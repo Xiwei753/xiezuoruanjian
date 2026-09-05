@@ -15,6 +15,7 @@
 //! 本模块不持 Core 锁、不做网络、不写 live 文件（commit 由调用方用 SaveTransaction 落盘）。
 
 pub(crate) mod commit_plan;
+pub(crate) mod replace;
 pub(crate) mod resolve;
 pub(crate) mod run;
 

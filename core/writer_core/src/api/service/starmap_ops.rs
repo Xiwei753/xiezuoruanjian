@@ -115,7 +115,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "create_starmap");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_starmap");
         Self::json_string(&value)
     }
 
@@ -364,7 +364,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
-        self.record_workspace_change_set_history(&change_set, "create_starmap");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_starmap");
         Ok(result_dto)
     }
 
@@ -510,7 +510,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
-        self.record_workspace_change_set_history(&change_set, "rename_starmap");
+        let _ = self.record_workspace_change_set_history(&change_set, "rename_starmap");
         Ok(result_dto)
     }
 
@@ -527,7 +527,7 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        self.record_workspace_change_set_history(&change_set, "delete_starmap");
+        let _ = self.record_workspace_change_set_history(&change_set, "delete_starmap");
         Ok(true)
     }
 
@@ -658,7 +658,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_change_set_history(&change_set, "bind_starmap_to_project");
+        let _ = self.record_workspace_change_set_history(&change_set, "bind_starmap_to_project");
         Ok(true)
     }
 
@@ -783,7 +783,8 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_change_set_history(&change_set, "unbind_starmap_from_project");
+        let _ =
+            self.record_workspace_change_set_history(&change_set, "unbind_starmap_from_project");
         Ok(true)
     }
 
@@ -915,7 +916,8 @@ impl WriterCoreApi {
             .core_write()
             .set_main_starmap_for_project_with_changes(starmap_id, project_id)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_change_set_history(&change_set, "set_main_starmap_for_project");
+        let _ =
+            self.record_workspace_change_set_history(&change_set, "set_main_starmap_for_project");
         Ok(true)
     }
 
@@ -956,7 +958,7 @@ impl WriterCoreApi {
             target: Some(entry.target.clone()),
         });
         let result_dto: crate::api::types::StarMapMetaDto = result.into();
-        self.record_workspace_change_set_history(&change_set, "create_child_starmap");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_child_starmap");
         Ok(result_dto)
     }
 

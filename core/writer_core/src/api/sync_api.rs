@@ -237,15 +237,19 @@ impl WriterCoreApi {
             }
         } else {
             // sync disabled → 不做网络 IO，用空 catalog。
-            // #645 评论 5504296097 问题5：用 core_read（dry-run 只读）。
-            return self
-                .core_read()
-                .perform_full_sync_dry_run_with_catalog(
-                    &sync_config,
-                    &crate::sync::types::TargetLifecycleCatalog::default(),
-                )
-                .map(Into::into)
-                .map_err(Into::into);
+            // #645 评论 5504296097 回退问题：短锁 snapshot paths，锁外扫描。
+            let (app_data_root, projects_root) = {
+                let core = self.core_read();
+                (core.app_data_root.clone(), core.projects_root.clone())
+            };
+            return crate::facade::WriterCore::build_full_sync_dry_run_unlocked(
+                &app_data_root,
+                &projects_root,
+                &sync_config,
+                &crate::sync::types::TargetLifecycleCatalog::default(),
+            )
+            .map(Into::into)
+            .map_err(Into::into);
         };
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
@@ -258,13 +262,20 @@ impl WriterCoreApi {
                     crate::api::error::WriterError::from(e)
                 })?;
 
-        // 1c. 短锁 B（read）：构建 plan（纯本地 IO，read-only）。
-        // #645 评论 5504296097 问题5：用 core_read + read-only state loader，
-        // 不写本地文件。
-        self.core_read()
-            .perform_full_sync_dry_run_with_catalog(&sync_config, &remote_catalog_snapshot.catalog)
-            .map(Into::into)
-            .map_err(Into::into)
+        // 1c. 短锁 B（read）：snapshot paths，锁外扫描。
+        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        let (app_data_root, projects_root) = {
+            let core = self.core_read();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        crate::facade::WriterCore::build_full_sync_dry_run_unlocked(
+            &app_data_root,
+            &projects_root,
+            &sync_config,
+            &remote_catalog_snapshot.catalog,
+        )
+        .map(Into::into)
+        .map_err(Into::into)
     }
 
     /// 全量同步 — 四段式：Prepare（短写锁）→ Seed staging（不持锁）→ Transfer（不持锁）→ Commit（短写锁）。
@@ -278,6 +289,7 @@ impl WriterCoreApi {
     /// #645 评论 5504296097 第2点：通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
     /// 门控。具体 Provider 能否创建由 [`crate::facade::WriterCore::create_sync_provider_for_plan`]
     /// 决定（未启用 github-api feature 时 `github_api` 分支返回 `NotImplemented`）。
+    #[allow(clippy::too_many_lines)]
     pub fn perform_full_sync(
         &self,
         config: SyncConfigDto,
@@ -302,11 +314,13 @@ impl WriterCoreApi {
         // #645 评论 5504296097 问题4：catalog 读取失败直接结束本次 full sync，
         // 返回 RecoverableError，不构造空 catalog 继续 plan（空 catalog 会让
         // planner 误判"远端无记录"做破坏性删除/复活决策）。
+        // #645 评论 5504296097 问题6：用 discover_legacy_remote_catalog（真做 legacy 枚举），
+        // 不再用 load_remote_catalog（只读 catalog 文件，不做 legacy 发现）。
         let remote_catalog_snapshot =
-            match crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref()) {
+            match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
                 Ok(snapshot) => snapshot,
                 Err(e) => {
-                    let msg = format!("load_remote_catalog failed: {e}");
+                    let msg = format!("discover_legacy_remote_catalog failed: {e}");
                     log::warn!("[sync] prepare: {msg}");
                     let _ = self.record_full_sync_preflight_failure(
                         "recoverable_error".to_string(),
@@ -315,16 +329,66 @@ impl WriterCoreApi {
                     return Err(crate::api::error::WriterError::from(e));
                 }
             };
-        // 1c. 短锁 B：snapshot local projects + pending + device_id，build plan。
-        let mut plan = {
+
+        // #645 评论 5504296097 问题6：catalog 文件不存在于远端（version == __nonexistent__）
+        // → 正式 sync 需要把 discover 合成的 bootstrap catalog 落盘，后续 CAS 写入才有 base version。
+        // dry-run 不走本路径（dry-run 用 perform_full_sync_dry_run_with_catalog，不 persist）。
+        let remote_catalog_snapshot =
+            if remote_catalog_snapshot.version.as_str() == "__nonexistent__" {
+                match crate::sync::target_lifecycle::persist_bootstrap_catalog(
+                    provider.as_ref(),
+                    &remote_catalog_snapshot.catalog,
+                    &remote_catalog_snapshot.version,
+                ) {
+                    Ok(persisted) => {
+                        log::info!(
+                            "[sync] prepare: persisted bootstrap catalog ({} records) to remote",
+                            persisted.catalog.records.len()
+                        );
+                        persisted
+                    }
+                    Err(e) => {
+                        let msg = format!("persist_bootstrap_catalog failed: {e}");
+                        log::warn!("[sync] prepare: {msg}");
+                        let _ = self.record_full_sync_preflight_failure(
+                            "recoverable_error".to_string(),
+                            "target_catalog".to_string(),
+                        );
+                        return Err(crate::api::error::WriterError::from(e));
+                    }
+                }
+            } else {
+                remote_catalog_snapshot
+            };
+        // 1c. 短锁 B：只 persist Syncing + snapshot app_data_root/projects_root。
+        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        // 短锁只拿 app_data_root/projects_root/sync_policy/remote snapshot + persist Syncing，
+        // 释放锁后 list_projects/pending/device/planner/scan 全部锁外执行，
+        // 避免阻塞正文/作品读取。
+        let (app_data_root, projects_root) = {
             let core = self.core_write();
-            core.prepare_full_sync(
-                &sync_config,
-                force_sync,
-                secrets.clone(),
-                &remote_catalog_snapshot.catalog,
-                remote_catalog_snapshot.clone(),
-            )?
+            core.persist_full_sync_started();
+            (core.app_data_root.clone(), core.projects_root.clone())
+        };
+        // 写锁已释放。锁外构建 plan（list_projects / pending / device / planner / scan）。
+        let mut plan = match crate::facade::WriterCore::build_full_sync_plan_unlocked(
+            &app_data_root,
+            &projects_root,
+            &sync_config,
+            force_sync,
+            &remote_catalog_snapshot.catalog,
+            remote_catalog_snapshot.clone(),
+        ) {
+            Ok(plan) => plan,
+            Err(err) => {
+                let msg = err.to_string();
+                log::warn!("[sync] prepare: build_full_sync_plan_unlocked failed: {msg}");
+                let _ = self.record_full_sync_preflight_failure(
+                    "recoverable_error".to_string(),
+                    "global".to_string(),
+                );
+                return Err(crate::api::error::WriterError::from(err));
+            }
         };
 
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
@@ -368,38 +432,52 @@ impl WriterCoreApi {
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
         // 问题1：空 committed_paths 不触发全量扫描（record_workspace_paths_history
         // 空 paths 直接返回空结果）。
+        // #645 评论 5504296097 问题4 修复：committed_paths 不再包含 RemoteLifecycle 删除
+        // 的 paths（apply_local_lifecycle_deletes 已改为走 receipt.change_set 单一路径），
+        // 避免同一删除记两次 history。
         self.record_workspace_paths_history(&committed_paths, "full_sync_commit");
 
         // #645 评论 5504296097 问题2修复：处理 RemoteLifecycle 删除事务的 receipts。
+        // #645 评论 5504296097 问题4 修复：恢复单一 durable 路线 —
         // 对每个 receipt：用 change_set 调 record_workspace_change_set_history 记本地 history，
-        // 成功后调 ack_project_delete_history 推进 journal 到 HistoryRecorded → Completed
-        // （RemoteLifecycle origin 跳过 RemoteDeleteQueued，不生成 PendingDeletedTarget）。
-        // history 失败时 journal 保留在 StarMapsUnbound，下次启动 recover 补记。
+        // 成功后才调 ack_project_delete_history 推进 journal。
+        // history 失败 → 不 ack → journal 保留 StarMapsUnbound → bootstrap/recover 下次补记。
         for receipt in &lifecycle_receipts {
-            // 先记 history（best-effort，失败只 warn 不阻断）。
-            self.record_workspace_change_set_history(
-                &receipt.change_set,
-                "remote_lifecycle_delete",
-            );
-            // ack 推进 journal：RemoteLifecycle origin → 跳过 RemoteDeleteQueued
-            // 直接 Completed（不生成 PendingDeletedTarget）。
-            // history 失败时 record_workspace_change_set_history 已 warn，
-            // 这里仍调 ack 推进 journal（journal 保留更危险：下次 recover 会当 User 删除
-            // 反向排队删远端）。ack 失败时 journal 保留，下次启动 recover 补记。
-            if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
-                &self.app_data_root,
-                &receipt.journal_token,
-            ) {
+            self.process_lifecycle_receipt(receipt);
+        }
+
+        Ok(result.into())
+    }
+
+    /// #645 评论 5504296097 问题4：处理单个 lifecycle receipt — history + ack。
+    ///
+    /// history 成功 → ack 推进 journal；history 失败 → 不 ack → journal 保留 → 下次补记。
+    fn process_lifecycle_receipt(&self, receipt: &crate::sync::types::LocalLifecycleCommitReceipt) {
+        match self
+            .record_workspace_change_set_history(&receipt.change_set, "remote_lifecycle_delete")
+        {
+            Ok(()) => {
+                if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
+                    &self.app_data_root,
+                    &receipt.journal_token,
+                ) {
+                    log::warn!(
+                        "[sync] perform_full_sync: ack_project_delete_history failed \
+                         for {}: {} — journal retained",
+                        receipt.journal_token,
+                        e
+                    );
+                }
+            }
+            Err(e) => {
                 log::warn!(
-                    "[sync] perform_full_sync: ack_project_delete_history failed \
-                     for {}: {} — journal retained",
+                    "[sync] perform_full_sync: record_workspace_change_set_history failed \
+                     for {}: {} — journal retained, will retry on recover",
                     receipt.journal_token,
                     e
                 );
             }
         }
-
-        Ok(result.into())
     }
 
     /// 冲突解决：保留本地版本。

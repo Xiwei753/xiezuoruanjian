@@ -146,15 +146,114 @@ pub fn load_remote_catalog(
     Ok(RemoteTargetCatalogSnapshot { catalog, version })
 }
 
-/// #645 评论 5504296097 问题5：发现远端 catalog（只读，不写）。
+/// #645 评论 5504296097 问题6：发现远端 catalog（只读，不写远端）。
 ///
-/// 与 [`load_remote_catalog`] 同语义，明确表达"只发现不落盘"。
-/// dry-run 用本函数：catalog 不存在 → 返回空 catalog + `__nonexistent__` version，
-/// **绝不**写远端。正式 sync 在确认需要 bootstrap 后调 [`persist_bootstrap_catalog`]。
+/// 真做只读 legacy 枚举：
+/// 1. 先读 `targets.sync.json`（[`load_remote_catalog`]）。存在 → 直接返回。
+/// 2. 不存在 → `provider.list("projects")` 枚举所有 project 前缀，
+///    对每个 project 读 `projects/<id>/app-meta/sync/manifest.sync.json`，
+///    取 manifest 中所有 record 的最大 `updated_at_ms` 和对应 `device_id`，
+///    合成一条 Upsert `TargetLifecycleRecord`。
+/// 3. 返回合成 catalog + `__nonexistent__` version（catalog 文件仍不存在于远端）。
+///
+/// **绝不**写远端。dry-run 安全调用。正式 sync 在确认 `version == __nonexistent__`
+/// 后调 [`persist_bootstrap_catalog`] 把合成 catalog 落盘。
+///
+/// 远端 manifest 不存在或解析失败 → 用 fallback (time=0, device="legacy") 合成 Upsert，
+/// 不跳过该 project（legacy 远端可能只有 project.json 没有 manifest）。
 pub fn discover_legacy_remote_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
-    load_remote_catalog(provider)
+    // 1. 先读 catalog 文件。
+    let snapshot = load_remote_catalog(provider)?;
+    if snapshot.version.as_str() != "__nonexistent__" {
+        // catalog 存在 → 直接返回，不做 legacy 枚举。
+        return Ok(snapshot);
+    }
+
+    // 2. catalog 不存在 → legacy 枚举。
+    log::info!(
+        "[sync] discover_legacy_remote_catalog: targets.sync.json absent, \
+         enumerating legacy remote projects"
+    );
+    let entries = provider.list("projects").map_err(crate::Error::from)?;
+    // list("projects") 剥掉 "projects/" 前缀，返回相对路径如 "p1/app-meta/..."。
+    // 提取唯一顶层 project id segment。
+    let mut project_ids: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in &entries {
+        let first_segment = entry.path.split('/').next().unwrap_or("");
+        if !first_segment.is_empty() && seen.insert(first_segment.to_string()) {
+            project_ids.push(first_segment.to_string());
+        }
+    }
+    project_ids.sort();
+
+    // 3. 对每个 project 读 manifest，合成 Upsert record。
+    let mut records = Vec::with_capacity(project_ids.len());
+    for project_id in &project_ids {
+        let target_id = format!("projects/{project_id}");
+        // 校验 project id segment（防路径穿越）。
+        if let Err(e) = parse_project_target_id(&target_id) {
+            log::warn!(
+                "[sync] discover_legacy_remote_catalog: skip invalid project id {project_id:?}: {e}"
+            );
+            continue;
+        }
+        let (updated_at_ms, device_id) = read_legacy_project_lww(provider, project_id);
+        records.push(TargetLifecycleRecord::upsert(
+            &target_id,
+            &target_id,
+            updated_at_ms,
+            &device_id,
+        ));
+    }
+
+    let catalog = TargetLifecycleCatalog { records };
+    // version 仍是 __nonexistent__ — catalog 文件不在远端。
+    Ok(RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("__nonexistent__"),
+    })
+}
+
+/// #645 评论 5504296097 问题6：读 legacy project 的 manifest，提取 LWW 时间和 device_id。
+///
+/// 远端 manifest 路径：`projects/<id>/app-meta/sync/manifest.sync.json`。
+/// manifest 不存在或解析失败 → 返回 `(0, "legacy")` fallback。
+/// manifest 存在 → 取所有 file record 的最大 `(updated_at_ms, device_id)`。
+fn read_legacy_project_lww(provider: &dyn SyncProvider, project_id: &str) -> (i64, String) {
+    let manifest_path = format!("projects/{project_id}/app-meta/sync/manifest.sync.json");
+    let obj = match provider.read(&manifest_path) {
+        Ok(Some(obj)) => obj,
+        _ => {
+            // manifest 不存在 → fallback。
+            return (0, "legacy".to_string());
+        }
+    };
+    let manifest: crate::sync::types::SyncManifest = match serde_json::from_slice(&obj.content) {
+        Ok(m) => m,
+        Err(e) => {
+            log::warn!(
+                "[sync] read_legacy_project_lww: parse manifest for {project_id} failed: {e} — using fallback"
+            );
+            return (0, "legacy".to_string());
+        }
+    };
+    // 取所有 record 的最大 (updated_at_ms, device_id)。
+    let mut best_time: i64 = 0;
+    let mut best_device = "legacy".to_string();
+    for rec in &manifest.files {
+        let rec_time = match rec.deleted_at_ms {
+            Some(t) if rec.op == "delete" => t,
+            _ => rec.updated_at_ms,
+        };
+        if rec_time > best_time || (rec_time == best_time && rec.device_id > best_device) {
+            best_time = rec_time;
+            best_device = rec.device_id.clone();
+        }
+    }
+    (best_time, best_device)
 }
 
 /// #645 评论 5504296097 问题5：持久化 bootstrap catalog（正式 sync 才调用）。

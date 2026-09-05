@@ -25,7 +25,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "save_local_settings");
+        let _ = self.record_workspace_change_set_history(&change_set, "save_local_settings");
         Ok(true)
     }
 
@@ -51,7 +51,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "save_syncable_settings");
+        let _ = self.record_workspace_change_set_history(&change_set, "save_syncable_settings");
         Ok(true)
     }
 
@@ -76,7 +76,7 @@ impl WriterCoreApi {
             .core_write()
             .save_palette_record_with_changes(&r)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_change_set_history(&change_set, "save_palette_record");
+        let _ = self.record_workspace_change_set_history(&change_set, "save_palette_record");
         Ok(true)
     }
 
@@ -102,7 +102,7 @@ impl WriterCoreApi {
             .core_write()
             .delete_palette_record_with_changes(device_id, fingerprint)
             .map_err(crate::api::error::WriterError::from)?;
-        self.record_workspace_change_set_history(&change_set, "delete_palette_record");
+        let _ = self.record_workspace_change_set_history(&change_set, "delete_palette_record");
         Ok(true)
     }
 

@@ -60,7 +60,7 @@ impl WriterCoreApi {
             body: title_entry.body.clone(),
             target: Some(title_entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "create_chapter");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_chapter");
         Ok(chapter.into())
     }
 
@@ -141,7 +141,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_change_set_history(&change_set, "rename_chapter");
+        let _ = self.record_workspace_change_set_history(&change_set, "rename_chapter");
         Ok(true)
     }
 
@@ -171,7 +171,7 @@ impl WriterCoreApi {
         let change_set = self
             .core_write()
             .delete_chapter_with_changes(project_id, volume_id, chapter_id)?;
-        self.record_workspace_change_set_history(&change_set, "delete_chapter");
+        let _ = self.record_workspace_change_set_history(&change_set, "delete_chapter");
         Ok(true)
     }
 
@@ -188,7 +188,7 @@ impl WriterCoreApi {
             volume_id,
             ordered_chapter_ids,
         )?;
-        self.record_workspace_change_set_history(&change_set, "reorder_chapters");
+        let _ = self.record_workspace_change_set_history(&change_set, "reorder_chapters");
         Ok(true)
     }
 
@@ -230,7 +230,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "save_chapter_content");
+        let _ = self.record_workspace_change_set_history(&change_set, "save_chapter_content");
         Ok(receipt.into())
     }
 
@@ -266,7 +266,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "save_chapter_content");
+        let _ = self.record_workspace_change_set_history(&change_set, "save_chapter_content");
         Ok(receipt.into())
     }
 
@@ -293,7 +293,7 @@ impl WriterCoreApi {
             body: String::new(),
             target: None,
         });
-        self.record_workspace_change_set_history(&change_set, "clear_chapter_content");
+        let _ = self.record_workspace_change_set_history(&change_set, "clear_chapter_content");
         Ok(receipt.into())
     }
 
@@ -321,7 +321,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "update_chapter_note");
+        let _ = self.record_workspace_change_set_history(&change_set, "update_chapter_note");
         Ok(true)
     }
 }

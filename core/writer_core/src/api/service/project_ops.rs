@@ -50,7 +50,7 @@ impl WriterCoreApi {
                 });
             }
         }
-        self.record_workspace_change_set_history(&change_set, "create_project");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_project");
         Ok(project.into())
     }
 
@@ -120,7 +120,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "rename_project");
+        let _ = self.record_workspace_change_set_history(&change_set, "rename_project");
         Ok(true)
     }
 
@@ -215,7 +215,7 @@ impl WriterCoreApi {
         let change_set = self
             .core_write()
             .reorder_projects_with_changes(ordered_project_ids)?;
-        self.record_workspace_change_set_history(&change_set, "reorder_projects");
+        let _ = self.record_workspace_change_set_history(&change_set, "reorder_projects");
         Ok(true)
     }
 
@@ -244,7 +244,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "create_volume");
+        let _ = self.record_workspace_change_set_history(&change_set, "create_volume");
         Ok(volume)
     }
 
@@ -268,7 +268,7 @@ impl WriterCoreApi {
             body: entry.body.clone(),
             target: Some(entry.target.clone()),
         });
-        self.record_workspace_change_set_history(&change_set, "rename_volume");
+        let _ = self.record_workspace_change_set_history(&change_set, "rename_volume");
         Ok(true)
     }
 
@@ -287,7 +287,7 @@ impl WriterCoreApi {
         ] {
             self.remove_search_index_by_prefix(prefix);
         }
-        self.record_workspace_change_set_history(&change_set, "delete_volume");
+        let _ = self.record_workspace_change_set_history(&change_set, "delete_volume");
         Ok(true)
     }
 
@@ -300,7 +300,7 @@ impl WriterCoreApi {
         let change_set = self
             .core_write()
             .reorder_volumes_with_changes(project_id, ordered_volume_ids)?;
-        self.record_workspace_change_set_history(&change_set, "reorder_volumes");
+        let _ = self.record_workspace_change_set_history(&change_set, "reorder_volumes");
         Ok(true)
     }
 }

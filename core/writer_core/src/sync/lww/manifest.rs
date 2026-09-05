@@ -55,33 +55,29 @@ pub fn snapshot_local_records_read_only(
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
     // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
+    // #645 评论 5504296097 问题2：manifest 存在但损坏 → 返回 Err（不静默 fallback）。
+    // 调用方（compute_local_project_lifecycle_candidate）据此返回 Retry，
+    // 避免在无可靠本地 LWW 证据时做破坏性 DeleteLocalProject 决策。
+    // manifest 不存在 → 空 HashMap（首次同步，正常）。
     let manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
     let old_manifest_records: HashMap<String, ManifestFileRecord> = if manifest_path.exists() {
-        match std::fs::read(&manifest_path) {
-            Ok(content) => match serde_json::from_slice::<SyncManifest>(&content) {
-                Ok(manifest) => manifest
-                    .files
-                    .into_iter()
-                    .map(|r| (r.path.clone(), r))
-                    .collect(),
-                Err(e) => {
-                    log::warn!(
-                        "[sync] snapshot_local_records_read_only: \
-                             manifest corrupt at {}: {e} — using empty manifest",
-                        manifest_path.display()
-                    );
-                    HashMap::new()
-                }
-            },
-            Err(e) => {
-                log::warn!(
-                    "[sync] snapshot_local_records_read_only: \
-                     manifest read failed at {}: {e} — using empty manifest",
+        let content = std::fs::read(&manifest_path).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "snapshot_local_records_read_only: manifest read failed at {}: {e}",
+                manifest_path.display()
+            )))
+        })?;
+        serde_json::from_slice::<SyncManifest>(&content)
+            .map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "snapshot_local_records_read_only: manifest corrupt at {}: {e}",
                     manifest_path.display()
-                );
-                HashMap::new()
-            }
-        }
+                )))
+            })?
+            .files
+            .into_iter()
+            .map(|r| (r.path.clone(), r))
+            .collect()
     } else {
         HashMap::new()
     };
@@ -187,6 +183,19 @@ pub fn snapshot_local_records_read_only(
                     path
                 ))));
             }
+        }
+    }
+
+    // 5. #645 评论 5504296097 问题2：manifest 中有 upsert record 但文件不在磁盘上
+    //    且不在 known_files → 仍需携带该 record 的 LWW 用于 target-level 决策。
+    //    场景：测试/迁移只写 manifest 不写实际文件，或文件被外部删除但 manifest 未更新。
+    //    这些 record 代表"最后一次已知的本地 LWW 状态"，不应被静默丢弃。
+    for (path, old_rec) in &old_manifest_records {
+        if records.contains_key(path) {
+            continue;
+        }
+        if old_rec.op == "upsert" {
+            records.insert(path.clone(), old_rec.clone());
         }
     }
 

@@ -181,26 +181,13 @@ pub fn build_full_sync_target_plan(
         let project_local_root = projects_root.join(&project.id);
         let target_id = &target.remote_prefix;
 
-        // #645 评论 5504296097 问题2：用 lifecycle candidate 替代直接读 manifest。
-        // manifest 缺失 → 建立初始 manifest；manifest 损坏 → Retry。
+        // #645 评论 5504296097 问题1 修复：lifecycle candidate 走 snapshot_local_records_read_only
+        // 单一来源，不再读旧 manifest / 手写 initial scanner。失败 → Retry。
         let candidate = compute_local_project_lifecycle_candidate(&project_local_root, device_id);
         let (live_lww, kind) = match &candidate {
-            LifecycleCandidate::Live {
-                lww,
-                initial_manifest,
-            } => {
+            LifecycleCandidate::Live { lww } => {
                 let lww_clone = lww.clone();
                 let kind = decide_live_project_kind(remote_catalog, target_id, Some(lww));
-                // #645 评论 5504296097 问题4：initial_manifest 由正式同步在
-                // staging 阶段写入，planner 不落盘。此处仅记录日志。
-                if let Some(m) = initial_manifest {
-                    log::debug!(
-                        "[sync] build_full_sync_target_plan: project {} has initial \
-                         manifest with {} files — will write during staging",
-                        project.id,
-                        m.files.len()
-                    );
-                }
                 (Some(lww_clone), kind)
             }
             LifecycleCandidate::Retry => {
@@ -317,278 +304,91 @@ pub fn build_full_sync_target_plan(
     targets
 }
 
-/// #645 评论 5504296097 问题2：本地 project lifecycle candidate。
+/// #645 评论 5504296097 问题2（评论 5504296097 问题1 修复）：本地 project lifecycle candidate。
 ///
-/// `compute_local_project_lifecycle_candidate` 按优先级产出：
-/// - `Live(lww)`：已有合法 manifest，或首次同步成功建立初始 manifest；
-/// - `Retry`：manifest 损坏或本地状态无法可靠求时间，调用方应让 target 走 Retry。
+/// `compute_local_project_lifecycle_candidate` 只做：
+/// 1. `snapshot_local_records_read_only(project_root, SyncScope::Project, device_id)`
+///    → 从 records 取 `max(lww_time, device_id)` → `Live(lww)`；
+/// 2. 失败（known file 消失且无 tombstone 等）→ `Retry`。
 ///
-/// #645 评论 5504296097 问题4修复：planner 不再落盘 manifest。
-/// `Live { initial_manifest: Some(_) }` 携带待写入的初始 manifest，
-/// 正式同步在 staging/transfer 阶段写入，commit 成功后进入 live。
-/// dry-run 只计算计划，绝不改文件。
+/// 首次同步、已有 manifest、离线改动全部走这一套。target lifecycle 和文件 LWW
+/// 共用同一份"当前本地 records"，不再保留旧 manifest 直读 + 手写 initial scanner
+/// 的第二套状态机（`build_initial_lww_from_project_scan` / `scan_sync_file` /
+/// `append_chapter_meta_records` / `initial_manifest` 已删除）。
 #[derive(Debug, Clone)]
 pub(crate) enum LifecycleCandidate {
-    Live {
-        lww: LiveTargetLww,
-        /// #645 评论 5504296097 问题4修复：首次同步时携带待写入的初始 manifest。
-        /// 正式同步在 staging 阶段写入；dry-run 不写入。`None` 表示已有 manifest。
-        initial_manifest: Option<crate::sync::types::SyncManifest>,
-    },
+    Live { lww: LiveTargetLww },
     Retry,
 }
 
-/// #645 评论 5504296097 问题2：从本地 sync manifest 或元数据建立 lifecycle candidate。
+/// #645 评论 5504296097 问题1 修复：从 `snapshot_local_records_read_only` 单一来源
+/// 建立 lifecycle candidate。
 ///
-/// 来源按优先级：
-/// 1. 已有合法 sync manifest → 用 manifest max LWW；
-/// 2. manifest 不存在（首次同步）→ 从 `project.json` 的 `updated_at` 建立初始
-///    LWW，并写一份只含 `project.json` 记录的初始 manifest（让后续同步有据可依）；
-/// 3. manifest 存在但损坏 / `project.json` 也读不出 → `Retry`（绝不伪造 now()）。
-///
-/// `device_id` 来自真实 `DeviceInfo.device_id`，用于 LWW tie-break。
-#[allow(clippy::excessive_nesting)]
+/// 不再自己读旧 manifest，也不再手写 initial scanner。snapshot 失败 → `Retry`
+/// （调用方让 target 保留 pending，下次同步重试）。
 fn compute_local_project_lifecycle_candidate(
     project_root: &Path,
     device_id: &str,
 ) -> LifecycleCandidate {
-    let manifest_path = project_root.join("app-meta/sync/manifest.sync.json");
+    use crate::sync::types::SyncScope;
 
-    // 1. 已有 manifest — 尝试解析。
-    if manifest_path.exists() {
-        match std::fs::read(&manifest_path) {
-            Ok(content) => {
-                match serde_json::from_slice::<crate::sync::types::SyncManifest>(&content) {
-                    Ok(manifest) => {
-                        // #645 评论 5504296097 问题3修复：用 manifest_target_lww
-                        // 取 winner 的 device_id，不再硬塞本机设备。
-                        if let Some(lww) = manifest_target_lww(&manifest) {
-                            return LifecycleCandidate::Live {
-                                lww,
-                                initial_manifest: None,
-                            };
-                        }
-                        // manifest 合法但 files 为空 — 视为首次同步的空 manifest。
-                        // 走建立初始流程（扫描整个 Project）。
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "[sync] compute_local_project_lifecycle_candidate: \
-                         manifest corrupt at {}: {e} — returning Retry",
-                            manifest_path.display()
-                        );
-                        return LifecycleCandidate::Retry;
-                    }
-                }
-            }
-            Err(e) => {
-                log::warn!(
-                    "[sync] compute_local_project_lifecycle_candidate: \
-                     manifest read failed at {}: {e} — returning Retry",
-                    manifest_path.display()
-                );
-                return LifecycleCandidate::Retry;
-            }
-        }
-    }
-
-    // 2. manifest 不存在或 files 为空 — 首次同步，扫描整个 Project 建立初始。
-    // #645 评论 5504296097 问题4修复：planner 不再落盘 manifest，
-    // 返回 initial_manifest 让正式同步在 staging 阶段写入。
-    match build_initial_lww_from_project_scan(project_root, device_id) {
-        Some((initial_lww, initial_manifest)) => {
-            log::debug!(
-                "[sync2: compute_local_project_lifecycle_candidate: \
-                 initial manifest prepared (not written) at {} — lww_time={} device_id={}",
-                project_root.display(),
-                initial_lww.lww_time_ms,
-                initial_lww.device_id
-            );
-            LifecycleCandidate::Live {
-                lww: initial_lww,
-                initial_manifest: Some(initial_manifest),
-            }
-        }
-        None => {
+    let records = match crate::sync::lww::snapshot_local_records_read_only(
+        project_root,
+        SyncScope::Project,
+        device_id,
+    ) {
+        Ok(records) => records,
+        Err(e) => {
             log::warn!(
                 "[sync] compute_local_project_lifecycle_candidate: \
-                 cannot establish initial lww from project scan at {} — returning Retry",
+                 snapshot_local_records_read_only failed at {}: {e} — returning Retry",
                 project_root.display()
             );
-            LifecycleCandidate::Retry
+            return LifecycleCandidate::Retry;
         }
-    }
-}
+    };
 
-/// #645 评论 5504296097 问题4修复：从整个 Project 扫描建立初始 LWW + 初始 manifest。
-///
-/// 扫描这个 Project 的全部可同步内容（project.json, volumes/*/volume.json,
-/// volumes/*/chapters/*/chapter.meta.json, characters/*.json 等），
-/// 构造完整初始 manifest，然后从完整 manifest 取最大 `(time, device_id)`。
-///
-/// 成功 → 返回 `(LiveTargetLww, SyncManifest)`；失败 → None。
-/// 调用方（planner）不落盘 manifest，由正式同步在 staging 阶段写入。
-fn build_initial_lww_from_project_scan(
-    project_root: &Path,
-    device_id: &str,
-) -> Option<(LiveTargetLww, crate::sync::types::SyncManifest)> {
-    let mut files: Vec<crate::sync::types::ManifestFileRecord> = Vec::new();
+    // 从 records 取 max(lww_time, device_id)。
+    let winner = records.values().max_by(|a, b| {
+        let a_time = lww_record_time_for_manifest_record(a);
+        let b_time = lww_record_time_for_manifest_record(b);
+        a_time
+            .cmp(&b_time)
+            .then_with(|| a.device_id.cmp(&b.device_id))
+    });
 
-    // 1. project.json
-    if let Some(rec) = scan_sync_file(project_root, "project.json", device_id) {
-        files.push(rec);
-    }
-
-    // 2. volumes/*/volume.json
-    let volumes_dir = project_root.join("volumes");
-    if let Ok(volume_entries) = std::fs::read_dir(&volumes_dir) {
-        for volume_entry in volume_entries.flatten() {
-            if !volume_entry
-                .file_type()
-                .map(|t| t.is_dir())
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            let volume_id = volume_entry.file_name().to_string_lossy().to_string();
-            let volume_json_rel = format!("volumes/{}/volume.json", volume_id);
-            if let Some(rec) = scan_sync_file(project_root, &volume_json_rel, device_id) {
-                files.push(rec);
-            }
-
-            // 3. volumes/*/chapters/*/chapter.meta.json
-            // 直接构造 chapters_dir，避免 .parent().unwrap()（clippy unwrap_used + AGENTS 禁止 unwrap）。
-            let chapters_dir = project_root
-                .join("volumes")
-                .join(&volume_id)
-                .join("chapters");
-            append_chapter_meta_records(
-                project_root,
-                &chapters_dir,
-                &volume_id,
-                device_id,
-                &mut files,
+    match winner {
+        Some(w) => {
+            let lww = LiveTargetLww {
+                lww_time_ms: lww_record_time_for_manifest_record(w),
+                device_id: w.device_id.clone(),
+            };
+            log::debug!(
+                "[sync] compute_local_project_lifecycle_candidate: \
+                 snapshot at {} — lww_time={} device_id={} records={}",
+                project_root.display(),
+                lww.lww_time_ms,
+                lww.device_id,
+                records.len()
             );
+            LifecycleCandidate::Live { lww }
         }
-    }
-
-    // 4. characters/*.json（Project scope metadata）
-    let characters_dir = project_root.join("characters");
-    append_character_records(project_root, &characters_dir, device_id, &mut files);
-
-    if files.is_empty() {
-        return None;
-    }
-
-    let manifest = crate::sync::types::SyncManifest { files };
-    let lww = manifest_target_lww(&manifest)?;
-    Some((lww, manifest))
-}
-
-/// #645 评论 5504296097 问题4修复：扫描单个可同步文件，构造 manifest 记录。
-///
-/// 读文件的元数据（updated_at from JSON 或文件 mtime），返回 `ManifestFileRecord`。
-/// 文件不存在或读取失败 → None。
-fn scan_sync_file(
-    project_root: &Path,
-    rel: &str,
-    device_id: &str,
-) -> Option<crate::sync::types::ManifestFileRecord> {
-    let path = project_root.join(rel);
-    let content = std::fs::read(&path).ok()?;
-
-    // 尝试从 JSON 读 updated_at（RFC3339），失败时用文件 mtime。
-    let updated_at_ms = serde_json::from_slice::<serde_json::Value>(&content)
-        .ok()
-        .and_then(|v| {
-            v.get("updated_at")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
-        })
-        .and_then(|s| rfc3339_to_epoch_millis(&s))
-        .or_else(|| {
-            std::fs::metadata(&path)
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .map(|t| {
-                    t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-                        .unwrap_or(0)
-                })
-        })?;
-
-    let content_hash = format!("{:x}", md5::compute(&content));
-    Some(crate::sync::types::ManifestFileRecord {
-        path: rel.to_string(),
-        content_hash,
-        updated_at_ms,
-        deleted_at_ms: None,
-        device_id: device_id.to_string(),
-        op: "upsert".to_string(),
-        schema_version: 1,
-    })
-}
-
-/// #645 评论 5504296097 问题4修复：扫描 `volumes/<volume_id>/chapters/*/chapter.meta.json`。
-///
-/// 抽出为 helper 以降低 `build_initial_lww_from_project_scan` 的嵌套深度（clippy too_many_lines）。
-fn append_chapter_meta_records(
-    project_root: &Path,
-    chapters_dir: &Path,
-    volume_id: &str,
-    device_id: &str,
-    files: &mut Vec<crate::sync::types::ManifestFileRecord>,
-) {
-    let Ok(chapter_entries) = std::fs::read_dir(chapters_dir) else {
-        return;
-    };
-    for chapter_entry in chapter_entries.flatten() {
-        if !chapter_entry
-            .file_type()
-            .map(|t| t.is_dir())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        let chapter_id = chapter_entry.file_name().to_string_lossy().to_string();
-        let chapter_meta_rel = format!(
-            "volumes/{}/chapters/{}/chapter.meta.json",
-            volume_id, chapter_id
-        );
-        if let Some(rec) = scan_sync_file(project_root, &chapter_meta_rel, device_id) {
-            files.push(rec);
-        }
-    }
-}
-
-/// #645 评论 5504296097 问题4修复：扫描 `characters/*.json`。
-fn append_character_records(
-    project_root: &Path,
-    characters_dir: &Path,
-    device_id: &str,
-    files: &mut Vec<crate::sync::types::ManifestFileRecord>,
-) {
-    let Ok(char_entries) = std::fs::read_dir(characters_dir) else {
-        return;
-    };
-    for char_entry in char_entries.flatten() {
-        if !char_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-            continue;
-        }
-        let name = char_entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(".json") {
-            let rel = format!("characters/{}", name);
-            if let Some(rec) = scan_sync_file(project_root, &rel, device_id) {
-                files.push(rec);
+        None => {
+            // records 为空（全新 project，无任何可同步文件）→ 用 device_id + 0 时间。
+            // 不伪造 now()，让远端 catalog 决策按真实事实进行（远端无记录 → LiveProject）。
+            log::debug!(
+                "[sync] compute_local_project_lifecycle_candidate: \
+                 empty snapshot at {} — using zero lww",
+                project_root.display()
+            );
+            LifecycleCandidate::Live {
+                lww: LiveTargetLww {
+                    lww_time_ms: 0,
+                    device_id: device_id.to_string(),
+                },
             }
         }
     }
-}
-
-/// #645 评论 5504296097 问题2：RFC3339 字符串 → Unix 毫秒时间戳。
-fn rfc3339_to_epoch_millis(s: &str) -> Option<i64> {
-    let dt = chrono::DateTime::parse_from_rfc3339(s).ok()?;
-    Some(dt.timestamp_millis())
 }
 
 /// #645 评论 5504296097 问题1：live project 的 target-level LWW 决策。
@@ -988,6 +788,12 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 //
                 // #645 评论 5504296097 问题3：Ok(None) 直接 Retry（不再 "plan confirmed"），
                 // 与 RestoreProject 已修成 Retry 的语义一致。
+                //
+                // #645 评论 5504296097 问题5 修复：DeleteLocalProject -> current Delete
+                // 也必须先执行 delete_all_remote_objects()，成功后才返回 DeleteProject action。
+                // remote lifecycle 已确认 Delete winner -> delete_all_remote_objects(projects/P)
+                // -> 全部成功 -> 才允许 DeleteProject 本地提交。
+                // remote cleanup 失败 -> 不删本地 -> 下轮 DeleteLocalProject 再次先清 remote prefix。
                 match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
                     Ok(Some(current_rec)) => {
                         use crate::sync::types::TargetOp;
@@ -1017,23 +823,39 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 (result, None, action)
                             }
                             TargetOp::Delete => {
-                                // 远端仍是 delete — 确认删除，defer to Commit。
-                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
+                                // 远端仍是 delete — 先清远端 residue，成功后才 defer to Commit。
+                                // #645 评论 5504296097 问题5 修复：DeleteLocalProject -> current Delete
+                                // 也必须先执行 delete_all_remote_objects()，成功后才返回 DeleteProject action。
                                 log::info!(
                                     "[sync] run_transfer: DeleteLocalProject {} — \
-                                     CAS confirmed remote Delete, deferring to Commit",
+                                     CAS confirmed remote Delete, cleaning remote residue before deferring to Commit",
                                     planned.target.remote_prefix
                                 );
-                                let action = planned.project_id.as_ref().map(|pid| {
-                                    crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
-                                        project_id: pid.clone(),
-                                        expected_local_lww: planned
-                                            .live_lww
-                                            .as_ref()
-                                            .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
-                                    }
-                                });
-                                (SyncResult::no_changes(), None, action)
+                                let cleanup_result = delete_all_remote_objects(
+                                    provider,
+                                    &planned.target.remote_prefix,
+                                );
+                                let cleanup_ok = matches!(
+                                    cleanup_result.status,
+                                    SyncStatus::Success | SyncStatus::NoChanges
+                                );
+                                if !cleanup_ok {
+                                    // 远端清理失败 → 不删本地 → 下轮 DeleteLocalProject 再次先清 remote prefix。
+                                    (cleanup_result, None, None)
+                                } else {
+                                    // 远端清理成功 → defer to Commit。
+                                    // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
+                                    let action = planned.project_id.as_ref().map(|pid| {
+                                        crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                                            project_id: pid.clone(),
+                                            expected_local_lww: planned
+                                                .live_lww
+                                                .as_ref()
+                                                .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
+                                        }
+                                    });
+                                    (SyncResult::no_changes(), None, action)
+                                }
                             }
                         }
                     }
@@ -1201,28 +1023,97 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 // 确认 winner 仍是 upsert。若远端已变成 delete tombstone 且更晚，
                 // 改走 DeleteLocalProject（defer to Commit），绝不按过期 snapshot
                 // 恢复一个已被删除的作品。
+                //
+                // #645 评论 5504296097 问题3 修复：
+                // - Ok(None) -> Retry（不再 "plan confirmed" download）；
+                // - current=Delete && local project 不存在 -> 不生成 DeleteProject action
+                //   -> 清理 authoritative Delete 下的远端 residue（delete_all_remote_objects）；
+                // - current=Delete && local project 存在 -> 重新计算 current local LWW
+                //   -> 只有 Delete 仍赢才生成带 guard 的 DeleteProject。
                 match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
                     Ok(Some(current_rec)) => {
                         use crate::sync::types::TargetOp;
                         match current_rec.op {
                             TargetOp::Delete => {
-                                // 远端已变成 delete — 改走 DeleteLocalProject。
-                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
-                                log::info!(
-                                    "[sync] run_transfer: RestoreProject {} — \
-                                     CAS: remote changed to Delete, switching to DeleteLocalProject",
-                                    planned.target.remote_prefix
-                                );
-                                let action = planned.project_id.as_ref().map(|pid| {
-                                    crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
-                                        project_id: pid.clone(),
-                                        expected_local_lww: planned
-                                            .live_lww
-                                            .as_ref()
-                                            .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
+                                // 远端已变成 delete。
+                                // #645 评论 5504296097 问题3 修复：检查 local project 是否存在。
+                                let local_project_exists = planned.local_root.exists() && {
+                                    // 简单存在性检查：local_root 非空目录。
+                                    std::fs::read_dir(&planned.local_root)
+                                        .map(|mut it| it.next().is_some())
+                                        .unwrap_or(false)
+                                };
+                                if !local_project_exists {
+                                    // current=Delete && local project 不存在 ->
+                                    // 不生成 DeleteProject action -> 清理 authoritative Delete
+                                    // 下的远端 residue。
+                                    log::info!(
+                                        "[sync] run_transfer: RestoreProject {} — \
+                                         CAS: remote changed to Delete, local project absent — \
+                                         cleaning remote residue, no DeleteProject action",
+                                        planned.target.remote_prefix
+                                    );
+                                    let cleanup_result = delete_all_remote_objects(
+                                        provider,
+                                        &planned.target.remote_prefix,
+                                    );
+                                    (cleanup_result, None, None)
+                                } else {
+                                    // current=Delete && local project 存在 ->
+                                    // 重新计算 current local LWW -> 只有 Delete 仍赢才生成
+                                    // 带 guard 的 DeleteProject。
+                                    log::info!(
+                                        "[sync] run_transfer: RestoreProject {} — \
+                                         CAS: remote changed to Delete, local project exists — \
+                                         re-evaluating with current local LWW",
+                                        planned.target.remote_prefix
+                                    );
+                                    let current_candidate =
+                                        compute_local_project_lifecycle_candidate(
+                                            &planned.local_root,
+                                            planned
+                                                .live_lww
+                                                .as_ref()
+                                                .map(|l| l.device_id.as_str())
+                                                .unwrap_or(""),
+                                        );
+                                    let current_lww = match &current_candidate {
+                                        LifecycleCandidate::Live { lww } => Some(lww.clone()),
+                                        LifecycleCandidate::Retry => None,
+                                    };
+                                    let remote_time =
+                                        crate::sync::target_lifecycle::record_lww_time(
+                                            &current_rec,
+                                        );
+                                    let delete_wins = match &current_lww {
+                                        Some(live) => {
+                                            let local_wins = live.lww_time_ms > remote_time
+                                                || (live.lww_time_ms == remote_time
+                                                    && live.device_id > current_rec.device_id);
+                                            !local_wins
+                                        }
+                                        None => true, // 无 local LWW → Delete 默认赢
+                                    };
+                                    if delete_wins {
+                                        let action = planned.project_id.as_ref().map(|pid| {
+                                            crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                                                project_id: pid.clone(),
+                                                expected_local_lww: current_lww
+                                                    .as_ref()
+                                                    .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
+                                            }
+                                        });
+                                        (SyncResult::no_changes(), None, action)
+                                    } else {
+                                        // local LWW 赢 → 不删本地，保持 live。
+                                        log::info!(
+                                            "[sync] run_transfer: RestoreProject {} — \
+                                             CAS: remote Delete but local LWW wins — keeping live",
+                                            planned.target.remote_prefix
+                                        );
+                                        (SyncResult::no_changes(), None, None)
                                     }
-                                });
-                                (SyncResult::no_changes(), None, action)
+                                }
                             }
                             TargetOp::Upsert => {
                                 // 远端仍是 upsert — 确认恢复，下载远端内容。
@@ -1245,21 +1136,25 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         }
                     }
                     Ok(None) => {
-                        // 远端无记录 — 无法确认 upsert winner，保守下载恢复
-                        // （plan 阶段已确认远端 upsert 胜出）。
+                        // #645 评论 5504296097 问题3 修复：远端无记录 → 无法确认 upsert winner
+                        // → 直接 Retry（不再 "plan confirmed" download），与 DeleteLocalProject
+                        // 语义一致。Prepare 明明看到 Upsert，Transfer 时这条 lifecycle record
+                        // 整体消失，说明远端事实已经变化，不能继续相信旧 plan。
                         log::info!(
                             "[sync] run_transfer: RestoreProject {} — \
-                             CAS: no remote record, downloading (plan confirmed)",
+                             CAS: no remote record, returning Retry",
                             planned.target.remote_prefix
                         );
-                        let result = download_remote_to_staging(
-                            provider,
-                            &planned.target.remote_prefix,
-                            planned.staging_root.as_deref(),
-                        );
                         (
-                            result,
-                            Some(DeletedTargetResolution::RemoteTargetWins),
+                            SyncResult::error(
+                                SyncStatus::RecoverableError(
+                                    "RestoreProject: no remote record, retrying".to_string(),
+                                ),
+                                "RestoreProject: no remote record to confirm upsert winner"
+                                    .to_string(),
+                                None,
+                            ),
+                            Some(DeletedTargetResolution::Retry),
                             None,
                         )
                     }
@@ -2844,7 +2739,10 @@ mod tests {
     /// 运行时复现需要多线程 + mock WriterCore 锁竞争，这里用静态证据代替。
     #[test]
     fn repro_issue_645_q6_network_io_inside_core_write_lock_static_evidence() {
-        // 读取 sync_api.rs 源码，确认 load_remote_catalog 在 core_write() 作用域内。
+        // 读取 sync_api.rs 源码，确认 discover_legacy_remote_catalog 在 core_write() 作用域外。
+        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        // prepare_full_sync → build_full_sync_plan_unlocked（锁外）。
+        // load_remote_catalog → discover_legacy_remote_catalog（锁外）。
         let source = include_str!("../api/sync_api.rs");
         let perform_full_sync_start = source.find("pub fn perform_full_sync(");
         assert!(
@@ -2852,39 +2750,44 @@ mod tests {
             "问题6: perform_full_sync 函数应存在于 sync_api.rs"
         );
         let start = perform_full_sync_start.unwrap();
-        // 取函数体前 4000 字符做检查（覆盖整个 Prepare 阶段）。
-        let body = &source[start..source.len().min(start + 4000)];
+        // 取函数体做检查（覆盖整个 Prepare 阶段）。
+        // #645 评论 5504296097 回退问题：用整个剩余 source 而非固定字节窗口，
+        // 避免中文注释多字节字符导致切片落在 char boundary 内 panic。
+        let body = &source[start..];
 
         let has_core_write = body.contains("let core = self.core_write();");
-        let has_load_remote_catalog = body.contains("load_remote_catalog(provider.as_ref())");
-        let has_prepare_full_sync = body.contains("core.prepare_full_sync(");
+        let has_discover_catalog =
+            body.contains("discover_legacy_remote_catalog(provider.as_ref())");
+        let has_build_plan_unlocked = body.contains("build_full_sync_plan_unlocked(");
         let has_lock_released = body.contains("写锁已释放");
 
         // 四个都存在 — 证明代码结构如所述。
         assert!(has_core_write, "问题6: core_write() 调用应存在");
         assert!(
-            has_load_remote_catalog,
-            "问题6: load_remote_catalog 调用应存在"
+            has_discover_catalog,
+            "问题6: discover_legacy_remote_catalog 调用应存在"
         );
-        assert!(has_prepare_full_sync, "问题6: prepare_full_sync 调用应存在");
+        assert!(
+            has_build_plan_unlocked,
+            "问题6: build_full_sync_plan_unlocked 调用应存在（锁外扫描）"
+        );
         assert!(has_lock_released, "问题6: '写锁已释放' 注释应存在");
 
         let core_write_pos = body.find("let core = self.core_write();").unwrap();
-        let load_catalog_pos = body.find("load_remote_catalog(provider.as_ref())").unwrap();
+        let discover_catalog_pos = body
+            .find("discover_legacy_remote_catalog(provider.as_ref())")
+            .unwrap();
         let lock_released_pos = body.find("写锁已释放").unwrap();
 
-        // 期望（修复后）：load_remote_catalog 应在 "写锁已释放" 注释之后
+        // 期望（修复后）：discover_legacy_remote_catalog 应在 "写锁已释放" 注释之后
         // （即网络 IO 在写锁作用域外）。
-        // 当前：load_remote_catalog 在 core_write() 之后、"写锁已释放" 之前，
-        // 即网络 IO 期间持 core 写锁。
-        // 这个断言对当前代码会 FAIL — 证明网络 IO 在写锁内。
         assert!(
-            load_catalog_pos > lock_released_pos,
-            "问题6: load_remote_catalog (pos={}) 应在 '写锁已释放' (pos={}) 之后\
-             （即网络 IO 不在写锁内）。当前 load_remote_catalog 在 core_write (pos={}) 之后、\
+            discover_catalog_pos > lock_released_pos,
+            "问题6: discover_legacy_remote_catalog (pos={}) 应在 '写锁已释放' (pos={}) 之后\
+             （即网络 IO 不在写锁内）。当前 discover_legacy_remote_catalog 在 core_write (pos={}) 之后、\
              写锁释放 (pos={}) 之前，网络 IO 期间持 core 写锁，阻塞正文/作品读取，\
              与 #644 拆锁路线冲突。",
-            load_catalog_pos,
+            discover_catalog_pos,
             lock_released_pos,
             core_write_pos,
             lock_released_pos

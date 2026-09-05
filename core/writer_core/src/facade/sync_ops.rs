@@ -162,6 +162,95 @@ impl super::WriterCore {
         })
     }
 
+    /// #645 评论 5504296097 回退问题：锁外构建 dry-run plan。
+    ///
+    /// 与 [`perform_full_sync_dry_run_with_catalog`] 的区别：本函数不持任何 Core 锁，
+    /// 所有磁盘读取（list_projects / pending / device / planner / scan）在锁外执行。
+    /// `app_data_root` / `projects_root` 由调用方在短锁内 snapshot 后传入。
+    pub(crate) fn build_full_sync_dry_run_unlocked(
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
+        config: &crate::sync::SyncConfig,
+        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+    ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
+        use crate::sync::types::{FullSyncDryRunResult, SyncPlan, TargetSyncPlan};
+
+        let projects = crate::project::list_projects(projects_root)?;
+
+        let pending_deleted =
+            crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root)?;
+
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
+
+        let device_id = crate::settings::load_device_info(app_data_root)
+            .map(|info| info.device_id)
+            .unwrap_or_default();
+
+        let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
+            app_data_root,
+            projects_root,
+            &projects,
+            &pending_deleted,
+            remote_catalog,
+            &sync_policy,
+            false,
+            &device_id,
+        );
+
+        let mut targets: Vec<TargetSyncPlan> = Vec::new();
+        for planned in &planned_targets {
+            let plan = if !config.enabled || planned.is_deleted_target() {
+                SyncPlan::new()
+            } else {
+                crate::sync::SyncService::build_sync_plan(
+                    &planned.local_root,
+                    planned.target.scope,
+                )?
+            };
+            targets.push(TargetSyncPlan {
+                target_kind: planned.target_kind.as_target_kind_str().to_string(),
+                project_id: planned.project_id.clone(),
+                remote_prefix: planned.target.remote_prefix.clone(),
+                plan,
+            });
+        }
+
+        let total_to_upload: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.files_to_upload.len()).unwrap_or(u32::MAX))
+            .sum();
+        let total_to_download: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.files_to_download.len()).unwrap_or(u32::MAX))
+            .sum();
+        let total_to_delete_local: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.files_to_delete_local.len()).unwrap_or(u32::MAX))
+            .sum();
+        let total_to_delete_remote: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.files_to_delete_remote.len()).unwrap_or(u32::MAX))
+            .sum();
+        let total_ignored: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.ignored_files.len()).unwrap_or(u32::MAX))
+            .sum();
+        let total_conflicts: u32 = targets
+            .iter()
+            .map(|t| u32::try_from(t.plan.conflicts.len()).unwrap_or(u32::MAX))
+            .sum();
+
+        Ok(FullSyncDryRunResult {
+            targets,
+            total_to_upload,
+            total_to_download,
+            total_to_delete_local,
+            total_to_delete_remote,
+            total_ignored,
+            total_conflicts,
+        })
+    }
+
     /// #645 评论 5504296097 问题5：dry-run 读真实远端 catalog 的 helper。
     ///
     /// 创建 provider + 读 catalog。任一步骤失败时返回错误
@@ -294,6 +383,54 @@ impl super::WriterCore {
             force_sync,
             targets,
             app_data_root: self.app_data_root.clone(),
+            remote_catalog_snapshot,
+        })
+    }
+
+    /// #645 评论 5504296097 回退问题：锁外构建 full sync plan。
+    ///
+    /// 与 [`prepare_full_sync`] 的区别：本函数不调 `persist_full_sync_started`（调用方
+    /// 已在短锁内完成），不持任何 Core 锁，所有磁盘读取（list_projects / pending /
+    /// device / planner / scan）在锁外执行，避免阻塞正文/作品读取。
+    ///
+    /// `app_data_root` / `projects_root` 由调用方在短锁内 snapshot 后传入。
+    pub(crate) fn build_full_sync_plan_unlocked(
+        app_data_root: &std::path::Path,
+        projects_root: &std::path::Path,
+        config: &crate::sync::SyncConfig,
+        force_sync: bool,
+        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+        remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
+    ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
+        use crate::sync::full_sync::FullSyncPlan;
+
+        let projects = crate::project::list_projects(projects_root)?;
+
+        let pending_deleted =
+            crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root)?;
+
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
+
+        let device_id = crate::settings::load_device_info(app_data_root)
+            .map(|info| info.device_id)
+            .unwrap_or_default();
+
+        let targets = crate::sync::full_sync::build_full_sync_target_plan(
+            app_data_root,
+            projects_root,
+            &projects,
+            &pending_deleted,
+            remote_catalog,
+            &sync_policy,
+            force_sync,
+            &device_id,
+        );
+
+        Ok(FullSyncPlan {
+            sync_policy,
+            force_sync,
+            targets,
+            app_data_root: app_data_root.to_path_buf(),
             remote_catalog_snapshot,
         })
     }
@@ -476,10 +613,16 @@ impl super::WriterCore {
         (result, all_committed_paths, lifecycle_receipts)
     }
 
-    /// #645 评论 5504296097 问题1/2：对有 `DeleteProject` lifecycle action 的 target
+    /// #645 评论 5504296097 问题1/2 修复：对有 `DeleteProject` lifecycle action 的 target
     /// 执行完整 Project 本地删除事务（move worktree / unbind starmaps / history），
     /// 不生成 PendingDeletedTarget（远端已删，不反向要求删远端）。staging commit 会
     /// 跳过这些 target。
+    ///
+    /// #645 评论 5504296097 问题2 修复：DeleteProject 在执行删除前先用
+    /// `snapshot_local_records_read_only` 重新计算当前 local target LWW，与
+    /// `expected_local_lww` guard 比较。current_local > expected → 不动 live →
+    /// target 进入 RecoverableError（下次同步重试）。ReplaceProject 的 guard
+    /// 在 `apply_staging_commits_for_targets` 里检查（走 replace plan）。
     ///
     /// 返回 `(lifecycle_committed_paths, lifecycle_receipts)`：
     /// - `lifecycle_committed_paths`：本次删除真正落盘的 workspace-relative paths；
@@ -492,15 +635,62 @@ impl super::WriterCore {
         Vec<std::path::PathBuf>,
         Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
     ) {
-        let mut lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
         let mut lifecycle_receipts: Vec<crate::sync::types::LocalLifecycleCommitReceipt> =
             Vec::new();
         for target in targets {
             if let crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
                 project_id,
-                expected_local_lww: _,
+                expected_local_lww,
             } = &target.local_lifecycle_action
             {
+                // #645 评论 5504296097 问题2 修复：DeleteProject guard —
+                // 用 snapshot_local_records_read_only 重新计算当前 local target LWW，
+                // 与 expected_local_lww 比较。current_local > expected → 不动 live。
+                if let Some(expected_serde) = expected_local_lww {
+                    let expected_lww = crate::sync::full_sync::LiveTargetLww {
+                        lww_time_ms: expected_serde.lww_time_ms,
+                        device_id: expected_serde.device_id.clone(),
+                    };
+                    let project_root = self.projects_root.join(project_id);
+                    match crate::sync::staging::replace::check_replace_project_guard(
+                        &project_root,
+                        Some(&expected_lww),
+                    ) {
+                        crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
+                            // guard 通过，继续执行删除。
+                        }
+                        crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
+                            let msg = match e {
+                                crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
+                                    expected,
+                                    current,
+                                } => format!(
+                                    "DeleteProject guard failed: local advanced \
+                                     (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
+                                     — not touching live",
+                                    expected.lww_time_ms,
+                                    expected.device_id,
+                                    current.lww_time_ms,
+                                    current.device_id
+                                ),
+                                crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
+                                    format!("DeleteProject guard snapshot failed: {err}")
+                                }
+                            };
+                            log::warn!(
+                                "[sync] commit_full_sync: DeleteProject {} guard failed: {}",
+                                project_id,
+                                msg
+                            );
+                            target.result.status =
+                                crate::sync::SyncStatus::RecoverableError(msg.clone());
+                            target.result.error = Some(msg);
+                            continue;
+                        }
+                    }
+                }
+
                 // #645 评论 5504296097 问题1：RemoteLifecycle origin — 不生成
                 // PendingDeletedTarget（远端已删，不反向要求删远端）。
                 log::info!(
@@ -518,11 +708,11 @@ impl super::WriterCore {
                     crate::project::ProjectDeleteOrigin::RemoteLifecycle,
                 ) {
                     Ok(outcome) => {
-                        // #645 评论 5504296097 问题2修复：收集完整 receipt，
-                        // API 层用 change_set 记 history + ack 推进 journal。
-                        for path in outcome.changes.to_flat_paths() {
-                            lifecycle_committed_paths.push(path);
-                        }
+                        // #645 评论 5504296097 问题4 修复：RemoteLifecycle delete 走单一
+                        // durable 路线 — 不把 outcome.changes.to_flat_paths() 塞进
+                        // lifecycle_committed_paths（避免与 receipt.change_set 双重记 history）。
+                        // API 层用 receipt.change_set 调 record_workspace_change_set_history，
+                        // 成功后调 ack_project_delete_history。
                         lifecycle_receipts.push(crate::sync::types::LocalLifecycleCommitReceipt {
                             journal_token: outcome.journal_token.clone(),
                             change_set: outcome.changes.clone(),
@@ -725,8 +915,8 @@ impl super::WriterCore {
 
     /// 正式事务开始：原子写 `Syncing` + 本次 attempt 时间，保留旧 last_success_time。
     /// 写失败只记录警告（同步本身继续，状态持久化是副作用）。
-    /// `pub(super)`：仅供 facade 内部与 `sync_ops_tests` 验证中断语义。
-    pub(super) fn persist_full_sync_started(&self) {
+    /// #645 评论 5504296097 回退问题：改为 `pub(crate)` 供 API 层在短锁内调用。
+    pub(crate) fn persist_full_sync_started(&self) {
         let previous = self.load_full_sync_state().unwrap_or(None);
         let state = crate::sync::full_sync_state::FullSyncState::started(
             previous.as_ref(),

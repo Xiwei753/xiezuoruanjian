@@ -105,6 +105,9 @@ pub(crate) enum TargetCommitMode {
     Full,
     ConflictMetadataOnly,
     Skip,
+    /// #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan
+    /// （staging 有 → Apply；live 有但 staging 没有 → Delete），不走普通三方合并。
+    ReplaceProject,
 }
 
 pub(crate) fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetCommitMode {
@@ -143,8 +146,10 @@ pub(crate) fn apply_staging_commits_for_targets(
         // #645 评论 5504296097 问题1：有 DeleteProject lifecycle action 的 target
         // 跳过 staging commit（本地删除由 commit_full_sync 的 lifecycle action 处理）。
         // 否则 staging commit 会把 staging 里的旧作品内容写回 live，复活刚删掉的作品。
-        // #645 评论 5504296097 问题2：ReplaceProject 走整树替换 commit
-        // （staging 有 → Apply；live 有但 staging 没有 → Delete）。
+        // #645 评论 5504296097 问题2 修复：ReplaceProject 走整树替换 commit
+        // （staging 有 → Apply；live 有但 staging 没有 → Delete），不再走普通
+        // compute_commit_plan。在真正 Apply/Delete 之前用 snapshot_local_records_read_only
+        // 重新计算当前 local target LWW，与 expected_local_lww guard 比较。
         let has_delete_action = transfer_targets
             .get(idx)
             .map(|t| {
@@ -166,11 +171,8 @@ pub(crate) fn apply_staging_commits_for_targets(
         let mode = if has_delete_action {
             TargetCommitMode::Skip
         } else if has_replace_action {
-            // #645 评论 5504296097 问题2：ReplaceProject 用 Full mode 但
-            // compute_commit_plan 需要包含 live-only 旧文件做 Delete。
-            // 通过 TargetCommitMode::Full 走正常路径，但 compute_commit_plan
-            // 已扩展为包含 live_paths（见 staging/run.rs）。
-            TargetCommitMode::Full
+            // #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan。
+            TargetCommitMode::ReplaceProject
         } else if let Some(target) = transfer_targets.get(idx) {
             target_commit_mode(&target.result.status)
         } else {
@@ -316,6 +318,119 @@ pub(crate) fn apply_staging_commits_for_targets(
                 target_conflicts.push(plan.conflict);
                 target_results.push(TargetCommitResult::Ok);
                 run.cleanup();
+            }
+            TargetCommitMode::ReplaceProject => {
+                // #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan。
+                let live_root = run.target_live_root();
+                let staging_root = run.staging_root();
+
+                // 1. guard 检查：用 snapshot_local_records_read_only 重新计算当前
+                //    local target LWW，与 expected_local_lww 比较。
+                let expected_lww =
+                    transfer_targets
+                        .get(idx)
+                        .and_then(|t| match &t.local_lifecycle_action {
+                            crate::sync::types::LocalLifecycleCommitAction::ReplaceProject {
+                                expected_local_lww,
+                                ..
+                            } => expected_local_lww.as_ref().map(|s| {
+                                crate::sync::full_sync::LiveTargetLww {
+                                    lww_time_ms: s.lww_time_ms,
+                                    device_id: s.device_id.clone(),
+                                }
+                            }),
+                            _ => None,
+                        });
+                match crate::sync::staging::replace::check_replace_project_guard(
+                    live_root,
+                    expected_lww.as_ref(),
+                ) {
+                    crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
+                        // guard 通过，继续执行 replace plan。
+                    }
+                    crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
+                        let msg = match e {
+                            crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
+                                expected,
+                                current,
+                            } => format!(
+                                "ReplaceProject guard failed: local advanced \
+                                 (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
+                                 — not touching live",
+                                expected.lww_time_ms,
+                                expected.device_id,
+                                current.lww_time_ms,
+                                current.device_id
+                            ),
+                            crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
+                                format!("ReplaceProject guard snapshot failed: {err}")
+                            }
+                        };
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                }
+
+                // 2. 构建 replace plan（staging 有 → Apply；live 有但 staging 没有 → Delete）。
+                let plan = match crate::sync::staging::replace::build_replace_project_plan(
+                    live_root,
+                    &staging_root,
+                ) {
+                    Ok(plan) => plan,
+                    Err(e) => {
+                        let msg = format!("build_replace_project_plan failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+
+                // 3. 应用 replace plan 到 live。
+                let mut tx = match apply_commit_plan_to_live(
+                    live_root,
+                    &plan.content_actions,
+                    &plan.engine_state_actions,
+                    false,
+                ) {
+                    Ok(tx) => tx,
+                    Err(e) => {
+                        let msg = format!("apply_commit_plan_to_live failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
+
+                match tx.finish() {
+                    Ok(()) => {
+                        let (kind, pid) = transfer_targets
+                            .get(idx)
+                            .map(|t| (t.target_kind.as_str(), t.project_id.as_deref()))
+                            .unwrap_or(("", None));
+                        collect_action_paths(
+                            kind,
+                            pid,
+                            &plan.content_actions,
+                            &mut committed_paths,
+                        );
+                        target_conflicts.push(plan.conflict);
+                        target_results.push(TargetCommitResult::Ok);
+                        run.cleanup();
+                    }
+                    Err(e) => {
+                        let msg = format!("tx.finish() failed: {}", e);
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                    }
+                }
             }
         }
     }

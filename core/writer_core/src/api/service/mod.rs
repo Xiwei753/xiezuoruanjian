@@ -150,20 +150,25 @@ impl WriterCoreApi {
         }
     }
 
-    /// #645 评论 5504296097 问题2：在写事务完成后记录本地历史（变更集）。
+    /// #645 评论 5504296097 问题2 修复：在写事务完成后记录本地历史（变更集）。
     ///
     /// 按 [`WorkspaceChangeSet`] 中的 change 类型分别处理 Upsert/Delete/DeleteTree。
     /// 空变更集直接返回，绝不触发全量扫描。
+    ///
+    /// #645 评论 5504296097 问题4 修复：返回 `Result`，失败时调用方不 ack
+    /// （journal 保留 StarMapsUnbound，下次启动 recover 补记）。不再是无条件
+    /// best-effort void helper。
     pub(crate) fn record_workspace_change_set_history(
         &self,
         change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
         message: &str,
-    ) {
+    ) -> crate::error::Result<()> {
         let layout_guard = match self.workspace_git_layout.read() {
             Ok(g) => g,
             Err(_) => {
-                log::warn!("record_workspace_change_set_history: layout lock poisoned, skipping");
-                return;
+                return Err(crate::Error::Io(std::io::Error::other(
+                    "record_workspace_change_set_history: layout lock poisoned",
+                )));
             }
         };
         match crate::storage::workspace_git::record_workspace_change_set(
@@ -179,14 +184,16 @@ impl WriterCoreApi {
                         result.staged_count
                     );
                 }
+                Ok(())
             }
             Err(e) => {
                 log::warn!(
                     "record_workspace_change_set_history: failed to record ({}): {} — \
-                     local history is best-effort, main operation unaffected",
+                     journal will be retained for recover",
                     message,
                     e
                 );
+                Err(e)
             }
         }
     }
