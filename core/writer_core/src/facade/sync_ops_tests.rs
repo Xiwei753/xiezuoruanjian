@@ -1479,11 +1479,12 @@ fn q1_commit_full_sync_executes_delete_project_action() {
         deleted_resolution: None,
         local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
             project_id: project_id.clone(),
+            expected_local_lww: None,
         },
     }];
     let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
 
-    let (result, _committed_paths) = core.commit_full_sync(transfer_result, Vec::new());
+    let (result, _committed_paths, _) = core.commit_full_sync(transfer_result, Vec::new());
 
     // project 目录应已被 ProjectDeleteTransaction move 到 trash。
     assert!(
@@ -1520,6 +1521,7 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
         deleted_resolution: None,
         local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
             project_id: project_id.clone(),
+            expected_local_lww: None,
         },
     }];
     let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };

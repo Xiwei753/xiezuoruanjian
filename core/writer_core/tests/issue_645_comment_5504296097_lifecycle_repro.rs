@@ -181,10 +181,16 @@ fn problem2_commit_full_sync_drops_journal_token_static_evidence() {
         ("file", "core/writer_core/src/facade/sync_ops.rs"),
         ("commit_full_sync_range", "376-520"),
         ("remote_lifecycle_branch", "400-415"),
-        ("uses_outcome_changes", "line 411: outcome.changes.to_flat_paths()"),
+        (
+            "uses_outcome_changes",
+            "line 411: outcome.changes.to_flat_paths()",
+        ),
         ("drops_journal_token", "outcome.journal_token 未被引用"),
         ("no_ack_call", "未调 ack_project_delete_history"),
-        ("target_no_changes", "line 415: target.result = SyncResult::no_changes()"),
+        (
+            "target_no_changes",
+            "line 415: target.result = SyncResult::no_changes()",
+        ),
     ];
     assert!(!evidence.is_empty());
 }
@@ -358,10 +364,22 @@ fn problem6_dry_run_catalog_failure_fakes_empty_catalog_static_evidence() {
     let evidence = vec![
         ("file", "core/writer_core/src/facade/sync_ops.rs"),
         ("dry_run_load_remote_catalog", "line 164-189"),
-        ("provider_fail_fallback", "line 169-178: create_sync_provider_for_plan 失败 → TargetLifecycleCatalog::default()"),
-        ("catalog_fail_fallback", "line 179-188: load_remote_catalog 失败 → TargetLifecycleCatalog::default()"),
-        ("contrast_formal", "api/sync_api.rs line 256-270: 正式同步 catalog 失败返回 Err (RecoverableError)"),
-        ("issue", "dry-run 伪装空 catalog 会隐藏 remote-only/delete target，planner 误判'远端无记录'"),
+        (
+            "provider_fail_fallback",
+            "line 169-178: create_sync_provider_for_plan 失败 → TargetLifecycleCatalog::default()",
+        ),
+        (
+            "catalog_fail_fallback",
+            "line 179-188: load_remote_catalog 失败 → TargetLifecycleCatalog::default()",
+        ),
+        (
+            "contrast_formal",
+            "api/sync_api.rs line 256-270: 正式同步 catalog 失败返回 Err (RecoverableError)",
+        ),
+        (
+            "issue",
+            "dry-run 伪装空 catalog 会隐藏 remote-only/delete target，planner 误判'远端无记录'",
+        ),
     ];
     assert!(!evidence.is_empty());
 }

@@ -213,6 +213,8 @@ impl WriterCoreApi {
     ///
     /// #645 评论 5504296097 问题6：dry-run 网络 IO（读远端 catalog）在 core_write()
     /// 锁外执行，拆三段短锁，避免阻塞正文/作品读取。
+    /// #645 评论 5504296097 问题5：dry-run 用 core_read() + read-only state loader，
+    /// 绝不写本地文件，绝不写远端（discover_legacy_remote_catalog 只读）。
     pub fn perform_full_sync_dry_run(
         &self,
         config: SyncConfigDto,
@@ -229,16 +231,15 @@ impl WriterCoreApi {
                 Err(e) => {
                     // #645 评论 5504296097 问题6：provider 创建失败 → 返回错误，
                     // 不降级为空 catalog（dry-run 是预览，但不能返回假的远端事实）。
-                    log::warn!(
-                        "[sync] dry-run: create_sync_provider_for_plan failed: {e}"
-                    );
+                    log::warn!("[sync] dry-run: create_sync_provider_for_plan failed: {e}");
                     return Err(crate::api::error::WriterError::from(e));
                 }
             }
         } else {
             // sync disabled → 不做网络 IO，用空 catalog。
+            // #645 评论 5504296097 问题5：用 core_read（dry-run 只读）。
             return self
-                .core_write()
+                .core_read()
                 .perform_full_sync_dry_run_with_catalog(
                     &sync_config,
                     &crate::sync::types::TargetLifecycleCatalog::default(),
@@ -248,23 +249,20 @@ impl WriterCoreApi {
         };
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        // #645 评论 5504296097 问题6：catalog 读取失败返回错误，不降级为空 catalog。
-        // “预览”可以不执行写操作，但不能返回假的远端事实（会隐藏 remote-only Project / remote delete）。
+        // #645 评论 5504296097 问题5：用 discover_legacy_remote_catalog（只读，不写远端）。
+        // dry-run 绝不在远端创建 targets.sync.json。
         let remote_catalog_snapshot =
-            crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
+            crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref())
                 .map_err(|e| {
-                    log::warn!(
-                        "[sync] dry-run: load_remote_catalog failed: {e}"
-                    );
+                    log::warn!("[sync] dry-run: discover_legacy_remote_catalog failed: {e}");
                     crate::api::error::WriterError::from(e)
                 })?;
 
-        // 1c. 短锁 B：构建 plan（纯本地 IO）。
-        self.core_write()
-            .perform_full_sync_dry_run_with_catalog(
-                &sync_config,
-                &remote_catalog_snapshot.catalog,
-            )
+        // 1c. 短锁 B（read）：构建 plan（纯本地 IO，read-only）。
+        // #645 评论 5504296097 问题5：用 core_read + read-only state loader，
+        // 不写本地文件。
+        self.core_read()
+            .perform_full_sync_dry_run_with_catalog(&sync_config, &remote_catalog_snapshot.catalog)
             .map(Into::into)
             .map_err(Into::into)
     }

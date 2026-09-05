@@ -3188,6 +3188,8 @@ mod tests {
         // build_local_records 生成 delete 墓碑。远端 manifest 记录 upsert
         // （updated_at_ms 较小），LWW 本地 delete 时间戳获胜 →
         // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
+        // #645 评论 5504296097 问题1.2修复：必须有 tombstone 才能生成 delete record
+        // （无 tombstone 不伪造 now_ms 作为删除时间）。
         let dir = tempdir().unwrap();
 
         let mut state = crate::sync::types::SyncState::default();
@@ -3198,6 +3200,16 @@ mod tests {
         state
             .known_files_updated_at
             .insert("project.json".to_string(), 1000);
+        // 添加 tombstone 记录真实删除时间（deleted_at=2 → 2000ms > remote 900ms）。
+        state.tombstones.push(crate::sync::types::Tombstone {
+            original_path: "project.json".to_string(),
+            trash_path: "app-meta/trash/project.json".to_string(),
+            deleted_at: 2,
+            purge_after: 9999999999,
+            deleted_by: "device_local".to_string(),
+            original_hash: "old_hash".to_string(),
+            kind: "local_delete".to_string(),
+        });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let remote_manifest = crate::sync::types::SyncManifest {

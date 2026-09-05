@@ -108,9 +108,9 @@ impl super::WriterCore {
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
         for planned in &planned_targets {
-            let plan = if !config.enabled {
-                SyncPlan::new()
-            } else if planned.is_deleted_target() {
+            // #645 评论 5504296097 问题5：dry-run 用 read-only state loader，
+            // build_sync_plan 内部已改用 load_sync_state_read_only。
+            let plan = if !config.enabled || planned.is_deleted_target() {
                 SyncPlan::new()
             } else {
                 crate::sync::SyncService::build_sync_plan(
@@ -378,54 +378,8 @@ impl super::WriterCore {
         // #645 评论 5504296097 问题2修复：收集 LocalLifecycleCommitReceipt，
         // API 层负责记 history + ack（facade 没有 workspace_git_layout）。
         let mut targets = transfer_result.targets;
-        let mut lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
-        let mut lifecycle_receipts: Vec<crate::sync::types::LocalLifecycleCommitReceipt> =
-            Vec::new();
-        for target in &mut targets {
-            if let crate::sync::types::LocalLifecycleCommitAction::DeleteProject { project_id } =
-                &target.local_lifecycle_action
-            {
-                // #645 评论 5504296097 问题1：RemoteLifecycle origin — 不生成 PendingDeletedTarget
-                // （远端已删，不反向要求删远端）。staging commit 会跳过这些 target。
-                log::info!(
-                    "[sync] commit_full_sync: DeleteProject (remote lifecycle) project_id={}",
-                    project_id
-                );
-                let device_id = crate::settings::load_device_info(&self.app_data_root)
-                    .map(|info| info.device_id)
-                    .unwrap_or_default();
-                match crate::project::delete_project_with_changes(
-                    &self.projects_root,
-                    project_id,
-                    &self.app_data_root,
-                    &device_id,
-                    crate::project::ProjectDeleteOrigin::RemoteLifecycle,
-                ) {
-                    Ok(outcome) => {
-                        // #645 评论 5504296097 问题2修复：收集完整 receipt，
-                        // API 层用 change_set 记 history + ack 推进 journal。
-                        for path in outcome.changes.to_flat_paths() {
-                            lifecycle_committed_paths.push(path);
-                        }
-                        lifecycle_receipts.push(crate::sync::types::LocalLifecycleCommitReceipt {
-                            journal_token: outcome.journal_token.clone(),
-                            change_set: outcome.changes.clone(),
-                            unbound_starmap_ids: outcome.unbound_starmap_ids.clone(),
-                            origin: crate::project::ProjectDeleteOrigin::RemoteLifecycle,
-                        });
-                        // #645 评论 5504296097 问题2修复：真实删除是实际变更，
-                        // 用 Success 触发 rebuild_search_index（NoChanges 不触发）。
-                        target.result = crate::sync::types::SyncResult::success();
-                    }
-                    Err(e) => {
-                        let msg = format!("remote lifecycle delete failed: {e}");
-                        target.result.status =
-                            crate::sync::SyncStatus::RecoverableError(msg.clone());
-                        target.result.error = Some(msg);
-                    }
-                }
-            }
-        }
+        let (lifecycle_committed_paths, lifecycle_receipts) =
+            self.apply_local_lifecycle_deletes(&mut targets);
 
         // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
         // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
@@ -520,6 +474,75 @@ impl super::WriterCore {
         let mut all_committed_paths = lifecycle_committed_paths;
         all_committed_paths.extend(commit_outcome.committed_paths);
         (result, all_committed_paths, lifecycle_receipts)
+    }
+
+    /// #645 评论 5504296097 问题1/2：对有 `DeleteProject` lifecycle action 的 target
+    /// 执行完整 Project 本地删除事务（move worktree / unbind starmaps / history），
+    /// 不生成 PendingDeletedTarget（远端已删，不反向要求删远端）。staging commit 会
+    /// 跳过这些 target。
+    ///
+    /// 返回 `(lifecycle_committed_paths, lifecycle_receipts)`：
+    /// - `lifecycle_committed_paths`：本次删除真正落盘的 workspace-relative paths；
+    /// - `lifecycle_receipts`：`LocalLifecycleCommitReceipt`，供 API 层记 history + ack。
+    #[allow(clippy::excessive_nesting)]
+    fn apply_local_lifecycle_deletes(
+        &self,
+        targets: &mut [crate::sync::types::TargetSyncResult],
+    ) -> (
+        Vec<std::path::PathBuf>,
+        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
+    ) {
+        let mut lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut lifecycle_receipts: Vec<crate::sync::types::LocalLifecycleCommitReceipt> =
+            Vec::new();
+        for target in targets {
+            if let crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                project_id,
+                expected_local_lww: _,
+            } = &target.local_lifecycle_action
+            {
+                // #645 评论 5504296097 问题1：RemoteLifecycle origin — 不生成
+                // PendingDeletedTarget（远端已删，不反向要求删远端）。
+                log::info!(
+                    "[sync] commit_full_sync: DeleteProject (remote lifecycle) project_id={}",
+                    project_id
+                );
+                let device_id = crate::settings::load_device_info(&self.app_data_root)
+                    .map(|info| info.device_id)
+                    .unwrap_or_default();
+                match crate::project::delete_project_with_changes(
+                    &self.projects_root,
+                    project_id,
+                    &self.app_data_root,
+                    &device_id,
+                    crate::project::ProjectDeleteOrigin::RemoteLifecycle,
+                ) {
+                    Ok(outcome) => {
+                        // #645 评论 5504296097 问题2修复：收集完整 receipt，
+                        // API 层用 change_set 记 history + ack 推进 journal。
+                        for path in outcome.changes.to_flat_paths() {
+                            lifecycle_committed_paths.push(path);
+                        }
+                        lifecycle_receipts.push(crate::sync::types::LocalLifecycleCommitReceipt {
+                            journal_token: outcome.journal_token.clone(),
+                            change_set: outcome.changes.clone(),
+                            unbound_starmap_ids: outcome.unbound_starmap_ids.clone(),
+                            origin: crate::project::ProjectDeleteOrigin::RemoteLifecycle,
+                        });
+                        // #645 评论 5504296097 问题2修复：真实删除是实际变更，
+                        // 用 Success 触发 rebuild_search_index（NoChanges 不触发）。
+                        target.result = crate::sync::types::SyncResult::success();
+                    }
+                    Err(e) => {
+                        let msg = format!("remote lifecycle delete failed: {e}");
+                        target.result.status =
+                            crate::sync::SyncStatus::RecoverableError(msg.clone());
+                        target.result.error = Some(msg);
+                    }
+                }
+            }
+        }
+        (lifecycle_committed_paths, lifecycle_receipts)
     }
 
     /// #645 评论 5504296097 问题1/2：deleted target 远端清理/恢复成功后，

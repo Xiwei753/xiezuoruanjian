@@ -115,6 +115,10 @@ fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()
 /// - catalog 校验失败 → 返回 `Err`（损坏 record 不应被静默隐藏）。
 ///
 /// 返回的 `version` 用于后续 CAS 写入（`IfMatch`），防止多设备并发覆盖。
+///
+/// #645 评论 5504296097 问题5：本函数是纯只读的（只 `provider.read`，不 `provider.write`）。
+/// dry-run 安全调用。`__nonexistent__` version 只是标记"远端不存在"，不会自动写远端 —
+/// 只有显式调 [`persist_bootstrap_catalog`] 或 [`write_catalog_once`] 才落盘。
 pub fn load_remote_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
@@ -123,6 +127,8 @@ pub fn load_remote_catalog(
         .map_err(crate::Error::from)?;
     let Some(obj) = obj else {
         // 文件不存在：首次写应用 CreateNew，版本用 sentinel 表示不存在。
+        // #645 评论 5504296097 问题5：此处不写远端，只返回 sentinel version。
+        // dry-run 可以安全调用本函数 — 不会在远端创建 targets.sync.json。
         return Ok(RemoteTargetCatalogSnapshot {
             catalog: TargetLifecycleCatalog::default(),
             version: RemoteVersion::new("__nonexistent__"),
@@ -138,6 +144,34 @@ pub fn load_remote_catalog(
     // #645 评论 5504296097 问题6：校验整个 catalog，损坏 record 不应被静默隐藏。
     validate_catalog(&catalog)?;
     Ok(RemoteTargetCatalogSnapshot { catalog, version })
+}
+
+/// #645 评论 5504296097 问题5：发现远端 catalog（只读，不写）。
+///
+/// 与 [`load_remote_catalog`] 同语义，明确表达"只发现不落盘"。
+/// dry-run 用本函数：catalog 不存在 → 返回空 catalog + `__nonexistent__` version，
+/// **绝不**写远端。正式 sync 在确认需要 bootstrap 后调 [`persist_bootstrap_catalog`]。
+pub fn discover_legacy_remote_catalog(
+    provider: &dyn SyncProvider,
+) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
+    load_remote_catalog(provider)
+}
+
+/// #645 评论 5504296097 问题5：持久化 bootstrap catalog（正式 sync 才调用）。
+///
+/// 当 `snapshot.version` 为 `__nonexistent__` 时用 `CreateNew` 首次写入远端。
+/// dry-run **不**调本函数 — 只用 [`discover_legacy_remote_catalog`] 发现 catalog，
+/// 把内存 catalog 传 planner，绝不写远端。
+pub fn persist_bootstrap_catalog(
+    provider: &dyn SyncProvider,
+    catalog: &TargetLifecycleCatalog,
+    version: &RemoteVersion,
+) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog: catalog.clone(),
+        version: version.clone(),
+    };
+    write_catalog_once(provider, &snapshot)
 }
 
 /// #645 评论 5504296097 问题3/4：CAS 写远端 catalog，返回持久化后的完整 snapshot。

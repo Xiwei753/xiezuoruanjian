@@ -43,3 +43,8 @@ pub(crate) use crate::sync::content_class::{
 
 // #648：把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
 pub(crate) use engine::perform_lww_sync;
+
+// #645 评论 5504296097 问题1：re-export 只读 local record 投影 helper，
+// 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
+// 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
+pub(crate) use manifest::snapshot_local_records_read_only;

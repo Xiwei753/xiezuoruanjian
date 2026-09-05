@@ -275,6 +275,62 @@ impl crate::sync::SyncService {
         Self::load_sync_state_with_preferred_device_id(sync_root, None)
     }
 
+    /// #645 评论 5504296097 问题1/5：只读加载同步状态 — 不写文件、不删旧文件。
+    ///
+    /// 与 [`load_sync_state_with_preferred_device_id`] 的关键区别：
+    /// - 旧格式 `sync_state.json` 迁移只在内存做，**不** `save_sync_state` 也**不** `remove_file`；
+    /// - `device_id` 补写只在内存做，**不** `save_sync_state`。
+    #[allow(clippy::excessive_nesting)]
+    ///
+    /// 供 planner / dry-run / `snapshot_local_records_read_only` 使用，
+    /// 保证 dry-run 和 plan 阶段绝不落盘。正式同步仍用
+    /// [`load_sync_state_with_preferred_device_id`]（迁移落盘只放正式写路径）。
+    pub fn load_sync_state_read_only(
+        sync_root: &Path,
+        preferred_device_id: Option<&str>,
+    ) -> crate::Result<SyncState> {
+        let resolve_device_id = |existing: &str| -> String {
+            if !existing.is_empty() {
+                return existing.to_string();
+            }
+            if let Some(id) = preferred_device_id {
+                if !id.is_empty() {
+                    return id.to_string();
+                }
+            }
+            uuid::Uuid::new_v4().to_string()
+        };
+
+        let state_path = sync_root.join("app-meta/sync/state.local.json");
+        if !state_path.exists() {
+            // 旧格式迁移：只读不写。
+            let old_path = sync_root.join("app-meta/sync/sync_state.json");
+            if old_path.exists() {
+                if let Ok(content) = std::fs::read_to_string(&old_path) {
+                    if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
+                        state.device_id = resolve_device_id(&state.device_id);
+                        // #645 评论 5504296097 问题5：read-only — 不 save、不 remove_file。
+                        return Ok(state);
+                    }
+                }
+            }
+            let default_state = SyncState {
+                device_id: resolve_device_id(""),
+                ..Default::default()
+            };
+            return Ok(default_state);
+        }
+
+        let content = std::fs::read_to_string(state_path)?;
+        let mut state: SyncState = serde_json::from_str(&content).unwrap_or_default();
+        let new_device_id = resolve_device_id(&state.device_id);
+        if new_device_id != state.device_id {
+            // #645 评论 5504296097 问题5：read-only — 只在内存补 device_id，不 save。
+            state.device_id = new_device_id;
+        }
+        Ok(state)
+    }
+
     /// 加载同步状态，优先使用平台注入的 device_id。
     ///
     /// 当 `preferred_device_id` 为 `Some` 且 state 中 device_id 为空时，

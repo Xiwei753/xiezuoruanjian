@@ -4,6 +4,11 @@
 //!
 //! #644 评论 5473105049 第5节：local record / tombstone record / remote record 构造
 //! 也收归本模块，`mod.rs` 只保留重试和一次 attempt 的编排。
+//!
+//! #645 评论 5504296097 问题1：`snapshot_local_records_read_only` 是真正的只读
+//! local record 投影 helper，保留 per-file LWW（含真实 winner device_id），
+//! 绝不伪造 now_ms 作为删除时间。`snapshot_local_target_lifecycle` 和 LWW
+//! `execute_lww_sync_attempt` 都复用它。
 
 use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope, SyncState};
 use crate::sync::SyncService;
@@ -27,6 +32,167 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     }
 }
 
+/// #645 评论 5504296097 问题1：真正的只读 local record 投影 helper。
+///
+/// 读 old manifest + read-only SyncState → scan 当前文件，产出完整 LWW 投影：
+///
+/// - 当前 hash 与 old manifest record hash 相同 → 直接 clone old manifest record，
+///   保留原 `updated_at` / `deleted_at` / `device_id` / `op`（**不**丢 winner device_id）；
+/// - 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id 生成新 upsert；
+/// - known file 消失且有真实 tombstone → 用 tombstone 的 `deleted_at` + `deleted_by`/device_id
+///   生成 delete record（**不**伪造 now_ms）；
+/// - known file 消失且无 tombstone → 返回 `Err`（调用方应走 Retry，绝不能用 now_ms 伪造删除时间）。
+///
+/// 这个 helper 是真正只读的：用 [`SyncService::load_sync_state_read_only`] 加载 state，
+/// 不写文件、不删旧文件。
+///
+/// 返回 `HashMap<path, ManifestFileRecord>`，供 `build_sync_plan`（plan/dry-run 路径）
+/// 与 LWW `execute_lww_sync_attempt` 同源复用。
+#[allow(clippy::too_many_lines, clippy::excessive_nesting)]
+pub fn snapshot_local_records_read_only(
+    sync_root: &Path,
+    scope: SyncScope,
+    preferred_device_id: &str,
+) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
+    // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
+    let manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
+    let old_manifest_records: HashMap<String, ManifestFileRecord> = if manifest_path.exists() {
+        match std::fs::read(&manifest_path) {
+            Ok(content) => match serde_json::from_slice::<SyncManifest>(&content) {
+                Ok(manifest) => manifest
+                    .files
+                    .into_iter()
+                    .map(|r| (r.path.clone(), r))
+                    .collect(),
+                Err(e) => {
+                    log::warn!(
+                        "[sync] snapshot_local_records_read_only: \
+                             manifest corrupt at {}: {e} — using empty manifest",
+                        manifest_path.display()
+                    );
+                    HashMap::new()
+                }
+            },
+            Err(e) => {
+                log::warn!(
+                    "[sync] snapshot_local_records_read_only: \
+                     manifest read failed at {}: {e} — using empty manifest",
+                    manifest_path.display()
+                );
+                HashMap::new()
+            }
+        }
+    } else {
+        HashMap::new()
+    };
+
+    // 2. 读 SyncState（read-only，不写文件）。
+    let state = SyncService::load_sync_state_read_only(
+        sync_root,
+        if preferred_device_id.is_empty() {
+            None
+        } else {
+            Some(preferred_device_id)
+        },
+    )?;
+
+    // 3. scan 当前文件。
+    let local_entries = crate::sync::scanner::scan_for_sync(sync_root, scope)?;
+    let now_ms = chrono::Utc::now().timestamp_millis();
+
+    let mut records = HashMap::new();
+
+    for entry in &local_entries {
+        if entry.sync_kind == crate::sync::types::SyncKind::Upload
+            && entry.relative_path != SYNC_MANIFEST_PATH
+        {
+            let path = entry.relative_path.clone();
+            let local_hash = entry.file_hash.clone();
+
+            // #645 评论 5504296097 问题1.1：当前 hash 与 old manifest record hash 相同
+            // → 直接 clone old manifest record，保留原 device_id。
+            if let Some(old_rec) = old_manifest_records.get(&path) {
+                if old_rec.content_hash == local_hash && old_rec.op == "upsert" {
+                    records.insert(path.clone(), old_rec.clone());
+                    continue;
+                }
+            }
+
+            // 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id。
+            let updated_at_ms = if let Some(known_hash) = state.known_files.get(&path) {
+                if *known_hash == local_hash {
+                    state
+                        .known_files_updated_at
+                        .get(&path)
+                        .cloned()
+                        .unwrap_or(0)
+                } else {
+                    read_mtime_ms(sync_root, &path, now_ms)
+                }
+            } else {
+                read_mtime_ms(sync_root, &path, now_ms)
+            };
+
+            records.insert(
+                path.clone(),
+                ManifestFileRecord {
+                    path,
+                    content_hash: local_hash,
+                    updated_at_ms,
+                    deleted_at_ms: None,
+                    device_id: state.device_id.clone(),
+                    op: "upsert".to_string(),
+                    schema_version: 1,
+                },
+            );
+        }
+    }
+
+    // 4. known file 消失 → 有 tombstone 用真实删除时间；无 tombstone 返回 Err。
+    for path in state.known_files.keys() {
+        if records.contains_key(path) {
+            continue;
+        }
+        if !SyncService::is_whitelisted_path(path, scope)
+            || SyncService::is_blacklisted_path(path, scope)
+        {
+            continue;
+        }
+        if !sync_root.join(path).exists() {
+            // 有真实 tombstone → 用 tombstone 的 deleted_at + deleted_by/device_id。
+            if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
+                let deleted_at_ms = tombstone.deleted_at * 1000;
+                records.insert(
+                    path.clone(),
+                    ManifestFileRecord {
+                        path: path.clone(),
+                        content_hash: String::new(),
+                        updated_at_ms: deleted_at_ms,
+                        deleted_at_ms: Some(deleted_at_ms),
+                        device_id: if tombstone.deleted_by.is_empty() {
+                            state.device_id.clone()
+                        } else {
+                            tombstone.deleted_by.clone()
+                        },
+                        op: "delete".to_string(),
+                        schema_version: 1,
+                    },
+                );
+            } else {
+                // #645 评论 5504296097 问题1.2：无 tombstone → 绝不伪造 now_ms。
+                // 返回 Err，调用方应走 Retry。
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "snapshot_local_records_read_only: known file {} missing without tombstone \
+                     — cannot fabricate delete time",
+                    path
+                ))));
+            }
+        }
+    }
+
+    Ok(records)
+}
+
 /// #644 评论 5473105049 第5节：构建本地文件记录（upsert + delete 墓碑）。
 ///
 /// 从 `execute_lww_sync_attempt` 抽出。扫描结果中 `SyncKind::Upload` 的文件生成
@@ -37,13 +203,22 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
 /// 2. 已知文件但哈希已变 → 使用文件系统 mtime
 /// 3. 新文件 → 使用文件系统 mtime
 /// 4. mtime 读取失败 → 退回 `now_ms`
-#[allow(clippy::excessive_nesting)]
+///
+/// #645 评论 5504296097 问题1.1：`old_manifest_records` 携带 per-file 真实 winner
+/// device_id。已知文件 hash 未变时优先用 old manifest record 的 device_id，
+/// 不再统一写 `state.device_id`（丢掉上一次真正 winner 的 device_id）。
+///
+/// #645 评论 5504296097 问题1.2：known file 消失且无 tombstone 时，**不**伪造
+/// `now_ms` 作为删除时间。跳过该 path（不生成 delete record），调用方在
+/// `snapshot_local_records_read_only` 路径会返回 Err 走 Retry。
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 pub(super) fn build_local_records(
     sync_root: &Path,
     local_entries: &[crate::sync::types::SyncFileEntry],
     state: &SyncState,
     scope: SyncScope,
     now_ms: i64,
+    old_manifest_records: &HashMap<String, ManifestFileRecord>,
 ) -> HashMap<String, ManifestFileRecord> {
     let mut local_records = HashMap::new();
 
@@ -53,6 +228,15 @@ pub(super) fn build_local_records(
         {
             let path = entry.relative_path.clone();
             let local_hash = entry.file_hash.clone();
+
+            // #645 评论 5504296097 问题1.1：当前 hash 与 old manifest record hash 相同
+            // → 直接 clone old manifest record，保留原 device_id。
+            if let Some(old_rec) = old_manifest_records.get(&path) {
+                if old_rec.content_hash == local_hash && old_rec.op == "upsert" {
+                    local_records.insert(path.clone(), old_rec.clone());
+                    continue;
+                }
+            }
 
             let updated_at_ms = if let Some(known_hash) = state.known_files.get(&path) {
                 if *known_hash == local_hash {
@@ -92,24 +276,29 @@ pub(super) fn build_local_records(
                 continue;
             }
             if !sync_root.join(path).exists() {
-                let mut updated_at_ms = now_ms;
+                // #645 评论 5504296097 问题1.2：有 tombstone 才用真实删除时间；
+                // 无 tombstone 跳过（不伪造 now_ms）。
                 if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path)
                 {
-                    updated_at_ms = tombstone.deleted_at * 1000;
+                    let deleted_at_ms = tombstone.deleted_at * 1000;
+                    local_records.insert(
+                        path.clone(),
+                        ManifestFileRecord {
+                            path: path.clone(),
+                            content_hash: String::new(),
+                            updated_at_ms: deleted_at_ms,
+                            deleted_at_ms: Some(deleted_at_ms),
+                            device_id: if tombstone.deleted_by.is_empty() {
+                                state.device_id.clone()
+                            } else {
+                                tombstone.deleted_by.clone()
+                            },
+                            op: "delete".to_string(),
+                            schema_version: 1,
+                        },
+                    );
                 }
-
-                local_records.insert(
-                    path.clone(),
-                    ManifestFileRecord {
-                        path: path.clone(),
-                        content_hash: String::new(),
-                        updated_at_ms,
-                        deleted_at_ms: Some(updated_at_ms),
-                        device_id: state.device_id.clone(),
-                        op: "delete".to_string(),
-                        schema_version: 1,
-                    },
-                );
+                // 无 tombstone → 跳过（不伪造 now_ms）。
             }
         }
     }
@@ -247,5 +436,44 @@ mod tests {
         // Remote time should be 2000 (from deleted_at_ms) and win against local's 1500
         assert!(remote_time > local_time);
         assert_eq!(remote_time, 2000);
+    }
+
+    /// #645 评论 5504296097 问题1：snapshot_local_records_read_only 基本测试。
+    /// 验证：当前文件 hash 与 old manifest record hash 相同时，保留原 device_id。
+    #[test]
+    fn test_snapshot_local_records_read_only_preserves_device_id() {
+        use crate::sync::types::SyncScope;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let sync_root = tmp.path();
+
+        // 写一个 project.json 文件。
+        std::fs::write(sync_root.join("project.json"), b"content").unwrap();
+
+        // 写 old manifest，记录 device_id = "winner-device"。
+        let manifest = crate::sync::types::SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "project.json".to_string(),
+                content_hash: format!("{:x}", md5::compute(b"content")),
+                updated_at_ms: 1000,
+                deleted_at_ms: None,
+                device_id: "winner-device".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::create_dir_all(sync_root.join("app-meta/sync")).unwrap();
+        let _ = std::fs::write(
+            sync_root.join(SYNC_MANIFEST_PATH),
+            serde_json::to_string(&manifest).unwrap(),
+        );
+
+        let records =
+            snapshot_local_records_read_only(sync_root, SyncScope::Project, "current-device")
+                .unwrap();
+        let rec = records.get("project.json").unwrap();
+        // #645 评论 5504296097 问题1.1：保留原 winner 的 device_id，不写 currentA当前设备。
+        assert_eq!(rec.device_id, "winner-device");
     }
 }

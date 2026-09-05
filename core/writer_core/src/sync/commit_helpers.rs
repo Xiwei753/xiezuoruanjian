@@ -143,6 +143,8 @@ pub(crate) fn apply_staging_commits_for_targets(
         // #645 评论 5504296097 问题1：有 DeleteProject lifecycle action 的 target
         // 跳过 staging commit（本地删除由 commit_full_sync 的 lifecycle action 处理）。
         // 否则 staging commit 会把 staging 里的旧作品内容写回 live，复活刚删掉的作品。
+        // #645 评论 5504296097 问题2：ReplaceProject 走整树替换 commit
+        // （staging 有 → Apply；live 有但 staging 没有 → Delete）。
         let has_delete_action = transfer_targets
             .get(idx)
             .map(|t| {
@@ -152,8 +154,23 @@ pub(crate) fn apply_staging_commits_for_targets(
                 )
             })
             .unwrap_or(false);
+        let has_replace_action = transfer_targets
+            .get(idx)
+            .map(|t| {
+                matches!(
+                    t.local_lifecycle_action,
+                    crate::sync::types::LocalLifecycleCommitAction::ReplaceProject { .. }
+                )
+            })
+            .unwrap_or(false);
         let mode = if has_delete_action {
             TargetCommitMode::Skip
+        } else if has_replace_action {
+            // #645 评论 5504296097 问题2：ReplaceProject 用 Full mode 但
+            // compute_commit_plan 需要包含 live-only 旧文件做 Delete。
+            // 通过 TargetCommitMode::Full 走正常路径，但 compute_commit_plan
+            // 已扩展为包含 live_paths（见 staging/run.rs）。
+            TargetCommitMode::Full
         } else if let Some(target) = transfer_targets.get(idx) {
             target_commit_mode(&target.result.status)
         } else {

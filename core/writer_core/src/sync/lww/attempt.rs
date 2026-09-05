@@ -67,8 +67,34 @@ pub(crate) fn execute_lww_sync_attempt(
     let local_entries = scan_for_sync(sync_root, scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
 
+    // #645 评论 5504296097 问题1.1：读 local manifest 获取 per-file 真实 winner device_id。
+    let local_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
+    let old_manifest_records: std::collections::HashMap<String, ManifestFileRecord> =
+        if local_manifest_path.exists() {
+            match std::fs::read(&local_manifest_path) {
+                Ok(content) => match serde_json::from_slice::<SyncManifest>(&content) {
+                    Ok(manifest) => manifest
+                        .files
+                        .into_iter()
+                        .map(|r| (r.path.clone(), r))
+                        .collect(),
+                    Err(_) => std::collections::HashMap::new(),
+                },
+                Err(_) => std::collections::HashMap::new(),
+            }
+        } else {
+            std::collections::HashMap::new()
+        };
+
     // #644 评论 5473105049 第5节：local/remote record 构造委托给 manifest.rs。
-    let local_records = build_local_records(sync_root, &local_entries, state, scope, now_ms);
+    let local_records = build_local_records(
+        sync_root,
+        &local_entries,
+        state,
+        scope,
+        now_ms,
+        &old_manifest_records,
+    );
     let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope);
 
     // Build a quick-lookup set of unresolved conflict paths from the persisted state.

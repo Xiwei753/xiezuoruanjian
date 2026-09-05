@@ -185,7 +185,10 @@ pub fn build_full_sync_target_plan(
         // manifest 缺失 → 建立初始 manifest；manifest 损坏 → Retry。
         let candidate = compute_local_project_lifecycle_candidate(&project_local_root, device_id);
         let (live_lww, kind) = match &candidate {
-            LifecycleCandidate::Live { lww, initial_manifest } => {
+            LifecycleCandidate::Live {
+                lww,
+                initial_manifest,
+            } => {
                 let lww_clone = lww.clone();
                 let kind = decide_live_project_kind(remote_catalog, target_id, Some(lww));
                 // #645 评论 5504296097 问题4：initial_manifest 由正式同步在
@@ -283,19 +286,19 @@ pub fn build_full_sync_target_plan(
             // 远端 upsert 且本地没有 → RestoreProject。
             // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
             // 非法记录跳过并 log warn（不恢复、不删除、不 panic），不再 unwrap_or_default()。
-            let project_id = match crate::sync::target_lifecycle::parse_project_target_id(
-                &remote_rec.target_id,
-            ) {
-                Ok(id) => id,
-                Err(e) => {
-                    log::warn!(
-                        "[sync] build_full_sync_target_plan: skip remote-only target \
+            let project_id =
+                match crate::sync::target_lifecycle::parse_project_target_id(&remote_rec.target_id)
+                {
+                    Ok(id) => id,
+                    Err(e) => {
+                        log::warn!(
+                            "[sync] build_full_sync_target_plan: skip remote-only target \
                          with invalid target_id {:?}: {e}",
-                        remote_rec.target_id
-                    );
-                    continue;
-                }
-            };
+                            remote_rec.target_id
+                        );
+                        continue;
+                    }
+                };
             let project_root = projects_root.join(&project_id);
             targets.push(PlannedTarget {
                 target: crate::sync::types::SyncTarget::project(&project_id),
@@ -440,7 +443,11 @@ fn build_initial_lww_from_project_scan(
     let volumes_dir = project_root.join("volumes");
     if let Ok(volume_entries) = std::fs::read_dir(&volumes_dir) {
         for volume_entry in volume_entries.flatten() {
-            if !volume_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            if !volume_entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
                 continue;
             }
             let volume_id = volume_entry.file_name().to_string_lossy().to_string();
@@ -450,39 +457,24 @@ fn build_initial_lww_from_project_scan(
             }
 
             // 3. volumes/*/chapters/*/chapter.meta.json
-            let chapters_dir = project_root.join(&volume_json_rel).parent().unwrap().join("chapters");
-            if let Ok(chapter_entries) = std::fs::read_dir(&chapters_dir) {
-                for chapter_entry in chapter_entries.flatten() {
-                    if !chapter_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                        continue;
-                    }
-                    let chapter_id = chapter_entry.file_name().to_string_lossy().to_string();
-                    let chapter_meta_rel =
-                        format!("volumes/{}/chapters/{}/chapter.meta.json", volume_id, chapter_id);
-                    if let Some(rec) = scan_sync_file(project_root, &chapter_meta_rel, device_id) {
-                        files.push(rec);
-                    }
-                }
-            }
+            // 直接构造 chapters_dir，避免 .parent().unwrap()（clippy unwrap_used + AGENTS 禁止 unwrap）。
+            let chapters_dir = project_root
+                .join("volumes")
+                .join(&volume_id)
+                .join("chapters");
+            append_chapter_meta_records(
+                project_root,
+                &chapters_dir,
+                &volume_id,
+                device_id,
+                &mut files,
+            );
         }
     }
 
     // 4. characters/*.json（Project scope metadata）
     let characters_dir = project_root.join("characters");
-    if let Ok(char_entries) = std::fs::read_dir(&characters_dir) {
-        for char_entry in char_entries.flatten() {
-            if !char_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                continue;
-            }
-            let name = char_entry.file_name().to_string_lossy().to_string();
-            if name.ends_with(".json") {
-                let rel = format!("characters/{}", name);
-                if let Some(rec) = scan_sync_file(project_root, &rel, device_id) {
-                    files.push(rec);
-                }
-            }
-        }
-    }
+    append_character_records(project_root, &characters_dir, device_id, &mut files);
 
     if files.is_empty() {
         return None;
@@ -508,7 +500,11 @@ fn scan_sync_file(
     // 尝试从 JSON 读 updated_at（RFC3339），失败时用文件 mtime。
     let updated_at_ms = serde_json::from_slice::<serde_json::Value>(&content)
         .ok()
-        .and_then(|v| v.get("updated_at").and_then(|v| v.as_str()).map(|s| s.to_string()))
+        .and_then(|v| {
+            v.get("updated_at")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+        })
         .and_then(|s| rfc3339_to_epoch_millis(&s))
         .or_else(|| {
             std::fs::metadata(&path)
@@ -516,7 +512,7 @@ fn scan_sync_file(
                 .and_then(|m| m.modified().ok())
                 .map(|t| {
                     t.duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_millis() as i64)
+                        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
                         .unwrap_or(0)
                 })
         })?;
@@ -531,6 +527,62 @@ fn scan_sync_file(
         op: "upsert".to_string(),
         schema_version: 1,
     })
+}
+
+/// #645 评论 5504296097 问题4修复：扫描 `volumes/<volume_id>/chapters/*/chapter.meta.json`。
+///
+/// 抽出为 helper 以降低 `build_initial_lww_from_project_scan` 的嵌套深度（clippy too_many_lines）。
+fn append_chapter_meta_records(
+    project_root: &Path,
+    chapters_dir: &Path,
+    volume_id: &str,
+    device_id: &str,
+    files: &mut Vec<crate::sync::types::ManifestFileRecord>,
+) {
+    let Ok(chapter_entries) = std::fs::read_dir(chapters_dir) else {
+        return;
+    };
+    for chapter_entry in chapter_entries.flatten() {
+        if !chapter_entry
+            .file_type()
+            .map(|t| t.is_dir())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let chapter_id = chapter_entry.file_name().to_string_lossy().to_string();
+        let chapter_meta_rel = format!(
+            "volumes/{}/chapters/{}/chapter.meta.json",
+            volume_id, chapter_id
+        );
+        if let Some(rec) = scan_sync_file(project_root, &chapter_meta_rel, device_id) {
+            files.push(rec);
+        }
+    }
+}
+
+/// #645 评论 5504296097 问题4修复：扫描 `characters/*.json`。
+fn append_character_records(
+    project_root: &Path,
+    characters_dir: &Path,
+    device_id: &str,
+    files: &mut Vec<crate::sync::types::ManifestFileRecord>,
+) {
+    let Ok(char_entries) = std::fs::read_dir(characters_dir) else {
+        return;
+    };
+    for char_entry in char_entries.flatten() {
+        if !char_entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            continue;
+        }
+        let name = char_entry.file_name().to_string_lossy().to_string();
+        if name.ends_with(".json") {
+            let rel = format!("characters/{}", name);
+            if let Some(rec) = scan_sync_file(project_root, &rel, device_id) {
+                files.push(rec);
+            }
+        }
+    }
 }
 
 /// #645 评论 5504296097 问题2：RFC3339 字符串 → Unix 毫秒时间戳。
@@ -645,17 +697,14 @@ fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecor
 /// Prepare 前判断和 post-transfer publish 都用同一个 helper，
 /// 保证 catalog 写入的 device_id 与真实 winner 一致（不再硬塞本机设备）。
 fn manifest_target_lww(manifest: &crate::sync::types::SyncManifest) -> Option<LiveTargetLww> {
-    let winner = manifest
-        .files
-        .iter()
-        .max_by(|a, b| {
-            let a_time = lww_record_time_for_manifest_record(a);
-            let b_time = lww_record_time_for_manifest_record(b);
-            // 先按时间比较，时间相同按 device_id 字典序比较（与 resolve_lww_path 同规则）。
-            a_time
-                .cmp(&b_time)
-                .then_with(|| a.device_id.cmp(&b.device_id))
-        })?;
+    let winner = manifest.files.iter().max_by(|a, b| {
+        let a_time = lww_record_time_for_manifest_record(a);
+        let b_time = lww_record_time_for_manifest_record(b);
+        // 先按时间比较，时间相同按 device_id 字典序比较（与 resolve_lww_path 同规则）。
+        a_time
+            .cmp(&b_time)
+            .then_with(|| a.device_id.cmp(&b.device_id))
+    })?;
     Some(LiveTargetLww {
         lww_time_ms: lww_record_time_for_manifest_record(winner),
         device_id: winner.device_id.clone(),
@@ -843,21 +892,45 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 // #645 评论 5504296097 问题1：不在 Transfer 里
                                                 // remove_dir_all()。返回 DeleteProject action，
                                                 // 由 Commit 阶段执行完整 Project 本地删除事务。
+                                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
+                                                // #645 评论 5504296097 问题4：RemoteWinner(Delete) 后
+                                                // 清理远端 projects/P/ 下所有对象（含本轮上传正文 +
+                                                // manifest.sync.json + 旧残留），删对 prefix。
                                                 log::info!(
                                                     "[sync] run_transfer: LiveProject \
-                                                     RemoteWinner(Delete) {} — deferring delete \
+                                                     RemoteWinner(Delete) {} — cleaning remote + deferring delete \
                                                      to Commit",
                                                     planned.target.remote_prefix
                                                 );
-                                                let action = planned.project_id.as_ref().map(
-                                                    |pid| {
-                                                        crate::sync::types::
-                                                            LocalLifecycleCommitAction::DeleteProject {
-                                                                project_id: pid.clone(),
-                                                            }
-                                                    },
+                                                let cleanup_result = delete_all_remote_objects(
+                                                    provider,
+                                                    &planned.target.remote_prefix,
                                                 );
-                                                (content_result, None, action)
+                                                let cleanup_ok = matches!(
+                                                    cleanup_result.status,
+                                                    SyncStatus::Success | SyncStatus::NoChanges
+                                                );
+                                                if !cleanup_ok {
+                                                    // #645 评论 5504296097 问题4：远端清理失败 →
+                                                    // RecoverableError，不删本地（catalog Delete 已持久，
+                                                    // 下轮重新清理远端残留）。
+                                                    (cleanup_result, None, None)
+                                                } else {
+                                                    let action = planned.project_id.as_ref().map(
+                                                        |pid| {
+                                                            crate::sync::types::
+                                                                LocalLifecycleCommitAction::DeleteProject {
+                                                                    project_id: pid.clone(),
+                                                                    expected_local_lww:
+                                                                        planned.live_lww.as_ref().map(
+                                                                            crate::sync::types::
+                                                                                LiveTargetLwwSerde::from_lww,
+                                                                        ),
+                                                                }
+                                                        },
+                                                    );
+                                                    (content_result, None, action)
+                                                }
                                             }
                                         }
                                     }
@@ -911,19 +984,20 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 //
                 // #645 评论 5504296097 问题5：CAS — 执行破坏性删除前重新读远端
                 // catalog 确认 winner 仍是 delete tombstone。若远端已变成 upsert
-                // 且更晚，改走 RestoreProject 下载恢复，绝不按过期 snapshot 删本地。
-                match resolve_current_target_lifecycle(
-                    provider,
-                    &planned.target.remote_prefix,
-                ) {
+                // 且更晚，改走 ReplaceProject 整树替换，绝不按过期 snapshot 删本地。
+                //
+                // #645 评论 5504296097 问题3：Ok(None) 直接 Retry（不再 "plan confirmed"），
+                // 与 RestoreProject 已修成 Retry 的语义一致。
+                match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
                     Ok(Some(current_rec)) => {
                         use crate::sync::types::TargetOp;
                         match current_rec.op {
                             TargetOp::Upsert => {
-                                // 远端已变成 upsert — 改走 RestoreProject。
+                                // #645 评论 5504296097 问题2：远端已变成 upsert 且本地已有 Project
+                                // → ReplaceProject 整树替换（不再用空 staging + 普通三方 commit 冒充）。
                                 log::info!(
                                     "[sync] run_transfer: DeleteLocalProject {} — \
-                                     CAS: remote changed to Upsert, switching to RestoreProject",
+                                     CAS: remote changed to Upsert, switching to ReplaceProject",
                                     planned.target.remote_prefix
                                 );
                                 let result = download_remote_to_staging(
@@ -931,14 +1005,20 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     &planned.target.remote_prefix,
                                     planned.staging_root.as_deref(),
                                 );
-                                (
-                                    result,
-                                    Some(DeletedTargetResolution::RemoteTargetWins),
-                                    None,
-                                )
+                                let action = planned.project_id.as_ref().map(|pid| {
+                                    crate::sync::types::LocalLifecycleCommitAction::ReplaceProject {
+                                        project_id: pid.clone(),
+                                        expected_local_lww: planned
+                                            .live_lww
+                                            .as_ref()
+                                            .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
+                                    }
+                                });
+                                (result, None, action)
                             }
                             TargetOp::Delete => {
                                 // 远端仍是 delete — 确认删除，defer to Commit。
+                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
                                 log::info!(
                                     "[sync] run_transfer: DeleteLocalProject {} — \
                                      CAS confirmed remote Delete, deferring to Commit",
@@ -947,6 +1027,10 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 let action = planned.project_id.as_ref().map(|pid| {
                                     crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
                                         project_id: pid.clone(),
+                                        expected_local_lww: planned
+                                            .live_lww
+                                            .as_ref()
+                                            .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
                                     }
                                 });
                                 (SyncResult::no_changes(), None, action)
@@ -954,19 +1038,25 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         }
                     }
                     Ok(None) => {
-                        // 远端无记录 — 无法确认 delete winner，保守 defer to Commit
-                        // （plan 阶段已确认本地 tombstone 胜出，仍执行删除）。
+                        // #645 评论 5504296097 问题3：远端无记录 → 无法确认 delete winner
+                        // → 直接 Retry（不再 "plan confirmed"），与 RestoreProject 语义一致。
                         log::info!(
                             "[sync] run_transfer: DeleteLocalProject {} — \
-                             CAS: no remote record, deferring to Commit (plan confirmed)",
+                             CAS: no remote record, returning Retry",
                             planned.target.remote_prefix
                         );
-                        let action = planned.project_id.as_ref().map(|pid| {
-                            crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
-                                project_id: pid.clone(),
-                            }
-                        });
-                        (SyncResult::no_changes(), None, action)
+                        (
+                            SyncResult::error(
+                                SyncStatus::RecoverableError(
+                                    "DeleteLocalProject: no remote record, retrying".to_string(),
+                                ),
+                                "DeleteLocalProject: no remote record to confirm delete winner"
+                                    .to_string(),
+                                None,
+                            ),
+                            Some(DeletedTargetResolution::Retry),
+                            None,
+                        )
                     }
                     Err(e) => {
                         // CAS 读取失败 — 不执行破坏性删除，返回 Retry。
@@ -976,11 +1066,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         );
                         log::warn!("[sync] {msg}");
                         (
-                            SyncResult::error(
-                                SyncStatus::RecoverableError(msg.clone()),
-                                msg,
-                                None,
-                            ),
+                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
                             Some(DeletedTargetResolution::Retry),
                             None,
                         )
@@ -1115,15 +1201,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 // 确认 winner 仍是 upsert。若远端已变成 delete tombstone 且更晚，
                 // 改走 DeleteLocalProject（defer to Commit），绝不按过期 snapshot
                 // 恢复一个已被删除的作品。
-                match resolve_current_target_lifecycle(
-                    provider,
-                    &planned.target.remote_prefix,
-                ) {
+                match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
                     Ok(Some(current_rec)) => {
                         use crate::sync::types::TargetOp;
                         match current_rec.op {
                             TargetOp::Delete => {
                                 // 远端已变成 delete — 改走 DeleteLocalProject。
+                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
                                 log::info!(
                                     "[sync] run_transfer: RestoreProject {} — \
                                      CAS: remote changed to Delete, switching to DeleteLocalProject",
@@ -1132,6 +1216,10 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 let action = planned.project_id.as_ref().map(|pid| {
                                     crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
                                         project_id: pid.clone(),
+                                        expected_local_lww: planned
+                                            .live_lww
+                                            .as_ref()
+                                            .map(crate::sync::types::LiveTargetLwwSerde::from_lww),
                                     }
                                 });
                                 (SyncResult::no_changes(), None, action)
@@ -1183,11 +1271,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         );
                         log::warn!("[sync] {msg}");
                         (
-                            SyncResult::error(
-                                SyncStatus::RecoverableError(msg.clone()),
-                                msg,
-                                None,
-                            ),
+                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
                             Some(DeletedTargetResolution::Retry),
                             None,
                         )
@@ -2227,10 +2311,11 @@ mod tests {
 
         let transfer = run_transfer(&provider, &plan);
         assert_eq!(transfer.targets.len(), 1);
-        // DeleteLocalProject → NoChanges（不上传）。
+        // #645 评论 5504296097 问题3修复：DeleteLocalProject + 远端无记录 → Retry
+        // （不再 "plan confirmed" 继续 DeleteProject）。
         assert!(matches!(
             transfer.targets[0].result.status,
-            SyncStatus::NoChanges
+            SyncStatus::RecoverableError(_)
         ));
         // 没有上传任何文件。
         assert!(transfer.targets[0].result.uploaded_files.is_empty());
@@ -2486,10 +2571,7 @@ mod tests {
         // 期望：RemoteWinner（远端 upsert(P, 12:05) > candidate delete(P, 12:00)）。
         // 当前：Applied（write_remote_catalog 内部 CAS 冲突 → merge 保留 upsert → 返回 Ok → Applied）。
         assert!(
-            matches!(
-                result,
-                TargetLifecycleApplyResult::RemoteWinner { .. }
-            ),
+            matches!(result, TargetLifecycleApplyResult::RemoteWinner { .. }),
             "问题3: apply_lifecycle_record 应返回 RemoteWinner（远端 12:05 > candidate 12:00），\
              但 write_remote_catalog 内部吃掉 CAS 冲突后返回了 {:?}，\
              外层会误认为 Applied 并继续 delete_all_remote_objects",
@@ -2514,9 +2596,15 @@ mod tests {
     /// 本地目录，而是返回 `DeleteProject` action，由 `commit_full_sync` 执行删除事务。
     /// 这样删除走完整 ProjectDeleteTransaction（move worktree / unbind starmap /
     /// journal），不绕过 delete_guard。
+    ///
+    /// #645 评论 5504296097 问题3修复：远端必须有 Delete record（CAS 确认），
+    /// 否则 Ok(None) 直接 Retry。本测试用有 Delete record 的 catalog。
     #[test]
     fn repro_issue_645_q4_delete_local_project_no_actual_deletion() {
-        use crate::sync::types::{LocalLifecycleCommitAction, PlannedTargetKind};
+        use crate::sync::types::{
+            LocalLifecycleCommitAction, PlannedTargetKind, RemoteTargetCatalogSnapshot,
+            TargetLifecycleCatalog, TargetLifecycleRecord,
+        };
 
         let provider = MemoryProvider::new();
         let tmp = TempDir::new().unwrap();
@@ -2524,6 +2612,28 @@ mod tests {
         std::fs::create_dir_all(&project_root).unwrap();
         // 本地 P 有实际内容。
         std::fs::write(project_root.join("chapter.md"), b"content").unwrap();
+
+        // 远端 catalog 有 Delete record for projects/P（CAS 确认删除）。
+        let mut catalog = TargetLifecycleCatalog::default();
+        catalog.records.push(TargetLifecycleRecord::delete(
+            "projects/P",
+            "projects/P",
+            2000,
+            "dev-remote",
+        ));
+        let remote_catalog_snapshot = RemoteTargetCatalogSnapshot {
+            catalog: catalog.clone(),
+            version: crate::sync::provider::model::RemoteVersion::new("v1"),
+        };
+        // 把 catalog 写入 provider，让 resolve_current_target_lifecycle 能读到。
+        let catalog_json = serde_json::to_vec(&catalog).unwrap();
+        provider
+            .write(
+                crate::sync::target_lifecycle::TARGET_CATALOG_REMOTE_PATH,
+                &catalog_json,
+                crate::sync::provider::model::WritePrecondition::CreateNew,
+            )
+            .unwrap();
 
         let planned = PlannedTarget {
             target: SyncTarget::project("P"),
@@ -2541,7 +2651,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
-            remote_catalog_snapshot: test_empty_catalog_snapshot(),
+            remote_catalog_snapshot,
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -2558,7 +2668,7 @@ mod tests {
         assert!(
             matches!(
                 &transfer.targets[0].local_lifecycle_action,
-                LocalLifecycleCommitAction::DeleteProject { project_id } if project_id == "P"
+                LocalLifecycleCommitAction::DeleteProject { project_id, .. } if project_id == "P"
             ),
             "DeleteLocalProject 应返回 DeleteProject action，\
              实际: {:?}",

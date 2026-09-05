@@ -194,17 +194,24 @@ impl StagingRun {
             }
         };
 
-        // 收集 base ∪ staging 的路径全集。
+        // 收集 base ∪ staging ∪ live 的路径全集。
         // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
         // 排除 `.git/`、`full-sync-staging/`、`app-meta/transactions/`，
         // 不让 Git 元数据被当成正文比较。
+        // #645 评论 5504296097 问题2：加入 live_paths — ReplaceProject 整树替换时
+        // live-only 旧文件需要进入 commit plan 做 Delete。普通三方 commit 时
+        // live-only 文件不在 base/staging 中，不会被处理（保持原行为）。
         let base_paths = list_commit_candidate_paths(&base_root)?;
         let staging_paths = list_commit_candidate_paths(&staging_root)?;
+        let live_paths = list_commit_candidate_paths(live_root)?;
         let mut all_paths: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
         for p in &base_paths {
             all_paths.insert(p.clone());
         }
         for p in &staging_paths {
+            all_paths.insert(p.clone());
+        }
+        for p in &live_paths {
             all_paths.insert(p.clone());
         }
 

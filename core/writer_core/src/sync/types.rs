@@ -853,6 +853,14 @@ pub struct TargetSyncResult {
 ///
 /// 把"删除本地 project"从 Transfer 阶段（裸 `remove_dir_all`）移到 Commit 阶段
 /// （完整业务删除事务），避免 staging commit 把刚删掉的旧作品重新写回来。
+///
+/// #645 评论 5504296097 问题2：新增 `ReplaceProject` 变体 —
+/// DeleteLocalProject → remote 又 Upsert 时，本地已有 Project 需要整树替换，
+/// 不再用<空 staging + 普通三方 commit>冒充 replace。`ReplaceProject` 的 Commit
+/// 语义：对 live ∪ staging 做整树替换（staging 有 → Apply；live 有但 staging 没有 → Delete）。
+///
+/// #645 评论 5504296097C 问题3：`DeleteProject` / `ReplaceProject` 携带
+/// `expected_local_lww` guard，Commit 时再确认本地没有前进。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalLifecycleCommitAction {
@@ -863,12 +871,49 @@ pub enum LocalLifecycleCommitAction {
     DeleteProject {
         /// 被删除的 project id。
         project_id: String,
+        /// #645 评论 5504296097 问题3：Commit 时再确认本地没有前进的 guard。
+        /// `None` 表示无 guard（plan 阶段无 live_lww），Commit 不做 guard 检查。
+        #[serde(default)]
+        expected_local_lww: Option<LiveTargetLwwSerde>,
     },
     /// 预留：RestoreProject 在 Commit 阶段恢复本地 project。
     RestoreProject {
         /// 被恢复的 project id。
         project_id: String,
     },
+    /// #645 评论 5504296097 问题&2：远端 Upsert 胜出且本地已有 Project → 整树替换。
+    ///
+    /// Commit 语义：对 live ∪ staging 做整树替换：
+    /// 1. Commit 前再次确认本地没有比 guard 更新的编辑；
+    /// 2. staging 有 → Apply；live 有但 staging 没有 → Delete；
+    /// 3. 原子提交整棵 Project。
+    ReplaceProject {
+        /// 被替换的 project id。
+        project_id: String,
+        /// #645 评论 5504296097 问题3：Commit 时再确认本地没有前进的 guard。
+        #[serde(default)]
+        expected_local_lww: Option<LiveTargetLwwSerde>,
+    },
+}
+
+/// #645 评论 5504296097 问题3：`LiveTargetLww` 的 serde 友好包装。
+///
+/// `LiveTargetLww` 定义在 `full_sync.rs`（非 Serialize），lifecycle action 需要
+/// Serialize。此结构提供 serde 桥接，Commit 时转回 `LiveTargetLww` 做 guard 比较。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct LiveTargetLwwSerde {
+    pub lww_time_ms: i64,
+    pub device_id: String,
+}
+
+impl LiveTargetLwwSerde {
+    /// 从 `LiveTargetLww` 构造。
+    pub fn from_lww(lww: &crate::sync::full_sync::LiveTargetLww) -> Self {
+        Self {
+            lww_time_ms: lww.lww_time_ms,
+            device_id: lww.device_id.clone(),
+        }
+    }
 }
 
 /// #645 评论 5504296097 问题2修复：本地 lifecycle commit 的完整 receipt。
