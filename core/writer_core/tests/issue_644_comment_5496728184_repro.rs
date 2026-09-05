@@ -299,6 +299,7 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
         starmap_ids: Vec::new(),
         device_id: "test-device".to_string(),
         phase: ProjectDeletePhase::Completed,
+        origin: writer_core::project::ProjectDeleteOrigin::User,
     };
     fs::write(&journal_path, serde_json::to_string(&journal).unwrap()).unwrap();
     assert!(

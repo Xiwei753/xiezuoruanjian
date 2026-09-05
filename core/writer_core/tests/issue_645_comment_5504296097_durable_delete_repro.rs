@@ -155,6 +155,7 @@ fn gap2_fixed_recover_returns_change_set_and_bootstrap_writes_history() {
         &app_data_root,
         Vec::new(),
         "test-device",
+        writer_core::project::ProjectDeleteOrigin::User,
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -276,6 +277,7 @@ fn gap3_fixed_tombstone_replay_is_idempotent() {
         &app_data_root,
         Vec::new(),
         "test-device",
+        writer_core::project::ProjectDeleteOrigin::User,
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
