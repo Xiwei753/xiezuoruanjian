@@ -68,6 +68,26 @@ pub struct PlannedTarget {
     /// `None` 表示普通 target（app/project），非 deleted target。
     #[allow(clippy::struct_field_names)]
     pub deleted_journal_token: Option<String>,
+    /// #645 评论 5504296097 问题3：deleted target 的 LWW 元数据。
+    ///
+    /// `deleted_at_ms` 与远端 manifest 的 `max(lww_record_time)` 比较，
+    /// 本地 tombstone 胜出才删远端；远端更晚则不删（远端有更新，下次正常 sync
+    /// 会下载恢复）。`device_id` 用于时间相同时的 tie-break（字典序大的胜出，
+    /// 与 `resolve_lww_path` 一致）。
+    /// `None` 表示非 deleted target。
+    pub deleted_lww: Option<DeletedTargetLww>,
+}
+
+/// #645 评论 5504296097 问题3：deleted target 的 LWW 决策元数据。
+///
+/// 从 `PendingDeletedTarget` 提取，传给 `run_transfer` → `run_deleted_target_sync`
+/// 做 provider-neutral 的 LWW 比较。
+#[derive(Debug, Clone)]
+pub struct DeletedTargetLww {
+    /// 删除时间戳（Unix 毫秒），与远端 manifest 的 `max(lww_record_time)` 比较。
+    pub deleted_at_ms: i64,
+    /// 发起删除的设备 ID，时间相同时用于 tie-break。
+    pub device_id: String,
 }
 
 impl PlannedTarget {
@@ -102,9 +122,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
         let result = if planned.is_deleted_target() {
-            // #645 评论 5504296097 问题1：deleted target 走 target-delete 计划，
-            // 枚举远端前缀下所有对象逐个删除，不调 perform_lww_sync。
-            run_deleted_target_sync(provider, &planned.target)
+            // #645 评论 5504296097 问题1/3：deleted target 走 target-delete 计划，
+            // 先做 LWW 比较（deleted_at_ms vs 远端 manifest），本地 tombstone
+            // 胜出才枚举远端前缀下所有对象逐个删除，不调 perform_lww_sync。
+            // 远端更晚时跳过删除（远端有更新内容，不应被无条件清空）。
+            run_deleted_target_sync(provider, &planned.target, planned.deleted_lww.as_ref())
         } else {
             // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
             let sync_root = planned
@@ -129,26 +151,129 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
     FullSyncTransferResult { targets }
 }
 
-/// #645 评论 5504296097 问题1：执行已删除 target 的远端清理。
+/// #645 评论 5504296097 问题1/3：执行已删除 target 的远端清理。
 ///
 /// 走 target-delete 计划：
-/// 1. `provider.list(remote_prefix)` 枚举远端该 target 下所有对象；
-/// 2. 对每个远端对象调 `provider.delete(remote_prefix/path, DeletePrecondition::Unconditional)`；
-/// 3. 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
+/// 1. 若有 LWW 元数据，先读远端 manifest 做 LWW 比较（provider-neutral）；
+/// 2. `provider.list(remote_prefix)` 枚举远端该 target 下所有对象；
+/// 3. 对每个远端对象调 `provider.delete(remote_prefix/path, DeletePrecondition::Unconditional)`；
+/// 4. 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
 ///
-/// provider-neutral：只使用 `SyncProvider::list/delete`，不写 GitHub 专用逻辑。
+/// ## LWW 语义（#645 评论 5504296097 问题3）
+///
+/// 本地 target tombstone（`deleted_at_ms` / `device_id`）与远端 manifest 的
+/// `max(lww_record_time)` 做 LWW 比较（与 `resolve_lww_path` 同规则）：
+/// - 本地 tombstone 胜出 → 枚举远端前缀下所有对象逐个删除；
+/// - 远端更新更晚 → 不删（远端有更新内容），返回 `NoChanges`（跳过删除）；
+/// - 时间相同 → 按 `device_id` 字典序 tie-break（大的胜出）。
+///
+/// provider-neutral：只使用 `SyncProvider::read/list/delete`，不写 GitHub 专用逻辑。
 /// `Unconditional` 删除幂等（远端对象已不存在也返回 Ok）。
 ///
 /// 远端 list 失败 → `RecoverableError`（下次同步可重试）。
 /// 单个 delete 失败 → `RecoverableError`（已删的保留，下次同步继续清理剩余）。
-fn run_deleted_target_sync(provider: &dyn SyncProvider, target: &SyncTarget) -> SyncResult {
+#[allow(clippy::excessive_nesting)]
+fn run_deleted_target_sync(
+    provider: &dyn SyncProvider,
+    target: &SyncTarget,
+    deleted_lww: Option<&DeletedTargetLww>,
+) -> SyncResult {
     let remote_prefix = &target.remote_prefix;
     log::debug!(
         "[sync] entry=run_deleted_target_sync remote_prefix={}",
         remote_prefix
     );
 
-    // 1. 枚举远端该 target 下所有对象。
+    // #645 评论 5504296097 问题3：LWW 比较 — 读远端 manifest 判断是否应跳过删除。
+    if let Some(lww) = deleted_lww {
+        let skip = match fetch_remote_manifest_for_prefix(provider, remote_prefix) {
+            Ok(remote_records) => should_skip_delete_for_lww(&remote_records, lww),
+            Err(e) => {
+                log::warn!(
+                    "[sync] run_deleted_target_sync: failed to read remote manifest for {}: {} \
+                     — proceeding with delete (conservative)",
+                    remote_prefix,
+                    e
+                );
+                false
+            }
+        };
+        if skip {
+            return SyncResult::no_changes();
+        }
+    }
+
+    delete_all_remote_objects(provider, remote_prefix)
+}
+
+/// 从远端 manifest 记录判断是否应跳过删除（远端 LWW 胜出）。
+///
+/// #645 评论 5504296097 问题3：用 `lww_record_time`（与 `resolve_lww_path` 同规则）
+/// 计算远端最新记录时间，与本地 tombstone 的 `deleted_at_ms` 比较。
+/// 时间相同时按 `device_id` 字典序 tie-break。
+fn should_skip_delete_for_lww(
+    remote_records: &std::collections::HashMap<String, crate::sync::types::ManifestFileRecord>,
+    lww: &DeletedTargetLww,
+) -> bool {
+    let Some((remote_max_time, remote_device_id)) = remote_lww_max(remote_records) else {
+        return false;
+    };
+    // 与 resolve_lww_path 同规则：时间大的胜出，时间相同 device_id 大的胜出。
+    let remote_wins = if remote_max_time > lww.deleted_at_ms {
+        true
+    } else if remote_max_time == lww.deleted_at_ms {
+        remote_device_id.as_str() > lww.device_id.as_str()
+    } else {
+        false
+    };
+    if remote_wins {
+        log::info!(
+            "[sync] run_deleted_target_sync: remote_wins_lww \
+             remote_time={} remote_device={} local_deleted_at={} local_device={} → skip delete",
+            remote_max_time,
+            remote_device_id,
+            lww.deleted_at_ms,
+            lww.device_id
+        );
+    } else {
+        log::info!(
+            "[sync] run_deleted_target_sync: local_tombstone_wins_lww \
+             remote_time={} remote_device={} local_deleted_at={} local_device={} → proceed with delete",
+            remote_max_time,
+            remote_device_id,
+            lww.deleted_at_ms,
+            lww.device_id
+        );
+    }
+    remote_wins
+}
+
+/// 从远端 manifest 记录中提取最大的 LWW 记录时间和对应的 device_id。
+///
+/// 返回 `(max_lww_time, device_id_of_max)` 或 `None`（空记录）。
+fn remote_lww_max(
+    remote_records: &std::collections::HashMap<String, crate::sync::types::ManifestFileRecord>,
+) -> Option<(i64, String)> {
+    remote_records
+        .values()
+        .map(|r| (lww_record_time_for_record(r), r.device_id.clone()))
+        .max_by_key(|(t, d)| (*t, d.clone()))
+}
+
+/// 计算单条 manifest 记录的 LWW 时间（delete 用 `deleted_at_ms`，upsert 用 `updated_at_ms`）。
+fn lww_record_time_for_record(r: &crate::sync::types::ManifestFileRecord) -> i64 {
+    if r.op == "delete" {
+        r.deleted_at_ms.unwrap_or(r.updated_at_ms)
+    } else {
+        r.updated_at_ms
+    }
+}
+
+/// 枚举远端前缀下所有对象并逐个删除（Unconditional 幂等）。
+///
+/// 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
+/// 远端 list 失败 → `RecoverableError`。单个 delete 失败 → `RecoverableError`（已删的保留）。
+fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -> SyncResult {
     let remote_entries = match provider.list(remote_prefix) {
         Ok(entries) => entries,
         Err(err) => {
@@ -168,7 +293,6 @@ fn run_deleted_target_sync(provider: &dyn SyncProvider, target: &SyncTarget) -> 
         }
     };
 
-    // 2. 逐个删除远端对象（Unconditional 幂等）。
     let mut remote_deletes: Vec<String> = Vec::new();
     for entry in &remote_entries {
         let full_remote_path = format!("{}/{}", remote_prefix, entry.path);
@@ -188,8 +312,6 @@ fn run_deleted_target_sync(provider: &dyn SyncProvider, target: &SyncTarget) -> 
                 } else {
                     Some(category.to_string())
                 };
-                // 单个 delete 失败：返回 RecoverableError，已删的保留在 remote_deletes，
-                // 下次同步继续清理剩余。
                 let mut result = SyncResult::error(
                     SyncStatus::RecoverableError(msg.clone()),
                     msg,
@@ -201,10 +323,40 @@ fn run_deleted_target_sync(provider: &dyn SyncProvider, target: &SyncTarget) -> 
         }
     }
 
-    // 3. 全部删除成功。
     let mut result = SyncResult::success();
     result.remote_deletes = remote_deletes;
     result
+}
+
+/// 从远端读取指定前缀下的 manifest.sync.json 并解析为 `HashMap`。
+///
+/// provider-neutral：使用 `SyncProvider::read()` 读取 manifest 文件。
+/// manifest 路径固定为 `{remote_prefix}/app-meta/sync/manifest.sync.json`。
+///
+/// 远端不存在 manifest 时返回空 HashMap（视为无远端记录，本地 tombstone 胜出）。
+/// manifest 损坏时返回 Err（调用方保守处理：继续删除）。
+fn fetch_remote_manifest_for_prefix(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+) -> crate::error::Result<std::collections::HashMap<String, crate::sync::types::ManifestFileRecord>>
+{
+    let manifest_path = format!("{}/app-meta/sync/manifest.sync.json", remote_prefix);
+    let manifest_obj = provider.read(&manifest_path).map_err(crate::Error::from)?;
+    let Some(obj) = manifest_obj else {
+        return Ok(std::collections::HashMap::new());
+    };
+    let manifest: crate::sync::types::SyncManifest =
+        serde_json::from_slice(&obj.content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "fetch_remote_manifest_for_prefix: parse {}: {e}",
+                manifest_path
+            )))
+        })?;
+    let mut map = std::collections::HashMap::new();
+    for rec in manifest.files {
+        map.insert(rec.path.clone(), rec);
+    }
+    Ok(map)
 }
 
 /// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。

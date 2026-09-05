@@ -500,6 +500,7 @@ pub fn delete_project_with_changes(
     projects_root: &Path,
     project_id: &str,
     app_data_root: &Path,
+    device_id: &str,
 ) -> Result<ProjectDeleteOutcome> {
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = projects_root.join(project_id);
@@ -530,6 +531,7 @@ pub fn delete_project_with_changes(
         projects_root,
         app_data_root,
         starmap_ids,
+        device_id,
     );
 
     // 1. 准备阶段：写 journal 到 app_meta/delete-journals/。
@@ -547,7 +549,13 @@ pub fn delete_project_with_changes(
 
     // #645 评论 5504296097 缺口2修复：不在 core 内 complete/cleanup journal。
     // journal 保留在 StarMapsUnbound，由调用方记 history 后调
-    // ack_project_delete_history 推进到 HistoryRecorded → Completed 并清 journal。
+    // ack_project_delete_history 推进到 HistoryRecorded → RemoteDeleteQueued →
+    // Completed 并清 journal。
+    //
+    // #645 评论 5504296097 问题1修复：不在 core 内调 record_pending_deleted_target。
+    // PendingDeletedTarget 的落盘收进 delete journal durable 生命周期，由
+    // ack_project_delete_history 在推进到 HistoryRecorded 后幂等写，写失败
+    // journal 保留在 HistoryRecorded，下次启动 recover 补写——不让 pending target 丢失。
     let unbound_starmap_ids: Vec<String> = tx.starmap_ids().to_vec();
     let journal_token: String = tx.token().to_string();
 
@@ -556,27 +564,6 @@ pub fn delete_project_with_changes(
         project_id,
         &unbound_starmap_ids,
     );
-
-    // #645 评论 5504296097 问题1：记录 PendingDeletedTarget，让 prepare_full_sync
-    // 能为已删除作品生成 target，run_transfer 走 target-delete 计划清理远端
-    // projects/<project_id>/ 下所有对象。provider-neutral，不写 GitHub 专用逻辑。
-    let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
-        project_id,
-        chrono::Utc::now().timestamp_millis(),
-        &journal_token,
-    );
-    if let Err(e) =
-        crate::sync::pending_deleted::record_pending_deleted_target(app_data_root, pending_deleted)
-    {
-        // 记录失败不阻断删除（作品已删，远端清理可下次同步重试），
-        // 但用 log::warn 留痕，便于排查。
-        log::warn!(
-            "delete_project_with_changes: record_pending_deleted_target failed for {}: {} \
-             — remote projects/<id>/ cleanup will be skipped until next delete",
-            project_id,
-            e
-        );
-    }
 
     Ok(ProjectDeleteOutcome {
         changes,
@@ -782,8 +769,12 @@ mod inline_tests {
         let project_dir = data_root.join("projects").join(&project.id);
         assert!(project_dir.exists());
 
-        let outcome =
-            delete_project_with_changes(&data_root.join("projects"), &project.id, data_root);
+        let outcome = delete_project_with_changes(
+            &data_root.join("projects"),
+            &project.id,
+            data_root,
+            "test-device",
+        );
         assert!(outcome.is_ok());
         crate::storage::journal::project_delete::ack_project_delete_history(
             data_root,
@@ -811,8 +802,12 @@ mod inline_tests {
         let data_root = temp_dir.path();
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let result =
-            delete_project_with_changes(&data_root.join("projects"), "non_existent_id", data_root);
+        let result = delete_project_with_changes(
+            &data_root.join("projects"),
+            "non_existent_id",
+            data_root,
+            "test-device",
+        );
         assert!(result.is_err());
         match result {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}

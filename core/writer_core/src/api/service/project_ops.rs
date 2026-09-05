@@ -133,7 +133,15 @@ impl WriterCoreApi {
         //   ack_project_delete_history 推进到 HistoryRecorded → Completed 并清 journal。
         //   history 失败时 journal 保留在 StarMapsUnbound，下次启动 recover 补记。
 
-        let outcome = self.core_write().delete_project_with_changes(project_id)?;
+        // #645 评论 5504296097 问题3：读取 device_id 传给 delete_project_with_changes，
+        // 写入 journal 供 ack/recover 构造 PendingDeletedTarget（LWW tie-break）。
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|i| i.device_id)
+            .unwrap_or_default();
+
+        let outcome = self
+            .core_write()
+            .delete_project_with_changes(project_id, &device_id)?;
 
         // 删除成功后才清搜索索引。搜索索引清理放在删除成功之后，避免
         // project 没删掉但搜索索引已清空的不一致状态。

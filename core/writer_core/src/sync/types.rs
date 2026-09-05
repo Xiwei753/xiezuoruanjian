@@ -596,6 +596,25 @@ impl SyncResult {
         }
     }
 
+    /// #645 评论 5504296097 问题3：创建"无变更"结果——跳过删除（远端 LWW 胜出时）。
+    pub fn no_changes() -> Self {
+        Self {
+            status: SyncStatus::NoChanges,
+            uploaded_files: Vec::new(),
+            downloaded_files: Vec::new(),
+            ignored_files: Vec::new(),
+            conflicts: Vec::new(),
+            error: None,
+            error_category: None,
+            message_key: None,
+            conflict_summary: None,
+            local_deletes: Vec::new(),
+            remote_deletes: Vec::new(),
+            overwritten_files: Vec::new(),
+            search_index_rebuild_error: None,
+        }
+    }
+
     /// 创建错误结果——status 应为 Error/Conflict 等终端状态，error_category 可选。
     pub fn error(status: SyncStatus, error: String, error_category: Option<String>) -> Self {
         let message_key = error_category
@@ -886,14 +905,29 @@ pub struct FullSyncDiagnosticsResult {
 ///
 /// 只使用 `SyncProvider::list/delete` 和 capabilities，不写 GitHub 专用逻辑。
 /// GitHub 的 SHA/branch/API 细节由 `GitHubProvider` 自己处理。
+///
+/// #645 评论 5504296097 问题3：`deleted_at_ms` / `device_id` 参与 LWW 决策。
+/// `run_deleted_target_sync` 先读远端 manifest，用 `deleted_at_ms` 与远端
+/// manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端，
+/// 远端更晚则不删（远端有更新，下次正常 sync 会下载恢复）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingDeletedTarget {
     /// 已删除的同步目标 — `SyncTarget::project(project_id)`。
     pub target: SyncTarget,
-    /// 删除时间戳（Unix 毫秒），用于排序和日志。
+    /// 删除时间戳（Unix 毫秒）。
+    ///
+    /// #645 评论 5504296097 问题3：参与 LWW 决策，不再只用于排序和日志。
+    /// 与远端 manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端。
     pub deleted_at_ms: i64,
     /// 关联的 delete journal token，用于 ack 推进 journal。
     pub journal_token: String,
+    /// 发起删除的设备 ID，用于 LWW 平局决胜。
+    ///
+    /// #645 评论 5504296097 问题3：时间戳相同时，字典序大的 device_id 获胜
+    /// （与 `sync/lww/compare.rs::resolve_lww_path` 的 tie-break 规则一致）。
+    /// `#[serde(default)]` 保持向后兼容：旧文件反序列化得到空字符串。
+    #[serde(default)]
+    pub device_id: String,
     /// 需要在远端删除的相对路径列表（相对于 `target.remote_prefix`）。
     ///
     /// `None` 表示删除整个 `remote_prefix` 下所有远端对象（由 `provider.list` 枚举）；
@@ -908,11 +942,19 @@ impl PendingDeletedTarget {
     /// 为已删除的 project 构造 `PendingDeletedTarget`。
     ///
     /// `paths` 为 `None`：删除整个 `projects/<project_id>/` 前缀下所有远端对象。
-    pub fn for_project(project_id: &str, deleted_at_ms: i64, journal_token: &str) -> Self {
+    ///
+    /// #645 评论 5504296097 问题3：`device_id` 参与 LWW 决策，必传。
+    pub fn for_project(
+        project_id: &str,
+        deleted_at_ms: i64,
+        journal_token: &str,
+        device_id: &str,
+    ) -> Self {
         Self {
             target: SyncTarget::project(project_id),
             deleted_at_ms,
             journal_token: journal_token.to_string(),
+            device_id: device_id.to_string(),
             paths: None,
         }
     }

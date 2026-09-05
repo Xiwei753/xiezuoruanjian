@@ -297,6 +297,7 @@ fn defect2_completed_phase_durable_cleanup_returns_err() {
         projects_root: "/tmp/nonexistent_sujian/projects".to_string(),
         app_data_root: app_data_root.to_string_lossy().into_owned(),
         starmap_ids: Vec::new(),
+        device_id: "test-device".to_string(),
         phase: ProjectDeletePhase::Completed,
     };
     fs::write(&journal_path, serde_json::to_string(&journal).unwrap()).unwrap();

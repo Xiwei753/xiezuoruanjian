@@ -133,7 +133,15 @@ impl super::WriterCore {
     /// `targets`，继续下一 target。只有无法建立 target 列表（`list_projects`
     /// 失败）或全局配置无法解析/transport 初始化失败这类无法开始事务的错误才让
     /// 整个 `perform_full_sync` 返回 `Err`。
-    pub fn perform_full_sync(
+    ///
+    /// #645 评论 5504296097 问题2：降级为 `pub(crate)` + `#[cfg(test)]`，只给内部测试用作底层 helper。
+    /// 生产同步唯一 pipeline 是 `WriterAppService::perform_full_sync` →
+    /// `WriterCoreApi::perform_full_sync`（Prepare → Seed → Transfer → Commit），
+    /// 它会加载 pending deleted targets、走三段式 staging + workspace history。
+    /// 本方法不加载 pending deleted targets、不走 staging，是旧编排，不能被
+    /// FFI/UniFFI 等生产入口调用。
+    #[cfg(test)]
+    pub(crate) fn perform_full_sync(
         &self,
         config: &crate::sync::SyncConfig,
         force_sync: bool,
@@ -212,6 +220,7 @@ impl super::WriterCore {
             project_id: None,
             target_live_root: self.app_data_root.clone(),
             deleted_journal_token: None,
+            deleted_lww: None,
         });
 
         // Project targets — 只生成 plan，不创建 staging
@@ -226,6 +235,7 @@ impl super::WriterCore {
                 project_id: Some(project.id.clone()),
                 target_live_root: project_local_root,
                 deleted_journal_token: None,
+                deleted_lww: None,
             });
         }
 
@@ -233,6 +243,8 @@ impl super::WriterCore {
         // 已删除作品的远端前缀需要清理。target_kind="deleted_project"，
         // run_transfer 走 target-delete 计划。local_root 指向 app_data_root
         // （deleted target 不读本地目录，只枚举远端），staging_root=None。
+        // #645 评论 5504296097 问题3：deleted_lww 携带 deleted_at_ms/device_id，
+        // 供 run_transfer 做 LWW 比较（本地 tombstone vs 远端 manifest）。
         for pending in &pending_deleted {
             targets.push(PlannedTarget {
                 target: pending.target.clone(),
@@ -249,6 +261,10 @@ impl super::WriterCore {
                 ),
                 target_live_root: self.app_data_root.clone(),
                 deleted_journal_token: Some(pending.journal_token.clone()),
+                deleted_lww: Some(crate::sync::full_sync::DeletedTargetLww {
+                    deleted_at_ms: pending.deleted_at_ms,
+                    device_id: pending.device_id.clone(),
+                }),
             });
         }
 
@@ -472,6 +488,9 @@ impl super::WriterCore {
     /// `perform_full_sync` 创建 provider 后委托到此方法；测试通过此方法注入 mock provider。
     /// 语义与 `perform_full_sync` 一致：单个 target 的 `Err` 转为该 target 的
     /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
+    ///
+    /// #645 评论 5504296097 问题2：降级为 `#[cfg(test)]`，只给内部测试用。
+    #[cfg(test)]
     pub(crate) fn perform_full_sync_with_provider(
         &self,
         provider: &dyn crate::sync::provider::SyncProvider,
@@ -623,6 +642,10 @@ impl super::WriterCore {
     /// `error` / `error_category` / `message_key` 从与 `overall_status` 同优先级的
     /// 第一个 dominant target 取得，避免"总体是认证失败、文案却拿到前一个网络错误"
     /// 的错位。
+    ///
+    /// #645 评论 5504296097 问题2：降级为 `#[cfg(test)]`，只给 `perform_full_sync_with_provider` 用。
+    /// 生产路径用 `crate::sync::full_sync::aggregate_full_sync_result`（pub 函数）。
+    #[cfg(test)]
     fn aggregate_full_sync_result(
         targets: Vec<crate::sync::types::TargetSyncResult>,
     ) -> crate::sync::types::FullSyncResult {

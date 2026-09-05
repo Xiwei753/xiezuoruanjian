@@ -15,7 +15,7 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service, with_core};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -121,15 +121,21 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
 
 /// 全量同步 dry-run C ABI（Issue #630）。
 ///
+/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline，
+/// 经 `WriterAppService::perform_full_sync_dry_run` →
+/// `WriterCoreApi::perform_full_sync_dry_run` →
+/// `WriterCore::perform_full_sync_dry_run`。旧 facade `with_core` 路径
+/// 不加载 pending deleted targets，已删除作品的远端前缀不会被清理。
+///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
-        let secrets = core.load_sync_secrets().unwrap_or_default();
-        let plan = core
-            .perform_full_sync_dry_run(&config, &secrets)
+    match with_app_service(|svc| {
+        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
+        let dto: crate::api::SyncConfigDto = config.into();
+        let plan = svc
+            .perform_full_sync_dry_run(dto)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&plan).unwrap_or_default())
     }) {
@@ -140,15 +146,17 @@ pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
 
 /// 全量同步诊断 C ABI（Issue #630）— 只测一次仓库、分支、token。
 ///
+/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline。
+///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
-        let secrets = core.load_sync_secrets().unwrap_or_default();
-        let diag = core
-            .perform_full_sync_diagnostics(&config, &secrets)
+    match with_app_service(|svc| {
+        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
+        let dto: crate::api::SyncConfigDto = config.into();
+        let diag = svc
+            .perform_full_sync_diagnostics(dto)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&diag).unwrap_or_default())
     }) {
@@ -159,14 +167,22 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 
 /// 全量同步 C ABI（Issue #630）— 先 App target，再所有 Project target。
 ///
+/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline，
+/// 经 `WriterAppService::perform_full_sync` →
+/// `WriterCoreApi::perform_full_sync`（Prepare → Seed → Transfer → Commit）。
+/// 旧 facade `with_core(|core| core.perform_full_sync(...))` 不加载
+/// pending deleted targets，已删除作品的远端前缀不会被清理；且不走
+/// 三段式 staging + workspace history，是第二套并行 pipeline。删除。
+///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
-        let result = core
-            .perform_full_sync(&config, false)
+    match with_app_service(|svc| {
+        let config = svc.load_sync_config_core().map_err(|e| format!("{}", e))?;
+        let dto: crate::api::SyncConfigDto = config.into();
+        let result = svc
+            .perform_full_sync(dto, false)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&result).unwrap_or_default())
     }) {

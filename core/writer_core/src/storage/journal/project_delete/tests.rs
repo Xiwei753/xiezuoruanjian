@@ -1,4 +1,5 @@
 use super::*;
+use crate::sync::types::PendingDeletedTarget;
 use tempfile::tempdir;
 
 /// 验证 journal 序列化/反序列化。
@@ -14,6 +15,7 @@ fn test_journal_serde() {
         projects_root: "/projects".to_string(),
         app_data_root: "/app".to_string(),
         starmap_ids: Vec::new(),
+        device_id: "test-device".to_string(),
         phase: ProjectDeletePhase::Prepared,
     };
 
@@ -57,6 +59,7 @@ fn test_full_delete_flow() {
         &projects_root,
         app_data_root,
         Vec::new(),
+        "test-device",
     );
 
     // 获取事务实际使用的 trash 路径（token 拼出来的）。
@@ -128,6 +131,7 @@ fn test_recovery_from_prepared() {
         &projects_root,
         app_data_root,
         Vec::new(),
+        "test-device",
     );
     tx.prepare().unwrap();
 
@@ -175,6 +179,7 @@ fn test_recovery_from_worktree_moved() {
         &projects_root,
         app_data_root,
         Vec::new(),
+        "test-device",
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -220,6 +225,7 @@ fn test_recovery_from_git_moved() {
         &projects_root,
         app_data_root,
         Vec::new(),
+        "test-device",
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -260,6 +266,7 @@ fn test_delete_without_private_git() {
         &projects_root,
         app_data_root,
         Vec::new(),
+        "test-device",
     );
 
     tx.prepare().unwrap();
@@ -277,4 +284,192 @@ fn test_delete_without_private_git() {
     assert!(!worktree_from.exists());
     assert!(worktree_trash.exists());
     assert!(!journal_path.exists());
+}
+
+/// #645 评论 5504296097 问题1：ack_project_delete_history 推进到
+/// HistoryRecorded → RemoteDeleteQueued → Completed，并写 PendingDeletedTarget。
+#[test]
+fn test_ack_writes_pending_deleted_target_and_completes() {
+    let temp_dir = tempdir().unwrap();
+    let app_data_root = temp_dir.path();
+    let projects_root = app_data_root.join("projects");
+    fs::create_dir_all(&projects_root).unwrap();
+
+    let project_id = "test-project";
+    let worktree_from = projects_root.join(project_id);
+    fs::create_dir_all(&worktree_from).unwrap();
+    fs::write(worktree_from.join("project.json"), "{}").unwrap();
+
+    let trash_parent = app_data_root.join("sync/trash");
+    let mut tx = ProjectDeleteTransaction::new(
+        project_id,
+        &worktree_from,
+        &trash_parent,
+        None,
+        None,
+        &projects_root,
+        app_data_root,
+        Vec::new(),
+        "test-device",
+    );
+
+    // 推进到 StarMapsUnbound（模拟 delete_project_with_changes 的状态）。
+    tx.prepare().unwrap();
+    tx.move_worktree().unwrap();
+    tx.move_git().unwrap();
+    tx.write_tombstone().unwrap();
+    tx.unbind_starmaps().unwrap();
+    let token = tx.token().to_string();
+    // tx 在此处 drop，journal 保留在 StarMapsUnbound。
+
+    // ack：推进到 HistoryRecorded → RemoteDeleteQueued → Completed。
+    ack_project_delete_history(app_data_root, &token).unwrap();
+
+    // journal 已清理。
+    let journal_path = app_data_root
+        .join(DELETE_JOURNALS_DIR)
+        .join(format!("{}{}", DELETE_JOURNAL_PREFIX, token));
+    assert!(!journal_path.exists(), "ack 后 journal 应已清理");
+
+    // PendingDeletedTarget 已落盘。
+    let pending =
+        crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root).unwrap();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].journal_token, token);
+    assert_eq!(
+        pending[0].target.remote_prefix,
+        format!("projects/{}", project_id)
+    );
+}
+
+/// #645 评论 5504296097 问题1：HistoryRecorded phase 崩溃恢复时，
+/// recover 先补写 PendingDeletedTarget，再推进到 Completed 并清 journal。
+#[test]
+fn test_recovery_from_history_recorded_writes_pending_target() {
+    let temp_dir = tempdir().unwrap();
+    let app_data_root = temp_dir.path();
+    let projects_root = app_data_root.join("projects");
+    fs::create_dir_all(&projects_root).unwrap();
+
+    let project_id = "test-project";
+    let worktree_from = projects_root.join(project_id);
+    fs::create_dir_all(&worktree_from).unwrap();
+    fs::write(worktree_from.join("project.json"), "{}").unwrap();
+
+    let trash_parent = app_data_root.join("sync/trash");
+    let mut tx = ProjectDeleteTransaction::new(
+        project_id,
+        &worktree_from,
+        &trash_parent,
+        None,
+        None,
+        &projects_root,
+        app_data_root,
+        Vec::new(),
+        "test-device",
+    );
+
+    // 推进到 HistoryRecorded（模拟 ack 在写 pending target 前崩溃）。
+    tx.prepare().unwrap();
+    tx.move_worktree().unwrap();
+    tx.move_git().unwrap();
+    tx.write_tombstone().unwrap();
+    tx.unbind_starmaps().unwrap();
+    tx.advance_phase(ProjectDeletePhase::HistoryRecorded)
+        .unwrap();
+    let token = tx.token().to_string();
+    let journal_path = tx.journal_path.clone();
+
+    // PendingDeletedTarget 还没写。
+    let pending_before =
+        crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root).unwrap();
+    assert!(pending_before.is_empty());
+
+    // 重启恢复：recover 遇 HistoryRecorded 先补写 PendingDeletedTarget，
+    // 再推进到 Completed 并清 journal。
+    let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
+    assert!(
+        recovered.is_empty(),
+        "HistoryRecorded 已记 history，recover 应直接 complete，不返回 recovered"
+    );
+    assert!(!journal_path.exists(), "recover 后 journal 应已清理");
+
+    // PendingDeletedTarget 已补写。
+    let pending_after =
+        crate::sync::pending_deleted::load_pending_deleted_targets(app_data_root).unwrap();
+    assert_eq!(pending_after.len(), 1);
+    assert_eq!(pending_after[0].journal_token, token);
+}
+
+/// #645 评论 5504296097 问题1：RemoteDeleteQueued phase 崩溃恢复时，
+/// recover 直接推进到 Completed 并清 journal（pending target 已落盘）。
+#[test]
+fn test_recovery_from_remote_delete_queued() {
+    let temp_dir = tempdir().unwrap();
+    let app_data_root = temp_dir.path();
+    let projects_root = app_data_root.join("projects");
+    fs::create_dir_all(&projects_root).unwrap();
+
+    let project_id = "test-project";
+    let worktree_from = projects_root.join(project_id);
+    fs::create_dir_all(&worktree_from).unwrap();
+    fs::write(worktree_from.join("project.json"), "{}").unwrap();
+
+    let trash_parent = app_data_root.join("sync/trash");
+    let mut tx = ProjectDeleteTransaction::new(
+        project_id,
+        &worktree_from,
+        &trash_parent,
+        None,
+        None,
+        &projects_root,
+        app_data_root,
+        Vec::new(),
+        "test-device",
+    );
+
+    // 推进到 RemoteDeleteQueued（模拟 ack 在 complete 前崩溃）。
+    tx.prepare().unwrap();
+    tx.move_worktree().unwrap();
+    tx.move_git().unwrap();
+    tx.write_tombstone().unwrap();
+    tx.unbind_starmaps().unwrap();
+    tx.advance_phase(ProjectDeletePhase::HistoryRecorded)
+        .unwrap();
+    tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)
+        .unwrap();
+    let journal_path = tx.journal_path.clone();
+
+    // 重启恢复：recover 遇 RemoteDeleteQueued 直接 complete 并清 journal。
+    let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
+    assert!(recovered.is_empty());
+    assert!(!journal_path.exists(), "recover 后 journal 应已清理");
+}
+
+/// #645 评论 5504296097 问题1：record_pending_deleted_target 不吞文件损坏错误。
+/// 文件损坏时返回 Err，不覆盖丢失其他 pending target。
+#[test]
+fn test_record_pending_deleted_target_fails_on_corrupted_file() {
+    let temp_dir = tempdir().unwrap();
+    let app_data_root = temp_dir.path();
+
+    // 写一个损坏的 pending_deleted_targets.json。
+    let pending_path = app_data_root
+        .join("app-meta")
+        .join("sync")
+        .join("pending_deleted_targets.json");
+    fs::create_dir_all(pending_path.parent().unwrap()).unwrap();
+    fs::write(&pending_path, "{ corrupted json").unwrap();
+
+    // record 应返回 Err，不吞错误。
+    let target = PendingDeletedTarget::for_project("p1", 1000, "token_a", "dev-1");
+    let result = crate::sync::pending_deleted::record_pending_deleted_target(app_data_root, target);
+    assert!(
+        result.is_err(),
+        "record_pending_deleted_target 应在文件损坏时返回 Err，不吞错误"
+    );
+
+    // 损坏文件未被覆盖。
+    let content = fs::read_to_string(&pending_path).unwrap();
+    assert_eq!(content, "{ corrupted json");
 }

@@ -94,6 +94,7 @@ fn gap1_fixed_delete_project_propagates_starmap_enum_error() {
         &projects_root,
         &project_id,
         &app_data_root,
+        "test-device",
     );
 
     // 修复后断言 A：删除返回 Err——错误不再被吞掉，向上传播。
@@ -152,6 +153,7 @@ fn gap2_fixed_recover_returns_change_set_and_bootstrap_writes_history() {
         &projects_root,
         &app_data_root,
         Vec::new(),
+        "test-device",
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -272,6 +274,7 @@ fn gap3_fixed_tombstone_replay_is_idempotent() {
         &projects_root,
         &app_data_root,
         Vec::new(),
+        "test-device",
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();

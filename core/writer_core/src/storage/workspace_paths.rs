@@ -36,8 +36,8 @@ pub enum WorkspacePathClass {
     /// 用户设置（settings.local.json、settings.sync.json 等）。可进 staging 与本地 Git history。
     UserSetting,
     /// 同步引擎运行状态（app-meta/sync/manifest.sync.json、state.local.json、
-    /// config.local.json、conflicts.json、full_state.local.json）。
-    /// staging 可以使用，不进本地 Git history。
+    /// config.local.json、conflicts.json、full_state.local.json、
+    /// pending_deleted_targets.json）。staging 可以使用，不进本地 Git history。
     SyncEngineState,
     /// 凭据（secrets*.local.json）。staging/history 都不进。
     Secret,
@@ -117,7 +117,10 @@ fn is_workspace_secret_path(path: &str) -> bool {
 /// - `app-meta/sync/state.local.json`：App target 同步状态；
 /// - `app-meta/sync/full_state.local.json`：全量同步持久状态；
 /// - `app-meta/sync/conflicts.json`：冲突记录；
-/// - `app-meta/sync/config.local.json`：同步配置。
+/// - `app-meta/sync/config.local.json`：同步配置；
+/// - `app-meta/sync/pending_deleted_targets.json`：待删除 target tombstone 列表
+///   （#645 评论 5504296097 问题4：deleted target durable handoff 的 provider-neutral
+///   持久状态，由 sync engine 自己读写，不是用户内容）。
 ///
 /// staging 可以使用这些文件（同步需要），但 [`is_workspace_history_path`]
 /// 必须排除它们，避免把远端同步运行状态当成用户内容写进本地 Git history。
@@ -128,6 +131,7 @@ fn is_sync_engine_state_path(path: &str) -> bool {
         || path == "app-meta/sync/full_state.local.json"
         || path == "app-meta/sync/conflicts.json"
         || path == "app-meta/sync/config.local.json"
+        || path == "app-meta/sync/pending_deleted_targets.json"
 }
 
 /// [`is_sync_engine_state_path`] 的 `&Path` 版本。
@@ -474,6 +478,18 @@ mod tests {
             classify_workspace_path(&PathBuf::from("app-meta/sync/conflicts.json")),
             SyncEngineState
         );
+        // #645 评论 5504296097 问题4：pending_deleted_targets.json 归
+        // SyncEngineState（staging 可用、不进本地 Git history）。
+        assert_eq!(
+            classify_workspace_path(&PathBuf::from("app-meta/sync/pending_deleted_targets.json")),
+            SyncEngineState
+        );
+        assert!(!is_workspace_history_path_str(
+            "app-meta/sync/pending_deleted_targets.json"
+        ));
+        assert!(is_sync_staging_path_str(
+            "app-meta/sync/pending_deleted_targets.json"
+        ));
         // Secret
         assert_eq!(
             classify_workspace_path(&PathBuf::from("app-meta/sync/secrets.local.json")),

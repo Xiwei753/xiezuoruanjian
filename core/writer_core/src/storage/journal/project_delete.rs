@@ -26,8 +26,8 @@
 //! ## 状态机
 //!
 //! ```text
-//! Prepared → WorktreeMoved → GitMoved → TombstoneWritten → StarMapsUnbound → HistoryRecorded → Completed
-//!                (可以恢复)    (可以恢复)      (可以恢复)          (可以恢复)        (可以恢复)
+//! Prepared → WorktreeMoved → GitMoved → TombstoneWritten → StarMapsUnbound → HistoryRecorded → RemoteDeleteQueued → Completed
+//!                (可以恢复)    (可以恢复)      (可以恢复)          (可以恢复)        (可以恢复)          (可以恢复)
 //! ```
 //!
 //! - `Prepared`: journal 已落盘，尚未移动任何内容
@@ -36,6 +36,9 @@
 //! - `TombstoneWritten`: tombstone 已生成并持久化（#645 评论 5504296097 缺口3）
 //! - `StarMapsUnbound`: starmap 解绑已完成
 //! - `HistoryRecorded`: workspace Git history 已记录（#645 评论 5504296097 缺口2）
+//! - `RemoteDeleteQueued`: PendingDeletedTarget 已落盘到
+//!   `app-meta/sync/pending_deleted_targets.json`（#645 评论 5504296097 问题1），
+//!   下次 `prepare_full_sync` 会为该 target 生成 deleted_project plan 清理远端前缀
 //! - `Completed`: 可以清理 journal
 //!
 //! ## 崩溃恢复
@@ -46,7 +49,8 @@
 //! - 推进到 `StarMapsUnbound` 后**不** complete/cleanup，返回 `RecoveredProjectDelete`
 //!   （含 change-set）供 bootstrap 写 workspace Git history
 //! - bootstrap 记 history 成功后调 `ack_project_delete_history` 推进到
-//!   `HistoryRecorded` → `Completed` 并清 journal
+//!   `HistoryRecorded` → `RemoteDeleteQueued` → `Completed` 并清 journal
+//!   （`RemoteDeleteQueued` 阶段幂等写 PendingDeletedTarget）
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -70,6 +74,7 @@ const DELETE_JOURNALS_DIR: &str = "app-meta/delete-journals";
 /// - `TombstoneWritten`: tombstone 已生成并持久化（#645 评论 5504296097 缺口3）
 /// - `StarMapsUnbound`: starmap 解绑已完成
 /// - `HistoryRecorded`: workspace Git history 已记录（#645 评论 5504296097 缺口2）
+/// - `RemoteDeleteQueued`: PendingDeletedTarget 已落盘（#645 评论 5504296097 问题1）
 /// - `Completed`: 可以清理 journal
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -90,11 +95,19 @@ pub enum ProjectDeletePhase {
     StarMapsUnbound,
     /// #645 评论 5504296097 缺口2：workspace Git history 已记录。
     ///
-    /// 在 `StarMapsUnbound` 之后、`Completed` 之前。API/bootstrap 调
+    /// 在 `StarMapsUnbound` 之后、`RemoteDeleteQueued` 之前。API/bootstrap 调
     /// `record_workspace_change_set` 成功后通过 `ack_project_delete_history`
-    /// 推进到此 phase，再推进到 `Completed` 并清 journal。history 失败时
-    /// journal 保留在 `StarMapsUnbound`，下次启动 recover 补记。
+    /// 推进到此 phase。history 失败时 journal 保留在 `StarMapsUnbound`，
+    /// 下次启动 recover 补记。
     HistoryRecorded,
+    /// #645 评论 5504296097 问题1：PendingDeletedTarget 已落盘到
+    /// `app-meta/sync/pending_deleted_targets.json`。
+    ///
+    /// 在 `HistoryRecorded` 之后、`Completed` 之前。`ack_project_delete_history`
+    /// 推进到 `HistoryRecorded` 后，幂等调 `record_pending_deleted_target` 写
+    /// PendingDeletedTarget，成功后推进到此 phase。写失败时 journal 保留在
+    /// `HistoryRecorded`，下次启动 recover 补写——不让 pending target 丢失。
+    RemoteDeleteQueued,
     Completed,
 }
 
@@ -128,6 +141,15 @@ pub struct ProjectDeleteJournal {
     /// 已在旧 API 层 best-effort loop 里解绑过）。
     #[serde(default)]
     pub starmap_ids: Vec<String>,
+    /// #645 评论 5504296097 问题3：发起删除的设备 ID，参与 LWW 平局决胜。
+    ///
+    /// `ack_project_delete_history` 和 `recover_single_journal` 用此字段
+    /// 构造 `PendingDeletedTarget`，使 target tombstone 的 device_id 与
+    /// `resolve_lww_path` 的 tie-break 规则一致。
+    /// `#[serde(default)]` 保持向后兼容：旧 journal 没有此字段时反序列化
+    /// 为空字符串（LWW tie-break 中空字符串 < 任何非空 device_id）。
+    #[serde(default)]
+    pub device_id: String,
     /// 当前删除阶段。
     pub phase: ProjectDeletePhase,
 }
@@ -165,6 +187,7 @@ impl ProjectDeleteTransaction {
         projects_root: &Path,
         app_data_root: &Path,
         starmap_ids: Vec<String>,
+        device_id: &str,
     ) -> Self {
         let token = format!(
             "{}_{}_{}",
@@ -189,6 +212,7 @@ impl ProjectDeleteTransaction {
             projects_root: projects_root.to_string_lossy().into_owned(),
             app_data_root: app_data_root.to_string_lossy().into_owned(),
             starmap_ids,
+            device_id: device_id.to_string(),
             phase: ProjectDeletePhase::Prepared,
         };
 
@@ -517,12 +541,18 @@ pub fn recover_pending_delete_transactions(
     Ok(recovered_list)
 }
 
-/// #645 评论 5504296097 缺口2修复：API/bootstrap 记 history 成功后推进 journal。
+/// #645 评论 5504296097 缺口2/问题1修复：API/bootstrap 记 history 成功后推进 journal。
 ///
-/// 读取 journal、推进 phase 到 `HistoryRecorded` → `Completed`、清 journal。
+/// 读取 journal、推进 phase 到 `HistoryRecorded`，幂等写 PendingDeletedTarget
+/// 到 `app-meta/sync/pending_deleted_targets.json`，推进到 `RemoteDeleteQueued` →
+/// `Completed`、清 journal。
+///
 /// journal 文件名是 `.sujian-delete-journal-{token}`，在 `app-meta/delete-journals/` 下。
 ///
 /// 幂等：journal 已不存在（已清理）时返回 `Ok(())`。
+///
+/// #645 评论 5504296097 问题1：`record_pending_deleted_target` 失败时返回 Err，
+/// journal 保留在 `HistoryRecorded`，下次启动 recover 补写——不让 pending target 丢失。
 pub fn ack_project_delete_history(app_data_root: &Path, journal_token: &str) -> Result<()> {
     let journal_path = app_data_root
         .join(DELETE_JOURNALS_DIR)
@@ -544,8 +574,33 @@ pub fn ack_project_delete_history(app_data_root: &Path, journal_token: &str) -> 
         journal_path,
         completed: false,
     };
-    // 推进到 HistoryRecorded → Completed → cleanup。
+    // 推进到 HistoryRecorded。
     tx.advance_phase(ProjectDeletePhase::HistoryRecorded)?;
+
+    // #645 评论 5504296097 问题1：幂等写 PendingDeletedTarget，让 prepare_full_sync
+    // 能为已删除作品生成 deleted_project target，run_transfer 走 target-delete 计划
+    // 清理远端 projects/<id>/ 下所有对象。写失败返回 Err，journal 保留在
+    // HistoryRecorded，下次启动 recover 补写。
+    //
+    // deleted_at_ms 用 journal 的 token 时间戳前缀（token 格式：{ts}_{uuid}_{pid}），
+    // 解析失败时退回当前时间。provider-neutral，不写 GitHub 专用逻辑。
+    let deleted_at_ms = tx
+        .journal
+        .token
+        .split('_')
+        .next()
+        .and_then(|s| s.parse::<i64>().ok())
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
+        &tx.journal.project_id,
+        deleted_at_ms,
+        journal_token,
+        &tx.journal.device_id,
+    );
+    crate::sync::pending_deleted::record_pending_deleted_target(app_data_root, pending_deleted)?;
+
+    // PendingDeletedTarget 已落盘，推进到 RemoteDeleteQueued → Completed → cleanup。
+    tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
     tx.complete()?;
     tx.cleanup_journal()?;
     Ok(())
@@ -612,7 +667,36 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredProject
             Ok(Some(make_recovered(&tx)))
         }
         ProjectDeletePhase::HistoryRecorded => {
-            // history 已记，推进到 Completed 并清理 journal。
+            // #645 评论 5504296097 问题1：history 已记，但 PendingDeletedTarget
+            // 可能还没落盘（ack 在写 pending target 前崩溃）。先幂等补写
+            // PendingDeletedTarget，再推进到 RemoteDeleteQueued → Completed 并清 journal。
+            // 写失败返回 Err，journal 保留在 HistoryRecorded，下次启动 recover 补写。
+            let app_data_root = PathBuf::from(&tx.journal.app_data_root);
+            let deleted_at_ms = tx
+                .journal
+                .token
+                .split('_')
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
+                &tx.journal.project_id,
+                deleted_at_ms,
+                &tx.journal.token,
+                &tx.journal.device_id,
+            );
+            crate::sync::pending_deleted::record_pending_deleted_target(
+                &app_data_root,
+                pending_deleted,
+            )?;
+            tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
+            tx.complete()?;
+            tx.cleanup_journal()?;
+            Ok(None)
+        }
+        ProjectDeletePhase::RemoteDeleteQueued => {
+            // #645 评论 5504296097 问题1：PendingDeletedTarget 已落盘，
+            // 推进到 Completed 并清 journal。
             tx.complete()?;
             tx.cleanup_journal()?;
             Ok(None)

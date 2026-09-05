@@ -72,7 +72,7 @@ fn problem1_prepare_full_sync_includes_deleted_project_target() {
     // 2. 删除作品（走 facade WriterCore::delete_project_with_changes，
     // 记录 PendingDeletedTarget）。
     let outcome = core
-        .delete_project_with_changes(&project_id)
+        .delete_project_with_changes(&project_id, "test-device")
         .expect("delete_project_with_changes 应成功");
     // ack journal（模拟 API 层在记 history 后 ack）。
     writer_core::storage::journal::project_delete::ack_project_delete_history(

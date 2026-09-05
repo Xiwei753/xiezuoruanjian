@@ -220,11 +220,13 @@ impl super::WriterCore {
     pub fn delete_project_with_changes(
         &self,
         project_id: &str,
+        device_id: &str,
     ) -> Result<crate::project::ProjectDeleteOutcome> {
         crate::project::delete_project_with_changes(
             &self.projects_root,
             project_id,
             &self.app_data_root,
+            device_id,
         )
     }
 

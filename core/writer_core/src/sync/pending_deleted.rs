@@ -51,9 +51,14 @@ pub fn load_pending_deleted_targets(
     Ok(list.targets)
 }
 
-/// 记录一个待删除的同步 target（追加到持久化列表）。
+/// 计录一个待删除的同步 target（追加到持久化列表）。
 ///
 /// 用 read-modify-write + atomic write。幂等：相同 `journal_token` 不重复追加。
+///
+/// #645 评论 5504296097 问题1修复：read-modify-write 用
+/// `load_pending_deleted_targets(app_data_root)?`，不用 `unwrap_or_default()`。
+/// 文件损坏（解析失败）时返回 Err，不吞错误——吞掉会让 pending target 列表
+/// 被空列表覆盖，丢失其他已记录的待删除 target，导致远端前缀不被清理。
 pub fn record_pending_deleted_target(
     app_data_root: &Path,
     target: PendingDeletedTarget,
@@ -62,7 +67,10 @@ pub fn record_pending_deleted_target(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let mut current = load_pending_deleted_targets(app_data_root).unwrap_or_default();
+    // #645 评论 5504296097 问题1：不用 unwrap_or_default() 吞掉文件损坏错误。
+    // 文件损坏时返回 Err，让调用方（ack_project_delete_history / recover）决定
+    // 重试还是保留 journal，不会悄悄覆盖丢失其他 pending target。
+    let mut current = load_pending_deleted_targets(app_data_root)?;
     if current
         .iter()
         .any(|t| t.journal_token == target.journal_token)
@@ -116,7 +124,7 @@ mod tests {
     fn record_load_remove_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let target = PendingDeletedTarget::for_project("p1", 1000, "token_a");
+        let target = PendingDeletedTarget::for_project("p1", 1000, "token_a", "dev-1");
         record_pending_deleted_target(root, target.clone()).unwrap();
         let loaded = load_pending_deleted_targets(root).unwrap();
         assert_eq!(loaded, vec![target.clone()]);
@@ -146,10 +154,16 @@ mod tests {
     fn multiple_targets_preserved() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        record_pending_deleted_target(root, PendingDeletedTarget::for_project("p1", 1000, "t1"))
-            .unwrap();
-        record_pending_deleted_target(root, PendingDeletedTarget::for_project("p2", 2000, "t2"))
-            .unwrap();
+        record_pending_deleted_target(
+            root,
+            PendingDeletedTarget::for_project("p1", 1000, "t1", "dev-1"),
+        )
+        .unwrap();
+        record_pending_deleted_target(
+            root,
+            PendingDeletedTarget::for_project("p2", 2000, "t2", "dev-2"),
+        )
+        .unwrap();
         let loaded = load_pending_deleted_targets(root).unwrap();
         assert_eq!(loaded.len(), 2);
 
