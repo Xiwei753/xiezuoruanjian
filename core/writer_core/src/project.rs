@@ -305,44 +305,6 @@ pub struct ProjectDeleteOutcome {
     pub journal_token: String,
 }
 
-/// 删除作品。
-///
-/// 使用 durable delete transaction 解决"正文删了，private Git 还活着"的分裂状态：
-/// 1. 在第一次 rename 前先写 `ProjectDeleteJournal`（含 from/trash 路径 + phase）
-/// 2. 每次 rename 后 fsync 对应父目录并推进 phase
-/// 3. #644 评论 5495945801 问题3：tombstone 收进事务（`tx.write_tombstone`），
-///    错误直接返回不吞；journal 保留到 tombstone/worktree trash 都完成以后
-/// 4. #645 评论 5504296097 问题2：starmap 解绑收进事务（`tx.unbind_starmaps`），
-///    避免 API 层 best-effort unbind loop 产生的半状态
-///
-/// #645 评论 5504296097 缺口1修复：不再用 `unwrap_or_default()` 吞掉
-/// `list_starmaps_bound_to_project` 的错误——index.json 损坏等情况下删除返回 Err。
-///
-/// #645 评论 5504296097 缺口2修复：core 内不 complete/cleanup journal，
-/// 保留在 `StarMapsUnbound`，由 `delete_project`（core 简化入口）直接 ack，
-/// 或由 API 层 `delete_project` 记 history 后 ack。
-///
-/// #645 评论第 1 点：一个工作区一个 Git 仓库。Git 仓库是 workspace 级别共享的，
-/// 删除单个作品只移 worktree 进 trash，**不移动共享 git_dir**。因此不再传
-/// `git_dir_from`/`git_dir_trash_root`（传 None），也不再调 `tx.move_git()`。
-#[allow(
-    clippy::too_many_lines,
-    clippy::cognitive_complexity,
-    clippy::excessive_nesting,
-    clippy::too_many_arguments,
-    clippy::type_complexity
-)]
-pub fn delete_project(projects_root: &Path, project_id: &str, app_data_root: &Path) -> Result<()> {
-    // core 简化入口：删除后直接 ack（complete + cleanup），不记 history。
-    // 与旧版本等价（旧版本在 core 内 complete+cleanup，不记 history）。
-    let outcome = delete_project_with_changes(projects_root, project_id, app_data_root)?;
-    crate::storage::journal::project_delete::ack_project_delete_history(
-        app_data_root,
-        &outcome.journal_token,
-    )?;
-    Ok(())
-}
-
 /// 从子章节聚合获取 volume 的最近更新时间。
 ///
 /// 遍历该 volume 下所有 chapter.meta.json，取最大的 updated_at。
@@ -595,6 +557,27 @@ pub fn delete_project_with_changes(
         &unbound_starmap_ids,
     );
 
+    // #645 评论 5504296097 问题1：记录 PendingDeletedTarget，让 prepare_full_sync
+    // 能为已删除作品生成 target，run_transfer 走 target-delete 计划清理远端
+    // projects/<project_id>/ 下所有对象。provider-neutral，不写 GitHub 专用逻辑。
+    let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
+        project_id,
+        chrono::Utc::now().timestamp_millis(),
+        &journal_token,
+    );
+    if let Err(e) =
+        crate::sync::pending_deleted::record_pending_deleted_target(app_data_root, pending_deleted)
+    {
+        // 记录失败不阻断删除（作品已删，远端清理可下次同步重试），
+        // 但用 log::warn 留痕，便于排查。
+        log::warn!(
+            "delete_project_with_changes: record_pending_deleted_target failed for {}: {} \
+             — remote projects/<id>/ cleanup will be skipped until next delete",
+            project_id,
+            e
+        );
+    }
+
     Ok(ProjectDeleteOutcome {
         changes,
         unbound_starmap_ids,
@@ -799,8 +782,14 @@ mod inline_tests {
         let project_dir = data_root.join("projects").join(&project.id);
         assert!(project_dir.exists());
 
-        let result = delete_project(&data_root.join("projects"), &project.id, data_root);
-        assert!(result.is_ok());
+        let outcome =
+            delete_project_with_changes(&data_root.join("projects"), &project.id, data_root);
+        assert!(outcome.is_ok());
+        crate::storage::journal::project_delete::ack_project_delete_history(
+            data_root,
+            &outcome.unwrap().journal_token,
+        )
+        .unwrap();
 
         assert!(!project_dir.exists());
 
@@ -822,7 +811,8 @@ mod inline_tests {
         let data_root = temp_dir.path();
         std::fs::create_dir_all(data_root.join("projects")).unwrap();
 
-        let result = delete_project(&data_root.join("projects"), "non_existent_id", data_root);
+        let result =
+            delete_project_with_changes(&data_root.join("projects"), "non_existent_id", data_root);
         assert!(result.is_err());
         match result {
             Err(crate::error::Error::InvalidDeleteTarget(_)) => {}

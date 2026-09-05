@@ -861,3 +861,59 @@ pub struct FullSyncDryRunResult {
 pub struct FullSyncDiagnosticsResult {
     pub diagnostics: SyncDiagnosticsResult,
 }
+
+/// 待删除的同步 target — provider-neutral 持久状态（Issue #645 评论 5504296097 问题1）。
+///
+/// 整部作品删除后，远端 `projects/<project_id>/` 下的对象需要被清理。
+/// 但 `prepare_full_sync` 只通过 `list_projects()` 枚举现存作品生成 target，
+/// 已删除作品不在列表里，远端前缀没有任何 target 会去清理。
+///
+/// `PendingDeletedTarget` 是 sync engine 自己的 provider-neutral 持久状态
+/// （**不是** project tombstone），记录"这个 SyncTarget 已删除，下次同步时
+/// 需要走 target-delete 计划清理远端前缀下所有对象"。
+///
+/// ## 生命周期
+///
+/// 1. `delete_project_with_changes` 时记录：把 `PendingDeletedTarget` 持久化到
+///    `<app_data_root>/app-meta/sync/pending_deleted_targets.json`；
+/// 2. `prepare_full_sync` 加载 pending deleted targets，加入 `FullSyncPlan.targets`，
+///    `target_kind = "deleted_project"`；
+/// 3. `run_transfer` 对 `deleted_project` target 走 target-delete 计划：
+///    `provider.list(remote_prefix)` 枚举远端对象 → 逐个 `provider.delete(...)`；
+/// 4. 全部远端删除成功后从 pending 列表移除该条目。
+///
+/// ## provider-neutral
+///
+/// 只使用 `SyncProvider::list/delete` 和 capabilities，不写 GitHub 专用逻辑。
+/// GitHub 的 SHA/branch/API 细节由 `GitHubProvider` 自己处理。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingDeletedTarget {
+    /// 已删除的同步目标 — `SyncTarget::project(project_id)`。
+    pub target: SyncTarget,
+    /// 删除时间戳（Unix 毫秒），用于排序和日志。
+    pub deleted_at_ms: i64,
+    /// 关联的 delete journal token，用于 ack 推进 journal。
+    pub journal_token: String,
+    /// 需要在远端删除的相对路径列表（相对于 `target.remote_prefix`）。
+    ///
+    /// `None` 表示删除整个 `remote_prefix` 下所有远端对象（由 `provider.list` 枚举）；
+    /// `Some(paths)` 表示只删除指定路径（精确删除，不枚举远端）。
+    /// 当前实现统一用 `None`（枚举远端前缀下所有对象逐个删除），
+    /// `Some` 留作未来精确删除优化的扩展点。
+    #[serde(default)]
+    pub paths: Option<Vec<String>>,
+}
+
+impl PendingDeletedTarget {
+    /// 为已删除的 project 构造 `PendingDeletedTarget`。
+    ///
+    /// `paths` 为 `None`：删除整个 `projects/<project_id>/` 前缀下所有远端对象。
+    pub fn for_project(project_id: &str, deleted_at_ms: i64, journal_token: &str) -> Self {
+        Self {
+            target: SyncTarget::project(project_id),
+            deleted_at_ms,
+            journal_token: journal_token.to_string(),
+            paths: None,
+        }
+    }
+}

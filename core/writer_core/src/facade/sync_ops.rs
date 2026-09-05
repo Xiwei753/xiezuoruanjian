@@ -184,6 +184,22 @@ impl super::WriterCore {
             }
         };
 
+        // #645 评论 5504296097 问题1：加载 pending deleted targets，
+        // 让 prepare_full_sync 为已删除作品生成 target，run_transfer 走
+        // target-delete 计划清理远端 projects/<id>/ 下所有对象。
+        let pending_deleted =
+            match crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root) {
+                Ok(targets) => targets,
+                Err(err) => {
+                    let msg = err.to_string();
+                    self.persist_full_sync_early_failure(
+                        crate::sync::SyncStatus::RecoverableError(msg),
+                        "global",
+                    );
+                    return Err(err);
+                }
+            };
+
         let mut targets = Vec::new();
 
         // App target — 只生成 plan，不创建 staging。
@@ -195,6 +211,7 @@ impl super::WriterCore {
             target_kind: "app".to_string(),
             project_id: None,
             target_live_root: self.app_data_root.clone(),
+            deleted_journal_token: None,
         });
 
         // Project targets — 只生成 plan，不创建 staging
@@ -208,6 +225,30 @@ impl super::WriterCore {
                 target_kind: "project".to_string(),
                 project_id: Some(project.id.clone()),
                 target_live_root: project_local_root,
+                deleted_journal_token: None,
+            });
+        }
+
+        // #645 评论 5504296097 问题1：Pending deleted targets —
+        // 已删除作品的远端前缀需要清理。target_kind="deleted_project"，
+        // run_transfer 走 target-delete 计划。local_root 指向 app_data_root
+        // （deleted target 不读本地目录，只枚举远端），staging_root=None。
+        for pending in &pending_deleted {
+            targets.push(PlannedTarget {
+                target: pending.target.clone(),
+                local_root: self.app_data_root.clone(),
+                staging_root: None,
+                target_kind: "deleted_project".to_string(),
+                project_id: Some(
+                    pending
+                        .target
+                        .remote_prefix
+                        .strip_prefix("projects/")
+                        .map(|s| s.to_string())
+                        .unwrap_or_default(),
+                ),
+                target_live_root: self.app_data_root.clone(),
+                deleted_journal_token: Some(pending.journal_token.clone()),
             });
         }
 
@@ -356,6 +397,10 @@ impl super::WriterCore {
 
         let result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
+        // #645 评论 5504296097 问题1：deleted target 远端清理成功后，
+        // 从 pending_deleted_targets.json 移除该条目。
+        self.cleanup_completed_deleted_targets(&result);
+
         let previous_state = self.load_full_sync_state().unwrap_or(None);
         let new_state = crate::sync::full_sync_state::FullSyncState::from_result_and_previous(
             &result,
@@ -376,6 +421,50 @@ impl super::WriterCore {
         }
 
         (result, commit_outcome.committed_paths)
+    }
+
+    /// #645 评论 5504296097 问题1：deleted target 远端清理成功后，
+    /// 从 pending_deleted_targets.json 移除该条目。
+    /// 用 remote_prefix 匹配（target_kind=="deleted_project" 且 transfer 成功类终态）。
+    fn cleanup_completed_deleted_targets(&self, result: &crate::sync::types::FullSyncResult) {
+        for t in &result.targets {
+            if t.target_kind != "deleted_project" {
+                continue;
+            }
+            if !matches!(
+                t.result.status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                continue;
+            }
+            self.remove_pending_deleted_by_prefix(&t.remote_prefix);
+        }
+    }
+
+    /// 按 remote_prefix 找到 pending deleted target 并移除。
+    fn remove_pending_deleted_by_prefix(&self, remote_prefix: &str) {
+        let pending =
+            crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root)
+                .unwrap_or_default();
+        let Some(matched) = pending
+            .iter()
+            .find(|p| p.target.remote_prefix == remote_prefix)
+        else {
+            return;
+        };
+        if let Err(e) = crate::sync::pending_deleted::remove_pending_deleted_target(
+            &self.app_data_root,
+            &matched.journal_token,
+        ) {
+            log::warn!(
+                "commit_full_sync: remove_pending_deleted_target failed for {}: {} \
+                 — entry retained, will retry next sync",
+                remote_prefix,
+                e
+            );
+        }
     }
 
     /// 内部：用给定 provider 执行全量同步。

@@ -11,7 +11,7 @@
 //!
 //! ## 调用方
 //!
-//! - `project::delete_project()` → `validate_delete_target(..., "project.json")`
+//! - `project::delete_project_with_changes()` → `validate_delete_target(..., "project.json")`
 //! - `volume::delete_volume()` → `validate_delete_target(..., "volume.json")`
 //! - `chapter::delete_chapter()` → `validate_delete_target(..., "chapter.meta.json")`
 

@@ -391,9 +391,14 @@ pub fn prepare_staging_runs(
 
     for planned in &mut plan.targets {
         let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
-        // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
-        // #645 评论 5504296097 第2点：统一调 seed_from_live，不再按 backend 分支。
-        run.seed_from_live(&planned.target_live_root)?;
+        // #645 评论 5504296097 问题1：deleted target 不 seed（不读本地目录，
+        // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
+        // compute_commit_plan 会发现 staging 为空，自然 Skip。
+        if !planned.is_deleted_target() {
+            // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
+            // #645 评论 5504296097 第2点：统一调 seed_from_live，不再按 backend 分支。
+            run.seed_from_live(&planned.target_live_root)?;
+        }
         planned.staging_root = Some(run.staging_root());
         staging_runs.push(run);
     }

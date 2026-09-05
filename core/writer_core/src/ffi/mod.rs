@@ -24,7 +24,7 @@ pub mod writing_stats_ops;
 
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::app_service::WriterAppService;
 use crate::facade::WriterCore;
@@ -39,6 +39,10 @@ static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
 
 /// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
 ///
+/// #645 评论 5504296097 问题2：FFI 写操作统一改走 `with_app_service`，
+/// `WriterAppService` 由 bootstrap 流程初始化（`ensure_workspace_git` +
+/// `recover_storage_transactions`），持有 `GitRepoLayout`，写操作能记 history。
+///
 /// 持有 `text_edit_session_*` 系列方法所需的多目标会话注册表，
 /// 会话跨 FFI 调用持久化，不随单次调用重建。
 ///
@@ -46,7 +50,7 @@ static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
 ///
 /// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
 /// 非递归锁：不得在 `with_app_service` 闭包中再次调用 `with_app_service`。
-static APP_SERVICE: OnceLock<Mutex<WriterAppService>> = OnceLock::new();
+static APP_SERVICE: OnceLock<Mutex<Arc<WriterAppService>>> = OnceLock::new();
 
 /// 全局最近一次错误信息，供 `writer_core_get_last_error` 读取。
 static LAST_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
@@ -182,8 +186,25 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let projects_root_str = projects_root.to_string_lossy().to_string();
     let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
     let m = CORE.get_or_init(|| Mutex::new(None));
-    APP_SERVICE
-        .get_or_init(|| Mutex::new(WriterAppService::new(app_data_root_str, projects_root_str)));
+
+    // #645 评论 5504296097 问题2：FFI writer_core_init 复用 bootstrap 流程，
+    // 让 WriterAppService 持有 GitRepoLayout，写操作能记 workspace history。
+    // bootstrap 流程：ensure_workspace_git → recover_storage_transactions →
+    // 注入 layout → WriterAppService。与 api::bootstrap::open_app_service 一致。
+    let app_service =
+        match crate::api::bootstrap::open_app_service(app_data_root_str, projects_root_str) {
+            Ok(svc) => svc,
+            Err(e) => {
+                set_last_error(&format!("bootstrap failed: {}", e));
+                // bootstrap 失败仍保留 CORE（只读操作可用），但 APP_SERVICE 未初始化，
+                // 写操作会返回 "app service not initialized"。
+                if let Ok(mut guard) = m.lock() {
+                    *guard = Some(core);
+                }
+                return -4;
+            }
+        };
+    APP_SERVICE.get_or_init(|| Mutex::new(app_service));
     if let Ok(mut guard) = m.lock() {
         *guard = Some(core);
         0

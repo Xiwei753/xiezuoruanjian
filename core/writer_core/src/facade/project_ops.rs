@@ -182,14 +182,11 @@ impl super::WriterCore {
         crate::project::rename_project(&self.projects_root, project_id, new_title)
     }
 
-    /// #644 评论 5493295108 问题4：删除作品时同时清理 private git_dir。
-    ///
-    /// #645 评论第 3 点：改用 workspace 级别的 Git layout 后，git_dir 是所有
-    /// target 共享的（`root/workspace/`），删除单个作品不应移动共享 git_dir。
-    /// 因此 `delete_project` 直接走无 layout 路径，只删作品目录。
-    pub fn delete_project(&self, project_id: &str) -> crate::error::Result<()> {
-        crate::project::delete_project(&self.projects_root, project_id, &self.app_data_root)
-    }
+    // #645 评论 5504296097 问题2：`WriterCore::delete_project`（facade 层绕过
+    // workspace history 的旧入口）已删除。写操作统一走
+    // `with_app_service → WriterAppService → WriterCoreApi →
+    // delete_project_with_changes → record_workspace_change_set → ack`。
+    // 保留 `delete_project_with_changes` 供 API 层使用。
 
     /// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不再构造 layout_fn。
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {

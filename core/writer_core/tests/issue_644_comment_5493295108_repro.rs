@@ -392,11 +392,13 @@ fn problem_all_four_issues_fixed_on_current_branch() {
     assert!(git_repo_layout_src.contains("claimed_source"));
     assert!(git_repo_layout_src.contains("complete_migration_with_journal"));
 
-    // 问题4：delete_project 已合并（不再有 delete_project_with_layout），
-    // facade delete_project 直接调 project::delete_project。
-    assert!(project_src.contains("fn delete_project("));
-    let delete_body = extract_fn_body(&project_ops_src, "delete_project");
-    assert!(delete_body.contains("project::delete_project"));
+    // 问题4：delete_project 已合并（不再有 delete_project_with_layout）。
+    // #645 评论 5504296097 问题2：facade `delete_project` 和 core 简化入口
+    // `project::delete_project`（直接 ack 不记 history）已删除，
+    // 所有写操作统一走 `delete_project_with_changes → record_workspace_change_set → ack`。
+    assert!(!project_src.contains("fn delete_project_with_layout("));
+    assert!(project_src.contains("fn delete_project_with_changes("));
+    assert!(!project_ops_src.contains("pub fn delete_project("));
 
     println!("[BUGFIX_REPRO_TRACE] problem_all: 4 个问题的修复全部生效于当前分支 HEAD");
 }

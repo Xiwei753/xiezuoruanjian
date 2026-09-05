@@ -7,7 +7,7 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service, with_core};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -122,8 +122,11 @@ pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
     };
-    match with_core(|core| {
-        let project = core.create_project(&title).map_err(|e| format!("{}", e))?;
+    // #645 评论 5504296097 问题2：FFI 写操作改走 with_app_service，
+    // 经 WriterAppService → WriterCoreApi → *_with_changes → record_workspace_change_set → ack，
+    // 不再绕过 workspace history 协议。
+    match with_app_service(|svc| {
+        let project = svc.create_project(title).map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": project.id,
             "title": project.title,
@@ -198,9 +201,9 @@ pub unsafe extern "C" fn writer_core_create_volume(
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
     };
-    match with_core(|core| {
-        let vol = core
-            .create_volume(&pid, &title)
+    match with_app_service(|svc| {
+        let vol = svc
+            .create_volume(pid.clone(), title)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": vol.id,
@@ -299,9 +302,9 @@ pub unsafe extern "C" fn writer_core_create_chapter(
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
     };
-    match with_core(|core| {
-        let chapter = core
-            .create_chapter(&pid, &vid, &title)
+    match with_app_service(|svc| {
+        let chapter = svc
+            .create_chapter(pid.clone(), vid.clone(), title)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": chapter.id,
@@ -415,9 +418,9 @@ pub unsafe extern "C" fn writer_core_save_chapter(
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid content: error {}", e)),
     };
-    match with_core(|core| {
-        let receipt = core
-            .write_chapter_verified_with_allow_empty_overwrite(&pid, &vid, &cid, &text, false)
+    match with_app_service(|svc| {
+        let receipt = svc
+            .save_chapter_content_with_options(pid, vid, cid, text, false)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "success": true,
@@ -462,8 +465,8 @@ pub unsafe extern "C" fn writer_core_rename_project(
             )
         }
     };
-    match with_core(|core| {
-        core.rename_project(&pid, &title)
+    match with_app_service(|svc| {
+        svc.rename_project(pid.clone(), title)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -486,8 +489,12 @@ pub unsafe extern "C" fn writer_core_delete_project(project_id: *const c_char) -
             )
         }
     };
-    match with_core(|core| {
-        core.delete_project(&pid).map_err(|e| format!("{}", e))?;
+    // #645 评论 5504296097 问题2：FFI 写操作改走 with_app_service，
+    // 经 WriterAppService → WriterCoreApi → delete_project_with_changes →
+    // record_workspace_change_set → ack_project_delete_history，
+    // 不再绕过 workspace history 协议。
+    match with_app_service(|svc| {
+        svc.delete_project(pid).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -558,8 +565,8 @@ pub unsafe extern "C" fn writer_core_rename_volume(
             )
         }
     };
-    match with_core(|core| {
-        core.rename_volume(&pid, &vid, &title)
+    match with_app_service(|svc| {
+        svc.rename_volume(pid, vid, title)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -594,9 +601,8 @@ pub unsafe extern "C" fn writer_core_delete_volume(
             )
         }
     };
-    match with_core(|core| {
-        core.delete_volume(&pid, &vid)
-            .map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        svc.delete_volume(pid, vid).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -631,10 +637,10 @@ pub unsafe extern "C" fn writer_core_reorder_volumes(
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let ids: Vec<String> =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        core.reorder_volumes(&pid, &ids)
+        svc.reorder_volumes(pid, ids)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -689,8 +695,8 @@ pub unsafe extern "C" fn writer_core_rename_chapter(
             )
         }
     };
-    match with_core(|core| {
-        core.rename_chapter(&pid, &vid, &cid, &title)
+    match with_app_service(|svc| {
+        svc.rename_chapter(pid, vid, cid, title)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -735,8 +741,8 @@ pub unsafe extern "C" fn writer_core_delete_chapter(
             )
         }
     };
-    match with_core(|core| {
-        core.delete_chapter(&pid, &vid, &cid)
+    match with_app_service(|svc| {
+        svc.delete_chapter(pid, vid, cid)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -782,10 +788,10 @@ pub unsafe extern "C" fn writer_core_reorder_chapters(
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let ids: Vec<String> =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        core.reorder_chapters(&pid, &vid, &ids)
+        svc.reorder_chapters(pid, vid, ids)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -830,9 +836,9 @@ pub unsafe extern "C" fn writer_core_clear_chapter(
             )
         }
     };
-    match with_core(|core| {
-        let receipt = core
-            .clear_chapter_content_verified(&pid, &vid, &cid)
+    match with_app_service(|svc| {
+        let receipt = svc
+            .clear_chapter_content(pid, vid, cid)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "success": true,

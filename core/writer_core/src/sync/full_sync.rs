@@ -53,12 +53,28 @@ pub struct PlannedTarget {
     /// staging root for isolated transfer（三段式 staging 路径）。
     /// `Some` 时 Transfer 阶段写 staging 而非 live；`None` 时回退 `local_root`。
     pub staging_root: Option<PathBuf>,
-    /// `"app"` 或 `"project"`，用于 `TargetSyncResult.target_kind`。
+    /// `"app"`、`"project"` 或 `"deleted_project"`，用于 `TargetSyncResult.target_kind`。
+    ///
+    /// #645 评论 5504296097 问题1：`"deleted_project"` 表示该 target 已删除，
+    /// `run_transfer` 走 target-delete 计划（枚举远端前缀下所有对象逐个删除），
+    /// 而非普通 `perform_lww_sync`（那会扫描本地目录生成 upsert）。
     pub target_kind: String,
     pub project_id: Option<String>,
     /// #644 评论 5473401065 第1节：target 对应的 live root，
     /// 供 `prepare_staging_runs` 在无锁状态下创建 staging 时使用。
     pub target_live_root: PathBuf,
+    /// #645 评论 5504296097 问题1：待删除 target 的 journal_token，
+    /// 全部远端删除成功后用于从 pending_deleted_targets.json 移除该条目。
+    /// `None` 表示普通 target（app/project），非 deleted target。
+    #[allow(clippy::struct_field_names)]
+    pub deleted_journal_token: Option<String>,
+}
+
+impl PlannedTarget {
+    /// 是否为待删除 target（`target_kind == "deleted_project"`）。
+    pub fn is_deleted_target(&self) -> bool {
+        self.target_kind == "deleted_project"
+    }
 }
 
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
@@ -69,7 +85,13 @@ pub struct FullSyncTransferResult {
 
 // ── Transfer ──
 
-/// 执行 Transfer 阶段：对 plan 中每个 target 调 `perform_lww_sync`，收集结果。
+/// 执行 Transfer 阶段：对 plan 中每个 target 调对应同步函数，收集结果。
+///
+/// - 普通 target（app/project）调 `perform_lww_sync`；
+/// - deleted target（`target_kind == "deleted_project"`）调
+///   [`run_deleted_target_sync`] 走 target-delete 计划（枚举远端前缀下所有对象
+///   逐个 `provider.delete`），不调 `perform_lww_sync`（那会扫描本地目录生成
+///   upsert，反而把删掉的作品重新上传）。
 ///
 /// 单个 target 的 `Err`（本地 root IO 错、provider 调用失败等）不提前打断：
 /// 转为该 target 的 `SyncResult::error(...)` 后 push，继续下一 target。
@@ -79,18 +101,24 @@ pub struct FullSyncTransferResult {
 pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyncTransferResult {
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
-        // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
-        let sync_root = planned
-            .staging_root
-            .as_deref()
-            .unwrap_or(&planned.local_root);
-        let result = run_single_target(
-            provider,
-            sync_root,
-            &plan.sync_policy,
-            &planned.target,
-            plan.force_sync,
-        );
+        let result = if planned.is_deleted_target() {
+            // #645 评论 5504296097 问题1：deleted target 走 target-delete 计划，
+            // 枚举远端前缀下所有对象逐个删除，不调 perform_lww_sync。
+            run_deleted_target_sync(provider, &planned.target)
+        } else {
+            // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
+            let sync_root = planned
+                .staging_root
+                .as_deref()
+                .unwrap_or(&planned.local_root);
+            run_single_target(
+                provider,
+                sync_root,
+                &plan.sync_policy,
+                &planned.target,
+                plan.force_sync,
+            )
+        };
         targets.push(TargetSyncResult {
             target_kind: planned.target_kind.clone(),
             project_id: planned.project_id.clone(),
@@ -99,6 +127,84 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         });
     }
     FullSyncTransferResult { targets }
+}
+
+/// #645 评论 5504296097 问题1：执行已删除 target 的远端清理。
+///
+/// 走 target-delete 计划：
+/// 1. `provider.list(remote_prefix)` 枚举远端该 target 下所有对象；
+/// 2. 对每个远端对象调 `provider.delete(remote_prefix/path, DeletePrecondition::Unconditional)`；
+/// 3. 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
+///
+/// provider-neutral：只使用 `SyncProvider::list/delete`，不写 GitHub 专用逻辑。
+/// `Unconditional` 删除幂等（远端对象已不存在也返回 Ok）。
+///
+/// 远端 list 失败 → `RecoverableError`（下次同步可重试）。
+/// 单个 delete 失败 → `RecoverableError`（已删的保留，下次同步继续清理剩余）。
+fn run_deleted_target_sync(provider: &dyn SyncProvider, target: &SyncTarget) -> SyncResult {
+    let remote_prefix = &target.remote_prefix;
+    log::debug!(
+        "[sync] entry=run_deleted_target_sync remote_prefix={}",
+        remote_prefix
+    );
+
+    // 1. 枚举远端该 target 下所有对象。
+    let remote_entries = match provider.list(remote_prefix) {
+        Ok(entries) => entries,
+        Err(err) => {
+            let core_err = crate::Error::from(err);
+            let msg = core_err.to_string();
+            let category = core_err.sync_category();
+            let error_category = if category.is_empty() {
+                None
+            } else {
+                Some(category.to_string())
+            };
+            return SyncResult::error(
+                SyncStatus::RecoverableError(msg.clone()),
+                msg,
+                error_category,
+            );
+        }
+    };
+
+    // 2. 逐个删除远端对象（Unconditional 幂等）。
+    let mut remote_deletes: Vec<String> = Vec::new();
+    for entry in &remote_entries {
+        let full_remote_path = format!("{}/{}", remote_prefix, entry.path);
+        match provider.delete(
+            &full_remote_path,
+            crate::sync::provider::model::DeletePrecondition::Unconditional,
+        ) {
+            Ok(()) => {
+                remote_deletes.push(full_remote_path);
+            }
+            Err(err) => {
+                let core_err = crate::Error::from(err);
+                let msg = core_err.to_string();
+                let category = core_err.sync_category();
+                let error_category = if category.is_empty() {
+                    None
+                } else {
+                    Some(category.to_string())
+                };
+                // 单个 delete 失败：返回 RecoverableError，已删的保留在 remote_deletes，
+                // 下次同步继续清理剩余。
+                let mut result = SyncResult::error(
+                    SyncStatus::RecoverableError(msg.clone()),
+                    msg,
+                    error_category,
+                );
+                result.remote_deletes = remote_deletes;
+                return result;
+            }
+        }
+    }
+
+    // 3. 全部删除成功。
+    let mut result = SyncResult::success();
+    result.remote_deletes = remote_deletes;
+    result
 }
 
 /// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。
