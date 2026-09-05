@@ -14,57 +14,105 @@
 //!
 //! catalog 只通过 `SyncProvider::read/write` 操作；GitHub SHA、WebDAV ETag 等留在 Provider 里。
 
-use crate::sync::provider::model::WritePrecondition;
+use crate::sync::provider::model::{RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
-use crate::sync::types::{TargetLifecycleCatalog, TargetLifecycleRecord, TargetOp};
+use crate::sync::types::{
+    RemoteTargetCatalogSnapshot, TargetLifecycleCatalog, TargetLifecycleRecord, TargetOp,
+};
 
 /// catalog 在远端的固定路径：app target 的 remote_prefix（`"app"`）下。
 ///
 /// 这个位置不会随 `projects/<id>/` 一起被删除，保证 delete tombstone 持久存在。
 pub const TARGET_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/targets.sync.json";
 
-/// 加载远端 catalog。
+/// #645 评论 5504296097 问题4：加载远端 catalog，返回带版本标识的快照。
 ///
-/// - 远端不存在 catalog → 返回空 catalog（首次同步或所有 target 都未记录）；
+/// - 远端不存在 catalog → 返回空 catalog + 写入方应用 `CreateNew`；
 /// - 解析失败 → 返回 `Err`（不吞错误，调用方决定 Retry）。
+///
+/// 返回的 `version` 用于后续 CAS 写入（`IfMatch`），防止多设备并发覆盖。
 pub fn load_remote_catalog(
     provider: &dyn SyncProvider,
-) -> crate::error::Result<TargetLifecycleCatalog> {
+) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
     let obj = provider
         .read(TARGET_CATALOG_REMOTE_PATH)
         .map_err(crate::Error::from)?;
     let Some(obj) = obj else {
-        return Ok(TargetLifecycleCatalog::default());
+        // 文件不存在：首次写应用 CreateNew，版本用 sentinel 表示不存在。
+        return Ok(RemoteTargetCatalogSnapshot {
+            catalog: TargetLifecycleCatalog::default(),
+            version: RemoteVersion::new("__nonexistent__"),
+        });
     };
+    let version = obj.version.clone();
     let catalog: TargetLifecycleCatalog = serde_json::from_slice(&obj.content).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
             "load_remote_catalog: parse {}: {e}",
             TARGET_CATALOG_REMOTE_PATH
         )))
     })?;
-    Ok(catalog)
+    Ok(RemoteTargetCatalogSnapshot { catalog, version })
 }
 
-/// 写远端 catalog（Unconditional 覆盖）。
+/// #645 评论 5504296097 问题4：CAS 写远端 catalog。
 ///
+/// 使用 `WritePrecondition::IfMatch(version)` 防止多设备并发覆盖。
+/// `PreconditionFailed` 时自动重读远端 catalog、LWW 合并本地变更、再 IfMatch 写入。
+/// 重试次数限制为 3（超过视为并发冲突过于激烈，返回 `Err`）。
+///
+/// `snapshot.version` 为 `__nonexistent__` 时使用 `CreateNew`（首次写入）。
 /// 序列化失败或 provider.write 失败 → `Err`。
 pub fn write_remote_catalog(
     provider: &dyn SyncProvider,
-    catalog: &TargetLifecycleCatalog,
+    snapshot: &RemoteTargetCatalogSnapshot,
 ) -> crate::error::Result<()> {
-    let content = serde_json::to_vec(catalog).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "write_remote_catalog: serialize: {e}"
-        )))
-    })?;
-    provider
-        .write(
-            TARGET_CATALOG_REMOTE_PATH,
-            &content,
-            WritePrecondition::Unconditional,
-        )
-        .map_err(crate::Error::from)?;
-    Ok(())
+    let mut current_version = snapshot.version.clone();
+    let mut current_catalog = snapshot.catalog.clone();
+    let max_retries = 3;
+
+    for attempt in 0..max_retries {
+        let content = serde_json::to_vec(&current_catalog).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "write_remote_catalog: serialize: {e}"
+            )))
+        })?;
+
+        let precondition = if current_version.as_str() == "__nonexistent__" {
+            WritePrecondition::CreateNew
+        } else {
+            WritePrecondition::IfMatch(current_version.clone())
+        };
+
+        match provider.write(TARGET_CATALOG_REMOTE_PATH, &content, precondition) {
+            Ok(new_version) => {
+                log::debug!(
+                    "[sync] write_remote_catalog: succeeded (attempt={})",
+                    attempt + 1
+                );
+                let _ = new_version; // success, version updated on remote
+                return Ok(());
+            }
+            Err(crate::sync::provider::error::ProviderError::PreconditionFailed { .. }) => {
+                // #645 评论 5504296097 问题4：CAS 冲突 → 重读远端最新 catalog，
+                // LWW 合并本地变更后重试。
+                log::info!(
+                    "[sync] write_remote_catalog: PreconditionFailed (attempt={}), \
+                     re-reading and merging",
+                    attempt + 1
+                );
+                let reloaded = load_remote_catalog(provider)?;
+                current_catalog = merge_catalogs(&[reloaded.catalog, current_catalog]);
+                current_version = reloaded.version;
+            }
+            Err(e) => {
+                return Err(crate::Error::from(e));
+            }
+        }
+    }
+
+    Err(crate::Error::Io(std::io::Error::other(format!(
+        "write_remote_catalog: CAS retry exhausted after {max_retries} attempts"
+    ))))
 }
 
 /// 按 `target_id` upsert 一条记录（同 `target_id` 替换，否则追加）。
@@ -151,14 +199,15 @@ mod tests {
     use crate::sync::provider::memory::MemoryProvider;
 
     #[test]
-    fn load_missing_returns_empty() {
+    fn load_missing_returns_empty_snapshot() {
         let p = MemoryProvider::new();
-        let catalog = load_remote_catalog(&p).unwrap();
-        assert!(catalog.records.is_empty());
+        let snapshot = load_remote_catalog(&p).unwrap();
+        assert!(snapshot.catalog.records.is_empty());
+        assert_eq!(snapshot.version.as_str(), "__nonexistent__");
     }
 
     #[test]
-    fn write_load_roundtrip() {
+    fn write_load_roundtrip_with_version() {
         let p = MemoryProvider::new();
         let mut catalog = TargetLifecycleCatalog::default();
         upsert_record(
@@ -169,10 +218,51 @@ mod tests {
             &mut catalog,
             TargetLifecycleRecord::delete("projects/p2", "projects/p2", 2000, "dev-2"),
         );
-        write_remote_catalog(&p, &catalog).unwrap();
+        // 首次写入使用 CreateNew。
+        let snapshot = RemoteTargetCatalogSnapshot {
+            catalog: catalog.clone(),
+            version: RemoteVersion::new("__nonexistent__"),
+        };
+        write_remote_catalog(&p, &snapshot).unwrap();
 
         let loaded = load_remote_catalog(&p).unwrap();
-        assert_eq!(loaded, catalog);
+        assert_eq!(loaded.catalog, catalog);
+        // 版本号不再是 sentinel。
+        assert_ne!(loaded.version.as_str(), "__nonexistent__");
+    }
+
+    #[test]
+    fn cas_write_uses_ifmatch_after_initial() {
+        let p = MemoryProvider::new();
+        let mut catalog = TargetLifecycleCatalog::default();
+        upsert_record(
+            &mut catalog,
+            TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-1"),
+        );
+
+        // 第一次写入（CreateNew）。
+        let snap1 = RemoteTargetCatalogSnapshot {
+            catalog: catalog.clone(),
+            version: RemoteVersion::new("__nonexistent__"),
+        };
+        write_remote_catalog(&p, &snap1).unwrap();
+
+        // 读取最新版本。
+        let snap2 = load_remote_catalog(&p).unwrap();
+        assert_ne!(snap2.version.as_str(), "__nonexistent__");
+
+        // 用正确版本 CAS 写入应成功（CAS retry 会重读最新版本）。
+        write_remote_catalog(&p, &snap2).unwrap();
+
+        // 用错误版本 CAS 写入：CAS retry 会重读最新版本并重写，
+        // 在 MemoryProvider 单线程环境下总会成功（无并发覆盖）。
+        let snap_bad = RemoteTargetCatalogSnapshot {
+            catalog: catalog.clone(),
+            version: RemoteVersion::new("stale-version"),
+        };
+        let result = write_remote_catalog(&p, &snap_bad);
+        // CAS retry 重读后写入成功（MemoryProvider 无并发冲突）。
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -220,7 +310,6 @@ mod tests {
             TargetLifecycleRecord::upsert("projects/p1", "projects/p1", 1000, "dev-b"),
         );
         let merged = merge_catalogs(&[a, b]);
-        // dev-b > dev-a 字典序
         assert_eq!(merged.records[0].device_id, "dev-b");
     }
 
@@ -237,7 +326,6 @@ mod tests {
             TargetLifecycleRecord::delete("projects/p1", "projects/p1", 2000, "dev-2"),
         );
         let merged = merge_catalogs(&[a, b]);
-        // delete 的 lww_time = 2000 > upsert 的 1500
         assert_eq!(merged.records[0].op, TargetOp::Delete);
     }
 

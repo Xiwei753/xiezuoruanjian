@@ -1081,6 +1081,19 @@ pub struct TargetLifecycleCatalog {
     pub records: Vec<TargetLifecycleRecord>,
 }
 
+/// #645 评论 5504296097 问题4：带远端版本的 catalog 快照。
+///
+/// `load_remote_catalog` 返回此结构，携带远端当前版本。
+/// `write_remote_catalog` 用 `version` 做 CAS 写入（`IfMatch`），
+/// 防止多设备并发覆盖彼此的 lifecycle record。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RemoteTargetCatalogSnapshot {
+    pub catalog: TargetLifecycleCatalog,
+    /// 远端 `targets.sync.json` 的当前版本标识。
+    /// `None` 表示文件不存在（首次写应用 `CreateNew`）。
+    pub version: crate::sync::provider::model::RemoteVersion,
+}
+
 // ── #645 评论 5504296097 问题1/2：DeletedTargetResolution ──
 
 /// deleted target 的 LWW 决策结果 — provider-neutral typed resolution。

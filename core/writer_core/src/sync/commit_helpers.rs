@@ -1,16 +1,21 @@
 use std::path::{Path, PathBuf};
 
-/// #645 评论 5504296097 Blocker 2：把 target-relative `rel_path` 转成
+/// #645 评论 5504296097 Blocker 2 + 问题2：把 target-relative `rel_path` 转成
 /// workspace-relative path，供 `record_workspace_history` 精确 stage。
 ///
 /// - App target：`live_root = app_data_root`，`rel_path` 已是 workspace-relative。
 /// - Project target：`live_root = projects_root/<project_id>`，
 ///   workspace-relative = `projects/<project_id>/<rel_path>`。
+/// - DeletedProject target with `RemoteTargetWins`：`target_kind` 保持为
+///   `"deleted_project"`，但 `target_live_root` 已设为 `projects_root/<project_id>`，
+///   所以 workspace-relative 也是 `projects/<project_id>/<rel_path>`。
 ///
 /// `target_kind` / `project_id` 来自 `TargetSyncResult`，与 staging_runs
 /// 按索引对应。未知 target_kind 时退化为直接返回 `rel_path`（保守不丢路径）。
 fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: &Path) -> PathBuf {
-    if target_kind == "project" {
+    // #645 评论 5504296097 问题2：deleted_project 的 RemoteTargetWins 恢复路径
+    // 与普通 project 共用同一分支，不再走 rel-only 路径。
+    if target_kind == "project" || target_kind == "deleted_project" {
         if let Some(pid) = project_id {
             return PathBuf::from("projects").join(pid).join(rel_path);
         }
