@@ -97,6 +97,88 @@ impl PlannedTarget {
     }
 }
 
+/// #645 评论 5504296097 问题4：无副作用共享 target planner。
+///
+/// 正式 `prepare_full_sync` 和 `perform_full_sync_dry_run` 都调用本函数枚举 targets，
+/// 不复制一套 target 枚举逻辑。正式同步再在结果上创建 staging/provider transfer。
+///
+/// 产出的 `PlannedTarget` 列表顺序：App target → live Project targets → pending
+/// deleted targets。`staging_root` 全部为 `None`（由 `prepare_staging_runs` 填充）。
+///
+/// `remote_catalog` 当前不参与 target 枚举（catalog 在 Transfer 阶段读取做 LWW 决策），
+/// 保留参数供未来 dry-run 展示 deleted target 决策使用。`sync_policy` / `force_sync`
+/// 同理保留（planner 只做 target 发现，不做同步决策）。
+pub fn build_full_sync_target_plan(
+    app_data_root: &Path,
+    projects_root: &Path,
+    live_projects: &[crate::project::Project],
+    pending_deleted: &[crate::sync::types::PendingDeletedTarget],
+    _remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+    _sync_policy: &crate::sync::types::SyncPolicy,
+    _force_sync: bool,
+) -> Vec<PlannedTarget> {
+    let mut targets = Vec::new();
+
+    // App target
+    let app_target = crate::sync::types::SyncTarget::app();
+    targets.push(PlannedTarget {
+        target: app_target,
+        local_root: app_data_root.to_path_buf(),
+        staging_root: None,
+        target_kind: "app".to_string(),
+        project_id: None,
+        target_live_root: app_data_root.to_path_buf(),
+        deleted_journal_token: None,
+        deleted_lww: None,
+    });
+
+    // Project targets
+    for project in live_projects {
+        let target = crate::sync::types::SyncTarget::project(&project.id);
+        let project_local_root = projects_root.join(&project.id);
+        targets.push(PlannedTarget {
+            target,
+            local_root: project_local_root.clone(),
+            staging_root: None,
+            target_kind: "project".to_string(),
+            project_id: Some(project.id.clone()),
+            target_live_root: project_local_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+        });
+    }
+
+    // #645 评论 5504296097 问题1/4：Pending deleted targets —
+    // 已删除作品的远端前缀需要清理。target_kind="deleted_project"，
+    // run_transfer 走 target-level LWW 决策。local_root 指向 app_data_root
+    // （deleted target 不读本地目录，只枚举远端），staging_root=None。
+    // deleted_lww 携带 deleted_at_ms/device_id，供 run_transfer 做 LWW 比较。
+    for pending in pending_deleted {
+        targets.push(PlannedTarget {
+            target: pending.target.clone(),
+            local_root: app_data_root.to_path_buf(),
+            staging_root: None,
+            target_kind: "deleted_project".to_string(),
+            project_id: Some(
+                pending
+                    .target
+                    .remote_prefix
+                    .strip_prefix("projects/")
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            ),
+            target_live_root: app_data_root.to_path_buf(),
+            deleted_journal_token: Some(pending.journal_token.clone()),
+            deleted_lww: Some(DeletedTargetLww {
+                deleted_at_ms: pending.deleted_at_ms,
+                device_id: pending.device_id.clone(),
+            }),
+        });
+    }
+
+    targets
+}
+
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
 #[derive(Debug, Clone)]
 pub struct FullSyncTransferResult {
@@ -109,143 +191,352 @@ pub struct FullSyncTransferResult {
 ///
 /// - 普通 target（app/project）调 `perform_lww_sync`；
 /// - deleted target（`target_kind == "deleted_project"`）调
-///   [`run_deleted_target_sync`] 走 target-delete 计划（枚举远端前缀下所有对象
-///   逐个 `provider.delete`），不调 `perform_lww_sync`（那会扫描本地目录生成
-///   upsert，反而把删掉的作品重新上传）。
+///   [`run_deleted_target_sync`] 走 target-level LWW 决策（返回 typed
+///   [`DeletedTargetResolution`]），不调 `perform_lww_sync`（那会扫描本地目录
+///   生成 upsert，反而把删掉的作品重新上传）。
 ///
 /// 单个 target 的 `Err`（本地 root IO 错、provider 调用失败等）不提前打断：
 /// 转为该 target 的 `SyncResult::error(...)` 后 push，继续下一 target。
 ///
+/// #645 评论 5504296097 问题3：Transfer 开始先通过 `SyncProvider` 读取并合并
+/// target lifecycle catalog；LocalDeleteWins 时 upsert catalog delete tombstone，
+/// 循环结束后统一 `write_remote_catalog` 一次（单线程串行，无竞态）。
+///
 /// 本函数是纯函数 — 不接触 `WriterCore`、不持锁、不写 `FullSyncState`。
 /// 调用方（API 层）在释放 core 写锁后调用。
 pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyncTransferResult {
+    // #645 评论 5504296097 问题3：加载远端 target lifecycle catalog。
+    // 加载失败 → catalog_load_failed=true，所有 deleted target 走 Retry（不删除）。
+    let catalog_load = crate::sync::target_lifecycle::load_remote_catalog(provider);
+    let (mut catalog, catalog_load_failed) = match catalog_load {
+        Ok(c) => (c, false),
+        Err(e) => {
+            log::warn!(
+                "[sync] run_transfer: load_remote_catalog failed: {e} \
+                 — deleted targets will Retry"
+            );
+            (crate::sync::types::TargetLifecycleCatalog::default(), true)
+        }
+    };
+    let mut catalog_dirty = false;
+
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
-        let result = if planned.is_deleted_target() {
-            // #645 评论 5504296097 问题1/3：deleted target 走 target-delete 计划，
-            // 先做 LWW 比较（deleted_at_ms vs 远端 manifest），本地 tombstone
-            // 胜出才枚举远端前缀下所有对象逐个删除，不调 perform_lww_sync。
-            // 远端更晚时跳过删除（远端有更新内容，不应被无条件清空）。
-            run_deleted_target_sync(provider, &planned.target, planned.deleted_lww.as_ref())
+        let (result, resolution) = if planned.is_deleted_target() {
+            // #645 评论 5504296097 问题1/2/3：deleted target 走 target-level LWW
+            // 决策，返回 typed DeletedTargetResolution。
+            run_deleted_target_sync(
+                provider,
+                &planned.target,
+                planned.deleted_lww.as_ref(),
+                &catalog,
+                catalog_load_failed,
+                planned.staging_root.as_deref(),
+            )
         } else {
             // 三段式 staging：staging_root 有值时写隔离目录，否则回退 local_root。
             let sync_root = planned
                 .staging_root
                 .as_deref()
                 .unwrap_or(&planned.local_root);
-            run_single_target(
+            let r = run_single_target(
                 provider,
                 sync_root,
                 &plan.sync_policy,
                 &planned.target,
                 plan.force_sync,
-            )
+            );
+            (r, None)
         };
+
+        // #645 评论 5504296097 问题3：LocalDeleteWins 且远端删除成功时，
+        // upsert catalog delete tombstone（循环结束后统一写一次）。
+        if resolution == Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins)
+            && is_success_status(&result.status)
+        {
+            let deleted_at_ms = planned
+                .deleted_lww
+                .as_ref()
+                .map(|l| l.deleted_at_ms)
+                .unwrap_or_else(|| crate::sync::full_sync_utils::now_epoch_seconds() * 1000);
+            let device_id = planned
+                .deleted_lww
+                .as_ref()
+                .map(|l| l.device_id.as_str())
+                .unwrap_or("");
+            let record = crate::sync::types::TargetLifecycleRecord::delete(
+                &planned.target.remote_prefix,
+                &planned.target.remote_prefix,
+                deleted_at_ms,
+                device_id,
+            );
+            crate::sync::target_lifecycle::upsert_record(&mut catalog, record);
+            catalog_dirty = true;
+        }
+
         targets.push(TargetSyncResult {
             target_kind: planned.target_kind.clone(),
             project_id: planned.project_id.clone(),
             remote_prefix: planned.target.remote_prefix.clone(),
             result,
+            deleted_resolution: resolution,
         });
     }
+
+    // #645 评论 5504296097 问题3：统一写 catalog（一次 full sync 只写一次，
+    // 避免多个 deleted target 串行 read-modify-write 竞态）。写失败只 warn，
+    // 不让 catalog 持久化失败覆盖本次同步的 target 结果（下次同步会重写）。
+    if catalog_dirty {
+        if let Err(e) = crate::sync::target_lifecycle::write_remote_catalog(provider, &catalog) {
+            log::warn!("[sync] run_transfer: write_remote_catalog failed: {e}");
+        }
+    }
+
     FullSyncTransferResult { targets }
 }
 
-/// #645 评论 5504296097 问题1/3：执行已删除 target 的远端清理。
+/// #645 评论 5504296097 问题1/2/3：执行已删除 target 的 target-level LWW 决策。
 ///
-/// 走 target-delete 计划：
-/// 1. 若有 LWW 元数据，先读远端 manifest 做 LWW 比较（provider-neutral）；
-/// 2. `provider.list(remote_prefix)` 枚举远端该 target 下所有对象；
-/// 3. 对每个远端对象调 `provider.delete(remote_prefix/path, DeletePrecondition::Unconditional)`；
-/// 4. 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
+/// 返回 `(SyncResult, Option<DeletedTargetResolution>)`：
+/// - `LocalDeleteWins` → 执行远端删除（catalog tombstone 由 `run_transfer` 统一写）；
+/// - `RemoteTargetWins` → 下载远端内容到 staging，commit 阶段恢复本地 project；
+/// - `Retry` → 什么都不删/恢复，pending 保留。
 ///
-/// ## LWW 语义（#645 评论 5504296097 问题3）
+/// ## LWW 判断规则（完整）
 ///
-/// 本地 target tombstone（`deleted_at_ms` / `device_id`）与远端 manifest 的
-/// `max(lww_record_time)` 做 LWW 比较（与 `resolve_lww_path` 同规则）：
-/// - 本地 tombstone 胜出 → 枚举远端前缀下所有对象逐个删除；
-/// - 远端更新更晚 → 不删（远端有更新内容），返回 `NoChanges`（跳过删除）；
-/// - 时间相同 → 按 `device_id` 字典序 tie-break（大的胜出）。
+/// - catalog 加载失败 → `Retry`（不删除）；
+/// - manifest / target state 解析失败、读取失败 → `Retry`（RecoverableError），
+///   **不执行任何 provider.delete**，PendingDeletedTarget 保留；
+/// - 远端前缀完全不存在（`provider.list` 返回空 且 catalog 无该 target 的 upsert 记录
+///   且 manifest 无 upsert 记录）→ 本地 delete 已达成 → `LocalDeleteWins`；
+/// - 能读取完整 target lifecycle 状态 → 正常比较 `(time, device_id)`：
+///   本地 tombstone 胜出 → `LocalDeleteWins`；远端更晚 → `RemoteTargetWins`。
+///
+/// **不把"manifest 不存在"和"远端 target 不存在"混成一个意思**：
+/// manifest 不存在时先通过 catalog + provider.list 判断 target 是否真的为空。
 ///
 /// provider-neutral：只使用 `SyncProvider::read/list/delete`，不写 GitHub 专用逻辑。
-/// `Unconditional` 删除幂等（远端对象已不存在也返回 Ok）。
-///
-/// 远端 list 失败 → `RecoverableError`（下次同步可重试）。
-/// 单个 delete 失败 → `RecoverableError`（已删的保留，下次同步继续清理剩余）。
-#[allow(clippy::excessive_nesting)]
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 fn run_deleted_target_sync(
     provider: &dyn SyncProvider,
     target: &SyncTarget,
     deleted_lww: Option<&DeletedTargetLww>,
-) -> SyncResult {
+    remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+    catalog_load_failed: bool,
+    staging_root: Option<&Path>,
+) -> (
+    SyncResult,
+    Option<crate::sync::types::DeletedTargetResolution>,
+) {
+    use crate::sync::types::DeletedTargetResolution;
     let remote_prefix = &target.remote_prefix;
     log::debug!(
         "[sync] entry=run_deleted_target_sync remote_prefix={}",
         remote_prefix
     );
 
-    // #645 评论 5504296097 问题3：LWW 比较 — 读远端 manifest 判断是否应跳过删除。
-    if let Some(lww) = deleted_lww {
-        let skip = match fetch_remote_manifest_for_prefix(provider, remote_prefix) {
-            Ok(remote_records) => should_skip_delete_for_lww(&remote_records, lww),
-            Err(e) => {
-                log::warn!(
-                    "[sync] run_deleted_target_sync: failed to read remote manifest for {}: {} \
-                     — proceeding with delete (conservative)",
-                    remote_prefix,
-                    e
-                );
-                false
-            }
-        };
-        if skip {
-            return SyncResult::no_changes();
-        }
+    // #645 评论 5504296097 问题2：catalog 加载失败 → Retry（不删除）。
+    if catalog_load_failed {
+        let msg = "target catalog load failed".to_string();
+        return (
+            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+            Some(DeletedTargetResolution::Retry),
+        );
     }
 
-    delete_all_remote_objects(provider, remote_prefix)
-}
+    // 1. 读远端 manifest（区分不存在 vs 解析失败）。
+    let remote_records = match fetch_remote_manifest_for_prefix(provider, remote_prefix) {
+        Ok(r) => r,
+        Err(e) => {
+            // #645 评论 5504296097 问题2：manifest 读取/解析失败 → Retry，不删除。
+            log::warn!(
+                "[sync] run_deleted_target_sync: manifest read failed for {}: {} — Retry",
+                remote_prefix,
+                e
+            );
+            let msg = format!("manifest read failed: {e}");
+            return (
+                SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                Some(DeletedTargetResolution::Retry),
+            );
+        }
+    };
 
-/// 从远端 manifest 记录判断是否应跳过删除（远端 LWW 胜出）。
-///
-/// #645 评论 5504296097 问题3：用 `lww_record_time`（与 `resolve_lww_path` 同规则）
-/// 计算远端最新记录时间，与本地 tombstone 的 `deleted_at_ms` 比较。
-/// 时间相同时按 `device_id` 字典序 tie-break。
-fn should_skip_delete_for_lww(
-    remote_records: &std::collections::HashMap<String, crate::sync::types::ManifestFileRecord>,
-    lww: &DeletedTargetLww,
-) -> bool {
-    let Some((remote_max_time, remote_device_id)) = remote_lww_max(remote_records) else {
-        return false;
+    // 2. provider.list 判断 target 是否真的有内容。
+    let remote_entries = match provider.list(remote_prefix) {
+        Ok(e) => e,
+        Err(e) => {
+            let core_err = crate::Error::from(e);
+            let msg = core_err.to_string();
+            return (
+                SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                Some(DeletedTargetResolution::Retry),
+            );
+        }
     };
-    // 与 resolve_lww_path 同规则：时间大的胜出，时间相同 device_id 大的胜出。
-    let remote_wins = if remote_max_time > lww.deleted_at_ms {
-        true
-    } else if remote_max_time == lww.deleted_at_ms {
-        remote_device_id.as_str() > lww.device_id.as_str()
-    } else {
-        false
+
+    // 3. 无 LWW 元数据（旧 pending 或非 deleted target）→ 直接删除远端。
+    let Some(lww) = deleted_lww else {
+        let result = delete_all_remote_objects(provider, remote_prefix);
+        let resolution = if is_success_status(&result.status) {
+            DeletedTargetResolution::LocalDeleteWins
+        } else {
+            DeletedTargetResolution::Retry
+        };
+        return (result, Some(resolution));
     };
-    if remote_wins {
+
+    // 4. 判断 target 是否真的不存在：
+    //    provider.list 空 且 catalog 无该 target 的 upsert 记录 且 manifest 无 upsert 记录。
+    let catalog_has_upsert =
+        crate::sync::target_lifecycle::catalog_has_upsert(remote_catalog, remote_prefix);
+    let manifest_has_upsert = remote_records.values().any(|r| r.op == "upsert");
+    let target_truly_absent =
+        remote_entries.is_empty() && !catalog_has_upsert && !manifest_has_upsert;
+
+    // 5. target 真的不存在 → LocalDeleteWins（本地 delete 已达成，远端已空）。
+    if target_truly_absent {
         log::info!(
-            "[sync] run_deleted_target_sync: remote_wins_lww \
-             remote_time={} remote_device={} local_deleted_at={} local_device={} → skip delete",
-            remote_max_time,
-            remote_device_id,
-            lww.deleted_at_ms,
-            lww.device_id
+            "[sync] run_deleted_target_sync: target {} truly absent → LocalDeleteWins",
+            remote_prefix
         );
-    } else {
+        return (
+            SyncResult::success(),
+            Some(DeletedTargetResolution::LocalDeleteWins),
+        );
+    }
+
+    // 6. target 存在 → LWW 比较。
+    //    远端最新时间 = max(manifest records lww time, catalog record lww time)。
+    let remote_max = compute_remote_lww_max(&remote_records, remote_catalog, remote_prefix);
+    let local_wins = lww_local_wins(lww, remote_max.as_ref());
+    if local_wins {
         log::info!(
             "[sync] run_deleted_target_sync: local_tombstone_wins_lww \
-             remote_time={} remote_device={} local_deleted_at={} local_device={} → proceed with delete",
-            remote_max_time,
-            remote_device_id,
+             remote_max={:?} local_deleted_at={} local_device={} → LocalDeleteWins",
+            remote_max,
             lww.deleted_at_ms,
             lww.device_id
         );
+        // LocalDeleteWins → 执行远端删除。
+        let result = delete_all_remote_objects(provider, remote_prefix);
+        let resolution = if is_success_status(&result.status) {
+            DeletedTargetResolution::LocalDeleteWins
+        } else {
+            DeletedTargetResolution::Retry
+        };
+        (result, Some(resolution))
+    } else {
+        log::info!(
+            "[sync] run_deleted_target_sync: remote_wins_lww \
+             remote_max={:?} local_deleted_at={} local_device={} → RemoteTargetWins",
+            remote_max,
+            lww.deleted_at_ms,
+            lww.device_id
+        );
+        // RemoteTargetWins → 下载远端内容到 staging，commit 阶段恢复本地 project。
+        let result = download_remote_to_staging(provider, remote_prefix, staging_root);
+        (result, Some(DeletedTargetResolution::RemoteTargetWins))
     }
-    remote_wins
+}
+
+/// 判断 `SyncStatus` 是否为成功类（Success / LatestWinsApplied）。
+fn is_success_status(status: &SyncStatus) -> bool {
+    matches!(status, SyncStatus::Success | SyncStatus::LatestWinsApplied)
+}
+
+/// 计算远端 target 的 LWW 最大 `(time, device_id)`：取 manifest 记录和 catalog 记录的最大值。
+///
+/// 返回 `None` 表示远端无任何记录（本地 tombstone 胜出）。
+fn compute_remote_lww_max(
+    remote_records: &std::collections::HashMap<String, crate::sync::types::ManifestFileRecord>,
+    remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
+    remote_prefix: &str,
+) -> Option<(i64, String)> {
+    let mut max = remote_lww_max(remote_records);
+    if let Some(rec) = crate::sync::target_lifecycle::find_record(remote_catalog, remote_prefix) {
+        let t = crate::sync::target_lifecycle::record_lww_time(rec);
+        let candidate = (t, rec.device_id.clone());
+        max = Some(match max {
+            Some(existing) => {
+                // 与 resolve_lww_path 同规则：(time, device_id) 大的胜出。
+                if candidate.0 > existing.0
+                    || (candidate.0 == existing.0 && candidate.1 > existing.1)
+                {
+                    candidate
+                } else {
+                    existing
+                }
+            }
+            None => candidate,
+        });
+    }
+    max
+}
+
+/// 本地 tombstone 是否 LWW 胜出（与 `resolve_lww_path` 同规则）。
+fn lww_local_wins(lww: &DeletedTargetLww, remote_max: Option<&(i64, String)>) -> bool {
+    let Some((remote_time, remote_device)) = remote_max else {
+        return true; // 远端无记录，本地 tombstone 胜出
+    };
+    if lww.deleted_at_ms > *remote_time {
+        true
+    } else if lww.deleted_at_ms == *remote_time {
+        lww.device_id > *remote_device
+    } else {
+        false
+    }
+}
+
+/// #645 评论 5504296097 问题1：RemoteTargetWins 时把远端 `projects/<id>/` 下所有对象
+/// 下载到 staging，commit 阶段把 staging 写回 live 恢复本地 project。
+///
+/// `staging_root` 为 `None` 时只记录 `downloaded_files`，不落盘（调用方需保证
+/// deleted target 有 staging_root 才能真正恢复）。
+fn download_remote_to_staging(
+    provider: &dyn SyncProvider,
+    remote_prefix: &str,
+    staging_root: Option<&Path>,
+) -> SyncResult {
+    let entries = match provider.list(remote_prefix) {
+        Ok(e) => e,
+        Err(e) => return recoverable_error_from_provider(e),
+    };
+    let mut downloaded: Vec<String> = Vec::new();
+    for entry in &entries {
+        let full_remote_path = format!("{}/{}", remote_prefix, entry.path);
+        let obj = match provider.read(&full_remote_path) {
+            Ok(Some(obj)) => obj,
+            Ok(None) => continue, // 已被删，跳过
+            Err(e) => return recoverable_error_from_provider(e),
+        };
+        if let Some(staging) = staging_root {
+            if let Err(e) = write_staging_file(staging, &entry.path, &obj.content) {
+                let msg = format!("staging write failed: {e}");
+                return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
+            }
+        }
+        downloaded.push(full_remote_path);
+    }
+    let mut result = SyncResult::success();
+    result.downloaded_files = downloaded;
+    result
+}
+
+/// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
+fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Result<()> {
+    let dest = staging.join(rel);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&dest, content)
+}
+
+/// `ProviderError` → `SyncResult::error(RecoverableError, ...)`。
+fn recoverable_error_from_provider(e: crate::sync::provider::ProviderError) -> SyncResult {
+    let core_err = crate::Error::from(e);
+    let msg = core_err.to_string();
+    SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
 }
 
 /// 从远端 manifest 记录中提取最大的 LWW 记录时间和对应的 device_id。
@@ -620,5 +911,359 @@ fn full_sync_status_priority(status: &SyncStatus) -> u8 {
         SyncStatus::Conflict | SyncStatus::PartialConflict => 3,
         SyncStatus::RecoverableError(_) => 1,
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sync::provider::memory::MemoryProvider;
+    use crate::sync::provider::SyncProvider;
+    use crate::sync::types::{
+        DeletedTargetResolution, ManifestFileRecord, SyncManifest, SyncTarget,
+        TargetLifecycleCatalog,
+    };
+    use tempfile::TempDir;
+
+    /// 构造一个 deleted target LWW 元数据。
+    fn lww(deleted_at_ms: i64, device_id: &str) -> DeletedTargetLww {
+        DeletedTargetLww {
+            deleted_at_ms,
+            device_id: device_id.to_string(),
+        }
+    }
+
+    /// 在远端写入一个 manifest（含一条 upsert 记录）。
+    fn write_remote_manifest(
+        provider: &dyn SyncProvider,
+        remote_prefix: &str,
+        record: ManifestFileRecord,
+    ) {
+        let manifest = SyncManifest {
+            files: vec![record],
+        };
+        let content = serde_json::to_vec(&manifest).unwrap();
+        let path = format!("{}/app-meta/sync/manifest.sync.json", remote_prefix);
+        provider
+            .write(
+                &path,
+                &content,
+                crate::sync::provider::model::WritePrecondition::Unconditional,
+            )
+            .unwrap();
+    }
+
+    /// #645 评论 5504296097 问题1：target 真不存在（远端空 + catalog 无 upsert）→ LocalDeleteWins。
+    #[test]
+    fn deleted_target_truly_absent_returns_local_delete_wins() {
+        let provider = MemoryProvider::new();
+        let target = SyncTarget::project("p1");
+        let lww = lww(2000, "dev-1");
+        let catalog = TargetLifecycleCatalog::default();
+
+        let (result, resolution) =
+            run_deleted_target_sync(&provider, &target, Some(&lww), &catalog, false, None);
+        assert_eq!(resolution, Some(DeletedTargetResolution::LocalDeleteWins));
+        assert!(is_success_status(&result.status));
+    }
+
+    /// #645 评论 5504296097 问题1：本地 tombstone 时间更晚 → LocalDeleteWins，远端被删除。
+    #[test]
+    fn deleted_target_local_tombstone_wins_deletes_remote() {
+        let provider = MemoryProvider::with_entries([(
+            "projects/p1/chapter.md".to_string(),
+            b"hello".to_vec(),
+        )]);
+        let target = SyncTarget::project("p1");
+        let lww = lww(2000, "dev-1");
+        let catalog = TargetLifecycleCatalog::default();
+
+        let (result, resolution) =
+            run_deleted_target_sync(&provider, &target, Some(&lww), &catalog, false, None);
+        assert_eq!(resolution, Some(DeletedTargetResolution::LocalDeleteWins));
+        assert!(is_success_status(&result.status));
+        // 远端对象已被删除。
+        assert!(provider.read("projects/p1/chapter.md").unwrap().is_none());
+    }
+
+    /// #645 评论 5504296097 问题1：远端 manifest 时间更晚 → RemoteTargetWins，下载到 staging。
+    #[test]
+    fn deleted_target_remote_wins_downloads_to_staging() {
+        let provider = MemoryProvider::with_entries([(
+            "projects/p1/chapter.md".to_string(),
+            b"remote-content".to_vec(),
+        )]);
+        // 写远端 manifest：updated_at_ms=3000 > 本地 deleted_at_ms=2000。
+        write_remote_manifest(
+            &provider,
+            "projects/p1",
+            ManifestFileRecord {
+                path: "chapter.md".to_string(),
+                content_hash: "h".to_string(),
+                updated_at_ms: 3000,
+                deleted_at_ms: None,
+                device_id: "dev-2".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            },
+        );
+        let target = SyncTarget::project("p1");
+        let lww = lww(2000, "dev-1");
+        let catalog = TargetLifecycleCatalog::default();
+
+        let tmp = TempDir::new().unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let (result, resolution) = run_deleted_target_sync(
+            &provider,
+            &target,
+            Some(&lww),
+            &catalog,
+            false,
+            Some(&staging),
+        );
+        assert_eq!(resolution, Some(DeletedTargetResolution::RemoteTargetWins));
+        assert!(is_success_status(&result.status));
+        // 远端内容已下载到 staging。
+        let staged = std::fs::read(staging.join("chapter.md")).unwrap();
+        assert_eq!(staged, b"remote-content");
+        // 远端对象未被删除（RemoteTargetWins 不删远端）。
+        assert!(provider.read("projects/p1/chapter.md").unwrap().is_some());
+    }
+
+    /// #645 评论 5504296097 问题2：manifest 解析失败 → Retry，不删除远端。
+    #[test]
+    fn deleted_target_manifest_parse_failure_returns_retry() {
+        let provider = MemoryProvider::with_entries([
+            ("projects/p1/chapter.md".to_string(), b"hello".to_vec()),
+            (
+                "projects/p1/app-meta/sync/manifest.sync.json".to_string(),
+                b"not json".to_vec(),
+            ),
+        ]);
+        let target = SyncTarget::project("p1");
+        let lww = lww(2000, "dev-1");
+        let catalog = TargetLifecycleCatalog::default();
+
+        let (result, resolution) =
+            run_deleted_target_sync(&provider, &target, Some(&lww), &catalog, false, None);
+        assert_eq!(resolution, Some(DeletedTargetResolution::Retry));
+        assert!(matches!(result.status, SyncStatus::RecoverableError(_)));
+        // 远端对象未被删除。
+        assert!(provider.read("projects/p1/chapter.md").unwrap().is_some());
+    }
+
+    /// #645 评论 5504296097 问题2：catalog 加载失败 → Retry，不删除远端。
+    #[test]
+    fn deleted_target_catalog_load_failed_returns_retry() {
+        let provider = MemoryProvider::with_entries([(
+            "projects/p1/chapter.md".to_string(),
+            b"hello".to_vec(),
+        )]);
+        let target = SyncTarget::project("p1");
+        let lww = lww(2000, "dev-1");
+        let catalog = TargetLifecycleCatalog::default();
+
+        let (result, resolution) = run_deleted_target_sync(
+            &provider,
+            &target,
+            Some(&lww),
+            &catalog,
+            true, // catalog_load_failed
+            None,
+        );
+        assert_eq!(resolution, Some(DeletedTargetResolution::Retry));
+        assert!(matches!(result.status, SyncStatus::RecoverableError(_)));
+        // 远端对象未被删除。
+        assert!(provider.read("projects/p1/chapter.md").unwrap().is_some());
+    }
+
+    /// #645 评论 5504296097 问题3：catalog 有该 target 的 upsert 记录 → target 不算 absent，
+    /// 走 LWW 比较。本地 tombstone 时间更晚 → LocalDeleteWins。
+    #[test]
+    fn deleted_target_catalog_upsert_prevents_absent_shortcut() {
+        let provider = MemoryProvider::new(); // 远端空
+        let target = SyncTarget::project("p1");
+        let lww = lww(3000, "dev-1");
+        // catalog 有 upsert 记录（target 存在过），时间 1000 < 本地 3000。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/p1",
+                "projects/p1",
+                1000,
+                "dev-2",
+            ),
+        );
+
+        let (result, resolution) =
+            run_deleted_target_sync(&provider, &target, Some(&lww), &catalog, false, None);
+        // target 不算 absent（catalog 有 upsert），走 LWW：本地 3000 > catalog 1000 → LocalDeleteWins。
+        assert_eq!(resolution, Some(DeletedTargetResolution::LocalDeleteWins));
+        assert!(is_success_status(&result.status));
+    }
+
+    /// #645 评论 5504296097 问题3：catalog upsert 时间更晚 + 远端有内容 → RemoteTargetWins
+    /// （远端 target 比本地 tombstone 晚，远端胜出，下载到 staging 恢复）。
+    #[test]
+    fn deleted_target_catalog_upsert_later_returns_remote_wins() {
+        let provider = MemoryProvider::with_entries([(
+            "projects/p1/chapter.md".to_string(),
+            b"remote-content".to_vec(),
+        )]);
+        let target = SyncTarget::project("p1");
+        let lww = lww(1000, "dev-1");
+        // catalog 有 upsert 记录，时间 3000 > 本地 1000。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/p1",
+                "projects/p1",
+                3000,
+                "dev-2",
+            ),
+        );
+
+        let tmp = TempDir::new().unwrap();
+        let staging = tmp.path().join("staging");
+        std::fs::create_dir_all(&staging).unwrap();
+
+        let (result, resolution) = run_deleted_target_sync(
+            &provider,
+            &target,
+            Some(&lww),
+            &catalog,
+            false,
+            Some(&staging),
+        );
+        // 远端有内容 + catalog upsert lww_time=3000 > 本地 1000 → remote wins。
+        assert_eq!(resolution, Some(DeletedTargetResolution::RemoteTargetWins));
+        assert!(is_success_status(&result.status));
+        // 远端内容已下载到 staging。
+        let staged = std::fs::read(staging.join("chapter.md")).unwrap();
+        assert_eq!(staged, b"remote-content");
+    }
+
+    /// #645 评论 5504296097 问题4：build_full_sync_target_plan 包含 pending deleted target。
+    #[test]
+    fn build_plan_includes_pending_deleted_targets() {
+        use crate::sync::types::PendingDeletedTarget;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let pending = vec![PendingDeletedTarget::for_project(
+            "p-deleted",
+            1000,
+            "token-1",
+            "dev-1",
+        )];
+        let sync_policy = crate::sync::types::SyncPolicy::default();
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &[],
+            &pending,
+            &TargetLifecycleCatalog::default(),
+            &sync_policy,
+            false,
+        );
+
+        // App target + 1 deleted target。
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].target_kind, "app");
+        assert_eq!(planned[1].target_kind, "deleted_project");
+        assert_eq!(planned[1].target.remote_prefix, "projects/p-deleted");
+        assert_eq!(planned[1].deleted_journal_token.as_deref(), Some("token-1"));
+        assert!(planned[1].deleted_lww.is_some());
+    }
+
+    /// #645 评论 5504296097 问题4：build_full_sync_target_plan 包含 live project targets。
+    #[test]
+    fn build_plan_includes_live_projects() {
+        use crate::project::Project;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        let projects = vec![Project {
+            id: "p1".to_string(),
+            title: "T1".to_string(),
+            created_at: "2024-01-01".to_string(),
+            updated_at: "2024-01-01".to_string(),
+            order: 0,
+        }];
+        let sync_policy = crate::sync::types::SyncPolicy::default();
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &projects,
+            &[],
+            &TargetLifecycleCatalog::default(),
+            &sync_policy,
+            false,
+        );
+
+        // App target + 1 project target。
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].target_kind, "app");
+        assert_eq!(planned[1].target_kind, "project");
+        assert_eq!(planned[1].target.remote_prefix, "projects/p1");
+        assert_eq!(planned[1].local_root, projects_root.join("p1"));
+    }
+
+    /// #645 评论 5504296097 问题3：run_transfer 在 LocalDeleteWins 时写 catalog delete tombstone。
+    #[test]
+    fn run_transfer_writes_catalog_tombstone_on_local_delete_wins() {
+        use crate::sync::types::SyncPolicy;
+
+        let provider = MemoryProvider::with_entries([(
+            "projects/p1/chapter.md".to_string(),
+            b"hello".to_vec(),
+        )]);
+        let target = SyncTarget::project("p1");
+        let lww_val = lww(2000, "dev-1");
+
+        let tmp = TempDir::new().unwrap();
+        let planned = PlannedTarget {
+            target,
+            local_root: tmp.path().to_path_buf(),
+            staging_root: None,
+            target_kind: "deleted_project".to_string(),
+            project_id: Some("p1".to_string()),
+            target_live_root: tmp.path().to_path_buf(),
+            deleted_journal_token: Some("token-1".to_string()),
+            deleted_lww: Some(lww_val),
+        };
+        let plan = FullSyncPlan {
+            sync_policy: SyncPolicy::default(),
+            force_sync: false,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+        };
+
+        let transfer = run_transfer(&provider, &plan);
+        assert_eq!(transfer.targets.len(), 1);
+        assert_eq!(
+            transfer.targets[0].deleted_resolution,
+            Some(DeletedTargetResolution::LocalDeleteWins)
+        );
+
+        // catalog 已写入 delete tombstone。
+        let catalog = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+        let rec = crate::sync::target_lifecycle::find_record(&catalog, "projects/p1");
+        assert!(rec.is_some());
+        assert_eq!(rec.unwrap().op, crate::sync::types::TargetOp::Delete);
     }
 }

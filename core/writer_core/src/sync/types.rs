@@ -819,12 +819,23 @@ impl Default for SyncState {
 ///
 /// `target_kind` 为 `"app"` 或 `"project"`；`project_id` 仅在 Project target 时有值。
 /// `result` 为该 target 的 `SyncResult`；`error` 为该 target 执行失败时的错误描述。
+///
+/// #645 评论 5504296097 问题1/2：`deleted_resolution` 仅 deleted_project target 有值，
+/// `cleanup_completed_deleted_targets` 按此精确确认是否移除本地 `PendingDeletedTarget`，
+/// 不再按 `SyncStatus` 猜。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetSyncResult {
     pub target_kind: String,
     pub project_id: Option<String>,
     pub remote_prefix: String,
     pub result: SyncResult,
+    /// #645 评论 5504296097 问题1/2：deleted target 的 LWW 决策结果。
+    ///
+    /// 仅 `target_kind == "deleted_project"` 时有值。`cleanup_completed_deleted_targets`
+    /// 按此精确确认：`LocalDeleteWins` 且远端删除+catalog tombstone 写入成功才移除 pending；
+    /// `RemoteTargetWins` 且本地恢复成功才移除 pending；`Retry` 保留。
+    #[serde(default)]
+    pub deleted_resolution: Option<DeletedTargetResolution>,
 }
 
 /// 单个 target 的 dry-run 计划。
@@ -958,4 +969,136 @@ impl PendingDeletedTarget {
             paths: None,
         }
     }
+}
+
+// ── #645 评论 5504296097 问题3：Target 生命周期 catalog（远端持久、provider-neutral） ──
+
+/// target 生命周期操作类型 — provider-neutral，持久化到远端 catalog。
+///
+/// #645 评论 5504296097 问题3：`TargetLifecycleRecord` 记录单个 sync target
+/// （如 `projects/<project_id>`）的生命周期操作，让离线旧设备上线时能读到
+/// target 的 delete tombstone，不会把本地旧 project 重新上传（P 被复活）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetOp {
+    Upsert,
+    Delete,
+}
+
+impl TargetOp {
+    /// 线格式字符串。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TargetOp::Upsert => "upsert",
+            TargetOp::Delete => "delete",
+        }
+    }
+}
+
+/// target 生命周期记录 — 远端持久、provider-neutral。
+///
+/// 持久化到远端 `app/app-meta/sync/targets.sync.json`（app target 的 remote_prefix 下，
+/// 不会随 `projects/<id>/` 一起被删除）。catalog 只通过 `SyncProvider::read/write` 操作，
+/// GitHub SHA / WebDAV ETag 等留在 Provider 里。
+///
+/// ## 与 `PendingDeletedTarget` 的职责区分
+///
+/// - 本地 `pending_deleted_targets.json`（`PendingDeletedTarget`）：负责
+///   "本机删除事务还没同步完成"，本机状态。
+/// - 远端 `targets.sync.json`（`TargetLifecycleRecord`）：负责
+///   "跨设备都必须知道这个 target 的生命周期"，跨设备共识。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetLifecycleRecord {
+    /// target 标识，如 `"projects/<project_id>"`，与 `SyncTarget.remote_prefix` 对齐。
+    pub target_id: String,
+    /// 远端前缀，如 `"projects/<project_id>"`。
+    pub remote_prefix: String,
+    /// 操作类型：upsert（target 存在）/ delete（target 已删除）。
+    pub op: TargetOp,
+    /// 记录更新时间（Unix 毫秒）。
+    pub updated_at_ms: i64,
+    /// 删除时间（仅 `op == Delete` 时有值），优先于 `updated_at_ms` 作为 LWW 时间。
+    #[serde(default)]
+    pub deleted_at_ms: Option<i64>,
+    /// 发起操作的设备 ID，用于 LWW tie-break（字典序大的胜出，与 `resolve_lww_path` 同规则）。
+    #[serde(default)]
+    pub device_id: String,
+    /// schema 版本。
+    #[serde(default = "default_target_catalog_schema_version")]
+    pub schema_version: u32,
+}
+
+fn default_target_catalog_schema_version() -> u32 {
+    1
+}
+
+impl TargetLifecycleRecord {
+    /// 构造一条 upsert 记录。
+    pub fn upsert(
+        target_id: &str,
+        remote_prefix: &str,
+        updated_at_ms: i64,
+        device_id: &str,
+    ) -> Self {
+        Self {
+            target_id: target_id.to_string(),
+            remote_prefix: remote_prefix.to_string(),
+            op: TargetOp::Upsert,
+            updated_at_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            schema_version: 1,
+        }
+    }
+
+    /// 构造一条 delete tombstone 记录。
+    pub fn delete(
+        target_id: &str,
+        remote_prefix: &str,
+        deleted_at_ms: i64,
+        device_id: &str,
+    ) -> Self {
+        Self {
+            target_id: target_id.to_string(),
+            remote_prefix: remote_prefix.to_string(),
+            op: TargetOp::Delete,
+            updated_at_ms: deleted_at_ms,
+            deleted_at_ms: Some(deleted_at_ms),
+            device_id: device_id.to_string(),
+            schema_version: 1,
+        }
+    }
+}
+
+/// target 生命周期 catalog 容器 — 持久化到远端 `targets.sync.json`。
+///
+/// `records` 按 `target_id` 唯一（合并/upsert 后）。LWW 合并规则：
+/// 按 `target_id` 分组，取 `(lww_time, device_id)` 最大的记录
+/// （与 `resolve_lww_path` 同规则）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct TargetLifecycleCatalog {
+    #[serde(default)]
+    pub records: Vec<TargetLifecycleRecord>,
+}
+
+// ── #645 评论 5504296097 问题1/2：DeletedTargetResolution ──
+
+/// deleted target 的 LWW 决策结果 — provider-neutral typed resolution。
+///
+/// #645 评论 5504296097 问题1/2：`run_deleted_target_sync` 做完 target-level LWW
+/// 后返回这个 typed resolution（而非 `SyncResult`），`cleanup_completed_deleted_targets`
+/// 按此精确确认是否移除本地 `PendingDeletedTarget`，不再按 `SyncStatus` 猜。
+///
+/// - `LocalDeleteWins` → 执行远端删除 + catalog 写 delete tombstone → 才移除 pending；
+/// - `RemoteTargetWins` → 下载远端到 staging → commit 恢复本地 project → 才移除 pending；
+/// - `Retry` → 什么都不删/恢复 → pending 保留（manifest/读取失败时）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeletedTargetResolution {
+    /// 本地 delete 胜出：执行远端删除 + catalog 写 delete tombstone。
+    LocalDeleteWins,
+    /// 远端 target 胜出：下载远端内容到 staging，commit 恢复本地 project。
+    RemoteTargetWins,
+    /// 无法确定（manifest/读取失败）：不删不恢复，pending 保留。
+    Retry,
 }

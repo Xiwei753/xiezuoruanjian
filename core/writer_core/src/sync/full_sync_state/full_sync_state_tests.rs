@@ -13,6 +13,7 @@ mod tests {
                 project_id: None,
                 remote_prefix: "app".to_string(),
                 result: crate::sync::types::SyncResult::success(),
+                deleted_resolution: None,
             }],
             total_uploaded: 0,
             total_downloaded: 0,
@@ -36,6 +37,7 @@ mod tests {
                     project_id: None,
                     remote_prefix: "app".to_string(),
                     result: crate::sync::types::SyncResult::success(),
+                    deleted_resolution: None,
                 },
                 crate::sync::types::TargetSyncResult {
                     target_kind: "project".to_string(),
@@ -46,6 +48,7 @@ mod tests {
                         "boom".to_string(),
                         None,
                     ),
+                    deleted_resolution: None,
                 },
             ],
             total_uploaded: 0,

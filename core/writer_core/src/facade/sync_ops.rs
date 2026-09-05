@@ -42,48 +42,61 @@ impl super::WriterCore {
         Ok(crate::sync::types::FullSyncDiagnosticsResult { diagnostics })
     }
 
-    /// 全量同步 dry-run — 枚举 App target + 所有 Project target，构建每个 target 的计划。
+    /// 全量同步 dry-run — 枚举 App target + 所有 Project target + pending deleted targets，
+    /// 构建每个 target 的计划。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
+    ///
+    /// #645 评论 5504296097 问题4：调用共享 `build_full_sync_target_plan` 枚举 targets，
+    /// dry-run 也包含 pending deleted target（`target_kind="deleted_project"`），
+    /// 不再只看 live Project targets。deleted target 的 `SyncPlan` 为空（dry-run 不读远端，
+    /// 无法知道远端对象数；调用方据 `target_kind` 判断将删除/恢复）。
     pub fn perform_full_sync_dry_run(
         &self,
         config: &crate::sync::SyncConfig,
         _secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
-        use crate::sync::types::{FullSyncDryRunResult, SyncTarget, TargetSyncPlan};
+        use crate::sync::types::{FullSyncDryRunResult, SyncPlan, TargetSyncPlan};
+
+        let projects = self.list_projects()?;
+
+        // #645 评论 5504296097 问题4：加载 pending deleted targets，让 dry-run 也能看到 deleted target。
+        let pending_deleted =
+            crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root)?;
+
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
+
+        // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
+        // 不复制一套 target 枚举逻辑。
+        let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
+            &self.app_data_root,
+            &self.projects_root,
+            &projects,
+            &pending_deleted,
+            &crate::sync::types::TargetLifecycleCatalog::default(),
+            &sync_policy,
+            false,
+        );
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
-
-        // App target
-        let app_target = SyncTarget::app();
-        let app_plan = if !config.enabled {
-            crate::sync::SyncPlan::new()
-        } else {
-            crate::sync::SyncService::build_sync_plan(&self.app_data_root, app_target.scope)?
-        };
-        targets.push(TargetSyncPlan {
-            target_kind: "app".to_string(),
-            project_id: None,
-            remote_prefix: app_target.remote_prefix.clone(),
-            plan: app_plan,
-        });
-
-        // Project targets
-        let projects = self.list_projects()?;
-        for project in &projects {
-            let target = SyncTarget::project(&project.id);
+        for planned in &planned_targets {
             let plan = if !config.enabled {
-                crate::sync::SyncPlan::new()
+                SyncPlan::new()
+            } else if planned.is_deleted_target() {
+                // deleted target：dry-run 不读远端，SyncPlan 为空。
+                // target_kind="deleted_project" 让调用方知道这是 deleted target，
+                // 将在正式同步时走 target-level LWW 决策（删除远端或恢复本地）。
+                SyncPlan::new()
             } else {
                 crate::sync::SyncService::build_sync_plan(
-                    &self.project_root(&project.id),
-                    target.scope,
+                    &planned.local_root,
+                    planned.target.scope,
                 )?
             };
             targets.push(TargetSyncPlan {
-                target_kind: "project".to_string(),
-                project_id: Some(project.id.clone()),
-                remote_prefix: target.remote_prefix.clone(),
+                target_kind: planned.target_kind.clone(),
+                project_id: planned.project_id.clone(),
+                remote_prefix: planned.target.remote_prefix.clone(),
                 plan,
             });
         }
@@ -176,7 +189,7 @@ impl super::WriterCore {
         force_sync: bool,
         _secrets: crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
-        use crate::sync::full_sync::{FullSyncPlan, PlannedTarget};
+        use crate::sync::full_sync::FullSyncPlan;
 
         self.persist_full_sync_started();
 
@@ -208,71 +221,25 @@ impl super::WriterCore {
                 }
             };
 
-        let mut targets = Vec::new();
+        let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
-        // App target — 只生成 plan，不创建 staging。
-        let app_target = crate::sync::types::SyncTarget::app();
-        targets.push(PlannedTarget {
-            target: app_target,
-            local_root: self.app_data_root.clone(),
-            staging_root: None, // prepare_staging_runs 会填充
-            target_kind: "app".to_string(),
-            project_id: None,
-            target_live_root: self.app_data_root.clone(),
-            deleted_journal_token: None,
-            deleted_lww: None,
-        });
-
-        // Project targets — 只生成 plan，不创建 staging
-        for project in &projects {
-            let target = crate::sync::types::SyncTarget::project(&project.id);
-            let project_local_root = self.project_root(&project.id);
-            targets.push(PlannedTarget {
-                target,
-                local_root: project_local_root.clone(),
-                staging_root: None, // prepare_staging_runs 会填充
-                target_kind: "project".to_string(),
-                project_id: Some(project.id.clone()),
-                target_live_root: project_local_root,
-                deleted_journal_token: None,
-                deleted_lww: None,
-            });
-        }
-
-        // #645 评论 5504296097 问题1：Pending deleted targets —
-        // 已删除作品的远端前缀需要清理。target_kind="deleted_project"，
-        // run_transfer 走 target-delete 计划。local_root 指向 app_data_root
-        // （deleted target 不读本地目录，只枚举远端），staging_root=None。
-        // #645 评论 5504296097 问题3：deleted_lww 携带 deleted_at_ms/device_id，
-        // 供 run_transfer 做 LWW 比较（本地 tombstone vs 远端 manifest）。
-        for pending in &pending_deleted {
-            targets.push(PlannedTarget {
-                target: pending.target.clone(),
-                local_root: self.app_data_root.clone(),
-                staging_root: None,
-                target_kind: "deleted_project".to_string(),
-                project_id: Some(
-                    pending
-                        .target
-                        .remote_prefix
-                        .strip_prefix("projects/")
-                        .map(|s| s.to_string())
-                        .unwrap_or_default(),
-                ),
-                target_live_root: self.app_data_root.clone(),
-                deleted_journal_token: Some(pending.journal_token.clone()),
-                deleted_lww: Some(crate::sync::full_sync::DeletedTargetLww {
-                    deleted_at_ms: pending.deleted_at_ms,
-                    device_id: pending.device_id.clone(),
-                }),
-            });
-        }
+        // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
+        // 不复制一套 target 枚举逻辑。catalog 在 Transfer 阶段读取，这里传空 catalog。
+        let targets = crate::sync::full_sync::build_full_sync_target_plan(
+            &self.app_data_root,
+            &self.projects_root,
+            &projects,
+            &pending_deleted,
+            &crate::sync::types::TargetLifecycleCatalog::default(),
+            &sync_policy,
+            force_sync,
+        );
 
         // #645 评论 5504296097 第2点：不再携带 workspace_git_layout。
         // 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
 
         Ok(FullSyncPlan {
-            sync_policy: crate::sync::types::SyncPolicy::from_config(config),
+            sync_policy,
             force_sync,
             targets,
             app_data_root: self.app_data_root.clone(),
@@ -439,23 +406,36 @@ impl super::WriterCore {
         (result, commit_outcome.committed_paths)
     }
 
-    /// #645 评论 5504296097 问题1：deleted target 远端清理成功后，
+    /// #645 评论 5504296097 问题1/2：deleted target 远端清理/恢复成功后，
     /// 从 pending_deleted_targets.json 移除该条目。
-    /// 用 remote_prefix 匹配（target_kind=="deleted_project" 且 transfer 成功类终态）。
+    ///
+    /// 按 typed `DeletedTargetResolution` 精确确认（不再按 `SyncStatus` 猜）：
+    /// - `LocalDeleteWins` 且 `result.status` 成功类 → 移除 pending（远端删除+catalog tombstone 写入成功）；
+    /// - `RemoteTargetWins` 且 `result.status` 成功类 → 移除 pending（本地恢复成功）；
+    /// - `Retry` 或 `None` → 保留 pending（下次同步重试）。
     fn cleanup_completed_deleted_targets(&self, result: &crate::sync::types::FullSyncResult) {
+        use crate::sync::types::DeletedTargetResolution;
+
         for t in &result.targets {
             if t.target_kind != "deleted_project" {
                 continue;
             }
-            if !matches!(
-                t.result.status,
-                crate::sync::SyncStatus::Success
-                    | crate::sync::SyncStatus::NoChanges
-                    | crate::sync::SyncStatus::LatestWinsApplied
-            ) {
-                continue;
+            let should_remove = match t.deleted_resolution {
+                Some(DeletedTargetResolution::LocalDeleteWins)
+                | Some(DeletedTargetResolution::RemoteTargetWins) => {
+                    // 且 result.status 是成功类（远端删除/恢复真正落盘成功）。
+                    matches!(
+                        t.result.status,
+                        crate::sync::SyncStatus::Success
+                            | crate::sync::SyncStatus::LatestWinsApplied
+                    )
+                }
+                // Retry 或 None（未走 deleted target 决策路径）→ 保留 pending。
+                Some(DeletedTargetResolution::Retry) | None => false,
+            };
+            if should_remove {
+                self.remove_pending_deleted_by_prefix(&t.remote_prefix);
             }
-            self.remove_pending_deleted_by_prefix(&t.remote_prefix);
         }
     }
 
@@ -529,6 +509,7 @@ impl super::WriterCore {
             project_id: None,
             remote_prefix: app_target.remote_prefix.clone(),
             result: app_result,
+            deleted_resolution: None,
         });
 
         // Project targets
@@ -546,6 +527,7 @@ impl super::WriterCore {
                 project_id: Some(project.id.clone()),
                 remote_prefix: target.remote_prefix.clone(),
                 result,
+                deleted_resolution: None,
             });
         }
 

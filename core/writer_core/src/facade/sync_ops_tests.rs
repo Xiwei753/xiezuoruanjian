@@ -147,6 +147,7 @@ fn aggregate_with_outcomes(
                 project_id,
                 remote_prefix: prefix.to_string(),
                 result: mock_outcome_to_sync_result(outcome),
+                deleted_resolution: None,
             }
         })
         .collect();

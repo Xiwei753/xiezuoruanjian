@@ -221,6 +221,7 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            deleted_resolution: None,
         }],
     };
 
@@ -264,6 +265,7 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            deleted_resolution: None,
         }],
     };
 

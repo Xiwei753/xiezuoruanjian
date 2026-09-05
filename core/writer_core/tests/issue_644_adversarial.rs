@@ -342,6 +342,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
+            deleted_resolution: None,
         }],
     };
 
@@ -388,6 +389,7 @@ fn adv_p2_fatal_error_skips_staging_commit() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::FatalError("auth failed".to_string())),
+            deleted_resolution: None,
         }],
     };
 
@@ -428,6 +430,7 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::RecoverableError("network".to_string())),
+            deleted_resolution: None,
         }],
     };
 
@@ -470,6 +473,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::Success),
+            deleted_resolution: None,
         }],
     };
 
@@ -527,6 +531,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
             project_id: Some("p1".to_string()),
             remote_prefix: "projects/p1".to_string(),
             result: sync_result,
+            deleted_resolution: None,
         }],
     };
 
