@@ -140,7 +140,21 @@ pub(crate) fn apply_staging_commits_for_targets(
     let mut committed_paths: Vec<PathBuf> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
-        let mode = if let Some(target) = transfer_targets.get(idx) {
+        // #645 评论 5504296097 问题1：有 DeleteProject lifecycle action 的 target
+        // 跳过 staging commit（本地删除由 commit_full_sync 的 lifecycle action 处理）。
+        // 否则 staging commit 会把 staging 里的旧作品内容写回 live，复活刚删掉的作品。
+        let has_delete_action = transfer_targets
+            .get(idx)
+            .map(|t| {
+                matches!(
+                    t.local_lifecycle_action,
+                    crate::sync::types::LocalLifecycleCommitAction::DeleteProject { .. }
+                )
+            })
+            .unwrap_or(false);
+        let mode = if has_delete_action {
+            TargetCommitMode::Skip
+        } else if let Some(target) = transfer_targets.get(idx) {
             target_commit_mode(&target.result.status)
         } else {
             TargetCommitMode::Skip

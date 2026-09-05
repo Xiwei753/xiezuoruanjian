@@ -836,6 +836,39 @@ pub struct TargetSyncResult {
     /// `RemoteTargetWins` 且本地恢复成功才移除 pending；`Retry` 保留。
     #[serde(default)]
     pub deleted_resolution: Option<DeletedTargetResolution>,
+    /// #645 评论 5504296097 问题1：本地 lifecycle commit action —
+    /// Transfer 阶段产出，Commit 阶段执行。
+    ///
+    /// - `None`：无 lifecycle action，走普通 staging commit；
+    /// - `DeleteProject { project_id }`：远端 delete 胜出，Commit 阶段执行完整
+    ///   Project 本地删除事务（move worktree / unbind starmaps / history），
+    ///   **不**生成 `PendingDeletedTarget`（不反向要求删远端，远端已删）；
+    /// - `RestoreProject { project_id }`：预留，当前 RestoreProject 在 Transfer 直接下载。
+    #[serde(default)]
+    pub local_lifecycle_action: LocalLifecycleCommitAction,
+}
+
+/// #645 评论 5504296097 问题1：本地 lifecycle commit action —
+/// Transfer 阶段产出，Commit 阶段执行。
+///
+/// 把"删除本地 project"从 Transfer 阶段（裸 `remove_dir_all`）移到 Commit 阶段
+/// （完整业务删除事务），避免 staging commit 把刚删掉的旧作品重新写回来。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalLifecycleCommitAction {
+    /// 无 lifecycle action，走普通 staging commit。
+    #[default]
+    None,
+    /// 远端 delete 胜出，Commit 阶段执行完整 Project 本地删除事务。
+    DeleteProject {
+        /// 被删除的 project id。
+        project_id: String,
+    },
+    /// 预留：RestoreProject 在 Commit 阶段恢复本地 project。
+    RestoreProject {
+        /// 被恢复的 project id。
+        project_id: String,
+    },
 }
 
 /// 单个 target 的 dry-run 计划。

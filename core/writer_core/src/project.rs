@@ -284,6 +284,25 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     Ok(())
 }
 
+/// #645 评论 5504296097 问题1：Project 本地删除的发起来源。
+///
+/// `delete_project_with_changes` 共同执行 move worktree / unbind starmaps /
+/// WorkspaceChangeSet / workspace history。区别在后续是否生成 `PendingDeletedTarget`：
+/// - `User`：用户主动删除 → 后续 ack 推进到 `RemoteDeleteQueued` → 落盘
+///   `PendingDeletedTarget` → 下次同步清理远端；
+/// - `RemoteLifecycle`：远端 delete 胜出，Commit 阶段执行本地删除 → **不**生成
+///   `PendingDeletedTarget`（远端已删，不反向再要求删远端）。
+///
+/// `delete_project_with_changes` 本身只做到 `StarMapsUnbound` phase，
+/// `PendingDeletedTarget` 落盘由 ack 控制（`RemoteLifecycle` 调用方不调 ack）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProjectDeleteOrigin {
+    /// 用户主动删除。
+    User,
+    /// 远端 lifecycle delete 胜出，Commit 阶段执行本地删除。
+    RemoteLifecycle,
+}
+
 /// #645 评论 5504296097 缺口1/缺口2修复：删除作品的业务结果。
 ///
 /// `delete_project_with_changes` 返回此结构，把删除产生的变更集、被解绑的
@@ -501,7 +520,17 @@ pub fn delete_project_with_changes(
     project_id: &str,
     app_data_root: &Path,
     device_id: &str,
+    origin: ProjectDeleteOrigin,
 ) -> Result<ProjectDeleteOutcome> {
+    // #645 评论 5504296097 问题1：记录删除发起来源。
+    // origin 影响后续是否生成 PendingDeletedTarget：
+    // - User → 调用方调 ack_project_delete_history → 落盘 PendingDeletedTarget；
+    // - RemoteLifecycle → 调用方不调 ack → 不落盘 PendingDeletedTarget（远端已删）。
+    log::info!(
+        "[project] delete_project_with_changes: project_id={} origin={:?}",
+        project_id,
+        origin
+    );
     let project_id = crate::delete_guard::validate_id_segment(project_id)?;
     let project_dir = projects_root.join(project_id);
     let target_canon =
@@ -774,6 +803,7 @@ mod inline_tests {
             &project.id,
             data_root,
             "test-device",
+            ProjectDeleteOrigin::User,
         );
         assert!(outcome.is_ok());
         crate::storage::journal::project_delete::ack_project_delete_history(
@@ -807,6 +837,7 @@ mod inline_tests {
             "non_existent_id",
             data_root,
             "test-device",
+            ProjectDeleteOrigin::User,
         );
         assert!(result.is_err());
         match result {

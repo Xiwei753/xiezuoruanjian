@@ -35,6 +35,12 @@ use crate::sync::SyncStatus;
 ///
 /// #645 评论 5504296097 第2点：不再携带 `workspace_git_layout`。
 /// 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
+///
+/// #645 评论 5504296097 问题4：携带 `remote_catalog_snapshot` —
+/// Prepare 阶段在写锁外读取的远端 catalog 完整 snapshot（含 version）。
+/// Transfer 阶段用这份 snapshot 作为 lifecycle CAS 起点，不再无条件再读一次
+/// catalog（避免 target discovery 和执行使用两套时间点的 catalog）。
+/// `apply_lifecycle_record` 在 CAS 冲突时仍会重读远端最新 snapshot。
 #[derive(Debug, Clone)]
 pub struct FullSyncPlan {
     pub sync_policy: SyncPolicy,
@@ -43,6 +49,11 @@ pub struct FullSyncPlan {
     /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
     /// 调用 `prepare_staging_runs` 时传给 `StagingRun::create`。
     pub app_data_root: PathBuf,
+    /// #645 评论 5504296097 问题4：Prepare 阶段读取的远端 catalog snapshot。
+    ///
+    /// Transfer 阶段 `run_transfer` 用它作为 lifecycle CAS 起点。
+    /// `apply_lifecycle_record` 在 CAS 冲突时重读远端最新 snapshot。
+    pub remote_catalog_snapshot: crate::sync::types::RemoteTargetCatalogSnapshot,
 }
 
 /// 单个 target 的执行计划 — target 元数据 + 本地根 + 分类标签。
@@ -135,6 +146,7 @@ impl PlannedTarget {
 ///
 /// `device_id` 来自真实 `DeviceInfo.device_id`，用于 lifecycle record 的 tie-break。
 #[allow(clippy::too_many_arguments)] // 8 个参数均为独立决策输入，打包会掩盖各自语义
+#[allow(clippy::too_many_lines)] // target 枚举 + LWW 决策逻辑 inherently long
 pub fn build_full_sync_target_plan(
     app_data_root: &Path,
     projects_root: &Path,
@@ -169,11 +181,21 @@ pub fn build_full_sync_target_plan(
         let project_local_root = projects_root.join(&project.id);
         let target_id = &target.remote_prefix;
 
-        // 从本地 sync manifest 计算 LWW 时间。
-        let live_lww = compute_local_project_lww_time(&project_local_root, device_id);
-
-        // 与远端 catalog 的 delete tombstone 做 target-level LWW 决策。
-        let kind = decide_live_project_kind(remote_catalog, target_id, live_lww.as_ref());
+        // #645 评论 5504296097 问题2：用 lifecycle candidate 替代直接读 manifest。
+        // manifest 缺失 → 建立初始 manifest；manifest 损坏 → Retry。
+        let candidate = compute_local_project_lifecycle_candidate(&project_local_root, device_id);
+        let (live_lww, kind) = match &candidate {
+            LifecycleCandidate::Live(lww) => {
+                let lww_clone = lww.clone();
+                let kind = decide_live_project_kind(remote_catalog, target_id, Some(lww));
+                (Some(lww_clone), kind)
+            }
+            LifecycleCandidate::Retry => {
+                // #645 评论 5504296097 问题2：无法可靠求本地 LWW → 不 DeleteLocalProject
+                // （无证据证明远端 delete 更新），让 target 走 Retry 保留 pending。
+                (None, PlannedTargetKind::Retry)
+            }
+        };
 
         targets.push(PlannedTarget {
             target,
@@ -194,12 +216,19 @@ pub fn build_full_sync_target_plan(
     // - 远端 upsert 胜出 → RestoreProject（下载恢复）；
     // - 无法决策 → Retry。
     for pending in pending_deleted {
-        let project_id = pending
-            .target
-            .remote_prefix
-            .strip_prefix("projects/")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
+        // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
+        // 非法记录跳过（不恢复、不删除、不 panic），不再 unwrap_or_default()。
+        let project_id = match parse_project_target_id(&pending.target.remote_prefix) {
+            Ok(id) => id,
+            Err(e) => {
+                log::warn!(
+                    "[sync] build_full_sync_target_plan: skip pending deleted target \
+                     with invalid target_id {:?}: {e}",
+                    pending.target.remote_prefix
+                );
+                continue;
+            }
+        };
         let project_root = projects_root.join(&project_id);
         let target_id = &pending.target.remote_prefix;
 
@@ -240,11 +269,19 @@ pub fn build_full_sync_target_plan(
                 continue;
             }
             // 远端 upsert 且本地没有 → RestoreProject。
-            let project_id = remote_rec
-                .target_id
-                .strip_prefix("projects/")
-                .map(|s| s.to_string())
-                .unwrap_or_default();
+            // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
+            // 非法记录跳过并 log warn（不恢复、不删除、不 panic），不再 unwrap_or_default()。
+            let project_id = match parse_project_target_id(&remote_rec.target_id) {
+                Ok(id) => id,
+                Err(e) => {
+                    log::warn!(
+                        "[sync] build_full_sync_target_plan: skip remote-only target \
+                         with invalid target_id {:?}: {e}",
+                        remote_rec.target_id
+                    );
+                    continue;
+                }
+            };
             let project_root = projects_root.join(&project_id);
             targets.push(PlannedTarget {
                 target: crate::sync::types::SyncTarget::project(&project_id),
@@ -263,23 +300,179 @@ pub fn build_full_sync_target_plan(
     targets
 }
 
-/// #645 评论 5504296097 问题1：从本地 sync manifest 计算 live project 的 LWW 时间。
+/// #645 评论 5504296097 问题6：统一解析 remote target_id，验证前缀 + 单段合法 id。
 ///
-/// `max(lww_record_time)` over all manifest records，`device_id` 来自 `DeviceInfo`。
-/// manifest 不存在或解析失败时返回 `None`（调用方按 `lww_time_ms = 0` 处理）。
-fn compute_local_project_lww_time(project_root: &Path, device_id: &str) -> Option<LiveTargetLww> {
+/// remote catalog 里的 `target_id` 是远端持久数据，可能损坏或被恶意构造。
+/// 直接 `strip_prefix("projects/").unwrap_or_default()` 会把非法记录当成
+/// `projects/` 路径拼接，存在路径穿越风险（如 `projects/../app`）。
+///
+/// 本函数严格校验：
+/// - 固定前缀 `projects/`；
+/// - 剩余部分只有一个合法 project id segment（不含 `/`、不含 `\`、非 `.`/`..`、非空）；
+/// - 通过 [`crate::delete_guard::validate_id_segment`] 复用同一套 ID 验证规则。
+///
+/// 合法 → 返回 `Ok(project_id)`；非法 → 返回 `Err`，调用方跳过该记录（不恢复、不删除、不 panic）。
+pub(crate) fn parse_project_target_id(target_id: &str) -> crate::error::Result<String> {
+    let rest = target_id.strip_prefix("projects/").ok_or_else(|| {
+        crate::Error::Other(format!(
+            "parse_project_target_id: missing 'projects/' prefix in {target_id:?}"
+        ))
+    })?;
+    // 必须只有一个 segment — 不含路径分隔符。
+    if rest.contains('/') || rest.contains('\\') || rest.is_empty() {
+        return Err(crate::Error::Other(format!(
+            "parse_project_target_id: invalid project segment in {target_id:?}"
+        )));
+    }
+    // 复用 delete_guard 的 ID 验证（拒绝 `.`、`..`、空、含分隔符）。
+    let validated = crate::delete_guard::validate_id_segment(rest)?;
+    Ok(validated.to_string())
+}
+
+/// #645 评论 5504296097 问题2：本地 project lifecycle candidate。
+///
+/// `compute_local_project_lifecycle_candidate` 按优先级产出：
+/// - `Live(lww)`：已有合法 manifest，或首次同步成功建立初始 manifest；
+/// - `Retry`：manifest 损坏或本地状态无法可靠求时间，调用方应让 target 走 Retry。
+#[derive(Debug, Clone)]
+pub(crate) enum LifecycleCandidate {
+    Live(LiveTargetLww),
+    Retry,
+}
+
+/// #645 评论 5504296097 问题2：从本地 sync manifest 或元数据建立 lifecycle candidate。
+///
+/// 来源按优先级：
+/// 1. 已有合法 sync manifest → 用 manifest max LWW；
+/// 2. manifest 不存在（首次同步）→ 从 `project.json` 的 `updated_at` 建立初始
+///    LWW，并写一份只含 `project.json` 记录的初始 manifest（让后续同步有据可依）；
+/// 3. manifest 存在但损坏 / `project.json` 也读不出 → `Retry`（绝不伪造 now()）。
+///
+/// `device_id` 来自真实 `DeviceInfo.device_id`，用于 LWW tie-break。
+#[allow(clippy::excessive_nesting)]
+fn compute_local_project_lifecycle_candidate(
+    project_root: &Path,
+    device_id: &str,
+) -> LifecycleCandidate {
     let manifest_path = project_root.join("app-meta/sync/manifest.sync.json");
-    let content = std::fs::read(&manifest_path).ok()?;
-    let manifest: crate::sync::types::SyncManifest = serde_json::from_slice(&content).ok()?;
-    let max_time = manifest
-        .files
-        .iter()
-        .map(lww_record_time_for_manifest_record)
-        .max()?;
-    Some(LiveTargetLww {
-        lww_time_ms: max_time,
-        device_id: device_id.to_string(),
-    })
+
+    // 1. 已有 manifest — 尝试解析。
+    if manifest_path.exists() {
+        match std::fs::read(&manifest_path) {
+            Ok(content) => {
+                match serde_json::from_slice::<crate::sync::types::SyncManifest>(&content) {
+                    Ok(manifest) => {
+                        if let Some(max_time) = manifest
+                            .files
+                            .iter()
+                            .map(lww_record_time_for_manifest_record)
+                            .max()
+                        {
+                            return LifecycleCandidate::Live(LiveTargetLww {
+                                lww_time_ms: max_time,
+                                device_id: device_id.to_string(),
+                            });
+                        }
+                        // manifest 合法但 files 为空 — 视为首次同步的空 manifest。
+                        // 走建立初始流程（用 project.json 元数据）。
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "[sync] compute_local_project_lifecycle_candidate: \
+                         manifest corrupt at {}: {e} — returning Retry",
+                            manifest_path.display()
+                        );
+                        return LifecycleCandidate::Retry;
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "[sync] compute_local_project_lifecycle_candidate: \
+                     manifest read failed at {}: {e} — returning Retry",
+                    manifest_path.display()
+                );
+                return LifecycleCandidate::Retry;
+            }
+        }
+    }
+
+    // 2. manifest 不存在或 files 为空 — 首次同步，从 project.json 建立初始。
+    match build_initial_lww_from_project_meta(project_root, device_id) {
+        Some((initial_ms, initial_manifest)) => {
+            // 写初始 manifest（best-effort；写失败仍用 initial_ms，不阻塞同步）。
+            if let Some(parent) = manifest_path.parent() {
+                if let Err(e) = std::fs::create_dir_all(parent) {
+                    log::warn!(
+                        "[sync] compute_local_project_lifecycle_candidate: \
+                         create manifest dir failed at {}: {e} — using initial lww anyway",
+                        manifest_path.display()
+                    );
+                }
+            }
+            match serde_json::to_vec(&initial_manifest) {
+                Ok(bytes) => {
+                    if let Err(e) = std::fs::write(&manifest_path, &bytes) {
+                        log::warn!(
+                            "[sync] compute_local_project_lifecycle_candidate: \
+                             write initial manifest failed at {}: {e} — using initial lww anyway",
+                            manifest_path.display()
+                        );
+                    }
+                }
+                Err(e) => {
+                    log::warn!(
+                        "[sync] compute_local_project_lifecycle_candidate: \
+                         serialize initial manifest failed: {e} — using initial lww anyway"
+                    );
+                }
+            }
+            LifecycleCandidate::Live(LiveTargetLww {
+                lww_time_ms: initial_ms,
+                device_id: device_id.to_string(),
+            })
+        }
+        None => {
+            log::warn!(
+                "[sync] compute_local_project_lifecycle_candidate: \
+                 cannot establish initial lww from project meta at {} — returning Retry",
+                project_root.display()
+            );
+            LifecycleCandidate::Retry
+        }
+    }
+}
+
+/// #645 评论 5504296097 问题2：从 `project.json` 元数据建立初始 LWW + 初始 manifest。
+///
+/// 读 `project_root/project.json` 的 `updated_at`（RFC3339），转成毫秒时间戳。
+/// 成功 → 返回 `(initial_ms, initial_manifest)`；失败 → None。
+fn build_initial_lww_from_project_meta(
+    project_root: &Path,
+    device_id: &str,
+) -> Option<(i64, crate::sync::types::SyncManifest)> {
+    let project_json_path = project_root.join("project.json");
+    let content = std::fs::read(&project_json_path).ok()?;
+    let project: crate::project::Project = serde_json::from_slice(&content).ok()?;
+    let updated_ms = rfc3339_to_epoch_millis(&project.updated_at)?;
+    let initial_manifest = crate::sync::types::SyncManifest {
+        files: vec![crate::sync::types::ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: String::new(),
+            updated_at_ms: updated_ms,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    Some((updated_ms, initial_manifest))
+}
+
+/// #645 评论 5504296097 问题2：RFC3339 字符串 → Unix 毫秒时间戳。
+fn rfc3339_to_epoch_millis(s: &str) -> Option<i64> {
+    let dt = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+    Some(dt.timestamp_millis())
 }
 
 /// #645 评论 5504296097 问题1：live project 的 target-level LWW 决策。
@@ -287,8 +480,9 @@ fn compute_local_project_lww_time(project_root: &Path, device_id: &str) -> Optio
 /// - 远端无记录或远端是 upsert → `LiveProject`（正常同步）；
 /// - 远端是 delete tombstone 且本地 live 更新（`live_lww` 胜出）→ `LiveProject`（重新 upsert）；
 /// - 远端是 delete tombstone 且远端胜出 → `DeleteLocalProject`（不上传，本地应删除）；
-/// - 远端是 delete tombstone 且无 `live_lww`（manifest 读取失败）→ `DeleteLocalProject`
-///   （远端 delete 胜出，本地无证据反驳，绝不伪造 now 复活远端 delete）。
+/// - 远端是 delete tombstone 且无 `live_lww`（manifest 读取失败）→ `Retry`
+///   （#645 评论 5504296097 问题2：无证据证明远端 delete 更新，绝不破坏性删除，
+///   也不伪造 now 复活远端 delete。让 target 保留 pending，下次同步重试）。
 ///
 /// #645 评论 5504296097 问题2：远端无记录/upsert 且 manifest 缺失时仍返回 `LiveProject`，
 /// 但 `run_transfer` 的 LiveProject 分支在 `live_lww=None` 时不伪造 now()，
@@ -313,9 +507,10 @@ fn decide_live_project_kind(
 
     // 远端是 delete tombstone → 需要与本地 live LWW 比较。
     let Some(live) = live_lww else {
-        // 无本地 LWW（manifest 读取失败）→ 远端 delete 胜出，
-        // 不上传，本地应删除（绝不伪造 now 复活远端 delete）。
-        return PlannedTargetKind::DeleteLocalProject;
+        // #645 评论 5504296097 问题2：无本地 LWW（manifest 读取失败）→
+        // 不 DeleteLocalProject（无证据证明远端 delete 更新），
+        // 也不伪造 now 复活远端 delete。返回 Retry，pending 保留。
+        return PlannedTargetKind::Retry;
     };
 
     let remote_time = crate::sync::target_lifecycle::record_lww_time(remote_rec);
@@ -379,6 +574,25 @@ fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecor
     }
 }
 
+/// #645 评论 5504296097 问题3：读 post-transfer staging manifest，算最终 LWW 时间。
+///
+/// 正文 transfer 成功后，publish candidate 必须用 staging manifest 的
+/// `max(lww_record_time)` 作为 lifecycle 时间，不能用 Transfer 前的旧 live_lww
+/// （那只是"本机有没有资格尝试同步"的判断，不是正文 LWW 合并后的最终状态）。
+///
+/// `root` 是 staging root（`planned.staging_root`）或 `planned.local_root`。
+/// manifest 不存在或解析失败 → None（调用方返回 RecoverableError，不伪造旧时间）。
+fn read_post_transfer_lww(root: &Path) -> Option<i64> {
+    let manifest_path = root.join("app-meta/sync/manifest.sync.json");
+    let content = std::fs::read(&manifest_path).ok()?;
+    let manifest: crate::sync::types::SyncManifest = serde_json::from_slice(&content).ok()?;
+    manifest
+        .files
+        .iter()
+        .map(lww_record_time_for_manifest_record)
+        .max()
+}
+
 /// Transfer 阶段产出 — 各 target 的 `SyncResult`，待 Commit 聚合。
 #[derive(Debug, Clone)]
 pub struct FullSyncTransferResult {
@@ -417,29 +631,16 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         DeletedTargetResolution, PlannedTargetKind, TargetLifecycleApplyResult,
     };
 
-    // #645 评论 5504296097 问题3：全程只传 RemoteTargetCatalogSnapshot，
-    // 不再用 catalog + catalog_version 两个分离变量。
-    let catalog_load = crate::sync::target_lifecycle::load_remote_catalog(provider);
-    let (mut catalog_snapshot, catalog_load_failed) = match catalog_load {
-        Ok(snapshot) => (snapshot, false),
-        Err(e) => {
-            log::warn!(
-                "[sync] run_transfer: load_remote_catalog failed: {e} \
-                 — lifecycle-affecting targets will Retry"
-            );
-            (
-                crate::sync::types::RemoteTargetCatalogSnapshot {
-                    catalog: crate::sync::types::TargetLifecycleCatalog::default(),
-                    version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
-                },
-                true,
-            )
-        }
-    };
+    // #645 评论 5504296097 问题4：不再无条件再读一次 catalog。
+    // 用 plan 携带的 `remote_catalog_snapshot`（Prepare 阶段在写锁外读取的）
+    // 作为 lifecycle CAS 起点。`apply_lifecycle_record` 在 CAS 冲突时仍会重读
+    // 远端最新 snapshot。这避免 target discovery（用 Prepare 阶段 catalog）
+    // 和执行（用 Transfer 阶段重读 catalog）使用两套时间点的 catalog。
+    let mut catalog_snapshot = plan.remote_catalog_snapshot.clone();
 
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
-        let (result, resolution) = match planned.target_kind {
+        let (result, resolution, action) = match planned.target_kind {
             PlannedTargetKind::App => {
                 // App target：正常 LWW 同步，不写 lifecycle catalog。
                 let sync_root = planned
@@ -453,7 +654,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     &planned.target,
                     plan.force_sync,
                 );
-                (r, None)
+                (r, None, None)
             }
             PlannedTargetKind::LiveProject => {
                 // #645 评论 5504296097 问题5：先传正文，成功后再发布 lifecycle upsert。
@@ -461,13 +662,9 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 // #645 评论 5504296097 问题2：lifecycle 时间从 sync manifest LWW 计算，
                 // 不用 now() 伪造。live_lww 为 None 时 decide_live_project_kind 已转
                 // DeleteLocalProject/Retry，不应进入此分支；防御性返回 RecoverableError。
-                if catalog_load_failed {
-                    let msg = "target catalog load failed".to_string();
-                    (
-                        SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
-                        None,
-                    )
-                } else if let Some(live_lww) = planned.live_lww.as_ref() {
+                // #645 评论 5504296097 问题4：catalog 已由 Prepare 阶段读取并装入 plan，
+                // 失败在 API 层提前返回 RecoverableError，不进入 run_transfer。
+                if let Some(live_lww) = planned.live_lww.as_ref() {
                     // 1. 先执行 LWW 文件同步（正文 transfer）。
                     let sync_root = planned
                         .staging_root
@@ -486,49 +683,76 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
                     );
                     if !content_ok {
-                        (content_result, None)
+                        (content_result, None, None)
                     } else {
-                        // 2. 正文 transfer 成功 → 发布 lifecycle upsert 作为 target publish。
-                        let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
-                            &planned.target.remote_prefix,
-                            &planned.target.remote_prefix,
-                            live_lww.lww_time_ms,
-                            &live_lww.device_id,
-                        );
-                        match crate::sync::target_lifecycle::apply_lifecycle_record(
-                            provider,
-                            &catalog_snapshot,
-                            candidate,
-                        ) {
-                            TargetLifecycleApplyResult::Applied(persisted) => {
-                                // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
-                                catalog_snapshot = persisted;
-                                (content_result, None)
-                            }
-                            TargetLifecycleApplyResult::LostToRemote(persisted) => {
-                                // #645 评论 5504296097 问题5：lifecycle CAS 输给更新的
-                                // remote delete → 不把这个 target 视为 live；本地转
-                                // DeleteLocalProject（删除本地目录）。远端目录里即使
-                                // 暂时残留本轮上传的文件也不能代表 target 存活；
-                                // catalog delete 仍是唯一事实来源。
-                                catalog_snapshot = persisted;
-                                log::info!(
-                                    "[sync] run_transfer: LiveProject LostToRemote {} — \
-                                     deleting local, remote delete wins after content transfer",
-                                    planned.target.remote_prefix
+                        // 2. 正文 transfer 成功 → 从 post-transfer staging manifest
+                        //    算最终 LWW 时间（#645 评论 5504296097 问题3）。
+                        //    live_lww 只是 Transfer 前的资格判断，不是最终状态。
+                        let post_transfer_root = planned
+                            .staging_root
+                            .as_deref()
+                            .unwrap_or(&planned.local_root);
+                        match read_post_transfer_lww(post_transfer_root) {
+                            Some(final_lww_ms) => {
+                                let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
+                                    &planned.target.remote_prefix,
+                                    &planned.target.remote_prefix,
+                                    final_lww_ms,
+                                    &live_lww.device_id,
                                 );
-                                let del_result = delete_local_project_dir(&planned.local_root);
-                                (del_result, None)
+                                match crate::sync::target_lifecycle::apply_lifecycle_record(
+                                    provider,
+                                    &catalog_snapshot,
+                                    candidate,
+                                ) {
+                                    TargetLifecycleApplyResult::Applied(persisted) => {
+                                        // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
+                                        catalog_snapshot = persisted;
+                                        (content_result, None, None)
+                                    }
+                                    TargetLifecycleApplyResult::LostToRemote(persisted) => {
+                                        // #645 评论 5504296097 问题1：不在 Transfer 里
+                                        // remove_dir_all()。返回 DeleteProject action，
+                                        // 由 Commit 阶段执行完整 Project 本地删除事务。
+                                        catalog_snapshot = persisted;
+                                        log::info!(
+                                            "[sync] run_transfer: LiveProject LostToRemote {} — \
+                                             deferring delete to Commit (remote delete wins after content transfer)",
+                                            planned.target.remote_prefix
+                                        );
+                                        let action = planned.project_id.as_ref().map(|pid| {
+                                            crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                                                project_id: pid.clone(),
+                                            }
+                                        });
+                                        (content_result, None, action)
+                                    }
+                                    TargetLifecycleApplyResult::Retry(e) => {
+                                        // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError。
+                                        let msg = format!("lifecycle upsert failed: {e}");
+                                        (
+                                            SyncResult::error(
+                                                SyncStatus::RecoverableError(msg.clone()),
+                                                msg,
+                                                None,
+                                            ),
+                                            None,
+                                            None,
+                                        )
+                                    }
+                                }
                             }
-                            TargetLifecycleApplyResult::Retry(e) => {
-                                // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError。
-                                let msg = format!("lifecycle upsert failed: {e}");
+                            None => {
+                                // #645 评论 5504296097 问题3：post-transfer staging manifest
+                                // 读取失败 → RecoverableError，不伪造旧 live_lww 时间。
+                                let msg = "post-transfer staging manifest unreadable".to_string();
                                 (
                                     SyncResult::error(
                                         SyncStatus::RecoverableError(msg.clone()),
                                         msg,
                                         None,
                                     ),
+                                    None,
                                     None,
                                 )
                             }
@@ -540,31 +764,34 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     (
                         SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
                         None,
+                        None,
                     )
                 }
             }
             PlannedTargetKind::DeleteLocalProject => {
-                // #645 评论 5504296097 问题4：远端 delete tombstone 胜出 →
-                // 真正删除本地 projects/<id> 目录，不只 NoChanges。
-                // 复用安全删除辅助（validate + remove_dir_all），不绕过 delete_guard。
+                // #645 评论 5504296097 问题1：不在 Transfer 里裸 remove_dir_all()。
+                // 返回 NoChanges + LocalLifecycleCommitAction::DeleteProject，
+                // 由 Commit 阶段执行完整 Project 本地删除事务（move worktree /
+                // unbind starmaps / history），避免 staging commit 把刚删掉的
+                // 旧作品重新写回来。
                 log::info!(
-                    "[sync] run_transfer: DeleteLocalProject {} — deleting local, \
-                     remote delete tombstone wins",
+                    "[sync] run_transfer: DeleteLocalProject {} — deferring to Commit \
+                     (remote delete tombstone wins)",
                     planned.target.remote_prefix
                 );
-                let del_result = delete_local_project_dir(&planned.local_root);
-                (del_result, None)
+                let action = planned.project_id.as_ref().map(|pid| {
+                    crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                        project_id: pid.clone(),
+                    }
+                });
+                (SyncResult::no_changes(), None, action)
             }
             PlannedTargetKind::DeleteRemoteProject => {
                 // #645 评论 5504296097 问题2/4：先写 catalog delete tombstone（CAS 是完成条件），
                 // 再删远端对象。用 apply_lifecycle_record 原子决策。
-                if catalog_load_failed {
-                    let msg = "target catalog load failed".to_string();
-                    (
-                        SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
-                        Some(DeletedTargetResolution::Retry),
-                    )
-                } else {
+                // #645 评论 5504296097 问题4：catalog 已由 Prepare 阶段读取并装入 plan，
+                // 失败在 API 层提前返回 RecoverableError，不进入 run_transfer。
+                {
                     let deleted_at_ms = planned
                         .deleted_lww
                         .as_ref()
@@ -596,7 +823,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 delete_all_remote_objects(provider, &planned.target.remote_prefix);
                             // 即使远端删除部分失败，catalog tombstone 已持久，
                             // 返回 LocalDeleteWins 让 pending 被清理（不会复活远端）。
-                            (del_result, Some(DeletedTargetResolution::LocalDeleteWins))
+                            (
+                                del_result,
+                                Some(DeletedTargetResolution::LocalDeleteWins),
+                                None,
+                            )
                         }
                         TargetLifecycleApplyResult::LostToRemote(persisted) => {
                             // #645 评论 5504296097 问题2：远端 upsert 胜出，
@@ -615,6 +846,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             (
                                 restore_result,
                                 Some(DeletedTargetResolution::RemoteTargetWins),
+                                None,
                             )
                         }
                         TargetLifecycleApplyResult::Retry(e) => {
@@ -627,6 +859,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     None,
                                 ),
                                 Some(DeletedTargetResolution::Retry),
+                                None,
                             )
                         }
                     }
@@ -643,7 +876,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     &planned.target.remote_prefix,
                     planned.staging_root.as_deref(),
                 );
-                (result, Some(DeletedTargetResolution::RemoteTargetWins))
+                (
+                    result,
+                    Some(DeletedTargetResolution::RemoteTargetWins),
+                    None,
+                )
             }
             PlannedTargetKind::Retry => {
                 // #645 评论 5504296097 问题1：无法决策，pending 保留。
@@ -651,6 +888,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 (
                     SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
                     Some(DeletedTargetResolution::Retry),
+                    None,
                 )
             }
         };
@@ -661,6 +899,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
             remote_prefix: planned.target.remote_prefix.clone(),
             result,
             deleted_resolution: resolution,
+            local_lifecycle_action: action.unwrap_or_default(),
         });
     }
 
@@ -709,39 +948,6 @@ fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Res
         std::fs::create_dir_all(parent)?;
     }
     std::fs::write(&dest, content)
-}
-
-/// #645 评论 5504296097 问题4：远端 delete tombstone 胜出时删除本地 project 目录。
-///
-/// `local_root` 来自 planner 计算的 `projects_root/<id>`（`PlannedTarget.local_root`），
-/// 不是用户输入的任意路径。`project_id` 在 planner 中由 `list_projects`（已验证）或
-/// `PendingDeletedTarget`（已验证）产生，不存在路径穿越风险。
-///
-/// 删除策略：
-/// - 目录不存在 → `NoChanges`（无需删除，不上传）；
-/// - 目录存在 → `remove_dir_all`，成功 → `NoChanges`（远端 delete 的本地应用效果，
-///   不上传无同步变更），失败 → `RecoverableError`。
-///
-/// SAFETY: `local_root` 是 planner 产生的 `projects_root/<id>` 路径，`id` 已经过
-/// `validate_id_segment` 或来自已验证的 `Project.id`。不绕过 delete_guard 的
-/// ID 验证；此处只做目录移除，不做 starmap unbind/history（由完整删除事务负责）。
-fn delete_local_project_dir(local_root: &Path) -> SyncResult {
-    if !local_root.exists() {
-        return SyncResult::no_changes();
-    }
-    match std::fs::remove_dir_all(local_root) {
-        Ok(()) => {
-            log::info!(
-                "[sync] delete_local_project_dir: removed {}",
-                local_root.display()
-            );
-            SyncResult::no_changes()
-        }
-        Err(e) => {
-            let msg = format!("delete local project dir failed: {e}");
-            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
-        }
-    }
 }
 
 /// `ProviderError` → `SyncResult::error(RecoverableError, ...)`。
@@ -1085,6 +1291,14 @@ mod tests {
     };
     use tempfile::TempDir;
 
+    /// #645 评论 5504296097 问题4：测试用空 catalog snapshot。
+    fn test_empty_catalog_snapshot() -> crate::sync::types::RemoteTargetCatalogSnapshot {
+        crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: crate::sync::types::TargetLifecycleCatalog::default(),
+            version: crate::sync::provider::model::RemoteVersion::new("__nonexistent__"),
+        }
+    }
+
     /// 模拟 catalog 路径写入始终失败的 Provider（用于测试 catalog 写失败时的 Retry 语义）。
     struct AlwaysFailCatalogProvider {
         inner: MemoryProvider,
@@ -1214,10 +1428,19 @@ mod tests {
         let projects = vec![Project {
             id: "p1".to_string(),
             title: "T1".to_string(),
-            created_at: "2024-01-01".to_string(),
-            updated_at: "2024-01-01".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
             order: 0,
         }];
+        // #645 评论 5504296097 问题2：首次同步 manifest 缺失，需要 project.json
+        // 元数据建立初始 LWW。写一份合法 project.json。
+        let project_root = projects_root.join("p1");
+        std::fs::create_dir_all(&project_root).unwrap();
+        std::fs::write(
+            project_root.join("project.json"),
+            serde_json::to_vec(&projects[0]).unwrap(),
+        )
+        .unwrap();
         let sync_policy = crate::sync::types::SyncPolicy::default();
 
         let planned = build_full_sync_target_plan(
@@ -1234,7 +1457,7 @@ mod tests {
         // App target + 1 project target。
         assert_eq!(planned.len(), 2);
         assert_eq!(planned[0].target_kind, PlannedTargetKind::App);
-        // 远端无 catalog 记录 → LiveProject。
+        // 远端无 catalog 记录 → LiveProject（首次同步建立初始 manifest）。
         assert_eq!(planned[1].target_kind, PlannedTargetKind::LiveProject);
         assert_eq!(planned[1].target.remote_prefix, "projects/p1");
         assert_eq!(planned[1].local_root, projects_root.join("p1"));
@@ -1493,6 +1716,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -1539,6 +1763,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -1560,12 +1785,31 @@ mod tests {
     /// #645 评论 5504296097 问题1/4：run_transfer 对 LiveProject 先写 catalog upsert（lifecycle CAS 是完成条件）。
     #[test]
     fn run_transfer_writes_catalog_upsert_for_live_project() {
-        use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+        use crate::sync::types::{ManifestFileRecord, PlannedTargetKind, SyncManifest, SyncPolicy};
 
         let provider = MemoryProvider::new();
         let tmp = TempDir::new().unwrap();
         let project_root = tmp.path().join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
+        // #645 评论 5504296097 问题3：post-transfer LWW 从 staging manifest 读取。
+        // staging_root 为 None → 用 local_root。写一份 manifest 让 LWW 能读到。
+        std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+        let manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "project.json".to_string(),
+                content_hash: "h".to_string(),
+                updated_at_ms: 2000,
+                deleted_at_ms: None,
+                device_id: "dev-1".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::write(
+            project_root.join("app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
 
         let planned = PlannedTarget {
             target: SyncTarget::project("p1"),
@@ -1586,6 +1830,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -1627,6 +1872,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -1664,6 +1910,7 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -1853,6 +2100,7 @@ mod tests {
             force_sync: false,
             targets: planned.clone(),
             app_data_root: app_root.clone(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
         let transfer = run_transfer(&provider, &plan);
 
@@ -1943,12 +2191,14 @@ mod tests {
     /// 问题 4 复现：DeleteLocalProject 只 NoChanges，本地 Project 根本没被删除。
     ///
     /// 场景：远端已明确 delete(P)，本地 P 一直存在。
-    /// run_transfer 对 DeleteLocalProject 返回 NoChanges，没有后续真正删除 projects/<id> 的路径。
     ///
-    /// 期望：本地 projects/P 目录应该被删除（或至少有删除路径被触发）。
+    /// #645 评论 5504296097 问题1：run_transfer 对 DeleteLocalProject 不再直接删除
+    /// 本地目录，而是返回 `DeleteProject` action，由 `commit_full_sync` 执行删除事务。
+    /// 这样删除走完整 ProjectDeleteTransaction（move worktree / unbind starmap /
+    /// journal），不绕过 delete_guard。
     #[test]
     fn repro_issue_645_q4_delete_local_project_no_actual_deletion() {
-        use crate::sync::types::PlannedTargetKind;
+        use crate::sync::types::{LocalLifecycleCommitAction, PlannedTargetKind};
 
         let provider = MemoryProvider::new();
         let tmp = TempDir::new().unwrap();
@@ -1973,24 +2223,35 @@ mod tests {
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
 
-        // 当前行为：返回 NoChanges，本地目录仍存在。
+        // #645 评论 5504296097 问题1：run_transfer 返回 NoChanges
+        // （不在此阶段做文件 IO 删除）。
         assert!(
             matches!(transfer.targets[0].result.status, SyncStatus::NoChanges),
-            "当前 DeleteLocalProject 返回 NoChanges（这是 bug 的表现）"
+            "DeleteLocalProject 返回 NoChanges（删除延迟到 commit 阶段）"
         );
 
-        // 期望：本地 projects/P 应该被删除（远端 delete 胜出，本地应删除）。
-        // 当前：目录仍存在，UI 仍看见这个已被其他设备删除的作品。
+        // #645 评论 5504296097 问题1：run_transfer 返回 DeleteProject action，
+        // commit_full_sync 会据此执行 ProjectDeleteTransaction。
         assert!(
-            !project_root.exists(),
-            "问题4: DeleteLocalProject 后本地 projects/P 目录仍存在。\
-             远端已 delete(P)，本地应删除，但当前只 NoChanges 不删除。\
-             project_root.exists()={}",
-            project_root.exists()
+            matches!(
+                &transfer.targets[0].local_lifecycle_action,
+                LocalLifecycleCommitAction::DeleteProject { project_id } if project_id == "P"
+            ),
+            "DeleteLocalProject 应返回 DeleteProject action，\
+             实际: {:?}",
+            transfer.targets[0].local_lifecycle_action
+        );
+
+        // #645 评论 5504296097 问题1：run_transfer 阶段不删除本地目录
+        // （删除由 commit_full_sync 走 ProjectDeleteTransaction 完成）。
+        assert!(
+            project_root.exists(),
+            "run_transfer 不应删除本地目录（删除延迟到 commit 阶段）"
         );
     }
 
@@ -2111,6 +2372,7 @@ mod tests {
             force_sync: true, // 绕过 debounce，确保 LWW engine 真正执行
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
         };
 
         let transfer = run_transfer(&provider, &plan);
@@ -2198,6 +2460,648 @@ mod tests {
             lock_released_pos,
             core_write_pos,
             lock_released_pos
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #645 评论 5504296097 问题6：parse_project_target_id 验证测试
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// #645 评论 5504296097 问题6：合法 target_id 正确解析。
+    #[test]
+    fn q6_parse_project_target_id_valid() {
+        assert_eq!(parse_project_target_id("projects/p1").unwrap(), "p1");
+        assert_eq!(
+            parse_project_target_id("projects/abc-123").unwrap(),
+            "abc-123"
+        );
+    }
+
+    /// #645 评论 5504296097 问题6：非法 target_id 被拒绝。
+    #[test]
+    fn q6_parse_project_target_id_invalid() {
+        // 缺前缀
+        assert!(parse_project_target_id("p1").is_err());
+        assert!(parse_project_target_id("apps/p1").is_err());
+        // 空段
+        assert!(parse_project_target_id("projects/").is_err());
+        // 多段（路径穿越）
+        assert!(parse_project_target_id("projects/../app").is_err());
+        assert!(parse_project_target_id("projects/a/b").is_err());
+        // 点段
+        assert!(parse_project_target_id("projects/.").is_err());
+        assert!(parse_project_target_id("projects/..").is_err());
+        // 反斜杠
+        assert!(parse_project_target_id("projects/a\\b").is_err());
+    }
+
+    /// #645 评论 5504296097 问题6：remote-only discovery 遇到非法 target_id 跳过。
+    #[test]
+    fn q6_build_plan_skips_invalid_remote_target_id() {
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // 远端 catalog 含一条非法 target_id 的 upsert 记录。
+        let mut remote_catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut remote_catalog,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/../app",
+                "projects/../app",
+                10_000,
+                "dev-A",
+            ),
+        );
+        // 加一条合法记录作为对照。
+        crate::sync::target_lifecycle::upsert_record(
+            &mut remote_catalog,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/legit",
+                "projects/legit",
+                10_000,
+                "dev-A",
+            ),
+        );
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &[],
+            &[],
+            &remote_catalog,
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "dev-B",
+        );
+
+        // 非法记录被跳过 — 不应出现 "projects/../app" 或 "app" target。
+        let has_traversal = planned
+            .iter()
+            .any(|t| t.target.remote_prefix.contains(".."));
+        assert!(
+            !has_traversal,
+            "问题6: 非法 target_id 不应进入 plan。planned={:?}",
+            planned
+                .iter()
+                .map(|t| &t.target.remote_prefix)
+                .collect::<Vec<_>>()
+        );
+        // 合法记录仍进入 plan。
+        let has_legit = planned
+            .iter()
+            .any(|t| t.target.remote_prefix == "projects/legit");
+        assert!(has_legit, "问题6: 合法 target_id 应进入 plan");
+    }
+
+    /// #645 评论 5504296097 问题6：pending deleted 非法 target_id 跳过。
+    #[test]
+    fn q6_build_plan_skips_invalid_pending_deleted_target_id() {
+        use crate::sync::types::PendingDeletedTarget;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // 手工构造一条非法 target_id 的 pending deleted target。
+        // PendingDeletedTarget::for_project 会用 "projects/<id>"，这里直接构造
+        // 一个含路径穿越的 remote_prefix 来模拟损坏的持久数据。
+        let pending = vec![PendingDeletedTarget {
+            target: crate::sync::types::SyncTarget {
+                scope: crate::sync::types::SyncScope::Project,
+                remote_prefix: "projects/../app".to_string(),
+            },
+            deleted_at_ms: 1000,
+            journal_token: "tok-1".to_string(),
+            device_id: "dev-1".to_string(),
+            paths: None,
+        }];
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &[],
+            &pending,
+            &TargetLifecycleCatalog::default(),
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "dev-1",
+        );
+
+        // 非法 pending 被跳过 — plan 只有 App target。
+        assert_eq!(
+            planned.len(),
+            1,
+            "问题6: 非法 pending deleted target_id 应被跳过，plan 只含 App target"
+        );
+        assert_eq!(
+            planned[0].target_kind,
+            crate::sync::types::PlannedTargetKind::App
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #645 评论 5504296097 问题4：catalog 读取失败不吞、plan 携带 snapshot 测试
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// #645 评论 5504296097 问题4：run_transfer 用 plan 携带的 snapshot 作为起点，
+    /// 不再无条件再读一次 catalog。
+    ///
+    /// plan 携带的 snapshot 含 delete(P, 12000)。LiveProject candidate upsert(P, 10000)
+    /// < remote delete 12000 → LostToRemote，不写远端 catalog。
+    /// 若 run_transfer 重读空 catalog，candidate 赢 → Applied → 写远端 catalog。
+    /// 用远端 catalog 是否出现记录区分两条路径。
+    #[test]
+    fn q4_run_transfer_uses_plan_catalog_snapshot() {
+        use crate::sync::types::{PlannedTargetKind, SyncPolicy, TargetLifecycleRecord};
+
+        let provider = MemoryProvider::new();
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("projects").join("p1");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        // plan 携带的 snapshot：已有 delete(P, 12000)。
+        let mut plan_catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut plan_catalog,
+            TargetLifecycleRecord::delete("projects/p1", "projects/p1", 12000, "dev-old"),
+        );
+        let plan_snapshot_with_delete = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: plan_catalog,
+            version: crate::sync::provider::model::RemoteVersion::new("v-plan"),
+        };
+
+        let planned = PlannedTarget {
+            target: SyncTarget::project("p1"),
+            local_root: project_root.clone(),
+            staging_root: None,
+            target_kind: PlannedTargetKind::LiveProject,
+            project_id: Some("p1".to_string()),
+            target_live_root: project_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: Some(LiveTargetLww {
+                lww_time_ms: 10_000,
+                device_id: "dev-1".to_string(),
+            }),
+        };
+        let plan = FullSyncPlan {
+            sync_policy: SyncPolicy::default(),
+            force_sync: false,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: plan_snapshot_with_delete,
+        };
+
+        let transfer = run_transfer(&provider, &plan);
+        // plan snapshot 有 delete(P, 12000) > candidate upsert(P, 10000) → LostToRemote。
+        // LostToRemote 不写远端 catalog（远端无 catalog 文件）。
+        // 若 run_transfer 重读空 catalog，candidate 赢 → Applied → CreateNew 写 catalog。
+        let remote_catalog_after =
+            crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+        let remote_has_record = !remote_catalog_after.catalog.records.is_empty();
+        assert!(
+            !remote_has_record,
+            "问题4: run_transfer 应用 plan 携带的 snapshot（含 delete tombstone）\
+             走 LostToRemote，不应写远端 catalog。但远端出现了记录 — \
+             说明 run_transfer 重读了空 catalog 误判 Applied。transfer={:?}",
+            transfer.targets[0].result.status
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #645 评论 5504296097 问题2：manifest 缺失/损坏处理测试
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// #645 评论 5504296097 问题2：manifest 损坏 → Retry，不 DeleteLocalProject。
+    #[test]
+    fn q2_manifest_corrupt_returns_retry() {
+        use crate::project::Project;
+        use crate::sync::types::PlannedTargetKind;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        let project_root = projects_root.join("P");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // 写损坏的 manifest。
+        std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+        std::fs::write(
+            project_root.join("app-meta/sync/manifest.sync.json"),
+            b"{not valid json",
+        )
+        .unwrap();
+
+        let projects = vec![Project {
+            id: "P".to_string(),
+            title: "T".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+        }];
+
+        // 远端 catalog 有 delete tombstone。
+        let mut remote_catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut remote_catalog,
+            crate::sync::types::TargetLifecycleRecord::delete(
+                "projects/P",
+                "projects/P",
+                12_000,
+                "dev-A",
+            ),
+        );
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &projects,
+            &[],
+            &remote_catalog,
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "dev-B",
+        );
+
+        let p_target = planned
+            .iter()
+            .find(|t| t.target.remote_prefix == "projects/P")
+            .expect("P target should exist");
+        // manifest 损坏 → Retry，绝不 DeleteLocalProject（无证据）。
+        assert_eq!(
+            p_target.target_kind,
+            PlannedTargetKind::Retry,
+            "问题2: manifest 损坏应返回 Retry，不 DeleteLocalProject"
+        );
+    }
+
+    /// #645 评论 5504296097 问题2：首次同步 manifest 不存在 + project.json 合法
+    /// → 建立初始 manifest → LiveProject（正常同步）。
+    #[test]
+    fn q2_first_sync_establishes_initial_manifest() {
+        use crate::project::Project;
+        use crate::sync::types::PlannedTargetKind;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        let project_root = projects_root.join("P");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // 不写 manifest（首次同步）。写合法 project.json。
+        let project = Project {
+            id: "P".to_string(),
+            title: "T".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+        };
+        std::fs::write(
+            project_root.join("project.json"),
+            serde_json::to_vec(&project).unwrap(),
+        )
+        .unwrap();
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &[project],
+            &[],
+            &TargetLifecycleCatalog::default(),
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "dev-B",
+        );
+
+        let p_target = planned
+            .iter()
+            .find(|t| t.target.remote_prefix == "projects/P")
+            .expect("P target should exist");
+        // 首次同步 → 建立初始 manifest → LiveProject。
+        assert_eq!(
+            p_target.target_kind,
+            PlannedTargetKind::LiveProject,
+            "问题2: 首次同步应建立初始 manifest 并判为 LiveProject"
+        );
+        assert!(
+            p_target.live_lww.is_some(),
+            "问题2: 首次同步应产出初始 live_lww"
+        );
+        // 初始 manifest 已落盘。
+        assert!(
+            project_root
+                .join("app-meta/sync/manifest.sync.json")
+                .exists(),
+            "问题2: 首次同步应写初始 manifest"
+        );
+    }
+
+    /// #645 评论 5504296097 问题2：manifest 不存在 + project.json 也损坏 → Retry。
+    #[test]
+    fn q2_no_manifest_and_corrupt_project_json_returns_retry() {
+        use crate::project::Project;
+        use crate::sync::types::PlannedTargetKind;
+
+        let tmp = TempDir::new().unwrap();
+        let app_root = tmp.path().join("app");
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&app_root).unwrap();
+        let project_root = projects_root.join("P");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // 不写 manifest，写损坏 project.json。
+        std::fs::write(project_root.join("project.json"), b"not json").unwrap();
+
+        let projects = vec![Project {
+            id: "P".to_string(),
+            title: "T".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+        }];
+
+        let planned = build_full_sync_target_plan(
+            &app_root,
+            &projects_root,
+            &projects,
+            &[],
+            &TargetLifecycleCatalog::default(),
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "dev-B",
+        );
+
+        let p_target = planned
+            .iter()
+            .find(|t| t.target.remote_prefix == "projects/P")
+            .expect("P target should exist");
+        assert_eq!(
+            p_target.target_kind,
+            PlannedTargetKind::Retry,
+            "问题2: 无 manifest 且 project.json 损坏应返回 Retry"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // #645 评论 5504296097 问题3：post-transfer staging LWW 测试
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// #645 评论 5504296097 问题3：lifecycle publish 用 post-transfer staging manifest LWW，
+    /// 不是 Transfer 前的旧 live_lww。
+    ///
+    /// live_lww.lww_time_ms = 1000（旧）。staging manifest max lww = 5000（post-transfer）。
+    /// catalog upsert 应记录 updated_at_ms = 5000，不是 1000。
+    #[test]
+    fn q3_publish_uses_post_transfer_staging_lww() {
+        use crate::sync::types::{ManifestFileRecord, PlannedTargetKind, SyncManifest, SyncPolicy};
+
+        let provider = MemoryProvider::new();
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("projects").join("p1");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // staging_root 单独设一个目录，里面放 post-transfer manifest（max=5000）。
+        let staging_root = tmp.path().join("staging-p1");
+        std::fs::create_dir_all(staging_root.join("app-meta/sync")).unwrap();
+        let staging_manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "chapter.md".to_string(),
+                content_hash: "h".to_string(),
+                updated_at_ms: 5000,
+                deleted_at_ms: None,
+                device_id: "dev-1".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::write(
+            staging_root.join("app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&staging_manifest).unwrap(),
+        )
+        .unwrap();
+
+        let planned = PlannedTarget {
+            target: SyncTarget::project("p1"),
+            local_root: project_root.clone(),
+            staging_root: Some(staging_root.clone()),
+            target_kind: PlannedTargetKind::LiveProject,
+            project_id: Some("p1".to_string()),
+            target_live_root: project_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+            // 旧 live_lww = 1000，不应被用作 publish 时间。
+            live_lww: Some(LiveTargetLww {
+                lww_time_ms: 1000,
+                device_id: "dev-1".to_string(),
+            }),
+        };
+        let plan = FullSyncPlan {
+            sync_policy: SyncPolicy::default(),
+            force_sync: false,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
+        };
+
+        let _transfer = run_transfer(&provider, &plan);
+
+        // catalog upsert 应记录 updated_at_ms = 5000（post-transfer staging LWW）。
+        let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+        let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
+            .expect("catalog should have upsert record");
+        assert_eq!(rec.op, crate::sync::types::TargetOp::Upsert);
+        assert_eq!(
+            rec.updated_at_ms, 5000,
+            "问题3: lifecycle publish 应使用 post-transfer staging LWW (5000)，\
+             不是旧 live_lww (1000)"
+        );
+    }
+
+    /// #645 评论 5504296097 问题3：post-transfer staging manifest 读取失败 → RecoverableError。
+    #[test]
+    fn q3_post_transfer_manifest_unreadable_returns_error() {
+        use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+
+        let provider = MemoryProvider::new();
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("projects").join("p1");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // staging_root 没有 manifest → read_post_transfer_lww 返回 None。
+        let staging_root = tmp.path().join("staging-p1");
+        std::fs::create_dir_all(&staging_root).unwrap();
+
+        let planned = PlannedTarget {
+            target: SyncTarget::project("p1"),
+            local_root: project_root.clone(),
+            staging_root: Some(staging_root),
+            target_kind: PlannedTargetKind::LiveProject,
+            project_id: Some("p1".to_string()),
+            target_live_root: project_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: Some(LiveTargetLww {
+                lww_time_ms: 1000,
+                device_id: "dev-1".to_string(),
+            }),
+        };
+        let plan = FullSyncPlan {
+            sync_policy: SyncPolicy::default(),
+            force_sync: false,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
+        };
+
+        let transfer = run_transfer(&provider, &plan);
+        assert!(
+            matches!(
+                transfer.targets[0].result.status,
+                SyncStatus::RecoverableError(_)
+            ),
+            "问题3: post-transfer manifest 不可读应返回 RecoverableError，\
+             不伪造旧 live_lww。status={:?}",
+            transfer.targets[0].result.status
+        );
+        // 不写 catalog。
+        let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+        assert!(
+            snapshot.catalog.records.is_empty(),
+            "问题3: manifest 不可读时不应写 catalog"
+        );
+    }
+
+    /// #645 评论 5504296097 问题5：dry-run 应使用真实 catalog 做 target 决策。
+    ///
+    /// 场景：远端 catalog 有 project P 的 upsert 记录，本地也有 P。
+    /// 用真实 catalog 调 build_full_sync_target_plan，P 应被计划为 LiveProject
+    /// （而非 RemoteOnly 或 LostToRemote）。
+    #[test]
+    fn q5_dry_run_uses_real_catalog_for_target_decision() {
+        use crate::sync::types::{
+            ManifestFileRecord, PlannedTargetKind, SyncManifest, TargetLifecycleCatalog,
+        };
+
+        let tmp = TempDir::new().unwrap();
+        let projects_root = tmp.path().join("projects");
+        let project_root = projects_root.join("P");
+        std::fs::create_dir_all(&project_root).unwrap();
+        // 写合法 project.json + manifest，让 P 被识别为 live project。
+        let project = crate::project::Project {
+            id: "P".to_string(),
+            title: "P".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+        };
+        std::fs::write(
+            project_root.join("project.json"),
+            serde_json::to_vec(&project).unwrap(),
+        )
+        .unwrap();
+        std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+        let manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "project.json".to_string(),
+                content_hash: "h".to_string(),
+                updated_at_ms: 1000,
+                deleted_at_ms: None,
+                device_id: "device-1".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::write(
+            project_root.join("app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let projects = vec![project];
+
+        // 真实 catalog：P 有 upsert 记录（LWW=2000，比本地 manifest 1000 新）。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            crate::sync::types::TargetLifecycleRecord::upsert(
+                "projects/P",
+                "projects/P",
+                2000,
+                "device-2",
+            ),
+        );
+
+        let planned = build_full_sync_target_plan(
+            tmp.path(),
+            &projects_root,
+            &projects,
+            &[],
+            &catalog,
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "device-1",
+        );
+
+        // P 应被计划为 LiveProject（本地有 + catalog 有 upsert）。
+        let p_target = planned
+            .iter()
+            .find(|t| t.project_id.as_deref() == Some("P"))
+            .expect("P should be in plan");
+        assert!(
+            matches!(p_target.target_kind, PlannedTargetKind::LiveProject),
+            "P 应为 LiveProject（本地有 + catalog 有 upsert），实际: {:?}",
+            p_target.target_kind
+        );
+    }
+
+    /// #645 评论 5504296097 问题5：dry-run 用空 catalog 时，
+    /// 本地有但 catalog 无记录的 project 应被计划为 LiveProject（首次同步）。
+    #[test]
+    fn q5_dry_run_empty_catalog_first_sync() {
+        use crate::sync::types::{PlannedTargetKind, TargetLifecycleCatalog};
+
+        let tmp = TempDir::new().unwrap();
+        let projects_root = tmp.path().join("projects");
+        let project_root = projects_root.join("P");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let project = crate::project::Project {
+            id: "P".to_string(),
+            title: "P".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            updated_at: "2024-01-01T00:00:00Z".to_string(),
+            order: 0,
+        };
+        std::fs::write(
+            project_root.join("project.json"),
+            serde_json::to_vec(&project).unwrap(),
+        )
+        .unwrap();
+
+        let projects = vec![project];
+
+        // 空 catalog（首次同步，远端无记录）。
+        let planned = build_full_sync_target_plan(
+            tmp.path(),
+            &projects_root,
+            &projects,
+            &[],
+            &TargetLifecycleCatalog::default(),
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "device-1",
+        );
+
+        let p_target = planned
+            .iter()
+            .find(|t| t.project_id.as_deref() == Some("P"))
+            .expect("P should be in plan");
+        // 首次同步：本地有，catalog 无 → LiveProject（问题2 修复后不再 DeleteLocalProject）。
+        assert!(
+            matches!(p_target.target_kind, PlannedTargetKind::LiveProject),
+            "首次同步 P 应为 LiveProject，实际: {:?}",
+            p_target.target_kind
         );
     }
 }

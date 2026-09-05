@@ -148,6 +148,7 @@ fn aggregate_with_outcomes(
                 remote_prefix: prefix.to_string(),
                 result: mock_outcome_to_sync_result(outcome),
                 deleted_resolution: None,
+                local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
             }
         })
         .collect();
@@ -1448,4 +1449,121 @@ fn recover_interrupted_full_sync_state_no_file_returns_false() {
         .recover_interrupted_full_sync_state()
         .expect("recover must not error on absent file");
     assert!(!recovered, "should return false when no state file exists");
+}
+
+// #645 评论 5504296097 问题1：DeleteLocalProject 移到 Commit 阶段。
+// 以下测试验证：
+// 1. commit_full_sync 对 DeleteProject action 执行 ProjectDeleteTransaction；
+// 2. 删除后本地 projects/<id> 目录不再存在（已 move 到 trash）；
+// 3. RemoteLifecycle origin 不生成 PendingDeletedTarget（远端已删，不反向要求删远端）。
+
+/// 问题1：commit_full_sync 对 DeleteProject action 执行删除事务，
+/// 本地 project 目录被移到 trash。
+#[test]
+fn q1_commit_full_sync_executes_delete_project_action() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let project = core.create_project("TestProject").expect("create project");
+    let project_id = project.id.clone();
+    let project_root = core.project_root(&project_id);
+    assert!(
+        project_root.exists(),
+        "project dir should exist before commit"
+    );
+
+    // 构造 transfer_result：一个 target 携带 DeleteProject action。
+    let targets = vec![crate::sync::types::TargetSyncResult {
+        target_kind: "project".to_string(),
+        project_id: Some(project_id.clone()),
+        remote_prefix: format!("projects/{}/", project_id),
+        result: SyncResult::no_changes(),
+        deleted_resolution: None,
+        local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+            project_id: project_id.clone(),
+        },
+    }];
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+
+    let (result, _committed_paths) = core.commit_full_sync(transfer_result, Vec::new());
+
+    // project 目录应已被 ProjectDeleteTransaction move 到 trash。
+    assert!(
+        !project_root.exists(),
+        "commit_full_sync 后 project 目录应已删除（move 到 trash），\
+         project_root={:?}",
+        project_root
+    );
+    // 聚合结果应为 Success 或 NoChanges（删除成功 → NoChanges）。
+    assert!(
+        matches!(
+            result.overall_status,
+            SyncStatus::Success | SyncStatus::NoChanges
+        ),
+        "删除成功后 overall_status 应为 Success/NoChanges，实际: {:?}",
+        result.overall_status
+    );
+}
+
+/// 问题1：RemoteLifecycle origin 的删除不生成 PendingDeletedTarget。
+/// （远端已删，不反向要求删远端。User origin 才会生成 PendingDeletedTarget。）
+#[test]
+fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
+    let (temp_dir, core) = new_core_with_projects();
+    let project = core.create_project("TestProject").expect("create project");
+    let project_id = project.id.clone();
+
+    // 构造 transfer_result：DeleteProject action（RemoteLifecycle origin 由 commit 内部设置）。
+    let targets = vec![crate::sync::types::TargetSyncResult {
+        target_kind: "project".to_string(),
+        project_id: Some(project_id.clone()),
+        remote_prefix: format!("projects/{}/", project_id),
+        result: SyncResult::no_changes(),
+        deleted_resolution: None,
+        local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+            project_id: project_id.clone(),
+        },
+    }];
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+
+    let _ = core.commit_full_sync(transfer_result, Vec::new());
+
+    // 验证 pending_deleted_targets.json 不包含此 project。
+    let pending = crate::sync::pending_deleted::load_pending_deleted_targets(temp_dir.path())
+        .unwrap_or_default();
+    let found = pending
+        .iter()
+        .any(|p| p.target.remote_prefix.contains(&project_id));
+    assert!(
+        !found,
+        "RemoteLifecycle origin 不应生成 PendingDeletedTarget，\
+         但 pending 中包含 project_id={}：{:?}",
+        project_id, pending
+    );
+}
+
+/// 问题1：commit_full_sync 对没有 DeleteProject action 的 target 不做删除。
+#[test]
+fn q1_commit_full_sync_without_delete_action_preserves_project() {
+    let (_temp_dir, core) = new_core_with_projects();
+    let project = core.create_project("TestProject").expect("create project");
+    let project_id = project.id.clone();
+    let project_root = core.project_root(&project_id);
+
+    // 构造 transfer_result：local_lifecycle_action = None（正常同步）。
+    let targets = vec![crate::sync::types::TargetSyncResult {
+        target_kind: "project".to_string(),
+        project_id: Some(project_id.clone()),
+        remote_prefix: format!("projects/{}/", project_id),
+        result: SyncResult::success(),
+        deleted_resolution: None,
+        local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
+    }];
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+
+    let _ = core.commit_full_sync(transfer_result, Vec::new());
+
+    // project 目录应仍存在（没有 DeleteProject action，不删除）。
+    assert!(
+        project_root.exists(),
+        "没有 DeleteProject action 时 project 目录应保留"
+    );
 }

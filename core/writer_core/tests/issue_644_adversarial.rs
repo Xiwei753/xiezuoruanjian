@@ -22,7 +22,9 @@ use tempfile::TempDir;
 use writer_core::facade::WriterCore;
 use writer_core::sync::full_sync::FullSyncTransferResult;
 use writer_core::sync::staging::{CommitAction, StagingRun};
-use writer_core::sync::types::{SyncResult, SyncStatus, TargetSyncResult};
+use writer_core::sync::types::{
+    LocalLifecycleCommitAction, SyncResult, SyncStatus, TargetSyncResult,
+};
 
 // ── helpers ──
 
@@ -343,6 +345,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 
@@ -390,6 +393,7 @@ fn adv_p2_fatal_error_skips_staging_commit() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::FatalError("auth failed".to_string())),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 
@@ -431,6 +435,7 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::RecoverableError("network".to_string())),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 
@@ -474,6 +479,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::Success),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 
@@ -532,6 +538,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result,
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 

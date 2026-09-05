@@ -253,17 +253,32 @@ impl WriterCoreApi {
         };
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        // 读失败 → 传空 catalog，planner 按"远端无记录"决策（保守删除/正常同步）。
-        let remote_catalog = crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
-            .map(|snapshot| snapshot.catalog)
-            .unwrap_or_else(|e| {
-                log::warn!("[sync] prepare: load_remote_catalog failed: {e} — using empty catalog");
-                crate::sync::types::TargetLifecycleCatalog::default()
-            });
+        // #645 评论 5504296097 问题4：catalog 读取失败直接结束本次 full sync，
+        // 返回 RecoverableError，不构造空 catalog 继续 plan（空 catalog 会让
+        // planner 误判"远端无记录"做破坏性删除/复活决策）。
+        let remote_catalog_snapshot =
+            match crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref()) {
+                Ok(snapshot) => snapshot,
+                Err(e) => {
+                    let msg = format!("load_remote_catalog failed: {e}");
+                    log::warn!("[sync] prepare: {msg}");
+                    let _ = self.record_full_sync_preflight_failure(
+                        "recoverable_error".to_string(),
+                        "target_catalog".to_string(),
+                    );
+                    return Err(crate::api::error::WriterError::from(e));
+                }
+            };
         // 1c. 短锁 B：snapshot local projects + pending + device_id，build plan。
         let mut plan = {
             let core = self.core_write();
-            core.prepare_full_sync(&sync_config, force_sync, secrets.clone(), &remote_catalog)?
+            core.prepare_full_sync(
+                &sync_config,
+                force_sync,
+                secrets.clone(),
+                &remote_catalog_snapshot.catalog,
+                remote_catalog_snapshot.clone(),
+            )?
         };
 
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。

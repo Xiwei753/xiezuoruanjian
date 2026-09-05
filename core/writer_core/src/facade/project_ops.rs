@@ -227,6 +227,7 @@ impl super::WriterCore {
             project_id,
             &self.app_data_root,
             device_id,
+            crate::project::ProjectDeleteOrigin::User,
         )
     }
 

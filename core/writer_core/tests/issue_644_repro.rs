@@ -25,7 +25,9 @@ use tempfile::TempDir;
 use writer_core::facade::WriterCore;
 use writer_core::sync::full_sync::FullSyncTransferResult;
 use writer_core::sync::staging::{CommitAction, StagingRun};
-use writer_core::sync::types::{SyncResult, SyncStatus, TargetSyncResult};
+use writer_core::sync::types::{
+    LocalLifecycleCommitAction, SyncResult, SyncStatus, TargetSyncResult,
+};
 
 // ── helpers ──
 
@@ -222,6 +224,7 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 
@@ -266,6 +269,7 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
             remote_prefix: "projects/p1".to_string(),
             result: sync_result_with_status(SyncStatus::PartialConflict),
             deleted_resolution: None,
+            local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
     };
 

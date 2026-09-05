@@ -14,6 +14,7 @@ mod tests {
                 remote_prefix: "app".to_string(),
                 result: crate::sync::types::SyncResult::success(),
                 deleted_resolution: None,
+                local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
             }],
             total_uploaded: 0,
             total_downloaded: 0,
@@ -38,6 +39,7 @@ mod tests {
                     remote_prefix: "app".to_string(),
                     result: crate::sync::types::SyncResult::success(),
                     deleted_resolution: None,
+                    local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
                 },
                 crate::sync::types::TargetSyncResult {
                     target_kind: "project".to_string(),
@@ -49,6 +51,7 @@ mod tests {
                         None,
                     ),
                     deleted_resolution: None,
+                    local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
                 },
             ],
             total_uploaded: 0,

@@ -90,11 +90,22 @@ fn problem1_prepare_full_sync_includes_deleted_project_target() {
 
     // 3. 调 prepare_full_sync，拿到 FullSyncPlan。
     // #645 评论 5504296097 问题1：prepare_full_sync 现在接受 remote_catalog 参数。
+    // #645 评论 5504296097 问题4：prepare_full_sync 现在接受 remote_catalog_snapshot 参数。
     let config = make_sync_config();
     let secrets = SyncSecrets::default();
     let remote_catalog = writer_core::sync::types::TargetLifecycleCatalog::default();
+    let remote_catalog_snapshot = writer_core::sync::types::RemoteTargetCatalogSnapshot {
+        catalog: remote_catalog.clone(),
+        version: writer_core::sync::provider::model::RemoteVersion::new("__nonexistent__"),
+    };
     let plan: FullSyncPlan = core
-        .prepare_full_sync(&config, false, secrets, &remote_catalog)
+        .prepare_full_sync(
+            &config,
+            false,
+            secrets,
+            &remote_catalog,
+            remote_catalog_snapshot,
+        )
         .expect("prepare_full_sync 应成功");
 
     // 4. 断言修复后行为：plan 里有 deleted_project target。

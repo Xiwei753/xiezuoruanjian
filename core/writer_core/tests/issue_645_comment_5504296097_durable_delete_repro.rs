@@ -95,6 +95,7 @@ fn gap1_fixed_delete_project_propagates_starmap_enum_error() {
         &project_id,
         &app_data_root,
         "test-device",
+        writer_core::project::ProjectDeleteOrigin::User,
     );
 
     // 修复后断言 A：删除返回 Err——错误不再被吞掉，向上传播。
