@@ -295,9 +295,16 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
 ///
 /// `delete_project_with_changes` 本身只做到 `StarMapsUnbound` phase，
 /// `PendingDeletedTarget` 落盘由 ack 控制（`RemoteLifecycle` 调用方不调 ack）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// #645 评论 5504296097 问题2修复：`origin` 必须进入 durable journal，
+/// `ack_project_delete_history` 和 `recover_single_journal` 按 origin 分流：
+/// - `User` → 推进到 `RemoteDeleteQueued`（写 PendingDeletedTarget）；
+/// - `RemoteLifecycle` → 跳过 `RemoteDeleteQueued`，直接 `Completed`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
 pub enum ProjectDeleteOrigin {
     /// 用户主动删除。
+    #[default]
     User,
     /// 远端 lifecycle delete 胜出，Commit 阶段执行本地删除。
     RemoteLifecycle,
@@ -551,6 +558,7 @@ pub fn delete_project_with_changes(
 
     // #645 评论第 1 点：workspace 共享 git_dir 不因删除单个作品而移动。
     // 创建 durable delete transaction，不传 private git_dir。
+    // #645 评论 5504296097 问题2修复：把 origin 写进 durable journal。
     let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
         project_id,
         &target_canon,
@@ -561,6 +569,7 @@ pub fn delete_project_with_changes(
         app_data_root,
         starmap_ids,
         device_id,
+        origin,
     );
 
     // 1. 准备阶段：写 journal 到 app_meta/delete-journals/。

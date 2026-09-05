@@ -42,7 +42,7 @@ impl super::WriterCore {
         Ok(crate::sync::types::FullSyncDiagnosticsResult { diagnostics })
     }
 
-    /// 全量同步 dry-run — 枚举 App target + 所有 Project target + pending deleted targets，
+    /// #645 评论 5504296097 问题4：全量同步 dry-run — 枚举 App target + 所有 Project target + pending deleted targets，
     /// 构建每个 target 的计划。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
@@ -53,12 +53,30 @@ impl super::WriterCore {
     /// 无法知道远端对象数；调用方据 `target_kind` 判断将删除/恢复）。
     ///
     /// #645 评论 5504296097 问题5：dry-run 读真实远端 catalog（read-only 网络 IO），
-    /// 不再传空 catalog。catalog 读取失败时降级为空 catalog + warning（dry-run 是预览，
-    /// 网络不可用不应硬失败）。
+    /// 不再传空 catalog。catalog 读取失败时返回错误（dry-run 是预览，不能返回假的远端事实）。
     pub fn perform_full_sync_dry_run(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
+    ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
+        // #645 评论 5504296097 问题6：catalog 读取（网络 IO）由 API 层在
+        // core_write() 锁外执行，传入已加载的 catalog。此处只做本地 plan 构建。
+        // 保留 fallback：若 API 层未预加载 catalog（旧调用方），在此加载。
+        let remote_catalog = if config.enabled {
+            self.dry_run_load_remote_catalog(config, secrets)?
+        } else {
+            crate::sync::types::TargetLifecycleCatalog::default()
+        };
+        self.perform_full_sync_dry_run_with_catalog(config, &remote_catalog)
+    }
+
+    /// #645 评论 5504296097 问题6：dry-run plan 构建（纯本地 IO，不做网络 IO）。
+    ///
+    /// `remote_catalog` 由 API 层在 core_write() 锁外预加载后传入。
+    pub(crate) fn perform_full_sync_dry_run_with_catalog(
+        &self,
+        config: &crate::sync::SyncConfig,
+        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
         use crate::sync::types::{FullSyncDryRunResult, SyncPlan, TargetSyncPlan};
 
@@ -75,16 +93,6 @@ impl super::WriterCore {
             .map(|info| info.device_id)
             .unwrap_or_default();
 
-        // #645 评论 5504296097 问题5：读真实远端 catalog（read-only 网络 IO）。
-        // dry-run 是预览，catalog 读取失败时降级为空 catalog + warning，
-        // 不硬失败（与 perform_full_sync 问题4 的硬失败不同）。
-        let remote_catalog = if config.enabled {
-            self.dry_run_load_remote_catalog(config, secrets)
-        } else {
-            // sync disabled → 不做网络 IO，用空 catalog。
-            crate::sync::types::TargetLifecycleCatalog::default()
-        };
-
         // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
         // 不复制一套 target 枚举逻辑。
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
@@ -92,7 +100,7 @@ impl super::WriterCore {
             &self.projects_root,
             &projects,
             &pending_deleted,
-            &remote_catalog,
+            remote_catalog,
             &sync_policy,
             false,
             &device_id,
@@ -103,9 +111,6 @@ impl super::WriterCore {
             let plan = if !config.enabled {
                 SyncPlan::new()
             } else if planned.is_deleted_target() {
-                // deleted target：dry-run 不读远端，SyncPlan 为空。
-                // target_kind="deleted_project" 让调用方知道这是 deleted target，
-                // 将在正式同步时走 target-level LWW 决策（删除远端或恢复本地）。
                 SyncPlan::new()
             } else {
                 crate::sync::SyncService::build_sync_plan(
@@ -159,33 +164,16 @@ impl super::WriterCore {
 
     /// #645 评论 5504296097 问题5：dry-run 读真实远端 catalog 的 helper。
     ///
-    /// 创建 provider + 读 catalog。任一步骤失败时降级为空 catalog + warning
-    /// （dry-run 是预览，网络不可用不应硬失败）。
+    /// 创建 provider + 读 catalog。任一步骤失败时返回错误
+    /// （dry-run 是预览，不能返回假的远端事实）。
     fn dry_run_load_remote_catalog(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
-    ) -> crate::sync::types::TargetLifecycleCatalog {
-        let provider = match self.create_sync_provider_for_plan(config, secrets) {
-            Ok(p) => p,
-            Err(e) => {
-                log::warn!(
-                    "[sync] dry-run: create_sync_provider_for_plan failed, \
-                     falling back to empty catalog: {e}"
-                );
-                return crate::sync::types::TargetLifecycleCatalog::default();
-            }
-        };
-        match crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref()) {
-            Ok(snapshot) => snapshot.catalog,
-            Err(e) => {
-                log::warn!(
-                    "[sync] dry-run: load_remote_catalog failed, \
-                     falling back to empty catalog: {e}"
-                );
-                crate::sync::types::TargetLifecycleCatalog::default()
-            }
-        }
+    ) -> crate::error::Result<crate::sync::types::TargetLifecycleCatalog> {
+        let provider = self.create_sync_provider_for_plan(config, secrets)?;
+        let snapshot = crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())?;
+        Ok(snapshot.catalog)
     }
 
     /// 全量同步 — 先建立 App target，再枚举所有作品建立 Project target；
@@ -369,21 +357,30 @@ impl super::WriterCore {
     /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
     /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
     ///
-    /// #645 评论 5504296097 Blocker 2：返回 `(FullSyncResult, committed_paths)`，
+    /// #645 评论 5504296097 Blocker 2：返回 `(FullSyncResult, committed_paths, lifecycle_receipts)`，
     /// `committed_paths` 是本次 commit 真正落盘的 workspace-relative paths，
-    /// 供 API 层调 `record_workspace_history` 精确 stage，替代全量 `&[]` 扫描。
+    /// `lifecycle_receipts` 是 RemoteLifecycle 删除事务的完整 receipt，
+    /// 供 API 层调 `record_workspace_change_set` + `ack_project_delete_history`。
     #[allow(clippy::excessive_nesting)]
     pub fn commit_full_sync(
         &self,
         transfer_result: crate::sync::full_sync::FullSyncTransferResult,
         staging_runs: Vec<crate::sync::staging::StagingRun>,
-    ) -> (crate::sync::types::FullSyncResult, Vec<std::path::PathBuf>) {
+    ) -> (
+        crate::sync::types::FullSyncResult,
+        Vec<std::path::PathBuf>,
+        Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
+    ) {
         // #645 评论 5504296097 问题1：先处理 local_lifecycle_action（DeleteProject）。
         // 对有 DeleteProject action 的 target，执行完整 Project 本地删除事务
         // （move worktree / unbind starmaps / history），不生成 PendingDeletedTarget
         // （远端已删，不反向要求删远端）。staging commit 会跳过这些 target。
+        // #645 评论 5504296097 问题2修复：收集 LocalLifecycleCommitReceipt，
+        // API 层负责记 history + ack（facade 没有 workspace_git_layout）。
         let mut targets = transfer_result.targets;
         let mut lifecycle_committed_paths: Vec<std::path::PathBuf> = Vec::new();
+        let mut lifecycle_receipts: Vec<crate::sync::types::LocalLifecycleCommitReceipt> =
+            Vec::new();
         for target in &mut targets {
             if let crate::sync::types::LocalLifecycleCommitAction::DeleteProject { project_id } =
                 &target.local_lifecycle_action
@@ -405,14 +402,20 @@ impl super::WriterCore {
                     crate::project::ProjectDeleteOrigin::RemoteLifecycle,
                 ) {
                     Ok(outcome) => {
-                        // #645 评论 5504296097 问题1：收集 committed_paths
-                        // （删除的 workspace-relative 路径）。API 层会用这些 paths
-                        // 调 record_workspace_paths_history 写 history。
+                        // #645 评论 5504296097 问题2修复：收集完整 receipt，
+                        // API 层用 change_set 记 history + ack 推进 journal。
                         for path in outcome.changes.to_flat_paths() {
                             lifecycle_committed_paths.push(path);
                         }
-                        // target 结果改为 NoChanges（本地删除已完成）。
-                        target.result = crate::sync::types::SyncResult::no_changes();
+                        lifecycle_receipts.push(crate::sync::types::LocalLifecycleCommitReceipt {
+                            journal_token: outcome.journal_token.clone(),
+                            change_set: outcome.changes.clone(),
+                            unbound_starmap_ids: outcome.unbound_starmap_ids.clone(),
+                            origin: crate::project::ProjectDeleteOrigin::RemoteLifecycle,
+                        });
+                        // #645 评论 5504296097 问题2修复：真实删除是实际变更，
+                        // 用 Success 触发 rebuild_search_index（NoChanges 不触发）。
+                        target.result = crate::sync::types::SyncResult::success();
                     }
                     Err(e) => {
                         let msg = format!("remote lifecycle delete failed: {e}");
@@ -516,7 +519,7 @@ impl super::WriterCore {
         // 与 staging commit 产生的 committed_paths。
         let mut all_committed_paths = lifecycle_committed_paths;
         all_committed_paths.extend(commit_outcome.committed_paths);
-        (result, all_committed_paths)
+        (result, all_committed_paths, lifecycle_receipts)
     }
 
     /// #645 评论 5504296097 问题1/2：deleted target 远端清理/恢复成功后，

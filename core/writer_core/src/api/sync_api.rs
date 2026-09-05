@@ -210,13 +210,61 @@ impl WriterCoreApi {
     }
 
     /// 全量同步 dry-run — 枚举 App target + 所有 Project target。
+    ///
+    /// #645 评论 5504296097 问题6：dry-run 网络 IO（读远端 catalog）在 core_write()
+    /// 锁外执行，拆三段短锁，避免阻塞正文/作品读取。
     pub fn perform_full_sync_dry_run(
         &self,
         config: SyncConfigDto,
     ) -> ApiResult<FullSyncDryRunResultDto> {
+        let sync_config: crate::sync::SyncConfig = config.into();
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
+
+        // #645 评论 5504296097 问题6：三段短锁 — 网络 IO 不持 core 写锁。
+        // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
+        let provider = if sync_config.enabled {
+            let core = self.core_write();
+            match core.create_sync_provider_for_plan(&sync_config, &secrets) {
+                Ok(p) => p,
+                Err(e) => {
+                    // #645 评论 5504296097 问题6：provider 创建失败 → 返回错误，
+                    // 不降级为空 catalog（dry-run 是预览，但不能返回假的远端事实）。
+                    log::warn!(
+                        "[sync] dry-run: create_sync_provider_for_plan failed: {e}"
+                    );
+                    return Err(crate::api::error::WriterError::from(e));
+                }
+            }
+        } else {
+            // sync disabled → 不做网络 IO，用空 catalog。
+            return self
+                .core_write()
+                .perform_full_sync_dry_run_with_catalog(
+                    &sync_config,
+                    &crate::sync::types::TargetLifecycleCatalog::default(),
+                )
+                .map(Into::into)
+                .map_err(Into::into);
+        };
+        // 写锁已释放。
+        // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
+        // #645 评论 5504296097 问题6：catalog 读取失败返回错误，不降级为空 catalog。
+        // “预览”可以不执行写操作，但不能返回假的远端事实（会隐藏 remote-only Project / remote delete）。
+        let remote_catalog_snapshot =
+            crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
+                .map_err(|e| {
+                    log::warn!(
+                        "[sync] dry-run: load_remote_catalog failed: {e}"
+                    );
+                    crate::api::error::WriterError::from(e)
+                })?;
+
+        // 1c. 短锁 B：构建 plan（纯本地 IO）。
         self.core_write()
-            .perform_full_sync_dry_run(&config.into(), &secrets)
+            .perform_full_sync_dry_run_with_catalog(
+                &sync_config,
+                &remote_catalog_snapshot.catalog,
+            )
             .map(Into::into)
             .map_err(Into::into)
     }
@@ -313,7 +361,7 @@ impl WriterCoreApi {
         let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
-        let (result, committed_paths) = {
+        let (result, committed_paths, lifecycle_receipts) = {
             let core = self.core_write();
             core.commit_full_sync(transfer_result, staging_runs)
         };
@@ -323,6 +371,35 @@ impl WriterCoreApi {
         // 问题1：空 committed_paths 不触发全量扫描（record_workspace_paths_history
         // 空 paths 直接返回空结果）。
         self.record_workspace_paths_history(&committed_paths, "full_sync_commit");
+
+        // #645 评论 5504296097 问题2修复：处理 RemoteLifecycle 删除事务的 receipts。
+        // 对每个 receipt：用 change_set 调 record_workspace_change_set_history 记本地 history，
+        // 成功后调 ack_project_delete_history 推进 journal 到 HistoryRecorded → Completed
+        // （RemoteLifecycle origin 跳过 RemoteDeleteQueued，不生成 PendingDeletedTarget）。
+        // history 失败时 journal 保留在 StarMapsUnbound，下次启动 recover 补记。
+        for receipt in &lifecycle_receipts {
+            // 先记 history（best-effort，失败只 warn 不阻断）。
+            self.record_workspace_change_set_history(
+                &receipt.change_set,
+                "remote_lifecycle_delete",
+            );
+            // ack 推进 journal：RemoteLifecycle origin → 跳过 RemoteDeleteQueued
+            // 直接 Completed（不生成 PendingDeletedTarget）。
+            // history 失败时 record_workspace_change_set_history 已 warn，
+            // 这里仍调 ack 推进 journal（journal 保留更危险：下次 recover 会当 User 删除
+            // 反向排队删远端）。ack 失败时 journal 保留，下次启动 recover 补记。
+            if let Err(e) = crate::storage::journal::project_delete::ack_project_delete_history(
+                &self.app_data_root,
+                &receipt.journal_token,
+            ) {
+                log::warn!(
+                    "[sync] perform_full_sync: ack_project_delete_history failed \
+                     for {}: {} — journal retained",
+                    receipt.journal_token,
+                    e
+                );
+            }
+        }
 
         Ok(result.into())
     }

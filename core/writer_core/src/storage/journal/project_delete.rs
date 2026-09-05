@@ -150,6 +150,15 @@ pub struct ProjectDeleteJournal {
     /// 为空字符串（LWW tie-break 中空字符串 < 任何非空 device_id）。
     #[serde(default)]
     pub device_id: String,
+    /// #645 评论 5504296097 问题2修复：删除发起来源 — 必须进入 durable journal。
+    ///
+    /// `ack_project_delete_history` 和 `recover_single_journal` 按 origin 分流：
+    /// - `User` → 推进到 `RemoteDeleteQueued`（写 PendingDeletedTarget）；
+    /// - `RemoteLifecycle` → 跳过 `RemoteDeleteQueued`，直接 `Completed`
+    ///   （远端已删，不反向排队删远端）。
+    /// `#[serde(default)]` 保持向后兼容：旧 journal 反序列化为 `User`。
+    #[serde(default)]
+    pub origin: crate::project::ProjectDeleteOrigin,
     /// 当前删除阶段。
     pub phase: ProjectDeletePhase,
 }
@@ -177,6 +186,9 @@ impl ProjectDeleteTransaction {
     ///
     /// #645 评论 5504296097 问题2：接收 `starmap_ids`，在 `StarMapsUnbound` phase
     /// 逐个执行幂等 unbind。把 unbind 收进事务，避免半状态。
+    ///
+    /// #645 评论 5504296097 问题2修复：接收 `origin`，写入 durable journal，
+    /// ack/recover 按 origin 分流（RemoteLifecycle 不生成 PendingDeletedTarget）。
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         project_id: &str,
@@ -188,6 +200,7 @@ impl ProjectDeleteTransaction {
         app_data_root: &Path,
         starmap_ids: Vec<String>,
         device_id: &str,
+        origin: crate::project::ProjectDeleteOrigin,
     ) -> Self {
         let token = format!(
             "{}_{}_{}",
@@ -213,6 +226,7 @@ impl ProjectDeleteTransaction {
             app_data_root: app_data_root.to_string_lossy().into_owned(),
             starmap_ids,
             device_id: device_id.to_string(),
+            origin,
             phase: ProjectDeletePhase::Prepared,
         };
 
@@ -577,32 +591,54 @@ pub fn ack_project_delete_history(app_data_root: &Path, journal_token: &str) -> 
     // 推进到 HistoryRecorded。
     tx.advance_phase(ProjectDeletePhase::HistoryRecorded)?;
 
-    // #645 评论 5504296097 问题1：幂等写 PendingDeletedTarget，让 prepare_full_sync
-    // 能为已删除作品生成 deleted_project target，run_transfer 走 target-delete 计划
-    // 清理远端 projects/<id>/ 下所有对象。写失败返回 Err，journal 保留在
-    // HistoryRecorded，下次启动 recover 补写。
-    //
-    // deleted_at_ms 用 journal 的 token 时间戳前缀（token 格式：{ts}_{uuid}_{pid}），
-    // 解析失败时退回当前时间。provider-neutral，不写 GitHub 专用逻辑。
-    let deleted_at_ms = tx
-        .journal
-        .token
-        .split('_')
-        .next()
-        .and_then(|s| s.parse::<i64>().ok())
-        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-    let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
-        &tx.journal.project_id,
-        deleted_at_ms,
-        journal_token,
-        &tx.journal.device_id,
-    );
-    crate::sync::pending_deleted::record_pending_deleted_target(app_data_root, pending_deleted)?;
+    // #645 评论 5504296097 问题2修复：按 origin 分流。
+    // - User → 写 PendingDeletedTarget → RemoteDeleteQueued → Completed
+    //   （下次同步清理远端）；
+    // - RemoteLifecycle → 跳过 PendingDeletedTarget，直接 Completed
+    //   （远端已删，不反向排队删远端）。
+    match tx.journal.origin {
+        crate::project::ProjectDeleteOrigin::User => {
+            // #645 评论 5504296097 问题1：幂等写 PendingDeletedTarget，让 prepare_full_sync
+            // 能为已删除作品生成 deleted_project target，run_transfer 走 target-delete 计划
+            // 清理远端 projects/<id>/ 下所有对象。写失败返回 Err，journal 保留在
+            // HistoryRecorded，下次启动 recover 补写。
+            //
+            // deleted_at_ms 用 journal 的 token 时间戳前缀（token 格式：{ts}_{uuid}_{pid}），
+            // 解析失败时退回当前时间。provider-neutral，不写 GitHub 专用逻辑。
+            let deleted_at_ms = tx
+                .journal
+                .token
+                .split('_')
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+            let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
+                &tx.journal.project_id,
+                deleted_at_ms,
+                journal_token,
+                &tx.journal.device_id,
+            );
+            crate::sync::pending_deleted::record_pending_deleted_target(
+                app_data_root,
+                pending_deleted,
+            )?;
 
-    // PendingDeletedTarget 已落盘，推进到 RemoteDeleteQueued → Completed → cleanup。
-    tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
-    tx.complete()?;
-    tx.cleanup_journal()?;
+            // PendingDeletedTarget 已落盘，推进到 RemoteDeleteQueued → Completed → cleanup。
+            tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
+            tx.complete()?;
+            tx.cleanup_journal()?;
+        }
+        crate::project::ProjectDeleteOrigin::RemoteLifecycle => {
+            // RemoteLifecycle 永远不进入 RemoteDeleteQueued（远端已删，
+            // 不反向排队删远端）。直接推进到 Completed 并清 journal。
+            log::info!(
+                "[ack_project_delete_history] RemoteLifecycle origin — \
+                 skipping PendingDeletedTarget, advancing to Completed"
+            );
+            tx.complete()?;
+            tx.cleanup_journal()?;
+        }
+    }
     Ok(())
 }
 
@@ -668,30 +704,45 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredProject
         }
         ProjectDeletePhase::HistoryRecorded => {
             // #645 评论 5504296097 问题1：history 已记，但 PendingDeletedTarget
-            // 可能还没落盘（ack 在写 pending target 前崩溃）。先幂等补写
-            // PendingDeletedTarget，再推进到 RemoteDeleteQueued → Completed 并清 journal。
+            // 可能还没落盘（ack 在写 pending target 前崩溃）。
+            // #645 评论 5504296097 问题2修复：按 origin 分流。
+            // - User → 幂等补写 PendingDeletedTarget → RemoteDeleteQueued → Completed；
+            // - RemoteLifecycle → 跳过 PendingDeletedTarget，直接 Completed
+            //   （远端已删，不反向排队删远端）。
             // 写失败返回 Err，journal 保留在 HistoryRecorded，下次启动 recover 补写。
             let app_data_root = PathBuf::from(&tx.journal.app_data_root);
-            let deleted_at_ms = tx
-                .journal
-                .token
-                .split('_')
-                .next()
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
-            let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
-                &tx.journal.project_id,
-                deleted_at_ms,
-                &tx.journal.token,
-                &tx.journal.device_id,
-            );
-            crate::sync::pending_deleted::record_pending_deleted_target(
-                &app_data_root,
-                pending_deleted,
-            )?;
-            tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
-            tx.complete()?;
-            tx.cleanup_journal()?;
+            match tx.journal.origin {
+                crate::project::ProjectDeleteOrigin::User => {
+                    let deleted_at_ms = tx
+                        .journal
+                        .token
+                        .split('_')
+                        .next()
+                        .and_then(|s| s.parse::<i64>().ok())
+                        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+                    let pending_deleted = crate::sync::types::PendingDeletedTarget::for_project(
+                        &tx.journal.project_id,
+                        deleted_at_ms,
+                        &tx.journal.token,
+                        &tx.journal.device_id,
+                    );
+                    crate::sync::pending_deleted::record_pending_deleted_target(
+                        &app_data_root,
+                        pending_deleted,
+                    )?;
+                    tx.advance_phase(ProjectDeletePhase::RemoteDeleteQueued)?;
+                    tx.complete()?;
+                    tx.cleanup_journal()?;
+                }
+                crate::project::ProjectDeleteOrigin::RemoteLifecycle => {
+                    log::info!(
+                        "[recover_single_journal] RemoteLifecycle origin — \
+                         skipping PendingDeletedTarget, advancing to Completed"
+                    );
+                    tx.complete()?;
+                    tx.cleanup_journal()?;
+                }
+            }
             Ok(None)
         }
         ProjectDeletePhase::RemoteDeleteQueued => {

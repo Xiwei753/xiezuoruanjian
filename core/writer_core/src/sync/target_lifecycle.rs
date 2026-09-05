@@ -25,10 +25,94 @@ use crate::sync::types::{
 /// 这个位置不会随 `projects/<id>/` 一起被删除，保证 delete tombstone 持久存在。
 pub const TARGET_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/targets.sync.json";
 
-/// #645 评论 5504296097 问题4：加载远端 catalog，返回带版本标识的快照。
+/// #645 评论 5504296097 问题6：统一解析 remote target_id，验证前缀 + 单段合法 id。
+///
+/// remote catalog 里的 `target_id` 是远端持久数据，可能损坏或被恶意构造。
+/// 直接 `strip_prefix("projects/").unwrap_or_default()` 会把非法记录当成
+/// `projects/` 路径拼接，存在路径穿越风险（如 `projects/../app`）。
+///
+/// 本函数严格校验：
+/// - 固定前缀 `projects/`；
+/// - 剩余部分只有一个合法 project id segment（不含 `/`、不含 `\`、非 `.`/`..`、非空）；
+/// - 通过 [`crate::delete_guard::validate_id_segment`] 复用同一套 ID 验证规则。
+///
+/// 合法 → 返回 `Ok(project_id)`；非法 → 返回 `Err`。
+pub(crate) fn parse_project_target_id(target_id: &str) -> crate::error::Result<String> {
+    let rest = target_id.strip_prefix("projects/").ok_or_else(|| {
+        crate::Error::Other(format!(
+            "parse_project_target_id: missing 'projects/' prefix in {target_id:?}"
+        ))
+    })?;
+    // 必须只有一个 segment — 不含路径分隔符。
+    if rest.contains('/') || rest.contains('\\') || rest.is_empty() {
+        return Err(crate::Error::Other(format!(
+            "parse_project_target_id: invalid project segment in {target_id:?}"
+        )));
+    }
+    // 复用 delete_guard 的 ID 验证（拒绝 `.`、`..`、空、含分隔符）。
+    let validated = crate::delete_guard::validate_id_segment(rest)?;
+    Ok(validated.to_string())
+}
+
+/// #645 评论 5504296097 问题6：校验整个 catalog — 损坏/非法 record 返回错误。
+///
+/// 校验规则：
+/// - `target_id` 合法（`parse_project_target_id` 通过）
+/// - `remote_prefix == target_id`
+/// - `schema_version` 支持（当前只支持 1）
+/// - 同 `target_id` 不重复（合并后唯一）
+/// - `Delete` 必须有合法 `deleted_at_ms`
+///
+/// 任一不合法 → `Err`，调用方不应在此假 catalog 上继续规划。
+fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()> {
+    use std::collections::HashSet;
+
+    let mut seen_target_ids = HashSet::new();
+    for record in &catalog.records {
+        // 1. target_id 合法
+        if let Err(e) = parse_project_target_id(&record.target_id) {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "validate_catalog: invalid target_id {:?}: {e}",
+                record.target_id
+            ))));
+        }
+        // 2. remote_prefix == target_id
+        if record.remote_prefix != record.target_id {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "validate_catalog: remote_prefix {:?} != target_id {:?}",
+                record.remote_prefix, record.target_id
+            ))));
+        }
+        // 3. schema_version 支持
+        if record.schema_version != 1 {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "validate_catalog: unsupported schema_version {} for target {:?}",
+                record.schema_version, record.target_id
+            ))));
+        }
+        // 4. 同 target_id 不重复
+        if !seen_target_ids.insert(&record.target_id) {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "validate_catalog: duplicate target_id {:?}",
+                record.target_id
+            ))));
+        }
+        // 5. Delete 必须有合法 deleted_at_ms
+        if record.op == TargetOp::Delete && record.deleted_at_ms.is_none() {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "validate_catalog: Delete record for {:?} missing deleted_at_ms",
+                record.target_id
+            ))));
+        }
+    }
+    Ok(())
+}
+
+/// #645 评论 5504296097 问题6：加载远端 catalog，返回带版本标识的快照。
 ///
 /// - 远端不存在 catalog → 返回空 catalog + 写入方应用 `CreateNew`；
-/// - 解析失败 → 返回 `Err`（不吞错误，调用方决定 Retry）。
+/// - 解析失败 → 返回 `Err`（不吞错误，调用方决定 Retry）；
+/// - catalog 校验失败 → 返回 `Err`（损坏 record 不应被静默隐藏）。
 ///
 /// 返回的 `version` 用于后续 CAS 写入（`IfMatch`），防止多设备并发覆盖。
 pub fn load_remote_catalog(
@@ -51,6 +135,8 @@ pub fn load_remote_catalog(
             TARGET_CATALOG_REMOTE_PATH
         )))
     })?;
+    // #645 评论 5504296097 问题6：校验整个 catalog，损坏 record 不应被静默隐藏。
+    validate_catalog(&catalog)?;
     Ok(RemoteTargetCatalogSnapshot { catalog, version })
 }
 
@@ -166,12 +252,14 @@ pub fn write_catalog_once(
 ///
 /// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
 /// 重读最新 snapshot → candidate 与最新 remote record 重新做 target-level LWW：
-/// - candidate 仍赢 → merge → IfMatch 再写；
-/// - remote 已经赢 → 返回 `LostToRemote` → 绝不能继续执行旧的 delete/upload 决策；
+/// - candidate 严格赢 → merge → IfMatch 再写 → `Applied`；
+/// - candidate 与 remote 完全相等 → `AlreadyCurrent`（不写 catalog，调用方按 candidate.op 继续）；
+/// - remote 严格赢 → `RemoteWinner { record }`（携带真实赢的 record，调用方按 record.op 决策）；
 /// - Retry → 不删任何远端文件 → pending 保留。
 ///
-/// `Applied` 才允许继续执行后续操作（delete/upload）；`LostToRemote` 改走
-/// `RestoreProject / DeleteLocalProject`；`Retry` 不删。
+/// #645 评论 5504296097 问题1修复：不再用含糊的 `LostToRemote(snapshot)` 让调用方猜 op 反转。
+/// 完全相等的 record 返回 `AlreadyCurrent`，远端严格赢返回 `RemoteWinner { record }`，
+/// 调用方按真实 `record.op` 走对应路径，避免 LWW 相等时误判为"远端 delete 赢"或"远端 upsert 赢"。
 ///
 /// #645 评论 5504296097 问题3：用 [`write_catalog_once`] 单次 CAS 原语，
 /// 不再用 [`write_remote_catalog`] 的内部 retry（会把 PreconditionFailed 吞成 Ok，
@@ -197,17 +285,35 @@ pub fn apply_lifecycle_record(
         };
 
         if !candidate_wins {
-            // remote 已经赢 → 返回 LostToRemote，绝不继续执行 delete/upload。
-            // candidate_wins == false 蕴含 remote_record.is_some()。
-            let remote_time = remote_record.map(record_lww_time).unwrap_or(0);
+            // remote 不输给 candidate — 可能完全相等或严格赢。
+            let Some(existing) = remote_record else {
+                // candidate_wins == false 蕴含 remote_record.is_some()，防御性 Retry。
+                return TargetLifecycleApplyResult::Retry(crate::Error::Io(std::io::Error::other(
+                    "apply_lifecycle_record: invariant violation — candidate_wins=false but remote_record=None",
+                )));
+            };
+            // #645 评论 5504296097 问题1修复：完全相等 → AlreadyCurrent；
+            // 远端严格赢 → RemoteWinner { record: existing }（携带真实 op）。
+            if records_equal(&current_candidate, existing) {
+                log::info!(
+                    "[sync] apply_lifecycle_record: AlreadyCurrent target={} — \
+                     candidate identical to remote record",
+                    current_candidate.target_id
+                );
+                return TargetLifecycleApplyResult::AlreadyCurrent(current_snapshot.clone());
+            }
             log::info!(
-                "[sync] apply_lifecycle_record: LostToRemote target={} \
-                 candidate_time={} remote_time={} — aborting write",
+                "[sync] apply_lifecycle_record: RemoteWinner target={} \
+                 candidate_time={} remote_time={} remote_op={:?} — aborting write",
                 current_candidate.target_id,
                 record_lww_time(&current_candidate),
-                remote_time,
+                record_lww_time(existing),
+                existing.op,
             );
-            return TargetLifecycleApplyResult::LostToRemote(current_snapshot.clone());
+            return TargetLifecycleApplyResult::RemoteWinner {
+                snapshot: current_snapshot.clone(),
+                record: existing.clone(),
+            };
         }
 
         // 2. candidate 仍赢 → merge → write_catalog_once 单次 CAS。
@@ -224,10 +330,7 @@ pub fn apply_lifecycle_record(
                 // 确实就是 candidate winner，不能只是"写请求成功"。
                 let persisted_rec = find_record(&persisted.catalog, &current_candidate.target_id);
                 let candidate_persisted = persisted_rec
-                    .map(|rec| {
-                        rec.op == current_candidate.op
-                            && record_lww_time(rec) == record_lww_time(&current_candidate)
-                    })
+                    .map(|rec| records_equal(rec, &current_candidate))
                     .unwrap_or(false);
                 if candidate_persisted {
                     log::debug!(
@@ -238,12 +341,24 @@ pub fn apply_lifecycle_record(
                     return TargetLifecycleApplyResult::Applied(persisted);
                 }
                 // 持久化后该 target_id record 不是 candidate winner → 远端已有更新。
+                let remote_rec = persisted_rec.map(|r| r.clone()).unwrap_or_else(|| {
+                    // 防御性：远端无 record 不应发生（CAS 写成功），构造 Retry。
+                    TargetLifecycleRecord::upsert(
+                        &current_candidate.target_id,
+                        &current_candidate.target_id,
+                        0,
+                        "",
+                    )
+                });
                 log::info!(
-                    "[sync] apply_lifecycle_record: LostToRemote after CAS target={} \
+                    "[sync] apply_lifecycle_record: RemoteWinner after CAS target={} \
                      — persisted record differs from candidate",
                     current_candidate.target_id
                 );
-                return TargetLifecycleApplyResult::LostToRemote(persisted);
+                return TargetLifecycleApplyResult::RemoteWinner {
+                    snapshot: persisted,
+                    record: remote_rec,
+                };
             }
             Err(crate::Error::SyncRemoteError { category, .. })
                 if category == "precondition_failed" =>
@@ -274,6 +389,18 @@ pub fn apply_lifecycle_record(
         "apply_lifecycle_record: CAS retry exhausted after {max_retries} attempts for target={}",
         candidate.target_id
     ))))
+}
+
+/// #645 评论 5504296097 问题1修复：判断两条 record 是否完全相等
+/// （同 op / 同 lww_time / 同 device_id / 同 target_id / 同 remote_prefix）。
+///
+/// 用于 `apply_lifecycle_record` 区分 `AlreadyCurrent`（完全相等）和 `RemoteWinner`（远端严格赢）。
+fn records_equal(a: &TargetLifecycleRecord, b: &TargetLifecycleRecord) -> bool {
+    a.target_id == b.target_id
+        && a.remote_prefix == b.remote_prefix
+        && a.op == b.op
+        && a.device_id == b.device_id
+        && record_lww_time(a) == record_lww_time(b)
 }
 
 /// 按 `target_id` upsert 一条记录（同 `target_id` 替换，否则追加）。

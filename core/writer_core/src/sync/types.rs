@@ -871,6 +871,25 @@ pub enum LocalLifecycleCommitAction {
     },
 }
 
+/// #645 评论 5504296097 问题2修复：本地 lifecycle commit 的完整 receipt。
+///
+/// `commit_full_sync` 返回 `Vec<LocalLifecycleCommitReceipt>`，每个元素对应一个
+/// RemoteLifecycle 删除事务。API 层用 `change_set` 调 `record_workspace_change_set`
+/// 记本地 history，成功后调 `ack_project_delete_history` 推进 journal 到
+/// `HistoryRecorded` → `Completed`（RemoteLifecycle origin 跳过 `RemoteDeleteQueued`）。
+/// history 失败时 journal 保留在 `StarMapsUnbound`，下次启动 recover 补记。
+#[derive(Debug, Clone)]
+pub struct LocalLifecycleCommitReceipt {
+    /// 本次删除的 journal token（用于 ack 推进 journal）。
+    pub journal_token: String,
+    /// 删除产生的 workspace 变更集（DeleteTree + 解绑 starmap 的 Upsert）。
+    pub change_set: crate::storage::workspace_git::WorkspaceChangeSet,
+    /// 本次被解绑的 starmap ids（供调用方刷搜索索引等）。
+    pub unbound_starmap_ids: Vec<String>,
+    /// 删除发起来源（User/RemoteLifecycle）。
+    pub origin: crate::project::ProjectDeleteOrigin,
+}
+
 /// 单个 target 的 dry-run 计划。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetSyncPlan {
@@ -1209,19 +1228,40 @@ impl PlannedTargetKind {
 
 /// provider-neutral 原子决策接口的返回值 — catalog CAS 写入后的决策结果。
 ///
-/// #645 评论 5504296097 问题2：`apply_lifecycle_record` 在每次 CAS 冲突后重读最新
-/// snapshot → candidate 与最新 remote record 重新做 target-level LWW：
+/// #645 评论 5504296097 问题1修复：原 `LostToRemote(snapshot)` 让调用方猜 op 反转，
+/// 导致 LWW 相等时被误判为"远端 delete 赢"或"远端 upsert 赢"。新枚举明确四种结果：
 ///
-/// - `Applied(snapshot)` → candidate 仍赢，merge + IfMatch 写成功，返回持久化后的完整 snapshot；
-/// - `LostToRemote(snapshot)` → remote 已经赢，绝不能继续执行旧的 delete/upload 决策，
-///   返回远端最新 snapshot 供调用方改走 `RestoreProject / DeleteLocalProject`；
-/// - `Retry(err)` → 不删任何远端文件，pending 保留。
+/// - `Applied(snapshot)` → candidate 严格赢，merge + IfMatch 写成功，携带持久化后的完整 snapshot；
+/// - `AlreadyCurrent(snapshot)` → candidate 与远端 record 完全相等（同 op/同时间/同 device_id），
+///   不需要再写 catalog，调用方按 candidate.op 继续后续动作（不删本地/不恢复）；
+/// - `RemoteWinner { snapshot, record }` → 远端严格赢，携带远端最新 snapshot 和**真实**赢的 record，
+///   调用方按 `record.op` 决策（Delete → 删本地；Upsert → 恢复本地），不再猜 op 反转；
+/// - `Retry(err)` → 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
 #[derive(Debug)]
 pub enum TargetLifecycleApplyResult {
-    /// candidate 仍赢，CAS 写成功，携带持久化后的完整 snapshot。
+    /// candidate 严格赢，CAS 写成功，携带持久化后的完整 snapshot。
     Applied(RemoteTargetCatalogSnapshot),
-    /// remote 已经赢，CAS 不写，携带远端最新 snapshot 供调用方改走恢复/删除本地路径。
-    LostToRemote(RemoteTargetCatalogSnapshot),
+    /// candidate 与远端 record 完全相等，不需要再写 catalog。
+    AlreadyCurrent(RemoteTargetCatalogSnapshot),
+    /// 远端严格赢，携带远端最新 snapshot 和真实赢的 record（含 op）。
+    RemoteWinner {
+        snapshot: RemoteTargetCatalogSnapshot,
+        record: TargetLifecycleRecord,
+    },
     /// 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
     Retry(crate::Error),
+}
+
+impl TargetLifecycleApplyResult {
+    /// 取出内嵌的 snapshot（Applied/AlreadyCurrent/RemoteWinner 共用）。
+    ///
+    /// `Retry` 返回 `None`（无 snapshot）。供调用方统一更新本地 catalog 缓存。
+    pub fn snapshot(&self) -> Option<&RemoteTargetCatalogSnapshot> {
+        match self {
+            TargetLifecycleApplyResult::Applied(s)
+            | TargetLifecycleApplyResult::AlreadyCurrent(s) => Some(s),
+            TargetLifecycleApplyResult::RemoteWinner { snapshot, .. } => Some(snapshot),
+            TargetLifecycleApplyResult::Retry(_) => None,
+        }
+    }
 }

@@ -17,6 +17,7 @@ fn test_journal_serde() {
         starmap_ids: Vec::new(),
         device_id: "test-device".to_string(),
         phase: ProjectDeletePhase::Prepared,
+        origin: crate::project::ProjectDeleteOrigin::User,
     };
 
     let json = serde_json::to_string(&journal).unwrap();
@@ -60,6 +61,7 @@ fn test_full_delete_flow() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
 
     // 获取事务实际使用的 trash 路径（token 拼出来的）。
@@ -132,6 +134,7 @@ fn test_recovery_from_prepared() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
     tx.prepare().unwrap();
 
@@ -180,6 +183,7 @@ fn test_recovery_from_worktree_moved() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -226,6 +230,7 @@ fn test_recovery_from_git_moved() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
     tx.prepare().unwrap();
     tx.move_worktree().unwrap();
@@ -267,6 +272,7 @@ fn test_delete_without_private_git() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
 
     tx.prepare().unwrap();
@@ -311,6 +317,7 @@ fn test_ack_writes_pending_deleted_target_and_completes() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
 
     // 推进到 StarMapsUnbound（模拟 delete_project_with_changes 的状态）。
@@ -367,6 +374,7 @@ fn test_recovery_from_history_recorded_writes_pending_target() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
 
     // 推进到 HistoryRecorded（模拟 ack 在写 pending target 前崩溃）。
@@ -426,6 +434,7 @@ fn test_recovery_from_remote_delete_queued() {
         app_data_root,
         Vec::new(),
         "test-device",
+        crate::project::ProjectDeleteOrigin::User,
     );
 
     // 推进到 RemoteDeleteQueued（模拟 ack 在 complete 前崩溃）。
