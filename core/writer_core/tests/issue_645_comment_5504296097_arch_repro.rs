@@ -89,20 +89,23 @@ fn problem1_prepare_full_sync_includes_deleted_project_target() {
     );
 
     // 3. 调 prepare_full_sync，拿到 FullSyncPlan。
+    // #645 评论 5504296097 问题1：prepare_full_sync 现在接受 remote_catalog 参数。
     let config = make_sync_config();
     let secrets = SyncSecrets::default();
+    let remote_catalog = writer_core::sync::types::TargetLifecycleCatalog::default();
     let plan: FullSyncPlan = core
-        .prepare_full_sync(&config, false, secrets)
+        .prepare_full_sync(&config, false, secrets, &remote_catalog)
         .expect("prepare_full_sync 应成功");
 
     // 4. 断言修复后行为：plan 里有 deleted_project target。
+    // #645 评论 5504296097 问题1：target_kind 现在是 PlannedTargetKind 枚举。
     let has_deleted_target = plan.targets.iter().any(|t| {
-        t.target.remote_prefix == expected_remote_prefix && t.target_kind == "deleted_project"
+        t.target.remote_prefix == expected_remote_prefix && t.target_kind.is_pending_deleted()
     });
     assert!(
         has_deleted_target,
         "问题1修复验证：prepare_full_sync 应为已删除作品生成 \
-         target_kind=deleted_project 的 target（remote_prefix={}），\
+         pending deleted target（remote_prefix={}），\
          让 run_transfer 走 target-delete 计划清理远端",
         expected_remote_prefix,
     );

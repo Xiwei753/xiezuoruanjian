@@ -66,8 +66,15 @@ impl super::WriterCore {
 
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
+        // #645 评论 5504296097 问题1：device_id 来自真实 DeviceInfo。
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|info| info.device_id)
+            .unwrap_or_default();
+
         // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
         // 不复制一套 target 枚举逻辑。
+        // #645 评论 5504296097 问题1：dry-run 传空 catalog（dry-run 不做网络 IO），
+        // 正式同步在 prepare_full_sync 传真实 catalog。
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
@@ -76,6 +83,7 @@ impl super::WriterCore {
             &crate::sync::types::TargetLifecycleCatalog::default(),
             &sync_policy,
             false,
+            &device_id,
         );
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
@@ -94,7 +102,7 @@ impl super::WriterCore {
                 )?
             };
             targets.push(TargetSyncPlan {
-                target_kind: planned.target_kind.clone(),
+                target_kind: planned.target_kind.as_target_kind_str().to_string(),
                 project_id: planned.project_id.clone(),
                 remote_prefix: planned.target.remote_prefix.clone(),
                 plan,
@@ -177,9 +185,13 @@ impl super::WriterCore {
     ///
     /// #644 评论 5473401065 第1节：**不在**写锁内创建或 seed `StagingRun`。
     /// seed 涉及磁盘扫描/复制，会把"短写锁"变成"磁盘长锁"，阻塞冷启动卷章读取。
-    /// staging 的创建和 seed 移到 `prepare_staging_runs`，在无锁状态下执行。
+    /// staging 的创建和 seed 积到 `prepare_staging_runs`，在无锁状态下执行。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
+    ///
+    /// #645 评论 5504296097 问题1：`remote_catalog` 由调用方传入（在创建 provider 后
+    /// 读取），planner 真正使用它做 target-level LWW 决策。`device_id` 来自真实
+    /// `DeviceInfo.device_id`。
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
     /// `list_projects` 失败时返回 Err（已持久化失败状态）。
@@ -188,6 +200,7 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
         _secrets: crate::sync::SyncSecrets,
+        remote_catalog: &crate::sync::types::TargetLifecycleCatalog,
     ) -> crate::error::Result<crate::sync::full_sync::FullSyncPlan> {
         use crate::sync::full_sync::FullSyncPlan;
 
@@ -223,16 +236,22 @@ impl super::WriterCore {
 
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
-        // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
-        // 不复制一套 target 枚举逻辑。catalog 在 Transfer 阶段读取，这里传空 catalog。
+        // #645 评论 5504296097 问题1：device_id 来自真实 DeviceInfo。
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|info| info.device_id)
+            .unwrap_or_default();
+
+        // #645 评论 5504296097 问题1：调用共享 planner，传入真实 remote_catalog
+        // 做 target-level LWW 决策。
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
             &projects,
             &pending_deleted,
-            &crate::sync::types::TargetLifecycleCatalog::default(),
+            remote_catalog,
             &sync_policy,
             force_sync,
+            &device_id,
         );
 
         // #645 评论 5504296097 第2点：不再携带 workspace_git_layout。

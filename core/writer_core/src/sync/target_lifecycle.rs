@@ -54,7 +54,7 @@ pub fn load_remote_catalog(
     Ok(RemoteTargetCatalogSnapshot { catalog, version })
 }
 
-/// #645 评论 5504296097 问题4：CAS 写远端 catalog。
+/// #645 评论 5504296097 问题3/4：CAS 写远端 catalog，返回持久化后的完整 snapshot。
 ///
 /// 使用 `WritePrecondition::IfMatch(version)` 防止多设备并发覆盖。
 /// `PreconditionFailed` 时自动重读远端 catalog、LWW 合并本地变更、再 IfMatch 写入。
@@ -62,10 +62,14 @@ pub fn load_remote_catalog(
 ///
 /// `snapshot.version` 为 `__nonexistent__` 时使用 `CreateNew`（首次写入）。
 /// 序列化失败或 provider.write 失败 → `Err`。
+///
+/// #645 评论 5504296097 问题3：返回 `RemoteTargetCatalogSnapshot`（实际持久化后的完整
+/// catalog + version），调用方必须用返回值更新本地 catalog 和 version，避免
+/// "version 是新的、内容还是旧的"非法组合。
 pub fn write_remote_catalog(
     provider: &dyn SyncProvider,
     snapshot: &RemoteTargetCatalogSnapshot,
-) -> crate::error::Result<()> {
+) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
     let mut current_version = snapshot.version.clone();
     let mut current_catalog = snapshot.catalog.clone();
     let max_retries = 3;
@@ -89,8 +93,12 @@ pub fn write_remote_catalog(
                     "[sync] write_remote_catalog: succeeded (attempt={})",
                     attempt + 1
                 );
-                let _ = new_version; // success, version updated on remote
-                return Ok(());
+                // #645 评论 5504296097 问题3：返回实际持久化后的完整 snapshot。
+                // provider.write 成功后远端内容就是 current_catalog，version 是 new_version。
+                return Ok(RemoteTargetCatalogSnapshot {
+                    catalog: current_catalog.clone(),
+                    version: new_version,
+                });
             }
             Err(crate::sync::provider::error::ProviderError::PreconditionFailed { .. }) => {
                 // #645 评论 5504296097 问题4：CAS 冲突 → 重读远端最新 catalog，
@@ -112,6 +120,98 @@ pub fn write_remote_catalog(
 
     Err(crate::Error::Io(std::io::Error::other(format!(
         "write_remote_catalog: CAS retry exhausted after {max_retries} attempts"
+    ))))
+}
+
+/// #645 评论 5504296097 问题2：provider-neutral 原子决策接口。
+///
+/// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
+/// 重读最新 snapshot → candidate 与最新 remote record 重新做 target-level LWW：
+/// - candidate 仍赢 → merge → IfMatch 再写；
+/// - remote 已经赢 → 返回 `LostToRemote` → 绝不能继续执行旧的 delete/upload 决策；
+/// - Retry → 不删任何远端文件 → pending 保留。
+///
+/// `Applied` 才允许继续执行后续操作（delete/upload）；`LostToRemote` 改走
+/// `RestoreProject / DeleteLocalProject`；`Retry` 不删。
+#[allow(clippy::excessive_nesting)]
+pub fn apply_lifecycle_record(
+    provider: &dyn SyncProvider,
+    snapshot: &RemoteTargetCatalogSnapshot,
+    candidate: TargetLifecycleRecord,
+) -> crate::sync::types::TargetLifecycleApplyResult {
+    use crate::sync::types::TargetLifecycleApplyResult;
+
+    let max_retries = 3;
+    let mut current_snapshot = snapshot.clone();
+    let current_candidate = candidate.clone();
+
+    for attempt in 0..max_retries {
+        // 1. 检查 candidate 与当前 remote record 的 LWW 关系。
+        let remote_record = find_record(&current_snapshot.catalog, &current_candidate.target_id);
+        let candidate_wins = match &remote_record {
+            None => true, // 远端无记录，candidate 胜出
+            Some(existing) => lww_record_wins(&current_candidate, existing),
+        };
+
+        if !candidate_wins {
+            // remote 已经赢 → 返回 LostToRemote，绝不继续执行 delete/upload。
+            // candidate_wins == false 蕴含 remote_record.is_some()。
+            let remote_time = remote_record.map(record_lww_time).unwrap_or(0);
+            log::info!(
+                "[sync] apply_lifecycle_record: LostToRemote target={} \
+                 candidate_time={} remote_time={} — aborting write",
+                current_candidate.target_id,
+                record_lww_time(&current_candidate),
+                remote_time,
+            );
+            return TargetLifecycleApplyResult::LostToRemote(current_snapshot.clone());
+        }
+
+        // 2. candidate 仍赢 → merge → IfMatch 写。
+        let mut merged_catalog = current_snapshot.catalog.clone();
+        upsert_record(&mut merged_catalog, current_candidate.clone());
+        let write_snapshot = RemoteTargetCatalogSnapshot {
+            catalog: merged_catalog,
+            version: current_snapshot.version.clone(),
+        };
+
+        match write_remote_catalog(provider, &write_snapshot) {
+            Ok(persisted) => {
+                log::debug!(
+                    "[sync] apply_lifecycle_record: Applied (attempt={}) target={}",
+                    attempt + 1,
+                    current_candidate.target_id
+                );
+                return TargetLifecycleApplyResult::Applied(persisted);
+            }
+            Err(crate::Error::SyncRemoteError { category, .. })
+                if category == "precondition_failed" =>
+            {
+                // CAS 冲突 → 重读最新 snapshot，重新判定 winner。
+                log::info!(
+                    "[sync] apply_lifecycle_record: CAS conflict (attempt={}), \
+                     re-reading snapshot",
+                    attempt + 1
+                );
+                match load_remote_catalog(provider) {
+                    Ok(reloaded) => {
+                        current_snapshot = reloaded;
+                        // candidate 不变，下一轮重新与最新 remote record 比较。
+                    }
+                    Err(e) => {
+                        return TargetLifecycleApplyResult::Retry(e);
+                    }
+                }
+            }
+            Err(e) => {
+                return TargetLifecycleApplyResult::Retry(e);
+            }
+        }
+    }
+
+    TargetLifecycleApplyResult::Retry(crate::Error::Io(std::io::Error::other(format!(
+        "apply_lifecycle_record: CAS retry exhausted after {max_retries} attempts for target={}",
+        candidate.target_id
     ))))
 }
 

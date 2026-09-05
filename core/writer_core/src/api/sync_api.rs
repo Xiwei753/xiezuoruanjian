@@ -244,10 +244,24 @@ impl WriterCoreApi {
 
         // Phase 1: Prepare（短写锁）— 写 Syncing、枚举 targets、创建 provider。
         // 不创建/seed staging runs（#644 评论 5473401065 第1节）。
+        // #645 评论 5504296097 问题1：先创建 provider，读 remote catalog，
+        // 再调 prepare_full_sync 传 catalog 做 target-level LWW 决策。
         let (mut plan, provider) = {
             let core = self.core_write();
-            let plan = core.prepare_full_sync(&sync_config, force_sync, secrets.clone())?;
             let provider = core.create_sync_provider_for_plan(&sync_config, &secrets)?;
+            // #645 评论 5504296097 问题1：读 remote catalog（网络 IO，但只读一个文件）。
+            // 读失败 → 传空 catalog，planner 按"远端无记录"决策（保守删除/正常同步）。
+            let remote_catalog =
+                crate::sync::target_lifecycle::load_remote_catalog(provider.as_ref())
+                    .map(|snapshot| snapshot.catalog)
+                    .unwrap_or_else(|e| {
+                        log::warn!(
+                            "[sync] prepare: load_remote_catalog failed: {e} — using empty catalog"
+                        );
+                        crate::sync::types::TargetLifecycleCatalog::default()
+                    });
+            let plan =
+                core.prepare_full_sync(&sync_config, force_sync, secrets.clone(), &remote_catalog)?;
             (plan, provider)
         };
         // 写锁已释放。

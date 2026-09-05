@@ -1115,3 +1115,80 @@ pub enum DeletedTargetResolution {
     /// 无法确定（manifest/读取失败）：不删不恢复，pending 保留。
     Retry,
 }
+
+// ── #645 评论 5504296097 问题1：PlannedTargetKind ──
+
+/// 计划阶段 target 的明确类型 — 替代字符串 `target_kind`，强类型决策结果。
+///
+/// #645 评论 5504296097 问题1：`build_full_sync_target_plan` 按 `target_id` 合并
+/// local live project / local pending delete / remote lifecycle record，
+/// 生成此明确类型，`run_transfer` 按此走对应执行路径。
+///
+/// ## 决策语义
+///
+/// - `App`：app target，正常 LWW 同步。
+/// - `LiveProject`：本地 live project，远端无 delete tombstone 或本地更新 → 正常 upsert 同步。
+/// - `DeleteRemoteProject`：本地 pending delete，本地 tombstone 胜出 → 删远端对象 + 写 delete tombstone。
+/// - `DeleteLocalProject`：本地 live project，远端 delete tombstone 更新 → 不上传，本地 project 应删除。
+/// - `RestoreProject`：本地 pending delete，远端 upsert 更新 → 下载远端恢复本地 project。
+/// - `Retry`：无法决策（catalog/manifest 读取失败）→ 不删不恢复，pending 保留。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlannedTargetKind {
+    App,
+    LiveProject,
+    DeleteRemoteProject,
+    DeleteLocalProject,
+    RestoreProject,
+    Retry,
+}
+
+impl PlannedTargetKind {
+    /// 转为 `TargetSyncResult.target_kind` 的字符串标识（API 契约，不可随意更改）。
+    ///
+    /// - `App` → `"app"`
+    /// - `LiveProject` / `DeleteLocalProject` → `"project"`（都是 live project target）
+    /// - `DeleteRemoteProject` / `RestoreProject` / `Retry` → `"deleted_project"`（都是 pending delete target）
+    pub fn as_target_kind_str(&self) -> &'static str {
+        match self {
+            PlannedTargetKind::App => "app",
+            PlannedTargetKind::LiveProject | PlannedTargetKind::DeleteLocalProject => "project",
+            PlannedTargetKind::DeleteRemoteProject
+            | PlannedTargetKind::RestoreProject
+            | PlannedTargetKind::Retry => "deleted_project",
+        }
+    }
+
+    /// 是否为待删除 target（pending delete target）。
+    ///
+    /// `DeleteRemoteProject` / `RestoreProject` / `Retry` 为 true（都是 pending delete target）。
+    pub fn is_pending_deleted(&self) -> bool {
+        matches!(
+            self,
+            PlannedTargetKind::DeleteRemoteProject
+                | PlannedTargetKind::RestoreProject
+                | PlannedTargetKind::Retry
+        )
+    }
+}
+
+// ── #645 评论 5504296097 问题2：TargetLifecycleApplyResult ──
+
+/// provider-neutral 原子决策接口的返回值 — catalog CAS 写入后的决策结果。
+///
+/// #645 评论 5504296097 问题2：`apply_lifecycle_record` 在每次 CAS 冲突后重读最新
+/// snapshot → candidate 与最新 remote record 重新做 target-level LWW：
+///
+/// - `Applied(snapshot)` → candidate 仍赢，merge + IfMatch 写成功，返回持久化后的完整 snapshot；
+/// - `LostToRemote(snapshot)` → remote 已经赢，绝不能继续执行旧的 delete/upload 决策，
+///   返回远端最新 snapshot 供调用方改走 `RestoreProject / DeleteLocalProject`；
+/// - `Retry(err)` → 不删任何远端文件，pending 保留。
+#[derive(Debug)]
+pub enum TargetLifecycleApplyResult {
+    /// candidate 仍赢，CAS 写成功，携带持久化后的完整 snapshot。
+    Applied(RemoteTargetCatalogSnapshot),
+    /// remote 已经赢，CAS 不写，携带远端最新 snapshot 供调用方改走恢复/删除本地路径。
+    LostToRemote(RemoteTargetCatalogSnapshot),
+    /// 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
+    Retry(crate::Error),
+}
