@@ -1076,4 +1076,18 @@ open class AppServiceBridge(
         volumeId: String,
         orderedIds: List<String>,
     ) = recoveryChapterBridge.reorderChapters(projectId, volumeId, orderedIds)
+
+    /**
+     * #649 评论 5561465552 第 2 点：恢复专用 restoreProjectTree — 一次跨 FFI 传入完整作品树。
+     *
+     * 仅供 [com.xiwei.sujian.storage.recovery.ReadableMirrorRestorer] 在恢复过程中调用，
+     * 替代逐层 `recoveryCreateProject`/`recoveryCreateVolume`/`recoveryCreateChapter`，
+     * 保留 manifest 里的 project.id/volume.id/chapter.id（不再生成新 ID）。
+     *
+     * 不触发 [MirrorChangeSink]：恢复时镜像正在恢复中，不需要再反向发布一次。
+     */
+    fun restoreProjectTree(
+        input: uniffi.writer_core.RestoreProjectInputDto,
+    ): BridgeResult<com.xiwei.sujian.feature.project.data.model.Project> =
+        recoveryProjectBridge.restoreProjectTree(input)
 }

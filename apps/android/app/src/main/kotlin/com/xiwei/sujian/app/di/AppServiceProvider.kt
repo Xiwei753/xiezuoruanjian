@@ -7,11 +7,12 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
-import com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads
+import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import com.xiwei.sujian.storage.mirror.CoreMirrorSnapshotSource
 import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
 import com.xiwei.sujian.storage.mirror.ReadableMirrorPublisher
 import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
+import com.xiwei.sujian.storage.mirror.selectMirrorStorage
 import java.util.Locale
 import java.util.TimeZone
 
@@ -30,6 +31,9 @@ import java.util.TimeZone
  * #649 评论 5560971132 修复 1/6：在此组装镜像发布链：
  * `CoreMirrorSnapshotSource → ReadableMirrorPublisher → DefaultMirrorChangeSink → AppServiceBridge`。
  * Publisher 只依赖 SnapshotSource（只读），不持有 AppServiceBridge，切断循环依赖。
+ *
+ * #649 评论 5561465552 第 3 点：Publisher 改用 [com.xiwei.sujian.storage.mirror.ReadableMirrorStorage]
+ * 接口，由 [selectMirrorStorage] 根据 stateStore.backend 选择 MediaStore 或 SAF 后端。
  *
  * UI 层不应直接引用此类（架构分层规则 #597），应通过各 Repository/容器间接访问。
  */
@@ -68,9 +72,13 @@ object AppServiceProvider {
         // 组装镜像发布链（#649 修复 1/6）：
         // SnapshotSource 只读 Core 快照；Publisher 不持有 AppServiceBridge，切断循环。
         val snapshotSource = CoreMirrorSnapshotSource(holder)
-        val mediaStore = MediaStoreDownloads(appContext.contentResolver)
         val stateStore = ReadableMirrorStateStore(appContext)
-        val publisher = ReadableMirrorPublisher(snapshotSource, mediaStore, stateStore)
+        // #649 评论 5561465552 第 3 点：根据 stateStore.backend 选择存储后端。
+        // 旧 Publisher 直接 new MediaStoreDownloads；新实现通过 selectMirrorStorage
+        // 在 MediaStore 和 SAF DocumentTree 之间切换。
+        val documentTreeReader = DocumentTreeReader(appContext.contentResolver)
+        val storage = selectMirrorStorage(stateStore, appContext.contentResolver, documentTreeReader)
+        val publisher = ReadableMirrorPublisher(snapshotSource, storage, stateStore)
         val mirrorChangeSink = DefaultMirrorChangeSink(publisher)
         val bridge = AppServiceBridge(holder, mirrorChangeSink)
         AndroidNetworkMonitor.registerNetworkCallback(appContext) {

@@ -306,6 +306,11 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/app/SujianAppState.kt"
       # --- 测试：设置页 LazyColumn 结构契约测试，基线已有 23 个函数（#632 前已存在） ---
       - "**/kotlin/com/xiwei/sujian/feature/settings/ui/SettingsLazyColumnStructureTest.kt"
+      # --- #649 评论 5561465552：镜像发布/状态持久化函数由事务性发布流程决定 ---
+      # Publisher: 准备/写入/提交/清理四阶段 + journal 辅助 + manifest JSON 序列化
+      # StateStore: 条目 CRUD + backend/treeUri/pendingPublish 存取 + JSON 编解码
+      - "**/kotlin/com/xiwei/sujian/storage/mirror/ReadableMirrorPublisher.kt"
+      - "**/kotlin/com/xiwei/sujian/storage/mirror/ReadableMirrorStateStore.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3

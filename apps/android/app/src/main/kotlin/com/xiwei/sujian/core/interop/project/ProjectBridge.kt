@@ -144,4 +144,23 @@ class ProjectBridge internal constructor(
                 mirrorChangeSink?.projectStructureChanged(projectId)
             }
         }
+
+    /**
+     * #649 评论 5561465552 第 2 点：恢复作品树 — 一次跨 FFI 传入完整作品树。
+     *
+     * Core 负责校验 ID、校验目标不冲突、原子发布到 `projects/<projectId>`、
+     * 记录 workspace Git 变更。Android 端只负责把 manifest + 预读正文组装成
+     * [uniffi.writer_core.RestoreProjectInputDto] 后调一次 FFI。
+     *
+     * 不触发 [MirrorChangeSink]：恢复时镜像正在恢复中，不需要再反向发布一次。
+     * 恢复完成后由 [com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore] 持久化新 URI，
+     * 后续正常发布走生产 Bridge。
+     *
+     * @param input 由 Restorer 组装的完整作品树 DTO。
+     * @return 恢复后的 [Project]（含 Core 最终确认的 id/title/createdAt/updatedAt）。
+     */
+    fun restoreProjectTree(input: uniffi.writer_core.RestoreProjectInputDto): BridgeResult<Project> =
+        holder.wrapResult {
+            holder.service.restoreProjectTree(input).toModel()
+        }
 }

@@ -8,6 +8,7 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import com.xiwei.sujian.storage.mirror.ChapterKey
 import com.xiwei.sujian.storage.mirror.ChapterMirrorEntry
+import com.xiwei.sujian.storage.mirror.MirrorBackend
 import com.xiwei.sujian.storage.mirror.MirrorChapter
 import com.xiwei.sujian.storage.mirror.MirrorManifest
 import com.xiwei.sujian.storage.mirror.MirrorProject
@@ -17,6 +18,9 @@ import com.xiwei.sujian.storage.mirror.verifyContentHash
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
+import uniffi.writer_core.RestoreChapterInputDto
+import uniffi.writer_core.RestoreProjectInputDto
+import uniffi.writer_core.RestoreVolumeInputDto
 import java.io.IOException
 
 /**
@@ -38,10 +42,19 @@ sealed class RestoreResult {
  *
  * 处理新的 `Download/Sujian` 镜像恢复：
  * 1. 读取 `_meta/manifest.json`（用 [DocumentTreeReader.readText]，解析 JSON）。
- * 2. 按 manifest 的 ID、标题和顺序通过现有 Core API（[AppServiceBridge]）创建
- *    project / volume / chapter。
- * 3. 逐章读取 `.md` 并调用 Core 的 `saveChapterContent()`。
+ * 2. 预读所有章节正文到内存，预检查 hash。
+ * 3. 把 manifest + 预读正文组装成 [RestoreProjectInputDto]，对每个 project 调一次
+ *    [AppServiceBridge.restoreProjectTree]（#649 评论 5561465552 第 2 点）。
  * 4. 恢复完成后调用 [RecoveryChangeSink.everythingChanged]。
+ *
+ * #649 评论 5561465552 第 2 点：不再逐层调 `recoveryCreateProject`/`recoveryCreateVolume`/
+ * `recoveryCreateChapter`（丢弃 manifest 里的 ID，生成新 ID）。新实现一次跨 FFI 传入完整
+ * 作品树，Core 负责校验 ID、校验目标不冲突、原子发布到 `projects/<projectId>`。
+ *
+ * #649 评论 5561465552 第 3 点：恢复成功后保存 `backend=document_tree` 和 `treeUri` 到
+ * [ReadableMirrorStateStore]，后续 Publisher 通过 [com.xiwei.sujian.storage.mirror.selectMirrorStorage]
+ * 选择 [com.xiwei.sujian.storage.mirror.DocumentTreeMirrorStorage]，直接更新用户刚选中的那棵
+ * Download/Sujian，不再创建第二份。
  *
  * 不把 Download 目录直接复制进 `filesDir/sujian`（镜像格式是给人看的，不是 Core 磁盘格式）。
  * 不把 `content://` URI 传给 Rust——只把 SAF 文档读成内存文本再交给 Core API。
@@ -53,8 +66,10 @@ class ReadableMirrorRestorer {
     /**
      * #649 评论 5561286861 第 4 点：恢复专用写入接口（不带 MirrorChangeSink）。
      *
-     * 恢复时使用 AppServiceBridge 的 recovery* 方法，避免触发镜像发布。
+     * 恢复时使用 [AppServiceBridge.restoreProjectTree]（不触发镜像发布）。
      * 恢复完成后保存状态到 [ReadableMirrorStateStore]，供后续 Publisher 做集合差删除。
+     *
+     * #649 评论 5561465552 第 3 点：保存 `backend=document_tree` 和 `treeUri`。
      */
     suspend fun restore(
         context: Context,
@@ -79,49 +94,77 @@ class ReadableMirrorRestorer {
                     return@withContext RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}")
                 }
 
-            // 1.1 预检查：创建 Core 项目前，对所有章节做"存在 + 可读 + hash"预检。
+            // 1.1 预检查 + 预读所有章节正文到内存。
             // #649 评论 5560971132 修复 8：任一章节读取失败或 hash 不匹配立即返回 RestoreFailed，
-            // 不创建半成品 Core 项目。扩展现有 missingFiles 检查，同时预读验证 hash。
-            val precheckFailure = precheckAllChapters(manifest, mirrorTreeUri, documentTreeReader)
+            // 不创建半成品 Core 项目。
+            // #649 评论 5561465552 第 2 点：预读正文到内存，组装 DTO 时直接用，不再逐章调 Core。
+            val preloadedContents = mutableMapOf<String, String>() // key: "projectId/volumeId/chapterId"
+            val precheckFailure =
+                precheckAndPreloadAllChapters(
+                    manifest,
+                    mirrorTreeUri,
+                    documentTreeReader,
+                    preloadedContents,
+                )
             if (precheckFailure != null) {
                 return@withContext precheckFailure
             }
 
-            // 2-3. 按 manifest 重建 project / volume / chapter + 逐章读取内容
-            // #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink
+            // 2. 对每个 project 组装 RestoreProjectInputDto 并调一次 restoreProjectTree。
+            // #649 评论 5561465552 第 2 点：保留 manifest 里的 project.id/volume.id/chapter.id，
+            // 不再生成新 ID。
             val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
             try {
                 for (project in manifest.projects) {
-                    val projectEntries = restoreProject(project, mirrorTreeUri, documentTreeReader, appServiceBridge)
+                    val dto = buildRestoreProjectInputDto(project, preloadedContents)
+                    val result = appServiceBridge.restoreProjectTree(dto).unwrapOrThrow()
+                    // restore_project_tree 保留 manifest ID，所以这里用 manifest 的 ID 组装条目
+                    val projectEntries = buildChapterEntries(project, mirrorTreeUri, documentTreeReader)
                     allChapterEntries.putAll(projectEntries)
                 }
             } catch (e: Exception) {
                 return@withContext RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
             }
 
-            // 4. 保存恢复后的状态到 ReadableMirrorStateStore
+            // 3. 保存恢复后的状态到 ReadableMirrorStateStore。
+            // #649 评论 5561465552 第 3 点：backend=document_tree，treeUri=mirrorTreeUri。
             val manifestUriString = manifestUri.toString()
-            stateStore.saveRestoredState(manifestUriString, allChapterEntries)
+            stateStore.saveRestoredState(
+                manifestUri = manifestUriString,
+                chapterEntries = allChapterEntries,
+                backend = MirrorBackend.DOCUMENT_TREE,
+                treeUri = mirrorTreeUri.toString(),
+            )
 
-            // 5. 通知所有组件刷新
+            // 4. 通知所有组件刷新
             changeSink.everythingChanged()
             RestoreResult.Success
         }
 
     /**
-     * 预检查所有章节：存在 + 可读 + hash 匹配。
+     * 预检查所有章节 + 预读正文到 [preloadedContents]。
      *
      * 返回 null 表示全部通过；否则返回 [RestoreResult.RestoreFailed]。
      * 在创建任何 Core 项目之前调用，避免半成品。
+     *
+     * @param preloadedContents 输出参数：预读的正文，key 为 `projectId/volumeId/chapterId`。
      */
-    private fun precheckAllChapters(
+    private fun precheckAndPreloadAllChapters(
         manifest: MirrorManifest,
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
+        preloadedContents: MutableMap<String, String>,
     ): RestoreResult? {
         for (project in manifest.projects) {
             for (volume in project.volumes) {
-                val failure = precheckVolumeChapters(volume, mirrorTreeUri, reader)
+                val failure =
+                    precheckAndPreloadVolumeChapters(
+                        project.id,
+                        volume,
+                        mirrorTreeUri,
+                        reader,
+                        preloadedContents,
+                    )
                 if (failure != null) return failure
             }
         }
@@ -129,12 +172,14 @@ class ReadableMirrorRestorer {
     }
 
     /**
-     * 预检查单卷所有章节。提取自 precheckAllChapters 以控制嵌套深度与认知复杂度。
+     * 预检查 + 预读单卷所有章节。提取自 precheckAndPreloadAllChapters 以控制嵌套深度。
      */
-    private fun precheckVolumeChapters(
+    private fun precheckAndPreloadVolumeChapters(
+        projectId: String,
         volume: MirrorVolume,
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
+        preloadedContents: MutableMap<String, String>,
     ): RestoreResult? {
         for (chapter in volume.chapters) {
             if (chapter.contentFile.isEmpty()) {
@@ -161,8 +206,78 @@ class ReadableMirrorRestorer {
                     "Content hash mismatch for ${chapter.contentFile}",
                 )
             }
+            // 预读到内存，组装 DTO 时直接用
+            preloadedContents["$projectId/${volume.id}/${chapter.id}"] = content
         }
         return null
+    }
+
+    /**
+     * 把 manifest 的 [MirrorProject] + 预读正文组装成 [RestoreProjectInputDto]。
+     *
+     * #649 评论 5561465552 第 2 点：manifest 里的 id → DTO 的 id，order 直接传，
+     * content 用预读的正文。
+     */
+    private fun buildRestoreProjectInputDto(
+        project: MirrorProject,
+        preloadedContents: Map<String, String>,
+    ): RestoreProjectInputDto {
+        val volumeDtos =
+            project.volumes.sortedBy { it.order }.map { volume ->
+                val chapterDtos =
+                    volume.chapters.sortedBy { it.order }.map { chapter ->
+                        val contentKey = "${project.id}/${volume.id}/${chapter.id}"
+                        val content = preloadedContents[contentKey] ?: ""
+                        RestoreChapterInputDto(
+                            chapterId = chapter.id,
+                            title = chapter.title,
+                            order = chapter.order,
+                            content = content,
+                        )
+                    }
+                RestoreVolumeInputDto(
+                    volumeId = volume.id,
+                    title = volume.title,
+                    order = volume.order,
+                    chapters = chapterDtos,
+                )
+            }
+        return RestoreProjectInputDto(
+            projectId = project.id,
+            title = project.title,
+            order = project.order,
+            volumes = volumeDtos,
+        )
+    }
+
+    /**
+     * 为已恢复的 [MirrorProject] 构建章节条目映射（用于保存到 stateStore）。
+     *
+     * #649 评论 5561465552 第 2 点：restore_project_tree 保留 manifest ID，
+     * 所以这里用 manifest 的 project.id/volume.id/chapter.id 组装 ChapterKey
+     * （不再用新生成的 ID）。
+     */
+    private fun buildChapterEntries(
+        project: MirrorProject,
+        mirrorTreeUri: Uri,
+        reader: DocumentTreeReader,
+    ): Map<ChapterKey, ChapterMirrorEntry> {
+        val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+        for (volume in project.volumes) {
+            for (chapter in volume.chapters) {
+                val contentUri = findDescendant(mirrorTreeUri, chapter.contentFile, reader)
+                if (contentUri != null) {
+                    entries[ChapterKey(project.id, volume.id, chapter.id)] =
+                        ChapterMirrorEntry(
+                            uri = contentUri.toString(),
+                            relativePath = chapter.contentFile,
+                            revision = chapter.revision,
+                            contentHash = chapter.contentHash,
+                        )
+                }
+            }
+        }
+        return entries
     }
 
     /** 验证根 URI 仍可查询；返回 null 表示通过，否则返回失败结果。 */
@@ -192,108 +307,6 @@ class ReadableMirrorRestorer {
                 null
             }
         }
-    }
-
-    /**
-     * 恢复单个项目，返回该项目所有章节的条目映射。
-     *
-     * #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink。
-     */
-    private fun restoreProject(
-        project: MirrorProject,
-        mirrorTreeUri: Uri,
-        reader: DocumentTreeReader,
-        bridge: AppServiceBridge,
-    ): Map<ChapterKey, ChapterMirrorEntry> {
-        val newProject = bridge.recoveryCreateProject(project.title).unwrapOrThrow()
-        val sortedVolumes = project.volumes.sortedBy { it.order }
-        val newVolumeIds = mutableListOf<String>()
-        val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-        for (volume in sortedVolumes) {
-            val newVolume = bridge.recoveryCreateVolume(newProject.id, volume.title).unwrapOrThrow()
-            newVolumeIds.add(newVolume.id)
-            val volumeEntries = restoreVolumeChapters(newProject.id, newVolume.id, volume, mirrorTreeUri, reader, bridge)
-            allChapterEntries.putAll(volumeEntries)
-        }
-        if (newVolumeIds.size > 1) {
-            bridge.recoveryReorderVolumes(newProject.id, newVolumeIds).unwrapOrThrow()
-        }
-        return allChapterEntries
-    }
-
-    /**
-     * 恢复单个卷的所有章节，返回该卷所有章节的条目映射。
-     *
-     * #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink。
-     */
-    private fun restoreVolumeChapters(
-        projectId: String,
-        volumeId: String,
-        volume: MirrorVolume,
-        mirrorTreeUri: Uri,
-        reader: DocumentTreeReader,
-        bridge: AppServiceBridge,
-    ): Map<ChapterKey, ChapterMirrorEntry> {
-        val sortedChapters = volume.chapters.sortedBy { it.order }
-        val newChapterIds = mutableListOf<String>()
-        val chapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-        for (chapter in sortedChapters) {
-            val newChapter = bridge.recoveryCreateChapter(projectId, volumeId, chapter.title).unwrapOrThrow()
-            newChapterIds.add(newChapter.id)
-            // #649 修复 8：失败直接 throw IOException，不返回 null。
-            // 预检查已保证可读 + hash 匹配，此处再读一次做双重保险。
-            val content = readVerifiedChapterContent(chapter, mirrorTreeUri, reader)
-            bridge.recoverySaveChapterContent(projectId, volumeId, newChapter.id, content).unwrapOrThrow()
-            // 记录章节条目（用于保存到 stateStore）
-            val contentUri = findDescendant(mirrorTreeUri, chapter.contentFile, reader)
-            if (contentUri != null) {
-                chapterEntries[ChapterKey(projectId, volumeId, newChapter.id)] = ChapterMirrorEntry(
-                    uri = contentUri.toString(),
-                    relativePath = chapter.contentFile,
-                    revision = chapter.revision,
-                    contentHash = chapter.contentHash,
-                )
-            }
-        }
-        if (newChapterIds.size > 1) {
-            bridge.recoveryReorderChapters(projectId, volumeId, newChapterIds).unwrapOrThrow()
-        }
-        return chapterEntries
-    }
-
-    /**
-     * 读取并验证章节内容；失败 throw [IOException]。
-     *
-     * #649 评论 5560971132 修复 8：旧 [readChapterContent] 返回 null 时调用方静默跳过，
-     * 导致恢复出空章节。新实现失败直接 throw，让外层 try-catch 转成 RestoreFailed。
-     *
-     * - contentFile 为空 → throw（manifest 声明了该文件存在）。
-     * - 文件不存在 → throw。
-     * - 读取失败 → throw。
-     * - hash 不匹配 → throw。
-     * - 空正文返回空字符串（正常恢复）。
-     */
-    private fun readVerifiedChapterContent(
-        chapter: MirrorChapter,
-        mirrorTreeUri: Uri,
-        reader: DocumentTreeReader,
-    ): String {
-        if (chapter.contentFile.isEmpty()) {
-            throw IOException("Chapter ${chapter.id} has empty contentFile")
-        }
-        val contentUri =
-            findDescendant(mirrorTreeUri, chapter.contentFile, reader)
-                ?: throw IOException("Content file not found: ${chapter.contentFile}")
-        val content =
-            try {
-                reader.readText(contentUri)
-            } catch (e: Exception) {
-                throw IOException("Failed to read ${chapter.contentFile}: ${e.message}", e)
-            }
-        if (chapter.contentHash.isNotEmpty() && !verifyContentHash(content, chapter.contentHash)) {
-            throw IOException("Content hash mismatch for ${chapter.contentFile}")
-        }
-        return content
     }
 
     /**

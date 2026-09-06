@@ -96,6 +96,29 @@ dictionary ChapterSaveReceiptDto {
     u32 word_count;
 };
 
+// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 一次跨 FFI 传入完整作品树，
+// Core 负责校验 ID、校验目标不冲突、原子发布到 projects/<projectId>。
+dictionary RestoreChapterInputDto {
+    string chapter_id;
+    string title;
+    i32 order;
+    string content;
+};
+
+dictionary RestoreVolumeInputDto {
+    string volume_id;
+    string title;
+    i32 order;
+    sequence<RestoreChapterInputDto> chapters;
+};
+
+dictionary RestoreProjectInputDto {
+    string project_id;
+    string title;
+    i32 order;
+    sequence<RestoreVolumeInputDto> volumes;
+};
+
 dictionary RecentEditDto {
     string project_id;
     string volume_id;
@@ -1104,6 +1127,11 @@ interface WriterAppService {
 
     [Throws=WriterError]
     ChapterMetaDto create_chapter_in_project(string project_id, string title);
+
+    // #649 评论 5561465552 第 2 点：恢复作品树 — 一次跨 FFI 传入完整作品树，
+    // Core 负责校验 ID、校验目标不冲突、原子发布到 projects/<projectId>、记录 workspace Git 变更。
+    [Throws=WriterError]
+    ProjectDto restore_project_tree(RestoreProjectInputDto input);
 
     [Throws=WriterError]
     boolean rename_chapter(string project_id, string volume_id, string chapter_id, string new_title);

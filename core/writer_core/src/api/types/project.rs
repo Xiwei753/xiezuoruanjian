@@ -84,3 +84,42 @@ pub struct ProjectWorkspaceSnapshotDto {
     pub stats: ProjectStatsDto,
     pub volumes: Vec<VolumeWithChaptersDto>,
 }
+
+/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 单个章节的恢复输入。
+///
+/// 携带 manifest 中的稳定 `chapter_id`、标题、order 和正文内容。
+/// Core 负责校验 ID 格式、唯一性，并按指定 ID 重建章节、写入正文。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreChapterInputDto {
+    pub chapter_id: String,
+    pub title: String,
+    pub order: i32,
+    pub content: String,
+}
+
+/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 单个卷的恢复输入。
+///
+/// 携带 manifest 中的稳定 `volume_id`、标题、order 和该卷下所有章节的恢复输入。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreVolumeInputDto {
+    pub volume_id: String,
+    pub title: String,
+    pub order: i32,
+    pub chapters: Vec<RestoreChapterInputDto>,
+}
+
+/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 完整作品树的恢复输入。
+///
+/// 一次跨 FFI 传入完整作品树（作品 + 卷 + 章节 + 正文），Core 负责校验 ID、
+/// 校验目标不冲突、原子发布到 `projects/<projectId>`、记录 workspace Git 变更。
+/// 任一步失败时回滚已创建的项目，保证不留半成品。
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreProjectInputDto {
+    pub project_id: String,
+    pub title: String,
+    pub order: i32,
+    pub volumes: Vec<RestoreVolumeInputDto>,
+}

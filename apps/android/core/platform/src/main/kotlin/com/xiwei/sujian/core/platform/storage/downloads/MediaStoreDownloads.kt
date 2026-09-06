@@ -102,6 +102,16 @@ class MediaStoreDownloads(
      *
      * 流程：`IS_PENDING=1 → 写 → IS_PENDING=0`，避免其他应用看到半写文件。
      * 返回 false 表示置 pending、打开输出流、写入或清 pending 失败。
+     *
+     * #649 评论 5561465552 第 3 点：检查 `set pending` 的返回值。
+     *
+     * 旧实现只 `try { contentResolver.update(uri, setPending, null, null) } catch (...) { return false }`，
+     * 不检查返回值。对 SAF DocumentsProvider URI（非 MediaStore URI）调用 update 不抛异常
+     * 但返回 0（不是 1），旧实现继续走 `openOutputStream`，因 SAF 有写权限反而成功，
+     * 把旧备份正文改了——SAF URI 不应走 MediaStore 的 IS_PENDING 流程。
+     *
+     * 新实现：update 返回值 != 1 时立即 return false，让上层（[com.xiwei.sujian.storage.mirror.MediaStoreMirrorStorage]）
+     * 回退到 createText 或改走 [com.xiwei.sujian.storage.mirror.DocumentTreeMirrorStorage]。
      */
     fun replaceText(uri: Uri, text: String): Boolean {
         if (!isSupported()) return false
@@ -109,9 +119,16 @@ class MediaStoreDownloads(
         val setPending = ContentValues().apply {
             put(MediaStore.Downloads.IS_PENDING, 1)
         }
-        try {
-            contentResolver.update(uri, setPending, null, null)
-        } catch (e: Exception) {
+        val pendingUpdated =
+            try {
+                contentResolver.update(uri, setPending, null, null)
+            } catch (e: Exception) {
+                return false
+            }
+        // #649 评论 5561465552 第 3 点：update 返回 0 表示 URI 不受 MediaStore 管辖
+        // （典型是 SAF document URI）。立即返回 false，不继续 openOutputStream，
+        // 避免误改旧文件。
+        if (pendingUpdated != 1) {
             return false
         }
         // 2. 写内容

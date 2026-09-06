@@ -1,4 +1,7 @@
-use crate::api::{ProjectDto, ProjectStatsDto, ProjectSummaryDto, RecentEditDto, WriterError};
+use crate::api::{
+    ProjectDto, ProjectStatsDto, ProjectSummaryDto, RecentEditDto, RestoreProjectInputDto,
+    WriterError,
+};
 
 impl super::WriterAppService {
     pub fn list_projects(&self) -> Result<Vec<ProjectDto>, WriterError> {
@@ -40,6 +43,16 @@ impl super::WriterAppService {
         order: i32,
     ) -> Result<ProjectDto, WriterError> {
         self.api.create_project_with_id(&id, &title, order)
+    }
+
+    /// #649 评论 5561465552 第 2 点：恢复作品树——一次跨 FFI 传入完整作品树。
+    ///
+    /// Core 负责校验 ID、校验目标不冲突、原子发布、记录 workspace Git 变更。
+    pub fn restore_project_tree(
+        &self,
+        input: RestoreProjectInputDto,
+    ) -> Result<ProjectDto, WriterError> {
+        self.api.restore_project_tree(&input)
     }
 
     pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
