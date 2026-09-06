@@ -43,6 +43,22 @@ data class StagedMirrorRef(
 )
 
 /**
+ * promote() 的结果，记录新引用与被替换的旧引用。
+ *
+ * #649 评论 5562462046 问题 1：promote() 必须是真正的 swap——
+ * 先在最终位置创建新文件，成功后才删旧文件，避免 create 失败时旧正文已丢。
+ *
+ * @property newRef 新创建/移动后的文件引用。
+ * @property displacedOldRef 被替换掉的旧引用（promote 前 `old` 参数原样回传）；
+ *   调用方据此在 journal/stateStore 提交后再决定何时删旧。
+ *   `null` 表示本次是新建（无旧文件被替换）。
+ */
+data class PromoteResult(
+    val newRef: MirrorFileRef,
+    val displacedOldRef: MirrorFileRef?,
+)
+
+/**
  * 统一镜像存储接口，隔离 MediaStore 与 SAF DocumentsProvider 两套 URI 体系。
  *
  * #649 评论 5561465552 第 3 点。
@@ -125,18 +141,26 @@ interface ReadableMirrorStorage {
     ): StagedMirrorRef?
 
     /**
-     * 提升暂存文件到最终位置。
+     * 提升暂存文件到最终位置（真正的 swap，不先删旧）。
+     *
+     * #649 评论 5562462046 问题 1：旧实现先 delete(old) → create 新文件，
+     * create 失败时旧正文已丢、无法回滚。新实现要求：
+     * 1. 不先删 old；
+     * 2. 在最终位置创建/移动新文件；
+     * 3. create 成功后才删 old（如果有），再删 staging；
+     * 4. create 失败时不删 old，返回 null（调用方可 rollback staging）。
      *
      * @param staged 暂存引用
-     * @param old 旧引用（promote 成功后删除；可为 null，表示新建）
+     * @param old 旧引用（可为 null，表示新建）
      * @param finalRelativePath 最终目标路径（通常等于 staged.finalRelativePath）
-     * @return 新文件的引用；失败返回 null
+     * @return [PromoteResult]（含新引用与被替换的旧引用）；任何不可逆步骤失败返回 null，
+     *   且不删除 old（调用方可调 [rollback] 清理 staging）
      */
     fun promote(
         staged: StagedMirrorRef,
         old: MirrorFileRef?,
         finalRelativePath: String,
-    ): MirrorFileRef?
+    ): PromoteResult?
 
     /**
      * 回滚事务：删除该 txId 对应的所有暂存文件。

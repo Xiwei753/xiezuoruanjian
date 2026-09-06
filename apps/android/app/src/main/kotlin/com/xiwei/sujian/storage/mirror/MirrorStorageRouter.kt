@@ -59,4 +59,30 @@ class MirrorStorageRouter(
             MirrorBackend.MEDIA_STORE -> mediaStoreStorage
         }
     }
+
+    /**
+     * 按指定的 [backend] / [treeUri] 构造 [ReadableMirrorStorage]，不从 stateStore 读。
+     *
+     * #649 评论 5562462046 问题 3：恢复 pending publish 时必须用 journal 记录的
+     * backend/treeUri 构造当时那套 storage，不能用 [current] 猜当前 stateStore
+     * （stateStore 可能已被后续操作改写，或 journal 的事务后端与当前不同）。
+     *
+     * [MirrorBackend.DOCUMENT_TREE] 但 [treeUri] 为 null 时回退到 [mediaStoreStorage]
+     * （与 [current] 行为一致）。
+     */
+    fun forBackend(
+        backend: MirrorBackend,
+        treeUri: String?,
+    ): ReadableMirrorStorage {
+        return when (backend) {
+            MirrorBackend.DOCUMENT_TREE -> {
+                if (treeUri != null) {
+                    documentTreeFactory(Uri.parse(treeUri))
+                } else {
+                    mediaStoreStorage
+                }
+            }
+            MirrorBackend.MEDIA_STORE -> mediaStoreStorage
+        }
+    }
 }

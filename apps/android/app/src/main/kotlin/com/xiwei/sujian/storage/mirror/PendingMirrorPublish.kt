@@ -4,6 +4,51 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
+ * 镜像事务类型。
+ *
+ * #649 评论 5562462046 问题 4：deleteProject() 的 pending 恢复逻辑错误。
+ * cleanup 阶段恢复时需要区分本次事务是 UPSERT 还是 DELETE，才能按正确顺序
+ * 提交 manifest / 删旧正文。
+ */
+enum class MirrorTransactionType {
+    UPSERT_PROJECT,
+    DELETE_PROJECT,
+}
+
+/**
+ * 单个章节在事务中的逐项进度。
+ *
+ * #649 评论 5562462046 问题 3：journal 没有逐项记录 promote 进度，
+ * 进程死在第 N 章时恢复不了。每个章节独立记录已推进到哪一步，
+ * 恢复时只继续未完成的 item。
+ *
+ * @property key 章节定位。
+ * @property stagedRef 已 stage 的暂存引用（STAGED 及之后非空）。
+ * @property oldRef 旧引用（可为 null，表示新建）。
+ * @property backupOldRef 旧正文备份引用（OLD_BACKED_UP 及之后非空，用于回滚）。
+ *   当前实现中 promote 走真正 swap（不先删 old），backupOldRef 主要用于
+ *   journal 记录"old 已被替换"这一事实，恢复时据此跳过重复 promote。
+ * @property promotedRef promote 后的新引用（PROMOTED 及之后非空）。
+ * @property state 推进状态：[STATE_STAGED] / [STATE_OLD_BACKED_UP] /
+ *   [STATE_PROMOTED] / [STATE_COMMITTED]。
+ */
+data class PendingItem(
+    val key: ChapterKey,
+    val stagedRef: StagedMirrorRef?,
+    val oldRef: MirrorFileRef?,
+    val backupOldRef: MirrorFileRef?,
+    val promotedRef: MirrorFileRef?,
+    val state: String,
+) {
+    companion object {
+        const val STATE_STAGED = "STAGED"
+        const val STATE_OLD_BACKED_UP = "OLD_BACKED_UP"
+        const val STATE_PROMOTED = "PROMOTED"
+        const val STATE_COMMITTED = "COMMITTED"
+    }
+}
+
+/**
  * PendingMirrorPublish — pendingPublish journal 的完整数据模型。
  *
  * #649 评论 5561974464 问题 3：pendingPublish 没有恢复逻辑，内容不足以恢复事务。
@@ -16,14 +61,18 @@ import org.json.JSONObject
  * - [txId]：事务 ID，用于 [ReadableMirrorStorage.rollback]。
  * - [backend] / [treeUri]：事务开始时的后端（恢复时用同一后端）。
  * - [projectId]：本次事务的目标项目。
+ * - [transactionType]：UPSERT 还是 DELETE（#649 评论 5562462046 问题 4）。
  * - [phase]：`stage` | `promote` | `cleanup`。
  * - [oldEntries]：本次变更前的旧条目（按 [ChapterKey] 索引）。
  * - [newEntries]：desired entries（promote 后填 URI）。
- * - [stagedRefs]：已 stage 的章节 staging 引用。
+ * - [stagedRefs]：已 stage 的章节 staging 引用（向后兼容，与 [items] 中的 stagedRef 同步）。
+ * - [items]：逐项进度（#649 评论 5562462046 问题 3），按 [ChapterKey] 索引。
  * - [removedProjectIds]：要从 manifest 移除的项目（deleteProject 时非空）。
  * - [manifestOldRef]：旧 manifest 引用。
  * - [manifestStagedRef]：manifest staging 引用。
  * - [manifestNewRef]：promote 后的新 manifest 引用（phase=cleanup 时非空）。
+ * - [manifestBackupRef]：manifest 事务中旧 manifest 的备份引用（#649 评论 5562462046 问题 2），
+ *   新 manifest 提交成功后才删。
  *
  * ## 恢复策略（[ReadableMirrorPublisher.recoverPendingPublishIfNeeded]）
  * - `stage`：staging 未完成，旧镜像完整 → rollback(txId) + clearPendingPublish。
@@ -38,14 +87,17 @@ data class PendingMirrorPublish(
     val backend: MirrorBackend,
     val treeUri: String?,
     val projectId: String,
+    val transactionType: MirrorTransactionType,
     val phase: String,
     val oldEntries: Map<ChapterKey, ChapterMirrorEntry>,
     val newEntries: Map<ChapterKey, ChapterMirrorEntry>,
     val stagedRefs: Map<ChapterKey, StagedMirrorRef>,
+    val items: Map<ChapterKey, PendingItem>,
     val removedProjectIds: Set<String>,
     val manifestOldRef: MirrorFileRef?,
     val manifestStagedRef: StagedMirrorRef?,
     val manifestNewRef: MirrorFileRef?,
+    val manifestBackupRef: MirrorFileRef?,
 ) {
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
@@ -54,14 +106,17 @@ data class PendingMirrorPublish(
         root.put(KEY_BACKEND, backend.toJsonValue())
         if (treeUri != null) root.put(KEY_TREE_URI, treeUri)
         root.put(KEY_PROJECT_ID, projectId)
+        root.put(KEY_TRANSACTION_TYPE, transactionType.toJsonValue())
         root.put(KEY_PHASE, phase)
         root.put(KEY_OLD_ENTRIES, encodeEntries(oldEntries))
         root.put(KEY_NEW_ENTRIES, encodeEntries(newEntries))
         root.put(KEY_STAGED_REFS, encodeStagedRefs(stagedRefs))
+        root.put(KEY_ITEMS, encodeItems(items))
         root.put(KEY_REMOVED_PROJECT_IDS, JSONArray(removedProjectIds.toList()))
         if (manifestOldRef != null) root.put(KEY_MANIFEST_OLD_REF, encodeFileRef(manifestOldRef))
         if (manifestStagedRef != null) root.put(KEY_MANIFEST_STAGED_REF, encodeStagedRef(manifestStagedRef))
         if (manifestNewRef != null) root.put(KEY_MANIFEST_NEW_REF, encodeFileRef(manifestNewRef))
+        if (manifestBackupRef != null) root.put(KEY_MANIFEST_BACKUP_REF, encodeFileRef(manifestBackupRef))
         return root.toString()
     }
 
@@ -74,14 +129,17 @@ data class PendingMirrorPublish(
         private const val KEY_BACKEND = "backend"
         private const val KEY_TREE_URI = "treeUri"
         private const val KEY_PROJECT_ID = "projectId"
+        private const val KEY_TRANSACTION_TYPE = "transactionType"
         private const val KEY_PHASE = "phase"
         private const val KEY_OLD_ENTRIES = "oldEntries"
         private const val KEY_NEW_ENTRIES = "newEntries"
         private const val KEY_STAGED_REFS = "stagedRefs"
+        private const val KEY_ITEMS = "items"
         private const val KEY_REMOVED_PROJECT_IDS = "removedProjectIds"
         private const val KEY_MANIFEST_OLD_REF = "manifestOldRef"
         private const val KEY_MANIFEST_STAGED_REF = "manifestStagedRef"
         private const val KEY_MANIFEST_NEW_REF = "manifestNewRef"
+        private const val KEY_MANIFEST_BACKUP_REF = "manifestBackupRef"
         private const val KEY_URI = "uri"
         private const val KEY_RELATIVE_PATH = "relativePath"
         private const val KEY_REVISION = "revision"
@@ -90,6 +148,10 @@ data class PendingMirrorPublish(
         private const val KEY_STAGING_RELATIVE_PATH = "stagingRelativePath"
         private const val KEY_FINAL_RELATIVE_PATH = "finalRelativePath"
         private const val KEY_MIME_TYPE = "mimeType"
+        private const val KEY_OLD_REF = "oldRef"
+        private const val KEY_BACKUP_OLD_REF = "backupOldRef"
+        private const val KEY_PROMOTED_REF = "promotedRef"
+        private const val KEY_STATE = "state"
 
         /** 从 [ReadableMirrorStateStore.readPendingPublish] 的 JSON 字符串反序列化。 */
         fun fromJson(json: String): PendingMirrorPublish? {
@@ -98,27 +160,34 @@ data class PendingMirrorPublish(
                 val backend = mirrorBackendFromJsonValue(root.optString(KEY_BACKEND))
                 val treeUri = root.optString(KEY_TREE_URI).takeIf { it.isNotEmpty() }
                 val projectId = root.getString(KEY_PROJECT_ID)
+                val transactionType =
+                    mirrorTransactionTypeFromJsonValue(root.optString(KEY_TRANSACTION_TYPE))
                 val phase = root.getString(KEY_PHASE)
                 val oldEntries = decodeEntries(root.optJSONObject(KEY_OLD_ENTRIES))
                 val newEntries = decodeEntries(root.optJSONObject(KEY_NEW_ENTRIES))
                 val stagedRefs = decodeStagedRefs(root.optJSONObject(KEY_STAGED_REFS))
+                val items = decodeItems(root.optJSONObject(KEY_ITEMS))
                 val removedProjectIds = decodeStringSet(root.optJSONArray(KEY_REMOVED_PROJECT_IDS))
                 val manifestOldRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_OLD_REF))
                 val manifestStagedRef = decodeStagedRef(root.optJSONObject(KEY_MANIFEST_STAGED_REF))
                 val manifestNewRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_NEW_REF))
+                val manifestBackupRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_BACKUP_REF))
                 PendingMirrorPublish(
                     txId = root.getString(KEY_TX_ID),
                     backend = backend,
                     treeUri = treeUri,
                     projectId = projectId,
+                    transactionType = transactionType,
                     phase = phase,
                     oldEntries = oldEntries,
                     newEntries = newEntries,
                     stagedRefs = stagedRefs,
+                    items = items,
                     removedProjectIds = removedProjectIds,
                     manifestOldRef = manifestOldRef,
                     manifestStagedRef = manifestStagedRef,
                     manifestNewRef = manifestNewRef,
+                    manifestBackupRef = manifestBackupRef,
                 )
             } catch (_: Exception) {
                 null
@@ -226,6 +295,54 @@ data class PendingMirrorPublish(
             }
             return result
         }
+
+        private fun encodeItems(items: Map<ChapterKey, PendingItem>): JSONObject {
+            val obj = JSONObject()
+            for ((key, item) in items) {
+                val keyStr = "${key.projectId}/${key.volumeId}/${key.chapterId}"
+                obj.put(keyStr, encodeItem(item))
+            }
+            return obj
+        }
+
+        private fun encodeItem(item: PendingItem): JSONObject =
+            JSONObject().apply {
+                put(KEY_STATE, item.state)
+                if (item.stagedRef != null) put(KEY_STAGED_REFS, encodeStagedRef(item.stagedRef))
+                if (item.oldRef != null) put(KEY_OLD_REF, encodeFileRef(item.oldRef))
+                if (item.backupOldRef != null) put(KEY_BACKUP_OLD_REF, encodeFileRef(item.backupOldRef))
+                if (item.promotedRef != null) put(KEY_PROMOTED_REF, encodeFileRef(item.promotedRef))
+            }
+
+        private fun decodeItems(obj: JSONObject?): Map<ChapterKey, PendingItem> {
+            if (obj == null) return emptyMap()
+            val result = mutableMapOf<ChapterKey, PendingItem>()
+            val keys = obj.keys()
+            while (keys.hasNext()) {
+                val keyStr = keys.next()
+                val parts = keyStr.split("/", limit = 3)
+                if (parts.size != 3) continue
+                val itemObj = obj.optJSONObject(keyStr) ?: continue
+                val key = ChapterKey(parts[0], parts[1], parts[2])
+                val item = decodeItem(key, itemObj) ?: continue
+                result[key] = item
+            }
+            return result
+        }
+
+        private fun decodeItem(
+            key: ChapterKey,
+            obj: JSONObject,
+        ): PendingItem? {
+            return PendingItem(
+                key = key,
+                stagedRef = decodeStagedRef(obj.optJSONObject(KEY_STAGED_REFS)),
+                oldRef = decodeFileRef(obj.optJSONObject(KEY_OLD_REF)),
+                backupOldRef = decodeFileRef(obj.optJSONObject(KEY_BACKUP_OLD_REF)),
+                promotedRef = decodeFileRef(obj.optJSONObject(KEY_PROMOTED_REF)),
+                state = obj.optString(KEY_STATE).ifEmpty { PendingItem.STATE_STAGED },
+            )
+        }
     }
 }
 
@@ -240,4 +357,17 @@ private fun mirrorBackendFromJsonValue(value: String): MirrorBackend =
     when (value) {
         "document_tree" -> MirrorBackend.DOCUMENT_TREE
         else -> MirrorBackend.MEDIA_STORE
+    }
+
+/** [MirrorTransactionType] 与 journal 字符串互转。 */
+private fun MirrorTransactionType.toJsonValue(): String =
+    when (this) {
+        MirrorTransactionType.UPSERT_PROJECT -> "upsert_project"
+        MirrorTransactionType.DELETE_PROJECT -> "delete_project"
+    }
+
+private fun mirrorTransactionTypeFromJsonValue(value: String): MirrorTransactionType =
+    when (value) {
+        "delete_project" -> MirrorTransactionType.DELETE_PROJECT
+        else -> MirrorTransactionType.UPSERT_PROJECT
     }

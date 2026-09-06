@@ -59,7 +59,9 @@ class MediaStoreMirrorStorage(
     ): StagedMirrorRef? {
         // MediaStore 暂存：用 txId 作为临时目录，避免覆盖 committed ref
         val stagingDir = "$STAGING_DIR/$txId"
-        val relativeDir = stagingDir + relativePath.substringBeforeLast('/', "")
+        // #649 评论 5562462046 问题 6：路径拼接修复，避免少一个 `/`
+        val parent = relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) stagingDir else "$stagingDir/$parent"
         val displayName = relativePath.substringAfterLast('/')
         val uri = mediaStore.createText(relativeDir, displayName, mimeType, text) ?: return null
         return StagedMirrorRef(
@@ -75,25 +77,29 @@ class MediaStoreMirrorStorage(
         staged: StagedMirrorRef,
         old: MirrorFileRef?,
         finalRelativePath: String,
-    ): MirrorFileRef? {
-        // 1. 先删旧文件（如果有）
+    ): PromoteResult? {
+        // #649 评论 5562462046 问题 1：真正的 swap，不先删 old。
+        // 1. 读取暂存内容
+        val stagingUri = tryParseUri(staged.stagingUri) ?: return null
+        val content = mediaStore.readText(stagingUri) ?: return null
+        // 2. 在最终位置创建新文件（old 不动）
+        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
+        val displayName = finalRelativePath.substringAfterLast('/')
+        val newUri = mediaStore.createText(relativeDir, displayName, staged.mimeType, content)
+            ?: return null
+        // 3. create 成功后才删 old（如果有）
         if (old != null) {
             val oldUri = tryParseUri(old.uri)
             if (oldUri != null) {
                 mediaStore.delete(oldUri)
             }
         }
-        // 2. 把暂存文件移动到最终位置（MediaStore 用 rename 或 createText + delete）
-        val stagingUri = tryParseUri(staged.stagingUri) ?: return null
-        // 读取暂存内容
-        val content = mediaStore.readText(stagingUri) ?: return null
-        // 在最终位置创建
-        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
-        val displayName = finalRelativePath.substringAfterLast('/')
-        val newUri = mediaStore.createText(relativeDir, displayName, staged.mimeType, content) ?: return null
-        // 3. 删除暂存文件
+        // 4. 删 staging
         mediaStore.delete(stagingUri)
-        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
+        return PromoteResult(
+            newRef = MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath),
+            displacedOldRef = old,
+        )
     }
 
     override fun rollback(txId: String) {

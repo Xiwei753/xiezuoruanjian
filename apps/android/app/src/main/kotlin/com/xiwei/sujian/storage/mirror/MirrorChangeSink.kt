@@ -106,15 +106,18 @@ class DefaultMirrorChangeSink(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
-        // 恢复 pending publish（如果有）
+        // #649 评论 5562462046 问题 5：pending recovery 和正常 worker 必须串行。
+        // 旧实现两个 scope.launch 并行，recoverPendingPublishIfNeeded() 和 workerLoop()
+        // 可能同时改 state/journal/文件。改成同一个串行 worker：先恢复 pending，
+        // 恢复完成前不启动新的镜像事务。
         scope.launch {
             try {
                 publisher.recoverPendingPublishIfNeeded()
             } catch (e: Exception) {
                 DiagnosticsLogger.e(TAG, "Failed to recover pending publish", e)
             }
+            workerLoop()
         }
-        scope.launch { workerLoop() }
     }
 
     override fun chapterChanged(
