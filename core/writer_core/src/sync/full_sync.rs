@@ -1859,7 +1859,7 @@ fn download_remote_to_staging(
 ) -> SyncResult {
     let entries = match provider.list(remote_prefix) {
         Ok(e) => e,
-        Err(e) => return recoverable_error_from_provider(e),
+        Err(e) => return sync_result_from_provider_error(e),
     };
     let mut downloaded: Vec<String> = Vec::new();
     for entry in &entries {
@@ -1867,12 +1867,11 @@ fn download_remote_to_staging(
         let obj = match provider.read(&full_remote_path) {
             Ok(Some(obj)) => obj,
             Ok(None) => continue, // 已被删，跳过
-            Err(e) => return recoverable_error_from_provider(e),
+            Err(e) => return sync_result_from_provider_error(e),
         };
         if let Some(staging) = staging_root {
             if let Err(e) = write_staging_file(staging, &entry.path, &obj.content) {
-                let msg = format!("staging write failed: {e}");
-                return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
+                return sync_result_from_error(crate::Error::Io(e));
             }
         }
         downloaded.push(full_remote_path);
@@ -1925,13 +1924,10 @@ fn publish_generation(
     let meta_path = format!("{generation_prefix}/{GENERATION_META_FILENAME}");
     let meta_content = match serde_json::to_vec(&meta) {
         Ok(c) => c,
-        Err(e) => {
-            let msg = format!("publish_generation: serialize meta failed: {e}");
-            return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
-        }
+        Err(e) => return sync_result_from_error(crate::Error::Json(e)),
     };
     if let Err(e) = provider.write(&meta_path, &meta_content, WritePrecondition::CreateNew) {
-        return recoverable_error_from_provider(e);
+        return sync_result_from_provider_error(e);
     }
 
     // 2. 上传 staging 内容到 generation prefix。
@@ -1970,10 +1966,7 @@ fn publish_generation(
                 }
                 r
             }
-            Err(e) => {
-                let msg = format!("publish_generation: upload complete snapshot failed: {e}");
-                SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
-            }
+            Err(e) => sync_result_from_error(e),
         }
     } else {
         // 无 merge_outcome（首次同步 / legacy）→ run_single_target 全量上传。
@@ -2002,13 +1995,10 @@ fn publish_generation(
     meta.complete = true;
     let meta_content = match serde_json::to_vec(&meta) {
         Ok(c) => c,
-        Err(e) => {
-            let msg = format!("publish_generation: serialize complete meta failed: {e}");
-            return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
-        }
+        Err(e) => return sync_result_from_error(crate::Error::Json(e)),
     };
     if let Err(e) = provider.write(&meta_path, &meta_content, WritePrecondition::Unconditional) {
-        return recoverable_error_from_provider(e);
+        return sync_result_from_provider_error(e);
     }
 
     content_result
@@ -2129,11 +2119,35 @@ fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Res
     std::fs::write(&dest, content)
 }
 
-/// `ProviderError` → `SyncResult::error(RecoverableError, ...)`。
-fn recoverable_error_from_provider(e: crate::sync::provider::ProviderError) -> SyncResult {
-    let core_err = crate::Error::from(e);
-    let msg = core_err.to_string();
-    SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
+/// `crate::Error` → `SyncResult::error(...)` 的统一转换。
+///
+/// `err.recoverable()` 决定 `SyncStatus::RecoverableError` / `FatalError`，
+/// `err.sync_category()` 决定 `error_category`（空字符串视为无分类）。
+///
+/// #645 评论 5504296097：full-sync 所有错误转换都共用此函数，
+/// 不再各自猜 recoverable/fatal 或硬编码 error_category=None。
+fn sync_result_from_error(err: crate::Error) -> SyncResult {
+    let msg = err.to_string();
+    let category = err.sync_category();
+    let status = if err.recoverable() {
+        SyncStatus::RecoverableError(msg.clone())
+    } else {
+        SyncStatus::FatalError(msg.clone())
+    };
+    SyncResult::error(
+        status,
+        msg,
+        (!category.is_empty()).then(|| category.to_string()),
+    )
+}
+
+/// `ProviderError` → `SyncResult::error(...)` 的统一转换。
+///
+/// 通过 `crate::Error::from(ProviderError)` 转入 [`sync_result_from_error`]，
+/// 保证 Provider 错误的 recoverable/fatal/error_category 由 provider-neutral
+/// `crate::Error` 语义推出，不硬编码。
+fn sync_result_from_provider_error(err: crate::sync::provider::ProviderError) -> SyncResult {
+    sync_result_from_error(crate::Error::from(err))
 }
 
 /// 枚举远端前缀下所有对象并逐个删除（Unconditional 幂等）。
@@ -2149,21 +2163,7 @@ fn recoverable_error_from_provider(e: crate::sync::provider::ProviderError) -> S
 fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -> SyncResult {
     let remote_entries = match provider.list(remote_prefix) {
         Ok(entries) => entries,
-        Err(err) => {
-            let core_err = crate::Error::from(err);
-            let msg = core_err.to_string();
-            let category = core_err.sync_category();
-            let error_category = if category.is_empty() {
-                None
-            } else {
-                Some(category.to_string())
-            };
-            return SyncResult::error(
-                SyncStatus::RecoverableError(msg.clone()),
-                msg,
-                error_category,
-            );
-        }
+        Err(err) => return sync_result_from_provider_error(err),
     };
 
     let mut remote_deletes: Vec<String> = Vec::new();
@@ -2187,19 +2187,7 @@ fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -
                 remote_deletes.push(full_remote_path);
             }
             Err(err) => {
-                let core_err = crate::Error::from(err);
-                let msg = core_err.to_string();
-                let category = core_err.sync_category();
-                let error_category = if category.is_empty() {
-                    None
-                } else {
-                    Some(category.to_string())
-                };
-                let mut result = SyncResult::error(
-                    SyncStatus::RecoverableError(msg.clone()),
-                    msg,
-                    error_category,
-                );
+                let mut result = sync_result_from_provider_error(err);
                 result.remote_deletes = remote_deletes;
                 return result;
             }
@@ -2232,21 +2220,7 @@ fn run_single_target(
         force_sync,
     ) {
         Ok(result) => result,
-        Err(err) => {
-            let msg = err.to_string();
-            let category = err.sync_category();
-            let error_category = if category.is_empty() {
-                None
-            } else {
-                Some(category.to_string())
-            };
-            let status = if err.recoverable() {
-                SyncStatus::RecoverableError(msg.clone())
-            } else {
-                SyncStatus::FatalError(msg.clone())
-            };
-            SyncResult::error(status, msg, error_category)
-        }
+        Err(err) => sync_result_from_error(err),
     }
 }
 
