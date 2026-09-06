@@ -38,11 +38,18 @@ const GENERATION_SUBDIR: &str = "__generations__";
 /// 构造 generation 不可见 prefix。
 ///
 /// `projects/P` + `G` → `projects/P/__generations__/G`。
-fn generation_remote_prefix(project_remote_prefix: &str, generation_id: &str) -> String {
-    format!(
+///
+/// #645 评论 5504296097 问题4：防御性校验 `generation_id` 是合法单 path segment，
+/// 不只依赖 catalog loader。非法 `generation_id`（空、`.`、`..`、含 `/`/`\`）→ `Err`。
+fn generation_remote_prefix(
+    project_remote_prefix: &str,
+    generation_id: &str,
+) -> crate::error::Result<String> {
+    crate::sync::target_lifecycle::validate_generation_id(generation_id)?;
+    Ok(format!(
         "{}/{}/{}",
         project_remote_prefix, GENERATION_SUBDIR, generation_id
-    )
+    ))
 }
 
 /// 判断远端相对路径是否落在 generation 不可见 prefix 下。
@@ -741,142 +748,138 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     // CAS targets.sync.json 写 active_generation=G。CAS 成功后 G 才成为
                     // 可见版本；CAS 输给 Delete 则 G 是未引用 generation，后续 GC。
                     let generation_id = uuid::Uuid::new_v4().to_string();
-                    let gen_remote_prefix =
-                        generation_remote_prefix(&planned.target.remote_prefix, &generation_id);
-                    let generation_target = SyncTarget {
-                        scope: planned.target.scope,
-                        remote_prefix: gen_remote_prefix,
-                    };
-                    log::info!(
-                        "[sync] run_transfer: LiveProject {} — uploading to generation prefix {}",
-                        planned.target.remote_prefix,
-                        generation_target.remote_prefix
-                    );
                     let sync_root = planned
                         .staging_root
                         .as_deref()
                         .unwrap_or(&planned.local_root);
-                    let content_result = run_single_target(
-                        provider,
-                        sync_root,
-                        &plan.sync_policy,
-                        &generation_target,
-                        plan.force_sync,
-                    );
-                    // 正文 transfer 失败 → 不发布 lifecycle，直接返回错误。
-                    // generation prefix 下残留的未引用 generation 由后续 GC 清理。
-                    let content_ok = matches!(
-                        content_result.status,
-                        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
-                    );
-                    if !content_ok {
-                        (content_result, None, None)
-                    } else {
-                        // 2. 正文 transfer 成功 → 从 post-transfer staging manifest
-                        //    算最终 LWW（#645 评论 5504296097 问题3修复）。
-                        //    live_lww 只是 Transfer 前的资格判断，不是最终状态。
-                        //    用 winner 的 device_id 构造 candidate，不再硬塞本机设备。
-                        //    #645 评论 5504296097 问题2：candidate 携带 active_generation=G，
-                        //    CAS 成功后 G 成为可见版本。
-                        let post_transfer_root = planned
-                            .staging_root
-                            .as_deref()
-                            .unwrap_or(&planned.local_root);
-                        match read_post_transfer_lww(post_transfer_root) {
-                            Some(post_transfer_lww) => {
-                                let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
+                    // #645 评论 5504296097 问题1：先从当前可见 generation 合并远端到
+                    // staging，再上传 staging 到新 generation。这修复了"LiveProject
+                    // 直接创建空 G2，没有先从 G1 读取/合并，A 在 G1 的远端更新没进入
+                    // 合并"的 bug。merge 只读 source（不向 source generation 写）。
+                    let merge_outcome: crate::error::Result<()> = (|| {
+                        if let Some(source_record) = crate::sync::target_lifecycle::find_record(
+                            &catalog_snapshot.catalog,
+                            &planned.target.remote_prefix,
+                        ) {
+                            if let Some(source_prefix) =
+                                crate::sync::target_lifecycle::resolve_visible_project_prefix(
+                                    source_record,
                                     &planned.target.remote_prefix,
-                                    &planned.target.remote_prefix,
-                                    post_transfer_lww.lww_time_ms,
-                                    &post_transfer_lww.device_id,
-                                )
-                                .with_active_generation(&generation_id);
-                                match crate::sync::target_lifecycle::apply_lifecycle_record(
+                                )?
+                            {
+                                log::info!(
+                                    "[sync] run_transfer: LiveProject {} — merging from visible source {}",
+                                    planned.target.remote_prefix,
+                                    source_prefix
+                                );
+                                merge_remote_into_staging(provider, &source_prefix, sync_root)?;
+                            }
+                        }
+                        Ok(())
+                    })();
+                    // #645 评论 5504296097 问题4：generation_remote_prefix 防御性校验
+                    // generation_id（UUID 总是合法，但不依赖调用方不变式）。
+                    match generation_remote_prefix(&planned.target.remote_prefix, &generation_id) {
+                        Ok(gen_remote_prefix) => {
+                            log::info!(
+                        "[sync] run_transfer: LiveProject {} — uploading to generation prefix {}",
+                        planned.target.remote_prefix,
+                        gen_remote_prefix
+                    );
+                            let content_result = match merge_outcome {
+                                Ok(()) => publish_generation(
                                     provider,
-                                    &catalog_snapshot,
-                                    candidate,
-                                ) {
-                                    TargetLifecycleApplyResult::Applied(persisted) => {
-                                        // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
-                                        catalog_snapshot = persisted;
-                                        (content_result, None, None)
-                                    }
-                                    TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
-                                        // #645 评论 5504296097 问题1修复：candidate 与远端
-                                        // 完全相等，不需要写 catalog，保持 live（不删本地）。
-                                        catalog_snapshot = persisted;
-                                        (content_result, None, None)
-                                    }
-                                    TargetLifecycleApplyResult::RemoteWinner {
-                                        snapshot: persisted,
-                                        record: winner,
-                                    } => {
-                                        catalog_snapshot = persisted;
-                                        // #645 评论 5504296097 问题1修复：按真实 winner.op
-                                        // 决策，不再猜 op 反转。
-                                        // - Upsert → 保持 live（远端是 upsert，不删本地）；
-                                        // - Delete → 远端 delete 赢，安排 DeleteProject。
-                                        match winner.op {
-                                            crate::sync::types::TargetOp::Upsert => {
-                                                log::info!(
-                                                    "[sync] run_transfer: LiveProject \
-                                                     RemoteWinner(Upsert) {} — keeping live",
-                                                    planned.target.remote_prefix
-                                                );
+                                    sync_root,
+                                    &gen_remote_prefix,
+                                    &generation_id,
+                                    planned.project_id.as_deref().unwrap_or(""),
+                                    planned.target.scope,
+                                    &plan.sync_policy,
+                                    plan.force_sync,
+                                ),
+                                Err(e) => {
+                                    let msg = format!(
+                                        "LiveProject: merge remote into staging failed: {e}"
+                                    );
+                                    SyncResult::error(
+                                        SyncStatus::RecoverableError(msg.clone()),
+                                        msg,
+                                        None,
+                                    )
+                                }
+                            };
+                            // 正文 transfer 失败 → 不发布 lifecycle，直接返回错误。
+                            // generation prefix 下残留的未引用 generation 由后续 GC 清理。
+                            let content_ok = matches!(
+                                content_result.status,
+                                SyncStatus::Success
+                                    | SyncStatus::NoChanges
+                                    | SyncStatus::LatestWinsApplied
+                            );
+                            if !content_ok {
+                                (content_result, None, None)
+                            } else {
+                                // 2. 正文 transfer 成功 → 从 post-transfer staging manifest
+                                //    算最终 LWW（#645 评论 5504296097 问题3修复）。
+                                //    live_lww 只是 Transfer 前的资格判断，不是最终状态。
+                                //    用 winner 的 device_id 构造 candidate，不再硬塞本机设备。
+                                //    #645 评论 5504296097 问题2：candidate 携带 active_generation=G，
+                                //    CAS 成功后 G 成为可见版本。
+                                let post_transfer_root = planned
+                                    .staging_root
+                                    .as_deref()
+                                    .unwrap_or(&planned.local_root);
+                                match read_post_transfer_lww(post_transfer_root) {
+                                    Some(post_transfer_lww) => {
+                                        let candidate =
+                                            crate::sync::types::TargetLifecycleRecord::upsert(
+                                                &planned.target.remote_prefix,
+                                                &planned.target.remote_prefix,
+                                                post_transfer_lww.lww_time_ms,
+                                                &post_transfer_lww.device_id,
+                                            )
+                                            .with_active_generation(&generation_id);
+                                        match crate::sync::target_lifecycle::apply_lifecycle_record(
+                                            provider,
+                                            &catalog_snapshot,
+                                            candidate,
+                                        ) {
+                                            TargetLifecycleApplyResult::Applied(persisted) => {
+                                                // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
+                                                catalog_snapshot = persisted;
                                                 (content_result, None, None)
                                             }
-                                            crate::sync::types::TargetOp::Delete => {
-                                                // #645 评论 5504296097 问题1：不在 Transfer 里
-                                                // remove_dir_all()。返回 DeleteProject action，
-                                                // 由 Commit 阶段执行完整 Project 本地删除事务。
-                                                // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
-                                                // #645 评论 5504296097 问题2 修复：guard 非 Option —
-                                                // 必须有 live_lww 才能生成 DeleteProject。
-                                                // #645 评论 5504296097 问题4：RemoteWinner(Delete) 后
-                                                // 清理远端 projects/P/ 下所有对象（含本轮上传正文 +
-                                                // manifest.sync.json + 旧残留），删对 prefix。
-                                                log::info!(
-                                                    "[sync] run_transfer: LiveProject \
-                                                     RemoteWinner(Delete) {} — cleaning remote + deferring delete \
-                                                     to Commit",
-                                                    planned.target.remote_prefix
-                                                );
-                                                let cleanup_result = delete_all_remote_objects(
-                                                    provider,
-                                                    &planned.target.remote_prefix,
-                                                );
-                                                let cleanup_ok = matches!(
-                                                    cleanup_result.status,
-                                                    SyncStatus::Success | SyncStatus::NoChanges
-                                                );
-                                                if !cleanup_ok {
-                                                    // #645 评论 5504296097 问题4：远端清理失败 →
-                                                    // RecoverableError，不删本地（catalog Delete 已持久，
-                                                    // 下轮重新清理远端残留）。
-                                                    // #645 评论 5504296097 问题3 修复：cleanup 失败 →
-                                                    // record pending remote cleanup，下轮 Prepare
-                                                    // 生成 RemoteCleanupProject 重试。
-                                                    // #645 评论 5504296097 问题2 修复：传入当前 Delete
-                                                    // 的 lww_time 和 device_id，绑定 lifecycle identity。
-                                                    // #645 评论 5504296097 问题3 修复：record 失败也向上
-                                                    // 传递，不再 let _ = 吞掉。
-                                                    let expected_time = crate::sync::target_lifecycle::record_lww_time(&winner);
-                                                    let expected_device = &winner.device_id;
-                                                    let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
-                                                        &plan.app_data_root,
-                                                        &planned.target.remote_prefix,
-                                                        planned.project_id.as_deref().unwrap_or(""),
-                                                        &format!(
-                                                            "LiveProject RemoteWinner(Delete) cleanup failed: {:?}",
-                                                            cleanup_result.status
-                                                        ),
-                                                        expected_time,
-                                                        expected_device,
-                                                    );
-                                                    if let Err(e) = record_result {
-                                                        let msg = format!(
-                                                            "record pending remote cleanup failed: {e}"
+                                            TargetLifecycleApplyResult::AlreadyCurrent(
+                                                persisted,
+                                            ) => {
+                                                // #645 评论 5504296097 问题1修复：candidate 与远端
+                                                // 完全相等，不需要写 catalog，保持 live（不删本地）。
+                                                catalog_snapshot = persisted;
+                                                (content_result, None, None)
+                                            }
+                                            TargetLifecycleApplyResult::RemoteWinner {
+                                                snapshot: persisted,
+                                                record: winner,
+                                            } => {
+                                                catalog_snapshot = persisted;
+                                                // #645 评论 5504296097 问题1修复：按真实 winner.op
+                                                // 决策，不再猜 op 反转。
+                                                // - Upsert → 保持 live（远端是 upsert，不删本地）；
+                                                // - Delete → 远端 delete 赢，安排 DeleteProject。
+                                                match winner.op {
+                                                    crate::sync::types::TargetOp::Upsert => {
+                                                        // #645 评论 5504296097 问题1 修复：
+                                                        // RemoteWinner(Upsert) 说明 merge 期间
+                                                        // 远端已切到新 generation，本次 staging
+                                                        // 基于旧 source，必须 Retry（下一轮从
+                                                        // 新 active generation 重新 merge）。
+                                                        log::info!(
+                                                            "[sync] run_transfer: LiveProject \
+                                                     RemoteWinner(Upsert) {} — retrying (remote generation changed during merge)",
+                                                            planned.target.remote_prefix
                                                         );
+                                                        let msg = "LiveProject: remote generation changed during merge, retrying"
+                                                            .to_string();
                                                         (
                                                             SyncResult::error(
                                                                 SyncStatus::RecoverableError(
@@ -888,12 +891,78 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                             None,
                                                             None,
                                                         )
-                                                    } else {
-                                                        (cleanup_result, None, None)
                                                     }
-                                                } else {
-                                                    // guard 必须存在（外层 live_lww.is_some() 已判断）。
-                                                    let action = planned
+                                                    crate::sync::types::TargetOp::Delete => {
+                                                        // #645 评论 5504296097 问题1：不在 Transfer 里
+                                                        // remove_dir_all()。返回 DeleteProject action，
+                                                        // 由 Commit 阶段执行完整 Project 本地删除事务。
+                                                        // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
+                                                        // #645 评论 5504296097 问题2 修复：guard 非 Option —
+                                                        // 必须有 live_lww 才能生成 DeleteProject。
+                                                        // #645 评论 5504296097 问题4：RemoteWinner(Delete) 后
+                                                        // 清理远端 projects/P/ 下所有对象（含本轮上传正文 +
+                                                        // manifest.sync.json + 旧残留），删对 prefix。
+                                                        log::info!(
+                                                    "[sync] run_transfer: LiveProject \
+                                                     RemoteWinner(Delete) {} — cleaning remote + deferring delete \
+                                                     to Commit",
+                                                    planned.target.remote_prefix
+                                                );
+                                                        let cleanup_result =
+                                                            delete_all_remote_objects(
+                                                                provider,
+                                                                &planned.target.remote_prefix,
+                                                            );
+                                                        let cleanup_ok = matches!(
+                                                            cleanup_result.status,
+                                                            SyncStatus::Success
+                                                                | SyncStatus::NoChanges
+                                                        );
+                                                        if !cleanup_ok {
+                                                            // #645 评论 5504296097 问题4：远端清理失败 →
+                                                            // RecoverableError，不删本地（catalog Delete 已持久，
+                                                            // 下轮重新清理远端残留）。
+                                                            // #645 评论 5504296097 问题3 修复：cleanup 失败 →
+                                                            // record pending remote cleanup，下轮 Prepare
+                                                            // 生成 RemoteCleanupProject 重试。
+                                                            // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                                            // 的 lww_time 和 device_id，绑定 lifecycle identity。
+                                                            // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                                            // 传递，不再 let _ = 吞掉。
+                                                            let expected_time = crate::sync::target_lifecycle::record_lww_time(&winner);
+                                                            let expected_device = &winner.device_id;
+                                                            let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                                        &plan.app_data_root,
+                                                        &planned.target.remote_prefix,
+                                                        planned.project_id.as_deref().unwrap_or(""),
+                                                        &format!(
+                                                            "LiveProject RemoteWinner(Delete) cleanup failed: {:?}",
+                                                            cleanup_result.status
+                                                        ),
+                                                        expected_time,
+                                                        expected_device,
+                                                    );
+                                                            if let Err(e) = record_result {
+                                                                let msg = format!(
+                                                            "record pending remote cleanup failed: {e}"
+                                                        );
+                                                                (
+                                                            SyncResult::error(
+                                                                SyncStatus::RecoverableError(
+                                                                    msg.clone(),
+                                                                ),
+                                                                msg,
+                                                                None,
+                                                            ),
+                                                            None,
+                                                            None,
+                                                        )
+                                                            } else {
+                                                                (cleanup_result, None, None)
+                                                            }
+                                                        } else {
+                                                            // guard 必须存在（外层 live_lww.is_some() 已判断）。
+                                                            let action = planned
                                                         .project_id
                                                         .as_ref()
                                                         .and_then(|pid| {
@@ -907,14 +976,31 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                                     }
                                                             })
                                                         });
-                                                    (content_result, None, action)
+                                                            (content_result, None, action)
+                                                        }
+                                                    }
                                                 }
+                                            }
+                                            TargetLifecycleApplyResult::Retry(e) => {
+                                                // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError。
+                                                let msg = format!("lifecycle upsert failed: {e}");
+                                                (
+                                                    SyncResult::error(
+                                                        SyncStatus::RecoverableError(msg.clone()),
+                                                        msg,
+                                                        None,
+                                                    ),
+                                                    None,
+                                                    None,
+                                                )
                                             }
                                         }
                                     }
-                                    TargetLifecycleApplyResult::Retry(e) => {
-                                        // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError。
-                                        let msg = format!("lifecycle upsert failed: {e}");
+                                    None => {
+                                        // #645 评论 5504296097 问题3：post-transfer staging manifest
+                                        // 读取失败 → RecoverableError，不伪造旧 live_lww 时间。
+                                        let msg =
+                                            "post-transfer staging manifest unreadable".to_string();
                                         (
                                             SyncResult::error(
                                                 SyncStatus::RecoverableError(msg.clone()),
@@ -927,20 +1013,18 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     }
                                 }
                             }
-                            None => {
-                                // #645 评论 5504296097 问题3：post-transfer staging manifest
-                                // 读取失败 → RecoverableError，不伪造旧 live_lww 时间。
-                                let msg = "post-transfer staging manifest unreadable".to_string();
-                                (
-                                    SyncResult::error(
-                                        SyncStatus::RecoverableError(msg.clone()),
-                                        msg,
-                                        None,
-                                    ),
+                        }
+                        Err(e) => {
+                            let msg = format!("LiveProject: invalid generation id: {e}");
+                            (
+                                SyncResult::error(
+                                    SyncStatus::RecoverableError(msg.clone()),
+                                    msg,
                                     None,
-                                    None,
-                                )
-                            }
+                                ),
+                                None,
+                                None,
+                            )
                         }
                     }
                 } else {
@@ -1421,42 +1505,65 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 // active_generation=G，从 generation prefix
                                 // （projects/P/__generations__/G/）下载；否则从 legacy
                                 // prefix（projects/P/）下载（兼容旧数据/无 generation 记录）。
-                                let download_prefix = match &current_rec.active_generation {
-                                    Some(gen_id) => {
-                                        let gen_prefix = generation_remote_prefix(
-                                            &planned.target.remote_prefix,
-                                            gen_id,
-                                        );
-                                        log::info!(
-                                            "[sync] run_transfer: RestoreProject {} — \
-                                             CAS confirmed remote Upsert with active_generation={}, \
-                                             downloading from generation prefix {}",
-                                            planned.target.remote_prefix,
-                                            gen_id,
+                                // #645 评论 5504296097 问题4：generation_remote_prefix 防御性
+                                // 校验 active_generation（catalog 已校验，但 CAS 重读可能绕过）。
+                                let download_prefix: crate::error::Result<String> =
+                                    match &current_rec.active_generation {
+                                        Some(gen_id) => {
+                                            let gen_prefix = generation_remote_prefix(
+                                                &planned.target.remote_prefix,
+                                                gen_id,
+                                            );
+                                            if let Ok(ref p) = gen_prefix {
+                                                log::info!(
+                                                    "[sync] run_transfer: RestoreProject {} — \
+                                                     CAS confirmed remote Upsert with active_generation={}, \
+                                                     downloading from generation prefix {}",
+                                                    planned.target.remote_prefix,
+                                                    gen_id,
+                                                    p
+                                                );
+                                            }
                                             gen_prefix
+                                        }
+                                        None => {
+                                            log::info!(
+                                                "[sync] run_transfer: RestoreProject {} — \
+                                                 CAS confirmed remote Upsert (no active_generation), \
+                                                 downloading from legacy prefix",
+                                                planned.target.remote_prefix
+                                            );
+                                            Ok(planned.target.remote_prefix.clone())
+                                        }
+                                    };
+                                match download_prefix {
+                                    Ok(download_prefix) => {
+                                        let result = download_remote_to_staging(
+                                            provider,
+                                            &download_prefix,
+                                            planned.staging_root.as_deref(),
                                         );
-                                        gen_prefix
+                                        (
+                                            result,
+                                            Some(DeletedTargetResolution::RemoteTargetWins),
+                                            None,
+                                        )
                                     }
-                                    None => {
-                                        log::info!(
-                                            "[sync] run_transfer: RestoreProject {} — \
-                                             CAS confirmed remote Upsert (no active_generation), \
-                                             downloading from legacy prefix",
-                                            planned.target.remote_prefix
+                                    Err(e) => {
+                                        let msg = format!(
+                                            "RestoreProject: invalid active_generation: {e}"
                                         );
-                                        planned.target.remote_prefix.clone()
+                                        (
+                                            SyncResult::error(
+                                                SyncStatus::RecoverableError(msg.clone()),
+                                                msg,
+                                                None,
+                                            ),
+                                            None,
+                                            None,
+                                        )
                                     }
-                                };
-                                let result = download_remote_to_staging(
-                                    provider,
-                                    &download_prefix,
-                                    planned.staging_root.as_deref(),
-                                );
-                                (
-                                    result,
-                                    Some(DeletedTargetResolution::RemoteTargetWins),
-                                    None,
-                                )
+                                }
                             }
                         }
                     }
@@ -1636,6 +1743,33 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         });
     }
 
+    // #645 评论 5504296097 问题2：generation GC — 清理未引用 generation。
+    // 对每个 project target 调一次 run_generation_gc。不在 CAS 成功后立刻删旧
+    // generation（另一台设备可能正拿着旧 catalog 下载）。GC 失败不致命（下轮继续）。
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    for planned in &plan.targets {
+        // 只对 project target 做 GC（app target 无 generation）。
+        if planned.target.remote_prefix.starts_with("projects/") {
+            let active_generation = crate::sync::target_lifecycle::find_record(
+                &catalog_snapshot.catalog,
+                &planned.target.remote_prefix,
+            )
+            .and_then(|r| r.active_generation.as_deref());
+            if let Err(e) = crate::sync::generation_gc::run_generation_gc(
+                provider,
+                &planned.target.remote_prefix,
+                active_generation,
+                now_ms,
+                crate::sync::generation_gc::GENERATION_RETENTION_MS,
+            ) {
+                log::warn!(
+                    "[sync] run_transfer: generation GC failed for {}: {e}",
+                    planned.target.remote_prefix
+                );
+            }
+        }
+    }
+
     FullSyncTransferResult { targets }
 }
 
@@ -1672,6 +1806,130 @@ fn download_remote_to_staging(
     let mut result = SyncResult::success();
     result.downloaded_files = downloaded;
     result
+}
+
+/// #645 评论 5504296097 问题1：只读 merge 远端 generation 到 staging。
+///
+/// 把 source generation prefix 下的远端文件下载到 staging，**只下载 staging 没有
+/// 的文件**（保留本地修改）。这修复了"LiveProject 直接创建空 G2，没有先从 G1
+/// 读取/合并，A 在 G1 的远端更新没进入合并"的 bug。
+///
+/// 只允许 `provider.list/read(source)` + 写本地 staging，**绝不向 source generation
+/// 写**（不 `provider.write` source）。source generation 可能正被其他设备读取
+/// （RestoreProject 从 active generation 下载），向 source 写会破坏并发安全。
+///
+/// merge 策略：对每个远端文件，staging 已有则保留本地（LiveProject 前提是本地
+/// live，本地版本是最新的）；staging 没有则下载（远端新增文件）。这不是真正的
+/// LWW 合并，但对 LiveProject（本地 live）是合理的 — 如果远端更新，应该走
+/// RestoreProject 而非 LiveProject。
+fn merge_remote_into_staging(
+    provider: &dyn SyncProvider,
+    source_remote_prefix: &str,
+    staging_root: &Path,
+) -> crate::error::Result<()> {
+    let entries = provider
+        .list(source_remote_prefix)
+        .map_err(crate::Error::from)?;
+    for entry in &entries {
+        let local_path = staging_root.join(&entry.path);
+        if local_path.exists() {
+            // staging 已有（本地修改），保留本地，不下载。
+            continue;
+        }
+        let full_remote_path = format!("{}/{}", source_remote_prefix, entry.path);
+        let obj = provider
+            .read(&full_remote_path)
+            .map_err(crate::Error::from)?;
+        if let Some(obj) = obj {
+            write_staging_file(staging_root, &entry.path, &obj.content)?;
+        }
+    }
+    Ok(())
+}
+
+/// #645 评论 5504296097 问题2：generation 原子发布 — 上传 staging 到新 generation prefix，
+/// 写 `generation.meta.json`（complete=false → 内容 → complete=true）。
+///
+/// 步骤：
+/// 1. 写 `meta(complete=false, lease_until=now+lease)` 到 `generation_prefix/generation.meta.json`。
+/// 2. `run_single_target` 上传 staging 到 generation prefix（LWW，远端 generation 空所以全上传）。
+/// 3. 内容上传成功后写 `meta(complete=true)`。
+///
+/// meta 让 GC 能识别 incomplete generation（上传中，不删）和 complete generation
+/// （可按保留期删）。`uploader_device_id` 用空字符串（诊断字段，不影响 GC 逻辑）。
+#[allow(clippy::too_many_arguments)] // 8 个参数均为独立发布输入，打包会掩盖各自语义
+fn publish_generation(
+    provider: &dyn SyncProvider,
+    sync_root: &Path,
+    generation_prefix: &str,
+    generation_id: &str,
+    project_id: &str,
+    scope: crate::sync::types::SyncScope,
+    sync_policy: &SyncPolicy,
+    force_sync: bool,
+) -> SyncResult {
+    use crate::sync::generation_gc::{
+        GenerationMeta, GENERATION_META_FILENAME, GENERATION_UPLOAD_LEASE_MS,
+    };
+    use crate::sync::provider::model::WritePrecondition;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    // 1. 写 meta(complete=false, lease)。
+    let meta = GenerationMeta {
+        generation_id: generation_id.to_string(),
+        project_id: project_id.to_string(),
+        created_at_ms: now_ms,
+        uploader_device_id: String::new(),
+        upload_lease_until_ms: now_ms + GENERATION_UPLOAD_LEASE_MS,
+        complete: false,
+    };
+    let meta_path = format!("{generation_prefix}/{GENERATION_META_FILENAME}");
+    let meta_content = match serde_json::to_vec(&meta) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("publish_generation: serialize meta failed: {e}");
+            return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
+        }
+    };
+    if let Err(e) = provider.write(&meta_path, &meta_content, WritePrecondition::CreateNew) {
+        return recoverable_error_from_provider(e);
+    }
+
+    // 2. 上传 staging 到 generation prefix（LWW，远端 generation 空所以全上传）。
+    let generation_target = SyncTarget {
+        scope,
+        remote_prefix: generation_prefix.to_string(),
+    };
+    let content_result = run_single_target(
+        provider,
+        sync_root,
+        sync_policy,
+        &generation_target,
+        force_sync,
+    );
+    let content_ok = matches!(
+        content_result.status,
+        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+    );
+    if !content_ok {
+        return content_result;
+    }
+
+    // 3. 写 meta(complete=true)。
+    let mut meta = meta;
+    meta.complete = true;
+    let meta_content = match serde_json::to_vec(&meta) {
+        Ok(c) => c,
+        Err(e) => {
+            let msg = format!("publish_generation: serialize complete meta failed: {e}");
+            return SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None);
+        }
+    };
+    if let Err(e) = provider.write(&meta_path, &meta_content, WritePrecondition::Unconditional) {
+        return recoverable_error_from_provider(e);
+    }
+
+    content_result
 }
 
 /// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
@@ -4026,7 +4284,7 @@ mod tests {
             .expect("Upsert should carry active_generation");
 
         // 验证远端 generation prefix 有正文文件。
-        let gen_prefix = generation_remote_prefix("projects/P", gen_id);
+        let gen_prefix = generation_remote_prefix("projects/P", gen_id).unwrap();
         let gen_entries = provider.list(&gen_prefix).unwrap();
         assert!(
             gen_entries
@@ -4064,7 +4322,7 @@ mod tests {
             )
             .unwrap();
         // 写 generation prefix 下的文件（模拟并发 Upsert 正在上传的 generation）。
-        let gen_prefix = generation_remote_prefix("projects/P", "gen-1");
+        let gen_prefix = generation_remote_prefix("projects/P", "gen-1").unwrap();
         provider
             .write(
                 &format!("{}/chapter.md", gen_prefix),
@@ -4109,7 +4367,7 @@ mod tests {
 
         // 在 generation prefix 写远端正文。
         let gen_id = "gen-restore-1";
-        let gen_prefix = generation_remote_prefix("projects/P", gen_id);
+        let gen_prefix = generation_remote_prefix("projects/P", gen_id).unwrap();
         provider
             .write(
                 &format!("{}/chapter.md", gen_prefix),

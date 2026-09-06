@@ -25,6 +25,35 @@ use crate::sync::types::{
 /// 这个位置不会随 `projects/<id>/` 一起被删除，保证 delete tombstone 持久存在。
 pub const TARGET_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/targets.sync.json";
 
+/// #645 评论 5504296097 问题1：解析当前可见远端 project prefix。
+///
+/// LiveProject 两步发布的第一步 — 从 catalog record 解析当前可见远端 source：
+/// - `Upsert` + `active_generation=Some(G)` → `Ok(Some("projects/P/__generations__/G"))`
+///   （`G` 经 [`validate_generation_id`] 校验，防路径穿越）；
+/// - `Upsert` + `active_generation=None` → `Ok(Some("projects/P"))`（legacy，无 generation）；
+/// - `Delete` → `Ok(None)`（target 已删除，无可见远端）。
+///
+/// 调用方（LiveProject）用返回的 source prefix 做 只读 merge（下载远端到 staging），
+/// 再发布到新 generation。`__generations__` 子目录名与 `full_sync::GENERATION_SUBDIR` 一致。
+pub fn resolve_visible_project_prefix(
+    record: &TargetLifecycleRecord,
+    project_remote_prefix: &str,
+) -> crate::error::Result<Option<String>> {
+    match record.op {
+        TargetOp::Delete => Ok(None),
+        TargetOp::Upsert => match &record.active_generation {
+            Some(gen) => {
+                validate_generation_id(gen)?;
+                Ok(Some(format!(
+                    "{}/__generations__/{}",
+                    project_remote_prefix, gen
+                )))
+            }
+            None => Ok(Some(project_remote_prefix.to_string())),
+        },
+    }
+}
+
 /// #645 评论 5504296097 问题6：统一解析 remote target_id，验证前缀 + 单段合法 id。
 ///
 /// remote catalog 里的 `target_id` 是远端持久数据，可能损坏或被恶意构造。
@@ -54,6 +83,49 @@ pub(crate) fn parse_project_target_id(target_id: &str) -> crate::error::Result<S
     Ok(validated.to_string())
 }
 
+/// #645 评论 5504296097 问题4：校验 generation ID 是合法的单 path segment。
+///
+/// generation ID 用作 `projects/P/__generations__/G/` 中的 `G` 段，必须不能
+/// 越过 generation 目录（空、`.`、`..`、含 `/`、含 `\` 都拒绝）。
+/// 复用 [`crate::delete_guard::validate_id_segment`] 同一套 ID 验证规则，
+/// 与 [`parse_project_target_id`] 保持一致的路径穿越防护。
+///
+/// 合法 → `Ok(id)`；非法 → `Err`。
+pub(crate) fn validate_generation_id(id: &str) -> crate::error::Result<&str> {
+    crate::delete_guard::validate_id_segment(id)
+}
+
+/// #645 评论 5504296097 问题4：校验单条 record 的 `active_generation` 合法性。
+///
+/// - `Delete` 记录不应有 `active_generation`（必须 `None`）；
+/// - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
+/// - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
+///
+/// 提取为独立 helper 以保持 `validate_catalog` 的嵌套深度在 clippy 阈值内。
+fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::error::Result<()> {
+    match record.op {
+        TargetOp::Delete => {
+            if record.active_generation.is_some() {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "validate_catalog: Delete record for {:?} must not have active_generation",
+                    record.target_id
+                ))));
+            }
+        }
+        TargetOp::Upsert => {
+            if let Some(gen) = &record.active_generation {
+                if let Err(e) = validate_generation_id(gen) {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "validate_catalog: invalid active_generation {:?} for target {:?}: {e}",
+                        gen, record.target_id
+                    ))));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// #645 评论 5504296097 问题6：校验整个 catalog — 损坏/非法 record 返回错误。
 ///
 /// 校验规则：
@@ -62,11 +134,45 @@ pub(crate) fn parse_project_target_id(target_id: &str) -> crate::error::Result<S
 /// - `schema_version` 支持（当前只支持 1）
 /// - 同 `target_id` 不重复（合并后唯一）
 /// - `Delete` 必须有合法 `deleted_at_ms`
+/// - #645 评论 5504296097 问题4：`active_generation` 合法性
+///   - `Delete` 记录不应有 `active_generation`（必须 `None`）；
+///   - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
+///   - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
 ///
+/// #645 评论 5504296097 问题4：校验单条 record 的 active_generation 合法性。
+///
+/// - `Delete` 记录不应有 `active_generation`（必须 `None`）；
+/// - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
+/// - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
+fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::error::Result<()> {
+    match record.op {
+        TargetOp::Delete => {
+            if record.active_generation.is_some() {
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "validate_catalog: Delete record for {:?} must not have active_generation",
+                    record.target_id
+                ))));
+            }
+        }
+        TargetOp::Upsert => {
+            if let Some(gen) = &record.active_generation {
+                // generation ID 必须是合法单 path segment，防止远端损坏 catalog
+                // 把 "../../other" 等拼进 provider path。
+                if let Err(e) = validate_generation_id(gen) {
+                    return Err(crate::Error::Io(std::io::Error::other(format!(
+                        "validate_catalog: invalid active_generation {:?} for target {:?}: {e}",
+                        gen, record.target_id
+                    ))));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 /// 任一不合法 → `Err`，调用方不应在此假 catalog 上继续规划。
 fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()> {
     use std::collections::HashSet;
-
     let mut seen_target_ids = HashSet::new();
     for record in &catalog.records {
         // 1. target_id 合法
@@ -104,6 +210,8 @@ fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()
                 record.target_id
             ))));
         }
+        // 6. #645 评论 5504296097 问题4：active_generation 合法性
+        validate_record_active_generation(record)?;
     }
     Ok(())
 }

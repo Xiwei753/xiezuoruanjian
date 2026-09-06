@@ -4,9 +4,14 @@
 //!
 //! ## 扫描逻辑
 //!
-//! - 遍历作品目录所有文件（跳过 `.git/`）
+//! - 遍历作品目录所有文件（只显式跳过 `.git/` 和 `.git`）
 //! - 白名单路径标记为 `Upload`，其余为 `Ignore`
 //! - 黑名单路径直接忽略（不进入上传计划）
+//!
+//! #645 评论 5504296097 问题3：严格扫描 — WalkDir / metadata / mtime / hash
+//! 错误不再被 `filter_map(Result::ok)` / `unwrap_or(now)` / `unwrap_or_default()`
+//! 静默吞掉。白名单（需要同步）文件任一 I/O 失败都 `Err` 向上传递；非白名单
+//! （ignored）文件 metadata/hash 失败仍收集为 `Ignore`（下游只用其路径）。
 //!
 //! ## 计划构建
 //!
@@ -22,19 +27,33 @@ use std::path::Path;
 #[allow(clippy::cast_possible_wrap)]
 /// 扫描作品目录所有文件，生成 `SyncFileEntry` 列表。
 ///
-/// `.git/` 目录被排除。`modified_time` 使用 Unix epoch 秒；
-/// 文件 hash 为空字符串表示计算失败（扫描不因单个文件失败而中断）。
+/// `.git/` 目录被显式跳过。`modified_time` 使用 Unix epoch 秒。
+///
+/// #645 评论 5504296097 问题3 修复：严格扫描，不再吞 I/O / mtime / hash 错误。
+/// - WalkDir 迭代错误全部 `Err` 向上传递（不再 `filter_map(Result::ok)`）；
+/// - 白名单（需要同步）文件的 metadata / modified / hash 任一失败都 `Err`
+///   （下游 `lww::manifest` / `lww::attempt` 依赖真实 hash，空 hash 会让 manifest
+///   记算错误）；
+/// - 非 白名单（ignored）文件 metadata / hash 失败不 `Err`（仍收集为
+///   `SyncKind::Ignore`，hash/mtime 用 fallback 值，因为下游只用 ignored 文件的
+///   路径，不用其 hash/mtime）。
 pub(crate) fn scan_for_sync(
     sync_root: &Path,
     scope: SyncScope,
 ) -> crate::Result<Vec<SyncFileEntry>> {
     let mut entries = Vec::new();
 
-    for entry in walkdir::WalkDir::new(sync_root)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-    {
+    for item in walkdir::WalkDir::new(sync_root).into_iter() {
+        let entry = item.map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "scan_for_sync: walkdir error under {}: {e}",
+                sync_root.display()
+            )))
+        })?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+
         let absolute_path = entry.path().to_path_buf();
 
         let rel_path = match absolute_path.strip_prefix(sync_root) {
@@ -42,35 +61,77 @@ pub(crate) fn scan_for_sync(
             Err(_) => continue,
         };
 
+        // 只显式跳过 .git/ 和 .git（其余路径错误不跳过）。
         if rel_path.starts_with(".git/") || rel_path == ".git" {
             continue;
         }
 
-        let modified_time = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .unwrap_or(std::time::SystemTime::now())
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let modified_time = modified_time as i64;
-
-        let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
-
-        let sync_kind = if SyncService::is_whitelisted_path(&rel_path, scope) {
+        let is_whitelisted = SyncService::is_whitelisted_path(&rel_path, scope);
+        let sync_kind = if is_whitelisted {
             SyncKind::Upload
         } else {
             SyncKind::Ignore
         };
 
-        entries.push(SyncFileEntry {
-            relative_path: rel_path,
-            absolute_path: absolute_path.to_string_lossy().into_owned(),
-            file_hash,
-            modified_time,
-            sync_kind,
-        });
+        if is_whitelisted {
+            // 白名单文件：metadata / modified / hash 任一失败都 Err（不静默吞错误）。
+            let metadata = entry.metadata().map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "scan_for_sync: metadata failed for {}: {e}",
+                    absolute_path.display()
+                )))
+            })?;
+            let modified = metadata.modified().map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "scan_for_sync: mtime failed for {}: {e}",
+                    absolute_path.display()
+                )))
+            })?;
+            let modified_time = modified
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "scan_for_sync: mtime before epoch for {}: {e}",
+                        absolute_path.display()
+                    )))
+                })?
+                .as_secs();
+            let modified_time = modified_time as i64;
+            let file_hash = SyncService::compute_file_hash(&absolute_path).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "scan_for_sync: hash failed for {}: {e}",
+                    absolute_path.display()
+                )))
+            })?;
+
+            entries.push(SyncFileEntry {
+                relative_path: rel_path,
+                absolute_path: absolute_path.to_string_lossy().into_owned(),
+                file_hash,
+                modified_time,
+                sync_kind,
+            });
+        } else {
+            // 非 白名单（ignored）文件：metadata / hash 失败不 Err
+            // （下游只用 ignored 文件的路径，不用其 hash/mtime）。
+            // 仍尝试取 mtime/hash 以便诊断，失败则用 fallback 值。
+            let modified_time = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            let file_hash = SyncService::compute_file_hash(&absolute_path).unwrap_or_default();
+
+            entries.push(SyncFileEntry {
+                relative_path: rel_path,
+                absolute_path: absolute_path.to_string_lossy().into_owned(),
+                file_hash,
+                modified_time,
+                sync_kind,
+            });
+        }
     }
 
     Ok(entries)
