@@ -2,6 +2,7 @@ package com.xiwei.sujian.storage.recovery
 
 import android.content.Context
 import android.net.Uri
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -130,7 +131,9 @@ class LegacySharedStorageImporter {
         legacyGitWorkspace: File,
         context: Context,
     ): ImportResult.CopyFailed? {
-        val finalDir = File(context.filesDir, FINAL_DIR_NAME)
+        // #649 评论 5560685734 要求 2：最终目录由 AndroidPrivateDataRoot 统一管理，
+        // 避免大小写不一致导致迁移后 Core 读不到数据。
+        val finalDir = AndroidPrivateDataRoot.root(context)
         if (finalDir.exists()) {
             rollbackGit(File(tmpDir, GIT_DIR_NAME), legacyGitWorkspace)
             return ImportResult.CopyFailed("Target dir already exists: $finalDir")
@@ -162,7 +165,6 @@ class LegacySharedStorageImporter {
         private const val LEGACY_GIT_WORKSPACE_PATH = "sujian-git/workspace"
         private const val LEGACY_GIT_BASE_NAME = "sujian-git"
         private const val TMP_DIR_NAME = "sujian-import.tmp"
-        private const val FINAL_DIR_NAME = "sujian"
         private const val GIT_DIR_NAME = ".git"
     }
 }

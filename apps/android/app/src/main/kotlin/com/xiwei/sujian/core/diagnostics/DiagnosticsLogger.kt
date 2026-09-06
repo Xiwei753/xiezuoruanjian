@@ -3,7 +3,7 @@ package com.xiwei.sujian.core.diagnostics
 import android.content.Context
 import android.util.Log
 import com.xiwei.sujian.BuildConfig
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -302,7 +302,7 @@ object DiagnosticsLogger {
      */
     fun getCrashFile(): File? {
         val ctx = contextRef.get() ?: return null
-        val primary = File(AndroidDataRoot.logsDir(ctx), "last_crash.txt")
+        val primary = File(AndroidPrivateDataRoot.logs(ctx), "last_crash.txt")
         if (primary.exists()) return primary
         val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
         return if (fallback.exists()) fallback else null
@@ -316,7 +316,7 @@ object DiagnosticsLogger {
      */
     fun getFallbackCrashFile(): File? {
         val ctx = contextRef.get() ?: return null
-        val primary = File(AndroidDataRoot.logsDir(ctx), "last_crash.txt")
+        val primary = File(AndroidPrivateDataRoot.logs(ctx), "last_crash.txt")
         if (!primary.exists()) return null
         val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
         return if (fallback.exists()) fallback else null

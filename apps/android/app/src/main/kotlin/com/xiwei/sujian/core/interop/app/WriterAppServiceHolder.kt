@@ -6,7 +6,7 @@ import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toSyncFailureKind
 import com.xiwei.sujian.core.interop.common.toWireErrorCode
 import com.xiwei.sujian.core.interop.security.AndroidKeystoreSecureStorage
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import uniffi.writer_core.PlatformDto
 import uniffi.writer_core.PlatformInitDto
 import uniffi.writer_core.WriterAppService
@@ -92,14 +92,14 @@ class WriterAppServiceHolder(
             isConnected: Boolean,
             isMetered: Boolean,
         ): WriterAppServiceHolder {
-            val appDataRoot = AndroidDataRoot.rootDir(context).absolutePath
-            val projectsRoot = AndroidDataRoot.projectsDir(context).absolutePath
+            val appDataRoot = AndroidPrivateDataRoot.root(context).absolutePath
+            val projectsRoot = AndroidPrivateDataRoot.projects(context).absolutePath
             val init =
                 PlatformInitDto(
                     platform = PlatformDto.ANDROID,
                     appDataDir = appDataRoot,
                     cacheDir = cacheDir,
-                    logDir = AndroidDataRoot.logsDir(context).absolutePath,
+                    logDir = AndroidPrivateDataRoot.logs(context).absolutePath,
                     noBackupDir = noBackupDir,
                     deviceId = deviceId,
                     appVersion = appVersion,

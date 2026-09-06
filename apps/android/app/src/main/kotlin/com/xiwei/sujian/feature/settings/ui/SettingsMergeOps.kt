@@ -28,7 +28,7 @@ fun SettingsViewModel.mergeRefresh() {
         val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
         // #649 评论 5559763924：数据根目录路径由 Repository 持有的 appContext 解析，
-        // 不再直接调 AndroidDataRoot 无 context 重载。
+        // 不再直接调 AndroidPrivateDataRoot 无 context 重载。
         val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootPath() }
         _uiState.update {
             SettingsUiState(

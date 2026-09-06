@@ -5,7 +5,7 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.diagnostics.LogRequest
 import com.xiwei.sujian.core.diagnostics.PersistentLogWriter
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -64,7 +64,7 @@ class DiagnosticsExportPackageTest {
                 threadName = "test",
             ),
         )
-        val logsDir = AndroidDataRoot.logsDir(context)
+        val logsDir = AndroidPrivateDataRoot.logs(context)
         logsDir.mkdirs()
         File(logsDir, "last_crash.txt").writeText("probe crash content")
 

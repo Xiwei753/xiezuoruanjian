@@ -4,7 +4,7 @@ import androidx.core.content.edit
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,7 +59,7 @@ class SettingsRepository(
      * #649 评论 5559763924：应用私有数据根目录的绝对路径（`filesDir/Sujian`）。
      * 供设置页"关于"分类展示，调用方无需自己持有 [android.content.Context]。
      */
-    fun dataRootPath(): String = AndroidDataRoot.rootDir(appContext).absolutePath
+    fun dataRootPath(): String = AndroidPrivateDataRoot.root(appContext).absolutePath
 
     fun consumeWarning(): String? {
         val w = lastWarning

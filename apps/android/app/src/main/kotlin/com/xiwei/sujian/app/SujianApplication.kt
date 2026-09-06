@@ -8,9 +8,10 @@ import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
+import com.xiwei.sujian.storage.recovery.LegacyStorageMigrationGate
 import java.io.File
 import java.io.FileWriter
 import java.io.PrintWriter
@@ -74,7 +75,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                         append("Crash at $timestamp\nThread: ${thread.name}\n\n")
                     }
                 val externalWritten =
-                    writeCrashFile(File(AndroidDataRoot.logsDir(this), "last_crash.txt"), header, redactedTrace)
+                    writeCrashFile(File(AndroidPrivateDataRoot.logs(this), "last_crash.txt"), header, redactedTrace)
                 if (!externalWritten) {
                     val fallbackDir = File(filesDir, "diagnostics")
                     fallbackDir.mkdirs()
@@ -115,6 +116,14 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     override fun onStart(owner: LifecycleOwner) {
         // #649 评论 5559763924：数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("start")
+        // #649 评论 5560685734 要求 3：旧结构待迁移时 Core 尚未打开，
+        // 不初始化 autoSyncScheduler、不触碰 appContainer（访问 appContainer 会触发
+        // DefaultAppServiceContainer 构造并初始化 WriterAppService）。只记日志后 return，
+        // 等迁移成功、MainActivity.proceedWithUi 后下次 onStart 再正常初始化。
+        if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
+            DiagnosticsLogger.w("SujianApp", "Legacy storage pending migration; skip appContainer init on start")
+            return
+        }
         if (autoSyncScheduler == null) {
             autoSyncScheduler = AutoSyncScheduler(this, appContainer.syncRepository)
         }
@@ -124,6 +133,13 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     override fun onStop(owner: LifecycleOwner) {
         // 同 onStart：私有存储无需权限检查。
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("stop")
+        // #649 评论 5560685734 要求 3：旧结构仍待迁移时跳过 syncRepository/starMapBridge 调用，
+        // 它们会触发 Core 初始化。autoSyncScheduler 此时也必为 null，无需 stop。
+        if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
+            DiagnosticsLogger.w("SujianApp", "Legacy storage pending migration; skip appContainer touch on stop")
+            DiagnosticsLogger.flushBlocking()
+            return
+        }
         autoSyncScheduler?.stop()
         val result = AppServiceProvider.getAppServiceBridge(this).starMapBridge.flushAllStarmapStores()
         when (result) {

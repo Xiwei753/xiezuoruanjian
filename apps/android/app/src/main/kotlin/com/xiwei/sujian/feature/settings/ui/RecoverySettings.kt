@@ -16,7 +16,7 @@ import com.xiwei.sujian.app.RecoveryFromLocalButton
  * [com.xiwei.sujian.storage.recovery.StorageRecoveryCoordinator.recoverFromUri]，
  * 由协调器判断来源并完成迁移/恢复。不在 Composable 里做目录遍历/复制/解析。
  *
- * 恢复结果通过 Toast 提示；恢复成功后 [com.xiwei.sujian.storage.recovery.MirrorChangeSink]
+ * 恢复结果通过 Toast 提示；恢复成功后 [com.xiwei.sujian.storage.recovery.RecoveryChangeSink]
  * 负责刷新作品列表/星图/统计缓存。
  */
 @Composable

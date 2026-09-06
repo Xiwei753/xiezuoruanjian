@@ -39,7 +39,7 @@ class StorageRecoveryCoordinator(
     private val context: Context,
     private val documentTreeReader: DocumentTreeReader,
     private val appServiceBridge: AppServiceBridge,
-    private val changeSink: MirrorChangeSink,
+    private val changeSink: RecoveryChangeSink,
 ) {
     private val legacyImporter by lazy { LegacySharedStorageImporter() }
     private val mirrorRestorer by lazy { ReadableMirrorRestorer() }

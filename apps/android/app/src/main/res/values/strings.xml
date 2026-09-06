@@ -64,6 +64,14 @@
     <string name="recovery_result_failed">恢复失败：%1$s</string>
     <string name="recovery_result_cancelled">已取消选择源目录</string>
 
+    <!-- #649 评论 5560685734 要求 3：旧版本升级迁移入口（启动时检测到 filesDir/sujian-git/workspace） -->
+    <string name="migration_gate_title">需要迁移旧版数据</string>
+    <string name="migration_gate_message">检测到旧版本数据，需要从原共享存储选择源目录迁移到应用私有目录后才能继续。</string>
+    <string name="migration_gate_action">从旧版本迁移数据</string>
+    <string name="migration_gate_success">迁移成功，正在进入应用</string>
+    <string name="migration_gate_failed">迁移失败：%1$s</string>
+    <string name="migration_gate_cancelled">已取消选择源目录</string>
+
     <!-- 设置页顶部紧凑全局搜索入口（#477 未接入时为占位） -->
     <string name="settings_search_hint">搜索设置</string>
 

@@ -1,7 +1,7 @@
 package com.xiwei.sujian.core.diagnostics
 
 import android.content.Context
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -142,7 +142,7 @@ internal object PersistentLogWriter {
 
     /**
      * 初始化并启动 writer 线程。幂等：重复调用无副作用。
-     * [context] 保留供未来绑定应用生命周期；当前日志目录由 [AndroidDataRoot] 决定。
+     * [context] 保留供未来绑定应用生命周期；当前日志目录由 [AndroidPrivateDataRoot] 决定。
      */
     fun init(
         context: Context,
@@ -244,7 +244,7 @@ internal object PersistentLogWriter {
      * #649 评论 5559763924：解析应用私有 logsDir（`filesDir/Sujian/logs`）。
      * 未初始化（appContext 为 null）时返回 null，调用方据此返回空/失败。
      */
-    private fun logsDir(): File? = appContext?.let { AndroidDataRoot.logsDir(it) }
+    private fun logsDir(): File? = appContext?.let { AndroidPrivateDataRoot.logs(it) }
 
     /** 返回当前日志目录下所有 sujian-current*.log 文件。 */
     fun getLogFiles(): List<File> {

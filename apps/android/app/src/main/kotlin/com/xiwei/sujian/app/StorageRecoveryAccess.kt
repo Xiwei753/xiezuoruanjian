@@ -15,7 +15,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
-import com.xiwei.sujian.storage.recovery.DefaultMirrorChangeSink
+import com.xiwei.sujian.storage.recovery.DefaultRecoveryChangeSink
 import com.xiwei.sujian.storage.recovery.RecoveryResult
 import com.xiwei.sujian.storage.recovery.StorageRecoveryCoordinator
 import kotlinx.coroutines.launch
@@ -51,7 +51,7 @@ fun rememberStorageRecoveryCoordinator(appState: WorkspaceAppState): StorageReco
     return remember(appState, deps) {
         val documentTreeReader = DocumentTreeReader(context.applicationContext.contentResolver)
         val changeSink =
-            DefaultMirrorChangeSink(
+            DefaultRecoveryChangeSink(
                 appState = appState,
                 starMapRepository = deps.starmapRepository,
                 writingStatsRepository = deps.statsRepository,
