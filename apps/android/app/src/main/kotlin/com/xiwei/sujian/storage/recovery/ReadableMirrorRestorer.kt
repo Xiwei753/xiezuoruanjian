@@ -10,7 +10,6 @@ import com.xiwei.sujian.storage.mirror.MirrorChapter
 import com.xiwei.sujian.storage.mirror.MirrorManifest
 import com.xiwei.sujian.storage.mirror.MirrorProject
 import com.xiwei.sujian.storage.mirror.MirrorVolume
-import com.xiwei.sujian.storage.mirror.computeContentHash
 import com.xiwei.sujian.storage.mirror.verifyContentHash
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -70,24 +69,12 @@ class ReadableMirrorRestorer {
                     return@withContext RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}")
                 }
 
-            // 1.1 校验 manifest 引用的正文文件是否都存在
-            val missingFiles = mutableListOf<String>()
-            for (project in manifest.projects) {
-                for (volume in project.volumes) {
-                    for (chapter in volume.chapters) {
-                        if (chapter.contentFile.isEmpty()) {
-                            missingFiles.add(chapter.contentFile)
-                            continue
-                        }
-                        val contentUri = findDescendant(mirrorTreeUri, chapter.contentFile, documentTreeReader)
-                        if (contentUri == null) {
-                            missingFiles.add(chapter.contentFile)
-                        }
-                    }
-                }
-            }
-            if (missingFiles.isNotEmpty()) {
-                return@withContext RestoreResult.RestoreFailed("Missing content files: ${missingFiles.joinToString(", ")}")
+            // 1.1 预检查：创建 Core 项目前，对所有章节做"存在 + 可读 + hash"预检。
+            // #649 评论 5560971132 修复 8：任一章节读取失败或 hash 不匹配立即返回 RestoreFailed，
+            // 不创建半成品 Core 项目。扩展现有 missingFiles 检查，同时预读验证 hash。
+            val precheckFailure = precheckAllChapters(manifest, mirrorTreeUri, documentTreeReader)
+            if (precheckFailure != null) {
+                return@withContext precheckFailure
             }
 
             // 2-3. 按 manifest 重建 project / volume / chapter + 逐章读取内容
@@ -103,6 +90,63 @@ class ReadableMirrorRestorer {
             changeSink.everythingChanged()
             RestoreResult.Success
         }
+
+    /**
+     * 预检查所有章节：存在 + 可读 + hash 匹配。
+     *
+     * 返回 null 表示全部通过；否则返回 [RestoreResult.RestoreFailed]。
+     * 在创建任何 Core 项目之前调用，避免半成品。
+     */
+    private fun precheckAllChapters(
+        manifest: MirrorManifest,
+        mirrorTreeUri: Uri,
+        reader: DocumentTreeReader,
+    ): RestoreResult? {
+        for (project in manifest.projects) {
+            for (volume in project.volumes) {
+                val failure = precheckVolumeChapters(volume, mirrorTreeUri, reader)
+                if (failure != null) return failure
+            }
+        }
+        return null
+    }
+
+    /**
+     * 预检查单卷所有章节。提取自 precheckAllChapters 以控制嵌套深度与认知复杂度。
+     */
+    private fun precheckVolumeChapters(
+        volume: MirrorVolume,
+        mirrorTreeUri: Uri,
+        reader: DocumentTreeReader,
+    ): RestoreResult? {
+        for (chapter in volume.chapters) {
+            if (chapter.contentFile.isEmpty()) {
+                return RestoreResult.RestoreFailed(
+                    "Chapter ${chapter.id} has empty contentFile in manifest",
+                )
+            }
+            val contentUri =
+                findDescendant(mirrorTreeUri, chapter.contentFile, reader)
+                    ?: return RestoreResult.RestoreFailed(
+                        "Missing content file: ${chapter.contentFile}",
+                    )
+            val content =
+                try {
+                    reader.readText(contentUri)
+                } catch (e: Exception) {
+                    return RestoreResult.RestoreFailed(
+                        "Failed to read ${chapter.contentFile}: ${e.message}",
+                    )
+                }
+            // hash 预检：manifest 声明了 hash 时必须匹配
+            if (chapter.contentHash.isNotEmpty() && !verifyContentHash(content, chapter.contentHash)) {
+                return RestoreResult.RestoreFailed(
+                    "Content hash mismatch for ${chapter.contentFile}",
+                )
+            }
+        }
+        return null
+    }
 
     /** 验证根 URI 仍可查询；返回 null 表示通过，否则返回失败结果。 */
     private fun verifyUriAccessible(
@@ -165,10 +209,10 @@ class ReadableMirrorRestorer {
         for (chapter in sortedChapters) {
             val newChapter = bridge.createChapter(projectId, volumeId, chapter.title).unwrapOrThrow()
             newChapterIds.add(newChapter.id)
-            val content = readChapterContent(chapter, mirrorTreeUri, reader)
-            if (content != null) {
-                bridge.saveChapterContent(projectId, volumeId, newChapter.id, content).unwrapOrThrow()
-            }
+            // #649 修复 8：失败直接 throw IOException，不返回 null。
+            // 预检查已保证可读 + hash 匹配，此处再读一次做双重保险。
+            val content = readVerifiedChapterContent(chapter, mirrorTreeUri, reader)
+            bridge.saveChapterContent(projectId, volumeId, newChapter.id, content).unwrapOrThrow()
         }
         if (newChapterIds.size > 1) {
             bridge.reorderChapters(projectId, volumeId, newChapterIds).unwrapOrThrow()
@@ -176,26 +220,38 @@ class ReadableMirrorRestorer {
     }
 
     /**
-     * 读取章节内容；返回 null 表示读取失败（阻断恢复，因为 manifest 已声明该文件存在）。
-     * 空正文返回空字符串（正常恢复）。
+     * 读取并验证章节内容；失败 throw [IOException]。
+     *
+     * #649 评论 5560971132 修复 8：旧 [readChapterContent] 返回 null 时调用方静默跳过，
+     * 导致恢复出空章节。新实现失败直接 throw，让外层 try-catch 转成 RestoreFailed。
+     *
+     * - contentFile 为空 → throw（manifest 声明了该文件存在）。
+     * - 文件不存在 → throw。
+     * - 读取失败 → throw。
+     * - hash 不匹配 → throw。
+     * - 空正文返回空字符串（正常恢复）。
      */
-    private fun readChapterContent(
+    private fun readVerifiedChapterContent(
         chapter: MirrorChapter,
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
-    ): String? {
-        if (chapter.contentFile.isEmpty()) return ""
-        val contentUri = findDescendant(mirrorTreeUri, chapter.contentFile, reader) ?: return null
-        return runCatching { reader.readText(contentUri) }
-            .getOrNull()
-            ?.let { content ->
-                // 校验 contentHash
-                if (chapter.contentHash.isNotEmpty() && !verifyContentHash(content, chapter.contentHash)) {
-                    null // 哈希不匹配
-                } else {
-                    content
-                }
+    ): String {
+        if (chapter.contentFile.isEmpty()) {
+            throw IOException("Chapter ${chapter.id} has empty contentFile")
+        }
+        val contentUri =
+            findDescendant(mirrorTreeUri, chapter.contentFile, reader)
+                ?: throw IOException("Content file not found: ${chapter.contentFile}")
+        val content =
+            try {
+                reader.readText(contentUri)
+            } catch (e: Exception) {
+                throw IOException("Failed to read ${chapter.contentFile}: ${e.message}", e)
             }
+        if (chapter.contentHash.isNotEmpty() && !verifyContentHash(content, chapter.contentHash)) {
+            throw IOException("Content hash mismatch for ${chapter.contentFile}")
+        }
+        return content
     }
 
     /**
@@ -220,12 +276,16 @@ class ReadableMirrorRestorer {
     /**
      * 解析 manifest JSON。
      *
-     * #649 评论 5560685734：使用共享的 [MirrorManifest] 格式，
-     * 包含 schemaVersion、revision、contentHash。
+     * #649 评论 5560971132 修复 8：schemaVersion 严格校验。
+     * - 用 [JSONObject.getInt]（不是 optInt）：字段缺失时 throw JSONException → RestoreFailed。
+     * - 值 != 1 时 throw IOException → RestoreFailed（不支持的未来版本）。
      */
     private fun parseManifest(json: String): MirrorManifest {
         val root = JSONObject(json)
-        val schemaVersion = root.optInt(SCHEMA_VERSION_KEY, 1)
+        val schemaVersion = root.getInt(SCHEMA_VERSION_KEY)
+        if (schemaVersion != 1) {
+            throw IOException("Unsupported manifest schemaVersion: $schemaVersion (expected 1)")
+        }
         val revision = root.optLong(REVISION_KEY)
         val updatedAt = root.optString(UPDATED_AT_KEY)
         val projects = mutableListOf<MirrorProject>()

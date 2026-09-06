@@ -7,6 +7,11 @@ import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
+import com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads
+import com.xiwei.sujian.storage.mirror.CoreMirrorSnapshotSource
+import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
+import com.xiwei.sujian.storage.mirror.ReadableMirrorPublisher
+import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
 import java.util.Locale
 import java.util.TimeZone
 
@@ -21,6 +26,10 @@ import java.util.TimeZone
  * - 网络状态检测与回调注册 → AndroidNetworkMonitor
  * - 设备 ID 持久化 → AndroidDeviceIdentity
  * - 应用版本读取 → AndroidAppVersionProvider
+ *
+ * #649 评论 5560971132 修复 1/6：在此组装镜像发布链：
+ * `CoreMirrorSnapshotSource → ReadableMirrorPublisher → DefaultMirrorChangeSink → AppServiceBridge`。
+ * Publisher 只依赖 SnapshotSource（只读），不持有 AppServiceBridge，切断循环依赖。
  *
  * UI 层不应直接引用此类（架构分层规则 #597），应通过各 Repository/容器间接访问。
  */
@@ -56,7 +65,14 @@ object AppServiceProvider {
                 isConnected = isConnected,
                 isMetered = isMetered,
             )
-        val bridge = AppServiceBridge(holder)
+        // 组装镜像发布链（#649 修复 1/6）：
+        // SnapshotSource 只读 Core 快照；Publisher 不持有 AppServiceBridge，切断循环。
+        val snapshotSource = CoreMirrorSnapshotSource(holder)
+        val mediaStore = MediaStoreDownloads(appContext.contentResolver)
+        val stateStore = ReadableMirrorStateStore(appContext)
+        val publisher = ReadableMirrorPublisher(snapshotSource, mediaStore, stateStore)
+        val mirrorChangeSink = DefaultMirrorChangeSink(publisher)
+        val bridge = AppServiceBridge(holder, mirrorChangeSink)
         AndroidNetworkMonitor.registerNetworkCallback(appContext) {
             refreshNetworkState(appContext, bridge)
         }

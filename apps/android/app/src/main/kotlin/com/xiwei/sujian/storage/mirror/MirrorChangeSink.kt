@@ -5,9 +5,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * MirrorChangeSink — 镜像变更入口。
@@ -23,7 +25,7 @@ import kotlinx.coroutines.sync.withLock
  * ## 设计要点
  * - 异步：Bridge 在保存热路径不能同步写 Download；所有发布都进队列，
  *   由后台协程串行消费。
- * - 合并：短时间内多次 chapterChanged 合并成一次全量发布，
+ * - 合并：短时间内多次 chapterChanged 合并成一次按项目发布，
  *   避免频繁 I/O。
  * - 幂等：发布失败可重试；manifest 与正文文件都是幂等写入。
  *
@@ -39,7 +41,11 @@ interface MirrorChangeSink {
      *
      * 触发发布该章正文 + 更新 manifest。
      */
-    fun chapterChanged(projectId: String, volumeId: String, chapterId: String)
+    fun chapterChanged(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    )
 
     /**
      * 项目结构变更（新建/重命名/删除 卷或章节、重新排序）。
@@ -69,34 +75,62 @@ interface MirrorChangeSink {
 }
 
 /**
- * 默认实现：合并队列 + 异步发布。
+ * 默认实现：ConcurrentHashMap 脏标记 + Channel.CONFLATED 信号 + debounce。
+ *
+ * #649 评论 5560971132 修复 5：旧实现用 `Mutex + pendingTask + lastPublishTime` 做
+ * 合并，存在两个问题：
+ * 1. `lastPublishTime` 让合并窗口内的后续事件被静默丢弃（`return@launch` 不再调度），
+ *    导致最后一次变更可能永远不发布。
+ * 2. `pendingTask` 单值合并丢失并发到达的多项目事件。
+ *
+ * 新实现：
+ * - [dirtyMap] 用 ConcurrentHashMap 累积脏项目/章节键，不丢事件。
+ * - [deleteQueue] 用 ConcurrentLinkedQueue 单独保留删除事件（删除不能被 publish 吞掉）。
+ * - [signal] 用 Channel.CONFLATED 合并信号：多次 trySend 只保留一个待处理信号。
+ * - [workerLoop] 收到信号后 delay(debounceMs) 让后续事件合并进 map，再一次性处理。
  *
  * @param publisher 实际的发布器（注入以便测试）
- * @param mergeWindowMs 合并窗口（毫秒），默认 2000ms。窗口内的多个事件合并成一次发布。
+ * @param debounceMs debounce 窗口（毫秒），默认 500ms。窗口内到达的多个事件
+ *   合并进同一个 dirtyMap 快照，窗口结束后一次性发布。
  */
 class DefaultMirrorChangeSink(
     private val publisher: ReadableMirrorPublisher,
-    private val mergeWindowMs: Long = 2000L,
+    private val debounceMs: Long = 500L,
 ) : MirrorChangeSink {
+    private val dirtyMap = ConcurrentHashMap<MirrorKey, DirtyEntry>()
+    private val deleteQueue = ConcurrentLinkedQueue<DeleteEvent>()
+    private val signal = Channel<Unit>(Channel.CONFLATED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val mutex = Mutex()
-    private var pendingTask: PublishTask? = null
-    private var lastPublishTime = 0L
 
-    override fun chapterChanged(projectId: String, volumeId: String, chapterId: String) {
-        schedule(PublishTask.ChapterChanged(projectId, volumeId, chapterId))
+    init {
+        scope.launch { workerLoop() }
+    }
+
+    override fun chapterChanged(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    ) {
+        dirtyMap[MirrorKey(projectId, volumeId, chapterId)] = DirtyEntry(System.currentTimeMillis())
+        signal.trySend(Unit)
     }
 
     override fun projectStructureChanged(projectId: String) {
-        schedule(PublishTask.ProjectStructureChanged(projectId))
+        dirtyMap[MirrorKey(projectId, "", "")] = DirtyEntry(System.currentTimeMillis())
+        signal.trySend(Unit)
     }
 
     override fun projectDeleted(projectId: String) {
-        schedule(PublishTask.ProjectDeleted(projectId))
+        deleteQueue.add(DeleteEvent(projectId))
+        // 删除项目时清掉该项目的脏标记，避免删除后又触发 publishProject
+        dirtyMap.keys.removeAll { it.projectId == projectId }
+        signal.trySend(Unit)
     }
 
     override fun everythingChanged() {
-        schedule(PublishTask.EverythingChanged)
+        dirtyMap.clear()
+        dirtyMap[MirrorKey(WILDCARD_PROJECT, "", "")] = DirtyEntry(System.currentTimeMillis())
+        signal.trySend(Unit)
     }
 
     override fun close() {
@@ -104,120 +138,74 @@ class DefaultMirrorChangeSink(
     }
 
     /**
-     * 调度发布任务。
+     * 后台消费循环：等信号 → debounce → 处理删除 → 处理 dirty。
      *
-     * 合并策略：
-     * - EverythingChanged 吞并所有其他事件
-     * - ProjectDeleted 吞并同项目的 ProjectStructureChanged/ChapterChanged
-     * - ProjectStructureChanged 吞并同项目的 ChapterChanged
+     * Channel.CONFLATED 保证：在 workerLoop delay 期间到达的多次 trySend 只积压一个信号，
+     * delay 结束后一次性处理 dirtyMap 快照，自然合并。
      */
-    private fun schedule(task: PublishTask) {
-        scope.launch {
-            mutex.withLock {
-                val merged = merge(pendingTask, task)
-                pendingTask = merged
-                // 如果合并窗口还没过，等一等
-                val now = System.currentTimeMillis()
-                if (now - lastPublishTime < mergeWindowMs) {
-                    return@launch
-                }
-                // 执行发布
-                val taskToPublish = pendingTask
-                if (taskToPublish != null) {
-                    pendingTask = null
-                    lastPublishTime = now
-                    publish(taskToPublish)
-                }
+    private suspend fun workerLoop() {
+        while (true) {
+            // 阻塞等信号（CONFLATED channel 的 receive 在空时挂起）
+            signal.receive()
+            // debounce：让后续事件合并进 dirtyMap
+            delay(debounceMs)
+            // 先处理删除队列（删除优先，避免删后又 publish）
+            processDeletes()
+            // 再处理 dirty 快照
+            processDirtySnapshot()
+        }
+    }
+
+    private suspend fun processDeletes() {
+        while (true) {
+            val del = deleteQueue.poll() ?: break
+            try {
+                publisher.deleteProject(del.projectId)
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "deleteProject failed: ${del.projectId}", e)
             }
         }
     }
 
-    /**
-     * 合并两个任务。
-     */
-    private fun merge(existing: PublishTask?, new: PublishTask): PublishTask {
-        if (existing == null) return new
-        // EverythingChanged 优先
-        if (existing is PublishTask.EverythingChanged || new is PublishTask.EverythingChanged) {
-            return PublishTask.EverythingChanged
-        }
-        // ProjectDeleted 优先
-        if (existing is PublishTask.ProjectDeleted) return existing
-        if (new is PublishTask.ProjectDeleted) return new
-        // ProjectStructureChanged 吞并同项目 ChapterChanged
-        if (existing is PublishTask.ProjectStructureChanged && new is PublishTask.ChapterChanged) {
-            if (new.projectId == existing.projectId) return existing
-            return PublishTask.Batch(listOf(existing, new))
-        }
-        if (new is PublishTask.ProjectStructureChanged && existing is PublishTask.ChapterChanged) {
-            if (existing.projectId == new.projectId) return new
-            return PublishTask.Batch(listOf(existing, new))
-        }
-        // 同项目多个 ChapterChanged
-        if (existing is PublishTask.ChapterChanged && new is PublishTask.ChapterChanged) {
-            return PublishTask.Batch(listOf(existing, new))
-        }
-        // 其他情况合并成 Batch
-        return PublishTask.Batch(listOf(existing, new))
-    }
-
-    /**
-     * 执行发布。
-     */
-    private suspend fun publish(task: PublishTask) {
-        try {
-            when (task) {
-                is PublishTask.ChapterChanged ->
-                    publisher.publishChapter(task.projectId, task.volumeId, task.chapterId)
-
-                is PublishTask.ProjectStructureChanged ->
-                    publisher.publishProject(task.projectId)
-
-                is PublishTask.ProjectDeleted ->
-                    publisher.deleteProject(task.projectId)
-
-                is PublishTask.EverythingChanged ->
-                    publisher.publishAll()
-
-                is PublishTask.Batch -> {
-                    // Batch 按项目分组去重
-                    val projectIds = task.tasks.mapNotNullTo(mutableSetOf()) { t ->
-                        when (t) {
-                            is PublishTask.ChapterChanged -> t.projectId
-                            is PublishTask.ProjectStructureChanged -> t.projectId
-                            is PublishTask.ProjectDeleted -> t.projectId
-                            else -> null
-                        }
-                    }
-                    // 如果有 EverythingChanged，直接全量
-                    if (task.tasks.any { it is PublishTask.EverythingChanged }) {
-                        publisher.publishAll()
-                    } else {
-                        // 按项目发布
-                        projectIds.forEach { projectId ->
-                            publisher.publishProject(projectId)
-                        }
-                    }
-                }
+    private suspend fun processDirtySnapshot() {
+        val snapshot = dirtyMap.toMap()
+        if (snapshot.isEmpty()) return
+        dirtyMap.clear()
+        // 通配键表示全量
+        if (snapshot.containsKey(MirrorKey(WILDCARD_PROJECT, "", ""))) {
+            try {
+                publisher.publishAll()
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "publishAll failed", e)
             }
-        } catch (e: Exception) {
-            DiagnosticsLogger.e("MirrorChangeSink", "Failed to publish: ${e.message}", e)
+            return
+        }
+        // 按项目去重发布
+        val projectIds = snapshot.keys.map { it.projectId }.distinct()
+        for (pid in projectIds) {
+            try {
+                publisher.publishProject(pid)
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "publishProject failed: $pid", e)
+            }
         }
     }
 
-    /**
-     * 发布任务。
-     */
-    sealed class PublishTask {
-        data class ChapterChanged(
-            val projectId: String,
-            val volumeId: String,
-            val chapterId: String,
-        ) : PublishTask()
-
-        data class ProjectStructureChanged(val projectId: String) : PublishTask()
-        data class ProjectDeleted(val projectId: String) : PublishTask()
-        object EverythingChanged : PublishTask()
-        data class Batch(val tasks: List<PublishTask>) : PublishTask()
+    companion object {
+        private const val TAG = "DefaultMirrorChangeSink"
+        private const val WILDCARD_PROJECT = "*"
     }
 }
+
+/** 脏标记键：projectId + volumeId + chapterId。volumeId/chapterId 为空表示项目级。 */
+data class MirrorKey(
+    val projectId: String,
+    val volumeId: String,
+    val chapterId: String,
+)
+
+/** 脏条目：记录入队时间（供未来按时间窗口策略扩展）。 */
+data class DirtyEntry(val timestamp: Long)
+
+/** 删除事件：单独队列保留，不被 publish 吞掉。 */
+data class DeleteEvent(val projectId: String)
