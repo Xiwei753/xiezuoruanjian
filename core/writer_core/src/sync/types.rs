@@ -1125,6 +1125,20 @@ pub struct TargetLifecycleRecord {
     /// 发起操作的设备 ID，用于 LWW tie-break（字典序大的胜出，与 `resolve_lww_path` 同规则）。
     #[serde(default)]
     pub device_id: String,
+    /// #645 评论 5504296097 问题2：generation 原子发布 — Upsert 记录指向的当前可见
+    /// generation ID。
+    ///
+    /// LiveProject 先把完整 Project 上传到不可见 generation prefix
+    /// （`projects/P/__generations__/G/`），全部成功后 CAS `targets.sync.json`
+    /// 写 `active_generation = G`。CAS 成功后 G 才成为可见版本；CAS 输给 Delete
+    /// 则 G 是未引用 generation，后续 GC。
+    ///
+    /// - `Some(G)`：Upsert 的当前可见 generation，RestoreProject 从
+    ///   `projects/P/__generations__/G/` 下载；Delete cleanup 不碰此 generation prefix。
+    /// - `None`：legacy（无 generation）或 Delete 记录，RestoreProject 从 legacy
+    ///   `projects/P/` 下载。
+    #[serde(default)]
+    pub active_generation: Option<String>,
     /// schema 版本。
     #[serde(default = "default_target_catalog_schema_version")]
     pub schema_version: u32,
@@ -1149,6 +1163,7 @@ impl TargetLifecycleRecord {
             updated_at_ms,
             deleted_at_ms: None,
             device_id: device_id.to_string(),
+            active_generation: None,
             schema_version: 1,
         }
     }
@@ -1167,8 +1182,19 @@ impl TargetLifecycleRecord {
             updated_at_ms: deleted_at_ms,
             deleted_at_ms: Some(deleted_at_ms),
             device_id: device_id.to_string(),
+            active_generation: None,
             schema_version: 1,
         }
+    }
+
+    /// #645 评论 5504296097 问题2：builder 方法 — 给 Upsert 记录设置 active_generation。
+    ///
+    /// 用于 LiveProject generation 原子发布：先上传到 generation prefix，成功后
+    /// 构造 `upsert(...).with_active_generation(G)` 作为 CAS candidate。
+    /// Delete 记录不应设置 active_generation（调用方应只在 Upsert 上调用）。
+    pub fn with_active_generation(mut self, generation: impl Into<String>) -> Self {
+        self.active_generation = Some(generation.into());
+        self
     }
 }
 

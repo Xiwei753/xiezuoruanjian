@@ -82,9 +82,18 @@ pub(crate) fn scan_for_sync(
 /// - 增量同步：hash 变化或新增的文件上传；本地已删除的远端文件标记删除
 /// - 墓碑清理：`purge_after <= now` 的 trash 文件标记本地删除
 ///
-/// #645 评论 5504296097 问题1：调用 `snapshot_local_records_read_only` 获取只读
-/// local record 投影，保持 `build_sync_plan` 与 LWW `execute_lww_sync_attempt`
-/// 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
+/// #645 评论 5504296097 问题1：upload/delete 动作**直接**从
+/// `snapshot_local_records_read_only` 的 records 推导，保持 `build_sync_plan`
+/// 与 LWW `execute_lww_sync_attempt` 同一 source of truth（per-file 真实 winner
+/// device_id + 真实删除时间）。
+///
+/// - `record.op == "upsert"` → 决定 upload（仍结合 `state.known_files` hash 判断
+///   是否需要上传，但动作**来源**是 snapshot records）
+/// - `record.op == "delete"` → 决定 remote delete
+///
+/// `scan_for_sync` 仍用于收集 `ignored_files`（黑名单/非白名单路径）；
+/// `state.tombstones` 仍用于 `files_to_delete_local`（墓碑清理/purge）。
+/// 但 state/scan 不再单独解释同步动作。
 ///
 /// #645 评论 5504296097 问题1 修复：snapshot 失败（known file 消失且无 tombstone、
 /// manifest 损坏等）不再 fallback 到 entries-only，直接返回 Err。fallback 会让
@@ -100,6 +109,7 @@ pub(crate) fn scan_for_sync(
 pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Result<SyncPlan> {
     let mut plan = SyncPlan::new();
 
+    // scan_for_sync 仍用于收集 ignored_files（黑名单/非白名单路径）。
     let entries = scan_for_sync(sync_root, scope)?;
     // #645 评论 5504296097 问题5：build_sync_plan 是 plan/dry-run helper，
     // 用 read-only state loader，不写文件（旧 state 迁移/device_id 补写只在内存）。
@@ -110,47 +120,53 @@ pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Resu
 
     // #645 评论 5504296097 问题1 修复：用 snapshot_local_records_read_only 获取只读 records，
     // 与 LWW execute attempt 同源。snapshot 失败直接返回 Err（不再 fallback）。
+    // upload/delete 动作直接从 snapshot_records 推导，不再用 state.known_files /
+    // scan / local_files 重新推一遍。
     let snapshot_records =
         crate::sync::lww::snapshot_local_records_read_only(sync_root, scope, "")?;
 
-    let mut local_files = std::collections::HashSet::new();
-
+    // ignored_files：黑名单路径 + 非 Upload/ConflictCandidate kind。
+    // snapshot_records 只含白名单且非黑名单的路径，所以这些辅助信息仍需从 entries 收集。
     for entry in entries {
         if SyncService::is_blacklisted_path(&entry.relative_path, scope) {
             plan.ignored_files.push(entry.relative_path.clone());
             continue;
         }
-
-        if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate {
-            local_files.insert(entry.relative_path.clone());
-            let known_hash_opt = state.known_files.get(&entry.relative_path);
-            // 用 snapshot records 的 content_hash（与 LWW execute attempt 同源）。
-            let effective_hash = snapshot_records
-                .get(&entry.relative_path)
-                .map(|r| r.content_hash.as_str())
-                .unwrap_or(entry.file_hash.as_str());
-            if is_first_sync {
-                plan.files_to_upload.push(entry.relative_path.clone());
-            } else if let Some(kh) = known_hash_opt {
-                if *kh != effective_hash {
-                    plan.files_to_upload.push(entry.relative_path.clone());
-                }
-            } else {
-                plan.files_to_upload.push(entry.relative_path.clone());
-            }
-        } else {
+        if entry.sync_kind != SyncKind::Upload && entry.sync_kind != SyncKind::ConflictCandidate {
             plan.ignored_files.push(entry.relative_path.clone());
         }
     }
 
-    if !is_first_sync {
-        for known_path in state.known_files.keys() {
-            if !local_files.contains(known_path) {
-                plan.files_to_delete_remote.push(known_path.clone());
+    // upload/delete 动作直接从 snapshot_records 推导（与 LWW execute attempt 同源）。
+    // 遍历 HashMap 顺序不确定，排序输出以保证 plan 的确定性（测试/UI 稳定）。
+    let mut sorted_paths: Vec<&String> = snapshot_records.keys().collect();
+    sorted_paths.sort();
+    for path in sorted_paths {
+        let record = &snapshot_records[path];
+        if record.op == "upsert" {
+            // 动作来源是 snapshot records；用 state.known_files 做 hash 比较优化，
+            // 避免无变化时重复上传。
+            if is_first_sync {
+                plan.files_to_upload.push(path.clone());
+            } else if let Some(known_hash) = state.known_files.get(path) {
+                if *known_hash != record.content_hash {
+                    plan.files_to_upload.push(path.clone());
+                }
+            } else {
+                // known_files 没有但 snapshot 有 upsert → 新文件需上传。
+                plan.files_to_upload.push(path.clone());
             }
+        } else if record.op == "delete" {
+            // #645 评论 5504296097 问题1 修复：remote delete 直接从 snapshot 的
+            // delete op 推导，不再遍历 state.known_files.keys() 推断。
+            // 这修复了"old manifest upsert + known_files 无 + tombstone 有 +
+            // 磁盘无"场景：统一 snapshot 产出 Delete(real deleted_at/device)，
+            // build_sync_plan 现在能正确生成 remote delete，与 LWW execute attempt 一致。
+            plan.files_to_delete_remote.push(path.clone());
         }
     }
 
+    // 墓碑清理/purge：保留 state.tombstones 用于 files_to_delete_local。
     let now = chrono::Utc::now().timestamp();
     for t in &state.tombstones {
         if t.purge_after <= now {

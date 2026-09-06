@@ -26,6 +26,33 @@ use crate::sync::provider::SyncProvider;
 use crate::sync::types::{FullSyncResult, SyncPolicy, SyncResult, SyncTarget, TargetSyncResult};
 use crate::sync::SyncStatus;
 
+// ── #645 评论 5504296097 问题2：generation 原子发布 helpers ──
+
+/// generation 原子发布 — 不可见 generation prefix 的子目录名。
+///
+/// LiveProject 先把完整 Project 上传到 `projects/P/__generations__/G/`，
+/// CAS `targets.sync.json` 成功后才成为可见版本。`delete_all_remote_objects`
+/// 跳过此子目录，不碰并发 Upsert 正在上传的 generation。
+const GENERATION_SUBDIR: &str = "__generations__";
+
+/// 构造 generation 不可见 prefix。
+///
+/// `projects/P` + `G` → `projects/P/__generations__/G`。
+fn generation_remote_prefix(project_remote_prefix: &str, generation_id: &str) -> String {
+    format!(
+        "{}/{}/{}",
+        project_remote_prefix, GENERATION_SUBDIR, generation_id
+    )
+}
+
+/// 判断远端相对路径是否落在 generation 不可见 prefix 下。
+///
+/// `delete_all_remote_objects` 用此跳过 `__generations__/` 下的对象，不碰并发
+/// Upsert 正在上传的 generation。
+fn is_generation_path(rel_path: &str) -> bool {
+    rel_path == GENERATION_SUBDIR || rel_path.starts_with(&format!("{}/", GENERATION_SUBDIR))
+}
+
 // ── Plan / Transfer 结果 ──
 
 /// Prepare 阶段产出 — Transfer 阶段需要的全部数据（owned，不依赖 core 锁）。
@@ -268,7 +295,8 @@ pub fn build_full_sync_target_plan(
     // #645 评论 5504296097 问题1：遍历 remote_catalog.records 补远端独有 target。
     // 对本地既没有 live project 也没有 pending delete 的远端记录：
     // - 远端 Upsert → RestoreProject（下载远端恢复，让新设备发现远端独有作品）；
-    // - 远端 Delete → 跳过（本地没有该 project，无需删除）。
+    // - 远端 Delete → RemoteCleanupProject（#645 评论 5504296097 问题3 修复：
+    //   不再跳过，让远端 Delete tombstone 本身成为 durable cleanup queue）。
     {
         use std::collections::HashSet;
         let local_target_ids: HashSet<String> = targets
@@ -279,11 +307,6 @@ pub fn build_full_sync_target_plan(
             if local_target_ids.contains(&remote_rec.target_id) {
                 continue;
             }
-            if remote_rec.op != crate::sync::types::TargetOp::Upsert {
-                // 远端 delete tombstone 且本地没有该 project → 无需删除，跳过。
-                continue;
-            }
-            // 远端 upsert 且本地没有 → RestoreProject。
             // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
             // 非法记录跳过并 log warn（不恢复、不删除、不 panic），不再 unwrap_or_default()。
             let project_id =
@@ -300,18 +323,51 @@ pub fn build_full_sync_target_plan(
                     }
                 };
             let project_root = projects_root.join(&project_id);
-            targets.push(PlannedTarget {
-                target: crate::sync::types::SyncTarget::project(&project_id),
-                local_root: project_root.clone(),
-                staging_root: None,
-                target_kind: PlannedTargetKind::RestoreProject,
-                project_id: Some(project_id),
-                target_live_root: project_root,
-                deleted_journal_token: None,
-                deleted_lww: None,
-                live_lww: None,
-                expected_delete_lww: None,
-            });
+            // #645 评论 5504296097 问题3 修复：remote-only Delete 直接生成
+            // RemoteCleanupProject target（不再跳过）。这让远端 Delete tombstone
+            // 本身成为 durable cleanup queue — 即使本地 pending_remote_cleanups.json
+            // 没成功持久化，下一轮看到 remote Delete + local absent 仍会生成
+            // cleanup target。本地 pending_remote_cleanups.json 保留诊断/退避信息，
+            // 但不再决定是否存在 cleanup target。
+            // - remote-only Upsert → RestoreProject（下载远端恢复）；
+            // - remote-only Delete → RemoteCleanupProject，expected_delete_lww 从
+            //   remote_rec 构造（deleted_at_ms 或 updated_at_ms 作为 lww_time，
+            //   device_id 从 remote_rec）。
+            match remote_rec.op {
+                crate::sync::types::TargetOp::Upsert => {
+                    targets.push(PlannedTarget {
+                        target: crate::sync::types::SyncTarget::project(&project_id),
+                        local_root: project_root.clone(),
+                        staging_root: None,
+                        target_kind: PlannedTargetKind::RestoreProject,
+                        project_id: Some(project_id),
+                        target_live_root: project_root,
+                        deleted_journal_token: None,
+                        deleted_lww: None,
+                        live_lww: None,
+                        expected_delete_lww: None,
+                    });
+                }
+                crate::sync::types::TargetOp::Delete => {
+                    let expected_lww_time =
+                        crate::sync::target_lifecycle::record_lww_time(remote_rec);
+                    targets.push(PlannedTarget {
+                        target: crate::sync::types::SyncTarget::project(&project_id),
+                        local_root: project_root.clone(),
+                        staging_root: None,
+                        target_kind: PlannedTargetKind::RemoteCleanupProject,
+                        project_id: Some(project_id),
+                        target_live_root: project_root,
+                        deleted_journal_token: None,
+                        deleted_lww: None,
+                        live_lww: None,
+                        expected_delete_lww: Some(DeletedTargetLww {
+                            deleted_at_ms: expected_lww_time,
+                            device_id: remote_rec.device_id.clone(),
+                        }),
+                    });
+                }
+            }
         }
     }
 
@@ -680,6 +736,22 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     // 1. 先执行 LWW 文件同步（正文 transfer）。
                     // #645 评论 5504296097 问题3修复：live_lww 只用于资格判断
                     // （None 时不进入 LiveProject），post-transfer LWW 用 winner 的 device_id。
+                    // #645 评论 5504296097 问题2：generation 原子发布 — 先上传到不可见
+                    // generation prefix（projects/P/__generations__/G/），全部成功后
+                    // CAS targets.sync.json 写 active_generation=G。CAS 成功后 G 才成为
+                    // 可见版本；CAS 输给 Delete 则 G 是未引用 generation，后续 GC。
+                    let generation_id = uuid::Uuid::new_v4().to_string();
+                    let gen_remote_prefix =
+                        generation_remote_prefix(&planned.target.remote_prefix, &generation_id);
+                    let generation_target = SyncTarget {
+                        scope: planned.target.scope,
+                        remote_prefix: gen_remote_prefix,
+                    };
+                    log::info!(
+                        "[sync] run_transfer: LiveProject {} — uploading to generation prefix {}",
+                        planned.target.remote_prefix,
+                        generation_target.remote_prefix
+                    );
                     let sync_root = planned
                         .staging_root
                         .as_deref()
@@ -688,10 +760,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         provider,
                         sync_root,
                         &plan.sync_policy,
-                        &planned.target,
+                        &generation_target,
                         plan.force_sync,
                     );
                     // 正文 transfer 失败 → 不发布 lifecycle，直接返回错误。
+                    // generation prefix 下残留的未引用 generation 由后续 GC 清理。
                     let content_ok = matches!(
                         content_result.status,
                         SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
@@ -703,6 +776,8 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         //    算最终 LWW（#645 评论 5504296097 问题3修复）。
                         //    live_lww 只是 Transfer 前的资格判断，不是最终状态。
                         //    用 winner 的 device_id 构造 candidate，不再硬塞本机设备。
+                        //    #645 评论 5504296097 问题2：candidate 携带 active_generation=G，
+                        //    CAS 成功后 G 成为可见版本。
                         let post_transfer_root = planned
                             .staging_root
                             .as_deref()
@@ -714,7 +789,8 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     &planned.target.remote_prefix,
                                     post_transfer_lww.lww_time_ms,
                                     &post_transfer_lww.device_id,
-                                );
+                                )
+                                .with_active_generation(&generation_id);
                                 match crate::sync::target_lifecycle::apply_lifecycle_record(
                                     provider,
                                     &catalog_snapshot,
@@ -1341,14 +1417,39 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             }
                             TargetOp::Upsert => {
                                 // 远端仍是 upsert — 确认恢复，下载远端内容。
-                                log::info!(
-                                    "[sync] run_transfer: RestoreProject {} — \
-                                     CAS confirmed remote Upsert, downloading remote to staging",
-                                    planned.target.remote_prefix
-                                );
+                                // #645 评论 5504296097 问题2：如果 catalog winner 有
+                                // active_generation=G，从 generation prefix
+                                // （projects/P/__generations__/G/）下载；否则从 legacy
+                                // prefix（projects/P/）下载（兼容旧数据/无 generation 记录）。
+                                let download_prefix = match &current_rec.active_generation {
+                                    Some(gen_id) => {
+                                        let gen_prefix = generation_remote_prefix(
+                                            &planned.target.remote_prefix,
+                                            gen_id,
+                                        );
+                                        log::info!(
+                                            "[sync] run_transfer: RestoreProject {} — \
+                                             CAS confirmed remote Upsert with active_generation={}, \
+                                             downloading from generation prefix {}",
+                                            planned.target.remote_prefix,
+                                            gen_id,
+                                            gen_prefix
+                                        );
+                                        gen_prefix
+                                    }
+                                    None => {
+                                        log::info!(
+                                            "[sync] run_transfer: RestoreProject {} — \
+                                             CAS confirmed remote Upsert (no active_generation), \
+                                             downloading from legacy prefix",
+                                            planned.target.remote_prefix
+                                        );
+                                        planned.target.remote_prefix.clone()
+                                    }
+                                };
                                 let result = download_remote_to_staging(
                                     provider,
-                                    &planned.target.remote_prefix,
+                                    &download_prefix,
                                     planned.staging_root.as_deref(),
                                 );
                                 (
@@ -1593,6 +1694,12 @@ fn recoverable_error_from_provider(e: crate::sync::provider::ProviderError) -> S
 ///
 /// 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
 /// 远端 list 失败 → `RecoverableError`。单个 delete 失败 → `RecoverableError`（已删的保留）。
+///
+/// #645 评论 5504296097 问题2：跳过 `__generations__/` 下的对象 — 不碰并发 Upsert
+/// 正在上传的 generation prefix。Delete cleanup 只清 legacy prefix（`projects/P/`
+/// 下非 generation 的对象），generation prefix 由 GC 单独清理（未引用 generation）。
+/// 这修复了"设备 B 已上传新正文到 generation prefix 但还没 CAS catalog，设备 A
+/// cleanup 看到 Delete(P) → 删 projects/P/ → 误删 B 的 generation"的竞态。
 fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -> SyncResult {
     let remote_entries = match provider.list(remote_prefix) {
         Ok(entries) => entries,
@@ -1615,6 +1722,16 @@ fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -
 
     let mut remote_deletes: Vec<String> = Vec::new();
     for entry in &remote_entries {
+        // #645 评论 5504296097 问题2：跳过 generation prefix 下的对象，
+        // 不碰并发 Upsert 正在上传的 generation。
+        if is_generation_path(&entry.path) {
+            log::debug!(
+                "[sync] delete_all_remote_objects: skipping generation path {} under {}",
+                entry.path,
+                remote_prefix
+            );
+            continue;
+        }
         let full_remote_path = format!("{}/{}", remote_prefix, entry.path);
         match provider.delete(
             &full_remote_path,
@@ -3825,6 +3942,391 @@ mod tests {
             matches!(p_target.target_kind, PlannedTargetKind::LiveProject),
             "首次同步 P 应为 LiveProject，实际: {:?}",
             p_target.target_kind
+        );
+    }
+
+    /// #645 评论 5504296097 问题2：LiveProject generation 原子发布。
+    ///
+    /// 验证：LiveProject 上传到不可见 generation prefix
+    /// （`projects/P/__generations__/G/`），catalog Upsert 记录携带 active_generation=G，
+    /// legacy prefix（`projects/P/`）下无正文文件。
+    #[test]
+    fn test_live_project_uploads_to_generation_prefix() {
+        use crate::sync::types::{PlannedTargetKind, SyncPolicy};
+
+        let provider = MemoryProvider::new();
+
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("projects").join("P");
+        let chapter_dir = project_root.join("volumes").join("v1");
+        std::fs::create_dir_all(&chapter_dir).unwrap();
+        // volumes/v1/chapter.md 是 project 白名单路径。
+        std::fs::write(chapter_dir.join("chapter.md"), b"content").unwrap();
+        std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
+        let manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "volumes/v1/chapter.md".to_string(),
+                content_hash: format!("{:x}", md5::compute(b"content")),
+                updated_at_ms: 10_000,
+                deleted_at_ms: None,
+                device_id: "dev-A".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::write(
+            project_root.join("app-meta/sync/manifest.sync.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let planned = PlannedTarget {
+            target: SyncTarget::project("P"),
+            local_root: project_root.clone(),
+            staging_root: None,
+            target_kind: PlannedTargetKind::LiveProject,
+            project_id: Some("P".to_string()),
+            target_live_root: project_root.clone(),
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: Some(LiveTargetLww {
+                lww_time_ms: 10_000,
+                device_id: "dev-A".to_string(),
+            }),
+            expected_delete_lww: None,
+        };
+        let sync_policy = SyncPolicy {
+            enabled: true,
+            auto_sync: false,
+            sync_interval_seconds: 60,
+            has_network_permission: true,
+        };
+        let plan = FullSyncPlan {
+            sync_policy,
+            force_sync: true,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: test_empty_catalog_snapshot(),
+        };
+
+        let _transfer = run_transfer(&provider, &plan);
+
+        // 验证 catalog 有 Upsert with active_generation。
+        let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
+        let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/P")
+            .expect("catalog should have projects/P record");
+        assert_eq!(
+            rec.op,
+            crate::sync::types::TargetOp::Upsert,
+            "catalog should have Upsert for projects/P"
+        );
+        let gen_id = rec
+            .active_generation
+            .as_ref()
+            .expect("Upsert should carry active_generation");
+
+        // 验证远端 generation prefix 有正文文件。
+        let gen_prefix = generation_remote_prefix("projects/P", gen_id);
+        let gen_entries = provider.list(&gen_prefix).unwrap();
+        assert!(
+            gen_entries
+                .iter()
+                .any(|e| e.path == "volumes/v1/chapter.md"),
+            "generation prefix {} should have volumes/v1/chapter.md, entries: {:?}",
+            gen_prefix,
+            gen_entries
+        );
+
+        // 验证 legacy prefix 无正文（上传到 generation 而非 legacy）。
+        let legacy_read = provider.read("projects/P/volumes/v1/chapter.md").unwrap();
+        assert!(
+            legacy_read.is_none(),
+            "legacy prefix should not have volumes/v1/chapter.md (uploaded to generation prefix)"
+        );
+    }
+
+    /// #645 评论 5504296097 问题2：delete_all_remote_objects 跳过 generation prefix。
+    ///
+    /// 验证：legacy 文件被删，generation prefix 下的文件保留（不碰并发 Upsert
+    /// 正在上传的 generation）。这修复了"设备 B 已上传新正文到 generation prefix
+    /// 但还没 CAS catalog，设备 A cleanup 看到 Delete(P) → 删 projects/P/ → 误删
+    /// B 的 generation"的竞态。
+    #[test]
+    fn test_delete_all_remote_objects_skips_generation_prefix() {
+        let provider = MemoryProvider::new();
+
+        // 写 legacy 文件。
+        provider
+            .write(
+                "projects/P/chapter.md",
+                b"legacy",
+                crate::sync::provider::model::WritePrecondition::CreateNew,
+            )
+            .unwrap();
+        // 写 generation prefix 下的文件（模拟并发 Upsert 正在上传的 generation）。
+        let gen_prefix = generation_remote_prefix("projects/P", "gen-1");
+        provider
+            .write(
+                &format!("{}/chapter.md", gen_prefix),
+                b"generation",
+                crate::sync::provider::model::WritePrecondition::CreateNew,
+            )
+            .unwrap();
+
+        let result = delete_all_remote_objects(&provider, "projects/P");
+        assert!(
+            matches!(
+                result.status,
+                crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges
+            ),
+            "delete_all_remote_objects should succeed, status: {:?}",
+            result.status
+        );
+
+        // legacy 文件应被删。
+        let legacy_read = provider.read("projects/P/chapter.md").unwrap();
+        assert!(legacy_read.is_none(), "legacy chapter.md should be deleted");
+
+        // generation 文件应保留（不碰并发 Upsert 的 generation）。
+        let gen_read = provider
+            .read(&format!("{}/chapter.md", gen_prefix))
+            .unwrap();
+        assert!(
+            gen_read.is_some(),
+            "generation prefix chapter.md should be preserved (not deleted)"
+        );
+    }
+
+    /// #645 评论 5504296097 问题2：RestoreProject 从 generation prefix 下载。
+    ///
+    /// 验证：catalog winner 是 Upsert with active_generation=G 时，RestoreProject
+    /// 从 generation prefix（`projects/P/__generations__/G/`）下载，而非 legacy prefix。
+    #[test]
+    fn test_restore_project_downloads_from_generation_prefix() {
+        use crate::sync::types::{PlannedTargetKind, SyncPolicy, TargetLifecycleRecord};
+
+        let provider = MemoryProvider::new();
+
+        // 在 generation prefix 写远端正文。
+        let gen_id = "gen-restore-1";
+        let gen_prefix = generation_remote_prefix("projects/P", gen_id);
+        provider
+            .write(
+                &format!("{}/chapter.md", gen_prefix),
+                b"remote-content",
+                crate::sync::provider::model::WritePrecondition::CreateNew,
+            )
+            .unwrap();
+
+        // 写 catalog：Upsert with active_generation=G。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            TargetLifecycleRecord::upsert("projects/P", "projects/P", 10_000, "dev-A")
+                .with_active_generation(gen_id),
+        );
+        let catalog_snapshot = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog,
+            version: crate::sync::provider::model::RemoteVersion::new("v1"),
+        };
+        crate::sync::target_lifecycle::write_remote_catalog(&provider, &catalog_snapshot).unwrap();
+
+        // 构造 RestoreProject target（本地无 project，远端有 Upsert）。
+        let tmp = TempDir::new().unwrap();
+        let staging_root = tmp.path().join("staging").join("P");
+        std::fs::create_dir_all(&staging_root).unwrap();
+        // local_root 不存在（本地无 project）。
+        let local_root = tmp.path().join("projects").join("P");
+
+        let planned = PlannedTarget {
+            target: SyncTarget::project("P"),
+            local_root: local_root.clone(),
+            staging_root: Some(staging_root.clone()),
+            target_kind: PlannedTargetKind::RestoreProject,
+            project_id: Some("P".to_string()),
+            target_live_root: local_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: None,
+            expected_delete_lww: None,
+        };
+        let sync_policy = SyncPolicy {
+            enabled: true,
+            auto_sync: false,
+            sync_interval_seconds: 60,
+            has_network_permission: true,
+        };
+        let plan = FullSyncPlan {
+            sync_policy,
+            force_sync: true,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: catalog_snapshot,
+        };
+
+        let transfer = run_transfer(&provider, &plan);
+
+        // 验证 staging 从 generation prefix 下载了 chapter.md。
+        let staged_content = std::fs::read(staging_root.join("chapter.md"));
+        assert!(
+            staged_content.as_deref().ok() == Some(b"remote-content".as_slice()),
+            "RestoreProject should download chapter.md from generation prefix, \
+             staged_content: {:?}, transfer status: {:?}",
+            staged_content.map(|c| String::from_utf8_lossy(&c).into_owned()),
+            transfer.targets[0].result.status
+        );
+    }
+
+    /// #645 评论 5504296097 问题3：remote-only Delete 直接生成 RemoteCleanupProject。
+    ///
+    /// 场景：远端 catalog 有 Delete(P) tombstone，本地无 P（无 live project、
+    /// 无 pending delete）。修复前 planner 跳过 remote Delete + local absent；
+    /// 修复后直接生成 RemoteCleanupProject，expected_delete_lww 从 remote_rec 构造。
+    /// 这让远端 Delete tombstone 本身成为 durable cleanup queue — 即使本地
+    /// pending_remote_cleanups.json 没成功持久化，下一轮仍会生成 cleanup target。
+    #[test]
+    fn test_remote_only_delete_generates_cleanup_target() {
+        use crate::sync::types::{
+            PlannedTargetKind, TargetLifecycleCatalog, TargetLifecycleRecord,
+        };
+
+        let tmp = TempDir::new().unwrap();
+        let projects_root = tmp.path().join("projects");
+        std::fs::create_dir_all(&projects_root).unwrap();
+
+        // 远端 catalog 有 Delete(P) tombstone。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            TargetLifecycleRecord::delete("projects/P", "projects/P", 20_000, "dev-A"),
+        );
+
+        // 本地无 P（live_projects 为空，pending_deleted 为空）。
+        let planned = build_full_sync_target_plan(
+            tmp.path(),
+            &projects_root,
+            &[],
+            &[],
+            &catalog,
+            &crate::sync::types::SyncPolicy::default(),
+            false,
+            "device-local",
+            &[],
+        );
+
+        // 应生成 RemoteCleanupProject（而非跳过）。
+        let p_target = planned
+            .iter()
+            .find(|t| t.project_id.as_deref() == Some("P"))
+            .expect("remote-only Delete should generate a target for P");
+        assert!(
+            matches!(
+                p_target.target_kind,
+                PlannedTargetKind::RemoteCleanupProject
+            ),
+            "remote-only Delete 应生成 RemoteCleanupProject，实际: {:?}",
+            p_target.target_kind
+        );
+        // expected_delete_lww 从 remote_rec 构造。
+        let expected = p_target
+            .expected_delete_lww
+            .as_ref()
+            .expect("RemoteCleanupProject should carry expected_delete_lww");
+        assert_eq!(
+            expected.deleted_at_ms, 20_000,
+            "expected_delete_lww.deleted_at_ms 应从 remote_rec 的 deleted_at_ms 构造"
+        );
+        assert_eq!(
+            expected.device_id, "dev-A",
+            "expected_delete_lww.device_id 应从 remote_rec 的 device_id 构造"
+        );
+    }
+
+    /// #645 评论 5504296097 问题3：remote-only Delete 的 RemoteCleanupProject
+    /// 实际执行 cleanup（delete_all_remote_objects），清理远端残留。
+    ///
+    /// 验证端到端：catalog 有 Delete(P)，远端有 legacy 残留文件，
+    /// run_transfer 执行 RemoteCleanupProject → 残留被清理。
+    #[test]
+    fn test_remote_only_delete_cleanup_executes() {
+        use crate::sync::types::{PlannedTargetKind, SyncPolicy, TargetLifecycleCatalog};
+
+        let provider = MemoryProvider::new();
+
+        // 远端有 legacy 残留文件（projects/P/project.json）。
+        provider
+            .write(
+                "projects/P/project.json",
+                b"residue",
+                crate::sync::provider::model::WritePrecondition::CreateNew,
+            )
+            .unwrap();
+
+        // 写 catalog：Delete(P) tombstone。
+        let mut catalog = TargetLifecycleCatalog::default();
+        crate::sync::target_lifecycle::upsert_record(
+            &mut catalog,
+            crate::sync::types::TargetLifecycleRecord::delete(
+                "projects/P",
+                "projects/P",
+                20_000,
+                "dev-A",
+            ),
+        );
+        let catalog_snapshot = crate::sync::types::RemoteTargetCatalogSnapshot {
+            catalog: catalog.clone(),
+            version: crate::sync::provider::model::RemoteVersion::new("v1"),
+        };
+        crate::sync::target_lifecycle::write_remote_catalog(&provider, &catalog_snapshot).unwrap();
+
+        // 构造 RemoteCleanupProject target（模拟 build_full_sync_target_plan 的输出）。
+        let tmp = TempDir::new().unwrap();
+        let project_root = tmp.path().join("projects").join("P");
+        let planned = PlannedTarget {
+            target: SyncTarget::project("P"),
+            local_root: project_root.clone(),
+            staging_root: None,
+            target_kind: PlannedTargetKind::RemoteCleanupProject,
+            project_id: Some("P".to_string()),
+            target_live_root: project_root,
+            deleted_journal_token: None,
+            deleted_lww: None,
+            live_lww: None,
+            expected_delete_lww: Some(DeletedTargetLww {
+                deleted_at_ms: 20_000,
+                device_id: "dev-A".to_string(),
+            }),
+        };
+        let sync_policy = SyncPolicy {
+            enabled: true,
+            auto_sync: false,
+            sync_interval_seconds: 60,
+            has_network_permission: true,
+        };
+        let plan = FullSyncPlan {
+            sync_policy,
+            force_sync: true,
+            targets: vec![planned],
+            app_data_root: tmp.path().to_path_buf(),
+            remote_catalog_snapshot: catalog_snapshot,
+        };
+
+        let transfer = run_transfer(&provider, &plan);
+
+        // RemoteCleanupProject 应成功清理远端残留。
+        assert!(
+            matches!(
+                transfer.targets[0].result.status,
+                crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges
+            ),
+            "RemoteCleanupProject should succeed, status: {:?}",
+            transfer.targets[0].result.status
+        );
+        // legacy 残留应被删。
+        let residue = provider.read("projects/P/project.json").unwrap();
+        assert!(
+            residue.is_none(),
+            "legacy residue projects/P/project.json should be deleted"
         );
     }
 }

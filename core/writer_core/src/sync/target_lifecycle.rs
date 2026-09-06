@@ -548,14 +548,18 @@ pub fn apply_lifecycle_record(
 }
 
 /// #645 评论 5504296097 问题1修复：判断两条 record 是否完全相等
-/// （同 op / 同 lww_time / 同 device_id / 同 target_id / 同 remote_prefix）。
+/// （同 op / 同 lww_time / 同 device_id / 同 target_id / 同 remote_prefix /
+/// 同 active_generation）。
 ///
 /// 用于 `apply_lifecycle_record` 区分 `AlreadyCurrent`（完全相等）和 `RemoteWinner`（远端严格赢）。
+/// #645 评论 5504296097 问题2：active_generation 也参与相等判断 — 两条 Upsert 只有
+/// 指向同一 generation 才算完全相等，否则 candidate 仍需 CAS 写入新 active_generation。
 fn records_equal(a: &TargetLifecycleRecord, b: &TargetLifecycleRecord) -> bool {
     a.target_id == b.target_id
         && a.remote_prefix == b.remote_prefix
         && a.op == b.op
         && a.device_id == b.device_id
+        && a.active_generation == b.active_generation
         && record_lww_time(a) == record_lww_time(b)
 }
 

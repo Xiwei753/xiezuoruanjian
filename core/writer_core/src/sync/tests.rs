@@ -780,6 +780,115 @@ mod tests {
         );
     }
 
+    /// #645 评论 5504296097 问题1：build_sync_plan 的 remote delete 直接从
+    /// snapshot_local_records_read_only 的 delete op 推导，不再遍历 state.known_files。
+    ///
+    /// 不一致场景：old manifest 有 project.json upsert，state.known_files 不含
+    /// project.json，state.tombstones 有 project.json 真实 tombstone，磁盘无
+    /// project.json。统一 snapshot 产出 Delete(real deleted_at/device)，正式 LWW
+    /// 会处理这条 Delete；修复前 build_sync_plan 只遍历 state.known_files 会漏掉，
+    /// 修复后直接从 snapshot delete op 生成 files_to_delete_remote。
+    #[test]
+    fn test_build_sync_plan_remote_delete_from_snapshot_delete_op() {
+        use crate::sync::types::{
+            ManifestFileRecord, SyncManifest, SyncScope, SyncState, Tombstone,
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let sync_root = dir.path();
+
+        // 磁盘无 project.json（已删除）。
+
+        // 写 old manifest：project.json = Upsert（winner-device 同步过）。
+        std::fs::create_dir_all(sync_root.join("app-meta/sync")).unwrap();
+        let manifest = SyncManifest {
+            files: vec![ManifestFileRecord {
+                path: "project.json".to_string(),
+                content_hash: "oldhash".to_string(),
+                updated_at_ms: 1000,
+                deleted_at_ms: None,
+                device_id: "winner-device".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            }],
+        };
+        std::fs::write(
+            sync_root.join("app-meta/sync/manifest.sync.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        // 写 state：known_files 不含 project.json，tombstones 有真实 tombstone。
+        // 这模拟"known_files 已被清理但 tombstone 仍在"的合法中间状态。
+        let state = SyncState {
+            last_sync_time: None,
+            last_error: None,
+            known_files: std::collections::HashMap::new(),
+            conflicts: Vec::new(),
+            tombstones: vec![Tombstone {
+                original_path: "project.json".to_string(),
+                trash_path: "app-meta/trash/project.json".to_string(),
+                deleted_at: 2000,
+                purge_after: 9_999_999_999,
+                deleted_by: "winner-device".to_string(),
+                original_hash: "oldhash".to_string(),
+                kind: "local_delete".to_string(),
+            }],
+            deleted_files: std::collections::HashSet::new(),
+            device_id: "current-device".to_string(),
+            known_files_updated_at: std::collections::HashMap::new(),
+            conflicted_files: std::collections::HashSet::new(),
+            pending_take_remote: std::collections::HashSet::new(),
+        };
+        crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+
+        let plan =
+            crate::sync::SyncService::build_sync_plan(sync_root, SyncScope::Project).unwrap();
+
+        // 修复后：snapshot 产出 Delete，build_sync_plan 生成 remote delete。
+        assert!(
+            plan.files_to_delete_remote
+                .contains(&"project.json".to_string()),
+            "build_sync_plan 应从 snapshot delete op 生成 remote delete，实际 files_to_delete_remote: {:?}",
+            plan.files_to_delete_remote
+        );
+    }
+
+    /// #645 评论 5504296097 问题1：build_sync_plan 的 upload 动作也从 snapshot
+    /// records 的 upsert op 推导（动作来源是 snapshot，hash 比较优化用 known_files）。
+    ///
+    /// 场景：磁盘有 project.json，old manifest 无记录，state.known_files 为空
+    /// （首次同步）。snapshot 产出 Upsert，build_sync_plan 应生成 files_to_upload。
+    #[test]
+    fn test_build_sync_plan_upload_from_snapshot_upsert_op() {
+        use crate::sync::types::{SyncScope, SyncState};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sync_root = dir.path();
+
+        // 磁盘有 project.json。
+        std::fs::write(sync_root.join("project.json"), b"{}").unwrap();
+        std::fs::create_dir_all(sync_root.join("app-meta/sync")).unwrap();
+
+        // 无 old manifest，state.known_files 为空（首次同步）。
+        let state = SyncState::default();
+        crate::sync::SyncService::save_sync_state(sync_root, &state).unwrap();
+
+        let plan =
+            crate::sync::SyncService::build_sync_plan(sync_root, SyncScope::Project).unwrap();
+
+        assert!(
+            plan.files_to_upload.contains(&"project.json".to_string()),
+            "build_sync_plan 应从 snapshot upsert op 生成 upload，实际 files_to_upload: {:?}",
+            plan.files_to_upload
+        );
+        assert!(
+            plan.files_to_delete_remote.is_empty(),
+            "首次同步无 delete op，files_to_delete_remote 应为空，实际: {:?}",
+            plan.files_to_delete_remote
+        );
+    }
+
     #[cfg(feature = "github-api")]
     #[allow(clippy::type_complexity)]
     fn start_mock_github_api(
