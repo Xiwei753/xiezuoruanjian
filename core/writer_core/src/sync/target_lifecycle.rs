@@ -139,37 +139,6 @@ fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::e
 ///   - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
 ///   - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
 ///
-/// #645 评论 5504296097 问题4：校验单条 record 的 active_generation 合法性。
-///
-/// - `Delete` 记录不应有 `active_generation`（必须 `None`）；
-/// - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
-/// - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
-fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::error::Result<()> {
-    match record.op {
-        TargetOp::Delete => {
-            if record.active_generation.is_some() {
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "validate_catalog: Delete record for {:?} must not have active_generation",
-                    record.target_id
-                ))));
-            }
-        }
-        TargetOp::Upsert => {
-            if let Some(gen) = &record.active_generation {
-                // generation ID 必须是合法单 path segment，防止远端损坏 catalog
-                // 把 "../../other" 等拼进 provider path。
-                if let Err(e) = validate_generation_id(gen) {
-                    return Err(crate::Error::Io(std::io::Error::other(format!(
-                        "validate_catalog: invalid active_generation {:?} for target {:?}: {e}",
-                        gen, record.target_id
-                    ))));
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
 /// 任一不合法 → `Err`，调用方不应在此假 catalog 上继续规划。
 fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()> {
     use std::collections::HashSet;
