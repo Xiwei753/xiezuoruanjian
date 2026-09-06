@@ -8,11 +8,15 @@ import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import android.net.Uri
+import com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads
 import com.xiwei.sujian.storage.mirror.CoreMirrorSnapshotSource
 import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
+import com.xiwei.sujian.storage.mirror.DocumentTreeMirrorStorage
+import com.xiwei.sujian.storage.mirror.MediaStoreMirrorStorage
+import com.xiwei.sujian.storage.mirror.MirrorStorageRouter
 import com.xiwei.sujian.storage.mirror.ReadableMirrorPublisher
 import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
-import com.xiwei.sujian.storage.mirror.selectMirrorStorage
 import java.util.Locale
 import java.util.TimeZone
 
@@ -73,12 +77,16 @@ object AppServiceProvider {
         // SnapshotSource 只读 Core 快照；Publisher 不持有 AppServiceBridge，切断循环。
         val snapshotSource = CoreMirrorSnapshotSource(holder)
         val stateStore = ReadableMirrorStateStore(appContext)
-        // #649 评论 5561465552 第 3 点：根据 stateStore.backend 选择存储后端。
-        // 旧 Publisher 直接 new MediaStoreDownloads；新实现通过 selectMirrorStorage
-        // 在 MediaStore 和 SAF DocumentTree 之间切换。
+        // #649 评论 5561974464 问题 1：SAF 恢复后 Publisher 不会立即切换到 DocumentTree 后端。
+        // 旧实现 selectMirrorStorage 在启动时一次性固化 storage，Publisher 握着固定实例。
+        // 新实现：创建 MirrorStorageRouter，Publisher 每次事务时从 router.current() 获取。
         val documentTreeReader = DocumentTreeReader(appContext.contentResolver)
-        val storage = selectMirrorStorage(stateStore, appContext.contentResolver, documentTreeReader)
-        val publisher = ReadableMirrorPublisher(snapshotSource, storage, stateStore)
+        val mediaStoreStorage = MediaStoreMirrorStorage(MediaStoreDownloads(appContext.contentResolver))
+        val documentTreeFactory: (Uri) -> DocumentTreeMirrorStorage = { treeUri ->
+            DocumentTreeMirrorStorage(treeUri, appContext.contentResolver, documentTreeReader)
+        }
+        val router = MirrorStorageRouter(stateStore, mediaStoreStorage, documentTreeFactory)
+        val publisher = ReadableMirrorPublisher(snapshotSource, router, stateStore)
         val mirrorChangeSink = DefaultMirrorChangeSink(publisher)
         val bridge = AppServiceBridge(holder, mirrorChangeSink)
         AndroidNetworkMonitor.registerNetworkCallback(appContext) {

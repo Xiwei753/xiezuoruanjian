@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import java.io.IOException
 
 /**
  * SAF DocumentsProvider 后端的 [ReadableMirrorStorage] 实现。
@@ -181,7 +182,116 @@ class DocumentTreeMirrorStorage(
             null
         }
 
+    // ── 事务能力（#649 评论 5561974464 问题 2）──
+
+    override fun stageText(
+        txId: String,
+        relativePath: String,
+        mimeType: String,
+        text: String,
+    ): StagedMirrorRef? {
+        if (!isSupported()) return null
+        // SAF 暂存：用 txId 作为临时目录，避免覆盖 committed ref
+        val stagingDir = "$STAGING_DIR/$txId"
+        val relativeDir = stagingDir + relativePath.substringBeforeLast('/', "")
+        val displayName = relativePath.substringAfterLast('/')
+        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val fileUri =
+            try {
+                DocumentsContract.createDocument(contentResolver, parentUri, mimeType, displayName)
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
+                return null
+            } ?: return null
+        if (!writeToUri(fileUri, text)) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, fileUri)
+            } catch (_: Exception) {
+            }
+            return null
+        }
+        return StagedMirrorRef(
+            txId = txId,
+            stagingUri = fileUri.toString(),
+            stagingRelativePath = "$stagingDir/$relativePath",
+            finalRelativePath = relativePath,
+            mimeType = mimeType,
+        )
+    }
+
+    override fun promote(
+        staged: StagedMirrorRef,
+        old: MirrorFileRef?,
+        finalRelativePath: String,
+    ): MirrorFileRef? {
+        if (!isSupported()) return null
+        // 1. 先删旧文件（如果有）
+        if (old != null) {
+            val oldUri = tryParseUri(old.uri)
+            if (oldUri != null) {
+                try {
+                    DocumentsContract.deleteDocument(contentResolver, oldUri)
+                } catch (_: Exception) {
+                }
+            }
+        }
+        // 2. 读取暂存内容
+        val stagingUri = tryParseUri(staged.stagingUri) ?: return null
+        val content = readTextFromUri(stagingUri) ?: return null
+        // 3. 在最终位置创建
+        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
+        val displayName = finalRelativePath.substringAfterLast('/')
+        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val newUri =
+            try {
+                DocumentsContract.createDocument(contentResolver, parentUri, staged.mimeType, displayName)
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
+                return null
+            } ?: return null
+        if (!writeToUri(newUri, content)) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, newUri)
+            } catch (_: Exception) {
+            }
+            return null
+        }
+        // 4. 删除暂存文件
+        try {
+            DocumentsContract.deleteDocument(contentResolver, stagingUri)
+        } catch (_: Exception) {
+        }
+        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
+    }
+
+    override fun rollback(txId: String) {
+        if (!isSupported()) return
+        // 删除 txId 对应的整个暂存目录
+        val stagingDir = "$STAGING_DIR/$txId"
+        val stagingUri = ensureDirectory(stagingDir)
+        if (stagingUri != null) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, stagingUri)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** 从 URI 读取全部文本。失败返回 null。 */
+    private fun readTextFromUri(uri: Uri): String? {
+        return try {
+            contentResolver.openInputStream(uri)?.use { input ->
+                input.readBytes().toString(Charsets.UTF_8)
+            }
+        } catch (e: IOException) {
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     companion object {
         private const val TAG = "DocumentTreeMirrorStorage"
+        private const val STAGING_DIR = ".staging"
     }
 }

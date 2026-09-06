@@ -332,6 +332,12 @@ impl From<serde_json::Error> for WriterError {
     }
 }
 
+impl From<std::io::Error> for WriterError {
+    fn from(e: std::io::Error) -> Self {
+        WriterError::Io(e.to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

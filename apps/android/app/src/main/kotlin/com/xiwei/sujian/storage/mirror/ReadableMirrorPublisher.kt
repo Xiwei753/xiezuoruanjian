@@ -5,6 +5,8 @@ import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.VolumeWithChapters
+import com.xiwei.sujian.storage.mirror.toMirrorProject
+import com.xiwei.sujian.storage.mirror.toMirrorVolume
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -15,6 +17,7 @@ import java.time.format.DateTimeFormatter
  *
  * #649 评论 5560971132 修复 4/6/7：重构发布器。
  * #649 评论 5561465552 第 3+4 点：改用 [ReadableMirrorStorage] 接口 + 事务性发布 + journal。
+ * #649 评论 5561974464 问题 1：SAF 恢复后 Publisher 不会立即切换到 DocumentTree 后端。
  *
  * ## 修复 4：用户可读路径
  * 旧路径 `projects/<id>/volumes/<vid>/chapters/<cid>.md` 对用户不可读。
@@ -32,8 +35,8 @@ import java.time.format.DateTimeFormatter
  * 不再用 Core 的 `chapter.hash`（MD5）。恢复时用 [verifyContentHash] 校验。
  *
  * ## #649 评论 5561465552 第 3 点：统一存储接口
- * 构造时注入 [ReadableMirrorStorage]（替代直接用 [com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads]）。
- * 由 [selectMirrorStorage] 根据 stateStore.backend 选择 MediaStore 或 SAF 后端。
+ * 构造时注入 [MirrorStorageRouter]，每次事务开始时从 [router.current] 获取 storage，
+ * 不再持有固定 storage 实例。由 [MirrorStorageRouter] 根据 stateStore.backend 选择 MediaStore 或 SAF 后端。
  *
  * ## #649 评论 5561465552 第 4 点：事务性发布
  * publishProject 改成真正的"准备 → 写入 → 提交 manifest → 清旧文件"顺序：
@@ -65,9 +68,126 @@ import java.time.format.DateTimeFormatter
  */
 class ReadableMirrorPublisher(
     private val source: MirrorSnapshotSource,
-    private val storage: ReadableMirrorStorage,
+    private val router: MirrorStorageRouter,
     private val stateStore: ReadableMirrorStateStore,
 ) {
+    /**
+     * 检查并恢复 pending publish（如果存在）。
+     *
+     * #649 评论 5561974464 问题 3：pendingPublish 没有恢复逻辑。
+     * 在应用初始化/worker 开始消费业务事件前调用恢复方法。
+     *
+     * 恢复策略：
+     * - `stage`：staging 未完成，旧镜像完整 → rollback(txId) + clearPendingPublish
+     * - `promote`：staging 已写完，promote 部分完成 → 继续 promote 剩余，然后 cleanup
+     * - `cleanup`：已 promote 完，stateStore 未更新/清理未完成 → 继续 cleanup
+     */
+    suspend fun recoverPendingPublishIfNeeded() {
+        val journalJson = stateStore.readPendingPublish() ?: return
+        val journal = PendingMirrorPublish.fromJson(journalJson) ?: return
+        DiagnosticsLogger.i(TAG, "Recovering pending publish: phase=${journal.phase}, projectId=${journal.projectId}")
+
+        val storage = router.current()
+        if (!storage.isSupported()) {
+            DiagnosticsLogger.w(TAG, "Storage not supported during recovery, clearing pending publish")
+            stateStore.clearPendingPublish()
+            return
+        }
+
+        when (journal.phase) {
+            PendingMirrorPublish.PHASE_STAGE -> {
+                // staging 未完成，旧镜像完整 → rollback + clear
+                storage.rollback(journal.txId)
+                stateStore.clearPendingPublish()
+            }
+            PendingMirrorPublish.PHASE_PROMOTE -> {
+                // staging 已写完，promote 部分完成 → 继续 promote
+                recoverPromotePhase(journal, storage)
+            }
+            PendingMirrorPublish.PHASE_CLEANUP -> {
+                // 已 promote 完，stateStore 未更新/清理未完成 → 继续 cleanup
+                recoverCleanupPhase(journal, storage)
+            }
+            else -> {
+                DiagnosticsLogger.w(TAG, "Unknown phase in pending publish: ${journal.phase}")
+                stateStore.clearPendingPublish()
+            }
+        }
+    }
+
+    /**
+     * 恢复 promote 阶段。
+     */
+    private suspend fun recoverPromotePhase(
+        journal: PendingMirrorPublish,
+        storage: ReadableMirrorStorage,
+    ) {
+        val promotedEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+        // promote 所有已 stage 的条目
+        for ((key, staged) in journal.stagedRefs) {
+            val oldEntry = journal.oldEntries[key]
+            val oldRef = oldEntry?.let { MirrorFileRef(uri = it.uri, relativePath = it.relativePath) }
+            val promoted = storage.promote(staged, oldRef, staged.finalRelativePath)
+            if (promoted == null) {
+                DiagnosticsLogger.w(TAG, "Recover promote failed for ${key.chapterId}, rolling back")
+                storage.rollback(journal.txId)
+                // 回滚已 promote 的文件
+                for ((_, entry) in promotedEntries) {
+                    storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                }
+                stateStore.clearPendingPublish()
+                return
+            }
+            promotedEntries[key] =
+                ChapterMirrorEntry(
+                    uri = promoted.uri,
+                    relativePath = promoted.relativePath,
+                    revision = journal.newEntries[key]?.revision ?: 0L,
+                    contentHash = journal.newEntries[key]?.contentHash ?: "",
+                )
+        }
+
+        // 写 manifest
+        val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
+        if (snapshotResult !is BridgeResult.Success) {
+            DiagnosticsLogger.w(TAG, "Failed to get snapshot for project ${journal.projectId} during recovery")
+            storage.rollback(journal.txId)
+            stateStore.clearPendingPublish()
+            return
+        }
+        val manifestOk = publishManifestWithDesired(journal.projectId, snapshotResult.data, promotedEntries)
+        if (!manifestOk) {
+            DiagnosticsLogger.w(TAG, "Failed to write manifest during recovery")
+            storage.rollback(journal.txId)
+            stateStore.clearPendingPublish()
+            return
+        }
+        // manifest 成功后批量更新 stateStore
+        stateStore.putChapterEntries(promotedEntries)
+        // 进入 cleanup 阶段
+        recoverCleanupPhase(journal.copy(phase = PendingMirrorPublish.PHASE_CLEANUP, newEntries = promotedEntries), storage)
+    }
+
+    /**
+     * 恢复 cleanup 阶段。
+     */
+    private suspend fun recoverCleanupPhase(
+        journal: PendingMirrorPublish,
+        storage: ReadableMirrorStorage,
+    ) {
+        // 删除 snapshot 中已不存在的旧 key
+        val allKeys = journal.newEntries.keys
+        for ((key, entry) in journal.oldEntries) {
+            if (key !in allKeys) {
+                val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
+                storage.delete(ref)
+                stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
+            }
+        }
+        // 清除 journal
+        stateStore.clearPendingPublish()
+    }
+
     /**
      * 发布单章正文。
      *
@@ -81,7 +201,7 @@ class ReadableMirrorPublisher(
         chapterId: String,
     ) {
         try {
-            if (!storage.isSupported()) {
+            if (!router.current().isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
                 return
             }
@@ -131,16 +251,19 @@ class ReadableMirrorPublisher(
      * 发布整个项目：事务性发布流程。
      *
      * #649 评论 5561465552 第 4 点：准备 → 写入 → 提交 manifest → 清旧文件。
+     * #649 评论 5561974464 问题 2：publishManifest() 仍用旧 state，且"失败保留旧镜像"不成立。
      *
      * 1. **准备**：读完整快照和所有章节正文到内存，计算 desired state。
-     * 2. **写入**：写所有章节正文，任一失败 → 返回，不动 stateStore，不写 manifest。
-     * 3. **提交 manifest**：manifest 成功后才批量更新 stateStore。
-     * 4. **清理**：删除不再被引用的旧文件。
+     * 2. **暂存**：所有新正文先写到 staging（不能覆盖 committed ref）。
+     * 3. **提升**：promote 所有暂存文件到最终位置。
+     * 4. **提交 manifest**：用 desiredEntries 直接构造 manifest，manifest 成功后才批量更新 stateStore。
+     * 5. **清理**：删除不再被引用的旧文件。
      *
      * pendingPublish journal 在整个流程中记录进度，成功后清除。
      */
     suspend fun publishProject(projectId: String) {
         try {
+            val storage = router.current()
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
                 return
@@ -153,74 +276,131 @@ class ReadableMirrorPublisher(
             val snapshot = snapshotResult.data
             val oldEntries = stateStore.getProjectEntries(projectId)
 
-            // 1. 准备阶段：收集 snapshot 中全部仍存在章节的 key
+            // 1. 准备阶段：读完整快照和所有章节正文到内存，计算 desired state
             val allKeys = mutableSetOf<ChapterKey>()
             for (volumeWithChapters in snapshot.volumes) {
                 for (chapter in volumeWithChapters.chapters) {
                     allKeys.add(ChapterKey(projectId, volumeWithChapters.volume.id, chapter.id))
                 }
             }
-
-            // 写 pendingPublish journal（记录发布开始）
-            writePendingPublishJournal(projectId, phase = "write", writtenKeys = emptyList(), deletedKeys = emptyList())
-
-            // 2. 写入阶段：写所有章节正文到内存计划，再一次性写入
             val usedRelativePaths = mutableSetOf<String>()
             val writePlan = buildWritePlan(projectId, snapshot, oldEntries, usedRelativePaths)
             if (writePlan == null) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: failed to build write plan")
-                stateStore.clearPendingPublish()
                 return
             }
 
-            // 执行写入：任一章节失败 → 返回，不动 stateStore，不写 manifest
-            val newEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-            val writtenKeys = mutableListOf<String>()
+            // 生成事务 ID
+            val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
+
+            // 2. 暂存阶段：所有新正文先写到 staging（不能覆盖 committed ref）
+            val stagedRefs = mutableMapOf<ChapterKey, StagedMirrorRef>()
+            val desiredEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
             for (planEntry in writePlan) {
-                val ok = executeWritePlanEntry(planEntry, newEntries)
-                if (!ok) {
+                val contentHash = computeContentHash(planEntry.content)
+                val staged =
+                    storage.stageText(
+                        txId = txId,
+                        relativePath = planEntry.relativePath,
+                        mimeType = MIME_MARKDOWN,
+                        text = planEntry.content,
+                    )
+                if (staged == null) {
                     DiagnosticsLogger.w(
                         TAG,
-                        "Publish project $projectId aborted: write failed for ${planEntry.key.chapterId}",
+                        "Publish project $projectId aborted: stage failed for ${planEntry.key.chapterId}",
                     )
-                    // 不动 stateStore，不写 manifest；旧镜像保持不变
+                    storage.rollback(txId)
+                    return
+                }
+                stagedRefs[planEntry.key] = staged
+                // 记录 desired entry（promote 后填 URI）
+                desiredEntries[planEntry.key] =
+                    ChapterMirrorEntry(
+                        uri = "",
+                        relativePath = planEntry.relativePath,
+                        revision = planEntry.chapter.updatedAt.toEpochMillis(),
+                        contentHash = contentHash,
+                    )
+            }
+
+            // 写 pendingPublish journal（记录 staging 完成）
+            writePendingPublishJournal(
+                projectId = projectId,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                txId = txId,
+                backend = stateStore.getBackend(),
+                treeUri = stateStore.getTreeUri(),
+                oldEntries = oldEntries,
+                newEntries = desiredEntries,
+                stagedRefs = stagedRefs,
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+            )
+
+            // 3. 提升阶段：promote 所有暂存文件到最终位置
+            val promotedEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+            for ((key, staged) in stagedRefs) {
+                val oldEntry = oldEntries[key]
+                val oldRef = oldEntry?.let { MirrorFileRef(uri = it.uri, relativePath = it.relativePath) }
+                val promoted = storage.promote(staged, oldRef, staged.finalRelativePath)
+                if (promoted == null) {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Publish project $projectId aborted: promote failed for ${key.chapterId}",
+                    )
+                    storage.rollback(txId)
+                    // 回滚已 promote 的文件（如果有）
+                    for ((_, promotedEntry) in promotedEntries) {
+                        storage.delete(MirrorFileRef(uri = promotedEntry.uri, relativePath = promotedEntry.relativePath))
+                    }
                     stateStore.clearPendingPublish()
                     return
                 }
-                writtenKeys.add(planEntry.key.chapterId)
-                // 更新 journal 进度
-                writePendingPublishJournal(
-                    projectId,
-                    phase = "write",
-                    writtenKeys = writtenKeys,
-                    deletedKeys = emptyList(),
-                )
+                promotedEntries[key] =
+                    ChapterMirrorEntry(
+                        uri = promoted.uri,
+                        relativePath = promoted.relativePath,
+                        revision = desiredEntries[key]!!.revision,
+                        contentHash = desiredEntries[key]!!.contentHash,
+                    )
             }
 
-            // 3. 提交 manifest：manifest 成功后才批量更新 stateStore
-            val manifestOk = publishManifest()
+            // 4. 提交 manifest：用 desiredEntries 直接构造 manifest
+            val manifestOk = publishManifestWithDesired(projectId, snapshot, promotedEntries)
             if (!manifestOk) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifest write failed")
+                storage.rollback(txId)
                 stateStore.clearPendingPublish()
                 return
             }
-            // 批量提交新 state
-            stateStore.putChapterEntries(newEntries)
+            // manifest 成功后一次性写 desiredEntries 到 stateStore
+            stateStore.putChapterEntries(promotedEntries)
+
+            // 更新 pendingPublish journal（记录 cleanup 阶段）
             writePendingPublishJournal(
-                projectId,
-                phase = "cleanup",
-                writtenKeys = writtenKeys,
-                deletedKeys = emptyList(),
+                projectId = projectId,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                txId = txId,
+                backend = stateStore.getBackend(),
+                treeUri = stateStore.getTreeUri(),
+                oldEntries = oldEntries,
+                newEntries = promotedEntries,
+                stagedRefs = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
             )
 
-            // 4. 清理阶段：删除 snapshot 中已不存在的旧 key
-            val deletedKeys = mutableListOf<String>()
+            // 5. 清理阶段：删除 snapshot 中已不存在的旧 key
             for ((key, entry) in oldEntries) {
                 if (key !in allKeys) {
                     val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
                     storage.delete(ref)
                     stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
-                    deletedKeys.add(key.chapterId)
                 }
             }
             // 发布成功，清除 journal
@@ -235,18 +415,47 @@ class ReadableMirrorPublisher(
      * 删除项目镜像：先让新 manifest 不再引用旧项目，manifest 成功后再删旧 URI。
      *
      * #649 评论 5561465552 第 4 点：不能先删正文再尝试写 manifest。
+     * #649 评论 5561974464 问题 3：确保 deleteProject() 也走同一套 mirror transaction。
      */
     suspend fun deleteProject(projectId: String) {
         try {
+            val storage = router.current()
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
                 return
             }
-            // 1. 先从 state store 移除条目（manifest 不再引用该项目）
-            val removed = stateStore.removeAllProjectEntries(projectId)
-            // 2. 写新 manifest（已不含该项目）
-            publishManifest()
-            // 3. manifest 成功后再删旧 URI
+            // 1. 获取旧条目
+            val removed = stateStore.getProjectEntries(projectId)
+            if (removed.isEmpty()) {
+                // 没有条目，直接返回
+                return
+            }
+            // 2. 写 pending journal（记录删除操作）
+            val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
+            writePendingPublishJournal(
+                projectId = projectId,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                txId = txId,
+                backend = stateStore.getBackend(),
+                treeUri = stateStore.getTreeUri(),
+                oldEntries = removed,
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                removedProjectIds = setOf(projectId),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+            )
+            // 3. 先从 state store 移除条目（manifest 不再引用该项目）
+            stateStore.removeAllProjectEntries(projectId)
+            // 4. 写新 manifest（已不含该项目）
+            val manifestOk = publishManifest()
+            if (!manifestOk) {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
+                // manifest 失败不清除 journal，下次恢复会重试
+                return
+            }
+            // 5. manifest 成功后再删旧 URI
             for ((_, entry) in removed) {
                 try {
                     val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
@@ -255,8 +464,11 @@ class ReadableMirrorPublisher(
                     DiagnosticsLogger.w(TAG, "Failed to delete URI ${entry.uri}", e)
                 }
             }
+            // 6. 删除成功，清除 journal
+            stateStore.clearPendingPublish()
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to delete project: ${e.message}", e)
+            // 异常时保留 journal，下次启动可继续
         }
     }
 
@@ -265,7 +477,7 @@ class ReadableMirrorPublisher(
      */
     suspend fun publishAll() {
         try {
-            if (!storage.isSupported()) {
+            if (!router.current().isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
                 return
             }
@@ -384,16 +596,16 @@ class ReadableMirrorPublisher(
         if (oldEntry != null && oldEntry.relativePath == entry.relativePath) {
             // 同路径：覆盖旧 URI
             val oldRef = MirrorFileRef(uri = oldEntry.uri, relativePath = oldEntry.relativePath)
-            if (storage.replaceText(oldRef, entry.content)) {
+            if (router.current().replaceText(oldRef, entry.content)) {
                 ref = oldRef
             } else {
                 // 旧 URI 失效，新建并删旧
-                storage.delete(oldRef)
-                ref = storage.createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
+                router.current().delete(oldRef)
+                ref = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
             }
         } else if (oldEntry != null && oldEntry.relativePath != entry.relativePath) {
             // 路径变化（作品名/卷名/章节名改动）：先在新路径创建成功
-            val newRef = storage.createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
+            val newRef = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
             if (newRef != null) {
                 // 新文件就绪后旧文件先保留（不立即删），由清理阶段处理
                 ref = newRef
@@ -402,7 +614,7 @@ class ReadableMirrorPublisher(
             }
         } else {
             // 无旧条目，直接创建
-            ref = storage.createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
+            ref = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, entry.content)
         }
 
         return if (ref != null) {
@@ -426,29 +638,51 @@ class ReadableMirrorPublisher(
      * journal JSON 结构：
      * ```json
      * {
+     *   "txId": "<txId>",
+     *   "backend": "media_store" | "document_tree",
+     *   "treeUri": "<treeUri>",
      *   "projectId": "<id>",
-     *   "phase": "write" | "cleanup",
-     *   "writtenKeys": ["<chapterId>", ...],
-     *   "deletedKeys": ["<chapterId>", ...],
-     *   "updatedAt": "<ISO-8601>"
+     *   "phase": "stage" | "promote" | "cleanup",
+     *   "oldEntries": {...},
+     *   "newEntries": {...},
+     *   "stagedRefs": {...},
+     *   "removedProjectIds": [...],
+     *   "manifestOldRef": {...},
+     *   "manifestStagedRef": {...},
+     *   "manifestNewRef": {...}
      * }
      * ```
      */
     private fun writePendingPublishJournal(
         projectId: String,
         phase: String,
-        writtenKeys: List<String>,
-        deletedKeys: List<String>,
+        txId: String,
+        backend: MirrorBackend,
+        treeUri: String?,
+        oldEntries: Map<ChapterKey, ChapterMirrorEntry>,
+        newEntries: Map<ChapterKey, ChapterMirrorEntry>,
+        stagedRefs: Map<ChapterKey, StagedMirrorRef>,
+        removedProjectIds: Set<String>,
+        manifestOldRef: MirrorFileRef?,
+        manifestStagedRef: StagedMirrorRef?,
+        manifestNewRef: MirrorFileRef?,
     ) {
         val journal =
-            JSONObject().apply {
-                put("projectId", projectId)
-                put("phase", phase)
-                put("writtenKeys", JSONArray(writtenKeys))
-                put("deletedKeys", JSONArray(deletedKeys))
-                put("updatedAt", DateTimeFormatter.ISO_INSTANT.format(Instant.now()))
-            }
-        stateStore.writePendingPublish(journal.toString())
+            PendingMirrorPublish(
+                txId = txId,
+                backend = backend,
+                treeUri = treeUri,
+                projectId = projectId,
+                phase = phase,
+                oldEntries = oldEntries,
+                newEntries = newEntries,
+                stagedRefs = stagedRefs,
+                removedProjectIds = removedProjectIds,
+                manifestOldRef = manifestOldRef,
+                manifestStagedRef = manifestStagedRef,
+                manifestNewRef = manifestNewRef,
+            )
+        stateStore.writePendingPublish(journal.toJson())
     }
 
     // ── 内部 ──
@@ -481,27 +715,27 @@ class ReadableMirrorPublisher(
         if (oldEntry != null && oldEntry.relativePath == relativePath) {
             // 同路径：覆盖旧 URI
             val oldRef = MirrorFileRef(uri = oldEntry.uri, relativePath = oldEntry.relativePath)
-            if (storage.replaceText(oldRef, content)) {
+            if (router.current().replaceText(oldRef, content)) {
                 ref = oldRef
             } else {
                 // 旧 URI 失效，新建并删旧
-                storage.delete(oldRef)
-                ref = storage.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+                router.current().delete(oldRef)
+                ref = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, content)
             }
         } else if (oldEntry != null && oldEntry.relativePath != relativePath) {
             // 路径变化（作品名/卷名/章节名改动）：先在新路径创建成功
-            val newRef = storage.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+            val newRef = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, content)
             if (newRef != null) {
                 // 新文件就绪后再删旧文件，避免文件停在旧路径
                 val oldRef = MirrorFileRef(uri = oldEntry.uri, relativePath = oldEntry.relativePath)
-                storage.delete(oldRef)
+                router.current().delete(oldRef)
                 ref = newRef
             } else {
                 ref = null
             }
         } else {
             // 无旧条目，直接创建
-            ref = storage.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+            ref = router.current().createText(relativeDir, displayName, MIME_MARKDOWN, content)
         }
 
         return if (ref != null) {
@@ -594,6 +828,56 @@ class ReadableMirrorPublisher(
     }
 
     /**
+     * 用 desired entries 生成并写入 manifest（事务性发布专用）。
+     *
+     * #649 评论 5561974464 问题 2：publishManifest() 仍用旧 state。
+     * 事务性发布时，manifest 用 desiredEntries 直接构造，不从 stateStore 取旧 entries。
+     *
+     * @param projectId 目标项目 ID（只更新这个项目的 manifest）
+     * @param snapshot 项目快照
+     * @param desiredEntries 期望的条目（promote 后的新条目）
+     * @return manifest 是否写入成功。
+     */
+    private suspend fun publishManifestWithDesired(
+        projectId: String,
+        snapshot: ProjectWorkspaceSnapshot,
+        desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
+    ): Boolean {
+        val projectsResult = source.listProjects()
+        if (projectsResult !is BridgeResult.Success) return false
+        val projects = projectsResult.data
+
+        val mirrorProjects = mutableListOf<MirrorProject>()
+        for (project in projects) {
+            if (project.id == projectId) {
+                // 目标项目：用 desiredEntries 构造
+                mirrorProjects.add(snapshot.toMirrorProject(desiredEntries))
+            } else {
+                // 其他项目：从 stateStore 取旧 entries
+                val snapshotResult = source.getProjectWorkspaceSnapshot(project.id)
+                if (snapshotResult is BridgeResult.Success) {
+                    val s = snapshotResult.data
+                    val entries = stateStore.getProjectEntries(project.id)
+                    mirrorProjects.add(s.toMirrorProject(entries))
+                }
+            }
+        }
+
+        val now = Instant.now()
+        val updatedAt = DateTimeFormatter.ISO_INSTANT.format(now)
+        val manifest =
+            MirrorManifest(
+                schemaVersion = 1,
+                revision = now.toEpochMilli(),
+                updatedAt = updatedAt,
+                projects = mirrorProjects,
+            )
+
+        val json = manifestToJson(manifest)
+        return writeManifestFile(json)
+    }
+
+    /**
      * 写 manifest 文件，复用旧 URI 覆盖写。
      *
      * @return 是否写入成功。
@@ -603,14 +887,14 @@ class ReadableMirrorPublisher(
         val ref: MirrorFileRef?
         if (oldUri != null) {
             val oldRef = MirrorFileRef(uri = oldUri, relativePath = "$META_DIR/$MANIFEST_FILE_NAME")
-            if (storage.replaceText(oldRef, json)) {
+            if (router.current().replaceText(oldRef, json)) {
                 ref = oldRef
             } else {
-                storage.delete(oldRef)
-                ref = storage.createText(META_DIR, MANIFEST_FILE_NAME, MIME_JSON, json)
+                router.current().delete(oldRef)
+                ref = router.current().createText(META_DIR, MANIFEST_FILE_NAME, MIME_JSON, json)
             }
         } else {
-            ref = storage.createText(META_DIR, MANIFEST_FILE_NAME, MIME_JSON, json)
+            ref = router.current().createText(META_DIR, MANIFEST_FILE_NAME, MIME_JSON, json)
         }
         return if (ref != null) {
             stateStore.setManifestUri(ref.uri)
@@ -725,61 +1009,5 @@ class ReadableMirrorPublisher(
         private const val MIME_JSON = "application/json"
         private const val MIN_ID_LENGTH = 8
         private const val SKIP_NOT_SUPPORTED = "Mirror publish skipped: storage not supported"
-    }
-}
-
-/**
- * 把 ProjectWorkspaceSnapshot 转成 MirrorProject。
- *
- * contentFile 用用户可读的相对路径（`作品/作品名/卷名/章节名.md`），
- * 从 state store 的条目里取（Publisher 写入时已算好重名处理）。
- * contentHash 用 state store 里存的 SHA-256（Publisher 写入时已算好）。
- */
-private fun ProjectWorkspaceSnapshot.toMirrorProject(entries: Map<ChapterKey, ChapterMirrorEntry>): MirrorProject {
-    return MirrorProject(
-        id = this.project.id,
-        title = this.project.title,
-        order = 0,
-        revision = this.project.updatedAt.toEpochMillis(),
-        updatedAt = this.project.updatedAt,
-        volumes = this.volumes.map { it.toMirrorVolume(this.project.id, entries) },
-    )
-}
-
-private fun VolumeWithChapters.toMirrorVolume(
-    projectId: String,
-    entries: Map<ChapterKey, ChapterMirrorEntry>,
-): MirrorVolume {
-    return MirrorVolume(
-        id = this.volume.id,
-        title = this.volume.title,
-        order = this.volume.order,
-        revision = this.volume.updatedAt.toEpochMillis(),
-        updatedAt = this.volume.updatedAt,
-        chapters =
-            this.chapters.map { chapter ->
-                val key = ChapterKey(projectId, this.volume.id, chapter.id)
-                val entry = entries[key]
-                MirrorChapter(
-                    id = chapter.id,
-                    title = chapter.title,
-                    order = chapter.order,
-                    revision = chapter.updatedAt.toEpochMillis(),
-                    updatedAt = chapter.updatedAt,
-                    contentFile = entry?.relativePath ?: "",
-                    contentHash = entry?.contentHash ?: "",
-                )
-            },
-    )
-}
-
-/**
- * 把 ISO-8601 字符串转成毫秒级时间戳。
- */
-private fun String.toEpochMillis(): Long {
-    return try {
-        Instant.parse(this).toEpochMilli()
-    } catch (e: Exception) {
-        System.currentTimeMillis()
     }
 }

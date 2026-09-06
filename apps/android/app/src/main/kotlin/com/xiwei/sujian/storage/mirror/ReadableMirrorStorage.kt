@@ -23,6 +23,26 @@ data class MirrorFileRef(
 )
 
 /**
+ * 事务中暂存的镜像文件引用。
+ *
+ * #649 评论 5561974464 问题 2：事务性发布需要 stage → promote 两阶段。
+ * 正文先写到 staging 暂存（不覆盖 committed ref），promote 成功后才提交。
+ *
+ * @property txId 事务 ID，用于 [ReadableMirrorStorage.rollback]。
+ * @property stagingUri 暂存文件的 URI。
+ * @property stagingRelativePath 暂存文件的相对路径。
+ * @property finalRelativePath 最终目标路径（promote 后重命名/移动到这个位置）。
+ * @property mimeType MIME 类型。
+ */
+data class StagedMirrorRef(
+    val txId: String,
+    val stagingUri: String,
+    val stagingRelativePath: String,
+    val finalRelativePath: String,
+    val mimeType: String,
+)
+
+/**
  * 统一镜像存储接口，隔离 MediaStore 与 SAF DocumentsProvider 两套 URI 体系。
  *
  * #649 评论 5561465552 第 3 点。
@@ -80,4 +100,48 @@ interface ReadableMirrorStorage {
 
     /** 当前后端是否可用。 */
     fun isSupported(): Boolean
+
+    // ── 事务能力（#649 评论 5561974464 问题 2）──
+
+    /**
+     * 暂存正文到事务 staging（不覆盖 committed ref）。
+     *
+     * 事务性发布的两阶段写：
+     * 1. 所有新正文先写到 staging（不能覆盖 committed ref）
+     * 2. promotion 成功后写正式 manifest
+     * 3. manifest 成功后一次性写 desiredEntries 到 stateStore
+     *
+     * @param txId 事务 ID（同一事务内所有 stage 调用用相同 txId）
+     * @param relativePath 相对 `Download/Sujian/` 的目标路径
+     * @param mimeType MIME 类型
+     * @param text 正文内容
+     * @return 暂存引用；失败返回 null
+     */
+    fun stageText(
+        txId: String,
+        relativePath: String,
+        mimeType: String,
+        text: String,
+    ): StagedMirrorRef?
+
+    /**
+     * 提升暂存文件到最终位置。
+     *
+     * @param staged 暂存引用
+     * @param old 旧引用（promote 成功后删除；可为 null，表示新建）
+     * @param finalRelativePath 最终目标路径（通常等于 staged.finalRelativePath）
+     * @return 新文件的引用；失败返回 null
+     */
+    fun promote(
+        staged: StagedMirrorRef,
+        old: MirrorFileRef?,
+        finalRelativePath: String,
+    ): MirrorFileRef?
+
+    /**
+     * 回滚事务：删除该 txId 对应的所有暂存文件。
+     *
+     * @param txId 事务 ID
+     */
+    fun rollback(txId: String)
 }

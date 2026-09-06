@@ -89,6 +89,9 @@ interface MirrorChangeSink {
  * - [signal] 用 Channel.CONFLATED 合并信号：多次 trySend 只保留一个待处理信号。
  * - [workerLoop] 收到信号后 delay(debounceMs) 让后续事件合并进 map，再一次性处理。
  *
+ * #649 评论 5561974464 问题 3：pendingPublish 没有恢复逻辑。
+ * 在初始化时调用 [ReadableMirrorPublisher.recoverPendingPublishIfNeeded] 恢复未完成的发布。
+ *
  * @param publisher 实际的发布器（注入以便测试）
  * @param debounceMs debounce 窗口（毫秒），默认 500ms。窗口内到达的多个事件
  *   合并进同一个 dirtyMap 快照，窗口结束后一次性发布。
@@ -103,6 +106,14 @@ class DefaultMirrorChangeSink(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     init {
+        // 恢复 pending publish（如果有）
+        scope.launch {
+            try {
+                publisher.recoverPendingPublishIfNeeded()
+            } catch (e: Exception) {
+                DiagnosticsLogger.e(TAG, "Failed to recover pending publish", e)
+            }
+        }
         scope.launch { workerLoop() }
     }
 

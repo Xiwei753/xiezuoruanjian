@@ -350,20 +350,59 @@ impl WriterCoreApi {
     /// 4. 任一步失败时回滚已创建的项目（delete_project），返回 Err，不留半成品；
     /// 5. 全部成功后把这次恢复作为一次 workspace Git 变更记录下来；
     /// 6. 返回创建的 ProjectDto。
+    ///
+    /// #649 评论 5561974464 第4点：staging 原子发布——
+    /// 先在 `.restore-staging/<txId>/<projectId>/` 下完整生成，
+    /// 所有 ID/正文校验完成后再 rename 到 `projects/<projectId>/`。
     pub fn restore_project_tree(&self, input: &RestoreProjectInputDto) -> ApiResult<ProjectDto> {
+        use std::fs;
+        use uuid::Uuid;
+
         // 1. 校验输入（ID 格式、唯一性、project_id 不已存在）
         self.validate_restore_input(input)?;
 
-        // 2. 创建项目树，收集变更集
-        let change_set = match self.create_restore_tree(input) {
+        // 2. 生成事务 ID，创建 staging 目录
+        // 路径：app_data_root/.restore-staging/<txId>/
+        // 项目会创建在：app_data_root/.restore-staging/<txId>/<projectId>/
+        let transaction_id = Uuid::new_v4().to_string();
+        let staging_root = self.app_data_root.join(".restore-staging").join(&transaction_id);
+
+        // 3. 创建临时 WriterCoreApi，使用 staging 目录作为 projects_root
+        // 这样 create_project_with_id 会在 staging_root/<projectId>/ 下创建项目
+        let staging_api = WriterCoreApi::new(&self.app_data_root, &staging_root);
+
+        // 4. 在 staging 目录下创建项目树，收集变更集
+        let change_set = match self.create_restore_tree_with_staging_api(&staging_api, input) {
             Ok(cs) => cs,
-            Err(e) => return Err(self.rollback_restore(input, e)),
+            Err(e) => {
+                // 失败时直接删除 staging 目录，不走正常 delete_project()
+                let _ = fs::remove_dir_all(&staging_root);
+                return Err(self.rollback_restore_with_staging(input, e, &staging_root));
+            }
         };
 
-        // 3. 全部成功后记录 workspace Git 变更
+        // 5. 所有校验完成，原子 rename staging/<projectId> → 最终位置
+        let staging_project_dir = staging_root.join(&input.project_id);
+        let target_project_dir = self.projects_root.join(&input.project_id);
+        if let Some(parent) = target_project_dir.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::rename(&staging_project_dir, &target_project_dir).map_err(|e| {
+            // rename 失败时清理 staging
+            let _ = fs::remove_dir_all(&staging_root);
+            WriterError::Other(format!(
+                "restore_project_tree: failed to rename staging to final: {}",
+                e
+            ))
+        })?;
+
+        // 6. 清理空的 staging 目录（如果存在）
+        let _ = fs::remove_dir(&staging_root);
+
+        // 7. 全部成功后记录 workspace Git 变更
         let _ = self.record_workspace_change_set_history(&change_set, "restore_project_tree");
 
-        // 4. 返回创建的 ProjectDto
+        // 8. 返回创建的 ProjectDto
         let project_dto: ProjectDto = self
             .core_read()
             .list_projects()
@@ -452,8 +491,55 @@ impl WriterCoreApi {
         Ok(())
     }
 
-    /// 创建恢复项目树：项目 → 卷 → 章节 → 正文 → reorder，返回变更集。
-    /// 调用方负责在失败时回滚已创建的项目。
+    /// 使用 staging API 创建恢复项目树：项目 → 卷 → 章节 → 正文 → reorder，返回变更集。
+    /// 用于在 staging 目录下创建项目，调用方负责在失败时回滚。
+    fn create_restore_tree_with_staging_api(
+        &self,
+        staging_api: &WriterCoreApi,
+        input: &RestoreProjectInputDto,
+    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        use crate::storage::workspace_git::WorkspaceChangeSet;
+
+        // 创建项目（使用 staging API，会在 staging 目录下创建）
+        staging_api
+            .core_write()
+            .create_project_with_id(&input.project_id, &input.title, input.order)?;
+
+        let mut change_set = WorkspaceChangeSet::new().add_upsert(
+            std::path::PathBuf::from("projects")
+                .join(&input.project_id)
+                .join("project.json"),
+        );
+
+        // 逐卷创建
+        for vol in &input.volumes {
+            change_set = self.create_restore_volume_with_staging_api(
+                staging_api, input, vol, change_set,
+            )?;
+        }
+
+        // 按 input 顺序 reorder volumes（确保 order 连续 0,1,2,...）
+        if !input.volumes.is_empty() {
+            let ordered_volume_ids: Vec<String> =
+                input.volumes.iter().map(|v| v.volume_id.clone()).collect();
+            let vol_change_set = staging_api
+                .core_write()
+                .reorder_volumes_with_changes(&input.project_id, &ordered_volume_ids)?;
+            change_set = change_set.merge(vol_change_set);
+        }
+
+        // 按 input 顺序 reorder 每个卷的 chapters
+        for vol in &input.volumes {
+            change_set = self.reorder_restore_chapters_with_staging_api(
+                staging_api, input, vol, change_set,
+            )?;
+        }
+
+        Ok(change_set)
+    }
+
+    /// 创建恢复项目树（旧版，直接写最终目录）。
+    /// 保留用于向后兼容。
     fn create_restore_tree(
         &self,
         input: &RestoreProjectInputDto,
@@ -493,6 +579,39 @@ impl WriterCoreApi {
         Ok(change_set)
     }
 
+    /// 使用 staging API 创建单个恢复卷及其章节，返回更新后的变更集。
+    fn create_restore_volume_with_staging_api(
+        &self,
+        staging_api: &WriterCoreApi,
+        input: &RestoreProjectInputDto,
+        vol: &RestoreVolumeInputDto,
+        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
+    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        let volume = staging_api.core_write().create_volume_with_id(
+            &input.project_id,
+            &vol.volume_id,
+            &vol.title,
+            vol.order,
+        )?;
+
+        change_set = change_set.add_upsert(
+            std::path::PathBuf::from("projects")
+                .join(&input.project_id)
+                .join("volumes")
+                .join(&volume.id)
+                .join("volume.json"),
+        );
+
+        // 逐章创建 + 保存正文
+        for ch in &vol.chapters {
+            change_set = self.create_restore_chapter_with_staging_api(
+                staging_api, input, vol, ch, change_set,
+            )?;
+        }
+
+        Ok(change_set)
+    }
+
     /// 创建单个恢复卷及其章节，返回更新后的变更集。
     fn create_restore_volume(
         &self,
@@ -518,6 +637,50 @@ impl WriterCoreApi {
         // 逐章创建 + 保存正文
         for ch in &vol.chapters {
             change_set = self.create_restore_chapter(input, vol, ch, change_set)?;
+        }
+
+        Ok(change_set)
+    }
+
+    /// 使用 staging API 创建单个恢复章节并保存正文，返回更新后的变更集。
+    fn create_restore_chapter_with_staging_api(
+        &self,
+        staging_api: &WriterCoreApi,
+        input: &RestoreProjectInputDto,
+        vol: &RestoreVolumeInputDto,
+        ch: &RestoreChapterInputDto,
+        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
+    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        let chapter = staging_api.core_write().create_chapter_with_id(
+            &input.project_id,
+            &vol.volume_id,
+            &ch.chapter_id,
+            &ch.title,
+            ch.order,
+        )?;
+
+        change_set = change_set.add_upsert(
+            std::path::PathBuf::from("projects")
+                .join(&input.project_id)
+                .join("volumes")
+                .join(&vol.volume_id)
+                .join("chapters")
+                .join(&chapter.id)
+                .join("chapter.meta.json"),
+        );
+
+        // 保存正文：content 非空时才写入（create_chapter_with_id 已创建空 chapter.md）
+        if !ch.content.is_empty() {
+            let (_receipt, ch_change_set) = staging_api
+                .core_write()
+                .save_chapter_verified_with_changes_with_options(
+                    &input.project_id,
+                    &vol.volume_id,
+                    &ch.chapter_id,
+                    &ch.content,
+                    true,
+                )?;
+            change_set = change_set.merge(ch_change_set);
         }
 
         Ok(change_set)
@@ -566,6 +729,28 @@ impl WriterCoreApi {
         Ok(change_set)
     }
 
+    /// 使用 staging API reorder 单个卷的章节，返回更新后的变更集。
+    fn reorder_restore_chapters_with_staging_api(
+        &self,
+        staging_api: &WriterCoreApi,
+        input: &RestoreProjectInputDto,
+        vol: &RestoreVolumeInputDto,
+        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
+    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+        if vol.chapters.is_empty() {
+            return Ok(change_set);
+        }
+        let ordered_chapter_ids: Vec<String> =
+            vol.chapters.iter().map(|c| c.chapter_id.clone()).collect();
+        let ch_change_set = staging_api.core_write().reorder_chapters_with_changes(
+            &input.project_id,
+            &vol.volume_id,
+            &ordered_chapter_ids,
+        )?;
+        change_set = change_set.merge(ch_change_set);
+        Ok(change_set)
+    }
+
     /// reorder 单个卷的章节，返回更新后的变更集。
     fn reorder_restore_chapters(
         &self,
@@ -604,6 +789,32 @@ impl WriterCoreApi {
                 "restore_project_tree: rollback delete_project failed: {} — \
                  partial state may remain",
                 del_err
+            );
+        }
+        WriterError::from(err)
+    }
+
+    /// 回滚恢复操作（staging 模式）：直接删除 staging 目录，不走正常 delete_project()。
+    /// 返回原始错误，让调用方返回给 FFI 调用方。
+    fn rollback_restore_with_staging(
+        &self,
+        input: &RestoreProjectInputDto,
+        err: crate::error::Error,
+        staging_root: &std::path::Path,
+    ) -> WriterError {
+        use std::fs;
+        log::warn!(
+            "restore_project_tree: rolling back staging for project {} due to error: {}",
+            input.project_id,
+            err
+        );
+        // 直接删除 staging 目录，不走正常 delete_project()（避免走 history/tombstone）
+        if let Err(del_err) = fs::remove_dir_all(staging_root) {
+            log::warn!(
+                "restore_project_tree: rollback delete staging failed: {} — \
+                 staging directory may remain: {}",
+                del_err,
+                staging_root.display()
             );
         }
         WriterError::from(err)

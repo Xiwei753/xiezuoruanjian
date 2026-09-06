@@ -165,6 +165,27 @@ class MediaStoreDownloads(
     }
 
     /**
+     * 按相对路径前缀删除（用于事务 rollback）。
+     *
+     * 删除所有 `RELATIVE_PATH` 以 `prefix` 开头的记录。
+     * @param relativePathPrefix 相对 `Download/Sujian/` 的路径前缀（如 `.staging/<txId>`）
+     * @return 删除的记录数
+     */
+    fun deleteByPrefix(relativePathPrefix: String): Int {
+        if (!isSupported()) return 0
+        val prefix = buildRelativePath(relativePathPrefix)
+        return try {
+            contentResolver.delete(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                "${MediaStore.Downloads.RELATIVE_PATH} LIKE ?",
+                arrayOf("$prefix%"),
+            )
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /**
      * 读取 URI 的全部文本。失败返回 null。
      */
     fun readText(uri: Uri): String? {
