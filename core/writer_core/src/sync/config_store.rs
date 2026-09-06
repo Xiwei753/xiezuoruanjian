@@ -430,7 +430,12 @@ impl crate::sync::SyncService {
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
             state.device_id = new_device_id;
-            let _ = Self::save_sync_state(sync_root, &state);
+            // #645 评论 5504296097 问题3 修复：正式同步路径不能在 device identity
+            // 持久化失败时继续跑。原先 `let _ =` 吞掉 save_sync_state 的 Err，
+            // 磁盘写失败时返回 Ok(state)，调用方拿到一个只存在内存里的 device_id，
+            // 下次进程重启又会生成另一个 UUID，导致 LWW tie-break 漂移。
+            // 现在用 `?` 让错误向上传播，调用方必须处理持久化失败。
+            Self::save_sync_state(sync_root, &state)?;
         }
         Ok(state)
     }

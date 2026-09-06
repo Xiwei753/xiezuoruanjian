@@ -1,7 +1,9 @@
 //! 同步服务层 — 编排 LWW 同步策略的统一入口。
 //!
 //! `SyncService` 是同步功能的业务编排层，提供：
-//! - LWW 同步（`perform_lww_sync`）：基于 GitHub Contents API 的文件级 Last Writer Wins
+//! - LWW 同步（`perform_lww_sync`，`pub(crate)`）：内部 staging LWW 引擎，
+//!   唯一生产入口是 `WriterCoreApi::perform_full_sync`，不作为对 live root 的
+//!   独立同步入口（#645 评论 5504296097 问题2 修复）
 //! - 诊断（`perform_sync_diagnostics`）：探测网络、认证、仓库和分支可用性
 //! - 路径过滤（`is_blacklisted_path`/`is_whitelisted_path`）：见 `config_store` 模块
 //!
@@ -44,13 +46,23 @@ impl SyncService {
 }
 
 impl SyncService {
-    /// LWW 同步主入口——基于 Last-Writer-Wins 策略执行文件级同步。
+    /// #645 评论 5504296097 问题2 修复：内部 staging LWW 引擎，**不是**对 live root
+    /// 的独立同步入口。
+    ///
+    /// 唯一生产入口是 `WriterCoreApi::perform_full_sync`（staging → LWW merge →
+    /// remote publish → staging commit to live）。本函数只在 full_sync 内部编排
+    /// 里被 `run_single_target` 调用，调用方必须传隔离 staging root。
+    ///
+    /// 直接对 live root 调用本函数是错误的：`merge_remote_into_local_snapshot`
+    /// 会在远端写之前推进本地 manifest/known_files/SyncState，远端上传失败时
+    /// 本地基线已错误前移。降级为 `pub(crate)` 阻止外部（facade/app_service/
+    /// uniffi）直接对 live root 调用。
     ///
     /// 通过 `SyncProvider` trait 与具体后端解耦：调用方传入已构造的 provider,
     /// engine 不直接依赖 `SyncConfig`/`SyncSecrets`/`SyncTransport`。
     /// `sync_policy` 携带 engine 决策所需的通用字段（enabled/interval 等）。
     /// `force_sync=true` 跳过 debounce。
-    pub fn perform_lww_sync(
+    pub(crate) fn perform_lww_sync(
         sync_root: &Path,
         provider: &dyn crate::sync::provider::SyncProvider,
         sync_policy: &crate::sync::types::SyncPolicy,

@@ -76,6 +76,12 @@ pub(crate) struct LwwMergeOutcome {
     pub remote_manifest_path: String,
     /// manifest JSON（供调用方上传 manifest）。
     pub manifest_json: String,
+    /// #645 评论 5504296097 问题1 修复：合并后的完整强类型 manifest 快照。
+    ///
+    /// generation publisher 必须用此字段发布完整快照，不能只上传
+    /// `remote_upload_paths`（delta 动作）。`remote_upload_paths` 只给普通
+    /// "原地 LWW"写远端用，不要拿它发布 generation。
+    pub merged_manifest: SyncManifest,
 }
 
 /// #645 评论 5504296097 问题1 修复：唯一的只读 merge 核心。
@@ -445,5 +451,8 @@ pub(crate) fn merge_remote_into_local_snapshot(
         remote_tree_files,
         remote_manifest_path,
         manifest_json,
+        // #645 评论 5504296097 问题1 修复：携带完整强类型 manifest 快照，
+        // 供 generation publisher 上传完整快照（不只是 delta 动作）。
+        merged_manifest: sync_manifest,
     })
 }

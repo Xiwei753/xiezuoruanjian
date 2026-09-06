@@ -1936,9 +1936,21 @@ fn publish_generation(
 
     // 2. 上传 staging 内容到 generation prefix。
     let content_result = if let Some(outcome) = merge_outcome {
-        // #645 评论 5504296097 问题1 修复：已 merge → 直接用 outcome 上传到新
+        // #645 评论 5504296097 问题1 修复：已 merge → 上传完整快照到新
         // generation prefix，不再做第二次 LWW 同步。
-        match upload_merged_outcome_to_generation(provider, sync_root, generation_prefix, outcome) {
+        // 关键：必须上传 merged_manifest 里所有 upsert 文件，不能只上传
+        // outcome.remote_upload_paths（delta 动作）。NoOp/DownloadRemote/
+        // LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不在
+        // remote_upload_paths 里，但它们在 merged_manifest 中，新 generation
+        // 必须包含这些文件对象，否则 catalog 指向一个 manifest 声称文件存在
+        // 但实际对象不存在的 generation。
+        match upload_complete_generation_snapshot(
+            provider,
+            sync_root,
+            generation_prefix,
+            &outcome.merged_manifest,
+            scope,
+        ) {
             Ok(()) => {
                 let mut r = SyncResult::success();
                 r.uploaded_files = outcome.remote_upload_paths.clone();
@@ -1959,7 +1971,7 @@ fn publish_generation(
                 r
             }
             Err(e) => {
-                let msg = format!("publish_generation: upload merged outcome failed: {e}");
+                let msg = format!("publish_generation: upload complete snapshot failed: {e}");
                 SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
             }
         }
@@ -2002,33 +2014,80 @@ fn publish_generation(
     content_result
 }
 
-/// #645 评论 5504296097 问题1 修复：把 merge outcome 的本地文件和 manifest 上传到
-/// 新 generation prefix。
+/// #645 评论 5504296097 问题1 修复：把完整 merged manifest 快照上传到新 generation prefix。
 ///
-/// 已 merge 的 staging 不需要再做 LWW 同步（远端 generation prefix 是空的），
-/// 直接上传 outcome.remote_upload_paths 的本地文件 + outcome.manifest_json 到
-/// generation prefix。
-fn upload_merged_outcome_to_generation(
+/// 新 generation 是不可变完整快照。本函数遍历 `merged_manifest.files`，
+/// 对每个 `op=upsert` 的 record：
+/// 1. 路径必须仍在同步白名单（`SyncService::is_whitelisted_path`）。
+/// 2. `staging_root/path` 必须存在。
+/// 3. 重新算 md5 hash，必须 == `record.content_hash`（不一致则 `Err`）。
+/// 4. 上传到新 generation prefix（`CreateNew` 或 `Unconditional`）。
+///
+/// `op=delete` 的 record 只保留 tombstone（manifest 里有记录），不上传物理文件。
+///
+/// 上传规则保证新 generation 的 manifest 与实际对象一致：manifest 声称存在的
+/// 文件对象一定已上传到 generation prefix。原先 `upload_merged_outcome_to_generation`
+/// 只上传 `remote_upload_paths`（delta 动作），NoOp/DownloadRemote/
+/// LwwRemoteWinsDownload/pending_take_remote 成功下载的文件都不会进新 generation，
+/// 导致 catalog 指向一个 manifest 声称文件存在但实际对象不存在的 generation。
+fn upload_complete_generation_snapshot(
     provider: &dyn SyncProvider,
-    sync_root: &Path,
+    staging_root: &Path,
     generation_prefix: &str,
-    outcome: &crate::sync::lww::LwwMergeOutcome,
+    merged_manifest: &crate::sync::types::SyncManifest,
+    scope: crate::sync::types::SyncScope,
 ) -> crate::error::Result<()> {
     use crate::sync::provider::model::WritePrecondition;
 
     let caps = provider.capabilities();
-    // 上传本地文件到 generation prefix。
-    for path in &outcome.remote_upload_paths {
-        let local_full = sync_root.join(path);
-        if !local_full.exists() {
+
+    // 遍历 merged_manifest.files，上传所有 upsert 文件到新 generation prefix。
+    for record in &merged_manifest.files {
+        // op=delete 只保留 tombstone（manifest 里有记录），不上传物理文件。
+        if record.op == "delete" {
             continue;
         }
+        if record.op != "upsert" {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "upload_complete_generation_snapshot: unknown op={} for path={}",
+                record.op, record.path
+            ))));
+        }
+
+        // 1. 路径白名单检查。
+        if !crate::sync::SyncService::is_whitelisted_path(&record.path, scope) {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "upload_complete_generation_snapshot: path {} not whitelisted for scope {:?}",
+                record.path, scope
+            ))));
+        }
+
+        // 2. staging 文件必须存在。
+        let local_full = staging_root.join(&record.path);
+        if !local_full.exists() {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "upload_complete_generation_snapshot: staging file missing for path={}",
+                record.path
+            ))));
+        }
+
+        // 3. 读取 staging 文件，计算 md5 hash，必须 == record.content_hash。
         let content = std::fs::read(&local_full).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
-                "upload_merged_outcome: read {path}: {e}"
+                "upload_complete_generation_snapshot: read {}: {e}",
+                record.path
             )))
         })?;
-        let remote_path = format!("{generation_prefix}/{path}");
+        let actual_hash = format!("{:x}", md5::compute(&content));
+        if actual_hash != record.content_hash {
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "upload_complete_generation_snapshot: hash mismatch for path={} expected={} actual={}",
+                record.path, record.content_hash, actual_hash
+            ))));
+        }
+
+        // 4. 上传到新 generation prefix。
+        let remote_path = format!("{generation_prefix}/{}", record.path);
         let precondition = if caps.conditional_write {
             WritePrecondition::CreateNew
         } else {
@@ -2042,15 +2101,20 @@ fn upload_merged_outcome_to_generation(
         "{generation_prefix}/{}",
         crate::sync::lww::SYNC_MANIFEST_PATH
     );
-    let precondition = if caps.conditional_write {
+    let manifest_json = serde_json::to_string(merged_manifest).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "upload_complete_generation_snapshot: serialize manifest: {e}"
+        )))
+    })?;
+    let manifest_precondition = if caps.conditional_write {
         WritePrecondition::CreateNew
     } else {
         WritePrecondition::Unconditional
     };
     provider.write(
         &manifest_remote_path,
-        outcome.manifest_json.as_bytes(),
-        precondition,
+        manifest_json.as_bytes(),
+        manifest_precondition,
     )?;
 
     Ok(())
@@ -2158,8 +2222,15 @@ fn run_single_target(
     target: &SyncTarget,
     force_sync: bool,
 ) -> SyncResult {
-    match crate::sync::lww::perform_lww_sync(local_root, provider, sync_policy, target, force_sync)
-    {
+    // #645 评论 5504296097 问题2 修复：通过 SyncService::perform_lww_sync
+    // （pub(crate) 内部 staging 引擎）调用，保持唯一调用路径。
+    match crate::sync::SyncService::perform_lww_sync(
+        local_root,
+        provider,
+        sync_policy,
+        target,
+        force_sync,
+    ) {
         Ok(result) => result,
         Err(err) => {
             let msg = err.to_string();
