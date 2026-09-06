@@ -7,13 +7,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * MirrorChangeSink — 恢复完成后通知所有相关组件数据已变更。
+ * RecoveryChangeSink — 恢复完成后通知所有相关组件数据已变更。
  *
  * 聚合 project 列表、recent edits、starmap cache、stats 的刷新入口，
  * 避免恢复器各自直接依赖这些组件。位于 `:app` 的 `storage/recovery` 包，
  * 可依赖 :app 的 DI 与 Repository，但不放 Composable（UI 接入由上层负责）。
+ *
+ * #649 评论 5560685734 要求 5：本类只负责"恢复后刷新 UI/缓存"，与评论 5559759935
+ * 中的镜像变更入口（MirrorChangeSink）撞名，故改名 `RecoveryChangeSink` 以区分。
  */
-interface MirrorChangeSink {
+interface RecoveryChangeSink {
     /** 通知 project 列表、recent edits、starmap cache、stats 全部刷新。 */
     suspend fun everythingChanged()
 }
@@ -28,11 +31,11 @@ interface MirrorChangeSink {
  * #649 评论 5559763924：接收 [WorkspaceAppState] 接口而非具体 [com.xiwei.sujian.app.SujianAppState]，
  * 让作品页（持有接口）与设置页（通过 CompositionLocal 拿到具体类）都能构造 Sink。
  */
-class DefaultMirrorChangeSink(
+class DefaultRecoveryChangeSink(
     private val appState: WorkspaceAppState,
     private val starMapRepository: StarMapRepository,
     private val writingStatsRepository: WritingStatsRepository,
-) : MirrorChangeSink {
+) : RecoveryChangeSink {
     override suspend fun everythingChanged() {
         withContext(Dispatchers.IO) {
             appState.refreshProjectSummaries()

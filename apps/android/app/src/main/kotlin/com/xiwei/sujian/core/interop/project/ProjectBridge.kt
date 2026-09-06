@@ -1,6 +1,7 @@
 package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.storage.mirror.MirrorChangeSink
 import com.xiwei.sujian.feature.project.data.model.Project
 import com.xiwei.sujian.feature.project.data.model.ProjectStats
 import com.xiwei.sujian.feature.project.data.model.ProjectSummary
@@ -11,8 +12,14 @@ import com.xiwei.sujian.feature.project.data.model.Volume
  * 项目/卷 领域 Bridge。
  *
  * 从 AppServiceBridge 拆出，负责项目、卷的 CRUD 与排序操作。
+ *
+ * #649 评论 5560685734：成功后通知 [MirrorChangeSink] 触发镜像发布，
+ * 不能在保存热路径同步写 Download。
  */
-class ProjectBridge internal constructor(private val holder: WriterAppServiceHolder) {
+class ProjectBridge internal constructor(
+    private val holder: WriterAppServiceHolder,
+    private val mirrorChangeSink: MirrorChangeSink? = null,
+) {
     fun listProjects(): BridgeResult<List<Project>> =
         holder.wrapResult {
             holder.service.listProjects().map { it.toModel() }
@@ -32,6 +39,10 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     fun createProject(title: String): BridgeResult<Project> =
         holder.wrapResult {
             holder.service.createProject(title).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.everythingChanged()
+            }
         }
 
     fun getProjectStats(projectId: String): BridgeResult<ProjectStats> =
@@ -56,16 +67,28 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.renameProject(projectId, newTitle)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun deleteProject(projectId: String): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.deleteProject(projectId)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectDeleted(projectId)
+            }
         }
 
     fun reorderProjects(orderedIds: List<String>): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.reorderProjects(orderedIds)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.everythingChanged()
+            }
         }
 
     fun listVolumes(projectId: String): BridgeResult<List<Volume>> =
@@ -79,6 +102,10 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Volume> =
         holder.wrapResult {
             holder.service.createVolume(projectId, title).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun renameVolume(
@@ -88,6 +115,10 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.renameVolume(projectId, volumeId, newTitle)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun deleteVolume(
@@ -96,6 +127,10 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.deleteVolume(projectId, volumeId)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun reorderVolumes(
@@ -104,5 +139,9 @@ class ProjectBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.reorderVolumes(projectId, orderedIds)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 }

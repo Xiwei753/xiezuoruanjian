@@ -4,6 +4,7 @@ import com.xiwei.sujian.core.interop.project.ChapterBridge
 import com.xiwei.sujian.core.interop.project.ProjectBridge
 import com.xiwei.sujian.core.interop.project.RecentEditsBridge
 import com.xiwei.sujian.core.interop.settings.SettingsBridge
+import com.xiwei.sujian.storage.mirror.MirrorChangeSink
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
@@ -21,13 +22,17 @@ import uniffi.writer_core.ScreenRoleDto
  * 内部已拆分为领域 Bridge（ProjectBridge、ChapterBridge、SettingsBridge 等），
  * 原有公开 API 全部委托到对应领域 Bridge，行为不变。
  *
+ * #649 评论 5560685734：可选接收 [MirrorChangeSink]，在业务成功后触发镜像发布。
  * 新代码应直接使用领域 Bridge，不再依赖此门面类。
  */
-open class AppServiceBridge(val holder: WriterAppServiceHolder) {
+open class AppServiceBridge(
+    val holder: WriterAppServiceHolder,
+    private val mirrorChangeSink: MirrorChangeSink? = null,
+) {
     // ── 领域 Bridge ──
-    val projectBridge: ProjectBridge by lazy { ProjectBridge(holder) }
+    val projectBridge: ProjectBridge by lazy { ProjectBridge(holder, mirrorChangeSink) }
     val recentEditsBridge: RecentEditsBridge by lazy { RecentEditsBridge(holder) }
-    val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder) }
+    val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder, mirrorChangeSink) }
     val settingsBridge: SettingsBridge by lazy { SettingsBridge(holder) }
     open val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }

@@ -2,6 +2,7 @@ package com.xiwei.sujian.core.interop.project
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.storage.mirror.MirrorChangeSink
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ChapterOpenResult
 import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
@@ -10,8 +11,14 @@ import com.xiwei.sujian.feature.project.data.model.ChapterSaveReceipt
  * 章节 领域 Bridge。
  *
  * 从 AppServiceBridge 拆出，负责章节相关操作。
+ *
+ * #649 评论 5560685734：成功后通知 [MirrorChangeSink] 触发镜像发布，
+ * 不能在保存热路径同步写 Download。
  */
-class ChapterBridge internal constructor(private val holder: WriterAppServiceHolder) {
+class ChapterBridge internal constructor(
+    private val holder: WriterAppServiceHolder,
+    private val mirrorChangeSink: MirrorChangeSink? = null,
+) {
     companion object {
         private const val TAG = "ChapterBridge"
     }
@@ -31,6 +38,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<ChapterMeta> =
         holder.wrapResult {
             holder.service.createChapter(projectId, volumeId, title).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun renameChapter(
@@ -41,6 +52,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.renameChapter(projectId, volumeId, chapterId, newTitle)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)
+            }
         }
 
     fun deleteChapter(
@@ -50,6 +65,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.deleteChapter(projectId, volumeId, chapterId)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun reorderChapters(
@@ -59,6 +78,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<Boolean> =
         holder.wrapResult {
             holder.service.reorderChapters(projectId, volumeId, orderedIds)
+        }.also { result ->
+            if (result is BridgeResult.Success && result.data) {
+                mirrorChangeSink?.projectStructureChanged(projectId)
+            }
         }
 
     fun openChapter(
@@ -78,6 +101,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<ChapterSaveReceipt> =
         holder.wrapResult {
             holder.service.saveChapterContent(projectId, volumeId, chapterId, content).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)
+            }
         }
 
     fun clearChapterContent(
@@ -87,6 +114,10 @@ class ChapterBridge internal constructor(private val holder: WriterAppServiceHol
     ): BridgeResult<ChapterSaveReceipt> =
         holder.wrapResult {
             holder.service.clearChapterContent(projectId, volumeId, chapterId).toModel()
+        }.also { result ->
+            if (result is BridgeResult.Success) {
+                mirrorChangeSink?.chapterChanged(projectId, volumeId, chapterId)
+            }
         }
 
     fun updateChapterNote(
