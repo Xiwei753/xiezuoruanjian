@@ -860,16 +860,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                         None,
                                     )
                                 }
-                                Err(e) => {
-                                    let msg = format!(
-                                        "LiveProject: merge remote into staging failed: {e}"
-                                    );
-                                    SyncResult::error(
-                                        SyncStatus::RecoverableError(msg.clone()),
-                                        msg,
-                                        None,
-                                    )
-                                }
+                                Err(e) => sync_result_from_error(e),
                             };
                             // 正文 transfer 失败 → 不发布 lifecycle，直接返回错误。
                             // generation prefix 下残留的未引用 generation 由后续 GC 清理。
@@ -1006,20 +997,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                         expected_device,
                                                     );
                                                             if let Err(e) = record_result {
-                                                                let msg = format!(
-                                                            "record pending remote cleanup failed: {e}"
-                                                        );
                                                                 (
-                                                            SyncResult::error(
-                                                                SyncStatus::RecoverableError(
-                                                                    msg.clone(),
-                                                                ),
-                                                                msg,
-                                                                None,
-                                                            ),
-                                                            None,
-                                                            None,
-                                                        )
+                                                                    sync_result_from_error(e),
+                                                                    None,
+                                                                    None,
+                                                                )
                                                             } else {
                                                                 (cleanup_result, None, None)
                                                             }
@@ -1045,17 +1027,8 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 }
                                             }
                                             TargetLifecycleApplyResult::Retry(e) => {
-                                                // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError。
-                                                let msg = format!("lifecycle upsert failed: {e}");
-                                                (
-                                                    SyncResult::error(
-                                                        SyncStatus::RecoverableError(msg.clone()),
-                                                        msg,
-                                                        None,
-                                                    ),
-                                                    None,
-                                                    None,
-                                                )
+                                                // #645 评论 5504296097：lifecycle 写失败 → 按 Error 语义映射。
+                                                (sync_result_from_error(e), None, None)
                                             }
                                         }
                                     }
@@ -1077,18 +1050,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 }
                             }
                         }
-                        Err(e) => {
-                            let msg = format!("LiveProject: invalid generation id: {e}");
-                            (
-                                SyncResult::error(
-                                    SyncStatus::RecoverableError(msg.clone()),
-                                    msg,
-                                    None,
-                                ),
-                                None,
-                                None,
-                            )
-                        }
+                        Err(e) => (sync_result_from_error(e), None, None),
                     }
                 } else {
                     // 防御性：live_lww 为 None 不应进入 LiveProject（decide 已过滤）。
@@ -1197,17 +1159,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                         expected_device,
                                     );
                                     if let Err(e) = record_result {
-                                        let msg =
-                                            format!("record pending remote cleanup failed: {e}");
-                                        (
-                                            SyncResult::error(
-                                                SyncStatus::RecoverableError(msg.clone()),
-                                                msg,
-                                                None,
-                                            ),
-                                            None,
-                                            None,
-                                        )
+                                        (sync_result_from_error(e), None, None)
                                     } else {
                                         (cleanup_result, None, None)
                                     }
@@ -1255,14 +1207,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         )
                     }
                     Err(e) => {
-                        // CAS 读取失败 — 不执行破坏性删除，返回 Retry。
-                        let msg = format!(
-                            "DeleteLocalProject CAS failed for {}: {e}",
+                        // CAS 读取失败 — 不执行破坏性删除，按 Error 语义映射，返回 Retry。
+                        log::warn!(
+                            "[sync] DeleteLocalProject CAS failed for {}: {e}",
                             planned.target.remote_prefix
                         );
-                        log::warn!("[sync] {msg}");
                         (
-                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                            sync_result_from_error(e),
                             Some(DeletedTargetResolution::Retry),
                             None,
                         )
@@ -1375,14 +1326,9 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             }
                         }
                         TargetLifecycleApplyResult::Retry(e) => {
-                            // #645 评论 5504296097 问题4：lifecycle 写失败 → Retry，不删远端。
-                            let msg = format!("lifecycle tombstone write failed: {e}");
+                            // #645 评论 5504296097：lifecycle 写失败 → 按 Error 语义映射，Retry，不删远端。
                             (
-                                SyncResult::error(
-                                    SyncStatus::RecoverableError(msg.clone()),
-                                    msg,
-                                    None,
-                                ),
+                                sync_result_from_error(e),
                                 Some(DeletedTargetResolution::Retry),
                                 None,
                             )
@@ -1464,18 +1410,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                             expected_device,
                                         );
                                         if let Err(e) = record_result {
-                                            let msg = format!(
-                                                "record pending remote cleanup failed: {e}"
-                                            );
-                                            (
-                                                SyncResult::error(
-                                                    SyncStatus::RecoverableError(msg.clone()),
-                                                    msg,
-                                                    None,
-                                                ),
-                                                None,
-                                                None,
-                                            )
+                                            (sync_result_from_error(e), None, None)
                                         } else {
                                             (cleanup_result, None, None)
                                         }
@@ -1612,20 +1547,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                             None,
                                         )
                                     }
-                                    Err(e) => {
-                                        let msg = format!(
-                                            "RestoreProject: invalid active_generation: {e}"
-                                        );
-                                        (
-                                            SyncResult::error(
-                                                SyncStatus::RecoverableError(msg.clone()),
-                                                msg,
-                                                None,
-                                            ),
-                                            None,
-                                            None,
-                                        )
-                                    }
+                                    Err(e) => (sync_result_from_error(e), None, None),
                                 }
                             }
                         }
@@ -1654,14 +1576,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         )
                     }
                     Err(e) => {
-                        // CAS 读取失败 — 不执行恢复，返回 Retry。
-                        let msg = format!(
-                            "RestoreProject CAS failed for {}: {e}",
+                        // CAS 读取失败 — 不执行恢复，按 Error 语义映射，返回 Retry。
+                        log::warn!(
+                            "[sync] RestoreProject CAS failed for {}: {e}",
                             planned.target.remote_prefix
                         );
-                        log::warn!("[sync] {msg}");
                         (
-                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                            sync_result_from_error(e),
                             Some(DeletedTargetResolution::Retry),
                             None,
                         )
@@ -1780,14 +1701,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         )
                     }
                     Err(e) => {
-                        // CAS 读取失败 — 不执行删除，返回 Retry。
-                        let msg = format!(
-                            "RemoteCleanupProject CAS failed for {}: {e}",
+                        // CAS 读取失败 — 不执行删除，按 Error 语义映射，返回 Retry。
+                        log::warn!(
+                            "[sync] RemoteCleanupProject CAS failed for {}: {e}",
                             planned.target.remote_prefix
                         );
-                        log::warn!("[sync] {msg}");
                         (
-                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                            sync_result_from_error(e),
                             Some(DeletedTargetResolution::Retry),
                             None,
                         )
