@@ -155,7 +155,10 @@ fn aggregate_with_outcomes(
     // #645 评论 5504296097 Blocker 2：commit_full_sync 现在返回
     // (FullSyncResult, committed_paths)，聚合测试只关心 FullSyncResult。
     core.commit_full_sync(
-        crate::sync::full_sync::FullSyncTransferResult { targets },
+        crate::sync::full_sync::FullSyncTransferResult {
+            targets,
+            generation_gc_result: None,
+        },
         Vec::new(),
     )
     .0
@@ -1517,7 +1520,10 @@ fn q1_commit_full_sync_executes_delete_project_action() {
             expected_local_lww: expected_lww.clone(),
         },
     }];
-    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult {
+        targets,
+        generation_gc_result: None,
+    };
 
     let (result, _committed_paths, _) = core.commit_full_sync(transfer_result, Vec::new());
 
@@ -1594,7 +1600,10 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
             expected_local_lww: expected_lww.clone(),
         },
     }];
-    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult {
+        targets,
+        generation_gc_result: None,
+    };
 
     let _ = core.commit_full_sync(transfer_result, Vec::new());
 
@@ -1629,7 +1638,10 @@ fn q1_commit_full_sync_without_delete_action_preserves_project() {
         deleted_resolution: None,
         local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::None,
     }];
-    let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
+    let transfer_result = crate::sync::full_sync::FullSyncTransferResult {
+        targets,
+        generation_gc_result: None,
+    };
 
     let _ = core.commit_full_sync(transfer_result, Vec::new());
 

@@ -347,6 +347,7 @@ fn adv_p2_partial_conflict_commits_non_conflict_files_and_conflict_metadata() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
@@ -395,6 +396,7 @@ fn adv_p2_fatal_error_skips_staging_commit() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
@@ -437,6 +439,7 @@ fn adv_p2_recoverable_error_skips_staging_commit() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
@@ -481,6 +484,7 @@ fn adv_p2_success_full_commit_writes_both_content_and_engine_state() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
@@ -540,6 +544,7 @@ fn adv_p2_partial_conflict_excludes_conflict_paths_from_content_actions() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);

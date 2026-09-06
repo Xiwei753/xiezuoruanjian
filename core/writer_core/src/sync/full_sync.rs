@@ -658,6 +658,13 @@ fn read_post_transfer_lww(root: &Path) -> Option<LiveTargetLww> {
 #[derive(Debug, Clone)]
 pub struct FullSyncTransferResult {
     pub targets: Vec<TargetSyncResult>,
+    /// #645 评论 5504296097 问题2 修复：generation GC 的 provider-neutral 维护结果。
+    ///
+    /// `None` 表示未执行 GC（sync disabled 或无 project target）。
+    /// `Some(Ok(()))` 表示 GC 成功；`Some(Err(msg))` 表示 GC 失败（RecoverableError），
+    /// Commit 聚合进去，下一轮 full-sync 自然再次执行 GC，不再用 `log::warn!` 吞掉。
+    /// 用 `String` 而非 `crate::error::Error` 因为 `Error` 不实现 `Clone`。
+    pub generation_gc_result: Option<Result<(), String>>,
 }
 
 // ── Transfer ──
@@ -706,6 +713,17 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         DeletedTargetResolution, PlannedTargetKind, TargetLifecycleApplyResult,
     };
 
+    // #645 评论 5504296097 问题3 修复：sync disabled → 在创建 generation_id / merge /
+    // publish / lifecycle CAS 之前直接返回 no-op。这样内部调用即使绕过 API 层
+    // perform_full_sync 的 guard，也不可能在 disabled 状态写远端。
+    if !plan.sync_policy.enabled {
+        log::debug!("[sync] run_transfer: sync disabled — returning no-op");
+        return FullSyncTransferResult {
+            targets: Vec::new(),
+            generation_gc_result: None,
+        };
+    }
+
     // #645 评论 5504296097 问题4：不再无条件再读一次 catalog。
     // 用 plan 携带的 `remote_catalog_snapshot`（Prepare 阶段在写锁外读取的）
     // 作为 lifecycle CAS 起点。`apply_lifecycle_record` 在 CAS 冲突时仍会重读
@@ -752,11 +770,14 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         .staging_root
                         .as_deref()
                         .unwrap_or(&planned.local_root);
-                    // #645 评论 5504296097 问题1：先从当前可见 generation 合并远端到
-                    // staging，再上传 staging 到新 generation。这修复了"LiveProject
-                    // 直接创建空 G2，没有先从 G1 读取/合并，A 在 G1 的远端更新没进入
-                    // 合并"的 bug。merge 只读 source（不向 source generation 写）。
-                    let merge_outcome: crate::error::Result<()> = (|| {
+                    // #645 评论 5504296097 问题1 修复：先从当前可见 generation 用统一
+                    // LWW merge 核心合并远端到 staging，再上传 staging 到新 generation。
+                    // 不再用"存在就本地赢"的 merge_remote_into_staging，统一复用
+                    // merge_remote_into_local_snapshot（与普通 LWW 同源），正确处理
+                    // 远端同路径更新（LWW 时间戳比较）和远端删除 tombstone。
+                    let merge_outcome: crate::error::Result<
+                        Option<crate::sync::lww::LwwMergeOutcome>,
+                    > = (|| {
                         if let Some(source_record) = crate::sync::target_lifecycle::find_record(
                             &catalog_snapshot.catalog,
                             &planned.target.remote_prefix,
@@ -772,10 +793,19 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     planned.target.remote_prefix,
                                     source_prefix
                                 );
-                                merge_remote_into_staging(provider, &source_prefix, sync_root)?;
+                                let mut merge_state =
+                                    crate::sync::SyncService::load_sync_state(sync_root)?;
+                                let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
+                                    sync_root,
+                                    provider,
+                                    &source_prefix,
+                                    planned.target.scope,
+                                    &mut merge_state,
+                                )?;
+                                return Ok(Some(outcome));
                             }
                         }
-                        Ok(())
+                        Ok(None)
                     })();
                     // #645 评论 5504296097 问题4：generation_remote_prefix 防御性校验
                     // generation_id（UUID 总是合法，但不依赖调用方不变式）。
@@ -787,16 +817,49 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         gen_remote_prefix
                     );
                             let content_result = match merge_outcome {
-                                Ok(()) => publish_generation(
-                                    provider,
-                                    sync_root,
-                                    &gen_remote_prefix,
-                                    &generation_id,
-                                    planned.project_id.as_deref().unwrap_or(""),
-                                    planned.target.scope,
-                                    &plan.sync_policy,
-                                    plan.force_sync,
-                                ),
+                                Ok(Some(outcome)) => {
+                                    // #645 评论 5504296097 问题1 修复：有正文冲突 →
+                                    // 不发布新 generation，不改 active_generation，
+                                    // 返回 PartialConflict。
+                                    if !outcome.conflicts.is_empty() {
+                                        let mut r = SyncResult::success();
+                                        r.status = SyncStatus::PartialConflict;
+                                        r.conflicts = outcome.conflicts;
+                                        r.downloaded_files = outcome.downloaded_files;
+                                        r.local_deletes = outcome.remote_delete_paths;
+                                        r.remote_deletes = outcome.local_deletes;
+                                        r.overwritten_files = outcome.overwritten_files;
+                                        r.ignored_files = outcome.ignored_files;
+                                        r
+                                    } else {
+                                        publish_generation(
+                                            provider,
+                                            sync_root,
+                                            &gen_remote_prefix,
+                                            &generation_id,
+                                            planned.project_id.as_deref().unwrap_or(""),
+                                            planned.target.scope,
+                                            &plan.sync_policy,
+                                            plan.force_sync,
+                                            Some(&outcome),
+                                        )
+                                    }
+                                }
+                                Ok(None) => {
+                                    // 无 source generation（首次同步 / legacy）→
+                                    // 直接 publish staging 到新 generation。
+                                    publish_generation(
+                                        provider,
+                                        sync_root,
+                                        &gen_remote_prefix,
+                                        &generation_id,
+                                        planned.project_id.as_deref().unwrap_or(""),
+                                        planned.target.scope,
+                                        &plan.sync_policy,
+                                        plan.force_sync,
+                                        None,
+                                    )
+                                }
                                 Err(e) => {
                                     let msg = format!(
                                         "LiveProject: merge remote into staging failed: {e}"
@@ -1743,10 +1806,14 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         });
     }
 
-    // #645 评论 5504296097 问题2：generation GC — 清理未引用 generation。
+    // #645 评论 5504296097 问题2 修复：generation GC — 清理未引用 generation。
     // 对每个 project target 调一次 run_generation_gc。不在 CAS 成功后立刻删旧
-    // generation（另一台设备可能正拿着旧 catalog 下载）。GC 失败不致命（下轮继续）。
+    // generation（另一台设备可能正拿着旧 catalog 下载）。
+    //
+    // 错误传播：GC 出错 → RecoverableError，聚合进 generation_gc_result，下一轮
+    // full-sync 自然再次执行 GC。不再用 `if let Err(e) = ... { log::warn!(...); }` 吞掉。
     let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut generation_gc_result: Option<Result<(), String>> = None;
     for planned in &plan.targets {
         // 只对 project target 做 GC（app target 无 generation）。
         if planned.target.remote_prefix.starts_with("projects/") {
@@ -1755,22 +1822,29 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 &planned.target.remote_prefix,
             )
             .and_then(|r| r.active_generation.as_deref());
-            if let Err(e) = crate::sync::generation_gc::run_generation_gc(
+            match crate::sync::generation_gc::run_generation_gc(
                 provider,
                 &planned.target.remote_prefix,
                 active_generation,
                 now_ms,
                 crate::sync::generation_gc::GENERATION_RETENTION_MS,
             ) {
-                log::warn!(
-                    "[sync] run_transfer: generation GC failed for {}: {e}",
-                    planned.target.remote_prefix
-                );
+                Ok(()) => {}
+                Err(e) => {
+                    log::warn!(
+                        "[sync] run_transfer: generation GC failed for {}: {e}",
+                        planned.target.remote_prefix
+                    );
+                    generation_gc_result = Some(Err(e.to_string()));
+                }
             }
         }
     }
 
-    FullSyncTransferResult { targets }
+    FullSyncTransferResult {
+        targets,
+        generation_gc_result,
+    }
 }
 
 /// #645 评论 5504296097 问题1：RestoreProject / DeleteRemoteProject LostToRemote 时
@@ -1808,56 +1882,20 @@ fn download_remote_to_staging(
     result
 }
 
-/// #645 评论 5504296097 问题1：只读 merge 远端 generation 到 staging。
-///
-/// 把 source generation prefix 下的远端文件下载到 staging，**只下载 staging 没有
-/// 的文件**（保留本地修改）。这修复了"LiveProject 直接创建空 G2，没有先从 G1
-/// 读取/合并，A 在 G1 的远端更新没进入合并"的 bug。
-///
-/// 只允许 `provider.list/read(source)` + 写本地 staging，**绝不向 source generation
-/// 写**（不 `provider.write` source）。source generation 可能正被其他设备读取
-/// （RestoreProject 从 active generation 下载），向 source 写会破坏并发安全。
-///
-/// merge 策略：对每个远端文件，staging 已有则保留本地（LiveProject 前提是本地
-/// live，本地版本是最新的）；staging 没有则下载（远端新增文件）。这不是真正的
-/// LWW 合并，但对 LiveProject（本地 live）是合理的 — 如果远端更新，应该走
-/// RestoreProject 而非 LiveProject。
-fn merge_remote_into_staging(
-    provider: &dyn SyncProvider,
-    source_remote_prefix: &str,
-    staging_root: &Path,
-) -> crate::error::Result<()> {
-    let entries = provider
-        .list(source_remote_prefix)
-        .map_err(crate::Error::from)?;
-    for entry in &entries {
-        let local_path = staging_root.join(&entry.path);
-        if local_path.exists() {
-            // staging 已有（本地修改），保留本地，不下载。
-            continue;
-        }
-        let full_remote_path = format!("{}/{}", source_remote_prefix, entry.path);
-        let obj = provider
-            .read(&full_remote_path)
-            .map_err(crate::Error::from)?;
-        if let Some(obj) = obj {
-            write_staging_file(staging_root, &entry.path, &obj.content)?;
-        }
-    }
-    Ok(())
-}
-
 /// #645 评论 5504296097 问题2：generation 原子发布 — 上传 staging 到新 generation prefix，
 /// 写 `generation.meta.json`（complete=false → 内容 → complete=true）。
 ///
 /// 步骤：
 /// 1. 写 `meta(complete=false, lease_until=now+lease)` 到 `generation_prefix/generation.meta.json`。
-/// 2. `run_single_target` 上传 staging 到 generation prefix（LWW，远端 generation 空所以全上传）。
+/// 2. 上传 staging 内容到 generation prefix：
+///    - 有 `merge_outcome`（已 merge）→ 直接用 outcome 的 upload paths / manifest
+///      上传到新 generation prefix（不再做第二次 LWW 同步）；
+///    - 无 `merge_outcome`（首次同步 / legacy）→ `run_single_target` 全量上传。
 /// 3. 内容上传成功后写 `meta(complete=true)`。
 ///
 /// meta 让 GC 能识别 incomplete generation（上传中，不删）和 complete generation
 /// （可按保留期删）。`uploader_device_id` 用空字符串（诊断字段，不影响 GC 逻辑）。
-#[allow(clippy::too_many_arguments)] // 8 个参数均为独立发布输入，打包会掩盖各自语义
+#[allow(clippy::too_many_arguments)] // 9 个参数均为独立发布输入，打包会掩盖各自语义
 fn publish_generation(
     provider: &dyn SyncProvider,
     sync_root: &Path,
@@ -1867,6 +1905,7 @@ fn publish_generation(
     scope: crate::sync::types::SyncScope,
     sync_policy: &SyncPolicy,
     force_sync: bool,
+    merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
 ) -> SyncResult {
     use crate::sync::generation_gc::{
         GenerationMeta, GENERATION_META_FILENAME, GENERATION_UPLOAD_LEASE_MS,
@@ -1895,18 +1934,49 @@ fn publish_generation(
         return recoverable_error_from_provider(e);
     }
 
-    // 2. 上传 staging 到 generation prefix（LWW，远端 generation 空所以全上传）。
-    let generation_target = SyncTarget {
-        scope,
-        remote_prefix: generation_prefix.to_string(),
+    // 2. 上传 staging 内容到 generation prefix。
+    let content_result = if let Some(outcome) = merge_outcome {
+        // #645 评论 5504296097 问题1 修复：已 merge → 直接用 outcome 上传到新
+        // generation prefix，不再做第二次 LWW 同步。
+        match upload_merged_outcome_to_generation(provider, sync_root, generation_prefix, outcome) {
+            Ok(()) => {
+                let mut r = SyncResult::success();
+                r.uploaded_files = outcome.remote_upload_paths.clone();
+                r.downloaded_files = outcome.downloaded_files.clone();
+                r.local_deletes = outcome.remote_delete_paths.clone();
+                r.remote_deletes = outcome.local_deletes.clone();
+                r.overwritten_files = outcome.overwritten_files.clone();
+                r.ignored_files = outcome.ignored_files.clone();
+                if r.uploaded_files.is_empty()
+                    && r.downloaded_files.is_empty()
+                    && r.local_deletes.is_empty()
+                    && r.remote_deletes.is_empty()
+                {
+                    r.status = SyncStatus::NoChanges;
+                } else {
+                    r.status = SyncStatus::LatestWinsApplied;
+                }
+                r
+            }
+            Err(e) => {
+                let msg = format!("publish_generation: upload merged outcome failed: {e}");
+                SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None)
+            }
+        }
+    } else {
+        // 无 merge_outcome（首次同步 / legacy）→ run_single_target 全量上传。
+        let generation_target = SyncTarget {
+            scope,
+            remote_prefix: generation_prefix.to_string(),
+        };
+        run_single_target(
+            provider,
+            sync_root,
+            sync_policy,
+            &generation_target,
+            force_sync,
+        )
     };
-    let content_result = run_single_target(
-        provider,
-        sync_root,
-        sync_policy,
-        &generation_target,
-        force_sync,
-    );
     let content_ok = matches!(
         content_result.status,
         SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
@@ -1930,6 +2000,60 @@ fn publish_generation(
     }
 
     content_result
+}
+
+/// #645 评论 5504296097 问题1 修复：把 merge outcome 的本地文件和 manifest 上传到
+/// 新 generation prefix。
+///
+/// 已 merge 的 staging 不需要再做 LWW 同步（远端 generation prefix 是空的），
+/// 直接上传 outcome.remote_upload_paths 的本地文件 + outcome.manifest_json 到
+/// generation prefix。
+fn upload_merged_outcome_to_generation(
+    provider: &dyn SyncProvider,
+    sync_root: &Path,
+    generation_prefix: &str,
+    outcome: &crate::sync::lww::LwwMergeOutcome,
+) -> crate::error::Result<()> {
+    use crate::sync::provider::model::WritePrecondition;
+
+    let caps = provider.capabilities();
+    // 上传本地文件到 generation prefix。
+    for path in &outcome.remote_upload_paths {
+        let local_full = sync_root.join(path);
+        if !local_full.exists() {
+            continue;
+        }
+        let content = std::fs::read(&local_full).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "upload_merged_outcome: read {path}: {e}"
+            )))
+        })?;
+        let remote_path = format!("{generation_prefix}/{path}");
+        let precondition = if caps.conditional_write {
+            WritePrecondition::CreateNew
+        } else {
+            WritePrecondition::Unconditional
+        };
+        provider.write(&remote_path, &content, precondition)?;
+    }
+
+    // 上传 manifest 到 generation prefix。
+    let manifest_remote_path = format!(
+        "{generation_prefix}/{}",
+        crate::sync::lww::SYNC_MANIFEST_PATH
+    );
+    let precondition = if caps.conditional_write {
+        WritePrecondition::CreateNew
+    } else {
+        WritePrecondition::Unconditional
+    };
+    provider.write(
+        &manifest_remote_path,
+        outcome.manifest_json.as_bytes(),
+        precondition,
+    )?;
+
+    Ok(())
 }
 
 /// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
@@ -2736,7 +2860,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -2784,7 +2911,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -2818,11 +2948,15 @@ mod tests {
         std::fs::create_dir_all(&project_root).unwrap();
         // #645 评论 5504296097 问题3：post-transfer LWW 从 staging manifest 读取。
         // staging_root 为 None → 用 local_root。写一份 manifest 让 LWW 能读到。
+        // #645 评论 5504296097 问题1 修复：merge_remote_into_local_snapshot 会调
+        // snapshot_local_records_read_only，要求 manifest 中 upsert record 对应的
+        // 文件必须存在或有 tombstone，否则返回 Err。补上实际 project.json 文件。
+        std::fs::write(project_root.join("project.json"), b"project content").unwrap();
         std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "project.json".to_string(),
-                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
+                content_hash: format!("{:x}", md5::compute(b"project content")),
                 updated_at_ms: 2000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -2852,7 +2986,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -2895,7 +3032,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -2934,7 +3074,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -3127,7 +3270,10 @@ mod tests {
         }
 
         let plan = FullSyncPlan {
-            sync_policy: crate::sync::types::SyncPolicy::default(),
+            sync_policy: crate::sync::types::SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: planned.clone(),
             app_data_root: app_root.clone(),
@@ -3290,7 +3436,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: crate::sync::types::SyncPolicy::default(),
+            sync_policy: crate::sync::types::SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -3736,7 +3885,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -3958,12 +4110,21 @@ mod tests {
         let project_root = tmp.path().join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
         // staging_root 单独设一个目录，里面放 post-transfer manifest（max=5000）。
+        // #645 评论 5504296097 问题1 修复：merge_remote_into_local_snapshot 会调
+        // snapshot_local_records_read_only，要求 manifest 中 upsert record 对应的
+        // 文件必须存在或有 tombstone。补上实际 chapter.md 文件。
         let staging_root = tmp.path().join("staging-p1");
+        std::fs::create_dir_all(staging_root.join("volumes").join("v1")).unwrap();
+        std::fs::write(
+            staging_root.join("volumes").join("v1").join("chapter.md"),
+            b"chapter content",
+        )
+        .unwrap();
         std::fs::create_dir_all(staging_root.join("app-meta/sync")).unwrap();
         let staging_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "chapter.md".to_string(),
-                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
+                path: "volumes/v1/chapter.md".to_string(),
+                content_hash: format!("{:x}", md5::compute(b"chapter content")),
                 updated_at_ms: 5000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -3994,7 +4155,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),
@@ -4044,7 +4208,10 @@ mod tests {
             expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
-            sync_policy: SyncPolicy::default(),
+            sync_policy: SyncPolicy {
+                enabled: true,
+                ..Default::default()
+            },
             force_sync: false,
             targets: vec![planned],
             app_data_root: tmp.path().to_path_buf(),

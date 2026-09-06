@@ -602,7 +602,25 @@ impl super::WriterCore {
             }
         }
 
-        let result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+        let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
+
+        // #645 评论 5504296097 问题2 修复：generation GC 失败 → 聚合进 FullSyncResult。
+        // GC 出错是 RecoverableError（下一轮 full-sync 自然再次执行 GC）。
+        // 只在当前 overall_status 是成功类时升级，避免覆盖更严重的 FatalError/Conflict。
+        if let Some(Err(gc_err)) = &transfer_result.generation_gc_result {
+            let gc_msg = format!("generation_gc failed: {gc_err}");
+            log::warn!("[sync] commit_full_sync: {gc_msg}");
+            if matches!(
+                result.overall_status,
+                crate::sync::SyncStatus::Success
+                    | crate::sync::SyncStatus::NoChanges
+                    | crate::sync::SyncStatus::LatestWinsApplied
+            ) {
+                result.overall_status =
+                    crate::sync::SyncStatus::RecoverableError("generation_gc_failed".to_string());
+                result.error = Some(gc_msg);
+            }
+        }
 
         // #645 评论 5504296097 问题1：deleted target 远端清理成功后，
         // 从 pending_deleted_targets.json 移除该条目。

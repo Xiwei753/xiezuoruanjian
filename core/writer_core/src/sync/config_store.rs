@@ -306,13 +306,24 @@ impl crate::sync::SyncService {
             // 旧格式迁移：只读不写。
             let old_path = sync_root.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&old_path) {
-                    if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
-                        state.device_id = resolve_device_id(&state.device_id);
-                        // #645 评论 5504296097 问题5：read-only — 不 save、不 remove_file。
-                        return Ok(state);
-                    }
-                }
+                // #645 评论 5504296097 问题4 修复：旧 sync_state.json 存在但读失败/JSON
+                // 损坏 → 返回 Err，不再回退 Default 把旧 state 损坏解释成"首次同步"，
+                // 丢 known_files / tombstones / conflicted_files / device_id。
+                let content = std::fs::read_to_string(&old_path).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_sync_state_read_only: legacy sync_state.json read failed at {}: {e}",
+                        old_path.display()
+                    )))
+                })?;
+                let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_sync_state_read_only: legacy sync_state.json parse failed at {}: {e}",
+                        old_path.display()
+                    )))
+                })?;
+                state.device_id = resolve_device_id(&state.device_id);
+                // #645 评论 5504296097 问题5：read-only — 不 save、不 remove_file。
+                return Ok(state);
             }
             let default_state = SyncState {
                 device_id: resolve_device_id(""),
@@ -369,14 +380,35 @@ impl crate::sync::SyncService {
         if !state_path.exists() {
             let old_path = sync_root.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&old_path) {
-                    if let Ok(mut state) = serde_json::from_str::<SyncState>(&content) {
-                        state.device_id = resolve_device_id(&state.device_id);
-                        let _ = Self::save_sync_state(sync_root, &state);
-                        let _ = std::fs::remove_file(old_path);
-                        return Ok(state);
-                    }
-                }
+                // #645 评论 5504296097 问题4 修复：严格迁移 —
+                // - old 存在 + read fail -> Err
+                // - old 存在 + parse fail -> Err
+                // - old 合法 -> save new 必须成功
+                // - save new 成功 -> 才 remove old
+                // - remove 失败 -> Err
+                // 不再用 `let _ =` 静默吞掉 save/remove 错误，避免旧 state 被删但新 state
+                // 没写成功导致 known_files/tombstones 永久丢失。
+                let content = std::fs::read_to_string(&old_path).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_sync_state: legacy sync_state.json read failed at {}: {e}",
+                        old_path.display()
+                    )))
+                })?;
+                let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_sync_state: legacy sync_state.json parse failed at {}: {e}",
+                        old_path.display()
+                    )))
+                })?;
+                state.device_id = resolve_device_id(&state.device_id);
+                Self::save_sync_state(sync_root, &state)?;
+                std::fs::remove_file(&old_path).map_err(|e| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "load_sync_state: remove legacy sync_state.json failed at {}: {e}",
+                        old_path.display()
+                    )))
+                })?;
+                return Ok(state);
             }
 
             let default_state = SyncState {

@@ -297,6 +297,29 @@ impl WriterCoreApi {
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
+        // #645 评论 5504296097 问题3 修复：sync disabled → 直接返回 no-op，
+        // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
+        // 防止 disabled 状态下仍写远端（LiveProject 会发布只有 generation.meta.json
+        // 没有 正文/manifest 的空 active generation）。
+        if !sync_config.enabled {
+            log::debug!("[sync] perform_full_sync: sync disabled — returning no-op");
+            let noop = crate::sync::types::FullSyncResult {
+                overall_status: crate::sync::SyncStatus::Success,
+                targets: Vec::new(),
+                total_uploaded: 0,
+                total_downloaded: 0,
+                total_local_deletes: 0,
+                total_remote_deletes: 0,
+                total_overwritten: 0,
+                total_ignored: 0,
+                total_conflicts: 0,
+                error: None,
+                error_category: None,
+                message_key: None,
+            };
+            return Ok(noop.into());
+        }
+
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 

@@ -17,7 +17,7 @@ use std::path::Path;
 
 /// 同步清单文件路径——记录本地所有文件的哈希、操作类型和时间戳。
 /// 这是 LWW 同步的唯一事实来源：三路比较的 base_hash 即从此文件读取。
-pub(super) const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
+pub const SYNC_MANIFEST_PATH: &str = "app-meta/sync/manifest.sync.json";
 
 /// 获取 LWW 比较时间戳。
 ///
@@ -94,7 +94,6 @@ pub fn snapshot_local_records_read_only(
 
     // 3. scan 当前文件。
     let local_entries = crate::sync::scanner::scan_for_sync(sync_root, scope)?;
-    let now_ms = chrono::Utc::now().timestamp_millis();
 
     let mut records = HashMap::new();
 
@@ -123,10 +122,10 @@ pub fn snapshot_local_records_read_only(
                         .cloned()
                         .unwrap_or(0)
                 } else {
-                    read_mtime_ms(sync_root, &path, now_ms)
+                    read_mtime_ms(sync_root, &path)?
                 }
             } else {
-                read_mtime_ms(sync_root, &path, now_ms)
+                read_mtime_ms(sync_root, &path)?
             };
 
             records.insert(
@@ -277,16 +276,30 @@ pub(super) fn build_remote_records(
     remote_records
 }
 
-/// 读取文件 mtime，失败时回退 `fallback_ms`。
-fn read_mtime_ms(sync_root: &Path, path: &str, fallback_ms: i64) -> i64 {
-    std::fs::metadata(sync_root.join(path))
-        .and_then(|m| m.modified())
-        .and_then(|t| {
-            t.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map_err(std::io::Error::other)
-        })
-        .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
-        .unwrap_or(fallback_ms)
+/// #645 评论 5504296097 问题4 修复：读取文件 mtime，失败时返回 `Err`。
+///
+/// 不再 `unwrap_or(fallback_ms)` — 二次 metadata 失败（竞态删/权限变）伪造
+/// "当前时间"的 LWW 记录会让本地文件错误地胜过远端。metadata / modified /
+/// epoch 转换任一失败直接 `Err`，调用方应走 Retry。
+fn read_mtime_ms(sync_root: &Path, path: &str) -> crate::error::Result<i64> {
+    let metadata = std::fs::metadata(sync_root.join(path)).map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_mtime_ms: metadata failed for {path}: {e}"
+        )))
+    })?;
+    let modified = metadata.modified().map_err(|e| {
+        crate::Error::Io(std::io::Error::other(format!(
+            "read_mtime_ms: modified failed for {path}: {e}"
+        )))
+    })?;
+    let duration = modified
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "read_mtime_ms: mtime before epoch for {path}: {e}"
+            )))
+        })?;
+    Ok(i64::try_from(duration.as_millis()).unwrap_or(i64::MAX))
 }
 
 #[cfg(test)]

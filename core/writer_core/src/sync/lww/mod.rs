@@ -31,6 +31,7 @@ mod attempt;
 mod compare;
 mod engine;
 mod manifest;
+mod merge;
 mod transfer;
 
 // #644 评论 5462823517 第3节：从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
@@ -48,3 +49,11 @@ pub(crate) use engine::perform_lww_sync;
 // 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
 // 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
 pub(crate) use manifest::snapshot_local_records_read_only;
+
+// #645 评论 5504296097 问题1 修复：re-export 统一 merge 核心，
+// 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
+pub(crate) use merge::{merge_remote_into_local_snapshot, LwwMergeOutcome};
+
+// #645 评论 5504296097 问题1 修复：re-export SYNC_MANIFEST_PATH，
+// 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径。
+pub(crate) use manifest::SYNC_MANIFEST_PATH;

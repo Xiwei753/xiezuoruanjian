@@ -226,6 +226,7 @@ fn repro_issue644_p2_partial_conflict_expected_to_commit_non_conflict_files() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
@@ -271,6 +272,7 @@ fn repro_issue644_p2_partial_conflict_now_commits_non_conflict_files() {
             deleted_resolution: None,
             local_lifecycle_action: LocalLifecycleCommitAction::None,
         }],
+        generation_gc_result: None,
     };
 
     let core = WriterCore::new(&app_data, &projects);
