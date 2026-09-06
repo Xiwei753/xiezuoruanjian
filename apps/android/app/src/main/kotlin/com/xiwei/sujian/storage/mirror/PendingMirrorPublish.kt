@@ -73,6 +73,11 @@ data class PendingItem(
  * - [manifestNewRef]：promote 后的新 manifest 引用（phase=cleanup 时非空）。
  * - [manifestBackupRef]：manifest 事务中旧 manifest 的备份引用（#649 评论 5562462046 问题 2），
  *   新 manifest 提交成功后才删。
+ * - [isManifestCommitted]：DELETE_PROJECT 事务中 manifest 事务是否已提交成功。
+ *   #649 评论 5562462046 问题 4：manifest 提交成功后设为 true，恢复 cleanup 阶段
+ *   可区分：若 manifest 已提交，直接 publishManifest()（依赖 Core 当前快照，
+ *   已不含被删项目）；若 manifest 未提交，需构造 desiredEntries 手动排除被删项目后
+ *   走 publishManifestWithDesired() 重写。
  *
  * ## 恢复策略（[ReadableMirrorPublisher.recoverPendingPublishIfNeeded]）
  * - `stage`：staging 未完成，旧镜像完整 → rollback(txId) + clearPendingPublish。
@@ -98,6 +103,7 @@ data class PendingMirrorPublish(
     val manifestStagedRef: StagedMirrorRef?,
     val manifestNewRef: MirrorFileRef?,
     val manifestBackupRef: MirrorFileRef?,
+    val isManifestCommitted: Boolean = false,
 ) {
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
@@ -117,6 +123,7 @@ data class PendingMirrorPublish(
         if (manifestStagedRef != null) root.put(KEY_MANIFEST_STAGED_REF, encodeStagedRef(manifestStagedRef))
         if (manifestNewRef != null) root.put(KEY_MANIFEST_NEW_REF, encodeFileRef(manifestNewRef))
         if (manifestBackupRef != null) root.put(KEY_MANIFEST_BACKUP_REF, encodeFileRef(manifestBackupRef))
+        root.put(KEY_IS_MANIFEST_COMMITTED, isManifestCommitted)
         return root.toString()
     }
 
@@ -152,6 +159,7 @@ data class PendingMirrorPublish(
         private const val KEY_BACKUP_OLD_REF = "backupOldRef"
         private const val KEY_PROMOTED_REF = "promotedRef"
         private const val KEY_STATE = "state"
+        private const val KEY_IS_MANIFEST_COMMITTED = "isManifestCommitted"
 
         /** 从 [ReadableMirrorStateStore.readPendingPublish] 的 JSON 字符串反序列化。 */
         fun fromJson(json: String): PendingMirrorPublish? {
@@ -172,6 +180,7 @@ data class PendingMirrorPublish(
                 val manifestStagedRef = decodeStagedRef(root.optJSONObject(KEY_MANIFEST_STAGED_REF))
                 val manifestNewRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_NEW_REF))
                 val manifestBackupRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_BACKUP_REF))
+                val isManifestCommitted = root.optBoolean(KEY_IS_MANIFEST_COMMITTED, false)
                 PendingMirrorPublish(
                     txId = root.getString(KEY_TX_ID),
                     backend = backend,
@@ -188,6 +197,7 @@ data class PendingMirrorPublish(
                     manifestStagedRef = manifestStagedRef,
                     manifestNewRef = manifestNewRef,
                     manifestBackupRef = manifestBackupRef,
+                    isManifestCommitted = isManifestCommitted,
                 )
             } catch (_: Exception) {
                 null

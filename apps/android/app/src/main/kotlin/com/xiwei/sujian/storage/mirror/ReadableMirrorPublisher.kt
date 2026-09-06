@@ -252,13 +252,36 @@ class ReadableMirrorPublisher(
                 }
             }
             MirrorTransactionType.DELETE_PROJECT -> {
-                // 1. 确保 manifest 已提交成不引用该项目（manifestNewRef 已在 journal 中）
-                //    若 manifestNewRef 缺失，尝试重新写一次"不含该项目"的 manifest
-                if (journal.manifestNewRef == null) {
+                // 1. 确保 manifest 已提交成不引用该项目
+                //    #649 评论 5562462046 问题 4：区分 manifest 是否已提交
+                if (!journal.isManifestCommitted) {
+                    // manifest 事务未完成：需构造 desiredEntries 手动排除被删项目
+                    if (journal.oldEntries.isNotEmpty()) {
+                        val desiredWithoutDeleted = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+                        for ((key, entry) in journal.oldEntries) {
+                            if (key.projectId != journal.projectId) {
+                                desiredWithoutDeleted[key] = entry
+                            }
+                        }
+                        val manifestOk = publishManifestWithDesired(
+                            journal.projectId,
+                            source.getProjectWorkspaceSnapshot(journal.projectId)
+                                .let { if (it is BridgeResult.Success) it.data else null },
+                            desiredWithoutDeleted,
+                        )
+                        if (!manifestOk) {
+                            DiagnosticsLogger.w(TAG, "Recover cleanup: manifest rewrite failed for DELETE_PROJECT ${journal.projectId}")
+                            return
+                        }
+                    } else {
+                        // oldEntries 为空，manifest 无该项目可移除
+                    }
+                } else {
+                    // manifest 已提交成功但 stateStore 未移除：
+                    // 直接 publishManifest()（依赖 Core 当前快照，已不含被删项目）
                     val manifestOk = publishManifest()
                     if (!manifestOk) {
-                        DiagnosticsLogger.w(TAG, "Recover cleanup: manifest rewrite failed for DELETE_PROJECT ${journal.projectId}")
-                        // manifest 仍失败，保留 journal 等下次重试，不删旧正文
+                        DiagnosticsLogger.w(TAG, "Recover cleanup: manifest re-publish failed for DELETE_PROJECT ${journal.projectId}")
                         return
                     }
                 }
@@ -623,9 +646,29 @@ class ReadableMirrorPublisher(
                 // manifest 失败不清除 journal，下次恢复会重试
                 return
             }
-            // 4. manifest 成功后再从 state store 删除该项目条目
+            // 4. manifest 成功后更新 journal（标记 manifest 已提交）
+            //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
+            writePendingPublishJournal(
+                projectId = projectId,
+                transactionType = MirrorTransactionType.DELETE_PROJECT,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                txId = txId,
+                backend = stateStore.getBackend(),
+                treeUri = stateStore.getTreeUri(),
+                oldEntries = removed,
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = setOf(projectId),
+                manifestOldRef = manifestResult.manifestOldRef,
+                manifestStagedRef = manifestResult.manifestStagedRef,
+                manifestNewRef = manifestResult.newRef,
+                manifestBackupRef = manifestResult.backupOldRef,
+                isManifestCommitted = true,
+            )
+            // 5. 从 state store 删除该项目条目
             stateStore.removeAllProjectEntries(projectId)
-            // 5. 删旧 URI
+            // 6. 删旧 URI
             for ((_, entry) in removed) {
                 try {
                     val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
@@ -634,9 +677,9 @@ class ReadableMirrorPublisher(
                     DiagnosticsLogger.w(TAG, "Failed to delete URI ${entry.uri}", e)
                 }
             }
-            // 6. 删旧 manifest backup（事务已提交）
+            // 7. 删旧 manifest backup（事务已提交）
             manifestResult.backupOldRef?.let { storage.delete(it) }
-            // 7. 删除成功，清除 journal
+            // 8. 删除成功，清除 journal
             stateStore.clearPendingPublish()
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to delete project: ${e.message}", e)
@@ -844,6 +887,7 @@ class ReadableMirrorPublisher(
         manifestStagedRef: StagedMirrorRef?,
         manifestNewRef: MirrorFileRef?,
         manifestBackupRef: MirrorFileRef?,
+        isManifestCommitted: Boolean = false,
     ) {
         val journal =
             PendingMirrorPublish(
@@ -862,6 +906,7 @@ class ReadableMirrorPublisher(
                 manifestStagedRef = manifestStagedRef,
                 manifestNewRef = manifestNewRef,
                 manifestBackupRef = manifestBackupRef,
+                isManifestCommitted = isManifestCommitted,
             )
         stateStore.writePendingPublish(journal.toJson())
     }
