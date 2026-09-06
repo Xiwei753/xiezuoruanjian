@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -39,6 +40,7 @@ class StorageRecoveryCoordinator(
     private val context: Context,
     private val documentTreeReader: DocumentTreeReader,
     private val appServiceBridge: AppServiceBridge,
+    private val stateStore: ReadableMirrorStateStore,
     private val changeSink: RecoveryChangeSink,
 ) {
     private val legacyImporter by lazy { LegacySharedStorageImporter() }
@@ -54,6 +56,7 @@ class StorageRecoveryCoordinator(
                             treeUri,
                             documentTreeReader,
                             appServiceBridge,
+                            stateStore,
                             changeSink,
                         )
                 ) {

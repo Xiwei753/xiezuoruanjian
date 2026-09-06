@@ -23,6 +23,11 @@ impl super::WriterCore {
         project::create_project(&self.projects_root, title)
     }
 
+    /// #649 评论 5561286861 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
+    pub fn create_project_with_id(&self, id: &str, title: &str, order: i32) -> Result<Project> {
+        project::create_project_with_id(&self.projects_root, id, title, order)
+    }
+
     pub fn list_volumes(&self, project_id: &str) -> Result<Vec<Volume>> {
         let project_root = self.project_root(project_id);
         volume::list_volumes(&project_root)
@@ -31,6 +36,18 @@ impl super::WriterCore {
     pub fn create_volume(&self, project_id: &str, title: &str) -> Result<Volume> {
         let project_root = self.project_root(project_id);
         volume::create_volume(&project_root, title)
+    }
+
+    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    pub fn create_volume_with_id(
+        &self,
+        project_id: &str,
+        id: &str,
+        title: &str,
+        order: i32,
+    ) -> Result<Volume> {
+        let project_root = self.project_root(project_id);
+        volume::create_volume_with_id(&project_root, id, title, order)
     }
 
     pub fn list_valid_chapter_ids(
@@ -58,6 +75,19 @@ impl super::WriterCore {
     ) -> Result<Chapter> {
         let project_root = self.project_root(project_id);
         chapter::create_chapter(&project_root, volume_id, title)
+    }
+
+    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    pub fn create_chapter_with_id(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        id: &str,
+        title: &str,
+        order: i32,
+    ) -> Result<Chapter> {
+        let project_root = self.project_root(project_id);
+        chapter::create_chapter_with_id(&project_root, volume_id, id, title, order)
     }
 
     pub fn get_project_stats(&self, project_id: &str) -> Result<crate::project::ProjectStats> {

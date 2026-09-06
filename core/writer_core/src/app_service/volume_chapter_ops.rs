@@ -24,6 +24,18 @@ impl super::WriterAppService {
         self.api.create_volume(&project_id, &title)
     }
 
+    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    pub fn create_volume_with_id(
+        &self,
+        project_id: String,
+        id: String,
+        title: String,
+        order: i32,
+    ) -> Result<VolumeDto, WriterError> {
+        self.api
+            .create_volume_with_id(&project_id, &id, &title, order)
+    }
+
     pub fn rename_volume(
         &self,
         project_id: String,
@@ -64,6 +76,19 @@ impl super::WriterAppService {
         title: String,
     ) -> Result<ChapterMetaDto, WriterError> {
         self.api.create_chapter(&project_id, &volume_id, &title)
+    }
+
+    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    pub fn create_chapter_with_id(
+        &self,
+        project_id: String,
+        volume_id: String,
+        id: String,
+        title: String,
+        order: i32,
+    ) -> Result<ChapterMetaDto, WriterError> {
+        self.api
+            .create_chapter_with_id(&project_id, &volume_id, &id, &title, order)
     }
 
     pub fn create_chapter_in_project(

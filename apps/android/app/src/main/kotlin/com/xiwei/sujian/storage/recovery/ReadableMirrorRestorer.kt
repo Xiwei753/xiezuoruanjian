@@ -6,10 +6,13 @@ import android.provider.DocumentsContract
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import com.xiwei.sujian.storage.mirror.ChapterKey
+import com.xiwei.sujian.storage.mirror.ChapterMirrorEntry
 import com.xiwei.sujian.storage.mirror.MirrorChapter
 import com.xiwei.sujian.storage.mirror.MirrorManifest
 import com.xiwei.sujian.storage.mirror.MirrorProject
 import com.xiwei.sujian.storage.mirror.MirrorVolume
+import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
 import com.xiwei.sujian.storage.mirror.verifyContentHash
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -47,11 +50,18 @@ sealed class RestoreResult {
  * 包含 schemaVersion、revision、contentHash；恢复时校验正文完整性。
  */
 class ReadableMirrorRestorer {
+    /**
+     * #649 评论 5561286861 第 4 点：恢复专用写入接口（不带 MirrorChangeSink）。
+     *
+     * 恢复时使用 AppServiceBridge 的 recovery* 方法，避免触发镜像发布。
+     * 恢复完成后保存状态到 [ReadableMirrorStateStore]，供后续 Publisher 做集合差删除。
+     */
     suspend fun restore(
         context: Context,
         mirrorTreeUri: Uri,
         documentTreeReader: DocumentTreeReader,
         appServiceBridge: AppServiceBridge,
+        stateStore: ReadableMirrorStateStore,
         changeSink: RecoveryChangeSink,
     ): RestoreResult =
         withContext(Dispatchers.IO) {
@@ -78,15 +88,22 @@ class ReadableMirrorRestorer {
             }
 
             // 2-3. 按 manifest 重建 project / volume / chapter + 逐章读取内容
+            // #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink
+            val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
             try {
                 for (project in manifest.projects) {
-                    restoreProject(project, mirrorTreeUri, documentTreeReader, appServiceBridge)
+                    val projectEntries = restoreProject(project, mirrorTreeUri, documentTreeReader, appServiceBridge)
+                    allChapterEntries.putAll(projectEntries)
                 }
             } catch (e: Exception) {
                 return@withContext RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
             }
 
-            // 4. 通知所有组件刷新
+            // 4. 保存恢复后的状态到 ReadableMirrorStateStore
+            val manifestUriString = manifestUri.toString()
+            stateStore.saveRestoredState(manifestUriString, allChapterEntries)
+
+            // 5. 通知所有组件刷新
             changeSink.everythingChanged()
             RestoreResult.Success
         }
@@ -177,25 +194,38 @@ class ReadableMirrorRestorer {
         }
     }
 
+    /**
+     * 恢复单个项目，返回该项目所有章节的条目映射。
+     *
+     * #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink。
+     */
     private fun restoreProject(
         project: MirrorProject,
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
         bridge: AppServiceBridge,
-    ) {
-        val newProject = bridge.createProject(project.title).unwrapOrThrow()
+    ): Map<ChapterKey, ChapterMirrorEntry> {
+        val newProject = bridge.recoveryCreateProject(project.title).unwrapOrThrow()
         val sortedVolumes = project.volumes.sortedBy { it.order }
         val newVolumeIds = mutableListOf<String>()
+        val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
         for (volume in sortedVolumes) {
-            val newVolume = bridge.createVolume(newProject.id, volume.title).unwrapOrThrow()
+            val newVolume = bridge.recoveryCreateVolume(newProject.id, volume.title).unwrapOrThrow()
             newVolumeIds.add(newVolume.id)
-            restoreVolumeChapters(newProject.id, newVolume.id, volume, mirrorTreeUri, reader, bridge)
+            val volumeEntries = restoreVolumeChapters(newProject.id, newVolume.id, volume, mirrorTreeUri, reader, bridge)
+            allChapterEntries.putAll(volumeEntries)
         }
         if (newVolumeIds.size > 1) {
-            bridge.reorderVolumes(newProject.id, newVolumeIds).unwrapOrThrow()
+            bridge.recoveryReorderVolumes(newProject.id, newVolumeIds).unwrapOrThrow()
         }
+        return allChapterEntries
     }
 
+    /**
+     * 恢复单个卷的所有章节，返回该卷所有章节的条目映射。
+     *
+     * #649 评论 5561286861：使用恢复专用写入接口，不触发 MirrorChangeSink。
+     */
     private fun restoreVolumeChapters(
         projectId: String,
         volumeId: String,
@@ -203,20 +233,32 @@ class ReadableMirrorRestorer {
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
         bridge: AppServiceBridge,
-    ) {
+    ): Map<ChapterKey, ChapterMirrorEntry> {
         val sortedChapters = volume.chapters.sortedBy { it.order }
         val newChapterIds = mutableListOf<String>()
+        val chapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
         for (chapter in sortedChapters) {
-            val newChapter = bridge.createChapter(projectId, volumeId, chapter.title).unwrapOrThrow()
+            val newChapter = bridge.recoveryCreateChapter(projectId, volumeId, chapter.title).unwrapOrThrow()
             newChapterIds.add(newChapter.id)
             // #649 修复 8：失败直接 throw IOException，不返回 null。
             // 预检查已保证可读 + hash 匹配，此处再读一次做双重保险。
             val content = readVerifiedChapterContent(chapter, mirrorTreeUri, reader)
-            bridge.saveChapterContent(projectId, volumeId, newChapter.id, content).unwrapOrThrow()
+            bridge.recoverySaveChapterContent(projectId, volumeId, newChapter.id, content).unwrapOrThrow()
+            // 记录章节条目（用于保存到 stateStore）
+            val contentUri = findDescendant(mirrorTreeUri, chapter.contentFile, reader)
+            if (contentUri != null) {
+                chapterEntries[ChapterKey(projectId, volumeId, newChapter.id)] = ChapterMirrorEntry(
+                    uri = contentUri.toString(),
+                    relativePath = chapter.contentFile,
+                    revision = chapter.revision,
+                    contentHash = chapter.contentHash,
+                )
+            }
         }
         if (newChapterIds.size > 1) {
-            bridge.reorderChapters(projectId, volumeId, newChapterIds).unwrapOrThrow()
+            bridge.recoveryReorderChapters(projectId, volumeId, newChapterIds).unwrapOrThrow()
         }
+        return chapterEntries
     }
 
     /**

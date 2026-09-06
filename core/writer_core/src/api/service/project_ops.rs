@@ -54,6 +54,25 @@ impl WriterCoreApi {
         Ok(project.into())
     }
 
+    /// #649 评论 5561286861 第 4 点：恢复/导入项目入口——使用 manifest 中的稳定 ID。
+    ///
+    /// 不自动创建"第一卷"（卷信息在 manifest 中已包含，由调用方逐卷恢复）。
+    /// 不记录 workspace history（恢复场景下 manifest 是已有事实来源）。
+    pub fn create_project_with_id(
+        &self,
+        id: &str,
+        title: &str,
+        order: i32,
+    ) -> ApiResult<ProjectDto> {
+        let project = self
+            .core_write()
+            .create_project_with_id(id, title, order)
+            .map_err(WriterError::from)?;
+        // 恢复场景：不记录 workspace history（manifest 是已有事实来源）
+        // 不自动创建默认卷（卷信息在 manifest 中）
+        Ok(project.into())
+    }
+
     pub fn get_project_stats(&self, project_id: &str) -> ApiResult<ProjectStatsDto> {
         self.core_read()
             .get_project_stats(project_id)
@@ -246,6 +265,23 @@ impl WriterCoreApi {
         });
         let _ = self.record_workspace_change_set_history(&change_set, "create_volume");
         Ok(volume)
+    }
+
+    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    ///
+    /// 恢复场景：不记录 workspace history（manifest 是已有事实来源）。
+    pub fn create_volume_with_id(
+        &self,
+        project_id: &str,
+        id: &str,
+        title: &str,
+        order: i32,
+    ) -> ApiResult<VolumeDto> {
+        let volume = self
+            .core_write()
+            .create_volume_with_id(project_id, id, title, order)
+            .map_err(WriterError::from)?;
+        Ok(volume.into())
     }
 
     pub fn rename_volume(

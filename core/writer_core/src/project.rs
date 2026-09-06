@@ -221,7 +221,44 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
         .map(|m| m + 1)
         .unwrap_or(0);
 
-    let id = Uuid::new_v4().to_string();
+    create_project_with_id_and_order(projects_root, title, None, order)
+}
+
+/// 恢复/导入项目——使用 manifest 中的稳定 ID、标题和 order。
+///
+/// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
+/// 不自动创建"第一卷"（卷信息在 manifest 中已包含，由调用方逐卷恢复）。
+///
+/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// Android Restorer 只把 manifest 转成 DTO 调此入口。
+pub fn create_project_with_id(
+    projects_root: &Path,
+    id: &str,
+    title: &str,
+    order: i32,
+) -> Result<Project> {
+    create_project_with_id_and_order(projects_root, title, Some(id), order)
+}
+
+/// 内部共享实现：带可选 ID 的项目创建。
+/// `id` 为 `None` 时自动生成 UUID；为 `Some(id)` 时使用传入的稳定 ID。
+fn create_project_with_id_and_order(
+    projects_root: &Path,
+    title: &str,
+    id_opt: Option<&str>,
+    order: i32,
+) -> Result<Project> {
+    let id = id_opt
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // 验证 ID 格式：必须是合法 UUID 字符串，避免磁盘路径注入
+    if Uuid::parse_str(&id).is_err() {
+        return Err(crate::error::Error::Other(format!(
+            "Invalid project ID format: {id}"
+        )));
+    }
+
     let now = Utc::now().to_rfc3339();
     let project = Project {
         id: id.clone(),
@@ -242,8 +279,11 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
     let content = serde_json::to_string_pretty(&project)?;
     crate::storage::atomic_write_string(&meta_path, &content)?;
 
-    // Create a default volume to maintain consistency with product requirements
-    let _ = crate::volume::create_volume(&project_dir, "第一卷")?;
+    // 恢复/导入场景不自动创建"第一卷"——卷信息在 manifest 中已包含，由调用方逐卷恢复
+    if id_opt.is_none() {
+        // 普通新建场景：自动创建默认卷保持产品一致性
+        let _ = crate::volume::create_volume(&project_dir, "第一卷");
+    }
 
     Ok(project)
 }

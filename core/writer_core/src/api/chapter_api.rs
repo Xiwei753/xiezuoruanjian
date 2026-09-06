@@ -34,6 +34,24 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
+    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    ///
+    /// 恢复场景：不记录 workspace history（manifest 是已有事实来源）。
+    pub fn create_chapter_with_id(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        id: &str,
+        title: &str,
+        order: i32,
+    ) -> ApiResult<ChapterMetaDto> {
+        let chapter = self
+            .core_write()
+            .create_chapter_with_id(project_id, volume_id, id, title, order)
+            .map_err(WriterError::from)?;
+        Ok(chapter.into())
+    }
+
     /// 创建章节，自动分配 UUID 和递增 order。
     pub fn create_chapter(
         &self,

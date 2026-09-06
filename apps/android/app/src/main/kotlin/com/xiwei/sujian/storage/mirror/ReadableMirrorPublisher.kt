@@ -91,8 +91,10 @@ class ReadableMirrorPublisher(
                     stateStore.getProjectEntries(projectId),
                     ChapterKey(projectId, volumeId, chapterId),
                 )
-            writeChapterContent(projectId, volumeId, chapterId, chapter, relativePath, content)
-            publishManifest()
+            val ok = writeChapterContent(projectId, volumeId, chapterId, chapter, relativePath, content)
+            if (ok) {
+                publishManifest()
+            }
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to publish chapter: ${e.message}", e)
         }
@@ -100,6 +102,10 @@ class ReadableMirrorPublisher(
 
     /**
      * 发布整个项目：写当前所有章节，删除已不存在的旧章节 URI，更新 manifest。
+     *
+     * 完整结果语义：先从 snapshot 得到全部仍存在章节的 key；
+     * 任一章节读取或写入失败时，本次发布返回失败，保留旧镜像和旧 manifest，不执行删除。
+     * 只有所有当前章节都成功后，才删除 snapshot 中已不存在的旧 key，再写新 manifest。
      */
     suspend fun publishProject(projectId: String) {
         try {
@@ -114,14 +120,27 @@ class ReadableMirrorPublisher(
             }
             val snapshot = snapshotResult.data
             val oldEntries = stateStore.getProjectEntries(projectId)
-            val newKeys = mutableSetOf<ChapterKey>()
+
+            // 先收集 snapshot 中全部仍存在章节的 key，删除判断只看这个集合
+            val allKeys = mutableSetOf<ChapterKey>()
+            for (volumeWithChapters in snapshot.volumes) {
+                for (chapter in volumeWithChapters.chapters) {
+                    allKeys.add(ChapterKey(projectId, volumeWithChapters.volume.id, chapter.id))
+                }
+            }
+
             val usedRelativePaths = mutableSetOf<String>()
+            val newKeys = publishProjectChapters(projectId, snapshot, oldEntries, usedRelativePaths)
 
-            publishProjectChapters(projectId, snapshot, oldEntries, newKeys, usedRelativePaths)
+            // 任一章节失败：保留旧镜像和旧 manifest，不执行删除
+            if (newKeys == null) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: some chapters failed")
+                return
+            }
 
-            // 集合差：删除已不存在的旧章节
+            // 所有章节都成功后，删除 snapshot 中已不存在的旧 key
             for ((key, entry) in oldEntries) {
-                if (key !in newKeys) {
+                if (key !in allKeys) {
                     mediaStore.delete(Uri.parse(entry.uri))
                     stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
                 }
@@ -133,22 +152,23 @@ class ReadableMirrorPublisher(
     }
 
     /**
-     * 遍历项目所有卷/章节，写正文并收集 newKeys。
-     * 提取自 publishProject 以控制嵌套深度。
+     * 遍历项目所有卷/章节，写正文并收集成功写入的 key。
+     *
+     * @return 成功写入的 key 集合；任一章节读取或写入失败时返回 null。
      */
     private suspend fun publishProjectChapters(
         projectId: String,
         snapshot: ProjectWorkspaceSnapshot,
         oldEntries: Map<ChapterKey, ReadableMirrorStateStore.ChapterMirrorEntry>,
-        newKeys: MutableSet<ChapterKey>,
         usedRelativePaths: MutableSet<String>,
-    ) {
+    ): Set<ChapterKey>? {
+        val newKeys = mutableSetOf<ChapterKey>()
         for (volumeWithChapters in snapshot.volumes) {
             for (chapter in volumeWithChapters.chapters) {
                 val openResult = source.openChapter(projectId, volumeWithChapters.volume.id, chapter.id)
                 if (openResult !is BridgeResult.Success) {
                     DiagnosticsLogger.w(TAG, "Failed to open chapter ${chapter.id}, skip")
-                    continue
+                    return null
                 }
                 val content = openResult.data.content
                 val relativePath =
@@ -161,10 +181,22 @@ class ReadableMirrorPublisher(
                         usedRelativePaths,
                     )
                 usedRelativePaths.add(relativePath)
-                writeChapterContent(projectId, volumeWithChapters.volume.id, chapter.id, chapter, relativePath, content)
+                val ok = writeChapterContent(
+                    projectId,
+                    volumeWithChapters.volume.id,
+                    chapter.id,
+                    chapter,
+                    relativePath,
+                    content,
+                )
+                if (!ok) {
+                    DiagnosticsLogger.w(TAG, "Failed to write chapter ${chapter.id}, skip")
+                    return null
+                }
                 newKeys.add(ChapterKey(projectId, volumeWithChapters.volume.id, chapter.id))
             }
         }
+        return newKeys
     }
 
     /**
@@ -243,7 +275,13 @@ class ReadableMirrorPublisher(
     /**
      * 写单章正文到 MediaStore，更新 state store。
      *
-     * 优先覆盖旧 URI（replaceText）；旧 URI 失效或不存在时 createText 新文件。
+     * 分支处理：
+     * - 旧条目存在且 relativePath 未变：覆盖旧 URI；旧 URI 失效则新建。
+     * - 旧条目存在但 relativePath 已变（重命名）：先在新路径创建成功，
+     *   stateStore 记录新 URI 后再删旧 URI，避免文件停在旧路径。
+     * - 无旧条目：直接 createText。
+     *
+     * @return 是否写入成功。
      */
     private fun writeChapterContent(
         projectId: String,
@@ -252,28 +290,39 @@ class ReadableMirrorPublisher(
         chapter: ChapterMeta,
         relativePath: String,
         content: String,
-    ) {
+    ): Boolean {
         val contentHash = computeContentHash(content)
         val oldEntry = stateStore.getProjectEntries(projectId)[ChapterKey(projectId, volumeId, chapterId)]
         val relativeDir = relativePath.substringBeforeLast('/', "")
         val displayName = relativePath.substringAfterLast('/')
 
-        val uri =
-            if (oldEntry != null) {
-                // 尝试覆盖旧 URI
-                val oldUri = Uri.parse(oldEntry.uri)
-                if (mediaStore.replaceText(oldUri, content)) {
-                    oldEntry.uri
-                } else {
-                    // 旧 URI 失效，新建并删旧
-                    mediaStore.delete(oldUri)
-                    mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)?.toString()
-                }
+        val uri: String?
+        if (oldEntry != null && oldEntry.relativePath == relativePath) {
+            // 同路径：覆盖旧 URI
+            val oldUri = Uri.parse(oldEntry.uri)
+            if (mediaStore.replaceText(oldUri, content)) {
+                uri = oldEntry.uri
             } else {
-                mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)?.toString()
+                // 旧 URI 失效，新建并删旧
+                mediaStore.delete(oldUri)
+                uri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)?.toString()
             }
+        } else if (oldEntry != null && oldEntry.relativePath != relativePath) {
+            // 路径变化（作品名/卷名/章节名改动）：先在新路径创建成功
+            val newUri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+            if (newUri != null) {
+                // 新文件就绪后再删旧文件，避免文件停在旧路径
+                mediaStore.delete(Uri.parse(oldEntry.uri))
+                uri = newUri.toString()
+            } else {
+                uri = null
+            }
+        } else {
+            // 无旧条目，直接创建
+            uri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)?.toString()
+        }
 
-        if (uri != null) {
+        return if (uri != null) {
             stateStore.putChapterEntry(
                 projectId,
                 volumeId,
@@ -285,8 +334,10 @@ class ReadableMirrorPublisher(
                     contentHash = contentHash,
                 ),
             )
+            true
         } else {
             DiagnosticsLogger.w(TAG, "Failed to write chapter content: $relativePath")
+            false
         }
     }
 

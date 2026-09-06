@@ -23,7 +23,7 @@ import java.io.IOException
  * ## 新 API
  * - [isSupported]：API 29+ 才支持 MediaStore.Downloads。
  * - [createText]：`IS_PENDING=1 → 写 → IS_PENDING=0`，返回新 URI。
- * - [replaceText]：覆盖现有 URI 内容，写完置 `IS_PENDING=0`。
+ * - [replaceText]：`IS_PENDING=1 → 写 → IS_PENDING=0`，覆盖现有 URI 内容。
  * - [delete]：按 URI 删除（幂等）。
  * - [readText]：按 URI 读全部文本。
  *
@@ -82,31 +82,56 @@ class MediaStoreDownloads(
             put(MediaStore.Downloads.IS_PENDING, 0)
         }
         return try {
-            contentResolver.update(uri, clearPending, null, null)
-            uri
+            val updated = contentResolver.update(uri, clearPending, null, null)
+            if (updated == 1) {
+                uri
+            } else {
+                // 清 pending 失败：删除半写文件，不留下用户看不见的 pending 记录
+                try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+                null
+            }
         } catch (e: Exception) {
-            // 文件已写好但 IS_PENDING 没清掉；返回 URI 仍可用（下次 replace 可修复）。
-            uri
+            // update 抛异常：同样删除，返回 null
+            try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            null
         }
     }
 
     /**
      * 覆盖现有 URI 的内容。
      *
-     * 写完置 `IS_PENDING=0`。返回 false 表示打开输出流或写入失败。
+     * 流程：`IS_PENDING=1 → 写 → IS_PENDING=0`，避免其他应用看到半写文件。
+     * 返回 false 表示置 pending、打开输出流、写入或清 pending 失败。
      */
     fun replaceText(uri: Uri, text: String): Boolean {
         if (!isSupported()) return false
-        if (!writeToUri(uri, text)) return false
+        // 1. 先置 IS_PENDING=1，让文件对其他应用不可见
+        val setPending = ContentValues().apply {
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        try {
+            contentResolver.update(uri, setPending, null, null)
+        } catch (e: Exception) {
+            return false
+        }
+        // 2. 写内容
+        if (!writeToUri(uri, text)) {
+            // 写失败：清 pending 恢复可见，避免留下 IS_PENDING=1 的不可见文件
+            try {
+                contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.Downloads.IS_PENDING, 0)
+                }, null, null)
+            } catch (_: Exception) {}
+            return false
+        }
+        // 3. 清 IS_PENDING=0，检查返回值
         val clearPending = ContentValues().apply {
             put(MediaStore.Downloads.IS_PENDING, 0)
         }
         return try {
-            contentResolver.update(uri, clearPending, null, null)
-            true
+            contentResolver.update(uri, clearPending, null, null) == 1
         } catch (e: Exception) {
-            // 内容已覆盖，IS_PENDING 状态不影响数据正确性。
-            true
+            false
         }
     }
 

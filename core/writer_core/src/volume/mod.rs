@@ -101,7 +101,43 @@ pub fn create_volume(project_root: &Path, title: &str) -> Result<Volume> {
         .map(|m| m + 1)
         .unwrap_or(0);
 
-    let id = Uuid::new_v4().to_string();
+    create_volume_with_id_and_order(project_root, title, None, order)
+}
+
+/// 恢复/导入卷——使用 manifest 中的稳定 ID、标题和 order。
+///
+/// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
+///
+/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// Android Restorer 只把 manifest 转成 DTO 调此入口。
+pub fn create_volume_with_id(
+    project_root: &Path,
+    id: &str,
+    title: &str,
+    order: i32,
+) -> Result<Volume> {
+    create_volume_with_id_and_order(project_root, title, Some(id), order)
+}
+
+/// 内部共享实现：带可选 ID 的卷创建。
+/// `id` 为 `None` 时自动生成 UUID；为 `Some(id)` 时使用传入的稳定 ID。
+fn create_volume_with_id_and_order(
+    project_root: &Path,
+    title: &str,
+    id_opt: Option<&str>,
+    order: i32,
+) -> Result<Volume> {
+    let id = id_opt
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // 验证 ID 格式：必须是合法 UUID 字符串，避免磁盘路径注入
+    if Uuid::parse_str(&id).is_err() {
+        return Err(crate::error::Error::Other(format!(
+            "Invalid volume ID format: {id}"
+        )));
+    }
+
     let now = Utc::now().to_rfc3339();
     let volume = Volume {
         id: id.clone(),

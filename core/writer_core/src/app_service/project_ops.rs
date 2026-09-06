@@ -32,6 +32,16 @@ impl super::WriterAppService {
         self.api.create_project(&title)
     }
 
+    /// #649 评论 5561286861 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
+    pub fn create_project_with_id(
+        &self,
+        id: String,
+        title: String,
+        order: i32,
+    ) -> Result<ProjectDto, WriterError> {
+        self.api.create_project_with_id(&id, &title, order)
+    }
+
     pub fn get_project_stats(&self, project_id: String) -> Result<ProjectStatsDto, WriterError> {
         self.api.get_project_stats(&project_id)
     }

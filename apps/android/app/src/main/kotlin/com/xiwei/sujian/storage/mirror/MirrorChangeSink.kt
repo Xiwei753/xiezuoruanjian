@@ -138,10 +138,14 @@ class DefaultMirrorChangeSink(
     }
 
     /**
-     * 后台消费循环：等信号 → debounce → 处理删除 → 处理 dirty。
+     * 后台消费循环：等信号 → debounce → 处理删除 → 处理 dirty → 补发信号。
      *
      * Channel.CONFLATED 保证：在 workerLoop delay 期间到达的多次 trySend 只积压一个信号，
      * delay 结束后一次性处理 dirtyMap 快照，自然合并。
+     *
+     * #649 评论 5561286861 第 1 点：处理结束后若 dirtyMap/deleteQueue 仍非空，
+     * 说明处理期间又有新事件到达（且未被本轮精确移除覆盖），补发一轮信号，
+     * 保证最后一次正文一定会有下一轮处理，不再依赖下一笔外部事件触发。
      */
     private suspend fun workerLoop() {
         while (true) {
@@ -153,10 +157,17 @@ class DefaultMirrorChangeSink(
             processDeletes()
             // 再处理 dirty 快照
             processDirtySnapshot()
+            // 处理期间新到达的事件（精确移除后仍残留的新版本）补发一轮信号，
+            // 保证不丢最后一次正文。
+            if (dirtyMap.isNotEmpty() || deleteQueue.isNotEmpty()) {
+                signal.trySend(Unit)
+            }
         }
     }
 
     private suspend fun processDeletes() {
+        // poll 是精确移除：只取走队列头部一个事件，处理期间新 add 的事件保留在队列里，
+        // 由 workerLoop 末尾的补发信号触发下一轮。
         while (true) {
             val del = deleteQueue.poll() ?: break
             try {
@@ -168,11 +179,20 @@ class DefaultMirrorChangeSink(
     }
 
     private suspend fun processDirtySnapshot() {
-        val snapshot = dirtyMap.toMap()
+        // #649 评论 5561286861 第 1 点：按快照条目精确移除。
+        // 用 entries.map 拿到当前 (key, value) 对，再逐条 remove(key, value)。
+        // ConcurrentHashMap.remove(key, value) 是原子的条件移除：
+        // 只在该 key 当前仍映射到该 value 时才移除。
+        // 因此处理期间新写入的更新版本（value 不同）会保留在 dirtyMap，
+        // 由 workerLoop 末尾的补发信号触发下一轮，不再被 clear() 误删。
+        val snapshot = dirtyMap.entries.map { it.key to it.value }
         if (snapshot.isEmpty()) return
-        dirtyMap.clear()
+        for ((key, value) in snapshot) {
+            dirtyMap.remove(key, value)
+        }
+        val wildcardKey = MirrorKey(WILDCARD_PROJECT, "", "")
         // 通配键表示全量
-        if (snapshot.containsKey(MirrorKey(WILDCARD_PROJECT, "", ""))) {
+        if (snapshot.any { it.first == wildcardKey }) {
             try {
                 publisher.publishAll()
             } catch (e: Exception) {
@@ -181,7 +201,7 @@ class DefaultMirrorChangeSink(
             return
         }
         // 按项目去重发布
-        val projectIds = snapshot.keys.map { it.projectId }.distinct()
+        val projectIds = snapshot.map { it.first.projectId }.distinct()
         for (pid in projectIds) {
             try {
                 publisher.publishProject(pid)

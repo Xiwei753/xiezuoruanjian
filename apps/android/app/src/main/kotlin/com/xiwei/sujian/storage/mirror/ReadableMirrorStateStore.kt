@@ -175,6 +175,35 @@ class ReadableMirrorStateStore(
         }
     }
 
+    /**
+     * #649 评论 5561286861 第 4 点：恢复成功后保存完整状态。
+     *
+     * 用用户刚选中的 tree URI 把：
+     * - `_meta/manifest.json` 的 URI
+     * - 每个 `contentFile` 对应的现有文档 URI
+     * 写进 [ReadableMirrorStateStore]，供后续 Publisher 做集合差删除。
+     *
+     * @param manifestUri manifest 文件的 MediaStore URI
+     * @param chapterEntries 所有章节的条目（包含 URI、相对路径、revision、contentHash）
+     */
+    fun saveRestoredState(
+        manifestUri: String,
+        chapterEntries: Map<ChapterKey, ChapterMirrorEntry>,
+    ) {
+        synchronized(lock) {
+            val root = readRoot() ?: JSONObject()
+            // 写入 manifest URI
+            root.put(MANIFEST_URI_KEY, manifestUri)
+            // 写入所有章节条目
+            val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
+            for ((key, entry) in chapterEntries) {
+                val projectObj = projects.optJSONObject(key.projectId) ?: JSONObject().also { projects.put(key.projectId, it) }
+                projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
+            }
+            writeRoot(root)
+        }
+    }
+
     // ── 内部 ──
 
     private fun chapterKey(

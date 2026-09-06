@@ -33,6 +33,17 @@ open class AppServiceBridge(
     val projectBridge: ProjectBridge by lazy { ProjectBridge(holder, mirrorChangeSink) }
     val recentEditsBridge: RecentEditsBridge by lazy { RecentEditsBridge(holder) }
     val chapterBridge: ChapterBridge by lazy { ChapterBridge(holder, mirrorChangeSink) }
+
+    /**
+     * #649 评论 5561286861 第 4 点：恢复专用写入 Bridge（不带 MirrorChangeSink）。
+     *
+     * 恢复时使用此 Bridge 写入 Core，避免触发镜像发布（Download 镜像正在恢复中，
+     * 不需要再反向发布一次）。
+     *
+     * 恢复完成后由 [ReadableMirrorStateStore] 持久化新 URI，后续正常发布走生产 Bridge。
+     */
+    private val recoveryProjectBridge: ProjectBridge by lazy { ProjectBridge(holder, null) }
+    private val recoveryChapterBridge: ChapterBridge by lazy { ChapterBridge(holder, null) }
     val settingsBridge: SettingsBridge by lazy { SettingsBridge(holder) }
     open val syncBridge: SyncBridge by lazy { SyncBridge(holder) }
     val statsBridge: StatsBridge by lazy { StatsBridge(holder) }
@@ -1012,4 +1023,57 @@ open class AppServiceBridge(
                 expectedRevision,
             )
         }
+
+    // ── #649 评论 5561286861：恢复专用写入接口（不触发 MirrorChangeSink）──
+
+    /**
+     * 恢复专用 createProject — 不触发镜像发布。
+     *
+     * 仅供 [ReadableMirrorRestorer] 在恢复过程中调用，避免恢复时反向触发镜像发布。
+     */
+    fun recoveryCreateProject(title: String) = recoveryProjectBridge.createProject(title)
+
+    /**
+     * 恢复专用 createVolume — 不触发镜像发布。
+     */
+    fun recoveryCreateVolume(
+        projectId: String,
+        title: String,
+    ) = recoveryProjectBridge.createVolume(projectId, title)
+
+    /**
+     * 恢复专用 createChapter — 不触发镜像发布。
+     */
+    fun recoveryCreateChapter(
+        projectId: String,
+        volumeId: String,
+        title: String,
+    ) = recoveryChapterBridge.createChapter(projectId, volumeId, title)
+
+    /**
+     * 恢复专用 saveChapterContent — 不触发镜像发布。
+     */
+    fun recoverySaveChapterContent(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+        content: String,
+    ) = recoveryChapterBridge.saveChapterContent(projectId, volumeId, chapterId, content)
+
+    /**
+     * 恢复专用 reorderVolumes — 不触发镜像发布。
+     */
+    fun recoveryReorderVolumes(
+        projectId: String,
+        orderedIds: List<String>,
+    ) = recoveryProjectBridge.reorderVolumes(projectId, orderedIds)
+
+    /**
+     * 恢复专用 reorderChapters — 不触发镜像发布。
+     */
+    fun recoveryReorderChapters(
+        projectId: String,
+        volumeId: String,
+        orderedIds: List<String>,
+    ) = recoveryChapterBridge.reorderChapters(projectId, volumeId, orderedIds)
 }

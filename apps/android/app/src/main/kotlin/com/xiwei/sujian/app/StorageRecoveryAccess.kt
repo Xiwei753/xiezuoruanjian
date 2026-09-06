@@ -15,6 +15,7 @@ import com.xiwei.sujian.R
 import com.xiwei.sujian.app.di.LocalSujianAppDependencies
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
 import com.xiwei.sujian.storage.recovery.DefaultRecoveryChangeSink
 import com.xiwei.sujian.storage.recovery.RecoveryResult
 import com.xiwei.sujian.storage.recovery.StorageRecoveryCoordinator
@@ -50,6 +51,7 @@ fun rememberStorageRecoveryCoordinator(appState: WorkspaceAppState): StorageReco
     val deps = LocalSujianAppDependencies.current
     return remember(appState, deps) {
         val documentTreeReader = DocumentTreeReader(context.applicationContext.contentResolver)
+        val stateStore = ReadableMirrorStateStore(context.applicationContext)
         val changeSink =
             DefaultRecoveryChangeSink(
                 appState = appState,
@@ -60,6 +62,7 @@ fun rememberStorageRecoveryCoordinator(appState: WorkspaceAppState): StorageReco
             context = context.applicationContext,
             documentTreeReader = documentTreeReader,
             appServiceBridge = deps.appServiceBridge,
+            stateStore = stateStore,
             changeSink = changeSink,
         )
     }
@@ -99,7 +102,8 @@ fun RecoveryFromLocalButton(
             try {
                 context.contentResolver.takePersistableUriPermission(
                     uri,
-                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                    android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                        android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
                 )
             } catch (_: SecurityException) {
                 // 持久化授权失败不阻断本次恢复：单次读取权限已由 launcher 授予。

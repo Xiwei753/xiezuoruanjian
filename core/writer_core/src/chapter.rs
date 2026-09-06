@@ -180,14 +180,54 @@ pub fn create_chapter(project_root: &Path, volume_id: &str, title: &str) -> Resu
         .map(|m| m + 1)
         .unwrap_or(0);
 
-    // 空标题兜底：按当前卷章节数量生成默认标题
+    create_chapter_with_id_and_order(project_root, volume_id, title, None, order)
+}
+
+/// 恢复/导入章节——使用 manifest 中的稳定 ID、标题和 order。
+///
+/// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
+/// 不自动生成默认标题（标题已在 manifest 中）。
+///
+/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// Android Restorer 只把 manifest 转成 DTO 调此入口。
+pub fn create_chapter_with_id(
+    project_root: &Path,
+    volume_id: &str,
+    id: &str,
+    title: &str,
+    order: i32,
+) -> Result<Chapter> {
+    create_chapter_with_id_and_order(project_root, volume_id, title, Some(id), order)
+}
+
+/// 内部共享实现：带可选 ID 的章节创建。
+/// `id` 为 `None` 时自动生成 UUID；为 `Some(id)` 时使用传入的稳定 ID。
+fn create_chapter_with_id_and_order(
+    project_root: &Path,
+    volume_id: &str,
+    title: &str,
+    id_opt: Option<&str>,
+    order: i32,
+) -> Result<Chapter> {
+    let id = id_opt
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    // 验证 ID 格式：必须是合法 UUID 字符串，避免磁盘路径注入
+    if Uuid::parse_str(&id).is_err() {
+        return Err(crate::error::Error::Other(format!(
+            "Invalid chapter ID format: {id}"
+        )));
+    }
+
+    // 空标题兜底：按当前卷章节数量生成默认标题（仅用于普通新建场景）
     let effective_title = if title.trim().is_empty() {
+        let chapters = list_chapters(project_root, volume_id)?;
         format!("第{}章", chapters.len() + 1)
     } else {
         title.to_string()
     };
 
-    let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     let chapter = Chapter {
         id: id.clone(),
