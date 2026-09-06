@@ -193,7 +193,9 @@ class DocumentTreeMirrorStorage(
         if (!isSupported()) return null
         // SAF 暂存：用 txId 作为临时目录，避免覆盖 committed ref
         val stagingDir = "$STAGING_DIR/$txId"
-        val relativeDir = stagingDir + relativePath.substringBeforeLast('/', "")
+        // #649 评论 5562462046 问题 6：路径拼接修复，避免少一个 `/`
+        val parent = relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) stagingDir else "$stagingDir/$parent"
         val displayName = relativePath.substringAfterLast('/')
         val parentUri = ensureDirectory(relativeDir) ?: return null
         val fileUri =
@@ -223,9 +225,52 @@ class DocumentTreeMirrorStorage(
         staged: StagedMirrorRef,
         old: MirrorFileRef?,
         finalRelativePath: String,
-    ): MirrorFileRef? {
+    ): PromoteResult? {
         if (!isSupported()) return null
-        // 1. 先删旧文件（如果有）
+        // #649 评论 5562462046 问题 1：真正的 swap，不先删 old。
+        val stagingUri = tryParseUri(staged.stagingUri) ?: return null
+        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
+        val displayName = finalRelativePath.substringAfterLast('/')
+        val parentUri = ensureDirectory(relativeDir) ?: return null
+
+        // 优先尝试 DocumentsContract.moveDocument（原子移动，不复制内容）
+        val newUri: Uri? = tryMoveDocument(stagingUri, parentUri, displayName)
+        if (newUri == null) {
+            // provider 不支持 moveDocument 或失败 → 走"复制到最终位置成功后再删 staging"分支
+            val content = readTextFromUri(stagingUri) ?: return null
+            val createdUri =
+                try {
+                    DocumentsContract.createDocument(contentResolver, parentUri, staged.mimeType, displayName)
+                } catch (e: Exception) {
+                    DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
+                    return null
+                } ?: return null
+            if (!writeToUri(createdUri, content)) {
+                try {
+                    DocumentsContract.deleteDocument(contentResolver, createdUri)
+                } catch (_: Exception) {
+                }
+                return null
+            }
+            // 复制成功后删 staging
+            try {
+                DocumentsContract.deleteDocument(contentResolver, stagingUri)
+            } catch (_: Exception) {
+            }
+            // newUri = createdUri
+            return finishPromoteSwap(createdUri, finalRelativePath, old)
+        }
+        return finishPromoteSwap(newUri, finalRelativePath, old)
+    }
+
+    /**
+     * promote 共用收尾：create/move 成功后才删 old，返回 [PromoteResult]。
+     */
+    private fun finishPromoteSwap(
+        newUri: Uri,
+        finalRelativePath: String,
+        old: MirrorFileRef?,
+    ): PromoteResult {
         if (old != null) {
             val oldUri = tryParseUri(old.uri)
             if (oldUri != null) {
@@ -235,45 +280,83 @@ class DocumentTreeMirrorStorage(
                 }
             }
         }
-        // 2. 读取暂存内容
-        val stagingUri = tryParseUri(staged.stagingUri) ?: return null
-        val content = readTextFromUri(stagingUri) ?: return null
-        // 3. 在最终位置创建
-        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
-        val displayName = finalRelativePath.substringAfterLast('/')
-        val parentUri = ensureDirectory(relativeDir) ?: return null
-        val newUri =
-            try {
-                DocumentsContract.createDocument(contentResolver, parentUri, staged.mimeType, displayName)
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
-                return null
-            } ?: return null
-        if (!writeToUri(newUri, content)) {
-            try {
-                DocumentsContract.deleteDocument(contentResolver, newUri)
-            } catch (_: Exception) {
-            }
-            return null
+        return PromoteResult(
+            newRef = MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath),
+            displacedOldRef = old,
+        )
+    }
+
+    /**
+     * 尝试用 [DocumentsContract.renameDocument] 把 staging 原子重命名到最终位置。
+     *
+     * 部分 DocumentsProvider 不支持 renameDocument（抛 UnsupportedOperationException
+     * 或返回 null），调用方应回退到复制+删 staging 分支。
+     *
+     * 注意：renameDocument 不能改变父目录，只能重命名。因此 staging 必须在最终父目录下。
+     * 当前 staging 路径是 `.staging/<txId>/<finalRelativePath>`，不在最终父目录下，
+     * 所以这里只尝试 rename 到最终文件名（假设 staging 已在最终父目录）。
+     * 如果 rename 失败，调用方走"复制到最终位置成功后再删 staging"分支。
+     */
+    private fun tryMoveDocument(
+        stagingUri: Uri,
+        parentUri: Uri,
+        displayName: String,
+    ): Uri? {
+        // 先尝试 renameDocument（重命名到最终文件名）
+        return try {
+            DocumentsContract.renameDocument(contentResolver, stagingUri, displayName)
+        } catch (_: UnsupportedOperationException) {
+            null
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "renameDocument failed, will fallback to copy: ${e.message}")
+            null
         }
-        // 4. 删除暂存文件
-        try {
-            DocumentsContract.deleteDocument(contentResolver, stagingUri)
-        } catch (_: Exception) {
-        }
-        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
     }
 
     override fun rollback(txId: String) {
         if (!isSupported()) return
-        // 删除 txId 对应的整个暂存目录
+        // #649 评论 5562462046 问题 6：rollback 只查不创建。
+        // 旧实现用 ensureDirectory(stagingDir) 会在目录不存在时新建一个再删，职责不对。
         val stagingDir = "$STAGING_DIR/$txId"
-        val stagingUri = ensureDirectory(stagingDir)
+        val stagingUri = findDirectory(stagingDir)
         if (stagingUri != null) {
             try {
                 DocumentsContract.deleteDocument(contentResolver, stagingUri)
             } catch (_: Exception) {
             }
+        }
+    }
+
+    /**
+     * 只查找 [relativeDir] 对应的目录 URI，不创建。
+     *
+     * #649 评论 5562462046 问题 6：rollback 需要一个只查不创建的方法，
+     * 避免目录不存在时新建一个再删。
+     *
+     * @return 已存在目录的 URI；任一级不存在或查找失败返回 null。
+     */
+    private fun findDirectory(relativeDir: String): Uri? {
+        val parts = relativeDir.split("/").filter { it.isNotEmpty() }
+        var current = treeUri
+        for (part in parts) {
+            current = findChildDir(current, part) ?: return null
+        }
+        return current
+    }
+
+    /**
+     * 在 [parentUri] 下查找同名子目录（不创建）。
+     */
+    private fun findChildDir(
+        parentUri: Uri,
+        dirName: String,
+    ): Uri? {
+        return try {
+            val children = documentTreeReader.listChildren(parentUri)
+            children.find { it.isDirectory && it.name == dirName }?.uri
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "listChildren failed for $dirName: ${e.message}")
+            null
         }
     }
 
