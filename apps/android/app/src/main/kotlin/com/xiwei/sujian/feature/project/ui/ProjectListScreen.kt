@@ -27,6 +27,8 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
+import com.xiwei.sujian.app.LocalWorkspaceAppState
+import com.xiwei.sujian.app.RecoveryFromLocalButton
 import com.xiwei.sujian.app.WorkspaceAppState
 import com.xiwei.sujian.app.presentation.layout.WorkspaceLayoutMode
 import com.xiwei.sujian.app.presentation.screen.AndroidWorkspaceActionSpec
@@ -337,6 +339,17 @@ private fun ProjectListEmptyState(
         }
         Spacer(modifier = Modifier.height(dims.space8))
         Text(stringResource(id = R.string.project_list_empty_hint), style = MaterialTheme.typography.bodyMedium)
+        // #649 评论 5559763924：新安装私有 projects/ 为空时提供"从本地恢复"入口，
+        // 用户选择旧版共享存储/Download 镜像目录后恢复作品。不自动扫描全盘、不申请权限。
+        // 仅在无加载错误（真正空状态）时显示，错误态不展示恢复按钮。
+        if (loadError == null) {
+            Spacer(modifier = Modifier.height(dims.space16))
+            val appState = LocalWorkspaceAppState.current
+            RecoveryFromLocalButton(
+                appState = appState,
+                buttonTextResId = R.string.pref_category_recovery,
+            )
+        }
     }
 }
 

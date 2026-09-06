@@ -85,10 +85,8 @@ private suspend fun SettingsViewModel.loadInitialSnapshot(repo: SettingsReposito
             builtinThemes = withContext(Dispatchers.IO) { themeRepo.listBuiltinThemes() },
             paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() },
             aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() },
-            dataRootPath =
-                withContext(
-                    Dispatchers.IO,
-                ) { com.xiwei.sujian.core.platform.storage.AndroidDataRoot.rootDir().absolutePath },
+            // #649 评论 5559763924：数据根目录路径由 Repository 持有的 appContext 解析。
+            dataRootPath = withContext(Dispatchers.IO) { repo.dataRootPath() },
         )
     _uiState.update { current -> buildInitialUiState(current, loaded, snapshotRevisions) }
 }

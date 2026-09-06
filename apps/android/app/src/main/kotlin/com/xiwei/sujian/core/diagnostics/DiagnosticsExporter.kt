@@ -267,8 +267,6 @@ object DiagnosticsExporter {
                     mapOf(
                         "projectId" to projectId,
                         "status" to syncState.status.name,
-                        "backendType" to syncState.backendType,
-                        "transport" to syncState.transport,
                         "lastSyncTime" to syncState.lastSyncTime,
                         "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
                         "conflictCount" to (syncState.conflicts?.size ?: 0),

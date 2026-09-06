@@ -229,7 +229,8 @@ class EditorViewModel(
      *
      * #595 五：baseVersion 按 target 从 EditorSessionStore 读取（活动状态属于
      * 其他 target 时不得使用全局 committedVersion）；sourceVersion 使用真实
-     * commit/manifest ID（lastSyncedCommit），不再用 lastSyncTime 时间锚点；
+     * commit/manifest ID（Core provider-neutral 重构后恒为 null），不再用
+     * lastSyncTime 时间锚点；
      * parentVersion=同步前磁盘版本 — 后续 flush/应用据此判断因果顺序。
      * internal 暴露 viewModelScope 供 extension functions 使用。
      */

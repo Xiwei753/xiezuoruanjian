@@ -296,24 +296,27 @@ object DiagnosticsLogger {
     }
 
     /**
-     * 返回 last_crash.txt。优先返回外部 logsDir 下的，回退到 filesDir/diagnostics/。
+     * 返回 last_crash.txt。优先返回应用私有 logsDir 下的，回退到 filesDir/diagnostics/。
+     * #649 评论 5559763924：logsDir 现在位于应用私有 filesDir，需 [contextRef] 解析；
+     * 未初始化（contextRef 为 null）时返回 null。
      */
     fun getCrashFile(): File? {
-        val primary = File(AndroidDataRoot.logsDir(), "last_crash.txt")
-        if (primary.exists()) return primary
         val ctx = contextRef.get() ?: return null
+        val primary = File(AndroidDataRoot.logsDir(ctx), "last_crash.txt")
+        if (primary.exists()) return primary
         val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
         return if (fallback.exists()) fallback else null
     }
 
     /**
-     * 仅在外部 logsDir 与 filesDir/diagnostics/ 两处都存在 last_crash.txt 时返回
+     * 仅在应用私有 logsDir 与 filesDir/diagnostics/ 两处都存在 last_crash.txt 时返回
      * 回退位置的那份（导出时两处都收集，见 Issue #612 评论二.4）。
      * 只有回退位置有文件时返回 null —— 那份由 [getCrashFile] 以主文件名导出。
+     * #649 评论 5559763924：logsDir 需 [contextRef] 解析；未初始化时返回 null。
      */
     fun getFallbackCrashFile(): File? {
         val ctx = contextRef.get() ?: return null
-        val primary = File(AndroidDataRoot.logsDir(), "last_crash.txt")
+        val primary = File(AndroidDataRoot.logsDir(ctx), "last_crash.txt")
         if (!primary.exists()) return null
         val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
         return if (fallback.exists()) fallback else null

@@ -92,14 +92,14 @@ class WriterAppServiceHolder(
             isConnected: Boolean,
             isMetered: Boolean,
         ): WriterAppServiceHolder {
-            val appDataRoot = AndroidDataRoot.rootDir().absolutePath
-            val projectsRoot = AndroidDataRoot.projectsDir().absolutePath
+            val appDataRoot = AndroidDataRoot.rootDir(context).absolutePath
+            val projectsRoot = AndroidDataRoot.projectsDir(context).absolutePath
             val init =
                 PlatformInitDto(
                     platform = PlatformDto.ANDROID,
                     appDataDir = appDataRoot,
                     cacheDir = cacheDir,
-                    logDir = AndroidDataRoot.logsDir().absolutePath,
+                    logDir = AndroidDataRoot.logsDir(context).absolutePath,
                     noBackupDir = noBackupDir,
                     deviceId = deviceId,
                     appVersion = appVersion,
@@ -109,7 +109,6 @@ class WriterAppServiceHolder(
                     isMetered = isMetered,
                     proxyHost = null,
                     proxyPort = null,
-                    gitMetadataRoot = AndroidDataRoot.gitMetadataBaseDir(context).absolutePath,
                 )
             val secureStorage =
                 try {

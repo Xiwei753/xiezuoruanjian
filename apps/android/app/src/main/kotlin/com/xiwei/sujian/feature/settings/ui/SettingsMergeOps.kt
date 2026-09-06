@@ -4,7 +4,6 @@ package com.xiwei.sujian.feature.settings.ui
 //
 // #630 评论 #1+#2：同步 profile 只有一份，刷新合并只读一份。
 
-import com.xiwei.sujian.core.platform.storage.AndroidDataRoot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
@@ -28,8 +27,9 @@ fun SettingsViewModel.mergeRefresh() {
         val builtinThemes = withContext(Dispatchers.IO) { themeRepo.listBuiltinThemes() }
         val paletteRecords = withContext(Dispatchers.IO) { themeRepo.listPaletteRecords() }
         val aiAvailable = withContext(Dispatchers.IO) { repo.aiAvailable() }
-        val dataRootPath =
-            withContext(Dispatchers.IO) { AndroidDataRoot.rootDir().absolutePath }
+        // #649 评论 5559763924：数据根目录路径由 Repository 持有的 appContext 解析，
+        // 不再直接调 AndroidDataRoot 无 context 重载。
+        val dataRootPath = withContext(Dispatchers.IO) { repo.dataRootPath() }
         _uiState.update {
             SettingsUiState(
                 settings = mergeLoadedLocal(current.settings, settings),

@@ -54,6 +54,16 @@
     <string name="pref_category_app_sync">应用数据同步</string>
     <string name="pref_category_ai">AI</string>
 
+    <!-- #649 评论 5559763924：从本地恢复（旧版共享存储 / Download 镜像 → 应用私有 filesDir） -->
+    <string name="pref_category_recovery">从本地恢复</string>
+    <string name="pref_summary_recovery">从旧版共享存储或 Download 镜像恢复作品到应用私有目录</string>
+    <string name="recovery_action_pick_source">选择源目录</string>
+    <string name="recovery_result_legacy_imported">已从旧版共享存储恢复</string>
+    <string name="recovery_result_mirror_restored">已从镜像恢复</string>
+    <string name="recovery_result_nothing">未发现可恢复数据</string>
+    <string name="recovery_result_failed">恢复失败：%1$s</string>
+    <string name="recovery_result_cancelled">已取消选择源目录</string>
+
     <!-- 设置页顶部紧凑全局搜索入口（#477 未接入时为占位） -->
     <string name="settings_search_hint">搜索设置</string>
 

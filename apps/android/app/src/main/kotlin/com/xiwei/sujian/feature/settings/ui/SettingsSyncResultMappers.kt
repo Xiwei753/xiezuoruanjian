@@ -152,8 +152,7 @@ internal fun SyncDiagnosticsOutcome.Success.diagnosticsSuccessToIoResult(): Sync
                 mapOf(
                     "network" to if (diag.networkOk) "ok" else "fail",
                     "auth" to if (diag.authOk) "ok" else "fail",
-                    "repo" to if (diag.repoOk) "ok" else "fail",
-                    "branch" to if (diag.branchOk) "ok" else "fail",
+                    "remote" to if (diag.remoteOk) "ok" else "fail",
                 ),
             sanitizedDiagnostic = if (!diag.success) "connection_failed" else null,
         ),

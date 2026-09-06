@@ -21,11 +21,7 @@ class AutoSyncWorker(
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
-        // 没有外部存储权限时（例如首次启动尚未授权）不得触碰 appContainer /
-        // AppServiceProvider / WriterAppServiceHolder，避免提前初始化 Rust Core（Issue #600）。
-        if (!com.xiwei.sujian.core.platform.storage.AndroidDataRoot.hasStorageAccess()) {
-            return Result.success()
-        }
+        // #649 评论 5559763924：数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。Worker 可直接访问 appContainer。
         val deps =
             (applicationContext as? com.xiwei.sujian.app.di.SujianAppDependenciesProvider)
                 ?.dependencies

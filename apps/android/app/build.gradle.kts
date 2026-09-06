@@ -94,8 +94,7 @@ android {
 
     defaultConfig {
         applicationId = "com.xiwei.sujian"
-        // Issue #600：真实共享目录 + 普通文件路径（Rust std::fs / Git）路线要求
-        // MANAGE_EXTERNAL_STORAGE（API 30 才有），基线直接设为 API 30。
+        // #649 评论 5559763924：数据根目录改为应用私有 filesDir，不再需要共享存储权限；基线 API 30 保留为最低运行版本。
         minSdk = 30
         targetSdk = 36
         versionCode = appVersionCode

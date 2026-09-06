@@ -246,6 +246,9 @@ fun SujianApp(initialDestination: String? = null) {
             LocalAndroidCapabilities provides capabilities,
             LocalEditorWindowHost provides windowCoordinator,
             LocalSujianAppDependencies provides deps,
+            // #649 评论 5559763924：向设置页等无 appState 形参的 Composable 提供 appState，
+            // 用于构造 StorageRecoveryCoordinator 恢复入口。
+            LocalWorkspaceAppState provides appState,
         ) {
             SujianAppContent(
                 capabilityProvider = capabilityProvider,

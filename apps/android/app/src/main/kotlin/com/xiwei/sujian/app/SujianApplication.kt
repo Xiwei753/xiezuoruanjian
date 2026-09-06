@@ -33,7 +33,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
 
     override fun onCreate() {
         super<Application>.onCreate()
-        // 崩溃处理器放在第一项：无论是否持有存储权限，crash 都要落到日志目录。
+        // 崩溃处理器放在第一项：crash 都要落到日志目录（应用私有 filesDir，无需权限）。
         installCrashHandler()
         initDiagnostics()
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
@@ -74,7 +74,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                         append("Crash at $timestamp\nThread: ${thread.name}\n\n")
                     }
                 val externalWritten =
-                    writeCrashFile(File(AndroidDataRoot.logsDir(), "last_crash.txt"), header, redactedTrace)
+                    writeCrashFile(File(AndroidDataRoot.logsDir(this), "last_crash.txt"), header, redactedTrace)
                 if (!externalWritten) {
                     val fallbackDir = File(filesDir, "diagnostics")
                     fallbackDir.mkdirs()
@@ -113,10 +113,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     }
 
     override fun onStart(owner: LifecycleOwner) {
-        // 没有外部存储权限时（例如首次启动跳转授权页）不得触碰
-        // appContainer / AppServiceProvider / WriterAppServiceHolder，
-        // 避免在授权前提前初始化 Rust Core（Issue #600）。
-        if (!AndroidDataRoot.hasStorageAccess()) return
+        // #649 评论 5559763924：数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("start")
         if (autoSyncScheduler == null) {
             autoSyncScheduler = AutoSyncScheduler(this, appContainer.syncRepository)
@@ -125,8 +122,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     }
 
     override fun onStop(owner: LifecycleOwner) {
-        // 同 onStart：授权前进入后台（跳转系统授权页）不能拉起 Core。
-        if (!AndroidDataRoot.hasStorageAccess()) return
+        // 同 onStart：私有存储无需权限检查。
         com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("stop")
         autoSyncScheduler?.stop()
         val result = AppServiceProvider.getAppServiceBridge(this).starMapBridge.flushAllStarmapStores()

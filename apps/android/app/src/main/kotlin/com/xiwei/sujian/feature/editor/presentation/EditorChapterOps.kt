@@ -92,12 +92,6 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
         // 不再用 SyncMergeEmitDedup hash 去重。同 hash dirty conflict 事实不被吞。
         val committedHash = _sessionCoordinator?.documentCommittedVersionFor(targetId)?.contentHash ?: ""
         if (syncMergePrefilter(meta.hash, committedHash)) {
-            val syncState =
-                try {
-                    syncRepository.loadSyncState(session.projectId)
-                } catch (_: Exception) {
-                    null
-                }
             val baseVersion = _sessionCoordinator?.documentCommittedVersionFor(targetId) ?: DocumentVersion()
             emitDocumentFact(
                 TargetDocumentFact(
@@ -106,7 +100,6 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
                     sourceVersion =
                         DocumentVersion(
                             contentHash = meta.hash,
-                            syncCommitId = syncState?.lastSyncedCommit,
                             parentVersion = baseVersion,
                         ),
                     baseVersion = baseVersion,
@@ -139,9 +132,9 @@ suspend fun EditorViewModel.checkSyncMergedChapter() {
  * 不论 origin 都 Apply）。[baseVersion] 仅用于 [TargetDocumentFact.baseVersion]
  * （本地正文基于的版本，保存后的 committedVersion）。
  *
- * [syncCommitId] 仅在 `pending.origin == SYNC_MERGED` 时由调用方传入
- * `syncRepository.loadSyncState().lastSyncedCommit`；`REPOSITORY_LOAD` origin
- * 传 null（章节加载事实不带同步锚点）。
+ * [syncCommitId] 仅在 `pending.origin == SYNC_MERGED` 时由调用方传入；Core
+ * provider-neutral 重构后不再暴露 commit hash，调用方传 null。
+ * `REPOSITORY_LOAD` origin 传 null（章节加载事实不带同步锚点）。
  */
 internal fun buildPendingReapplyFact(
     pending: PendingExternalVersion,
@@ -200,8 +193,7 @@ internal fun shouldConsumePendingAfterFact(
  * 1. 取 target 的 pendingExternal，无则返回 false（无事可做）；
  * 2. 从 Repository 读最新正文/hash（不拿 pending 旧正文/hash）；
  * 3. baseVersion = 当前 committedVersion（保存后版本）；
- * 4. syncCommitId 仅在 `pending.origin == SYNC_MERGED` 时读
- *    `syncRepository.loadSyncState().lastSyncedCommit`，否则 null；
+ * 4. syncCommitId 恒为 null（Core provider-neutral 重构后不再暴露 commit hash）；
  * 5. 用 [buildPendingReapplyFact] 构造事实（origin 来自 pending）并 emit；
  * 6. 返回 true 表示已触发 reapply。
  *
@@ -221,16 +213,7 @@ suspend fun EditorViewModel.reapplyPendingExternalAfterSave(targetId: String): B
                 )
             }
         val baseVersion = coordinator.documentCommittedVersionFor(targetId)
-        val syncCommitId =
-            if (pending.origin == DocumentFactOrigin.SYNC_MERGED) {
-                try {
-                    syncRepository.loadSyncState(session.projectId).lastSyncedCommit
-                } catch (_: Exception) {
-                    null
-                }
-            } else {
-                null
-            }
+        val syncCommitId: String? = null
         val fact =
             buildPendingReapplyFact(
                 pending = pending,

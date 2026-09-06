@@ -1,47 +1,37 @@
 package com.xiwei.sujian.core.platform.storage
 
 import android.content.Context
-import android.os.Environment
 import java.io.File
 
 /**
  * AndroidDataRoot — 平台数据根目录的唯一事实来源。
  *
- * 所有业务数据统一存放在共享存储下的 `Sujian/` 目录（稳定 ASCII 磁盘契约，
- * 不随界面语言变化，见 Issue #609 二）：
+ * 所有业务数据统一存放在应用私有存储 `context.filesDir/Sujian/` 下（稳定 ASCII
+ * 磁盘契约，不随界面语言变化，见 Issue #609 二）：
  * - `Sujian/projects/`  — 项目（作品）数据
  * - `Sujian/logs/`      — 诊断日志与 crash 记录
  * - `Sujian/exports/`   — 导出产物
  * - `Sujian/backups/`   — 备份
  *
- * ## Git metadata 私有目录（#644 评论 5490206957）
+ * ## 应用私有存储（#649 评论 5559763924）
  *
- * 共享存储（`/storage/emulated/0/...`）不适合放可写 Git metadata（`.git/`），
- * 因为 sidecar 文件与真正的 `.lock` 不是原子事实，无法可靠证明 ownership。
- * Git metadata 放在应用私有 `filesDir`，共享存储只保留用户可见的 worktree。
+ * 数据根目录位于应用私有 `filesDir`，不再使用共享外部存储。
+ * 应用私有存储提供 POSIX 文件语义、不需要运行时权限、卸载即清除。
+ * 旧版共享存储数据（`/Sujian/`、`/素笺/`）的一次性迁移改由
+ * [com.xiwei.sujian.storage.recovery.LegacySharedStorageImporter] 通过 SAF
+ *（`OpenDocumentTree`）在用户主动选择源目录后完成，不在启动时自动扫描全盘。
  *
- * - `gitMetadataDir(context, projectId)` → `filesDir/sujian-git/<project-id>/`
- *   每个项目的可写 Git metadata（`.git/`）的根目录。
- * - `gitMetadataBaseDir(context)` → `filesDir/sujian-git/`
- *   所有项目的 Git metadata 基目录，启动时一次性创建。
+ * Git metadata 与 worktree 一并落在应用私有 `Sujian/projects/<id>/` 下，
+ * 不再单独外置 `filesDir/sujian-git/` 基目录（#644 评论 5490206957 的外置方案
+ * 随私有化收回，Core 的 `GitRepoLayout` 永远用 app_data_root 内的默认 `.git`）。
  *
  * 界面显示名（”素笺 / 作品 / 日志 / 导出 / 备份”）一律走 `strings.xml`，
  * 禁止从真实目录名反推显示文字。
  *
- * ## 存储契约约束（#644 评论 5486167472 问题1）
- * 此目录位于 Android 共享/模拟存储（`/storage/emulated/0/...`），由 AOSP FUSE
- * MediaProvider 挂载。**不支持 POSIX hardlink**（`link()` 会失败），`rename` 的
- * 带 flag 版本也不是可依赖的 no-replace CAS。Core 的 `IndexLockProtocol`
- *（`sync::git_commit::OwnedIndexLock`）不能假定 POSIX hardlink 存在，只能依赖
- * `O_EXCL`（`create_new`）原子创建、`rename`（覆盖式）、`fsync`、读写文件内容。
- *
  * ## 架构定位
  * - 全局单例，只负责目录路径获取与创建，不实现任何业务规则。
  * - 业务规则（保存、同步、格式）全部由 Rust Core 负责。
- *
- * ## 权限前提
- * - Android 11+ 需要持有 `MANAGE_EXTERNAL_STORAGE` 权限（见 [hasStorageAccess]）。
- * - 调用方必须在 [hasStorageAccess] 返回 true 后才能调用 [ensureDirectories]。
+ * - 位于 `:core:platform`，不依赖 Compose、UniFFI、`:app`。
  */
 object AndroidDataRoot {
     /** 新数据根目录名：稳定 ASCII，长期磁盘路径契约（#609 二）。 */
@@ -52,159 +42,30 @@ object AndroidDataRoot {
     private const val BACKUPS_DIR_NAME = "backups"
 
     /**
-     * 旧版中文目录名（#609 二 迁移源）：早期版本把界面中文显示名
-     * 直接用作磁盘路径，仅在迁移旧数据时使用，不是新数据的路径契约。
+     * 应用私有根目录下的 `Sujian/`（`context.filesDir/Sujian`）。
+     *
+     * 调用方需传入 [Context]；内部使用 [Context.getFilesDir]，不访问共享外部存储。
      */
-    private const val LEGACY_ROOT_DIR_NAME = "素笺"
-    private const val LEGACY_PROJECTS_DIR_NAME = "作品"
-    private const val LEGACY_LOGS_DIR_NAME = "日志"
-    private const val LEGACY_EXPORTS_DIR_NAME = "导出"
-    private const val LEGACY_BACKUPS_DIR_NAME = "备份"
-
-    /** 共享存储根目录下的 `Sujian/`。 */
-    fun rootDir(): File = File(Environment.getExternalStorageDirectory(), ROOT_DIR_NAME)
+    fun rootDir(context: Context): File = File(context.filesDir, ROOT_DIR_NAME)
 
     /** `Sujian/projects/` — 项目数据根目录，对应 Core 的 `projects_root`。 */
-    fun projectsDir(): File = File(rootDir(), PROJECTS_DIR_NAME)
+    fun projectsDir(context: Context): File = File(rootDir(context), PROJECTS_DIR_NAME)
 
     /** `Sujian/logs/` — 诊断日志与 crash 记录。 */
-    fun logsDir(): File = File(rootDir(), LOGS_DIR_NAME)
+    fun logsDir(context: Context): File = File(rootDir(context), LOGS_DIR_NAME)
 
     /** `Sujian/exports/` — 导出产物。 */
-    fun exportsDir(): File = File(rootDir(), EXPORTS_DIR_NAME)
+    fun exportsDir(context: Context): File = File(rootDir(context), EXPORTS_DIR_NAME)
 
     /** `Sujian/backups/` — 备份。 */
-    fun backupsDir(): File = File(rootDir(), BACKUPS_DIR_NAME)
+    fun backupsDir(context: Context): File = File(rootDir(context), BACKUPS_DIR_NAME)
 
-    /** 创建所有业务子目录（幂等）。调用前需确保已持有存储访问权限。 */
-    fun ensureDirectories() {
-        rootDir().mkdirs()
-        projectsDir().mkdirs()
-        logsDir().mkdirs()
-        exportsDir().mkdirs()
-        backupsDir().mkdirs()
-    }
-
-    /** #644 评论 5490206957：所有项目的 Git metadata 基目录（应用私有 filesDir）。 */
-    private const val GIT_METADATA_DIR_NAME = "sujian-git"
-
-    /**
-     * #644 评论 5490206957：Git metadata 私有基目录。
-     *
-     * 位于 `context.filesDir/sujian-git/`，所有项目的可写 Git metadata
-     *（`.git/`）的根目录。共享存储的 `Sujian/projects/<id>/` 只保留
-     * 用户可见 worktree（正文、元数据等）。
-     */
-    fun gitMetadataBaseDir(context: Context): File =
-        File(context.filesDir, GIT_METADATA_DIR_NAME)
-
-    /**
-     * #644 评论 5490206957：单个项目的 Git metadata 目录。
-     *
-     * 位于 `context.filesDir/sujian-git/<projectId>/`，是该项目的
-     * `GitRepoLayout.git_dir` 的值。Core 初始化时通过 JNI 传入此路径。
-     */
-    fun gitMetadataDir(context: Context, projectId: String): File =
-        File(gitMetadataBaseDir(context), projectId)
-
-    /**
-     * #644 评论 5490206957：创建 Git metadata 私有目录（幂等）。
-     *
-     * 在应用启动时、初始化 Core 前调用。确保 `filesDir/sujian-git/` 目录存在。
-     */
-    fun ensureGitMetadataDirectories(context: Context) {
-        gitMetadataBaseDir(context).mkdirs()
-    }
-
-    /**
-     * 是否拥有共享存储访问权限。
-     *
-     * 基线为 API 30（minSdk=30）：共享存储的普通文件路径语义只由
-     * [Environment.isExternalStorageManager] 保证，低版本不再伪装兼容
-     * （旧存储权限无法在 targetSdk=36 下提供 `/storage/emulated/0` 的
-     * 普通文件路径语义，见 Issue #600）。
-     */
-    fun hasStorageAccess(): Boolean = Environment.isExternalStorageManager()
-
-    /**
-     * 一次性迁移旧版中文数据目录（#609 二）。
-     *
-     * 早期版本使用 `/素笺/作品|日志|导出|备份` 作为磁盘路径契约；本方法在
-     * 启动取得存储权限后、初始化 Core 前调用，把旧目录中的现有内容移动到
-     * 新的 `/Sujian/` 对应目录：
-     * - 文件按相对路径逐项移动，目标已存在时跳过（不覆盖已有新数据）；
-     * - 旧目录下的未知子目录/文件整体并入 `Sujian/` 对应位置；
-     * - 迁移完成后只删除空的旧目录，绝不删除任何文件。
-     *
-     * 幂等：首次执行后旧目录已空并被删除，再次调用为空操作。
-     * 调用方需确保已持有存储访问权限。
-     */
-    fun migrateLegacyChineseDataRoot() {
-        val legacyRoot = File(Environment.getExternalStorageDirectory(), LEGACY_ROOT_DIR_NAME)
-        if (!legacyRoot.isDirectory) return
-
-        val legacyToNewDirs =
-            mapOf(
-                LEGACY_PROJECTS_DIR_NAME to projectsDir(),
-                LEGACY_LOGS_DIR_NAME to logsDir(),
-                LEGACY_EXPORTS_DIR_NAME to exportsDir(),
-                LEGACY_BACKUPS_DIR_NAME to backupsDir(),
-            )
-        val knownLegacyNames = legacyToNewDirs.keys
-
-        // 1. 已知业务子目录：整树并入对应的新目录（文件级合并，不覆盖已有文件）。
-        legacyToNewDirs.forEach { (legacyName, newDir) ->
-            val legacyDir = File(legacyRoot, legacyName)
-            if (legacyDir.isDirectory) {
-                mergeTree(legacyDir, newDir)
-            }
-        }
-
-        // 2. 旧根下未知的子目录/散落文件：并入新根（同样按文件级合并，
-        //    不覆盖已有文件；已知业务子目录已在第 1 步处理，不得以中文名重建）。
-        legacyRoot.listFiles()?.forEach { child ->
-            if (child.name in knownLegacyNames) return@forEach
-            val target = File(rootDir(), child.name)
-            if (child.isDirectory) {
-                mergeTree(child, target)
-            } else if (child.isFile && !target.exists()) {
-                target.parentFile?.mkdirs()
-                child.renameTo(target)
-            }
-        }
-
-        // 3. 删除迁移后遗留的空目录（自底向上，仅空目录）。
-        deleteEmptyDirsBottomUp(legacyRoot)
-    }
-
-    /**
-     * 把 [source] 目录树中的每个文件移动到 [targetRoot] 的对应相对路径下；
-     * 目标文件已存在时跳过，绝不覆盖。目录本身不移动，仅创建目标父目录。
-     */
-    private fun mergeTree(
-        source: File,
-        targetRoot: File,
-    ) {
-        if (!source.isDirectory) return
-        source.listFiles()?.forEach { child ->
-            val target = File(targetRoot, child.name)
-            if (child.isDirectory) {
-                mergeTree(child, target)
-            } else if (child.isFile && !target.exists()) {
-                target.parentFile?.mkdirs()
-                child.renameTo(target)
-            }
-        }
-    }
-
-    /** 自底向上删除空目录（含旧根自身）。非空目录保留，不删除任何文件。 */
-    private fun deleteEmptyDirsBottomUp(dir: File) {
-        if (!dir.exists() || !dir.isDirectory) return
-        dir.listFiles()?.forEach { child ->
-            if (child.isDirectory) {
-                deleteEmptyDirsBottomUp(child)
-            }
-        }
-        dir.delete()
+    /** 创建所有业务子目录（幂等）。应用私有存储不需要额外权限。 */
+    fun ensureDirectories(context: Context) {
+        rootDir(context).mkdirs()
+        projectsDir(context).mkdirs()
+        logsDir(context).mkdirs()
+        exportsDir(context).mkdirs()
+        backupsDir(context).mkdirs()
     }
 }

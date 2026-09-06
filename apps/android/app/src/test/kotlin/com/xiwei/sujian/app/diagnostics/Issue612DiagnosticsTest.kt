@@ -898,7 +898,7 @@ class PersistentLogWriterTest {
 
     private fun currentLogFile(): File {
         val identity = DiagnosticsBuildIdentity.fromBuildConfig()
-        return File(AndroidDataRoot.logsDir(), "sujian-current-${identity.buildKey}.log")
+        return File(AndroidDataRoot.logsDir(context), "sujian-current-${identity.buildKey}.log")
     }
 
     @Test
@@ -1190,7 +1190,7 @@ class PersistentLogWriterTest {
         // persistenceHealthy 变 false，flushBlocking 返回 false 而非假装成功。
         // 把 logsDir 路径占为普通文件（目录状态异常）使 writeBatch 无法创建文件。
         PersistentLogWriter.flushBlocking()
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         if (logsDir.exists()) logsDir.deleteRecursively()
         val parent = logsDir.parentFile
         parent.mkdirs()
@@ -1222,9 +1222,10 @@ class PersistentLogWriterTest {
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [34])
 class PersistentLogWriterRotationPruneTest {
+    private val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+
     @Before
     fun setUp() {
-        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
         PersistentLogWriter.init(context)
         PersistentLogWriter.setEnabled(true)
         PersistentLogWriter.flushBlocking()
@@ -1251,7 +1252,7 @@ class PersistentLogWriterRotationPruneTest {
 
     private fun currentLogFile(): File {
         val identity = DiagnosticsBuildIdentity.fromBuildConfig()
-        return File(AndroidDataRoot.logsDir(), "sujian-current-${identity.buildKey}.log")
+        return File(AndroidDataRoot.logsDir(context), "sujian-current-${identity.buildKey}.log")
     }
 
     @Test
@@ -1259,7 +1260,7 @@ class PersistentLogWriterRotationPruneTest {
         // #623 评论 10：同一 buildKey 最多 4 个轮转 + 1 当前 = 5 总数。
         // 创建 6 个 rotated + 1 当前，裁剪后保留 4 个最新 rotated（probe-2..probe-5），
         // 删除 2 个最旧 rotated（probe-0, probe-1）；当前文件不参与裁剪必须保留。
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
         val rotated =
@@ -1297,7 +1298,7 @@ class PersistentLogWriterRotationPruneTest {
         // current 被排除，参与裁剪 5 项（4 rotated + blocker），保留前 4 个 rotated，
         // blocker 位于索引 4 裁剪位，delete() 非空目录返回 false → prune 返回 false。
         // 5 个 probe 文件（4 rotated + 1 current）必须全部保留。
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
         val blocker = File(logsDir, "sujian-current-probe-blocker.log")
@@ -1334,7 +1335,7 @@ class PersistentLogWriterRotationPruneTest {
         // 失败抛 IOException → writeBatch=false → persistenceHealthy=false →
         // flushBlocking=false，导出据此不得把日志系统不完整伪装成完整落盘。
         PersistentLogWriter.flushBlocking()
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
         // 预置超过 1 MiB 的当前日志文件 → 下一次 writeBatch 必然触发轮转。
@@ -1359,7 +1360,7 @@ class PersistentLogWriterRotationPruneTest {
         // B buildKey=v2-bbb-ai-debug：1 current + 6 rotated（超过 4，触发裁剪）
         // 裁剪 B 后：A 的所有文件必须原样保留（存在 + 内容不变 + 数量不变），
         // B current 保留，B rotated 保留恰好 4 个最新。
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         logsDir.mkdirs()
         PersistentLogWriter.getLogFiles().forEach { it.delete() }
 
@@ -1680,7 +1681,7 @@ class CrashFileLocationsTest {
     @Test
     fun bothLocationsReturnFallbackForSecondCopy() {
         // 正：两处都有时，主位置 + 回退位置都可取到。
-        val primaryDir = AndroidDataRoot.logsDir()
+        val primaryDir = AndroidDataRoot.logsDir(context)
         primaryDir.mkdirs()
         val primary = java.io.File(primaryDir, "last_crash.txt")
         primary.writeText("crash in external logsDir")
@@ -1700,7 +1701,7 @@ class CrashFileLocationsTest {
     @Test
     fun onlyPrimaryReturnsNullFallback() {
         // 反：只有主位置有文件时，回退位置不应返回（否则同一内容导出两份）。
-        val primaryDir = AndroidDataRoot.logsDir()
+        val primaryDir = AndroidDataRoot.logsDir(context)
         primaryDir.mkdirs()
         val primary = java.io.File(primaryDir, "last_crash.txt")
         primary.writeText("crash in external logsDir")
@@ -1799,10 +1800,12 @@ class PersistentLogWriterDeleteLogFilesTest {
 @org.junit.runner.RunWith(org.robolectric.RobolectricTestRunner::class)
 @org.robolectric.annotation.Config(sdk = [34])
 class ClearLogsFailurePropagationTest {
+    private val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+
     @Test
     fun clearLogsReturnsFalseWhenLogsDirIsNotDirectory() {
         PersistentLogWriter.flushBlocking()
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         // 把目录路径占为普通文件（不存在的父目录先建好；沙箱内残留目录先清掉）。
         if (logsDir.exists()) logsDir.deleteRecursively()
         val parent = logsDir.parentFile

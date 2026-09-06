@@ -6,11 +6,6 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <!-- 业务数据统一存放于共享存储 /Sujian/（稳定 ASCII 目录名，见 Issue #609），
-         Android 11+ 需要所有文件访问权限。 -->
-    <uses-permission
-        android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
-        tools:ignore="ScopedStorage" />
 
     <!-- 写作软件不应默认备份正文/仓库/token/log/crash 到 Google 云。
          以后若要备份，必须通过 dataExtractionRules / backup_rules 仅允许非敏感设置，

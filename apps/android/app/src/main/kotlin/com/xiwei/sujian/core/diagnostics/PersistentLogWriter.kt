@@ -122,6 +122,12 @@ internal object PersistentLogWriter {
     @Volatile private var enabled = false
 
     /**
+     * #649 评论 5559763924：缓存应用 context 用于解析应用私有 logsDir。
+     * 由 init 调用线程写入，由 writer 线程读取；用 @Volatile 保证可见性。
+     */
+    @Volatile private var appContext: Context? = null
+
+    /**
      * #623 评论 3：当前构建身份。init 时设置，决定日志文件名 build key。
      * 由 init 调用线程写入，由 writer 线程读取；用 @Volatile 保证可见性。
      */
@@ -146,6 +152,7 @@ internal object PersistentLogWriter {
             if (initialized) return
             initialized = true
             enabled = true
+            appContext = context.applicationContext
             buildIdentity = identity
             val thread = Thread({ writerLoop() }, "sujian-logger")
             thread.priority = Thread.MIN_PRIORITY
@@ -233,9 +240,15 @@ internal object PersistentLogWriter {
         return completed && persisted.get()
     }
 
+    /**
+     * #649 评论 5559763924：解析应用私有 logsDir（`filesDir/Sujian/logs`）。
+     * 未初始化（appContext 为 null）时返回 null，调用方据此返回空/失败。
+     */
+    private fun logsDir(): File? = appContext?.let { AndroidDataRoot.logsDir(it) }
+
     /** 返回当前日志目录下所有 sujian-current*.log 文件。 */
     fun getLogFiles(): List<File> {
-        val logDir = AndroidDataRoot.logsDir()
+        val logDir = logsDir() ?: return emptyList()
         if (!logDir.exists()) return emptyList()
         return logDir.listFiles { _, name -> name.startsWith(LOG_PREFIX) && name.endsWith(".log") }
             ?.toList() ?: emptyList()
@@ -347,7 +360,8 @@ internal object PersistentLogWriter {
             flushBatch(batch)
             // 文件删除在 writer 线程执行，与 writeBatch 串行，无并发竞态；
             // 删除结果经 cmd.deleted 传回调用方（不得把失败伪装成成功）。
-            val deleted = deleteLogFiles(AndroidDataRoot.logsDir())
+            val dir = logsDir()
+            val deleted = if (dir != null) deleteLogFiles(dir) else false
             // 只有删除成功才把 persistenceHealthy 重置为 true（Issue #612 评论 3.1）：
             // 旧日志已清空，后续可重新声称完整。删除失败时保留原健康位，
             // 调用方通过 deleted 感知清空失败。
@@ -419,7 +433,8 @@ internal object PersistentLogWriter {
     private fun writeBatch(batch: List<LogRequest>): Boolean {
         return try {
             ensureLogsDirOrThrow()
-            val currentFile = File(AndroidDataRoot.logsDir(), currentLogFileName())
+            val dir = logsDir() ?: return false
+            val currentFile = File(dir, currentLogFileName())
             if (!rotateIfNeeded(currentFile)) return false
             FileOutputStream(currentFile, true)
                 .bufferedWriter(Charsets.UTF_8)
@@ -506,6 +521,6 @@ internal object PersistentLogWriter {
      * catch(Exception) 统一捕获返回 false——调用方据此感知写盘失败。
      */
     private fun ensureLogsDirOrThrow() {
-        AndroidDataRoot.logsDir().mkdirs()
+        logsDir()?.mkdirs()
     }
 }

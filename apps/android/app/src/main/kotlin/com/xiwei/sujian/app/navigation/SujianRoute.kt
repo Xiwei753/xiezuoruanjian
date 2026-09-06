@@ -38,6 +38,7 @@ enum class SettingsSection {
     Editor,
     Save,
     Sync,
+    Recovery,
     Ai,
     Diagnostics,
     Laboratory,

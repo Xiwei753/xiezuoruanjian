@@ -83,20 +83,11 @@ fn recover_storage_transactions(
 /// 本地 Git 仓库的生命周期独立于 SyncProvider — 只要 workspace 被打开，
 /// Git 历史层就存在，不依赖有没有启用远端同步。
 ///
-/// `git_metadata_root`：Android 私有 Git metadata 根目录；`None` 用标准布局。
-///
 /// 返回对应的 `GitRepoLayout`，供调用方注入到 `WriterCoreApi`。
 fn ensure_workspace_git(
     app_data_root: &Path,
-    git_metadata_root: Option<&Path>,
 ) -> std::result::Result<crate::storage::git_repo_layout::GitRepoLayout, WriterError> {
-    let layout = match git_metadata_root {
-        Some(root) => crate::storage::git_repo_layout::GitRepoLayout::with_external_git_dir(
-            app_data_root.to_path_buf(),
-            root.join("workspace"),
-        ),
-        None => crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root.to_path_buf()),
-    };
+    let layout = crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root.to_path_buf());
     crate::storage::workspace_git::ensure_workspace_repo(&layout)?;
     // #645 评论 5504296097 问题4：bootstrap 初始化后实际调用 recover_workspace_crash，
     // 确保打开 workspace 时自动恢复 HEAD/index 损坏。
@@ -127,7 +118,7 @@ pub fn open_app_service(
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
-    let layout = ensure_workspace_git(Path::new(&app_data_root), None)?;
+    let layout = ensure_workspace_git(Path::new(&app_data_root))?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
     // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
@@ -147,14 +138,8 @@ pub fn open_app_service_with_init(
     init: PlatformInitDto,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
-    // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
-    // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
-    let git_metadata_root = init
-        .git_metadata_root
-        .as_ref()
-        .map(std::path::PathBuf::from);
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
-    let layout = ensure_workspace_git(Path::new(&app_data_root), git_metadata_root.as_deref())?;
+    let layout = ensure_workspace_git(Path::new(&app_data_root))?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
     // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
@@ -199,14 +184,8 @@ pub fn open_app_service_with_secure_storage(
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
-    // #644 评论 5491531984 问题5：git_metadata_root 不在 PlatformInit 中，
-    // 从 PlatformInitDto 直接提取后传给 WriterCoreApi。
-    let git_metadata_root = init
-        .git_metadata_root
-        .as_ref()
-        .map(std::path::PathBuf::from);
     // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
-    let layout = ensure_workspace_git(Path::new(&app_data_root), git_metadata_root.as_deref())?;
+    let layout = ensure_workspace_git(Path::new(&app_data_root))?;
     // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
     // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;

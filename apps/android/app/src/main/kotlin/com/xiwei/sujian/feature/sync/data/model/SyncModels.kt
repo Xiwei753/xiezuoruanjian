@@ -5,14 +5,9 @@ enum class SyncTransport {
     SshKey,
 }
 
-enum class BackendType {
-    Git,
-    GithubApi,
-}
-
 data class SyncConfig(
     val enabled: Boolean? = false,
-    val backendType: BackendType? = BackendType.GithubApi,
+    val activeProvider: String? = "github",
     val remoteUrl: String? = "",
     val transport: SyncTransport? = SyncTransport.HttpsToken,
     val branch: String? = "main",
@@ -25,7 +20,7 @@ data class SyncConfig(
     fun normalize(): SyncConfig {
         return copy(
             enabled = enabled ?: false,
-            backendType = backendType ?: BackendType.GithubApi,
+            activeProvider = activeProvider ?: "github",
             remoteUrl = remoteUrl ?: "",
             transport = transport ?: SyncTransport.HttpsToken,
             branch = if (branch.isNullOrEmpty()) "main" else branch,
@@ -41,7 +36,6 @@ data class SyncConfig(
 
 data class SyncSecrets(
     val token: String? = null,
-    val sshPrivateKey: String? = null,
 )
 
 data class Tombstone(
@@ -56,10 +50,6 @@ data class Tombstone(
 
 data class SyncState(
     val status: SyncStatus = SyncStatus.Idle,
-    val remoteUrl: String? = null,
-    val backendType: String? = null,
-    val transport: String? = null,
-    val lastSyncedCommit: String? = null,
     val lastSyncTime: Long? = null,
     val lastError: String? = null,
     val knownFiles: Map<String, String>? = emptyMap(),
@@ -91,25 +81,6 @@ enum class SyncStatus {
     LatestWinsApplied,
 }
 
-enum class FirstSyncMode {
-    NotAttempted,
-    CloneIntoEmptyProject,
-    InitExistingProject,
-    AlreadyGitRepo,
-    BlockedNonEmptyRemote,
-    UnrelatedHistories,
-    None,
-}
-
-data class SyncConflictSummary(
-    val status: String,
-    val localDirty: Boolean,
-    val remoteChanged: Boolean,
-    val conflictedFiles: List<String> = emptyList(),
-    val blockedReason: String,
-    val safeNextSteps: List<String> = emptyList(),
-)
-
 data class SyncConflict(
     val localPath: String,
     val remotePath: String,
@@ -122,22 +93,18 @@ data class SyncConflict(
 
 data class SyncDiagnosticsResult(
     val success: Boolean,
-    val backendType: String,
+    val providerType: String,
     val hasNetworkPermission: Boolean,
     val hasNetworkStatePermission: Boolean,
     val networkState: String,
     val networkOk: Boolean,
     val authOk: Boolean,
-    val repoOk: Boolean,
-    val branchOk: Boolean,
+    val remoteOk: Boolean,
     val networkStatus: String,
     val authStatus: String,
-    val repoStatus: String,
-    val branchStatus: String,
-    val remoteUrlSanitized: String,
-    val transport: String,
     val errorCategory: String,
     val rawError: String?,
+    val providerDetails: String?,
 )
 
 data class SyncResult(
@@ -149,11 +116,10 @@ data class SyncResult(
     val overwrittenFiles: List<String> = emptyList(),
     val ignoredFiles: List<String> = emptyList(),
     val conflicts: List<SyncConflict> = emptyList(),
-    val conflictSummary: SyncConflictSummary? = null,
-    val commitHash: String? = null,
     val error: String? = null,
     val errorCategory: String? = null,
-    val firstSyncMode: FirstSyncMode = FirstSyncMode.None,
+    val messageKey: String? = null,
+    val searchIndexRebuildError: String? = null,
 )
 
 data class SyncPlan(

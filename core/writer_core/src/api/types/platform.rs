@@ -37,10 +37,6 @@ pub struct PlatformInitDto {
     pub is_metered: bool,
     pub proxy_host: Option<String>,
     pub proxy_port: Option<u16>,
-    /// #644 评论 5490799656 问题1：Android 私有 Git metadata 根目录。
-    /// `None` 表示使用标准 Git 布局（`project_root.join(".git")`）。
-    #[serde(default)]
-    pub git_metadata_root: Option<String>,
 }
 
 impl From<PlatformInitDto> for writer_platform_api::PlatformInit {

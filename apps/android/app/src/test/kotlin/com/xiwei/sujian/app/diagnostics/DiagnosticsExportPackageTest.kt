@@ -64,7 +64,7 @@ class DiagnosticsExportPackageTest {
                 threadName = "test",
             ),
         )
-        val logsDir = AndroidDataRoot.logsDir()
+        val logsDir = AndroidDataRoot.logsDir(context)
         logsDir.mkdirs()
         File(logsDir, "last_crash.txt").writeText("probe crash content")
 

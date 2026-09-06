@@ -14,7 +14,8 @@ import androidx.compose.runtime.Immutable
  *   contentHash），由 Core 计算维护 — 唯一稳定的内容指纹；
  * - [repositoryRevision]：Repository 侧单调版本号（Core 尚无独立章节 revision
  *   时保持 0，仅当两侧都非零时参与新旧判定）；
- * - [syncCommitId]：同步真实 commit/manifest ID（SyncState.lastSyncedCommit），
+ * - [syncCommitId]：同步真实 commit/manifest ID；Core provider-neutral 重构后
+ *   不再暴露 commit hash，当前恒为 null，保留字段以备未来 provider 重新提供。
  *   不是时间锚点（lastSyncTime 不表达任何因果顺序，不得参与版本比较）；
  * - [parentVersion]：本版本基于的父版本 — 同步合并结果携带 parentVersion=
  *   同步前磁盘版本；incoming 的父版本链包含 committed 时二者可比较

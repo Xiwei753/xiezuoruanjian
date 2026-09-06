@@ -12,8 +12,6 @@ import com.xiwei.sujian.feature.stats.data.model.WritingSpeedCurve
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsRange
 import com.xiwei.sujian.feature.stats.data.model.WritingStatsSummary
 import com.xiwei.sujian.feature.sync.data.SyncFailureKind
-import com.xiwei.sujian.feature.sync.data.model.BackendType
-import com.xiwei.sujian.feature.sync.data.model.FirstSyncMode
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDiagnosticsResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncDryRunResult
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
@@ -45,6 +43,8 @@ import uniffi.writer_core.LegacyProfileMetadataDto
 import uniffi.writer_core.LocalSettingsDto
 import uniffi.writer_core.ProjectStatsRecordDto
 import uniffi.writer_core.ProjectStatsSummaryDto
+import uniffi.writer_core.ProviderConfigDto
+import uniffi.writer_core.ProviderSecretsDto
 import uniffi.writer_core.SpeedCurvePointDto
 import uniffi.writer_core.SpeedCurveSummaryDto
 import uniffi.writer_core.SyncConfigDto
@@ -169,39 +169,46 @@ internal fun SyncableSettingsDto.toModel() = SyncableSettings(fontSize, themeMod
 @Suppress("DEPRECATION")
 internal fun SyncableSettings.toDto() = SyncableSettingsDto(fontSize, themeMode, monetColor, themePaletteJson)
 
-internal fun SyncConfigDto.toModel() =
-    SyncConfig(
+internal fun SyncConfigDto.toModel(): SyncConfig {
+    val gitHubConfig = providerConfig as? ProviderConfigDto.GitHub
+    return SyncConfig(
         enabled = enabled,
-        backendType = backendType.toBackendType(),
-        remoteUrl = remoteUrl,
-        transport = transport.toSyncTransport(),
-        branch = branch,
+        activeProvider = activeProvider,
+        remoteUrl = gitHubConfig?.remoteUrl ?: "",
+        transport = gitHubConfig?.transport.toSyncTransport(),
+        branch = gitHubConfig?.branch ?: "main",
         autoSync = autoSync,
         syncIntervalSeconds = syncIntervalSeconds.toInt(),
-        username = username,
+        username = gitHubConfig?.username ?: "",
         hasNetworkStatePermission = hasNetworkStatePermission,
         hasNetworkPermission = hasNetworkPermission,
     )
+}
 
 internal fun SyncConfig.toDto(): SyncConfigDto {
     val normalized = normalize()
     return SyncConfigDto(
         enabled = normalized.enabled ?: false,
-        backendType = normalized.backendType.toWire(),
-        remoteUrl = normalized.remoteUrl ?: "",
-        transport = normalized.transport.toWire(),
-        branch = normalized.branch ?: "main",
+        activeProvider = normalized.activeProvider ?: "github",
+        providerConfig =
+            ProviderConfigDto.GitHub(
+                remoteUrl = normalized.remoteUrl ?: "",
+                branch = normalized.branch ?: "main",
+                username = normalized.username ?: "",
+                transport = normalized.transport.toWire(),
+            ),
         autoSync = normalized.autoSync ?: false,
         syncIntervalSeconds = (normalized.syncIntervalSeconds ?: 300).toUInt(),
-        username = normalized.username ?: "",
         hasNetworkPermission = normalized.hasNetworkPermission ?: false,
         hasNetworkStatePermission = normalized.hasNetworkStatePermission ?: false,
     )
 }
 
-internal fun SyncSecretsDto.toModel() = SyncSecrets(token, null)
+internal fun SyncSecretsDto.toModel(): SyncSecrets =
+    SyncSecrets((providerSecrets as? ProviderSecretsDto.GitHub)?.token)
 
-internal fun SyncSecrets.toDto() = SyncSecretsDto(token)
+internal fun SyncSecrets.toDto(): SyncSecretsDto =
+    SyncSecretsDto(token?.let { ProviderSecretsDto.GitHub(it) })
 
 internal fun SyncStatus.toWire(): String =
     when (this) {
@@ -234,10 +241,6 @@ internal fun SyncConflict.toDto() =
 internal fun SyncState.toDto() =
     SyncStateDto(
         status = status.toWire(),
-        remoteUrl = remoteUrl,
-        backendType = backendType,
-        transport = transport,
-        lastSyncedCommit = lastSyncedCommit,
         lastSyncTime = lastSyncTime,
         lastError = lastError,
         conflicts = conflicts?.map { it.toDto() },
@@ -246,10 +249,6 @@ internal fun SyncState.toDto() =
 internal fun SyncStateDto.toModel() =
     SyncState(
         status = status.toSyncStatus(),
-        remoteUrl = remoteUrl,
-        backendType = backendType,
-        transport = transport,
-        lastSyncedCommit = lastSyncedCommit,
         lastSyncTime = lastSyncTime,
         lastError = lastError,
         conflicts = conflicts?.map { it.toModel() } ?: emptyList(),
@@ -269,22 +268,18 @@ internal fun SyncConflictDto.toModel() =
 internal fun SyncDiagnosticsResultDto.toModel() =
     SyncDiagnosticsResult(
         success = success,
-        backendType = backendType,
+        providerType = providerType,
         hasNetworkPermission = hasNetworkPermission,
         hasNetworkStatePermission = hasNetworkStatePermission,
         networkState = networkState,
         networkOk = networkOk,
         authOk = authOk,
-        repoOk = repoOk,
-        branchOk = branchOk,
+        remoteOk = remoteOk,
         networkStatus = networkStatus,
         authStatus = authStatus,
-        repoStatus = repoStatus,
-        branchStatus = branchStatus,
-        remoteUrlSanitized = remoteUrlSanitized,
-        transport = transport,
         errorCategory = errorCategory,
         rawError = rawError,
+        providerDetails = providerDetails,
     )
 
 internal fun SyncPlanDto.toModel() =
@@ -307,11 +302,10 @@ internal fun SyncResultDto.toModel() =
         overwrittenFiles = overwrittenFiles,
         ignoredFiles = ignoredFiles,
         conflicts = conflicts.map { it.toModel() },
-        conflictSummary = null,
-        commitHash = commitHash,
         error = error,
         errorCategory = errorCategory,
-        firstSyncMode = firstSyncMode.toFirstSyncMode(),
+        messageKey = messageKey,
+        searchIndexRebuildError = searchIndexRebuildError,
     )
 
 internal fun TargetSyncResultDto.toModel() =
@@ -401,19 +395,6 @@ internal fun LegacyProfileMetadata.toDto(): LegacyProfileMetadataDto =
         activeGeneration = activeGeneration?.takeIf { it in 1L..UInt.MAX_VALUE.toLong() }?.toUInt(),
     )
 
-internal fun String?.toBackendType(): BackendType =
-    when (this) {
-        "git" -> BackendType.Git
-        "github_api" -> BackendType.GithubApi
-        else -> BackendType.GithubApi
-    }
-
-internal fun BackendType?.toWire(): String =
-    when (this ?: BackendType.GithubApi) {
-        BackendType.Git -> "git"
-        BackendType.GithubApi -> "github_api"
-    }
-
 internal fun String?.toSyncTransport(): SyncTransport =
     when (this) {
         "ssh", "ssh_deploy_key" -> SyncTransport.SshKey
@@ -441,18 +422,6 @@ internal fun String?.toSyncStatus(): SyncStatus =
         "no_changes" -> SyncStatus.NoChanges
         "latest_wins_applied" -> SyncStatus.LatestWinsApplied
         else -> SyncStatus.Error
-    }
-
-internal fun String?.toFirstSyncMode(): FirstSyncMode =
-    when (this) {
-        "not_attempted" -> FirstSyncMode.NotAttempted
-        "clone_into_empty_project" -> FirstSyncMode.CloneIntoEmptyProject
-        "init_existing_project" -> FirstSyncMode.InitExistingProject
-        "already_git_repo" -> FirstSyncMode.AlreadyGitRepo
-        "blocked_non_empty_remote" -> FirstSyncMode.BlockedNonEmptyRemote
-        "unrelated_histories" -> FirstSyncMode.UnrelatedHistories
-        "none" -> FirstSyncMode.None
-        else -> FirstSyncMode.None
     }
 
 internal fun DateRangeDto.toModel() =

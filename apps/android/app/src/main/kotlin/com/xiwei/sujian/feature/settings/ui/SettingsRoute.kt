@@ -79,6 +79,12 @@ val settingsCategories =
             SettingsGroup.DataSync,
         ),
         SettingsCategory(
+            SettingsSection.Recovery,
+            R.string.pref_category_recovery,
+            SujianIcons.Save,
+            SettingsGroup.DataSync,
+        ),
+        SettingsCategory(
             SettingsSection.Ai,
             R.string.pref_category_ai,
             SujianIcons.AutoStories,
@@ -270,6 +276,7 @@ private fun SettingsCategoryContent(
         SettingsSection.Editor -> EditorSettingsContent(vm)
         SettingsSection.Save -> SaveSettingsContent(vm)
         SettingsSection.Sync -> SyncSettingsContent(vm)
+        SettingsSection.Recovery -> RecoverySettingsContent()
         SettingsSection.Ai -> AiSettingsContent(vm)
         SettingsSection.Diagnostics -> DiagnosticsSettingsContent(vm)
         SettingsSection.Laboratory -> LaboratorySettingsContent(vm)
@@ -308,6 +315,7 @@ internal fun settingsCategorySummary(category: SettingsCategory): String? =
         SettingsSection.Editor -> stringResource(id = R.string.pref_summary_editor)
         SettingsSection.Save -> stringResource(id = R.string.pref_summary_save)
         SettingsSection.Sync -> stringResource(id = R.string.pref_summary_sync)
+        SettingsSection.Recovery -> stringResource(id = R.string.pref_summary_recovery)
         SettingsSection.Ai -> stringResource(id = R.string.pref_summary_ai)
         SettingsSection.Diagnostics -> stringResource(id = R.string.pref_summary_diagnostics)
         SettingsSection.Laboratory -> stringResource(id = R.string.pref_summary_laboratory)
@@ -340,6 +348,7 @@ internal fun settingsCategoryValue(
             val state by vm.syncState.collectAsStateWithLifecycle()
             toggleValue(state.syncConfig.enabled == true)
         }
+        SettingsSection.Recovery -> null
         SettingsSection.Ai -> {
             val state by vm.aiState.collectAsStateWithLifecycle()
             toggleValue(state.enabled)

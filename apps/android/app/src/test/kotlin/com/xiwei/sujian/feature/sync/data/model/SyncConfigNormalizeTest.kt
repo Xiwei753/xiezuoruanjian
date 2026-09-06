@@ -10,8 +10,8 @@ import org.junit.Test
  */
 class SyncConfigNormalizeTest {
     @Test
-    fun normalize_usesGithubApi_whenBackendTypeIsNull() {
-        val normalized = SyncConfig(backendType = null).normalize()
-        assertEquals(BackendType.GithubApi, normalized.backendType)
+    fun normalize_usesGithub_whenActiveProviderIsNull() {
+        val normalized = SyncConfig(activeProvider = null).normalize()
+        assertEquals("github", normalized.activeProvider)
     }
 }
