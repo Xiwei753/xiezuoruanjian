@@ -132,15 +132,14 @@ fn problem2_journal_has_no_origin_field() {
     );
 
     // 进一步证据：反序列化带 origin 的 JSON，origin 被正确解析。
-    let json_with_origin = format!(
-        "{{
+    let json_with_origin = "{
             \"token\":\"t\",\"project_id\":\"p\",\"worktree_from\":\"/a\",
             \"worktree_trash\":\"/b\",\"git_dir_from\":null,\"git_dir_trash\":null,
             \"projects_root\":\"/p\",\"app_data_root\":\"/a\",
             \"starmap_ids\":[],\"device_id\":\"d\",\"phase\":\"prepared\",
             \"origin\":\"remote_lifecycle\"
-        }}"
-    );
+        }"
+    .to_string();
     let parsed: Result<ProjectDeleteJournal, _> = serde_json::from_str(&json_with_origin);
     assert!(
         parsed.is_ok(),
@@ -177,7 +176,7 @@ fn problem2_commit_full_sync_drops_journal_token_static_evidence() {
     //   - target.result = SyncResult::no_changes() (line 415)
     //
     // 此测试通过即表示静态证据已记录。
-    let evidence = vec![
+    let _evidence = [
         ("file", "core/writer_core/src/facade/sync_ops.rs"),
         ("commit_full_sync_range", "376-520"),
         ("remote_lifecycle_branch", "400-415"),
@@ -192,7 +191,6 @@ fn problem2_commit_full_sync_drops_journal_token_static_evidence() {
             "line 415: target.result = SyncResult::no_changes()",
         ),
     ];
-    assert!(!evidence.is_empty());
 }
 
 // ══ 问题3：LWW device_id 硬塞本机设备 ══
@@ -209,13 +207,10 @@ fn problem2_commit_full_sync_drops_journal_token_static_evidence() {
 ///       run_transfer LiveProject 分支 (line 695-702) 用 live_lww.device_id。
 #[test]
 fn problem3_post_transfer_lww_drops_device_id_static_evidence() {
-    let evidence = vec![
-        ("file", "core/writer_core/src/sync/full_sync.rs"),
+    let _evidence = [("file", "core/writer_core/src/sync/full_sync.rs"),
         ("read_post_transfer_lww_signature", "fn read_post_transfer_lww(root: &Path) -> Option<i64> (line 585-594)"),
         ("live_project_candidate_construction", "line 697-702: TargetLifecycleRecord::upsert(..., final_lww_ms, &live_lww.device_id)"),
-        ("issue", "final_lww_ms 来自 max(manifest record time)，但 device_id 用 live_lww.device_id（本机），而非 staging manifest 最大 record 的 device_id（可能来自远端设备）"),
-    ];
-    assert!(!evidence.is_empty());
+        ("issue", "final_lww_ms 来自 max(manifest record time)，但 device_id 用 live_lww.device_id（本机），而非 staging manifest 最大 record 的 device_id（可能来自远端设备）")];
 }
 
 // ══ 问题4：章节保存不更新 project.json.updated_at ══
@@ -295,14 +290,11 @@ fn problem4_save_chapter_does_not_update_project_json() {
 ///       line 415 std::fs::write(&manifest_path, &bytes);
 #[test]
 fn problem4_planner_writes_file_breaking_dry_run_static_evidence() {
-    let evidence = vec![
-        ("file", "core/writer_core/src/sync/full_sync.rs"),
+    let _evidence = [("file", "core/writer_core/src/sync/full_sync.rs"),
         ("function", "compute_local_project_lifecycle_candidate (line 353-444)"),
         ("create_dir_all", "line 405: std::fs::create_dir_all(parent)"),
         ("fs_write", "line 415: std::fs::write(&manifest_path, &bytes)"),
-        ("issue", "dry-run 调 build_full_sync_target_plan → compute_local_project_lifecycle_candidate，会落盘 manifest.sync.json，违反 planner 无副作用契约"),
-    ];
-    assert!(!evidence.is_empty());
+        ("issue", "dry-run 调 build_full_sync_target_plan → compute_local_project_lifecycle_candidate，会落盘 manifest.sync.json，违反 planner 无副作用契约")];
 }
 
 // ══ 问题5：DeleteLocalProject/RestoreProject 无 CAS ══
@@ -319,16 +311,13 @@ fn problem4_planner_writes_file_breaking_dry_run_static_evidence() {
 ///   - 对比 LiveProject (line 659-770) 和 DeleteRemoteProject (line 789-866) 都调 apply_lifecycle_record。
 #[test]
 fn problem5_delete_local_and_restore_have_no_cas_static_evidence() {
-    let evidence = vec![
-        ("file", "core/writer_core/src/sync/full_sync.rs"),
+    let _evidence = [("file", "core/writer_core/src/sync/full_sync.rs"),
         ("delete_local_branch", "run_transfer DeleteLocalProject (line 771-788): 直接返回 NoChanges + DeleteProject action，无 apply_lifecycle_record CAS"),
         ("restore_branch", "run_transfer RestoreProject (line 868+): 直接 download_remote_to_staging，无 apply_lifecycle_record CAS"),
         ("contrast_live_project", "LiveProject (line 659-770) 调 apply_lifecycle_record (line 703)"),
         ("contrast_delete_remote", "DeleteRemoteProject (line 789-866) 调 apply_lifecycle_record (line 813)"),
         ("issue", "Prepare 读一次 snapshot → planner 决定 → Transfer 直接执行。并发下另一设备写入新 record，本机按过期 snapshot 做破坏性/恢复动作"),
-        ("residual_issue", "LiveProject 正文上传后若 publish 发现最新 winner 是 Delete，本轮留下的远端残留需清理（line 713-728 只返回 DeleteProject action，不清理远端残留）"),
-    ];
-    assert!(!evidence.is_empty());
+        ("residual_issue", "LiveProject 正文上传后若 publish 发现最新 winner 是 Delete，本轮留下的远端残留需清理（line 713-728 只返回 DeleteProject action，不清理远端残留）")];
 }
 
 // ══ 问题6：dry-run 和 catalog 校验没共用正式语义 ══
@@ -342,14 +331,11 @@ fn problem5_delete_local_and_restore_have_no_cas_static_evidence() {
 /// - facade/sync_ops.rs perform_full_sync_dry_run (line 58-158) 内部调 dry_run_load_remote_catalog 做网络 IO。
 #[test]
 fn problem6_dry_run_network_io_in_core_write_lock_static_evidence() {
-    let evidence = vec![
-        ("file_api", "core/writer_core/src/api/sync_api.rs"),
+    let _evidence = [("file_api", "core/writer_core/src/api/sync_api.rs"),
         ("dry_run_in_lock", "perform_full_sync_dry_run (line 213-222): self.core_write().perform_full_sync_dry_run(...) 整个在锁内"),
         ("formal_outside_lock", "perform_full_sync (line 235-328): load_remote_catalog 在 core_write 锁外 (line 259-271)"),
         ("file_facade", "core/writer_core/src/facade/sync_ops.rs"),
-        ("dry_run_does_network", "perform_full_sync_dry_run (line 58-158) 调 dry_run_load_remote_catalog (line 164-189) 做网络 IO"),
-    ];
-    assert!(!evidence.is_empty());
+        ("dry_run_does_network", "perform_full_sync_dry_run (line 58-158) 调 dry_run_load_remote_catalog (line 164-189) 做网络 IO")];
 }
 
 /// 重现（静态证据）：dry-run catalog 读取失败时伪装成空 catalog + warning，
@@ -358,10 +344,11 @@ fn problem6_dry_run_network_io_in_core_write_lock_static_evidence() {
 /// 证据：facade/sync_ops.rs dry_run_load_remote_catalog (line 164-189)：
 ///   - create_sync_provider_for_plan 失败 → 返回空 catalog (line 176)；
 ///   - load_remote_catalog 失败 → 返回空 catalog (line 186)。
+///
 /// 对比正式同步 (api/sync_api.rs line 256-270) catalog 失败返回 RecoverableError。
 #[test]
 fn problem6_dry_run_catalog_failure_fakes_empty_catalog_static_evidence() {
-    let evidence = vec![
+    let _evidence = [
         ("file", "core/writer_core/src/facade/sync_ops.rs"),
         ("dry_run_load_remote_catalog", "line 164-189"),
         (
@@ -381,7 +368,6 @@ fn problem6_dry_run_catalog_failure_fakes_empty_catalog_static_evidence() {
             "dry-run 伪装空 catalog 会隐藏 remote-only/delete target，planner 误判'远端无记录'",
         ),
     ];
-    assert!(!evidence.is_empty());
 }
 
 /// 重现（静态证据）：非法 remote target_id 只 skip + warn + continue，
@@ -392,12 +378,9 @@ fn problem6_dry_run_catalog_failure_fakes_empty_catalog_static_evidence() {
 ///   - line 274-283: remote-only target 非法 target_id → log::warn + continue。
 #[test]
 fn problem6_invalid_target_id_only_skip_warn_static_evidence() {
-    let evidence = vec![
-        ("file", "core/writer_core/src/sync/full_sync.rs"),
+    let _evidence = [("file", "core/writer_core/src/sync/full_sync.rs"),
         ("pending_invalid_skip", "build_full_sync_target_plan line 221-230: parse_project_target_id 失败 → log::warn + continue"),
         ("remote_only_invalid_skip", "build_full_sync_target_plan line 274-283: parse_project_target_id 失败 → log::warn + continue"),
         ("issue", "非法 target_id 只 skip+warn，不把整体 catalog 标记为 invalid，后续同步可能基于不完整 catalog 做决策"),
-        ("existing_test", "已有 q6_build_plan_skips_invalid_remote_target_id (line 2500) 和 q6_build_plan_skips_invalid_pending_deleted_target_id (line 2561) 验证 skip 行为"),
-    ];
-    assert!(!evidence.is_empty());
+        ("existing_test", "已有 q6_build_plan_skips_invalid_remote_target_id (line 2500) 和 q6_build_plan_skips_invalid_pending_deleted_target_id (line 2561) 验证 skip 行为")];
 }

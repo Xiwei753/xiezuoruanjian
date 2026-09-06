@@ -861,6 +861,11 @@ pub struct TargetSyncResult {
 ///
 /// #645 评论 5504296097C 问题3：`DeleteProject` / `ReplaceProject` 携带
 /// `expected_local_lww` guard，Commit 时再确认本地没有前进。
+///
+/// #645 评论 5504296097 问题2 修复：`expected_local_lww` 是**非 Option** 的
+/// `LiveTargetLwwSerde`。破坏性 lifecycle action（DeleteProject / ReplaceProject）
+/// 必须携带 guard — 不允许"无 guard 也允许删/替换"。Transfer 阶段生成这些 action
+/// 时必须先成功获取当前 local LWW（snapshot 失败 → Retry，不生成 action）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalLifecycleCommitAction {
@@ -871,10 +876,10 @@ pub enum LocalLifecycleCommitAction {
     DeleteProject {
         /// 被删除的 project id。
         project_id: String,
-        /// #645 评论 5504296097 问题3：Commit 时再确认本地没有前进的 guard。
-        /// `None` 表示无 guard（plan 阶段无 live_lww），Commit 不做 guard 检查。
-        #[serde(default)]
-        expected_local_lww: Option<LiveTargetLwwSerde>,
+        /// #645 评论 5504296097 问题2 修复：Commit 时再确认本地没有前进的 guard。
+        /// 非 Option — 破坏性 action 必须携带 guard，Commit 严格比较
+        /// `current_local == expected_local_lww`，其他任何情况都拒绝执行。
+        expected_local_lww: LiveTargetLwwSerde,
     },
     /// 预留：RestoreProject 在 Commit 阶段恢复本地 project。
     RestoreProject {
@@ -890,9 +895,9 @@ pub enum LocalLifecycleCommitAction {
     ReplaceProject {
         /// 被替换的 project id。
         project_id: String,
-        /// #645 评论 5504296097 问题3：Commit 时再确认本地没有前进的 guard。
-        #[serde(default)]
-        expected_local_lww: Option<LiveTargetLwwSerde>,
+        /// #645 评论 5504296097 问题2 修复：Commit 时再确认本地没有前进的 guard。
+        /// 非 Option — 破坏性 action 必须携带 guard。
+        expected_local_lww: LiveTargetLwwSerde,
     },
 }
 
@@ -1229,6 +1234,9 @@ pub enum DeletedTargetResolution {
 /// - `DeleteLocalProject`：本地 live project，远端 delete tombstone 更新 → 不上传，本地 project 应删除。
 /// - `RestoreProject`：本地 pending delete，远端 upsert 更新 → 下载远端恢复本地 project。
 /// - `Retry`：无法决策（catalog/manifest 读取失败）→ 不删不恢复，pending 保留。
+/// - `RemoteCleanupProject`：#645 评论 5504296097 问题3 修复 — 远端残留清理重试。
+///   上一轮 authoritative Delete 清 prefix 失败时记录 `PendingRemoteTargetCleanup`，
+///   下一轮 Prepare 加载 pending 生成此 target，重试 `delete_all_remote_objects`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlannedTargetKind {
@@ -1238,6 +1246,8 @@ pub enum PlannedTargetKind {
     DeleteLocalProject,
     RestoreProject,
     Retry,
+    /// #645 评论 5504296097 问题3 修复：远端残留清理重试。
+    RemoteCleanupProject,
 }
 
 impl PlannedTargetKind {
@@ -1245,26 +1255,30 @@ impl PlannedTargetKind {
     ///
     /// - `App` → `"app"`
     /// - `LiveProject` / `DeleteLocalProject` → `"project"`（都是 live project target）
-    /// - `DeleteRemoteProject` / `RestoreProject` / `Retry` → `"deleted_project"`（都是 pending delete target）
+    /// - `DeleteRemoteProject` / `RestoreProject` / `Retry` / `RemoteCleanupProject`
+    ///   → `"deleted_project"`（都是 pending delete / cleanup target）
     pub fn as_target_kind_str(&self) -> &'static str {
         match self {
             PlannedTargetKind::App => "app",
             PlannedTargetKind::LiveProject | PlannedTargetKind::DeleteLocalProject => "project",
             PlannedTargetKind::DeleteRemoteProject
             | PlannedTargetKind::RestoreProject
-            | PlannedTargetKind::Retry => "deleted_project",
+            | PlannedTargetKind::Retry
+            | PlannedTargetKind::RemoteCleanupProject => "deleted_project",
         }
     }
 
     /// 是否为待删除 target（pending delete target）。
     ///
-    /// `DeleteRemoteProject` / `RestoreProject` / `Retry` 为 true（都是 pending delete target）。
+    /// `DeleteRemoteProject` / `RestoreProject` / `Retry` / `RemoteCleanupProject`
+    /// 为 true（都是 pending delete / cleanup target）。
     pub fn is_pending_deleted(&self) -> bool {
         matches!(
             self,
             PlannedTargetKind::DeleteRemoteProject
                 | PlannedTargetKind::RestoreProject
                 | PlannedTargetKind::Retry
+                | PlannedTargetKind::RemoteCleanupProject
         )
     }
 }

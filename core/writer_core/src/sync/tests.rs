@@ -3185,7 +3185,7 @@ mod tests {
     fn test_lww_sync_with_memory_provider_local_delete_propagates() {
         // 场景：本地删除文件 → 远端删除。
         // 本地 sync state 记录 known_files["project.json"]，但本地文件已删，
-        // build_local_records 生成 delete 墓碑。远端 manifest 记录 upsert
+        // snapshot_local_records_read_only 生成 delete 墓碑。远端 manifest 记录 upsert
         // （updated_at_ms 较小），LWW 本地 delete 时间戳获胜 →
         // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
         // #645 评论 5504296097 问题1.2修复：必须有 tombstone 才能生成 delete record

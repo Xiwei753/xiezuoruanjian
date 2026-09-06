@@ -1471,6 +1471,41 @@ fn q1_commit_full_sync_executes_delete_project_action() {
     );
 
     // 构造 transfer_result：一个 target 携带 DeleteProject action。
+    // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
+    // 破坏性 action 必须携带 guard。用 snapshot 算出真实 current lww，
+    // 让 guard 通过（current == expected）。
+    let expected_lww = {
+        let records = crate::sync::lww::snapshot_local_records_read_only(
+            &project_root,
+            crate::sync::types::SyncScope::Project,
+            "test-device",
+        )
+        .expect("snapshot must succeed on freshly created project");
+        let winner = records.values().max_by(|a, b| {
+            let a_time = if a.op == "delete" {
+                a.deleted_at_ms.unwrap_or(a.updated_at_ms)
+            } else {
+                a.updated_at_ms
+            };
+            let b_time = if b.op == "delete" {
+                b.deleted_at_ms.unwrap_or(b.updated_at_ms)
+            } else {
+                b.updated_at_ms
+            };
+            a_time
+                .cmp(&b_time)
+                .then_with(|| a.device_id.cmp(&b.device_id))
+        });
+        let w = winner.expect("freshly created project must have at least one record");
+        crate::sync::types::LiveTargetLwwSerde {
+            lww_time_ms: if w.op == "delete" {
+                w.deleted_at_ms.unwrap_or(w.updated_at_ms)
+            } else {
+                w.updated_at_ms
+            },
+            device_id: w.device_id.clone(),
+        }
+    };
     let targets = vec![crate::sync::types::TargetSyncResult {
         target_kind: "project".to_string(),
         project_id: Some(project_id.clone()),
@@ -1479,7 +1514,7 @@ fn q1_commit_full_sync_executes_delete_project_action() {
         deleted_resolution: None,
         local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
             project_id: project_id.clone(),
-            expected_local_lww: None,
+            expected_local_lww: expected_lww.clone(),
         },
     }];
     let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };
@@ -1513,6 +1548,41 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
     let project_id = project.id.clone();
 
     // 构造 transfer_result：DeleteProject action（RemoteLifecycle origin 由 commit 内部设置）。
+    // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option。
+    // 用 snapshot 算出真实 current lww，让 guard 通过。
+    let project_root = core.project_root(&project_id);
+    let expected_lww = {
+        let records = crate::sync::lww::snapshot_local_records_read_only(
+            &project_root,
+            crate::sync::types::SyncScope::Project,
+            "test-device",
+        )
+        .expect("snapshot must succeed on freshly created project");
+        let winner = records.values().max_by(|a, b| {
+            let a_time = if a.op == "delete" {
+                a.deleted_at_ms.unwrap_or(a.updated_at_ms)
+            } else {
+                a.updated_at_ms
+            };
+            let b_time = if b.op == "delete" {
+                b.deleted_at_ms.unwrap_or(b.updated_at_ms)
+            } else {
+                b.updated_at_ms
+            };
+            a_time
+                .cmp(&b_time)
+                .then_with(|| a.device_id.cmp(&b.device_id))
+        });
+        let w = winner.expect("freshly created project must have at least one record");
+        crate::sync::types::LiveTargetLwwSerde {
+            lww_time_ms: if w.op == "delete" {
+                w.deleted_at_ms.unwrap_or(w.updated_at_ms)
+            } else {
+                w.updated_at_ms
+            },
+            device_id: w.device_id.clone(),
+        }
+    };
     let targets = vec![crate::sync::types::TargetSyncResult {
         target_kind: "project".to_string(),
         project_id: Some(project_id.clone()),
@@ -1521,7 +1591,7 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
         deleted_resolution: None,
         local_lifecycle_action: crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
             project_id: project_id.clone(),
-            expected_local_lww: None,
+            expected_local_lww: expected_lww.clone(),
         },
     }];
     let transfer_result = crate::sync::full_sync::FullSyncTransferResult { targets };

@@ -156,6 +156,7 @@ pub struct ProjectDeleteJournal {
     /// - `User` → 推进到 `RemoteDeleteQueued`（写 PendingDeletedTarget）；
     /// - `RemoteLifecycle` → 跳过 `RemoteDeleteQueued`，直接 `Completed`
     ///   （远端已删，不反向排队删远端）。
+    ///
     /// `#[serde(default)]` 保持向后兼容：旧 journal 反序列化为 `User`。
     #[serde(default)]
     pub origin: crate::project::ProjectDeleteOrigin,

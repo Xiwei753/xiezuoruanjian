@@ -43,28 +43,24 @@ pub(crate) enum ReplaceProjectGuardResult {
 /// #645 评论 5504296097 问题2 修复：检查 ReplaceProject guard。
 ///
 /// 用 `snapshot_local_records_read_only()` 重新计算当前 local target LWW，
-/// 与 `expected_local_lww` 比较：
+/// 与 `expected_local_lww` 严格比较：
 /// - `current_local == expected_local_lww` → `Ok`；
-/// - `current_local > expected_local_lww` → `Err(LocalAdvanced)`；
-/// - snapshot 失败 → `Err(SnapshotFailed)`。
+/// - 其他任何情况（`current_local > expected` / `current_local < expected` /
+///   snapshot 失败）→ `Err`。
 ///
-/// `expected` 为 `None` 表示 plan 阶段无 live_lww，跳过 guard（兼容旧路径）。
+/// #645 评论 5504296097 问题2 修复：`expected` 改为非 Option — 破坏性 action
+/// 必须携带 guard，不再有"无 guard 也允许删/替换"的口子。
 pub(crate) fn check_replace_project_guard(
     live_root: &Path,
-    expected: Option<&crate::sync::full_sync::LiveTargetLww>,
+    expected: &crate::sync::full_sync::LiveTargetLww,
 ) -> ReplaceProjectGuardResult {
     use crate::sync::full_sync::LiveTargetLww;
     use crate::sync::types::SyncScope;
 
-    let Some(expected_lww) = expected else {
-        // plan 阶段无 live_lww → 不做 guard 检查（首次 replace 等）。
-        return ReplaceProjectGuardResult::Ok;
-    };
-
     let records = match crate::sync::lww::snapshot_local_records_read_only(
         live_root,
         SyncScope::Project,
-        &expected_lww.device_id,
+        &expected.device_id,
     ) {
         Ok(records) => records,
         Err(e) => {
@@ -88,36 +84,39 @@ pub(crate) fn check_replace_project_guard(
         },
         None => LiveTargetLww {
             lww_time_ms: 0,
-            device_id: expected_lww.device_id.clone(),
+            device_id: expected.device_id.clone(),
         },
     };
 
-    // current_local == expected → Ok；current_local > expected → Err。
-    let equal = current_lww.lww_time_ms == expected_lww.lww_time_ms
-        && current_lww.device_id == expected_lww.device_id;
+    // #645 评论 5504296097 问题2 修复：严格相等才放行，其他任何情况都拒绝。
+    // 不再有 current < expected → warn+Ok 的口子，也不再有 None → Ok 的口子。
+    let equal = current_lww.lww_time_ms == expected.lww_time_ms
+        && current_lww.device_id == expected.device_id;
     if equal {
         return ReplaceProjectGuardResult::Ok;
     }
 
-    // current > expected？（时间更大，或时间相同 device_id 更大）
-    let current_advances = current_lww.lww_time_ms > expected_lww.lww_time_ms
-        || (current_lww.lww_time_ms == expected_lww.lww_time_ms
-            && current_lww.device_id > expected_lww.device_id);
+    let current_advances = current_lww.lww_time_ms > expected.lww_time_ms
+        || (current_lww.lww_time_ms == expected.lww_time_ms
+            && current_lww.device_id > expected.device_id);
     if current_advances {
         return ReplaceProjectGuardResult::Err(ReplaceProjectGuardError::LocalAdvanced {
-            expected: expected_lww.clone(),
+            expected: expected.clone(),
             current: current_lww,
         });
     }
 
-    // current < expected（plan 阶段的 lww 比现在还新？不应发生，但保守放行）。
+    // current < expected（plan 阶段的 lww 比现在还新？不应发生）→ 严格拒绝。
     log::warn!(
         "[sync] check_replace_project_guard: current lww ({:?}) older than expected ({:?}) \
-         — allowing replace (unexpected but safe)",
+         — rejecting (strict equality required)",
         current_lww,
-        expected_lww
+        expected
     );
-    ReplaceProjectGuardResult::Ok
+    ReplaceProjectGuardResult::Err(ReplaceProjectGuardError::LocalAdvanced {
+        expected: expected.clone(),
+        current: current_lww,
+    })
 }
 
 /// #645 评论 5504296097 问题2 修复：计算 manifest record 的 LWW 时间。
@@ -284,14 +283,24 @@ mod tests {
             lww_time_ms: 0,
             device_id: "dev-1".to_string(),
         };
-        let result = check_replace_project_guard(live.path(), Some(&expected));
+        let result = check_replace_project_guard(live.path(), &expected);
         assert!(matches!(result, ReplaceProjectGuardResult::Ok));
     }
 
+    /// #645 评论 5504296097 问题2 修复：current < expected 也必须拒绝（严格相等）。
     #[test]
-    fn replace_guard_none_expected_passes() {
+    fn replace_guard_current_older_rejects() {
         let live = TempDir::new().unwrap();
-        let result = check_replace_project_guard(live.path(), None);
-        assert!(matches!(result, ReplaceProjectGuardResult::Ok));
+        // 空 live → current lww = (0, "dev-1")。
+        // expected = (100, "dev-1") → current < expected → 严格拒绝。
+        let expected = crate::sync::full_sync::LiveTargetLww {
+            lww_time_ms: 100,
+            device_id: "dev-1".to_string(),
+        };
+        let result = check_replace_project_guard(live.path(), &expected);
+        assert!(matches!(
+            result,
+            ReplaceProjectGuardResult::Err(ReplaceProjectGuardError::LocalAdvanced { .. })
+        ));
     }
 }

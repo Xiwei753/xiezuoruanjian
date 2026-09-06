@@ -40,6 +40,8 @@ pub(crate) mod full_sync_utils;
 pub mod lww;
 /// #645 评论 5504296097 问题1：待删除同步 target 的持久化（provider-neutral）。
 pub mod pending_deleted;
+/// #645 评论 5504296097 问题3 修复：待清理远端残留的持久化（provider-neutral）。
+pub mod pending_remote_cleanup;
 pub mod provider;
 pub mod scanner;
 pub mod service;

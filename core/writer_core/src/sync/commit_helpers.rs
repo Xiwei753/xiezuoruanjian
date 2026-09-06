@@ -325,7 +325,9 @@ pub(crate) fn apply_staging_commits_for_targets(
                 let staging_root = run.staging_root();
 
                 // 1. guard 检查：用 snapshot_local_records_read_only 重新计算当前
-                //    local target LWW，与 expected_local_lww 比较。
+                //    local target LWW，与 expected_local_lww 严格比较。
+                // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
+                // 破坏性 action 必须携带 guard。
                 let expected_lww =
                     transfer_targets
                         .get(idx)
@@ -333,17 +335,29 @@ pub(crate) fn apply_staging_commits_for_targets(
                             crate::sync::types::LocalLifecycleCommitAction::ReplaceProject {
                                 expected_local_lww,
                                 ..
-                            } => expected_local_lww.as_ref().map(|s| {
-                                crate::sync::full_sync::LiveTargetLww {
-                                    lww_time_ms: s.lww_time_ms,
-                                    device_id: s.device_id.clone(),
-                                }
+                            } => Some(crate::sync::full_sync::LiveTargetLww {
+                                lww_time_ms: expected_local_lww.lww_time_ms,
+                                device_id: expected_local_lww.device_id.clone(),
                             }),
                             _ => None,
                         });
+                let expected_lww = match expected_lww {
+                    Some(lww) => lww,
+                    None => {
+                        // 不应发生：TargetCommitMode::ReplaceProject 只对 ReplaceProject action 设置。
+                        let msg =
+                            "ReplaceProject commit mode but no ReplaceProject action with guard"
+                                .to_string();
+                        log::warn!("Staging commit: {} for run {}", msg, run.run_id());
+                        target_results.push(TargetCommitResult::Failed(msg));
+                        target_conflicts.push(Vec::new());
+                        run.cleanup();
+                        continue;
+                    }
+                };
                 match crate::sync::staging::replace::check_replace_project_guard(
                     live_root,
-                    expected_lww.as_ref(),
+                    &expected_lww,
                 ) {
                     crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
                         // guard 通过，继续执行 replace plan。

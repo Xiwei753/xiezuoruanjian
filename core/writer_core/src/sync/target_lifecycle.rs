@@ -159,8 +159,10 @@ pub fn load_remote_catalog(
 /// **绝不**写远端。dry-run 安全调用。正式 sync 在确认 `version == __nonexistent__`
 /// 后调 [`persist_bootstrap_catalog`] 把合成 catalog 落盘。
 ///
-/// 远端 manifest 不存在或解析失败 → 用 fallback (time=0, device="legacy") 合成 Upsert，
-/// 不跳过该 project（legacy 远端可能只有 project.json 没有 manifest）。
+/// #645 评论 5504296097 问题4 修复：远端 manifest 不存在 / 损坏 / 非法 project id
+/// 不再 fallback 或 warn+skip。直接返回 `Err`（`RecoverableError`），不写
+/// `targets.sync.json`，不把这个 Project 写成合法 Upsert。让真实远端 target
+/// 不会静默消失，也不会被伪造的 `(0, "legacy")` LWW 错误地建成合法 record。
 pub fn discover_legacy_remote_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
@@ -190,17 +192,14 @@ pub fn discover_legacy_remote_catalog(
     project_ids.sort();
 
     // 3. 对每个 project 读 manifest，合成 Upsert record。
+    // #645 评论 5504296097 问题4 修复：非法 project id 不 skip，直接返回 Err。
+    // read_legacy_project_lww 返回 Err 时整个 bootstrap 返回 Err。
     let mut records = Vec::with_capacity(project_ids.len());
     for project_id in &project_ids {
         let target_id = format!("projects/{project_id}");
-        // 校验 project id segment（防路径穿越）。
-        if let Err(e) = parse_project_target_id(&target_id) {
-            log::warn!(
-                "[sync] discover_legacy_remote_catalog: skip invalid project id {project_id:?}: {e}"
-            );
-            continue;
-        }
-        let (updated_at_ms, device_id) = read_legacy_project_lww(provider, project_id);
+        // 校验 project id segment（防路径穿越）。非法 → Err（不 skip）。
+        parse_project_target_id(&target_id)?;
+        let (updated_at_ms, device_id) = read_legacy_project_lww(provider, project_id)?;
         records.push(TargetLifecycleRecord::upsert(
             &target_id,
             &target_id,
@@ -217,32 +216,40 @@ pub fn discover_legacy_remote_catalog(
     })
 }
 
-/// #645 评论 5504296097 问题6：读 legacy project 的 manifest，提取 LWW 时间和 device_id。
+/// #645 评论 5504296097 问题4 修复：读 legacy project 的 manifest，提取 LWW 时间和 device_id。
 ///
 /// 远端 manifest 路径：`projects/<id>/app-meta/sync/manifest.sync.json`。
-/// manifest 不存在或解析失败 → 返回 `(0, "legacy")` fallback。
-/// manifest 存在 → 取所有 file record 的最大 `(updated_at_ms, device_id)`。
-fn read_legacy_project_lww(provider: &dyn SyncProvider, project_id: &str) -> (i64, String) {
+///
+/// #645 评论 5504296097 问题4 修复：不再伪造 `(0, "legacy")` fallback。
+/// - manifest 存在且合法 → 取所有 file record 的最大 `(updated_at_ms, device_id)`；
+/// - manifest 不存在 / 损坏 / records 无法可靠判断 → 返回 `Err`，
+///   调用方（`discover_legacy_remote_catalog`）应让整个 bootstrap 返回
+///   `RecoverableError`，不写 `targets.sync.json`，不把这个 Project 写成合法 Upsert。
+fn read_legacy_project_lww(
+    provider: &dyn SyncProvider,
+    project_id: &str,
+) -> crate::error::Result<(i64, String)> {
     let manifest_path = format!("projects/{project_id}/app-meta/sync/manifest.sync.json");
-    let obj = match provider.read(&manifest_path) {
-        Ok(Some(obj)) => obj,
-        _ => {
-            // manifest 不存在 → fallback。
-            return (0, "legacy".to_string());
-        }
+    let obj = provider.read(&manifest_path).map_err(crate::Error::from)?;
+    let Some(obj) = obj else {
+        // manifest 不存在 → 无法可靠判断 LWW → Err（不伪造 (0, "legacy")）。
+        return Err(crate::Error::Io(std::io::Error::other(format!(
+            "read_legacy_project_lww: manifest not found for project {project_id} \
+             — cannot fabricate LWW"
+        ))));
     };
-    let manifest: crate::sync::types::SyncManifest = match serde_json::from_slice(&obj.content) {
-        Ok(m) => m,
-        Err(e) => {
-            log::warn!(
-                "[sync] read_legacy_project_lww: parse manifest for {project_id} failed: {e} — using fallback"
-            );
-            return (0, "legacy".to_string());
-        }
-    };
-    // 取所有 record 的最大 (updated_at_ms, device_id)。
+    let manifest: crate::sync::types::SyncManifest =
+        serde_json::from_slice(&obj.content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "read_legacy_project_lww: parse manifest for {project_id} failed: {e} \
+                 — cannot fabricate LWW"
+            )))
+        })?;
+    // 取所有 record 的最大 (lww_time, device_id)。
+    // manifest 存在但 files 为空 → 仍返回合法 (0, "") 表示"无记录"，
+    // 这是真实事实（空 manifest），不是伪造。
     let mut best_time: i64 = 0;
-    let mut best_device = "legacy".to_string();
+    let mut best_device = String::new();
     for rec in &manifest.files {
         let rec_time = match rec.deleted_at_ms {
             Some(t) if rec.op == "delete" => t,
@@ -253,7 +260,7 @@ fn read_legacy_project_lww(provider: &dyn SyncProvider, project_id: &str) -> (i6
             best_device = rec.device_id.clone();
         }
     }
-    (best_time, best_device)
+    Ok((best_time, best_device))
 }
 
 /// #645 评论 5504296097 问题5：持久化 bootstrap catalog（正式 sync 才调用）。
@@ -397,7 +404,7 @@ pub fn write_catalog_once(
 /// #645 评论 5504296097 问题3：用 [`write_catalog_once`] 单次 CAS 原语，
 /// 不再用 [`write_remote_catalog`] 的内部 retry（会把 PreconditionFailed 吞成 Ok，
 /// 外层看不到冲突误判 Applied）。CAS 冲突由本函数重读 snapshot + 重新判定 winner 处理。
-#[allow(clippy::excessive_nesting)]
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 pub fn apply_lifecycle_record(
     provider: &dyn SyncProvider,
     snapshot: &RemoteTargetCatalogSnapshot,
@@ -474,7 +481,7 @@ pub fn apply_lifecycle_record(
                     return TargetLifecycleApplyResult::Applied(persisted);
                 }
                 // 持久化后该 target_id record 不是 candidate winner → 远端已有更新。
-                let remote_rec = persisted_rec.map(|r| r.clone()).unwrap_or_else(|| {
+                let remote_rec = persisted_rec.cloned().unwrap_or_else(|| {
                     // 防御性：远端无 record 不应发生（CAS 写成功），构造 Retry。
                     TargetLifecycleRecord::upsert(
                         &current_candidate.target_id,

@@ -85,9 +85,11 @@ pub(crate) fn scan_for_sync(
 /// #645 评论 5504296097 问题1：调用 `snapshot_local_records_read_only` 获取只读
 /// local record 投影，保持 `build_sync_plan` 与 LWW `execute_lww_sync_attempt`
 /// 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
-/// snapshot 失败（known file 消失且无 tombstone 等）时退化为 entries-only 推导，
-/// 不改变 plan 的可见行为（snapshot records 的 upsert content_hash 总等于
-/// entry.file_hash，详见 `snapshot_local_records_read_only` 实现）。
+///
+/// #645 评论 5504296097 问题1 修复：snapshot 失败（known file 消失且无 tombstone、
+/// manifest 损坏等）不再 fallback 到 entries-only，直接返回 Err。fallback 会让
+/// build_sync_plan 与 execute_lww_sync_attempt 使用两套 local record 规则，
+/// 且会静默吞掉"无法可靠确认本地状态"的错误。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -104,19 +106,10 @@ pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Resu
     let state = SyncService::load_sync_state_read_only(sync_root, None).unwrap_or_default();
     let is_first_sync = state.known_files.is_empty();
 
-    // #645 评论 5504296097 问题1：用 snapshot_local_records_read_only 获取只读 records，
-    // 与 LWW execute attempt 同源。snapshot 失败时退化为空 records，仅用 entries 推导。
+    // #645 评论 5504296097 问题1 修复：用 snapshot_local_records_read_only 获取只读 records，
+    // 与 LWW execute attempt 同源。snapshot 失败直接返回 Err（不再 fallback）。
     let snapshot_records =
-        match crate::sync::lww::snapshot_local_records_read_only(sync_root, scope, "") {
-            Ok(records) => records,
-            Err(e) => {
-                log::debug!(
-                    "[sync] build_sync_plan: snapshot_local_records_read_only failed, \
-                 falling back to entries-only: {e}"
-                );
-                std::collections::HashMap::new()
-            }
-        };
+        crate::sync::lww::snapshot_local_records_read_only(sync_root, scope, "")?;
 
     let mut local_files = std::collections::HashSet::new();
 
@@ -129,8 +122,7 @@ pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Resu
         if entry.sync_kind == SyncKind::Upload || entry.sync_kind == SyncKind::ConflictCandidate {
             local_files.insert(entry.relative_path.clone());
             let known_hash_opt = state.known_files.get(&entry.relative_path);
-            // 优先用 snapshot records 的 content_hash（与 LWW execute attempt 同源）；
-            // snapshot 失败时退化为 entry.file_hash（行为与旧实现一致）。
+            // 用 snapshot records 的 content_hash（与 LWW execute attempt 同源）。
             let effective_hash = snapshot_records
                 .get(&entry.relative_path)
                 .map(|r| r.content_hash.as_str())

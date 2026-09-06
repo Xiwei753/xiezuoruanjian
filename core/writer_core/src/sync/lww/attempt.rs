@@ -14,9 +14,7 @@ use crate::sync::SyncService;
 use std::path::Path;
 
 use super::compare::{resolve_path_decision, PathDecision};
-use super::manifest::{
-    build_local_records, build_remote_records, lww_record_time, SYNC_MANIFEST_PATH,
-};
+use super::manifest::{build_remote_records, lww_record_time, SYNC_MANIFEST_PATH};
 use super::transfer::{
     delete_remote_files, download_pending_take_remote, download_remote_files,
     fetch_remote_manifest, fetch_remote_tree, move_to_trash, save_conflict_copy,
@@ -64,37 +62,23 @@ pub(crate) fn execute_lww_sync_attempt(
     let remote_manifest = fetch_remote_manifest(provider, remote_prefix, &remote_tree_files)?;
 
     log::debug!("[sync] lww step=正在比较本地和远端");
-    let local_entries = scan_for_sync(sync_root, scope)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
 
-    // #645 评论 5504296097 问题1.1：读 local manifest 获取 per-file 真实 winner device_id。
-    let local_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
-    let old_manifest_records: std::collections::HashMap<String, ManifestFileRecord> =
-        if local_manifest_path.exists() {
-            match std::fs::read(&local_manifest_path) {
-                Ok(content) => match serde_json::from_slice::<SyncManifest>(&content) {
-                    Ok(manifest) => manifest
-                        .files
-                        .into_iter()
-                        .map(|r| (r.path.clone(), r))
-                        .collect(),
-                    Err(_) => std::collections::HashMap::new(),
-                },
-                Err(_) => std::collections::HashMap::new(),
-            }
-        } else {
-            std::collections::HashMap::new()
-        };
-
-    // #644 评论 5473105049 第5节：local/remote record 构造委托给 manifest.rs。
-    let local_records = build_local_records(
+    // #645 评论 5504296097 问题1 修复：execute_lww_sync_attempt 直接调用
+    // snapshot_local_records_read_only 获取 local_records，不再自己读 old manifest
+    // + build_local_records。snapshot_local_records_read_only 是真正的只读 local
+    // record 投影 helper，保留 per-file LWW（含真实 winner device_id），绝不伪造
+    // now_ms 作为删除时间。manifest 损坏、missing known file 无 tombstone 等情况
+    // 直接返回 Err，让上层 Retry。
+    //
+    // 注意：snapshot_local_records_read_only 内部用 load_sync_state_read_only 加载
+    // state，不依赖传入的 state。传入的 state 仍用于 pending_take_remote /
+    // known_files / conflicted_files 等后续处理。
+    let local_records = crate::sync::lww::manifest::snapshot_local_records_read_only(
         sync_root,
-        &local_entries,
-        state,
         scope,
-        now_ms,
-        &old_manifest_records,
-    );
+        &state.device_id,
+    )?;
     let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope);
 
     // Build a quick-lookup set of unresolved conflict paths from the persisted state.

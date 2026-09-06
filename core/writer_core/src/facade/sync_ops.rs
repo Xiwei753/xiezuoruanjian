@@ -95,6 +95,11 @@ impl super::WriterCore {
 
         // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
         // 不复制一套 target 枚举逻辑。
+        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups，
+        // 让上一轮 cleanup 失败的远端残留能在本轮重试。
+        let pending_remote_cleanups =
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)
+                .unwrap_or_default();
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
@@ -104,6 +109,7 @@ impl super::WriterCore {
             &sync_policy,
             false,
             &device_id,
+            &pending_remote_cleanups,
         );
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
@@ -186,6 +192,10 @@ impl super::WriterCore {
             .map(|info| info.device_id)
             .unwrap_or_default();
 
+        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        let pending_remote_cleanups =
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
+                .unwrap_or_default();
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
             app_data_root,
             projects_root,
@@ -195,6 +205,7 @@ impl super::WriterCore {
             &sync_policy,
             false,
             &device_id,
+            &pending_remote_cleanups,
         );
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
@@ -364,6 +375,10 @@ impl super::WriterCore {
 
         // #645 评论 5504296097 问题1：调用共享 planner，传入真实 remote_catalog
         // 做 target-level LWW 决策。
+        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        let pending_remote_cleanups =
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)
+                .unwrap_or_default();
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
@@ -373,6 +388,7 @@ impl super::WriterCore {
             &sync_policy,
             force_sync,
             &device_id,
+            &pending_remote_cleanups,
         );
 
         // #645 评论 5504296097 第2点：不再携带 workspace_git_layout。
@@ -415,6 +431,10 @@ impl super::WriterCore {
             .map(|info| info.device_id)
             .unwrap_or_default();
 
+        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        let pending_remote_cleanups =
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
+                .unwrap_or_default();
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             app_data_root,
             projects_root,
@@ -424,6 +444,7 @@ impl super::WriterCore {
             &sync_policy,
             force_sync,
             &device_id,
+            &pending_remote_cleanups,
         );
 
         Ok(FullSyncPlan {
@@ -646,48 +667,49 @@ impl super::WriterCore {
             {
                 // #645 评论 5504296097 问题2 修复：DeleteProject guard —
                 // 用 snapshot_local_records_read_only 重新计算当前 local target LWW，
-                // 与 expected_local_lww 比较。current_local > expected → 不动 live。
-                if let Some(expected_serde) = expected_local_lww {
-                    let expected_lww = crate::sync::full_sync::LiveTargetLww {
-                        lww_time_ms: expected_serde.lww_time_ms,
-                        device_id: expected_serde.device_id.clone(),
-                    };
-                    let project_root = self.projects_root.join(project_id);
-                    match crate::sync::staging::replace::check_replace_project_guard(
-                        &project_root,
-                        Some(&expected_lww),
-                    ) {
-                        crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
-                            // guard 通过，继续执行删除。
-                        }
-                        crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
-                            let msg = match e {
-                                crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
-                                    expected,
-                                    current,
-                                } => format!(
-                                    "DeleteProject guard failed: local advanced \
-                                     (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
-                                     — not touching live",
-                                    expected.lww_time_ms,
-                                    expected.device_id,
-                                    current.lww_time_ms,
-                                    current.device_id
-                                ),
-                                crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
-                                    format!("DeleteProject guard snapshot failed: {err}")
-                                }
-                            };
-                            log::warn!(
-                                "[sync] commit_full_sync: DeleteProject {} guard failed: {}",
-                                project_id,
-                                msg
-                            );
-                            target.result.status =
-                                crate::sync::SyncStatus::RecoverableError(msg.clone());
-                            target.result.error = Some(msg);
-                            continue;
-                        }
+                // 与 expected_local_lww 严格比较。current_local == expected 才放行，
+                // 其他任何情况都拒绝。
+                // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
+                // 破坏性 action 必须携带 guard。
+                let expected_lww = crate::sync::full_sync::LiveTargetLww {
+                    lww_time_ms: expected_local_lww.lww_time_ms,
+                    device_id: expected_local_lww.device_id.clone(),
+                };
+                let project_root = self.projects_root.join(project_id);
+                match crate::sync::staging::replace::check_replace_project_guard(
+                    &project_root,
+                    &expected_lww,
+                ) {
+                    crate::sync::staging::replace::ReplaceProjectGuardResult::Ok => {
+                        // guard 通过，继续执行删除。
+                    }
+                    crate::sync::staging::replace::ReplaceProjectGuardResult::Err(e) => {
+                        let msg = match e {
+                            crate::sync::staging::replace::ReplaceProjectGuardError::LocalAdvanced {
+                                expected,
+                                current,
+                            } => format!(
+                                "DeleteProject guard failed: local diverged \
+                                 (expected lww_time={} device_id={}, current lww_time={} device_id={}) \
+                                 — not touching live",
+                                expected.lww_time_ms,
+                                expected.device_id,
+                                current.lww_time_ms,
+                                current.device_id
+                            ),
+                            crate::sync::staging::replace::ReplaceProjectGuardError::SnapshotFailed(err) => {
+                                format!("DeleteProject guard snapshot failed: {err}")
+                            }
+                        };
+                        log::warn!(
+                            "[sync] commit_full_sync: DeleteProject {} guard failed: {}",
+                            project_id,
+                            msg
+                        );
+                        target.result.status =
+                            crate::sync::SyncStatus::RecoverableError(msg.clone());
+                        target.result.error = Some(msg);
+                        continue;
                     }
                 }
 
@@ -764,7 +786,25 @@ impl super::WriterCore {
             };
             if should_remove {
                 self.remove_pending_deleted_by_prefix(&t.remote_prefix);
+                // #645 评论 5504296097 问题3 修复：同时移除 pending_remote_cleanup
+                // （RemoteCleanupProject 成功时）。如果不存在则是幂等 no-op。
+                self.remove_pending_remote_cleanup_by_prefix(&t.remote_prefix);
             }
+        }
+    }
+
+    /// #645 评论 5504296097 问题3 修复：按 remote_prefix 移除 pending_remote_cleanup。
+    fn remove_pending_remote_cleanup_by_prefix(&self, remote_prefix: &str) {
+        if let Err(e) = crate::sync::pending_remote_cleanup::remove_pending_remote_cleanup(
+            &self.app_data_root,
+            remote_prefix,
+        ) {
+            log::warn!(
+                "commit_full_sync: remove_pending_remote_cleanup failed for {}: {} \
+                 — pending will be retried next sync",
+                remote_prefix,
+                e
+            );
         }
     }
 

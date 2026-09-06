@@ -10,7 +10,7 @@
 //! 绝不伪造 now_ms 作为删除时间。`snapshot_local_target_lifecycle` 和 LWW
 //! `execute_lww_sync_attempt` 都复用它。
 
-use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope, SyncState};
+use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope};
 use crate::sync::SyncService;
 use std::collections::HashMap;
 use std::path::Path;
@@ -200,119 +200,6 @@ pub fn snapshot_local_records_read_only(
     }
 
     Ok(records)
-}
-
-/// #644 评论 5473105049 第5节：构建本地文件记录（upsert + delete 墓碑）。
-///
-/// 从 `execute_lww_sync_attempt` 抽出。扫描结果中 `SyncKind::Upload` 的文件生成
-/// upsert 记录；`known_files` 中存在但本地已删除的文件生成 delete 墓碑记录。
-///
-/// `updated_at_ms` 确定策略：
-/// 1. 已知文件且哈希未变 → 使用上次同步记录的时间戳
-/// 2. 已知文件但哈希已变 → 使用文件系统 mtime
-/// 3. 新文件 → 使用文件系统 mtime
-/// 4. mtime 读取失败 → 退回 `now_ms`
-///
-/// #645 评论 5504296097 问题1.1：`old_manifest_records` 携带 per-file 真实 winner
-/// device_id。已知文件 hash 未变时优先用 old manifest record 的 device_id，
-/// 不再统一写 `state.device_id`（丢掉上一次真正 winner 的 device_id）。
-///
-/// #645 评论 5504296097 问题1.2：known file 消失且无 tombstone 时，**不**伪造
-/// `now_ms` 作为删除时间。跳过该 path（不生成 delete record），调用方在
-/// `snapshot_local_records_read_only` 路径会返回 Err 走 Retry。
-#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
-pub(super) fn build_local_records(
-    sync_root: &Path,
-    local_entries: &[crate::sync::types::SyncFileEntry],
-    state: &SyncState,
-    scope: SyncScope,
-    now_ms: i64,
-    old_manifest_records: &HashMap<String, ManifestFileRecord>,
-) -> HashMap<String, ManifestFileRecord> {
-    let mut local_records = HashMap::new();
-
-    for entry in local_entries {
-        if entry.sync_kind == crate::sync::types::SyncKind::Upload
-            && entry.relative_path != SYNC_MANIFEST_PATH
-        {
-            let path = entry.relative_path.clone();
-            let local_hash = entry.file_hash.clone();
-
-            // #645 评论 5504296097 问题1.1：当前 hash 与 old manifest record hash 相同
-            // → 直接 clone old manifest record，保留原 device_id。
-            if let Some(old_rec) = old_manifest_records.get(&path) {
-                if old_rec.content_hash == local_hash && old_rec.op == "upsert" {
-                    local_records.insert(path.clone(), old_rec.clone());
-                    continue;
-                }
-            }
-
-            let updated_at_ms = if let Some(known_hash) = state.known_files.get(&path) {
-                if *known_hash == local_hash {
-                    state
-                        .known_files_updated_at
-                        .get(&path)
-                        .cloned()
-                        .unwrap_or(0)
-                } else {
-                    read_mtime_ms(sync_root, &path, now_ms)
-                }
-            } else {
-                read_mtime_ms(sync_root, &path, now_ms)
-            };
-
-            local_records.insert(
-                path.clone(),
-                ManifestFileRecord {
-                    path,
-                    content_hash: local_hash,
-                    updated_at_ms,
-                    deleted_at_ms: None,
-                    device_id: state.device_id.clone(),
-                    op: "upsert".to_string(),
-                    schema_version: 1,
-                },
-            );
-        }
-    }
-
-    // 构建本地删除墓碑记录
-    for path in state.known_files.keys() {
-        if !local_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, scope)
-                || SyncService::is_blacklisted_path(path, scope)
-            {
-                continue;
-            }
-            if !sync_root.join(path).exists() {
-                // #645 评论 5504296097 问题1.2：有 tombstone 才用真实删除时间；
-                // 无 tombstone 跳过（不伪造 now_ms）。
-                if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path)
-                {
-                    let deleted_at_ms = tombstone.deleted_at * 1000;
-                    local_records.insert(
-                        path.clone(),
-                        ManifestFileRecord {
-                            path: path.clone(),
-                            content_hash: String::new(),
-                            updated_at_ms: deleted_at_ms,
-                            deleted_at_ms: Some(deleted_at_ms),
-                            device_id: if tombstone.deleted_by.is_empty() {
-                                state.device_id.clone()
-                            } else {
-                                tombstone.deleted_by.clone()
-                            },
-                            op: "delete".to_string(),
-                            schema_version: 1,
-                        },
-                    );
-                }
-                // 无 tombstone → 跳过（不伪造 now_ms）。
-            }
-        }
-    }
-
-    local_records
 }
 
 /// #644 评论 5473105049 第5节：构建远端文件记录。
