@@ -103,7 +103,9 @@ pub(crate) fn build_sync_plan(sync_root: &Path, scope: SyncScope) -> crate::Resu
     let entries = scan_for_sync(sync_root, scope)?;
     // #645 评论 5504296097 问题5：build_sync_plan 是 plan/dry-run helper，
     // 用 read-only state loader，不写文件（旧 state 迁移/device_id 补写只在内存）。
-    let state = SyncService::load_sync_state_read_only(sync_root, None).unwrap_or_default();
+    // #645 评论 5504296097 问题1 修复：state 加载失败 → 直接返回 Err，
+    // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
+    let state = SyncService::load_sync_state_read_only(sync_root, None)?;
     let is_first_sync = state.known_files.is_empty();
 
     // #645 评论 5504296097 问题1 修复：用 snapshot_local_records_read_only 获取只读 records，

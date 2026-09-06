@@ -245,22 +245,38 @@ fn read_legacy_project_lww(
                  — cannot fabricate LWW"
             )))
         })?;
-    // 取所有 record 的最大 (lww_time, device_id)。
-    // manifest 存在但 files 为空 → 仍返回合法 (0, "") 表示"无记录"，
-    // 这是真实事实（空 manifest），不是伪造。
-    let mut best_time: i64 = 0;
-    let mut best_device = String::new();
-    for rec in &manifest.files {
-        let rec_time = match rec.deleted_at_ms {
-            Some(t) if rec.op == "delete" => t,
-            _ => rec.updated_at_ms,
-        };
-        if rec_time > best_time || (rec_time == best_time && rec.device_id > best_device) {
-            best_time = rec_time;
-            best_device = rec.device_id.clone();
-        }
-    }
-    Ok((best_time, best_device))
+    // #645 评论 5504296097 问题4 修复：取所有 record 的最大 (lww_time, device_id)。
+    // manifest 存在但 files 为空 → 返回 Err（不伪造 (0, "") LWW）。
+    // 空 manifest 无法可靠判断该 project 的真实 LWW — 调用方（discover_legacy_remote_catalog）
+    // 应让整个 bootstrap 返回 RecoverableError，不写 targets.sync.json，
+    // 不把这个 Project 写成合法 Upsert。
+    let winner = manifest
+        .files
+        .iter()
+        .max_by(|a, b| {
+            let a_time = match a.deleted_at_ms {
+                Some(t) if a.op == "delete" => t,
+                _ => a.updated_at_ms,
+            };
+            let b_time = match b.deleted_at_ms {
+                Some(t) if b.op == "delete" => t,
+                _ => b.updated_at_ms,
+            };
+            a_time
+                .cmp(&b_time)
+                .then_with(|| a.device_id.cmp(&b.device_id))
+        })
+        .ok_or_else(|| {
+            crate::Error::Io(std::io::Error::other(format!(
+            "read_legacy_project_lww: legacy manifest for project {project_id} has no LWW records \
+             — cannot fabricate LWW"
+        )))
+        })?;
+    let winner_time = match winner.deleted_at_ms {
+        Some(t) if winner.op == "delete" => t,
+        _ => winner.updated_at_ms,
+    };
+    Ok((winner_time, winner.device_id.clone()))
 }
 
 /// #645 评论 5504296097 问题5：持久化 bootstrap catalog（正式 sync 才调用）。

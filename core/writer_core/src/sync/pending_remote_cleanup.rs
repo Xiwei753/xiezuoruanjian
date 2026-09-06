@@ -36,6 +36,14 @@ pub struct PendingRemoteTargetCleanup {
     pub last_error: String,
     /// 记录创建时间（Unix 毫秒）。
     pub created_at_ms: i64,
+    /// #645 评论 5504296097 问题2 修复：绑定产生该 cleanup 的 Delete lifecycle identity。
+    ///
+    /// Transfer 前重新确认远端 catalog 时，用这两个字段校验当前 winner record
+    /// 仍是同一条/更新的 Delete（lww_time 和 device_id 匹配，或当前 Delete 的
+    /// lww_time >= expected）。当前是 Upsert → pending 过期，不删 prefix。
+    pub expected_delete_lww_time_ms: i64,
+    /// #645 评论 5504296097 问题2 修复：绑定 Delete 的 device_id（tie-break）。
+    pub expected_delete_device_id: String,
 }
 
 const PENDING_REMOTE_CLEANUP_FILE: &str = "pending_remote_cleanups.json";
@@ -76,14 +84,20 @@ pub fn load_pending_remote_cleanups(
 /// 记录一条待清理的远端残留（追加到持久化列表）。
 ///
 /// 用 read-modify-write + atomic write。幂等：相同 `remote_prefix` 不重复追加，
-/// 只更新 `last_error` 和 `created_at_ms`。
+/// 只更新 `last_error`、`created_at_ms` 和 `expected_delete_*` 字段。
 ///
 /// 文件损坏（解析失败）时返回 Err，不吞错误。
+///
+/// #645 评论 5504296097 问题2 修复：`expected_delete_lww_time_ms` /
+/// `expected_delete_device_id` 绑定产生该 cleanup 的 Delete lifecycle identity，
+/// Transfer 前重新确认远端 catalog 时校验当前 winner 仍是同一条/更新的 Delete。
 pub fn record_pending_remote_cleanup(
     app_data_root: &Path,
     remote_prefix: &str,
     project_id: &str,
     last_error: &str,
+    expected_delete_lww_time_ms: i64,
+    expected_delete_device_id: &str,
 ) -> crate::error::Result<()> {
     let path = pending_remote_cleanup_path(app_data_root);
     if let Some(parent) = path.parent() {
@@ -95,15 +109,19 @@ pub fn record_pending_remote_cleanup(
         .iter_mut()
         .find(|c| c.remote_prefix == remote_prefix)
     {
-        // 幂等：相同 remote_prefix 只更新错误和时间。
+        // 幂等：相同 remote_prefix 只更新错误、时间和 lifecycle identity。
         existing.last_error = last_error.to_string();
         existing.created_at_ms = now_ms;
+        existing.expected_delete_lww_time_ms = expected_delete_lww_time_ms;
+        existing.expected_delete_device_id = expected_delete_device_id.to_string();
     } else {
         current.push(PendingRemoteTargetCleanup {
             remote_prefix: remote_prefix.to_string(),
             project_id: project_id.to_string(),
             last_error: last_error.to_string(),
             created_at_ms: now_ms,
+            expected_delete_lww_time_ms,
+            expected_delete_device_id: expected_delete_device_id.to_string(),
         });
     }
     let list = PendingRemoteTargetCleanupList { cleanups: current };
@@ -152,20 +170,38 @@ mod tests {
     fn record_load_remove_roundtrip() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        record_pending_remote_cleanup(root, "projects/p1", "p1", "cleanup failed: network")
-            .unwrap();
+        record_pending_remote_cleanup(
+            root,
+            "projects/p1",
+            "p1",
+            "cleanup failed: network",
+            1000,
+            "dev1",
+        )
+        .unwrap();
         let loaded = load_pending_remote_cleanups(root).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].remote_prefix, "projects/p1");
         assert_eq!(loaded[0].project_id, "p1");
         assert_eq!(loaded[0].last_error, "cleanup failed: network");
+        assert_eq!(loaded[0].expected_delete_lww_time_ms, 1000);
+        assert_eq!(loaded[0].expected_delete_device_id, "dev1");
 
         // 幂等：相同 remote_prefix 只更新错误。
-        record_pending_remote_cleanup(root, "projects/p1", "p1", "cleanup failed: timeout")
-            .unwrap();
+        record_pending_remote_cleanup(
+            root,
+            "projects/p1",
+            "p1",
+            "cleanup failed: timeout",
+            2000,
+            "dev2",
+        )
+        .unwrap();
         let loaded = load_pending_remote_cleanups(root).unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].last_error, "cleanup failed: timeout");
+        assert_eq!(loaded[0].expected_delete_lww_time_ms, 2000);
+        assert_eq!(loaded[0].expected_delete_device_id, "dev2");
 
         // 移除后为空。
         remove_pending_remote_cleanup(root, "projects/p1").unwrap();
@@ -187,8 +223,8 @@ mod tests {
     fn multiple_cleanups_preserved() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        record_pending_remote_cleanup(root, "projects/p1", "p1", "err1").unwrap();
-        record_pending_remote_cleanup(root, "projects/p2", "p2", "err2").unwrap();
+        record_pending_remote_cleanup(root, "projects/p1", "p1", "err1", 1000, "dev1").unwrap();
+        record_pending_remote_cleanup(root, "projects/p2", "p2", "err2", 2000, "dev2").unwrap();
         let loaded = load_pending_remote_cleanups(root).unwrap();
         assert_eq!(loaded.len(), 2);
 

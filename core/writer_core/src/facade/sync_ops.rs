@@ -97,9 +97,9 @@ impl super::WriterCore {
         // 不复制一套 target 枚举逻辑。
         // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups，
         // 让上一轮 cleanup 失败的远端残留能在本轮重试。
+        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
         let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)
-                .unwrap_or_default();
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)?;
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
@@ -114,8 +114,8 @@ impl super::WriterCore {
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
         for planned in &planned_targets {
-            // #645 评论 5504296097 问题5：dry-run 用 read-only state loader，
-            // build_sync_plan 内部已改用 load_sync_state_read_only。
+            // #645 评论 5504296097 问题5：dry-run 用 read-only state loader,
+            // build_sync_plan 内部已改用 load_sync_state_read_only.
             let plan = if !config.enabled || planned.is_deleted_target() {
                 SyncPlan::new()
             } else {
@@ -193,9 +193,9 @@ impl super::WriterCore {
             .unwrap_or_default();
 
         // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
         let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
-                .unwrap_or_default();
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)?;
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
             app_data_root,
             projects_root,
@@ -376,9 +376,9 @@ impl super::WriterCore {
         // #645 评论 5504296097 问题1：调用共享 planner，传入真实 remote_catalog
         // 做 target-level LWW 决策。
         // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
         let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)
-                .unwrap_or_default();
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)?;
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             &self.app_data_root,
             &self.projects_root,
@@ -432,9 +432,9 @@ impl super::WriterCore {
             .unwrap_or_default();
 
         // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
+        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
         let pending_remote_cleanups =
-            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)
-                .unwrap_or_default();
+            crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)?;
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
             app_data_root,
             projects_root,

@@ -322,7 +322,14 @@ impl crate::sync::SyncService {
         }
 
         let content = std::fs::read_to_string(state_path)?;
-        let mut state: SyncState = serde_json::from_str(&content).unwrap_or_default();
+        // #645 评论 5504296097 问题1 修复：文件存在但解析失败 → 返回 Err，
+        // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
+        // 文件不存在的分支在上面已处理（返回 Default，正常首次同步）。
+        let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "load_sync_state: parse state.local.json failed: {e}"
+            )))
+        })?;
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
             // #645 评论 5504296097 问题5：read-only — 只在内存补 device_id，不 save。
@@ -380,7 +387,14 @@ impl crate::sync::SyncService {
         }
 
         let content = std::fs::read_to_string(state_path)?;
-        let mut state: SyncState = serde_json::from_str(&content).unwrap_or_default();
+        // #645 评论 5504296097 问题1 修复：文件存在但解析失败 → 返回 Err，
+        // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
+        // 文件不存在的分支在上面已处理（返回 Default，正常首次同步）。
+        let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "load_sync_state: parse state.local.json failed: {e}"
+            )))
+        })?;
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
             state.device_id = new_device_id;

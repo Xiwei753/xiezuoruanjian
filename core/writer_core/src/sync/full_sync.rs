@@ -93,6 +93,15 @@ pub struct PlannedTarget {
     /// 用于与远端 catalog 的 delete tombstone 做 target-level LWW 决策。
     /// `None` 表示非 live project target 或 manifest 读取失败。
     pub live_lww: Option<LiveTargetLww>,
+    /// #645 评论 5504296097 问题2 修复：RemoteCleanupProject target 携带的
+    /// 产生该 cleanup 的 Delete lifecycle identity。
+    ///
+    /// `run_transfer` 在执行 `delete_all_remote_objects` 前重新读远端 catalog，
+    /// 校验当前 winner record 仍是同一条/更新的 Delete（lww_time 和 device_id 匹配，
+    /// 或当前 Delete 的 lww_time >= expected）。当前是 Upsert → pending 过期，不删 prefix。
+    /// `None` 表示非 RemoteCleanupProject target，或无可靠 lifecycle identity
+    /// （占位 0/"" 时仍执行 CAS 校验，但 expected 永远不匹配 Upsert）。
+    pub expected_delete_lww: Option<DeletedTargetLww>,
 }
 
 /// #645 评论 5504296097 问题3：deleted target 的 LWW 决策元数据。
@@ -174,6 +183,7 @@ pub fn build_full_sync_target_plan(
         deleted_journal_token: None,
         deleted_lww: None,
         live_lww: None,
+        expected_delete_lww: None,
     });
 
     // Project targets — #645 评论 5504296097 问题1：按 remote catalog 决策。
@@ -208,6 +218,7 @@ pub fn build_full_sync_target_plan(
             deleted_journal_token: None,
             deleted_lww: None,
             live_lww,
+            expected_delete_lww: None,
         });
     }
 
@@ -250,6 +261,7 @@ pub fn build_full_sync_target_plan(
                 device_id: pending.device_id.clone(),
             }),
             live_lww: None,
+            expected_delete_lww: None,
         });
     }
 
@@ -298,6 +310,7 @@ pub fn build_full_sync_target_plan(
                 deleted_journal_token: None,
                 deleted_lww: None,
                 live_lww: None,
+                expected_delete_lww: None,
             });
         }
     }
@@ -339,6 +352,12 @@ pub fn build_full_sync_target_plan(
                 deleted_journal_token: None,
                 deleted_lww: None,
                 live_lww: None,
+                // #645 评论 5504296097 问题2 修复：从 PendingRemoteTargetCleanup
+                // 填入 Delete lifecycle identity，run_transfer 时 CAS 校验。
+                expected_delete_lww: Some(DeletedTargetLww {
+                    deleted_at_ms: cleanup.expected_delete_lww_time_ms,
+                    device_id: cleanup.expected_delete_device_id.clone(),
+                }),
             });
         }
     }
@@ -761,7 +780,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                     // #645 评论 5504296097 问题3 修复：cleanup 失败 →
                                                     // record pending remote cleanup，下轮 Prepare
                                                     // 生成 RemoteCleanupProject 重试。
-                                                    let _ = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                                    // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                                    // 的 lww_time 和 device_id，绑定 lifecycle identity。
+                                                    // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                                    // 传递，不再 let _ = 吞掉。
+                                                    let expected_time = crate::sync::target_lifecycle::record_lww_time(&winner);
+                                                    let expected_device = &winner.device_id;
+                                                    let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
                                                         &plan.app_data_root,
                                                         &planned.target.remote_prefix,
                                                         planned.project_id.as_deref().unwrap_or(""),
@@ -769,8 +794,27 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                             "LiveProject RemoteWinner(Delete) cleanup failed: {:?}",
                                                             cleanup_result.status
                                                         ),
+                                                        expected_time,
+                                                        expected_device,
                                                     );
-                                                    (cleanup_result, None, None)
+                                                    if let Err(e) = record_result {
+                                                        let msg = format!(
+                                                            "record pending remote cleanup failed: {e}"
+                                                        );
+                                                        (
+                                                            SyncResult::error(
+                                                                SyncStatus::RecoverableError(
+                                                                    msg.clone(),
+                                                                ),
+                                                                msg,
+                                                                None,
+                                                            ),
+                                                            None,
+                                                            None,
+                                                        )
+                                                    } else {
+                                                        (cleanup_result, None, None)
+                                                    }
                                                 } else {
                                                     // guard 必须存在（外层 live_lww.is_some() 已判断）。
                                                     let action = planned
@@ -909,7 +953,16 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     // #645 评论 5504296097 问题3 修复：cleanup 失败 →
                                     // record pending remote cleanup，下轮 Prepare
                                     // 生成 RemoteCleanupProject 重试。
-                                    let _ = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                    // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                    // 的 lww_time 和 device_id，绑定 lifecycle identity。
+                                    // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                    // 传递，不再 let _ = 吞掉。
+                                    let expected_time =
+                                        crate::sync::target_lifecycle::record_lww_time(
+                                            &current_rec,
+                                        );
+                                    let expected_device = &current_rec.device_id;
+                                    let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
                                         &plan.app_data_root,
                                         &planned.target.remote_prefix,
                                         planned.project_id.as_deref().unwrap_or(""),
@@ -917,8 +970,24 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                             "DeleteLocalProject current Delete cleanup failed: {:?}",
                                             cleanup_result.status
                                         ),
+                                        expected_time,
+                                        expected_device,
                                     );
-                                    (cleanup_result, None, None)
+                                    if let Err(e) = record_result {
+                                        let msg =
+                                            format!("record pending remote cleanup failed: {e}");
+                                        (
+                                            SyncResult::error(
+                                                SyncStatus::RecoverableError(msg.clone()),
+                                                msg,
+                                                None,
+                                            ),
+                                            None,
+                                            None,
+                                        )
+                                    } else {
+                                        (cleanup_result, None, None)
+                                    }
                                 } else {
                                     // 远端清理成功 → defer to Commit。
                                     // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
@@ -1151,7 +1220,16 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                         // 下一轮 planner 对"remote Delete + 本地无 live + 无 pending delete"
                                         // 会直接跳过，再也没有 target 会清这个 prefix。
                                         // pending_remote_cleanup 让下一轮重试。
-                                        let _ = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                        // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                        // 的 lww_time 和 device_id，绑定 lifecycle identity。
+                                        // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                        // 传递，不再 let _ = 吞掉。
+                                        let expected_time =
+                                            crate::sync::target_lifecycle::record_lww_time(
+                                                &current_rec,
+                                            );
+                                        let expected_device = &current_rec.device_id;
+                                        let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
                                             &plan.app_data_root,
                                             &planned.target.remote_prefix,
                                             planned.project_id.as_deref().unwrap_or(""),
@@ -1159,9 +1237,28 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 "RestoreProject remote-only cleanup failed: {:?}",
                                                 cleanup_result.status
                                             ),
+                                            expected_time,
+                                            expected_device,
                                         );
+                                        if let Err(e) = record_result {
+                                            let msg = format!(
+                                                "record pending remote cleanup failed: {e}"
+                                            );
+                                            (
+                                                SyncResult::error(
+                                                    SyncStatus::RecoverableError(msg.clone()),
+                                                    msg,
+                                                    None,
+                                                ),
+                                                None,
+                                                None,
+                                            )
+                                        } else {
+                                            (cleanup_result, None, None)
+                                        }
+                                    } else {
+                                        (cleanup_result, None, None)
                                     }
-                                    (cleanup_result, None, None)
                                 } else {
                                     // current=Delete && local project 存在 ->
                                     // 重新计算 current local LWW -> 只有 Delete 仍赢才生成
@@ -1313,33 +1410,117 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 // #645 评论 5504296097 问题3 修复：远端残留清理重试。
                 // 上一轮 authoritative Delete 清 prefix 失败时记录了
                 // PendingRemoteTargetCleanup，本轮 Prepare 生成此 target。
-                // Transfer：delete_all_remote_objects(prefix)。
-                // - 成功 → remove_pending_remote_cleanup(prefix)（由 API 层在
-                //   commit 阶段完成，这里只返回结果）。
-                // - 失败 → 保留 pending（pending_remote_cleanup 文件不变），
-                //   返回 RecoverableError，下轮再次重试。
+                //
+                // #645 评论 5504296097 问题2 修复：Transfer 前重新查询远端 catalog
+                // 当前该 target 的 lifecycle，校验当前 winner 仍是同一条/更新的 Delete：
+                // - 当前是 Upsert → pending 过期，返回 Success + LocalDeleteWins
+                //   （pending 应被移除），**绝不删 prefix**；
+                // - 当前仍是同一条/更新的 Delete（lww_time 和 device_id 匹配 expected，
+                //   或当前 Delete 的 lww_time >= expected）→ delete_all_remote_objects；
+                // - record 消失 / 读取失败 → Retry（RecoverableError），不删。
                 log::info!(
                     "[sync] run_transfer: RemoteCleanupProject {} — \
-                     retrying remote prefix cleanup",
+                     CAS: re-confirming remote lifecycle before cleanup",
                     planned.target.remote_prefix
                 );
-                let cleanup_result =
-                    delete_all_remote_objects(provider, &planned.target.remote_prefix);
-                let cleanup_ok = matches!(
-                    cleanup_result.status,
-                    SyncStatus::Success | SyncStatus::NoChanges
-                );
-                if cleanup_ok {
-                    // cleanup 成功 → 标记为 LocalDeleteWins（pending 在 API 层
-                    // commit 阶段按此移除）。
-                    (
-                        cleanup_result,
-                        Some(DeletedTargetResolution::LocalDeleteWins),
-                        None,
-                    )
-                } else {
-                    // cleanup 失败 → 保留 pending，返回 RecoverableError。
-                    (cleanup_result, Some(DeletedTargetResolution::Retry), None)
+                match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
+                    Ok(Some(current_rec)) => {
+                        use crate::sync::types::TargetOp;
+                        match current_rec.op {
+                            TargetOp::Upsert => {
+                                // 远端已变成 Upsert → pending 过期，不删 prefix。
+                                log::info!(
+                                    "[sync] run_transfer: RemoteCleanupProject {} — \
+                                     CAS: remote changed to Upsert, pending expired — \
+                                     returning LocalDeleteWins without deleting prefix",
+                                    planned.target.remote_prefix
+                                );
+                                (
+                                    SyncResult::no_changes(),
+                                    Some(DeletedTargetResolution::LocalDeleteWins),
+                                    None,
+                                )
+                            }
+                            TargetOp::Delete => {
+                                // 远端仍是 Delete → 校验 lifecycle identity。
+                                let current_time =
+                                    crate::sync::target_lifecycle::record_lww_time(&current_rec);
+                                let expected = planned.expected_delete_lww.as_ref();
+                                let expected_time = expected.map(|e| e.deleted_at_ms).unwrap_or(0);
+                                let expected_device =
+                                    expected.map(|e| e.device_id.as_str()).unwrap_or("");
+                                // 同一条 Delete（time 和 device_id 都匹配）
+                                // 或更新的 Delete（current lww_time >= expected）→ 才删。
+                                let same_delete = current_time == expected_time
+                                    && current_rec.device_id == expected_device;
+                                let newer_delete = current_time >= expected_time;
+                                if !same_delete && !newer_delete {
+                                    // 当前 Delete 的 lww_time < expected → 异常，Retry。
+                                    let msg = format!(
+                                        "RemoteCleanupProject {}: CAS: current Delete \
+                                         lww_time {} < expected {} — stale catalog, retrying",
+                                        planned.target.remote_prefix, current_time, expected_time
+                                    );
+                                    log::warn!("[sync] {msg}");
+                                    (
+                                        SyncResult::error(
+                                            SyncStatus::RecoverableError(msg.clone()),
+                                            msg,
+                                            None,
+                                        ),
+                                        Some(DeletedTargetResolution::Retry),
+                                        None,
+                                    )
+                                } else {
+                                    // 校验通过 → delete_all_remote_objects。
+                                    let cleanup_result = delete_all_remote_objects(
+                                        provider,
+                                        &planned.target.remote_prefix,
+                                    );
+                                    let cleanup_ok = matches!(
+                                        cleanup_result.status,
+                                        SyncStatus::Success | SyncStatus::NoChanges
+                                    );
+                                    if cleanup_ok {
+                                        (
+                                            cleanup_result,
+                                            Some(DeletedTargetResolution::LocalDeleteWins),
+                                            None,
+                                        )
+                                    } else {
+                                        // cleanup 失败 → 保留 pending，返回 RecoverableError。
+                                        (cleanup_result, Some(DeletedTargetResolution::Retry), None)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        // 远端无记录 → 无法确认 delete winner → Retry，不删。
+                        let msg = format!(
+                            "RemoteCleanupProject {}: CAS: no remote record, retrying",
+                            planned.target.remote_prefix
+                        );
+                        log::warn!("[sync] {msg}");
+                        (
+                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                            Some(DeletedTargetResolution::Retry),
+                            None,
+                        )
+                    }
+                    Err(e) => {
+                        // CAS 读取失败 — 不执行删除，返回 Retry。
+                        let msg = format!(
+                            "RemoteCleanupProject CAS failed for {}: {e}",
+                            planned.target.remote_prefix
+                        );
+                        log::warn!("[sync] {msg}");
+                        (
+                            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+                            Some(DeletedTargetResolution::Retry),
+                            None,
+                        )
+                    }
                 }
             }
         };
@@ -1933,8 +2114,8 @@ mod tests {
         std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "chapter.md".to_string(),
-                content_hash: "h".to_string(),
+                path: "volumes/v1/chapter.md".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 12000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -1947,6 +2128,11 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        // #645 评论 5504296097 问题1 修复：同时创建实际文件（whitelisted 路径），
+        // 让 snapshot_local_records_read_only 第 3 步处理（当前文件存在 + hash 匹配），
+        // 直接 clone old manifest record 保留 updated_at_ms = 12000。
+        std::fs::create_dir_all(project_root.join("volumes/v1")).unwrap();
+        std::fs::write(project_root.join("volumes/v1/chapter.md"), b"content").unwrap();
 
         let projects = vec![Project {
             id: "p1".to_string(),
@@ -2001,8 +2187,8 @@ mod tests {
         std::fs::create_dir_all(project_root.join("app-meta/sync")).unwrap();
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
-                path: "chapter.md".to_string(),
-                content_hash: "h".to_string(),
+                path: "volumes/v1/chapter.md".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 11000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -2015,6 +2201,11 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
+        // #645 评论 5504296097 问题1 修复：同时创建实际文件（whitelisted 路径），
+        // 让 snapshot_local_records_read_only 第 3 步处理（当前文件存在 + hash 匹配），
+        // 直接 clone old manifest record 保留 updated_at_ms = 11000。
+        std::fs::create_dir_all(project_root.join("volumes/v1")).unwrap();
+        std::fs::write(project_root.join("volumes/v1/chapter.md"), b"content").unwrap();
 
         let projects = vec![Project {
             id: "p1".to_string(),
@@ -2167,6 +2358,7 @@ mod tests {
             deleted_journal_token: Some("token-1".to_string()),
             deleted_lww: Some(lww_val),
             live_lww: None,
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -2214,6 +2406,7 @@ mod tests {
             deleted_journal_token: Some("token-1".to_string()),
             deleted_lww: Some(lww_val),
             live_lww: None,
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -2254,7 +2447,7 @@ mod tests {
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "project.json".to_string(),
-                content_hash: "h".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 2000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -2281,6 +2474,7 @@ mod tests {
                 lww_time_ms: 1000,
                 device_id: "dev-1".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -2323,6 +2517,7 @@ mod tests {
                 lww_time_ms: 1000,
                 device_id: "dev-1".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -2361,6 +2556,7 @@ mod tests {
             deleted_journal_token: None,
             deleted_lww: None,
             live_lww: None,
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -2716,6 +2912,7 @@ mod tests {
                 lww_time_ms: 1000,
                 device_id: "dev-local".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: crate::sync::types::SyncPolicy::default(),
@@ -2831,7 +3028,7 @@ mod tests {
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "chapter.md".to_string(),
-                content_hash: "h".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 10_000,
                 deleted_at_ms: None,
                 device_id: "dev-A".to_string(),
@@ -2858,6 +3055,7 @@ mod tests {
                 lww_time_ms: 10_000,
                 device_id: "dev-A".to_string(),
             }),
+            expected_delete_lww: None,
         };
         // 用 enabled 的 SyncPolicy，让 LWW engine 真正运行并尝试上传正文。
         let sync_policy = crate::sync::types::SyncPolicy {
@@ -3160,6 +3358,7 @@ mod tests {
                 lww_time_ms: 10_000,
                 device_id: "dev-1".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -3389,7 +3588,7 @@ mod tests {
         let staging_manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "chapter.md".to_string(),
-                content_hash: "h".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 5000,
                 deleted_at_ms: None,
                 device_id: "dev-1".to_string(),
@@ -3417,6 +3616,7 @@ mod tests {
                 lww_time_ms: 1000,
                 device_id: "dev-1".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -3466,6 +3666,7 @@ mod tests {
                 lww_time_ms: 1000,
                 device_id: "dev-1".to_string(),
             }),
+            expected_delete_lww: None,
         };
         let plan = FullSyncPlan {
             sync_policy: SyncPolicy::default(),
@@ -3525,7 +3726,7 @@ mod tests {
         let manifest = SyncManifest {
             files: vec![ManifestFileRecord {
                 path: "project.json".to_string(),
-                content_hash: "h".to_string(),
+                content_hash: "9a0364b9e99bb480dd25e1f0284c8555".to_string(),
                 updated_at_ms: 1000,
                 deleted_at_ms: None,
                 device_id: "device-1".to_string(),

@@ -186,16 +186,49 @@ pub fn snapshot_local_records_read_only(
         }
     }
 
-    // 5. #645 评论 5504296097 问题2：manifest 中有 upsert record 但文件不在磁盘上
-    //    且不在 known_files → 仍需携带该 record 的 LWW 用于 target-level 决策。
-    //    场景：测试/迁移只写 manifest 不写实际文件，或文件被外部删除但 manifest 未更新。
-    //    这些 record 代表"最后一次已知的本地 LWW 状态"，不应被静默丢弃。
+    // 5. #645 评论 5504296097 问题1 修复：manifest 中有 upsert record 但文件不在磁盘上
+    //    且不在 known_files → 不再把旧 upsert 冒充当前本地事实。
+    //    - 文件实际存在 → 说明被 whitelisted/blacklisted 跳过，不管（上面 step 3 已处理）；
+    //    - 文件不存在 + 有 tombstone（state.tombstones 中 original_path 匹配）
+    //      → 生成 Delete record（用 tombstone 的 deleted_at*1000 作为 deleted_at_ms
+    //      和 updated_at_ms，device_id 用 tombstone.deleted_by 或 state.device_id）；
+    //    - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
     for (path, old_rec) in &old_manifest_records {
         if records.contains_key(path) {
             continue;
         }
-        if old_rec.op == "upsert" {
-            records.insert(path.clone(), old_rec.clone());
+        if old_rec.op != "upsert" {
+            continue;
+        }
+        // 文件实际存在 → 上面 step 3 已处理（whitelisted 之外或被跳过的）。
+        if sync_root.join(path).exists() {
+            continue;
+        }
+        // 文件不存在 → 查找 tombstone。
+        if let Some(tombstone) = state.tombstones.iter().find(|t| t.original_path == *path) {
+            let deleted_at_ms = tombstone.deleted_at * 1000;
+            records.insert(
+                path.clone(),
+                ManifestFileRecord {
+                    path: path.clone(),
+                    content_hash: String::new(),
+                    updated_at_ms: deleted_at_ms,
+                    deleted_at_ms: Some(deleted_at_ms),
+                    device_id: if tombstone.deleted_by.is_empty() {
+                        state.device_id.clone()
+                    } else {
+                        tombstone.deleted_by.clone()
+                    },
+                    op: "delete".to_string(),
+                    schema_version: 1,
+                },
+            );
+        } else {
+            // 无 tombstone → 不能把旧 upsert 冒充当前本地事实，返回 Err。
+            return Err(crate::Error::Io(std::io::Error::other(format!(
+                "snapshot_local_records_read_only: old manifest upsert for {path} but file missing \
+                 without tombstone — cannot fabricate current local fact"
+            ))));
         }
     }
 
