@@ -51,16 +51,20 @@ class MediaStoreMirrorStorage(
     /**
      * 删除引用指向的文件（幂等）。
      *
-     * #649 评论 5564379115 问题 3：文件不存在时也返回 true（目标状态已达到），
-     * 避免 cleanup 重跑时因第二次 delete 返回 false 永远卡住 journal。
+     * #649 评论 5564624383 问题 5：明确区分"不存在 → true"和"异常 → false"。
+     * 幂等只应该是"明确不存在"返回 true，不是"任何异常都算成功"。
+     * 例如 SAF 权限丢失、provider I/O 错误时，如果返回 true，
+     * cleanupCommittedTransaction() 会认为清理完成并删除 journal，实际旧文件仍在。
+     *
+     * 查询三态：FOUND → 尝试删除；MISSING → 返回 true（目标已达到）；FAILED → 返回 false。
      */
     override fun delete(ref: MirrorFileRef): Boolean {
         val uri = tryParseUri(ref.uri) ?: return true // URI 无效 → 目标状态已达到
-        return try {
-            if (!mediaStore.isSupported()) return true
-            // 先检查文件是否存在，不存在则视为目标已达到
-            val directory = mediaStoreDirectory(ref.relativePath)
-            val displayName = ref.relativePath.substringAfterLast('/')
+        if (!mediaStore.isSupported()) return true
+        val directory = mediaStoreDirectory(ref.relativePath)
+        val displayName = ref.relativePath.substringAfterLast('/')
+        // 三态查询：FOUND / MISSING / FAILED
+        val queryResult = try {
             val exists = contentResolver.query(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 arrayOf(MediaStore.Downloads._ID),
@@ -70,10 +74,22 @@ class MediaStoreMirrorStorage(
                 arrayOf(directory, displayName),
                 null,
             )?.use { it.moveToFirst() } ?: false
-            if (!exists) return true // 文件不存在 → 目标已达到
-            mediaStore.delete(uri)
+            if (exists) QueryResult.FOUND else QueryResult.MISSING
+        } catch (_: SecurityException) {
+            QueryResult.FAILED
         } catch (_: Exception) {
-            true // 异常时视为目标状态已达到（幂等）
+            QueryResult.FAILED
+        }
+        return when (queryResult) {
+            QueryResult.MISSING -> true // 文件不存在 → 目标已达到
+            QueryResult.FAILED -> false // 查询失败 → 不确定文件是否存在，返回 false
+            QueryResult.FOUND -> try {
+                mediaStore.delete(uri)
+            } catch (_: SecurityException) {
+                false // 权限异常 → 删除失败
+            } catch (_: Exception) {
+                false // I/O 异常 → 删除失败
+            }
         }
     }
 
@@ -291,5 +307,8 @@ class MediaStoreMirrorStorage(
         private const val STAGING_DIR = ".staging"
         private const val BACKUP_DIR = "backup"
         private const val MIRROR_ROOT_NAME = "Sujian"
+
+        // #649 评论 5564624383 问题 5：查询三态结果
+        private enum class QueryResult { FOUND, MISSING, FAILED }
     }
 }

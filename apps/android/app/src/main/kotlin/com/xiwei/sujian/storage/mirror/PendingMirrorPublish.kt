@@ -131,6 +131,9 @@ data class PendingMirrorPublish(
         const val PHASE_STAGE = "stage"
         const val PHASE_PROMOTE = "promote"
         const val PHASE_CLEANUP = "cleanup"
+        // #649 评论 5564624383 问题 2：rollback 本身做成 journal 状态。
+        // 进程死在回滚中间，下次是继续回滚，不会又转回 forward promote。
+        const val PHASE_ROLLBACK = "rollback"
 
         private const val KEY_TX_ID = "txId"
         private const val KEY_BACKEND = "backend"

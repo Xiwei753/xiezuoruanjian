@@ -194,8 +194,15 @@ class ReadableMirrorStateStore(
     fun readSnapshotStrict(): Result<MirrorStateSnapshot> {
         synchronized(lock) {
             return when (val result = readRoot()) {
-                is ReadResult.NotExists -> Result.failure(
-                    IOException("state.json does not exist")
+                // #649 评论 5564624383 问题 3：首次安装 state.json 不存在不是损坏，
+                // 是合法初始状态，默认 MEDIA_STORE 后端。
+                is ReadResult.NotExists -> Result.success(
+                    MirrorStateSnapshot(
+                        backend = MirrorBackend.MEDIA_STORE,
+                        treeUri = null,
+                        manifestUri = null,
+                        projects = emptyMap(),
+                    )
                 )
                 is ReadResult.Corrupted -> Result.failure(result.error)
                 is ReadResult.Parsed -> {

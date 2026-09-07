@@ -92,8 +92,14 @@ class DocumentTreeMirrorStorage(
     /**
      * 删除引用指向的文件（幂等）。
      *
-     * #649 评论 5564379115 问题 3：文件不存在时也返回 true（目标状态已达到），
-     * 避免 cleanup 重跑时因第二次 delete 返回 false 永远卡住 journal。
+     * #649 评论 5564624383 问题 5：明确区分"不存在 → true"和"异常 → false"。
+     * 幂等只应该是"明确不存在"返回 true，不是"任何异常都算成功"。
+     * 例如 SAF 权限丢失、provider I/O 错误时，如果返回 true，
+     * cleanupCommittedTransaction() 会认为清理完成并删除 journal，实际旧文件仍在。
+     *
+     * - FileNotFoundException → true（明确不存在）
+     * - 删除成功 → true
+     * - SecurityException / IOException / provider 异常 → false（无法确认是否存在）
      */
     override fun delete(ref: MirrorFileRef): Boolean {
         if (!isSupported()) return true
@@ -102,8 +108,12 @@ class DocumentTreeMirrorStorage(
             DocumentsContract.deleteDocument(contentResolver, uri)
         } catch (_: FileNotFoundException) {
             true // 文件不存在 → 目标已达到
+        } catch (_: SecurityException) {
+            false // 权限异常 → 无法确认文件状态
+        } catch (_: IOException) {
+            false // I/O 异常 → 无法确认文件状态
         } catch (_: Exception) {
-            true // 异常时视为目标状态已达到（幂等）
+            false // 其他异常 → 无法确认文件状态
         }
     }
 
