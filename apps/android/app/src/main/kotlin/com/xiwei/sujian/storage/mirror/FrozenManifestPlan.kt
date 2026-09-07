@@ -1,25 +1,25 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
  * FrozenManifestPlan — 冻结的全局 manifest 计划。
  *
- * #649 评论 5575551884 问题 3：旧 `buildManifestJsonFromMetadata` 只冻结单个项目级元数据，
- * 输出的 JSON schema 与 MirrorManifest 不一致（{projectId,title,...} vs
- * {schemaVersion,revision,updatedAt,projects:[...]}），且会丢掉其他作品。
+ * #649 评论 5575950895 问题 5：旧 `buildFrozenManifestPlan` 对所有非目标作品的章节都写
+ * `contentFile = ""`, `contentHash = ""`，`frozenPlanToManifestJson` 对非目标作品又原样
+ * 输出这两个空值，生成的全局 manifest 中非目标作品章节 contentFile/contentHash 为空，
+ * 与真实镜像状态不一致。而且 `if (snapshotResult !is BridgeResult.Success) continue`
+ * 会在读取任意作品失败时把整个作品从下一版 manifest 静默删掉。
  *
- * 新实现：在正文开始改公共镜像前，冻结本事务最终需要的全局 manifest 逻辑状态。
- * 恢复时只把本事务已经验证过的 `promotedEntries` 的真实 URI/hash 填回目标章节，
- * 再输出与 [MirrorManifest] 完全一致的 JSON，其他作品保留，不重新读取当前 Core。
- *
- * ## 与 `frozenManifestMetadata` 的关系
- * `frozenManifestMetadata`（已有的字段）保存项目级元数据（id/title/order/revision），
- * 用于恢复时构建单项目 MirrorProject。
- * `FrozenManifestPlan` 保存全局 manifest 计划（schemaVersion + revision + 所有项目），
- * 恢复时直接输出完整的 MirrorManifest JSON。
+ * 新实现：冻结计划以**上一次已提交 manifest**为基线，只替换本事务目标项目：
+ * - 非目标项目：从 `committedManifest` 取原样 metadata + contentFile + contentHash，
+ *   不重新从当前 Core 全量状态拼，不写空占位，不静默 continue 丢作品。
+ * - 目标项目：复用 `publishProject()` 开始时那一份 `targetSnapshot` + `targetDesiredEntries`，
+ *   不再次 `getProjectWorkspaceSnapshot(targetProjectId)`，避免正文 staging 完后 Core 变成 R2
+ *   时得到"R2 metadata + R1 正文"的混合状态。
+ * - 任何必要数据无法读取时返回 null（不开始正文 swap），而非 continue 静默删作品。
  *
  * @property schemaVersion manifest schema 版本（当前为 1）。
  * @property revision 全局 revision（毫秒时间戳）。
@@ -70,8 +70,9 @@ data class FrozenManifestVolume(
 /**
  * 单个章节在 frozen plan 中的快照。
  *
- * 注意：contentFile 和 contentHash 在冻结时可能还是占位值（空字符串），
- * 恢复时由 `promotedEntries` 的真实 URI/hash 替换。
+ * 注意：对非目标项目，contentFile 和 contentHash 来自已提交 manifest 的真实值
+ * （不再是空字符串占位）；对目标项目，contentFile/contentHash 在冻结时还是占位值
+ * （空字符串），恢复时由 `promotedEntries` 的真实 URI/hash 替换。
  */
 data class FrozenManifestChapter(
     val id: String,
@@ -86,62 +87,105 @@ data class FrozenManifestChapter(
 /**
  * 构建 frozen manifest plan。
  *
- * 在正文事务开始前调用，冻结所有项目的逻辑状态。
- * targetProjectId 的章节 contentFile/contentHash 由调用方在恢复时用 promotedEntries 替换。
+ * #649 评论 5575950895 问题 5：以已提交 manifest 为基线，只替换本事务目标项目。
  *
- * @param source 快照源（读取所有项目的当前快照）。
+ * - 非目标项目来自 [committedManifest]，保留原样 metadata + contentFile + contentHash。
+ * - 目标项目来自当前事务已经冻结的 [targetSnapshot] + [targetDesiredEntries]，
+ *   不再次 `getProjectWorkspaceSnapshot(targetProjectId)`，避免正文 staging 完后
+ *   Core 变成 R2 时得到"R2 metadata + R1 正文"的混合状态。
+ * - 任何必要数据无法读取时返回 null（不开始正文 swap），而非 continue 静默删作品。
+ *
+ * @param committedManifest 上一次已提交的全局 manifest（null 表示首次发布，无基线）。
  * @param targetProjectId 本次事务的目标项目 ID。
+ * @param targetSnapshot publishProject 开始时那一份目标项目快照（与建立正文 plan 同一份）。
+ * @param targetDesiredEntries 目标项目的 desired entries（promote 后填 URI）。
  * @return frozen plan；任何步骤失败返回 null。
  */
-suspend fun buildFrozenManifestPlan(
-    source: MirrorSnapshotSource,
+fun buildFrozenManifestPlan(
+    committedManifest: MirrorManifest?,
     targetProjectId: String,
+    targetSnapshot: ProjectWorkspaceSnapshot,
+    targetDesiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
 ): FrozenManifestPlan? {
-    val projectsResult = source.listProjects()
-    if (projectsResult !is BridgeResult.Success) return null
-
     val now = java.time.Instant.now()
     val updatedAt = java.time.format.DateTimeFormatter.ISO_INSTANT.format(now)
     val revision = now.toEpochMilli()
 
     val frozenProjects = mutableListOf<FrozenManifestProject>()
-    for (project in projectsResult.data) {
-        val snapshotResult = source.getProjectWorkspaceSnapshot(project.id)
-        if (snapshotResult !is BridgeResult.Success) continue
-        val snapshot = snapshotResult.data
 
-        val volumes = snapshot.volumes.map { vol ->
-            FrozenManifestVolume(
-                id = vol.volume.id,
-                title = vol.volume.title,
-                order = vol.volume.order,
-                revision = vol.volume.updatedAt.toEpochMillis(),
-                updatedAt = vol.volume.updatedAt,
-                chapters = vol.chapters.map { ch ->
-                    FrozenManifestChapter(
-                        id = ch.id,
-                        title = ch.title,
-                        order = ch.order,
-                        revision = ch.updatedAt.toEpochMillis(),
-                        updatedAt = ch.updatedAt,
-                        contentFile = "", // 占位，恢复时替换
-                        contentHash = "", // 占位，恢复时替换
-                    )
-                },
+    // 1. 非目标项目：从 committedManifest 取原样 metadata + contentFile + contentHash
+    if (committedManifest != null) {
+        for (project in committedManifest.projects) {
+            if (project.id == targetProjectId) continue
+            frozenProjects.add(
+                FrozenManifestProject(
+                    id = project.id,
+                    title = project.title,
+                    order = project.order,
+                    revision = project.revision,
+                    updatedAt = project.updatedAt,
+                    volumes = project.volumes.map { vol ->
+                        FrozenManifestVolume(
+                            id = vol.id,
+                            title = vol.title,
+                            order = vol.order,
+                            revision = vol.revision,
+                            updatedAt = vol.updatedAt,
+                            chapters = vol.chapters.map { ch ->
+                                FrozenManifestChapter(
+                                    id = ch.id,
+                                    title = ch.title,
+                                    order = ch.order,
+                                    revision = ch.revision,
+                                    updatedAt = ch.updatedAt,
+                                    // #649 评论 5575950895 问题 5：保留已提交 manifest 的真实值，
+                                    // 不再写空字符串占位。
+                                    contentFile = ch.contentFile,
+                                    contentHash = ch.contentHash,
+                                )
+                            },
+                        )
+                    },
+                ),
             )
         }
+    }
 
-        frozenProjects.add(
-            FrozenManifestProject(
-                id = project.id,
-                title = project.title,
-                order = 0,
-                revision = snapshot.project.updatedAt.toEpochMillis(),
-                updatedAt = snapshot.project.updatedAt,
-                volumes = volumes,
-            ),
+    // 2. 目标项目：复用 targetSnapshot + targetDesiredEntries，不再次 getProjectWorkspaceSnapshot
+    val targetVolumes = targetSnapshot.volumes.map { vol ->
+        FrozenManifestVolume(
+            id = vol.volume.id,
+            title = vol.volume.title,
+            order = vol.volume.order,
+            revision = vol.volume.updatedAt.toEpochMillis(),
+            updatedAt = vol.volume.updatedAt,
+            chapters = vol.chapters.map { ch ->
+                val key = ChapterKey(targetProjectId, vol.volume.id, ch.id)
+                val entry = targetDesiredEntries[key]
+                FrozenManifestChapter(
+                    id = ch.id,
+                    title = ch.title,
+                    order = ch.order,
+                    revision = ch.updatedAt.toEpochMillis(),
+                    updatedAt = ch.updatedAt,
+                    // 目标项目：用 targetDesiredEntries 的真实 URI/hash（promote 后填）；
+                    // 若 desiredEntries 缺失则用空占位，恢复时由 promotedEntries 替换。
+                    contentFile = entry?.relativePath ?: "",
+                    contentHash = entry?.contentHash ?: "",
+                )
+            },
         )
     }
+    frozenProjects.add(
+        FrozenManifestProject(
+            id = targetProjectId,
+            title = targetSnapshot.project.title,
+            order = 0,
+            revision = targetSnapshot.project.updatedAt.toEpochMillis(),
+            updatedAt = targetSnapshot.project.updatedAt,
+            volumes = targetVolumes,
+        ),
+    )
 
     return FrozenManifestPlan(
         schemaVersion = 1,
@@ -157,9 +201,12 @@ suspend fun buildFrozenManifestPlan(
  *
  * 输出与 [mirrorManifestToJson] 一致的 schema：`{schemaVersion, revision, updatedAt, projects: [...]}`。
  *
+ * #649 评论 5575950895 问题 5：非目标项目章节原样输出冻结的真实 contentFile/contentHash
+ * （来自已提交 manifest），不再是空字符串。
+ *
  * @param plan 冻结的 manifest 计划。
  * @param promotedEntries 本次事务已 promote 的章节 entries（key 为 ChapterKey）。
- * @return manifest JSON 字符串；如果 plan 中有章节在 promotedEntries 中缺失 URI/hash，返回 null。
+ * @return manifest JSON 字符串；如果目标项目有章节在 promotedEntries 中缺失 URI/hash，返回 null。
  */
 fun frozenPlanToManifestJson(
     plan: FrozenManifestPlan,
@@ -193,10 +240,8 @@ fun frozenPlanToManifestJson(
                         put("contentHash", entry.contentHash)
                     })
                 } else {
-                    // 非目标项目：用冻结的占位值（contentFile/contentHash 由后续维护保证）
-                    // 注意：冻结时 contentFile/contentHash 是空字符串，
-                    // 正常流程中非目标项目不会被改动，所以这里保留原始空值。
-                    // 实际生产中，非目标项目的内容来自 stateStore，不在此 plan 中。
+                    // #649 评论 5575950895 问题 5：非目标项目原样输出冻结的真实 contentFile/contentHash
+                    // （来自已提交 manifest），不再输出空字符串占位。
                     chaptersJson.put(JSONObject().apply {
                         put("id", frozenChapter.id)
                         put("title", frozenChapter.title)

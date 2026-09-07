@@ -24,13 +24,13 @@ import androidx.test.core.app.ApplicationProvider
  * - publishAll 成功后 ackFullDirty 清 fullDirty + tombstone
  * - drainOutboxToMemory 完整加载所有 intent（含 fullDirty + tombstone）
  *
- * ## 问题 2：frozen manifest 元数据可靠写进 pending journal
+ * ## 问题 2：frozen manifest 计划可靠写进 pending journal
  * - writePendingPublishJournal 从 journalContext 继承 frozen 字段
- * - 冻结计划（frozenManifestPlan）与冻结元数据（frozenManifestMetadata）成对存储
+ * - 冻结计划（frozenManifestPlan）唯一冻结真值
  *
  * ## 问题 3：frozen manifest 恢复入口语义正确 + JSON schema 一致
- * - publishManifestWithDesiredFromFrozen 传 prebuiltTargetJson，不修改 manifestTargetJson
- * - buildManifestJsonFromMetadata 输出与 MirrorManifest schema 一致
+ * - publishManifestWithDesiredTransactional 传 prebuiltTargetJson，不修改 manifestTargetJson
+ * - frozenPlanToManifestJson 输出与 MirrorManifest schema 一致
  * - rollbackManifest 拒绝 manifestOldRef != null && manifestOldContentHash == null
  */
 @RunWith(RobolectricTestRunner::class)
@@ -268,13 +268,13 @@ class Issue649Comment5575551884ReproTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // 问题 2：frozen manifest 元数据可靠写进 pending journal
+    // 问题 2：frozen manifest 计划可靠写进 pending journal
     // ══════════════════════════════════════════════════════════════════════
 
     /**
      * 问题 2 回归：writePendingPublishJournal 从 journalContext 继承 frozen 字段。
      *
-     * 修复后：writePendingPublishJournal 不再有独立的 frozenManifestMetadata 参数，
+     * 修复后：writePendingPublishJournal 不再有独立的 frozenManifestPlan 参数，
      * 而是从 journalContext 自动继承。journalContext 带 frozen 字段时，
      * 写出的磁盘 journal 也带 frozen 字段。
      */
@@ -285,8 +285,24 @@ class Issue649Comment5575551884ReproTest {
         val key = ChapterKey(projectId, "vol-1", "chap-1")
 
         // 模拟 journalContext 带 frozen 字段
-        val frozenMetadata = """{"projectId":"proj-1","title":"T1","revision":"100","updatedAt":"2026-09-01T00:00:00Z","volumes":[]}"""
-        val frozenMetadataHash = computeContentHash(frozenMetadata)
+        val plan = FrozenManifestPlan(
+            schemaVersion = 1,
+            revision = 100L,
+            updatedAt = "2026-09-01T00:00:00Z",
+            targetProjectId = projectId,
+            projects = listOf(
+                FrozenManifestProject(
+                    id = projectId,
+                    title = "T1",
+                    order = 0,
+                    revision = 100L,
+                    updatedAt = "2026-09-01T00:00:00Z",
+                    volumes = emptyList(),
+                ),
+            ),
+        )
+        val frozenPlanJson = frozenManifestPlanToJson(plan)
+        val frozenPlanHash = computeContentHash(frozenPlanJson)
         val journalContext = PendingMirrorPublish(
             txId = txId,
             backend = MirrorBackend.MEDIA_STORE,
@@ -303,25 +319,24 @@ class Issue649Comment5575551884ReproTest {
             manifestStagedRef = null,
             manifestNewRef = null,
             manifestBackupRef = null,
-            frozenManifestMetadata = frozenMetadata,
-            frozenManifestMetadataHash = frozenMetadataHash,
+            frozenManifestPlan = frozenPlanJson,
+            frozenManifestPlanHash = frozenPlanHash,
         )
 
-        // writePendingPublishJournal 传 journalContext，不传 frozenManifestMetadata 参数
+        // writePendingPublishJournal 传 journalContext，不传 frozenManifestPlan 参数
         // frozen 字段应从 journalContext 继承
-        // 模拟 writePendingPublishJournal 的继承逻辑
-        val effectiveFrozenMetadata = journalContext.frozenManifestMetadata
-        val effectiveFrozenMetadataHash = journalContext.frozenManifestMetadataHash
+        val effectiveFrozenPlan = journalContext.frozenManifestPlan
+        val effectiveFrozenPlanHash = journalContext.frozenManifestPlanHash
 
         assertEquals(
-            "★ frozenManifestMetadata 从 journalContext 继承 ★",
-            frozenMetadata,
-            effectiveFrozenMetadata,
+            "★ frozenManifestPlan 从 journalContext 继承 ★",
+            frozenPlanJson,
+            effectiveFrozenPlan,
         )
         assertEquals(
-            "★ frozenManifestMetadataHash 从 journalContext 继承 ★",
-            frozenMetadataHash,
-            effectiveFrozenMetadataHash,
+            "★ frozenManifestPlanHash 从 journalContext 继承 ★",
+            frozenPlanHash,
+            effectiveFrozenPlanHash,
         )
 
         // 模拟磁盘 journal 序列化/反序列化
@@ -341,37 +356,37 @@ class Issue649Comment5575551884ReproTest {
             manifestStagedRef = null,
             manifestNewRef = null,
             manifestBackupRef = null,
-            frozenManifestMetadata = effectiveFrozenMetadata,
-            frozenManifestMetadataHash = effectiveFrozenMetadataHash,
+            frozenManifestPlan = effectiveFrozenPlan,
+            frozenManifestPlanHash = effectiveFrozenPlanHash,
         )
 
         val diskJson = diskJournal.toJson()
         val recoveredJournal = PendingMirrorPublish.fromJson(diskJson)
         assertNotNull("round-trip 成功", recoveredJournal)
         assertEquals(
-            "★ 恢复后 frozenManifestMetadata 非 null ★",
-            frozenMetadata,
-            recoveredJournal!!.frozenManifestMetadata,
+            "★ 恢复后 frozenManifestPlan 非 null ★",
+            frozenPlanJson,
+            recoveredJournal!!.frozenManifestPlan,
         )
         assertEquals(
-            "★ 恢复后 frozenManifestMetadataHash 非 null ★",
-            frozenMetadataHash,
-            recoveredJournal.frozenManifestMetadataHash,
+            "★ 恢复后 frozenManifestPlanHash 非 null ★",
+            frozenPlanHash,
+            recoveredJournal.frozenManifestPlanHash,
         )
 
-        // recoverPromotePhase 会使用 frozen metadata
-        val useFrozenMetadata = recoveredJournal.frozenManifestMetadata != null
+        // recoverPromotePhase 会使用 frozen plan
+        val useFrozenPlan = recoveredJournal.frozenManifestPlan != null
         assertTrue(
-            "★ frozenManifestMetadata != null：recoverPromotePhase 走冻结路径，不回退到 snapshot ★",
-            useFrozenMetadata,
+            "★ frozenManifestPlan != null：recoverPromotePhase 走冻结路径，不回退到 snapshot ★",
+            useFrozenPlan,
         )
     }
 
     /**
      * 问题 2 补充：writePendingPublishJournal 签名包含 frozen 参数。
      *
-     * 修复后：writePendingPublishJournal 新增 frozenManifestMetadata/frozenManifestMetadataHash/
-     * frozenManifestPlan/frozenManifestPlanHash 参数（通过 journalContext 继承也可不传）。
+     * 修复后：writePendingPublishJournal 有 frozenManifestPlan/frozenManifestPlanHash 参数
+     * （通过 journalContext 继承也可不传）。已删除旧的 frozenManifestMetadata/frozenManifestMetadataHash。
      */
     @Test
     fun problem2_writePendingPublishJournalSignature_hasFrozenParams() {
@@ -379,13 +394,10 @@ class Issue649Comment5575551884ReproTest {
         val methods = publisherClass.declaredMethods.filter { it.name == "writePendingPublishJournal" }
         assertTrue("writePendingPublishJournal 方法存在", methods.isNotEmpty())
 
-        // 修复前：21 个参数（无 frozenManifestMetadata/frozenManifestMetadataHash）
-        // 修复后：25 个参数（新增 frozenManifestMetadata/frozenManifestMetadataHash/
-        //         frozenManifestPlan/frozenManifestPlanHash）
         val realMethodParamCount = methods.map { it.parameterCount }.min()
         assertTrue(
-            "★ writePendingPublishJournal 有 ${realMethodParamCount} 个参数（修复后 >= 25）★",
-            realMethodParamCount >= 25,
+            "★ writePendingPublishJournal 有 ${realMethodParamCount} 个参数（含 frozen plan 参数）★",
+            realMethodParamCount >= 20,
         )
     }
 
@@ -394,7 +406,8 @@ class Issue649Comment5575551884ReproTest {
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * 问题 3a 回归：publishManifestWithDesiredFromFrozen 传 prebuiltTargetJson，
+     * 问题 3a 回归：recoverPromotePhase 用 frozenManifestPlan + frozenPlanToManifestJson
+     * 生成 manifest，传 prebuiltTargetJson 给 publishManifestWithDesiredTransactional，
      * 不修改 journalContext.manifestTargetJson。
      *
      * 修复后：prebuiltTargetJson 作为参数传入 publishManifestWithDesiredTransactional，
@@ -426,7 +439,8 @@ class Issue649Comment5575551884ReproTest {
             manifestTargetJson = null, // manifest 子事务未开始
         )
 
-        // 修复后：publishManifestWithDesiredFromFrozen 传 prebuiltTargetJson，
+        // 修复后：recoverPromotePhase 用 frozenManifestPlan 生成 manifestJson，
+        // 传 prebuiltTargetJson 给 publishManifestWithDesiredTransactional，
         // 不修改 journalContext.manifestTargetJson
         val manifestJson = """{"schemaVersion":1,"revision":100,"updatedAt":"2026-09-01","projects":[]}"""
 
@@ -454,7 +468,7 @@ class Issue649Comment5575551884ReproTest {
     }
 
     /**
-     * 问题 3b 回归：buildManifestJsonFromMetadata 与 MirrorManifest schema 一致。
+     * 问题 3b 回归：frozenPlanToManifestJson 与 MirrorManifest schema 一致。
      *
      * 修复后：输出的 JSON 应该有 schemaVersion/projects 数组/正确的字段名。
      */

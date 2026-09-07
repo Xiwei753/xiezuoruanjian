@@ -188,7 +188,16 @@ class MirrorOutboxStore(
 
     /**
      * ACK 全量脏标记：只有当前磁盘的 fullDirtyGeneration 仍等于本轮处理的那一份时，
-     * 才清除全量标记和所有 tombstone。
+     * 才清除全量标记。
+     *
+     * #649 评论 5575950895 问题 1：旧实现无条件 `projects = emptyMap()`，
+     * 会删掉发布期间新到的 `intent.generation > generation` 的更晚事件。
+     * 新实现只保留 generation 严格大于本轮 ACK generation 的项目，
+     * 既清掉本轮全量覆盖的旧意图，又不误删更晚的新事件。
+     *
+     * 如果发布期间又来了新的 fullDirty，`fullDirtyGeneration` 已经变化，
+     * 则 `snapshot.fullDirtyGeneration != generation` 校验失败，ACK 直接返回 false，
+     * 保留新一代全量标记等待下一轮处理。
      *
      * @return true 表示 ACK 成功；false 表示 generation 不匹配或持久化失败。
      */
@@ -198,9 +207,12 @@ class MirrorOutboxStore(
             if (snapshot.fullDirtyGeneration != generation) {
                 return false
             }
+            // #649 评论 5575950895 问题 1：保留 generation > 本轮 generation 的更晚新事件，
+            // 不再无条件清空 projects。
+            val remainingProjects = snapshot.projects.filterValues { it.generation > generation }
             val newSnapshot = OutboxSnapshot(
                 nextGeneration = snapshot.nextGeneration,
-                projects = emptyMap(),
+                projects = remainingProjects,
                 fullDirtyGeneration = null,
                 lastSignalTime = snapshot.lastSignalTime,
             )

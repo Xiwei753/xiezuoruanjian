@@ -362,13 +362,31 @@ class Issue649Comment5575052682ReproTest {
     }
 
     /**
-     * 硬问题 2 修复验证：PendingMirrorPublish 数据类已有冻结 manifest 元数据字段。
+     * 硬问题 2 修复验证：PendingMirrorPublish 数据类已有冻结 manifest 计划字段。
      *
-     * #649 评论 5575052682：新增 frozenManifestMetadata / frozenManifestMetadataHash 字段，
-     * manifest 子事务未开始（manifestTargetJson==null）时恢复仍能用冻结的元数据。
+     * #649 评论 5575052682：新增 frozenManifestPlan / frozenManifestPlanHash 字段，
+     * manifest 子事务未开始（manifestTargetJson==null）时恢复仍能用冻结的计划。
      */
     @Test
-    fun hardProblem2_pendingMirrorPublish_hasFrozenSnapshotMetadataField() {
+    fun hardProblem2_pendingMirrorPublish_hasFrozenSnapshotPlanField() {
+        val plan = FrozenManifestPlan(
+            schemaVersion = 1,
+            revision = 100L,
+            updatedAt = "2026-09-01T00:00:00Z",
+            targetProjectId = "proj-1",
+            projects = listOf(
+                FrozenManifestProject(
+                    id = "proj-1",
+                    title = "T1",
+                    order = 0,
+                    revision = 100L,
+                    updatedAt = "2026-09-01T00:00:00Z",
+                    volumes = emptyList(),
+                ),
+            ),
+        )
+        val frozenPlanJson = frozenManifestPlanToJson(plan)
+        val frozenPlanHash = computeContentHash(frozenPlanJson)
         val journal = PendingMirrorPublish(
             txId = "tx-1",
             backend = MirrorBackend.MEDIA_STORE,
@@ -386,20 +404,20 @@ class Issue649Comment5575052682ReproTest {
             manifestNewRef = null,
             manifestBackupRef = null,
             manifestTargetJson = null,
-            frozenManifestMetadata = """{"projectId":"proj-1","title":"T1","revision":"100","updatedAt":"2026-09-01","volumes":[]}""",
-            frozenManifestMetadataHash = "sha256:test",
+            frozenManifestPlan = frozenPlanJson,
+            frozenManifestPlanHash = frozenPlanHash,
         )
 
         // manifestTargetJson 仍为 null（manifest 子事务未开始）
         assertNull("manifestTargetJson 是 null（manifest 子事务未开始）", journal.manifestTargetJson)
-        // frozenManifestMetadata 不为 null：恢复时可用冻结的元数据，不用重读 snapshot
-        assertNotNull("frozenManifestMetadata 存在，恢复时可替代 getProjectWorkspaceSnapshot", journal.frozenManifestMetadata)
-        assertNotNull("frozenManifestMetadataHash 存在，用于完整性校验", journal.frozenManifestMetadataHash)
+        // frozenManifestPlan 不为 null：恢复时可用冻结的计划，不用重读 snapshot
+        assertNotNull("frozenManifestPlan 存在，恢复时可替代 getProjectWorkspaceSnapshot", journal.frozenManifestPlan)
+        assertNotNull("frozenManifestPlanHash 存在，用于完整性校验", journal.frozenManifestPlanHash)
         // 验证 JSON round-trip 保持 frozen 字段
         val roundTripped = PendingMirrorPublish.fromJson(journal.toJson())
         assertNotNull("round-trip 成功", roundTripped)
-        assertEquals("frozenManifestMetadata round-trip", journal.frozenManifestMetadata, roundTripped!!.frozenManifestMetadata)
-        assertEquals("frozenManifestMetadataHash round-trip", journal.frozenManifestMetadataHash, roundTripped.frozenManifestMetadataHash)
+        assertEquals("frozenManifestPlan round-trip", journal.frozenManifestPlan, roundTripped!!.frozenManifestPlan)
+        assertEquals("frozenManifestPlanHash round-trip", journal.frozenManifestPlanHash, roundTripped.frozenManifestPlanHash)
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -472,45 +490,57 @@ class Issue649Comment5575052682ReproTest {
     }
 
     // ══════════════════════════════════════════════════════════════════════
-    // 硬问题 2 修复验证：recoverPromotePhase 使用冻结的元数据。
-    // 源：PendingMirrorPublish.kt (frozenManifestMetadata 字段)
+    // 硬问题 2 修复验证：recoverPromotePhase 使用冻结的计划。
+    // 源：PendingMirrorPublish.kt (frozenManifestPlan 字段)
     // ══════════════════════════════════════════════════════════════════════
 
     /**
-     * 硬问题 2 修复验证：recoverPromotePhase 使用冻结的元数据。
+     * 硬问题 2 修复验证：recoverPromotePhase 使用冻结的计划。
      *
-     * 修复后：PendingMirrorPublish 包含 frozenManifestMetadata 和 frozenManifestMetadataHash，
-     * 在恢复时使用这些冻结的元数据而不是重新读取当前 snapshot。
+     * 修复后：PendingMirrorPublish 包含 frozenManifestPlan 和 frozenManifestPlanHash，
+     * 在恢复时使用这些冻结的计划而不是重新读取当前 snapshot。
      */
     @Test
-    fun hardProblem2_frozenMetadataUsedInRecovery() {
-        // 构建一个包含 frozenManifestMetadata 的 journal
+    fun hardProblem2_frozenPlanUsedInRecovery() {
+        // 构建一个包含 frozenManifestPlan 的 journal
         val projectId = "proj-1"
-        val frozenMetadata = """
-            {
-                "projectId": "$projectId",
-                "title": "测试作品",
-                "revision": "100",
-                "updatedAt": "2026-09-01T00:00:00Z",
-                "volumes": [
-                    {
-                        "volumeId": "vol-1",
-                        "title": "卷一",
-                        "order": 0,
-                        "chapters": [
-                            {
-                                "chapterId": "chap-1",
-                                "title": "第一章",
-                                "order": 0,
-                                "revision": 100,
-                                "contentHash": "sha256:abc123",
-                                "relativePath": "作品/测试作品/卷一/第一章.md"
-                            }
-                        ]
-                    }
-                ]
-            }
-        """.trimIndent()
+        val plan = FrozenManifestPlan(
+            schemaVersion = 1,
+            revision = 100L,
+            updatedAt = "2026-09-01T00:00:00Z",
+            targetProjectId = projectId,
+            projects = listOf(
+                FrozenManifestProject(
+                    id = projectId,
+                    title = "测试作品",
+                    order = 0,
+                    revision = 100L,
+                    updatedAt = "2026-09-01T00:00:00Z",
+                    volumes = listOf(
+                        FrozenManifestVolume(
+                            id = "vol-1",
+                            title = "卷一",
+                            order = 0,
+                            revision = 100L,
+                            updatedAt = "2026-09-01T00:00:00Z",
+                            chapters = listOf(
+                                FrozenManifestChapter(
+                                    id = "chap-1",
+                                    title = "第一章",
+                                    order = 0,
+                                    revision = 100L,
+                                    updatedAt = "2026-09-01T00:00:00Z",
+                                    contentFile = "",
+                                    contentHash = "",
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+        )
+        val frozenPlanJson = frozenManifestPlanToJson(plan)
+        val frozenPlanHash = computeContentHash(frozenPlanJson)
 
         val journal = PendingMirrorPublish(
             txId = "tx-1",
@@ -545,17 +575,17 @@ class Issue649Comment5575052682ReproTest {
             manifestNewRef = null,
             manifestBackupRef = null,
             isManifestCommitted = false,
-            frozenManifestMetadata = frozenMetadata,
-            frozenManifestMetadataHash = computeContentHash(frozenMetadata),
+            frozenManifestPlan = frozenPlanJson,
+            frozenManifestPlanHash = frozenPlanHash,
         )
 
-        // 验证 journal 包含冻结的元数据
-        assertNotNull(journal.frozenManifestMetadata)
-        assertNotNull(journal.frozenManifestMetadataHash)
+        // 验证 journal 包含冻结的计划
+        assertNotNull(journal.frozenManifestPlan)
+        assertNotNull(journal.frozenManifestPlanHash)
 
-        // 验证元数据 hash 正确
-        val computedHash = computeContentHash(frozenMetadata)
-        assertEquals(computedHash, journal.frozenManifestMetadataHash)
+        // 验证计划 hash 正确
+        val computedHash = computeContentHash(frozenPlanJson)
+        assertEquals(computedHash, journal.frozenManifestPlanHash)
     }
 
     /**

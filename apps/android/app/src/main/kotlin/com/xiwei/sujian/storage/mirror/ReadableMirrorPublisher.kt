@@ -620,38 +620,48 @@ class ReadableMirrorPublisher(
         }
 
         // 写 manifest（走事务性 manifest 写入）
-        // #649 评论 5575052682 问题 2：恢复时使用冻结的元数据，不再重新读取当前 snapshot
+        // #649 评论 5575950895 问题 4：收口到 frozenManifestPlan 路径。
+        // 旧实现检查 journal.frozenManifestMetadata != null 并调用旧的
+        // publishManifestWithDesiredFromFrozen()（内部调 buildManifestJsonFromMetadata()）。
+        // 新加的 frozenManifestPlan / frozenPlanToManifestJson() 没有成为恢复真值。
+        // 现在直接收口成一套：只保留 FrozenManifestPlan 一个冻结真值。
+        // 新 UPSERT promote journal 没 plan/hash 就回滚，不允许重新读取当前 Core 猜目标。
+        val frozenPlanJson = journal.frozenManifestPlan ?: run {
+            DiagnosticsLogger.w(TAG, "Recover promote: missing frozenManifestPlan, rolling back")
+            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+            return
+        }
+        val frozenPlanHash = journal.frozenManifestPlanHash ?: run {
+            DiagnosticsLogger.w(TAG, "Recover promote: missing frozenManifestPlanHash, rolling back")
+            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+            return
+        }
+        if (computeContentHash(frozenPlanJson) != frozenPlanHash) {
+            DiagnosticsLogger.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
+            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+            return
+        }
+        val plan = frozenManifestPlanFromJson(frozenPlanJson) ?: run {
+            DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
+            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+            return
+        }
+        val manifestJson = frozenPlanToManifestJson(plan, promotedEntries) ?: run {
+            DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
+            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+            return
+        }
         val manifestResult =
-            if (journal.frozenManifestMetadata != null) {
-                // 使用冻结的元数据恢复
-                publishManifestWithDesiredFromFrozen(
-                    projectId = journal.projectId,
-                    frozenMetadata = journal.frozenManifestMetadata,
-                    frozenMetadataHash = journal.frozenManifestMetadataHash,
-                    promotedEntries = promotedEntries,
-                    txId = journal.txId,
-                    journalContext = journal,
-                    items = currentItems,
-                    storage = storage,
-                )
-            } else {
-                // 旧 journal 没有冻结元数据，回退到读取当前 snapshot
-                val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
-                if (snapshotResult !is BridgeResult.Success) {
-                    DiagnosticsLogger.w(TAG, "Failed to get snapshot for project ${journal.projectId} during recovery")
-                    rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-                    return
-                }
-                publishManifestWithDesiredTransactional(
-                    projectId = journal.projectId,
-                    snapshot = snapshotResult.data,
-                    desiredEntries = promotedEntries,
-                    txId = journal.txId,
-                    journalContext = journal,
-                    items = currentItems,
-                    storage = storage,
-                )
-            }
+            publishManifestWithDesiredTransactional(
+                projectId = journal.projectId,
+                snapshot = null,
+                desiredEntries = promotedEntries,
+                txId = journal.txId,
+                journalContext = journal,
+                items = currentItems,
+                storage = storage,
+                prebuiltTargetJson = manifestJson,
+            )
         if (manifestResult == null) {
             DiagnosticsLogger.w(TAG, "Failed to write manifest during recovery")
             // #649 评论 5564379115 问题 2：统一事务回滚
@@ -1086,50 +1096,32 @@ class ReadableMirrorPublisher(
                     )
             }
 
-            // 冻结 manifest 元数据（#649 评论 5575052682 问题 2）
-            // 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存项目级元数据，
-            // 恢复时使用此字段的元数据，不再重新读取当前 snapshot。
-            val frozenMetadata = buildManifestMetadataJson(projectId, snapshot, desiredEntries)
-            val frozenMetadataHash = if (frozenMetadata != null) computeContentHash(frozenMetadata) else null
-
-            // #649 评论 5575551884 问题 3：冻结全局 manifest 计划
-            // 在正文开始改公共镜像前，冻结所有项目的逻辑状态。
-            // 恢复时输出完整的 MirrorManifest JSON（含其他作品），不重新读取当前 Core。
-            val frozenPlan = buildFrozenManifestPlan(source, projectId)
-            val frozenPlanJson = frozenPlan?.let { frozenManifestPlanToJson(it) }
-            val frozenPlanHash = frozenPlanJson?.let { computeContentHash(it) }
-
-            // 写 pendingPublish journal（记录 staging 完成）
-            // #649 评论 5563333323 缺口 2：journal 写入失败则停止本轮镜像操作
-            // 使用 txContext 中的 backend/treeUri，不再从 stateStore 读取（#649 评论 5565862745 问题 4）
-            if (!writePendingPublishJournal(
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                    phase = PendingMirrorPublish.PHASE_PROMOTE,
-                    txId = txId,
-                    backend = txContext.backend,
-                    treeUri = txContext.treeUri,
-                    oldEntries = oldEntries,
-                    newEntries = desiredEntries,
-                    stagedRefs = stagedRefs,
-                    items = items,
-                    removedProjectIds = emptySet(),
-                    manifestOldRef = null,
-                    manifestStagedRef = null,
-                    manifestNewRef = null,
-                    manifestBackupRef = null,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                )
-            ) {
-                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after stage")
+            // #649 评论 5575551884 问题 3 / 5575950895 问题 3+5：冻结全局 manifest 计划。
+            // 在正文开始改公共镜像前，以已提交 manifest 为基线，只替换本事务目标项目，
+            // 冻结所有项目的逻辑状态。恢复时输出完整的 MirrorManifest JSON（含其他作品），
+            // 不重新读取当前 Core。
+            // buildFrozenManifestPlan 返回 null 时直接停止事务，不带着 null plan 继续
+            // backup/vacate/promote（#649 评论 5575950895 问题 3）。
+            val committedManifest = readCommittedManifest(storage)
+            val frozenPlan = buildFrozenManifestPlan(
+                committedManifest = committedManifest,
+                targetProjectId = projectId,
+                targetSnapshot = snapshot,
+                targetDesiredEntries = desiredEntries,
+            )
+            if (frozenPlan == null) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: failed to build frozen manifest plan")
                 storage.rollback(txId)
                 return MirrorPublishResult.RetryableFailure
             }
+            val frozenPlanJson = frozenManifestPlanToJson(frozenPlan)
+            val frozenPlanHash = computeContentHash(frozenPlanJson)
 
-            // #649 评论 5564624383 问题 2：journalContext 在 promote 循环前创建，
-            // 让 promote 失败时能传给 rollbackWholePublishTransaction 写 rollback journal
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            val journalContext =
+            // #649 评论 5575950895 问题 3：advancing journal 模式。
+            // 第一份 durable pending journal 直接收成 currentJournal，传入 frozenManifestPlan/Hash，
+            // 后续步骤只 currentJournal = currentJournal.copy(...) + persistPendingJournal(currentJournal)，
+            // 不再让 writePendingPublishJournal 重建整份对象。以后新增字段也不会被旧 builder 擦掉。
+            var currentJournal =
                 PendingMirrorPublish(
                     txId = txId,
                     backend = txContext.backend,
@@ -1146,11 +1138,14 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = null,
                     manifestNewRef = null,
                     manifestBackupRef = null,
-                    frozenManifestMetadata = frozenMetadata,
-                    frozenManifestMetadataHash = frozenMetadataHash,
                     frozenManifestPlan = frozenPlanJson,
                     frozenManifestPlanHash = frozenPlanHash,
                 )
+            if (!persistPendingJournal(currentJournal)) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after stage")
+                storage.rollback(txId)
+                return MirrorPublishResult.RetryableFailure
+            }
 
             // 3. 提升阶段：promote 所有暂存文件到最终位置（逐项更新 journal）
             // #649 评论 5564820566 问题 3：两步 journalable backup — prepareBackup + vacateCommitted
@@ -1202,7 +1197,7 @@ class ReadableMirrorPublisher(
                                             items,
                                             stagedRefs,
                                             storage,
-                                            journalContext,
+                                            currentJournal,
                                         )
                                         return MirrorPublishResult.RetryableFailure
                                     }
@@ -1217,7 +1212,7 @@ class ReadableMirrorPublisher(
                                         "Publish project $projectId aborted: " +
                                             "backup prepare failed for ${key.chapterId}",
                                     )
-                                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                                     return MirrorPublishResult.RetryableFailure
                                 }
                                 oldVacated = prepared.vacated
@@ -1229,39 +1224,21 @@ class ReadableMirrorPublisher(
                                     "Publish project $projectId aborted: " +
                                         "lookupBackup failed for ${key.chapterId}: ${backupResult.cause?.message}",
                                 )
-                                rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                                rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                                 return MirrorPublishResult.RetryableFailure
                             }
                         }
                     // #649 评论 5565067997 修复 1：journal 先写 STATE_BACKUP_READY
                     items[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_BACKUP_READY)
-                    // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-                    if (!writePendingPublishJournal(
-                            projectId = projectId,
-                            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                            phase = PendingMirrorPublish.PHASE_PROMOTE,
-                            txId = txId,
-                            backend = txContext.backend,
-                            treeUri = txContext.treeUri,
-                            oldEntries = oldEntries,
-                            newEntries = desiredEntries,
-                            stagedRefs = stagedRefs,
-                            items = items,
-                            removedProjectIds = emptySet(),
-                            manifestOldRef = null,
-                            manifestStagedRef = null,
-                            manifestNewRef = null,
-                            manifestBackupRef = null,
-                            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                            journalContext = journalContext,
-                        )
-                    ) {
+                    // #649 评论 5575950895 问题 3：advancing journal 模式
+                    currentJournal = currentJournal.copy(items = items)
+                    if (!persistPendingJournal(currentJournal)) {
                         DiagnosticsLogger.w(
                             TAG,
                             "Publish project $projectId aborted: " +
                                 "journal write failed after backup prepare for ${key.chapterId}",
                         )
-                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                         return MirrorPublishResult.RetryableFailure
                     }
                     // 2. vacate old（如果 prepareBackup 还没 move old）
@@ -1271,39 +1248,21 @@ class ReadableMirrorPublisher(
                                 TAG,
                                 "Publish project $projectId aborted: vacate failed for ${key.chapterId}",
                             )
-                            rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                            rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                             return MirrorPublishResult.RetryableFailure
                         }
                     }
                     // #649 评论 5565067997 修复 1：vacate 成功后写 STATE_OLD_VACATED
                     items[key] = items[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
-                    // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-                    if (!writePendingPublishJournal(
-                            projectId = projectId,
-                            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                            phase = PendingMirrorPublish.PHASE_PROMOTE,
-                            txId = txId,
-                            backend = txContext.backend,
-                            treeUri = txContext.treeUri,
-                            oldEntries = oldEntries,
-                            newEntries = desiredEntries,
-                            stagedRefs = stagedRefs,
-                            items = items,
-                            removedProjectIds = emptySet(),
-                            manifestOldRef = null,
-                            manifestStagedRef = null,
-                            manifestNewRef = null,
-                            manifestBackupRef = null,
-                            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                            journalContext = journalContext,
-                        )
-                    ) {
+                    // #649 评论 5575950895 问题 3：advancing journal 模式
+                    currentJournal = currentJournal.copy(items = items)
+                    if (!persistPendingJournal(currentJournal)) {
                         DiagnosticsLogger.w(
                             TAG,
                             "Publish project $projectId aborted: " +
                                 "journal write failed after vacate for ${key.chapterId}",
                         )
-                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                         return MirrorPublishResult.RetryableFailure
                     }
                 }
@@ -1337,7 +1296,7 @@ class ReadableMirrorPublisher(
                         "Publish project $projectId aborted: promote failed for ${key.chapterId}",
                     )
                     // #649 评论 5564379115 问题 2：统一事务回滚，不逐 item 回滚
-                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                     return MirrorPublishResult.RetryableFailure
                 }
                 promotedEntries[key] =
@@ -1349,54 +1308,35 @@ class ReadableMirrorPublisher(
                     )
                 // 逐项更新 journal（记录该 item 已 PROMOTED）
                 items[key] = items[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
-                // #649 评论 5563333323 缺口 2：journal 写入失败则停止
-                // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-                if (!writePendingPublishJournal(
-                        projectId = projectId,
-                        transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                        phase = PendingMirrorPublish.PHASE_PROMOTE,
-                        txId = txId,
-                        backend = txContext.backend,
-                        treeUri = txContext.treeUri,
-                        oldEntries = oldEntries,
-                        newEntries = desiredEntries,
-                        stagedRefs = stagedRefs,
-                        items = items,
-                        removedProjectIds = emptySet(),
-                        manifestOldRef = null,
-                        manifestStagedRef = null,
-                        manifestNewRef = null,
-                        manifestBackupRef = null,
-                        manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                        journalContext = journalContext,
-                    )
-                ) {
+                // #649 评论 5575950895 问题 3：advancing journal 模式
+                currentJournal = currentJournal.copy(items = items)
+                if (!persistPendingJournal(currentJournal)) {
                     DiagnosticsLogger.w(
                         TAG,
                         "Publish project $projectId aborted: journal write failed after promote for ${key.chapterId}",
                     )
                     // #649 评论 5564379115 问题 2：统一事务回滚，不逐 item 回滚
-                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                     return MirrorPublishResult.RetryableFailure
                 }
             }
 
             // 4. 提交 manifest：走事务性 manifest 写入（stage → promote → setManifestUri → 删 backup）
-            //    #649 评论 5562715833 问题 5：传 journalContext，manifest 事务每步落 journal
+            //    #649 评论 5562715833 问题 5：传 currentJournal，manifest 事务每步落 journal
             val manifestResult =
                 publishManifestWithDesiredTransactional(
                     projectId = projectId,
                     snapshot = snapshot,
                     desiredEntries = promotedEntries,
                     txId = txId,
-                    journalContext = journalContext,
+                    journalContext = currentJournal,
                     items = items,
                     storage = storage,
                 )
             if (manifestResult == null) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifest write failed")
                 // #649 评论 5564379115 问题 2：统一事务回滚
-                rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
                 return MirrorPublishResult.RetryableFailure
             }
             // #649 评论 5573310799 问题 5：先写 PHASE_CLEANUP journal（在 stateStore 更新之前），
@@ -1405,19 +1345,13 @@ class ReadableMirrorPublisher(
             //    journal 里放 committedItems + promotedEntries + manifest committed 状态。
             // 标记所有 item 为 COMMITTED，更新 journal 到 cleanup 阶段
             val committedItems = items.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            if (!writePendingPublishJournal(
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            // #649 评论 5575950895 问题 3：advancing journal 模式
+            currentJournal =
+                currentJournal.copy(
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
-                    txId = txId,
-                    backend = txContext.backend,
-                    treeUri = txContext.treeUri,
-                    oldEntries = oldEntries,
                     newEntries = promotedEntries,
                     stagedRefs = emptyMap(),
                     items = committedItems,
-                    removedProjectIds = emptySet(),
                     manifestOldRef = manifestResult.manifestOldRef,
                     manifestStagedRef = manifestResult.manifestStagedRef,
                     manifestNewRef = manifestResult.newRef,
@@ -1427,7 +1361,7 @@ class ReadableMirrorPublisher(
                     manifestNewContentHash = manifestResult.manifestNewContentHash,
                     manifestOldContentHash = manifestResult.manifestOldContentHash,
                 )
-            ) {
+            if (!persistPendingJournal(currentJournal)) {
                 DiagnosticsLogger.w(
                     TAG,
                     "Publish project $projectId: cleanup journal write failed, keeping journal for retry",
@@ -1455,28 +1389,8 @@ class ReadableMirrorPublisher(
 
             // 5. 清理阶段：调用统一 cleanup 函数
             //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            val cleanupJournal =
-                PendingMirrorPublish(
-                    txId = txId,
-                    backend = txContext.backend,
-                    treeUri = txContext.treeUri,
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                    phase = PendingMirrorPublish.PHASE_CLEANUP,
-                    oldEntries = oldEntries,
-                    newEntries = promotedEntries,
-                    stagedRefs = emptyMap(),
-                    items = committedItems,
-                    removedProjectIds = emptySet(),
-                    manifestOldRef = manifestResult.manifestOldRef,
-                    manifestStagedRef = manifestResult.manifestStagedRef,
-                    manifestNewRef = manifestResult.newRef,
-                    manifestBackupRef = manifestResult.backupOldRef,
-                    isManifestCommitted = true,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                )
-            if (cleanupCommittedTransaction(cleanupJournal, storage, allLiveKeys = allKeys)) {
+            // #649 评论 5575950895 问题 3：直接用 currentJournal（已包含 manifest committed 状态）
+            if (cleanupCommittedTransaction(currentJournal, storage, allLiveKeys = allKeys)) {
                 // 全部清理成功，清除 journal
                 stateStore.clearPendingPublish()
             } else {
@@ -3089,8 +3003,7 @@ class ReadableMirrorPublisher(
         // 显式传参或从 journalContext 继承，避免字段新增后被旧 builder 静默清空。
         manifestTargetJson: String? = null,
         // #649 评论 5575551884 问题 2：frozen 字段显式传参或从 journalContext 继承
-        frozenManifestMetadata: String? = null,
-        frozenManifestMetadataHash: String? = null,
+        // #649 评论 5575950895 问题 4：删除 frozenManifestMetadata/frozenManifestMetadataHash 参数
         frozenManifestPlan: String? = null,
         frozenManifestPlanHash: String? = null,
         journalContext: PendingMirrorPublish? = null,
@@ -3102,8 +3015,6 @@ class ReadableMirrorPublisher(
         // #649 评论 5572554935 额外修复：manifestTargetJson 同样从 journalContext 继承
         val effectiveManifestTargetJson = manifestTargetJson ?: journalContext?.manifestTargetJson
         // #649 评论 5575551884 问题 3：冻结计划字段从 journalContext 继承
-        val effectiveFrozenManifestMetadata = frozenManifestMetadata ?: journalContext?.frozenManifestMetadata
-        val effectiveFrozenManifestMetadataHash = frozenManifestMetadataHash ?: journalContext?.frozenManifestMetadataHash
         val effectiveFrozenManifestPlan = frozenManifestPlan ?: journalContext?.frozenManifestPlan
         val effectiveFrozenManifestPlanHash = frozenManifestPlanHash ?: journalContext?.frozenManifestPlanHash
         val journal =
@@ -3128,8 +3039,6 @@ class ReadableMirrorPublisher(
                 manifestNewContentHash = effectiveManifestNewContentHash,
                 manifestOldContentHash = effectiveManifestOldContentHash,
                 manifestTargetJson = effectiveManifestTargetJson,
-                frozenManifestMetadata = effectiveFrozenManifestMetadata,
-                frozenManifestMetadataHash = effectiveFrozenManifestMetadataHash,
                 frozenManifestPlan = effectiveFrozenManifestPlan,
                 frozenManifestPlanHash = effectiveFrozenManifestPlanHash,
             )
@@ -3916,6 +3825,94 @@ class ReadableMirrorPublisher(
         return sb.toString()
     }
 
+    /**
+     * 从 JSON 字符串解析 [MirrorManifest]（#649 评论 5575950895 问题 5）。
+     *
+     * 用于读取已提交 manifest 作为 frozen plan 基线。
+     * 解析失败返回 null（调用方应停止事务，不猜测 manifest 内容）。
+     */
+    private fun parseMirrorManifestFromJson(json: String): MirrorManifest? {
+        return try {
+            val root = JSONObject(json)
+            val schemaVersion = root.optInt("schemaVersion", 1)
+            val revision = root.optLong("revision", 0L)
+            val updatedAt = root.optString("updatedAt", "")
+            val projectsArray = root.optJSONArray("projects") ?: JSONArray()
+            val projects = mutableListOf<MirrorProject>()
+            for (i in 0 until projectsArray.length()) {
+                val projectObj = projectsArray.getJSONObject(i)
+                val volumesArray = projectObj.optJSONArray("volumes") ?: JSONArray()
+                val volumes = mutableListOf<MirrorVolume>()
+                for (j in 0 until volumesArray.length()) {
+                    val volumeObj = volumesArray.getJSONObject(j)
+                    val chaptersArray = volumeObj.optJSONArray("chapters") ?: JSONArray()
+                    val chapters = mutableListOf<MirrorChapter>()
+                    for (k in 0 until chaptersArray.length()) {
+                        val chapterObj = chaptersArray.getJSONObject(k)
+                        chapters.add(
+                            MirrorChapter(
+                                id = chapterObj.getString("id"),
+                                title = chapterObj.optString("title", ""),
+                                order = chapterObj.optInt("order", 0),
+                                revision = chapterObj.optLong("revision", 0L),
+                                updatedAt = chapterObj.optString("updatedAt", ""),
+                                contentFile = chapterObj.optString("contentFile", ""),
+                                contentHash = chapterObj.optString("contentHash", ""),
+                            ),
+                        )
+                    }
+                    volumes.add(
+                        MirrorVolume(
+                            id = volumeObj.getString("id"),
+                            title = volumeObj.optString("title", ""),
+                            order = volumeObj.optInt("order", 0),
+                            revision = volumeObj.optLong("revision", 0L),
+                            updatedAt = volumeObj.optString("updatedAt", ""),
+                            chapters = chapters,
+                        ),
+                    )
+                }
+                projects.add(
+                    MirrorProject(
+                        id = projectObj.getString("id"),
+                        title = projectObj.optString("title", ""),
+                        order = projectObj.optInt("order", 0),
+                        revision = projectObj.optLong("revision", 0L),
+                        updatedAt = projectObj.optString("updatedAt", ""),
+                        volumes = volumes,
+                    ),
+                )
+            }
+            MirrorManifest(
+                schemaVersion = schemaVersion,
+                revision = revision,
+                updatedAt = updatedAt,
+                projects = projects,
+            )
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to parse manifest JSON", e)
+            null
+        }
+    }
+
+    /**
+     * 读取当前已提交的全局 manifest（#649 评论 5575950895 问题 5）。
+     *
+     * 用于 [buildFrozenManifestPlan] 的基线：非目标项目从已提交 manifest 取原样
+     * metadata + contentFile + contentHash，不重新从当前 Core 全量状态拼。
+     *
+     * @param storage 当前事务的 storage
+     * @return 已提交 manifest；无 manifest / 读取失败 / 解析失败返回 null（表示首次发布或基线不可用）
+     */
+    private fun readCommittedManifest(storage: ReadableMirrorStorage): MirrorManifest? {
+        val manifestUri = stateStore.getManifestUri() ?: return null
+        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
+        val lookup = storage.lookup(manifestRelativePath)
+        if (lookup !is MirrorLookupResult.Found) return null
+        val textHash = storage.readTextAndHash(lookup.ref) ?: return null
+        return parseMirrorManifestFromJson(textHash.first)
+    }
+
     private fun projectToJson(
         project: MirrorProject,
         indent: String,
@@ -3986,174 +3983,9 @@ class ReadableMirrorPublisher(
             .replace("\r", "\\r")
             .replace("\t", "\\t")
 
-    /**
-     * 构建 manifest 元数据 JSON（冻结用）。
-     *
-     * 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存项目级元数据，
-     * 恢复时使用此字段的元数据，不再重新读取当前 snapshot。
-     * 包含 project/volume/chapter 的 id/title/order/revision/updatedAt。
-     * 不必提前写最终 URI。
-     */
-    private fun buildManifestMetadataJson(
-        projectId: String,
-        snapshot: ProjectWorkspaceSnapshot,
-        desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
-    ): String? {
-        return try {
-            val root = JSONObject()
-            root.put("projectId", projectId)
-            root.put("title", snapshot.project.title)
-            root.put("revision", snapshot.project.updatedAt)
-            root.put("updatedAt", snapshot.project.updatedAt)
-
-            // 序列化卷和章节信息
-            val volumesArray = JSONArray()
-            for (volumeWithChapters in snapshot.volumes) {
-                val volumeObj = JSONObject()
-                volumeObj.put("volumeId", volumeWithChapters.volume.id)
-                volumeObj.put("title", volumeWithChapters.volume.title)
-                volumeObj.put("order", volumeWithChapters.volume.order)
-
-                val chaptersArray = JSONArray()
-                for (chapter in volumeWithChapters.chapters) {
-                    val chapterObj = JSONObject()
-                    chapterObj.put("chapterId", chapter.id)
-                    chapterObj.put("title", chapter.title)
-                    chapterObj.put("order", chapter.order)
-                    chapterObj.put("revision", chapter.updatedAt.toEpochMillis())
-
-                    // 添加 desiredEntries 中的 contentHash 和 relativePath
-                    val key = ChapterKey(projectId, volumeWithChapters.volume.id, chapter.id)
-                    desiredEntries[key]?.let { entry ->
-                        chapterObj.put("contentHash", entry.contentHash)
-                        chapterObj.put("relativePath", entry.relativePath)
-                    }
-
-                    chaptersArray.put(chapterObj)
-                }
-                volumeObj.put("chapters", chaptersArray)
-                volumesArray.put(volumeObj)
-            }
-            root.put("volumes", volumesArray)
-            root.toString()
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to build manifest metadata", e)
-            null
-        }
-    }
-
-    /**
-     * 从冻结的 manifest 元数据恢复并发布 manifest（#649 评论 5575052682 问题 2）。
-     *
-     * 当 journal 包含 frozenManifestMetadata 时，使用此字段的元数据生成 manifest，
-     * 不再重新读取当前 snapshot，避免把新 metadata 混进旧事务正文。
-     */
-    private suspend fun publishManifestWithDesiredFromFrozen(
-        projectId: String,
-        frozenMetadata: String,
-        frozenMetadataHash: String?,
-        promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
-        txId: String,
-        journalContext: PendingMirrorPublish,
-        items: Map<ChapterKey, PendingItem>,
-        storage: ReadableMirrorStorage,
-    ): ManifestTransactionResult? {
-        // 校验元数据完整性
-        if (frozenMetadataHash != null) {
-            val computedHash = computeContentHash(frozenMetadata)
-            if (computedHash != frozenMetadataHash) {
-                DiagnosticsLogger.e(TAG, "Frozen manifest metadata hash mismatch, cannot recover")
-                return null
-            }
-        }
-
-        // 解析冻结的元数据
-        val metadataObj = try {
-            JSONObject(frozenMetadata)
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to parse frozen manifest metadata", e)
-            return null
-        }
-
-        // 构建 manifest JSON
-        val manifestJson = buildManifestJsonFromMetadata(metadataObj, promotedEntries) ?: return null
-
-        // 走事务性 manifest 写入
-        // #649 评论 5575551884 问题 3：把冻结产物作为 prebuiltTargetJson 传入，
-        // 不先改 journalContext.manifestTargetJson（否则会伪造"manifest 子事务已开始"）。
-        return publishManifestWithDesiredTransactional(
-            projectId = projectId,
-            snapshot = null,
-            desiredEntries = promotedEntries,
-            txId = txId,
-            journalContext = journalContext,
-            items = items,
-            storage = storage,
-            prebuiltTargetJson = manifestJson,
-        )
-    }
-
-    /**
-     * 从冻结的元数据构建 manifest JSON。
-     */
-    private fun buildManifestJsonFromMetadata(
-        metadataObj: JSONObject,
-        promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
-    ): String? {
-        return try {
-            val root = JSONObject()
-            root.put("projectId", metadataObj.getString("projectId"))
-            root.put("title", metadataObj.getString("title"))
-            root.put("revision", metadataObj.getString("revision"))
-            root.put("updatedAt", metadataObj.getString("updatedAt"))
-
-            val volumesArray = JSONArray()
-            val metadataVolumes = metadataObj.optJSONArray("volumes")
-            if (metadataVolumes != null) {
-                for (i in 0 until metadataVolumes.length()) {
-                    val volObj = metadataVolumes.getJSONObject(i)
-                    val volumeObj = JSONObject()
-                    volumeObj.put("volumeId", volObj.getString("volumeId"))
-                    volumeObj.put("title", volObj.getString("title"))
-                    volumeObj.put("order", volObj.getInt("order"))
-
-                    val chaptersArray = JSONArray()
-                    val metadataChapters = volObj.optJSONArray("chapters")
-                    if (metadataChapters != null) {
-                        for (j in 0 until metadataChapters.length()) {
-                            val chapObj = metadataChapters.getJSONObject(j)
-                            val chapterObj = JSONObject()
-                            chapterObj.put("chapterId", chapObj.getString("chapterId"))
-                            chapterObj.put("title", chapObj.getString("title"))
-                            chapterObj.put("order", chapObj.getInt("order"))
-                            chapterObj.put("revision", chapObj.getLong("revision"))
-
-                            // 使用 promotedEntries 中的 URI 和 contentHash
-                            val key = ChapterKey(
-                                metadataObj.getString("projectId"),
-                                volObj.getString("volumeId"),
-                                chapObj.getString("chapterId")
-                            )
-                            promotedEntries[key]?.let { entry ->
-                                chapterObj.put("uri", entry.uri)
-                                chapterObj.put("contentHash", entry.contentHash)
-                                chapterObj.put("relativePath", entry.relativePath)
-                            }
-
-                            chaptersArray.put(chapterObj)
-                        }
-                    }
-                    volumeObj.put("chapters", chaptersArray)
-                    volumesArray.put(volumeObj)
-                }
-            }
-            root.put("volumes", volumesArray)
-            root.toString()
-        } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to build manifest from frozen metadata", e)
-            null
-        }
-    }
+    // #649 评论 5575950895 问题 4：删除旧的冻结元数据机制
+    // （buildManifestMetadataJson / publishManifestWithDesiredFromFrozen / buildManifestJsonFromMetadata）。
+    // 只保留 FrozenManifestPlan 一个冻结真值，恢复主路径走 frozenManifestPlan + frozenPlanToManifestJson()。
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"

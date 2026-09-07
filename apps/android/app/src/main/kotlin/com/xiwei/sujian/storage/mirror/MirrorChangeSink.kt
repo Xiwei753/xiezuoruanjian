@@ -55,7 +55,7 @@ data class DeleteEvent(
 )
 
 /**
- * 默认实现：ConcurrentHashMap 脏标记 + Channel.CONFLATED 信号 + debounce。
+ * DefaultMirrorChangeSink — ConcurrentHashMap 脏标记 + Channel.CONFLATED 信号 + debounce。
  *
  * #649 评论 5575551884 问题 1：generation-aware ACK。
  * - dirtyMap / deleteQueue 中每个条目带 outbox 的 generation。
@@ -63,6 +63,16 @@ data class DeleteEvent(
  * - publishAll 成功后用 ackFullDirty(generation) 清除全量标记。
  * - processDeletes 成功后用 ackProject(generation) 清除 tombstone。
  * - drainOutboxToMemory 从 snapshot 完整恢复所有 intent（含 fullDirty + tombstone）。
+ *
+ * #649 评论 5575950895 问题 1/2：
+ * - 不再用全局 `loadedFullDirtyGeneration` 做全量 ACK。运行期 `everythingChanged()`
+ *   根本没给它赋值，导致运行期 fullDirty 成功后无法 ACK。直接用本轮 snapshot 中
+ *   wildcard 的 `DirtyEntry.generation` 做 ACK，发布期间若来了新一代 wildcard，
+ *   `remove(key, oldValue)` 和 `ackFullDirty(oldGeneration)` 都不会误删新事件。
+ * - `projectDeleted()` 改为先 durable outbox 成功再改内存，不再"先放占位再 poll"
+ *   误删队头其他删除事件。
+ * - `chapterChanged()` / `projectStructureChanged()` 用 `intent.kind` 而非硬编码
+ *   `OutboxIntentKind.UPSERT`，避免磁盘里项目已是 DELETE 时仍硬塞 UPSERT。
  */
 class DefaultMirrorChangeSink(
     private val publisher: ReadableMirrorPublisher,
@@ -73,10 +83,6 @@ class DefaultMirrorChangeSink(
     private val deleteQueue = ConcurrentLinkedQueue<DeleteEvent>()
     private val signal = Channel<Unit>(Channel.CONFLATED)
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-    /** 从 outbox 加载的 fullDirty 代次号，ACK 时校验。 */
-    @Volatile
-    private var loadedFullDirtyGeneration: Long? = null
 
     init {
         scope.launch {
@@ -101,7 +107,10 @@ class DefaultMirrorChangeSink(
             dirtyMap[key] = DirtyEntry(
                 timestamp = System.currentTimeMillis(),
                 generation = intent.generation,
-                kind = OutboxIntentKind.UPSERT,
+                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+                // 若磁盘里项目已是 DELETE，markDirty 返回已有 DELETE intent，
+                // 调用方不能再把它硬塞成 UPSERT。
+                kind = intent.kind,
             )
             outboxStore.recordSignalTime()
             signal.trySend(Unit)
@@ -116,7 +125,8 @@ class DefaultMirrorChangeSink(
             dirtyMap[MirrorKey(projectId, "", "")] = DirtyEntry(
                 timestamp = System.currentTimeMillis(),
                 generation = intent.generation,
-                kind = OutboxIntentKind.UPSERT,
+                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+                kind = intent.kind,
             )
             outboxStore.recordSignalTime()
             signal.trySend(Unit)
@@ -126,19 +136,18 @@ class DefaultMirrorChangeSink(
     }
 
     override fun projectDeleted(projectId: String) {
-        deleteQueue.add(DeleteEvent(projectId))
-        // 删除项目时清掉该项目的脏标记，避免删除后又触发 publishProject
-        dirtyMap.keys.removeAll { it.projectId == projectId }
-        val intent = outboxStore.markDeleted(projectId)
-        if (intent != null) {
-            // 重新加入 deleteQueue 带 generation
-            deleteQueue.poll() // 移除不带 generation 的那个
-            deleteQueue.add(DeleteEvent(projectId, intent.generation))
-            outboxStore.recordSignalTime()
-            signal.trySend(Unit)
-        } else {
+        // #649 评论 5575950895 问题 2：先 durable outbox 成功再改内存。
+        // 旧实现"先 add 占位再 poll"会 poll 掉队头其他删除事件（ConcurrentLinkedQueue FIFO）。
+        val intent = outboxStore.markDeleted(projectId) ?: run {
             DiagnosticsLogger.e(TAG, "Failed to write outbox for projectDeleted: $projectId")
+            return
         }
+
+        // durable outbox 已成功，再改内存：清掉该项目的脏标记，加入带 generation 的删除事件。
+        dirtyMap.keys.removeAll { it.projectId == projectId }
+        deleteQueue.add(DeleteEvent(projectId, intent.generation))
+        outboxStore.recordSignalTime()
+        signal.trySend(Unit)
     }
 
     override fun everythingChanged() {
@@ -168,12 +177,13 @@ class DefaultMirrorChangeSink(
      *
      * 修复：旧实现 `isFullDirty() { return }` 跳过 tombstone 加载，与 markDirtyAll 保留 tombstone 冲突。
      * 新实现：无论 fullDirty 状态，都加载所有 intent（UPSERT + DELETE）。
+     *
+     * #649 评论 5575950895 问题 1：不再保存 `loadedFullDirtyGeneration` 全局变量。
+     * 运行期 `everythingChanged()` 不给它赋值，导致运行期 fullDirty 成功后无法 ACK。
+     * 改用本轮 snapshot 中 wildcard 的 `DirtyEntry.generation` 做 ACK（见 processDirtySnapshot）。
      */
     private suspend fun drainOutboxToMemory() {
         val snapshot = outboxStore.readSnapshot() ?: return
-
-        // 保存 fullDirty 代次号，ACK 时校验
-        loadedFullDirtyGeneration = snapshot.fullDirtyGeneration
 
         // 加载全量标记
         if (snapshot.fullDirtyGeneration != null) {
@@ -255,15 +265,18 @@ class DefaultMirrorChangeSink(
 
         // 通配键表示全量
         if (snapshot.any { it.first == wildcardKey }) {
+            // #649 评论 5575950895 问题 1：用本轮 snapshot 中 wildcard 的 DirtyEntry.generation
+            // 做 ACK，不再用全局 loadedFullDirtyGeneration（运行期 everythingChanged 不给它赋值）。
+            // 发布期间若来了新一代 wildcard，remove(key, oldValue) 和 ackFullDirty(oldGeneration)
+            // 都不会误删新事件。
+            val processedWildcard = snapshot.first { it.first == wildcardKey }.second
             val result = publisher.publishAll()
             when (result) {
                 is MirrorPublishResult.Committed -> {
-                    dirtyMap.remove(wildcardKey, snapshot.first { it.first == wildcardKey }.second)
+                    dirtyMap.remove(wildcardKey, processedWildcard)
                     // #649 评论 5575551884：用 generation-aware ACK 清 fullDirty
-                    val fullGen = loadedFullDirtyGeneration
-                    if (fullGen != null) {
-                        outboxStore.ackFullDirty(fullGen)
-                        loadedFullDirtyGeneration = null
+                    if (processedWildcard.generation > 0) {
+                        outboxStore.ackFullDirty(processedWildcard.generation)
                     }
                 }
                 is MirrorPublishResult.PendingRecovery,
