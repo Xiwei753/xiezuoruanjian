@@ -9,39 +9,76 @@ import java.io.FileOutputStream
 import java.io.IOException
 
 /**
- * MirrorOutboxStore — 镜像变更意图的持久化 outbox 存储。
+ * 镜像 outbox 中每个项目的操作意图类型。
+ */
+enum class OutboxIntentKind {
+    UPSERT,
+    DELETE,
+}
+
+/**
+ * 单个项目在 outbox 中的意图，带代次号用于并发 ACK。
  *
- * #649 评论 5575052682：当前 [DefaultMirrorChangeSink] 的 dirtyMap、deleteQueue、
- * Channel.CONFLATED 都是纯内存对象，进程死亡后变更意图丢失。本类提供持久化 outbox，
- * 让发布器在进程重启后仍能恢复待发布的项目。
+ * @property projectId 项目 ID。
+ * @property generation 递增代次号，每次 markDirty/markDeleted 递增。
+ * @property kind 操作类型：UPSERT（脏发布）或 DELETE（删除 tombstone）。
+ */
+data class OutboxProjectIntent(
+    val projectId: String,
+    val generation: Long,
+    val kind: OutboxIntentKind,
+)
+
+/**
+ * 从磁盘读取的完整 outbox 快照。
+ *
+ * @property nextGeneration 下一个待分配的代次号。
+ * @property projects 所有项目的意图（含 dirty 和 tombstone），key 为 projectId。
+ * @property fullDirtyGeneration 全量脏标记的代次号（null 表示无全量标记）。
+ */
+data class OutboxSnapshot(
+    val nextGeneration: Long,
+    val projects: Map<String, OutboxProjectIntent>,
+    val fullDirtyGeneration: Long?,
+    val lastSignalTime: Long = 0L,
+)
+
+/**
+ * MirrorOutboxStore — 带代次号的持久化 outbox 存储。
+ *
+ * #649 评论 5575551884 问题 1：旧 outbox 用 `Set<String>` 保存 projectId，
+ * markDirty 去重（projectId 已存在时直接 return true，outbox 不发生任何变化），
+ * 导致并发保存时 R2 的意图无法持久化，R1 ACK 后 outbox 清空，进程死亡后 R2 丢失。
+ *
+ * 新实现：
+ * - 每个项目的意图带递增 [generation] 号。
+ * - [markDirty] / [markDeleted] 每次调用都推进代次。
+ * - [ackProject] / [ackFullDirty] 只在"当前磁盘 generation/kind 仍然等于
+ *   本轮处理的那一份"时才清除；处理期间来了更晚的保存（generation 已变），
+ *   本轮 ACK 什么都不删。
  *
  * ## 存储位置
- * `context.noBackupFilesDir/sujian-mirror/outbox.json`（与 state.json 同一目录）。
+ * `context.noBackupFilesDir/sujian-mirror/outbox.json`。
  *
  * ## 线程安全
- * 所有公开方法用 [lock] 保护，保证多线程读写原子。文件 I/O 在锁内同步执行
- * （调用方在 IO 调度器上调用）。
+ * 所有公开方法用 [lock] 保护，保证多线程读写原子。
  *
  * ## JSON 结构
  * ```json
  * {
- *   "dirtyProjects": ["proj-1", "proj-2"],
- *   "deleteTombstones": ["proj-3"],
- *   "fullDirty": false,
+ *   "nextGeneration": 5,
+ *   "projects": {
+ *     "proj-1": { "generation": 2, "kind": "upsert" },
+ *     "proj-3": { "generation": 1, "kind": "delete" }
+ *   },
+ *   "fullDirtyGeneration": null,
  *   "lastSignalTime": 1694123456789
  * }
  * ```
  *
- * ## 优先级规则
- * - **delete tombstone 优先**：同一 projectId 既有 dirty 又有 tombstone 时，tombstone 胜出。
- *   [getDirtyProjects()] 会排除 tombstone 项目，[getDeleteTombstones()] 单独返回。
- * - **全量脏标记优先**：fullDirty=true 时，[getDirtyProjects()] 返回空集，
- *   [isFullDirty()] 返回 true。调用方应优先处理全量发布。
- *
- * ## 使用约定
- * 1. 先调用本类方法持久化 outbox
- * 2. 再 signal 通知 worker（调用方负责发信号）
- * 3. publish 成功后调用 [clearDirty] 或 [clearAll] 清理
+ * ## 旧格式迁移
+ * 首次读取时检测旧格式（`dirtyProjects`/`deleteTombstones`/`fullDirty`）
+ * 并自动迁移为新格式。
  */
 class MirrorOutboxStore(
     private val context: Context,
@@ -54,208 +91,155 @@ class MirrorOutboxStore(
         }
     }
 
-    /** 用 AtomicFile 做原子写入。 */
     private val outboxAtomicFile: AtomicFile by lazy { AtomicFile(outboxFile) }
 
     /**
-     * 标记项目脏（需要重新发布）。
+     * 标记项目脏（需要重新发布），推进代次。
      *
-     * 如果该项目已在 deleteTombstones 中，tombstone 优先，不添加 dirty。
-     * 如果 fullDirty=true，不需要再标记单个项目。
-     *
-     * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作）。
+     * @return 新的 [OutboxProjectIntent]（含递增代次）；null 表示持久化失败。
      */
-    fun markDirty(projectId: String): Boolean {
+    fun markDirty(projectId: String): OutboxProjectIntent? {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
-            val dirty = ensureArray(root, DIRTY_PROJECTS_KEY)
-            val tombstones = root.optJSONArray(DELETE_TOMBSTONES_KEY)
-            // tombstone 优先：如果该项目已在 tombstone 中，不添加 dirty
-            if (tombstones != null && containsString(tombstones, projectId)) {
-                return true
+            val snapshot = readSnapshotForUpdate() ?: return null
+            // tombstone 优先：如果该项目已是 DELETE 意图，不添加 dirty
+            val existing = snapshot.projects[projectId]
+            if (existing != null && existing.kind == OutboxIntentKind.DELETE) {
+                return existing
             }
-            // 如果 fullDirty=true，不需要再标记单个项目
-            if (root.optBoolean(FULL_DIRTY_KEY, false)) {
-                return true
-            }
-            // 去重：如果已在 dirty 中，不重复添加
-            if (containsString(dirty, projectId)) {
-                return true
-            }
-            dirty.put(projectId)
-            return writeRoot(root)
+            val generation = snapshot.nextGeneration
+            val intent = OutboxProjectIntent(projectId, generation, OutboxIntentKind.UPSERT)
+            val projects = snapshot.projects.toMutableMap()
+            projects[projectId] = intent
+            val newSnapshot = OutboxSnapshot(
+                nextGeneration = generation + 1,
+                projects = projects,
+                fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                lastSignalTime = snapshot.lastSignalTime,
+            )
+            return if (writeSnapshot(newSnapshot)) intent else null
         }
     }
 
     /**
-     * 全量脏标记（所有项目都需要重新发布）。
+     * 标记全量脏（所有项目都需要重新发布），推进代次。
      *
-     * 设置 fullDirty=true，并清空 dirtyProjects（全量时不需要逐项记录）。
-     * 保留 deleteTombstones（全量发布时仍应执行删除）。
-     *
-     * @return true 表示持久化成功；false 表示失败。
+     * @return 新的全量代次号；null 表示持久化失败。
      */
-    fun markDirtyAll(): Boolean {
+    fun markDirtyAll(): Long? {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
-            root.put(FULL_DIRTY_KEY, true)
-            // 全量时清空逐项 dirty，避免冗余
-            root.remove(DIRTY_PROJECTS_KEY)
-            return writeRoot(root)
+            val snapshot = readSnapshotForUpdate() ?: return null
+            val generation = snapshot.nextGeneration
+            val newSnapshot = OutboxSnapshot(
+                nextGeneration = generation + 1,
+                projects = snapshot.projects,
+                fullDirtyGeneration = generation,
+                lastSignalTime = snapshot.lastSignalTime,
+            )
+            return if (writeSnapshot(newSnapshot)) generation else null
         }
     }
 
     /**
-     * 标记项目删除（tombstone 优先）。
+     * 标记项目删除（tombstone 优先），推进代次。
      *
-     * 添加 tombstone，并从 dirtyProjects 中移除该项目（删除优先于发布）。
-     *
-     * @return true 表示持久化成功；false 表示失败。
+     * @return 新的 [OutboxProjectIntent]（含递增代次）；null 表示持久化失败。
      */
-    fun markDeleted(projectId: String): Boolean {
+    fun markDeleted(projectId: String): OutboxProjectIntent? {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
-            // 添加到 tombstone（去重）
-            val tombstones = ensureArray(root, DELETE_TOMBSTONES_KEY)
-            if (!containsString(tombstones, projectId)) {
-                tombstones.put(projectId)
+            val snapshot = readSnapshotForUpdate() ?: return null
+            val generation = snapshot.nextGeneration
+            val intent = OutboxProjectIntent(projectId, generation, OutboxIntentKind.DELETE)
+            val projects = snapshot.projects.toMutableMap()
+            projects[projectId] = intent
+            val newSnapshot = OutboxSnapshot(
+                nextGeneration = generation + 1,
+                projects = projects,
+                fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                lastSignalTime = snapshot.lastSignalTime,
+            )
+            return if (writeSnapshot(newSnapshot)) intent else null
+        }
+    }
+
+    /**
+     * ACK 单个项目：只有当前磁盘的 generation 和 kind 仍等于本轮处理的那一份时，
+     * 才清除该条意图。处理期间来了更晚的保存（generation 已变），本轮 ACK 什么都不删。
+     *
+     * @return true 表示 ACK 成功（条目已清除）；false 表示 generation 不匹配或持久化失败。
+     */
+    fun ackProject(projectId: String, generation: Long, kind: OutboxIntentKind): Boolean {
+        synchronized(lock) {
+            val snapshot = readSnapshotForUpdate() ?: return false
+            val current = snapshot.projects[projectId]
+            if (current == null || current.generation != generation || current.kind != kind) {
+                return false
             }
-            // 从 dirty 中移除：删除优先于发布
-            val dirty = root.optJSONArray(DIRTY_PROJECTS_KEY)
-            if (dirty != null) {
-                removeString(dirty, projectId)
-                // 如果 dirty 变空，移除字段
-                if (dirty.length() == 0) {
-                    root.remove(DIRTY_PROJECTS_KEY)
-                }
-            }
-            return writeRoot(root)
+            val projects = snapshot.projects.toMutableMap()
+            projects.remove(projectId)
+            val newSnapshot = OutboxSnapshot(
+                nextGeneration = snapshot.nextGeneration,
+                projects = projects,
+                fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                lastSignalTime = snapshot.lastSignalTime,
+            )
+            return writeSnapshot(newSnapshot)
         }
     }
 
     /**
-     * 清除指定项目的脏标记（publish 成功后调用）。
+     * ACK 全量脏标记：只有当前磁盘的 fullDirtyGeneration 仍等于本轮处理的那一份时，
+     * 才清除全量标记和所有 tombstone。
      *
-     * 从 dirtyProjects 中移除该项目，不影响 deleteTombstones。
-     *
-     * @return true 表示持久化成功或项目本就不在 dirty 中；false 表示失败。
+     * @return true 表示 ACK 成功；false 表示 generation 不匹配或持久化失败。
      */
-    fun clearDirty(projectId: String): Boolean {
+    fun ackFullDirty(generation: Long): Boolean {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
-            val dirty = root.optJSONArray(DIRTY_PROJECTS_KEY) ?: return true
-            removeString(dirty, projectId)
-            if (dirty.length() == 0) {
-                root.remove(DIRTY_PROJECTS_KEY)
+            val snapshot = readSnapshotForUpdate() ?: return false
+            if (snapshot.fullDirtyGeneration != generation) {
+                return false
             }
-            return writeRoot(root)
+            val newSnapshot = OutboxSnapshot(
+                nextGeneration = snapshot.nextGeneration,
+                projects = emptyMap(),
+                fullDirtyGeneration = null,
+                lastSignalTime = snapshot.lastSignalTime,
+            )
+            return writeSnapshot(newSnapshot)
         }
     }
 
     /**
-     * 获取所有脏项目（包含 delete tombstone 排除后的项目）。
+     * 读取当前 outbox 快照（仅读，不修改）。
      *
-     * - fullDirty=true 时返回空集（调用方应通过 [isFullDirty] 判断全量发布）。
-     * - 返回的项目已排除 deleteTombstones（tombstone 优先）。
-     *
-     * @return 脏项目 ID 集合，失败时返回空集。
+     * @return 完整快照；失败时返回 null。
      */
-    fun getDirtyProjects(): Set<String> {
+    fun readSnapshot(): OutboxSnapshot? {
         synchronized(lock) {
-            val root = readRootForRead() ?: return emptySet()
-            // 全量脏标记优先：返回空集，调用方走 isFullDirty
-            if (root.optBoolean(FULL_DIRTY_KEY, false)) {
-                return emptySet()
-            }
-            val dirty = root.optJSONArray(DIRTY_PROJECTS_KEY) ?: return emptySet()
-            val tombstones = root.optJSONArray(DELETE_TOMBSTONES_KEY)
-            val result = mutableSetOf<String>()
-            for (i in 0 until dirty.length()) {
-                val pid = dirty.optString(i)
-                if (pid.isNotEmpty()) {
-                    // 排除 tombstone 中的项目
-                    if (tombstones == null || !containsString(tombstones, pid)) {
-                        result.add(pid)
-                    }
-                }
-            }
-            return result
+            return readSnapshotForRead()
         }
     }
 
     /**
-     * 获取所有删除 tombstone。
-     *
-     * @return 删除 tombstone 集合，失败时返回空集。
-     */
-    fun getDeleteTombstones(): Set<String> {
-        synchronized(lock) {
-            val root = readRootForRead() ?: return emptySet()
-            val tombstones = root.optJSONArray(DELETE_TOMBSTONES_KEY) ?: return emptySet()
-            val result = mutableSetOf<String>()
-            for (i in 0 until tombstones.length()) {
-                val pid = tombstones.optString(i)
-                if (pid.isNotEmpty()) {
-                    result.add(pid)
-                }
-            }
-            return result
-        }
-    }
-
-    /**
-     * 是否有全量脏标记。
-     *
-     * @return true 表示需要全量发布；false 表示没有全量标记或读取失败。
-     */
-    fun isFullDirty(): Boolean {
-        synchronized(lock) {
-            val root = readRootForRead() ?: return false
-            return root.optBoolean(FULL_DIRTY_KEY, false)
-        }
-    }
-
-    /**
-     * 清空所有 outbox（应用启动时 drain 完成后调用）。
-     *
-     * 清除 dirtyProjects、deleteTombstones、fullDirty，保留 lastSignalTime。
-     *
-     * @return true 表示清空成功；false 表示失败。
-     */
-    fun clearAll(): Boolean {
-        synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
-            root.remove(DIRTY_PROJECTS_KEY)
-            root.remove(DELETE_TOMBSTONES_KEY)
-            root.put(FULL_DIRTY_KEY, false)
-            return writeRoot(root)
-        }
-    }
-
-    /**
-     * 是否为空（无 dirty、无 tombstone、无全量标记）。
-     *
-     * @return true 表示 outbox 为空；false 表示有待处理项或读取失败（失败时视为非空）。
+     * 是否为空（无 projects、无 fullDirty）。
      */
     fun isEmpty(): Boolean {
         synchronized(lock) {
-            val root = readRootForRead() ?: return false
-            if (root.optBoolean(FULL_DIRTY_KEY, false)) {
-                return false
-            }
-            val dirty = root.optJSONArray(DIRTY_PROJECTS_KEY)
-            val tombstones = root.optJSONArray(DELETE_TOMBSTONES_KEY)
-            return (dirty == null || dirty.length() == 0) &&
-                (tombstones == null || tombstones.length() == 0)
+            val snapshot = readSnapshotForRead() ?: return false
+            return snapshot.projects.isEmpty() && snapshot.fullDirtyGeneration == null
+        }
+    }
+
+    /**
+     * 清空所有 outbox。
+     */
+    fun clearAll(): Boolean {
+        synchronized(lock) {
+            return writeSnapshot(OutboxSnapshot(1, emptyMap(), null))
         }
     }
 
     /**
      * 记录上次发送信号的时间（用于调试）。
-     *
-     * 调用方在 signal 成功后调用此方法记录时间戳。
-     *
-     * @return true 表示持久化成功；false 表示失败。
      */
     fun recordSignalTime(): Boolean {
         synchronized(lock) {
@@ -267,8 +251,6 @@ class MirrorOutboxStore(
 
     /**
      * 获取上次发送信号的时间（用于调试）。
-     *
-     * @return 时间戳（毫秒），未记录或失败时返回 0。
      */
     fun getLastSignalTime(): Long {
         synchronized(lock) {
@@ -277,80 +259,125 @@ class MirrorOutboxStore(
         }
     }
 
-    // ── 内部 JSON 操作 ──
+    // ── 内部方法 ──
 
-    /**
-     * 确保 root 中存在指定 key 的 JSONArray，不存在则创建空数组。
-     */
-    private fun ensureArray(
-        root: JSONObject,
-        key: String,
-    ): org.json.JSONArray {
-        val array = root.optJSONArray(key)
-        if (array != null) {
-            return array
-        }
-        val newArr = org.json.JSONArray()
-        root.put(key, newArr)
-        return newArr
-    }
-
-    /**
-     * 检查 JSONArray 中是否包含指定字符串值。
-     */
-    private fun containsString(
-        array: org.json.JSONArray,
-        value: String,
-    ): Boolean {
-        for (i in 0 until array.length()) {
-            if (array.optString(i) == value) {
-                return true
-            }
-        }
-        return false
-    }
-
-    /**
-     * 从 JSONArray 中移除指定字符串值（如果存在）。
-     */
-    private fun removeString(
-        array: org.json.JSONArray,
-        value: String,
-    ) {
-        // JSONArray 没有按值删除，需要遍历找索引
-        val idx = (0 until array.length()).firstOrNull { array.optString(it) == value } ?: return
-        // JSONArray.remove(int index) 在 API 19+ 可用
-        array.remove(idx)
-    }
-
-    // ── 文件读写 ──
-
-    /**
-     * 读 root 用于更新；损坏时返回 null（调用方应停止本轮操作）。
-     * 文件不存在时返回空 JSONObject（首次启动）。
-     */
-    private fun readRootForUpdate(): JSONObject? {
+    private fun readSnapshotForUpdate(): OutboxSnapshot? {
         return when (val result = readRoot()) {
-            is ReadResult.NotExists -> JSONObject()
-            is ReadResult.Parsed -> result.root
+            is ReadResult.NotExists -> OutboxSnapshot(1, emptyMap(), null)
+            is ReadResult.Parsed -> parseSnapshot(result.root)
             is ReadResult.Corrupted -> null
         }
     }
 
-    /**
-     * 读 root 用于只读查询；损坏时返回 null（调用方返回默认值）。
-     */
-    private fun readRootForRead(): JSONObject? {
+    private fun readSnapshotForRead(): OutboxSnapshot? {
         return when (val result = readRoot()) {
             is ReadResult.NotExists -> null
-            is ReadResult.Parsed -> result.root
+            is ReadResult.Parsed -> parseSnapshot(result.root)
             is ReadResult.Corrupted -> null
         }
     }
 
     /**
-     * 读取 outbox root。
+     * 从 JSON root 解析快照，自动迁移旧格式。
      */
+    private fun parseSnapshot(root: JSONObject): OutboxSnapshot {
+        if (root.has(NEXT_GENERATION_KEY)) {
+            return parseNewFormat(root)
+        }
+        // 旧格式迁移
+        return migrateLegacy(root)
+    }
+
+    private fun parseNewFormat(root: JSONObject): OutboxSnapshot {
+        val nextGeneration = root.optLong(NEXT_GENERATION_KEY, 1L)
+        val fullDirtyGeneration = if (root.has(FULL_DIRTY_GENERATION_KEY)) {
+            root.optLong(FULL_DIRTY_GENERATION_KEY, 0L).takeIf { it > 0 }
+        } else {
+            null
+        }
+        val projectsObj = root.optJSONObject(PROJECTS_KEY)
+        val projects = mutableMapOf<String, OutboxProjectIntent>()
+        if (projectsObj != null) {
+            val keys = projectsObj.keys()
+            while (keys.hasNext()) {
+                val pid = keys.next()
+                val intentObj = projectsObj.optJSONObject(pid) ?: continue
+                val gen = intentObj.optLong("generation", 1L)
+                val kindStr = intentObj.optString("kind", "upsert")
+                val kind = when (kindStr) {
+                    "delete" -> OutboxIntentKind.DELETE
+                    else -> OutboxIntentKind.UPSERT
+                }
+                projects[pid] = OutboxProjectIntent(pid, gen, kind)
+            }
+        }
+        val signalTime = root.optLong(LAST_SIGNAL_TIME_KEY, 0L)
+        return OutboxSnapshot(nextGeneration, projects, fullDirtyGeneration, signalTime)
+    }
+
+    /**
+     * 旧格式迁移：`dirtyProjects: [...], deleteTombstones: [...], fullDirty: bool`
+     * → 新格式：`nextGeneration: Long, projects: {...}, fullDirtyGeneration: Long?`
+     *
+     * 旧 dirtyProjects 的项给 generation=1 UPSERT，
+     * 旧 deleteTombstones 的项给 generation=1 DELETE，
+     * 旧 fullDirty=true 给 fullDirtyGeneration=1。
+     */
+    private fun migrateLegacy(root: JSONObject): OutboxSnapshot {
+        val projects = mutableMapOf<String, OutboxProjectIntent>()
+        var gen: Long = 1
+
+        val dirtyArray = root.optJSONArray(LEGACY_DIRTY_PROJECTS_KEY)
+        if (dirtyArray != null) {
+            for (i in 0 until dirtyArray.length()) {
+                val pid = dirtyArray.optString(i)
+                if (pid.isNotEmpty()) {
+                    projects[pid] = OutboxProjectIntent(pid, gen++, OutboxIntentKind.UPSERT)
+                }
+            }
+        }
+
+        val tombstoneArray = root.optJSONArray(LEGACY_DELETE_TOMBSTONES_KEY)
+        if (tombstoneArray != null) {
+            for (i in 0 until tombstoneArray.length()) {
+                val pid = tombstoneArray.optString(i)
+                if (pid.isNotEmpty()) {
+                    // tombstone 优先：覆盖 dirty
+                    projects[pid] = OutboxProjectIntent(pid, gen++, OutboxIntentKind.DELETE)
+                }
+            }
+        }
+
+        val fullDirty = root.optBoolean(LEGACY_FULL_DIRTY_KEY, false)
+        val signalTime = root.optLong(LAST_SIGNAL_TIME_KEY, 0L)
+
+        return OutboxSnapshot(gen, projects, if (fullDirty) 1L else null, signalTime)
+    }
+
+    private fun writeSnapshot(snapshot: OutboxSnapshot): Boolean {
+        val root = JSONObject()
+        root.put(NEXT_GENERATION_KEY, snapshot.nextGeneration)
+        if (snapshot.fullDirtyGeneration != null) {
+            root.put(FULL_DIRTY_GENERATION_KEY, snapshot.fullDirtyGeneration)
+        }
+        val projectsObj = JSONObject()
+        for ((pid, intent) in snapshot.projects) {
+            val intentObj = JSONObject()
+            intentObj.put("generation", intent.generation)
+            intentObj.put("kind", when (intent.kind) {
+                OutboxIntentKind.UPSERT -> "upsert"
+                OutboxIntentKind.DELETE -> "delete"
+            })
+            projectsObj.put(pid, intentObj)
+        }
+        root.put(PROJECTS_KEY, projectsObj)
+        // 保留 lastSignalTime
+        if (snapshot.lastSignalTime > 0) {
+            root.put(LAST_SIGNAL_TIME_KEY, snapshot.lastSignalTime)
+        }
+        return writeRoot(root)
+    }
+
     private fun readRoot(): ReadResult {
         if (!outboxFile.exists()) return ReadResult.NotExists
         return try {
@@ -362,11 +389,22 @@ class MirrorOutboxStore(
         }
     }
 
-    /**
-     * 用 AtomicFile 原子写入 outbox root。
-     *
-     * @return true 表示持久化成功；false 表示失败。
-     */
+    private fun readRootForUpdate(): JSONObject? {
+        return when (val result = readRoot()) {
+            is ReadResult.NotExists -> JSONObject()
+            is ReadResult.Parsed -> result.root
+            is ReadResult.Corrupted -> null
+        }
+    }
+
+    private fun readRootForRead(): JSONObject? {
+        return when (val result = readRoot()) {
+            is ReadResult.NotExists -> null
+            is ReadResult.Parsed -> result.root
+            is ReadResult.Corrupted -> null
+        }
+    }
+
     private fun writeRoot(root: JSONObject): Boolean {
         return try {
             outboxFile.parentFile?.mkdirs()
@@ -384,23 +422,23 @@ class MirrorOutboxStore(
         }
     }
 
-    /**
-     * 读取结果（与 ReadableMirrorStateStore 保持一致的密封类）。
-     */
     private sealed class ReadResult {
         object NotExists : ReadResult()
-
         data class Parsed(val root: JSONObject) : ReadResult()
-
         data class Corrupted(val error: Exception) : ReadResult()
     }
 
     companion object {
         private const val DIR_NAME = "sujian-mirror"
         private const val OUTBOX_FILE_NAME = "outbox.json"
-        private const val DIRTY_PROJECTS_KEY = "dirtyProjects"
-        private const val DELETE_TOMBSTONES_KEY = "deleteTombstones"
-        private const val FULL_DIRTY_KEY = "fullDirty"
+        private const val NEXT_GENERATION_KEY = "nextGeneration"
+        private const val PROJECTS_KEY = "projects"
+        private const val FULL_DIRTY_GENERATION_KEY = "fullDirtyGeneration"
         private const val LAST_SIGNAL_TIME_KEY = "lastSignalTime"
+
+        // 旧格式 key（用于迁移）
+        private const val LEGACY_DIRTY_PROJECTS_KEY = "dirtyProjects"
+        private const val LEGACY_DELETE_TOMBSTONES_KEY = "deleteTombstones"
+        private const val LEGACY_FULL_DIRTY_KEY = "fullDirty"
     }
 }

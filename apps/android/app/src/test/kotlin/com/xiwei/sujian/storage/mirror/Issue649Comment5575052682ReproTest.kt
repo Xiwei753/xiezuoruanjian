@@ -426,13 +426,15 @@ class Issue649Comment5575052682ReproTest {
         outboxStore.markDirty(projectId)
 
         // 验证 outbox 已持久化
-        assertTrue(outboxStore.getDirtyProjects().contains(projectId))
+        val snapshot1 = outboxStore.readSnapshot()
+        assertTrue(snapshot1?.projects?.containsKey(projectId) == true)
 
         // 模拟进程重启：创建新的 outboxStore 实例
         val outboxStore2 = MirrorOutboxStore(context)
 
         // 验证变更意图已恢复
-        assertTrue(outboxStore2.getDirtyProjects().contains(projectId))
+        val snapshot2 = outboxStore2.readSnapshot()
+        assertTrue(snapshot2?.projects?.containsKey(projectId) == true)
 
         // 清理
         outboxStore2.clearAll()
@@ -456,11 +458,15 @@ class Issue649Comment5575052682ReproTest {
         // 再标记删除（tombstone 优先）
         outboxStore.markDeleted("proj-1")
 
-        // dirty 列表应为空（被 tombstone 排除）
-        assertFalse(outboxStore.getDirtyProjects().contains("proj-1"))
-
-        // tombstone 列表应包含 proj-1
-        assertTrue(outboxStore.getDeleteTombstones().contains("proj-1"))
+        // proj-1 的 intent 应该是 DELETE（tombstone 优先于 dirty）
+        val snapshot = outboxStore.readSnapshot()
+        val projIntent = snapshot?.projects?.get("proj-1")
+        assertNotNull("proj-1 intent 存在", projIntent)
+        assertEquals(
+            "★ proj-1 是 DELETE（tombstone 优先）★",
+            OutboxIntentKind.DELETE,
+            projIntent?.kind,
+        )
 
         outboxStore.clearAll()
     }

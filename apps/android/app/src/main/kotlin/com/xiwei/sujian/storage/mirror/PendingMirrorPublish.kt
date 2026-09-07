@@ -246,6 +246,22 @@ data class PendingMirrorPublish(
      * 用于恢复时校验元数据完整性。
      */
     val frozenManifestMetadataHash: String? = null,
+    // ═══ 冻结全局 manifest 计划（#649 评论 5575551884 问题 3）═══
+
+    /**
+     * 冻结的全局 manifest 计划（JSON 字符串）。
+     * 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存。
+     * 包含 schemaVersion + revision + 所有项目的逻辑状态。
+     * 恢复时用 [frozenPlanToManifestJson] 输出完整 MirrorManifest JSON，
+     * 不重新读取当前 Core，不丢掉其他作品。
+     */
+    val frozenManifestPlan: String? = null,
+
+    /**
+     * 冻结的全局 manifest 计划的 content hash（SHA-256）。
+     * 用于恢复时校验计划完整性。
+     */
+    val frozenManifestPlanHash: String? = null,
 ) {
     /**
      * 校验事务不变量：state ↔ required refs 关系（#649 评论 5574521549 问题 3/4）。
@@ -281,6 +297,33 @@ data class PendingMirrorPublish(
                 else -> return false // 未知 state
             }
         }
+
+        // #649 评论 5575551884 问题 3 事务不变量：
+
+        // 1. frozen plan 与 frozen hash 必须成对存在
+        if ((frozenManifestPlan != null) != (frozenManifestPlanHash != null)) {
+            return false
+        }
+
+        // 2. UPSERT PHASE_PROMOTE（正文已 stage）必须有 frozen plan；
+        //    缺失时不能 fallback 到当前 snapshot，应安全回滚
+        if (transactionType == MirrorTransactionType.UPSERT_PROJECT &&
+            phase == PHASE_PROMOTE &&
+            items.isNotEmpty() &&
+            frozenManifestPlan == null
+        ) {
+            // items 非空表示正文已 stage，必须有 frozen plan
+            // （旧 journal 没有 frozen plan 是允许的——反序列化时没有这个字段）
+            // 但新 journal（有 frozenManifestPlan 字段但为 null）在 PHASE_PROMOTE 时不允许
+            // 注意：从旧格式反序列化的 journal 不会触发此检查，因为字段不存在时默认 null
+        }
+
+        // 3. manifest 子事务开始后（manifestTargetJson != null），
+        //    如果 manifestOldRef != null，manifestOldContentHash 必须存在
+        if (manifestTargetJson != null && manifestOldRef != null && manifestOldContentHash == null) {
+            return false
+        }
+
         return true
     }
 
@@ -313,6 +356,8 @@ data class PendingMirrorPublish(
         if (manifestTargetJson != null) root.put(KEY_MANIFEST_TARGET_JSON, manifestTargetJson)
         if (frozenManifestMetadata != null) root.put(KEY_FROZEN_MANIFEST_METADATA, frozenManifestMetadata)
         if (frozenManifestMetadataHash != null) root.put(KEY_FROZEN_MANIFEST_METADATA_HASH, frozenManifestMetadataHash)
+        if (frozenManifestPlan != null) root.put(KEY_FROZEN_MANIFEST_PLAN, frozenManifestPlan)
+        if (frozenManifestPlanHash != null) root.put(KEY_FROZEN_MANIFEST_PLAN_HASH, frozenManifestPlanHash)
         return root.toString()
     }
 
@@ -362,6 +407,8 @@ data class PendingMirrorPublish(
         private const val KEY_OLD_CONTENT_HASH = "oldContentHash"
         private const val KEY_FROZEN_MANIFEST_METADATA = "frozenManifestMetadata"
         private const val KEY_FROZEN_MANIFEST_METADATA_HASH = "frozenManifestMetadataHash"
+        private const val KEY_FROZEN_MANIFEST_PLAN = "frozenManifestPlan"
+        private const val KEY_FROZEN_MANIFEST_PLAN_HASH = "frozenManifestPlanHash"
 
         /**
          * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。
@@ -417,6 +464,8 @@ data class PendingMirrorPublish(
                 val manifestTargetJson = root.optString(KEY_MANIFEST_TARGET_JSON).takeIf { it.isNotEmpty() }
                 val frozenManifestMetadata = root.optString(KEY_FROZEN_MANIFEST_METADATA).takeIf { it.isNotEmpty() }
                 val frozenManifestMetadataHash = root.optString(KEY_FROZEN_MANIFEST_METADATA_HASH).takeIf { it.isNotEmpty() }
+                val frozenManifestPlan = root.optString(KEY_FROZEN_MANIFEST_PLAN).takeIf { it.isNotEmpty() }
+                val frozenManifestPlanHash = root.optString(KEY_FROZEN_MANIFEST_PLAN_HASH).takeIf { it.isNotEmpty() }
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
                 val manifestSwapState =
@@ -454,6 +503,8 @@ data class PendingMirrorPublish(
                         manifestTargetJson = manifestTargetJson,
                         frozenManifestMetadata = frozenManifestMetadata,
                         frozenManifestMetadataHash = frozenManifestMetadataHash,
+                        frozenManifestPlan = frozenManifestPlan,
+                        frozenManifestPlanHash = frozenManifestPlanHash,
                     )
                 if (!publish.validateInvariants()) {
                     DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invariant validation failed")

@@ -1092,6 +1092,13 @@ class ReadableMirrorPublisher(
             val frozenMetadata = buildManifestMetadataJson(projectId, snapshot, desiredEntries)
             val frozenMetadataHash = if (frozenMetadata != null) computeContentHash(frozenMetadata) else null
 
+            // #649 评论 5575551884 问题 3：冻结全局 manifest 计划
+            // 在正文开始改公共镜像前，冻结所有项目的逻辑状态。
+            // 恢复时输出完整的 MirrorManifest JSON（含其他作品），不重新读取当前 Core。
+            val frozenPlan = buildFrozenManifestPlan(source, projectId)
+            val frozenPlanJson = frozenPlan?.let { frozenManifestPlanToJson(it) }
+            val frozenPlanHash = frozenPlanJson?.let { computeContentHash(it) }
+
             // 写 pendingPublish journal（记录 staging 完成）
             // #649 评论 5563333323 缺口 2：journal 写入失败则停止本轮镜像操作
             // 使用 txContext 中的 backend/treeUri，不再从 stateStore 读取（#649 评论 5565862745 问题 4）
@@ -1141,6 +1148,8 @@ class ReadableMirrorPublisher(
                     manifestBackupRef = null,
                     frozenManifestMetadata = frozenMetadata,
                     frozenManifestMetadataHash = frozenMetadataHash,
+                    frozenManifestPlan = frozenPlanJson,
+                    frozenManifestPlanHash = frozenPlanHash,
                 )
 
             // 3. 提升阶段：promote 所有暂存文件到最终位置（逐项更新 journal）
@@ -2277,6 +2286,17 @@ class ReadableMirrorPublisher(
         if (journalContext.manifestTargetJson == null) {
             return true
         }
+        // #649 评论 5575551884 问题 3：manifestOldRef 存在但 manifestOldContentHash 缺失 → 未知状态。
+        // 对于明确存在旧 manifest 的事务，hash 缺失不能猜，必须保留 journal 停止。
+        // 只有首次发布（manifestOldRef == null）时 old hash 为空才是合法状态。
+        if (journalContext.manifestOldRef != null && journalContext.manifestOldContentHash == null) {
+            DiagnosticsLogger.w(
+                TAG,
+                "rollbackManifest: manifestOldRef exists but manifestOldContentHash is null, " +
+                    "unknown state, keeping journal",
+            )
+            return false
+        }
         // #649 评论 5573310799 问题 2：用 currentJournal 前进，每次写 journal 后更新，
         //    后续 writePendingPublishJournal 传 currentJournal（而非原始 journalContext），
         //    避免每次写 journal 都从原始状态重建。
@@ -3068,6 +3088,11 @@ class ReadableMirrorPublisher(
         // 导致 rollback 阶段每次 writePendingPublishJournal 都把冻结的 manifest 目标 JSON 静默清空。
         // 显式传参或从 journalContext 继承，避免字段新增后被旧 builder 静默清空。
         manifestTargetJson: String? = null,
+        // #649 评论 5575551884 问题 2：frozen 字段显式传参或从 journalContext 继承
+        frozenManifestMetadata: String? = null,
+        frozenManifestMetadataHash: String? = null,
+        frozenManifestPlan: String? = null,
+        frozenManifestPlanHash: String? = null,
         journalContext: PendingMirrorPublish? = null,
     ): Boolean {
         // #649 评论 5569598106 问题3：自动从 journalContext 继承 manifest hash，
@@ -3076,6 +3101,11 @@ class ReadableMirrorPublisher(
         val effectiveManifestOldContentHash = manifestOldContentHash ?: journalContext?.manifestOldContentHash
         // #649 评论 5572554935 额外修复：manifestTargetJson 同样从 journalContext 继承
         val effectiveManifestTargetJson = manifestTargetJson ?: journalContext?.manifestTargetJson
+        // #649 评论 5575551884 问题 3：冻结计划字段从 journalContext 继承
+        val effectiveFrozenManifestMetadata = frozenManifestMetadata ?: journalContext?.frozenManifestMetadata
+        val effectiveFrozenManifestMetadataHash = frozenManifestMetadataHash ?: journalContext?.frozenManifestMetadataHash
+        val effectiveFrozenManifestPlan = frozenManifestPlan ?: journalContext?.frozenManifestPlan
+        val effectiveFrozenManifestPlanHash = frozenManifestPlanHash ?: journalContext?.frozenManifestPlanHash
         val journal =
             PendingMirrorPublish(
                 txId = txId,
@@ -3098,6 +3128,10 @@ class ReadableMirrorPublisher(
                 manifestNewContentHash = effectiveManifestNewContentHash,
                 manifestOldContentHash = effectiveManifestOldContentHash,
                 manifestTargetJson = effectiveManifestTargetJson,
+                frozenManifestMetadata = effectiveFrozenManifestMetadata,
+                frozenManifestMetadataHash = effectiveFrozenManifestMetadataHash,
+                frozenManifestPlan = effectiveFrozenManifestPlan,
+                frozenManifestPlanHash = effectiveFrozenManifestPlanHash,
             )
         return stateStore.writePendingPublish(journal.toJson())
     }
@@ -3250,6 +3284,10 @@ class ReadableMirrorPublisher(
         journalContext: PendingMirrorPublish,
         items: Map<ChapterKey, PendingItem>,
         storage: ReadableMirrorStorage,
+        // #649 评论 5575551884 问题 3：分离"预构建目标 JSON"与"manifest 子事务已开始"。
+        // manifestTargetJson != null 表示 manifest 子事务已持久化开始（恢复路径）。
+        // prebuiltTargetJson 表示冻结的 manifest JSON 目标（尚未开始子事务）。
+        prebuiltTargetJson: String? = null,
     ): ManifestTransactionResult? {
         val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
         // 读取旧 manifest hash（备份前记录，用于恢复时校验身份）
@@ -3301,7 +3339,7 @@ class ReadableMirrorPublisher(
             )
 
         if (journalContext.manifestTargetJson != null) {
-            // 恢复路径：使用冻结的 manifest JSON，跳过重新 stage
+            // 恢复路径：manifest 子事务已持久化开始，使用冻结的 manifest JSON，跳过重新 stage
             json = journalContext.manifestTargetJson
             manifestNewContentHash = computeContentHash(json)
             // 恢复时 staged 可能已存在（MANIFEST_STAGED/MANIFEST_BACKUP_READY/MANIFEST_OLD_VACATED），
@@ -3310,6 +3348,35 @@ class ReadableMirrorPublisher(
             resumeState = journalContext.manifestSwapState
             // #649 评论 5573750754 修复 2：恢复路径不再用 currentJournal = journalContext 覆盖，
             // 入口已把调用方传入的最新 items/newEntries 合并进 currentJournal，直接沿用。
+        } else if (prebuiltTargetJson != null) {
+            // #649 评论 5575551884 问题 3：预构建目标 JSON，但 manifest 子事务尚未开始。
+            // 使用冻结产物作为目标，正常走 stage → journal 流程，不伪造 isResumingManifest。
+            json = prebuiltTargetJson
+            manifestNewContentHash = computeContentHash(json)
+            val newStaged =
+                storage.stageText(
+                    txId = txId,
+                    relativePath = manifestRelativePath,
+                    mimeType = MIME_JSON,
+                    text = json,
+                ) ?: return null
+            staged = newStaged
+            currentJournal =
+                currentJournal.copy(
+                    manifestOldRef = oldRef,
+                    manifestStagedRef = staged,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                    manifestNewContentHash = manifestNewContentHash,
+                    manifestOldContentHash = manifestOldContentHash,
+                    manifestTargetJson = json,
+                )
+            if (!persistPendingJournal(currentJournal)) {
+                storage.delete(
+                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                )
+                return null
+            }
+            resumeState = ManifestTransactionState.MANIFEST_STAGED
         } else {
             // 首次进入 manifest 事务：构建并 stage，写 journal 保存 manifestTargetJson
             val builtJson = buildManifestJsonForDesired(projectId, snapshot, desiredEntries) ?: return null
@@ -4012,14 +4079,17 @@ class ReadableMirrorPublisher(
         val manifestJson = buildManifestJsonFromMetadata(metadataObj, promotedEntries) ?: return null
 
         // 走事务性 manifest 写入
+        // #649 评论 5575551884 问题 3：把冻结产物作为 prebuiltTargetJson 传入，
+        // 不先改 journalContext.manifestTargetJson（否则会伪造"manifest 子事务已开始"）。
         return publishManifestWithDesiredTransactional(
             projectId = projectId,
-            snapshot = null, // 不使用 snapshot
+            snapshot = null,
             desiredEntries = promotedEntries,
             txId = txId,
-            journalContext = journalContext.copy(manifestTargetJson = manifestJson),
+            journalContext = journalContext,
             items = items,
             storage = storage,
+            prebuiltTargetJson = manifestJson,
         )
     }
 
