@@ -102,8 +102,10 @@ class DocumentTreeMirrorStorage(
      * - SecurityException / IOException / provider 异常 → false（无法确认是否存在）
      */
     override fun delete(ref: MirrorFileRef): Boolean {
-        if (!isSupported()) return true
-        val uri = tryParseUri(ref.uri) ?: return true // URI 无效 → 目标状态已达到
+        // #649 评论 5564820566 问题 4：不再把 "后端不可用" 当删除成功。
+        // 旧代码 `if (!isSupported()) return true` 会让 cleanup 误认为文件已删。
+        // SAF 权限丢失、provider I/O 异常时，不支持的 I/O 会由下面的 try/catch 捕获。
+        val uri = tryParseUri(ref.uri) ?: return false // URI 无效 → 无法确认状态，返回 false
         return try {
             DocumentsContract.deleteDocument(contentResolver, uri)
         } catch (_: FileNotFoundException) {
@@ -346,6 +348,61 @@ class DocumentTreeMirrorStorage(
             return null
         }
         return MirrorFileRef(uri = fileUri.toString(), relativePath = backupRelativePath)
+    }
+
+    // #649 评论 5564820566 问题 3：两步 journalable backup — SAF 路径
+
+    override fun prepareBackup(
+        txId: String,
+        old: MirrorFileRef,
+        mimeType: String,
+    ): BackupReadyRef? {
+        val oldUri = tryParseUri(old.uri) ?: return null
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/${old.relativePath}"
+        val parent = old.relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
+        val displayName = old.relativePath.substringAfterLast('/')
+        val backupParentUri = ensureDirectory(relativeDir) ?: return null
+        val oldParentPath = old.relativePath.substringBeforeLast('/', "")
+        val oldParentUri = if (oldParentPath.isBlank()) treeUri else findDirectory(oldParentPath)
+        // 1. 优先尝试 moveDocument（原子 move）
+        if (oldParentUri != null) {
+            val movedUri = tryMoveDocument(oldUri, oldParentUri, backupParentUri, displayName)
+            if (movedUri != null) {
+                return BackupReadyRef(
+                    backupRef = MirrorFileRef(uri = movedUri.toString(), relativePath = backupRelativePath),
+                    vacated = true,
+                )
+            }
+        }
+        // 2. 回退：只复制 old → backup，不删 old
+        val content = readTextFromUri(oldUri) ?: return null
+        val fileUri = try {
+            DocumentsContract.createDocument(contentResolver, backupParentUri, mimeType, displayName)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "createDocument failed for prepareBackup $displayName: ${e.message}")
+            return null
+        } ?: return null
+        if (!writeToUri(fileUri, content)) {
+            try { DocumentsContract.deleteDocument(contentResolver, fileUri) } catch (_: Exception) {}
+            return null
+        }
+        return BackupReadyRef(
+            backupRef = MirrorFileRef(uri = fileUri.toString(), relativePath = backupRelativePath),
+            vacated = false,
+        )
+    }
+
+    override fun vacateCommitted(old: MirrorFileRef): Boolean {
+        val uri = tryParseUri(old.uri) ?: return true // URI 无效 → 无法确认 old 是否存在，视为已腾空
+        return try {
+            DocumentsContract.deleteDocument(contentResolver, uri)
+        } catch (_: FileNotFoundException) {
+            true // 文件已不存在 → 目标已达到
+        } catch (_: Exception) {
+            false
+        }
     }
 
     override fun resolve(relativePath: String): MirrorFileRef? {

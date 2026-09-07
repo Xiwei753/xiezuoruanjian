@@ -45,6 +45,10 @@ data class PendingItem(
         const val STATE_OLD_BACKED_UP = "OLD_BACKED_UP"
         const val STATE_PROMOTED = "PROMOTED"
         const val STATE_COMMITTED = "COMMITTED"
+        // #649 评论 5564820566 问题 2：rollback 和 recovery 共用同一套显式状态机，
+        // 不再根据 "final/backup 是否存在" 猜测文件是新版还是旧版。
+        const val STATE_ROLLBACK_NEW_REMOVED = "ROLLBACK_NEW_REMOVED"
+        const val STATE_ROLLBACK_OLD_RESTORED = "ROLLBACK_OLD_RESTORED"
     }
 }
 
@@ -104,6 +108,10 @@ data class PendingMirrorPublish(
     val manifestNewRef: MirrorFileRef?,
     val manifestBackupRef: MirrorFileRef?,
     val isManifestCommitted: Boolean = false,
+    // #649 评论 5564820566 问题 5：零章节作品也需要独立 project 状态。
+    // 正常 UPSERT 事务中记录本次要 publish 的 projectId 集合（含子项目），
+    // DELETE 事务中记录被删的 projectId。恢复时据此维护 publishedProjectIds。
+    val affectedProjectIds: Set<String> = emptySet(),
 ) {
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
@@ -124,6 +132,9 @@ data class PendingMirrorPublish(
         if (manifestNewRef != null) root.put(KEY_MANIFEST_NEW_REF, encodeFileRef(manifestNewRef))
         if (manifestBackupRef != null) root.put(KEY_MANIFEST_BACKUP_REF, encodeFileRef(manifestBackupRef))
         root.put(KEY_IS_MANIFEST_COMMITTED, isManifestCommitted)
+        if (affectedProjectIds.isNotEmpty()) {
+            root.put(KEY_AFFECTED_PROJECT_IDS, JSONArray(affectedProjectIds.toList()))
+        }
         return root.toString()
     }
 
@@ -163,6 +174,7 @@ data class PendingMirrorPublish(
         private const val KEY_PROMOTED_REF = "promotedRef"
         private const val KEY_STATE = "state"
         private const val KEY_IS_MANIFEST_COMMITTED = "isManifestCommitted"
+        private const val KEY_AFFECTED_PROJECT_IDS = "affectedProjectIds"
 
         /** 从 [ReadableMirrorStateStore.readPendingPublish] 的 JSON 字符串反序列化。 */
         fun fromJson(json: String): PendingMirrorPublish? {
@@ -184,6 +196,7 @@ data class PendingMirrorPublish(
                 val manifestNewRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_NEW_REF))
                 val manifestBackupRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_BACKUP_REF))
                 val isManifestCommitted = root.optBoolean(KEY_IS_MANIFEST_COMMITTED, false)
+                val affectedProjectIds = decodeStringSet(root.optJSONArray(KEY_AFFECTED_PROJECT_IDS))
                 PendingMirrorPublish(
                     txId = root.getString(KEY_TX_ID),
                     backend = backend,
@@ -201,6 +214,7 @@ data class PendingMirrorPublish(
                     manifestNewRef = manifestNewRef,
                     manifestBackupRef = manifestBackupRef,
                     isManifestCommitted = isManifestCommitted,
+                    affectedProjectIds = affectedProjectIds,
                 )
             } catch (_: Exception) {
                 null

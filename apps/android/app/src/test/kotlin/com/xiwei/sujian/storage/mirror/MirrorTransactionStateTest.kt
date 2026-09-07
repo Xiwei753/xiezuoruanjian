@@ -822,6 +822,26 @@ class MirrorTransactionStateTest {
             return MirrorFileRef(backupUri, backupPath)
         }
 
+        // #649 评论 5564820566 问题 3：两步 journalable backup — fake 实现
+        override fun prepareBackup(txId: String, old: MirrorFileRef, mimeType: String): BackupReadyRef? {
+            if (failBackup) return null
+            val content = committedFiles[old.uri] ?: return null
+            val backupUri = "content://fake/backup/${backupFiles.size}"
+            backupFiles[backupUri] = content
+            val backupPath = ".staging/$txId/backup/${old.relativePath}"
+            journalSteps.add("prepareBackup:${old.relativePath}→$backupPath")
+            return BackupReadyRef(
+                backupRef = MirrorFileRef(backupUri, backupPath),
+                vacated = false,
+            )
+        }
+
+        override fun vacateCommitted(old: MirrorFileRef): Boolean {
+            committedFiles.remove(old.uri)
+            journalSteps.add("vacate:${old.relativePath}")
+            return true
+        }
+
         override fun promoteStaged(staged: StagedMirrorRef, finalRelativePath: String): MirrorFileRef? {
             if (failPromote) return null
             val content = stagingFiles.remove(staged.stagingUri) ?: return null
@@ -922,5 +942,175 @@ class MirrorTransactionStateTest {
 
         // If resolved is null, cleanup should skip the delete
         // (not attempt to delete a non-existent URI)
+    }
+
+    // ── #649 评论 5564820566 问题 2：rollback 新状态 ──
+
+    @Test
+    fun pendingItem_jsonRoundTrip_rollbackStates() {
+        val states = listOf(
+            PendingItem.STATE_ROLLBACK_NEW_REMOVED,
+            PendingItem.STATE_ROLLBACK_OLD_RESTORED,
+        )
+        val key = ChapterKey("p1", "v1", "ch1")
+        val staged = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown")
+
+        for (state in states) {
+            val item = PendingItem(
+                key = key,
+                stagedRef = staged,
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = MirrorFileRef("content://new", "f.md"),
+                state = state,
+            )
+
+            val journal = PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = mapOf(key to item),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json"),
+            )
+
+            val json = journal.toJson()
+            val restored = PendingMirrorPublish.fromJson(json)!!
+            val restoredItem = restored.items[key]!!
+
+            assertEquals("Rollback state $state should round-trip", state, restoredItem.state)
+            assertEquals(PendingMirrorPublish.PHASE_ROLLBACK, restored.phase)
+        }
+    }
+
+    // ── #649 评论 5564820566：PHASE_ROLLBACK 序列化 ──
+
+    @Test
+    fun phase_serialization_includesRollback() {
+        val phases = listOf(
+            PendingMirrorPublish.PHASE_STAGE,
+            PendingMirrorPublish.PHASE_PROMOTE,
+            PendingMirrorPublish.PHASE_CLEANUP,
+            PendingMirrorPublish.PHASE_ROLLBACK,
+        )
+        for (phase in phases) {
+            val journal = PendingMirrorPublish(
+                txId = "tx",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = phase,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
+
+            val json = journal.toJson()
+            val restored = PendingMirrorPublish.fromJson(json)!!
+            assertEquals(phase, restored.phase)
+        }
+    }
+
+    // ── #649 评论 5564820566 问题 5：affectedProjectIds 序列化 ──
+
+    @Test
+    fun pendingMirrorPublish_jsonRoundTrip_affectedProjectIds() {
+        val journal = PendingMirrorPublish(
+            txId = "tx1",
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+            affectedProjectIds = setOf("p1", "p2"),
+        )
+
+        val json = journal.toJson()
+        val restored = PendingMirrorPublish.fromJson(json)!!
+        assertEquals(setOf("p1", "p2"), restored.affectedProjectIds)
+    }
+
+    @Test
+    fun pendingMirrorPublish_jsonRoundTrip_emptyAffectedProjectIds() {
+        val journal = PendingMirrorPublish(
+            txId = "tx1",
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+        )
+
+        val json = journal.toJson()
+        val restored = PendingMirrorPublish.fromJson(json)!!
+        assertTrue(restored.affectedProjectIds.isEmpty())
+    }
+
+    // ── #649 评论 5564820566 问题 3：两步 backup 模式 ──
+
+    @Test
+    fun twoStepBackup_prepareBackupThenVacate() {
+        val storage = FakeReadableMirrorStorage()
+        storage.committedFiles["content://old"] = "important content"
+
+        val old = MirrorFileRef("content://old", "作品/P/V/Ch.md")
+
+        // Step 1: prepareBackup (copy only, don't delete old)
+        val prepared = storage.prepareBackup("tx1", old, "text/markdown")
+        assertNotNull(prepared)
+        assertFalse("old should still exist after prepareBackup", prepared!!.vacated)
+        assertTrue("backup should exist", storage.backupFiles.containsKey(prepared.backupRef.uri))
+        assertEquals("backup content should match old", "important content", storage.backupFiles[prepared.backupRef.uri])
+        assertTrue("old should still exist after prepareBackup", storage.committedFiles.containsKey("content://old"))
+
+        // Step 2: vacateCommitted (delete old)
+        assertTrue("vacate should succeed", storage.vacateCommitted(old))
+        assertFalse("old should be deleted after vacate", storage.committedFiles.containsKey("content://old"))
+    }
+
+    @Test
+    fun twoStepBackup_crashWindow_detectsExistingBackup() {
+        val storage = FakeReadableMirrorStorage()
+        storage.committedFiles["content://old"] = "important content"
+        // Simulate crash window: prepareBackup created a backup but vacate wasn't called yet.
+        // The fake's resolveBackup matches by URI containing relativePath.replace("/", "_").
+        // For "作品/P/V/Ch.md" the pattern is "作品_P_V_Ch.md"
+        storage.backupFiles["content://fake/backup/path_作品_P_V_Ch.md"] = "important content"
+        val found = storage.resolveBackup("tx1", "作品/P/V/Ch.md")
+        assertNotNull("resolveBackup should find existing backup", found)
     }
 }

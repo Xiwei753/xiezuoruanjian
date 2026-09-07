@@ -63,6 +63,23 @@ data class PromoteResult(
 )
 
 /**
+ * 两步 backup 的第一步结果（#649 评论 5564820566 问题 3）。
+ *
+ * 非原子 provider（copy → delete）在 process crash 时可能出现
+ * "backup 已创建但 old 还没删" 的歧义窗口。用两步 journalable 状态消除歧义：
+ * 1. [prepareBackup]：只复制/准备 backup，不删 old → [BackupReadyRef]
+ * 2. [vacateCommitted]：删 old → 最终路径腾空
+ *
+ * @property backupRef backup 文件引用（已存在于 backup 目录）
+ * @property vacated true 表示 old 已被移走/删除（原子 move 的 provider 在第一步就完成）；
+ *   false 表示 old 仍在原位，调用方需要后续调用 [vacateCommitted]
+ */
+data class BackupReadyRef(
+    val backupRef: MirrorFileRef,
+    val vacated: Boolean,
+)
+
+/**
  * 统一镜像存储接口，隔离 MediaStore 与 SAF DocumentsProvider 两套 URI 体系。
  *
  * #649 评论 5561465552 第 3 点。
@@ -169,6 +186,38 @@ interface ReadableMirrorStorage {
         old: MirrorFileRef,
         mimeType: String,
     ): MirrorFileRef?
+
+    // #649 评论 5564820566 问题 3：两步 journalable backup，消除 "backup 已创建、old 还没删" 的歧义窗口。
+
+    /**
+     * 第一步：只复制/准备 backup，不删 old。
+     *
+     * 非原子 provider（MediaStore fallback）：copy old → backup，返回 [BackupReadyRef]（vacated=false），
+     * 调用方需后续调用 [vacateCommitted] 删 old。
+     * 原子 provider（SAF moveDocument）：move old → backup，返回 [BackupReadyRef]（vacated=true），
+     * 调用方跳过 [vacateCommitted]。
+     *
+     * @param txId 事务 ID
+     * @param old 旧引用（非空）
+     * @param mimeType MIME 类型
+     * @return [BackupReadyRef]；失败返回 null
+     */
+    fun prepareBackup(
+        txId: String,
+        old: MirrorFileRef,
+        mimeType: String,
+    ): BackupReadyRef?
+
+    /**
+     * 第二步：删除 old，腾空最终路径。
+     *
+     * 幂等：如果 old 已经不存在（被移动或已删除），返回 true。
+     * 如果 backup 已存在但 old 还在（崩溃窗口），也返回 true。
+     *
+     * @param old 旧引用
+     * @return true 表示最终路径已腾空；false 表示删除失败（无法确认状态）
+     */
+    fun vacateCommitted(old: MirrorFileRef): Boolean
 
     /**
      * 只查不创建：返回已存在于 [relativePath] 的文件 ref。

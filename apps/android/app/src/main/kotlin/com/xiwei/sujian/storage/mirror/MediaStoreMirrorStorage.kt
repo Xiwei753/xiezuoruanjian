@@ -59,8 +59,9 @@ class MediaStoreMirrorStorage(
      * 查询三态：FOUND → 尝试删除；MISSING → 返回 true（目标已达到）；FAILED → 返回 false。
      */
     override fun delete(ref: MirrorFileRef): Boolean {
-        val uri = tryParseUri(ref.uri) ?: return true // URI 无效 → 目标状态已达到
-        if (!mediaStore.isSupported()) return true
+        val uri = tryParseUri(ref.uri) ?: return false // URI 无效 → 无法确认状态，返回 false
+        // #649 评论 5564820566 问题 4：不再把 "后端不可用" 当删除成功。
+        // 旧代码 `if (!mediaStore.isSupported()) return true` 会让 cleanup 误认为文件已删。
         val directory = mediaStoreDirectory(ref.relativePath)
         val displayName = ref.relativePath.substringAfterLast('/')
         // 三态查询：FOUND / MISSING / FAILED
@@ -169,6 +170,41 @@ class MediaStoreMirrorStorage(
             return null
         }
         return MirrorFileRef(uri = backupUri.toString(), relativePath = backupRelativePath)
+    }
+
+    // #649 评论 5564820566 问题 3：两步 journalable backup — MediaStore fallback 路径
+
+    override fun prepareBackup(
+        txId: String,
+        old: MirrorFileRef,
+        mimeType: String,
+    ): BackupReadyRef? {
+        val oldUri = tryParseUri(old.uri) ?: return null
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/${old.relativePath}"
+        // 1. 优先尝试 update RELATIVE_PATH 移动 old 到 backup（原子 move）
+        val movedRef = tryMoveByRelativePath(oldUri, backupRelativePath, mimeType)
+        if (movedRef != null) return BackupReadyRef(backupRef = movedRef, vacated = true)
+        // 2. 回退：只复制 old → backup，不删 old
+        val content = mediaStore.readText(oldUri) ?: return null
+        val parent = old.relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
+        val displayName = old.relativePath.substringAfterLast('/')
+        val backupUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
+            ?: return null
+        return BackupReadyRef(
+            backupRef = MirrorFileRef(uri = backupUri.toString(), relativePath = backupRelativePath),
+            vacated = false,
+        )
+    }
+
+    override fun vacateCommitted(old: MirrorFileRef): Boolean {
+        val oldUri = tryParseUri(old.uri) ?: return true // URI 无效 → 无法确认 old 是否存在，视为已腾空
+        return try {
+            mediaStore.delete(oldUri)
+        } catch (_: Exception) {
+            false
+        }
     }
 
     override fun resolve(relativePath: String): MirrorFileRef? {

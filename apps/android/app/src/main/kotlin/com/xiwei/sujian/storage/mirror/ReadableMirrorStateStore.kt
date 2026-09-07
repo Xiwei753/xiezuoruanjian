@@ -313,13 +313,60 @@ class ReadableMirrorStateStore(
     fun getAllProjectIds(): Set<String> {
         synchronized(lock) {
             val root = readRootForRead() ?: return emptySet()
-            val projects = root.optJSONObject(PROJECTS_KEY) ?: return emptySet()
             val ids = mutableSetOf<String>()
-            val keys = projects.keys()
-            while (keys.hasNext()) {
-                ids.add(keys.next())
+            // #649 评论 5564820566 问题 5：零章节作品也需要独立 project 状态。
+            // publishedProjectIds 独立于章节条目保存，即使 chapters={} 也保留。
+            val publishedObj = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+            if (publishedObj != null) {
+                val keys = publishedObj.keys()
+                while (keys.hasNext()) {
+                    ids.add(keys.next())
+                }
+            }
+            val projects = root.optJSONObject(PROJECTS_KEY)
+            if (projects != null) {
+                val keys = projects.keys()
+                while (keys.hasNext()) {
+                    ids.add(keys.next())
+                }
             }
             return ids
+        }
+    }
+
+    // ── publishedProjectIds（#649 评论 5564820566 问题 5）──
+
+    /**
+     * 标记作品已发布到镜像（manifest 提交成功后调用）。
+     * 零章节作品在 putChapterEntries(emptyMap()) 后不会留下 projectId，
+     * 但 publishedProjectIds 能保留该信息，让 cleanupStaleProjects 正确清理。
+     *
+     * @return true 表示持久化成功。
+     */
+    fun addPublishedProjectId(projectId: String): Boolean {
+        synchronized(lock) {
+            val root = readRootForUpdate() ?: return false
+            val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+                ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
+            published.put(projectId, true)
+            return writeRoot(root)
+        }
+    }
+
+    /**
+     * 移除作品的已发布标记（delete 成功后调用）。
+     *
+     * @return true 表示持久化成功。
+     */
+    fun removePublishedProjectId(projectId: String): Boolean {
+        synchronized(lock) {
+            val root = readRootForUpdate() ?: return false
+            val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY) ?: return true
+            published.remove(projectId)
+            if (published.length() == 0) {
+                root.remove(PUBLISHED_PROJECTS_KEY)
+            }
+            return writeRoot(root)
         }
     }
 
@@ -447,11 +494,19 @@ class ReadableMirrorStateStore(
             root.put(MANIFEST_URI_KEY, manifestUri)
             // 写入所有章节条目
             val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
+            // #649 评论 5564820566 问题 5：恢复时也写 publishedProjectIds
+            val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+                ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
+            val projectIds = mutableSetOf<String>()
             for ((key, entry) in chapterEntries) {
                 val projectObj =
                     projects.optJSONObject(key.projectId)
                         ?: JSONObject().also { projects.put(key.projectId, it) }
                 projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
+                projectIds.add(key.projectId)
+            }
+            for (pid in projectIds) {
+                published.put(pid, true)
             }
             return writeRoot(root)
         }
@@ -666,6 +721,8 @@ class ReadableMirrorStateStore(
         private const val STATE_FILE_NAME = "state.json"
         private const val PENDING_PUBLISH_FILE_NAME = "pending-publish.json"
         private const val PROJECTS_KEY = "projects"
+        // #649 评论 5564820566 问题 5：零章节作品独立 project 状态
+        private const val PUBLISHED_PROJECTS_KEY = "publishedProjectIds"
         private const val MANIFEST_URI_KEY = "manifestUri"
         private const val BACKEND_KEY = "backend"
         private const val TREE_URI_KEY = "treeUri"
