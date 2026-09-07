@@ -299,6 +299,7 @@ class ReadableMirrorPublisher(
                         manifestNewRef = journal.manifestNewRef,
                         manifestBackupRef = journal.manifestBackupRef,
                         manifestSwapState = journal.manifestSwapState,
+                        journalContext = journal,
                     )
                 ) {
                     DiagnosticsLogger.w(TAG, "Recover backup: journal write failed (BACKUP_READY) for ${key.chapterId}, keeping journal")
@@ -338,6 +339,7 @@ class ReadableMirrorPublisher(
                         manifestNewRef = journal.manifestNewRef,
                         manifestBackupRef = journal.manifestBackupRef,
                         manifestSwapState = journal.manifestSwapState,
+                        journalContext = journal,
                     )
                 ) {
                     DiagnosticsLogger.w(TAG, "Recover backup: journal write failed (OLD_VACATED) for ${key.chapterId}, keeping journal")
@@ -350,19 +352,48 @@ class ReadableMirrorPublisher(
             }
             // 2. promote staged（不删 old）
             //    #649 评论 5566303837 问题 2：OLD_VACATED 崩溃窗口检查
+            //    #649 评论 5569598106 问题2：lookup 返回 Failed / hash 不匹配 / 无法校验时
+            //    必须停止保留 journal，不继续猜测式 promote。只允许明确确认时推进。
             var newRef: MirrorFileRef? = null
             if (item.state == PendingItem.STATE_OLD_VACATED) {
                 val finalLookup = storage.lookup(staged.finalRelativePath)
-                if (finalLookup is MirrorLookupResult.Found) {
-                    val expectedHash = journal.newEntries[key]?.contentHash
-                    if (expectedHash != null) {
-                        val hashResult = storage.readTextAndHash(finalLookup.ref)
-                        if (hashResult != null) {
-                            val (_, hash) = hashResult
-                            if (hash == expectedHash) {
-                                newRef = finalLookup.ref
+                when (finalLookup) {
+                    is MirrorLookupResult.Found -> {
+                        val expectedHash = journal.newEntries[key]?.contentHash
+                        if (expectedHash != null) {
+                            val hashResult = storage.readTextAndHash(finalLookup.ref)
+                            if (hashResult != null) {
+                                val (_, hash) = hashResult
+                                if (hash == expectedHash) {
+                                    // final 已是本事务新正文 → promote 已完成，直接复用
+                                    newRef = finalLookup.ref
+                                } else {
+                                    // hash 不匹配 → final 上是错误内容，停止保留 journal
+                                    DiagnosticsLogger.w(TAG, "Recover promote: final hash mismatch for ${key.chapterId}, keeping journal, not promoting")
+                                    rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                                    return
+                                }
+                            } else {
+                                // 读取失败，无法校验身份，停止保留 journal
+                                DiagnosticsLogger.w(TAG, "Recover promote: readTextAndHash failed for ${key.chapterId}, keeping journal, not promoting")
+                                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                                return
                             }
+                        } else {
+                            // 无期望 hash（journal.newEntries[key] 缺失），状态不明确，停止保留 journal
+                            DiagnosticsLogger.w(TAG, "Recover promote: no expectedHash in journal.newEntries for ${key.chapterId}, keeping journal, not promoting")
+                            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                            return
                         }
+                    }
+                    is MirrorLookupResult.Missing -> {
+                        // final 不存在，继续 promote（正常路径）
+                    }
+                    is MirrorLookupResult.Failed -> {
+                        // lookup 失败，状态不明确，停止保留 journal，不继续 promote
+                        DiagnosticsLogger.w(TAG, "Recover promote: lookup final failed for ${key.chapterId}: ${finalLookup.cause?.message}, keeping journal, not promoting")
+                        rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                        return
                     }
                 }
             }
@@ -400,11 +431,12 @@ class ReadableMirrorPublisher(
                     manifestOldRef = journal.manifestOldRef,
                     manifestStagedRef = journal.manifestStagedRef,
                     manifestNewRef = journal.manifestNewRef,
-                    manifestBackupRef = journal.manifestBackupRef,
-                    manifestSwapState = journal.manifestSwapState,
-                )
-            ) {
-                DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
+                        manifestBackupRef = journal.manifestBackupRef,
+                        manifestSwapState = journal.manifestSwapState,
+                        journalContext = journal,
+                    )
+                ) {
+                    DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
                 // #649 评论 5564379115 问题 2：统一事务回滚
                 rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
                 return
@@ -469,6 +501,8 @@ class ReadableMirrorPublisher(
                 manifestBackupRef = manifestResult.backupOldRef,
                 isManifestCommitted = true,
                 manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                manifestNewContentHash = manifestResult.manifestNewContentHash,
+                manifestOldContentHash = manifestResult.manifestOldContentHash,
             )
         ) {
             DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
@@ -948,6 +982,7 @@ class ReadableMirrorPublisher(
                             manifestNewRef = null,
                             manifestBackupRef = null,
                             manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                            journalContext = journalContext,
                         )
                     ) {
                         DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after backup prepare for ${key.chapterId}")
@@ -982,6 +1017,7 @@ class ReadableMirrorPublisher(
                             manifestNewRef = null,
                             manifestBackupRef = null,
                             manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                            journalContext = journalContext,
                         )
                     ) {
                         DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after vacate for ${key.chapterId}")
@@ -1048,13 +1084,14 @@ class ReadableMirrorPublisher(
                         manifestOldRef = null,
                         manifestStagedRef = null,
                         manifestNewRef = null,
-                        manifestBackupRef = null,
-                        manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                    )
-                ) {
-                    DiagnosticsLogger.w(
-                        TAG,
-                        "Publish project $projectId aborted: journal write failed after promote for ${key.chapterId}",
+                            manifestBackupRef = null,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                            journalContext = journalContext,
+                        )
+                    ) {
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Publish project $projectId aborted: journal write failed after promote for ${key.chapterId}",
                     )
                     // #649 评论 5564379115 问题 2：统一事务回滚，不逐 item 回滚
                     rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
@@ -1114,6 +1151,8 @@ class ReadableMirrorPublisher(
                     manifestBackupRef = manifestResult.backupOldRef,
                     isManifestCommitted = true,
                     manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                    manifestNewContentHash = manifestResult.manifestNewContentHash,
+                    manifestOldContentHash = manifestResult.manifestOldContentHash,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup journal write failed, keeping journal for retry")
@@ -1278,6 +1317,8 @@ class ReadableMirrorPublisher(
                     manifestBackupRef = manifestResult.backupOldRef,
                     isManifestCommitted = true,
                     manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                    manifestNewContentHash = manifestResult.manifestNewContentHash,
+                    manifestOldContentHash = manifestResult.manifestOldContentHash,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup journal write failed, keeping journal for retry")
@@ -1489,6 +1530,7 @@ class ReadableMirrorPublisher(
                 manifestNewRef = latestJournal.manifestNewRef,
                 manifestBackupRef = latestJournal.manifestBackupRef,
                 manifestSwapState = latestJournal.manifestSwapState,
+                journalContext = latestJournal,
             )
         ) {
             DiagnosticsLogger.w(TAG, "rollback: journal write failed at start")
@@ -1533,6 +1575,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = latestJournal.manifestNewRef,
                     manifestBackupRef = latestJournal.manifestBackupRef,
                     manifestSwapState = latestJournal.manifestSwapState,
+                    journalContext = latestJournal,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
@@ -1549,12 +1592,37 @@ class ReadableMirrorPublisher(
             val finalPath = staged.finalRelativePath
 
             // 2.1 先检查 final 是否已经存在（上次已恢复成功）
+            //    #649 评论 5569598106 问题1：用 hash 校验 final 是旧内容还是新内容，
+            //    不能只看"final 存在"——崩溃窗口（新内容 promote 完成 + journal 未落盘到
+            //    ROLLBACK_NEW_REMOVED）下 final 上是新内容（promotedRef），会被误判为已恢复。
             val finalLookup = storage.lookup(finalPath)
             val alreadyRestored = when (finalLookup) {
                 is MirrorLookupResult.Found -> {
-                    // final 已存在，说明上次已恢复成功，直接复用
-                    DiagnosticsLogger.i(TAG, "rollback: final already exists for ${key.chapterId}, skipping restore")
-                    true
+                    // final 已存在，用旧正文期望 hash 校验身份
+                    val expectedOldHash = latestJournal.oldEntries[key]?.contentHash ?: item.oldContentHash
+                    if (expectedOldHash != null) {
+                        val hashResult = storage.readTextAndHash(finalLookup.ref)
+                        if (hashResult != null) {
+                            val (_, finalHash) = hashResult
+                            if (finalHash == expectedOldHash) {
+                                // final 上确实是旧正文 → 已恢复成功，直接复用
+                                DiagnosticsLogger.i(TAG, "rollback: final already restored (hash matches old) for ${key.chapterId}, skipping restore")
+                                true
+                            } else {
+                                // final 上是新内容残留（崩溃窗口）→ 需要继续 restoreBackup 恢复旧正文
+                                DiagnosticsLogger.w(TAG, "rollback: final exists but hash mismatch (new content残留) for ${key.chapterId}, will restoreBackup")
+                                false
+                            }
+                        } else {
+                            // 读取失败，无法确认 final 身份，停止保留 journal
+                            DiagnosticsLogger.w(TAG, "rollback: readTextAndHash failed for ${key.chapterId}, cannot verify final identity, keeping journal")
+                            return false
+                        }
+                    } else {
+                        // 无旧正文期望 hash（新建章节无旧内容），final 存在视为已恢复
+                        DiagnosticsLogger.i(TAG, "rollback: final exists, no expectedOldHash to verify for ${key.chapterId}, skipping restore")
+                        true
+                    }
                 }
                 is MirrorLookupResult.Missing -> {
                     // final 不存在，需要恢复
@@ -1621,6 +1689,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = latestJournal.manifestNewRef,
                     manifestBackupRef = latestJournal.manifestBackupRef,
                     manifestSwapState = latestJournal.manifestSwapState,
+                    journalContext = latestJournal,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
@@ -1788,6 +1857,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = journal.manifestNewRef,
                     manifestBackupRef = journal.manifestBackupRef,
                     manifestSwapState = journal.manifestSwapState,
+                    journalContext = journal,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
@@ -1804,13 +1874,37 @@ class ReadableMirrorPublisher(
             val finalPath = staged.finalRelativePath
 
             // 2.1 先检查 final 是否已经存在（上次已恢复成功）
+            //    #649 评论 5569598106 问题1：用 hash 校验 final 是旧内容还是新内容，
+            //    不能只看"final 存在"——崩溃窗口下 final 上可能是新内容残留。
             val finalLookup = storage.lookup(finalPath)
             when (finalLookup) {
                 is MirrorLookupResult.Found -> {
-                    // final 已存在，说明上次已恢复成功，直接复用
-                    DiagnosticsLogger.i(TAG, "Recover rollback: final already exists for ${key.chapterId}, skipping restore")
-                    currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
-                    continue
+                    // final 已存在，用旧正文期望 hash 校验身份
+                    val expectedOldHash = journal.oldEntries[key]?.contentHash ?: item.oldContentHash
+                    if (expectedOldHash != null) {
+                        val hashResult = storage.readTextAndHash(finalLookup.ref)
+                        if (hashResult != null) {
+                            val (_, finalHash) = hashResult
+                            if (finalHash == expectedOldHash) {
+                                // final 上确实是旧正文 → 已恢复成功，直接复用
+                                DiagnosticsLogger.i(TAG, "Recover rollback: final already restored (hash matches old) for ${key.chapterId}, skipping restore")
+                                currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
+                                continue
+                            } else {
+                                // final 上是新内容残留（崩溃窗口）→ 继续 restoreBackup 恢复旧正文
+                                DiagnosticsLogger.w(TAG, "Recover rollback: final exists but hash mismatch (new content残留) for ${key.chapterId}, will restoreBackup")
+                            }
+                        } else {
+                            // 读取失败，无法确认 final 身份，停止保留 journal
+                            DiagnosticsLogger.w(TAG, "Recover rollback: readTextAndHash failed for ${key.chapterId}, cannot verify final identity, keeping journal")
+                            return
+                        }
+                    } else {
+                        // 无旧正文期望 hash（新建章节无旧内容），final 存在视为已恢复
+                        DiagnosticsLogger.i(TAG, "Recover rollback: final exists, no expectedOldHash to verify for ${key.chapterId}, skipping restore")
+                        currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
+                        continue
+                    }
                 }
                 is MirrorLookupResult.Failed -> {
                     DiagnosticsLogger.w(TAG, "Recover rollback: lookup final failed for ${key.chapterId}: ${finalLookup.cause?.message}")
@@ -1871,6 +1965,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = journal.manifestNewRef,
                     manifestBackupRef = journal.manifestBackupRef,
                     manifestSwapState = journal.manifestSwapState,
+                    journalContext = journal,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
@@ -1987,6 +2082,10 @@ class ReadableMirrorPublisher(
      * }
      * ```
      *
+     * @param journalContext 当前事务 journal 上下文（#649 评论 5569598106 问题3）。
+     *   当 `manifestNewContentHash`/`manifestOldContentHash` 参数为 null 时，自动从
+     *   `journalContext` 继承对应 hash，避免调用点遗漏传递导致 journal 更新后 hash 丢失。
+     *   传 null 表示无上下文可继承（如事务刚开始、manifest 尚未生成）。
      * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作，不继续移动文件）。
      */
     private fun writePendingPublishJournal(
@@ -2009,7 +2108,12 @@ class ReadableMirrorPublisher(
         manifestSwapState: ManifestTransactionState = ManifestTransactionState.MANIFEST_STAGED,
         manifestNewContentHash: String? = null,
         manifestOldContentHash: String? = null,
+        journalContext: PendingMirrorPublish? = null,
     ): Boolean {
+        // #649 评论 5569598106 问题3：自动从 journalContext 继承 manifest hash，
+        // 避免调用点遗漏传递导致 journal 更新后 hash 丢失为 null。
+        val effectiveManifestNewContentHash = manifestNewContentHash ?: journalContext?.manifestNewContentHash
+        val effectiveManifestOldContentHash = manifestOldContentHash ?: journalContext?.manifestOldContentHash
         val journal =
             PendingMirrorPublish(
                 txId = txId,
@@ -2029,8 +2133,8 @@ class ReadableMirrorPublisher(
                 manifestBackupRef = manifestBackupRef,
                 isManifestCommitted = isManifestCommitted,
                 manifestSwapState = manifestSwapState,
-                manifestNewContentHash = manifestNewContentHash,
-                manifestOldContentHash = manifestOldContentHash,
+                manifestNewContentHash = effectiveManifestNewContentHash,
+                manifestOldContentHash = effectiveManifestOldContentHash,
             )
         return stateStore.writePendingPublish(journal.toJson())
     }
@@ -2126,12 +2230,17 @@ class ReadableMirrorPublisher(
      * @property manifestOldRef 旧 manifest 引用（promote 前）。
      * @property manifestStagedRef manifest staging 引用。
      * @property backupOldRef 旧 manifest 备份引用（= manifestOldRef，新 manifest 提交成功后由调用方删）。
+     * @property manifestNewContentHash 新 manifest 的内容 hash（#649 评论 5569598106 问题3），
+     *   供调用方写 cleanup journal 时持续传递，避免 hash 丢失。
+     * @property manifestOldContentHash 旧 manifest 的内容 hash（#649 评论 5569598106 问题3）。
      */
     private data class ManifestTransactionResult(
         val newRef: MirrorFileRef,
         val manifestOldRef: MirrorFileRef?,
         val manifestStagedRef: StagedMirrorRef,
         val backupOldRef: MirrorFileRef?,
+        val manifestNewContentHash: String? = null,
+        val manifestOldContentHash: String? = null,
     )
 
     /**
@@ -2224,6 +2333,8 @@ class ReadableMirrorPublisher(
                             manifestOldRef = oldRef,
                             manifestStagedRef = staged,
                             backupOldRef = manifestBackupRef,
+                            manifestNewContentHash = manifestNewContentHash,
+                            manifestOldContentHash = manifestOldContentHash,
                         )
                     }
                     // final 不存在但状态是 COMMITTED → 数据异常，回滚
@@ -2257,6 +2368,8 @@ class ReadableMirrorPublisher(
                         manifestOldRef = oldRef,
                         manifestStagedRef = staged,
                         backupOldRef = manifestBackupRef,
+                        manifestNewContentHash = manifestNewContentHash,
+                        manifestOldContentHash = manifestOldContentHash,
                     )
                 }
                 ManifestTransactionState.MANIFEST_OLD_VACATED -> {
@@ -2398,6 +2511,8 @@ class ReadableMirrorPublisher(
                             manifestOldRef = oldRef,
                             manifestStagedRef = staged,
                             backupOldRef = manifestBackupRef,
+                            manifestNewContentHash = manifestNewContentHash,
+                            manifestOldContentHash = manifestOldContentHash,
                         )
                     }
                     // hash 不匹配 → final 有文件但不是新 manifest，继续 promote
@@ -2456,6 +2571,8 @@ class ReadableMirrorPublisher(
                 manifestOldRef = oldRef,
                 manifestStagedRef = staged,
                 backupOldRef = manifestBackupRef,
+                manifestNewContentHash = manifestNewContentHash,
+                manifestOldContentHash = manifestOldContentHash,
             )
         }
         // resumeState 是 PROMOTED 或 COMMITTED 时已在上面 return，不应到达此处
@@ -2499,7 +2616,8 @@ class ReadableMirrorPublisher(
             isManifestCommitted = isManifestCommitted,
             manifestSwapState = manifestSwapState,
             manifestNewContentHash = manifestNewContentHash,
-            manifestOldContentHash = manifestOldContentHash ?: journalContext.manifestOldContentHash,
+            manifestOldContentHash = manifestOldContentHash,
+            journalContext = journalContext,
         )
     }
 
