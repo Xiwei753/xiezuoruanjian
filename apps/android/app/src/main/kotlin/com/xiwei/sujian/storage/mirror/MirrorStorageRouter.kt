@@ -82,17 +82,18 @@ class MirrorStorageRouter(
      */
     fun currentTransactionResult(): Result<MirrorStorageTransactionContext> {
         return readSnapshotStrict().map { (backend, treeUri) ->
-            val storage = when (backend) {
-                MirrorBackend.DOCUMENT_TREE -> {
-                    requireNotNull(treeUri) {
-                        "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
+            val storage =
+                when (backend) {
+                    MirrorBackend.DOCUMENT_TREE -> {
+                        requireNotNull(treeUri) {
+                            "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
                                 "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                        }
+                        val treeUriParsed = Uri.parse(treeUri)
+                        documentTreeFactory(treeUriParsed)
                     }
-                    val treeUriParsed = Uri.parse(treeUri)
-                    documentTreeFactory(treeUriParsed)
+                    MirrorBackend.MEDIA_STORE -> mediaStoreStorage
                 }
-                MirrorBackend.MEDIA_STORE -> mediaStoreStorage
-            }
             MirrorStorageTransactionContext(backend, treeUri, storage)
         }
     }
@@ -120,7 +121,7 @@ class MirrorStorageRouter(
                     // 违背"一个镜像后端，不猜、不反向覆盖"原则
                     requireNotNull(treeUri) {
                         "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
-                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                            "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
                     }
                     val treeUriParsed = Uri.parse(treeUri)
                     documentTreeFactory(treeUriParsed)
@@ -139,7 +140,8 @@ class MirrorStorageRouter(
      * @see currentResult
      */
     @Deprecated(
-        message = "Use currentResult() for strict error handling. " +
+        message =
+            "Use currentResult() for strict error handling. " +
                 "This fallback behavior violates #649 single-backend principle.",
         ReplaceWith("currentResult().getOrThrow()"),
     )
@@ -181,7 +183,7 @@ class MirrorStorageRouter(
                     // #649 评论 5563798095：DOCUMENT_TREE 缺 treeUri 时返回错误，不回退 MediaStore
                     requireNotNull(treeUri) {
                         "forBackend(DOCUMENT_TREE, treeUri=null) is invalid. " +
-                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                            "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
                     }
                     documentTreeFactory(Uri.parse(treeUri))
                 }
@@ -199,7 +201,8 @@ class MirrorStorageRouter(
      * @see forBackendResult
      */
     @Deprecated(
-        message = "Use forBackendResult() for strict error handling. " +
+        message =
+            "Use forBackendResult() for strict error handling. " +
                 "This fallback behavior violates #649 single-backend principle.",
         ReplaceWith("forBackendResult(backend, treeUri).getOrThrow()"),
     )

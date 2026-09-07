@@ -196,14 +196,15 @@ class ReadableMirrorStateStore(
             return when (val result = readRoot()) {
                 // #649 评论 5564624383 问题 3：首次安装 state.json 不存在不是损坏，
                 // 是合法初始状态，默认 MEDIA_STORE 后端。
-                is ReadResult.NotExists -> Result.success(
-                    MirrorStateSnapshot(
-                        backend = MirrorBackend.MEDIA_STORE,
-                        treeUri = null,
-                        manifestUri = null,
-                        projects = emptyMap(),
+                is ReadResult.NotExists ->
+                    Result.success(
+                        MirrorStateSnapshot(
+                            backend = MirrorBackend.MEDIA_STORE,
+                            treeUri = null,
+                            manifestUri = null,
+                            projects = emptyMap(),
+                        ),
                     )
-                )
                 is ReadResult.Corrupted -> Result.failure(result.error)
                 is ReadResult.Parsed -> {
                     val root = result.root
@@ -351,8 +352,9 @@ class ReadableMirrorStateStore(
     fun addPublishedProjectId(projectId: String): Boolean {
         synchronized(lock) {
             val root = readRootForUpdate() ?: return false
-            val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
-                ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
+            val published =
+                root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+                    ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
             published.put(projectId, true)
             return writeRoot(root)
         }
@@ -486,11 +488,12 @@ class ReadableMirrorStateStore(
     ): Boolean {
         synchronized(lock) {
             // #649 评论 5563333323 缺口 2：用 readRoot() 区分"不存在"和"损坏"
-            val root = when (val result = readRoot()) {
-                is ReadResult.NotExists -> JSONObject()
-                is ReadResult.Corrupted -> return false // 损坏时返回 false，不覆盖
-                is ReadResult.Parsed -> result.root
-            }
+            val root =
+                when (val result = readRoot()) {
+                    is ReadResult.NotExists -> JSONObject()
+                    is ReadResult.Corrupted -> return false // 损坏时返回 false，不覆盖
+                    is ReadResult.Parsed -> result.root
+                }
             // 写入 backend
             root.put(
                 BACKEND_KEY,
@@ -508,8 +511,9 @@ class ReadableMirrorStateStore(
             // 写入所有章节条目
             val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
             // #649 评论 5564820566 问题 5：恢复时也写 publishedProjectIds
-            val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
-                ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
+            val published =
+                root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+                    ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
             // #649 评论 5565067997 修复 6：优先用传入的 publishedProjectIds，
             // 同时也从 chapterEntries 推导（向后兼容），取并集。
             val projectIds = mutableSetOf<String>()
@@ -557,7 +561,7 @@ class ReadableMirrorStateStore(
                 // 然后 ensurePendingRecovered 仍然设 pendingRecovered=true
                 PendingMirrorPublish.fromJson(json)
                     ?: return PendingPublishResult.Corrupted(
-                        IllegalArgumentException("Pending publish JSON is invalid")
+                        IllegalArgumentException("Pending publish JSON is invalid"),
                     )
                 PendingPublishResult.Success(json)
             } catch (e: IOException) {
@@ -741,6 +745,7 @@ class ReadableMirrorStateStore(
         private const val STATE_FILE_NAME = "state.json"
         private const val PENDING_PUBLISH_FILE_NAME = "pending-publish.json"
         private const val PROJECTS_KEY = "projects"
+
         // #649 评论 5564820566 问题 5：零章节作品独立 project 状态
         private const val PUBLISHED_PROJECTS_KEY = "publishedProjectIds"
         private const val MANIFEST_URI_KEY = "manifestUri"

@@ -65,32 +65,35 @@ class MediaStoreMirrorStorage(
         val directory = mediaStoreDirectory(ref.relativePath)
         val displayName = ref.relativePath.substringAfterLast('/')
         // 三态查询：FOUND / MISSING / FAILED
-        val queryResult = try {
-            val exists = contentResolver.query(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                arrayOf(MediaStore.Downloads._ID),
-                "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
-                    "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
-                    "${MediaStore.Downloads.IS_PENDING} = 0",
-                arrayOf(directory, displayName),
-                null,
-            )?.use { it.moveToFirst() } ?: false
-            if (exists) QueryResult.FOUND else QueryResult.MISSING
-        } catch (_: SecurityException) {
-            QueryResult.FAILED
-        } catch (_: Exception) {
-            QueryResult.FAILED
-        }
+        val queryResult =
+            try {
+                val exists =
+                    contentResolver.query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        arrayOf(MediaStore.Downloads._ID),
+                        "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                            "${MediaStore.Downloads.IS_PENDING} = 0",
+                        arrayOf(directory, displayName),
+                        null,
+                    )?.use { it.moveToFirst() } ?: false
+                if (exists) QueryResult.FOUND else QueryResult.MISSING
+            } catch (_: SecurityException) {
+                QueryResult.FAILED
+            } catch (_: Exception) {
+                QueryResult.FAILED
+            }
         return when (queryResult) {
             QueryResult.MISSING -> true // 文件不存在 → 目标已达到
             QueryResult.FAILED -> false // 查询失败 → 不确定文件是否存在，返回 false
-            QueryResult.FOUND -> try {
-                mediaStore.delete(uri)
-            } catch (_: SecurityException) {
-                false // 权限异常 → 删除失败
-            } catch (_: Exception) {
-                false // I/O 异常 → 删除失败
-            }
+            QueryResult.FOUND ->
+                try {
+                    mediaStore.delete(uri)
+                } catch (_: SecurityException) {
+                    false // 权限异常 → 删除失败
+                } catch (_: Exception) {
+                    false // I/O 异常 → 删除失败
+                }
         }
     }
 
@@ -136,8 +139,9 @@ class MediaStoreMirrorStorage(
         val content = mediaStore.readText(stagingUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
-        val newUri = mediaStore.createText(relativeDir, displayName, staged.mimeType, content)
-            ?: return null
+        val newUri =
+            mediaStore.createText(relativeDir, displayName, staged.mimeType, content)
+                ?: return null
         mediaStore.delete(stagingUri)
         return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
     }
@@ -161,8 +165,9 @@ class MediaStoreMirrorStorage(
         val parent = old.relativePath.substringBeforeLast('/', "")
         val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
         val displayName = old.relativePath.substringAfterLast('/')
-        val backupUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
-            ?: return null
+        val backupUri =
+            mediaStore.createText(relativeDir, displayName, mimeType, content)
+                ?: return null
         // 关键：删 old 腾空最终路径（不是保留 old）
         if (!mediaStore.delete(oldUri)) {
             // 删 old 失败：删 backup 回滚，old 仍在原位
@@ -190,8 +195,9 @@ class MediaStoreMirrorStorage(
         val parent = old.relativePath.substringBeforeLast('/', "")
         val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
         val displayName = old.relativePath.substringAfterLast('/')
-        val backupUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
-            ?: return null
+        val backupUri =
+            mediaStore.createText(relativeDir, displayName, mimeType, content)
+                ?: return null
         return BackupReadyRef(
             backupRef = MirrorFileRef(uri = backupUri.toString(), relativePath = backupRelativePath),
             vacated = false,
@@ -266,7 +272,10 @@ class MediaStoreMirrorStorage(
         }
     }
 
-    override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+    override fun resolveBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorFileRef? {
         // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。
         if (!mediaStore.isSupported()) return null
         val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
@@ -287,7 +296,10 @@ class MediaStoreMirrorStorage(
      * - [MirrorLookupResult.Missing] → backup 不存在，继续 restore
      * - [MirrorLookupResult.Failed] → 查询失败，返回 null
      */
-    override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+    override fun lookupBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorLookupResult {
         if (!mediaStore.isSupported()) {
             return MirrorLookupResult.Failed(IllegalStateException("MediaStore backend not supported"))
         }
@@ -356,7 +368,7 @@ class MediaStoreMirrorStorage(
                             android.util.Log.w(
                                 TAG,
                                 "queryByPathAndName: multiple matches for $resultRelativePath, " +
-                                    "count=${cursor.count}, returning null to avoid binding wrong file"
+                                    "count=${cursor.count}, returning null to avoid binding wrong file",
                             )
                             return null
                         }
@@ -409,8 +421,9 @@ class MediaStoreMirrorStorage(
         val content = mediaStore.readText(backupUri) ?: return RestoreBackupResult.Failed(null)
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
-        val newUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
-            ?: return RestoreBackupResult.Failed(null)
+        val newUri =
+            mediaStore.createText(relativeDir, displayName, mimeType, content)
+                ?: return RestoreBackupResult.Failed(null)
         return RestoreBackupResult.Restored(MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath))
     }
 
@@ -455,10 +468,11 @@ class MediaStoreMirrorStorage(
         mimeType: String,
     ): MirrorFileRef? {
         if (!mediaStore.isSupported()) return null
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.RELATIVE_PATH, mediaStoreDirectory(targetRelativePath))
-            put(MediaStore.Downloads.DISPLAY_NAME, targetRelativePath.substringAfterLast('/'))
-        }
+        val values =
+            ContentValues().apply {
+                put(MediaStore.Downloads.RELATIVE_PATH, mediaStoreDirectory(targetRelativePath))
+                put(MediaStore.Downloads.DISPLAY_NAME, targetRelativePath.substringAfterLast('/'))
+            }
         val updated =
             try {
                 contentResolver.update(sourceUri, values, null, null)

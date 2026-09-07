@@ -340,7 +340,10 @@ interface ReadableMirrorStorage {
      * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
      * @return 已存在文件的 ref；不存在或查询失败返回 null
      */
-    fun resolveBackup(txId: String, relativePath: String): MirrorFileRef?
+    fun resolveBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorFileRef?
 
     /**
      * 三态查询：返回备份路径 [relativePath] 的 [MirrorLookupResult]。
@@ -357,7 +360,10 @@ interface ReadableMirrorStorage {
      * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
      * @return [MirrorLookupResult.Found] / [MirrorLookupResult.Missing] / [MirrorLookupResult.Failed]
      */
-    fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult
+    fun lookupBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorLookupResult
 
     /**
      * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。

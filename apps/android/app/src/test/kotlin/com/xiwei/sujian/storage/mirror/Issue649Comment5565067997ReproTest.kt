@@ -3,7 +3,6 @@ package com.xiwei.sujian.storage.mirror
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,7 +28,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5565067997ReproTest {
-
     // ══════════════════════════════════════════════════════════════════════
     // 修复 1：PendingItem 增加 STATE_BACKUP_READY / STATE_OLD_VACATED 中间状态
     // ══════════════════════════════════════════════════════════════════════
@@ -95,14 +93,15 @@ class Issue649Comment5565067997ReproTest {
         assertTrue("old 仍在 committedFiles", storage.committedFiles.containsKey("content://old"))
 
         // 修复确认：prepareBackup 后写 STATE_BACKUP_READY（不是 STATE_OLD_BACKED_UP）
-        val item = PendingItem(
-            key = ChapterKey("p1", "v1", "ch1"),
-            stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = old,
-            backupOldRef = prepared.backupRef,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
+        val item =
+            PendingItem(
+                key = ChapterKey("p1", "v1", "ch1"),
+                stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = old,
+                backupOldRef = prepared.backupRef,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
 
         assertEquals(PendingItem.STATE_BACKUP_READY, item.state)
         // old 还在 final，状态是 BACKUP_READY（不是 OLD_VACATED）→ 恢复时知道需要 vacate
@@ -135,11 +134,12 @@ class Issue649Comment5565067997ReproTest {
 
         // 修复确认：用 lookup() 判断 old 是否已 vacate（不再硬编码 vacated=false）
         val oldLookup = storage.lookup(oldRef.relativePath)
-        val vacated = when (oldLookup) {
-            is MirrorLookupResult.Missing -> true
-            is MirrorLookupResult.Found -> false
-            is MirrorLookupResult.Failed -> false // 查询失败时停止，不盲 vacate
-        }
+        val vacated =
+            when (oldLookup) {
+                is MirrorLookupResult.Missing -> true
+                is MirrorLookupResult.Found -> false
+                is MirrorLookupResult.Failed -> false // 查询失败时停止，不盲 vacate
+            }
 
         // old 不在 committedFiles（被原子 move 走了）→ lookup 返回 Missing → vacated=true
         assertTrue(
@@ -218,14 +218,16 @@ class Issue649Comment5565067997ReproTest {
         val journalSwapState = ManifestTransactionState.MANIFEST_BACKUP_READY
         assertEquals(
             "修复2确认：manifestSwapState = BACKUP_READY → existingFinal 是 OLD manifest，需先 vacate",
-            ManifestTransactionState.MANIFEST_BACKUP_READY, journalSwapState,
+            ManifestTransactionState.MANIFEST_BACKUP_READY,
+            journalSwapState,
         )
 
         // existingFinal 内容是 OLD manifest content，不应被当作 new manifest
         val content = storage.committedFiles[existingFinal!!.uri]
         assertEquals(
             "existingFinal 是 OLD manifest（还没 vacate），不应被当作 new manifest 提交",
-            "OLD manifest content", content,
+            "OLD manifest content",
+            content,
         )
     }
 
@@ -300,31 +302,34 @@ class Issue649Comment5565067997ReproTest {
         storage.committedFiles["content://new"] = "new content"
 
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-            promotedRef = MirrorFileRef("content://new", "f.md"),
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = MirrorFileRef("content://new", "f.md"),
+                state = PendingItem.STATE_PROMOTED,
+            )
 
         // 修复确认：检查 delete() 返回值，失败时不推进状态
         val deleteResult = item.promotedRef?.let { storage.delete(it) }
         assertFalse("delete 返回 false（模拟权限错误/IO 失败）", deleteResult!!)
 
         // 修复确认：delete 失败时保留原状态（不推进到 STATE_ROLLBACK_NEW_REMOVED）
-        val newItem = if (deleteResult) {
-            item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
-        } else {
-            // delete 失败：保留 rollback journal，停止
-            item // 状态不变
-        }
+        val newItem =
+            if (deleteResult) {
+                item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
+            } else {
+                // delete 失败：保留 rollback journal，停止
+                item // 状态不变
+            }
 
         assertEquals(
             "修复4确认：delete() 返回 false 时状态不推进，保留原 STATE_PROMOTED，" +
                 "保留 rollback journal 让下次重试",
-            PendingItem.STATE_PROMOTED, newItem.state,
+            PendingItem.STATE_PROMOTED,
+            newItem.state,
         )
         assertTrue(
             "修复4确认：新正文还在 final（delete 失败），状态未推进，不会制造同名冲突",
@@ -356,13 +361,16 @@ class Issue649Comment5565067997ReproTest {
         )
 
         // 修复确认：lookup 方法存在，返回 MirrorLookupResult
-        val lookupMethod = ReadableMirrorStorage::class.java.getDeclaredMethod(
-            "lookup", String::class.java,
-        )
+        val lookupMethod =
+            ReadableMirrorStorage::class.java.getDeclaredMethod(
+                "lookup",
+                String::class.java,
+            )
         val returnType = lookupMethod.returnType
         assertEquals(
             "修复5确认：lookup() 返回 MirrorLookupResult，可区分 '文件不存在' 和 '查询失败'",
-            MirrorLookupResult::class.java, returnType,
+            MirrorLookupResult::class.java,
+            returnType,
         )
 
         // 验证三态子类存在
@@ -413,8 +421,12 @@ class Issue649Comment5565067997ReproTest {
         allSuccess = true
         when (val lookupResult = storage.lookup("nonexistent/path.md")) {
             is MirrorLookupResult.Missing -> { /* 目标已达到，成功 */ }
-            is MirrorLookupResult.Found -> { if (!storage.delete(lookupResult.ref)) allSuccess = false }
-            is MirrorLookupResult.Failed -> { allSuccess = false }
+            is MirrorLookupResult.Found -> {
+                if (!storage.delete(lookupResult.ref)) allSuccess = false
+            }
+            is MirrorLookupResult.Failed -> {
+                allSuccess = false
+            }
         }
         assertTrue(
             "修复5确认：lookup() 返回 Missing → 视为成功（目标已达到）",
@@ -432,11 +444,12 @@ class Issue649Comment5565067997ReproTest {
      */
     @Test
     fun fix6_saveRestoredStateHasPublishedProjectIdsParam() {
-        val stateStoreClass = try {
-            Class.forName("com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore")
-        } catch (_: ClassNotFoundException) {
-            null
-        }
+        val stateStoreClass =
+            try {
+                Class.forName("com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore")
+            } catch (_: ClassNotFoundException) {
+                null
+            }
         assertNotNull("ReadableMirrorStateStore 类应存在", stateStoreClass)
 
         val methods = stateStoreClass!!.declaredMethods
@@ -445,11 +458,12 @@ class Issue649Comment5565067997ReproTest {
         assertTrue("saveRestoredState 方法应存在", saveRestoredStateMethods.isNotEmpty())
 
         // 修复确认：saveRestoredState 有 publishedProjectIds 参数（Set 类型）
-        val hasPublishedProjectIdsParam = saveRestoredStateMethods.any { method ->
-            method.parameterTypes.any { paramType ->
-                paramType.name == "java.util.Set" || paramType.simpleName == "Set"
+        val hasPublishedProjectIdsParam =
+            saveRestoredStateMethods.any { method ->
+                method.parameterTypes.any { paramType ->
+                    paramType.name == "java.util.Set" || paramType.simpleName == "Set"
+                }
             }
-        }
         assertTrue(
             "修复6确认：saveRestoredState 有 publishedProjectIds: Set<String> 参数",
             hasPublishedProjectIdsParam,
@@ -508,11 +522,13 @@ class Issue649Comment5565067997ReproTest {
         // 修复确认：方法返回 Boolean
         assertEquals(
             "修复6确认：addPublishedProjectId 返回 Boolean，调用方检查返回值",
-            java.lang.Boolean.TYPE, addMethod.returnType,
+            java.lang.Boolean.TYPE,
+            addMethod.returnType,
         )
         assertEquals(
             "修复6确认：removePublishedProjectId 返回 Boolean，调用方检查返回值",
-            java.lang.Boolean.TYPE, removeMethod.returnType,
+            java.lang.Boolean.TYPE,
+            removeMethod.returnType,
         )
 
         // 修复确认：调用方检查返回值（通过源码审查确认 recoverPromotePhase 第 408-411 行、
@@ -552,7 +568,10 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(uri, path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean {
             committedFiles[ref.uri] = text
             operationLog.add("replaceText:${ref.relativePath}")
             return true
@@ -583,7 +602,11 @@ class Issue649Comment5565067997ReproTest {
             return StagedMirrorRef(txId, uri, ".staging/$txId/$relativePath", relativePath, mimeType)
         }
 
-        override fun backupCommitted(txId: String, old: MirrorFileRef, mimeType: String): MirrorFileRef? {
+        override fun backupCommitted(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): MirrorFileRef? {
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
             val backupPath = ".staging/$txId/backup/${old.relativePath}"
@@ -593,7 +616,11 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(backupUri, backupPath)
         }
 
-        override fun prepareBackup(txId: String, old: MirrorFileRef, mimeType: String): BackupReadyRef? {
+        override fun prepareBackup(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): BackupReadyRef? {
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
             val backupPath = ".staging/$txId/backup/${old.relativePath}"
@@ -624,7 +651,10 @@ class Issue649Comment5565067997ReproTest {
             return MirrorLookupResult.Found(MirrorFileRef(uri, relativePath))
         }
 
-        override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        override fun resolveBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorFileRef? {
             operationLog.add("resolveBackup:$relativePath")
             if (failResolve) return null
             val backupPath = ".staging/$txId/backup/$relativePath"
@@ -632,7 +662,10 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(uri, backupPath)
         }
 
-        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        override fun lookupBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorLookupResult {
             operationLog.add("lookupBackup:$relativePath")
             if (failLookup) return MirrorLookupResult.Failed(SecurityException("simulated lookup failure"))
             val backupPath = ".staging/$txId/backup/$relativePath"
@@ -640,7 +673,10 @@ class Issue649Comment5565067997ReproTest {
             return MirrorLookupResult.Found(MirrorFileRef(uri, backupPath))
         }
 
-        override fun promoteStaged(staged: StagedMirrorRef, finalRelativePath: String): MirrorFileRef? {
+        override fun promoteStaged(
+            staged: StagedMirrorRef,
+            finalRelativePath: String,
+        ): MirrorFileRef? {
             val content = stagingFiles.remove(staged.stagingUri) ?: return null
             val newUri = "content://fake/promoted/${committedFiles.size}"
             committedFiles[newUri] = content
@@ -649,7 +685,12 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(newUri, finalRelativePath)
         }
 
-        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String, expectedOldContentHash: String?): RestoreBackupResult {
+        override fun restoreBackup(
+            backup: MirrorFileRef,
+            finalRelativePath: String,
+            mimeType: String,
+            expectedOldContentHash: String?,
+        ): RestoreBackupResult {
             val existing = committedFiles.entries.find { it.value != null && committedPathToUri[finalRelativePath] == it.key }
             if (existing != null) {
                 return RestoreBackupResult.AlreadyRestored(MirrorFileRef(existing.key, finalRelativePath))

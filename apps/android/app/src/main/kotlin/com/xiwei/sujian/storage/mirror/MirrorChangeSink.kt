@@ -191,11 +191,12 @@ class DefaultMirrorChangeSink(
                     deleteQueue.poll()
                 }
                 is MirrorPublishResult.PendingRecovery,
-                is MirrorPublishResult.RetryableFailure -> {
+                is MirrorPublishResult.RetryableFailure,
+                -> {
                     // pending 恢复中或可重试失败：保留事件在队列中，补发信号触发下一轮
                     DiagnosticsLogger.w(
                         TAG,
-                        "deleteProject pending/failed for ${del.projectId}, keeping event for retry"
+                        "deleteProject pending/failed for ${del.projectId}, keeping event for retry",
                     )
                     signal.trySend(Unit)
                     return
@@ -219,7 +220,8 @@ class DefaultMirrorChangeSink(
                     dirtyMap.remove(wildcardKey, snapshot.first { it.first == wildcardKey }.second)
                 }
                 is MirrorPublishResult.PendingRecovery,
-                is MirrorPublishResult.RetryableFailure -> {
+                is MirrorPublishResult.RetryableFailure,
+                -> {
                     // pending 恢复中或可重试失败：保留事件在 dirtyMap 中，补发信号触发下一轮
                     DiagnosticsLogger.w(TAG, "publishAll pending/failed, keeping event for retry")
                     signal.trySend(Unit)
@@ -242,11 +244,12 @@ class DefaultMirrorChangeSink(
                     }
                 }
                 is MirrorPublishResult.PendingRecovery,
-                is MirrorPublishResult.RetryableFailure -> {
+                is MirrorPublishResult.RetryableFailure,
+                -> {
                     // pending 恢复中或可重试失败：保留事件在 dirtyMap 中，补发信号触发下一轮
                     DiagnosticsLogger.w(
                         TAG,
-                        "publishProject pending/failed for $pid, keeping event for retry"
+                        "publishProject pending/failed for $pid, keeping event for retry",
                     )
                     signal.trySend(Unit)
                     return

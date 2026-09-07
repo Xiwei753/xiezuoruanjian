@@ -23,7 +23,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MirrorTransactionStateTest {
-
     // ── PendingMirrorPublish JSON round-trip ──
 
     @Test
@@ -33,49 +32,73 @@ class MirrorTransactionStateTest {
         val entry1 = ChapterMirrorEntry("content://media/1", "作品/P/V/Ch1.md", 100L, "sha256:abc")
         val entry2 = ChapterMirrorEntry("content://media/2", "作品/P/V/Ch2.md", 200L, "sha256:def")
 
-        val staged1 = StagedMirrorRef("tx1", "content://staging/1", ".staging/tx1/作品/P/V/Ch1.md", "作品/P/V/Ch1.md", "text/markdown")
-        val staged2 = StagedMirrorRef("tx1", "content://staging/2", ".staging/tx1/作品/P/V/Ch2.md", "作品/P/V/Ch2.md", "text/markdown")
+        val staged1 =
+            StagedMirrorRef(
+                "tx1",
+                "content://staging/1",
+                ".staging/tx1/作品/P/V/Ch1.md",
+                "作品/P/V/Ch1.md",
+                "text/markdown",
+            )
+        val staged2 =
+            StagedMirrorRef(
+                "tx1",
+                "content://staging/2",
+                ".staging/tx1/作品/P/V/Ch2.md",
+                "作品/P/V/Ch2.md",
+                "text/markdown",
+            )
 
-        val item1 = PendingItem(
-            key = key1,
-            stagedRef = staged1,
-            oldRef = MirrorFileRef("content://old/1", "作品/P/V/Ch1.md"),
-            backupOldRef = MirrorFileRef("content://backup/1", ".staging/tx1/backup/作品/P/V/Ch1.md"),
-            promotedRef = MirrorFileRef("content://new/1", "作品/P/V/Ch1.md"),
-            state = PendingItem.STATE_PROMOTED,
-        )
-        val item2 = PendingItem(
-            key = key2,
-            stagedRef = staged2,
-            oldRef = MirrorFileRef("content://old/2", "作品/P/V/Ch2.md"),
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val item1 =
+            PendingItem(
+                key = key1,
+                stagedRef = staged1,
+                oldRef = MirrorFileRef("content://old/1", "作品/P/V/Ch1.md"),
+                backupOldRef = MirrorFileRef("content://backup/1", ".staging/tx1/backup/作品/P/V/Ch1.md"),
+                promotedRef = MirrorFileRef("content://new/1", "作品/P/V/Ch1.md"),
+                state = PendingItem.STATE_PROMOTED,
+            )
+        val item2 =
+            PendingItem(
+                key = key2,
+                stagedRef = staged2,
+                oldRef = MirrorFileRef("content://old/2", "作品/P/V/Ch2.md"),
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
 
         val manifestOldRef = MirrorFileRef("content://manifest/old", "_meta/manifest.json")
-        val manifestStagedRef = StagedMirrorRef("tx1", "content://manifest/staged", ".staging/tx1/_meta/manifest.json", "_meta/manifest.json", "application/json")
+        val manifestStagedRef =
+            StagedMirrorRef(
+                "tx1",
+                "content://manifest/staged",
+                ".staging/tx1/_meta/manifest.json",
+                "_meta/manifest.json",
+                "application/json",
+            )
         val manifestNewRef = MirrorFileRef("content://manifest/new", "_meta/manifest.json")
         val manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json")
 
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.DOCUMENT_TREE,
-            treeUri = "content://tree/doc",
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = mapOf(key1 to entry1, key2 to entry2),
-            newEntries = mapOf(key1 to entry2, key2 to entry1),
-            stagedRefs = mapOf(key1 to staged1, key2 to staged2),
-            items = mapOf(key1 to item1, key2 to item2),
-            removedProjectIds = emptySet(),
-            manifestOldRef = manifestOldRef,
-            manifestStagedRef = manifestStagedRef,
-            manifestNewRef = manifestNewRef,
-            manifestBackupRef = manifestBackupRef,
-            isManifestCommitted = false,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.DOCUMENT_TREE,
+                treeUri = "content://tree/doc",
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = mapOf(key1 to entry1, key2 to entry2),
+                newEntries = mapOf(key1 to entry2, key2 to entry1),
+                stagedRefs = mapOf(key1 to staged1, key2 to staged2),
+                items = mapOf(key1 to item1, key2 to item2),
+                removedProjectIds = emptySet(),
+                manifestOldRef = manifestOldRef,
+                manifestStagedRef = manifestStagedRef,
+                manifestNewRef = manifestNewRef,
+                manifestBackupRef = manifestBackupRef,
+                isManifestCommitted = false,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)
@@ -120,27 +143,29 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_deleteProject() {
-        val journal = PendingMirrorPublish(
-            txId = "tx-del",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p-del",
-            transactionType = MirrorTransactionType.DELETE_PROJECT,
-            phase = PendingMirrorPublish.PHASE_CLEANUP,
-            oldEntries = mapOf(
-                ChapterKey("p-del", "v1", "ch1") to
-                    ChapterMirrorEntry("content://old/1", "作品/Del/V/Ch.md", 100L, "sha256:x"),
-            ),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = setOf("p-del"),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = MirrorFileRef("content://manifest/new", "_meta/manifest.json"),
-            manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json"),
-            isManifestCommitted = true,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx-del",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p-del",
+                transactionType = MirrorTransactionType.DELETE_PROJECT,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                oldEntries =
+                    mapOf(
+                        ChapterKey("p-del", "v1", "ch1") to
+                            ChapterMirrorEntry("content://old/1", "作品/Del/V/Ch.md", 100L, "sha256:x"),
+                    ),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = setOf("p-del"),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = MirrorFileRef("content://manifest/new", "_meta/manifest.json"),
+                manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json"),
+                isManifestCommitted = true,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)
@@ -160,23 +185,24 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_nullManifestFields() {
-        val journal = PendingMirrorPublish(
-            txId = "tx-null",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_STAGE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx-null",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_STAGE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)
@@ -206,14 +232,15 @@ class MirrorTransactionStateTest {
         val oldRef = MirrorFileRef("content://old", "f.md")
         val backupRef = MirrorFileRef("content://backup", ".staging/tx1/backup/f.md")
 
-        val item = PendingItem(
-            key = key,
-            stagedRef = staged,
-            oldRef = oldRef,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = staged,
+                oldRef = oldRef,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
         assertEquals(PendingItem.STATE_STAGED, item.state)
         assertNull(item.backupOldRef)
 
@@ -230,14 +257,15 @@ class MirrorTransactionStateTest {
         val backupRef = MirrorFileRef("content://backup", ".staging/tx1/backup/f.md")
         val newRef = MirrorFileRef("content://new", "f.md")
 
-        val item = PendingItem(
-            key = key,
-            stagedRef = staged,
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = backupRef,
-            promotedRef = null,
-            state = PendingItem.STATE_OLD_BACKED_UP,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = staged,
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = backupRef,
+                promotedRef = null,
+                state = PendingItem.STATE_OLD_BACKED_UP,
+            )
 
         val promoted = item.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
         assertEquals(PendingItem.STATE_PROMOTED, promoted.state)
@@ -248,14 +276,15 @@ class MirrorTransactionStateTest {
     @Test
     fun pendingItem_stateTransitions_promotedToCommitted() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", ".staging/tx1/backup/f.md"),
-            promotedRef = MirrorFileRef("content://new", "f.md"),
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", ".staging/tx1/backup/f.md"),
+                promotedRef = MirrorFileRef("content://new", "f.md"),
+                state = PendingItem.STATE_PROMOTED,
+            )
 
         val committed = item.copy(state = PendingItem.STATE_COMMITTED)
         assertEquals(PendingItem.STATE_COMMITTED, committed.state)
@@ -264,14 +293,15 @@ class MirrorTransactionStateTest {
     @Test
     fun pendingItem_stateTransitions_newProject_noOldRef() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = null,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = null,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
         assertNull(item.oldRef)
         assertNull(item.backupOldRef)
 
@@ -288,44 +318,63 @@ class MirrorTransactionStateTest {
     fun pendingItem_jsonRoundTrip_allStates() {
         // #649 评论 5565067997 修复 1：新增 STATE_BACKUP_READY / STATE_OLD_VACATED，
         // 旧 STATE_OLD_BACKED_UP 反序列化时映射到 STATE_BACKUP_READY（normalizeState）。
-        val states = listOf(
-            PendingItem.STATE_STAGED,
-            PendingItem.STATE_BACKUP_READY,
-            PendingItem.STATE_OLD_VACATED,
-            PendingItem.STATE_OLD_BACKED_UP, // 旧状态，round-trip 后映射到 STATE_BACKUP_READY
-            PendingItem.STATE_PROMOTED,
-            PendingItem.STATE_COMMITTED,
-        )
+        val states =
+            listOf(
+                PendingItem.STATE_STAGED,
+                PendingItem.STATE_BACKUP_READY,
+                PendingItem.STATE_OLD_VACATED,
+                PendingItem.STATE_OLD_BACKED_UP, // 旧状态，round-trip 后映射到 STATE_BACKUP_READY
+                PendingItem.STATE_PROMOTED,
+                PendingItem.STATE_COMMITTED,
+            )
         val key = ChapterKey("p1", "v1", "ch1")
         val staged = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown")
 
         for (state in states) {
-            val item = PendingItem(
-                key = key,
-                stagedRef = staged,
-                oldRef = MirrorFileRef("content://old", "f.md"),
-                backupOldRef = if (state != PendingItem.STATE_STAGED) MirrorFileRef("content://backup", "backup/f.md") else null,
-                promotedRef = if (state == PendingItem.STATE_PROMOTED || state == PendingItem.STATE_COMMITTED) MirrorFileRef("content://new", "f.md") else null,
-                state = state,
-            )
+            val item =
+                PendingItem(
+                    key = key,
+                    stagedRef = staged,
+                    oldRef = MirrorFileRef("content://old", "f.md"),
+                    backupOldRef =
+                        if (state != PendingItem.STATE_STAGED) {
+                            MirrorFileRef(
+                                "content://backup",
+                                "backup/f.md",
+                            )
+                        } else {
+                            null
+                        },
+                    promotedRef =
+                        if (state == PendingItem.STATE_PROMOTED || state == PendingItem.STATE_COMMITTED) {
+                            MirrorFileRef(
+                                "content://new",
+                                "f.md",
+                            )
+                        } else {
+                            null
+                        },
+                    state = state,
+                )
 
-            val journal = PendingMirrorPublish(
-                txId = "tx1",
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = "p1",
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_PROMOTE,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = mapOf(key to item),
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-            )
+            val journal =
+                PendingMirrorPublish(
+                    txId = "tx1",
+                    backend = MirrorBackend.MEDIA_STORE,
+                    treeUri = null,
+                    projectId = "p1",
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_PROMOTE,
+                    oldEntries = emptyMap(),
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = mapOf(key to item),
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
 
             val json = journal.toJson()
             val restored = PendingMirrorPublish.fromJson(json)!!
@@ -333,7 +382,11 @@ class MirrorTransactionStateTest {
 
             // #649 评论 5565067997 修复 1：STATE_OLD_BACKED_UP 反序列化映射到 STATE_BACKUP_READY
             val expectedState = PendingItem.normalizeState(state)
-            assertEquals("State $state should round-trip (normalized: $expectedState)", expectedState, restoredItem.state)
+            assertEquals(
+                "State $state should round-trip (normalized: $expectedState)",
+                expectedState,
+                restoredItem.state,
+            )
             assertEquals("stagedRef should round-trip", staged.stagingUri, restoredItem.stagedRef?.stagingUri)
             assertEquals("oldRef should round-trip", "content://old", restoredItem.oldRef?.uri)
         }
@@ -470,7 +523,16 @@ class MirrorTransactionStateTest {
 
         // No old ref → no backup step
         val oldRef: MirrorFileRef? = null
-        val backup: MirrorFileRef? = if (oldRef != null) storage.backupCommitted(txId, oldRef, "text/markdown") else null
+        val backup: MirrorFileRef? =
+            if (oldRef != null) {
+                storage.backupCommitted(
+                    txId,
+                    oldRef,
+                    "text/markdown",
+                )
+            } else {
+                null
+            }
         assertNull("no backup for new project", backup)
 
         // Promote directly
@@ -509,18 +571,20 @@ class MirrorTransactionStateTest {
     @Test
     fun recovery_shouldSkipPromotedItems() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-            promotedRef = MirrorFileRef("content://new", "f.md"),
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = MirrorFileRef("content://new", "f.md"),
+                state = PendingItem.STATE_PROMOTED,
+            )
 
         // Simulate recovery decision logic
-        val shouldSkip = (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
-            item.promotedRef != null
+        val shouldSkip =
+            (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
+                item.promotedRef != null
 
         assertTrue("PROMOTED item should be skipped during recovery", shouldSkip)
     }
@@ -528,17 +592,19 @@ class MirrorTransactionStateTest {
     @Test
     fun recovery_shouldSkipCommittedItems() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-            promotedRef = MirrorFileRef("content://new", "f.md"),
-            state = PendingItem.STATE_COMMITTED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = MirrorFileRef("content://new", "f.md"),
+                state = PendingItem.STATE_COMMITTED,
+            )
 
-        val shouldSkip = (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
-            item.promotedRef != null
+        val shouldSkip =
+            (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
+                item.promotedRef != null
 
         assertTrue("COMMITTED item should be skipped during recovery", shouldSkip)
     }
@@ -546,17 +612,19 @@ class MirrorTransactionStateTest {
     @Test
     fun recovery_shouldNotSkipStagedItems() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
 
-        val shouldSkip = (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
-            item.promotedRef != null
+        val shouldSkip =
+            (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
+                item.promotedRef != null
 
         assertFalse("STAGED item should NOT be skipped during recovery", shouldSkip)
     }
@@ -564,17 +632,19 @@ class MirrorTransactionStateTest {
     @Test
     fun recovery_shouldNotSkipOldBackedUpItems() {
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-            promotedRef = null,
-            state = PendingItem.STATE_OLD_BACKED_UP,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = null,
+                state = PendingItem.STATE_OLD_BACKED_UP,
+            )
 
-        val shouldSkip = (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
-            item.promotedRef != null
+        val shouldSkip =
+            (item.state == PendingItem.STATE_PROMOTED || item.state == PendingItem.STATE_COMMITTED) &&
+                item.promotedRef != null
 
         assertFalse("OLD_BACKED_UP item should NOT be skipped during recovery", shouldSkip)
     }
@@ -583,11 +653,12 @@ class MirrorTransactionStateTest {
 
     @Test
     fun deleteProject_removesAllChaptersFromManifest() {
-        val oldEntries = mapOf(
-            ChapterKey("p1", "v1", "ch1") to ChapterMirrorEntry("content://1", "f1.md", 100L, "sha256:a"),
-            ChapterKey("p1", "v1", "ch2") to ChapterMirrorEntry("content://2", "f2.md", 200L, "sha256:b"),
-            ChapterKey("p2", "v1", "ch3") to ChapterMirrorEntry("content://3", "f3.md", 300L, "sha256:c"),
-        )
+        val oldEntries =
+            mapOf(
+                ChapterKey("p1", "v1", "ch1") to ChapterMirrorEntry("content://1", "f1.md", 100L, "sha256:a"),
+                ChapterKey("p1", "v1", "ch2") to ChapterMirrorEntry("content://2", "f2.md", 200L, "sha256:b"),
+                ChapterKey("p2", "v1", "ch3") to ChapterMirrorEntry("content://3", "f3.md", 300L, "sha256:c"),
+            )
 
         // DELETE_PROJECT for p1: desiredWithoutDeleted excludes all p1 entries
         val desiredWithoutDeleted = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
@@ -611,23 +682,24 @@ class MirrorTransactionStateTest {
         // Even with empty removed, we should NOT early return
         // The code should continue to create a new manifest without this project
         val txId = "${System.currentTimeMillis()}-p-empty"
-        val journal = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p-empty",
-            transactionType = MirrorTransactionType.DELETE_PROJECT,
-            phase = PendingMirrorPublish.PHASE_CLEANUP,
-            oldEntries = removed,
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = setOf("p-empty"),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p-empty",
+                transactionType = MirrorTransactionType.DELETE_PROJECT,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                oldEntries = removed,
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = setOf("p-empty"),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         // Verify journal is valid even for empty project
         val json = journal.toJson()
@@ -641,37 +713,47 @@ class MirrorTransactionStateTest {
     @Test
     fun manifestTransaction_journalStepTracking() {
         // Simulate manifest transaction: stage → journal → promote → journal → commit → journal
-        val baseJournal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.DOCUMENT_TREE,
-            treeUri = "content://tree",
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val baseJournal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.DOCUMENT_TREE,
+                treeUri = "content://tree",
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         // Step 1: manifest staged
-        val step1 = baseJournal.copy(
-            manifestStagedRef = StagedMirrorRef("tx1", "content://ms", ".staging/tx1/_meta/manifest.json", "_meta/manifest.json", "application/json"),
-        )
+        val step1 =
+            baseJournal.copy(
+                manifestStagedRef =
+                    StagedMirrorRef(
+                        "tx1",
+                        "content://ms",
+                        ".staging/tx1/_meta/manifest.json",
+                        "_meta/manifest.json",
+                        "application/json",
+                    ),
+            )
         assertNull(step1.manifestNewRef)
         assertNull(step1.manifestBackupRef)
         assertFalse(step1.isManifestCommitted)
 
         // Step 2: manifest promoted
-        val step2 = step1.copy(
-            manifestNewRef = MirrorFileRef("content://mn", "_meta/manifest.json"),
-            manifestBackupRef = MirrorFileRef("content://mo", "_meta/manifest.json"),
-        )
+        val step2 =
+            step1.copy(
+                manifestNewRef = MirrorFileRef("content://mn", "_meta/manifest.json"),
+                manifestBackupRef = MirrorFileRef("content://mo", "_meta/manifest.json"),
+            )
         assertNotNull(step2.manifestNewRef)
         assertNotNull(step2.manifestBackupRef)
         assertFalse(step2.isManifestCommitted)
@@ -693,23 +775,24 @@ class MirrorTransactionStateTest {
     @Test
     fun transactionType_serialization() {
         for (type in MirrorTransactionType.entries) {
-            val journal = PendingMirrorPublish(
-                txId = "tx",
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = "p1",
-                transactionType = type,
-                phase = PendingMirrorPublish.PHASE_STAGE,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-            )
+            val journal =
+                PendingMirrorPublish(
+                    txId = "tx",
+                    backend = MirrorBackend.MEDIA_STORE,
+                    treeUri = null,
+                    projectId = "p1",
+                    transactionType = type,
+                    phase = PendingMirrorPublish.PHASE_STAGE,
+                    oldEntries = emptyMap(),
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
 
             val json = journal.toJson()
             val restored = PendingMirrorPublish.fromJson(json)!!
@@ -721,29 +804,31 @@ class MirrorTransactionStateTest {
 
     @Test
     fun phase_serialization() {
-        val phases = listOf(
-            PendingMirrorPublish.PHASE_STAGE,
-            PendingMirrorPublish.PHASE_PROMOTE,
-            PendingMirrorPublish.PHASE_CLEANUP,
-        )
-        for (phase in phases) {
-            val journal = PendingMirrorPublish(
-                txId = "tx",
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = "p1",
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = phase,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
+        val phases =
+            listOf(
+                PendingMirrorPublish.PHASE_STAGE,
+                PendingMirrorPublish.PHASE_PROMOTE,
+                PendingMirrorPublish.PHASE_CLEANUP,
             )
+        for (phase in phases) {
+            val journal =
+                PendingMirrorPublish(
+                    txId = "tx",
+                    backend = MirrorBackend.MEDIA_STORE,
+                    treeUri = null,
+                    projectId = "p1",
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = phase,
+                    oldEntries = emptyMap(),
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
 
             val json = journal.toJson()
             val restored = PendingMirrorPublish.fromJson(json)!!
@@ -784,7 +869,10 @@ class MirrorTransactionStateTest {
             return MirrorFileRef(uri, path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean {
             committedFiles[ref.uri] = text
             journalSteps.add("replaceText:${ref.relativePath}")
             return true
@@ -792,9 +880,10 @@ class MirrorTransactionStateTest {
 
         override fun delete(ref: MirrorFileRef): Boolean {
             // #649 评论 5564379115 问题 3：幂等语义 — 文件不存在也返回 true
-            val existed = committedFiles.remove(ref.uri) != null ||
-                stagingFiles.remove(ref.uri) != null ||
-                backupFiles.remove(ref.uri) != null
+            val existed =
+                committedFiles.remove(ref.uri) != null ||
+                    stagingFiles.remove(ref.uri) != null ||
+                    backupFiles.remove(ref.uri) != null
             deletedFiles.add(ref.uri)
             journalSteps.add("delete:${ref.relativePath}")
             return true // 幂等：始终返回 true
@@ -820,7 +909,11 @@ class MirrorTransactionStateTest {
             )
         }
 
-        override fun backupCommitted(txId: String, old: MirrorFileRef, mimeType: String): MirrorFileRef? {
+        override fun backupCommitted(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): MirrorFileRef? {
             if (failBackup) return null
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
@@ -831,7 +924,11 @@ class MirrorTransactionStateTest {
         }
 
         // #649 评论 5564820566 问题 3：两步 journalable backup — fake 实现
-        override fun prepareBackup(txId: String, old: MirrorFileRef, mimeType: String): BackupReadyRef? {
+        override fun prepareBackup(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): BackupReadyRef? {
             if (failBackup) return null
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
@@ -850,7 +947,10 @@ class MirrorTransactionStateTest {
             return true
         }
 
-        override fun promoteStaged(staged: StagedMirrorRef, finalRelativePath: String): MirrorFileRef? {
+        override fun promoteStaged(
+            staged: StagedMirrorRef,
+            finalRelativePath: String,
+        ): MirrorFileRef? {
             if (failPromote) return null
             val content = stagingFiles.remove(staged.stagingUri) ?: return null
             val newUri = "content://fake/promoted/${committedFiles.size}"
@@ -880,7 +980,10 @@ class MirrorTransactionStateTest {
             }
         }
 
-        override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        override fun resolveBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorFileRef? {
             // 查找 backupFiles 中匹配的条目
             val backupPath = ".staging/$txId/backup/$relativePath"
             for ((uri, _) in backupFiles) {
@@ -892,7 +995,10 @@ class MirrorTransactionStateTest {
         }
 
         // #649 评论 5565862745 问题 3：实现 lookupBackup() 三态查询
-        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        override fun lookupBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorLookupResult {
             val resolved = resolveBackup(txId, relativePath)
             return if (resolved != null) {
                 MirrorLookupResult.Found(resolved)
@@ -901,7 +1007,12 @@ class MirrorTransactionStateTest {
             }
         }
 
-        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String, expectedOldContentHash: String?): RestoreBackupResult {
+        override fun restoreBackup(
+            backup: MirrorFileRef,
+            finalRelativePath: String,
+            mimeType: String,
+            expectedOldContentHash: String?,
+        ): RestoreBackupResult {
             // 先检查 final 是否已存在
             val existing = resolve(finalRelativePath)
             if (existing != null) {
@@ -999,40 +1110,43 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingItem_jsonRoundTrip_rollbackStates() {
-        val states = listOf(
-            PendingItem.STATE_ROLLBACK_NEW_REMOVED,
-            PendingItem.STATE_ROLLBACK_OLD_RESTORED,
-        )
+        val states =
+            listOf(
+                PendingItem.STATE_ROLLBACK_NEW_REMOVED,
+                PendingItem.STATE_ROLLBACK_OLD_RESTORED,
+            )
         val key = ChapterKey("p1", "v1", "ch1")
         val staged = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown")
 
         for (state in states) {
-            val item = PendingItem(
-                key = key,
-                stagedRef = staged,
-                oldRef = MirrorFileRef("content://old", "f.md"),
-                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-                promotedRef = MirrorFileRef("content://new", "f.md"),
-                state = state,
-            )
+            val item =
+                PendingItem(
+                    key = key,
+                    stagedRef = staged,
+                    oldRef = MirrorFileRef("content://old", "f.md"),
+                    backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                    promotedRef = MirrorFileRef("content://new", "f.md"),
+                    state = state,
+                )
 
-            val journal = PendingMirrorPublish(
-                txId = "tx1",
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = "p1",
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = mapOf(key to item),
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json"),
-            )
+            val journal =
+                PendingMirrorPublish(
+                    txId = "tx1",
+                    backend = MirrorBackend.MEDIA_STORE,
+                    treeUri = null,
+                    projectId = "p1",
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                    oldEntries = emptyMap(),
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = mapOf(key to item),
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = MirrorFileRef("content://manifest/backup", "_meta/manifest.json"),
+                )
 
             val json = journal.toJson()
             val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1047,30 +1161,32 @@ class MirrorTransactionStateTest {
 
     @Test
     fun phase_serialization_includesRollback() {
-        val phases = listOf(
-            PendingMirrorPublish.PHASE_STAGE,
-            PendingMirrorPublish.PHASE_PROMOTE,
-            PendingMirrorPublish.PHASE_CLEANUP,
-            PendingMirrorPublish.PHASE_ROLLBACK,
-        )
-        for (phase in phases) {
-            val journal = PendingMirrorPublish(
-                txId = "tx",
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = "p1",
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = phase,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
+        val phases =
+            listOf(
+                PendingMirrorPublish.PHASE_STAGE,
+                PendingMirrorPublish.PHASE_PROMOTE,
+                PendingMirrorPublish.PHASE_CLEANUP,
+                PendingMirrorPublish.PHASE_ROLLBACK,
             )
+        for (phase in phases) {
+            val journal =
+                PendingMirrorPublish(
+                    txId = "tx",
+                    backend = MirrorBackend.MEDIA_STORE,
+                    treeUri = null,
+                    projectId = "p1",
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = phase,
+                    oldEntries = emptyMap(),
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
 
             val json = journal.toJson()
             val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1082,24 +1198,25 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_affectedProjectIds() {
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            affectedProjectIds = setOf("p1", "p2"),
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                affectedProjectIds = setOf("p1", "p2"),
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1108,23 +1225,24 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_emptyAffectedProjectIds() {
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1145,7 +1263,11 @@ class MirrorTransactionStateTest {
         assertNotNull(prepared)
         assertFalse("old should still exist after prepareBackup", prepared!!.vacated)
         assertTrue("backup should exist", storage.backupFiles.containsKey(prepared.backupRef.uri))
-        assertEquals("backup content should match old", "important content", storage.backupFiles[prepared.backupRef.uri])
+        assertEquals(
+            "backup content should match old",
+            "important content",
+            storage.backupFiles[prepared.backupRef.uri],
+        )
         assertTrue("old should still exist after prepareBackup", storage.committedFiles.containsKey("content://old"))
 
         // Step 2: vacateCommitted (delete old)
@@ -1171,33 +1293,35 @@ class MirrorTransactionStateTest {
     fun pendingItem_jsonRoundTrip_oldContentHash() {
         val key = ChapterKey("p1", "v1", "ch1")
         val staged = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown")
-        val item = PendingItem(
-            key = key,
-            stagedRef = staged,
-            oldRef = MirrorFileRef("content://old", "f.md"),
-            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-            promotedRef = null,
-            state = PendingItem.STATE_OLD_VACATED,
-            oldContentHash = "sha256:abc123",
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = staged,
+                oldRef = MirrorFileRef("content://old", "f.md"),
+                backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+                promotedRef = null,
+                state = PendingItem.STATE_OLD_VACATED,
+                oldContentHash = "sha256:abc123",
+            )
 
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = mapOf(key to item),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = mapOf(key to item),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1207,25 +1331,26 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_manifestContentHash() {
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.DOCUMENT_TREE,
-            treeUri = "content://tree",
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestNewContentHash = "sha256:new_manifest_hash",
-            manifestOldContentHash = "sha256:old_manifest_hash",
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.DOCUMENT_TREE,
+                treeUri = "content://tree",
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestNewContentHash = "sha256:new_manifest_hash",
+                manifestOldContentHash = "sha256:old_manifest_hash",
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)!!
@@ -1235,23 +1360,24 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingMirrorPublish_jsonRoundTrip_nullManifestContentHash() {
-        val journal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         val json = journal.toJson()
         val restored = PendingMirrorPublish.fromJson(json)!!

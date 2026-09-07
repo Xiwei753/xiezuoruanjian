@@ -1,7 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
 import kotlinx.serialization.Serializable
-import org.json.JSONObject
 
 /**
  * ReadableMirrorManifest — Download/Sujian 镜像的共享清单格式。
@@ -128,7 +127,10 @@ fun computeContentHash(content: String): String {
 /**
  * 验证正文哈希是否匹配。
  */
-fun verifyContentHash(content: String, expectedHash: String): Boolean {
+fun verifyContentHash(
+    content: String,
+    expectedHash: String,
+): Boolean {
     if (expectedHash.isEmpty()) return false
     if (expectedHash == "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") {
         return content.isEmpty()

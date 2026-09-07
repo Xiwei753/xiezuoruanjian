@@ -1,6 +1,7 @@
 package com.xiwei.sujian.app.di
 
 import android.content.Context
+import android.net.Uri
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
@@ -8,7 +9,6 @@ import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
-import android.net.Uri
 import com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads
 import com.xiwei.sujian.storage.mirror.CoreMirrorSnapshotSource
 import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
@@ -81,7 +81,8 @@ object AppServiceProvider {
         // 旧实现 selectMirrorStorage 在启动时一次性固化 storage，Publisher 握着固定实例。
         // 新实现：创建 MirrorStorageRouter，Publisher 每次事务时从 router.currentResult() 获取。
         val documentTreeReader = DocumentTreeReader(appContext.contentResolver)
-        val mediaStoreStorage = MediaStoreMirrorStorage(MediaStoreDownloads(appContext.contentResolver), appContext.contentResolver)
+        val mediaStoreStorage =
+            MediaStoreMirrorStorage(MediaStoreDownloads(appContext.contentResolver), appContext.contentResolver)
         val documentTreeFactory: (Uri) -> DocumentTreeMirrorStorage = { treeUri ->
             DocumentTreeMirrorStorage(treeUri, appContext.contentResolver, documentTreeReader)
         }

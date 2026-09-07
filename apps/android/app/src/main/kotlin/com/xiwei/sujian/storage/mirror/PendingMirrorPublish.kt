@@ -42,8 +42,7 @@ enum class ManifestTransactionState(val journalValue: String) {
          * - 已知值返回对应枚举
          * - 未知值返回 null（不能回退到 MANIFEST_STAGED，否则会掩盖数据损坏）
          */
-        fun fromJournalValue(value: String): ManifestTransactionState? =
-            entries.find { it.journalValue == value }
+        fun fromJournalValue(value: String): ManifestTransactionState? = entries.find { it.journalValue == value }
     }
 }
 
@@ -93,6 +92,7 @@ data class PendingItem(
 ) {
     companion object {
         const val STATE_STAGED = "STAGED"
+
         /**
          * backup 已就绪，old 可能还没 vacate（#649 评论 5565067997 修复 1）。
          *
@@ -100,6 +100,7 @@ data class PendingItem(
          * 恢复时看到此状态需检查 old 是否已 vacate，未 vacate 则继续 vacateCommitted()。
          */
         const val STATE_BACKUP_READY = "BACKUP_READY"
+
         /**
          * old 已从 final 腾空，可以 promote（#649 评论 5565067997 修复 1）。
          *
@@ -108,6 +109,7 @@ data class PendingItem(
         const val STATE_OLD_VACATED = "OLD_VACATED"
         const val STATE_PROMOTED = "PROMOTED"
         const val STATE_COMMITTED = "COMMITTED"
+
         /**
          * 旧状态：backup 已准备 + old 已腾空揉成一个（向后兼容）。
          *
@@ -116,6 +118,7 @@ data class PendingItem(
          * （因为旧状态语义上等价于"backup 已就绪"，old 是否已 vacate 需恢复时检查）。
          */
         const val STATE_OLD_BACKED_UP = "OLD_BACKED_UP"
+
         // #649 评论 5564820566 问题 2：rollback 和 recovery 共用同一套显式状态机，
         // 不再根据 "final/backup 是否存在" 猜测文件是新版还是旧版。
         const val STATE_ROLLBACK_NEW_REMOVED = "ROLLBACK_NEW_REMOVED"
@@ -126,8 +129,7 @@ data class PendingItem(
          *
          * 新代码不再写入 [STATE_OLD_BACKED_UP]，但反序列化旧 journal 时需映射到新状态机。
          */
-        fun normalizeState(state: String): String =
-            if (state == STATE_OLD_BACKED_UP) STATE_BACKUP_READY else state
+        fun normalizeState(state: String): String = if (state == STATE_OLD_BACKED_UP) STATE_BACKUP_READY else state
     }
 }
 
@@ -237,6 +239,7 @@ data class PendingMirrorPublish(
         const val PHASE_STAGE = "stage"
         const val PHASE_PROMOTE = "promote"
         const val PHASE_CLEANUP = "cleanup"
+
         // #649 评论 5564624383 问题 2：rollback 本身做成 journal 状态。
         // 进程死在回滚中间，下次是继续回滚，不会又转回 forward promote。
         const val PHASE_ROLLBACK = "rollback"
@@ -318,13 +321,14 @@ data class PendingMirrorPublish(
                 val manifestOldContentHash = root.optString(KEY_MANIFEST_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() }
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
-                val manifestSwapState = if (root.has(KEY_MANIFEST_SWAP_STATE)) {
-                    // #649 评论 5565862745 问题 5：未知值返回 null
-                    ManifestTransactionState.fromJournalValue(root.optString(KEY_MANIFEST_SWAP_STATE))
-                        ?: return null
-                } else {
-                    deriveManifestSwapState(isManifestCommitted, manifestNewRef, manifestBackupRef)
-                }
+                val manifestSwapState =
+                    if (root.has(KEY_MANIFEST_SWAP_STATE)) {
+                        // #649 评论 5565862745 问题 5：未知值返回 null
+                        ManifestTransactionState.fromJournalValue(root.optString(KEY_MANIFEST_SWAP_STATE))
+                            ?: return null
+                    } else {
+                        deriveManifestSwapState(isManifestCommitted, manifestNewRef, manifestBackupRef)
+                    }
                 PendingMirrorPublish(
                     txId = root.getString(KEY_TX_ID),
                     backend = backend,

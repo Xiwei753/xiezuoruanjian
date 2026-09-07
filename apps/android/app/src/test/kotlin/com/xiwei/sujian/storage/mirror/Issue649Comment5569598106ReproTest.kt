@@ -2,7 +2,6 @@ package com.xiwei.sujian.storage.mirror
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,7 +36,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5569598106ReproTest {
-
     // ══════════════════════════════════════════════════════════════════════
     // 问题1：rollback/recovery 用 hash 校验 final 内容身份（修复后正确行为）
     // 源：ReadableMirrorPublisher.rollbackWholePublishTransaction
@@ -75,20 +73,21 @@ class Issue649Comment5569598106ReproTest {
 
         // ── 复现修复后 rollbackWholePublishTransaction 的 hash 校验逻辑 ──
         val finalLookup = storage.lookup(finalPath)
-        val alreadyRestored = when (finalLookup) {
-            is MirrorLookupResult.Found -> {
-                // 修复后：用 hash 校验 final 身份
-                val hashResult = storage.readTextAndHash(finalLookup.ref)
-                if (hashResult != null) {
-                    val (_, finalHash) = hashResult
-                    finalHash == expectedOldHash
-                } else {
-                    false
+        val alreadyRestored =
+            when (finalLookup) {
+                is MirrorLookupResult.Found -> {
+                    // 修复后：用 hash 校验 final 身份
+                    val hashResult = storage.readTextAndHash(finalLookup.ref)
+                    if (hashResult != null) {
+                        val (_, finalHash) = hashResult
+                        finalHash == expectedOldHash
+                    } else {
+                        false
+                    }
                 }
+                is MirrorLookupResult.Missing -> false
+                is MirrorLookupResult.Failed -> false
             }
-            is MirrorLookupResult.Missing -> false
-            is MirrorLookupResult.Failed -> false
-        }
 
         // 正确行为1：final 上是新内容，hash != oldHash → alreadyRestored = false
         assertFalse(
@@ -175,18 +174,19 @@ class Issue649Comment5569598106ReproTest {
     @Test
     fun problem2_forwardRecovery_stopsAndKeepsJournal_whenLookupFailed() {
         val storage = ReproFakeStorage()
-        storage.failLookup = true  // lookup 返回 Failed（状态不明确）
+        storage.failLookup = true // lookup 返回 Failed（状态不明确）
 
         // staged 内容已就绪
         val stagedUri = "content://staging/1"
         storage.stagingFiles[stagedUri] = "new content"
-        val staged = StagedMirrorRef(
-            txId = "tx1",
-            stagingUri = stagedUri,
-            stagingRelativePath = ".staging/tx1/f.md",
-            finalRelativePath = "作品/P/V/Ch.md",
-            mimeType = "text/markdown",
-        )
+        val staged =
+            StagedMirrorRef(
+                txId = "tx1",
+                stagingUri = stagedUri,
+                stagingRelativePath = ".staging/tx1/f.md",
+                finalRelativePath = "作品/P/V/Ch.md",
+                mimeType = "text/markdown",
+            )
 
         // ── 复现修复后 recoverPromotePhase 的控制流 ──
         val itemState = PendingItem.STATE_OLD_VACATED
@@ -244,17 +244,18 @@ class Issue649Comment5569598106ReproTest {
         // staged 内容
         val stagedUri = "content://staging/1"
         storage.stagingFiles[stagedUri] = "new content"
-        val staged = StagedMirrorRef(
-            txId = "tx1",
-            stagingUri = stagedUri,
-            stagingRelativePath = ".staging/tx1/f.md",
-            finalRelativePath = finalPath,
-            mimeType = "text/markdown",
-        )
+        val staged =
+            StagedMirrorRef(
+                txId = "tx1",
+                stagingUri = stagedUri,
+                stagingRelativePath = ".staging/tx1/f.md",
+                finalRelativePath = finalPath,
+                mimeType = "text/markdown",
+            )
 
         // ── 复现修复后 recoverPromotePhase，hash 不匹配分支 ──
         val itemState = PendingItem.STATE_OLD_VACATED
-        val expectedHash = computeContentHash("expected new content")  // 不匹配 final 上的内容
+        val expectedHash = computeContentHash("expected new content") // 不匹配 final 上的内容
         var newRef: MirrorFileRef? = null
         var stoppedAndKeptJournal = false
         if (itemState == PendingItem.STATE_OLD_VACATED) {
@@ -313,25 +314,26 @@ class Issue649Comment5569598106ReproTest {
     @Test
     fun problem3_journalWrite_preservesManifestHash_viaJournalContext() {
         // 原始 journal 带 manifest hash（事务开始时记录）
-        val originalJournal = PendingMirrorPublish(
-            txId = "tx1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestNewContentHash = "sha256:new_manifest_hash",
-            manifestOldContentHash = "sha256:old_manifest_hash",
-        )
+        val originalJournal =
+            PendingMirrorPublish(
+                txId = "tx1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestNewContentHash = "sha256:new_manifest_hash",
+                manifestOldContentHash = "sha256:old_manifest_hash",
+            )
         assertEquals("sha256:new_manifest_hash", originalJournal.manifestNewContentHash)
         assertEquals("sha256:old_manifest_hash", originalJournal.manifestOldContentHash)
 
@@ -343,27 +345,28 @@ class Issue649Comment5569598106ReproTest {
         val effectiveManifestNewContentHash: String? = null ?: originalJournal.manifestNewContentHash
         val effectiveManifestOldContentHash: String? = null ?: originalJournal.manifestOldContentHash
 
-        val rewrittenJournal = PendingMirrorPublish(
-            txId = originalJournal.txId,
-            backend = originalJournal.backend,
-            treeUri = originalJournal.treeUri,
-            projectId = originalJournal.projectId,
-            transactionType = originalJournal.transactionType,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = originalJournal.oldEntries,
-            newEntries = originalJournal.newEntries,
-            stagedRefs = originalJournal.stagedRefs,
-            items = mapOf(),
-            removedProjectIds = originalJournal.removedProjectIds,
-            manifestOldRef = originalJournal.manifestOldRef,
-            manifestStagedRef = originalJournal.manifestStagedRef,
-            manifestNewRef = originalJournal.manifestNewRef,
-            manifestBackupRef = originalJournal.manifestBackupRef,
-            manifestSwapState = originalJournal.manifestSwapState,
-            // 修复后：通过 journalContext 自动继承 hash
-            manifestNewContentHash = effectiveManifestNewContentHash,
-            manifestOldContentHash = effectiveManifestOldContentHash,
-        )
+        val rewrittenJournal =
+            PendingMirrorPublish(
+                txId = originalJournal.txId,
+                backend = originalJournal.backend,
+                treeUri = originalJournal.treeUri,
+                projectId = originalJournal.projectId,
+                transactionType = originalJournal.transactionType,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = originalJournal.oldEntries,
+                newEntries = originalJournal.newEntries,
+                stagedRefs = originalJournal.stagedRefs,
+                items = mapOf(),
+                removedProjectIds = originalJournal.removedProjectIds,
+                manifestOldRef = originalJournal.manifestOldRef,
+                manifestStagedRef = originalJournal.manifestStagedRef,
+                manifestNewRef = originalJournal.manifestNewRef,
+                manifestBackupRef = originalJournal.manifestBackupRef,
+                manifestSwapState = originalJournal.manifestSwapState,
+                // 修复后：通过 journalContext 自动继承 hash
+                manifestNewContentHash = effectiveManifestNewContentHash,
+                manifestOldContentHash = effectiveManifestOldContentHash,
+            )
 
         // 正确行为：journal 更新后 manifest hash 保留（不丢失为 null）
         assertEquals(
@@ -398,25 +401,26 @@ class Issue649Comment5569598106ReproTest {
      */
     @Test
     fun problem3B_journalWrite_explicitHashOverridesJournalContext() {
-        val journalContext = PendingMirrorPublish(
-            txId = "tx2",
-            backend = MirrorBackend.DOCUMENT_TREE,
-            treeUri = "content://tree",
-            projectId = "p2",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_STAGE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestNewContentHash = "sha256:old_new_hash",
-            manifestOldContentHash = "sha256:old_old_hash",
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = "tx2",
+                backend = MirrorBackend.DOCUMENT_TREE,
+                treeUri = "content://tree",
+                projectId = "p2",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_STAGE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestNewContentHash = "sha256:old_new_hash",
+                manifestOldContentHash = "sha256:old_old_hash",
+            )
 
         // manifest 事务成功后，用 manifestResult 的新 hash 显式覆盖
         val manifestResultNewHash = "sha256:brand_new_manifest_hash"
@@ -482,7 +486,10 @@ class Issue649Comment5569598106ReproTest {
             return MirrorFileRef(uri, path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean {
             committedFiles[ref.uri] = text
             operationLog.add("replaceText:${ref.relativePath}")
             return true
@@ -513,7 +520,11 @@ class Issue649Comment5569598106ReproTest {
             return StagedMirrorRef(txId, uri, ".staging/$txId/$relativePath", relativePath, mimeType)
         }
 
-        override fun backupCommitted(txId: String, old: MirrorFileRef, mimeType: String): MirrorFileRef? {
+        override fun backupCommitted(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): MirrorFileRef? {
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
             val backupPath = ".staging/$txId/backup/${old.relativePath}"
@@ -523,7 +534,11 @@ class Issue649Comment5569598106ReproTest {
             return MirrorFileRef(backupUri, backupPath)
         }
 
-        override fun prepareBackup(txId: String, old: MirrorFileRef, mimeType: String): BackupReadyRef? {
+        override fun prepareBackup(
+            txId: String,
+            old: MirrorFileRef,
+            mimeType: String,
+        ): BackupReadyRef? {
             val content = committedFiles[old.uri] ?: return null
             val backupUri = "content://fake/backup/${backupFiles.size}"
             val backupPath = ".staging/$txId/backup/${old.relativePath}"
@@ -554,7 +569,10 @@ class Issue649Comment5569598106ReproTest {
             return MirrorLookupResult.Found(MirrorFileRef(uri, relativePath))
         }
 
-        override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        override fun resolveBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorFileRef? {
             operationLog.add("resolveBackup:$relativePath")
             if (failResolve) return null
             val backupPath = ".staging/$txId/backup/$relativePath"
@@ -562,7 +580,10 @@ class Issue649Comment5569598106ReproTest {
             return MirrorFileRef(uri, backupPath)
         }
 
-        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        override fun lookupBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorLookupResult {
             operationLog.add("lookupBackup:$relativePath")
             if (failLookup) return MirrorLookupResult.Failed(SecurityException("simulated lookup failure"))
             val backupPath = ".staging/$txId/backup/$relativePath"
@@ -570,7 +591,10 @@ class Issue649Comment5569598106ReproTest {
             return MirrorLookupResult.Found(MirrorFileRef(uri, backupPath))
         }
 
-        override fun promoteStaged(staged: StagedMirrorRef, finalRelativePath: String): MirrorFileRef? {
+        override fun promoteStaged(
+            staged: StagedMirrorRef,
+            finalRelativePath: String,
+        ): MirrorFileRef? {
             val content = stagingFiles.remove(staged.stagingUri) ?: return null
             val newUri = "content://fake/promoted/${committedFiles.size}"
             committedFiles[newUri] = content

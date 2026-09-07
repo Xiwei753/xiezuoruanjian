@@ -27,8 +27,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.theme.SujianTheme
-import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
+import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import com.xiwei.sujian.storage.recovery.ImportResult
@@ -122,9 +122,10 @@ private fun LegacyStorageMigrationScreen(onMigrationSucceeded: () -> Unit) {
     val cancelledText = stringResource(id = R.string.migration_gate_cancelled)
 
     val importer = remember { LegacySharedStorageImporter() }
-    val documentTreeReader = remember {
-        DocumentTreeReader(context.applicationContext.contentResolver)
-    }
+    val documentTreeReader =
+        remember {
+            DocumentTreeReader(context.applicationContext.contentResolver)
+        }
 
     val launcher =
         rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->

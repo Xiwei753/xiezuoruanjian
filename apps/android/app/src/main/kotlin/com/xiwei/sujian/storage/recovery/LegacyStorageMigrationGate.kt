@@ -31,6 +31,5 @@ object LegacyStorageMigrationGate {
      * 迁移成功后再调用 [com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot.ensure]
      * 并初始化 WriterAppService。返回 false 表示新安装或已迁移，可正常进入 UI。
      */
-    fun legacyGitWorkspaceExists(context: Context): Boolean =
-        File(context.filesDir, LEGACY_GIT_WORKSPACE_PATH).exists()
+    fun legacyGitWorkspaceExists(context: Context): Boolean = File(context.filesDir, LEGACY_GIT_WORKSPACE_PATH).exists()
 }

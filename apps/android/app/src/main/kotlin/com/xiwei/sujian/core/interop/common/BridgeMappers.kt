@@ -204,11 +204,9 @@ internal fun SyncConfig.toDto(): SyncConfigDto {
     )
 }
 
-internal fun SyncSecretsDto.toModel(): SyncSecrets =
-    SyncSecrets((providerSecrets as? ProviderSecretsDto.GitHub)?.token)
+internal fun SyncSecretsDto.toModel(): SyncSecrets = SyncSecrets((providerSecrets as? ProviderSecretsDto.GitHub)?.token)
 
-internal fun SyncSecrets.toDto(): SyncSecretsDto =
-    SyncSecretsDto(token?.let { ProviderSecretsDto.GitHub(it) })
+internal fun SyncSecrets.toDto(): SyncSecretsDto = SyncSecretsDto(token?.let { ProviderSecretsDto.GitHub(it) })
 
 internal fun SyncStatus.toWire(): String =
     when (this) {
