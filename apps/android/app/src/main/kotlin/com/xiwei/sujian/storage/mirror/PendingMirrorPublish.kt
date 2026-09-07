@@ -33,6 +33,8 @@ enum class ManifestTransactionState(val journalValue: String) {
     MANIFEST_OLD_VACATED("OLD_VACATED"),
     MANIFEST_PROMOTED("PROMOTED"),
     MANIFEST_COMMITTED("COMMITTED"),
+    MANIFEST_ROLLBACK_NEW_REMOVED("ROLLBACK_NEW_REMOVED"),
+    MANIFEST_ROLLBACK_OLD_RESTORED("ROLLBACK_OLD_RESTORED"),
     ;
 
     companion object {
@@ -204,6 +206,8 @@ data class PendingMirrorPublish(
     // manifestOldContentHash: 旧 manifest 的 hash（备份前读取记录）
     val manifestNewContentHash: String? = null,
     val manifestOldContentHash: String? = null,
+    // 冻结 manifest 事务的目标 JSON，恢复时不再重新生成
+    val manifestTargetJson: String? = null,
 ) {
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
@@ -231,6 +235,7 @@ data class PendingMirrorPublish(
         }
         if (manifestNewContentHash != null) root.put(KEY_MANIFEST_NEW_CONTENT_HASH, manifestNewContentHash)
         if (manifestOldContentHash != null) root.put(KEY_MANIFEST_OLD_CONTENT_HASH, manifestOldContentHash)
+        if (manifestTargetJson != null) root.put(KEY_MANIFEST_TARGET_JSON, manifestTargetJson)
         return root.toString()
     }
 
@@ -273,6 +278,7 @@ data class PendingMirrorPublish(
         private const val KEY_STATE = "state"
         private const val KEY_IS_MANIFEST_COMMITTED = "isManifestCommitted"
         private const val KEY_MANIFEST_SWAP_STATE = "manifestSwapState"
+        private const val KEY_MANIFEST_TARGET_JSON = "manifestTargetJson"
         private const val KEY_AFFECTED_PROJECT_IDS = "affectedProjectIds"
         private const val KEY_MANIFEST_NEW_CONTENT_HASH = "manifestNewContentHash"
         private const val KEY_MANIFEST_OLD_CONTENT_HASH = "manifestOldContentHash"
@@ -319,6 +325,7 @@ data class PendingMirrorPublish(
                 // #649 评论 5566303837 问题 3：反序列化 manifest 内容 hash
                 val manifestNewContentHash = root.optString(KEY_MANIFEST_NEW_CONTENT_HASH).takeIf { it.isNotEmpty() }
                 val manifestOldContentHash = root.optString(KEY_MANIFEST_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() }
+                val manifestTargetJson = root.optString(KEY_MANIFEST_TARGET_JSON).takeIf { it.isNotEmpty() }
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
                 val manifestSwapState =
@@ -350,6 +357,7 @@ data class PendingMirrorPublish(
                     affectedProjectIds = affectedProjectIds,
                     manifestNewContentHash = manifestNewContentHash,
                     manifestOldContentHash = manifestOldContentHash,
+                    manifestTargetJson = manifestTargetJson,
                 )
             } catch (_: Exception) {
                 null
@@ -555,6 +563,10 @@ private fun mirrorTransactionTypeFromJsonValue(value: String): MirrorTransaction
 /**
  * 旧 journal 没有 manifestSwapState 字段时，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
  * #649 评论 5565067997 修复 2：向后兼容。
+ *
+ * 此函数只返回正向推进状态（STAGED/OLD_VACATED/PROMOTED/COMMITTED），
+ * 不会返回 ROLLBACK 状态（MANIFEST_ROLLBACK_NEW_REMOVED/MANIFEST_ROLLBACK_OLD_RESTORED）。
+ * ROLLBACK 状态只在显式写入 journal 时使用，不会从旧 journal 推导。
  */
 private fun deriveManifestSwapState(
     isManifestCommitted: Boolean,

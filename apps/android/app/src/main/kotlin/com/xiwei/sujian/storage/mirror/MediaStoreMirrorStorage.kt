@@ -56,44 +56,29 @@ class MediaStoreMirrorStorage(
      * 例如 SAF 权限丢失、provider I/O 错误时，如果返回 true，
      * cleanupCommittedTransaction() 会认为清理完成并删除 journal，实际旧文件仍在。
      *
-     * 查询三态：FOUND → 尝试删除；MISSING → 返回 true（目标已达到）；FAILED → 返回 false。
+     * 改法：按 ref.uri 本身判断并删除，不再用 relativePath 查询。
+     * 同一路径可能已是恢复后的旧 manifest：路径查询 FOUND，但 ref.uri 已不存在。
+     *
+     * 新逻辑：
+     * 1. 解析 ref.uri 得到 Uri
+     * 2. 直接用 contentResolver.delete(uri, null, null) 尝试删除
+     * 3. 删除成功（返回 1）→ true
+     * 4. URI 不存在（删除返回 0）→ true（幂等：目标已达到）
+     * 5. SecurityException / 其他异常 → false
      */
     override fun delete(ref: MirrorFileRef): Boolean {
         val uri = tryParseUri(ref.uri) ?: return false // URI 无效 → 无法确认状态，返回 false
         // #649 评论 5564820566 问题 4：不再把 "后端不可用" 当删除成功。
         // 旧代码 `if (!mediaStore.isSupported()) return true` 会让 cleanup 误认为文件已删。
-        val directory = mediaStoreDirectory(ref.relativePath)
-        val displayName = ref.relativePath.substringAfterLast('/')
-        // 三态查询：FOUND / MISSING / FAILED
-        val queryResult =
-            try {
-                val exists =
-                    contentResolver.query(
-                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                        arrayOf(MediaStore.Downloads._ID),
-                        "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
-                            "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
-                            "${MediaStore.Downloads.IS_PENDING} = 0",
-                        arrayOf(directory, displayName),
-                        null,
-                    )?.use { it.moveToFirst() } ?: false
-                if (exists) QueryResult.FOUND else QueryResult.MISSING
-            } catch (_: SecurityException) {
-                QueryResult.FAILED
-            } catch (_: Exception) {
-                QueryResult.FAILED
-            }
-        return when (queryResult) {
-            QueryResult.MISSING -> true // 文件不存在 → 目标已达到
-            QueryResult.FAILED -> false // 查询失败 → 不确定文件是否存在，返回 false
-            QueryResult.FOUND ->
-                try {
-                    mediaStore.delete(uri)
-                } catch (_: SecurityException) {
-                    false // 权限异常 → 删除失败
-                } catch (_: Exception) {
-                    false // I/O 异常 → 删除失败
-                }
+        return try {
+            val deleted = contentResolver.delete(uri, null, null)
+            // deleted > 0: 成功删除一行 → true
+            // deleted == 0: URI 不存在（已删除或从未存在）→ 幂等，目标已达到 → true
+            deleted >= 0
+        } catch (_: SecurityException) {
+            false // 权限异常 → 删除失败
+        } catch (_: Exception) {
+            false // I/O 异常 → 删除失败
         }
     }
 
