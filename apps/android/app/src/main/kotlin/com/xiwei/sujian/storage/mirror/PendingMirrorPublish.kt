@@ -231,6 +231,21 @@ data class PendingMirrorPublish(
     val manifestOldContentHash: String? = null,
     // 冻结 manifest 事务的目标 JSON，恢复时不再重新生成
     val manifestTargetJson: String? = null,
+    // ═══ 冻结 manifest 元数据（#649 评论 5575052682 问题 2）═══
+
+    /**
+     * 冻结的项目级 manifest 元数据（在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存）。
+     * 恢复时（manifestTargetJson != null）使用此字段的元数据，不再重新读取当前 snapshot。
+     * 格式：JSON 字符串，包含项目标题、顺序、revision、updatedAt，以及每章的 relativePath/contentHash。
+     * 不必提前写最终 URI，但至少要冻结 project/volume/chapter 的 id/title/order/revision/updatedAt。
+     */
+    val frozenManifestMetadata: String? = null,
+
+    /**
+     * 冻结的 manifest 元数据的 content hash（SHA-256）。
+     * 用于恢复时校验元数据完整性。
+     */
+    val frozenManifestMetadataHash: String? = null,
 ) {
     /**
      * 校验事务不变量：state ↔ required refs 关系（#649 评论 5574521549 问题 3/4）。
@@ -296,6 +311,8 @@ data class PendingMirrorPublish(
         if (manifestNewContentHash != null) root.put(KEY_MANIFEST_NEW_CONTENT_HASH, manifestNewContentHash)
         if (manifestOldContentHash != null) root.put(KEY_MANIFEST_OLD_CONTENT_HASH, manifestOldContentHash)
         if (manifestTargetJson != null) root.put(KEY_MANIFEST_TARGET_JSON, manifestTargetJson)
+        if (frozenManifestMetadata != null) root.put(KEY_FROZEN_MANIFEST_METADATA, frozenManifestMetadata)
+        if (frozenManifestMetadataHash != null) root.put(KEY_FROZEN_MANIFEST_METADATA_HASH, frozenManifestMetadataHash)
         return root.toString()
     }
 
@@ -343,6 +360,8 @@ data class PendingMirrorPublish(
         private const val KEY_MANIFEST_NEW_CONTENT_HASH = "manifestNewContentHash"
         private const val KEY_MANIFEST_OLD_CONTENT_HASH = "manifestOldContentHash"
         private const val KEY_OLD_CONTENT_HASH = "oldContentHash"
+        private const val KEY_FROZEN_MANIFEST_METADATA = "frozenManifestMetadata"
+        private const val KEY_FROZEN_MANIFEST_METADATA_HASH = "frozenManifestMetadataHash"
 
         /**
          * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。
@@ -396,6 +415,8 @@ data class PendingMirrorPublish(
                 val manifestNewContentHash = root.optString(KEY_MANIFEST_NEW_CONTENT_HASH).takeIf { it.isNotEmpty() }
                 val manifestOldContentHash = root.optString(KEY_MANIFEST_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() }
                 val manifestTargetJson = root.optString(KEY_MANIFEST_TARGET_JSON).takeIf { it.isNotEmpty() }
+                val frozenManifestMetadata = root.optString(KEY_FROZEN_MANIFEST_METADATA).takeIf { it.isNotEmpty() }
+                val frozenManifestMetadataHash = root.optString(KEY_FROZEN_MANIFEST_METADATA_HASH).takeIf { it.isNotEmpty() }
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
                 val manifestSwapState =
@@ -431,6 +452,8 @@ data class PendingMirrorPublish(
                         manifestNewContentHash = manifestNewContentHash,
                         manifestOldContentHash = manifestOldContentHash,
                         manifestTargetJson = manifestTargetJson,
+                        frozenManifestMetadata = frozenManifestMetadata,
+                        frozenManifestMetadataHash = frozenManifestMetadataHash,
                     )
                 if (!publish.validateInvariants()) {
                     DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invariant validation failed")

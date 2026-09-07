@@ -4,6 +4,8 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
+import org.json.JSONArray
+import org.json.JSONObject
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
@@ -618,23 +620,38 @@ class ReadableMirrorPublisher(
         }
 
         // 写 manifest（走事务性 manifest 写入）
-        val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
-        if (snapshotResult !is BridgeResult.Success) {
-            DiagnosticsLogger.w(TAG, "Failed to get snapshot for project ${journal.projectId} during recovery")
-            // #649 评论 5564379115 问题 2：统一事务回滚
-            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-            return
-        }
+        // #649 评论 5575052682 问题 2：恢复时使用冻结的元数据，不再重新读取当前 snapshot
         val manifestResult =
-            publishManifestWithDesiredTransactional(
-                projectId = journal.projectId,
-                snapshot = snapshotResult.data,
-                desiredEntries = promotedEntries,
-                txId = journal.txId,
-                journalContext = journal,
-                items = currentItems,
-                storage = storage,
-            )
+            if (journal.frozenManifestMetadata != null) {
+                // 使用冻结的元数据恢复
+                publishManifestWithDesiredFromFrozen(
+                    projectId = journal.projectId,
+                    frozenMetadata = journal.frozenManifestMetadata,
+                    frozenMetadataHash = journal.frozenManifestMetadataHash,
+                    promotedEntries = promotedEntries,
+                    txId = journal.txId,
+                    journalContext = journal,
+                    items = currentItems,
+                    storage = storage,
+                )
+            } else {
+                // 旧 journal 没有冻结元数据，回退到读取当前 snapshot
+                val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
+                if (snapshotResult !is BridgeResult.Success) {
+                    DiagnosticsLogger.w(TAG, "Failed to get snapshot for project ${journal.projectId} during recovery")
+                    rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                    return
+                }
+                publishManifestWithDesiredTransactional(
+                    projectId = journal.projectId,
+                    snapshot = snapshotResult.data,
+                    desiredEntries = promotedEntries,
+                    txId = journal.txId,
+                    journalContext = journal,
+                    items = currentItems,
+                    storage = storage,
+                )
+            }
         if (manifestResult == null) {
             DiagnosticsLogger.w(TAG, "Failed to write manifest during recovery")
             // #649 评论 5564379115 问题 2：统一事务回滚
@@ -1069,6 +1086,12 @@ class ReadableMirrorPublisher(
                     )
             }
 
+            // 冻结 manifest 元数据（#649 评论 5575052682 问题 2）
+            // 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存项目级元数据，
+            // 恢复时使用此字段的元数据，不再重新读取当前 snapshot。
+            val frozenMetadata = buildManifestMetadataJson(projectId, snapshot, desiredEntries)
+            val frozenMetadataHash = if (frozenMetadata != null) computeContentHash(frozenMetadata) else null
+
             // 写 pendingPublish journal（记录 staging 完成）
             // #649 评论 5563333323 缺口 2：journal 写入失败则停止本轮镜像操作
             // 使用 txContext 中的 backend/treeUri，不再从 stateStore 读取（#649 评论 5565862745 问题 4）
@@ -1116,6 +1139,8 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = null,
                     manifestNewRef = null,
                     manifestBackupRef = null,
+                    frozenManifestMetadata = frozenMetadata,
+                    frozenManifestMetadataHash = frozenMetadataHash,
                 )
 
             // 3. 提升阶段：promote 所有暂存文件到最终位置（逐项更新 journal）
@@ -3893,6 +3918,172 @@ class ReadableMirrorPublisher(
             .replace("\n", "\\n")
             .replace("\r", "\\r")
             .replace("\t", "\\t")
+
+    /**
+     * 构建 manifest 元数据 JSON（冻结用）。
+     *
+     * 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存项目级元数据，
+     * 恢复时使用此字段的元数据，不再重新读取当前 snapshot。
+     * 包含 project/volume/chapter 的 id/title/order/revision/updatedAt。
+     * 不必提前写最终 URI。
+     */
+    private fun buildManifestMetadataJson(
+        projectId: String,
+        snapshot: ProjectWorkspaceSnapshot,
+        desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
+    ): String? {
+        return try {
+            val root = JSONObject()
+            root.put("projectId", projectId)
+            root.put("title", snapshot.project.title)
+            root.put("revision", snapshot.project.updatedAt)
+            root.put("updatedAt", snapshot.project.updatedAt)
+
+            // 序列化卷和章节信息
+            val volumesArray = JSONArray()
+            for (volumeWithChapters in snapshot.volumes) {
+                val volumeObj = JSONObject()
+                volumeObj.put("volumeId", volumeWithChapters.volume.id)
+                volumeObj.put("title", volumeWithChapters.volume.title)
+                volumeObj.put("order", volumeWithChapters.volume.order)
+
+                val chaptersArray = JSONArray()
+                for (chapter in volumeWithChapters.chapters) {
+                    val chapterObj = JSONObject()
+                    chapterObj.put("chapterId", chapter.id)
+                    chapterObj.put("title", chapter.title)
+                    chapterObj.put("order", chapter.order)
+                    chapterObj.put("revision", chapter.updatedAt.toEpochMillis())
+
+                    // 添加 desiredEntries 中的 contentHash 和 relativePath
+                    val key = ChapterKey(projectId, volumeWithChapters.volume.id, chapter.id)
+                    desiredEntries[key]?.let { entry ->
+                        chapterObj.put("contentHash", entry.contentHash)
+                        chapterObj.put("relativePath", entry.relativePath)
+                    }
+
+                    chaptersArray.put(chapterObj)
+                }
+                volumeObj.put("chapters", chaptersArray)
+                volumesArray.put(volumeObj)
+            }
+            root.put("volumes", volumesArray)
+            root.toString()
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to build manifest metadata", e)
+            null
+        }
+    }
+
+    /**
+     * 从冻结的 manifest 元数据恢复并发布 manifest（#649 评论 5575052682 问题 2）。
+     *
+     * 当 journal 包含 frozenManifestMetadata 时，使用此字段的元数据生成 manifest，
+     * 不再重新读取当前 snapshot，避免把新 metadata 混进旧事务正文。
+     */
+    private suspend fun publishManifestWithDesiredFromFrozen(
+        projectId: String,
+        frozenMetadata: String,
+        frozenMetadataHash: String?,
+        promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
+        txId: String,
+        journalContext: PendingMirrorPublish,
+        items: Map<ChapterKey, PendingItem>,
+        storage: ReadableMirrorStorage,
+    ): ManifestTransactionResult? {
+        // 校验元数据完整性
+        if (frozenMetadataHash != null) {
+            val computedHash = computeContentHash(frozenMetadata)
+            if (computedHash != frozenMetadataHash) {
+                DiagnosticsLogger.e(TAG, "Frozen manifest metadata hash mismatch, cannot recover")
+                return null
+            }
+        }
+
+        // 解析冻结的元数据
+        val metadataObj = try {
+            JSONObject(frozenMetadata)
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to parse frozen manifest metadata", e)
+            return null
+        }
+
+        // 构建 manifest JSON
+        val manifestJson = buildManifestJsonFromMetadata(metadataObj, promotedEntries) ?: return null
+
+        // 走事务性 manifest 写入
+        return publishManifestWithDesiredTransactional(
+            projectId = projectId,
+            snapshot = null, // 不使用 snapshot
+            desiredEntries = promotedEntries,
+            txId = txId,
+            journalContext = journalContext.copy(manifestTargetJson = manifestJson),
+            items = items,
+            storage = storage,
+        )
+    }
+
+    /**
+     * 从冻结的元数据构建 manifest JSON。
+     */
+    private fun buildManifestJsonFromMetadata(
+        metadataObj: JSONObject,
+        promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
+    ): String? {
+        return try {
+            val root = JSONObject()
+            root.put("projectId", metadataObj.getString("projectId"))
+            root.put("title", metadataObj.getString("title"))
+            root.put("revision", metadataObj.getString("revision"))
+            root.put("updatedAt", metadataObj.getString("updatedAt"))
+
+            val volumesArray = JSONArray()
+            val metadataVolumes = metadataObj.optJSONArray("volumes")
+            if (metadataVolumes != null) {
+                for (i in 0 until metadataVolumes.length()) {
+                    val volObj = metadataVolumes.getJSONObject(i)
+                    val volumeObj = JSONObject()
+                    volumeObj.put("volumeId", volObj.getString("volumeId"))
+                    volumeObj.put("title", volObj.getString("title"))
+                    volumeObj.put("order", volObj.getInt("order"))
+
+                    val chaptersArray = JSONArray()
+                    val metadataChapters = volObj.optJSONArray("chapters")
+                    if (metadataChapters != null) {
+                        for (j in 0 until metadataChapters.length()) {
+                            val chapObj = metadataChapters.getJSONObject(j)
+                            val chapterObj = JSONObject()
+                            chapterObj.put("chapterId", chapObj.getString("chapterId"))
+                            chapterObj.put("title", chapObj.getString("title"))
+                            chapterObj.put("order", chapObj.getInt("order"))
+                            chapterObj.put("revision", chapObj.getLong("revision"))
+
+                            // 使用 promotedEntries 中的 URI 和 contentHash
+                            val key = ChapterKey(
+                                metadataObj.getString("projectId"),
+                                volObj.getString("volumeId"),
+                                chapObj.getString("chapterId")
+                            )
+                            promotedEntries[key]?.let { entry ->
+                                chapterObj.put("uri", entry.uri)
+                                chapterObj.put("contentHash", entry.contentHash)
+                                chapterObj.put("relativePath", entry.relativePath)
+                            }
+
+                            chaptersArray.put(chapterObj)
+                        }
+                    }
+                    volumeObj.put("chapters", chaptersArray)
+                    volumesArray.put(volumeObj)
+                }
+            }
+            root.put("volumes", volumesArray)
+            root.toString()
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to build manifest from frozen metadata", e)
+            null
+        }
+    }
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"
