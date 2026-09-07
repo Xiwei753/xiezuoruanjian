@@ -288,7 +288,7 @@ open class SyncRepository(
     fun performFullSync(
         config: SyncConfig,
         forceSync: Boolean = false,
-    ): BridgeResult<FullSyncResult> = syncBridge.performFullSync(config, forceSync)
+    ): BridgeResult<FullSyncResult> = appBridge.performFullSync(config, forceSync)
 
     fun performFullSyncDryRun(config: SyncConfig): BridgeResult<FullSyncDryRunResult> =
         syncBridge.performFullSyncDryRun(config)

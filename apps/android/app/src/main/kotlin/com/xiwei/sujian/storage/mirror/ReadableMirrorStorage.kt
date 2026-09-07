@@ -158,11 +158,13 @@ interface ReadableMirrorStorage {
      *
      * @param txId 事务 ID
      * @param old 旧引用（非空）
+     * @param mimeType MIME 类型（正文使用 `text/markdown`，manifest 使用 `application/json`）
      * @return backup 引用（old 已被移走，最终路径腾空）；失败返回 null（old 仍在原位）
      */
     fun backupCommitted(
         txId: String,
         old: MirrorFileRef,
+        mimeType: String,
     ): MirrorFileRef?
 
     /**
@@ -201,11 +203,13 @@ interface ReadableMirrorStorage {
      *
      * @param backup backup 引用
      * @param finalRelativePath 最终目标路径
+     * @param mimeType MIME 类型（正文使用 `text/markdown`，manifest 使用 `application/json`）
      * @return 恢复后的引用；失败返回 null
      */
     fun restoreBackup(
         backup: MirrorFileRef,
         finalRelativePath: String,
+        mimeType: String,
     ): MirrorFileRef?
 
     /**

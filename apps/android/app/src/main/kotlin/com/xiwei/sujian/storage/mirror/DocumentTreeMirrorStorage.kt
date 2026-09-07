@@ -273,6 +273,7 @@ class DocumentTreeMirrorStorage(
     override fun backupCommitted(
         txId: String,
         old: MirrorFileRef,
+        mimeType: String,
     ): MirrorFileRef? {
         if (!isSupported()) return null
         // #649 评论 5563333323 缺口 1：把 old 从最终路径**移动**到 tx backup 区（不是复制），
@@ -299,7 +300,7 @@ class DocumentTreeMirrorStorage(
         val content = readTextFromUri(oldUri) ?: return null
         val fileUri =
             try {
-                DocumentsContract.createDocument(contentResolver, backupParentUri, MIME_MARKDOWN, displayName)
+                DocumentsContract.createDocument(contentResolver, backupParentUri, mimeType, displayName)
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "createDocument failed for backup $displayName: ${e.message}")
                 return null
@@ -347,6 +348,7 @@ class DocumentTreeMirrorStorage(
     override fun restoreBackup(
         backup: MirrorFileRef,
         finalRelativePath: String,
+        mimeType: String,
     ): MirrorFileRef? {
         if (!isSupported()) return null
         // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
@@ -357,7 +359,7 @@ class DocumentTreeMirrorStorage(
         val parentUri = ensureDirectory(relativeDir) ?: return null
         val fileUri =
             try {
-                DocumentsContract.createDocument(contentResolver, parentUri, MIME_MARKDOWN, displayName)
+                DocumentsContract.createDocument(contentResolver, parentUri, mimeType, displayName)
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "createDocument failed for restore $displayName: ${e.message}")
                 return null
@@ -495,6 +497,5 @@ class DocumentTreeMirrorStorage(
         private const val TAG = "DocumentTreeMirrorStorage"
         private const val STAGING_DIR = ".staging"
         private const val BACKUP_DIR = "backup"
-        private const val MIME_MARKDOWN = "text/markdown"
     }
 }

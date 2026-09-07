@@ -46,6 +46,35 @@ data class ChapterMirrorEntry(
 )
 
 /**
+ * 镜像状态快照 — [readSnapshotStrict] 返回的结构化完整状态。
+ *
+ * #649 评论 5563333323 缺口 2：用结构化快照替代隐式 emptyMap()，让调用方区分
+ * "state.json 不存在/损坏"和"该作品确实没有任何条目"。
+ */
+data class MirrorStateSnapshot(
+    val backend: MirrorBackend,
+    val treeUri: String?,
+    val manifestUri: String?,
+    val projects: Map<String, Map<ChapterKey, ChapterMirrorEntry>>,
+)
+
+/**
+ * pendingPublish journal 读取结果（#649 评论 5563333323 缺口 2：区分"不存在"和"损坏"）。
+ *
+ * 损坏的 pending journal 必须阻止启动新事务（调用方应停止本轮操作）。
+ */
+sealed class PendingPublishResult {
+    /** journal 不存在（从未发布过或上次发布已成功清理）。 */
+    object NotExists : PendingPublishResult()
+
+    /** 成功读取。 */
+    data class Success(val json: String) : PendingPublishResult()
+
+    /** 文件存在但 JSON 损坏或读取失败。调用方应停止本轮操作，不启动新事务。 */
+    data class Corrupted(val error: Exception) : PendingPublishResult()
+}
+
+/**
  * 镜像存储后端类型。
  *
  * #649 评论 5561465552 第 3 点：SAF/MediaStore URI 体系混用问题。
@@ -149,6 +178,44 @@ class ReadableMirrorStateStore(
             val root = readRootForRead() ?: return emptyMap()
             val projectObj = root.optJSONObject(PROJECTS_KEY)?.optJSONObject(projectId) ?: return emptyMap()
             return decodeProjectEntries(projectId, projectObj)
+        }
+    }
+
+    /**
+     * 严格读取完整状态快照（#649 评论 5563333323 缺口 2）。
+     *
+     * 与 [getProjectEntries] 不同：
+     * - [getProjectEntries] 在 state.json 损坏时返回 `emptyMap()`，调用方不知道是损坏还是真的空
+     * - 本方法在损坏时返回 [Result.failure]，让调用方区分"不存在/损坏"与"该作品确实无条目"
+     *
+     * @return [Result.success] 包含完整快照；[Result.failure] 包含 [ReadResult.NotExists]
+     *   或 [ReadResult.Corrupted] 异常
+     */
+    fun readSnapshotStrict(): Result<MirrorStateSnapshot> {
+        synchronized(lock) {
+            return when (val result = readRoot()) {
+                is ReadResult.NotExists -> Result.failure(
+                    IOException("state.json does not exist")
+                )
+                is ReadResult.Corrupted -> Result.failure(result.error)
+                is ReadResult.Parsed -> {
+                    val root = result.root
+                    val backend = parseBackend(root)
+                    val treeUri = root.optString(TREE_URI_KEY).takeIf { it.isNotEmpty() }
+                    val manifestUri = root.optString(MANIFEST_URI_KEY).takeIf { it.isNotEmpty() }
+                    val projects = mutableMapOf<String, Map<ChapterKey, ChapterMirrorEntry>>()
+                    val projectsObj = root.optJSONObject(PROJECTS_KEY)
+                    if (projectsObj != null) {
+                        val ids = projectsObj.keys()
+                        while (ids.hasNext()) {
+                            val projectId = ids.next()
+                            val projectObj = projectsObj.optJSONObject(projectId) ?: continue
+                            projects[projectId] = decodeProjectEntries(projectId, projectObj)
+                        }
+                    }
+                    Result.success(MirrorStateSnapshot(backend, treeUri, manifestUri, projects))
+                }
+            }
         }
     }
 
@@ -334,11 +401,15 @@ class ReadableMirrorStateStore(
      * - 每个 `contentFile` 对应的现有文档 URI
      * 写进 [ReadableMirrorStateStore]，供后续 Publisher 做集合差删除。
      *
+     * #649 评论 5563333323 缺口 2：state.json 损坏时返回 false，不再静默覆盖成空对象。
+     * 调用方应报告错误并提示用户。
+     *
      * @param manifestUri manifest 文件的 URI（MediaStore 或 SAF document URI）
      * @param chapterEntries 所有章节的条目（包含 URI、相对路径、revision、contentHash）
      * @param backend 本次恢复使用的存储后端（默认 [MirrorBackend.DOCUMENT_TREE]，
      *   因为恢复入口是 SAF OpenDocumentTree）
      * @param treeUri SAF document tree URI（document_tree 后端时必传）
+     * @return true 表示持久化成功；false 表示失败（state.json 损坏或写入失败）
      */
     fun saveRestoredState(
         manifestUri: String,
@@ -347,7 +418,12 @@ class ReadableMirrorStateStore(
         treeUri: String? = null,
     ): Boolean {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: JSONObject()
+            // #649 评论 5563333323 缺口 2：用 readRoot() 区分"不存在"和"损坏"
+            val root = when (val result = readRoot()) {
+                is ReadResult.NotExists -> JSONObject()
+                is ReadResult.Corrupted -> return false // 损坏时返回 false，不覆盖
+                is ReadResult.Parsed -> result.root
+            }
             // 写入 backend
             root.put(
                 BACKEND_KEY,
@@ -385,15 +461,20 @@ class ReadableMirrorStateStore(
      *
      * journal 文件路径：`noBackupFilesDir/sujian-mirror/pending-publish.json`。
      *
-     * @return journal JSON 内容；不存在或读取失败返回 null。
+     * #649 评论 5563333323 缺口 2：返回 [PendingPublishResult] 区分"不存在"和"损坏"。
+     * 损坏的 pending journal 必须阻止启动新事务。
+     *
+     * @return [PendingPublishResult.NotExists] 文件不存在；
+     *   [PendingPublishResult.Success] 成功读取；
+     *   [PendingPublishResult.Corrupted] 文件存在但 JSON 损坏或读取失败
      */
-    fun readPendingPublish(): String? {
+    fun readPendingPublish(): PendingPublishResult {
         synchronized(lock) {
-            if (!pendingPublishFile.exists()) return null
+            if (!pendingPublishFile.exists()) return PendingPublishResult.NotExists
             return try {
-                pendingPublishFile.readText(Charsets.UTF_8)
+                PendingPublishResult.Success(pendingPublishFile.readText(Charsets.UTF_8))
             } catch (e: IOException) {
-                null
+                PendingPublishResult.Corrupted(e)
             }
         }
     }
@@ -486,6 +567,20 @@ class ReadableMirrorStateStore(
             put(REVISION_KEY, entry.revision)
             put(CONTENT_HASH_KEY, entry.contentHash)
         }
+
+    /**
+     * 从 root 对象解析 backend（复用 [getBackend] 的逻辑）。
+     *
+     * 旧 state.json 没有 backend 字段时返回 [MirrorBackend.MEDIA_STORE]（向后兼容）。
+     */
+    private fun parseBackend(root: JSONObject): MirrorBackend {
+        val name = root.optString(BACKEND_KEY).takeIf { it.isNotEmpty() }
+        return when (name) {
+            BACKEND_VALUE_DOCUMENT_TREE -> MirrorBackend.DOCUMENT_TREE
+            BACKEND_VALUE_MEDIA_STORE -> MirrorBackend.MEDIA_STORE
+            else -> MirrorBackend.MEDIA_STORE
+        }
+    }
 
     /**
      * 读取 state root。

@@ -180,47 +180,77 @@ class DefaultMirrorChangeSink(
     }
 
     private suspend fun processDeletes() {
-        // poll 是精确移除：只取走队列头部一个事件，处理期间新 add 的事件保留在队列里，
-        // 由 workerLoop 末尾的补发信号触发下一轮。
+        // peek/commit 语义：先 peek 查看队首，处理成功后才 poll 移除。
+        // PendingRecovery/RetryableFailure 时保留原事件并补发 signal，保证不丢删除事件。
         while (true) {
-            val del = deleteQueue.poll() ?: break
-            try {
-                publisher.deleteProject(del.projectId)
-            } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "deleteProject failed: ${del.projectId}", e)
+            val del = deleteQueue.peek() ?: break
+            val result = publisher.deleteProject(del.projectId)
+            when (result) {
+                is MirrorPublishResult.Committed -> {
+                    // 成功提交，移除已处理的事件
+                    deleteQueue.poll()
+                }
+                is MirrorPublishResult.PendingRecovery,
+                is MirrorPublishResult.RetryableFailure -> {
+                    // pending 恢复中或可重试失败：保留事件在队列中，补发信号触发下一轮
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "deleteProject pending/failed for ${del.projectId}, keeping event for retry"
+                    )
+                    signal.trySend(Unit)
+                    return
+                }
             }
         }
     }
 
     private suspend fun processDirtySnapshot() {
-        // #649 评论 5561286861 第 1 点：按快照条目精确移除。
-        // 用 entries.map 拿到当前 (key, value) 对，再逐条 remove(key, value)。
-        // ConcurrentHashMap.remove(key, value) 是原子的条件移除：
-        // 只在该 key 当前仍映射到该 value 时才移除。
-        // 因此处理期间新写入的更新版本（value 不同）会保留在 dirtyMap，
-        // 由 workerLoop 末尾的补发信号触发下一轮，不再被 clear() 误删。
+        // peek/commit 语义：先拍快照不 remove，Committed 后才 remove(key, value)。
+        // PendingRecovery/RetryableFailure 保留原事件并补发 signal，保证不丢事件。
         val snapshot = dirtyMap.entries.map { it.key to it.value }
         if (snapshot.isEmpty()) return
-        for ((key, value) in snapshot) {
-            dirtyMap.remove(key, value)
-        }
         val wildcardKey = MirrorKey(WILDCARD_PROJECT, "", "")
         // 通配键表示全量
         if (snapshot.any { it.first == wildcardKey }) {
-            try {
-                publisher.publishAll()
-            } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "publishAll failed", e)
+            val result = publisher.publishAll()
+            when (result) {
+                is MirrorPublishResult.Committed -> {
+                    // 成功提交，移除已处理的通配键
+                    dirtyMap.remove(wildcardKey, snapshot.first { it.first == wildcardKey }.second)
+                }
+                is MirrorPublishResult.PendingRecovery,
+                is MirrorPublishResult.RetryableFailure -> {
+                    // pending 恢复中或可重试失败：保留事件在 dirtyMap 中，补发信号触发下一轮
+                    DiagnosticsLogger.w(TAG, "publishAll pending/failed, keeping event for retry")
+                    signal.trySend(Unit)
+                    return
+                }
             }
             return
         }
         // 按项目去重发布
         val projectIds = snapshot.map { it.first.projectId }.distinct()
         for (pid in projectIds) {
-            try {
-                publisher.publishProject(pid)
-            } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "publishProject failed: $pid", e)
+            // 收集该项目的所有条目
+            val projectEntries = snapshot.filter { it.first.projectId == pid }
+            val result = publisher.publishProject(pid)
+            when (result) {
+                is MirrorPublishResult.Committed -> {
+                    // 成功提交，移除该项目已处理的条目
+                    for ((key, value) in projectEntries) {
+                        dirtyMap.remove(key, value)
+                    }
+                }
+                is MirrorPublishResult.PendingRecovery,
+                is MirrorPublishResult.RetryableFailure -> {
+                    // pending 恢复中或可重试失败：保留事件在 dirtyMap 中，补发信号触发下一轮
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "publishProject pending/failed for $pid, keeping event for retry"
+                    )
+                    signal.trySend(Unit)
+                    return
+                }
             }
         }
     }

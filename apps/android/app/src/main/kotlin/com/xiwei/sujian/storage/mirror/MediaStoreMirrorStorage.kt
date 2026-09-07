@@ -3,6 +3,7 @@ package com.xiwei.sujian.storage.mirror
 import android.content.ContentResolver
 import android.content.ContentValues
 import android.net.Uri
+import android.os.Environment
 import android.provider.MediaStore
 import com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads
 
@@ -103,6 +104,7 @@ class MediaStoreMirrorStorage(
     override fun backupCommitted(
         txId: String,
         old: MirrorFileRef,
+        mimeType: String,
     ): MirrorFileRef? {
         // #649 评论 5563333323 缺口 1：把 old 从最终路径**移动**到 tx backup 区（不是复制），
         // 最终路径真正腾空。promoteStaged 之后最终路径才被 staged 占据，不会冲突。
@@ -111,14 +113,14 @@ class MediaStoreMirrorStorage(
         val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
         val backupRelativePath = "$backupBase/${old.relativePath}"
         // 1. 优先尝试 update RELATIVE_PATH 移动 old 到 backup
-        val movedRef = tryMoveByRelativePath(oldUri, backupRelativePath, MIME_MARKDOWN)
+        val movedRef = tryMoveByRelativePath(oldUri, backupRelativePath, mimeType)
         if (movedRef != null) return movedRef
         // 2. 回退：read old → createText 到 backup → delete old（真正删 old 腾空最终路径）
         val content = mediaStore.readText(oldUri) ?: return null
         val parent = old.relativePath.substringBeforeLast('/', "")
         val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
         val displayName = old.relativePath.substringAfterLast('/')
-        val backupUri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+        val backupUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
             ?: return null
         // 关键：删 old 腾空最终路径（不是保留 old）
         if (!mediaStore.delete(oldUri)) {
@@ -130,21 +132,31 @@ class MediaStoreMirrorStorage(
     }
 
     override fun resolve(relativePath: String): MirrorFileRef? {
-        // #649 评论 5563333323 缺口 1：只查不创建，用 MediaStore query RELATIVE_PATH。
+        // #649 评论 5563333323 缺口 1：只查不创建，用 MediaStore query RELATIVE_PATH + DISPLAY_NAME。
         if (!mediaStore.isSupported()) return null
-        val fullRelativePath = buildMediaStoreRelativePath(relativePath)
+        val directory = mediaStoreDirectory(relativePath)
+        val displayName = relativePath.substringAfterLast('/')
         return try {
             contentResolver
                 .query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND ${MediaStore.Downloads.IS_PENDING} = 0",
-                    arrayOf(fullRelativePath),
+                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                        "${MediaStore.Downloads.IS_PENDING} = 0",
+                    arrayOf(directory, displayName),
                     null,
                 )
                 ?.use { cursor ->
                     if (cursor.moveToFirst()) {
                         val id = cursor.getLong(0)
+                        // 异常情况下可能命中多条，只取第一条并记日志
+                        if (cursor.count > 1) {
+                            android.util.Log.w(
+                                "MediaStoreMirrorStorage",
+                                "resolve: multiple matches for relativePath=$relativePath, count=${cursor.count}"
+                            )
+                        }
                         val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
                         MirrorFileRef(uri = uri.toString(), relativePath = relativePath)
                     } else {
@@ -159,13 +171,14 @@ class MediaStoreMirrorStorage(
     override fun restoreBackup(
         backup: MirrorFileRef,
         finalRelativePath: String,
+        mimeType: String,
     ): MirrorFileRef? {
         // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
         val backupUri = tryParseUri(backup.uri) ?: return null
         val content = mediaStore.readText(backupUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
-        val newUri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+        val newUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
             ?: return null
         return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
     }
@@ -200,12 +213,9 @@ class MediaStoreMirrorStorage(
         mimeType: String,
     ): MirrorFileRef? {
         if (!mediaStore.isSupported()) return null
-        val fullRelativePath = buildMediaStoreRelativePath(targetRelativePath)
-        val parent = targetRelativePath.substringBeforeLast('/', "")
-        val displayName = targetRelativePath.substringAfterLast('/')
         val values = ContentValues().apply {
-            put(MediaStore.Downloads.RELATIVE_PATH, fullRelativePath)
-            put(MediaStore.Downloads.DISPLAY_NAME, displayName)
+            put(MediaStore.Downloads.RELATIVE_PATH, mediaStoreDirectory(targetRelativePath))
+            put(MediaStore.Downloads.DISPLAY_NAME, targetRelativePath.substringAfterLast('/'))
         }
         val updated =
             try {
@@ -217,14 +227,31 @@ class MediaStoreMirrorStorage(
         return MirrorFileRef(uri = sourceUri.toString(), relativePath = targetRelativePath)
     }
 
-    /** 构造 MediaStore 完整 RELATIVE_PATH（`Download/Sujian/<relativePath>`）。 */
-    private fun buildMediaStoreRelativePath(relativePath: String): String =
-        "${android.os.Environment.DIRECTORY_DOWNLOADS}/$MIRROR_ROOT_NAME/" + relativePath
+    /**
+     * 构造 MediaStore 目录路径（`Download/Sujian/<parent>/`）。
+     * 返回纯目录路径，不含文件名。
+     */
+    private fun mediaStoreDirectory(relativePath: String): String {
+        val parent = relativePath.substringBeforeLast('/', "")
+        val base = "${Environment.DIRECTORY_DOWNLOADS}/$MIRROR_ROOT_NAME"
+        return if (parent.isBlank()) "$base/" else "$base/$parent/"
+    }
+
+    /**
+     * 构造 MediaStore 完整 RELATIVE_PATH（`Download/Sujian/<parent>/<displayName>`）。
+     * 已弃用：RELATIVE_PATH 应只包含目录，文件名在 DISPLAY_NAME。
+     * 保留用于需要完整路径的兼容场景。
+     */
+    private fun buildMediaStoreRelativePath(relativePath: String): String {
+        val parent = relativePath.substringBeforeLast('/', "")
+        val displayName = relativePath.substringAfterLast('/')
+        val base = "${Environment.DIRECTORY_DOWNLOADS}/$MIRROR_ROOT_NAME"
+        return if (parent.isBlank()) "$base/$displayName" else "$base/$parent/$displayName"
+    }
 
     companion object {
         private const val STAGING_DIR = ".staging"
         private const val BACKUP_DIR = "backup"
-        private const val MIME_MARKDOWN = "text/markdown"
         private const val MIRROR_ROOT_NAME = "Sujian"
     }
 }

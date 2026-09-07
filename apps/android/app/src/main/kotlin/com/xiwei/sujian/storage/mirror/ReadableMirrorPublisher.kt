@@ -11,6 +11,20 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 import java.time.format.DateTimeFormatter
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * 发布结果密封接口。
+ *
+ * - [Committed]：发布成功，事件已提交，可以安全移除
+ * - [PendingRecovery]：存在未恢复的 pending publish，需要等待恢复完成
+ * - [RetryableFailure]：可重试的失败，事件应保留并稍后重试
+ */
+sealed interface MirrorPublishResult {
+    data object Committed : MirrorPublishResult
+    data object PendingRecovery : MirrorPublishResult
+    data object RetryableFailure : MirrorPublishResult
+}
 
 /**
  * ReadableMirrorPublisher — 异步发布正文到 Download/Sujian 镜像。
@@ -72,6 +86,34 @@ class ReadableMirrorPublisher(
     private val stateStore: ReadableMirrorStateStore,
 ) {
     /**
+     * pending 恢复标志：true 表示已完成 pending 恢复检查。
+     * 使用 AtomicBoolean 保证线程安全。
+     */
+    private val pendingRecovered = AtomicBoolean(false)
+
+    /**
+     * 确保 pending publish 已恢复。
+     *
+     * 在每个公开 publish/delete/all 入口开始前调用，
+     * 避免 pending 恢复未完成时开启新的镜像事务。
+     *
+     * @return true 表示 pending 已恢复或无 pending，可以继续；false 表示恢复失败需重试
+     */
+    private suspend fun ensurePendingRecovered(): Boolean {
+        if (pendingRecovered.get()) {
+            return true
+        }
+        try {
+            recoverPendingPublishIfNeeded()
+            pendingRecovered.set(true)
+            return true
+        } catch (e: Exception) {
+            DiagnosticsLogger.e(TAG, "Failed to ensure pending recovered", e)
+            return false
+        }
+    }
+
+    /**
      * 检查并恢复 pending publish（如果存在）。
      *
      * #649 评论 5561974464 问题 3：pendingPublish 没有恢复逻辑。
@@ -81,38 +123,52 @@ class ReadableMirrorPublisher(
      * - `stage`：staging 未完成，旧镜像完整 → rollback(txId) + clearPendingPublish
      * - `promote`：staging 已写完，promote 部分完成 → 继续 promote 剩余，然后 cleanup
      * - `cleanup`：已 promote 完，stateStore 未更新/清理未完成 → 继续 cleanup
+     *
+     * #649 评论 5563333323 缺口 2：损坏的 pending journal 必须阻止启动新事务。
+     * 损坏时直接返回，不启动新事务；也不清理损坏的 journal（保留供人工排查）。
      */
     suspend fun recoverPendingPublishIfNeeded() {
-        val journalJson = stateStore.readPendingPublish() ?: return
-        val journal = PendingMirrorPublish.fromJson(journalJson) ?: return
-        DiagnosticsLogger.i(TAG, "Recovering pending publish: phase=${journal.phase}, projectId=${journal.projectId}, txType=${journal.transactionType}")
+        val pendingResult = stateStore.readPendingPublish()
+        when (pendingResult) {
+            is PendingPublishResult.NotExists -> return
+            is PendingPublishResult.Corrupted -> {
+                // #649 评论 5563333323 缺口 2：损坏时记录日志，不启动新事务，不清理 journal
+                DiagnosticsLogger.e(TAG, "Pending publish journal is corrupted, cannot start new transaction", pendingResult.error)
+                return
+            }
+            is PendingPublishResult.Success -> {
+                val journalJson = pendingResult.json
+                val journal = PendingMirrorPublish.fromJson(journalJson) ?: return
+                DiagnosticsLogger.i(TAG, "Recovering pending publish: phase=${journal.phase}, projectId=${journal.projectId}, txType=${journal.transactionType}")
 
-        // #649 评论 5562462046 问题 3：恢复时按 journal 记录的 backend/treeUri 构造当时那套 storage，
-        // 不能用 router.current() 猜（stateStore 可能已被改写）。
-        val storage = router.forBackend(journal.backend, journal.treeUri)
-        if (!storage.isSupported()) {
-            DiagnosticsLogger.w(TAG, "Storage not supported during recovery, clearing pending publish")
-            stateStore.clearPendingPublish()
-            return
-        }
+                // #649 评论 5562462046 问题 3：恢复时按 journal 记录的 backend/treeUri 构造当时那套 storage，
+                // 不能用 router.current() 猜（stateStore 可能已被改写）。
+                val storage = router.forBackend(journal.backend, journal.treeUri)
+                if (!storage.isSupported()) {
+                    DiagnosticsLogger.w(TAG, "Storage not supported during recovery, clearing pending publish")
+                    stateStore.clearPendingPublish()
+                    return
+                }
 
-        when (journal.phase) {
-            PendingMirrorPublish.PHASE_STAGE -> {
-                // staging 未完成，旧镜像完整 → rollback + clear
-                storage.rollback(journal.txId)
-                stateStore.clearPendingPublish()
-            }
-            PendingMirrorPublish.PHASE_PROMOTE -> {
-                // staging 已写完，promote 部分完成 → 继续 promote
-                recoverPromotePhase(journal, storage)
-            }
-            PendingMirrorPublish.PHASE_CLEANUP -> {
-                // 已 promote 完，stateStore 未更新/清理未完成 → 继续 cleanup
-                recoverCleanupPhase(journal, storage)
-            }
-            else -> {
-                DiagnosticsLogger.w(TAG, "Unknown phase in pending publish: ${journal.phase}")
-                stateStore.clearPendingPublish()
+                when (journal.phase) {
+                    PendingMirrorPublish.PHASE_STAGE -> {
+                        // staging 未完成，旧镜像完整 → rollback + clear
+                        storage.rollback(journal.txId)
+                        stateStore.clearPendingPublish()
+                    }
+                    PendingMirrorPublish.PHASE_PROMOTE -> {
+                        // staging 已写完，promote 部分完成 → 继续 promote
+                        recoverPromotePhase(journal, storage)
+                    }
+                    PendingMirrorPublish.PHASE_CLEANUP -> {
+                        // 已 promote 完，stateStore 未更新/清理未完成 → 继续 cleanup
+                        recoverCleanupPhase(journal, storage)
+                    }
+                    else -> {
+                        DiagnosticsLogger.w(TAG, "Unknown phase in pending publish: ${journal.phase}")
+                        stateStore.clearPendingPublish()
+                    }
+                }
             }
         }
     }
@@ -157,7 +213,7 @@ class ReadableMirrorPublisher(
             // #649 评论 5562715833 问题 2：backupCommitted + promoteStaged，不先删 old
             // 1. 备份 old（如果有）
             if (oldRef != null) {
-                val backup = storage.backupCommitted(journal.txId, oldRef)
+                val backup = storage.backupCommitted(journal.txId, oldRef, MIME_MARKDOWN)
                 if (backup == null) {
                     DiagnosticsLogger.w(TAG, "Recover backup failed for ${key.chapterId}, rolling back")
                     storage.rollback(journal.txId)
@@ -203,7 +259,7 @@ class ReadableMirrorPublisher(
                 for ((_, entry) in promotedEntries) {
                     storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
                 }
-                currentItems[key]?.backupOldRef?.let { storage.restoreBackup(it, staged.finalRelativePath) }
+                currentItems[key]?.backupOldRef?.let { storage.restoreBackup(it, staged.finalRelativePath, MIME_MARKDOWN) }
                 stateStore.clearPendingPublish()
                 return
             }
@@ -463,13 +519,15 @@ class ReadableMirrorPublisher(
      * #649 评论 5562715833 问题 6：单章发布委托 [publishProject] 的事务性路径，
      * 不另走非事务简化路径（旧 writeChapterContent + publishManifest）。
      * 统一走 stage → promote → 事务性 manifest → cleanup → journal 的事务性发布。
+     *
+     * @return 发布结果 [MirrorPublishResult]
      */
     suspend fun publishChapter(
         projectId: String,
         volumeId: String,
         chapterId: String,
-    ) {
-        publishProject(projectId)
+    ): MirrorPublishResult {
+        return publishProject(projectId)
     }
 
     /**
@@ -485,18 +543,24 @@ class ReadableMirrorPublisher(
      * 5. **清理**：删除不再被引用的旧文件。
      *
      * pendingPublish journal 在整个流程中记录进度，成功后清除。
+     *
+     * @return 发布结果 [MirrorPublishResult]
      */
-    suspend fun publishProject(projectId: String) {
+    suspend fun publishProject(projectId: String): MirrorPublishResult {
         try {
+            // 门控：确保 pending 已恢复
+            if (!ensurePendingRecovered()) {
+                return MirrorPublishResult.PendingRecovery
+            }
             val storage = router.current()
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             val snapshotResult = source.getProjectWorkspaceSnapshot(projectId)
             if (snapshotResult !is BridgeResult.Success) {
                 logNotLoaded(snapshotResult, "publishProject")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             val snapshot = snapshotResult.data
             val oldEntries = stateStore.getProjectEntries(projectId)
@@ -512,7 +576,7 @@ class ReadableMirrorPublisher(
             val writePlan = buildWritePlan(projectId, snapshot, oldEntries, usedRelativePaths)
             if (writePlan == null) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: failed to build write plan")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
 
             // 生成事务 ID
@@ -537,7 +601,7 @@ class ReadableMirrorPublisher(
                         "Publish project $projectId aborted: stage failed for ${planEntry.key.chapterId}",
                     )
                     storage.rollback(txId)
-                    return
+                    return MirrorPublishResult.RetryableFailure
                 }
                 stagedRefs[planEntry.key] = staged
                 // 记录 desired entry（promote 后填 URI）
@@ -583,7 +647,7 @@ class ReadableMirrorPublisher(
             ) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after stage")
                 storage.rollback(txId)
-                return
+                return MirrorPublishResult.RetryableFailure
             }
 
             // 3. 提升阶段：promote 所有暂存文件到最终位置（逐项更新 journal）
@@ -605,7 +669,7 @@ class ReadableMirrorPublisher(
                 val oldRef = item.oldRef
                 // 1. 备份 old（如果有）
                 if (oldRef != null) {
-                    val backup = storage.backupCommitted(txId, oldRef)
+                    val backup = storage.backupCommitted(txId, oldRef, MIME_MARKDOWN)
                     if (backup == null) {
                         DiagnosticsLogger.w(
                             TAG,
@@ -616,7 +680,7 @@ class ReadableMirrorPublisher(
                             storage.delete(MirrorFileRef(uri = promotedEntry.uri, relativePath = promotedEntry.relativePath))
                         }
                         stateStore.clearPendingPublish()
-                        return
+                        return MirrorPublishResult.RetryableFailure
                     }
                     items[key] = item.copy(backupOldRef = backup, state = PendingItem.STATE_OLD_BACKED_UP)
                     // #649 评论 5563333323 缺口 2：journal 写入失败则停止
@@ -646,7 +710,7 @@ class ReadableMirrorPublisher(
                         for ((_, promotedEntry) in promotedEntries) {
                             storage.delete(MirrorFileRef(uri = promotedEntry.uri, relativePath = promotedEntry.relativePath))
                         }
-                        return
+                        return MirrorPublishResult.RetryableFailure
                     }
                 }
                 // 2. promote staged（不删 old）
@@ -660,9 +724,9 @@ class ReadableMirrorPublisher(
                     for ((_, promotedEntry) in promotedEntries) {
                         storage.delete(MirrorFileRef(uri = promotedEntry.uri, relativePath = promotedEntry.relativePath))
                     }
-                    items[key]?.backupOldRef?.let { storage.restoreBackup(it, staged.finalRelativePath) }
+                    items[key]?.backupOldRef?.let { storage.restoreBackup(it, staged.finalRelativePath, MIME_MARKDOWN) }
                     stateStore.clearPendingPublish()
-                    return
+                    return MirrorPublishResult.RetryableFailure
                 }
                 promotedEntries[key] =
                     ChapterMirrorEntry(
@@ -697,7 +761,7 @@ class ReadableMirrorPublisher(
                         "Publish project $projectId aborted: journal write failed after promote for ${key.chapterId}",
                     )
                     storage.rollback(txId)
-                    return
+                    return MirrorPublishResult.RetryableFailure
                 }
             }
 
@@ -735,13 +799,13 @@ class ReadableMirrorPublisher(
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifest write failed")
                 storage.rollback(txId)
                 stateStore.clearPendingPublish()
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // manifest 成功后一次性写 desiredEntries 到 stateStore
             // #649 评论 5563333323 缺口 2：putChapterEntries 失败也不清 journal
             if (!stateStore.putChapterEntries(promotedEntries)) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId: putChapterEntries failed, keeping journal for retry")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
 
             // 标记所有 item 为 COMMITTED，更新 journal 到 cleanup 阶段
@@ -765,7 +829,7 @@ class ReadableMirrorPublisher(
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup journal write failed, keeping journal for retry")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
 
             // 5. 清理阶段：调用统一 cleanup 函数
@@ -795,10 +859,13 @@ class ReadableMirrorPublisher(
             } else {
                 // 有失败项，保留 journal，下次 recover 继续清
                 DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup partial failure, keeping journal for retry")
+                return MirrorPublishResult.RetryableFailure
             }
+            return MirrorPublishResult.Committed
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to publish project: ${e.message}", e)
             // 异常时保留 journal，下次启动可继续
+            return MirrorPublishResult.RetryableFailure
         }
     }
 
@@ -810,12 +877,16 @@ class ReadableMirrorPublisher(
      * #649 评论 5562462046 问题 4：正确顺序——先写 journal(transactionType=DELETE_PROJECT, phase=CLEANUP)，
      * 再事务提交"不含该项目"的 manifest，manifest 成功后才从 stateStore 删项目条目，最后删旧正文。
      */
-    suspend fun deleteProject(projectId: String) {
+    suspend fun deleteProject(projectId: String): MirrorPublishResult {
         try {
+            // 门控：确保 pending 已恢复
+            if (!ensurePendingRecovered()) {
+                return MirrorPublishResult.PendingRecovery
+            }
             val storage = router.current()
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 1. 获取旧条目
             val removed = stateStore.getProjectEntries(projectId)
@@ -843,7 +914,7 @@ class ReadableMirrorPublisher(
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 3. 事务提交新 manifest（已不含该项目）
             //    用 desiredEntries=emptyMap 表示该项目不再有任何章节
@@ -882,7 +953,7 @@ class ReadableMirrorPublisher(
             if (manifestResult == null) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
                 // manifest 失败不清除 journal，下次恢复会重试
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 4. manifest 成功后更新 journal（标记 manifest 已提交）
             //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
@@ -907,14 +978,14 @@ class ReadableMirrorPublisher(
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup journal write failed, keeping journal for retry")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 5. 从 state store 删除该项目条目
             //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
             val removeResult = stateStore.removeAllProjectEntries(projectId)
             if (removeResult.isFailure) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: removeAllProjectEntries failed, keeping journal for retry")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
             //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
@@ -941,35 +1012,50 @@ class ReadableMirrorPublisher(
                 stateStore.clearPendingPublish()
             } else {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup partial failure, keeping journal for retry")
+                return MirrorPublishResult.RetryableFailure
             }
+            return MirrorPublishResult.Committed
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to delete project: ${e.message}", e)
             // 异常时保留 journal，下次启动可继续
+            return MirrorPublishResult.RetryableFailure
         }
     }
 
     /**
      * 全量发布：遍历所有项目。
+     *
+     * @return 发布结果 [MirrorPublishResult]
      */
-    suspend fun publishAll() {
+    suspend fun publishAll(): MirrorPublishResult {
         try {
+            // 门控：确保 pending 已恢复
+            if (!ensurePendingRecovered()) {
+                return MirrorPublishResult.PendingRecovery
+            }
             if (!router.current().isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             val projectsResult = source.listProjects()
             if (projectsResult !is BridgeResult.Success) {
                 logNotLoaded(projectsResult, "publishAll")
-                return
+                return MirrorPublishResult.RetryableFailure
             }
             // 先清理 state store 中已不存在的项目
             val liveProjectIds = projectsResult.data.map { it.id }.toSet()
             cleanupStaleProjects(liveProjectIds)
+            var anyFailure = false
             for (project in projectsResult.data) {
-                publishProject(project.id)
+                val result = publishProject(project.id)
+                if (result is MirrorPublishResult.RetryableFailure || result is MirrorPublishResult.PendingRecovery) {
+                    anyFailure = true
+                }
             }
+            return if (anyFailure) MirrorPublishResult.RetryableFailure else MirrorPublishResult.Committed
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to publish all: ${e.message}", e)
+            return MirrorPublishResult.RetryableFailure
         }
     }
 
@@ -988,6 +1074,40 @@ class ReadableMirrorPublisher(
     /** 删除某项目的全部镜像文件（从 state store 移除条目并逐个删 URI）。 */
     private suspend fun deleteProjectMirrorFiles(projectId: String) {
         deleteProject(projectId)
+    }
+
+    /**
+     * 回滚单个 item 的 swap 操作：先恢复 old（如果存在），再删除 tx staging。
+     *
+     * #649 评论 5563333323 缺口 1：rollback 会删整个 tx staging 目录，backup 也在里面。
+     * 必须先 restoreBackup 把 old 移回最终路径，再 rollback tx staging。
+     *
+     * @param storage 当前事务的 storage
+     * @param txId 事务 ID
+     * @param item 当前 item（包含 backupOldRef）
+     * @param finalRelativePath 最终路径
+     * @return true 表示回滚成功；false 表示恢复失败（最终路径可能为空）
+     */
+    private fun rollbackItemSwap(
+        storage: ReadableMirrorStorage,
+        txId: String,
+        item: PendingItem,
+        finalRelativePath: String,
+    ): Boolean {
+        // 1. 先删除 promotedRef（如果 promote 已部分完成）
+        item.promotedRef?.let { storage.delete(it) }
+
+        // 2. 恢复 old backup 到最终路径（仅当最终路径为空时）
+        val backup = item.backupOldRef
+        if (backup != null && storage.resolve(finalRelativePath) == null) {
+            if (storage.restoreBackup(backup, finalRelativePath, MIME_MARKDOWN) == null) {
+                return false
+            }
+        }
+
+        // 3. 最后删除 tx staging（backup 已在 staging 内，此时 rollback 安全）
+        storage.rollback(txId)
+        return true
     }
 
     // ── 事务性发布内部 ──

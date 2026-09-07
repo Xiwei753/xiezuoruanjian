@@ -37,13 +37,65 @@ class MirrorStorageRouter(
     private val documentTreeFactory: (Uri) -> DocumentTreeMirrorStorage,
 ) {
     /**
+     * 严格读取当前 backend 和 treeUri。
+     *
+     * #649 评论 5563798095：与 [ReadableMirrorStateStore.readSnapshotStrict] 对齐，
+     * 区分"损坏/不存在"与"正常但字段为空"，让调用方决定是停止操作还是报告错误。
+     *
+     * @return [Result.success] 包含 (backend, treeUri)；[Result.failure] 包含读取失败的异常
+     */
+    fun readSnapshotStrict(): Result<Pair<MirrorBackend, String?>> {
+        return stateStore.readSnapshotStrict().map { snapshot ->
+            Pair(snapshot.backend, snapshot.treeUri)
+        }
+    }
+
+    /**
      * 返回当前 backend 对应的 [ReadableMirrorStorage]。
      *
-     * - [MirrorBackend.DOCUMENT_TREE] 但 treeUri 缺失时回退到 [mediaStoreStorage]
-     *   （保守：至少能写一份，与旧 [selectMirrorStorage] 行为一致）。
+     * #649 评论 5563798095：严格模式 — 损坏或缺失必需字段时返回错误，**不回退到 MediaStore**。
+     * 调用方应在事务入口调 [currentResult]，失败时停止本轮操作、不镜像。
+     *
+     * - [MirrorBackend.DOCUMENT_TREE] 但 treeUri 缺失时返回 [Result.failure]
+     *   （违背 #649 "一个镜像后端，不猜、不反向覆盖"原则，不能回退 MediaStore）。
+     * - state.json 损坏时返回 [Result.failure]。
      *
      * 调用方应在每次事务开始时调一次本方法，在同一次事务里复用返回的 storage。
+     *
+     * @return [Result.success] 包含对应的 storage；[Result.failure] 包含 [IllegalStateException]
+     *   或读取失败的异常
      */
+    fun currentResult(): Result<ReadableMirrorStorage> {
+        return readSnapshotStrict().mapCatching { (backend, treeUri) ->
+            when (backend) {
+                MirrorBackend.DOCUMENT_TREE -> {
+                    // #649 评论 5563798095：DOCUMENT_TREE 缺 treeUri 时返回错误，不回退 MediaStore
+                    // 违背"一个镜像后端，不猜、不反向覆盖"原则
+                    requireNotNull(treeUri) {
+                        "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
+                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                    }
+                    val treeUriParsed = Uri.parse(treeUri)
+                    documentTreeFactory(treeUriParsed)
+                }
+                MirrorBackend.MEDIA_STORE -> mediaStoreStorage
+            }
+        }
+    }
+
+    /**
+     * 返回当前 backend 对应的 [ReadableMirrorStorage]（兼容旧版，不推荐新代码使用）。
+     *
+     * #649 评论 5563798095：旧版行为 — 损坏时回退到 MEDIA_STORE，DOCUMENT_TREE 缺 treeUri 时也回退。
+     * 仅保留给未适配 [currentResult] 的旧调用方，新代码请用 [currentResult]。
+     *
+     * @see currentResult
+     */
+    @Deprecated(
+        message = "Use currentResult() for strict error handling. " +
+                "This fallback behavior violates #649 single-backend principle.",
+        ReplaceWith("currentResult().getOrThrow()"),
+    )
     fun current(): ReadableMirrorStorage {
         return when (stateStore.getBackend()) {
             MirrorBackend.DOCUMENT_TREE -> {
@@ -52,7 +104,7 @@ class MirrorStorageRouter(
                     val treeUri = Uri.parse(treeUriString)
                     documentTreeFactory(treeUri)
                 } else {
-                    // treeUri 缺失，回退到 MediaStore（保守：至少能写一份）
+                    // treeUri 缺失，回退到 MediaStore（旧版行为，违背 #649 原则）
                     mediaStoreStorage
                 }
             }
@@ -67,9 +119,43 @@ class MirrorStorageRouter(
      * backend/treeUri 构造当时那套 storage，不能用 [current] 猜当前 stateStore
      * （stateStore 可能已被后续操作改写，或 journal 的事务后端与当前不同）。
      *
-     * [MirrorBackend.DOCUMENT_TREE] 但 [treeUri] 为 null 时回退到 [mediaStoreStorage]
-     * （与 [current] 行为一致）。
+     * #649 评论 5563798095：严格模式 — [MirrorBackend.DOCUMENT_TREE] 但 [treeUri] 为 null 时返回错误，
+     * **不回退到 MediaStore**（违背 #649 "一个镜像后端，不猜、不反向覆盖"原则）。
+     *
+     * @return [Result.success] 包含对应的 storage；[Result.failure] 包含 [IllegalStateException]
      */
+    fun forBackendResult(
+        backend: MirrorBackend,
+        treeUri: String?,
+    ): Result<ReadableMirrorStorage> {
+        return runCatching {
+            when (backend) {
+                MirrorBackend.DOCUMENT_TREE -> {
+                    // #649 评论 5563798095：DOCUMENT_TREE 缺 treeUri 时返回错误，不回退 MediaStore
+                    requireNotNull(treeUri) {
+                        "forBackend(DOCUMENT_TREE, treeUri=null) is invalid. " +
+                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                    }
+                    documentTreeFactory(Uri.parse(treeUri))
+                }
+                MirrorBackend.MEDIA_STORE -> mediaStoreStorage
+            }
+        }
+    }
+
+    /**
+     * 按指定的 [backend] / [treeUri] 构造 [ReadableMirrorStorage]（兼容旧版，不推荐新代码使用）。
+     *
+     * #649 评论 5563798095：旧版行为 — DOCUMENT_TREE 缺 treeUri 时回退到 MEDIA_STORE。
+     * 仅保留给未适配 [forBackendResult] 的旧调用方，新代码请用 [forBackendResult]。
+     *
+     * @see forBackendResult
+     */
+    @Deprecated(
+        message = "Use forBackendResult() for strict error handling. " +
+                "This fallback behavior violates #649 single-backend principle.",
+        ReplaceWith("forBackendResult(backend, treeUri).getOrThrow()"),
+    )
     fun forBackend(
         backend: MirrorBackend,
         treeUri: String?,
