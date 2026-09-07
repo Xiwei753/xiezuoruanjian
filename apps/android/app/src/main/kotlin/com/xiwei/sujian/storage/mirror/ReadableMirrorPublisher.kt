@@ -228,11 +228,28 @@ class ReadableMirrorPublisher(
             // #649 评论 5562715833 问题 2：backupCommitted + promoteStaged，不先删 old
             // #649 评论 5563798095：崩溃窗口恢复 — backupCommitted 已移动 old 但 journal 未更新时，
             // 检测 backup 是否已存在于备份目录，如果存在则跳过重复 backup。
-            if (oldRef != null && item.backupOldRef == null) {
+            // #649 评论 5565067997 修复 1：用 STATE_BACKUP_READY / STATE_OLD_VACATED 显式状态。
+            if (oldRef != null && item.state != PendingItem.STATE_OLD_VACATED) {
                 // #649 评论 5564820566 问题 3：两步 journalable backup — recover 同样用 prepareBackup + vacateCommitted
                 val existingBackup = storage.resolveBackup(journal.txId, oldRef.relativePath)
                 val backupReady = if (existingBackup != null) {
-                    BackupReadyRef(backupRef = existingBackup, vacated = false)
+                    // #649 评论 5565067997 修复 1：用 lookup() 三态查询判断 old 是否已 vacate，
+                    // 不再硬编码 vacated=false。
+                    val oldLookup = storage.lookup(oldRef.relativePath)
+                    val vacated = when (oldLookup) {
+                        is MirrorLookupResult.Missing -> true
+                        is MirrorLookupResult.Found -> false
+                        is MirrorLookupResult.Failed -> {
+                            // 查询失败，不能继续，回滚
+                            DiagnosticsLogger.w(TAG, "Recover backup: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                            for ((_, entry) in promotedEntries) {
+                                storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                            }
+                            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                            return
+                        }
+                    }
+                    BackupReadyRef(backupRef = existingBackup, vacated = vacated)
                 } else {
                     val prepared = storage.prepareBackup(journal.txId, oldRef, MIME_MARKDOWN)
                     if (prepared == null) {
@@ -245,19 +262,8 @@ class ReadableMirrorPublisher(
                     }
                     prepared
                 }
-                // vacate old（如果 prepareBackup 还没 move old）
-                if (!backupReady.vacated) {
-                    if (!storage.vacateCommitted(oldRef)) {
-                        DiagnosticsLogger.w(TAG, "Recover vacate failed for ${key.chapterId}")
-                        for ((_, entry) in promotedEntries) {
-                            storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
-                        }
-                        rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-                        return
-                    }
-                }
-                currentItems[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_OLD_BACKED_UP)
-                // 写 journal
+                // #649 评论 5565067997 修复 1：journal 先写 STATE_BACKUP_READY
+                currentItems[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_BACKUP_READY)
                 if (!writePendingPublishJournal(
                         projectId = journal.projectId,
                         transactionType = journal.transactionType,
@@ -274,9 +280,49 @@ class ReadableMirrorPublisher(
                         manifestStagedRef = journal.manifestStagedRef,
                         manifestNewRef = journal.manifestNewRef,
                         manifestBackupRef = journal.manifestBackupRef,
+                        manifestSwapState = journal.manifestSwapState,
                     )
                 ) {
-                    DiagnosticsLogger.w(TAG, "Recover backup: journal write failed for ${key.chapterId}, keeping journal")
+                    DiagnosticsLogger.w(TAG, "Recover backup: journal write failed (BACKUP_READY) for ${key.chapterId}, keeping journal")
+                    for ((_, entry) in promotedEntries) {
+                        storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                    }
+                    rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                    return
+                }
+                // vacate old（如果 prepareBackup 还没 move old）
+                if (!backupReady.vacated) {
+                    if (!storage.vacateCommitted(oldRef)) {
+                        DiagnosticsLogger.w(TAG, "Recover vacate failed for ${key.chapterId}")
+                        for ((_, entry) in promotedEntries) {
+                            storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                        }
+                        rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                        return
+                    }
+                }
+                // #649 评论 5565067997 修复 1：vacate 成功后写 STATE_OLD_VACATED
+                currentItems[key] = currentItems[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
+                if (!writePendingPublishJournal(
+                        projectId = journal.projectId,
+                        transactionType = journal.transactionType,
+                        phase = PendingMirrorPublish.PHASE_PROMOTE,
+                        txId = journal.txId,
+                        backend = journal.backend,
+                        treeUri = journal.treeUri,
+                        oldEntries = journal.oldEntries,
+                        newEntries = journal.newEntries,
+                        stagedRefs = journal.stagedRefs,
+                        items = currentItems,
+                        removedProjectIds = journal.removedProjectIds,
+                        manifestOldRef = journal.manifestOldRef,
+                        manifestStagedRef = journal.manifestStagedRef,
+                        manifestNewRef = journal.manifestNewRef,
+                        manifestBackupRef = journal.manifestBackupRef,
+                        manifestSwapState = journal.manifestSwapState,
+                    )
+                ) {
+                    DiagnosticsLogger.w(TAG, "Recover backup: journal write failed (OLD_VACATED) for ${key.chapterId}, keeping journal")
                     for ((_, entry) in promotedEntries) {
                         storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
                     }
@@ -318,6 +364,7 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = journal.manifestStagedRef,
                     manifestNewRef = journal.manifestNewRef,
                     manifestBackupRef = journal.manifestBackupRef,
+                    manifestSwapState = journal.manifestSwapState,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
@@ -358,7 +405,11 @@ class ReadableMirrorPublisher(
             return
         }
         // #649 评论 5564820566 问题 5：恢复成功后也标记作品已发布
-        stateStore.addPublishedProjectId(journal.projectId)
+        // #649 评论 5565067997 修复 6：检查 addPublishedProjectId 返回值，失败时不清 journal
+        if (!stateStore.addPublishedProjectId(journal.projectId)) {
+            DiagnosticsLogger.w(TAG, "Recover promote: addPublishedProjectId failed, keeping journal for retry")
+            return
+        }
         // 标记所有 item 为 COMMITTED
         val committedItems = currentItems.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
         // #649 评论 5562715833 问题 4b：manifest 成功后先写 cleanup journal，再 recoverCleanupPhase
@@ -380,6 +431,7 @@ class ReadableMirrorPublisher(
                 manifestNewRef = manifestResult.newRef,
                 manifestBackupRef = manifestResult.backupOldRef,
                 isManifestCommitted = true,
+                manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
             )
         ) {
             DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
@@ -394,6 +446,7 @@ class ReadableMirrorPublisher(
                 manifestNewRef = manifestResult.newRef,
                 manifestBackupRef = manifestResult.backupOldRef,
                 isManifestCommitted = true,
+                manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
             ),
             storage,
         )
@@ -462,7 +515,11 @@ class ReadableMirrorPublisher(
                 //    allLiveKeys = null：DELETE_PROJECT 时 oldEntries 全部要删
                 if (cleanupCommittedTransaction(journal, storage, allLiveKeys = null)) {
                     // #649 评论 5564820566 问题 5：delete 成功后移除 publishedProjectId
-                    stateStore.removePublishedProjectId(journal.projectId)
+                    // #649 评论 5565067997 修复 6：检查 removePublishedProjectId 返回值
+                    if (!stateStore.removePublishedProjectId(journal.projectId)) {
+                        DiagnosticsLogger.w(TAG, "Recover cleanup: removePublishedProjectId failed for ${journal.projectId}, keeping journal")
+                        return
+                    }
                     stateStore.clearPendingPublish()
                 } else {
                     DiagnosticsLogger.w(TAG, "Recover cleanup: partial failure for DELETE_PROJECT ${journal.projectId}, keeping journal")
@@ -504,15 +561,24 @@ class ReadableMirrorPublisher(
         var allSuccess = true
         // 1. 每个 COMMITTED item 的 backupOldRef（oldRef 已被 backupCommitted 移走，不删 oldRef）
         //    #649 评论 5564379115 问题 3：只删 backupOldRef，不要同时删 oldRef（同一 MediaStore row）
+        //    #649 评论 5565067997 修复 5：用 lookup() 三态查询，Failed 时停止。
         for ((_, item) in journal.items) {
             try {
                 item.backupOldRef?.let { ref ->
-                    // 先 resolve 确认文件仍存在，不存在视为目标已达到（幂等）
-                    val resolved = storage.resolve(ref.relativePath)
-                    if (resolved != null) {
-                        if (!storage.delete(resolved)) allSuccess = false
+                    // #649 评论 5565067997 修复 5：用 lookup() 区分 Missing 和 Failed
+                    when (val lookupResult = storage.lookup(ref.relativePath)) {
+                        is MirrorLookupResult.Found -> {
+                            if (!storage.delete(lookupResult.ref)) allSuccess = false
+                        }
+                        is MirrorLookupResult.Missing -> {
+                            // 文件已不存在，目标已达到，视为成功
+                        }
+                        is MirrorLookupResult.Failed -> {
+                            // 查询失败，不能当 Missing，保留 journal
+                            DiagnosticsLogger.w(TAG, "cleanup: lookup backupOldRef failed ${ref.uri}: ${lookupResult.cause?.message}")
+                            allSuccess = false
+                        }
                     }
-                    // resolved == null：文件已不存在，目标已达到，视为成功
                 }
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "cleanup: failed to delete backupOldRef ${item.backupOldRef?.uri}", e)
@@ -520,14 +586,23 @@ class ReadableMirrorPublisher(
             }
         }
         // 2. 已删除章节的旧 ref（snapshot 中已不存在的旧 key）
-        //    先 resolve 确认文件存在再删，避免 MediaStore 同一条 row 被删两次
+        //    先 lookup 确认文件存在再删，避免 MediaStore 同一条 row 被删两次
+        //    #649 评论 5565067997 修复 5：用 lookup() 三态查询
         for ((key, entry) in journal.oldEntries) {
             val shouldDelete = allLiveKeys?.let { key !in it } ?: true
             if (shouldDelete) {
                 try {
-                    val resolved = storage.resolve(entry.relativePath)
-                    if (resolved != null) {
-                        if (!storage.delete(resolved)) allSuccess = false
+                    when (val lookupResult = storage.lookup(entry.relativePath)) {
+                        is MirrorLookupResult.Found -> {
+                            if (!storage.delete(lookupResult.ref)) allSuccess = false
+                        }
+                        is MirrorLookupResult.Missing -> {
+                            // 文件已不存在，目标已达到
+                        }
+                        is MirrorLookupResult.Failed -> {
+                            DiagnosticsLogger.w(TAG, "cleanup: lookup old entry failed ${entry.uri}: ${lookupResult.cause?.message}")
+                            allSuccess = false
+                        }
                     }
                 } catch (e: Exception) {
                     DiagnosticsLogger.w(TAG, "cleanup: failed to delete old entry ${entry.uri}", e)
@@ -546,11 +621,20 @@ class ReadableMirrorPublisher(
             }
         }
         // 3. manifestBackupRef（manifest 事务备份）
+        //    #649 评论 5565067997 修复 5：用 lookup() 三态查询
         try {
             journal.manifestBackupRef?.let { ref ->
-                val resolved = storage.resolve(ref.relativePath)
-                if (resolved != null) {
-                    if (!storage.delete(resolved)) allSuccess = false
+                when (val lookupResult = storage.lookup(ref.relativePath)) {
+                    is MirrorLookupResult.Found -> {
+                        if (!storage.delete(lookupResult.ref)) allSuccess = false
+                    }
+                    is MirrorLookupResult.Missing -> {
+                        // 文件已不存在，目标已达到
+                    }
+                    is MirrorLookupResult.Failed -> {
+                        DiagnosticsLogger.w(TAG, "cleanup: lookup manifestBackupRef failed ${ref.uri}: ${lookupResult.cause?.message}")
+                        allSuccess = false
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -707,6 +791,7 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = null,
                     manifestNewRef = null,
                     manifestBackupRef = null,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after stage")
@@ -753,14 +838,29 @@ class ReadableMirrorPublisher(
                 }
                 val oldRef = item.oldRef
                 // 1. 两步备份 old（如果有）
+                // #649 评论 5565067997 修复 1：用 STATE_BACKUP_READY / STATE_OLD_VACATED 显式状态
                 var oldVacated = false
-                if (oldRef != null) {
+                if (oldRef != null && item.state != PendingItem.STATE_OLD_VACATED) {
                     // 检查崩溃窗口：backup 已就绪但 vacate 未完成
                     val existingBackup = storage.resolveBackup(txId, oldRef.relativePath)
                     val backupReady = if (existingBackup != null) {
-                        // backup 已存在，检查 old 是否已 vacate
-                        oldVacated = storage.resolve(oldRef.relativePath) == null
-                        BackupReadyRef(backupRef = existingBackup, vacated = oldVacated)
+                        // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
+                        val oldLookup = storage.lookup(oldRef.relativePath)
+                        when (oldLookup) {
+                            is MirrorLookupResult.Missing -> {
+                                oldVacated = true
+                                BackupReadyRef(backupRef = existingBackup, vacated = true)
+                            }
+                            is MirrorLookupResult.Found -> {
+                                oldVacated = false
+                                BackupReadyRef(backupRef = existingBackup, vacated = false)
+                            }
+                            is MirrorLookupResult.Failed -> {
+                                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                                rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                                return MirrorPublishResult.RetryableFailure
+                            }
+                        }
                     } else {
                         val prepared = storage.prepareBackup(txId, oldRef, MIME_MARKDOWN)
                         if (prepared == null) {
@@ -771,8 +871,8 @@ class ReadableMirrorPublisher(
                         oldVacated = prepared.vacated
                         prepared
                     }
-                    // journal: STATE_BACKUP_READY（backup 就绪，old 可能还没 vacate）
-                    items[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_OLD_BACKED_UP)
+                    // #649 评论 5565067997 修复 1：journal 先写 STATE_BACKUP_READY
+                    items[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_BACKUP_READY)
                     if (!writePendingPublishJournal(
                             projectId = projectId,
                             transactionType = MirrorTransactionType.UPSERT_PROJECT,
@@ -789,6 +889,7 @@ class ReadableMirrorPublisher(
                             manifestStagedRef = null,
                             manifestNewRef = null,
                             manifestBackupRef = null,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
                         )
                     ) {
                         DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after backup prepare for ${key.chapterId}")
@@ -802,6 +903,31 @@ class ReadableMirrorPublisher(
                             rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
                             return MirrorPublishResult.RetryableFailure
                         }
+                    }
+                    // #649 评论 5565067997 修复 1：vacate 成功后写 STATE_OLD_VACATED
+                    items[key] = items[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
+                    if (!writePendingPublishJournal(
+                            projectId = projectId,
+                            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                            phase = PendingMirrorPublish.PHASE_PROMOTE,
+                            txId = txId,
+                            backend = stateStore.getBackend(),
+                            treeUri = stateStore.getTreeUri(),
+                            oldEntries = oldEntries,
+                            newEntries = desiredEntries,
+                            stagedRefs = stagedRefs,
+                            items = items,
+                            removedProjectIds = emptySet(),
+                            manifestOldRef = null,
+                            manifestStagedRef = null,
+                            manifestNewRef = null,
+                            manifestBackupRef = null,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                        )
+                    ) {
+                        DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after vacate for ${key.chapterId}")
+                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                        return MirrorPublishResult.RetryableFailure
                     }
                 }
                 // 2. promote staged（不删 old）
@@ -841,6 +967,7 @@ class ReadableMirrorPublisher(
                         manifestStagedRef = null,
                         manifestNewRef = null,
                         manifestBackupRef = null,
+                        manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
                     )
                 ) {
                     DiagnosticsLogger.w(
@@ -902,6 +1029,8 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = manifestResult.manifestStagedRef,
                     manifestNewRef = manifestResult.newRef,
                     manifestBackupRef = manifestResult.backupOldRef,
+                    isManifestCommitted = true,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup journal write failed, keeping journal for retry")
@@ -928,6 +1057,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = manifestResult.newRef,
                     manifestBackupRef = manifestResult.backupOldRef,
                     isManifestCommitted = true,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
                 )
             if (cleanupCommittedTransaction(cleanupJournal, storage, allLiveKeys = allKeys)) {
                 // 全部清理成功，清除 journal
@@ -994,6 +1124,7 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = null,
                     manifestNewRef = null,
                     manifestBackupRef = null,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
@@ -1058,6 +1189,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = manifestResult.newRef,
                     manifestBackupRef = manifestResult.backupOldRef,
                     isManifestCommitted = true,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup journal write failed, keeping journal for retry")
@@ -1090,10 +1222,15 @@ class ReadableMirrorPublisher(
                     manifestNewRef = manifestResult.newRef,
                     manifestBackupRef = manifestResult.backupOldRef,
                     isManifestCommitted = true,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
                 )
             if (cleanupCommittedTransaction(deleteCleanupJournal, storage, allLiveKeys = null)) {
                 // #649 评论 5564820566 问题 5：delete 成功后移除 publishedProjectId
-                stateStore.removePublishedProjectId(projectId)
+                // #649 评论 5565067997 修复 6：检查 removePublishedProjectId 返回值
+                if (!stateStore.removePublishedProjectId(projectId)) {
+                    DiagnosticsLogger.w(TAG, "Delete project $projectId: removePublishedProjectId failed, keeping journal for retry")
+                    return MirrorPublishResult.RetryableFailure
+                }
                 stateStore.clearPendingPublish()
             } else {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup partial failure, keeping journal for retry")
@@ -1218,6 +1355,7 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = journalContext.manifestStagedRef,
                     manifestNewRef = journalContext.manifestNewRef,
                     manifestBackupRef = journalContext.manifestBackupRef,
+                    manifestSwapState = journalContext.manifestSwapState,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "rollback: journal write failed at start")
@@ -1229,16 +1367,23 @@ class ReadableMirrorPublisher(
         // 逐项处理：每个 item 独立跟踪 rollback 进度，不靠 "final/backup 是否存在" 猜测。
 
         // 1. 幂等删除 promotedRef（跳过已处理的 item）
+        //    #649 评论 5565067997 修复 4：检查 delete() 返回值，失败时停止推进状态
         val currentItems = items.toMutableMap()
         for ((key, item) in currentItems.toMap()) {
             if (item.state == PendingItem.STATE_ROLLBACK_OLD_RESTORED) continue
             if (item.state == PendingItem.STATE_ROLLBACK_NEW_REMOVED) {
                 // 新内容已删，跳过删除步骤，直接进入恢复旧内容
             } else {
-                item.promotedRef?.let { storage.delete(it) }
+                // #649 评论 5565067997 修复 4：检查 delete() 返回值
+                val removed = item.promotedRef?.let { storage.delete(it) } ?: true
+                if (!removed) {
+                    // delete 失败：保留当前 rollback journal，停止
+                    DiagnosticsLogger.w(TAG, "rollback: delete promotedRef failed for ${key.chapterId}, keeping journal")
+                    return false
+                }
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
             }
-            // 更新 journal（记录 NEW_REMOVED）
+            // 更新. journal（记录 NEW_REMOVED）
             if (journalContext != null) {
                 if (!writePendingPublishJournal(
                         projectId = journalContext.projectId,
@@ -1256,6 +1401,7 @@ class ReadableMirrorPublisher(
                         manifestStagedRef = journalContext.manifestStagedRef,
                         manifestNewRef = journalContext.manifestNewRef,
                         manifestBackupRef = journalContext.manifestBackupRef,
+                        manifestSwapState = journalContext.manifestSwapState,
                     )
                 ) {
                     DiagnosticsLogger.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
@@ -1292,6 +1438,7 @@ class ReadableMirrorPublisher(
                             manifestStagedRef = journalContext.manifestStagedRef,
                             manifestNewRef = journalContext.manifestNewRef,
                             manifestBackupRef = journalContext.manifestBackupRef,
+                            manifestSwapState = journalContext.manifestSwapState,
                         )
                     }
                     return false
@@ -1316,6 +1463,7 @@ class ReadableMirrorPublisher(
                         manifestStagedRef = journalContext.manifestStagedRef,
                         manifestNewRef = journalContext.manifestNewRef,
                         manifestBackupRef = journalContext.manifestBackupRef,
+                        manifestSwapState = journalContext.manifestSwapState,
                     )
                 ) {
                     DiagnosticsLogger.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
@@ -1325,36 +1473,62 @@ class ReadableMirrorPublisher(
         }
 
         // 3. 全部旧正文恢复成功
-        //    #649 评论 5564820566 问题 1：先恢复 manifest backup → 确认最终路径已腾空 →
-        //    删 new manifest → setManifestUri → rollback(txId) → clearPendingPublish
-        //    任何一步失败都保留 journal，不继续清 staging。
-        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
-        val manifestRestored = journalContext?.manifestBackupRef?.let { backup ->
-            val restoredRef = storage.restoreBackup(backup, manifestRelativePath, MIME_JSON)
-            if (restoredRef != null) {
-                // 删 manifest final（已被 promote 覆盖的旧 final）
-                storage.resolve(manifestRelativePath)?.let { storage.delete(it) }
-                if (!stateStore.setManifestUri(restoredRef.uri)) {
-                    DiagnosticsLogger.w(TAG, "rollback: setManifestUri failed after restoring manifest backup")
-                    null // 标记失败
-                } else {
-                    restoredRef
-                }
-            } else {
-                DiagnosticsLogger.w(TAG, "rollback: failed to restore manifest backup")
-                null
-            }
-        }
-
-        // 只有 manifest 恢复成功（或不需要恢复）才继续清理
-        if (journalContext?.manifestBackupRef != null && manifestRestored == null) {
-            // manifest 恢复失败，保留 journal
+        //    #649 评论 5565067997 修复 3：manifest rollback 顺序修正。
+        //    正确顺序：1.先删 manifestNewRef → 2.final 腾空 → 3.restoreBackup →
+        //    4.setManifestUri → 5.清 staging。
+        //    不再先 restoreBackup 再 resolve(final).delete()（会删掉刚恢复的旧 manifest）。
+        if (!rollbackManifest(journalContext, storage)) {
             return false
         }
 
         // 4. rollback(txId) 删 staging（backup 已不在 staging 内）
         storage.rollback(txId)
         stateStore.clearPendingPublish()
+        return true
+    }
+
+    /**
+     * Manifest rollback helper（#649 评论 5565067997 修复 3）。
+     *
+     * 正确顺序：
+     * 1. 如果 manifestNewRef 已 promote，先删除精确的 manifestNewRef，并确认成功
+     * 2. final 名字腾空
+     * 3. restoreBackup(old manifest)
+     * 4. 拿 restoredRef
+     * 5. setManifestUri(restoredRef.uri)，失败则保留 rollback journal
+     *
+     * 恢复旧 manifest 后绝对不能再 resolve(final).delete()。
+     * [rollbackWholePublishTransaction] 和 [recoverRollbackPhase] 共用此 helper。
+     *
+     * @return true 表示 manifest rollback 成功（或不需要 rollback）；false 表示失败
+     */
+    private fun rollbackManifest(
+        journalContext: PendingMirrorPublish?,
+        storage: ReadableMirrorStorage,
+    ): Boolean {
+        val backup = journalContext?.manifestBackupRef ?: return true
+        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
+        // 1. 先删 manifestNewRef（如果已 promote）
+        //    #649 评论 5565067997 修复 3：先删 new manifest，腾空 final，再 restoreBackup。
+        val manifestNewRef = journalContext.manifestNewRef
+        if (manifestNewRef != null) {
+            val newRemoved = storage.delete(manifestNewRef)
+            if (!newRemoved) {
+                DiagnosticsLogger.w(TAG, "rollback manifest: delete manifestNewRef failed")
+                return false
+            }
+        }
+        // 2. restoreBackup(old manifest) → 拿 restoredRef
+        val restoredRef = storage.restoreBackup(backup, manifestRelativePath, MIME_JSON)
+        if (restoredRef == null) {
+            DiagnosticsLogger.w(TAG, "rollback manifest: failed to restore manifest backup")
+            return false
+        }
+        // 3. setManifestUri(restoredRef.uri)，失败则保留 rollback journal
+        if (!stateStore.setManifestUri(restoredRef.uri)) {
+            DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed after restoring manifest backup")
+            return false
+        }
         return true
     }
 
@@ -1376,10 +1550,16 @@ class ReadableMirrorPublisher(
         var allSuccess = true
 
         // 步骤 1：删除 promotedRef（幂等，跳过已处理的 item）
+        // #649 评论 5565067997 修复 4：检查 delete() 返回值，失败时停止推进状态
         for ((key, item) in currentItems.toMap()) {
             if (item.state == PendingItem.STATE_ROLLBACK_OLD_RESTORED) continue
             if (item.state != PendingItem.STATE_ROLLBACK_NEW_REMOVED) {
-                item.promotedRef?.let { storage.delete(it) }
+                // #649 评论 5565067997 修复 4：检查 delete() 返回值
+                val removed = item.promotedRef?.let { storage.delete(it) } ?: true
+                if (!removed) {
+                    DiagnosticsLogger.w(TAG, "Recover rollback: delete promotedRef failed for ${key.chapterId}, keeping journal")
+                    return
+                }
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
             }
             // 更新 journal
@@ -1399,6 +1579,7 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = journal.manifestStagedRef,
                     manifestNewRef = journal.manifestNewRef,
                     manifestBackupRef = journal.manifestBackupRef,
+                    manifestSwapState = journal.manifestSwapState,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
@@ -1438,6 +1619,7 @@ class ReadableMirrorPublisher(
                         manifestStagedRef = journal.manifestStagedRef,
                         manifestNewRef = journal.manifestNewRef,
                         manifestBackupRef = journal.manifestBackupRef,
+                        manifestSwapState = journal.manifestSwapState,
                     )
                 ) {
                     DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
@@ -1452,13 +1634,10 @@ class ReadableMirrorPublisher(
         }
 
         // 步骤 3：恢复 manifest
-        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
-        journal.manifestBackupRef?.let { backup ->
-            val restoredRef = storage.restoreBackup(backup, manifestRelativePath, MIME_JSON)
-            if (restoredRef != null) {
-                storage.resolve(manifestRelativePath)?.let { storage.delete(it) }
-                stateStore.setManifestUri(restoredRef.uri)
-            }
+        //    #649 评论 5565067997 修复 3：共用 rollbackManifest helper，正确顺序。
+        if (!rollbackManifest(journal, storage)) {
+            DiagnosticsLogger.w(TAG, "Recover rollback: manifest rollback failed, keeping journal")
+            return
         }
         storage.rollback(journal.txId)
         stateStore.clearPendingPublish()
@@ -1573,6 +1752,7 @@ class ReadableMirrorPublisher(
         manifestNewRef: MirrorFileRef?,
         manifestBackupRef: MirrorFileRef?,
         isManifestCommitted: Boolean = false,
+        manifestSwapState: ManifestTransactionState = ManifestTransactionState.MANIFEST_STAGED,
     ): Boolean {
         val journal =
             PendingMirrorPublish(
@@ -1592,6 +1772,7 @@ class ReadableMirrorPublisher(
                 manifestNewRef = manifestNewRef,
                 manifestBackupRef = manifestBackupRef,
                 isManifestCommitted = isManifestCommitted,
+                manifestSwapState = manifestSwapState,
             )
         return stateStore.writePendingPublish(journal.toJson())
     }
@@ -1733,7 +1914,7 @@ class ReadableMirrorPublisher(
                 mimeType = MIME_JSON,
                 text = json,
             ) ?: return null
-        // 写 journal：记录 manifestStagedRef
+        // 写 journal：记录 manifestStagedRef，状态 = MANIFEST_STAGED
         // #649 评论 5563333323 缺口 2：journal 写入失败则停止
         if (!writeManifestJournal(
                 journalContext = journalContext,
@@ -1742,81 +1923,132 @@ class ReadableMirrorPublisher(
                 manifestNewRef = journalContext.manifestNewRef,
                 manifestBackupRef = journalContext.manifestBackupRef,
                 isManifestCommitted = false,
+                manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
             )
         ) {
             storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
             return null
         }
         // 2. 备份旧 manifest（如果存在）
-        //    #649 评论 5564379115 问题 6：manifest 也要走同一套 backupCommitted/restoreBackup swap，
-        //    且处理崩溃窗口。
-        //    #649 评论 5564624383 问题 4：backup 和 final 同时存在是"旧 manifest 已进 backup，
-        //    新 manifest 已 promote，但 journal 还没写完"的典型崩溃窗口。
-        //    此时应该：保留 backup → 把现有 final 当成已经 promote 的 new manifest →
-        //    journal 写 manifestNewRef=finalRef + manifestBackupRef=backup → 继续 setManifestUri/commit。
-        //    不能删 backup，也不能再 promote 一份同名 manifest（MediaStore 会出现两条同路径记录）。
+        //    #649 评论 5565067997 修复 2：用 manifestSwapState 显式状态机，
+        //    不再根据 "backup/final 是否同时存在" 猜 final 是旧还是新。
         val oldUri = journalContext.manifestNewRef?.uri ?: stateStore.getManifestUri()
         val oldRef = oldUri?.let { MirrorFileRef(uri = it, relativePath = manifestRelativePath) }
         var manifestBackupRef: MirrorFileRef? = null
 
-        // #649 评论 5564379115 问题 6 + #649 评论 5564624383 问题 4：
-        // 检查崩溃窗口 — backup 已存在于备份目录
+        // #649 评论 5565067997 修复 2：根据 journalContext.manifestSwapState 决定从哪一步继续。
+        // 不再用 "backup + final 同时存在" 猜测，而是看 journal 记录的显式状态。
+        val resumeState = journalContext.manifestSwapState
         val existingBackup = storage.resolveBackup(txId, manifestRelativePath)
         if (existingBackup != null) {
-            // backup 已存在（backupCommitted 已执行但 journal 未更新）
             manifestBackupRef = existingBackup
-            // 检查 final 是否也存在（崩溃在 promote 成功 + journal 未写完之间）
-            val existingFinal = storage.resolve(manifestRelativePath)
-            if (existingFinal != null) {
-                // final 和 backup 同时存在：旧 manifest 已进 backup，新 manifest 已 promote。
-                // 保留 backup 用于 rollback，把 final 当作已 promote 的 new manifest。
-                // 跳过 promote 步骤，直接继续 setManifestUri。
-                if (!writeManifestJournal(
+            // backup 已存在。根据 journal 的 manifestSwapState 决定下一步：
+            // - MANIFEST_BACKUP_READY：backup 就绪，old 可能还没 vacate → 需 vacate
+            // - MANIFEST_OLD_VACATED：old 已腾空 → 需 promote
+            // - MANIFEST_PROMOTED：已 promote → 需 setManifestUri
+            // - MANIFEST_COMMITTED：已提交 → 直接返回
+            when (resumeState) {
+                ManifestTransactionState.MANIFEST_COMMITTED -> {
+                    // 已提交，final 就是 new manifest
+                    val existingFinal = storage.resolve(manifestRelativePath)
+                    if (existingFinal != null) {
+                        return ManifestTransactionResult(
+                            newRef = existingFinal,
+                            manifestOldRef = oldRef,
+                            manifestStagedRef = staged,
+                            backupOldRef = manifestBackupRef,
+                        )
+                    }
+                    // final 不存在但状态是 COMMITTED → 数据异常，回滚
+                    DiagnosticsLogger.w(TAG, "Manifest transaction: COMMITTED but final missing, rolling back")
+                    storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                    return null
+                }
+                ManifestTransactionState.MANIFEST_PROMOTED -> {
+                    // 已 promote，继续 setManifestUri
+                    val existingFinal = storage.resolve(manifestRelativePath)
+                    if (existingFinal == null) {
+                        DiagnosticsLogger.w(TAG, "Manifest transaction: PROMOTED but final missing")
+                        storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                        return null
+                    }
+                    if (!stateStore.setManifestUri(existingFinal.uri)) {
+                        DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (resume PROMOTED)")
+                        return null
+                    }
+                    writeManifestJournal(
                         journalContext = journalContext,
                         items = items,
                         manifestStagedRef = staged,
                         manifestNewRef = existingFinal,
                         manifestBackupRef = manifestBackupRef,
-                        isManifestCommitted = false,
+                        isManifestCommitted = true,
+                        manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
                     )
-                ) {
-                    storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
-                    return null
+                    return ManifestTransactionResult(
+                        newRef = existingFinal,
+                        manifestOldRef = oldRef,
+                        manifestStagedRef = staged,
+                        backupOldRef = manifestBackupRef,
+                    )
                 }
-                // 跳到 setManifestUri（步骤 4），不走 promote
-                if (!stateStore.setManifestUri(existingFinal.uri)) {
-                    DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (crash window recovery)")
-                    return null
+                ManifestTransactionState.MANIFEST_OLD_VACATED -> {
+                    // old 已腾空，继续 promote
+                    if (!writeManifestJournal(
+                            journalContext = journalContext,
+                            items = items,
+                            manifestStagedRef = staged,
+                            manifestNewRef = null,
+                            manifestBackupRef = manifestBackupRef,
+                            isManifestCommitted = false,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
+                        )
+                    ) {
+                        storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                        return null
+                    }
+                    // 跳到 promote 步骤
                 }
-                // 写 journal：isManifestCommitted = true
-                writeManifestJournal(
-                    journalContext = journalContext,
-                    items = items,
-                    manifestStagedRef = staged,
-                    manifestNewRef = existingFinal,
-                    manifestBackupRef = manifestBackupRef,
-                    isManifestCommitted = true,
-                )
-                return ManifestTransactionResult(
-                    newRef = existingFinal,
-                    manifestOldRef = oldRef,
-                    manifestStagedRef = staged,
-                    backupOldRef = manifestBackupRef,
-                )
-            }
-            // final 不存在 + backup 存在 → backup 已完成，可以继续 promote
-            // 写 journal：记录已检测到的 manifestBackupRef
-            if (!writeManifestJournal(
-                    journalContext = journalContext,
-                    items = items,
-                    manifestStagedRef = staged,
-                    manifestNewRef = null,
-                    manifestBackupRef = manifestBackupRef,
-                    isManifestCommitted = false,
-                )
-            ) {
-                storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
-                return null
+                else -> {
+                    // MANIFEST_STAGED 或 MANIFEST_BACKUP_READY：backup 就绪，需 vacate old
+                    // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
+                    if (oldRef != null) {
+                        val oldLookup = storage.lookup(oldRef.relativePath)
+                        when (oldLookup) {
+                            is MirrorLookupResult.Found -> {
+                                // old 还在 final，需 vacate
+                                if (!storage.vacateCommitted(oldRef)) {
+                                    DiagnosticsLogger.w(TAG, "Manifest transaction: vacate failed (resume BACKUP_READY)")
+                                    storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                                    return null
+                                }
+                            }
+                            is MirrorLookupResult.Missing -> {
+                                // old 已腾空，无需再 vacate
+                            }
+                            is MirrorLookupResult.Failed -> {
+                                // 查询失败，不能继续
+                                DiagnosticsLogger.w(TAG, "Manifest transaction: lookup old failed (resume BACKUP_READY): ${oldLookup.cause?.message}")
+                                storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                                return null
+                            }
+                        }
+                    }
+                    // 写 journal：MANIFEST_OLD_VACATED
+                    if (!writeManifestJournal(
+                            journalContext = journalContext,
+                            items = items,
+                            manifestStagedRef = staged,
+                            manifestNewRef = null,
+                            manifestBackupRef = manifestBackupRef,
+                            isManifestCommitted = false,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
+                        )
+                    ) {
+                        storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                        return null
+                    }
+                }
             }
         } else if (oldRef != null) {
             // #649 评论 5564820566 问题 3：manifest 也用两步 prepareBackup + vacateCommitted
@@ -1827,6 +2059,20 @@ class ReadableMirrorPublisher(
                 return null
             }
             manifestBackupRef = prepared.backupRef
+            // 写 journal：MANIFEST_BACKUP_READY
+            if (!writeManifestJournal(
+                    journalContext = journalContext,
+                    items = items,
+                    manifestStagedRef = staged,
+                    manifestNewRef = null,
+                    manifestBackupRef = manifestBackupRef,
+                    isManifestCommitted = false,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_BACKUP_READY,
+                )
+            ) {
+                storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                return null
+            }
             // vacate old（如果 prepareBackup 还没 move old）
             if (!prepared.vacated) {
                 if (!storage.vacateCommitted(oldRef)) {
@@ -1835,7 +2081,7 @@ class ReadableMirrorPublisher(
                     return null
                 }
             }
-            // 写 journal：记录 manifestBackupRef
+            // 写 journal：MANIFEST_OLD_VACATED
             if (!writeManifestJournal(
                     journalContext = journalContext,
                     items = items,
@@ -1843,6 +2089,7 @@ class ReadableMirrorPublisher(
                     manifestNewRef = null,
                     manifestBackupRef = manifestBackupRef,
                     isManifestCommitted = false,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
                 )
             ) {
                 // journal 失败：恢复 backup 到最终位置，删 staging
@@ -1852,56 +2099,66 @@ class ReadableMirrorPublisher(
             }
         }
         // 3. promote 新 manifest（promoteStaged 不删旧 manifest，旧 manifest 已由 backupCommitted 移走）
-        val newRef = storage.promoteStaged(staged, manifestRelativePath)
-        if (newRef == null) {
-            // promote 失败：恢复 backup（如果有），删 staging
-            manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
-            storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
-            return null
-        }
-        // 写 journal：记录 manifestNewRef, manifestBackupRef
-        if (!writeManifestJournal(
-                journalContext = journalContext,
-                items = items,
-                manifestStagedRef = staged,
-                manifestNewRef = newRef,
-                manifestBackupRef = manifestBackupRef,
-                isManifestCommitted = false,
-            )
+        //    只有 MANIFEST_OLD_VACATED 状态才允许 promote
+        if (resumeState != ManifestTransactionState.MANIFEST_PROMOTED &&
+            resumeState != ManifestTransactionState.MANIFEST_COMMITTED
         ) {
-            // journal 写失败：删新 manifest，恢复 backup（如果有）
-            storage.delete(newRef)
-            manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
-            return null
-        }
-        // 4. setManifestUri
-        //    #649 评论 5563333323 缺口 2：setManifestUri 返回 Boolean
-        if (!stateStore.setManifestUri(newRef.uri)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed")
-            storage.delete(newRef)
-            manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
-            return null
-        }
-        // 写 journal：isManifestCommitted = true
-        if (!writeManifestJournal(
-                journalContext = journalContext,
-                items = items,
+            val newRef = storage.promoteStaged(staged, manifestRelativePath)
+            if (newRef == null) {
+                // promote 失败：恢复 backup（如果有），删 staging
+                manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
+                storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                return null
+            }
+            // 写 journal：MANIFEST_PROMOTED
+            if (!writeManifestJournal(
+                    journalContext = journalContext,
+                    items = items,
+                    manifestStagedRef = staged,
+                    manifestNewRef = newRef,
+                    manifestBackupRef = manifestBackupRef,
+                    isManifestCommitted = false,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_PROMOTED,
+                )
+            ) {
+                // journal 写失败：删新 manifest，恢复 backup（如果有）
+                storage.delete(newRef)
+                manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
+                return null
+            }
+            // 4. setManifestUri
+            //    #649 评论 5563333323 缺口 2：setManifestUri 返回 Boolean
+            if (!stateStore.setManifestUri(newRef.uri)) {
+                DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed")
+                storage.delete(newRef)
+                manifestBackupRef?.let { storage.restoreBackup(it, manifestRelativePath, MIME_JSON) }
+                return null
+            }
+            // 写 journal：MANIFEST_COMMITTED
+            if (!writeManifestJournal(
+                    journalContext = journalContext,
+                    items = items,
+                    manifestStagedRef = staged,
+                    manifestNewRef = newRef,
+                    manifestBackupRef = manifestBackupRef,
+                    isManifestCommitted = true,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                )
+            ) {
+                // journal 写失败：manifest 已 setManifestUri，但 MANIFEST_COMMITTED 未落盘。
+                // 返回成功让调用方继续；下次 recover 会发现状态不是 COMMITTED 重做。
+                DiagnosticsLogger.w(TAG, "Manifest transaction: MANIFEST_COMMITTED journal write failed")
+            }
+            return ManifestTransactionResult(
+                newRef = newRef,
+                manifestOldRef = oldRef,
                 manifestStagedRef = staged,
-                manifestNewRef = newRef,
-                manifestBackupRef = manifestBackupRef,
-                isManifestCommitted = true,
+                backupOldRef = manifestBackupRef,
             )
-        ) {
-            // journal 写失败：manifest 已 setManifestUri，但 isManifestCommitted 未落盘。
-            // 返回成功让调用方继续；下次 recover 会发现 isManifestCommitted=false 重做。
-            DiagnosticsLogger.w(TAG, "Manifest transaction: isManifestCommitted journal write failed")
         }
-        return ManifestTransactionResult(
-            newRef = newRef,
-            manifestOldRef = oldRef,
-            manifestStagedRef = staged,
-            backupOldRef = manifestBackupRef,
-        )
+        // resumeState 是 PROMOTED 或 COMMITTED 时已在上面 return，不应到达此处
+        DiagnosticsLogger.w(TAG, "Manifest transaction: unexpected resumeState=$resumeState with existingBackup")
+        return null
     }
 
     /**
@@ -1917,6 +2174,7 @@ class ReadableMirrorPublisher(
         manifestNewRef: MirrorFileRef?,
         manifestBackupRef: MirrorFileRef?,
         isManifestCommitted: Boolean,
+        manifestSwapState: ManifestTransactionState,
     ): Boolean {
         return writePendingPublishJournal(
             projectId = journalContext.projectId,
@@ -1935,6 +2193,7 @@ class ReadableMirrorPublisher(
             manifestNewRef = manifestNewRef,
             manifestBackupRef = manifestBackupRef,
             isManifestCommitted = isManifestCommitted,
+            manifestSwapState = manifestSwapState,
         )
     }
 

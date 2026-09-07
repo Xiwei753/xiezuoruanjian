@@ -286,9 +286,13 @@ class MirrorTransactionStateTest {
 
     @Test
     fun pendingItem_jsonRoundTrip_allStates() {
+        // #649 评论 5565067997 修复 1：新增 STATE_BACKUP_READY / STATE_OLD_VACATED，
+        // 旧 STATE_OLD_BACKED_UP 反序列化时映射到 STATE_BACKUP_READY（normalizeState）。
         val states = listOf(
             PendingItem.STATE_STAGED,
-            PendingItem.STATE_OLD_BACKED_UP,
+            PendingItem.STATE_BACKUP_READY,
+            PendingItem.STATE_OLD_VACATED,
+            PendingItem.STATE_OLD_BACKED_UP, // 旧状态，round-trip 后映射到 STATE_BACKUP_READY
             PendingItem.STATE_PROMOTED,
             PendingItem.STATE_COMMITTED,
         )
@@ -327,7 +331,9 @@ class MirrorTransactionStateTest {
             val restored = PendingMirrorPublish.fromJson(json)!!
             val restoredItem = restored.items[key]!!
 
-            assertEquals("State $state should round-trip", state, restoredItem.state)
+            // #649 评论 5565067997 修复 1：STATE_OLD_BACKED_UP 反序列化映射到 STATE_BACKUP_READY
+            val expectedState = PendingItem.normalizeState(state)
+            assertEquals("State $state should round-trip (normalized: $expectedState)", expectedState, restoredItem.state)
             assertEquals("stagedRef should round-trip", staged.stagingUri, restoredItem.stagedRef?.stagingUri)
             assertEquals("oldRef should round-trip", "content://old", restoredItem.oldRef?.uri)
         }
@@ -860,6 +866,16 @@ class MirrorTransactionStateTest {
                 }
             }
             return null
+        }
+
+        // #649 评论 5565067997 修复 5：实现 lookup() 三态查询
+        override fun lookup(relativePath: String): MirrorLookupResult {
+            val resolved = resolve(relativePath)
+            return if (resolved != null) {
+                MirrorLookupResult.Found(resolved)
+            } else {
+                MirrorLookupResult.Missing
+            }
         }
 
         override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {

@@ -411,6 +411,48 @@ class DocumentTreeMirrorStorage(
         return resolveInTree(relativePath, treeUri)
     }
 
+    /**
+     * 三态查询实现（#649 评论 5565067997 修复 5）。
+     *
+     * - 后端不可用 → [MirrorLookupResult.Failed]（不静默当 Missing）
+     * - 查询成功且找到文件 → [MirrorLookupResult.Found]
+     * - 查询成功但路径不存在/无匹配 → [MirrorLookupResult.Missing]
+     * - 查询抛异常（SecurityException / IOException / provider 异常）→ [MirrorLookupResult.Failed]
+     */
+    override fun lookup(relativePath: String): MirrorLookupResult {
+        if (!isSupported()) {
+            return MirrorLookupResult.Failed(IllegalStateException("DocumentTree backend not supported"))
+        }
+        val parent = relativePath.substringBeforeLast('/', "")
+        val displayName = relativePath.substringAfterLast('/')
+        // 先定位父目录
+        val dirUri = if (parent.isBlank()) treeUri else findDirectory(parent)
+        if (dirUri == null) {
+            // findDirectory 返回 null 可能是"路径不存在"或"查询失败"。
+            // 为安全起见，视为 Failed（不静默当 Missing），因为 findDirectory 内部吞了异常。
+            // 但若 parent 各级确实不存在，也属于 Missing。这里用 isSupported() 再校验一次
+            // 区分：若 treeUri 仍可访问但中间目录不存在 → Missing；否则 Failed。
+            return if (isSupported()) {
+                MirrorLookupResult.Missing
+            } else {
+                MirrorLookupResult.Failed(IllegalStateException("treeUri not accessible while locating parent"))
+            }
+        }
+        return try {
+            val children = documentTreeReader.listChildren(dirUri)
+            val match = children.find { !it.isDirectory && it.name == displayName }
+            if (match != null) {
+                MirrorLookupResult.Found(MirrorFileRef(uri = match.uri.toString(), relativePath = relativePath))
+            } else {
+                MirrorLookupResult.Missing
+            }
+        } catch (e: SecurityException) {
+            MirrorLookupResult.Failed(e)
+        } catch (e: Exception) {
+            MirrorLookupResult.Failed(e)
+        }
+    }
+
     override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
         if (!isSupported()) return null
         // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。

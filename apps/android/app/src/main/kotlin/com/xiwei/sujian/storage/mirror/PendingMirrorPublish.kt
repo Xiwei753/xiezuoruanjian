@@ -4,6 +4,41 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
+ * manifest 事务的显式 swap 状态（#649 评论 5565067997 修复 2）。
+ *
+ * 旧实现用 `isManifestCommitted: Boolean` 单布尔值，在 `existingBackup != null` 且
+ * `existingFinal != null` 时直接把 final 当成"已经 promote 的新 manifest"提交。
+ * 但拆成 prepareBackup() + vacateCommitted() 后，"backup + final 同时存在"是
+ * fallback copy 正常的中间状态（backup 已复制好，old manifest 还在 final，还没 vacate）。
+ *
+ * 新状态机：
+ * - [MANIFEST_STAGED]：新 manifest 已 stage，old 还在 final。
+ * - [MANIFEST_BACKUP_READY]：old manifest 已备份（backup 就绪），old 可能还没 vacate。
+ * - [MANIFEST_OLD_VACATED]：old manifest 已从 final 腾空，可以 promote 新 manifest。
+ * - [MANIFEST_PROMOTED]：新 manifest 已 promote 到 final，setManifestUri 已调用。
+ * - [MANIFEST_COMMITTED]：manifest 事务完全提交（isManifestCommitted=true 的等价）。
+ *
+ * 旧 journal 没有 manifestSwapState 字段，反序列化时根据 isManifestCommitted 推导：
+ * - isManifestCommitted=true → MANIFEST_COMMITTED
+ * - isManifestCommitted=false + manifestNewRef != null → MANIFEST_PROMOTED
+ * - isManifestCommitted=false + manifestBackupRef != null → MANIFEST_BACKUP_READY
+ * - 其他 → MANIFEST_STAGED
+ */
+enum class ManifestTransactionState(val journalValue: String) {
+    MANIFEST_STAGED("STAGED"),
+    MANIFEST_BACKUP_READY("BACKUP_READY"),
+    MANIFEST_OLD_VACATED("OLD_VACATED"),
+    MANIFEST_PROMOTED("PROMOTED"),
+    MANIFEST_COMMITTED("COMMITTED"),
+    ;
+
+    companion object {
+        fun fromJournalValue(value: String): ManifestTransactionState =
+            entries.find { it.journalValue == value } ?: MANIFEST_STAGED
+    }
+}
+
+/**
  * 镜像事务类型。
  *
  * #649 评论 5562462046 问题 4：deleteProject() 的 pending 恢复逻辑错误。
@@ -22,15 +57,19 @@ enum class MirrorTransactionType {
  * 进程死在第 N 章时恢复不了。每个章节独立记录已推进到哪一步，
  * 恢复时只继续未完成的 item。
  *
+ * #649 评论 5565067997 修复 1：状态机增加 [STATE_BACKUP_READY] / [STATE_OLD_VACATED]
+ * 两个独立中间状态，把"backup 已准备"和"old 已腾空"分开。
+ *
  * @property key 章节定位。
  * @property stagedRef 已 stage 的暂存引用（STAGED 及之后非空）。
  * @property oldRef 旧引用（可为 null，表示新建）。
- * @property backupOldRef 旧正文备份引用（OLD_BACKED_UP 及之后非空，用于回滚）。
+ * @property backupOldRef 旧正文备份引用（BACKUP_READY 及之后非空，用于回滚）。
  *   当前实现中 promote 走真正 swap（不先删 old），backupOldRef 主要用于
  *   journal 记录"old 已被替换"这一事实，恢复时据此跳过重复 promote。
  * @property promotedRef promote 后的新引用（PROMOTED 及之后非空）。
- * @property state 推进状态：[STATE_STAGED] / [STATE_OLD_BACKED_UP] /
- *   [STATE_PROMOTED] / [STATE_COMMITTED]。
+ * @property state 推进状态：[STATE_STAGED] / [STATE_BACKUP_READY] /
+ *   [STATE_OLD_VACATED] / [STATE_PROMOTED] / [STATE_COMMITTED]。
+ *   旧 journal 的 [STATE_OLD_BACKED_UP] 反序列化时映射到 [STATE_BACKUP_READY]。
  */
 data class PendingItem(
     val key: ChapterKey,
@@ -42,13 +81,41 @@ data class PendingItem(
 ) {
     companion object {
         const val STATE_STAGED = "STAGED"
-        const val STATE_OLD_BACKED_UP = "OLD_BACKED_UP"
+        /**
+         * backup 已就绪，old 可能还没 vacate（#649 评论 5565067997 修复 1）。
+         *
+         * prepareBackup() 只复制/移动 old 到 backup，old 可能仍在 final（fallback copy 路径）。
+         * 恢复时看到此状态需检查 old 是否已 vacate，未 vacate 则继续 vacateCommitted()。
+         */
+        const val STATE_BACKUP_READY = "BACKUP_READY"
+        /**
+         * old 已从 final 腾空，可以 promote（#649 评论 5565067997 修复 1）。
+         *
+         * vacateCommitted() 成功后写入此状态。只有此状态才允许 promoteStaged()。
+         */
+        const val STATE_OLD_VACATED = "OLD_VACATED"
         const val STATE_PROMOTED = "PROMOTED"
         const val STATE_COMMITTED = "COMMITTED"
+        /**
+         * 旧状态：backup 已准备 + old 已腾空揉成一个（向后兼容）。
+         *
+         * #649 评论 5565067997 修复 1：保留此常量仅用于反序列化旧 journal，
+         * 新代码不再写入此状态。旧 journal 反序列化时映射到 [STATE_BACKUP_READY]
+         * （因为旧状态语义上等价于"backup 已就绪"，old 是否已 vacate 需恢复时检查）。
+         */
+        const val STATE_OLD_BACKED_UP = "OLD_BACKED_UP"
         // #649 评论 5564820566 问题 2：rollback 和 recovery 共用同一套显式状态机，
         // 不再根据 "final/backup 是否存在" 猜测文件是新版还是旧版。
         const val STATE_ROLLBACK_NEW_REMOVED = "ROLLBACK_NEW_REMOVED"
         const val STATE_ROLLBACK_OLD_RESTORED = "ROLLBACK_OLD_RESTORED"
+
+        /**
+         * 把旧 journal 的 [STATE_OLD_BACKED_UP] 映射到 [STATE_BACKUP_READY]（#649 评论 5565067997 修复 1）。
+         *
+         * 新代码不再写入 [STATE_OLD_BACKED_UP]，但反序列化旧 journal 时需映射到新状态机。
+         */
+        fun normalizeState(state: String): String =
+            if (state == STATE_OLD_BACKED_UP) STATE_BACKUP_READY else state
     }
 }
 
@@ -108,6 +175,10 @@ data class PendingMirrorPublish(
     val manifestNewRef: MirrorFileRef?,
     val manifestBackupRef: MirrorFileRef?,
     val isManifestCommitted: Boolean = false,
+    // #649 评论 5565067997 修复 2：manifest 事务显式 swap 状态。
+    // 替代 isManifestCommitted: Boolean 单布尔值，区分 backup_ready / old_vacated / promoted / committed。
+    // 旧 journal 没有此字段，反序列化时根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
+    val manifestSwapState: ManifestTransactionState = ManifestTransactionState.MANIFEST_STAGED,
     // #649 评论 5564820566 问题 5：零章节作品也需要独立 project 状态。
     // 正常 UPSERT 事务中记录本次要 publish 的 projectId 集合（含子项目），
     // DELETE 事务中记录被删的 projectId。恢复时据此维护 publishedProjectIds。
@@ -132,6 +203,8 @@ data class PendingMirrorPublish(
         if (manifestNewRef != null) root.put(KEY_MANIFEST_NEW_REF, encodeFileRef(manifestNewRef))
         if (manifestBackupRef != null) root.put(KEY_MANIFEST_BACKUP_REF, encodeFileRef(manifestBackupRef))
         root.put(KEY_IS_MANIFEST_COMMITTED, isManifestCommitted)
+        // #649 评论 5565067997 修复 2：持久化 manifestSwapState
+        root.put(KEY_MANIFEST_SWAP_STATE, manifestSwapState.journalValue)
         if (affectedProjectIds.isNotEmpty()) {
             root.put(KEY_AFFECTED_PROJECT_IDS, JSONArray(affectedProjectIds.toList()))
         }
@@ -174,6 +247,7 @@ data class PendingMirrorPublish(
         private const val KEY_PROMOTED_REF = "promotedRef"
         private const val KEY_STATE = "state"
         private const val KEY_IS_MANIFEST_COMMITTED = "isManifestCommitted"
+        private const val KEY_MANIFEST_SWAP_STATE = "manifestSwapState"
         private const val KEY_AFFECTED_PROJECT_IDS = "affectedProjectIds"
 
         /** 从 [ReadableMirrorStateStore.readPendingPublish] 的 JSON 字符串反序列化。 */
@@ -197,6 +271,13 @@ data class PendingMirrorPublish(
                 val manifestBackupRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_BACKUP_REF))
                 val isManifestCommitted = root.optBoolean(KEY_IS_MANIFEST_COMMITTED, false)
                 val affectedProjectIds = decodeStringSet(root.optJSONArray(KEY_AFFECTED_PROJECT_IDS))
+                // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
+                // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
+                val manifestSwapState = if (root.has(KEY_MANIFEST_SWAP_STATE)) {
+                    ManifestTransactionState.fromJournalValue(root.optString(KEY_MANIFEST_SWAP_STATE))
+                } else {
+                    deriveManifestSwapState(isManifestCommitted, manifestNewRef, manifestBackupRef)
+                }
                 PendingMirrorPublish(
                     txId = root.getString(KEY_TX_ID),
                     backend = backend,
@@ -214,6 +295,7 @@ data class PendingMirrorPublish(
                     manifestNewRef = manifestNewRef,
                     manifestBackupRef = manifestBackupRef,
                     isManifestCommitted = isManifestCommitted,
+                    manifestSwapState = manifestSwapState,
                     affectedProjectIds = affectedProjectIds,
                 )
             } catch (_: Exception) {
@@ -367,7 +449,8 @@ data class PendingMirrorPublish(
                 oldRef = decodeFileRef(obj.optJSONObject(KEY_OLD_REF)),
                 backupOldRef = decodeFileRef(obj.optJSONObject(KEY_BACKUP_OLD_REF)),
                 promotedRef = decodeFileRef(obj.optJSONObject(KEY_PROMOTED_REF)),
-                state = obj.optString(KEY_STATE).ifEmpty { PendingItem.STATE_STAGED },
+                // #649 评论 5565067997 修复 1：旧 journal 的 STATE_OLD_BACKED_UP 映射到 STATE_BACKUP_READY
+                state = PendingItem.normalizeState(obj.optString(KEY_STATE).ifEmpty { PendingItem.STATE_STAGED }),
             )
         }
     }
@@ -397,4 +480,20 @@ private fun mirrorTransactionTypeFromJsonValue(value: String): MirrorTransaction
     when (value) {
         "delete_project" -> MirrorTransactionType.DELETE_PROJECT
         else -> MirrorTransactionType.UPSERT_PROJECT
+    }
+
+/**
+ * 旧 journal 没有 manifestSwapState 字段时，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
+ * #649 评论 5565067997 修复 2：向后兼容。
+ */
+private fun deriveManifestSwapState(
+    isManifestCommitted: Boolean,
+    manifestNewRef: MirrorFileRef?,
+    manifestBackupRef: MirrorFileRef?,
+): ManifestTransactionState =
+    when {
+        isManifestCommitted -> ManifestTransactionState.MANIFEST_COMMITTED
+        manifestNewRef != null -> ManifestTransactionState.MANIFEST_PROMOTED
+        manifestBackupRef != null -> ManifestTransactionState.MANIFEST_BACKUP_READY
+        else -> ManifestTransactionState.MANIFEST_STAGED
     }

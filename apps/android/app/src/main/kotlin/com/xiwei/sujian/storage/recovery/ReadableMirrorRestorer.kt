@@ -129,12 +129,16 @@ class ReadableMirrorRestorer {
             // 3. 保存恢复后的状态到 ReadableMirrorStateStore。
             // #649 评论 5561465552 第 3 点：backend=document_tree，treeUri=mirrorTreeUri。
             // #649 评论 5563333323 缺口 2：saveRestoredState 返回 Boolean，失败时报告错误。
+            // #649 评论 5565067997 修复 6：传 publishedProjectIds = manifest.projects.map { it.id }.toSet()，
+            // 让零章节作品也能进 publishedProjectIds。
             val manifestUriString = manifestUri.toString()
+            val publishedProjectIds = manifest.projects.map { it.id }.toSet()
             if (!stateStore.saveRestoredState(
                     manifestUri = manifestUriString,
                     chapterEntries = allChapterEntries,
                     backend = MirrorBackend.DOCUMENT_TREE,
                     treeUri = mirrorTreeUri.toString(),
+                    publishedProjectIds = publishedProjectIds,
                 )
             ) {
                 return@withContext RestoreResult.RestoreFailed("Failed to persist restored mirror state")

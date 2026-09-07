@@ -80,6 +80,29 @@ data class BackupReadyRef(
 )
 
 /**
+ * 镜像查询三态结果（#649 评论 5565067997 修复 5）。
+ *
+ * 旧 [ReadableMirrorStorage.resolve] 返回 `MirrorFileRef?`，把"文件不存在"和"查询失败"
+ * 都返回 null，cleanup 会把查询失败当"文件不存在"然后清 journal，丢失未完成的事务。
+ *
+ * 新 [ReadableMirrorStorage.lookup] 返回三态：
+ * - [Found]：文件存在，附带 [ref]。
+ * - [Missing]：明确不存在（查询成功但无结果）。
+ * - [Failed]：查询失败（SecurityException / provider I/O / query 异常），附带 [cause]。
+ *   调用方必须停止操作，不能当 Missing 处理。
+ */
+sealed interface MirrorLookupResult {
+    /** 文件存在。 */
+    data class Found(val ref: MirrorFileRef) : MirrorLookupResult
+
+    /** 文件明确不存在（查询成功，无匹配记录）。 */
+    data object Missing : MirrorLookupResult
+
+    /** 查询失败（权限/IO/异常），无法确认文件是否存在。 */
+    data class Failed(val cause: Throwable? = null) : MirrorLookupResult
+}
+
+/**
  * 统一镜像存储接口，隔离 MediaStore 与 SAF DocumentsProvider 两套 URI 体系。
  *
  * #649 评论 5561465552 第 3 点。
@@ -230,6 +253,22 @@ interface ReadableMirrorStorage {
      * @return 已存在文件的 ref；不存在或查询失败返回 null
      */
     fun resolve(relativePath: String): MirrorFileRef?
+
+    /**
+     * 三态查询：返回 [relativePath] 的 [MirrorLookupResult]（#649 评论 5565067997 修复 5）。
+     *
+     * 与 [resolve] 区别：[resolve] 在"不存在"和"查询失败"时都返回 null，无法区分；
+     * [lookup] 明确区分 [MirrorLookupResult.Missing] 和 [MirrorLookupResult.Failed]。
+     *
+     * 新代码（cleanup / recover / vacate）应使用 [lookup] 而非 [resolve]：
+     * - [MirrorLookupResult.Found] → 文件存在，可继续删除/处理。
+     * - [MirrorLookupResult.Missing] → 文件明确不存在，目标已达到（幂等成功）。
+     * - [MirrorLookupResult.Failed] → 查询失败，必须停止，不能清 journal。
+     *
+     * @param relativePath 相对 `Download/Sujian/` 的路径
+     * @return [MirrorLookupResult.Found] / [MirrorLookupResult.Missing] / [MirrorLookupResult.Failed]
+     */
+    fun lookup(relativePath: String): MirrorLookupResult
 
     /**
      * 只查不创建：返回已存在于备份路径 [relativePath] 的文件 ref。

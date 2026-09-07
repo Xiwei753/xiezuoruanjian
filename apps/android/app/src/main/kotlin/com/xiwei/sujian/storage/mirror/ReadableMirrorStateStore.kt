@@ -458,11 +458,18 @@ class ReadableMirrorStateStore(
      * #649 评论 5563333323 缺口 2：state.json 损坏时返回 false，不再静默覆盖成空对象。
      * 调用方应报告错误并提示用户。
      *
+     * #649 评论 5565067997 修复 6：增加 publishedProjectIds 参数。
+     * 旧实现从 chapterEntries 推导 published ID，零章节作品没有 chapterEntries 所以不进 publishedProjectIds。
+     * 新实现让 ReadableMirrorRestorer 直接传 manifest.projects.map { it.id }.toSet()，
+     * 和章节条目一起在同一次 AtomicFile state 写入里保存。
+     *
      * @param manifestUri manifest 文件的 URI（MediaStore 或 SAF document URI）
      * @param chapterEntries 所有章节的条目（包含 URI、相对路径、revision、contentHash）
      * @param backend 本次恢复使用的存储后端（默认 [MirrorBackend.DOCUMENT_TREE]，
      *   因为恢复入口是 SAF OpenDocumentTree）
      * @param treeUri SAF document tree URI（document_tree 后端时必传）
+     * @param publishedProjectIds 已发布作品的 ID 集合（含零章节作品），
+     *   默认空集（向后兼容，旧调用方不传时从 chapterEntries 推导）
      * @return true 表示持久化成功；false 表示失败（state.json 损坏或写入失败）
      */
     fun saveRestoredState(
@@ -470,6 +477,7 @@ class ReadableMirrorStateStore(
         chapterEntries: Map<ChapterKey, ChapterMirrorEntry>,
         backend: MirrorBackend = MirrorBackend.DOCUMENT_TREE,
         treeUri: String? = null,
+        publishedProjectIds: Set<String> = emptySet(),
     ): Boolean {
         synchronized(lock) {
             // #649 评论 5563333323 缺口 2：用 readRoot() 区分"不存在"和"损坏"
@@ -497,6 +505,8 @@ class ReadableMirrorStateStore(
             // #649 评论 5564820566 问题 5：恢复时也写 publishedProjectIds
             val published = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
                 ?: JSONObject().also { root.put(PUBLISHED_PROJECTS_KEY, it) }
+            // #649 评论 5565067997 修复 6：优先用传入的 publishedProjectIds，
+            // 同时也从 chapterEntries 推导（向后兼容），取并集。
             val projectIds = mutableSetOf<String>()
             for ((key, entry) in chapterEntries) {
                 val projectObj =
@@ -505,6 +515,8 @@ class ReadableMirrorStateStore(
                 projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
                 projectIds.add(key.projectId)
             }
+            // 合并传入的 publishedProjectIds（含零章节作品）
+            projectIds.addAll(publishedProjectIds)
             for (pid in projectIds) {
                 published.put(pid, true)
             }

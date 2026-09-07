@@ -216,6 +216,56 @@ class MediaStoreMirrorStorage(
         return queryByPathAndName(directory, displayName, relativePath)
     }
 
+    /**
+     * 三态查询实现（#649 评论 5565067997 修复 5）。
+     *
+     * - 查询成功且有唯一匹配 → [MirrorLookupResult.Found]
+     * - 查询成功但无匹配 → [MirrorLookupResult.Missing]
+     * - 查询抛异常（SecurityException / provider I/O）→ [MirrorLookupResult.Failed]
+     * - 命中多条（数据异常）→ [MirrorLookupResult.Failed]（不绑定错误文件）
+     * - 后端不可用 → [MirrorLookupResult.Failed]（不静默当 Missing）
+     */
+    override fun lookup(relativePath: String): MirrorLookupResult {
+        if (!mediaStore.isSupported()) {
+            // #649 评论 5565067997 修复 5：后端不可用是查询失败，不是 Missing。
+            return MirrorLookupResult.Failed(IllegalStateException("MediaStore backend not supported"))
+        }
+        val directory = mediaStoreDirectory(relativePath)
+        val displayName = relativePath.substringAfterLast('/')
+        return try {
+            contentResolver
+                .query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Downloads._ID),
+                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                        "${MediaStore.Downloads.IS_PENDING} = 0",
+                    arrayOf(directory, displayName),
+                    null,
+                )
+                ?.use { cursor ->
+                    if (!cursor.moveToFirst()) {
+                        MirrorLookupResult.Missing
+                    } else if (cursor.count > 1) {
+                        android.util.Log.w(
+                            TAG,
+                            "lookup: multiple matches for $relativePath, " +
+                                "count=${cursor.count}, returning Failed to avoid binding wrong file",
+                        )
+                        MirrorLookupResult.Failed(IllegalStateException("multiple matches for $relativePath"))
+                    } else {
+                        val id = cursor.getLong(0)
+                        val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+                        MirrorLookupResult.Found(MirrorFileRef(uri = uri.toString(), relativePath = relativePath))
+                    }
+                } ?: MirrorLookupResult.Failed(IllegalStateException("contentResolver.query returned null"))
+        } catch (e: SecurityException) {
+            MirrorLookupResult.Failed(e)
+        } catch (e: Exception) {
+            MirrorLookupResult.Failed(e)
+        }
+    }
+
     override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
         // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。
         if (!mediaStore.isSupported()) return null
