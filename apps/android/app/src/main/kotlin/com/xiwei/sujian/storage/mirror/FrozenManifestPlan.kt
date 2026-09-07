@@ -393,3 +393,66 @@ fun frozenManifestPlanFromJson(json: String): FrozenManifestPlan? {
         null
     }
 }
+
+/**
+ * 为删除项目构建 frozen manifest plan。
+ *
+ * 以 private committed manifest 为基线，只把被删项目剔掉，其他作品全部原样保留。
+ * 不需要再读其他项目 Core。
+ *
+ * @param committedManifest 上一次已提交的全局 manifest
+ * @param deletedProjectId 被删除的项目 ID
+ * @return frozen plan；失败返回 null
+ */
+fun buildFrozenDeleteManifestPlan(
+    committedManifest: MirrorManifest,
+    deletedProjectId: String,
+): FrozenManifestPlan {
+    val now = java.time.Instant.now()
+    val updatedAt = java.time.format.DateTimeFormatter.ISO_INSTANT.format(now)
+    val revision = now.toEpochMilli()
+
+    val frozenProjects = mutableListOf<FrozenManifestProject>()
+
+    // 非被删项目：从 committedManifest 取原样 metadata + contentFile + contentHash
+    for (project in committedManifest.projects) {
+        if (project.id == deletedProjectId) continue
+        frozenProjects.add(
+            FrozenManifestProject(
+                id = project.id,
+                title = project.title,
+                order = project.order,
+                revision = project.revision,
+                updatedAt = project.updatedAt,
+                volumes = project.volumes.map { vol ->
+                    FrozenManifestVolume(
+                        id = vol.id,
+                        title = vol.title,
+                        order = vol.order,
+                        revision = vol.revision,
+                        updatedAt = vol.updatedAt,
+                        chapters = vol.chapters.map { ch ->
+                            FrozenManifestChapter(
+                                id = ch.id,
+                                title = ch.title,
+                                order = ch.order,
+                                revision = ch.revision,
+                                updatedAt = ch.updatedAt,
+                                contentFile = ch.contentFile,
+                                contentHash = ch.contentHash,
+                            )
+                        },
+                    )
+                },
+            )
+        )
+    }
+
+    return FrozenManifestPlan(
+        schemaVersion = 1,
+        revision = revision,
+        updatedAt = updatedAt,
+        targetProjectId = deletedProjectId,
+        projects = frozenProjects,
+    )
+}

@@ -254,9 +254,19 @@ class ReadableMirrorStateStore(
      * 在锁内一次性写完所有条目，避免半提交状态。任一条目写入失败不影响其他条目
      * （JSONObject.put 不抛异常）。
      *
+     * manifest 提交成功后（进入 PHASE_CLEANUP 之前），把本事务最终的 manifest JSON/hash
+     * 幂等写进 private state（#649 评论 5576464076 问题 2）。
+     *
+     * @param entries 章节条目映射
+     * @param committedManifestJson 本次事务最终的 manifest JSON 字符串（可选，提交成功后写入）
+     * @param committedManifestHash 本次事务最终的 manifest 的 SHA-256 hash（可选，提交成功后写入）
      * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作，不清 journal）。
      */
-    fun putChapterEntries(entries: Map<ChapterKey, ChapterMirrorEntry>): Boolean {
+    fun putChapterEntries(
+        entries: Map<ChapterKey, ChapterMirrorEntry>,
+        committedManifestJson: String? = null,
+        committedManifestHash: String? = null,
+    ): Boolean {
         synchronized(lock) {
             val root = readRootForUpdate() ?: return false
             val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
@@ -265,6 +275,11 @@ class ReadableMirrorStateStore(
                     projects.optJSONObject(key.projectId)
                         ?: JSONObject().also { projects.put(key.projectId, it) }
                 projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
+            }
+            // manifest 提交成功后，幂等写入 committed manifest 信息
+            if (committedManifestJson != null && committedManifestHash != null) {
+                root.put(COMMITTED_MANIFEST_JSON_KEY, committedManifestJson)
+                root.put(COMMITTED_MANIFEST_HASH_KEY, committedManifestHash)
             }
             return writeRoot(root)
         }
@@ -430,6 +445,43 @@ class ReadableMirrorStateStore(
         synchronized(lock) {
             val root = readRootForUpdate() ?: return false
             root.put(TREE_URI_KEY, uri)
+            return writeRoot(root)
+        }
+    }
+
+    // ── committed manifest 存取（#649 评论 5576464076 问题 2）──
+
+    /**
+     * 获取上一次已提交的 manifest。
+     *
+     * @return [Result.success] 包含 manifest JSON 字符串（从未提交过时为 null）；
+     *   [Result.failure] 包含读取失败或 JSON 损坏的异常
+     */
+    fun getCommittedManifest(): Result<String?> {
+        synchronized(lock) {
+            val root = readRootForRead() ?: return Result.success(null)
+            val json = root.optString(COMMITTED_MANIFEST_JSON_KEY).takeIf { it.isNotEmpty() }
+            return if (json != null) {
+                Result.success(json)
+            } else {
+                // 字段不存在，向后兼容：旧 state.json 没有该字段
+                Result.success(null)
+            }
+        }
+    }
+
+    /**
+     * 记录上一次已提交的 manifest（幂等写入）。
+     *
+     * @param json 本次事务最终的 manifest JSON 字符串
+     * @param hash 本次事务最终的 manifest 的 SHA-256 hash
+     * @return true 表示持久化成功；false 表示失败
+     */
+    fun setCommittedManifest(json: String, hash: String): Boolean {
+        synchronized(lock) {
+            val root = readRootForUpdate() ?: return false
+            root.put(COMMITTED_MANIFEST_JSON_KEY, json)
+            root.put(COMMITTED_MANIFEST_HASH_KEY, hash)
             return writeRoot(root)
         }
     }
@@ -775,5 +827,7 @@ class ReadableMirrorStateStore(
         private const val RELATIVE_PATH_KEY = "relativePath"
         private const val REVISION_KEY = "revision"
         private const val CONTENT_HASH_KEY = "contentHash"
+        private const val COMMITTED_MANIFEST_JSON_KEY = "committedManifestJson"
+        private const val COMMITTED_MANIFEST_HASH_KEY = "committedManifestHash"
     }
 }

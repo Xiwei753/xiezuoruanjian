@@ -102,37 +102,46 @@ class DefaultMirrorChangeSink(
         chapterId: String,
     ) {
         val key = MirrorKey(projectId, volumeId, chapterId)
-        val intent = outboxStore.markDirty(projectId)
-        if (intent != null) {
-            dirtyMap[key] = DirtyEntry(
-                timestamp = System.currentTimeMillis(),
-                generation = intent.generation,
-                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
-                // 若磁盘里项目已是 DELETE，markDirty 返回已有 DELETE intent，
-                // 调用方不能再把它硬塞成 UPSERT。
-                kind = intent.kind,
-            )
-            outboxStore.recordSignalTime()
-            signal.trySend(Unit)
-        } else {
+        val intent = outboxStore.markDirty(projectId) ?: run {
             DiagnosticsLogger.e(TAG, "Failed to write outbox for chapterChanged: $projectId")
+            return
         }
+        // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
+        // markDirty 遇到已有 DELETE 返回已有 DELETE intent；此时不应再 publish 该项目。
+        if (intent.kind == OutboxIntentKind.DELETE) {
+            signal.trySend(Unit)
+            return
+        }
+        dirtyMap[key] = DirtyEntry(
+            timestamp = System.currentTimeMillis(),
+            generation = intent.generation,
+            // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+            // 若磁盘里项目已是 DELETE，markDirty 返回已有 DELETE intent，
+            // 调用方不能再把它硬塞成 UPSERT。
+            kind = intent.kind,
+        )
+        outboxStore.recordSignalTime()
+        signal.trySend(Unit)
     }
 
     override fun projectStructureChanged(projectId: String) {
-        val intent = outboxStore.markDirty(projectId)
-        if (intent != null) {
-            dirtyMap[MirrorKey(projectId, "", "")] = DirtyEntry(
-                timestamp = System.currentTimeMillis(),
-                generation = intent.generation,
-                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
-                kind = intent.kind,
-            )
-            outboxStore.recordSignalTime()
-            signal.trySend(Unit)
-        } else {
+        val intent = outboxStore.markDirty(projectId) ?: run {
             DiagnosticsLogger.e(TAG, "Failed to write outbox for projectStructureChanged: $projectId")
+            return
         }
+        // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
+        if (intent.kind == OutboxIntentKind.DELETE) {
+            signal.trySend(Unit)
+            return
+        }
+        dirtyMap[MirrorKey(projectId, "", "")] = DirtyEntry(
+            timestamp = System.currentTimeMillis(),
+            generation = intent.generation,
+            // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+            kind = intent.kind,
+        )
+        outboxStore.recordSignalTime()
+        signal.trySend(Unit)
     }
 
     override fun projectDeleted(projectId: String) {
@@ -304,11 +313,12 @@ class DefaultMirrorChangeSink(
                     // 只清除仍在脏 map 中且 generation 未变的项目
                     val entry = dirtyMap.entries.firstOrNull { it.key.projectId == pid }
                     if (entry == null) {
-                        // 项目已全部移除：用处理时的 generation ACK
-                        // （处理期间没新 dirty 到来，generation 未变）
-                        val processedEntry = projectEntries.firstOrNull()?.second
-                        if (processedEntry != null && processedEntry.generation > 0) {
-                            outboxStore.ackProject(pid, processedEntry.generation, OutboxIntentKind.UPSERT)
+                        // 项目已全部移除：用本轮 snapshot 的最大 generation ACK
+                        // #649 评论 5576464076 问题 4.2：取 maxOf 而非 firstOrNull，
+                        // 避免多个 dirty key（如 gen 10 + gen 11）时 ACK 拿到旧的 gen 10 失败。
+                        val processedGeneration = projectEntries.maxOf { it.second.generation }
+                        if (processedGeneration > 0) {
+                            outboxStore.ackProject(pid, processedGeneration, OutboxIntentKind.UPSERT)
                         }
                     }
                     // 如果 entry 仍在 map 中（处理期间有新 dirty），generation 已变，ACK 会失败，保留新 dirty

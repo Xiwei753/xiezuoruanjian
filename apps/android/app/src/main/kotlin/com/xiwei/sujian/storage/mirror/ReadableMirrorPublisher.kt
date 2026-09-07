@@ -625,29 +625,37 @@ class ReadableMirrorPublisher(
         // publishManifestWithDesiredFromFrozen()（内部调 buildManifestJsonFromMetadata()）。
         // 新加的 frozenManifestPlan / frozenPlanToManifestJson() 没有成为恢复真值。
         // 现在直接收口成一套：只保留 FrozenManifestPlan 一个冻结真值。
-        // 新 UPSERT promote journal 没 plan/hash 就回滚，不允许重新读取当前 Core 猜目标。
-        val frozenPlanJson = journal.frozenManifestPlan ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: missing frozenManifestPlan, rolling back")
-            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-            return
-        }
-        val frozenPlanHash = journal.frozenManifestPlanHash ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: missing frozenManifestPlanHash, rolling back")
-            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-            return
-        }
-        if (computeContentHash(frozenPlanJson) != frozenPlanHash) {
-            DiagnosticsLogger.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
-            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-            return
-        }
-        val plan = frozenManifestPlanFromJson(frozenPlanJson) ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
-            rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-            return
-        }
-        val manifestJson = frozenPlanToManifestJson(plan, promotedEntries) ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
+        // #649 评论 5576464076 问题 5：处理旧 pending journal 缺 frozen plan 时的安全回滚。
+        // 1. manifestTargetJson != null：manifest 子事务已经开始，直接按已经冻结的 targetJson 继续
+        // 2. frozenManifestPlan != null && frozenManifestPlanHash != null：新格式，从 plan 生成 prebuiltTargetJson
+        // 3. 否则（旧格式，没有 plan，且 manifest 子事务也没开始）：安全回滚
+        val manifestJson: String?
+        if (journal.manifestTargetJson != null) {
+            // manifest 子事务已经开始，直接用已冻结的 targetJson
+            manifestJson = journal.manifestTargetJson
+        } else if (journal.frozenManifestPlan != null && journal.frozenManifestPlanHash != null) {
+            // 新格式：从 plan 生成 prebuiltTargetJson
+            val frozenPlanJson = journal.frozenManifestPlan
+            val frozenPlanHash = journal.frozenManifestPlanHash
+            if (computeContentHash(frozenPlanJson) != frozenPlanHash) {
+                DiagnosticsLogger.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
+                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                return
+            }
+            val plan = frozenManifestPlanFromJson(frozenPlanJson) ?: run {
+                DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
+                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                return
+            }
+            manifestJson = frozenPlanToManifestJson(plan, promotedEntries) ?: run {
+                DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
+                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                return
+            }
+        } else {
+            // 旧格式：没有 plan，且 manifest 子事务也没开始
+            // 不读取当前 Core 猜目标，直接安全回滚
+            DiagnosticsLogger.w(TAG, "Recover promote: old journal without frozen plan, rolling back")
             rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
             return
         }
@@ -667,6 +675,11 @@ class ReadableMirrorPublisher(
             // #649 评论 5564379115 问题 2：统一事务回滚
             rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
             return
+        }
+        // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest，
+        // 与正常发布路径保持一致，确保下一笔 frozen plan 基线正确。
+        if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
+            stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)
         }
         // #649 评论 5573750754 修复 1：统一为先写 cleanup journal 再 recoverCleanupPhase。
         // 不直接写 stateStore，和正常发布（publishProject）顺序保持一致：
@@ -749,7 +762,27 @@ class ReadableMirrorPublisher(
                 //    #649 评论 5562715833 问题 1：改用事务 manifest 路径传 snapshot=null
                 //    #649 评论 5562715833 问题 6：isManifestCommitted=true 时不再调 publishManifest，直接 cleanup
                 if (!journal.isManifestCommitted) {
-                    // manifest 事务未完成：构造 desiredEntries 手动排除被删项目，走事务 manifest 路径
+                    // #649 评论 5576464076 问题 3：DELETE 恢复也优先用 frozen plan，
+                    // 与正常删除路径保持一致，不重新从 oldEntries 拼全局 manifest。
+                    val recoveryManifestTargetJson: String?
+                    if (journal.manifestTargetJson != null) {
+                        // manifest 子事务已开始，直接用已冻结的 targetJson
+                        recoveryManifestTargetJson = journal.manifestTargetJson
+                    } else if (journal.frozenManifestPlan != null && journal.frozenManifestPlanHash != null) {
+                        // 新格式：从 plan 生成 prebuiltTargetJson
+                        if (computeContentHash(journal.frozenManifestPlan) != journal.frozenManifestPlanHash) {
+                            DiagnosticsLogger.w(TAG, "Recover cleanup: frozenManifestPlan hash mismatch for DELETE, keeping journal")
+                            return
+                        }
+                        val plan = frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
+                            DiagnosticsLogger.w(TAG, "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal")
+                            return
+                        }
+                        recoveryManifestTargetJson = frozenPlanToManifestJson(plan, emptyMap())
+                    } else {
+                        // 旧格式：没有 plan 且 manifest 子事务没开始，从 oldEntries 构造
+                        recoveryManifestTargetJson = null
+                    }
                     val desiredWithoutDeleted = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
                     for ((key, entry) in journal.oldEntries) {
                         if (key.projectId != journal.projectId) {
@@ -760,11 +793,12 @@ class ReadableMirrorPublisher(
                         publishManifestWithDesiredTransactional(
                             projectId = journal.projectId,
                             snapshot = null,
-                            desiredEntries = desiredWithoutDeleted,
+                            desiredEntries = if (recoveryManifestTargetJson != null) emptyMap() else desiredWithoutDeleted,
                             txId = journal.txId,
                             journalContext = journal,
                             items = journal.items,
                             storage = storage,
+                            prebuiltTargetJson = recoveryManifestTargetJson,
                         )
                     if (manifestResult == null) {
                         DiagnosticsLogger.w(
@@ -772,6 +806,10 @@ class ReadableMirrorPublisher(
                             "Recover cleanup: manifest rewrite failed for DELETE_PROJECT ${journal.projectId}",
                         )
                         return
+                    }
+                    // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest
+                    if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
+                        stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)
                     }
                 }
                 // 2. 从 stateStore 删除该项目条目（若尚未删）
@@ -1102,7 +1140,14 @@ class ReadableMirrorPublisher(
             // 不重新读取当前 Core。
             // buildFrozenManifestPlan 返回 null 时直接停止事务，不带着 null plan 继续
             // backup/vacate/promote（#649 评论 5575950895 问题 3）。
-            val committedManifest = readCommittedManifest(storage)
+            // #649 评论 5576464076 问题 2：从 StateStore 读取 committed manifest
+            val committedManifestJson = stateStore.getCommittedManifest()
+            val committedManifest = if (committedManifestJson.isSuccess) {
+                val json = committedManifestJson.getOrNull()
+                if (json != null) parseMirrorManifestFromJson(json) else null
+            } else {
+                null // 读取失败，当作首次发布处理
+            }
             val frozenPlan = buildFrozenManifestPlan(
                 committedManifest = committedManifest,
                 targetProjectId = projectId,
@@ -1323,15 +1368,24 @@ class ReadableMirrorPublisher(
 
             // 4. 提交 manifest：走事务性 manifest 写入（stage → promote → setManifestUri → 删 backup）
             //    #649 评论 5562715833 问题 5：传 currentJournal，manifest 事务每步落 journal
+            //    #649 评论 5576464076 问题 1：正常 UPSERT 使用 frozen plan 生成 manifestTargetJson
+            val manifestTargetJson =
+                frozenPlanToManifestJson(frozenPlan, promotedEntries)
+                    ?: run {
+                        rollbackWholePublishTransaction(txId, items, stagedRefs, storage, currentJournal)
+                        return MirrorPublishResult.RetryableFailure
+                    }
+
             val manifestResult =
                 publishManifestWithDesiredTransactional(
                     projectId = projectId,
-                    snapshot = snapshot,
+                    snapshot = null,
                     desiredEntries = promotedEntries,
                     txId = txId,
                     journalContext = currentJournal,
                     items = items,
                     storage = storage,
+                    prebuiltTargetJson = manifestTargetJson,
                 )
             if (manifestResult == null) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifest write failed")
@@ -1375,6 +1429,15 @@ class ReadableMirrorPublisher(
                     TAG,
                     "Publish project $projectId: putChapterEntries failed, keeping journal for retry",
                 )
+                return MirrorPublishResult.RetryableFailure
+            }
+            // #649 评论 5576464076 问题 2：manifest 提交成功后写入 committed manifest
+            if (manifestResult.manifestNewJson == null || manifestResult.manifestNewContentHash == null) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifestNewJson or hash is null")
+                return MirrorPublishResult.RetryableFailure
+            }
+            if (!stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)) {
+                // 写入失败，保留 journal 重试
                 return MirrorPublishResult.RetryableFailure
             }
             // #649 评论 5564820566 问题 5：manifest 提交成功后标记作品已发布，
@@ -1440,7 +1503,24 @@ class ReadableMirrorPublisher(
             val removed = stateStore.getProjectEntries(projectId)
             // #649 评论 5562715833 问题 7：不在 removed.isEmpty() 时 early return，
             // 即使空作品也继续走事务流程，提交 snapshot=null 的新 manifest（确保 manifest 不再引用该项目）
-            // 2. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
+            // 2. 读取 committed manifest 并生成 frozen plan（#649 评论 5576464076 问题 3）
+            val committedManifestJson = stateStore.getCommittedManifest()
+            val committedManifest = if (committedManifestJson.isSuccess) {
+                val json = committedManifestJson.getOrNull()
+                if (json != null) parseMirrorManifestFromJson(json) else null
+            } else {
+                null
+            }
+            val frozenPlan = if (committedManifest != null) {
+                buildFrozenDeleteManifestPlan(committedManifest, projectId)
+            } else {
+                // 没有已提交 manifest（首次发布），不需要 frozen plan
+                null
+            }
+            val frozenPlanJson = frozenPlan?.let { frozenManifestPlanToJson(it) }
+            val frozenPlanHash = if (frozenPlanJson != null) computeContentHash(frozenPlanJson) else null
+
+            // 3. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
             //    #649 评论 5563333323 缺口 2：journal 写入失败则停止
             val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
             // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
@@ -1461,6 +1541,8 @@ class ReadableMirrorPublisher(
                     manifestNewRef = null,
                     manifestBackupRef = null,
                     manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                    frozenManifestPlan = frozenPlanJson,
+                    frozenManifestPlanHash = frozenPlanHash,
                 )
             ) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
@@ -1469,8 +1551,16 @@ class ReadableMirrorPublisher(
             // 3. 事务提交新 manifest（已不含该项目）
             //    用 desiredEntries=emptyMap 表示该项目不再有任何章节
             //    #649 评论 5562715833 问题 7：snapshot=null 确保 manifest 不再引用该项目
-            val snapshotResult = source.getProjectWorkspaceSnapshot(projectId)
-            val snapshot = (snapshotResult as? BridgeResult.Success)?.data
+            //    #649 评论 5576464076 问题 3：使用 frozen plan 生成 manifestTargetJson
+            val manifestTargetJson = if (frozenPlan != null) {
+                frozenPlanToManifestJson(frozenPlan, emptyMap())
+            } else {
+                null
+            }
+            if (frozenPlan != null && manifestTargetJson == null) {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: frozenPlanToManifestJson failed")
+                return MirrorPublishResult.RetryableFailure
+            }
             // #649 评论 5562715833 问题 5：传 journalContext，manifest 事务每步落 journal
             // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             val deleteJournalContext =
@@ -1490,16 +1580,19 @@ class ReadableMirrorPublisher(
                     manifestStagedRef = null,
                     manifestNewRef = null,
                     manifestBackupRef = null,
+                    frozenManifestPlan = frozenPlanJson,
+                    frozenManifestPlanHash = frozenPlanHash,
                 )
             val manifestResult =
                 publishManifestWithDesiredTransactional(
                     projectId = projectId,
-                    snapshot = snapshot,
+                    snapshot = null,
                     desiredEntries = emptyMap(),
                     txId = txId,
                     journalContext = deleteJournalContext,
                     items = emptyMap(),
                     storage = storage,
+                    prebuiltTargetJson = manifestTargetJson,
                 )
             if (manifestResult == null) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
@@ -1537,6 +1630,13 @@ class ReadableMirrorPublisher(
                     "Delete project $projectId: cleanup journal write failed, keeping journal for retry",
                 )
                 return MirrorPublishResult.RetryableFailure
+            }
+            // #649 评论 5576464076 问题 2：DELETE 也幂等写入 committed manifest，
+            // 确保下一笔 frozen plan 基线正确（不会因 manifest 未持久化而误判为首次发布）。
+            if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
+                if (!stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)) {
+                    return MirrorPublishResult.RetryableFailure
+                }
             }
             // 5. 从 state store 删除该项目条目
             //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
@@ -3140,14 +3240,14 @@ class ReadableMirrorPublisher(
     }
 
     /**
-     * manifest 事务性写入的结果。
+     * manifest 事务结果（stage → promote → setManifestUri 完成后返回）。
      *
-     * #649 评论 5562462046 问题 2：manifest 走和正文同一套事务。
-     *
-     * @property newRef 新 manifest 引用（已 [ReadableMirrorStateStore.setManifestUri]）。
-     * @property manifestOldRef 旧 manifest 引用（promote 前）。
-     * @property manifestStagedRef manifest staging 引用。
-     * @property backupOldRef 旧 manifest 备份引用（= manifestOldRef，新 manifest 提交成功后由调用方删）。
+     * @property newRef 新 manifest 的最终引用（promote 后的 ref）
+     * @property manifestOldRef 旧 manifest 引用（可为 null，表示首次发布）
+     * @property manifestStagedRef manifest staging 引用
+     * @property backupOldRef manifest 旧备份引用（用于回滚）
+     * @property manifestNewJson 新 manifest 的 JSON 内容（#649 评论 5576464076 问题 2），
+     *   供调用方写 committed manifest 到 StateStore。
      * @property manifestNewContentHash 新 manifest 的内容 hash（#649 评论 5569598106 问题3），
      *   供调用方写 cleanup journal 时持续传递，避免 hash 丢失。
      * @property manifestOldContentHash 旧 manifest 的内容 hash（#649 评论 5569598106 问题3）。
@@ -3157,6 +3257,7 @@ class ReadableMirrorPublisher(
         val manifestOldRef: MirrorFileRef?,
         val manifestStagedRef: StagedMirrorRef,
         val backupOldRef: MirrorFileRef?,
+        val manifestNewJson: String? = null,
         val manifestNewContentHash: String? = null,
         val manifestOldContentHash: String? = null,
     )
@@ -3679,6 +3780,7 @@ class ReadableMirrorPublisher(
                         manifestOldRef = oldRef,
                         manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
                         backupOldRef = manifestBackupRef,
+                        manifestNewJson = json,
                         manifestNewContentHash = manifestNewContentHash,
                         manifestOldContentHash = manifestOldContentHash,
                     )
@@ -3748,10 +3850,11 @@ class ReadableMirrorPublisher(
             DiagnosticsLogger.w(TAG, "Manifest transaction: MANIFEST_COMMITTED journal write failed")
         }
         return ManifestTransactionResult(
-            newRef = newRef,
+            newRef = newRef!!,
             manifestOldRef = oldRef,
             manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
             backupOldRef = manifestBackupRef,
+            manifestNewJson = json,
             manifestNewContentHash = manifestNewContentHash,
             manifestOldContentHash = manifestOldContentHash,
         )
@@ -3893,24 +3996,6 @@ class ReadableMirrorPublisher(
             DiagnosticsLogger.e(TAG, "Failed to parse manifest JSON", e)
             null
         }
-    }
-
-    /**
-     * 读取当前已提交的全局 manifest（#649 评论 5575950895 问题 5）。
-     *
-     * 用于 [buildFrozenManifestPlan] 的基线：非目标项目从已提交 manifest 取原样
-     * metadata + contentFile + contentHash，不重新从当前 Core 全量状态拼。
-     *
-     * @param storage 当前事务的 storage
-     * @return 已提交 manifest；无 manifest / 读取失败 / 解析失败返回 null（表示首次发布或基线不可用）
-     */
-    private fun readCommittedManifest(storage: ReadableMirrorStorage): MirrorManifest? {
-        val manifestUri = stateStore.getManifestUri() ?: return null
-        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
-        val lookup = storage.lookup(manifestRelativePath)
-        if (lookup !is MirrorLookupResult.Found) return null
-        val textHash = storage.readTextAndHash(lookup.ref) ?: return null
-        return parseMirrorManifestFromJson(textHash.first)
     }
 
     private fun projectToJson(

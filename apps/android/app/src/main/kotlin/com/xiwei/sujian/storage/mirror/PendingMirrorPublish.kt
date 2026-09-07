@@ -294,18 +294,9 @@ data class PendingMirrorPublish(
 
         // 2. UPSERT PHASE_PROMOTE（正文已 stage）必须有 frozen plan；
         //    缺失时不能 fallback 到当前 snapshot，应安全回滚
-        // #649 评论 5575950895 问题 4：旧实现此处只有注释没有 return false，
-        // 实际上什么都没校验。收口后直接明确：新 UPSERT promote journal 没 plan/hash
-        // 就判非法（return false），不允许重新读取当前 Core 猜目标。
-        if (transactionType == MirrorTransactionType.UPSERT_PROJECT &&
-            phase == PHASE_PROMOTE &&
-            items.isNotEmpty() &&
-            frozenManifestPlan == null
-        ) {
-            // items 非空表示正文已 stage，必须有 frozen plan。
-            // 缺失 plan 的 PHASE_PROMOTE journal 判非法，不允许进入恢复流程。
-            return false
-        }
+        // #649 评论 5576464076 问题 5：允许旧 journal（缺 frozen plan）被解析出来，
+        // 不要因为缺 plan 直接判死。旧 journal 走 recoverPromotePhase 的安全回滚路径。
+        // 新 journal 必须有 plan/hash，但旧 journal 可能没有，这里放宽校验让它们进入恢复流程。
 
         // 3. manifest 子事务开始后（manifestTargetJson != null），
         //    如果 manifestOldRef != null，manifestOldContentHash 必须存在
