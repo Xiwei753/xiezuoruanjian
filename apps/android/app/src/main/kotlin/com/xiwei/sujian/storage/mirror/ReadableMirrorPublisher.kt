@@ -292,8 +292,29 @@ class ReadableMirrorPublisher(
             }
             val staged = item.stagedRef ?: journal.stagedRefs[key]
             if (staged == null) {
-                DiagnosticsLogger.w(TAG, "Recover promote missing stagedRef for ${key.chapterId}, skipping")
-                continue
+                // #649 评论 5574521549 问题 4：stagedRef 缺失是事务状态不完整，
+                // 不能 continue 静默漏掉章节后继续提交 manifest。旧实现 `continue` 会
+                // 跳过该章节，恢复时漏掉它继续 promote 其他章节并提交 manifest，
+                // 导致事务结果不完整（该章节既没 promote 也没 rollback）。
+                // 改成停止恢复并保留 journal（rollback + return），让下次恢复重试或人工介入。
+                // 走到这里的不可能是 PROMOTED/COMMITTED + promotedRef != null（前面已 continue），
+                // 对其他正向状态（STAGED/BACKUP_READY/OLD_VACATED），stagedRef 缺失直接停止恢复。
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Recover promote: missing stagedRef for ${key.chapterId}, " +
+                        "transaction state incomplete, keeping journal and stopping",
+                )
+                for ((_, entry) in promotedEntries) {
+                    storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                }
+                rollbackWholePublishTransaction(
+                    journal.txId,
+                    currentItems,
+                    journal.stagedRefs,
+                    storage,
+                    journal,
+                )
+                return
             }
             val oldRef = item.oldRef
             // #649 评论 5562715833 问题 2：backupCommitted + promoteStaged，不先删 old
@@ -627,20 +648,21 @@ class ReadableMirrorPublisher(
         // 断电窗口：死在 journal 已落盘、stateStore 未更新之间，磁盘 journal 是 PHASE_CLEANUP，
         // 下次恢复走 recoverCleanupPhase 幂等补写 stateStore，不会重复 promote。
         val committedItems = currentItems.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
-        val cleanupJournal = journal.copy(
-            phase = PendingMirrorPublish.PHASE_CLEANUP,
-            newEntries = promotedEntries,
-            stagedRefs = emptyMap(),
-            items = committedItems,
-            manifestOldRef = manifestResult.manifestOldRef,
-            manifestStagedRef = manifestResult.manifestStagedRef,
-            manifestNewRef = manifestResult.newRef,
-            manifestBackupRef = manifestResult.backupOldRef,
-            isManifestCommitted = true,
-            manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-            manifestNewContentHash = manifestResult.manifestNewContentHash,
-            manifestOldContentHash = manifestResult.manifestOldContentHash,
-        )
+        val cleanupJournal =
+            journal.copy(
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                newEntries = promotedEntries,
+                stagedRefs = emptyMap(),
+                items = committedItems,
+                manifestOldRef = manifestResult.manifestOldRef,
+                manifestStagedRef = manifestResult.manifestStagedRef,
+                manifestNewRef = manifestResult.newRef,
+                manifestBackupRef = manifestResult.backupOldRef,
+                isManifestCommitted = true,
+                manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                manifestNewContentHash = manifestResult.manifestNewContentHash,
+                manifestOldContentHash = manifestResult.manifestOldContentHash,
+            )
         if (!persistPendingJournal(cleanupJournal)) {
             DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
             return
@@ -668,11 +690,17 @@ class ReadableMirrorPublisher(
                 //    publishProject 现在先写 PHASE_CLEANUP journal 再更新 stateStore，
                 //    恢复时必须先补上 stateStore 更新，再清旧文件。
                 if (!stateStore.putChapterEntries(journal.newEntries)) {
-                    DiagnosticsLogger.w(TAG, "Recover cleanup: putChapterEntries failed for UPSERT_PROJECT ${journal.projectId}, keeping journal")
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover cleanup: putChapterEntries failed for UPSERT_PROJECT ${journal.projectId}, keeping journal",
+                    )
                     return
                 }
                 if (!stateStore.addPublishedProjectId(journal.projectId)) {
-                    DiagnosticsLogger.w(TAG, "Recover cleanup: addPublishedProjectId failed for UPSERT_PROJECT ${journal.projectId}, keeping journal")
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover cleanup: addPublishedProjectId failed for UPSERT_PROJECT ${journal.projectId}, keeping journal",
+                    )
                     return
                 }
                 // #649 评论 5563333323 缺口 3：调用统一 cleanup 函数，不复制两份逻辑。
@@ -2107,10 +2135,11 @@ class ReadableMirrorPublisher(
             when (rollbackResult) {
                 is RollbackItemResult.Restored -> {
                     // #649 评论 5573310799 问题 1：先把真实 URI 写进 stateStore，再标记 journal
-                    val oldEntry = latestJournal.oldEntries[key] ?: run {
-                        DiagnosticsLogger.w(TAG, "rollback: missing oldEntry for ${key.chapterId}, keeping journal")
-                        return false
-                    }
+                    val oldEntry =
+                        latestJournal.oldEntries[key] ?: run {
+                            DiagnosticsLogger.w(TAG, "rollback: missing oldEntry for ${key.chapterId}, keeping journal")
+                            return false
+                        }
                     if (!stateStore.putChapterEntry(
                             key.projectId,
                             key.volumeId,
@@ -2121,7 +2150,10 @@ class ReadableMirrorPublisher(
                             ),
                         )
                     ) {
-                        DiagnosticsLogger.w(TAG, "rollback: putChapterEntry failed for ${key.chapterId}, keeping journal")
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "rollback: putChapterEntry failed for ${key.chapterId}, keeping journal",
+                        )
                         return false
                     }
                     currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
@@ -2237,17 +2269,18 @@ class ReadableMirrorPublisher(
         // 存在窗口：prepareBackup() 已把 old manifest move/copy 到 .staging/<tx>/backup，
         // 进程死亡，MANIFEST_BACKUP_READY journal 还没写成功，journal 里 manifestBackupRef 仍 null
         // 但物理 backup 已存在。
-        val backup = when (val r = storage.lookupBackup(journalContext.txId, manifestRelativePath)) {
-            is MirrorLookupResult.Found -> r.ref
-            is MirrorLookupResult.Missing -> null
-            is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(
-                    TAG,
-                    "rollback manifest: lookupBackup failed: ${r.cause?.message}, keeping journal",
-                )
-                return false
+        val backup =
+            when (val r = storage.lookupBackup(journalContext.txId, manifestRelativePath)) {
+                is MirrorLookupResult.Found -> r.ref
+                is MirrorLookupResult.Missing -> null
+                is MirrorLookupResult.Failed -> {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "rollback manifest: lookupBackup failed: ${r.cause?.message}, keeping journal",
+                    )
+                    return false
+                }
             }
-        }
 
         // 1. 先确认 final 上的 manifest 身份并处理（不依赖 manifestNewRef 是否已写进 journal）
         //    #649 评论 5573310799 问题 4：覆盖"new 已物理落到 final 但 manifestNewRef 还没写进 journal"的窗口。
@@ -2259,7 +2292,10 @@ class ReadableMirrorPublisher(
             is MirrorLookupResult.Found -> {
                 val hashResult = storage.readTextAndHash(finalLookup.ref)
                 if (hashResult == null) {
-                    DiagnosticsLogger.w(TAG, "rollback manifest: readTextAndHash failed for final, cannot verify identity")
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "rollback manifest: readTextAndHash failed for final, cannot verify identity",
+                    )
                     return false
                 }
                 val (_, finalHash) = hashResult
@@ -2271,10 +2307,11 @@ class ReadableMirrorPublisher(
                             return false
                         }
                         // 写 MANIFEST_ROLLBACK_NEW_REMOVED
-                        currentJournal = currentJournal.copy(
-                            manifestNewRef = null,
-                            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
-                        )
+                        currentJournal =
+                            currentJournal.copy(
+                                manifestNewRef = null,
+                                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+                            )
                         if (!writePendingPublishJournal(
                                 projectId = currentJournal.projectId,
                                 transactionType = currentJournal.transactionType,
@@ -2308,9 +2345,10 @@ class ReadableMirrorPublisher(
                             DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed (final already old)")
                             return false
                         }
-                        currentJournal = currentJournal.copy(
-                            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                        )
+                        currentJournal =
+                            currentJournal.copy(
+                                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                            )
                         if (!writePendingPublishJournal(
                                 projectId = currentJournal.projectId,
                                 transactionType = currentJournal.transactionType,
@@ -2334,13 +2372,19 @@ class ReadableMirrorPublisher(
                                 journalContext = currentJournal,
                             )
                         ) {
-                            DiagnosticsLogger.w(TAG, "rollback manifest: journal write failed after OLD_RESTORED (final already old)")
+                            DiagnosticsLogger.w(
+                                TAG,
+                                "rollback manifest: journal write failed after OLD_RESTORED (final already old)",
+                            )
                             return false
                         }
                         return true
                     }
                     else -> {
-                        DiagnosticsLogger.w(TAG, "rollback manifest: final hash matches neither old nor new, state unknown")
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "rollback manifest: final hash matches neither old nor new, state unknown",
+                        )
                         return false
                     }
                 }
@@ -2349,10 +2393,11 @@ class ReadableMirrorPublisher(
                 // final 已空，无需删除新 manifest
                 // 如果 manifestNewRef 不为 null（journal 记录过），仍写一次 NEW_REMOVED 推进状态
                 if (journalContext.manifestNewRef != null) {
-                    currentJournal = currentJournal.copy(
-                        manifestNewRef = null,
-                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
-                    )
+                    currentJournal =
+                        currentJournal.copy(
+                            manifestNewRef = null,
+                            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+                        )
                     if (!writePendingPublishJournal(
                             projectId = currentJournal.projectId,
                             transactionType = currentJournal.transactionType,
@@ -2376,7 +2421,10 @@ class ReadableMirrorPublisher(
                             journalContext = currentJournal,
                         )
                     ) {
-                        DiagnosticsLogger.w(TAG, "rollback manifest: journal write failed after NEW_REMOVED (final missing)")
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "rollback manifest: journal write failed after NEW_REMOVED (final missing)",
+                        )
                         return false
                     }
                 }
@@ -2397,9 +2445,10 @@ class ReadableMirrorPublisher(
                 return false
             }
             // 写 MANIFEST_ROLLBACK_OLD_RESTORED（语义：已恢复到"没有 manifest"的初始状态）
-            currentJournal = currentJournal.copy(
-                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-            )
+            currentJournal =
+                currentJournal.copy(
+                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                )
             if (!writePendingPublishJournal(
                     projectId = currentJournal.projectId,
                     transactionType = currentJournal.transactionType,
@@ -2447,12 +2496,16 @@ class ReadableMirrorPublisher(
                         if (hashResult != null && hashResult.second == oldHash) {
                             // final 上确实是 old manifest → setManifestUri 并推进状态
                             if (!stateStore.setManifestUri(oldStillInFinal.ref.uri)) {
-                                DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed (backup null, old verified in final)")
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "rollback manifest: setManifestUri failed (backup null, old verified in final)",
+                                )
                                 return false
                             }
-                            currentJournal = currentJournal.copy(
-                                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                            )
+                            currentJournal =
+                                currentJournal.copy(
+                                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                                )
                             if (!writePendingPublishJournal(
                                     projectId = currentJournal.projectId,
                                     transactionType = currentJournal.transactionType,
@@ -2476,7 +2529,10 @@ class ReadableMirrorPublisher(
                                     journalContext = currentJournal,
                                 )
                             ) {
-                                DiagnosticsLogger.w(TAG, "rollback manifest: journal write failed after OLD_RESTORED (backup null, old verified)")
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "rollback manifest: journal write failed after OLD_RESTORED (backup null, old verified)",
+                                )
                                 return false
                             }
                             return true
@@ -2526,9 +2582,10 @@ class ReadableMirrorPublisher(
                                 return false
                             }
                             // 写 MANIFEST_ROLLBACK_OLD_RESTORED
-                            currentJournal = currentJournal.copy(
-                                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                            )
+                            currentJournal =
+                                currentJournal.copy(
+                                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                                )
                             if (!writePendingPublishJournal(
                                     projectId = currentJournal.projectId,
                                     transactionType = currentJournal.transactionType,
@@ -2568,9 +2625,10 @@ class ReadableMirrorPublisher(
                         return false
                     }
                     // 写 MANIFEST_ROLLBACK_OLD_RESTORED
-                    currentJournal = currentJournal.copy(
-                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                    )
+                    currentJournal =
+                        currentJournal.copy(
+                            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                        )
                     if (!writePendingPublishJournal(
                             projectId = currentJournal.projectId,
                             transactionType = currentJournal.transactionType,
@@ -2601,7 +2659,10 @@ class ReadableMirrorPublisher(
                 }
             }
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(TAG, "rollback manifest: lookup final failed: ${restoredFinalLookup.cause?.message}")
+                DiagnosticsLogger.w(
+                    TAG,
+                    "rollback manifest: lookup final failed: ${restoredFinalLookup.cause?.message}",
+                )
                 return false
             }
             is MirrorLookupResult.Missing -> {
@@ -2614,41 +2675,42 @@ class ReadableMirrorPublisher(
             is RestoreBackupResult.Restored -> {
                 // 新恢复成功，更新 manifestUri
                 if (!stateStore.setManifestUri(restoreResult.ref.uri)) {
-                DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed after restoring manifest backup")
-                return false
+                    DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed after restoring manifest backup")
+                    return false
+                }
+                // 写 MANIFEST_ROLLBACK_OLD_RESTORED
+                currentJournal =
+                    currentJournal.copy(
+                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                    )
+                if (!writePendingPublishJournal(
+                        projectId = currentJournal.projectId,
+                        transactionType = currentJournal.transactionType,
+                        phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                        txId = currentJournal.txId,
+                        backend = currentJournal.backend,
+                        treeUri = currentJournal.treeUri,
+                        oldEntries = currentJournal.oldEntries,
+                        newEntries = currentJournal.newEntries,
+                        stagedRefs = currentJournal.stagedRefs,
+                        items = items,
+                        removedProjectIds = currentJournal.removedProjectIds,
+                        manifestOldRef = currentJournal.manifestOldRef,
+                        manifestStagedRef = currentJournal.manifestStagedRef,
+                        manifestNewRef = currentJournal.manifestNewRef,
+                        manifestBackupRef = currentJournal.manifestBackupRef,
+                        isManifestCommitted = currentJournal.isManifestCommitted,
+                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                        manifestNewContentHash = currentJournal.manifestNewContentHash,
+                        manifestOldContentHash = currentJournal.manifestOldContentHash,
+                        journalContext = currentJournal,
+                    )
+                ) {
+                    DiagnosticsLogger.w(TAG, "rollback manifest: journal write failed after OLD_RESTORED")
+                    return false
+                }
+                return true
             }
-            // 写 MANIFEST_ROLLBACK_OLD_RESTORED
-            currentJournal = currentJournal.copy(
-                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-            )
-            if (!writePendingPublishJournal(
-                    projectId = currentJournal.projectId,
-                    transactionType = currentJournal.transactionType,
-                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                    txId = currentJournal.txId,
-                    backend = currentJournal.backend,
-                    treeUri = currentJournal.treeUri,
-                    oldEntries = currentJournal.oldEntries,
-                    newEntries = currentJournal.newEntries,
-                    stagedRefs = currentJournal.stagedRefs,
-                    items = items,
-                    removedProjectIds = currentJournal.removedProjectIds,
-                    manifestOldRef = currentJournal.manifestOldRef,
-                    manifestStagedRef = currentJournal.manifestStagedRef,
-                    manifestNewRef = currentJournal.manifestNewRef,
-                    manifestBackupRef = currentJournal.manifestBackupRef,
-                    isManifestCommitted = currentJournal.isManifestCommitted,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                    manifestNewContentHash = currentJournal.manifestNewContentHash,
-                    manifestOldContentHash = currentJournal.manifestOldContentHash,
-                    journalContext = currentJournal,
-                )
-            ) {
-                DiagnosticsLogger.w(TAG, "rollback manifest: journal write failed after OLD_RESTORED")
-                return false
-            }
-            return true
-        }
             is RestoreBackupResult.AlreadyRestored -> {
                 // hash 校验通过，manifest 已恢复
                 if (!stateStore.setManifestUri(restoreResult.ref.uri)) {
@@ -2656,9 +2718,10 @@ class ReadableMirrorPublisher(
                     return false
                 }
                 // 写 MANIFEST_ROLLBACK_OLD_RESTORED
-                currentJournal = currentJournal.copy(
-                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                )
+                currentJournal =
+                    currentJournal.copy(
+                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                    )
                 if (!writePendingPublishJournal(
                         projectId = currentJournal.projectId,
                         transactionType = currentJournal.transactionType,
@@ -2775,10 +2838,11 @@ class ReadableMirrorPublisher(
                 is RollbackItemResult.Restored -> {
                     // #649 评论 5573310799 问题 1：先把真实 URI 写进 stateStore，再标记 journal。
                     //    putChapterEntry 失败时 return（state 没写成功不能继续）。
-                    val oldEntry = journal.oldEntries[key] ?: run {
-                        DiagnosticsLogger.w(TAG, "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal")
-                        return
-                    }
+                    val oldEntry =
+                        journal.oldEntries[key] ?: run {
+                            DiagnosticsLogger.w(TAG, "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal")
+                            return
+                        }
                     if (!stateStore.putChapterEntry(
                             key.projectId,
                             key.volumeId,
@@ -2789,7 +2853,10 @@ class ReadableMirrorPublisher(
                             ),
                         )
                     ) {
-                        DiagnosticsLogger.w(TAG, "Recover rollback: putChapterEntry failed for ${key.chapterId}, keeping journal")
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Recover rollback: putChapterEntry failed for ${key.chapterId}, keeping journal",
+                        )
                         return
                     }
                     currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
@@ -3265,190 +3332,65 @@ class ReadableMirrorPublisher(
         when (val backupResult = storage.lookupBackup(txId, manifestRelativePath)) {
             is MirrorLookupResult.Found -> {
                 manifestBackupRef = backupResult.ref
-            // backup 已存在。根据 journal 的 manifestSwapState 决定下一步：
-            // - MANIFEST_BACKUP_READY：backup 就绪，old 可能还没 vacate → 需 vacate
-            // - MANIFEST_OLD_VACATED：old 已腾空 → 需 promote
-            // - MANIFEST_PROMOTED：已 promote → 需 setManifestUri
-            // - MANIFEST_COMMITTED：已提交 → 直接返回
-            when (resumeState) {
-                ManifestTransactionState.MANIFEST_COMMITTED -> {
-                    // 已提交，final 就是 new manifest。用 lookup() 三态查询。
-                    val existingFinal = storage.lookup(manifestRelativePath)
-                    when (existingFinal) {
-                        is MirrorLookupResult.Found -> {
-                            // #649 评论 5573750754 修复 5：必须校验 hash == manifestNewContentHash。
-                            // lookup final = Found + readTextAndHash 成功 + hash == manifestNewContentHash
-                            // 三者全部成立才能返回 committed。hash 不匹配或读取失败就保留 journal，
-                            // 不要把未知 manifest 当成已提交。
-                            val committedHashResult = storage.readTextAndHash(existingFinal.ref)
-                            if (committedHashResult == null) {
-                                DiagnosticsLogger.w(
-                                    TAG,
-                                    "Manifest transaction: COMMITTED but readTextAndHash failed, keeping journal",
-                                )
-                                return null
-                            }
-                            if (committedHashResult.second != manifestNewContentHash) {
-                                DiagnosticsLogger.w(
-                                    TAG,
-                                    "Manifest transaction: COMMITTED but final hash mismatch, keeping journal",
-                                )
-                                return null
-                            }
-                            return ManifestTransactionResult(
-                                newRef = existingFinal.ref,
-                                manifestOldRef = oldRef,
-                                manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-                                backupOldRef = manifestBackupRef,
-                                manifestNewContentHash = manifestNewContentHash,
-                                manifestOldContentHash = manifestOldContentHash,
-                            )
-                        }
-                        is MirrorLookupResult.Missing -> {
-                            DiagnosticsLogger.w(TAG, "Manifest transaction: COMMITTED but final missing, rolling back")
-                            if (staged != null) {
-                                storage.delete(
-                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                                )
-                            }
-                            return null
-                        }
-                        is MirrorLookupResult.Failed -> {
-                            DiagnosticsLogger.w(
-                                TAG,
-                                "Manifest transaction: " +
-                                    "lookup final failed (COMMITTED): ${existingFinal.cause?.message}",
-                            )
-                            if (staged != null) {
-                                storage.delete(
-                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                                )
-                            }
-                            return null
-                        }
-                    }
-                }
-                ManifestTransactionState.MANIFEST_PROMOTED -> {
-                    // 已 promote，继续 setManifestUri。用 lookup() 三态查询。
-                    val existingFinal = storage.lookup(manifestRelativePath)
-                    when (existingFinal) {
-                        is MirrorLookupResult.Found -> {
-                            // #649 评论 5573750754 修复 5：必须校验 hash == manifestNewContentHash。
-                            // hash 不匹配或读取失败就保留 journal，不要把未知 manifest 当成已 promote。
-                            val promotedHashResult = storage.readTextAndHash(existingFinal.ref)
-                            if (promotedHashResult == null) {
-                                DiagnosticsLogger.w(
-                                    TAG,
-                                    "Manifest transaction: PROMOTED but readTextAndHash failed, keeping journal",
-                                )
-                                return null
-                            }
-                            if (promotedHashResult.second != manifestNewContentHash) {
-                                DiagnosticsLogger.w(
-                                    TAG,
-                                    "Manifest transaction: PROMOTED but final hash mismatch, keeping journal",
-                                )
-                                return null
-                            }
-                            if (!stateStore.setManifestUri(existingFinal.ref.uri)) {
-                                DiagnosticsLogger.w(
-                                    TAG,
-                                    "Manifest transaction: setManifestUri failed (resume PROMOTED)",
-                                )
-                                return null
-                            }
-                            currentJournal =
-                                currentJournal.copy(
-                                    manifestNewRef = existingFinal.ref,
-                                    manifestBackupRef = manifestBackupRef,
-                                    isManifestCommitted = true,
-                                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                                )
-                            if (!persistPendingJournal(currentJournal)) {
-                                return null
-                            }
-                            return ManifestTransactionResult(
-                                newRef = existingFinal.ref,
-                                manifestOldRef = oldRef,
-                                manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-                                backupOldRef = manifestBackupRef,
-                                manifestNewContentHash = manifestNewContentHash,
-                                manifestOldContentHash = manifestOldContentHash,
-                            )
-                        }
-                        is MirrorLookupResult.Missing -> {
-                            DiagnosticsLogger.w(TAG, "Manifest transaction: PROMOTED but final missing")
-                            if (staged != null) {
-                                storage.delete(
-                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                                )
-                            }
-                            return null
-                        }
-                        is MirrorLookupResult.Failed -> {
-                            DiagnosticsLogger.w(
-                                TAG,
-                                "Manifest transaction: lookup final failed (PROMOTED): ${existingFinal.cause?.message}",
-                            )
-                            if (staged != null) {
-                                storage.delete(
-                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                                )
-                            }
-                            return null
-                        }
-                    }
-                }
-                ManifestTransactionState.MANIFEST_OLD_VACATED -> {
-                    // old 已腾空，继续 promote
-                    currentJournal =
-                        currentJournal.copy(
-                            manifestBackupRef = manifestBackupRef,
-                            manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
-                        )
-                    if (!persistPendingJournal(currentJournal)) {
-                        if (staged != null) {
-                            storage.delete(
-                                MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                            )
-                        }
-                        return null
-                    }
-                    // 跳到 promote 步骤
-                }
-                else -> {
-                    // MANIFEST_STAGED 或 MANIFEST_BACKUP_READY：backup 就绪，需 vacate old
-                    // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
-                    if (oldRef != null) {
-                        val oldLookup = storage.lookup(oldRef.relativePath)
-                        when (oldLookup) {
+                // backup 已存在。根据 journal 的 manifestSwapState 决定下一步：
+                // - MANIFEST_BACKUP_READY：backup 就绪，old 可能还没 vacate → 需 vacate
+                // - MANIFEST_OLD_VACATED：old 已腾空 → 需 promote
+                // - MANIFEST_PROMOTED：已 promote → 需 setManifestUri
+                // - MANIFEST_COMMITTED：已提交 → 直接返回
+                when (resumeState) {
+                    ManifestTransactionState.MANIFEST_COMMITTED -> {
+                        // 已提交，final 就是 new manifest。用 lookup() 三态查询。
+                        val existingFinal = storage.lookup(manifestRelativePath)
+                        when (existingFinal) {
                             is MirrorLookupResult.Found -> {
-                                // old 还在 final，需 vacate
-                                if (!storage.vacateCommitted(oldRef)) {
+                                // #649 评论 5573750754 修复 5：必须校验 hash == manifestNewContentHash。
+                                // lookup final = Found + readTextAndHash 成功 + hash == manifestNewContentHash
+                                // 三者全部成立才能返回 committed。hash 不匹配或读取失败就保留 journal，
+                                // 不要把未知 manifest 当成已提交。
+                                val committedHashResult = storage.readTextAndHash(existingFinal.ref)
+                                if (committedHashResult == null) {
                                     DiagnosticsLogger.w(
                                         TAG,
-                                        "Manifest transaction: vacate failed (resume BACKUP_READY)",
+                                        "Manifest transaction: COMMITTED but readTextAndHash failed, keeping journal",
                                     )
-                                    if (staged != null) {
-                                        storage.delete(
-                                            MirrorFileRef(
-                                                uri = staged.stagingUri,
-                                                relativePath = staged.stagingRelativePath,
-                                            ),
-                                        )
-                                    }
                                     return null
                                 }
+                                if (committedHashResult.second != manifestNewContentHash) {
+                                    DiagnosticsLogger.w(
+                                        TAG,
+                                        "Manifest transaction: COMMITTED but final hash mismatch, keeping journal",
+                                    )
+                                    return null
+                                }
+                                return ManifestTransactionResult(
+                                    newRef = existingFinal.ref,
+                                    manifestOldRef = oldRef,
+                                    manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
+                                    backupOldRef = manifestBackupRef,
+                                    manifestNewContentHash = manifestNewContentHash,
+                                    manifestOldContentHash = manifestOldContentHash,
+                                )
                             }
                             is MirrorLookupResult.Missing -> {
-                                // old 已腾空，无需再 vacate
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "Manifest transaction: COMMITTED but final missing, rolling back",
+                                )
+                                if (staged != null) {
+                                    storage.delete(
+                                        MirrorFileRef(
+                                            uri = staged.stagingUri,
+                                            relativePath = staged.stagingRelativePath,
+                                        ),
+                                    )
+                                }
+                                return null
                             }
                             is MirrorLookupResult.Failed -> {
-                                // 查询失败，不能继续
                                 DiagnosticsLogger.w(
                                     TAG,
                                     "Manifest transaction: " +
-                                        "lookup old failed (resume BACKUP_READY): ${oldLookup.cause?.message}",
+                                        "lookup final failed (COMMITTED): ${existingFinal.cause?.message}",
                                 )
                                 if (staged != null) {
                                     storage.delete(
@@ -3462,22 +3404,162 @@ class ReadableMirrorPublisher(
                             }
                         }
                     }
-                    // 写 journal：MANIFEST_OLD_VACATED
-                    currentJournal =
-                        currentJournal.copy(
-                            manifestBackupRef = manifestBackupRef,
-                            manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
-                        )
-                    if (!persistPendingJournal(currentJournal)) {
-                        if (staged != null) {
-                            storage.delete(
-                                MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
-                            )
+                    ManifestTransactionState.MANIFEST_PROMOTED -> {
+                        // 已 promote，继续 setManifestUri。用 lookup() 三态查询。
+                        val existingFinal = storage.lookup(manifestRelativePath)
+                        when (existingFinal) {
+                            is MirrorLookupResult.Found -> {
+                                // #649 评论 5573750754 修复 5：必须校验 hash == manifestNewContentHash。
+                                // hash 不匹配或读取失败就保留 journal，不要把未知 manifest 当成已 promote。
+                                val promotedHashResult = storage.readTextAndHash(existingFinal.ref)
+                                if (promotedHashResult == null) {
+                                    DiagnosticsLogger.w(
+                                        TAG,
+                                        "Manifest transaction: PROMOTED but readTextAndHash failed, keeping journal",
+                                    )
+                                    return null
+                                }
+                                if (promotedHashResult.second != manifestNewContentHash) {
+                                    DiagnosticsLogger.w(
+                                        TAG,
+                                        "Manifest transaction: PROMOTED but final hash mismatch, keeping journal",
+                                    )
+                                    return null
+                                }
+                                if (!stateStore.setManifestUri(existingFinal.ref.uri)) {
+                                    DiagnosticsLogger.w(
+                                        TAG,
+                                        "Manifest transaction: setManifestUri failed (resume PROMOTED)",
+                                    )
+                                    return null
+                                }
+                                currentJournal =
+                                    currentJournal.copy(
+                                        manifestNewRef = existingFinal.ref,
+                                        manifestBackupRef = manifestBackupRef,
+                                        isManifestCommitted = true,
+                                        manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                                    )
+                                if (!persistPendingJournal(currentJournal)) {
+                                    return null
+                                }
+                                return ManifestTransactionResult(
+                                    newRef = existingFinal.ref,
+                                    manifestOldRef = oldRef,
+                                    manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
+                                    backupOldRef = manifestBackupRef,
+                                    manifestNewContentHash = manifestNewContentHash,
+                                    manifestOldContentHash = manifestOldContentHash,
+                                )
+                            }
+                            is MirrorLookupResult.Missing -> {
+                                DiagnosticsLogger.w(TAG, "Manifest transaction: PROMOTED but final missing")
+                                if (staged != null) {
+                                    storage.delete(
+                                        MirrorFileRef(
+                                            uri = staged.stagingUri,
+                                            relativePath = staged.stagingRelativePath,
+                                        ),
+                                    )
+                                }
+                                return null
+                            }
+                            is MirrorLookupResult.Failed -> {
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "Manifest transaction: lookup final failed (PROMOTED): ${existingFinal.cause?.message}",
+                                )
+                                if (staged != null) {
+                                    storage.delete(
+                                        MirrorFileRef(
+                                            uri = staged.stagingUri,
+                                            relativePath = staged.stagingRelativePath,
+                                        ),
+                                    )
+                                }
+                                return null
+                            }
                         }
-                        return null
+                    }
+                    ManifestTransactionState.MANIFEST_OLD_VACATED -> {
+                        // old 已腾空，继续 promote
+                        currentJournal =
+                            currentJournal.copy(
+                                manifestBackupRef = manifestBackupRef,
+                                manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
+                            )
+                        if (!persistPendingJournal(currentJournal)) {
+                            if (staged != null) {
+                                storage.delete(
+                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                                )
+                            }
+                            return null
+                        }
+                        // 跳到 promote 步骤
+                    }
+                    else -> {
+                        // MANIFEST_STAGED 或 MANIFEST_BACKUP_READY：backup 就绪，需 vacate old
+                        // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
+                        if (oldRef != null) {
+                            val oldLookup = storage.lookup(oldRef.relativePath)
+                            when (oldLookup) {
+                                is MirrorLookupResult.Found -> {
+                                    // old 还在 final，需 vacate
+                                    if (!storage.vacateCommitted(oldRef)) {
+                                        DiagnosticsLogger.w(
+                                            TAG,
+                                            "Manifest transaction: vacate failed (resume BACKUP_READY)",
+                                        )
+                                        if (staged != null) {
+                                            storage.delete(
+                                                MirrorFileRef(
+                                                    uri = staged.stagingUri,
+                                                    relativePath = staged.stagingRelativePath,
+                                                ),
+                                            )
+                                        }
+                                        return null
+                                    }
+                                }
+                                is MirrorLookupResult.Missing -> {
+                                    // old 已腾空，无需再 vacate
+                                }
+                                is MirrorLookupResult.Failed -> {
+                                    // 查询失败，不能继续
+                                    DiagnosticsLogger.w(
+                                        TAG,
+                                        "Manifest transaction: " +
+                                            "lookup old failed (resume BACKUP_READY): ${oldLookup.cause?.message}",
+                                    )
+                                    if (staged != null) {
+                                        storage.delete(
+                                            MirrorFileRef(
+                                                uri = staged.stagingUri,
+                                                relativePath = staged.stagingRelativePath,
+                                            ),
+                                        )
+                                    }
+                                    return null
+                                }
+                            }
+                        }
+                        // 写 journal：MANIFEST_OLD_VACATED
+                        currentJournal =
+                            currentJournal.copy(
+                                manifestBackupRef = manifestBackupRef,
+                                manifestSwapState = ManifestTransactionState.MANIFEST_OLD_VACATED,
+                            )
+                        if (!persistPendingJournal(currentJournal)) {
+                            if (staged != null) {
+                                storage.delete(
+                                    MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                                )
+                            }
+                            return null
+                        }
                     }
                 }
-            }
             }
             is MirrorLookupResult.Missing -> {
                 if (oldRef != null) {
@@ -3486,7 +3568,9 @@ class ReadableMirrorPublisher(
                     if (prepared == null) {
                         // backup 失败：删 manifest staging，不动旧 manifest
                         if (staged != null) {
-                            storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                            storage.delete(
+                                MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                            )
                         }
                         return null
                     }
@@ -3499,7 +3583,9 @@ class ReadableMirrorPublisher(
                         )
                     if (!persistPendingJournal(currentJournal)) {
                         if (staged != null) {
-                            storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                            storage.delete(
+                                MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                            )
                         }
                         return null
                     }
@@ -3529,7 +3615,9 @@ class ReadableMirrorPublisher(
                             currentJournal.manifestOldContentHash,
                         )
                         if (staged != null) {
-                            storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+                            storage.delete(
+                                MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath),
+                            )
                         }
                         return null
                     }

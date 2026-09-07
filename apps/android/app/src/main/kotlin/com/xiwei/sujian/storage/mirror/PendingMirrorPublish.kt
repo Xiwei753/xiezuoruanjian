@@ -130,8 +130,31 @@ data class PendingItem(
          * 把旧 journal 的 [STATE_OLD_BACKED_UP] 映射到 [STATE_BACKUP_READY]（#649 评论 5565067997 修复 1）。
          *
          * 新代码不再写入 [STATE_OLD_BACKED_UP]，但反序列化旧 journal 时需映射到新状态机。
+         *
+         * #649 评论 5574521549 问题 3：[decodeItem] 不再调用此函数，改用 [parseStateStrict]
+         * 做严格解析。保留此函数用于向后兼容文档/其他调用点。
          */
         fun normalizeState(state: String): String = if (state == STATE_OLD_BACKED_UP) STATE_BACKUP_READY else state
+
+        /**
+         * 严格解析 item state（#649 评论 5574521549 问题 3）。
+         *
+         * 只接受明确的合法状态值；缺失或未知值返回 null，让整个 pending journal 判损坏。
+         * [STATE_OLD_BACKED_UP] 作为旧版本兼容值映射到 [STATE_BACKUP_READY]。
+         *
+         * 与 [normalizeState] 区别：[normalizeState] 对未知值原样返回（宽松），
+         * [parseStateStrict] 对未知值返回 null（严格），避免未知 state 进入事务恢复
+         * 流程后被猜成合法状态导致恢复逻辑走错分支。
+         */
+        fun parseStateStrict(value: String): String? =
+            when (value) {
+                STATE_STAGED, STATE_BACKUP_READY, STATE_OLD_VACATED,
+                STATE_PROMOTED, STATE_COMMITTED,
+                STATE_ROLLBACK_NEW_REMOVED, STATE_ROLLBACK_OLD_RESTORED,
+                -> value
+                STATE_OLD_BACKED_UP -> STATE_BACKUP_READY
+                else -> null
+            }
     }
 }
 
@@ -209,6 +232,43 @@ data class PendingMirrorPublish(
     // 冻结 manifest 事务的目标 JSON，恢复时不再重新生成
     val manifestTargetJson: String? = null,
 ) {
+    /**
+     * 校验事务不变量：state ↔ required refs 关系（#649 评论 5574521549 问题 3/4）。
+     *
+     * 解析完成后统一检查每个 [PendingItem] 的 state 与其 required refs 是否一致：
+     * - STAGED / BACKUP_READY / OLD_VACATED：需要 stagedRef（item 自身或 journal.stagedRefs[key]）
+     * - PROMOTED / COMMITTED：需要 promotedRef
+     * - ROLLBACK_*：不强制要求 refs（回滚状态）
+     * - 未知 state：非法
+     *
+     * 非法状态组合返回 false，调用方（[fromJson]）应据此返回 null 标成 Corrupted，
+     * 不让损坏的 journal 进入事务恢复流程。
+     */
+    fun validateInvariants(): Boolean {
+        for ((key, item) in items) {
+            when (item.state) {
+                PendingItem.STATE_STAGED,
+                PendingItem.STATE_BACKUP_READY,
+                PendingItem.STATE_OLD_VACATED,
+                -> {
+                    if (item.stagedRef == null && stagedRefs[key] == null) return false
+                }
+                PendingItem.STATE_PROMOTED,
+                PendingItem.STATE_COMMITTED,
+                -> {
+                    if (item.promotedRef == null) return false
+                }
+                PendingItem.STATE_ROLLBACK_NEW_REMOVED,
+                PendingItem.STATE_ROLLBACK_OLD_RESTORED,
+                -> {
+                    // rollback 状态不强制要求 refs
+                }
+                else -> return false // 未知 state
+            }
+        }
+        return true
+    }
+
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
         val root = JSONObject()
@@ -313,8 +373,18 @@ data class PendingMirrorPublish(
                 }
                 val oldEntries = decodeEntries(root.optJSONObject(KEY_OLD_ENTRIES))
                 val newEntries = decodeEntries(root.optJSONObject(KEY_NEW_ENTRIES))
+                // #649 评论 5574521549 问题 3：decodeStagedRefs/decodeItems 返回 null 表示损坏，
+                // 整个 pending journal 判 Corrupted，不让损坏数据进入恢复流程。
                 val stagedRefs = decodeStagedRefs(root.optJSONObject(KEY_STAGED_REFS))
+                if (stagedRefs == null) {
+                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: corrupted stagedRefs")
+                    return null
+                }
                 val items = decodeItems(root.optJSONObject(KEY_ITEMS))
+                if (items == null) {
+                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: corrupted items")
+                    return null
+                }
                 val removedProjectIds = decodeStringSet(root.optJSONArray(KEY_REMOVED_PROJECT_IDS))
                 val manifestOldRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_OLD_REF))
                 val manifestStagedRef = decodeStagedRef(root.optJSONObject(KEY_MANIFEST_STAGED_REF))
@@ -336,29 +406,37 @@ data class PendingMirrorPublish(
                     } else {
                         deriveManifestSwapState(isManifestCommitted, manifestNewRef, manifestBackupRef)
                     }
-                PendingMirrorPublish(
-                    txId = root.getString(KEY_TX_ID),
-                    backend = backend,
-                    treeUri = treeUri,
-                    projectId = projectId,
-                    transactionType = transactionType,
-                    phase = phase,
-                    oldEntries = oldEntries,
-                    newEntries = newEntries,
-                    stagedRefs = stagedRefs,
-                    items = items,
-                    removedProjectIds = removedProjectIds,
-                    manifestOldRef = manifestOldRef,
-                    manifestStagedRef = manifestStagedRef,
-                    manifestNewRef = manifestNewRef,
-                    manifestBackupRef = manifestBackupRef,
-                    isManifestCommitted = isManifestCommitted,
-                    manifestSwapState = manifestSwapState,
-                    affectedProjectIds = affectedProjectIds,
-                    manifestNewContentHash = manifestNewContentHash,
-                    manifestOldContentHash = manifestOldContentHash,
-                    manifestTargetJson = manifestTargetJson,
-                )
+                // #649 评论 5574521549 问题 3：解析完成后校验事务不变量，
+                // state ↔ required refs 关系非法则判整个 pending journal 损坏。
+                val publish =
+                    PendingMirrorPublish(
+                        txId = root.getString(KEY_TX_ID),
+                        backend = backend,
+                        treeUri = treeUri,
+                        projectId = projectId,
+                        transactionType = transactionType,
+                        phase = phase,
+                        oldEntries = oldEntries,
+                        newEntries = newEntries,
+                        stagedRefs = stagedRefs,
+                        items = items,
+                        removedProjectIds = removedProjectIds,
+                        manifestOldRef = manifestOldRef,
+                        manifestStagedRef = manifestStagedRef,
+                        manifestNewRef = manifestNewRef,
+                        manifestBackupRef = manifestBackupRef,
+                        isManifestCommitted = isManifestCommitted,
+                        manifestSwapState = manifestSwapState,
+                        affectedProjectIds = affectedProjectIds,
+                        manifestNewContentHash = manifestNewContentHash,
+                        manifestOldContentHash = manifestOldContentHash,
+                        manifestTargetJson = manifestTargetJson,
+                    )
+                if (!publish.validateInvariants()) {
+                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invariant validation failed")
+                    return null
+                }
+                publish
             } catch (_: Exception) {
                 null
             }
@@ -419,16 +497,19 @@ data class PendingMirrorPublish(
                 put(KEY_MIME_TYPE, ref.mimeType)
             }
 
-        private fun decodeStagedRefs(obj: JSONObject?): Map<ChapterKey, StagedMirrorRef> {
+        private fun decodeStagedRefs(obj: JSONObject?): Map<ChapterKey, StagedMirrorRef>? {
+            // #649 评论 5574521549 问题 3：坏成员整体判损坏，不再 continue 静默丢掉。
+            // 返回 null 表示整个 pending journal 损坏，调用方（fromJson）应返回 null。
             if (obj == null) return emptyMap()
             val result = mutableMapOf<ChapterKey, StagedMirrorRef>()
             val keys = obj.keys()
             while (keys.hasNext()) {
                 val keyStr = keys.next()
                 val parts = keyStr.split("/", limit = 3)
-                if (parts.size != 3) continue
-                val refObj = obj.optJSONObject(keyStr) ?: continue
-                result[ChapterKey(parts[0], parts[1], parts[2])] = decodeStagedRef(refObj) ?: continue
+                if (parts.size != 3) return null // malformed key → 整体损坏
+                val refObj = obj.optJSONObject(keyStr) ?: return null // malformed item → 整体损坏
+                val ref = decodeStagedRef(refObj) ?: return null // 坏成员 → 整体损坏
+                result[ChapterKey(parts[0], parts[1], parts[2])] = ref
             }
             return result
         }
@@ -485,17 +566,21 @@ data class PendingMirrorPublish(
                 if (item.oldContentHash != null) put(KEY_OLD_CONTENT_HASH, item.oldContentHash)
             }
 
-        private fun decodeItems(obj: JSONObject?): Map<ChapterKey, PendingItem> {
+        private fun decodeItems(obj: JSONObject?): Map<ChapterKey, PendingItem>? {
+            // #649 评论 5574521549 问题 3：坏成员整体判损坏，不再 continue 静默丢掉那一章。
+            // 返回 null 表示整个 pending journal 损坏，调用方（fromJson）应返回 null。
+            // 旧实现遇到坏成员 `decodeItem(key, itemObj) ?: continue` 静默丢掉那一章，
+            // 恢复时会漏掉该章节继续提交 manifest，导致事务不完整。
             if (obj == null) return emptyMap()
             val result = mutableMapOf<ChapterKey, PendingItem>()
             val keys = obj.keys()
             while (keys.hasNext()) {
                 val keyStr = keys.next()
                 val parts = keyStr.split("/", limit = 3)
-                if (parts.size != 3) continue
-                val itemObj = obj.optJSONObject(keyStr) ?: continue
+                if (parts.size != 3) return null // malformed key → 整体损坏
+                val itemObj = obj.optJSONObject(keyStr) ?: return null // malformed item → 整体损坏
                 val key = ChapterKey(parts[0], parts[1], parts[2])
-                val item = decodeItem(key, itemObj) ?: continue
+                val item = decodeItem(key, itemObj) ?: return null // 坏成员 → 整体损坏，不 continue
                 result[key] = item
             }
             return result
@@ -505,14 +590,22 @@ data class PendingMirrorPublish(
             key: ChapterKey,
             obj: JSONObject,
         ): PendingItem? {
+            // #649 评论 5574521549 问题 3：严格解析 state，缺失或未知值返回 null，
+            // 让整个 pending journal 判损坏。不再用 normalizeState + ifEmpty { STATE_STAGED }
+            // 把缺失/未知 state 猜成 STAGED，否则恢复逻辑会走错分支。
+            val stateValue = obj.optString(KEY_STATE)
+            val state = PendingItem.parseStateStrict(stateValue)
+            if (state == null) {
+                DiagnosticsLogger.e(TAG, "decodeItem: invalid/missing state '$stateValue' for ${key.chapterId}")
+                return null
+            }
             return PendingItem(
                 key = key,
                 stagedRef = decodeStagedRef(obj.optJSONObject(KEY_STAGED_REFS)),
                 oldRef = decodeFileRef(obj.optJSONObject(KEY_OLD_REF)),
                 backupOldRef = decodeFileRef(obj.optJSONObject(KEY_BACKUP_OLD_REF)),
                 promotedRef = decodeFileRef(obj.optJSONObject(KEY_PROMOTED_REF)),
-                // #649 评论 5565067997 修复 1：旧 journal 的 STATE_OLD_BACKED_UP 映射到 STATE_BACKUP_READY
-                state = PendingItem.normalizeState(obj.optString(KEY_STATE).ifEmpty { PendingItem.STATE_STAGED }),
+                state = state,
                 // #649 评论 5566303837 问题 2：反序列化 oldContentHash
                 oldContentHash = obj.optString(KEY_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() },
             )

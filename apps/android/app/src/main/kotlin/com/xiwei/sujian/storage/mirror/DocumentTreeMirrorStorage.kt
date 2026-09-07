@@ -679,16 +679,19 @@ class DocumentTreeMirrorStorage(
     override fun rollback(txId: String): Boolean {
         if (!isSupported()) return false
         // #649 评论 5562462046 问题 6：rollback 只查不创建。
+        // #649 评论 5574521549 问题 2：返回 deleteDocument() 自己返回的 Boolean，
+        // 不再丢掉 provider 的删除结果。旧实现 `deleteDocument(...); true` 把 provider
+        // 返回 false（删除失败）当成功，cleanup 会误删 journal 留下事务垃圾。
+        // 规则：明确不存在 = 成功；明确删除成功 = 成功；状态不明/删除失败 = false。
         val stagingDir = "$STAGING_DIR/$txId"
         val stagingUriResult = findDirectory(stagingDir)
         if (stagingUriResult is DirectoryLookupResult.Found) {
             return try {
                 DocumentsContract.deleteDocument(contentResolver, stagingUriResult.uri)
-                true
             } catch (_: FileNotFoundException) {
-                true // 已不存在 → 目标已达到
+                true // 明确不存在 = 成功
             } catch (_: Exception) {
-                false // 删除失败
+                false // 状态不明/删除失败
             }
         }
         // 目录不存在或查询失败

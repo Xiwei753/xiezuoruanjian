@@ -168,20 +168,35 @@ class MediaStoreDownloads(
      * 按相对路径前缀删除（用于事务 rollback）。
      *
      * 删除所有 `RELATIVE_PATH` 以 `prefix` 开头的记录。
+     *
+     * #649 评论 5574521549 问题 1：返回类型从 `Int` 改成 `Result<Int>`。
+     *
+     * 旧实现用 `Int=0` 同时表示"确实没有记录"和"删除失败"，调用方
+     * （[com.xiwei.sujian.storage.mirror.MediaStoreMirrorStorage.rollback]）
+     * 无法区分这两种情况，会把清理失败当成功，误删 journal 留下事务垃圾。
+     *
+     * 新语义：
+     * - `contentResolver.delete(...)` 成功 → `Result.success(deletedCount)`（deletedCount 可能为 0，
+     *   表示没有匹配记录，算成功）
+     * - 抛异常 → `Result.failure(e)`（不 catch 后返回 0，让调用方看到失败）
+     * - 后端不可用 (`!isSupported()`) → `Result.success(0)`（明确没有记录可删，算成功）
+     *
      * @param relativePathPrefix 相对 `Download/Sujian/` 的路径前缀（如 `.staging/<txId>`）
-     * @return 删除的记录数
+     * @return [Result] 包装的删除记录数；[Result.isSuccess] 表示删除操作成功完成，
+     *   [Result.isFailure] 表示操作抛异常，调用方应据此判断 rollback 是否真的成功。
      */
-    fun deleteByPrefix(relativePathPrefix: String): Int {
-        if (!isSupported()) return 0
+    fun deleteByPrefix(relativePathPrefix: String): Result<Int> {
+        if (!isSupported()) return Result.success(0)
         val prefix = buildRelativePath(relativePathPrefix)
         return try {
-            contentResolver.delete(
+            val deleted = contentResolver.delete(
                 MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 "${MediaStore.Downloads.RELATIVE_PATH} LIKE ?",
                 arrayOf("$prefix%"),
             )
+            Result.success(deleted)
         } catch (e: Exception) {
-            0
+            Result.failure(e)
         }
     }
 

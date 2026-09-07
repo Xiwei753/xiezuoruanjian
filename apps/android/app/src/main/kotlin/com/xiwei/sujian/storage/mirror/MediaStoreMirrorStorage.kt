@@ -420,13 +420,12 @@ class MediaStoreMirrorStorage(
 
     override fun rollback(txId: String): Boolean {
         // 删除 txId 对应的整个暂存目录（含 backup 子目录）
+        // #649 评论 5574521549 问题 1：检查 deleteByPrefix 的 Result，不再把清理失败当成功。
+        // 旧实现调完 deleteByPrefix 后直接 return true，deleteByPrefix 用 Int=0 同时表示
+        // "没有记录"和"删除失败"，rollback 无法区分，会误删 journal 留下事务垃圾。
+        // 新实现：deleteByPrefix 返回 Result<Int>，只有 Success 才返回 true。
         val stagingDir = "$STAGING_DIR/$txId"
-        return try {
-            mediaStore.deleteByPrefix(stagingDir)
-            true
-        } catch (_: Exception) {
-            false
-        }
+        return mediaStore.deleteByPrefix(stagingDir).isSuccess
     }
 
     private fun tryParseUri(uriString: String): Uri? =
