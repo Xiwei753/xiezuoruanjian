@@ -691,11 +691,15 @@ class Issue649Comment5565067997ReproTest {
             mimeType: String,
             expectedOldContentHash: String?,
         ): RestoreBackupResult {
-            val existing = committedFiles.entries.find { it.value != null && committedPathToUri[finalRelativePath] == it.key }
+            val existing =
+                committedFiles.entries.find { it.value != null && committedPathToUri[finalRelativePath] == it.key }
             if (existing != null) {
                 return RestoreBackupResult.AlreadyRestored(MirrorFileRef(existing.key, finalRelativePath))
             }
-            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return RestoreBackupResult.Failed(null)
+            val content =
+                backupFiles[backup.uri]
+                    ?: committedFiles[backup.uri]
+                    ?: return RestoreBackupResult.Failed(null)
             val newUri = "content://fake/restored/${committedFiles.size}"
             committedFiles[newUri] = content
             committedPathToUri[finalRelativePath] = newUri

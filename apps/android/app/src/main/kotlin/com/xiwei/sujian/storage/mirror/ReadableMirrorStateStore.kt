@@ -444,11 +444,29 @@ class ReadableMirrorStateStore(
         }
     }
 
-    /** 记入 manifest 文件 URI。返回 true 表示持久化成功。 */
+    /** 计入 manifest 文件 URI。返回 true 表示持久化成功。 */
     fun setManifestUri(uri: String): Boolean {
         synchronized(lock) {
             val root = readRootForUpdate() ?: return false
             root.put(MANIFEST_URI_KEY, uri)
+            return writeRoot(root)
+        }
+    }
+
+    /**
+     * 清除 manifest 文件 URI（#649 评论 5572554935 问题 4）。
+     *
+     * 首次发布 manifest（无旧 manifest）的事务回滚时调用：
+     * 正确的回滚结果是 stateStore 不再持有 manifestUri（恢复成"没有 manifest"）。
+     * 旧实现只有 getManifestUri/setManifestUri，无法清除 manifestUri，
+     * 导致 no-old manifest rollback 直接 return true 时 manifestUri 仍指向新 manifest。
+     *
+     * @return true 表示持久化成功（或字段本就不存在）；false 表示失败（state 损坏或写入失败）
+     */
+    fun clearManifestUri(): Boolean {
+        synchronized(lock) {
+            val root = readRootForUpdate() ?: return false
+            root.remove(MANIFEST_URI_KEY)
             return writeRoot(root)
         }
     }

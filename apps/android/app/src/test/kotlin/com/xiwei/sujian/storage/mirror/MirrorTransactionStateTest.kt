@@ -323,7 +323,8 @@ class MirrorTransactionStateTest {
                 PendingItem.STATE_STAGED,
                 PendingItem.STATE_BACKUP_READY,
                 PendingItem.STATE_OLD_VACATED,
-                PendingItem.STATE_OLD_BACKED_UP, // 旧状态，round-trip 后映射到 STATE_BACKUP_READY
+                // 旧状态，round-trip 后映射到 STATE_BACKUP_READY
+                PendingItem.STATE_OLD_BACKED_UP,
                 PendingItem.STATE_PROMOTED,
                 PendingItem.STATE_COMMITTED,
             )
@@ -1030,7 +1031,10 @@ class MirrorTransactionStateTest {
                 }
                 return RestoreBackupResult.AlreadyRestored(existing)
             }
-            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return RestoreBackupResult.Failed(null)
+            val content =
+                backupFiles[backup.uri]
+                    ?: committedFiles[backup.uri]
+                    ?: return RestoreBackupResult.Failed(null)
             val newUri = "content://fake/restored/${committedFiles.size}"
             committedFiles[newUri] = content
             journalSteps.add("restore:${backup.relativePath}→$finalRelativePath")
