@@ -226,18 +226,18 @@ class DocumentTreeMirrorStorage(
         finalRelativePath: String,
     ): MirrorFileRef? {
         if (!isSupported()) return null
-        // #649 评论 5562715833 问题 2：promoteStaged 不删 old，只提升 staging 到 final。
+        // #649 评论 5563333323 缺口 1：promoteStaged 把 staging 移到最终位置。
+        // 最终路径已由 backupCommitted 腾空（old 已移走），不会冲突。
+        // 优先用 moveDocument 跨目录移动；失败回退到复制+删 staging。
         val stagingUri = tryParseUri(staged.stagingUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
         val targetParentUri = ensureDirectory(relativeDir) ?: return null
 
-        // #649 评论 5562715833 问题 3：获取 staging 的父目录 URI，用于 moveDocument 跨目录移动
-        // 从 stagingRelativePath 构造父目录路径，用 findDirectory 查找（不创建）
         val stagingParentPath = staged.stagingRelativePath.substringBeforeLast('/', "")
         val stagingParentUri = findDirectory(stagingParentPath)
 
-        // 优先尝试 DocumentsContract.moveDocument（跨目录原子移动，不复制内容）
+        // 优先尝试 moveDocument 跨目录原子移动
         val newUri: Uri? =
             if (stagingParentUri != null) {
                 tryMoveDocument(stagingUri, stagingParentUri, targetParentUri, displayName)
@@ -261,7 +261,6 @@ class DocumentTreeMirrorStorage(
                 }
                 return null
             }
-            // 复制成功后删 staging
             try {
                 DocumentsContract.deleteDocument(contentResolver, stagingUri)
             } catch (_: Exception) {
@@ -276,17 +275,31 @@ class DocumentTreeMirrorStorage(
         old: MirrorFileRef,
     ): MirrorFileRef? {
         if (!isSupported()) return null
-        // #649 评论 5562715833 问题 2：把 old 复制到 tx backup 目录，old 不动。
+        // #649 评论 5563333323 缺口 1：把 old 从最终路径**移动**到 tx backup 区（不是复制），
+        // 最终路径真正腾空。优先用 moveDocument 跨目录移动；
+        // 失败回退到 read+createText 到 backup + delete old（真正删 old 腾空最终路径）。
         val oldUri = tryParseUri(old.uri) ?: return null
-        val content = readTextFromUri(oldUri) ?: return null
         val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/${old.relativePath}"
         val parent = old.relativePath.substringBeforeLast('/', "")
         val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
         val displayName = old.relativePath.substringAfterLast('/')
-        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val backupParentUri = ensureDirectory(relativeDir) ?: return null
+        // old 的父目录 URI（用于 moveDocument）
+        val oldParentPath = old.relativePath.substringBeforeLast('/', "")
+        val oldParentUri = if (oldParentPath.isBlank()) treeUri else findDirectory(oldParentPath)
+        // 1. 优先尝试 moveDocument 把 old 移到 backup
+        if (oldParentUri != null) {
+            val movedUri = tryMoveDocument(oldUri, oldParentUri, backupParentUri, displayName)
+            if (movedUri != null) {
+                return MirrorFileRef(uri = movedUri.toString(), relativePath = backupRelativePath)
+            }
+        }
+        // 2. 回退：read old → createText 到 backup → delete old（真正删 old 腾空最终路径）
+        val content = readTextFromUri(oldUri) ?: return null
         val fileUri =
             try {
-                DocumentsContract.createDocument(contentResolver, parentUri, MIME_MARKDOWN, displayName)
+                DocumentsContract.createDocument(contentResolver, backupParentUri, MIME_MARKDOWN, displayName)
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "createDocument failed for backup $displayName: ${e.message}")
                 return null
@@ -298,7 +311,37 @@ class DocumentTreeMirrorStorage(
             }
             return null
         }
-        return MirrorFileRef(uri = fileUri.toString(), relativePath = "$backupBase/${old.relativePath}")
+        // 关键：删 old 腾空最终路径（不是保留 old）
+        if (!try {
+                DocumentsContract.deleteDocument(contentResolver, oldUri)
+            } catch (_: Exception) {
+                false
+            }
+        ) {
+            // 删 old 失败：删 backup 回滚，old 仍在原位
+            try {
+                DocumentsContract.deleteDocument(contentResolver, fileUri)
+            } catch (_: Exception) {
+            }
+            return null
+        }
+        return MirrorFileRef(uri = fileUri.toString(), relativePath = backupRelativePath)
+    }
+
+    override fun resolve(relativePath: String): MirrorFileRef? {
+        if (!isSupported()) return null
+        // #649 评论 5563333323 缺口 1：只查不创建，用 findDirectory + findChildFile。
+        val parent = relativePath.substringBeforeLast('/', "")
+        val displayName = relativePath.substringAfterLast('/')
+        val parentUri = if (parent.isBlank()) treeUri else findDirectory(parent) ?: return null
+        return try {
+            val children = documentTreeReader.listChildren(parentUri)
+            val match = children.find { !it.isDirectory && it.name == displayName }
+            match?.let { MirrorFileRef(uri = it.uri.toString(), relativePath = relativePath) }
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "resolve listChildren failed for $displayName: ${e.message}")
+            null
+        }
     }
 
     override fun restoreBackup(

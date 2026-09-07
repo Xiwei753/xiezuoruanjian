@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
 import com.xiwei.sujian.feature.stats.data.interop.StatsBridge
 import com.xiwei.sujian.feature.sync.data.interop.SyncBridge
 import com.xiwei.sujian.feature.sync.data.model.LegacyProfileMetadata
+import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import com.xiwei.sujian.feature.sync.data.model.SyncState
@@ -260,10 +261,18 @@ open class AppServiceBridge(
     fun getSyncCapability() = syncBridge.getSyncCapability()
 
     // #630 评论 #1：全量同步执行入口 — App + 所有 Project 一次同步。
+    // #649 评论 5563333323 缺口 4：全量同步真正成功落地后刷新 Download 镜像。
+    // 只有 BridgeResult.Success 才发 everythingChanged()；dry-run 走 performFullSyncDryRun 不改。
     fun performFullSync(
         config: SyncConfig,
         forceSync: Boolean = false,
-    ) = syncBridge.performFullSync(config, forceSync)
+    ): BridgeResult<FullSyncResult> {
+        val result = syncBridge.performFullSync(config, forceSync)
+        if (result is BridgeResult.Success) {
+            mirrorChangeSink?.everythingChanged()
+        }
+        return result
+    }
 
     fun performFullSyncDryRun(config: SyncConfig) = syncBridge.performFullSyncDryRun(config)
 

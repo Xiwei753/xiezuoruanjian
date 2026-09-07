@@ -42,9 +42,9 @@ fun selectMirrorStorage(
                 DocumentTreeMirrorStorage(treeUri, contentResolver, documentTreeReader)
             } else {
                 // treeUri 缺失，回退到 MediaStore（保守：至少能写一份）
-                MediaStoreMirrorStorage(mediaStore)
+                MediaStoreMirrorStorage(mediaStore, contentResolver)
             }
         }
-        MirrorBackend.MEDIA_STORE -> MediaStoreMirrorStorage(mediaStore)
+        MirrorBackend.MEDIA_STORE -> MediaStoreMirrorStorage(mediaStore, contentResolver)
     }
 }

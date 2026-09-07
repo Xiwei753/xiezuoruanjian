@@ -1,9 +1,11 @@
 package com.xiwei.sujian.storage.mirror
 
 import android.content.Context
+import androidx.core.util.AtomicFile
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 
 /**
@@ -60,6 +62,23 @@ enum class MirrorBackend {
 }
 
 /**
+ * readRoot 的结果。
+ *
+ * #649 评论 5563333323 缺口 2：readRoot 不要把 JSON 损坏当成"没有 state"再覆盖成空对象。
+ * 读坏了就返回明确错误，让 Publisher 停止本轮镜像操作。
+ */
+sealed class ReadResult {
+    /** state.json 不存在（首次启动或被清空）。 */
+    object NotExists : ReadResult()
+
+    /** 成功解析。 */
+    data class Parsed(val root: JSONObject) : ReadResult()
+
+    /** 文件存在但 JSON 损坏或读取失败。调用方应停止本轮操作，不覆盖。 */
+    data class Corrupted(val error: Exception) : ReadResult()
+}
+
+/**
  * ReadableMirrorStateStore — 镜像发布状态的持久化存储。
  *
  * #649 评论 5560971132 修复 2/6：[ReadableMirrorPublisher] 需要在删除项目/章节后
@@ -111,6 +130,9 @@ class ReadableMirrorStateStore(
         }
     }
 
+    /** #649 评论 5563333323 缺口 2：用 AtomicFile 做原子写入。 */
+    private val stateAtomicFile: AtomicFile by lazy { AtomicFile(stateFile) }
+
     /** pendingPublish journal 文件（#649 评论 5561465552 第 4 点）。 */
     private val pendingPublishFile: File by lazy {
         File(File(context.noBackupFilesDir, STATE_DIR_NAME), PENDING_PUBLISH_FILE_NAME).also { file ->
@@ -118,28 +140,31 @@ class ReadableMirrorStateStore(
         }
     }
 
+    /** #649 评论 5563333323 缺口 2：journal 也用 AtomicFile 做原子写入。 */
+    private val pendingPublishAtomicFile: AtomicFile by lazy { AtomicFile(pendingPublishFile) }
+
     /** 获取某作品下全部章节条目。 */
     fun getProjectEntries(projectId: String): Map<ChapterKey, ChapterMirrorEntry> {
         synchronized(lock) {
-            val root = readRoot() ?: return emptyMap()
+            val root = readRootForRead() ?: return emptyMap()
             val projectObj = root.optJSONObject(PROJECTS_KEY)?.optJSONObject(projectId) ?: return emptyMap()
             return decodeProjectEntries(projectId, projectObj)
         }
     }
 
-    /** 写入/覆盖单章条目。 */
+    /** 写入/覆盖单章条目。返回 true 表示持久化成功；false 表示失败（调用方应停止本轮操作）。 */
     fun putChapterEntry(
         projectId: String,
         volumeId: String,
         chapterId: String,
         entry: ChapterMirrorEntry,
-    ) {
+    ): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: return false
             val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
             val projectObj = projects.optJSONObject(projectId) ?: JSONObject().also { projects.put(projectId, it) }
             projectObj.put(chapterKey(volumeId, chapterId), encodeEntry(entry))
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
@@ -148,10 +173,12 @@ class ReadableMirrorStateStore(
      *
      * 在锁内一次性写完所有条目，避免半提交状态。任一条目写入失败不影响其他条目
      * （JSONObject.put 不抛异常）。
+     *
+     * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作，不清 journal）。
      */
-    fun putChapterEntries(entries: Map<ChapterKey, ChapterMirrorEntry>) {
+    fun putChapterEntries(entries: Map<ChapterKey, ChapterMirrorEntry>): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: return false
             val projects = root.optJSONObject(PROJECTS_KEY) ?: JSONObject().also { root.put(PROJECTS_KEY, it) }
             for ((key, entry) in entries) {
                 val projectObj =
@@ -159,20 +186,22 @@ class ReadableMirrorStateStore(
                         ?: JSONObject().also { projects.put(key.projectId, it) }
                 projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
             }
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
-    /** 删除单章条目（幂等）。 */
+    /**
+     * 删除单章条目（幂等）。返回 true 表示持久化成功；false 表示失败。
+     */
     fun removeChapterEntry(
         projectId: String,
         volumeId: String,
         chapterId: String,
-    ) {
+    ): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: return
-            val projects = root.optJSONObject(PROJECTS_KEY) ?: return
-            val projectObj = projects.optJSONObject(projectId) ?: return
+            val root = readRootForUpdate() ?: return false
+            val projects = root.optJSONObject(PROJECTS_KEY) ?: return true
+            val projectObj = projects.optJSONObject(projectId) ?: return true
             projectObj.remove(chapterKey(volumeId, chapterId))
             if (projectObj.length() == 0) {
                 projects.remove(projectId)
@@ -180,32 +209,36 @@ class ReadableMirrorStateStore(
             if (projects.length() == 0) {
                 root.remove(PROJECTS_KEY)
             }
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
     /**
      * 删除某作品的全部条目，返回被删除的条目（供 Publisher 逐个删 MediaStore URI）。
+     *
+     * #649 评论 5563333323 缺口 2：返回 Result，写失败时调用方不清 journal。
      */
-    fun removeAllProjectEntries(projectId: String): Map<ChapterKey, ChapterMirrorEntry> {
+    fun removeAllProjectEntries(projectId: String): Result<Map<ChapterKey, ChapterMirrorEntry>> {
         synchronized(lock) {
-            val root = readRoot() ?: return emptyMap()
-            val projects = root.optJSONObject(PROJECTS_KEY) ?: return emptyMap()
-            val projectObj = projects.optJSONObject(projectId) ?: return emptyMap()
+            val root = readRootForUpdate() ?: return Result.failure(IOException("state read failed or corrupted"))
+            val projects = root.optJSONObject(PROJECTS_KEY) ?: return Result.success(emptyMap())
+            val projectObj = projects.optJSONObject(projectId) ?: return Result.success(emptyMap())
             val removed = decodeProjectEntries(projectId, projectObj)
             projects.remove(projectId)
             if (projects.length() == 0) {
                 root.remove(PROJECTS_KEY)
             }
-            writeRoot(root)
-            return removed
+            if (!writeRoot(root)) {
+                return Result.failure(IOException("state write failed"))
+            }
+            return Result.success(removed)
         }
     }
 
     /** 列出所有有镜像条目的作品 ID。 */
     fun getAllProjectIds(): Set<String> {
         synchronized(lock) {
-            val root = readRoot() ?: return emptySet()
+            val root = readRootForRead() ?: return emptySet()
             val projects = root.optJSONObject(PROJECTS_KEY) ?: return emptySet()
             val ids = mutableSetOf<String>()
             val keys = projects.keys()
@@ -226,7 +259,7 @@ class ReadableMirrorStateStore(
      */
     fun getBackend(): MirrorBackend {
         synchronized(lock) {
-            val root = readRoot() ?: return MirrorBackend.MEDIA_STORE
+            val root = readRootForRead() ?: return MirrorBackend.MEDIA_STORE
             val name = root.optString(BACKEND_KEY).takeIf { it.isNotEmpty() }
             return when (name) {
                 BACKEND_VALUE_DOCUMENT_TREE -> MirrorBackend.DOCUMENT_TREE
@@ -236,10 +269,10 @@ class ReadableMirrorStateStore(
         }
     }
 
-    /** 设置当前镜像存储后端。 */
-    fun setBackend(backend: MirrorBackend) {
+    /** 设置当前镜像存储后端。返回 true 表示持久化成功。 */
+    fun setBackend(backend: MirrorBackend): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: return false
             root.put(
                 BACKEND_KEY,
                 when (backend) {
@@ -247,7 +280,7 @@ class ReadableMirrorStateStore(
                     MirrorBackend.DOCUMENT_TREE -> BACKEND_VALUE_DOCUMENT_TREE
                 },
             )
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
@@ -259,17 +292,17 @@ class ReadableMirrorStateStore(
      */
     fun getTreeUri(): String? {
         synchronized(lock) {
-            val root = readRoot() ?: return null
+            val root = readRootForRead() ?: return null
             return root.optString(TREE_URI_KEY).takeIf { it.isNotEmpty() }
         }
     }
 
-    /** 设置 SAF document tree URI。 */
-    fun setTreeUri(uri: String) {
+    /** 设置 SAF document tree URI。返回 true 表示持久化成功。 */
+    fun setTreeUri(uri: String): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: return false
             root.put(TREE_URI_KEY, uri)
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
@@ -278,17 +311,17 @@ class ReadableMirrorStateStore(
     /** 获取 manifest 文件的 MediaStore URI（供 Publisher 覆盖写入）。 */
     fun getManifestUri(): String? {
         synchronized(lock) {
-            val root = readRoot() ?: return null
+            val root = readRootForRead() ?: return null
             return root.optString(MANIFEST_URI_KEY).takeIf { it.isNotEmpty() }
         }
     }
 
-    /** 记入 manifest 文件 URI。 */
-    fun setManifestUri(uri: String) {
+    /** 记入 manifest 文件 URI。返回 true 表示持久化成功。 */
+    fun setManifestUri(uri: String): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: return false
             root.put(MANIFEST_URI_KEY, uri)
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
@@ -312,9 +345,9 @@ class ReadableMirrorStateStore(
         chapterEntries: Map<ChapterKey, ChapterMirrorEntry>,
         backend: MirrorBackend = MirrorBackend.DOCUMENT_TREE,
         treeUri: String? = null,
-    ) {
+    ): Boolean {
         synchronized(lock) {
-            val root = readRoot() ?: JSONObject()
+            val root = readRootForUpdate() ?: JSONObject()
             // 写入 backend
             root.put(
                 BACKEND_KEY,
@@ -337,7 +370,7 @@ class ReadableMirrorStateStore(
                         ?: JSONObject().also { projects.put(key.projectId, it) }
                 projectObj.put(chapterKey(key.volumeId, key.chapterId), encodeEntry(entry))
             }
-            writeRoot(root)
+            return writeRoot(root)
         }
     }
 
@@ -368,27 +401,45 @@ class ReadableMirrorStateStore(
     /**
      * 写入/覆盖 pendingPublish journal。
      *
+     * #649 评论 5563333323 缺口 2：用 AtomicFile 原子写入，返回 Boolean。
+     * Publisher 规则：下一步会改变外部镜像之前，上一步 journal 必须确认持久化成功；
+     * 失败则停止本轮镜像操作（不继续移动文件）。
+     *
      * @param journalJson 完整的 journal JSON（调用方负责组装）。
+     * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作）。
      */
-    fun writePendingPublish(journalJson: String) {
+    fun writePendingPublish(journalJson: String): Boolean {
         synchronized(lock) {
-            try {
+            return try {
                 pendingPublishFile.parentFile?.mkdirs()
-                pendingPublishFile.writeText(journalJson, Charsets.UTF_8)
+                val os = pendingPublishAtomicFile.startWrite() as FileOutputStream
+                try {
+                    os.write(journalJson.toByteArray(Charsets.UTF_8))
+                    pendingPublishAtomicFile.finishWrite(os)
+                    true
+                } catch (e: IOException) {
+                    pendingPublishAtomicFile.failWrite(os)
+                    false
+                }
             } catch (e: IOException) {
-                // journal 写入失败不阻断发布；最坏情况是中断后无法恢复未完成步骤。
+                false
             }
         }
     }
 
-    /** 删除 pendingPublish journal（发布成功后调用）。 */
-    fun clearPendingPublish() {
+    /**
+     * 删除 pendingPublish journal（发布成功后调用）。
+     *
+     * @return true 表示删除成功或文件本就不存在；false 表示删除失败。
+     */
+    fun clearPendingPublish(): Boolean {
         synchronized(lock) {
-            try {
-                if (pendingPublishFile.exists()) {
-                    pendingPublishFile.delete()
-                }
+            return try {
+                // AtomicFile.delete() 删除 .new 临时文件和正式文件
+                pendingPublishAtomicFile.delete()
+                true
             } catch (_: Exception) {
+                false
             }
         }
     }
@@ -436,23 +487,67 @@ class ReadableMirrorStateStore(
             put(CONTENT_HASH_KEY, entry.contentHash)
         }
 
-    private fun readRoot(): JSONObject? {
-        if (!stateFile.exists()) return null
+    /**
+     * 读取 state root。
+     *
+     * #649 评论 5563333323 缺口 2：返回 [ReadResult]，不把 JSON 损坏当成"没有 state"。
+     * 调用方遇到 [ReadResult.Corrupted] 时应停止操作，不覆盖成空对象。
+     */
+    private fun readRoot(): ReadResult {
+        if (!stateFile.exists()) return ReadResult.NotExists
         return try {
-            JSONObject(stateFile.readText(Charsets.UTF_8))
+            ReadResult.Parsed(JSONObject(stateAtomicFile.readFully().toString(Charsets.UTF_8)))
         } catch (e: IOException) {
-            null
+            ReadResult.Corrupted(e)
         } catch (e: JSONException) {
-            null
+            ReadResult.Corrupted(e)
         }
     }
 
-    private fun writeRoot(root: JSONObject) {
-        try {
+    /**
+     * 读 root 用于更新；损坏时返回 null（调用方应停止本轮操作，不覆盖）。
+     * 文件不存在时返回空 [JSONObject]（首次启动）。
+     */
+    private fun readRootForUpdate(): JSONObject? {
+        return when (val result = readRoot()) {
+            ReadResult.NotExists -> JSONObject()
+            is ReadResult.Parsed -> result.root
+            is ReadResult.Corrupted -> null
+        }
+    }
+
+    /**
+     * 读 root 用于只读查询；损坏时返回 null（调用方返回默认值，不抛异常）。
+     * 与 [readRootForUpdate] 区别：损坏时不停止操作（只读查询返回默认值更安全）。
+     */
+    private fun readRootForRead(): JSONObject? {
+        return when (val result = readRoot()) {
+            ReadResult.NotExists -> null
+            is ReadResult.Parsed -> result.root
+            is ReadResult.Corrupted -> null
+        }
+    }
+
+    /**
+     * 用 AtomicFile 原子写入 state root。
+     *
+     * #649 评论 5563333323 缺口 2：startWrite → finishWrite，失败 failWrite。
+     * @return true 表示持久化成功；false 表示失败。
+     */
+    private fun writeRoot(root: JSONObject): Boolean {
+        return try {
             stateFile.parentFile?.mkdirs()
-            stateFile.writeText(root.toString(), Charsets.UTF_8)
+            val os = stateAtomicFile.startWrite() as FileOutputStream
+            try {
+                os.write(root.toString().toByteArray(Charsets.UTF_8))
+                stateAtomicFile.finishWrite(os)
+                true
+            } catch (e: IOException) {
+                stateAtomicFile.failWrite(os)
+                false
+            }
         } catch (e: IOException) {
-            // 状态写入失败不阻断业务；下次发布会重写。
+            false
         }
     }
 

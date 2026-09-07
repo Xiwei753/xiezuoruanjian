@@ -168,23 +168,32 @@ class ReadableMirrorPublisher(
                     return
                 }
                 currentItems[key] = item.copy(backupOldRef = backup, state = PendingItem.STATE_OLD_BACKED_UP)
-                writePendingPublishJournal(
-                    projectId = journal.projectId,
-                    transactionType = journal.transactionType,
-                    phase = PendingMirrorPublish.PHASE_PROMOTE,
-                    txId = journal.txId,
-                    backend = journal.backend,
-                    treeUri = journal.treeUri,
-                    oldEntries = journal.oldEntries,
-                    newEntries = journal.newEntries,
-                    stagedRefs = journal.stagedRefs,
-                    items = currentItems,
-                    removedProjectIds = journal.removedProjectIds,
-                    manifestOldRef = journal.manifestOldRef,
-                    manifestStagedRef = journal.manifestStagedRef,
-                    manifestNewRef = journal.manifestNewRef,
-                    manifestBackupRef = journal.manifestBackupRef,
-                )
+                // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+                if (!writePendingPublishJournal(
+                        projectId = journal.projectId,
+                        transactionType = journal.transactionType,
+                        phase = PendingMirrorPublish.PHASE_PROMOTE,
+                        txId = journal.txId,
+                        backend = journal.backend,
+                        treeUri = journal.treeUri,
+                        oldEntries = journal.oldEntries,
+                        newEntries = journal.newEntries,
+                        stagedRefs = journal.stagedRefs,
+                        items = currentItems,
+                        removedProjectIds = journal.removedProjectIds,
+                        manifestOldRef = journal.manifestOldRef,
+                        manifestStagedRef = journal.manifestStagedRef,
+                        manifestNewRef = journal.manifestNewRef,
+                        manifestBackupRef = journal.manifestBackupRef,
+                    )
+                ) {
+                    DiagnosticsLogger.w(TAG, "Recover backup: journal write failed for ${key.chapterId}, rolling back")
+                    storage.rollback(journal.txId)
+                    for ((_, entry) in promotedEntries) {
+                        storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                    }
+                    return
+                }
             }
             // 2. promote staged（不删 old）
             val newRef = storage.promoteStaged(staged, staged.finalRelativePath)
@@ -207,23 +216,29 @@ class ReadableMirrorPublisher(
                 )
             // 逐项更新 journal（记录该 item 已 PROMOTED）
             currentItems[key] = currentItems[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
-            writePendingPublishJournal(
-                projectId = journal.projectId,
-                transactionType = journal.transactionType,
-                phase = PendingMirrorPublish.PHASE_PROMOTE,
-                txId = journal.txId,
-                backend = journal.backend,
-                treeUri = journal.treeUri,
-                oldEntries = journal.oldEntries,
-                newEntries = journal.newEntries,
-                stagedRefs = journal.stagedRefs,
-                items = currentItems,
-                removedProjectIds = journal.removedProjectIds,
-                manifestOldRef = journal.manifestOldRef,
-                manifestStagedRef = journal.manifestStagedRef,
-                manifestNewRef = journal.manifestNewRef,
-                manifestBackupRef = journal.manifestBackupRef,
-            )
+            // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+            if (!writePendingPublishJournal(
+                    projectId = journal.projectId,
+                    transactionType = journal.transactionType,
+                    phase = PendingMirrorPublish.PHASE_PROMOTE,
+                    txId = journal.txId,
+                    backend = journal.backend,
+                    treeUri = journal.treeUri,
+                    oldEntries = journal.oldEntries,
+                    newEntries = journal.newEntries,
+                    stagedRefs = journal.stagedRefs,
+                    items = currentItems,
+                    removedProjectIds = journal.removedProjectIds,
+                    manifestOldRef = journal.manifestOldRef,
+                    manifestStagedRef = journal.manifestStagedRef,
+                    manifestNewRef = journal.manifestNewRef,
+                    manifestBackupRef = journal.manifestBackupRef,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}, rolling back")
+                storage.rollback(journal.txId)
+                return
+            }
         }
 
         // 写 manifest（走事务性 manifest 写入）
@@ -251,28 +266,37 @@ class ReadableMirrorPublisher(
             return
         }
         // manifest 成功后批量更新 stateStore
-        stateStore.putChapterEntries(promotedEntries)
+        // #649 评论 5563333323 缺口 2：putChapterEntries 失败也不清 journal
+        if (!stateStore.putChapterEntries(promotedEntries)) {
+            DiagnosticsLogger.w(TAG, "Recover promote: putChapterEntries failed, keeping journal for retry")
+            return
+        }
         // 标记所有 item 为 COMMITTED
         val committedItems = currentItems.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
         // #649 评论 5562715833 问题 4b：manifest 成功后先写 cleanup journal，再 recoverCleanupPhase
-        writePendingPublishJournal(
-            projectId = journal.projectId,
-            transactionType = journal.transactionType,
-            phase = PendingMirrorPublish.PHASE_CLEANUP,
-            txId = journal.txId,
-            backend = journal.backend,
-            treeUri = journal.treeUri,
-            oldEntries = journal.oldEntries,
-            newEntries = promotedEntries,
-            stagedRefs = emptyMap(),
-            items = committedItems,
-            removedProjectIds = journal.removedProjectIds,
-            manifestOldRef = manifestResult.manifestOldRef,
-            manifestStagedRef = manifestResult.manifestStagedRef,
-            manifestNewRef = manifestResult.newRef,
-            manifestBackupRef = manifestResult.backupOldRef,
-            isManifestCommitted = true,
-        )
+        // #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
+        if (!writePendingPublishJournal(
+                projectId = journal.projectId,
+                transactionType = journal.transactionType,
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                txId = journal.txId,
+                backend = journal.backend,
+                treeUri = journal.treeUri,
+                oldEntries = journal.oldEntries,
+                newEntries = promotedEntries,
+                stagedRefs = emptyMap(),
+                items = committedItems,
+                removedProjectIds = journal.removedProjectIds,
+                manifestOldRef = manifestResult.manifestOldRef,
+                manifestStagedRef = manifestResult.manifestStagedRef,
+                manifestNewRef = manifestResult.newRef,
+                manifestBackupRef = manifestResult.backupOldRef,
+                isManifestCommitted = true,
+            )
+        ) {
+            DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
+            return
+        }
         // 进入 cleanup 阶段
         recoverCleanupPhase(
             journal.copy(
@@ -301,14 +325,14 @@ class ReadableMirrorPublisher(
     ) {
         when (journal.transactionType) {
             MirrorTransactionType.UPSERT_PROJECT -> {
-                // 删除 snapshot 中已不存在的旧 key
-                val allKeys = journal.newEntries.keys
-                for ((key, entry) in journal.oldEntries) {
-                    if (key !in allKeys) {
-                        val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
-                        storage.delete(ref)
-                        stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
-                    }
+                // #649 评论 5563333323 缺口 3：调用统一 cleanup 函数，不复制两份逻辑。
+                // allLiveKeys = journal.newEntries.keys：只清理已删除章节的旧 ref。
+                if (cleanupCommittedTransaction(journal, storage, allLiveKeys = journal.newEntries.keys)) {
+                    // 全部清理成功，清除 journal
+                    stateStore.clearPendingPublish()
+                } else {
+                    // 有失败项，保留 journal，下次 recover 继续清
+                    DiagnosticsLogger.w(TAG, "Recover cleanup: partial failure for UPSERT_PROJECT ${journal.projectId}, keeping journal")
                 }
             }
             MirrorTransactionType.DELETE_PROJECT -> {
@@ -340,22 +364,97 @@ class ReadableMirrorPublisher(
                     }
                 }
                 // 2. 从 stateStore 删除该项目条目（若尚未删）
-                stateStore.removeAllProjectEntries(journal.projectId)
-                // 3. 删旧正文
-                for ((_, entry) in journal.oldEntries) {
-                    try {
-                        val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
-                        storage.delete(ref)
-                    } catch (e: Exception) {
-                        DiagnosticsLogger.w(TAG, "Recover cleanup: failed to delete URI ${entry.uri}", e)
-                    }
+                //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
+                val removeResult = stateStore.removeAllProjectEntries(journal.projectId)
+                if (removeResult.isFailure) {
+                    DiagnosticsLogger.w(TAG, "Recover cleanup: removeAllProjectEntries failed for ${journal.projectId}, keeping journal")
+                    return
                 }
-                // 4. 删旧 manifest backup（若有）
-                journal.manifestBackupRef?.let { storage.delete(it) }
+                // 3. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
+                //    allLiveKeys = null：DELETE_PROJECT 时 oldEntries 全部要删
+                if (cleanupCommittedTransaction(journal, storage, allLiveKeys = null)) {
+                    stateStore.clearPendingPublish()
+                } else {
+                    DiagnosticsLogger.w(TAG, "Recover cleanup: partial failure for DELETE_PROJECT ${journal.projectId}, keeping journal")
+                }
             }
         }
-        // 清除 journal
-        stateStore.clearPendingPublish()
+    }
+
+    /**
+     * 统一清理已提交事务的残留文件。
+     *
+     * #649 评论 5563333323 缺口 3：正常 publishProject() 和 recoverCleanupPhase() 共用此函数，
+     * 不复制两份逻辑。任一必须删除的项失败时返回 false，调用方不清 journal，下次 recover 继续清。
+     *
+     * 处理：
+     * - 每个 COMMITTED item 的 oldRef（被替换的旧文件）
+     * - 每个 item 的 backupOldRef（旧正文备份）
+     * - 已删除章节的旧 ref（snapshot 中已不存在的旧 key）
+     * - manifestBackupRef（manifest 事务备份）
+     * - tx staging/backup 根（事务暂存目录）
+     *
+     * @param journal 已提交的 journal
+     * @param storage 当前事务的 storage
+     * @param allLiveKeys 当前 Core 中仍存在的章节 key 集合（用于清理已删除章节的旧 ref）；
+     *   null 表示不清理已删除章节（DELETE_PROJECT 场景，oldEntries 全部要删）。
+     * @return true 表示全部清理成功；false 表示有失败项（保留 journal，下次继续清）。
+     */
+    private fun cleanupCommittedTransaction(
+        journal: PendingMirrorPublish,
+        storage: ReadableMirrorStorage,
+        allLiveKeys: Set<ChapterKey>? = null,
+    ): Boolean {
+        var allSuccess = true
+        // 1. 每个 COMMITTED item 的 oldRef 和 backupOldRef
+        for ((_, item) in journal.items) {
+            try {
+                item.oldRef?.let { if (!storage.delete(it)) allSuccess = false }
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "cleanup: failed to delete oldRef ${item.oldRef?.uri}", e)
+                allSuccess = false
+            }
+            try {
+                item.backupOldRef?.let { if (!storage.delete(it)) allSuccess = false }
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "cleanup: failed to delete backupOldRef ${item.backupOldRef?.uri}", e)
+                allSuccess = false
+            }
+        }
+        // 2. 已删除章节的旧 ref（snapshot 中已不存在的旧 key）
+        for ((key, entry) in journal.oldEntries) {
+            val shouldDelete = allLiveKeys?.let { key !in it } ?: true
+            if (shouldDelete) {
+                try {
+                    val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
+                    if (!storage.delete(ref)) allSuccess = false
+                } catch (e: Exception) {
+                    DiagnosticsLogger.w(TAG, "cleanup: failed to delete old entry ${entry.uri}", e)
+                    allSuccess = false
+                }
+                // 同时从 stateStore 移除该条目
+                try {
+                    stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
+                } catch (e: Exception) {
+                    DiagnosticsLogger.w(TAG, "cleanup: failed to removeChapterEntry for ${key.chapterId}", e)
+                }
+            }
+        }
+        // 3. manifestBackupRef（manifest 事务备份）
+        try {
+            journal.manifestBackupRef?.let { if (!storage.delete(it)) allSuccess = false }
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "cleanup: failed to delete manifestBackupRef ${journal.manifestBackupRef?.uri}", e)
+            allSuccess = false
+        }
+        // 4. tx staging/backup 根（事务暂存目录）
+        try {
+            storage.rollback(journal.txId)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "cleanup: failed to rollback tx ${journal.txId}", e)
+            // rollback 失败不致命，staging 目录残留可下次清
+        }
+        return allSuccess
     }
 
     /**
@@ -463,23 +562,29 @@ class ReadableMirrorPublisher(
             }
 
             // 写 pendingPublish journal（记录 staging 完成）
-            writePendingPublishJournal(
-                projectId = projectId,
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_PROMOTE,
-                txId = txId,
-                backend = stateStore.getBackend(),
-                treeUri = stateStore.getTreeUri(),
-                oldEntries = oldEntries,
-                newEntries = desiredEntries,
-                stagedRefs = stagedRefs,
-                items = items,
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-            )
+            // #649 评论 5563333323 缺口 2：journal 写入失败则停止本轮镜像操作
+            if (!writePendingPublishJournal(
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_PROMOTE,
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    oldEntries = oldEntries,
+                    newEntries = desiredEntries,
+                    stagedRefs = stagedRefs,
+                    items = items,
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: journal write failed after stage")
+                storage.rollback(txId)
+                return
+            }
 
             // 3. 提升阶段：promote 所有暂存文件到最终位置（逐项更新 journal）
             // #649 评论 5562715833 问题 2：backupCommitted + promoteStaged，不先删 old
@@ -514,23 +619,35 @@ class ReadableMirrorPublisher(
                         return
                     }
                     items[key] = item.copy(backupOldRef = backup, state = PendingItem.STATE_OLD_BACKED_UP)
-                    writePendingPublishJournal(
-                        projectId = projectId,
-                        transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                        phase = PendingMirrorPublish.PHASE_PROMOTE,
-                        txId = txId,
-                        backend = stateStore.getBackend(),
-                        treeUri = stateStore.getTreeUri(),
-                        oldEntries = oldEntries,
-                        newEntries = desiredEntries,
-                        stagedRefs = stagedRefs,
-                        items = items,
-                        removedProjectIds = emptySet(),
-                        manifestOldRef = null,
-                        manifestStagedRef = null,
-                        manifestNewRef = null,
-                        manifestBackupRef = null,
-                    )
+                    // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+                    if (!writePendingPublishJournal(
+                            projectId = projectId,
+                            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                            phase = PendingMirrorPublish.PHASE_PROMOTE,
+                            txId = txId,
+                            backend = stateStore.getBackend(),
+                            treeUri = stateStore.getTreeUri(),
+                            oldEntries = oldEntries,
+                            newEntries = desiredEntries,
+                            stagedRefs = stagedRefs,
+                            items = items,
+                            removedProjectIds = emptySet(),
+                            manifestOldRef = null,
+                            manifestStagedRef = null,
+                            manifestNewRef = null,
+                            manifestBackupRef = null,
+                        )
+                    ) {
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Publish project $projectId aborted: journal write failed after backup for ${key.chapterId}",
+                        )
+                        storage.rollback(txId)
+                        for ((_, promotedEntry) in promotedEntries) {
+                            storage.delete(MirrorFileRef(uri = promotedEntry.uri, relativePath = promotedEntry.relativePath))
+                        }
+                        return
+                    }
                 }
                 // 2. promote staged（不删 old）
                 val newRef = storage.promoteStaged(staged, staged.finalRelativePath)
@@ -556,23 +673,32 @@ class ReadableMirrorPublisher(
                     )
                 // 逐项更新 journal（记录该 item 已 PROMOTED）
                 items[key] = items[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
-                writePendingPublishJournal(
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                    phase = PendingMirrorPublish.PHASE_PROMOTE,
-                    txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
-                    oldEntries = oldEntries,
-                    newEntries = desiredEntries,
-                    stagedRefs = stagedRefs,
-                    items = items,
-                    removedProjectIds = emptySet(),
-                    manifestOldRef = null,
-                    manifestStagedRef = null,
-                    manifestNewRef = null,
-                    manifestBackupRef = null,
-                )
+                // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+                if (!writePendingPublishJournal(
+                        projectId = projectId,
+                        transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                        phase = PendingMirrorPublish.PHASE_PROMOTE,
+                        txId = txId,
+                        backend = stateStore.getBackend(),
+                        treeUri = stateStore.getTreeUri(),
+                        oldEntries = oldEntries,
+                        newEntries = desiredEntries,
+                        stagedRefs = stagedRefs,
+                        items = items,
+                        removedProjectIds = emptySet(),
+                        manifestOldRef = null,
+                        manifestStagedRef = null,
+                        manifestNewRef = null,
+                        manifestBackupRef = null,
+                    )
+                ) {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Publish project $projectId aborted: journal write failed after promote for ${key.chapterId}",
+                    )
+                    storage.rollback(txId)
+                    return
+                }
             }
 
             // 4. 提交 manifest：走事务性 manifest 写入（stage → promote → setManifestUri → 删 backup）
@@ -612,46 +738,64 @@ class ReadableMirrorPublisher(
                 return
             }
             // manifest 成功后一次性写 desiredEntries 到 stateStore
-            stateStore.putChapterEntries(promotedEntries)
+            // #649 评论 5563333323 缺口 2：putChapterEntries 失败也不清 journal
+            if (!stateStore.putChapterEntries(promotedEntries)) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId: putChapterEntries failed, keeping journal for retry")
+                return
+            }
 
             // 标记所有 item 为 COMMITTED，更新 journal 到 cleanup 阶段
             val committedItems = items.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
-            writePendingPublishJournal(
-                projectId = projectId,
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_CLEANUP,
-                txId = txId,
-                backend = stateStore.getBackend(),
-                treeUri = stateStore.getTreeUri(),
-                oldEntries = oldEntries,
-                newEntries = promotedEntries,
-                stagedRefs = emptyMap(),
-                items = committedItems,
-                removedProjectIds = emptySet(),
-                manifestOldRef = manifestResult.manifestOldRef,
-                manifestStagedRef = manifestResult.manifestStagedRef,
-                manifestNewRef = manifestResult.newRef,
-                manifestBackupRef = manifestResult.backupOldRef,
-            )
+            if (!writePendingPublishJournal(
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    oldEntries = oldEntries,
+                    newEntries = promotedEntries,
+                    stagedRefs = emptyMap(),
+                    items = committedItems,
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = manifestResult.manifestOldRef,
+                    manifestStagedRef = manifestResult.manifestStagedRef,
+                    manifestNewRef = manifestResult.newRef,
+                    manifestBackupRef = manifestResult.backupOldRef,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup journal write failed, keeping journal for retry")
+                return
+            }
 
-            // 5. 清理阶段：删除旧正文和 backup（事务已提交）
-            //    #649 评论 5562715833 问题 2：事务提交后删 old 和 backup
-            for ((_, item) in committedItems) {
-                item.oldRef?.let { storage.delete(it) }
-                item.backupOldRef?.let { storage.delete(it) }
+            // 5. 清理阶段：调用统一 cleanup 函数
+            //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
+            val cleanupJournal =
+                PendingMirrorPublish(
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    oldEntries = oldEntries,
+                    newEntries = promotedEntries,
+                    stagedRefs = emptyMap(),
+                    items = committedItems,
+                    removedProjectIds = emptySet(),
+                    manifestOldRef = manifestResult.manifestOldRef,
+                    manifestStagedRef = manifestResult.manifestStagedRef,
+                    manifestNewRef = manifestResult.newRef,
+                    manifestBackupRef = manifestResult.backupOldRef,
+                    isManifestCommitted = true,
+                )
+            if (cleanupCommittedTransaction(cleanupJournal, storage, allLiveKeys = allKeys)) {
+                // 全部清理成功，清除 journal
+                stateStore.clearPendingPublish()
+            } else {
+                // 有失败项，保留 journal，下次 recover 继续清
+                DiagnosticsLogger.w(TAG, "Publish project $projectId: cleanup partial failure, keeping journal for retry")
             }
-            // 删除 snapshot 中已不存在的旧 key
-            for ((key, entry) in oldEntries) {
-                if (key !in allKeys) {
-                    val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
-                    storage.delete(ref)
-                    stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
-                }
-            }
-            // 删旧 manifest backup（事务已提交）
-            manifestResult.backupOldRef?.let { storage.delete(it) }
-            // 发布成功，清除 journal
-            stateStore.clearPendingPublish()
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to publish project: ${e.message}", e)
             // 异常时保留 journal，下次启动可继续
@@ -678,24 +822,29 @@ class ReadableMirrorPublisher(
             // #649 评论 5562715833 问题 7：不在 removed.isEmpty() 时 early return，
             // 即使空作品也继续走事务流程，提交 snapshot=null 的新 manifest（确保 manifest 不再引用该项目）
             // 2. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
+            //    #649 评论 5563333323 缺口 2：journal 写入失败则停止
             val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
-            writePendingPublishJournal(
-                projectId = projectId,
-                transactionType = MirrorTransactionType.DELETE_PROJECT,
-                phase = PendingMirrorPublish.PHASE_CLEANUP,
-                txId = txId,
-                backend = stateStore.getBackend(),
-                treeUri = stateStore.getTreeUri(),
-                oldEntries = removed,
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = setOf(projectId),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-            )
+            if (!writePendingPublishJournal(
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.DELETE_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    oldEntries = removed,
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = setOf(projectId),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
+                return
+            }
             // 3. 事务提交新 manifest（已不含该项目）
             //    用 desiredEntries=emptyMap 表示该项目不再有任何章节
             //    #649 评论 5562715833 问题 7：snapshot=null 确保 manifest 不再引用该项目
@@ -737,39 +886,62 @@ class ReadableMirrorPublisher(
             }
             // 4. manifest 成功后更新 journal（标记 manifest 已提交）
             //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
-            writePendingPublishJournal(
-                projectId = projectId,
-                transactionType = MirrorTransactionType.DELETE_PROJECT,
-                phase = PendingMirrorPublish.PHASE_CLEANUP,
-                txId = txId,
-                backend = stateStore.getBackend(),
-                treeUri = stateStore.getTreeUri(),
-                oldEntries = removed,
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = setOf(projectId),
-                manifestOldRef = manifestResult.manifestOldRef,
-                manifestStagedRef = manifestResult.manifestStagedRef,
-                manifestNewRef = manifestResult.newRef,
-                manifestBackupRef = manifestResult.backupOldRef,
-                isManifestCommitted = true,
-            )
-            // 5. 从 state store 删除该项目条目
-            stateStore.removeAllProjectEntries(projectId)
-            // 6. 删旧 URI
-            for ((_, entry) in removed) {
-                try {
-                    val ref = MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath)
-                    storage.delete(ref)
-                } catch (e: Exception) {
-                    DiagnosticsLogger.w(TAG, "Failed to delete URI ${entry.uri}", e)
-                }
+            //    #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
+            if (!writePendingPublishJournal(
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.DELETE_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    oldEntries = removed,
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = setOf(projectId),
+                    manifestOldRef = manifestResult.manifestOldRef,
+                    manifestStagedRef = manifestResult.manifestStagedRef,
+                    manifestNewRef = manifestResult.newRef,
+                    manifestBackupRef = manifestResult.backupOldRef,
+                    isManifestCommitted = true,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup journal write failed, keeping journal for retry")
+                return
             }
-            // 7. 删旧 manifest backup（事务已提交）
-            manifestResult.backupOldRef?.let { storage.delete(it) }
-            // 8. 删除成功，清除 journal
-            stateStore.clearPendingPublish()
+            // 5. 从 state store 删除该项目条目
+            //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
+            val removeResult = stateStore.removeAllProjectEntries(projectId)
+            if (removeResult.isFailure) {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId: removeAllProjectEntries failed, keeping journal for retry")
+                return
+            }
+            // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
+            //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
+            val deleteCleanupJournal =
+                PendingMirrorPublish(
+                    txId = txId,
+                    backend = stateStore.getBackend(),
+                    treeUri = stateStore.getTreeUri(),
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.DELETE_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    oldEntries = removed,
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = setOf(projectId),
+                    manifestOldRef = manifestResult.manifestOldRef,
+                    manifestStagedRef = manifestResult.manifestStagedRef,
+                    manifestNewRef = manifestResult.newRef,
+                    manifestBackupRef = manifestResult.backupOldRef,
+                    isManifestCommitted = true,
+                )
+            if (cleanupCommittedTransaction(deleteCleanupJournal, storage, allLiveKeys = null)) {
+                stateStore.clearPendingPublish()
+            } else {
+                DiagnosticsLogger.w(TAG, "Delete project $projectId: cleanup partial failure, keeping journal for retry")
+            }
         } catch (e: Exception) {
             DiagnosticsLogger.e(TAG, "Failed to delete project: ${e.message}", e)
             // 异常时保留 journal，下次启动可继续
@@ -885,6 +1057,8 @@ class ReadableMirrorPublisher(
     /**
      * 写 pendingPublish journal。
      *
+     * #649 评论 5563333323 缺口 2：返回 Boolean，失败时调用方停止本轮镜像操作。
+     *
      * journal JSON 结构：
      * ```json
      * {
@@ -905,6 +1079,8 @@ class ReadableMirrorPublisher(
      *   "manifestBackupRef": {...}
      * }
      * ```
+     *
+     * @return true 表示持久化成功；false 表示失败（调用方应停止本轮操作，不继续移动文件）。
      */
     private fun writePendingPublishJournal(
         projectId: String,
@@ -923,7 +1099,7 @@ class ReadableMirrorPublisher(
         manifestNewRef: MirrorFileRef?,
         manifestBackupRef: MirrorFileRef?,
         isManifestCommitted: Boolean = false,
-    ) {
+    ): Boolean {
         val journal =
             PendingMirrorPublish(
                 txId = txId,
@@ -943,7 +1119,7 @@ class ReadableMirrorPublisher(
                 manifestBackupRef = manifestBackupRef,
                 isManifestCommitted = isManifestCommitted,
             )
-        stateStore.writePendingPublish(journal.toJson())
+        return stateStore.writePendingPublish(journal.toJson())
     }
 
     // ── 内部 ──
@@ -1084,14 +1260,19 @@ class ReadableMirrorPublisher(
                 text = json,
             ) ?: return null
         // 写 journal：记录 manifestStagedRef
-        writeManifestJournal(
-            journalContext = journalContext,
-            items = items,
-            manifestStagedRef = staged,
-            manifestNewRef = journalContext.manifestNewRef,
-            manifestBackupRef = journalContext.manifestBackupRef,
-            isManifestCommitted = false,
-        )
+        // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+        if (!writeManifestJournal(
+                journalContext = journalContext,
+                items = items,
+                manifestStagedRef = staged,
+                manifestNewRef = journalContext.manifestNewRef,
+                manifestBackupRef = journalContext.manifestBackupRef,
+                isManifestCommitted = false,
+            )
+        ) {
+            storage.delete(MirrorFileRef(uri = staged.stagingUri, relativePath = staged.stagingRelativePath))
+            return null
+        }
         // 2. 旧 manifest ref（不删除，作为 backup）
         val oldUri = journalContext.manifestNewRef?.uri ?: stateStore.getManifestUri()
         val oldRef = oldUri?.let { MirrorFileRef(uri = it, relativePath = manifestRelativePath) }
@@ -1103,25 +1284,40 @@ class ReadableMirrorPublisher(
             return null
         }
         // 写 journal：记录 manifestNewRef, manifestBackupRef
-        writeManifestJournal(
-            journalContext = journalContext,
-            items = items,
-            manifestStagedRef = staged,
-            manifestNewRef = newRef,
-            manifestBackupRef = oldRef,
-            isManifestCommitted = false,
-        )
+        if (!writeManifestJournal(
+                journalContext = journalContext,
+                items = items,
+                manifestStagedRef = staged,
+                manifestNewRef = newRef,
+                manifestBackupRef = oldRef,
+                isManifestCommitted = false,
+            )
+        ) {
+            // journal 写失败：删新 manifest，保留旧 manifest
+            storage.delete(newRef)
+            return null
+        }
         // 4. setManifestUri
-        stateStore.setManifestUri(newRef.uri)
+        //    #649 评论 5563333323 缺口 2：setManifestUri 返回 Boolean
+        if (!stateStore.setManifestUri(newRef.uri)) {
+            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed")
+            storage.delete(newRef)
+            return null
+        }
         // 写 journal：isManifestCommitted = true
-        writeManifestJournal(
-            journalContext = journalContext,
-            items = items,
-            manifestStagedRef = staged,
-            manifestNewRef = newRef,
-            manifestBackupRef = oldRef,
-            isManifestCommitted = true,
-        )
+        if (!writeManifestJournal(
+                journalContext = journalContext,
+                items = items,
+                manifestStagedRef = staged,
+                manifestNewRef = newRef,
+                manifestBackupRef = oldRef,
+                isManifestCommitted = true,
+            )
+        ) {
+            // journal 写失败：manifest 已 setManifestUri，但 isManifestCommitted 未落盘。
+            // 返回成功让调用方继续；下次 recover 会发现 isManifestCommitted=false 重做。
+            DiagnosticsLogger.w(TAG, "Manifest transaction: isManifestCommitted journal write failed")
+        }
         return ManifestTransactionResult(
             newRef = newRef,
             manifestOldRef = oldRef,
@@ -1134,6 +1330,7 @@ class ReadableMirrorPublisher(
      * 写 manifest 相关的 journal 字段（复用 [journalContext] 的非 manifest 字段）。
      *
      * #649 评论 5562715833 问题 5：manifest 事务中间状态逐步落 journal。
+     * #649 评论 5563333323 缺口 2：返回 Boolean。
      */
     private fun writeManifestJournal(
         journalContext: PendingMirrorPublish,
@@ -1142,8 +1339,8 @@ class ReadableMirrorPublisher(
         manifestNewRef: MirrorFileRef?,
         manifestBackupRef: MirrorFileRef?,
         isManifestCommitted: Boolean,
-    ) {
-        writePendingPublishJournal(
+    ): Boolean {
+        return writePendingPublishJournal(
             projectId = journalContext.projectId,
             transactionType = journalContext.transactionType,
             phase = journalContext.phase,

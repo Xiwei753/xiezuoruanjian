@@ -81,7 +81,7 @@ object AppServiceProvider {
         // 旧实现 selectMirrorStorage 在启动时一次性固化 storage，Publisher 握着固定实例。
         // 新实现：创建 MirrorStorageRouter，Publisher 每次事务时从 router.current() 获取。
         val documentTreeReader = DocumentTreeReader(appContext.contentResolver)
-        val mediaStoreStorage = MediaStoreMirrorStorage(MediaStoreDownloads(appContext.contentResolver))
+        val mediaStoreStorage = MediaStoreMirrorStorage(MediaStoreDownloads(appContext.contentResolver), appContext.contentResolver)
         val documentTreeFactory: (Uri) -> DocumentTreeMirrorStorage = { treeUri ->
             DocumentTreeMirrorStorage(treeUri, appContext.contentResolver, documentTreeReader)
         }

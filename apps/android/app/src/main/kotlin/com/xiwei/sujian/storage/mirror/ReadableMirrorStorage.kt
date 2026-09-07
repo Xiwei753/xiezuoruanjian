@@ -145,20 +145,37 @@ interface ReadableMirrorStorage {
     ): StagedMirrorRef?
 
     /**
-     * 备份旧正文到事务 backup 目录（old 不动）。
+     * 把旧正文从最终路径**移动**到事务 backup 目录，最终路径真正腾空。
      *
-     * #649 评论 5562715833 问题 2：promote 拆成 backupCommitted + promoteStaged，
-     * 旧正文先复制/移动到事务 backup 目录（old 仍保留原位直到 promoteStaged 成功），
-     * manifest 提交成功后才删旧正文和 backup。
+     * #649 评论 5563333323 缺口 1：真正占位切换 swap。
+     * 旧实现只复制 old 到 backup，old 仍占着最终路径，promoteStaged 在 old 仍占着的
+     * 位置创建/移动同名新文件，provider 可能拒绝、改名或返回另一条记录，
+     * manifest 可能记录错误路径。
+     *
+     * 新语义：**移动**（不是复制）old 到 tx backup 区，最终文件名真正腾空。
+     * promoteStaged 之后最终路径才被 staged 占据，不会冲突。
+     * 事务回滚时用 [restoreBackup] 把 backup 移回最终路径。
      *
      * @param txId 事务 ID
      * @param old 旧引用（非空）
-     * @return backup 引用；失败返回 null
+     * @return backup 引用（old 已被移走，最终路径腾空）；失败返回 null（old 仍在原位）
      */
     fun backupCommitted(
         txId: String,
         old: MirrorFileRef,
     ): MirrorFileRef?
+
+    /**
+     * 只查不创建：返回已存在于 [relativePath] 的文件 ref。
+     *
+     * #649 评论 5563333323 缺口 1：恢复时判断 staged/final/backup 的真实位置。
+     * 移动是幂等的：如果文件已在目标位置，resolve() 发现后直接返回，
+     * 恢复时才能从任意一步继续。
+     *
+     * @param relativePath 相对 `Download/Sujian/` 的路径
+     * @return 已存在文件的 ref；不存在或查询失败返回 null
+     */
+    fun resolve(relativePath: String): MirrorFileRef?
 
     /**
      * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。
