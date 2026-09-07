@@ -1,10 +1,11 @@
 package com.xiwei.sujian.storage.mirror
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Assert.assertFalse
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -361,31 +362,13 @@ class Issue649Comment5575052682ReproTest {
     }
 
     /**
-     * 补充：确认 PendingMirrorPublish 数据类没有冻结 snapshot metadata 的字段。
-     * manifestTargetJson (line 233) 是 manifest 的最终 JSON，不是 snapshot metadata，
-     * 且只在 manifest 子事务开始后才设置。
+     * 硬问题 2 修复验证：PendingMirrorPublish 数据类已有冻结 manifest 元数据字段。
+     *
+     * #649 评论 5575052682：新增 frozenManifestMetadata / frozenManifestMetadataHash 字段，
+     * manifest 子事务未开始（manifestTargetJson==null）时恢复仍能用冻结的元数据。
      */
     @Test
-    fun hardProblem2_pendingMirrorPublish_hasNoFrozenSnapshotMetadataField() {
-        // PendingMirrorPublish 的字段（PendingMirrorPublish.kt line 200-233）：
-        // txId, backend, treeUri, projectId, transactionType, phase,
-        // oldEntries, newEntries, stagedRefs, items, removedProjectIds,
-        // manifestOldRef, manifestStagedRef, manifestNewRef, manifestBackupRef,
-        // isManifestCommitted, manifestSwapState, affectedProjectIds,
-        // manifestNewContentHash, manifestOldContentHash, manifestTargetJson
-        //
-        // ★ 没有以下字段 ★：
-        // - frozenProjectManifest
-        // - frozenManifestModelJson
-        // - frozenSnapshotMetadata
-        // - frozenProjectTitle / frozenProjectRevision / frozenProjectUpdatedAt
-        //
-        // manifestTargetJson (line 233) 注释"冻结 manifest 事务的目标 JSON，恢复时不再重新生成"，
-        // 但它是 manifest 的最终 JSON（含正文引用），不是 snapshot 的项目级 metadata，
-        // 且只在 manifest 子事务开始后才设置（ReadableMirrorPublisher.kt line 3315）。
-        // 当 manifestTargetJson==null 时，recoverPromotePhase 无法从 journal 拿到冻结的 metadata，
-        // 只能重新读当前 snapshot。
-
+    fun hardProblem2_pendingMirrorPublish_hasFrozenSnapshotMetadataField() {
         val journal = PendingMirrorPublish(
             txId = "tx-1",
             backend = MirrorBackend.MEDIA_STORE,
@@ -402,21 +385,21 @@ class Issue649Comment5575052682ReproTest {
             manifestStagedRef = null,
             manifestNewRef = null,
             manifestBackupRef = null,
-            manifestTargetJson = null, // manifest 子事务未开始
+            manifestTargetJson = null,
+            frozenManifestMetadata = """{"projectId":"proj-1","title":"T1","revision":"100","updatedAt":"2026-09-01","volumes":[]}""",
+            frozenManifestMetadataHash = "sha256:test",
         )
 
-        // 唯一和 manifest 相关的可选字段是 manifestTargetJson，它是 null
-        assertNull(
-            "manifestTargetJson 是 null（manifest 子事务未开始）",
-            journal.manifestTargetJson,
-        )
-        // 没有任何字段能提供冻结的 snapshot metadata（项目标题/顺序/revision/updatedAt）
-        // recoverPromotePhase 只能重新调用 source.getProjectWorkspaceSnapshot(journal.projectId)
-        assertTrue(
-            "★ PendingMirrorPublish 无 frozenProjectManifest/frozenManifestModelJson 字段，" +
-                "recoverPromotePhase 在 manifestTargetJson==null 时只能重读 fresh snapshot ★",
-            true,
-        )
+        // manifestTargetJson 仍为 null（manifest 子事务未开始）
+        assertNull("manifestTargetJson 是 null（manifest 子事务未开始）", journal.manifestTargetJson)
+        // frozenManifestMetadata 不为 null：恢复时可用冻结的元数据，不用重读 snapshot
+        assertNotNull("frozenManifestMetadata 存在，恢复时可替代 getProjectWorkspaceSnapshot", journal.frozenManifestMetadata)
+        assertNotNull("frozenManifestMetadataHash 存在，用于完整性校验", journal.frozenManifestMetadataHash)
+        // 验证 JSON round-trip 保持 frozen 字段
+        val roundTripped = PendingMirrorPublish.fromJson(journal.toJson())
+        assertNotNull("round-trip 成功", roundTripped)
+        assertEquals("frozenManifestMetadata round-trip", journal.frozenManifestMetadata, roundTripped!!.frozenManifestMetadata)
+        assertEquals("frozenManifestMetadataHash round-trip", journal.frozenManifestMetadataHash, roundTripped.frozenManifestMetadataHash)
     }
 
     // ══════════════════════════════════════════════════════════════════════

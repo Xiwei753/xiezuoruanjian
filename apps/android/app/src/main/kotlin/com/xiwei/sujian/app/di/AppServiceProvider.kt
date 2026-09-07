@@ -14,6 +14,7 @@ import com.xiwei.sujian.storage.mirror.CoreMirrorSnapshotSource
 import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
 import com.xiwei.sujian.storage.mirror.DocumentTreeMirrorStorage
 import com.xiwei.sujian.storage.mirror.MediaStoreMirrorStorage
+import com.xiwei.sujian.storage.mirror.MirrorOutboxStore
 import com.xiwei.sujian.storage.mirror.MirrorStorageRouter
 import com.xiwei.sujian.storage.mirror.ReadableMirrorPublisher
 import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
@@ -88,7 +89,8 @@ object AppServiceProvider {
         }
         val router = MirrorStorageRouter(stateStore, mediaStoreStorage, documentTreeFactory)
         val publisher = ReadableMirrorPublisher(snapshotSource, router, stateStore)
-        val mirrorChangeSink = DefaultMirrorChangeSink(publisher)
+        val outboxStore = MirrorOutboxStore(appContext)
+        val mirrorChangeSink = DefaultMirrorChangeSink(publisher, outboxStore)
         val bridge = AppServiceBridge(holder, mirrorChangeSink)
         AndroidNetworkMonitor.registerNetworkCallback(appContext) {
             refreshNetworkState(appContext, bridge)
