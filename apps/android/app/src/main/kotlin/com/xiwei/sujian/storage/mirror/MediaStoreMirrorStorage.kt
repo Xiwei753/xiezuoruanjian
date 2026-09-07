@@ -133,9 +133,33 @@ class MediaStoreMirrorStorage(
 
     override fun resolve(relativePath: String): MirrorFileRef? {
         // #649 评论 5563333323 缺口 1：只查不创建，用 MediaStore query RELATIVE_PATH + DISPLAY_NAME。
+        // #649 评论 5563798095：异常情况下命中多条时不随便拿第一条绑定章节，直接返回 null。
         if (!mediaStore.isSupported()) return null
         val directory = mediaStoreDirectory(relativePath)
         val displayName = relativePath.substringAfterLast('/')
+        return queryByPathAndName(directory, displayName, relativePath)
+    }
+
+    override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。
+        if (!mediaStore.isSupported()) return null
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/$relativePath"
+        val directory = mediaStoreDirectory(backupRelativePath)
+        val displayName = backupRelativePath.substringAfterLast('/')
+        return queryByPathAndName(directory, displayName, backupRelativePath)
+    }
+
+    /**
+     * MediaStore 公共查询：按 RELATIVE_PATH + DISPLAY_NAME 查找文件。
+     *
+     * #649 评论 5563798095：命中多条时返回 null 并记日志，不随便拿第一条绑定章节。
+     */
+    private fun queryByPathAndName(
+        directory: String,
+        displayName: String,
+        resultRelativePath: String,
+    ): MirrorFileRef? {
         return try {
             contentResolver
                 .query(
@@ -149,16 +173,17 @@ class MediaStoreMirrorStorage(
                 )
                 ?.use { cursor ->
                     if (cursor.moveToFirst()) {
-                        val id = cursor.getLong(0)
-                        // 异常情况下可能命中多条，只取第一条并记日志
                         if (cursor.count > 1) {
                             android.util.Log.w(
-                                "MediaStoreMirrorStorage",
-                                "resolve: multiple matches for relativePath=$relativePath, count=${cursor.count}"
+                                TAG,
+                                "queryByPathAndName: multiple matches for $resultRelativePath, " +
+                                    "count=${cursor.count}, returning null to avoid binding wrong file"
                             )
+                            return null
                         }
+                        val id = cursor.getLong(0)
                         val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
-                        MirrorFileRef(uri = uri.toString(), relativePath = relativePath)
+                        MirrorFileRef(uri = uri.toString(), relativePath = resultRelativePath)
                     } else {
                         null
                     }
@@ -237,19 +262,8 @@ class MediaStoreMirrorStorage(
         return if (parent.isBlank()) "$base/" else "$base/$parent/"
     }
 
-    /**
-     * 构造 MediaStore 完整 RELATIVE_PATH（`Download/Sujian/<parent>/<displayName>`）。
-     * 已弃用：RELATIVE_PATH 应只包含目录，文件名在 DISPLAY_NAME。
-     * 保留用于需要完整路径的兼容场景。
-     */
-    private fun buildMediaStoreRelativePath(relativePath: String): String {
-        val parent = relativePath.substringBeforeLast('/', "")
-        val displayName = relativePath.substringAfterLast('/')
-        val base = "${Environment.DIRECTORY_DOWNLOADS}/$MIRROR_ROOT_NAME"
-        return if (parent.isBlank()) "$base/$displayName" else "$base/$parent/$displayName"
-    }
-
     companion object {
+        private const val TAG = "MediaStoreMirrorStorage"
         private const val STAGING_DIR = ".staging"
         private const val BACKUP_DIR = "backup"
         private const val MIRROR_ROOT_NAME = "Sujian"

@@ -180,6 +180,22 @@ interface ReadableMirrorStorage {
     fun resolve(relativePath: String): MirrorFileRef?
 
     /**
+     * 只查不创建：返回已存在于备份路径 [relativePath] 的文件 ref。
+     *
+     * #649 评论 5563798095：恢复时判断 backup 是否已被移动到备份目录。
+     * 崩溃窗口：`backupCommitted()` 已把 old 移到 `.staging/<txId>/backup/`，
+     * 但 `backupOldRef` 还没写入 journal 时进程退出。重启后 journal 仍是 STAGED，
+     * 恢复会拿已失效的 old URI 再跑一次 `backupCommitted()`，
+     * 失败后又 `rollback(txId)` 会把唯一 backup 删掉。
+     * 用 `resolveBackup()` 检测 backup 已存在则跳过重复 backup。
+     *
+     * @param txId 事务 ID
+     * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
+     * @return 已存在文件的 ref；不存在或查询失败返回 null
+     */
+    fun resolveBackup(txId: String, relativePath: String): MirrorFileRef?
+
+    /**
      * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。
      *
      * #649 评论 5562715833 问题 2：promoteStaged 不再删 old。

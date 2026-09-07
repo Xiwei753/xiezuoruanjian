@@ -332,15 +332,45 @@ class DocumentTreeMirrorStorage(
     override fun resolve(relativePath: String): MirrorFileRef? {
         if (!isSupported()) return null
         // #649 评论 5563333323 缺口 1：只查不创建，用 findDirectory + findChildFile。
-        val parent = relativePath.substringBeforeLast('/', "")
-        val displayName = relativePath.substringAfterLast('/')
-        val parentUri = if (parent.isBlank()) treeUri else findDirectory(parent) ?: return null
+        return resolveInTree(relativePath, treeUri)
+    }
+
+    override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        if (!isSupported()) return null
+        // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/$relativePath"
+        // backup 位于 staging 目录内，需要逐级 findDirectory
+        val backupParentPath = backupRelativePath.substringBeforeLast('/', "")
+        val displayName = backupRelativePath.substringAfterLast('/')
+        val parentUri = findDirectory(backupParentPath) ?: return null
         return try {
             val children = documentTreeReader.listChildren(parentUri)
             val match = children.find { !it.isDirectory && it.name == displayName }
+            match?.let { MirrorFileRef(uri = it.uri.toString(), relativePath = backupRelativePath) }
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "resolveBackup listChildren failed for $displayName: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * 在给定的 parentUri 下查找文件（只查不创建）。
+     * [resolve] 和 [resolveBackup] 共用此实现。
+     */
+    private fun resolveInTree(
+        relativePath: String,
+        parentUri: Uri,
+    ): MirrorFileRef? {
+        val parent = relativePath.substringBeforeLast('/', "")
+        val displayName = relativePath.substringAfterLast('/')
+        val dirUri = if (parent.isBlank()) parentUri else findDirectory(parent) ?: return null
+        return try {
+            val children = documentTreeReader.listChildren(dirUri)
+            val match = children.find { !it.isDirectory && it.name == displayName }
             match?.let { MirrorFileRef(uri = it.uri.toString(), relativePath = relativePath) }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "resolve listChildren failed for $displayName: ${e.message}")
+            DiagnosticsLogger.w(TAG, "resolveInTree listChildren failed for $displayName: ${e.message}")
             null
         }
     }
