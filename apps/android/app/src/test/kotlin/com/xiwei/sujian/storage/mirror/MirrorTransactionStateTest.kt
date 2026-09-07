@@ -377,10 +377,11 @@ class MirrorTransactionStateTest {
         storage.committedFiles["content://backup"] = "backed up content"
 
         val backup = MirrorFileRef("content://backup", "backup/f.md")
-        val result = storage.restoreBackup(backup, "作品/P/V/Ch.md", "text/markdown")
+        val result = storage.restoreBackup(backup, "作品/P/V/Ch.md", "text/markdown", null)
 
-        assertNotNull(result)
-        assertEquals("restored content should match backup", "backed up content", storage.committedFiles[result!!.uri])
+        assertTrue("restore should succeed", result is RestoreBackupResult.Restored)
+        val ref = (result as RestoreBackupResult.Restored).ref
+        assertEquals("restored content should match backup", "backed up content", storage.committedFiles[ref.uri])
     }
 
     @Test
@@ -497,9 +498,10 @@ class MirrorTransactionStateTest {
         assertNull("promote should fail", promoted)
 
         // Step 3: restore backup on failure
-        val restored = storage.restoreBackup(backup!!, "f.md", "text/markdown")
-        assertNotNull("restore should succeed", restored)
-        assertEquals("restored content should match old", "old content", storage.committedFiles[restored!!.uri])
+        val restored = storage.restoreBackup(backup!!, "f.md", "text/markdown", null)
+        assertTrue("restore should succeed", restored is RestoreBackupResult.Restored)
+        val restoredRef = (restored as RestoreBackupResult.Restored).ref
+        assertEquals("restored content should match old", "old content", storage.committedFiles[restoredRef.uri])
     }
 
     // ── Recovery: skip PROMOTED/COMMITTED items ──
@@ -899,17 +901,40 @@ class MirrorTransactionStateTest {
             }
         }
 
-        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String): MirrorFileRef? {
-            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return null
+        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String, expectedOldContentHash: String?): RestoreBackupResult {
+            // 先检查 final 是否已存在
+            val existing = resolve(finalRelativePath)
+            if (existing != null) {
+                if (expectedOldContentHash != null) {
+                    val hashResult = readTextAndHash(existing)
+                    if (hashResult != null) {
+                        val (_, hash) = hashResult
+                        return if (hash == expectedOldContentHash) {
+                            RestoreBackupResult.AlreadyRestored(existing)
+                        } else {
+                            RestoreBackupResult.Conflict
+                        }
+                    }
+                    return RestoreBackupResult.Failed(null)
+                }
+                return RestoreBackupResult.AlreadyRestored(existing)
+            }
+            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return RestoreBackupResult.Failed(null)
             val newUri = "content://fake/restored/${committedFiles.size}"
             committedFiles[newUri] = content
             journalSteps.add("restore:${backup.relativePath}→$finalRelativePath")
-            return MirrorFileRef(newUri, finalRelativePath)
+            return RestoreBackupResult.Restored(MirrorFileRef(newUri, finalRelativePath))
         }
 
-        override fun rollback(txId: String) {
+        override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
+            val content = committedFiles[ref.uri] ?: stagingFiles[ref.uri] ?: backupFiles[ref.uri] ?: return null
+            return Pair(content, computeContentHash(content))
+        }
+
+        override fun rollback(txId: String): Boolean {
             stagingFiles.clear()
             journalSteps.add("rollback:$txId")
+            return true
         }
     }
 
@@ -1138,5 +1163,151 @@ class MirrorTransactionStateTest {
         storage.backupFiles["content://fake/backup/path_作品_P_V_Ch.md"] = "important content"
         val found = storage.resolveBackup("tx1", "作品/P/V/Ch.md")
         assertNotNull("resolveBackup should find existing backup", found)
+    }
+
+    // ── #649 评论 5566303837 问题 2：oldContentHash 序列化 ──
+
+    @Test
+    fun pendingItem_jsonRoundTrip_oldContentHash() {
+        val key = ChapterKey("p1", "v1", "ch1")
+        val staged = StagedMirrorRef("tx1", "content://s", ".staging/tx1/f.md", "f.md", "text/markdown")
+        val item = PendingItem(
+            key = key,
+            stagedRef = staged,
+            oldRef = MirrorFileRef("content://old", "f.md"),
+            backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
+            promotedRef = null,
+            state = PendingItem.STATE_OLD_VACATED,
+            oldContentHash = "sha256:abc123",
+        )
+
+        val journal = PendingMirrorPublish(
+            txId = "tx1",
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = mapOf(key to item),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+        )
+
+        val json = journal.toJson()
+        val restored = PendingMirrorPublish.fromJson(json)!!
+        val restoredItem = restored.items[key]!!
+        assertEquals("sha256:abc123", restoredItem.oldContentHash)
+    }
+
+    @Test
+    fun pendingMirrorPublish_jsonRoundTrip_manifestContentHash() {
+        val journal = PendingMirrorPublish(
+            txId = "tx1",
+            backend = MirrorBackend.DOCUMENT_TREE,
+            treeUri = "content://tree",
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+            manifestNewContentHash = "sha256:new_manifest_hash",
+            manifestOldContentHash = "sha256:old_manifest_hash",
+        )
+
+        val json = journal.toJson()
+        val restored = PendingMirrorPublish.fromJson(json)!!
+        assertEquals("sha256:new_manifest_hash", restored.manifestNewContentHash)
+        assertEquals("sha256:old_manifest_hash", restored.manifestOldContentHash)
+    }
+
+    @Test
+    fun pendingMirrorPublish_jsonRoundTrip_nullManifestContentHash() {
+        val journal = PendingMirrorPublish(
+            txId = "tx1",
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+        )
+
+        val json = journal.toJson()
+        val restored = PendingMirrorPublish.fromJson(json)!!
+        assertNull(restored.manifestNewContentHash)
+        assertNull(restored.manifestOldContentHash)
+    }
+
+    // ── #649 评论 5566303837 问题 4：RestoreBackupResult identity verification ──
+
+    @Test
+    fun restoreBackup_withHash_match_returnsAlreadyRestored() {
+        val storage = FakeReadableMirrorStorage()
+        val content = "important content"
+        val path = "作品/P/V/Ch.md"
+        val uriKey = "content://fake/作品_P_V_Ch.md"
+        storage.committedFiles[uriKey] = content
+        val backup = MirrorFileRef("content://backup", "backup/$path")
+        val expectedHash = computeContentHash(content)
+
+        val result = storage.restoreBackup(backup, path, "text/markdown", expectedHash)
+        assertTrue("should be AlreadyRestored when hash matches", result is RestoreBackupResult.AlreadyRestored)
+    }
+
+    @Test
+    fun restoreBackup_withHash_mismatch_returnsConflict() {
+        val storage = FakeReadableMirrorStorage()
+        val path = "作品/P/V/Ch.md"
+        val uriKey = "content://fake/作品_P_V_Ch.md"
+        storage.committedFiles[uriKey] = "new content (wrong)"
+        val backup = MirrorFileRef("content://backup", "backup/$path")
+        val expectedHash = computeContentHash("old content (expected)")
+
+        val result = storage.restoreBackup(backup, path, "text/markdown", expectedHash)
+        assertTrue("should be Conflict when hash mismatches", result is RestoreBackupResult.Conflict)
+    }
+
+    @Test
+    fun restoreBackup_withoutHash_found_returnsAlreadyRestored() {
+        val storage = FakeReadableMirrorStorage()
+        val path = "作品/P/V/Ch.md"
+        val uriKey = "content://fake/作品_P_V_Ch.md"
+        storage.committedFiles[uriKey] = "any content"
+        val backup = MirrorFileRef("content://backup", "backup/$path")
+
+        val result = storage.restoreBackup(backup, path, "text/markdown", null)
+        assertTrue("should be AlreadyRestored when no hash check", result is RestoreBackupResult.AlreadyRestored)
+    }
+
+    @Test
+    fun restoreBackup_missing_final_returnsRestored() {
+        val storage = FakeReadableMirrorStorage()
+        storage.backupFiles["content://backup"] = "backup content"
+        val path = "作品/P/V/Ch.md"
+        val backup = MirrorFileRef("content://backup", "backup/$path")
+
+        val result = storage.restoreBackup(backup, path, "text/markdown", null)
+        assertTrue("should be Restored when final missing", result is RestoreBackupResult.Restored)
     }
 }

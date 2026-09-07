@@ -79,6 +79,8 @@ enum class MirrorTransactionType {
  * @property state 推进状态：[STATE_STAGED] / [STATE_BACKUP_READY] /
  *   [STATE_OLD_VACATED] / [STATE_PROMOTED] / [STATE_COMMITTED]。
  *   旧 journal 的 [STATE_OLD_BACKED_UP] 反序列化时映射到 [STATE_BACKUP_READY]。
+ * @property oldContentHash 旧正文的 SHA-256 hash（#649 评论 5566303837 问题 2）。
+ *   OLD_VACATED 恢复时用于校验 final 是旧正文还是新文件残留，不能只看"final 在不在"。
  */
 data class PendingItem(
     val key: ChapterKey,
@@ -87,6 +89,7 @@ data class PendingItem(
     val backupOldRef: MirrorFileRef?,
     val promotedRef: MirrorFileRef?,
     val state: String,
+    val oldContentHash: String? = null,
 ) {
     companion object {
         const val STATE_STAGED = "STAGED"
@@ -192,6 +195,13 @@ data class PendingMirrorPublish(
     // 正常 UPSERT 事务中记录本次要 publish 的 projectId 集合（含子项目），
     // DELETE 事务中记录被删的 projectId。恢复时据此维护 publishedProjectIds。
     val affectedProjectIds: Set<String> = emptySet(),
+    // #649 评论 5566303837 问题 3：manifest promote 崩溃窗口。
+    // MANIFEST_OLD_VACATED 恢复时 final 上可能是新文件残留，
+    // 不能只看"final 在不在"，需要用 hash 校验身份。
+    // manifestNewContentHash: 新 manifest 的期望 hash（生成 JSON 时计算）
+    // manifestOldContentHash: 旧 manifest 的 hash（备份前读取记录）
+    val manifestNewContentHash: String? = null,
+    val manifestOldContentHash: String? = null,
 ) {
     /** 序列化为 JSON 字符串，供 [ReadableMirrorStateStore.writePendingPublish] 持久化。 */
     fun toJson(): String {
@@ -217,6 +227,8 @@ data class PendingMirrorPublish(
         if (affectedProjectIds.isNotEmpty()) {
             root.put(KEY_AFFECTED_PROJECT_IDS, JSONArray(affectedProjectIds.toList()))
         }
+        if (manifestNewContentHash != null) root.put(KEY_MANIFEST_NEW_CONTENT_HASH, manifestNewContentHash)
+        if (manifestOldContentHash != null) root.put(KEY_MANIFEST_OLD_CONTENT_HASH, manifestOldContentHash)
         return root.toString()
     }
 
@@ -259,6 +271,9 @@ data class PendingMirrorPublish(
         private const val KEY_IS_MANIFEST_COMMITTED = "isManifestCommitted"
         private const val KEY_MANIFEST_SWAP_STATE = "manifestSwapState"
         private const val KEY_AFFECTED_PROJECT_IDS = "affectedProjectIds"
+        private const val KEY_MANIFEST_NEW_CONTENT_HASH = "manifestNewContentHash"
+        private const val KEY_MANIFEST_OLD_CONTENT_HASH = "manifestOldContentHash"
+        private const val KEY_OLD_CONTENT_HASH = "oldContentHash"
 
         /**
          * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。
@@ -298,6 +313,9 @@ data class PendingMirrorPublish(
                 val manifestBackupRef = decodeFileRef(root.optJSONObject(KEY_MANIFEST_BACKUP_REF))
                 val isManifestCommitted = root.optBoolean(KEY_IS_MANIFEST_COMMITTED, false)
                 val affectedProjectIds = decodeStringSet(root.optJSONArray(KEY_AFFECTED_PROJECT_IDS))
+                // #649 评论 5566303837 问题 3：反序列化 manifest 内容 hash
+                val manifestNewContentHash = root.optString(KEY_MANIFEST_NEW_CONTENT_HASH).takeIf { it.isNotEmpty() }
+                val manifestOldContentHash = root.optString(KEY_MANIFEST_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() }
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
                 val manifestSwapState = if (root.has(KEY_MANIFEST_SWAP_STATE)) {
@@ -326,6 +344,8 @@ data class PendingMirrorPublish(
                     isManifestCommitted = isManifestCommitted,
                     manifestSwapState = manifestSwapState,
                     affectedProjectIds = affectedProjectIds,
+                    manifestNewContentHash = manifestNewContentHash,
+                    manifestOldContentHash = manifestOldContentHash,
                 )
             } catch (_: Exception) {
                 null
@@ -450,6 +470,7 @@ data class PendingMirrorPublish(
                 if (item.oldRef != null) put(KEY_OLD_REF, encodeFileRef(item.oldRef))
                 if (item.backupOldRef != null) put(KEY_BACKUP_OLD_REF, encodeFileRef(item.backupOldRef))
                 if (item.promotedRef != null) put(KEY_PROMOTED_REF, encodeFileRef(item.promotedRef))
+                if (item.oldContentHash != null) put(KEY_OLD_CONTENT_HASH, item.oldContentHash)
             }
 
         private fun decodeItems(obj: JSONObject?): Map<ChapterKey, PendingItem> {
@@ -480,6 +501,8 @@ data class PendingMirrorPublish(
                 promotedRef = decodeFileRef(obj.optJSONObject(KEY_PROMOTED_REF)),
                 // #649 评论 5565067997 修复 1：旧 journal 的 STATE_OLD_BACKED_UP 映射到 STATE_BACKUP_READY
                 state = PendingItem.normalizeState(obj.optString(KEY_STATE).ifEmpty { PendingItem.STATE_STAGED }),
+                // #649 评论 5566303837 问题 2：反序列化 oldContentHash
+                oldContentHash = obj.optString(KEY_OLD_CONTENT_HASH).takeIf { it.isNotEmpty() },
             )
         }
     }

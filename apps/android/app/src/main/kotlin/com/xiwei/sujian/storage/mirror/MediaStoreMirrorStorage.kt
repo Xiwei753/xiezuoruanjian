@@ -376,29 +376,59 @@ class MediaStoreMirrorStorage(
         backup: MirrorFileRef,
         finalRelativePath: String,
         mimeType: String,
-    ): MirrorFileRef? {
-        // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
-        // crash-idempotent：先检查 final 是否已经恢复，避免重复恢复。
-        val backupUri = tryParseUri(backup.uri) ?: return null
-        // 1. 先 lookup final 路径：如果已经恢复成功，直接返回这个 ref
+        expectedOldContentHash: String?,
+    ): RestoreBackupResult {
+        val backupUri = tryParseUri(backup.uri) ?: return RestoreBackupResult.Failed(null)
+        // 1. 先 lookup final 路径，校验内容身份
         when (val lookupResult = lookup(finalRelativePath)) {
-            is MirrorLookupResult.Found -> return lookupResult.ref // 已恢复成功
-            is MirrorLookupResult.Failed -> return null // 查询失败，无法确认状态
+            is MirrorLookupResult.Found -> {
+                // final 已存在，需要校验内容身份，不能只看"文件在不在"
+                if (expectedOldContentHash != null) {
+                    // 读取 final 内容并计算 hash
+                    val finalHashResult = readTextAndHash(lookupResult.ref)
+                    if (finalHashResult != null) {
+                        val (_, hash) = finalHashResult
+                        return if (hash == expectedOldContentHash) {
+                            // hash 匹配 → 真的是旧正文已恢复
+                            RestoreBackupResult.AlreadyRestored(lookupResult.ref)
+                        } else {
+                            // hash 不匹配 → final 上是新文件残留，冲突
+                            RestoreBackupResult.Conflict
+                        }
+                    }
+                    // 读取失败 → 无法确认状态
+                    return RestoreBackupResult.Failed(null)
+                }
+                // 无 hash 校验（如新建章节）→ 文件已存在视为已恢复
+                return RestoreBackupResult.AlreadyRestored(lookupResult.ref)
+            }
+            is MirrorLookupResult.Failed -> return RestoreBackupResult.Failed(lookupResult.cause)
             is MirrorLookupResult.Missing -> { /* final 不存在，继续 restore */ }
         }
         // 2. final 不存在，从 backup 读取内容并创建到 final 位置
-        val content = mediaStore.readText(backupUri) ?: return null
+        val content = mediaStore.readText(backupUri) ?: return RestoreBackupResult.Failed(null)
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
         val newUri = mediaStore.createText(relativeDir, displayName, mimeType, content)
-            ?: return null
-        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
+            ?: return RestoreBackupResult.Failed(null)
+        return RestoreBackupResult.Restored(MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath))
     }
 
-    override fun rollback(txId: String) {
+    override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
+        val uri = tryParseUri(ref.uri) ?: return null
+        val content = mediaStore.readText(uri) ?: return null
+        return Pair(content, computeContentHash(content))
+    }
+
+    override fun rollback(txId: String): Boolean {
         // 删除 txId 对应的整个暂存目录（含 backup 子目录）
         val stagingDir = "$STAGING_DIR/$txId"
-        mediaStore.deleteByPrefix(stagingDir)
+        return try {
+            mediaStore.deleteByPrefix(stagingDir)
+            true
+        } catch (_: Exception) {
+            false
+        }
     }
 
     private fun tryParseUri(uriString: String): Uri? =

@@ -256,12 +256,12 @@ class DocumentTreeMirrorStorage(
         val targetParentUri = ensureDirectory(relativeDir) ?: return null
 
         val stagingParentPath = staged.stagingRelativePath.substringBeforeLast('/', "")
-        val stagingParentUri = findDirectory(stagingParentPath)
+        val stagingParentUriResult = findDirectory(stagingParentPath)
 
         // 优先尝试 moveDocument 跨目录原子移动
         val newUri: Uri? =
-            if (stagingParentUri != null) {
-                tryMoveDocument(stagingUri, stagingParentUri, targetParentUri, displayName)
+            if (stagingParentUriResult is DirectoryLookupResult.Found) {
+                tryMoveDocument(stagingUri, stagingParentUriResult.uri, targetParentUri, displayName)
             } else {
                 null
             }
@@ -309,10 +309,10 @@ class DocumentTreeMirrorStorage(
         val backupParentUri = ensureDirectory(relativeDir) ?: return null
         // old 的父目录 URI（用于 moveDocument）
         val oldParentPath = old.relativePath.substringBeforeLast('/', "")
-        val oldParentUri = if (oldParentPath.isBlank()) treeUri else findDirectory(oldParentPath)
+        val oldParentUriResult = if (oldParentPath.isBlank()) DirectoryLookupResult.Found(treeUri) else findDirectory(oldParentPath)
         // 1. 优先尝试 moveDocument 把 old 移到 backup
-        if (oldParentUri != null) {
-            val movedUri = tryMoveDocument(oldUri, oldParentUri, backupParentUri, displayName)
+        if (oldParentUriResult is DirectoryLookupResult.Found) {
+            val movedUri = tryMoveDocument(oldUri, oldParentUriResult.uri, backupParentUri, displayName)
             if (movedUri != null) {
                 return MirrorFileRef(uri = movedUri.toString(), relativePath = backupRelativePath)
             }
@@ -365,10 +365,10 @@ class DocumentTreeMirrorStorage(
         val displayName = old.relativePath.substringAfterLast('/')
         val backupParentUri = ensureDirectory(relativeDir) ?: return null
         val oldParentPath = old.relativePath.substringBeforeLast('/', "")
-        val oldParentUri = if (oldParentPath.isBlank()) treeUri else findDirectory(oldParentPath)
+        val oldParentUriResult = if (oldParentPath.isBlank()) DirectoryLookupResult.Found(treeUri) else findDirectory(oldParentPath)
         // 1. 优先尝试 moveDocument（原子 move）
-        if (oldParentUri != null) {
-            val movedUri = tryMoveDocument(oldUri, oldParentUri, backupParentUri, displayName)
+        if (oldParentUriResult is DirectoryLookupResult.Found) {
+            val movedUri = tryMoveDocument(oldUri, oldParentUriResult.uri, backupParentUri, displayName)
             if (movedUri != null) {
                 return BackupReadyRef(
                     backupRef = MirrorFileRef(uri = movedUri.toString(), relativePath = backupRelativePath),
@@ -426,20 +426,19 @@ class DocumentTreeMirrorStorage(
         val parent = relativePath.substringBeforeLast('/', "")
         val displayName = relativePath.substringAfterLast('/')
         // 先定位父目录
-        val dirUri = if (parent.isBlank()) treeUri else findDirectory(parent)
-        if (dirUri == null) {
-            // findDirectory 返回 null 可能是"路径不存在"或"查询失败"。
-            // 为安全起见，视为 Failed（不静默当 Missing），因为 findDirectory 内部吞了异常。
-            // 但若 parent 各级确实不存在，也属于 Missing。这里用 isSupported() 再校验一次
-            // 区分：若 treeUri 仍可访问但中间目录不存在 → Missing；否则 Failed。
-            return if (isSupported()) {
-                MirrorLookupResult.Missing
-            } else {
-                MirrorLookupResult.Failed(IllegalStateException("treeUri not accessible while locating parent"))
+        val dirUriResult = if (parent.isBlank()) DirectoryLookupResult.Found(treeUri) else findDirectory(parent)
+        when (dirUriResult) {
+            is DirectoryLookupResult.Failed -> {
+                // #649 评论 5566303837 问题 5：目录遍历失败明确传播，不静默当 Missing
+                return MirrorLookupResult.Failed(dirUriResult.cause)
             }
+            is DirectoryLookupResult.Missing -> {
+                return MirrorLookupResult.Missing
+            }
+            is DirectoryLookupResult.Found -> { /* 继续查询文件 */ }
         }
         return try {
-            val children = documentTreeReader.listChildren(dirUri)
+            val children = documentTreeReader.listChildren(dirUriResult.uri)
             val match = children.find { !it.isDirectory && it.name == displayName }
             if (match != null) {
                 MirrorLookupResult.Found(MirrorFileRef(uri = match.uri.toString(), relativePath = relativePath))
@@ -461,7 +460,11 @@ class DocumentTreeMirrorStorage(
         // backup 位于 staging 目录内，需要逐级 findDirectory
         val backupParentPath = backupRelativePath.substringBeforeLast('/', "")
         val displayName = backupRelativePath.substringAfterLast('/')
-        val parentUri = findDirectory(backupParentPath) ?: return null
+        val parentUriResult = findDirectory(backupParentPath)
+        val parentUri = when (parentUriResult) {
+            is DirectoryLookupResult.Found -> parentUriResult.uri
+            else -> return null
+        }
         return try {
             val children = documentTreeReader.listChildren(parentUri)
             val match = children.find { !it.isDirectory && it.name == displayName }
@@ -481,18 +484,19 @@ class DocumentTreeMirrorStorage(
         // backup 位于 staging 目录内，需要逐级 findDirectory
         val backupParentPath = backupRelativePath.substringBeforeLast('/', "")
         val displayName = backupRelativePath.substringAfterLast('/')
-        val parentUri = findDirectory(backupParentPath)
-        if (parentUri == null) {
-            // findDirectory 返回 null 可能是"路径不存在"或"查询失败"。
-            // 用 isSupported() 再校验一次区分：若 treeUri 仍可访问但中间目录不存在 → Missing；否则 Failed。
-            return if (isSupported()) {
-                MirrorLookupResult.Missing
-            } else {
-                MirrorLookupResult.Failed(IllegalStateException("treeUri not accessible while locating backup parent"))
+        val parentUriResult = findDirectory(backupParentPath)
+        when (parentUriResult) {
+            is DirectoryLookupResult.Failed -> {
+                // #649 评论 5566303837 问题 5：目录遍历失败明确传播
+                return MirrorLookupResult.Failed(parentUriResult.cause)
             }
+            is DirectoryLookupResult.Missing -> {
+                return MirrorLookupResult.Missing
+            }
+            is DirectoryLookupResult.Found -> { /* 继续查询文件 */ }
         }
         return try {
-            val children = documentTreeReader.listChildren(parentUri)
+            val children = documentTreeReader.listChildren(parentUriResult.uri)
             val match = children.find { !it.isDirectory && it.name == displayName }
             if (match != null) {
                 MirrorLookupResult.Found(MirrorFileRef(uri = match.uri.toString(), relativePath = backupRelativePath))
@@ -516,7 +520,11 @@ class DocumentTreeMirrorStorage(
     ): MirrorFileRef? {
         val parent = relativePath.substringBeforeLast('/', "")
         val displayName = relativePath.substringAfterLast('/')
-        val dirUri = if (parent.isBlank()) parentUri else findDirectory(parent) ?: return null
+        val dirUriResult = if (parent.isBlank()) DirectoryLookupResult.Found(parentUri) else findDirectory(parent)
+        val dirUri = when (dirUriResult) {
+            is DirectoryLookupResult.Found -> dirUriResult.uri
+            else -> return null
+        }
         return try {
             val children = documentTreeReader.listChildren(dirUri)
             val match = children.find { !it.isDirectory && it.name == displayName }
@@ -531,35 +539,56 @@ class DocumentTreeMirrorStorage(
         backup: MirrorFileRef,
         finalRelativePath: String,
         mimeType: String,
-    ): MirrorFileRef? {
-        if (!isSupported()) return null
-        // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
-        // 幂等：先 lookup(finalPath)，如果已存在则直接返回（crash 后重试场景）。
+        expectedOldContentHash: String?,
+    ): RestoreBackupResult {
+        if (!isSupported()) return RestoreBackupResult.Failed(IllegalStateException("backend not supported"))
+        // #649 评论 5566303837 问题 4：带身份校验的 restoreBackup
         when (val existing = lookup(finalRelativePath)) {
-            is MirrorLookupResult.Found -> return existing.ref // 已恢复成功，直接返回
-            is MirrorLookupResult.Failed -> return null // 查询失败，无法确认状态
-            is MirrorLookupResult.Missing -> { /* 继续 restoreBackup */ }
+            is MirrorLookupResult.Found -> {
+                // final 已存在，需要校验内容身份
+                if (expectedOldContentHash != null) {
+                    val finalHashResult = readTextAndHash(existing.ref)
+                    if (finalHashResult != null) {
+                        val (_, hash) = finalHashResult
+                        return if (hash == expectedOldContentHash) {
+                            RestoreBackupResult.AlreadyRestored(existing.ref)
+                        } else {
+                            RestoreBackupResult.Conflict
+                        }
+                    }
+                    return RestoreBackupResult.Failed(null)
+                }
+                return RestoreBackupResult.AlreadyRestored(existing.ref)
+            }
+            is MirrorLookupResult.Failed -> return RestoreBackupResult.Failed(existing.cause)
+            is MirrorLookupResult.Missing -> { /* 继续 restore */ }
         }
-        val backupUri = tryParseUri(backup.uri) ?: return null
-        val content = readTextFromUri(backupUri) ?: return null
+        val backupUri = tryParseUri(backup.uri) ?: return RestoreBackupResult.Failed(null)
+        val content = readTextFromUri(backupUri) ?: return RestoreBackupResult.Failed(null)
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
-        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val parentUri = ensureDirectory(relativeDir) ?: return RestoreBackupResult.Failed(null)
         val fileUri =
             try {
                 DocumentsContract.createDocument(contentResolver, parentUri, mimeType, displayName)
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "createDocument failed for restore $displayName: ${e.message}")
-                return null
-            } ?: return null
+                return RestoreBackupResult.Failed(e)
+            } ?: return RestoreBackupResult.Failed(null)
         if (!writeToUri(fileUri, content)) {
             try {
                 DocumentsContract.deleteDocument(contentResolver, fileUri)
             } catch (_: Exception) {
             }
-            return null
+            return RestoreBackupResult.Failed(null)
         }
-        return MirrorFileRef(uri = fileUri.toString(), relativePath = finalRelativePath)
+        return RestoreBackupResult.Restored(MirrorFileRef(uri = fileUri.toString(), relativePath = finalRelativePath))
+    }
+
+    override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
+        val uri = tryParseUri(ref.uri) ?: return null
+        val content = readTextFromUri(uri) ?: return null
+        return Pair(content, computeContentHash(content))
     }
 
     /**
@@ -621,51 +650,75 @@ class DocumentTreeMirrorStorage(
         }
     }
 
-    override fun rollback(txId: String) {
-        if (!isSupported()) return
+    override fun rollback(txId: String): Boolean {
+        if (!isSupported()) return false
         // #649 评论 5562462046 问题 6：rollback 只查不创建。
-        // 旧实现用 ensureDirectory(stagingDir) 会在目录不存在时新建一个再删，职责不对。
         val stagingDir = "$STAGING_DIR/$txId"
-        val stagingUri = findDirectory(stagingDir)
-        if (stagingUri != null) {
-            try {
-                DocumentsContract.deleteDocument(contentResolver, stagingUri)
+        val stagingUriResult = findDirectory(stagingDir)
+        if (stagingUriResult is DirectoryLookupResult.Found) {
+            return try {
+                DocumentsContract.deleteDocument(contentResolver, stagingUriResult.uri)
+                true
+            } catch (_: FileNotFoundException) {
+                true // 已不存在 → 目标已达到
             } catch (_: Exception) {
+                false // 删除失败
             }
         }
+        // 目录不存在或查询失败
+        return stagingUriResult is DirectoryLookupResult.Missing
     }
 
     /**
      * 只查找 [relativeDir] 对应的目录 URI，不创建。
      *
-     * #649 评论 5562462046 问题 6：rollback 需要一个只查不创建的方法，
-     * 避免目录不存在时新建一个再删。
+     * #649 评论 5566303837 问题 5：返回 [DirectoryLookupResult]，
+     * 区分"目录不存在"和"查询异常"，不再把两者都压成 null。
      *
-     * @return 已存在目录的 URI；任一级不存在或查找失败返回 null。
+     * @return [DirectoryLookupResult]
      */
-    private fun findDirectory(relativeDir: String): Uri? {
+    private fun findDirectory(relativeDir: String): DirectoryLookupResult {
         val parts = relativeDir.split("/").filter { it.isNotEmpty() }
-        var current = treeUri
+        var current: Uri = treeUri
         for (part in parts) {
-            current = findChildDir(current, part) ?: return null
+            when (val result = findChildDir(current, part)) {
+                is DirectoryLookupResult.Found -> current = result.uri
+                is DirectoryLookupResult.Missing -> return DirectoryLookupResult.Missing
+                is DirectoryLookupResult.Failed -> return DirectoryLookupResult.Failed(result.cause)
+            }
         }
-        return current
+        return DirectoryLookupResult.Found(current)
     }
 
     /**
-     * 在 [parentUri] 下查找同名子目录（不创建）。
+     * 在 [parentUri] 下查找同名子目录（不创建），返回三态。
      */
     private fun findChildDir(
         parentUri: Uri,
         dirName: String,
-    ): Uri? {
+    ): DirectoryLookupResult {
         return try {
             val children = documentTreeReader.listChildren(parentUri)
-            children.find { it.isDirectory && it.name == dirName }?.uri
+            val match = children.find { it.isDirectory && it.name == dirName }
+            if (match != null) {
+                DirectoryLookupResult.Found(match.uri)
+            } else {
+                DirectoryLookupResult.Missing
+            }
+        } catch (e: SecurityException) {
+            DirectoryLookupResult.Failed(e)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "listChildren failed for $dirName: ${e.message}")
-            null
+            DirectoryLookupResult.Failed(e)
         }
+    }
+
+    /**
+     * 从 [DirectoryLookupResult] 提取 URI；Failed 时抛异常（用于调用方快速失败）。
+     */
+    private fun DirectoryLookupResult.getUriOrThrow(): Uri = when (this) {
+        is DirectoryLookupResult.Found -> uri
+        is DirectoryLookupResult.Missing -> throw FileNotFoundException("directory not found")
+        is DirectoryLookupResult.Failed -> throw cause ?: IOException("directory lookup failed")
     }
 
     /** 从 URI 读取全部文本。失败返回 null。 */

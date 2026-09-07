@@ -262,13 +262,14 @@ class Issue649Comment5565067997ReproTest {
         assertFalse("new manifest 已从 final 删除", storage.committedFiles.containsKey("content://manifest/new"))
 
         // 2. restoreBackup（final 已腾空，不会覆盖 new manifest）
-        val restoredRef = storage.restoreBackup(backup, manifestPath, "application/json")
-        assertNotNull("步骤2：restore 成功", restoredRef)
+        val restoreResult = storage.restoreBackup(backup, manifestPath, "application/json", null)
+        assertTrue("步骤2：restore 成功", restoreResult is RestoreBackupResult.Restored)
+        val restoredRef = (restoreResult as RestoreBackupResult.Restored).ref
 
         // 修复确认：恢复的旧 manifest 仍在 final（没有被删掉）
         assertTrue(
             "修复3确认：恢复的旧 manifest 仍在 final，没有被 resolve(final).delete() 删掉",
-            storage.committedFiles.containsKey(restoredRef!!.uri),
+            storage.committedFiles.containsKey(restoredRef.uri),
         )
 
         // 验证操作顺序：delete 在 restore 之前（正确顺序）
@@ -648,18 +649,28 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(newUri, finalRelativePath)
         }
 
-        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String): MirrorFileRef? {
-            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return null
+        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String, expectedOldContentHash: String?): RestoreBackupResult {
+            val existing = committedFiles.entries.find { it.value != null && committedPathToUri[finalRelativePath] == it.key }
+            if (existing != null) {
+                return RestoreBackupResult.AlreadyRestored(MirrorFileRef(existing.key, finalRelativePath))
+            }
+            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return RestoreBackupResult.Failed(null)
             val newUri = "content://fake/restored/${committedFiles.size}"
             committedFiles[newUri] = content
             committedPathToUri[finalRelativePath] = newUri
             operationLog.add("restore:${backup.relativePath}→$finalRelativePath")
-            return MirrorFileRef(newUri, finalRelativePath)
+            return RestoreBackupResult.Restored(MirrorFileRef(newUri, finalRelativePath))
         }
 
-        override fun rollback(txId: String) {
+        override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
+            val content = committedFiles[ref.uri] ?: stagingFiles[ref.uri] ?: backupFiles[ref.uri] ?: return null
+            return Pair(content, computeContentHash(content))
+        }
+
+        override fun rollback(txId: String): Boolean {
             stagingFiles.clear()
             operationLog.add("rollback:$txId")
+            return true
         }
     }
 }

@@ -1,5 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.net.Uri
+
 /**
  * 镜像文件引用：统一封装 MediaStore URI 或 SAF document URI。
  *
@@ -100,6 +102,60 @@ sealed interface MirrorLookupResult {
 
     /** 查询失败（权限/IO/异常），无法确认文件是否存在。 */
     data class Failed(val cause: Throwable? = null) : MirrorLookupResult
+}
+
+/**
+ * 磁盘 journal 读取严格结果（#649 评论 5566303837 问题 1）。
+ *
+ * rollback 前必须从磁盘读最新 journal，不能用调用方传入的旧对象。
+ * 此三态区分"找到同一事务"、"无文件"、"损坏/txId 不匹配"。
+ */
+sealed interface LatestPending {
+    /** 找到同一事务的 journal。 */
+    data class Found(val journal: PendingMirrorPublish) : LatestPending
+
+    /** 磁盘上不存在 pending publish journal。 */
+    data object NotExists : LatestPending
+
+    /** journal 文件损坏或 txId 不匹配。 */
+    data object CorruptedOrMismatch : LatestPending
+}
+
+/**
+ * restoreBackup 带身份校验的结果（#649 评论 5566303837 问题 4）。
+ *
+ * 旧 `MirrorFileRef?` 无法区分"final 有文件但不是旧正文"和"确实是旧正文"。
+ * promote 崩溃窗口会让 final 上出现新文件，直接 return Found 会误判。
+ */
+sealed interface RestoreBackupResult {
+    /** backup 成功恢复到 final 位置。 */
+    data class Restored(val ref: MirrorFileRef) : RestoreBackupResult
+
+    /** final 已存在且 hash 与旧正文匹配（真正已恢复）。 */
+    data class AlreadyRestored(val ref: MirrorFileRef) : RestoreBackupResult
+
+    /** final 已存在但 hash 不匹配（新文件残留），冲突。 */
+    data object Conflict : RestoreBackupResult
+
+    /** 读取/创建失败，无法确认状态。 */
+    data class Failed(val cause: Throwable? = null) : RestoreBackupResult
+}
+
+/**
+ * SAF 目录遍历三态（#649 评论 5566303837 问题 5）。
+ *
+ * 旧 `findDirectory()` 返回 null 无法区分"目录不存在"和"查询异常"。
+ * lookup/lookupBackup 需要明确区分这两种情况。
+ */
+sealed interface DirectoryLookupResult {
+    /** 找到目录。 */
+    data class Found(val uri: Uri) : DirectoryLookupResult
+
+    /** 目录明确不存在。 */
+    data object Missing : DirectoryLookupResult
+
+    /** 遍历过程中查询失败。 */
+    data class Failed(val cause: Throwable? = null) : DirectoryLookupResult
 }
 
 /**
@@ -322,24 +378,42 @@ interface ReadableMirrorStorage {
     /**
      * 把 backup 恢复到 final 位置（回滚用）。
      *
-     * #649 评论 5562715833 问题 2：promote 失败或 manifest 失败时，
-     * 用 restoreBackup 把旧正文从 backup 恢复到 final 位置。
+     * #649 评论 5566303837 问题 4：返回 [RestoreBackupResult]，带旧内容身份校验。
+     * 不能用 final 是否存在判断"已恢复"——promote 崩溃窗口可能在 final 上留下新文件。
      *
      * @param backup backup 引用
      * @param finalRelativePath 最终目标路径
      * @param mimeType MIME 类型（正文使用 `text/markdown`，manifest 使用 `application/json`）
-     * @return 恢复后的引用；失败返回 null
+     * @param expectedOldContentHash 旧正文的期望 hash（用于校验 final 上是否真的是旧正文）
+     *   null 表示不校验（如新建章节，没有旧正文）
+     * @return [RestoreBackupResult]
      */
     fun restoreBackup(
         backup: MirrorFileRef,
         finalRelativePath: String,
         mimeType: String,
-    ): MirrorFileRef?
+        expectedOldContentHash: String? = null,
+    ): RestoreBackupResult
+
+    /**
+     * 读取文件内容并计算 hash（#649 评论 5566303837 问题 2/4）。
+     *
+     * 用于 restoreBackup 校验 final 是否真的是旧正文：
+     * - promote 崩溃后 final 可能是新文件，不能只看"文件在不在"
+     * - 用 oldEntries[key].contentHash 校验 final 内容
+     *
+     * @return Pair(content, contentHash)；读取失败返回 null
+     */
+    fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>?
 
     /**
      * 回滚事务：删除该 txId 对应的所有暂存文件。
      *
+     * #649 评论 5566303837 问题 6：返回 Boolean，
+     * 让 cleanupCommittedTransaction 区分"残留已清理"和"清理失败"。
+     *
      * @param txId 事务 ID
+     * @return true 表示清理成功（或目录本就不存在）；false 表示清理失败
      */
-    fun rollback(txId: String)
+    fun rollback(txId: String): Boolean
 }
