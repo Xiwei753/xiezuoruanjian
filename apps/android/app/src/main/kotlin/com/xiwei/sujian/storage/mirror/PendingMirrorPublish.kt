@@ -1,7 +1,10 @@
 package com.xiwei.sujian.storage.mirror
 
+import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import org.json.JSONArray
 import org.json.JSONObject
+
+private const val TAG = "PendingMirrorPublish"
 
 /**
  * manifest 事务的显式 swap 状态（#649 评论 5565067997 修复 2）。
@@ -33,8 +36,14 @@ enum class ManifestTransactionState(val journalValue: String) {
     ;
 
     companion object {
-        fun fromJournalValue(value: String): ManifestTransactionState =
-            entries.find { it.journalValue == value } ?: MANIFEST_STAGED
+        /**
+         * 从 JSON 值反序列化 [ManifestTransactionState]（#649 评论 5565862745 问题 5）。
+         *
+         * - 已知值返回对应枚举
+         * - 未知值返回 null（不能回退到 MANIFEST_STAGED，否则会掩盖数据损坏）
+         */
+        fun fromJournalValue(value: String): ManifestTransactionState? =
+            entries.find { it.journalValue == value }
     }
 }
 
@@ -212,6 +221,7 @@ data class PendingMirrorPublish(
     }
 
     companion object {
+        const val TAG = "PendingMirrorPublish"
         const val PHASE_STAGE = "stage"
         const val PHASE_PROMOTE = "promote"
         const val PHASE_CLEANUP = "cleanup"
@@ -250,16 +260,33 @@ data class PendingMirrorPublish(
         private const val KEY_MANIFEST_SWAP_STATE = "manifestSwapState"
         private const val KEY_AFFECTED_PROJECT_IDS = "affectedProjectIds"
 
+        /**
+         * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。
+         *
+         * 只接受枚举中的明确值，未知值返回 null。
+         */
+        private fun validatePhase(value: String): String? =
+            when (value) {
+                PHASE_STAGE, PHASE_PROMOTE, PHASE_CLEANUP, PHASE_ROLLBACK -> value
+                else -> null
+            }
+
         /** 从 [ReadableMirrorStateStore.readPendingPublish] 的 JSON 字符串反序列化。 */
         fun fromJson(json: String): PendingMirrorPublish? {
             return try {
                 val root = JSONObject(json)
+                // #649 评论 5565862745 问题 5：未知值返回 null，不能回退到默认值
                 val backend = mirrorBackendFromJsonValue(root.optString(KEY_BACKEND))
                 val treeUri = root.optString(KEY_TREE_URI).takeIf { it.isNotEmpty() }
                 val projectId = root.getString(KEY_PROJECT_ID)
                 val transactionType =
                     mirrorTransactionTypeFromJsonValue(root.optString(KEY_TRANSACTION_TYPE))
-                val phase = root.getString(KEY_PHASE)
+                val phase = validatePhase(root.getString(KEY_PHASE))
+                // 校验必填字段解析成功（#649 评论 5565862745 问题 5）
+                if (backend == null || transactionType == null || phase == null) {
+                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invalid backend/transactionType/phase")
+                    return null
+                }
                 val oldEntries = decodeEntries(root.optJSONObject(KEY_OLD_ENTRIES))
                 val newEntries = decodeEntries(root.optJSONObject(KEY_NEW_ENTRIES))
                 val stagedRefs = decodeStagedRefs(root.optJSONObject(KEY_STAGED_REFS))
@@ -274,7 +301,9 @@ data class PendingMirrorPublish(
                 // #649 评论 5565067997 修复 2：反序列化 manifestSwapState。
                 // 旧 journal 没有此字段，根据 isManifestCommitted + manifestNewRef/manifestBackupRef 推导。
                 val manifestSwapState = if (root.has(KEY_MANIFEST_SWAP_STATE)) {
+                    // #649 评论 5565862745 问题 5：未知值返回 null
                     ManifestTransactionState.fromJournalValue(root.optString(KEY_MANIFEST_SWAP_STATE))
+                        ?: return null
                 } else {
                     deriveManifestSwapState(isManifestCommitted, manifestNewRef, manifestBackupRef)
                 }
@@ -463,10 +492,17 @@ private fun MirrorBackend.toJsonValue(): String =
         MirrorBackend.DOCUMENT_TREE -> "document_tree"
     }
 
-private fun mirrorBackendFromJsonValue(value: String): MirrorBackend =
+/**
+ * 从 JSON 值反序列化 [MirrorBackend]（#649 评论 5565862745 问题 5）。
+ *
+ * - 已知值返回对应枚举
+ * - 未知值返回 null（不能回退到 MEDIA_STORE，否则会掩盖数据损坏）
+ */
+private fun mirrorBackendFromJsonValue(value: String): MirrorBackend? =
     when (value) {
         "document_tree" -> MirrorBackend.DOCUMENT_TREE
-        else -> MirrorBackend.MEDIA_STORE
+        "media_store" -> MirrorBackend.MEDIA_STORE
+        else -> null
     }
 
 /** [MirrorTransactionType] 与 journal 字符串互转。 */
@@ -476,10 +512,17 @@ private fun MirrorTransactionType.toJsonValue(): String =
         MirrorTransactionType.DELETE_PROJECT -> "delete_project"
     }
 
-private fun mirrorTransactionTypeFromJsonValue(value: String): MirrorTransactionType =
+/**
+ * 从 JSON 值反序列化 [MirrorTransactionType]（#649 评论 5565862745 问题 5）。
+ *
+ * - 已知值返回对应枚举
+ * - 未知值返回 null（不能回退到 UPSERT_PROJECT，否则会掩盖数据损坏）
+ */
+private fun mirrorTransactionTypeFromJsonValue(value: String): MirrorTransactionType? =
     when (value) {
         "delete_project" -> MirrorTransactionType.DELETE_PROJECT
-        else -> MirrorTransactionType.UPSERT_PROJECT
+        "upsert_project" -> MirrorTransactionType.UPSERT_PROJECT
+        else -> null
     }
 
 /**

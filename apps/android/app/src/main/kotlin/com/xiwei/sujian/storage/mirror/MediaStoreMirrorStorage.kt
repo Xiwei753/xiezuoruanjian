@@ -199,7 +199,7 @@ class MediaStoreMirrorStorage(
     }
 
     override fun vacateCommitted(old: MirrorFileRef): Boolean {
-        val oldUri = tryParseUri(old.uri) ?: return true // URI 无效 → 无法确认 old 是否存在，视为已腾空
+        val oldUri = tryParseUri(old.uri) ?: return false // URI 无效 → 无法确认 old 是否存在，返回 false
         return try {
             mediaStore.delete(oldUri)
         } catch (_: Exception) {
@@ -277,6 +277,59 @@ class MediaStoreMirrorStorage(
     }
 
     /**
+     * 三态查询：返回备份路径 [relativePath] 的 [MirrorLookupResult]（#649 评论 5565862745 问题 3）。
+     *
+     * 与 [resolveBackup] 区别：[resolveBackup] 在"不存在"和"查询失败"时都返回 null；
+     * [lookupBackup] 明确区分 [MirrorLookupResult.Missing] 和 [MirrorLookupResult.Failed]。
+     *
+     * 用于 [restoreBackup] 的 crash-idempotent 检查：
+     * - [MirrorLookupResult.Found] → backup 已存在，可直接返回这个 ref（已恢复）
+     * - [MirrorLookupResult.Missing] → backup 不存在，继续 restore
+     * - [MirrorLookupResult.Failed] → 查询失败，返回 null
+     */
+    override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        if (!mediaStore.isSupported()) {
+            return MirrorLookupResult.Failed(IllegalStateException("MediaStore backend not supported"))
+        }
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/$relativePath"
+        val directory = mediaStoreDirectory(backupRelativePath)
+        val displayName = backupRelativePath.substringAfterLast('/')
+        return try {
+            contentResolver
+                .query(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.Downloads._ID),
+                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                        "${MediaStore.Downloads.IS_PENDING} = 0",
+                    arrayOf(directory, displayName),
+                    null,
+                )
+                ?.use { cursor ->
+                    if (!cursor.moveToFirst()) {
+                        MirrorLookupResult.Missing
+                    } else if (cursor.count > 1) {
+                        android.util.Log.w(
+                            TAG,
+                            "lookupBackup: multiple matches for $backupRelativePath, " +
+                                "count=${cursor.count}, returning Failed to avoid binding wrong file",
+                        )
+                        MirrorLookupResult.Failed(IllegalStateException("multiple matches for $backupRelativePath"))
+                    } else {
+                        val id = cursor.getLong(0)
+                        val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+                        MirrorLookupResult.Found(MirrorFileRef(uri = uri.toString(), relativePath = backupRelativePath))
+                    }
+                } ?: MirrorLookupResult.Failed(IllegalStateException("contentResolver.query returned null"))
+        } catch (e: SecurityException) {
+            MirrorLookupResult.Failed(e)
+        } catch (e: Exception) {
+            MirrorLookupResult.Failed(e)
+        }
+    }
+
+    /**
      * MediaStore 公共查询：按 RELATIVE_PATH + DISPLAY_NAME 查找文件。
      *
      * #649 评论 5563798095：命中多条时返回 null 并记日志，不随便拿第一条绑定章节。
@@ -325,7 +378,15 @@ class MediaStoreMirrorStorage(
         mimeType: String,
     ): MirrorFileRef? {
         // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
+        // crash-idempotent：先检查 final 是否已经恢复，避免重复恢复。
         val backupUri = tryParseUri(backup.uri) ?: return null
+        // 1. 先 lookup final 路径：如果已经恢复成功，直接返回这个 ref
+        when (val lookupResult = lookup(finalRelativePath)) {
+            is MirrorLookupResult.Found -> return lookupResult.ref // 已恢复成功
+            is MirrorLookupResult.Failed -> return null // 查询失败，无法确认状态
+            is MirrorLookupResult.Missing -> { /* final 不存在，继续 restore */ }
+        }
+        // 2. final 不存在，从 backup 读取内容并创建到 final 位置
         val content = mediaStore.readText(backupUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')

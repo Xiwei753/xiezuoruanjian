@@ -3,6 +3,22 @@ package com.xiwei.sujian.storage.mirror
 import android.net.Uri
 
 /**
+ * 事务上下文，用于在一笔事务内固定 backend、treeUri 和 storage 实例。
+ *
+ * #649 评论 5565862745 问题 4：同一笔事务的 backend/treeUri 还没有真正固定。
+ * 旧实现 [currentResult()] 可能缓存 storage，但每次写 journal 时仍重新读 stateStore，
+ * 导致同一笔事务可能实际在旧 MediaStore 上写 staging，却把 journal 记成新的 DocumentTree。
+ *
+ * 事务入口调 [currentTransactionResult()] 获取 context，整笔事务复用此 context 中的 storage，
+ * 确保 staging 写入与 journal 记录的 backend/treeUri 一致。
+ */
+data class MirrorStorageTransactionContext(
+    val backend: MirrorBackend,
+    val treeUri: String?,
+    val storage: ReadableMirrorStorage,
+)
+
+/**
  * MirrorStorageRouter — 运行时根据 [ReadableMirrorStateStore] 的 backend 字段路由到对应 [ReadableMirrorStorage]。
  *
  * #649 评论 5561974464 问题 1：SAF 恢复后，Publisher 仍然不会立即切到 DocumentTree 后端。
@@ -47,6 +63,37 @@ class MirrorStorageRouter(
     fun readSnapshotStrict(): Result<Pair<MirrorBackend, String?>> {
         return stateStore.readSnapshotStrict().map { snapshot ->
             Pair(snapshot.backend, snapshot.treeUri)
+        }
+    }
+
+    /**
+     * 返回当前事务上下文，每次调用都构造新的 storage 实例。
+     *
+     * #649 评论 5565862745 问题 4：同一笔事务的 backend/treeUri 还没有真正固定。
+     * [currentResult()] 可能缓存 storage 实例，但每次写 journal 时仍重新读 stateStore，
+     * 导致同一笔事务可能实际在旧 MediaStore 上写 staging，却把 journal 记成新的 DocumentTree。
+     *
+     * 本方法每次调用都根据当前 stateStore 快照构造新的 storage 实例，
+     * 事务入口只调一次，整笔事务复用返回的 [MirrorStorageTransactionContext]。
+     * 确保 staging 写入与 journal 记录的 backend/treeUri 一致。
+     *
+     * @return [Result.success] 包含事务上下文；[Result.failure] 包含 [IllegalStateException]
+     *   或读取失败的异常
+     */
+    fun currentTransactionResult(): Result<MirrorStorageTransactionContext> {
+        return readSnapshotStrict().map { (backend, treeUri) ->
+            val storage = when (backend) {
+                MirrorBackend.DOCUMENT_TREE -> {
+                    requireNotNull(treeUri) {
+                        "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
+                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                    }
+                    val treeUriParsed = Uri.parse(treeUri)
+                    documentTreeFactory(treeUriParsed)
+                }
+                MirrorBackend.MEDIA_STORE -> mediaStoreStorage
+            }
+            MirrorStorageTransactionContext(backend, treeUri, storage)
         }
     }
 

@@ -207,20 +207,25 @@ class ReadableMirrorStateStore(
                 is ReadResult.Corrupted -> Result.failure(result.error)
                 is ReadResult.Parsed -> {
                     val root = result.root
-                    val backend = parseBackend(root)
-                    val treeUri = root.optString(TREE_URI_KEY).takeIf { it.isNotEmpty() }
-                    val manifestUri = root.optString(MANIFEST_URI_KEY).takeIf { it.isNotEmpty() }
-                    val projects = mutableMapOf<String, Map<ChapterKey, ChapterMirrorEntry>>()
-                    val projectsObj = root.optJSONObject(PROJECTS_KEY)
-                    if (projectsObj != null) {
-                        val ids = projectsObj.keys()
-                        while (ids.hasNext()) {
-                            val projectId = ids.next()
-                            val projectObj = projectsObj.optJSONObject(projectId) ?: continue
-                            projects[projectId] = decodeProjectEntries(projectId, projectObj)
+                    try {
+                        val backend = parseBackend(root)
+                        val treeUri = root.optString(TREE_URI_KEY).takeIf { it.isNotEmpty() }
+                        val manifestUri = root.optString(MANIFEST_URI_KEY).takeIf { it.isNotEmpty() }
+                        val projects = mutableMapOf<String, Map<ChapterKey, ChapterMirrorEntry>>()
+                        val projectsObj = root.optJSONObject(PROJECTS_KEY)
+                        if (projectsObj != null) {
+                            val ids = projectsObj.keys()
+                            while (ids.hasNext()) {
+                                val projectId = ids.next()
+                                val projectObj = projectsObj.optJSONObject(projectId) ?: continue
+                                projects[projectId] = decodeProjectEntries(projectId, projectObj)
+                            }
                         }
+                        Result.success(MirrorStateSnapshot(backend, treeUri, manifestUri, projects))
+                    } catch (e: IllegalArgumentException) {
+                        // #649 评论 5565862745 问题 5：backend 字段值未知，返回 Result.failure
+                        Result.failure(e)
                     }
-                    Result.success(MirrorStateSnapshot(backend, treeUri, manifestUri, projects))
                 }
             }
         }
@@ -651,16 +656,19 @@ class ReadableMirrorStateStore(
         }
 
     /**
-     * 从 root 对象解析 backend（复用 [getBackend] 的逻辑）。
+     * 从 root 对象解析 backend（#649 评论 5565862745 问题 5）。
      *
-     * 旧 state.json 没有 backend 字段时返回 [MirrorBackend.MEDIA_STORE]（向后兼容）。
+     * - 旧 state.json 没有 backend 字段时返回 [MirrorBackend.MEDIA_STORE]（向后兼容）。
+     * - 字段存在但值未知时抛出 [IllegalArgumentException]，让调用方返回 Result.failure。
+     *  不能把未知值回退到 MEDIA_STORE，否则会掩盖数据损坏。
      */
     private fun parseBackend(root: JSONObject): MirrorBackend {
         val name = root.optString(BACKEND_KEY).takeIf { it.isNotEmpty() }
         return when (name) {
             BACKEND_VALUE_DOCUMENT_TREE -> MirrorBackend.DOCUMENT_TREE
             BACKEND_VALUE_MEDIA_STORE -> MirrorBackend.MEDIA_STORE
-            else -> MirrorBackend.MEDIA_STORE
+            null -> MirrorBackend.MEDIA_STORE // 字段不存在，向后兼容
+            else -> throw IllegalArgumentException("Unknown backend value: $name")
         }
     }
 

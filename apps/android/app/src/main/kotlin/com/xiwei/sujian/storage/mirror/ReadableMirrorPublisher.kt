@@ -231,36 +231,50 @@ class ReadableMirrorPublisher(
             // #649 评论 5565067997 修复 1：用 STATE_BACKUP_READY / STATE_OLD_VACATED 显式状态。
             if (oldRef != null && item.state != PendingItem.STATE_OLD_VACATED) {
                 // #649 评论 5564820566 问题 3：两步 journalable backup — recover 同样用 prepareBackup + vacateCommitted
-                val existingBackup = storage.resolveBackup(journal.txId, oldRef.relativePath)
-                val backupReady = if (existingBackup != null) {
-                    // #649 评论 5565067997 修复 1：用 lookup() 三态查询判断 old 是否已 vacate，
-                    // 不再硬编码 vacated=false。
-                    val oldLookup = storage.lookup(oldRef.relativePath)
-                    val vacated = when (oldLookup) {
-                        is MirrorLookupResult.Missing -> true
-                        is MirrorLookupResult.Found -> false
-                        is MirrorLookupResult.Failed -> {
-                            // 查询失败，不能继续，回滚
-                            DiagnosticsLogger.w(TAG, "Recover backup: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                // 使用 lookupBackup 三态查询（#649 评论 5565862745 问题 3）
+                val backupResult = storage.lookupBackup(journal.txId, oldRef.relativePath)
+                val backupReady = when (backupResult) {
+                    is MirrorLookupResult.Found -> {
+                        // backup 已存在，直接复用
+                        // 用 lookup() 三态查询判断 old 是否已 vacate（#649 评论 5565067997 修复 1）
+                        val oldLookup = storage.lookup(oldRef.relativePath)
+                        val vacated = when (oldLookup) {
+                            is MirrorLookupResult.Missing -> true
+                            is MirrorLookupResult.Found -> false
+                            is MirrorLookupResult.Failed -> {
+                                // 查询失败，不能继续，回滚
+                                DiagnosticsLogger.w(TAG, "Recover backup: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                                for ((_, entry) in promotedEntries) {
+                                    storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
+                                }
+                                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                                return
+                            }
+                        }
+                        BackupReadyRef(backupRef = backupResult.ref, vacated = vacated)
+                    }
+                    is MirrorLookupResult.Missing -> {
+                        // backup 不存在，需要 prepareBackup
+                        val prepared = storage.prepareBackup(journal.txId, oldRef, MIME_MARKDOWN)
+                        if (prepared == null) {
+                            DiagnosticsLogger.w(TAG, "Recover backup prepare failed for ${key.chapterId}")
                             for ((_, entry) in promotedEntries) {
                                 storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
                             }
                             rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
                             return
                         }
+                        prepared
                     }
-                    BackupReadyRef(backupRef = existingBackup, vacated = vacated)
-                } else {
-                    val prepared = storage.prepareBackup(journal.txId, oldRef, MIME_MARKDOWN)
-                    if (prepared == null) {
-                        DiagnosticsLogger.w(TAG, "Recover backup prepare failed for ${key.chapterId}")
+                    is MirrorLookupResult.Failed -> {
+                        // 查询失败，不能继续，回滚
+                        DiagnosticsLogger.w(TAG, "Recover backup: lookupBackup failed for ${key.chapterId}: ${backupResult.cause?.message}")
                         for ((_, entry) in promotedEntries) {
                             storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
                         }
                         rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
                         return
                     }
-                    prepared
                 }
                 // #649 评论 5565067997 修复 1：journal 先写 STATE_BACKUP_READY
                 currentItems[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_BACKUP_READY)
@@ -691,16 +705,17 @@ class ReadableMirrorPublisher(
             if (!ensurePendingRecovered()) {
                 return MirrorPublishResult.PendingRecovery
             }
-            // #649 评论 5564379115 问题 5：用严格接口 currentResult()，不再用已废弃的 current()。
-            // 首次安装 state.json 不存在是合法情况，明确初始化为 MEDIA_STORE。
-            val storageResult = router.currentResult()
-            if (storageResult.isFailure) {
+            // #649 评论 5565862745 问题 4：使用 currentTransactionResult() 获取完整事务上下文
+            // 事务开始时拿一次 backend/treeUri/storage，整笔事务复用此 context
+            val txContextResult = router.currentTransactionResult()
+            if (txContextResult.isFailure) {
                 // state.json 损坏或 DOCUMENT_TREE + treeUri=null
-                val error = storageResult.exceptionOrNull()
-                DiagnosticsLogger.e(TAG, "Failed to get storage: ${error?.message}")
+                val error = txContextResult.exceptionOrNull()
+                DiagnosticsLogger.e(TAG, "Failed to get transaction context: ${error?.message}")
                 return MirrorPublishResult.RetryableFailure
             }
-            val storage = storageResult.getOrThrow()
+            val txContext = txContextResult.getOrThrow()
+            val storage = txContext.storage
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
                 return MirrorPublishResult.RetryableFailure
@@ -775,13 +790,14 @@ class ReadableMirrorPublisher(
 
             // 写 pendingPublish journal（记录 staging 完成）
             // #649 评论 5563333323 缺口 2：journal 写入失败则停止本轮镜像操作
+            // 使用 txContext 中的 backend/treeUri，不再从 stateStore 读取（#649 评论 5565862745 问题 4）
             if (!writePendingPublishJournal(
                     projectId = projectId,
                     transactionType = MirrorTransactionType.UPSERT_PROJECT,
                     phase = PendingMirrorPublish.PHASE_PROMOTE,
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     oldEntries = oldEntries,
                     newEntries = desiredEntries,
                     stagedRefs = stagedRefs,
@@ -801,11 +817,12 @@ class ReadableMirrorPublisher(
 
             // #649 评论 5564624383 问题 2：journalContext 在 promote 循环前创建，
             // 让 promote 失败时能传给 rollbackWholePublishTransaction 写 rollback journal
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             val journalContext =
                 PendingMirrorPublish(
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     projectId = projectId,
                     transactionType = MirrorTransactionType.UPSERT_PROJECT,
                     phase = PendingMirrorPublish.PHASE_PROMOTE,
@@ -842,44 +859,56 @@ class ReadableMirrorPublisher(
                 var oldVacated = false
                 if (oldRef != null && item.state != PendingItem.STATE_OLD_VACATED) {
                     // 检查崩溃窗口：backup 已就绪但 vacate 未完成
-                    val existingBackup = storage.resolveBackup(txId, oldRef.relativePath)
-                    val backupReady = if (existingBackup != null) {
-                        // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
-                        val oldLookup = storage.lookup(oldRef.relativePath)
-                        when (oldLookup) {
-                            is MirrorLookupResult.Missing -> {
-                                oldVacated = true
-                                BackupReadyRef(backupRef = existingBackup, vacated = true)
+                    // 使用 lookupBackup 三态查询（#649 评论 5565862745 问题 3）
+                    val backupResult = storage.lookupBackup(txId, oldRef.relativePath)
+                    val backupReady = when (backupResult) {
+                        is MirrorLookupResult.Found -> {
+                            // backup 已存在，直接复用
+                            // #649 评论 5565067997 修复 5：用 lookup() 三态查询判断 old 是否已 vacate
+                            val oldLookup = storage.lookup(oldRef.relativePath)
+                            when (oldLookup) {
+                                is MirrorLookupResult.Missing -> {
+                                    oldVacated = true
+                                    BackupReadyRef(backupRef = backupResult.ref, vacated = true)
+                                }
+                                is MirrorLookupResult.Found -> {
+                                    oldVacated = false
+                                    BackupReadyRef(backupRef = backupResult.ref, vacated = false)
+                                }
+                                is MirrorLookupResult.Failed -> {
+                                    DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                                    rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
+                                    return MirrorPublishResult.RetryableFailure
+                                }
                             }
-                            is MirrorLookupResult.Found -> {
-                                oldVacated = false
-                                BackupReadyRef(backupRef = existingBackup, vacated = false)
-                            }
-                            is MirrorLookupResult.Failed -> {
-                                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}")
+                        }
+                        is MirrorLookupResult.Missing -> {
+                            // backup 不存在，需要 prepareBackup
+                            val prepared = storage.prepareBackup(txId, oldRef, MIME_MARKDOWN)
+                            if (prepared == null) {
+                                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: backup prepare failed for ${key.chapterId}")
                                 rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
                                 return MirrorPublishResult.RetryableFailure
                             }
+                            oldVacated = prepared.vacated
+                            prepared
                         }
-                    } else {
-                        val prepared = storage.prepareBackup(txId, oldRef, MIME_MARKDOWN)
-                        if (prepared == null) {
-                            DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: backup prepare failed for ${key.chapterId}")
+                        is MirrorLookupResult.Failed -> {
+                            DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: lookupBackup failed for ${key.chapterId}: ${backupResult.cause?.message}")
                             rollbackWholePublishTransaction(txId, items, stagedRefs, storage, journalContext)
                             return MirrorPublishResult.RetryableFailure
                         }
-                        oldVacated = prepared.vacated
-                        prepared
                     }
                     // #649 评论 5565067997 修复 1：journal 先写 STATE_BACKUP_READY
                     items[key] = item.copy(backupOldRef = backupReady.backupRef, state = PendingItem.STATE_BACKUP_READY)
+                    // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
                     if (!writePendingPublishJournal(
                             projectId = projectId,
                             transactionType = MirrorTransactionType.UPSERT_PROJECT,
                             phase = PendingMirrorPublish.PHASE_PROMOTE,
                             txId = txId,
-                            backend = stateStore.getBackend(),
-                            treeUri = stateStore.getTreeUri(),
+                            backend = txContext.backend,
+                            treeUri = txContext.treeUri,
                             oldEntries = oldEntries,
                             newEntries = desiredEntries,
                             stagedRefs = stagedRefs,
@@ -906,13 +935,14 @@ class ReadableMirrorPublisher(
                     }
                     // #649 评论 5565067997 修复 1：vacate 成功后写 STATE_OLD_VACATED
                     items[key] = items[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
+                    // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
                     if (!writePendingPublishJournal(
                             projectId = projectId,
                             transactionType = MirrorTransactionType.UPSERT_PROJECT,
                             phase = PendingMirrorPublish.PHASE_PROMOTE,
                             txId = txId,
-                            backend = stateStore.getBackend(),
-                            treeUri = stateStore.getTreeUri(),
+                            backend = txContext.backend,
+                            treeUri = txContext.treeUri,
                             oldEntries = oldEntries,
                             newEntries = desiredEntries,
                             stagedRefs = stagedRefs,
@@ -951,13 +981,14 @@ class ReadableMirrorPublisher(
                 // 逐项更新 journal（记录该 item 已 PROMOTED）
                 items[key] = items[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
                 // #649 评论 5563333323 缺口 2：journal 写入失败则停止
+                // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
                 if (!writePendingPublishJournal(
                         projectId = projectId,
                         transactionType = MirrorTransactionType.UPSERT_PROJECT,
                         phase = PendingMirrorPublish.PHASE_PROMOTE,
                         txId = txId,
-                        backend = stateStore.getBackend(),
-                        treeUri = stateStore.getTreeUri(),
+                        backend = txContext.backend,
+                        treeUri = txContext.treeUri,
                         oldEntries = oldEntries,
                         newEntries = desiredEntries,
                         stagedRefs = stagedRefs,
@@ -1013,13 +1044,14 @@ class ReadableMirrorPublisher(
 
             // 标记所有 item 为 COMMITTED，更新 journal 到 cleanup 阶段
             val committedItems = items.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             if (!writePendingPublishJournal(
                     projectId = projectId,
                     transactionType = MirrorTransactionType.UPSERT_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     oldEntries = oldEntries,
                     newEntries = promotedEntries,
                     stagedRefs = emptyMap(),
@@ -1039,11 +1071,12 @@ class ReadableMirrorPublisher(
 
             // 5. 清理阶段：调用统一 cleanup 函数
             //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             val cleanupJournal =
                 PendingMirrorPublish(
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     projectId = projectId,
                     transactionType = MirrorTransactionType.UPSERT_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
@@ -1089,14 +1122,15 @@ class ReadableMirrorPublisher(
             if (!ensurePendingRecovered()) {
                 return MirrorPublishResult.PendingRecovery
             }
-            // #649 评论 5564379115 问题 5：用严格接口
-            val storageResult = router.currentResult()
-            if (storageResult.isFailure) {
-                val error = storageResult.exceptionOrNull()
-                DiagnosticsLogger.e(TAG, "Failed to get storage for delete: ${error?.message}")
+            // #649 评论 5565862745 问题 4：使用 currentTransactionResult() 获取完整事务上下文
+            val txContextResult = router.currentTransactionResult()
+            if (txContextResult.isFailure) {
+                val error = txContextResult.exceptionOrNull()
+                DiagnosticsLogger.e(TAG, "Failed to get transaction context for delete: ${error?.message}")
                 return MirrorPublishResult.RetryableFailure
             }
-            val storage = storageResult.getOrThrow()
+            val txContext = txContextResult.getOrThrow()
+            val storage = txContext.storage
             if (!storage.isSupported()) {
                 DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
                 return MirrorPublishResult.RetryableFailure
@@ -1108,13 +1142,14 @@ class ReadableMirrorPublisher(
             // 2. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
             //    #649 评论 5563333323 缺口 2：journal 写入失败则停止
             val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             if (!writePendingPublishJournal(
                     projectId = projectId,
                     transactionType = MirrorTransactionType.DELETE_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     oldEntries = removed,
                     newEntries = emptyMap(),
                     stagedRefs = emptyMap(),
@@ -1136,11 +1171,12 @@ class ReadableMirrorPublisher(
             val snapshotResult = source.getProjectWorkspaceSnapshot(projectId)
             val snapshot = (snapshotResult as? BridgeResult.Success)?.data
             // #649 评论 5562715833 问题 5：传 journalContext，manifest 事务每步落 journal
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             val deleteJournalContext =
                 PendingMirrorPublish(
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     projectId = projectId,
                     transactionType = MirrorTransactionType.DELETE_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
@@ -1172,13 +1208,14 @@ class ReadableMirrorPublisher(
             // 4. manifest 成功后更新 journal（标记 manifest 已提交）
             //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
             //    #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             if (!writePendingPublishJournal(
                     projectId = projectId,
                     transactionType = MirrorTransactionType.DELETE_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     oldEntries = removed,
                     newEntries = emptyMap(),
                     stagedRefs = emptyMap(),
@@ -1204,11 +1241,12 @@ class ReadableMirrorPublisher(
             }
             // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
             //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
+            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
             val deleteCleanupJournal =
                 PendingMirrorPublish(
                     txId = txId,
-                    backend = stateStore.getBackend(),
-                    treeUri = stateStore.getTreeUri(),
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
                     projectId = projectId,
                     transactionType = MirrorTransactionType.DELETE_PROJECT,
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
@@ -1310,6 +1348,27 @@ class ReadableMirrorPublisher(
     }
 
     /**
+     * 从磁盘读取指定事务 ID 的最新 pending publish journal（#649 评论 5565862745 问题 1）。
+     *
+     * 用于 rollback 前获取最新 journal，避免使用调用方传入的旧对象。
+     *
+     * @param txId 事务 ID
+     * @return 最新的 journal；不存在或损坏返回 null
+     */
+    private fun readLatestPendingForTx(txId: String): PendingMirrorPublish? {
+        val result = stateStore.readPendingPublish()
+        return when (result) {
+            is PendingPublishResult.NotExists -> null
+            is PendingPublishResult.Corrupted -> null
+            is PendingPublishResult.Success -> {
+                val journal = PendingMirrorPublish.fromJson(result.json)
+                // 确保是同一笔事务
+                if (journal?.txId == txId) journal else null
+            }
+        }
+    }
+
+    /**
      * 回滚整个发布事务：恢复所有 item 的 old backup，再删除 tx staging。
      *
      * #649 评论 5564379115 问题 1/2：统一事务回滚，替代逐 item 回滚。
@@ -1318,16 +1377,17 @@ class ReadableMirrorPublisher(
      * #649 评论 5564624383 问题 2：rollback 本身做成 journal 状态。
      * 进程死在回滚中间，下次是继续回滚，不会又转回 forward promote。
      * 统一顺序：
-     * 0. 把当前 items 写成 phase=rollback
+     * 0. 从磁盘读取最新 journal，只把 phase 改成 PHASE_ROLLBACK，其余字段沿用最新值
      * 1. 删除所有 promotedRef
-     * 2. 逐个恢复 backupOldRef / resolveBackup() 找到的旧正文，每恢复一个更新 journal
+     * 2. 逐个恢复 backupOldRef / lookupBackup() 找到的旧正文，每恢复一个更新 journal
+     *    恢复前先 lookup(final) 判断是否已恢复（crash-idempotent）
      * 3. 全部恢复成功后：删除 manifest backup → manifest final → rollback(txId) → clearPendingPublish
      *
      * @param txId 事务 ID
      * @param items 当前 items（包含 backupOldRef、promotedRef）
      * @param stagedRefs staged refs（包含 finalRelativePath）
      * @param storage 当前事务的 storage
-     * @param journalContext 当前 journal 上下文（用于写 rollback journal）
+     * @param journalContext 当前 journal 上下文（用于写 rollback journal）；如果为 null 会尝试从磁盘读取
      * @return true 表示回滚成功；false 表示恢复失败或部分失败（需要后续重试）
      */
     private suspend fun rollbackWholePublishTransaction(
@@ -1337,30 +1397,37 @@ class ReadableMirrorPublisher(
         storage: ReadableMirrorStorage,
         journalContext: PendingMirrorPublish? = null,
     ): Boolean {
-        // 0. 写 rollback journal（让进程死在回滚中间时能继续回滚）
-        if (journalContext != null) {
-            if (!writePendingPublishJournal(
-                    projectId = journalContext.projectId,
-                    transactionType = journalContext.transactionType,
-                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                    txId = txId,
-                    backend = journalContext.backend,
-                    treeUri = journalContext.treeUri,
-                    oldEntries = journalContext.oldEntries,
-                    newEntries = journalContext.newEntries,
-                    stagedRefs = journalContext.stagedRefs,
-                    items = items,
-                    removedProjectIds = journalContext.removedProjectIds,
-                    manifestOldRef = journalContext.manifestOldRef,
-                    manifestStagedRef = journalContext.manifestStagedRef,
-                    manifestNewRef = journalContext.manifestNewRef,
-                    manifestBackupRef = journalContext.manifestBackupRef,
-                    manifestSwapState = journalContext.manifestSwapState,
-                )
-            ) {
-                DiagnosticsLogger.w(TAG, "rollback: journal write failed at start")
-                return false
-            }
+        // 0. 从磁盘读取最新 journal（#649 评论 5565862745 问题 1）
+        // 避免使用调用方传入的旧 journalContext，manifest 字段可能全是 null/STAGED
+        val latestJournal = journalContext ?: readLatestPendingForTx(txId)
+        if (latestJournal == null) {
+            DiagnosticsLogger.w(TAG, "rollback: cannot read latest journal for tx $txId")
+            return false
+        }
+
+        // 0.1 写 rollback journal（让进程死在回滚中间时能继续回滚）
+        // 只把 phase 改成 PHASE_ROLLBACK，其余字段沿用最新 journal 值
+        if (!writePendingPublishJournal(
+                projectId = latestJournal.projectId,
+                transactionType = latestJournal.transactionType,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                txId = txId,
+                backend = latestJournal.backend,
+                treeUri = latestJournal.treeUri,
+                oldEntries = latestJournal.oldEntries,
+                newEntries = latestJournal.newEntries,
+                stagedRefs = latestJournal.stagedRefs,
+                items = items,
+                removedProjectIds = latestJournal.removedProjectIds,
+                manifestOldRef = latestJournal.manifestOldRef,
+                manifestStagedRef = latestJournal.manifestStagedRef,
+                manifestNewRef = latestJournal.manifestNewRef,
+                manifestBackupRef = latestJournal.manifestBackupRef,
+                manifestSwapState = latestJournal.manifestSwapState,
+            )
+        ) {
+            DiagnosticsLogger.w(TAG, "rollback: journal write failed at start")
+            return false
         }
 
         // #649 评论 5564820566 问题 2：rollback 和 recovery 共用同一套显式状态机。
@@ -1383,92 +1450,106 @@ class ReadableMirrorPublisher(
                 }
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
             }
-            // 更新. journal（记录 NEW_REMOVED）
-            if (journalContext != null) {
-                if (!writePendingPublishJournal(
-                        projectId = journalContext.projectId,
-                        transactionType = journalContext.transactionType,
-                        phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                        txId = txId,
-                        backend = journalContext.backend,
-                        treeUri = journalContext.treeUri,
-                        oldEntries = journalContext.oldEntries,
-                        newEntries = journalContext.newEntries,
-                        stagedRefs = journalContext.stagedRefs,
-                        items = currentItems,
-                        removedProjectIds = journalContext.removedProjectIds,
-                        manifestOldRef = journalContext.manifestOldRef,
-                        manifestStagedRef = journalContext.manifestStagedRef,
-                        manifestNewRef = journalContext.manifestNewRef,
-                        manifestBackupRef = journalContext.manifestBackupRef,
-                        manifestSwapState = journalContext.manifestSwapState,
-                    )
-                ) {
-                    DiagnosticsLogger.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
-                    return false
-                }
+            // 更新 journal（记录 NEW_REMOVED）
+            if (!writePendingPublishJournal(
+                    projectId = latestJournal.projectId,
+                    transactionType = latestJournal.transactionType,
+                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                    txId = txId,
+                    backend = latestJournal.backend,
+                    treeUri = latestJournal.treeUri,
+                    oldEntries = latestJournal.oldEntries,
+                    newEntries = latestJournal.newEntries,
+                    stagedRefs = latestJournal.stagedRefs,
+                    items = currentItems,
+                    removedProjectIds = latestJournal.removedProjectIds,
+                    manifestOldRef = latestJournal.manifestOldRef,
+                    manifestStagedRef = latestJournal.manifestStagedRef,
+                    manifestNewRef = latestJournal.manifestNewRef,
+                    manifestBackupRef = latestJournal.manifestBackupRef,
+                    manifestSwapState = latestJournal.manifestSwapState,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
+                return false
             }
         }
 
         // 2. 逐个恢复 backupOldRef 到最终路径
+        //    #649 评论 5565862745 问题 2：先 lookup(final) 判断是否已恢复（crash-idempotent）
         for ((key, item) in currentItems.toMap()) {
             if (item.state == PendingItem.STATE_ROLLBACK_OLD_RESTORED) continue
             val staged = item.stagedRef ?: stagedRefs[key]
             if (staged == null) continue
             val finalPath = staged.finalRelativePath
-            val backup = item.backupOldRef
-                ?: storage.resolveBackup(txId, finalPath)
-            if (backup != null) {
+
+            // 2.1 先检查 final 是否已经存在（上次已恢复成功）
+            val finalLookup = storage.lookup(finalPath)
+            val alreadyRestored = when (finalLookup) {
+                is MirrorLookupResult.Found -> {
+                    // final 已存在，说明上次已恢复成功，直接复用
+                    DiagnosticsLogger.i(TAG, "rollback: final already exists for ${key.chapterId}, skipping restore")
+                    true
+                }
+                is MirrorLookupResult.Missing -> {
+                    // final 不存在，需要恢复
+                    false
+                }
+                is MirrorLookupResult.Failed -> {
+                    // 查询失败，不能继续
+                    DiagnosticsLogger.w(TAG, "rollback: lookup final failed for ${key.chapterId}: ${finalLookup.cause?.message}")
+                    return false
+                }
+            }
+
+            if (!alreadyRestored) {
+                // 2.2 查找 backup（使用 lookupBackup 三态查询）
+                val backupResult = storage.lookupBackup(txId, finalPath)
+                val backup = when (backupResult) {
+                    is MirrorLookupResult.Found -> backupResult.ref
+                    is MirrorLookupResult.Missing -> {
+                        // backup 不存在，无法继续
+                        DiagnosticsLogger.w(TAG, "rollback: backup missing for ${key.chapterId}")
+                        return false
+                    }
+                    is MirrorLookupResult.Failed -> {
+                        // 查询失败，不能继续
+                        DiagnosticsLogger.w(TAG, "rollback: lookup backup failed for ${key.chapterId}: ${backupResult.cause?.message}")
+                        return false
+                    }
+                }
+
+                // 2.3 恢复 backup 到 final 位置
                 if (storage.restoreBackup(backup, finalPath, MIME_MARKDOWN) == null) {
                     DiagnosticsLogger.w(TAG, "rollback: failed to restore backup for ${key.chapterId}")
-                    if (journalContext != null) {
-                        writePendingPublishJournal(
-                            projectId = journalContext.projectId,
-                            transactionType = journalContext.transactionType,
-                            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                            txId = txId,
-                            backend = journalContext.backend,
-                            treeUri = journalContext.treeUri,
-                            oldEntries = journalContext.oldEntries,
-                            newEntries = journalContext.newEntries,
-                            stagedRefs = journalContext.stagedRefs,
-                            items = currentItems,
-                            removedProjectIds = journalContext.removedProjectIds,
-                            manifestOldRef = journalContext.manifestOldRef,
-                            manifestStagedRef = journalContext.manifestStagedRef,
-                            manifestNewRef = journalContext.manifestNewRef,
-                            manifestBackupRef = journalContext.manifestBackupRef,
-                            manifestSwapState = journalContext.manifestSwapState,
-                        )
-                    }
                     return false
                 }
-                currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
             }
+
+            currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
+
             // 更新 journal（记录 OLD_RESTORED）
-            if (journalContext != null) {
-                if (!writePendingPublishJournal(
-                        projectId = journalContext.projectId,
-                        transactionType = journalContext.transactionType,
-                        phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                        txId = txId,
-                        backend = journalContext.backend,
-                        treeUri = journalContext.treeUri,
-                        oldEntries = journalContext.oldEntries,
-                        newEntries = journalContext.newEntries,
-                        stagedRefs = journalContext.stagedRefs,
-                        items = currentItems,
-                        removedProjectIds = journalContext.removedProjectIds,
-                        manifestOldRef = journalContext.manifestOldRef,
-                        manifestStagedRef = journalContext.manifestStagedRef,
-                        manifestNewRef = journalContext.manifestNewRef,
-                        manifestBackupRef = journalContext.manifestBackupRef,
-                        manifestSwapState = journalContext.manifestSwapState,
-                    )
-                ) {
-                    DiagnosticsLogger.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
-                    return false
-                }
+            if (!writePendingPublishJournal(
+                    projectId = latestJournal.projectId,
+                    transactionType = latestJournal.transactionType,
+                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                    txId = txId,
+                    backend = latestJournal.backend,
+                    treeUri = latestJournal.treeUri,
+                    oldEntries = latestJournal.oldEntries,
+                    newEntries = latestJournal.newEntries,
+                    stagedRefs = latestJournal.stagedRefs,
+                    items = currentItems,
+                    removedProjectIds = latestJournal.removedProjectIds,
+                    manifestOldRef = latestJournal.manifestOldRef,
+                    manifestStagedRef = latestJournal.manifestStagedRef,
+                    manifestNewRef = latestJournal.manifestNewRef,
+                    manifestBackupRef = latestJournal.manifestBackupRef,
+                    manifestSwapState = latestJournal.manifestSwapState,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
+                return false
             }
         }
 
@@ -1477,7 +1558,7 @@ class ReadableMirrorPublisher(
         //    正确顺序：1.先删 manifestNewRef → 2.final 腾空 → 3.restoreBackup →
         //    4.setManifestUri → 5.清 staging。
         //    不再先 restoreBackup 再 resolve(final).delete()（会删掉刚恢复的旧 manifest）。
-        if (!rollbackManifest(journalContext, storage)) {
+        if (!rollbackManifest(latestJournal, storage)) {
             return false
         }
 
@@ -1518,13 +1599,29 @@ class ReadableMirrorPublisher(
                 return false
             }
         }
-        // 2. restoreBackup(old manifest) → 拿 restoredRef
+        // 2. 先检查 final 是否已经存在（上次已恢复成功，crash-idempotent）
+        val finalLookup = storage.lookup(manifestRelativePath)
+        when (finalLookup) {
+            is MirrorLookupResult.Found -> {
+                // final 已存在，说明 manifest 已恢复，直接返回成功
+                DiagnosticsLogger.i(TAG, "rollback manifest: final already exists, skipping restore")
+                return true
+            }
+            is MirrorLookupResult.Failed -> {
+                DiagnosticsLogger.w(TAG, "rollback manifest: lookup final failed: ${finalLookup.cause?.message}")
+                return false
+            }
+            is MirrorLookupResult.Missing -> {
+                // final 不存在，继续恢复
+            }
+        }
+        // 3. restoreBackup(old manifest) → 拿 restoredRef
         val restoredRef = storage.restoreBackup(backup, manifestRelativePath, MIME_JSON)
         if (restoredRef == null) {
             DiagnosticsLogger.w(TAG, "rollback manifest: failed to restore manifest backup")
             return false
         }
-        // 3. setManifestUri(restoredRef.uri)，失败则保留 rollback journal
+        // 4. setManifestUri(restoredRef.uri)，失败则保留 rollback journal
         if (!stateStore.setManifestUri(restoredRef.uri)) {
             DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed after restoring manifest backup")
             return false
@@ -1588,43 +1685,74 @@ class ReadableMirrorPublisher(
         }
 
         // 步骤 2：恢复 backupOldRef 到最终路径
+        //    #649 评论 5565862745 问题 2：先 lookup(final) 判断是否已恢复（crash-idempotent）
         for ((key, item) in currentItems.toMap()) {
             if (item.state == PendingItem.STATE_ROLLBACK_OLD_RESTORED) continue
             val staged = item.stagedRef ?: journal.stagedRefs[key]
             if (staged == null) continue
             val finalPath = staged.finalRelativePath
-            val backup = item.backupOldRef
-                ?: storage.resolveBackup(journal.txId, finalPath)
-            if (backup != null) {
-                if (storage.restoreBackup(backup, finalPath, MIME_MARKDOWN) == null) {
-                    DiagnosticsLogger.w(TAG, "Recover rollback: failed to restore backup for ${key.chapterId}")
-                    allSuccess = false
+
+            // 2.1 先检查 final 是否已经存在（上次已恢复成功）
+            val finalLookup = storage.lookup(finalPath)
+            when (finalLookup) {
+                is MirrorLookupResult.Found -> {
+                    // final 已存在，说明上次已恢复成功，直接复用
+                    DiagnosticsLogger.i(TAG, "Recover rollback: final already exists for ${key.chapterId}, skipping restore")
+                    currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
                     continue
                 }
-                currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
-                // 更新 journal
-                if (!writePendingPublishJournal(
-                        projectId = journal.projectId,
-                        transactionType = journal.transactionType,
-                        phase = PendingMirrorPublish.PHASE_ROLLBACK,
-                        txId = journal.txId,
-                        backend = journal.backend,
-                        treeUri = journal.treeUri,
-                        oldEntries = journal.oldEntries,
-                        newEntries = journal.newEntries,
-                        stagedRefs = journal.stagedRefs,
-                        items = currentItems,
-                        removedProjectIds = journal.removedProjectIds,
-                        manifestOldRef = journal.manifestOldRef,
-                        manifestStagedRef = journal.manifestStagedRef,
-                        manifestNewRef = journal.manifestNewRef,
-                        manifestBackupRef = journal.manifestBackupRef,
-                        manifestSwapState = journal.manifestSwapState,
-                    )
-                ) {
-                    DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
+                is MirrorLookupResult.Failed -> {
+                    DiagnosticsLogger.w(TAG, "Recover rollback: lookup final failed for ${key.chapterId}: ${finalLookup.cause?.message}")
                     return
                 }
+                is MirrorLookupResult.Missing -> {
+                    // final 不存在，继续恢复
+                }
+            }
+
+            // 2.2 查找 backup（使用 lookupBackup 三态查询）
+            val backupResult = storage.lookupBackup(journal.txId, finalPath)
+            val backup = when (backupResult) {
+                is MirrorLookupResult.Found -> backupResult.ref
+                is MirrorLookupResult.Missing -> {
+                    DiagnosticsLogger.w(TAG, "Recover rollback: backup missing for ${key.chapterId}")
+                    return
+                }
+                is MirrorLookupResult.Failed -> {
+                    DiagnosticsLogger.w(TAG, "Recover rollback: lookup backup failed for ${key.chapterId}: ${backupResult.cause?.message}")
+                    return
+                }
+            }
+
+            // 2.3 恢复 backup 到 final 位置
+            if (storage.restoreBackup(backup, finalPath, MIME_MARKDOWN) == null) {
+                DiagnosticsLogger.w(TAG, "Recover rollback: failed to restore backup for ${key.chapterId}")
+                allSuccess = false
+                continue
+            }
+            currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
+            // 更新 journal
+            if (!writePendingPublishJournal(
+                    projectId = journal.projectId,
+                    transactionType = journal.transactionType,
+                    phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                    txId = journal.txId,
+                    backend = journal.backend,
+                    treeUri = journal.treeUri,
+                    oldEntries = journal.oldEntries,
+                    newEntries = journal.newEntries,
+                    stagedRefs = journal.stagedRefs,
+                    items = currentItems,
+                    removedProjectIds = journal.removedProjectIds,
+                    manifestOldRef = journal.manifestOldRef,
+                    manifestStagedRef = journal.manifestStagedRef,
+                    manifestNewRef = journal.manifestNewRef,
+                    manifestBackupRef = journal.manifestBackupRef,
+                    manifestSwapState = journal.manifestSwapState,
+                )
+            ) {
+                DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
+                return
             }
         }
 
@@ -1939,9 +2067,10 @@ class ReadableMirrorPublisher(
         // #649 评论 5565067997 修复 2：根据 journalContext.manifestSwapState 决定从哪一步继续。
         // 不再用 "backup + final 同时存在" 猜测，而是看 journal 记录的显式状态。
         val resumeState = journalContext.manifestSwapState
-        val existingBackup = storage.resolveBackup(txId, manifestRelativePath)
-        if (existingBackup != null) {
-            manifestBackupRef = existingBackup
+        // 使用 lookupBackup 三态查询（#649 评论 5565862745 问题 3）
+        val backupResult = storage.lookupBackup(txId, manifestRelativePath)
+        if (backupResult is MirrorLookupResult.Found) {
+            manifestBackupRef = backupResult.ref
             // backup 已存在。根据 journal 的 manifestSwapState 决定下一步：
             // - MANIFEST_BACKUP_READY：backup 就绪，old 可能还没 vacate → 需 vacate
             // - MANIFEST_OLD_VACATED：old 已腾空 → 需 promote

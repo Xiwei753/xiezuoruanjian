@@ -287,6 +287,23 @@ interface ReadableMirrorStorage {
     fun resolveBackup(txId: String, relativePath: String): MirrorFileRef?
 
     /**
+     * 三态查询：返回备份路径 [relativePath] 的 [MirrorLookupResult]。
+     *
+     * 与 [resolveBackup] 区别：[resolveBackup] 在"不存在"和"查询失败"时都返回 null，
+     * 无法区分；[lookupBackup] 明确区分 [MirrorLookupResult.Missing] 和 [MirrorLookupResult.Failed]。
+     *
+     * 用于 [restoreBackup] 的 crash-idempotent 检查：
+     * - [MirrorLookupResult.Found] → backup 已存在，可直接返回这个 ref（已恢复）
+     * - [MirrorLookupResult.Missing] → backup 不存在，继续 restore
+     * - [MirrorLookupResult.Failed] → 查询失败，返回 null
+     *
+     * @param txId 事务 ID
+     * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
+     * @return [MirrorLookupResult.Found] / [MirrorLookupResult.Missing] / [MirrorLookupResult.Failed]
+     */
+    fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult
+
+    /**
      * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。
      *
      * #649 评论 5562715833 问题 2：promoteStaged 不再删 old。

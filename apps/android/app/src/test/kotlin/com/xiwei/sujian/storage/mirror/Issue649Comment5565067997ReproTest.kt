@@ -631,6 +631,14 @@ class Issue649Comment5565067997ReproTest {
             return MirrorFileRef(uri, backupPath)
         }
 
+        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+            operationLog.add("lookupBackup:$relativePath")
+            if (failLookup) return MirrorLookupResult.Failed(SecurityException("simulated lookup failure"))
+            val backupPath = ".staging/$txId/backup/$relativePath"
+            val uri = backupPathToUri[backupPath] ?: return MirrorLookupResult.Missing
+            return MirrorLookupResult.Found(MirrorFileRef(uri, backupPath))
+        }
+
         override fun promoteStaged(staged: StagedMirrorRef, finalRelativePath: String): MirrorFileRef? {
             val content = stagingFiles.remove(staged.stagingUri) ?: return null
             val newUri = "content://fake/promoted/${committedFiles.size}"

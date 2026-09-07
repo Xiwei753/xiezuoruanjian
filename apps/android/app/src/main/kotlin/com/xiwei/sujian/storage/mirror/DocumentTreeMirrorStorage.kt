@@ -395,7 +395,7 @@ class DocumentTreeMirrorStorage(
     }
 
     override fun vacateCommitted(old: MirrorFileRef): Boolean {
-        val uri = tryParseUri(old.uri) ?: return true // URI 无效 → 无法确认 old 是否存在，视为已腾空
+        val uri = tryParseUri(old.uri) ?: return false // URI 无效 → 无法确认 old 是否已腾空，返回 false
         return try {
             DocumentsContract.deleteDocument(contentResolver, uri)
         } catch (_: FileNotFoundException) {
@@ -472,6 +472,40 @@ class DocumentTreeMirrorStorage(
         }
     }
 
+    override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        if (!isSupported()) {
+            return MirrorLookupResult.Failed(IllegalStateException("DocumentTree backend not supported"))
+        }
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupRelativePath = "$backupBase/$relativePath"
+        // backup 位于 staging 目录内，需要逐级 findDirectory
+        val backupParentPath = backupRelativePath.substringBeforeLast('/', "")
+        val displayName = backupRelativePath.substringAfterLast('/')
+        val parentUri = findDirectory(backupParentPath)
+        if (parentUri == null) {
+            // findDirectory 返回 null 可能是"路径不存在"或"查询失败"。
+            // 用 isSupported() 再校验一次区分：若 treeUri 仍可访问但中间目录不存在 → Missing；否则 Failed。
+            return if (isSupported()) {
+                MirrorLookupResult.Missing
+            } else {
+                MirrorLookupResult.Failed(IllegalStateException("treeUri not accessible while locating backup parent"))
+            }
+        }
+        return try {
+            val children = documentTreeReader.listChildren(parentUri)
+            val match = children.find { !it.isDirectory && it.name == displayName }
+            if (match != null) {
+                MirrorLookupResult.Found(MirrorFileRef(uri = match.uri.toString(), relativePath = backupRelativePath))
+            } else {
+                MirrorLookupResult.Missing
+            }
+        } catch (e: SecurityException) {
+            MirrorLookupResult.Failed(e)
+        } catch (e: Exception) {
+            MirrorLookupResult.Failed(e)
+        }
+    }
+
     /**
      * 在给定的 parentUri 下查找文件（只查不创建）。
      * [resolve] 和 [resolveBackup] 共用此实现。
@@ -500,6 +534,12 @@ class DocumentTreeMirrorStorage(
     ): MirrorFileRef? {
         if (!isSupported()) return null
         // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
+        // 幂等：先 lookup(finalPath)，如果已存在则直接返回（crash 后重试场景）。
+        when (val existing = lookup(finalRelativePath)) {
+            is MirrorLookupResult.Found -> return existing.ref // 已恢复成功，直接返回
+            is MirrorLookupResult.Failed -> return null // 查询失败，无法确认状态
+            is MirrorLookupResult.Missing -> { /* 继续 restoreBackup */ }
+        }
         val backupUri = tryParseUri(backup.uri) ?: return null
         val content = readTextFromUri(backupUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")

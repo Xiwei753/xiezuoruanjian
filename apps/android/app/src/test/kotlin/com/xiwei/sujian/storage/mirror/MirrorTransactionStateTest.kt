@@ -889,6 +889,16 @@ class MirrorTransactionStateTest {
             return null
         }
 
+        // #649 评论 5565862745 问题 3：实现 lookupBackup() 三态查询
+        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+            val resolved = resolveBackup(txId, relativePath)
+            return if (resolved != null) {
+                MirrorLookupResult.Found(resolved)
+            } else {
+                MirrorLookupResult.Missing
+            }
+        }
+
         override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String): MirrorFileRef? {
             val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return null
             val newUri = "content://fake/restored/${committedFiles.size}"
