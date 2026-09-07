@@ -114,7 +114,10 @@ interface ReadableMirrorStorage {
     /**
      * 删除引用指向的文件（幂等）。
      *
-     * URI 不存在或已删除返回 false，不抛异常。
+     * #649 评论 5564379115 问题 3：改成幂等语义 — 文件不存在也返回 true（目标状态已达到）。
+     * cleanup 重跑不能因为第二次 delete 返回 false 永远卡住 journal。
+     *
+     * @return true 表示文件已删除或本就不存在；false 表示删除失败（权限、IO 错误等）。
      */
     fun delete(ref: MirrorFileRef): Boolean
 

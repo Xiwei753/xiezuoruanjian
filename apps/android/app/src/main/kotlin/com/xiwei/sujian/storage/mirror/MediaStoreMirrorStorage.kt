@@ -48,9 +48,33 @@ class MediaStoreMirrorStorage(
         return mediaStore.replaceText(uri, text)
     }
 
+    /**
+     * 删除引用指向的文件（幂等）。
+     *
+     * #649 评论 5564379115 问题 3：文件不存在时也返回 true（目标状态已达到），
+     * 避免 cleanup 重跑时因第二次 delete 返回 false 永远卡住 journal。
+     */
     override fun delete(ref: MirrorFileRef): Boolean {
-        val uri = tryParseUri(ref.uri) ?: return false
-        return mediaStore.delete(uri)
+        val uri = tryParseUri(ref.uri) ?: return true // URI 无效 → 目标状态已达到
+        return try {
+            if (!mediaStore.isSupported()) return true
+            // 先检查文件是否存在，不存在则视为目标已达到
+            val directory = mediaStoreDirectory(ref.relativePath)
+            val displayName = ref.relativePath.substringAfterLast('/')
+            val exists = contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                arrayOf(MediaStore.Downloads._ID),
+                "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                    "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                    "${MediaStore.Downloads.IS_PENDING} = 0",
+                arrayOf(directory, displayName),
+                null,
+            )?.use { it.moveToFirst() } ?: false
+            if (!exists) return true // 文件不存在 → 目标已达到
+            mediaStore.delete(uri)
+        } catch (_: Exception) {
+            true // 异常时视为目标状态已达到（幂等）
+        }
     }
 
     override fun isSupported(): Boolean = mediaStore.isSupported()

@@ -356,11 +356,11 @@ class MirrorTransactionStateTest {
         storage.committedFiles["content://old"] = "important content"
 
         val old = MirrorFileRef("content://old", "作品/P/V/Ch.md")
-        val backup = storage.backupCommitted("tx1", old)
+        val backup = storage.backupCommitted("tx1", old, "text/markdown")
 
         assertNotNull(backup)
-        assertTrue("backup should exist", storage.committedFiles.containsKey(backup!!.uri))
-        assertEquals("backup content should match old", "important content", storage.committedFiles[backup.uri])
+        assertTrue("backup should exist", storage.backupFiles.containsKey(backup!!.uri))
+        assertEquals("backup content should match old", "important content", storage.backupFiles[backup.uri])
         // Old should still be there
         assertTrue("old should still exist", storage.committedFiles.containsKey("content://old"))
     }
@@ -371,7 +371,7 @@ class MirrorTransactionStateTest {
         storage.committedFiles["content://backup"] = "backed up content"
 
         val backup = MirrorFileRef("content://backup", "backup/f.md")
-        val result = storage.restoreBackup(backup, "作品/P/V/Ch.md")
+        val result = storage.restoreBackup(backup, "作品/P/V/Ch.md", "text/markdown")
 
         assertNotNull(result)
         assertEquals("restored content should match backup", "backed up content", storage.committedFiles[result!!.uri])
@@ -437,7 +437,7 @@ class MirrorTransactionStateTest {
         val staged = StagedMirrorRef(txId, "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown")
 
         // Step 1: backup old
-        val backup = storage.backupCommitted(txId, oldRef)
+        val backup = storage.backupCommitted(txId, oldRef, "text/markdown")
         assertNotNull("backup should succeed", backup)
 
         // Step 2: promote staged (old still exists)
@@ -450,7 +450,7 @@ class MirrorTransactionStateTest {
         storage.delete(backup!!)
 
         assertFalse("old should be deleted after cleanup", storage.committedFiles.containsKey("content://old"))
-        assertFalse("backup should be deleted after cleanup", storage.committedFiles.containsKey(backup.uri))
+        assertFalse("backup should be deleted after cleanup", storage.backupFiles.containsKey(backup.uri))
     }
 
     @Test
@@ -463,7 +463,7 @@ class MirrorTransactionStateTest {
 
         // No old ref → no backup step
         val oldRef: MirrorFileRef? = null
-        val backup: MirrorFileRef? = if (oldRef != null) storage.backupCommitted(txId, oldRef) else null
+        val backup: MirrorFileRef? = if (oldRef != null) storage.backupCommitted(txId, oldRef, "text/markdown") else null
         assertNull("no backup for new project", backup)
 
         // Promote directly
@@ -483,7 +483,7 @@ class MirrorTransactionStateTest {
         val staged = StagedMirrorRef(txId, "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown")
 
         // Step 1: backup old
-        val backup = storage.backupCommitted(txId, oldRef)
+        val backup = storage.backupCommitted(txId, oldRef, "text/markdown")
         assertNotNull(backup)
 
         // Step 2: promote fails
@@ -491,7 +491,7 @@ class MirrorTransactionStateTest {
         assertNull("promote should fail", promoted)
 
         // Step 3: restore backup on failure
-        val restored = storage.restoreBackup(backup!!, "f.md")
+        val restored = storage.restoreBackup(backup!!, "f.md", "text/markdown")
         assertNotNull("restore should succeed", restored)
         assertEquals("restored content should match old", "old content", storage.committedFiles[restored!!.uri])
     }
@@ -756,6 +756,7 @@ class MirrorTransactionStateTest {
     private class FakeReadableMirrorStorage : ReadableMirrorStorage {
         val committedFiles = mutableMapOf<String, String>() // uri → content
         val stagingFiles = mutableMapOf<String, String>() // uri → content
+        val backupFiles = mutableMapOf<String, String>() // uri → content (backup area)
         val deletedFiles = mutableListOf<String>() // uri
         val journalSteps = mutableListOf<String>() // operation log
 
@@ -782,11 +783,13 @@ class MirrorTransactionStateTest {
         }
 
         override fun delete(ref: MirrorFileRef): Boolean {
-            committedFiles.remove(ref.uri)
-            stagingFiles.remove(ref.uri)
+            // #649 评论 5564379115 问题 3：幂等语义 — 文件不存在也返回 true
+            val existed = committedFiles.remove(ref.uri) != null ||
+                stagingFiles.remove(ref.uri) != null ||
+                backupFiles.remove(ref.uri) != null
             deletedFiles.add(ref.uri)
             journalSteps.add("delete:${ref.relativePath}")
-            return true
+            return true // 幂等：始终返回 true
         }
 
         override fun isSupported(): Boolean = true
@@ -809,11 +812,11 @@ class MirrorTransactionStateTest {
             )
         }
 
-        override fun backupCommitted(txId: String, old: MirrorFileRef): MirrorFileRef? {
+        override fun backupCommitted(txId: String, old: MirrorFileRef, mimeType: String): MirrorFileRef? {
             if (failBackup) return null
             val content = committedFiles[old.uri] ?: return null
-            val backupUri = "content://fake/backup/${committedFiles.size}"
-            committedFiles[backupUri] = content
+            val backupUri = "content://fake/backup/${backupFiles.size}"
+            backupFiles[backupUri] = content
             val backupPath = ".staging/$txId/backup/${old.relativePath}"
             journalSteps.add("backup:${old.relativePath}→$backupPath")
             return MirrorFileRef(backupUri, backupPath)
@@ -828,8 +831,30 @@ class MirrorTransactionStateTest {
             return MirrorFileRef(newUri, finalRelativePath)
         }
 
-        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String): MirrorFileRef? {
-            val content = committedFiles[backup.uri] ?: return null
+        override fun resolve(relativePath: String): MirrorFileRef? {
+            // 查找 committedFiles 中匹配 relativePath 的条目
+            for ((uri, _) in committedFiles) {
+                // 简化：用 URI 中的路径信息匹配
+                if (uri.contains(relativePath.replace("/", "_"))) {
+                    return MirrorFileRef(uri, relativePath)
+                }
+            }
+            return null
+        }
+
+        override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+            // 查找 backupFiles 中匹配的条目
+            val backupPath = ".staging/$txId/backup/$relativePath"
+            for ((uri, _) in backupFiles) {
+                if (uri.contains(relativePath.replace("/", "_"))) {
+                    return MirrorFileRef(uri, backupPath)
+                }
+            }
+            return null
+        }
+
+        override fun restoreBackup(backup: MirrorFileRef, finalRelativePath: String, mimeType: String): MirrorFileRef? {
+            val content = backupFiles[backup.uri] ?: committedFiles[backup.uri] ?: return null
             val newUri = "content://fake/restored/${committedFiles.size}"
             committedFiles[newUri] = content
             journalSteps.add("restore:${backup.relativePath}→$finalRelativePath")
@@ -840,5 +865,62 @@ class MirrorTransactionStateTest {
             stagingFiles.clear()
             journalSteps.add("rollback:$txId")
         }
+    }
+
+    // ── #649 评论 5564379115 问题 3：idempotent delete ──
+
+    @Test
+    fun delete_idempotent_alreadyDeleted_returnsTrue() {
+        val storage = FakeReadableMirrorStorage()
+        val ref = MirrorFileRef("content://fake/0", "test.md")
+
+        // File doesn't exist in any map → delete should return true (idempotent)
+        val result = storage.delete(ref)
+        assertTrue("delete of non-existent file should return true (idempotent)", result)
+    }
+
+    @Test
+    fun delete_idempotent_afterFirstDelete_returnsTrue() {
+        val storage = FakeReadableMirrorStorage()
+        storage.committedFiles["content://test"] = "content"
+        val ref = MirrorFileRef("content://test", "test.md")
+
+        // First delete succeeds
+        assertTrue("first delete should succeed", storage.delete(ref))
+        assertFalse("file should be removed", storage.committedFiles.containsKey("content://test"))
+
+        // Second delete (file already gone) should still return true
+        assertTrue("second delete should return true (idempotent)", storage.delete(ref))
+    }
+
+    // ── #649 评论 5564379115 问题 3：cleanup 只删 backupOldRef，不删 oldRef ──
+
+    @Test
+    fun cleanup_afterSwap_onlyDeletesBackupOldRef() {
+        val storage = FakeReadableMirrorStorage()
+        // After swap: old was moved to backup by backupCommitted.
+        // In real MediaStore, both oldRef and backupOldRef point to the same row
+        // (just with different RELATIVE_PATH). Our fake tracks them separately.
+        storage.backupFiles["content://backup"] = "old content"
+
+        // Simulate what cleanupCommittedTransaction does:
+        // 1. For committed item with backupOldRef → delete backupOldRef
+        val backupRef = MirrorFileRef("content://backup", ".staging/tx1/backup/test.md")
+        storage.delete(backupRef)
+
+        assertFalse("backup should be deleted", storage.backupFiles.containsKey("content://backup"))
+    }
+
+    @Test
+    fun cleanup_deletedChapter_resolvesBeforeDelete() {
+        val storage = FakeReadableMirrorStorage()
+        // Chapter was already deleted by a previous cleanup run
+        // resolve() should return null → skip delete → don't fail
+
+        val resolved = storage.resolve("already/deleted.md")
+        assertNull("resolve of deleted file should return null", resolved)
+
+        // If resolved is null, cleanup should skip the delete
+        // (not attempt to delete a non-existent URI)
     }
 }

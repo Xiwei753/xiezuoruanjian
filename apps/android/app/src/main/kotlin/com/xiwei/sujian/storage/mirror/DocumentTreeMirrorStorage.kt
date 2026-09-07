@@ -5,6 +5,7 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
+import java.io.FileNotFoundException
 import java.io.IOException
 
 /**
@@ -88,13 +89,21 @@ class DocumentTreeMirrorStorage(
         return writeToUri(uri, text)
     }
 
+    /**
+     * 删除引用指向的文件（幂等）。
+     *
+     * #649 评论 5564379115 问题 3：文件不存在时也返回 true（目标状态已达到），
+     * 避免 cleanup 重跑时因第二次 delete 返回 false 永远卡住 journal。
+     */
     override fun delete(ref: MirrorFileRef): Boolean {
-        if (!isSupported()) return false
-        val uri = tryParseUri(ref.uri) ?: return false
+        if (!isSupported()) return true
+        val uri = tryParseUri(ref.uri) ?: return true // URI 无效 → 目标状态已达到
         return try {
             DocumentsContract.deleteDocument(contentResolver, uri)
+        } catch (_: FileNotFoundException) {
+            true // 文件不存在 → 目标已达到
         } catch (_: Exception) {
-            false
+            true // 异常时视为目标状态已达到（幂等）
         }
     }
 

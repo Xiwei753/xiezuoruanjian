@@ -472,7 +472,15 @@ class ReadableMirrorStateStore(
         synchronized(lock) {
             if (!pendingPublishFile.exists()) return PendingPublishResult.NotExists
             return try {
-                PendingPublishResult.Success(pendingPublishFile.readText(Charsets.UTF_8))
+                val json = pendingPublishFile.readText(Charsets.UTF_8)
+                // #649 评论 5564379115 问题 5：立即验证 JSON 可解析性，
+                // 不让坏 JSON 被当成 "Success" 后在恢复时走 fromJson() 失败
+                // 然后 ensurePendingRecovered 仍然设 pendingRecovered=true
+                PendingMirrorPublish.fromJson(json)
+                    ?: return PendingPublishResult.Corrupted(
+                        IllegalArgumentException("Pending publish JSON is invalid")
+                    )
+                PendingPublishResult.Success(json)
             } catch (e: IOException) {
                 PendingPublishResult.Corrupted(e)
             }
