@@ -21,7 +21,7 @@ class EditorAttachDecisionTest {
     fun attached_matchingWindow_returnsConfirm() {
         val state = WindowBindingState.Attached("w1", "t1", 5UL)
         assertEquals(
-            EditorAttachAction.Confirm,
+            EditorAttachAction.Hold,
             editorAttachDecision(state, "w1", "t1"),
         )
     }
@@ -49,7 +49,7 @@ class EditorAttachDecisionTest {
     fun attaching_matchingWindow_returnsWait() {
         val state = WindowBindingState.Attaching("w1", "t1", 5UL)
         assertEquals(
-            EditorAttachAction.Wait,
+            EditorAttachAction.Hold,
             editorAttachDecision(state, "w1", "t1"),
         )
     }

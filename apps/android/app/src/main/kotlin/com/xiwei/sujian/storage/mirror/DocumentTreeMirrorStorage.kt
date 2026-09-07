@@ -221,26 +221,35 @@ class DocumentTreeMirrorStorage(
         )
     }
 
-    override fun promote(
+    override fun promoteStaged(
         staged: StagedMirrorRef,
-        old: MirrorFileRef?,
         finalRelativePath: String,
-    ): PromoteResult? {
+    ): MirrorFileRef? {
         if (!isSupported()) return null
-        // #649 评论 5562462046 问题 1：真正的 swap，不先删 old。
+        // #649 评论 5562715833 问题 2：promoteStaged 不删 old，只提升 staging 到 final。
         val stagingUri = tryParseUri(staged.stagingUri) ?: return null
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
-        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val targetParentUri = ensureDirectory(relativeDir) ?: return null
 
-        // 优先尝试 DocumentsContract.moveDocument（原子移动，不复制内容）
-        val newUri: Uri? = tryMoveDocument(stagingUri, parentUri, displayName)
+        // #649 评论 5562715833 问题 3：获取 staging 的父目录 URI，用于 moveDocument 跨目录移动
+        // 从 stagingRelativePath 构造父目录路径，用 findDirectory 查找（不创建）
+        val stagingParentPath = staged.stagingRelativePath.substringBeforeLast('/', "")
+        val stagingParentUri = findDirectory(stagingParentPath)
+
+        // 优先尝试 DocumentsContract.moveDocument（跨目录原子移动，不复制内容）
+        val newUri: Uri? =
+            if (stagingParentUri != null) {
+                tryMoveDocument(stagingUri, stagingParentUri, targetParentUri, displayName)
+            } else {
+                null
+            }
         if (newUri == null) {
             // provider 不支持 moveDocument 或失败 → 走"复制到最终位置成功后再删 staging"分支
             val content = readTextFromUri(stagingUri) ?: return null
             val createdUri =
                 try {
-                    DocumentsContract.createDocument(contentResolver, parentUri, staged.mimeType, displayName)
+                    DocumentsContract.createDocument(contentResolver, targetParentUri, staged.mimeType, displayName)
                 } catch (e: Exception) {
                     DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
                     return null
@@ -257,58 +266,124 @@ class DocumentTreeMirrorStorage(
                 DocumentsContract.deleteDocument(contentResolver, stagingUri)
             } catch (_: Exception) {
             }
-            // newUri = createdUri
-            return finishPromoteSwap(createdUri, finalRelativePath, old)
+            return MirrorFileRef(uri = createdUri.toString(), relativePath = finalRelativePath)
         }
-        return finishPromoteSwap(newUri, finalRelativePath, old)
+        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
     }
 
-    /**
-     * promote 共用收尾：create/move 成功后才删 old，返回 [PromoteResult]。
-     */
-    private fun finishPromoteSwap(
-        newUri: Uri,
-        finalRelativePath: String,
-        old: MirrorFileRef?,
-    ): PromoteResult {
-        if (old != null) {
-            val oldUri = tryParseUri(old.uri)
-            if (oldUri != null) {
-                try {
-                    DocumentsContract.deleteDocument(contentResolver, oldUri)
-                } catch (_: Exception) {
-                }
+    override fun backupCommitted(
+        txId: String,
+        old: MirrorFileRef,
+    ): MirrorFileRef? {
+        if (!isSupported()) return null
+        // #649 评论 5562715833 问题 2：把 old 复制到 tx backup 目录，old 不动。
+        val oldUri = tryParseUri(old.uri) ?: return null
+        val content = readTextFromUri(oldUri) ?: return null
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val parent = old.relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
+        val displayName = old.relativePath.substringAfterLast('/')
+        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val fileUri =
+            try {
+                DocumentsContract.createDocument(contentResolver, parentUri, MIME_MARKDOWN, displayName)
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "createDocument failed for backup $displayName: ${e.message}")
+                return null
+            } ?: return null
+        if (!writeToUri(fileUri, content)) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, fileUri)
+            } catch (_: Exception) {
             }
+            return null
         }
-        return PromoteResult(
-            newRef = MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath),
-            displacedOldRef = old,
-        )
+        return MirrorFileRef(uri = fileUri.toString(), relativePath = "$backupBase/${old.relativePath}")
+    }
+
+    override fun restoreBackup(
+        backup: MirrorFileRef,
+        finalRelativePath: String,
+    ): MirrorFileRef? {
+        if (!isSupported()) return null
+        // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
+        val backupUri = tryParseUri(backup.uri) ?: return null
+        val content = readTextFromUri(backupUri) ?: return null
+        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
+        val displayName = finalRelativePath.substringAfterLast('/')
+        val parentUri = ensureDirectory(relativeDir) ?: return null
+        val fileUri =
+            try {
+                DocumentsContract.createDocument(contentResolver, parentUri, MIME_MARKDOWN, displayName)
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "createDocument failed for restore $displayName: ${e.message}")
+                return null
+            } ?: return null
+        if (!writeToUri(fileUri, content)) {
+            try {
+                DocumentsContract.deleteDocument(contentResolver, fileUri)
+            } catch (_: Exception) {
+            }
+            return null
+        }
+        return MirrorFileRef(uri = fileUri.toString(), relativePath = finalRelativePath)
     }
 
     /**
-     * 尝试用 [DocumentsContract.renameDocument] 把 staging 原子重命名到最终位置。
+     * 尝试用 [DocumentsContract.moveDocument] 把 staging 跨父目录原子移动到最终位置。
      *
-     * 部分 DocumentsProvider 不支持 renameDocument（抛 UnsupportedOperationException
+     * #649 评论 5562715833 问题 3：旧实现只用 renameDocument，无法跨父目录移动。
+     * 新实现先用 moveDocument 跨父目录移动，再视需要 renameDocument 调整文件名。
+     *
+     * 部分 DocumentsProvider 不支持 moveDocument（抛 UnsupportedOperationException
      * 或返回 null），调用方应回退到复制+删 staging 分支。
      *
-     * 注意：renameDocument 不能改变父目录，只能重命名。因此 staging 必须在最终父目录下。
-     * 当前 staging 路径是 `.staging/<txId>/<finalRelativePath>`，不在最终父目录下，
-     * 所以这里只尝试 rename 到最终文件名（假设 staging 已在最终父目录）。
-     * 如果 rename 失败，调用方走"复制到最终位置成功后再删 staging"分支。
+     * @param stagingUri 暂存文件 URI
+     * @param stagingParentUri 暂存文件的父目录 URI
+     * @param targetParentUri 目标父目录 URI
+     * @param displayName 最终文件名
+     * @return 移动后的文件 URI；失败返回 null
      */
     private fun tryMoveDocument(
         stagingUri: Uri,
-        parentUri: Uri,
+        stagingParentUri: Uri,
+        targetParentUri: Uri,
         displayName: String,
     ): Uri? {
-        // 先尝试 renameDocument（重命名到最终文件名）
+        // 1. moveDocument 跨父目录移动
+        val movedUri =
+            try {
+                DocumentsContract.moveDocument(contentResolver, stagingUri, stagingParentUri, targetParentUri)
+            } catch (_: UnsupportedOperationException) {
+                null
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "moveDocument failed: ${e.message}")
+                null
+            } ?: return null
+        // 2. 如目标文件名还需变化，再 renameDocument
+        val currentName = getDisplayName(movedUri)
+        return if (currentName == displayName) {
+            movedUri
+        } else {
+            try {
+                DocumentsContract.renameDocument(contentResolver, movedUri, displayName)
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "renameDocument failed after move: ${e.message}")
+                null
+            }
+        }
+    }
+
+    /** 查询 URI 的 display name。 */
+    private fun getDisplayName(uri: Uri): String? {
         return try {
-            DocumentsContract.renameDocument(contentResolver, stagingUri, displayName)
-        } catch (_: UnsupportedOperationException) {
-            null
+            contentResolver
+                .query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else null
+                }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "renameDocument failed, will fallback to copy: ${e.message}")
+            DiagnosticsLogger.w(TAG, "getDisplayName failed: ${e.message}")
             null
         }
     }
@@ -376,5 +451,7 @@ class DocumentTreeMirrorStorage(
     companion object {
         private const val TAG = "DocumentTreeMirrorStorage"
         private const val STAGING_DIR = ".staging"
+        private const val BACKUP_DIR = "backup"
+        private const val MIME_MARKDOWN = "text/markdown"
     }
 }

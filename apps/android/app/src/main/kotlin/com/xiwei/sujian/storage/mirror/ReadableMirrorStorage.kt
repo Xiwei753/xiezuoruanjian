@@ -43,18 +43,22 @@ data class StagedMirrorRef(
 )
 
 /**
- * promote() 的结果，记录新引用与被替换的旧引用。
+ * promote 流程拆分后的结果，记录新引用、旧正文备份引用与被替换的旧引用。
  *
- * #649 评论 5562462046 问题 1：promote() 必须是真正的 swap——
- * 先在最终位置创建新文件，成功后才删旧文件，避免 create 失败时旧正文已丢。
+ * #649 评论 5562715833 问题 2：promote 拆成 [ReadableMirrorStorage.backupCommitted] +
+ * [ReadableMirrorStorage.promoteStaged]，旧正文先备份再提升，
+ * manifest 提交成功后才删旧正文和 backup。
  *
  * @property newRef 新创建/移动后的文件引用。
+ * @property backupOldRef 旧正文备份引用（old != null 时非空，事务提交后由调用方删）；
+ *   `null` 表示本次是新建（无旧文件被备份）。
  * @property displacedOldRef 被替换掉的旧引用（promote 前 `old` 参数原样回传）；
  *   调用方据此在 journal/stateStore 提交后再决定何时删旧。
  *   `null` 表示本次是新建（无旧文件被替换）。
  */
 data class PromoteResult(
     val newRef: MirrorFileRef,
+    val backupOldRef: MirrorFileRef?,
     val displacedOldRef: MirrorFileRef?,
 )
 
@@ -141,26 +145,51 @@ interface ReadableMirrorStorage {
     ): StagedMirrorRef?
 
     /**
-     * 提升暂存文件到最终位置（真正的 swap，不先删旧）。
+     * 备份旧正文到事务 backup 目录（old 不动）。
      *
-     * #649 评论 5562462046 问题 1：旧实现先 delete(old) → create 新文件，
-     * create 失败时旧正文已丢、无法回滚。新实现要求：
-     * 1. 不先删 old；
-     * 2. 在最终位置创建/移动新文件；
-     * 3. create 成功后才删 old（如果有），再删 staging；
-     * 4. create 失败时不删 old，返回 null（调用方可 rollback staging）。
+     * #649 评论 5562715833 问题 2：promote 拆成 backupCommitted + promoteStaged，
+     * 旧正文先复制/移动到事务 backup 目录（old 仍保留原位直到 promoteStaged 成功），
+     * manifest 提交成功后才删旧正文和 backup。
+     *
+     * @param txId 事务 ID
+     * @param old 旧引用（非空）
+     * @return backup 引用；失败返回 null
+     */
+    fun backupCommitted(
+        txId: String,
+        old: MirrorFileRef,
+    ): MirrorFileRef?
+
+    /**
+     * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。
+     *
+     * #649 评论 5562715833 问题 2：promoteStaged 不再删 old。
+     * - MediaStore：读 staging 内容 → createText 到 final → 删 staging。
+     * - SAF：用 moveDocument 跨目录移动 staging 到 final（#649 评论 5562715833 问题 3）。
      *
      * @param staged 暂存引用
-     * @param old 旧引用（可为 null，表示新建）
-     * @param finalRelativePath 最终目标路径（通常等于 staged.finalRelativePath）
-     * @return [PromoteResult]（含新引用与被替换的旧引用）；任何不可逆步骤失败返回 null，
-     *   且不删除 old（调用方可调 [rollback] 清理 staging）
+     * @param finalRelativePath 最终目标路径
+     * @return 新文件引用；失败返回 null（staging 保留，调用方可 rollback）
      */
-    fun promote(
+    fun promoteStaged(
         staged: StagedMirrorRef,
-        old: MirrorFileRef?,
         finalRelativePath: String,
-    ): PromoteResult?
+    ): MirrorFileRef?
+
+    /**
+     * 把 backup 恢复到 final 位置（回滚用）。
+     *
+     * #649 评论 5562715833 问题 2：promote 失败或 manifest 失败时，
+     * 用 restoreBackup 把旧正文从 backup 恢复到 final 位置。
+     *
+     * @param backup backup 引用
+     * @param finalRelativePath 最终目标路径
+     * @return 恢复后的引用；失败返回 null
+     */
+    fun restoreBackup(
+        backup: MirrorFileRef,
+        finalRelativePath: String,
+    ): MirrorFileRef?
 
     /**
      * 回滚事务：删除该 txId 对应的所有暂存文件。

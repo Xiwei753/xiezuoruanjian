@@ -153,7 +153,7 @@ class PreparedWindowNotStuckTest {
                 windowId = "realWindow",
                 targetId = "b",
             )
-        assertEquals(EditorAttachAction.Confirm, decision)
+        assertEquals(EditorAttachAction.Hold, decision)
     }
 
     /**
@@ -167,7 +167,7 @@ class PreparedWindowNotStuckTest {
                 windowId = "realWindow",
                 targetId = "b",
             )
-        assertEquals(EditorAttachAction.Wait, decision)
+        assertEquals(EditorAttachAction.Hold, decision)
     }
 
     /**

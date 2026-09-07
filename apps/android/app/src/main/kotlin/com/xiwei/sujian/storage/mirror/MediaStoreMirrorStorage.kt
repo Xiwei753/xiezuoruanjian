@@ -73,37 +73,56 @@ class MediaStoreMirrorStorage(
         )
     }
 
-    override fun promote(
+    override fun promoteStaged(
         staged: StagedMirrorRef,
-        old: MirrorFileRef?,
         finalRelativePath: String,
-    ): PromoteResult? {
-        // #649 评论 5562462046 问题 1：真正的 swap，不先删 old。
+    ): MirrorFileRef? {
+        // #649 评论 5562715833 问题 2：promoteStaged 不删 old，只提升 staging 到 final。
         // 1. 读取暂存内容
         val stagingUri = tryParseUri(staged.stagingUri) ?: return null
         val content = mediaStore.readText(stagingUri) ?: return null
-        // 2. 在最终位置创建新文件（old 不动）
+        // 2. 在最终位置创建新文件（old 不动，由调用方在事务提交后删）
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
         val displayName = finalRelativePath.substringAfterLast('/')
         val newUri = mediaStore.createText(relativeDir, displayName, staged.mimeType, content)
             ?: return null
-        // 3. create 成功后才删 old（如果有）
-        if (old != null) {
-            val oldUri = tryParseUri(old.uri)
-            if (oldUri != null) {
-                mediaStore.delete(oldUri)
-            }
-        }
-        // 4. 删 staging
+        // 3. 删 staging
         mediaStore.delete(stagingUri)
-        return PromoteResult(
-            newRef = MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath),
-            displacedOldRef = old,
-        )
+        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
+    }
+
+    override fun backupCommitted(
+        txId: String,
+        old: MirrorFileRef,
+    ): MirrorFileRef? {
+        // #649 评论 5562715833 问题 2：把 old 复制到 tx backup 目录，old 不动。
+        val oldUri = tryParseUri(old.uri) ?: return null
+        val content = mediaStore.readText(oldUri) ?: return null
+        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val parent = old.relativePath.substringBeforeLast('/', "")
+        val relativeDir = if (parent.isBlank()) backupBase else "$backupBase/$parent"
+        val displayName = old.relativePath.substringAfterLast('/')
+        val backupUri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+            ?: return null
+        return MirrorFileRef(uri = backupUri.toString(), relativePath = "$backupBase/${old.relativePath}")
+    }
+
+    override fun restoreBackup(
+        backup: MirrorFileRef,
+        finalRelativePath: String,
+    ): MirrorFileRef? {
+        // #649 评论 5562715833 问题 2：把 backup 恢复到 final 位置（回滚用）。
+        val backupUri = tryParseUri(backup.uri) ?: return null
+        val content = mediaStore.readText(backupUri) ?: return null
+        val relativeDir = finalRelativePath.substringBeforeLast('/', "")
+        val displayName = finalRelativePath.substringAfterLast('/')
+        val newUri = mediaStore.createText(relativeDir, displayName, MIME_MARKDOWN, content)
+            ?: return null
+        return MirrorFileRef(uri = newUri.toString(), relativePath = finalRelativePath)
     }
 
     override fun rollback(txId: String) {
-        // 删除 txId 对应的整个暂存目录
+        // 删除 txId 对应的整个暂存目录（含 backup 子目录）
         val stagingDir = "$STAGING_DIR/$txId"
         mediaStore.deleteByPrefix(stagingDir)
     }
@@ -117,5 +136,7 @@ class MediaStoreMirrorStorage(
 
     companion object {
         private const val STAGING_DIR = ".staging"
+        private const val BACKUP_DIR = "backup"
+        private const val MIME_MARKDOWN = "text/markdown"
     }
 }

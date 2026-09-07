@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.interop.common
 
+import com.xiwei.sujian.core.interop.project.toModel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -16,10 +17,10 @@ class BridgeMapperTest {
     fun projectDto_toModel_mapsAllFields() {
         val dto =
             ProjectDto(
-                id = "p1",
-                title = "Test Project",
-                createdAt = "2023-01-01",
-                updatedAt = "2023-01-02",
+                "p1",
+                "Test Project",
+                "2023-01-01",
+                "2023-01-02",
             )
         val model = dto.toModel()
         assertEquals("p1", model.id)
@@ -32,9 +33,9 @@ class BridgeMapperTest {
     fun projectStatsDto_toModel_mapsAllFields() {
         val dto =
             ProjectStatsDto(
-                totalWordCount = 1000U,
-                volumeCount = 5U,
-                chapterCount = 50U,
+                1000U,
+                5U,
+                50U,
             )
         val model = dto.toModel()
         assertEquals(1000, model.totalWordCount)
@@ -46,11 +47,11 @@ class BridgeMapperTest {
     fun volumeDto_toModel_mapsAllFields() {
         val dto =
             VolumeDto(
-                id = "v1",
-                title = "Test Volume",
-                createdAt = "2023-01-01",
-                updatedAt = "2023-01-02",
-                order = 3,
+                "v1",
+                "Test Volume",
+                "2023-01-01",
+                "2023-01-02",
+                3,
             )
         val model = dto.toModel()
         assertEquals("v1", model.id)
@@ -64,14 +65,14 @@ class BridgeMapperTest {
     fun chapterMetaDto_toModel_mapsAllFields() {
         val dto =
             ChapterMetaDto(
-                id = "ch1",
-                title = "Chapter One",
-                createdAt = "2023-01-01",
-                updatedAt = "2023-01-02",
-                order = 2,
-                wordCount = 500U,
-                hash = "abc123",
-                note = "a note",
+                "ch1",
+                "Chapter One",
+                "2023-01-01",
+                "2023-01-02",
+                2,
+                500U,
+                "abc123",
+                "a note",
             )
         val model = dto.toModel()
         assertEquals("ch1", model.id)
@@ -88,14 +89,14 @@ class BridgeMapperTest {
     fun chapterMetaDto_toModel_mapsNullNote() {
         val dto =
             ChapterMetaDto(
-                id = "ch2",
-                title = "Chapter Two",
-                createdAt = "2023-01-01",
-                updatedAt = "2023-01-02",
-                order = 1,
-                wordCount = 0U,
-                hash = "h",
-                note = null,
+                "ch2",
+                "Chapter Two",
+                "2023-01-01",
+                "2023-01-02",
+                1,
+                0U,
+                "h",
+                null,
             )
         val model = dto.toModel()
         assertNull(model.note)
@@ -105,16 +106,16 @@ class BridgeMapperTest {
     fun chapterContentDto_toModel_mapsAllFields() {
         val metaDto =
             ChapterMetaDto(
-                id = "ch1",
-                title = "Ch",
-                createdAt = "2023-01-01",
-                updatedAt = "2023-01-02",
-                order = 1,
-                wordCount = 100U,
-                hash = "h1",
-                note = "a note",
+                "ch1",
+                "Ch",
+                "2023-01-01",
+                "2023-01-02",
+                1,
+                100U,
+                "h1",
+                "a note",
             )
-        val dto = ChapterContentDto(meta = metaDto, content = "Hello world")
+        val dto = ChapterContentDto(metaDto, "Hello world")
         val model = dto.toModel()
         assertEquals("ch1", model.meta.id)
         assertEquals("Ch", model.meta.title)
@@ -131,12 +132,12 @@ class BridgeMapperTest {
     fun chapterSaveReceiptDto_toModel_mapsAllFields() {
         val dto =
             ChapterSaveReceiptDto(
-                chapterRelativePath = "projects/p1/volumes/v1/chapters/ch1.md",
-                contentLen = 42U,
-                contentHash = "abc123",
-                metaHash = "def456",
-                updatedAt = "2023-01-02T00:00:00Z",
-                wordCount = 7U,
+                "projects/p1/volumes/v1/chapters/ch1.md",
+                42U,
+                "abc123",
+                "def456",
+                "2023-01-02T00:00:00Z",
+                7U,
             )
         val model = dto.toModel()
         assertEquals("projects/p1/volumes/v1/chapters/ch1.md", model.chapterRelativePath)
@@ -151,10 +152,10 @@ class BridgeMapperTest {
     fun recentEditDto_toModel_mapsAllFields() {
         val dto =
             RecentEditDto(
-                projectId = "p1",
-                volumeId = "v1",
-                chapterId = "ch1",
-                timestamp = "2023-01-01T00:00:00Z",
+                "p1",
+                "v1",
+                "ch1",
+                "2023-01-01T00:00:00Z",
             )
         val model = dto.toModel()
         assertEquals("p1", model.projectId)
