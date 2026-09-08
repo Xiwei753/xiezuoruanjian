@@ -167,16 +167,6 @@ impl SujianEditorItem {
         snapshot
     }
 
-    pub(crate) fn update_current_layout_snapshot(&mut self) {
-        let width = self.bounding_width();
-        let new_snapshot = self.build_editor_layout_snapshot(width);
-        let prev = self.pipeline.current_layout_snapshot().clone();
-        self.pipeline.set_previous_layout_snapshot(prev);
-        self.pipeline
-            .set_current_layout_snapshot(Some(new_snapshot));
-        self.pipeline.bump_layout_revision();
-    }
-
     pub(crate) fn ensure_layout_cached(&mut self, width: f64) -> &Vec<VisualLine> {
         let params = self.layout_params(width);
         &self

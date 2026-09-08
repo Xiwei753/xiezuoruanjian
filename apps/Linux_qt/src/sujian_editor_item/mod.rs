@@ -73,11 +73,14 @@ use std::time::Instant;
 use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::{
-    AnimationMode as CoreAnimationMode, CompositionSession, CursorRect, EditorAnimationKind,
-    EditorCursor, EditorSelection, EditorTransactionCause, EditorVisualTransaction, GlyphRect,
-    PreeditVisualTransaction,
+    CompositionSession, CursorRect, EditorAnimationKind, EditorCursor, EditorSelection,
+    EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
 };
 
+#[cfg(test)]
+use writer_core::editor::AnimationMode as CoreAnimationMode;
+
+#[cfg(test)]
 use animation_coordinator::AnimationMode;
 
 #[derive(Clone, Debug)]

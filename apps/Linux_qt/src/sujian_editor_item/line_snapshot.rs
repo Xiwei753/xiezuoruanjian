@@ -1,4 +1,3 @@
-pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::layout_snapshot::LineSnapshotId;
 
 use qmetaobject::QImage;
@@ -27,21 +26,12 @@ impl LineTextureStore {
         self.textures.contains_key(id)
     }
 
-    pub fn remove_revision(&mut self, revision: LayoutRevision) {
-        self.textures
-            .retain(|id, _| id.layout_revision != revision.0);
-    }
-
     pub fn remove(&mut self, id: &LineSnapshotId) {
         self.textures.remove(id);
     }
 
     pub fn clear(&mut self) {
         self.textures.clear();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.textures.is_empty()
     }
 }
 

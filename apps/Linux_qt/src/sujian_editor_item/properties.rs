@@ -453,30 +453,6 @@ impl SujianEditorItem {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) fn debug_meta_object_animation_signals(&self) -> QString {
-        let obj = self.get_cpp_object();
-        if obj.is_null() {
-            return "<null>".into();
-        }
-        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-        cpp!(unsafe [obj as "QObject*"] -> QString as "QString" {
-            const QMetaObject* meta = obj->metaObject();
-            QStringList signal_list;
-            for (int i = 0; meta && i < meta->methodCount(); ++i) {
-                QMetaMethod method = meta->method(i);
-                if (method.methodType() != QMetaMethod::Signal) continue;
-                const QByteArray sig = method.methodSignature();
-                if (sig.contains("visual") || sig.contains("transaction") || sig.contains("explicit_clear")) {
-                    signal_list << QString::fromLatin1(sig);
-                }
-            }
-            return QStringLiteral("class=%1 signals=%2")
-                .arg(meta ? QString::fromLatin1(meta->className()) : QStringLiteral("<null>"))
-                .arg(signal_list.join(QStringLiteral(",")));
-        })
-    }
-
     pub(crate) fn cursor_rect_x(&self) -> f32 {
         if !self.pipeline.composition().preedit_text.is_empty() {
             if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {

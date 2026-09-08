@@ -1513,7 +1513,7 @@ impl LinuxEditorAnimationCoordinator {
         is_selecting: bool,
         is_preediting: bool,
         smooth_cursor_enabled: bool,
-        smooth_cursor_duration_ms: u32,
+        _smooth_cursor_duration_ms: u32,
         coordinated_enabled: bool,
         scroll_y: f64,
         old_scroll_y: f64,
@@ -2423,7 +2423,6 @@ mod tests {
                     h: 20.0,
                 },
                 shaping_identity: sid.clone(),
-                visual_line_id: 0,
             })
             .collect();
         let line = PreparedLineSnapshot {
@@ -2431,19 +2430,12 @@ mod tests {
             image: None,
             clusters,
             document_origin_y: 0.0,
-            baseline_y: 16.0,
             dpr: 1.0,
             line_height: 20.0,
             line_width: 800.0,
             byte_start: line_clusters.first().map(|c| c.0).unwrap_or(0),
             byte_end: line_clusters.last().map(|c| c.1).unwrap_or(0),
-            para_text: virtual_text.to_string(),
-            para_start: 0,
-            qtextline_idx: 0,
-            paragraph_wrap_w: 800.0,
-            para_indent: 0.0,
             visual_x: 0.0,
-            scroll_y: 0.0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,
@@ -2530,7 +2522,6 @@ mod tests {
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
-            300,
             &old_snapshot,
             &new_snapshot,
             0,
@@ -2621,7 +2612,6 @@ mod tests {
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
-            300,
             &old_snapshot,
             &new_snapshot,
             0,
@@ -2706,7 +2696,6 @@ mod tests {
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
-            300,
             &old_snapshot,
             &new_snapshot,
             0,
@@ -2791,7 +2780,6 @@ mod tests {
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
-            300,
             &old_snapshot,
             &new_snapshot,
             3,
@@ -2867,7 +2855,6 @@ mod tests {
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
         let key = coord.handle_composition_commit_or_cancel(
-            300,
             &old_snapshot,
             &new_snapshot,
             3,

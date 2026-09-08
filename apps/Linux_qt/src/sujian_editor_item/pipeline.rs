@@ -60,26 +60,6 @@ impl CommittedTextMirror {
         self.selection_anchor
     }
 
-    pub fn has_selection(&self) -> bool {
-        self.cursor != self.selection_anchor
-    }
-
-    pub fn selection_range(&self) -> (usize, usize) {
-        if self.cursor <= self.selection_anchor {
-            (self.cursor, self.selection_anchor)
-        } else {
-            (self.selection_anchor, self.cursor)
-        }
-    }
-
-    pub fn selected_text(&self) -> String {
-        if !self.has_selection() {
-            return String::new();
-        }
-        let (start, end) = self.selection_range();
-        self.text[start..end].to_string()
-    }
-
     pub fn load_from_snapshot(
         &mut self,
         text: String,
@@ -172,14 +152,6 @@ pub(crate) struct CompositionState {
 /// IME commit 参数 — 描述一次 composition 上屏的替换范围和原因。
 ///
 /// `session_replace_start`/`session_replace_end` 为 composition session 记录的
-/// 原 preedit 占位范围（UTF-8 byte offset，半开区间），commit 时用上屏文本替换此范围。
-pub(crate) struct CompositionCommitParams {
-    pub inserted_text: String,
-    pub session_replace_start: usize,
-    pub session_replace_end: usize,
-    pub cause: EditorTransactionCause,
-}
-
 /// IME commit 结果 — 记录一次 composition 上屏前后的 byte range 映射，
 /// 供动画协调器构建视觉事务。
 ///
@@ -329,10 +301,14 @@ pub(crate) struct LinuxEditorPipeline {
     text_revision: u64,
     /// 任何需要重绘的变化时递增——比 text_revision 更频繁
     visual_revision: u64,
+    #[cfg_attr(all(), allow(dead_code))]
     animation_enabled: bool,
+    #[cfg_attr(all(), allow(dead_code))]
     typing_animation_enabled: bool,
     typing_animation_duration_ms: u32,
+    #[cfg_attr(all(), allow(dead_code))]
     coordinated_cursor_animation_enabled: bool,
+    #[cfg_attr(all(), allow(dead_code))]
     smooth_cursor_enabled: bool,
     cursor_animation_duration_ms: u32,
     /// 当前布局快照——包含视觉行信息和 QChar 边界
@@ -344,6 +320,7 @@ pub(crate) struct LinuxEditorPipeline {
     layout_revision: LayoutRevision,
 }
 
+#[cfg_attr(all(), allow(dead_code))] // 公共 API getter/setter，保留用于 QML/FFI 绑定和未来渲染路径
 impl LinuxEditorPipeline {
     pub fn new() -> Self {
         Self {
@@ -483,7 +460,8 @@ impl LinuxEditorPipeline {
         self.typing_animation_duration_ms = ms;
         self.engine.set_animation_duration_ms(u64::from(ms));
         self.kernel.set_animation_duration_ms(u64::from(ms));
-        self.animation_coordinator.set_typing_animation_duration_ms(ms);
+        self.animation_coordinator
+            .set_typing_animation_duration_ms(ms);
     }
 
     pub fn coordinated_cursor_animation_enabled(&self) -> bool {
@@ -508,7 +486,8 @@ impl LinuxEditorPipeline {
 
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
         self.cursor_animation_duration_ms = ms;
-        self.animation_coordinator.set_cursor_animation_duration_ms(ms);
+        self.animation_coordinator
+            .set_cursor_animation_duration_ms(ms);
     }
 
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {

@@ -6,52 +6,6 @@
 use super::events::*;
 use crate::sujian_editor_item::PreeditAttribute;
 
-#[cfg(test)]
-pub(crate) struct EditorInputController;
-
-#[cfg(test)]
-impl EditorInputController {
-    pub(crate) fn dispatch<H: EditorInputHost + ?Sized>(host: &mut H, event: EditorInputEvent) {
-        match event {
-            EditorInputEvent::PlainText { text } => {
-                if !host.input_enabled() || text.is_empty() {
-                    return;
-                }
-                host.input_insert_text(text);
-            }
-            EditorInputEvent::Shortcut { key, modifiers } => {
-                handle_key(host, key, modifiers);
-            }
-            EditorInputEvent::PreeditChanged {
-                text,
-                cursor,
-                attributes,
-            } => {
-                if !host.input_enabled() {
-                    return;
-                }
-                if !text.is_empty() {
-                    host.input_set_suppress_next_ime_commit(false);
-                }
-                host.input_set_preedit_with_attrs(text, cursor, attributes);
-            }
-            EditorInputEvent::ImeCommit { text } => {
-                ime_commit(host, text);
-            }
-            EditorInputEvent::ImeReplacementCommit {
-                text,
-                replace_start,
-                replace_length,
-            } => {
-                ime_replace_and_commit(host, text, replace_start, replace_length);
-            }
-            EditorInputEvent::ImeCancel => {
-                ime_cancel(host);
-            }
-        }
-    }
-}
-
 /// 编辑器输入宿主 trait — 平台端必须实现。
 ///
 /// 线程安全：所有方法在 GUI 线程上调用，实现方不得跨线程访问。

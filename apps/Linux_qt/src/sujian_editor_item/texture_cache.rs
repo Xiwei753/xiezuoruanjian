@@ -33,10 +33,6 @@ impl TextureCache {
     pub fn clear(&mut self) {
         self.line_store.clear();
     }
-
-    pub fn is_empty(&self) -> bool {
-        self.line_store.is_empty()
-    }
 }
 
 impl Default for TextureCache {

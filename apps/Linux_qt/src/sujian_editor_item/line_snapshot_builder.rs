@@ -21,8 +21,6 @@ use super::layout_snapshot::{
     EditorLayoutSnapshot, LineClusterSnapshot, LineSnapshotId, PreparedLineSnapshot,
     ShapingIdentity, SourceRect,
 };
-use super::line_snapshot::LineTextureStore;
-use crate::editor::layout;
 use crate::editor::layout::{CanonicalDocumentVisualSnapshot, CanonicalLineSnapshot, VisualLine};
 use crate::editor::paragraph_index_map::ParagraphIndexMap;
 
@@ -53,11 +51,6 @@ impl LineSnapshotBuilder {
                     continue;
                 }
 
-                let baseline_y = layout::text_baseline_y(
-                    line,
-                    doc_snapshot.font_size,
-                    &doc_snapshot.font_family,
-                );
                 let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
                 line_snapshots.push(PreparedLineSnapshot {
@@ -65,19 +58,12 @@ impl LineSnapshotBuilder {
                     image: None,
                     clusters: Vec::new(),
                     document_origin_y: line.y,
-                    baseline_y,
                     dpr: doc_snapshot.dpr,
                     line_height: line.height,
                     line_width: line.width,
                     byte_start: line.byte_start,
                     byte_end: line.byte_end,
-                    para_text: String::new(),
-                    para_start: line.para_start,
-                    qtextline_idx: line.qtextline_idx,
-                    paragraph_wrap_w: line.line_wrap_width + line.line_indent_x,
-                    para_indent: line.para_indent,
                     visual_x: line.x,
-                    scroll_y,
                 });
 
                 visual_line_ordinal += 1;
@@ -113,9 +99,6 @@ impl LineSnapshotBuilder {
                 (None, Vec::new())
             };
 
-            let baseline_y =
-                layout::text_baseline_y(line, doc_snapshot.font_size, &doc_snapshot.font_family);
-            let wrap_w = line.line_wrap_width + line.line_indent_x;
             let id = LineSnapshotId::new(revision.0, paragraph_id, visual_line_ordinal);
 
             line_snapshots.push(PreparedLineSnapshot {
@@ -123,19 +106,12 @@ impl LineSnapshotBuilder {
                 image,
                 clusters,
                 document_origin_y: line.y,
-                baseline_y,
                 dpr: doc_snapshot.dpr,
                 line_height: line.height,
                 line_width: line.width,
                 byte_start: line.byte_start,
                 byte_end: line.byte_end,
-                para_text: line.para_text.clone(),
-                para_start: line.para_start,
-                qtextline_idx: line.qtextline_idx,
-                paragraph_wrap_w: wrap_w,
-                para_indent: line.para_indent,
                 visual_x: line.x,
-                scroll_y,
             });
 
             visual_line_ordinal += 1;
@@ -143,7 +119,6 @@ impl LineSnapshotBuilder {
 
         EditorLayoutSnapshot {
             revision,
-            layout_snapshot: doc_snapshot.to_layout_snapshot(),
             line_snapshots,
             caret_rect: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Downstream,
@@ -168,7 +143,7 @@ impl LineSnapshotBuilder {
 
     fn build_clusters_from_canonical(
         canonical_line: &CanonicalLineSnapshot,
-        line: &VisualLine,
+        _line: &VisualLine,
         _index_map: &ParagraphIndexMap,
     ) -> Vec<LineClusterSnapshot> {
         canonical_line
@@ -194,7 +169,6 @@ impl LineSnapshotBuilder {
                         h: cc.source_rect_h,
                     },
                     shaping_identity,
-                    visual_line_id: line.id,
                 }
             })
             .collect()
@@ -214,26 +188,5 @@ impl LineSnapshotBuilder {
         let mut hasher = DefaultHasher::new();
         data.hash(&mut hasher);
         hasher.finish()
-    }
-
-    pub fn prepare_line_textures(
-        old_snapshot: &EditorLayoutSnapshot,
-        new_snapshot: &EditorLayoutSnapshot,
-        texture_store: &mut LineTextureStore,
-    ) {
-        for line in &old_snapshot.line_snapshots {
-            if let Some(ref image) = line.image {
-                if !texture_store.contains(&line.id) {
-                    texture_store.insert(line.id, image.clone());
-                }
-            }
-        }
-        for line in &new_snapshot.line_snapshots {
-            if let Some(ref image) = line.image {
-                if !texture_store.contains(&line.id) {
-                    texture_store.insert(line.id, image.clone());
-                }
-            }
-        }
     }
 }

@@ -15,6 +15,7 @@ impl VisualTransactionKey {
         }
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn zero() -> Self {
         Self {
             transaction_id: 0,
@@ -22,6 +23,7 @@ impl VisualTransactionKey {
         }
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn is_valid(&self) -> bool {
         self.transaction_id > 0
     }

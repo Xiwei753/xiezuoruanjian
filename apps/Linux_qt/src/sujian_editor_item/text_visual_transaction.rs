@@ -101,6 +101,7 @@ impl TransactionTimeline {
         self.first_render_frame.is_some()
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn is_paused(&self) -> bool {
         self.pause_start.is_some()
     }
@@ -125,11 +126,14 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub operation_kind: TextVisualOperationKind,
     pub animation_mode: AnimationMode,
     pub timeline: TransactionTimeline,
+    #[cfg_attr(all(), allow(dead_code))]
     pub old_revision: LayoutRevision,
+    #[cfg_attr(all(), allow(dead_code))]
     pub new_revision: LayoutRevision,
     pub slices: Vec<AnimatedSlice>,
     pub static_patches: Vec<StaticLinePatch>,
     pub decoration_slices: Vec<DecorationSlice>,
+    #[cfg_attr(all(), allow(dead_code))]
     pub cursor_transition: CursorTransition,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
@@ -140,10 +144,12 @@ pub(crate) struct PreparedTextVisualTransaction {
 }
 
 impl PreparedTextVisualTransaction {
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn duration_ms(&self) -> u64 {
         self.timeline.duration_ms
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn is_insert(&self) -> bool {
         self.operation_kind == TextVisualOperationKind::Insert
     }
@@ -193,10 +199,12 @@ impl PreparedTextVisualTransaction {
         }
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn mark_first_render(&mut self) {
         self.timeline.mark_first_frame();
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn inserted_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.static_patches
             .iter()
@@ -205,6 +213,7 @@ impl PreparedTextVisualTransaction {
             .collect()
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.static_patches
             .iter()
@@ -213,6 +222,7 @@ impl PreparedTextVisualTransaction {
             .collect()
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn all_hidden_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.static_patches
             .iter()
@@ -265,6 +275,7 @@ impl PreparedTransactionQueue {
         self.transactions.push(tx);
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn mark_prepared(&mut self, key: VisualTransactionKey) -> bool {
         if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
             if tx.state == TextVisualTransactionState::Pending {
@@ -275,6 +286,7 @@ impl PreparedTransactionQueue {
         false
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn mark_rendering(&mut self, key: VisualTransactionKey) {
         if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
             if tx.state == TextVisualTransactionState::Prepared {
@@ -358,6 +370,7 @@ impl PreparedTransactionQueue {
         &mut self.transactions
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn has_active(&self) -> bool {
         !self.transactions.is_empty()
     }
@@ -373,6 +386,7 @@ impl PreparedTransactionQueue {
         self.transactions.is_empty()
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn insert_byte_ranges(&self) -> Vec<(usize, usize)> {
         self.transactions
             .iter()
@@ -384,6 +398,7 @@ impl PreparedTransactionQueue {
             .collect()
     }
 
+    #[cfg_attr(all(), allow(dead_code))]
     pub fn all_hidden_ranges(&self) -> Vec<(usize, usize)> {
         self.transactions
             .iter()

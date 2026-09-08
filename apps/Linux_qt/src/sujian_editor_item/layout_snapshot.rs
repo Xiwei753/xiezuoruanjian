@@ -5,7 +5,7 @@
 
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
-use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot, VisualLine};
+use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot};
 use qmetaobject::QImage;
 
 /// 一次平台排版后的不可变 glyph cluster 视觉快照。
@@ -18,7 +18,6 @@ pub(crate) struct LineClusterSnapshot {
     pub byte_end: usize,
     pub source_rect: SourceRect,
     pub shaping_identity: ShapingIdentity,
-    pub visual_line_id: usize,
 }
 
 /// 通用矩形载体，具体坐标空间由字段契约决定。
@@ -42,13 +41,6 @@ impl SourceRect {
             w: 0.0,
             h: 0.0,
         }
-    }
-
-    pub fn intersects(&self, other: &SourceRect) -> bool {
-        self.x < other.x + other.w
-            && self.x + self.w > other.x
-            && self.y < other.y + other.h
-            && self.y + self.h > other.y
     }
 }
 
@@ -89,19 +81,12 @@ pub(crate) struct PreparedLineSnapshot {
     pub image: Option<QImage>,
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
-    pub baseline_y: f64,
     pub dpr: f64,
     pub line_height: f64,
     pub line_width: f64,
     pub byte_start: usize,
     pub byte_end: usize,
-    pub para_text: String,
-    pub para_start: usize,
-    pub qtextline_idx: i32,
-    pub paragraph_wrap_w: f64,
-    pub para_indent: f64,
     pub visual_x: f64,
-    pub scroll_y: f64,
 }
 
 impl PreparedLineSnapshot {
@@ -140,21 +125,6 @@ impl PreparedLineSnapshot {
         }
     }
 
-    pub fn clusters_in_byte_range(
-        &self,
-        byte_start: usize,
-        byte_end: usize,
-    ) -> Vec<&LineClusterSnapshot> {
-        self.clusters
-            .iter()
-            .filter(|c| c.byte_end > byte_start && c.byte_start < byte_end)
-            .collect()
-    }
-
-    pub fn intersects_byte_range(&self, start: usize, end: usize) -> bool {
-        self.byte_end > start && self.byte_start < end
-    }
-
     /// 将行局部物理像素 source_rect 转换为文档逻辑坐标。
     ///
     /// source_rect 来自 cluster 快照，使用行视觉资源局部坐标（已乘 DPR）。
@@ -169,6 +139,17 @@ impl PreparedLineSnapshot {
             h: source_rect.h / dpr,
         }
     }
+
+    pub fn clusters_in_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Vec<&LineClusterSnapshot> {
+        self.clusters
+            .iter()
+            .filter(|c| c.byte_end > byte_start && c.byte_start < byte_end)
+            .collect()
+    }
 }
 
 /// 一次完整排版的不可变快照集合。
@@ -179,7 +160,6 @@ impl PreparedLineSnapshot {
 #[derive(Clone)]
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
-    pub layout_snapshot: LayoutSnapshot,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
     pub caret_rect: Option<CaretRect>,
     pub caret_affinity: CaretAffinity,
@@ -197,7 +177,7 @@ impl std::fmt::Debug for EditorLayoutSnapshot {
 
 impl EditorLayoutSnapshot {
     pub fn new(
-        layout_snapshot: LayoutSnapshot,
+        _layout_snapshot: LayoutSnapshot,
         line_snapshots: Vec<PreparedLineSnapshot>,
         caret_rect: Option<CaretRect>,
         caret_affinity: CaretAffinity,
@@ -205,7 +185,6 @@ impl EditorLayoutSnapshot {
         let revision = LayoutRevision::next();
         EditorLayoutSnapshot {
             revision,
-            layout_snapshot,
             line_snapshots,
             caret_rect,
             caret_affinity,
@@ -213,6 +192,7 @@ impl EditorLayoutSnapshot {
         }
     }
 
+    #[cfg(test)]
     pub fn with_virtual_text(mut self, virtual_text: String) -> Self {
         self.virtual_text = virtual_text;
         self
@@ -244,25 +224,6 @@ impl EditorLayoutSnapshot {
             .iter()
             .filter(|l| l.byte_end > byte_start && l.byte_start < byte_end)
             .collect()
-    }
-
-    pub fn clusters_in_byte_range(
-        &self,
-        byte_start: usize,
-        byte_end: usize,
-    ) -> Vec<&LineClusterSnapshot> {
-        self.line_snapshots
-            .iter()
-            .flat_map(|l| l.clusters_in_byte_range(byte_start, byte_end))
-            .collect()
-    }
-
-    pub fn content_height(&self) -> f32 {
-        self.layout_snapshot.content_height
-    }
-
-    pub fn visual_lines(&self) -> &[VisualLine] {
-        &self.layout_snapshot.lines
     }
 }
 

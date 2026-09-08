@@ -2011,7 +2011,7 @@ pub fn prepare_paragraph_visual_snapshot(
             return 0.0;
         });
         // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-        let height = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        let _height = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].height;
             return 0.0;
@@ -2029,13 +2029,13 @@ pub fn prepare_paragraph_visual_snapshot(
             return 0.0;
         });
         // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-        let y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        let _y = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].y;
             return 0.0;
         });
         // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-        let x_end_leading = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        let _x_end_leading = cpp!(unsafe [idx as "int"] -> f64 as "double" {
             if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
                 return g_canonical_line_buf[idx].xEndLeading;
             return 0.0;

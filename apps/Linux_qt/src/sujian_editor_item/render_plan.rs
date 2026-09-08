@@ -6,12 +6,15 @@ use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenClipRect {
+    #[cfg_attr(all(), allow(dead_code))]
     pub key: VisualTransactionKey,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    #[cfg_attr(all(), allow(dead_code))]
     pub byte_start: usize,
+    #[cfg_attr(all(), allow(dead_code))]
     pub byte_end: usize,
 }
 
@@ -21,26 +24,6 @@ pub(crate) struct StaticTextPlan {
 }
 
 impl StaticTextPlan {
-    pub fn merged_byte_ranges(&self) -> Vec<(usize, usize)> {
-        let mut all: Vec<(usize, usize)> = self
-            .hidden_clip_rects
-            .iter()
-            .map(|r| (r.byte_start, r.byte_end))
-            .collect();
-        all.sort_by_key(|r| r.0);
-        let mut merged: Vec<(usize, usize)> = Vec::new();
-        for (rs, re) in all {
-            if let Some(last) = merged.last_mut() {
-                if rs <= last.1 {
-                    last.1 = last.1.max(re);
-                    continue;
-                }
-            }
-            merged.push((rs, re));
-        }
-        merged
-    }
-
     pub fn merged_clip_rects(&self) -> Vec<(f64, f64, f64, f64)> {
         let mut all: Vec<(f64, f64, f64, f64)> = self
             .hidden_clip_rects
@@ -65,13 +48,16 @@ impl StaticTextPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
+    #[cfg_attr(all(), allow(dead_code))]
     pub key: VisualTransactionKey,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
+    #[cfg_attr(all(), allow(dead_code))]
     pub animation_mode: AnimationMode,
+    #[cfg_attr(all(), allow(dead_code))]
     pub is_delete: bool,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
@@ -118,15 +104,21 @@ pub(crate) enum ImeUpdateKind {
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct ImeUpdatePlan {
+    #[cfg_attr(all(), allow(dead_code))]
     pub kind: ImeUpdateKind,
+    #[cfg_attr(all(), allow(dead_code))]
     pub cursor_changed: bool,
+    #[cfg_attr(all(), allow(dead_code))]
     pub anchor_changed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameContext {
+    #[cfg_attr(all(), allow(dead_code))]
     pub viewport_height: f64,
+    #[cfg_attr(all(), allow(dead_code))]
     pub scroll_offset_y: f64,
+    #[cfg_attr(all(), allow(dead_code))]
     pub dpr: f64,
     pub active_transaction_keys: Vec<VisualTransactionKey>,
     pub keys_to_complete: Vec<VisualTransactionKey>,
@@ -150,11 +142,14 @@ impl Default for CursorStyle {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RenderPlan {
+    #[cfg_attr(all(), allow(dead_code))]
     pub static_text: StaticTextPlan,
     pub text_animation: TextAnimationPlan,
     pub selection_preedit: SelectionPreeditPlan,
+    #[cfg_attr(all(), allow(dead_code))]
     pub decorations: Vec<DecorationSlice>,
     pub cursor: CursorAnimationPlan,
+    #[cfg_attr(all(), allow(dead_code))]
     pub ime: ImeUpdatePlan,
     pub frame_context: FrameContext,
     pub cursor_style: CursorStyle,

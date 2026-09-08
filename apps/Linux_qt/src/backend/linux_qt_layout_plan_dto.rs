@@ -126,17 +126,6 @@ mod tests {
     }
 
     #[test]
-    fn test_qt_available_pane_count_breakpoints() {
-        assert_eq!(qt_available_pane_count(360.0), 1);
-        assert_eq!(qt_available_pane_count(599.9), 1);
-        assert_eq!(qt_available_pane_count(600.0), 2);
-        assert_eq!(qt_available_pane_count(700.0), 2);
-        assert_eq!(qt_available_pane_count(839.9), 2);
-        assert_eq!(qt_available_pane_count(840.0), 3);
-        assert_eq!(qt_available_pane_count(1400.0), 3);
-    }
-
-    #[test]
     fn test_single_pane_paper_is_unbounded() {
         let contract = contract_for(360.0, 640.0);
         let dto = LinuxQtLayoutPlanDto::from_contract(&contract, 360.0, true);

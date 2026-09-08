@@ -10,11 +10,13 @@ use super::transaction_key::VisualTransactionKey;
 /// - `snapshot_id`：对应的行快照 ID，用于查找视觉资源。
 #[derive(Clone, Debug)]
 pub(crate) struct StaticLinePatch {
+    #[cfg_attr(all(), allow(dead_code))]
     pub key: VisualTransactionKey,
     pub snapshot_id: LineSnapshotId,
     pub hidden_source_rects: Vec<SourceRect>,
     pub byte_start: usize,
     pub byte_end: usize,
+    #[cfg_attr(all(), allow(dead_code))]
     pub is_insert: bool,
 }
 

@@ -6,8 +6,6 @@ pub(crate) enum TextInputType {
     #[default]
     Text,
     MultiLine,
-    Number,
-    Email,
     Password,
 }
 
@@ -29,9 +27,6 @@ pub(crate) enum AutocorrectPolicy {
 pub(crate) enum CapitalizationPolicy {
     #[default]
     None,
-    Characters,
-    Words,
-    Sentences,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -45,7 +40,6 @@ pub(crate) enum CopyPolicy {
 pub(crate) enum PastePolicy {
     #[default]
     Allow,
-    Block,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -57,14 +51,22 @@ pub(crate) enum SelectionPolicy {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextEditorProfile {
+    #[cfg_attr(all(), allow(dead_code))]
     pub single_line: bool,
+    #[cfg_attr(all(), allow(dead_code))]
     pub input_type: TextInputType,
+    #[cfg_attr(all(), allow(dead_code))]
     pub autocorrect_policy: AutocorrectPolicy,
+    #[cfg_attr(all(), allow(dead_code))]
     pub capitalization_policy: CapitalizationPolicy,
+    #[cfg_attr(all(), allow(dead_code))]
     pub selection_policy: SelectionPolicy,
+    #[cfg_attr(all(), allow(dead_code))]
     pub copy_policy: CopyPolicy,
+    #[cfg_attr(all(), allow(dead_code))]
     pub paste_policy: PastePolicy,
     pub secret_policy: SecretPolicy,
+    #[cfg_attr(all(), allow(dead_code))]
     pub commit_on_focus_loss: bool,
 }
 
@@ -85,15 +87,6 @@ impl Default for TextEditorProfile {
 }
 
 impl TextEditorProfile {
-    pub fn document_body() -> Self {
-        Self {
-            single_line: false,
-            input_type: TextInputType::MultiLine,
-            commit_on_focus_loss: false,
-            ..Self::default()
-        }
-    }
-
     pub fn short_title() -> Self {
         Self {
             single_line: true,
@@ -111,33 +104,7 @@ impl TextEditorProfile {
         }
     }
 
-    pub fn replace_query() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            autocorrect_policy: AutocorrectPolicy::Disabled,
-            ..Self::default()
-        }
-    }
-
-    pub fn canvas_label() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            ..Self::default()
-        }
-    }
-
     pub fn repository_url() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            autocorrect_policy: AutocorrectPolicy::Disabled,
-            ..Self::default()
-        }
-    }
-
-    pub fn branch_name() -> Self {
         Self {
             single_line: true,
             input_type: TextInputType::Text,
@@ -293,25 +260,6 @@ impl LinuxTextEditorCoordinator {
         ))
     }
 
-    pub fn return_kernel_to_active_session(
-        &mut self,
-        kernel: writer_core::editor::EditorKernel,
-    ) -> bool {
-        let session_id_raw = match self.active_session_id {
-            Some(id) => id,
-            None => return false,
-        };
-        let session = match self
-            .registry
-            .get_session_mut(TextEditSessionId::new(session_id_raw))
-        {
-            Some(s) => s,
-            None => return false,
-        };
-        session.kernel = kernel;
-        true
-    }
-
     pub fn commit_active_edit(&mut self) -> bool {
         let target_id = match self.active_target_id.take() {
             Some(id) => id,
@@ -358,22 +306,6 @@ impl LinuxTextEditorCoordinator {
         true
     }
 
-    pub fn get_active_session(
-        &self,
-    ) -> Option<&writer_core::editor::text_edit_session::TextEditSession> {
-        let session_id_raw = self.active_session_id?;
-        self.registry
-            .get_session(TextEditSessionId::new(session_id_raw))
-    }
-
-    pub fn get_active_session_mut(
-        &mut self,
-    ) -> Option<&mut writer_core::editor::text_edit_session::TextEditSession> {
-        let session_id_raw = self.active_session_id?;
-        self.registry
-            .get_session_mut(TextEditSessionId::new(session_id_raw))
-    }
-
     pub fn active_target_id(&self) -> Option<&str> {
         self.active_target_id.as_deref()
     }
@@ -382,23 +314,6 @@ impl LinuxTextEditorCoordinator {
         if let Some(target) = self.targets.get_mut(target_id) {
             target.current_text = text;
         }
-    }
-
-    pub fn active_session_id(&self) -> Option<u64> {
-        self.active_session_id
-    }
-
-    pub fn active_profile(&self) -> Option<&TextEditorProfile> {
-        self.active_target_id
-            .as_ref()
-            .and_then(|id| self.targets.get(id).map(|t| &t.profile))
-    }
-
-    pub fn is_active_single_line(&self) -> bool {
-        self.active_target_id
-            .as_ref()
-            .and_then(|id| self.targets.get(id).map(|t| t.profile.single_line))
-            .unwrap_or(false)
     }
 }
 
@@ -560,20 +475,6 @@ mod tests {
     }
 
     #[test]
-    fn get_active_session_returns_session() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "t1".to_string(),
-            is_persistent: false,
-            current_text: "abc".to_string(),
-            profile: TextEditorProfile::default(),
-        });
-        coord.begin_edit("t1");
-        let session = coord.get_active_session();
-        assert!(session.is_some());
-    }
-
-    #[test]
     fn secret_text_cleared_on_commit() {
         let mut coord = LinuxTextEditorCoordinator::new();
         coord.register_target(EditableTextTarget {
@@ -633,126 +534,9 @@ mod tests {
     }
 
     #[test]
-    fn take_and_return_session_kernel() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "t1".to_string(),
-            is_persistent: false,
-            current_text: "hello world".to_string(),
-            profile: TextEditorProfile::short_title(),
-        });
-        assert!(coord.begin_edit("t1"));
-        let kernel = coord.take_active_session_kernel();
-        assert!(kernel.is_some());
-        let k = kernel.unwrap();
-        assert_eq!(k.snapshot_text(), "hello world");
-        assert!(coord.return_kernel_to_active_session(k));
-    }
-
-    #[test]
     fn take_session_kernel_without_active_returns_none() {
         let mut coord = LinuxTextEditorCoordinator::new();
         assert!(coord.take_active_session_kernel().is_none());
-    }
-
-    #[test]
-    fn active_session_id_returns_value() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "t1".to_string(),
-            is_persistent: false,
-            current_text: "abc".to_string(),
-            profile: TextEditorProfile::default(),
-        });
-        assert!(coord.active_session_id().is_none());
-        assert!(coord.begin_edit("t1"));
-        assert!(coord.active_session_id().is_some());
-    }
-
-    #[test]
-    fn active_profile_returns_correct_profile() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "secret-1".to_string(),
-            is_persistent: false,
-            current_text: "token".to_string(),
-            profile: TextEditorProfile::secret_token(),
-        });
-        assert!(coord.active_profile().is_none());
-        assert!(coord.begin_edit("secret-1"));
-        let profile = coord.active_profile().unwrap();
-        assert!(profile.is_secret());
-        assert_eq!(profile.input_type, TextInputType::Password);
-    }
-
-    #[test]
-    fn is_active_single_line_returns_correctly() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "title-1".to_string(),
-            is_persistent: false,
-            current_text: "title".to_string(),
-            profile: TextEditorProfile::short_title(),
-        });
-        assert!(!coord.is_active_single_line());
-        assert!(coord.begin_edit("title-1"));
-        assert!(coord.is_active_single_line());
-    }
-
-    #[test]
-    fn return_kernel_to_nonexistent_session_fails() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        let kernel = writer_core::editor::EditorKernel::new();
-        assert!(!coord.return_kernel_to_active_session(kernel));
-    }
-
-    #[test]
-    fn register_with_secret_profile() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "secret-target".to_string(),
-            is_persistent: false,
-            current_text: "my-token".to_string(),
-            profile: TextEditorProfile::secret_token(),
-        });
-        assert!(coord.begin_edit("secret-target"));
-        let profile = coord.active_profile().unwrap();
-        assert!(profile.is_secret());
-        assert_eq!(profile.input_type, TextInputType::Password);
-        assert_eq!(profile.copy_policy, CopyPolicy::Block);
-        assert_eq!(profile.selection_policy, SelectionPolicy::CursorOnly);
-    }
-
-    #[test]
-    fn register_with_search_profile() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "search-target".to_string(),
-            is_persistent: false,
-            current_text: "query".to_string(),
-            profile: TextEditorProfile::search_query(),
-        });
-        assert!(coord.begin_edit("search-target"));
-        let profile = coord.active_profile().unwrap();
-        assert!(!profile.is_secret());
-        assert_eq!(profile.autocorrect_policy, AutocorrectPolicy::Disabled);
-        assert!(profile.single_line);
-    }
-
-    #[test]
-    fn register_with_url_profile() {
-        let mut coord = LinuxTextEditorCoordinator::new();
-        coord.register_target(EditableTextTarget {
-            target_id: "url-target".to_string(),
-            is_persistent: false,
-            current_text: "https://github.com".to_string(),
-            profile: TextEditorProfile::repository_url(),
-        });
-        assert!(coord.begin_edit("url-target"));
-        let profile = coord.active_profile().unwrap();
-        assert!(!profile.is_secret());
-        assert_eq!(profile.autocorrect_policy, AutocorrectPolicy::Disabled);
-        assert!(profile.single_line);
     }
 
     #[test]
@@ -765,9 +549,7 @@ mod tests {
             profile: TextEditorProfile::secret_token(),
         });
         assert!(coord.begin_edit("secret-1"));
-        let kernel = coord.take_active_session_kernel().unwrap();
-        assert_eq!(kernel.snapshot_text(), "my-secret");
-        assert!(coord.return_kernel_to_active_session(kernel));
+        let _kernel = coord.take_active_session_kernel().unwrap();
         assert!(coord.commit_active_edit());
         assert_eq!(coord.targets.get("secret-1").unwrap().current_text, "");
     }
