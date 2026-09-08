@@ -200,6 +200,7 @@ impl SujianEditorItem {
             inserted_preedit_glyph_rects,
             preedit_cursor_rect: self.pipeline.composition().preedit_cursor_rect.clone(),
             coordinate_mode: writer_core::editor::VisualCoordinateMode::Baseline,
+            duration_ms: u64::from(self.current_typing_animation_duration_ms),
         };
 
         self.pipeline.composition_mut().preedit_visual_transaction = Some(vt);

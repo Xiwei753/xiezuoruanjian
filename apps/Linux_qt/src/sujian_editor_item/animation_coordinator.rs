@@ -121,6 +121,12 @@ pub(crate) struct LinuxEditorAnimationCoordinator {
     next_key_id: u64,
     pub(crate) prepared_queue: PreparedTransactionQueue,
     layout_revision: LayoutRevision,
+    /// 打字/预输入动画时长（毫秒）。本地生成的事务不来自 core 的
+    /// `EditorVisualTransaction`，因此在此持有该视觉配置，与 core 把
+    /// `duration_ms` 放进 visual transaction 结构体的设计方向一致。
+    typing_animation_duration_ms: u32,
+    /// 光标平滑移动动画时长（毫秒）。
+    cursor_animation_duration_ms: u32,
 }
 
 impl LinuxEditorAnimationCoordinator {
@@ -129,6 +135,8 @@ impl LinuxEditorAnimationCoordinator {
             next_key_id: 1,
             prepared_queue: PreparedTransactionQueue::new(),
             layout_revision: LayoutRevision::initial(),
+            typing_animation_duration_ms: 160,
+            cursor_animation_duration_ms: 120,
         }
     }
 
@@ -136,6 +144,14 @@ impl LinuxEditorAnimationCoordinator {
         let id = self.next_key_id;
         self.next_key_id += 1;
         VisualTransactionKey::new(id, id)
+    }
+
+    pub(crate) fn set_typing_animation_duration_ms(&mut self, ms: u32) {
+        self.typing_animation_duration_ms = ms;
+    }
+
+    pub(crate) fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
+        self.cursor_animation_duration_ms = ms;
     }
 
     pub fn process_transaction(
@@ -657,7 +673,6 @@ impl LinuxEditorAnimationCoordinator {
             (Some(old), Some(new)) => CursorTransition::Tween {
                 old_rect: old.clone(),
                 new_rect: new.clone(),
-                duration_ms,
             },
             _ => CursorTransition::Snap,
         };
@@ -805,7 +820,7 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
             animation_mode: AnimationMode::GlyphAnimation,
-            timeline: TransactionTimeline::new(duration_ms),
+            timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
             old_revision: self.layout_revision,
             new_revision,
             slices,
@@ -884,7 +899,6 @@ impl LinuxEditorAnimationCoordinator {
             (Some(old), Some(new)) => CursorTransition::Tween {
                 old_rect: old.clone(),
                 new_rect: new.clone(),
-                duration_ms,
             },
             _ => CursorTransition::Snap,
         };
@@ -1263,7 +1277,7 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
             animation_mode: AnimationMode::GlyphAnimation,
-            timeline: TransactionTimeline::new(duration_ms),
+            timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
             old_revision: self.layout_revision,
             new_revision,
             slices,
@@ -1333,7 +1347,6 @@ impl LinuxEditorAnimationCoordinator {
             (Some(old), Some(new)) => CursorTransition::Tween {
                 old_rect: old.clone(),
                 new_rect: new.clone(),
-                duration_ms,
             },
             _ => CursorTransition::Snap,
         };
@@ -1343,7 +1356,7 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Cursor,
             animation_mode: AnimationMode::GlyphAnimation,
-            timeline: TransactionTimeline::new(duration_ms),
+            timeline: TransactionTimeline::new(u64::from(self.cursor_animation_duration_ms)),
             old_revision: self.layout_revision,
             new_revision,
             slices: Vec::new(),

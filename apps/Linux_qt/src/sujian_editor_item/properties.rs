@@ -261,7 +261,11 @@ impl SujianEditorItem {
 
     pub(crate) fn set_cursor_animation_duration_ms(&mut self, value: u32) {
         let clamped = value.max(30).min(1000);
+        if self.current_cursor_animation_duration_ms == clamped {
+            return;
+        }
         self.current_cursor_animation_duration_ms = clamped;
+        self.pipeline.set_cursor_animation_duration_ms(clamped);
         self.visual_settings_changed();
     }
 

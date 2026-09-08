@@ -483,6 +483,7 @@ impl LinuxEditorPipeline {
         self.typing_animation_duration_ms = ms;
         self.engine.set_animation_duration_ms(u64::from(ms));
         self.kernel.set_animation_duration_ms(u64::from(ms));
+        self.animation_coordinator.set_typing_animation_duration_ms(ms);
     }
 
     pub fn coordinated_cursor_animation_enabled(&self) -> bool {
@@ -507,6 +508,7 @@ impl LinuxEditorPipeline {
 
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
         self.cursor_animation_duration_ms = ms;
+        self.animation_coordinator.set_cursor_animation_duration_ms(ms);
     }
 
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {

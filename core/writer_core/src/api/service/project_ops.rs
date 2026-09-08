@@ -771,10 +771,8 @@ impl WriterCoreApi {
         // 直接删除 staging 目录，不走正常 delete_project()（避免走 history/tombstone）
         if let Err(del_err) = fs::remove_dir_all(staging_root) {
             log::warn!(
-                "restore_project_tree: rollback delete staging failed: {} — \
-                 staging directory may remain: {}",
+                "restore_project_tree: rollback delete staging failed: {}; staging directory may remain",
                 del_err,
-                staging_root.display()
             );
         }
         WriterError::from(err)

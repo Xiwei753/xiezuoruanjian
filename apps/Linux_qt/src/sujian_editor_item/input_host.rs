@@ -208,7 +208,6 @@ impl EditorInputHost for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_commit_or_cancel(
-                        u64::from(self.current_typing_animation_duration_ms),
                         &old_snapshot,
                         &new_snapshot,
                         composition_byte_start,
@@ -282,7 +281,6 @@ impl EditorInputHost for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
-                        u64::from(self.current_typing_animation_duration_ms),
                         &old_snapshot,
                         &new_snapshot,
                         data.composition_byte_start,
@@ -360,7 +358,6 @@ impl EditorInputHost for SujianEditorItem {
                 self.pipeline
                     .animation_coordinator_mut()
                     .handle_composition_update(
-                        u64::from(self.current_typing_animation_duration_ms),
                         &old_snapshot,
                         &new_snapshot,
                         data.composition_byte_start,

@@ -183,7 +183,6 @@ impl SujianEditorItem {
                 .pipeline
                 .animation_coordinator_mut()
                 .handle_composition_commit_or_cancel(
-                    u64::from(self.current_typing_animation_duration_ms),
                     &old_snapshot,
                     &new_snapshot,
                     commit.preedit_byte_start,
@@ -423,7 +422,6 @@ impl SujianEditorItem {
                 .pipeline
                 .animation_coordinator_mut()
                 .handle_composition_commit_or_cancel(
-                    u64::from(self.current_typing_animation_duration_ms),
                     &old_snapshot,
                     &new_snapshot,
                     commit.preedit_byte_start,
@@ -803,11 +801,7 @@ impl SujianEditorItem {
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline
                 .animation_coordinator_mut()
-                .handle_cursor_only(
-                    u64::from(self.current_cursor_animation_duration_ms),
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
+                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
         }
         self.request_static_repaint();
     }
@@ -846,11 +840,7 @@ impl SujianEditorItem {
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline
                 .animation_coordinator_mut()
-                .handle_cursor_only(
-                    u64::from(self.current_cursor_animation_duration_ms),
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
+                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
         }
         self.request_static_repaint();
     }
@@ -883,11 +873,7 @@ impl SujianEditorItem {
         if self.current_smooth_cursor_enabled && !extend {
             self.pipeline
                 .animation_coordinator_mut()
-                .handle_cursor_only(
-                    u64::from(self.current_cursor_animation_duration_ms),
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
+                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
         }
         self.request_static_repaint();
     }
