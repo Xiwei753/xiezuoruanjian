@@ -1,6 +1,5 @@
 // ShareDispatchRoutingTest.ets — HarmonyShareService 调度到三个独立后端的测试。
-// 环境阻塞：无 hvigor/ohpm/SDK，需在 CI 或本地 HarmonyOS 环境运行。
-// 运行：在 DevEco Studio 中以 ohosTest 模块运行，或 hvigorw assembleHap。
+// 仅在本地 HarmonyOS SDK / DevEco Studio 环境按需运行。
 //
 // 覆盖（Issue #629 评论5 第6/7部分）：
 //   1. system share -> SystemShareService（systemShare.SharedData + ShareController.show，非淘汰的 shareContent）

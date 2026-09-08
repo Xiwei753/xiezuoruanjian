@@ -1,6 +1,5 @@
 // ShareLifecycleTest.ets — HarmonyShareService 调度与生命周期接口测试。
-// 环境阻塞：无 hvigor/ohpm/ShareKit SDK，需在 CI 或本地 HarmonyOS 环境运行。
-// 运行：在 DevEco Studio 中以 ohosTest 模块运行，或 hvigorw assembleHap。
+// 仅在本地 HarmonyOS SDK / DevEco Studio 环境按需运行。
 //
 // 覆盖（Issue #629 评论 5306513458 问题 3）：
 //   1. share(payload, 'system') 委托 SystemShareService（一次性，ShareController.show）

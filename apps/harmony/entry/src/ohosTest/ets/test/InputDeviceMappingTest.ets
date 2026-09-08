@@ -1,6 +1,5 @@
 // InputDeviceMappingTest.ets — 输入设备映射 + 键盘/鼠标/笔事件归一化测试。
-// 环境阻塞：无 hvigor/ohpm/SDK，需在 CI 或本地 HarmonyOS 环境运行。
-// 运行：在 DevEco Studio 中以 ohosTest 模块运行，或 hvigorw assembleHap。
+// 仅在本地 HarmonyOS SDK / DevEco Studio 环境按需运行。
 //
 // 覆盖（Issue #629 评论 5 第 5 节）：
 //   1. SourceType 字符串值正确：'keyboard'/'mouse'/'touchscreen'/'stylus'/'joystick' 等
