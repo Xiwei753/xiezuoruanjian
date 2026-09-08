@@ -2,6 +2,8 @@ package com.xiwei.sujian.storage.mirror
 
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import com.xiwei.sujian.feature.project.data.model.VolumeWithChapters
+import org.json.JSONException
+import org.json.JSONObject
 import java.time.Instant
 
 /** 把 [MirrorManifest] 序列化为 JSON 字符串。 */
@@ -142,3 +144,142 @@ private fun escapeJson(s: String): String =
         .replace("\n", "\\n")
         .replace("\r", "\\r")
         .replace("\t", "\\t")
+
+// ════════════════════════════════════════════════════════════════════════════
+// #649 评论 5576949398 问题 1：严格 manifest 解析 codec
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * 严格解析 manifest JSON 字符串为 [MirrorManifest]。
+ *
+ * #649 评论 5576949398 问题 1：旧 [ReadableMirrorPublisher.parseMirrorManifestFromJson] 和
+ * [ReadableMirrorRestorer.parseManifest] 各自维护一套宽松解析，把字段缺失/类型错误
+ * 静默补成空字符串或默认值，导致损坏的 manifest 被当成合法对象继续进入事务，
+ * 把"状态损坏"误判为"首次发布"。
+ *
+ * 本函数用严格 [JSONObject.getInt] / [JSONObject.getString] / [JSONObject.getJSONArray]
+ * 读取所有必填字段，任一字段缺失或类型错误时抛 [JSONException]；
+ * schemaVersion != 1 时抛 [IllegalArgumentException]；
+ * project/volume/chapter 的 id、chapter 的 contentFile/contentHash 用 [JSONObject.getString]
+ * 读取并校验非空（空 id/contentFile/contentHash 视为损坏）。
+ *
+ * @param json manifest JSON 字符串
+ * @return 解析后的 [MirrorManifest]
+ * @throws JSONException 字段缺失或类型错误
+ * @throws IllegalArgumentException schemaVersion 不支持或字段值为空
+ */
+internal fun mirrorManifestFromJsonStrict(json: String): MirrorManifest {
+    val root = JSONObject(json)
+    // schemaVersion 必须存在且为 int，不再 optInt(_, 1) 把缺失字段补成 1
+    val schemaVersion = root.getInt(SCHEMA_VERSION_KEY)
+    if (schemaVersion != 1) {
+        throw IllegalArgumentException("Unsupported manifest schemaVersion: $schemaVersion (expected 1)")
+    }
+    // revision / updatedAt 严格读取（revision 用 getLong，updatedAt 用 getString）
+    val revision = root.getLong(REVISION_KEY)
+    val updatedAt = root.getString(UPDATED_AT_KEY)
+    // projects 必须是数组
+    val projectsArray = root.getJSONArray(PROJECTS_KEY)
+    val projects = mutableListOf<MirrorProject>()
+    for (i in 0 until projectsArray.length()) {
+        projects.add(parseProjectStrict(projectsArray.getJSONObject(i)))
+    }
+    return MirrorManifest(
+        schemaVersion = schemaVersion,
+        revision = revision,
+        updatedAt = updatedAt,
+        projects = projects,
+    )
+}
+
+/** 严格解析单个 project。 */
+private fun parseProjectStrict(obj: JSONObject): MirrorProject {
+    val id = obj.getString(ID_KEY)
+    if (id.isEmpty()) {
+        throw IllegalArgumentException("Project id is empty")
+    }
+    val title = obj.getString(TITLE_KEY)
+    val order = obj.getInt(ORDER_KEY)
+    val revision = obj.getLong(REVISION_KEY)
+    val updatedAt = obj.getString(UPDATED_AT_KEY)
+    val volumesArray = obj.getJSONArray(VOLUMES_KEY)
+    val volumes = mutableListOf<MirrorVolume>()
+    for (i in 0 until volumesArray.length()) {
+        volumes.add(parseVolumeStrict(volumesArray.getJSONObject(i)))
+    }
+    return MirrorProject(
+        id = id,
+        title = title,
+        order = order,
+        revision = revision,
+        updatedAt = updatedAt,
+        volumes = volumes,
+    )
+}
+
+/** 严格解析单个 volume。 */
+private fun parseVolumeStrict(obj: JSONObject): MirrorVolume {
+    val id = obj.getString(ID_KEY)
+    if (id.isEmpty()) {
+        throw IllegalArgumentException("Volume id is empty")
+    }
+    val title = obj.getString(TITLE_KEY)
+    val order = obj.getInt(ORDER_KEY)
+    val revision = obj.getLong(REVISION_KEY)
+    val updatedAt = obj.getString(UPDATED_AT_KEY)
+    val chaptersArray = obj.getJSONArray(CHAPTERS_KEY)
+    val chapters = mutableListOf<MirrorChapter>()
+    for (i in 0 until chaptersArray.length()) {
+        chapters.add(parseChapterStrict(chaptersArray.getJSONObject(i)))
+    }
+    return MirrorVolume(
+        id = id,
+        title = title,
+        order = order,
+        revision = revision,
+        updatedAt = updatedAt,
+        chapters = chapters,
+    )
+}
+
+/** 严格解析单个 chapter。contentFile/contentHash 用 getString 读取并校验非空。 */
+private fun parseChapterStrict(obj: JSONObject): MirrorChapter {
+    val id = obj.getString(ID_KEY)
+    if (id.isEmpty()) {
+        throw IllegalArgumentException("Chapter id is empty")
+    }
+    val title = obj.getString(TITLE_KEY)
+    val order = obj.getInt(ORDER_KEY)
+    val revision = obj.getLong(REVISION_KEY)
+    val updatedAt = obj.getString(UPDATED_AT_KEY)
+    val contentFile = obj.getString(CONTENT_FILE_KEY)
+    if (contentFile.isEmpty()) {
+        throw IllegalArgumentException("Chapter contentFile is empty for chapter $id")
+    }
+    val contentHash = obj.getString(CONTENT_HASH_KEY)
+    if (contentHash.isEmpty()) {
+        throw IllegalArgumentException("Chapter contentHash is empty for chapter $id")
+    }
+    return MirrorChapter(
+        id = id,
+        title = title,
+        order = order,
+        revision = revision,
+        updatedAt = updatedAt,
+        contentFile = contentFile,
+        contentHash = contentHash,
+    )
+}
+
+// 严格解析用的 JSON key 常量（与 [MirrorManifest] schema 对齐）
+private const val SCHEMA_VERSION_KEY = "schemaVersion"
+private const val REVISION_KEY = "revision"
+private const val UPDATED_AT_KEY = "updatedAt"
+private const val PROJECTS_KEY = "projects"
+private const val VOLUMES_KEY = "volumes"
+private const val CHAPTERS_KEY = "chapters"
+private const val ID_KEY = "id"
+private const val TITLE_KEY = "title"
+private const val ORDER_KEY = "order"
+private const val CONTENT_FILE_KEY = "contentFile"
+private const val CONTENT_HASH_KEY = "contentHash"

@@ -108,6 +108,54 @@ sealed class ReadResult {
 }
 
 /**
+ * 读取已提交 manifest 的三态结果（#649 评论 5576949398 问题 1）。
+ *
+ * 旧 [ReadableMirrorStateStore.getCommittedManifest] 把损坏当"首次发布"（返回 success(null)），
+ * 让 Publisher 误判状态损坏为首次发布，继续写入新 manifest 覆盖损坏状态。
+ *
+ * 新 [ReadableMirrorStateStore.getCommittedManifestStrict] 返回本密封接口，明确区分：
+ * - [NotExists]：state.json 不存在且没有任何旧 mirror state 字段（真正首次发布）
+ * - [Found]：committed manifest 存在且校验通过
+ * - [Corrupted]：state.json 损坏、committed json/hash 只存在一个、hash 不匹配或解析失败
+ * - [NeedsMigration]：旧 state 有 manifestUri/publishedProjectIds/projects 但无 committed baseline，
+ *   需要走 [ReadableMirrorStateMigration] 迁移，不能当首次发布继续写
+ */
+sealed interface CommittedManifestReadResult {
+    /** state.json 不存在或全空，真正首次发布。 */
+    data object NotExists : CommittedManifestReadResult
+
+    /**
+     * 已提交 manifest 存在且校验通过。
+     *
+     * @property json manifest JSON 字符串
+     * @property hash manifest 的 SHA-256 hash
+     * @property manifest 解析后的 [MirrorManifest] 对象
+     */
+    data class Found(
+        val json: String,
+        val hash: String,
+        val manifest: MirrorManifest,
+    ) : CommittedManifestReadResult
+
+    /**
+     * 状态损坏：state.json 读取失败、committed json/hash 只存在一个、hash 不匹配
+     * 或 manifest 解析失败。调用方应停止本轮发布（返回 RetryableFailure），不碰 Download。
+     *
+     * @property cause 损坏原因
+     */
+    data class Corrupted(val cause: Throwable) : CommittedManifestReadResult
+
+    /**
+     * 旧 state 有 manifestUri/publishedProjectIds/projects 但无 committed baseline。
+     *
+     * 需要走 [ReadableMirrorStateMigration] 迁移：从 manifestUri 读取 manifest，
+     * 严格校验后一次性写入 committed baseline。迁移完成前不能当首次发布继续写，
+     * 否则会把多作品 manifest 退化成单作品。
+     */
+    data object NeedsMigration : CommittedManifestReadResult
+}
+
+/**
  * ReadableMirrorStateStore — 镜像发布状态的持久化存储。
  *
  * #649 评论 5560971132 修复 2/6：[ReadableMirrorPublisher] 需要在删除项目/章节后
@@ -471,13 +519,86 @@ class ReadableMirrorStateStore(
     }
 
     /**
+     * 严格读取已提交 manifest，返回三态结果（#649 评论 5576949398 问题 1）。
+     *
+     * 旧 [getCommittedManifest] 把损坏当"首次发布"（返回 success(null)），让 Publisher
+     * 误判状态损坏为首次发布继续写。本方法用 [readRoot]（不把损坏当不存在），
+     * 明确区分四种情况：
+     *
+     * 1. state.json 不存在，且没有任何旧 mirror state 字段 → [CommittedManifestReadResult.NotExists]
+     * 2. committedManifestJson/hash 都存在且校验通过 → [CommittedManifestReadResult.Found]
+     * 3. 旧 state 有 manifestUri/publishedProjectIds/projects 但无 committed baseline
+     *    → [CommittedManifestReadResult.NeedsMigration]（需走迁移，不能当首次发布）
+     * 4. state.json 损坏、json/hash 只存在一个、hash 不匹配或解析失败
+     *    → [CommittedManifestReadResult.Corrupted]
+     *
+     * @return 三态结果，调用方据此决定首次发布 / 复用基线 / 停止 / 触发迁移
+     */
+    fun getCommittedManifestStrict(): CommittedManifestReadResult {
+        synchronized(lock) {
+            return when (val result = readRoot()) {
+                is ReadResult.NotExists -> CommittedManifestReadResult.NotExists
+                is ReadResult.Corrupted -> CommittedManifestReadResult.Corrupted(result.error)
+                is ReadResult.Parsed -> {
+                    val root = result.root
+                    val json = root.optString(COMMITTED_MANIFEST_JSON_KEY).takeIf { it.isNotEmpty() }
+                    val hash = root.optString(COMMITTED_MANIFEST_HASH_KEY).takeIf { it.isNotEmpty() }
+                    when {
+                        // json/hash 都存在：校验 hash + 严格解析
+                        json != null && hash != null -> {
+                            val computedHash = computeContentHash(json)
+                            if (computedHash != hash) {
+                                CommittedManifestReadResult.Corrupted(
+                                    IllegalArgumentException(
+                                        "Committed manifest hash mismatch: stored=$hash, computed=$computedHash",
+                                    ),
+                                )
+                            } else {
+                                try {
+                                    val manifest = mirrorManifestFromJsonStrict(json)
+                                    CommittedManifestReadResult.Found(json, hash, manifest)
+                                } catch (e: Exception) {
+                                    CommittedManifestReadResult.Corrupted(e)
+                                }
+                            }
+                        }
+                        // json/hash 只存在一个：状态不完整，视为损坏
+                        json != null || hash != null ->
+                            CommittedManifestReadResult.Corrupted(
+                                IllegalArgumentException(
+                                    "Committed manifest partial state: json=${json != null}, hash=${hash != null}",
+                                ),
+                            )
+                        // json/hash 都不存在：检查是否有旧 mirror state 字段
+                        else -> {
+                            val hasManifestUri = root.optString(MANIFEST_URI_KEY).isNotEmpty()
+                            val hasPublishedProjects = root.optJSONObject(PUBLISHED_PROJECTS_KEY)?.length() ?: 0 > 0
+                            val hasProjects = root.optJSONObject(PROJECTS_KEY)?.length() ?: 0 > 0
+                            if (hasManifestUri || hasPublishedProjects || hasProjects) {
+                                // 旧 state 有 mirror state 但无 committed baseline，需迁移
+                                CommittedManifestReadResult.NeedsMigration
+                            } else {
+                                // 真正全空 state，首次发布
+                                CommittedManifestReadResult.NotExists
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
      * 记录上一次已提交的 manifest（幂等写入）。
      *
      * @param json 本次事务最终的 manifest JSON 字符串
      * @param hash 本次事务最终的 manifest 的 SHA-256 hash
      * @return true 表示持久化成功；false 表示失败
      */
-    fun setCommittedManifest(json: String, hash: String): Boolean {
+    fun setCommittedManifest(
+        json: String,
+        hash: String,
+    ): Boolean {
         synchronized(lock) {
             val root = readRootForUpdate() ?: return false
             root.put(COMMITTED_MANIFEST_JSON_KEY, json)
@@ -540,6 +661,12 @@ class ReadableMirrorStateStore(
      * 新实现让 ReadableMirrorRestorer 直接传 manifest.projects.map { it.id }.toSet()，
      * 和章节条目一起在同一次 AtomicFile state 写入里保存。
      *
+     * #649 评论 5576949398 问题 3：增加 committedManifestJson / committedManifestHash 参数。
+     * SAF 恢复后第一次编辑会把多作品 manifest 退化成单作品，根因是恢复后 state 没有
+     * committed baseline，Publisher 误判为首次发布。新实现让 Restorer 在恢复时就把
+     * normalized manifest JSON 和 hash 写入 committed baseline，和 backend/treeUri/projects
+     * 一起在同一次 AtomicFile 写入里保存，不能先写 state 再单独 setCommittedManifest。
+     *
      * @param manifestUri manifest 文件的 URI（MediaStore 或 SAF document URI）
      * @param chapterEntries 所有章节的条目（包含 URI、相对路径、revision、contentHash）
      * @param backend 本次恢复使用的存储后端（默认 [MirrorBackend.DOCUMENT_TREE]，
@@ -547,6 +674,9 @@ class ReadableMirrorStateStore(
      * @param treeUri SAF document tree URI（document_tree 后端时必传）
      * @param publishedProjectIds 已发布作品的 ID 集合（含零章节作品），
      *   默认空集（向后兼容，旧调用方不传时从 chapterEntries 推导）
+     * @param committedManifestJson 已提交 manifest 的 JSON 字符串（#649 评论 5576949398 问题 3，
+     *   恢复时必传，写入 committed baseline 避免首次编辑退化）
+     * @param committedManifestHash 已提交 manifest 的 SHA-256 hash（恢复时必传）
      * @return true 表示持久化成功；false 表示失败（state.json 损坏或写入失败）
      */
     fun saveRestoredState(
@@ -555,6 +685,8 @@ class ReadableMirrorStateStore(
         backend: MirrorBackend = MirrorBackend.DOCUMENT_TREE,
         treeUri: String? = null,
         publishedProjectIds: Set<String> = emptySet(),
+        committedManifestJson: String = "",
+        committedManifestHash: String = "",
     ): Boolean {
         synchronized(lock) {
             // #649 评论 5563333323 缺口 2：用 readRoot() 区分"不存在"和"损坏"
@@ -598,6 +730,13 @@ class ReadableMirrorStateStore(
             projectIds.addAll(publishedProjectIds)
             for (pid in projectIds) {
                 published.put(pid, true)
+            }
+            // #649 评论 5576949398 问题 3：在同一次 AtomicFile 写入里保存 committed baseline，
+            // 避免先写 state 再单独 setCommittedManifest 的非原子窗口。
+            // committedManifestJson/hash 非空时才写（向后兼容旧调用方不传时跳过）。
+            if (committedManifestJson.isNotEmpty() && committedManifestHash.isNotEmpty()) {
+                root.put(COMMITTED_MANIFEST_JSON_KEY, committedManifestJson)
+                root.put(COMMITTED_MANIFEST_HASH_KEY, committedManifestHash)
             }
             return writeRoot(root)
         }

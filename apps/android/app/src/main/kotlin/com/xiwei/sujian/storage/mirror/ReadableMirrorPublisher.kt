@@ -4,8 +4,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
-import org.json.JSONArray
-import org.json.JSONObject
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 
@@ -642,11 +640,12 @@ class ReadableMirrorPublisher(
                 rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
                 return
             }
-            val plan = frozenManifestPlanFromJson(frozenPlanJson) ?: run {
-                DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
-                rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
-                return
-            }
+            val plan =
+                frozenManifestPlanFromJson(frozenPlanJson) ?: run {
+                    DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
+                    rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+                    return
+                }
             manifestJson = frozenPlanToManifestJson(plan, promotedEntries) ?: run {
                 DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
                 rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
@@ -678,8 +677,11 @@ class ReadableMirrorPublisher(
         }
         // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest，
         // 与正常发布路径保持一致，确保下一笔 frozen plan 基线正确。
-        if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
-            stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)
+        // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入，
+        // 检查返回值；从 manifestResult.committedJournal 继续，不再从旧 journal 重建。
+        if (!persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
+            DiagnosticsLogger.w(TAG, "Recover promote: persistCommittedBaseline failed, keeping journal")
+            return
         }
         // #649 评论 5573750754 修复 1：统一为先写 cleanup journal 再 recoverCleanupPhase。
         // 不直接写 stateStore，和正常发布（publishProject）顺序保持一致：
@@ -687,21 +689,15 @@ class ReadableMirrorPublisher(
         // putChapterEntries / addPublishedProjectId）。
         // 断电窗口：死在 journal 已落盘、stateStore 未更新之间，磁盘 journal 是 PHASE_CLEANUP，
         // 下次恢复走 recoverCleanupPhase 幂等补写 stateStore，不会重复 promote。
+        // #649 评论 5576949398 问题 2：从 manifestResult.committedJournal.copy(phase=PHASE_CLEANUP, ...)
+        // 继续推进，不再从 manifest 调用之前的旧 journal 重建 cleanup journal。
         val committedItems = currentItems.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
         val cleanupJournal =
-            journal.copy(
+            manifestResult.committedJournal.copy(
                 phase = PendingMirrorPublish.PHASE_CLEANUP,
                 newEntries = promotedEntries,
                 stagedRefs = emptyMap(),
                 items = committedItems,
-                manifestOldRef = manifestResult.manifestOldRef,
-                manifestStagedRef = manifestResult.manifestStagedRef,
-                manifestNewRef = manifestResult.newRef,
-                manifestBackupRef = manifestResult.backupOldRef,
-                isManifestCommitted = true,
-                manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                manifestNewContentHash = manifestResult.manifestNewContentHash,
-                manifestOldContentHash = manifestResult.manifestOldContentHash,
             )
         if (!persistPendingJournal(cleanupJournal)) {
             DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
@@ -725,6 +721,18 @@ class ReadableMirrorPublisher(
     ) {
         when (journal.transactionType) {
             MirrorTransactionType.UPSERT_PROJECT -> {
+                // #649 评论 5576949398 问题 2：cleanup 第一步先补 committed baseline。
+                // journal 已落盘且 isManifestCommitted=true 时，committed baseline 可能还没写
+                // （断电窗口：journal 落盘后、setCommittedManifest 前）。
+                // 先幂等补写 committed baseline，失败则保留 journal 停止，不继续改 chapter entries。
+                if (journal.isManifestCommitted && !persistCommittedBaselineFromJournal(journal)) {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover cleanup: committed baseline failed for UPSERT_PROJECT " +
+                            "${journal.projectId}, keeping journal",
+                    )
+                    return
+                }
                 // #649 评论 5573310799 问题 5：幂等执行 stateStore 提交
                 //    （journal 已落盘，stateStore 可能已写也可能没写）。
                 //    publishProject 现在先写 PHASE_CLEANUP journal 再更新 stateStore，
@@ -757,6 +765,18 @@ class ReadableMirrorPublisher(
                 }
             }
             MirrorTransactionType.DELETE_PROJECT -> {
+                // #649 评论 5576949398 问题 2：cleanup 第一步先补 committed baseline。
+                // journal 已落盘且 isManifestCommitted=true 时，committed baseline 可能还没写
+                // （断电窗口：journal 落盘后、setCommittedManifest 前）。
+                // 先幂等补写 committed baseline，失败则保留 journal 停止，不继续删项目条目。
+                if (journal.isManifestCommitted && !persistCommittedBaselineFromJournal(journal)) {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover cleanup: committed baseline failed for DELETE_PROJECT " +
+                            "${journal.projectId}, keeping journal",
+                    )
+                    return
+                }
                 // 1. 确保 manifest 已提交成不引用该项目
                 //    #649 评论 5562462046 问题 4：区分 manifest 是否已提交
                 //    #649 评论 5562715833 问题 1：改用事务 manifest 路径传 snapshot=null
@@ -771,13 +791,20 @@ class ReadableMirrorPublisher(
                     } else if (journal.frozenManifestPlan != null && journal.frozenManifestPlanHash != null) {
                         // 新格式：从 plan 生成 prebuiltTargetJson
                         if (computeContentHash(journal.frozenManifestPlan) != journal.frozenManifestPlanHash) {
-                            DiagnosticsLogger.w(TAG, "Recover cleanup: frozenManifestPlan hash mismatch for DELETE, keeping journal")
+                            DiagnosticsLogger.w(
+                                TAG,
+                                "Recover cleanup: frozenManifestPlan hash mismatch for DELETE, keeping journal",
+                            )
                             return
                         }
-                        val plan = frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
-                            DiagnosticsLogger.w(TAG, "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal")
-                            return
-                        }
+                        val plan =
+                            frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal",
+                                )
+                                return
+                            }
                         recoveryManifestTargetJson = frozenPlanToManifestJson(plan, emptyMap())
                     } else {
                         // 旧格式：没有 plan 且 manifest 子事务没开始，从 oldEntries 构造
@@ -807,9 +834,15 @@ class ReadableMirrorPublisher(
                         )
                         return
                     }
-                    // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest
-                    if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
-                        stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)
+                    // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest。
+                    // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入。
+                    if (!persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Recover cleanup: committed baseline failed for DELETE_PROJECT " +
+                                "${journal.projectId}, keeping journal",
+                        )
+                        return
                     }
                 }
                 // 2. 从 stateStore 删除该项目条目（若尚未删）
@@ -999,6 +1032,85 @@ class ReadableMirrorPublisher(
         return publishProject(projectId)
     }
 
+    // ════════════════════════════════════════════════════════════════════════════
+    // #649 评论 5576949398 问题 1：committed manifest 读取的三态收口
+    // ════════════════════════════════════════════════════════════════════════════
+
+    /**
+     * committed manifest 解析结果（#649 评论 5576949398 问题 1）。
+     *
+     * - [FirstPublish]：state 全空，真正首次发布，committedManifest = null
+     * - [Baseline]：找到已提交 manifest 作为 frozen plan 基线
+     * - [Stop]：状态损坏或迁移失败，调用方应返回 RetryableFailure 停止本轮发布
+     */
+    private sealed interface CommittedManifestResolution {
+        data object FirstPublish : CommittedManifestResolution
+
+        data class Baseline(val manifest: MirrorManifest) : CommittedManifestResolution
+
+        data object Stop : CommittedManifestResolution
+    }
+
+    /**
+     * 读取并解析 committed manifest，处理四种情况（#649 评论 5576949398 问题 1）。
+     *
+     * - [CommittedManifestReadResult.NotExists] → [CommittedManifestResolution.FirstPublish]
+     * - [CommittedManifestReadResult.Found] → [CommittedManifestResolution.Baseline]
+     * - [CommittedManifestReadResult.Corrupted] → [CommittedManifestResolution.Stop]
+     *   （停止本轮镜像，不碰 Download）
+     * - [CommittedManifestReadResult.NeedsMigration] → 触发 [ReadableMirrorStateMigration]，
+     *   迁移成功后重新读取；迁移失败 → [CommittedManifestResolution.Stop]
+     *
+     * @param storage 当前事务的 storage（迁移时用来读取 manifest 文件）
+     * @return 解析结果，调用方据此决定首次发布 / 复用基线 / 停止
+     */
+    private fun resolveCommittedManifestForPublish(storage: ReadableMirrorStorage): CommittedManifestResolution {
+        return when (val result = stateStore.getCommittedManifestStrict()) {
+            is CommittedManifestReadResult.NotExists -> CommittedManifestResolution.FirstPublish
+            is CommittedManifestReadResult.Found -> CommittedManifestResolution.Baseline(result.manifest)
+            is CommittedManifestReadResult.Corrupted -> {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Committed manifest corrupted, stopping publish: ${result.cause.message}",
+                )
+                CommittedManifestResolution.Stop
+            }
+            is CommittedManifestReadResult.NeedsMigration -> {
+                // #649 评论 5576949398 问题 4：触发旧 state 迁移
+                val migration = ReadableMirrorStateMigration(stateStore, storage)
+                when (migration.migrate()) {
+                    ReadableMirrorStateMigration.Result.SUCCESS -> {
+                        // 迁移成功后重新读取
+                        when (val reread = stateStore.getCommittedManifestStrict()) {
+                            is CommittedManifestReadResult.Found ->
+                                CommittedManifestResolution.Baseline(reread.manifest)
+                            is CommittedManifestReadResult.NotExists ->
+                                CommittedManifestResolution.FirstPublish
+                            is CommittedManifestReadResult.Corrupted -> {
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "Committed manifest still corrupted after migration: ${reread.cause.message}",
+                                )
+                                CommittedManifestResolution.Stop
+                            }
+                            is CommittedManifestReadResult.NeedsMigration -> {
+                                DiagnosticsLogger.w(
+                                    TAG,
+                                    "State still needs migration after migration attempt, stopping",
+                                )
+                                CommittedManifestResolution.Stop
+                            }
+                        }
+                    }
+                    ReadableMirrorStateMigration.Result.FAILURE -> {
+                        DiagnosticsLogger.w(TAG, "State migration failed, stopping publish")
+                        CommittedManifestResolution.Stop
+                    }
+                }
+            }
+        }
+    }
+
     /**
      * 发布整个项目：事务性发布流程。
      *
@@ -1140,20 +1252,29 @@ class ReadableMirrorPublisher(
             // 不重新读取当前 Core。
             // buildFrozenManifestPlan 返回 null 时直接停止事务，不带着 null plan 继续
             // backup/vacate/promote（#649 评论 5575950895 问题 3）。
-            // #649 评论 5576464076 问题 2：从 StateStore 读取 committed manifest
-            val committedManifestJson = stateStore.getCommittedManifest()
-            val committedManifest = if (committedManifestJson.isSuccess) {
-                val json = committedManifestJson.getOrNull()
-                if (json != null) parseMirrorManifestFromJson(json) else null
-            } else {
-                null // 读取失败，当作首次发布处理
+            // #649 评论 5576949398 问题 1：用 getCommittedManifestStrict 三态读取，
+            // 不再把损坏当首次发布；NeedsMigration 触发 ReadableMirrorStateMigration。
+            val committedManifestResolution = resolveCommittedManifestForPublish(storage)
+            if (committedManifestResolution is CommittedManifestResolution.Stop) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Publish project $projectId aborted: committed manifest corrupted or migration failed",
+                )
+                return MirrorPublishResult.RetryableFailure
             }
-            val frozenPlan = buildFrozenManifestPlan(
-                committedManifest = committedManifest,
-                targetProjectId = projectId,
-                targetSnapshot = snapshot,
-                targetDesiredEntries = desiredEntries,
-            )
+            val committedManifest =
+                when (committedManifestResolution) {
+                    is CommittedManifestResolution.Baseline -> committedManifestResolution.manifest
+                    CommittedManifestResolution.FirstPublish -> null
+                    CommittedManifestResolution.Stop -> null // 上面已 return，这里不会走到
+                }
+            val frozenPlan =
+                buildFrozenManifestPlan(
+                    committedManifest = committedManifest,
+                    targetProjectId = projectId,
+                    targetSnapshot = snapshot,
+                    targetDesiredEntries = desiredEntries,
+                )
             if (frozenPlan == null) {
                 DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: failed to build frozen manifest plan")
                 storage.rollback(txId)
@@ -1398,22 +1519,15 @@ class ReadableMirrorPublisher(
             //    下次恢复走 rollback 只恢复 old 章节，不会把本次新建章节从 stateStore 移掉。
             //    journal 里放 committedItems + promotedEntries + manifest committed 状态。
             // 标记所有 item 为 COMMITTED，更新 journal 到 cleanup 阶段
+            // #649 评论 5576949398 问题 2：从 manifestResult.committedJournal.copy(phase=PHASE_CLEANUP, ...)
+            // 继续推进，不再从 manifest 调用之前的旧 currentJournal 重建 cleanup journal。
             val committedItems = items.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
-            // #649 评论 5575950895 问题 3：advancing journal 模式
             currentJournal =
-                currentJournal.copy(
+                manifestResult.committedJournal.copy(
                     phase = PendingMirrorPublish.PHASE_CLEANUP,
                     newEntries = promotedEntries,
                     stagedRefs = emptyMap(),
                     items = committedItems,
-                    manifestOldRef = manifestResult.manifestOldRef,
-                    manifestStagedRef = manifestResult.manifestStagedRef,
-                    manifestNewRef = manifestResult.newRef,
-                    manifestBackupRef = manifestResult.backupOldRef,
-                    isManifestCommitted = true,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                    manifestNewContentHash = manifestResult.manifestNewContentHash,
-                    manifestOldContentHash = manifestResult.manifestOldContentHash,
                 )
             if (!persistPendingJournal(currentJournal)) {
                 DiagnosticsLogger.w(
@@ -1431,13 +1545,14 @@ class ReadableMirrorPublisher(
                 )
                 return MirrorPublishResult.RetryableFailure
             }
-            // #649 评论 5576464076 问题 2：manifest 提交成功后写入 committed manifest
-            if (manifestResult.manifestNewJson == null || manifestResult.manifestNewContentHash == null) {
-                DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: manifestNewJson or hash is null")
-                return MirrorPublishResult.RetryableFailure
-            }
-            if (!stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)) {
-                // 写入失败，保留 journal 重试
+            // #649 评论 5576464076 问题 2：manifest 提交成功后写入 committed manifest。
+            // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入，
+            // 严格校验 manifestTargetJson/hash 自洽 + 严格解析。
+            if (!persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Publish project $projectId: persistCommittedBaseline failed, keeping journal for retry",
+                )
                 return MirrorPublishResult.RetryableFailure
             }
             // #649 评论 5564820566 问题 5：manifest 提交成功后标记作品已发布，
@@ -1504,19 +1619,29 @@ class ReadableMirrorPublisher(
             // #649 评论 5562715833 问题 7：不在 removed.isEmpty() 时 early return，
             // 即使空作品也继续走事务流程，提交 snapshot=null 的新 manifest（确保 manifest 不再引用该项目）
             // 2. 读取 committed manifest 并生成 frozen plan（#649 评论 5576464076 问题 3）
-            val committedManifestJson = stateStore.getCommittedManifest()
-            val committedManifest = if (committedManifestJson.isSuccess) {
-                val json = committedManifestJson.getOrNull()
-                if (json != null) parseMirrorManifestFromJson(json) else null
-            } else {
-                null
+            // #649 评论 5576949398 问题 1：用 getCommittedManifestStrict 三态读取，
+            // 不再把损坏当首次发布；NeedsMigration 触发 ReadableMirrorStateMigration。
+            val committedManifestResolution = resolveCommittedManifestForPublish(storage)
+            if (committedManifestResolution is CommittedManifestResolution.Stop) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Delete project $projectId aborted: committed manifest corrupted or migration failed",
+                )
+                return MirrorPublishResult.RetryableFailure
             }
-            val frozenPlan = if (committedManifest != null) {
-                buildFrozenDeleteManifestPlan(committedManifest, projectId)
-            } else {
-                // 没有已提交 manifest（首次发布），不需要 frozen plan
-                null
-            }
+            val committedManifest =
+                when (committedManifestResolution) {
+                    is CommittedManifestResolution.Baseline -> committedManifestResolution.manifest
+                    CommittedManifestResolution.FirstPublish -> null
+                    CommittedManifestResolution.Stop -> null // 上面已 return，这里不会走到
+                }
+            val frozenPlan =
+                if (committedManifest != null) {
+                    buildFrozenDeleteManifestPlan(committedManifest, projectId)
+                } else {
+                    // 没有已提交 manifest（首次发布），不需要 frozen plan
+                    null
+                }
             val frozenPlanJson = frozenPlan?.let { frozenManifestPlanToJson(it) }
             val frozenPlanHash = if (frozenPlanJson != null) computeContentHash(frozenPlanJson) else null
 
@@ -1552,11 +1677,12 @@ class ReadableMirrorPublisher(
             //    用 desiredEntries=emptyMap 表示该项目不再有任何章节
             //    #649 评论 5562715833 问题 7：snapshot=null 确保 manifest 不再引用该项目
             //    #649 评论 5576464076 问题 3：使用 frozen plan 生成 manifestTargetJson
-            val manifestTargetJson = if (frozenPlan != null) {
-                frozenPlanToManifestJson(frozenPlan, emptyMap())
-            } else {
-                null
-            }
+            val manifestTargetJson =
+                if (frozenPlan != null) {
+                    frozenPlanToManifestJson(frozenPlan, emptyMap())
+                } else {
+                    null
+                }
             if (frozenPlan != null && manifestTargetJson == null) {
                 DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: frozenPlanToManifestJson failed")
                 return MirrorPublishResult.RetryableFailure
@@ -1602,29 +1728,9 @@ class ReadableMirrorPublisher(
             // 4. manifest 成功后更新 journal（标记 manifest 已提交）
             //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
             //    #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            if (!writePendingPublishJournal(
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.DELETE_PROJECT,
-                    phase = PendingMirrorPublish.PHASE_CLEANUP,
-                    txId = txId,
-                    backend = txContext.backend,
-                    treeUri = txContext.treeUri,
-                    oldEntries = removed,
-                    newEntries = emptyMap(),
-                    stagedRefs = emptyMap(),
-                    items = emptyMap(),
-                    removedProjectIds = setOf(projectId),
-                    manifestOldRef = manifestResult.manifestOldRef,
-                    manifestStagedRef = manifestResult.manifestStagedRef,
-                    manifestNewRef = manifestResult.newRef,
-                    manifestBackupRef = manifestResult.backupOldRef,
-                    isManifestCommitted = true,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                    manifestNewContentHash = manifestResult.manifestNewContentHash,
-                    manifestOldContentHash = manifestResult.manifestOldContentHash,
-                )
-            ) {
+            // #649 评论 5576949398 问题 2：从 manifestResult.committedJournal 继续，
+            // 不再用 writePendingPublishJournal 从旧字段重建。
+            if (!persistPendingJournal(manifestResult.committedJournal)) {
                 DiagnosticsLogger.w(
                     TAG,
                     "Delete project $projectId: cleanup journal write failed, keeping journal for retry",
@@ -1633,10 +1739,13 @@ class ReadableMirrorPublisher(
             }
             // #649 评论 5576464076 问题 2：DELETE 也幂等写入 committed manifest，
             // 确保下一笔 frozen plan 基线正确（不会因 manifest 未持久化而误判为首次发布）。
-            if (manifestResult.manifestNewJson != null && manifestResult.manifestNewContentHash != null) {
-                if (!stateStore.setCommittedManifest(manifestResult.manifestNewJson, manifestResult.manifestNewContentHash)) {
-                    return MirrorPublishResult.RetryableFailure
-                }
+            // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入。
+            if (!persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Delete project $projectId: persistCommittedBaseline failed, keeping journal for retry",
+                )
+                return MirrorPublishResult.RetryableFailure
             }
             // 5. 从 state store 删除该项目条目
             //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
@@ -1650,27 +1759,10 @@ class ReadableMirrorPublisher(
             }
             // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
             //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            val deleteCleanupJournal =
-                PendingMirrorPublish(
-                    txId = txId,
-                    backend = txContext.backend,
-                    treeUri = txContext.treeUri,
-                    projectId = projectId,
-                    transactionType = MirrorTransactionType.DELETE_PROJECT,
-                    phase = PendingMirrorPublish.PHASE_CLEANUP,
-                    oldEntries = removed,
-                    newEntries = emptyMap(),
-                    stagedRefs = emptyMap(),
-                    items = emptyMap(),
-                    removedProjectIds = setOf(projectId),
-                    manifestOldRef = manifestResult.manifestOldRef,
-                    manifestStagedRef = manifestResult.manifestStagedRef,
-                    manifestNewRef = manifestResult.newRef,
-                    manifestBackupRef = manifestResult.backupOldRef,
-                    isManifestCommitted = true,
-                    manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-                )
+            // #649 评论 5576949398 问题 2：直接用 manifestResult.committedJournal 作为 cleanup journal，
+            // 它已包含 manifestOldRef/manifestStagedRef/manifestNewRef/manifestBackupRef/
+            // isManifestCommitted/manifestSwapState 等全部 manifest committed 状态。
+            val deleteCleanupJournal = manifestResult.committedJournal
             if (cleanupCommittedTransaction(deleteCleanupJournal, storage, allLiveKeys = null)) {
                 // #649 评论 5564820566 问题 5：delete 成功后移除 publishedProjectId
                 // #649 评论 5565067997 修复 6：检查 removePublishedProjectId 返回值
@@ -3157,6 +3249,47 @@ class ReadableMirrorPublisher(
     private fun persistPendingJournal(journal: PendingMirrorPublish): Boolean =
         stateStore.writePendingPublish(journal.toJson())
 
+    /**
+     * 从 journal 持久化 committed manifest baseline（#649 评论 5576949398 问题 2）。
+     *
+     * 统一 helper，供 publishProject / deleteProject / recoverPromotePhase / recoverCleanupPhase
+     * 在 manifest 提交成功后写入 private committed baseline。
+     *
+     * 校验流程：
+     * 1. journal.manifestTargetJson 和 journal.manifestNewContentHash 都非空
+     * 2. computeContentHash(json) == hash（hash 自洽）
+     * 3. mirrorManifestFromJsonStrict(json) 严格解析通过（schema/字段完整性）
+     * 4. stateStore.setCommittedManifest(json, hash) 持久化成功
+     *
+     * 任一步骤失败返回 false，调用方应停止本轮操作（保留 journal 重试）。
+     *
+     * @param journal 已推进到 MANIFEST_COMMITTED 的 journal
+     * @return true 表示 committed baseline 持久化成功；false 表示失败
+     */
+    private fun persistCommittedBaselineFromJournal(journal: PendingMirrorPublish): Boolean {
+        val json =
+            journal.manifestTargetJson ?: run {
+                DiagnosticsLogger.w(TAG, "persistCommittedBaseline: manifestTargetJson is null")
+                return false
+            }
+        val hash =
+            journal.manifestNewContentHash ?: run {
+                DiagnosticsLogger.w(TAG, "persistCommittedBaseline: manifestNewContentHash is null")
+                return false
+            }
+        if (computeContentHash(json) != hash) {
+            DiagnosticsLogger.w(TAG, "persistCommittedBaseline: hash mismatch")
+            return false
+        }
+        try {
+            mirrorManifestFromJsonStrict(json)
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "persistCommittedBaseline: strict parse failed: ${e.message}")
+            return false
+        }
+        return stateStore.setCommittedManifest(json, hash)
+    }
+
     // ── 内部 ──
 
     /**
@@ -3242,24 +3375,24 @@ class ReadableMirrorPublisher(
     /**
      * manifest 事务结果（stage → promote → setManifestUri 完成后返回）。
      *
+     * #649 评论 5576949398 问题 2：收口成 (committedJournal, newRef) 两个字段。
+     * [committedJournal] 是 [publishManifestWithDesiredTransactional] 内部已经推进到
+     * [ManifestTransactionState.MANIFEST_COMMITTED] 的最新 currentJournal，
+     * 包含 manifestTargetJson、manifestNewContentHash、manifestOldContentHash、
+     * manifestOldRef、manifestStagedRef、manifestNewRef、manifestBackupRef、
+     * manifestSwapState=MANIFEST_COMMITTED、frozenManifestPlan、frozenManifestPlanHash、
+     * 最新 items/newEntries。
+     *
+     * 调用方（publishProject / deleteProject / recoverPromotePhase）从
+     * `manifestResult.committedJournal.copy(phase=PHASE_CLEANUP, ...)` 继续推进，
+     * 不再从 manifest 调用之前的旧 journal 重建 cleanup journal。
+     *
+     * @property committedJournal 已推进到 MANIFEST_COMMITTED 的最新 journal
      * @property newRef 新 manifest 的最终引用（promote 后的 ref）
-     * @property manifestOldRef 旧 manifest 引用（可为 null，表示首次发布）
-     * @property manifestStagedRef manifest staging 引用
-     * @property backupOldRef manifest 旧备份引用（用于回滚）
-     * @property manifestNewJson 新 manifest 的 JSON 内容（#649 评论 5576464076 问题 2），
-     *   供调用方写 committed manifest 到 StateStore。
-     * @property manifestNewContentHash 新 manifest 的内容 hash（#649 评论 5569598106 问题3），
-     *   供调用方写 cleanup journal 时持续传递，避免 hash 丢失。
-     * @property manifestOldContentHash 旧 manifest 的内容 hash（#649 评论 5569598106 问题3）。
      */
     private data class ManifestTransactionResult(
+        val committedJournal: PendingMirrorPublish,
         val newRef: MirrorFileRef,
-        val manifestOldRef: MirrorFileRef?,
-        val manifestStagedRef: StagedMirrorRef,
-        val backupOldRef: MirrorFileRef?,
-        val manifestNewJson: String? = null,
-        val manifestNewContentHash: String? = null,
-        val manifestOldContentHash: String? = null,
     )
 
     /**
@@ -3464,13 +3597,23 @@ class ReadableMirrorPublisher(
                                     )
                                     return null
                                 }
+                                // #649 评论 5576949398 问题 2：返回 committedJournal（currentJournal）
+                                // 已包含 manifestTargetJson/hash/refs/manifestSwapState=MANIFEST_COMMITTED。
+                                // 恢复 COMMITTED 路径下 currentJournal 已在入口合并了 items/newEntries，
+                                // 但 manifest committed 状态字段可能还来自 journalContext；
+                                // 这里补一次 copy 确保 manifestNewRef/manifestSwapState/isManifestCommitted 正确。
+                                val committedJournalForCommittedResume =
+                                    currentJournal.copy(
+                                        manifestNewRef = existingFinal.ref,
+                                        manifestBackupRef = manifestBackupRef,
+                                        isManifestCommitted = true,
+                                        manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+                                        manifestNewContentHash = manifestNewContentHash,
+                                        manifestOldContentHash = manifestOldContentHash,
+                                    )
                                 return ManifestTransactionResult(
+                                    committedJournal = committedJournalForCommittedResume,
                                     newRef = existingFinal.ref,
-                                    manifestOldRef = oldRef,
-                                    manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-                                    backupOldRef = manifestBackupRef,
-                                    manifestNewContentHash = manifestNewContentHash,
-                                    manifestOldContentHash = manifestOldContentHash,
                                 )
                             }
                             is MirrorLookupResult.Missing -> {
@@ -3545,13 +3688,12 @@ class ReadableMirrorPublisher(
                                 if (!persistPendingJournal(currentJournal)) {
                                     return null
                                 }
+                                // #649 评论 5576949398 问题 2：返回 committedJournal（currentJournal）
+                                // 已推进到 MANIFEST_COMMITTED（上面 copy 已设置 manifestNewRef/manifestBackupRef/
+                                // isManifestCommitted/manifestSwapState）。
                                 return ManifestTransactionResult(
+                                    committedJournal = currentJournal,
                                     newRef = existingFinal.ref,
-                                    manifestOldRef = oldRef,
-                                    manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-                                    backupOldRef = manifestBackupRef,
-                                    manifestNewContentHash = manifestNewContentHash,
-                                    manifestOldContentHash = manifestOldContentHash,
                                 )
                             }
                             is MirrorLookupResult.Missing -> {
@@ -3775,14 +3917,11 @@ class ReadableMirrorPublisher(
                     if (!persistPendingJournal(currentJournal)) {
                         return null
                     }
+                    // #649 评论 5576949398 问题 2：返回 committedJournal（currentJournal）
+                    // 已推进到 MANIFEST_COMMITTED。
                     return ManifestTransactionResult(
+                        committedJournal = currentJournal,
                         newRef = finalLookup.ref,
-                        manifestOldRef = oldRef,
-                        manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-                        backupOldRef = manifestBackupRef,
-                        manifestNewJson = json,
-                        manifestNewContentHash = manifestNewContentHash,
-                        manifestOldContentHash = manifestOldContentHash,
                     )
                 } else {
                     DiagnosticsLogger.w(
@@ -3849,14 +3988,13 @@ class ReadableMirrorPublisher(
         if (!persistPendingJournal(currentJournal)) {
             DiagnosticsLogger.w(TAG, "Manifest transaction: MANIFEST_COMMITTED journal write failed")
         }
+        // #649 评论 5576949398 问题 2：返回 committedJournal（currentJournal）
+        // 已推进到 MANIFEST_COMMITTED，包含 manifestTargetJson/manifestNewContentHash/
+        // manifestOldContentHash/manifestOldRef/manifestStagedRef/manifestNewRef/
+        // manifestBackupRef/frozenManifestPlan/frozenManifestPlanHash/最新 items/newEntries。
         return ManifestTransactionResult(
+            committedJournal = currentJournal,
             newRef = newRef!!,
-            manifestOldRef = oldRef,
-            manifestStagedRef = staged ?: journalContext.manifestStagedRef!!,
-            backupOldRef = manifestBackupRef,
-            manifestNewJson = json,
-            manifestNewContentHash = manifestNewContentHash,
-            manifestOldContentHash = manifestOldContentHash,
         )
     }
 
@@ -3931,69 +4069,16 @@ class ReadableMirrorPublisher(
     /**
      * 从 JSON 字符串解析 [MirrorManifest]（#649 评论 5575950895 问题 5）。
      *
-     * 用于读取已提交 manifest 作为 frozen plan 基线。
+     * #649 评论 5576949398 问题 1：收口到 [mirrorManifestFromJsonStrict] 严格 codec。
+     * 旧宽松解析（optInt/optString 把字段缺失补成默认值）已删除，
+     * 统一用严格版：字段缺失/类型错误/空 id/contentFile/contentHash 抛异常。
      * 解析失败返回 null（调用方应停止事务，不猜测 manifest 内容）。
      */
     private fun parseMirrorManifestFromJson(json: String): MirrorManifest? {
         return try {
-            val root = JSONObject(json)
-            val schemaVersion = root.optInt("schemaVersion", 1)
-            val revision = root.optLong("revision", 0L)
-            val updatedAt = root.optString("updatedAt", "")
-            val projectsArray = root.optJSONArray("projects") ?: JSONArray()
-            val projects = mutableListOf<MirrorProject>()
-            for (i in 0 until projectsArray.length()) {
-                val projectObj = projectsArray.getJSONObject(i)
-                val volumesArray = projectObj.optJSONArray("volumes") ?: JSONArray()
-                val volumes = mutableListOf<MirrorVolume>()
-                for (j in 0 until volumesArray.length()) {
-                    val volumeObj = volumesArray.getJSONObject(j)
-                    val chaptersArray = volumeObj.optJSONArray("chapters") ?: JSONArray()
-                    val chapters = mutableListOf<MirrorChapter>()
-                    for (k in 0 until chaptersArray.length()) {
-                        val chapterObj = chaptersArray.getJSONObject(k)
-                        chapters.add(
-                            MirrorChapter(
-                                id = chapterObj.getString("id"),
-                                title = chapterObj.optString("title", ""),
-                                order = chapterObj.optInt("order", 0),
-                                revision = chapterObj.optLong("revision", 0L),
-                                updatedAt = chapterObj.optString("updatedAt", ""),
-                                contentFile = chapterObj.optString("contentFile", ""),
-                                contentHash = chapterObj.optString("contentHash", ""),
-                            ),
-                        )
-                    }
-                    volumes.add(
-                        MirrorVolume(
-                            id = volumeObj.getString("id"),
-                            title = volumeObj.optString("title", ""),
-                            order = volumeObj.optInt("order", 0),
-                            revision = volumeObj.optLong("revision", 0L),
-                            updatedAt = volumeObj.optString("updatedAt", ""),
-                            chapters = chapters,
-                        ),
-                    )
-                }
-                projects.add(
-                    MirrorProject(
-                        id = projectObj.getString("id"),
-                        title = projectObj.optString("title", ""),
-                        order = projectObj.optInt("order", 0),
-                        revision = projectObj.optLong("revision", 0L),
-                        updatedAt = projectObj.optString("updatedAt", ""),
-                        volumes = volumes,
-                    ),
-                )
-            }
-            MirrorManifest(
-                schemaVersion = schemaVersion,
-                revision = revision,
-                updatedAt = updatedAt,
-                projects = projects,
-            )
+            mirrorManifestFromJsonStrict(json)
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to parse manifest JSON", e)
+            DiagnosticsLogger.e(TAG, "Failed to parse manifest JSON strictly", e)
             null
         }
     }

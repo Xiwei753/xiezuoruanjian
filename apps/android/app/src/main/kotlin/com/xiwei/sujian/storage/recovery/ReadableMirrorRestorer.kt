@@ -9,15 +9,16 @@ import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import com.xiwei.sujian.storage.mirror.ChapterKey
 import com.xiwei.sujian.storage.mirror.ChapterMirrorEntry
 import com.xiwei.sujian.storage.mirror.MirrorBackend
-import com.xiwei.sujian.storage.mirror.MirrorChapter
 import com.xiwei.sujian.storage.mirror.MirrorManifest
 import com.xiwei.sujian.storage.mirror.MirrorProject
 import com.xiwei.sujian.storage.mirror.MirrorVolume
 import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
+import com.xiwei.sujian.storage.mirror.computeContentHash
+import com.xiwei.sujian.storage.mirror.mirrorManifestFromJsonStrict
+import com.xiwei.sujian.storage.mirror.mirrorManifestToJson
 import com.xiwei.sujian.storage.mirror.verifyContentHash
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import org.json.JSONObject
 import uniffi.writer_core.RestoreChapterInputDto
 import uniffi.writer_core.RestoreProjectInputDto
 import uniffi.writer_core.RestoreVolumeInputDto
@@ -84,15 +85,23 @@ class ReadableMirrorRestorer {
             verifyUriAccessible(context, mirrorTreeUri)?.let { return@withContext it }
 
             // 1. 读取并解析 manifest
+            // #649 评论 5576949398 问题 1+3：用 mirrorManifestFromJsonStrict 严格解析，
+            // 不再把损坏 manifest 补成合法对象。保留完整文本，normalize 后计算 committedHash，
+            // 写入 private committed baseline，避免恢复后第一次编辑把多作品 manifest 退化成单作品。
             val manifestUri =
                 findDescendant(mirrorTreeUri, MANIFEST_PATH, documentTreeReader)
                     ?: return@withContext RestoreResult.ManifestMissing
-            val manifest =
-                try {
-                    parseManifest(documentTreeReader.readText(manifestUri))
-                } catch (e: Exception) {
-                    return@withContext RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}")
-                }
+            val manifest: MirrorManifest
+            val normalizedManifestJson: String
+            val committedHash: String
+            try {
+                val manifestJson = documentTreeReader.readText(manifestUri)
+                manifest = mirrorManifestFromJsonStrict(manifestJson)
+                normalizedManifestJson = mirrorManifestToJson(manifest)
+                committedHash = computeContentHash(normalizedManifestJson)
+            } catch (e: Exception) {
+                return@withContext RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}")
+            }
 
             // 1.1 预检查 + 预读所有章节正文到内存。
             // #649 评论 5560971132 修复 8：任一章节读取失败或 hash 不匹配立即返回 RestoreFailed，
@@ -131,6 +140,9 @@ class ReadableMirrorRestorer {
             // #649 评论 5563333323 缺口 2：saveRestoredState 返回 Boolean，失败时报告错误。
             // #649 评论 5565067997 修复 6：传 publishedProjectIds = manifest.projects.map { it.id }.toSet()，
             // 让零章节作品也能进 publishedProjectIds。
+            // #649 评论 5576949398 问题 3：传 committedManifestJson/hash，
+            // 在同一次 AtomicFile state 写入里保存 committed baseline，
+            // 恢复后第一次编辑不会把多作品 manifest 退化成单作品。
             val manifestUriString = manifestUri.toString()
             val publishedProjectIds = manifest.projects.map { it.id }.toSet()
             if (!stateStore.saveRestoredState(
@@ -139,6 +151,8 @@ class ReadableMirrorRestorer {
                     backend = MirrorBackend.DOCUMENT_TREE,
                     treeUri = mirrorTreeUri.toString(),
                     publishedProjectIds = publishedProjectIds,
+                    committedManifestJson = normalizedManifestJson,
+                    committedManifestHash = committedHash,
                 )
             ) {
                 return@withContext RestoreResult.RestoreFailed("Failed to persist restored mirror state")
@@ -339,79 +353,12 @@ class ReadableMirrorRestorer {
     /**
      * 解析 manifest JSON。
      *
-     * #649 评论 5560971132 修复 8：schemaVersion 严格校验。
-     * - 用 [JSONObject.getInt]（不是 optInt）：字段缺失时 throw JSONException → RestoreFailed。
-     * - 值 != 1 时 throw IOException → RestoreFailed（不支持的未来版本）。
+     * #649 评论 5576949398 问题 1：收口到 [mirrorManifestFromJsonStrict] 严格 codec。
+     * 旧 parseManifest/parseProject/parseVolume/parseChapter 宽松解析（optString/optInt 把
+     * 字段缺失补成空字符串/0）已删除，统一用严格版：字段缺失/类型错误/空 id/contentFile/contentHash
+     * 抛异常，由调用方 catch 后返回 RestoreFailed。
      */
-    private fun parseManifest(json: String): MirrorManifest {
-        val root = JSONObject(json)
-        val schemaVersion = root.getInt(SCHEMA_VERSION_KEY)
-        if (schemaVersion != 1) {
-            throw IOException("Unsupported manifest schemaVersion: $schemaVersion (expected 1)")
-        }
-        val revision = root.optLong(REVISION_KEY)
-        val updatedAt = root.optString(UPDATED_AT_KEY)
-        val projects = mutableListOf<MirrorProject>()
-        val projectsArr = root.optJSONArray(PROJECTS_KEY)
-        if (projectsArr != null) {
-            for (i in 0 until projectsArr.length()) {
-                projects.add(parseProject(projectsArr.getJSONObject(i)))
-            }
-        }
-        return MirrorManifest(
-            schemaVersion = schemaVersion,
-            revision = revision,
-            updatedAt = updatedAt,
-            projects = projects,
-        )
-    }
-
-    private fun parseProject(obj: JSONObject): MirrorProject {
-        val volumes = mutableListOf<MirrorVolume>()
-        val volumesArr = obj.optJSONArray(VOLUMES_KEY)
-        if (volumesArr != null) {
-            for (i in 0 until volumesArr.length()) {
-                volumes.add(parseVolume(volumesArr.getJSONObject(i)))
-            }
-        }
-        return MirrorProject(
-            id = obj.optString(ID_KEY),
-            title = obj.optString(TITLE_KEY),
-            order = obj.optInt(ORDER_KEY, 0),
-            revision = obj.optLong(REVISION_KEY),
-            updatedAt = obj.optString(UPDATED_AT_KEY),
-            volumes = volumes,
-        )
-    }
-
-    private fun parseVolume(obj: JSONObject): MirrorVolume {
-        val chapters = mutableListOf<MirrorChapter>()
-        val chaptersArr = obj.optJSONArray(CHAPTERS_KEY)
-        if (chaptersArr != null) {
-            for (i in 0 until chaptersArr.length()) {
-                chapters.add(parseChapter(chaptersArr.getJSONObject(i)))
-            }
-        }
-        return MirrorVolume(
-            id = obj.optString(ID_KEY),
-            title = obj.optString(TITLE_KEY),
-            order = obj.optInt(ORDER_KEY, 0),
-            revision = obj.optLong(REVISION_KEY),
-            updatedAt = obj.optString(UPDATED_AT_KEY),
-            chapters = chapters,
-        )
-    }
-
-    private fun parseChapter(obj: JSONObject): MirrorChapter =
-        MirrorChapter(
-            id = obj.optString(ID_KEY),
-            title = obj.optString(TITLE_KEY),
-            order = obj.optInt(ORDER_KEY, 0),
-            revision = obj.optLong(REVISION_KEY),
-            updatedAt = obj.optString(UPDATED_AT_KEY),
-            contentFile = obj.optString(CONTENT_FILE_KEY),
-            contentHash = obj.optString(CONTENT_HASH_KEY),
-        )
+    private fun parseManifest(json: String): MirrorManifest = mirrorManifestFromJsonStrict(json)
 
     private fun <T> BridgeResult<T>.unwrapOrThrow(): T =
         when (this) {
@@ -424,16 +371,5 @@ class ReadableMirrorRestorer {
 
     companion object {
         private const val MANIFEST_PATH = "_meta/manifest.json"
-        private const val SCHEMA_VERSION_KEY = "schemaVersion"
-        private const val REVISION_KEY = "revision"
-        private const val UPDATED_AT_KEY = "updatedAt"
-        private const val PROJECTS_KEY = "projects"
-        private const val VOLUMES_KEY = "volumes"
-        private const val CHAPTERS_KEY = "chapters"
-        private const val ID_KEY = "id"
-        private const val TITLE_KEY = "title"
-        private const val ORDER_KEY = "order"
-        private const val CONTENT_FILE_KEY = "contentFile"
-        private const val CONTENT_HASH_KEY = "contentHash"
     }
 }
