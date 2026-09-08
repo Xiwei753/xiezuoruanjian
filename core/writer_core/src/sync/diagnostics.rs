@@ -5,7 +5,7 @@
 //!
 //! SSH 传输方式当前跳过诊断（`ssh_not_recommended`），因为 LWW 后端仅支持 HTTPS。
 //!
-//! Issue #645 评论 5504296097 第2点：`SyncDiagnosticsResult` 重构为 provider-neutral，
+//! `SyncDiagnosticsResult` 采用 provider-neutral 设计，
 //! `provider_type` 替代旧 `backend_type`，`remote_ok` 合并远端可达性，
 //! `provider_details` 由各 Provider 自行填充特定诊断详情。
 //! GitHub `remote_url`/`transport` 从 `provider_config: ProviderConfig::GitHub` 读取。
@@ -23,10 +23,10 @@ use crate::sync::url::detect_transport;
 use crate::sync::url::sanitize_remote_url;
 
 impl crate::sync::SyncService {
-    #[allow(clippy::too_many_lines, unused_variables)]
+    #[allow(clippy::too_many_lines)]
     pub fn perform_sync_diagnostics(
         config: &SyncConfig,
-        secrets: &SyncSecrets,
+        _secrets: &SyncSecrets,
     ) -> crate::Result<SyncDiagnosticsResult> {
         let mut result = SyncDiagnosticsResult::new();
         result.provider_type = config.active_provider.clone();
@@ -56,8 +56,6 @@ impl crate::sync::SyncService {
                 }
                 None => (String::new(), None),
             };
-        #[cfg(not(feature = "github-api"))]
-        let (remote_url, transport_opt): (String, Option<()>) = (String::new(), None);
 
         match config.active_provider.as_str() {
             #[cfg(feature = "github-api")]
@@ -81,7 +79,7 @@ impl crate::sync::SyncService {
                 }
 
                 let token_from_parsed = parsed.extracted_token;
-                let token = secrets
+                let token = _secrets
                     .github_token()
                     .or(token_from_parsed)
                     .unwrap_or_default();
@@ -101,7 +99,7 @@ impl crate::sync::SyncService {
 
                 match crate::sync::provider::github::config::GitHubRuntimeConfig::from_persisted(
                     &github_config,
-                    secrets.provider_secrets.as_ref(),
+                    _secrets.provider_secrets.as_ref(),
                 ) {
                     Ok(_runtime) => {
                         result.error_category = "network_probe_failed".to_string();

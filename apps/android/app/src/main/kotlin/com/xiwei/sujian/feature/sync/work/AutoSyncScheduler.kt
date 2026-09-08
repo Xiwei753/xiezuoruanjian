@@ -23,7 +23,7 @@ class AutoSyncScheduler(context: Context) {
 
     fun start() {
         DiagnosticsEvents.syncEvent("scheduler", "start")
-        kotlinx.coroutines.runBlocking { scheduleFromSettings(appContext) }
+        scheduleFromSettings(appContext)
         enqueueForegroundCheck(appContext)
     }
 
@@ -34,7 +34,6 @@ class AutoSyncScheduler(context: Context) {
     }
 
     companion object {
-        private const val TAG = "AutoSyncScheduler"
         private const val UNIQUE_PERIODIC_WORK = "writer_auto_sync_periodic"
         private const val UNIQUE_FOREGROUND_WORK = "writer_auto_sync_foreground"
         internal const val DEFAULT_INTERVAL_SECONDS = 300L

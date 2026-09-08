@@ -119,8 +119,7 @@ impl SettingsRegistry {
     }
 
     pub fn default_registry() -> Self {
-        #[allow(unused_mut)]
-        let mut items = vec![
+        let items = vec![
             SettingItem {
                 id: "editor.font_size".to_string(),
                 title_key: "settings.item.editor_font_size".to_string(),
@@ -166,7 +165,8 @@ impl SettingsRegistry {
         ];
 
         #[cfg(feature = "ai")]
-        {
+        let items = {
+            let mut items = items;
             items.insert(
                 1,
                 SettingItem {
@@ -191,7 +191,8 @@ impl SettingsRegistry {
                     is_experimental: false,
                 },
             );
-        }
+            items
+        };
 
         Self { items }
     }

@@ -1,4 +1,4 @@
-//! 全量同步 facade 行为测试（Issue #630）。
+//! 全量同步 facade 行为测试。
 //!
 //! 覆盖：单 target 失败不阻断其它 target、聚合优先级与 dominant 错误文案、
 //! FullSyncState 在事务开始/提前失败/中断/聚合完成四个时点的持久化行为。
@@ -152,7 +152,7 @@ fn aggregate_with_outcomes(
             }
         })
         .collect();
-    // #645 评论 5504296097 Blocker 2：commit_full_sync 现在返回
+    // commit_full_sync 现在返回
     // (FullSyncResult, committed_paths)，聚合测试只关心 FullSyncResult。
     core.commit_full_sync(
         crate::sync::full_sync::FullSyncTransferResult {
@@ -240,7 +240,7 @@ fn test_full_sync_single_target_err_does_not_block_others() {
         ));
     }
 
-    // overall_status 保留可重试语义（#630 评论 5308040939 Part 2）：
+    // overall_status 保留可重试语义：
     // 只有 RecoverableError 时总体是 RecoverableError 而不是笼统 Error。
     assert!(
         matches!(result.overall_status, SyncStatus::RecoverableError(_)),
@@ -341,7 +341,7 @@ fn test_full_sync_all_ok_overall_success() {
 
 /// list_projects 失败（projects_root 是文件不是目录）→ 整体 Err，
 /// 且 FullSyncState 先持久化 RecoverableError + failed_targets=["global"]
-/// （#630 评论 5308040939 Part 1），不能留下旧绿灯。
+/// 不能留下旧绿灯。
 #[test]
 fn test_full_sync_list_projects_failure_returns_err_and_persists_global() {
     let temp_dir = tempdir().expect("tempdir");
@@ -455,7 +455,7 @@ fn test_run_full_sync_target_auth_err_maps_category() {
     assert!(result.error.is_some(), "error field should be set");
 }
 
-// ── #630 评论 5307423953 Part B：FullSyncState 持久化行为测试 ──
+// ── FullSyncState 持久化行为测试 ──
 
 fn make_full_sync_state(
     status: SyncStatus,
@@ -589,7 +589,7 @@ fn full_sync_state_partial_failure_preserves_previous_last_success() {
     // 所以 failed_targets 可能为空。关键断言是 last_success_time 保留（见上方）。
 }
 
-// ── #630 评论 5308040939 Part 1：事务开始 / 提前失败 / 进程中断 ──
+// ── 事务开始 / 提前失败 / 进程中断 ──
 
 /// 正式事务开始：旧 Success 被覆盖为 Syncing，旧 last_success_time 保留，
 /// last_attempt_time 更新 —— 重启后顶部读到的不是旧绿灯。
@@ -815,7 +815,7 @@ fn record_full_sync_preflight_failure_persists_same_core_state() {
     );
 }
 
-// ── #630 评论 5308040939 Part 2：聚合优先级与 dominant 错误文案 ──
+// ── 聚合优先级与 dominant 错误文案 ──
 
 /// dominant 错误文案：总体是 FatalError（auth），error/category/message_key
 /// 必须取自己优先级（Fatal）的 target，不能拿到低优先级（Recoverable）的错误。
@@ -984,7 +984,7 @@ fn aggregate_error_status_target_makes_overall_fatal() {
     assert_eq!(result.error.as_deref(), Some("repo exploded"));
 }
 
-// ── Issue #630 评论 5308439467 Part 2：transport 初始化失败类型化 Error 转换 ──
+// ── transport 初始化失败类型化 Error 转换 ──
 
 /// transport 初始化失败（auth 类）：返回 `SyncAuthFailed`（recoverable=false），
 /// 磁盘写 `FatalError`。
@@ -1134,7 +1134,7 @@ fn transport_init_failure_unknown_category_defaults_to_auth_failed() {
     );
 }
 
-// ── Issue #630 评论 5308439467 Part 3：成功类终态聚合 ──
+// ── 成功类终态聚合 ──
 
 /// 构造一个指定 status 的 SyncResult（无上传/下载/冲突，仅状态不同）。
 fn sync_result_with_status(status: SyncStatus) -> SyncResult {
@@ -1156,7 +1156,7 @@ fn sync_result_with_status(status: SyncStatus) -> SyncResult {
 }
 
 /// 全部 target 返回 `NoChanges` → overall `NoChanges`（不再丢成普通 Success）。
-/// （Issue #630 评论 5311102143：`NoChanges + NoChanges -> NoChanges`）
+/// （`NoChanges + NoChanges -> NoChanges`）
 #[test]
 fn aggregate_all_no_changes_overall_is_no_changes() {
     let (_temp_dir, core) = new_core_with_projects();
@@ -1179,7 +1179,7 @@ fn aggregate_all_no_changes_overall_is_no_changes() {
 }
 
 /// `Success + NoChanges -> Success`：有 target 实际上传/下载了，不能丢成 NoChanges。
-/// （Issue #630 评论 5311102143：修复 max() 把 NoChanges(2) 压过 Success(1) 的聚合错误）
+/// 修复 max() 把 NoChanges(2) 压过 Success(1) 的聚合错误
 #[test]
 fn aggregate_success_plus_no_changes_is_success() {
     let (_temp_dir, core) = new_core_with_projects();
@@ -1235,7 +1235,7 @@ fn aggregate_success_first_then_no_changes_is_success() {
 }
 
 /// `Success + LatestWinsApplied -> LatestWinsApplied`：有 target 因最新赢家规则合并了变更。
-/// （Issue #630 评论 5311102143：`Success + LatestWinsApplied -> LatestWinsApplied`）
+/// （`Success + LatestWinsApplied -> LatestWinsApplied`）
 #[test]
 fn aggregate_success_plus_latest_wins_applied_is_latest_wins_applied() {
     let (_temp_dir, core) = new_core_with_projects();
@@ -1371,7 +1371,7 @@ fn aggregate_protocol_error_beats_success() {
     );
 }
 
-// ── Issue #630 评论 5308439467 Part 1：冷启动恢复中断 Syncing ──
+// ── 冷启动恢复中断 Syncing ──
 
 /// `recover_interrupted_full_sync_state`：磁盘上是 Syncing 时原子改成
 /// RecoverableError("previous_full_sync_interrupted")，返回 true。
@@ -1454,13 +1454,13 @@ fn recover_interrupted_full_sync_state_no_file_returns_false() {
     assert!(!recovered, "should return false when no state file exists");
 }
 
-// #645 评论 5504296097 问题1：DeleteLocalProject 移到 Commit 阶段。
+// DeleteLocalProject 移到 Commit 阶段。
 // 以下测试验证：
 // 1. commit_full_sync 对 DeleteProject action 执行 ProjectDeleteTransaction；
 // 2. 删除后本地 projects/<id> 目录不再存在（已 move 到 trash）；
 // 3. RemoteLifecycle origin 不生成 PendingDeletedTarget（远端已删，不反向要求删远端）。
 
-/// 问题1：commit_full_sync 对 DeleteProject action 执行删除事务，
+/// commit_full_sync 对 DeleteProject action 执行删除事务，
 /// 本地 project 目录被移到 trash。
 #[test]
 fn q1_commit_full_sync_executes_delete_project_action() {
@@ -1474,7 +1474,7 @@ fn q1_commit_full_sync_executes_delete_project_action() {
     );
 
     // 构造 transfer_result：一个 target 携带 DeleteProject action。
-    // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
+    // expected_local_lww 非 Option —
     // 破坏性 action 必须携带 guard。用 snapshot 算出真实 current lww，
     // 让 guard 通过（current == expected）。
     let expected_lww = {
@@ -1554,7 +1554,7 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
     let project_id = project.id.clone();
 
     // 构造 transfer_result：DeleteProject action（RemoteLifecycle origin 由 commit 内部设置）。
-    // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option。
+    // expected_local_lww 非 Option。
     // 用 snapshot 算出真实 current lww，让 guard 通过。
     let project_root = core.project_root(&project_id);
     let expected_lww = {

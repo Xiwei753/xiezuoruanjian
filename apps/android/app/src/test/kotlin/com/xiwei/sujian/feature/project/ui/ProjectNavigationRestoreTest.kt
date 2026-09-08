@@ -108,7 +108,7 @@ class DeriveRestoreDestinationTest {
 }
 
 /**
- * #625 第二段：[WorkspaceNavigator] 业务行为单测 — 验证历史栈、canNavigateBack、back。
+ * [WorkspaceNavigator] 业务行为单测 — 验证历史栈、canNavigateBack、back。
  */
 class WorkspaceNavigatorTest {
     @Test
@@ -166,20 +166,6 @@ class WorkspaceNavigatorTest {
             assertTrue(navigator.back())
             assertEquals(1, navigator.history.size)
             assertTrue(navigator.currentLocation is WorkspaceLocation.ProjectList)
-        }
-
-    @Test
-    fun seekBack_isNoOp_doesNotThrow() =
-        kotlinx.coroutines.test.runTest {
-            val navigator = WorkspaceNavigator()
-            navigator.replaceInitialHistory(
-                listOf(WorkspacePaneKey.ProjectList, WorkspacePaneKey.ChapterTree("p1")),
-            )
-            // seekBack 是空实现 — 不应抛异常，不应改变历史。
-            navigator.seekBack(0.5f)
-            assertEquals(2, navigator.history.size)
-            navigator.seekBack(0f)
-            assertEquals(2, navigator.history.size)
         }
 
     private fun assertFalse(actual: Boolean) = org.junit.Assert.assertFalse(actual)

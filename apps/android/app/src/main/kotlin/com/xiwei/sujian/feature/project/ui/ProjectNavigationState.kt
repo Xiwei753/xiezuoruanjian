@@ -8,7 +8,7 @@ import com.xiwei.sujian.app.state.ActiveDocumentGate
 import kotlinx.parcelize.Parcelize
 
 /**
- * 唯一工作区导航目的地键 — 业务身份（#625 第二段）。
+ * 唯一工作区导航目的地键 — 业务身份。
  *
  * 不再携带 Material3 Adaptive 的 [androidx.compose.material3.adaptive.layout.ThreePaneScaffoldRole]，
  * "当前在哪个业务位置"与"屏幕上同时画哪些区域"彻底分开：
@@ -77,19 +77,14 @@ sealed interface SessionRestoreState {
 }
 
 /**
- * 纯业务工作区导航器（#625 第二段）— 持有 [WorkspacePaneKey] 历史栈，
+ * 纯业务工作区导航器 — 持有 [WorkspacePaneKey] 历史栈，
  * 不再依赖 Material3 Adaptive 的 [androidx.compose.material3.adaptive.navigation.ThreePaneScaffoldNavigator]。
  *
  * 职责：
  * - 维护业务位置历史栈（[history]）；
  * - 暴露当前业务位置（[currentDestination] / [currentLocation]）；
- * - 提供 navigateTo / back / seekBack / replaceInitialHistory 业务方法；
+ * - 提供 navigateTo / back / replaceInitialHistory 业务方法；
  * - canNavigateBack 由历史栈长度决定。
- *
- * seekBack 是预测返回手势进度回调 — 业务级实现只保留入口签名（手势动画由
- * [ProjectWorkspaceScreen] 的 AnimatedContent 过渡承担，不需要 Material scaffold seek）。
- * 真正的预测返回手势由 [com.xiwei.sujian.app.navigation.SujianNavigationSuite] 的
- * PredictiveBackHandler 接管，本类只提供 seekBack 空实现 + 注释。
  */
 @Stable
 internal class WorkspaceNavigator {
@@ -117,21 +112,6 @@ internal class WorkspaceNavigator {
     }
 
     /**
-     * 预测返回手势进度 — 业务级空实现。
-     *
-     * #625 第二段：解耦 Material scaffold 后，预测返回的视觉过渡由
-     * [ProjectWorkspaceScreen] 的 AnimatedContent 与 NavDisplay 的 predictivePopTransitionSpec
-     * 承担，不再需要 ThreePaneScaffoldNavigator.seekBack 驱动 pane 位移。
-     * 保留入口签名以兼容 [com.xiwei.sujian.app.navigation.SujianWorkspaceBackEffects]
-     * 的 PredictiveBackHandler 调用契约。
-     */
-    fun seekBack(
-        @Suppress("UNUSED_PARAMETER") progress: Float,
-    ) {
-        // 业务级空实现 — 视觉过渡由 AnimatedContent 承担。
-    }
-
-    /**
      * 一次性替换初始历史（会话恢复）— 之后导航只使用 [_history] 自己保存/恢复的历史，
      * 不再从业务字段反复重建。
      */
@@ -145,7 +125,7 @@ internal class WorkspaceNavigator {
 /**
  * 组合层可保存的唯一工作区导航状态。
  *
- * #625 第二段：持有纯业务 [WorkspaceNavigator]，[currentLocation] 从 navigator 的当前
+ * 持有纯业务 [WorkspaceNavigator]，[currentLocation] 从 navigator 的当前
  * destination 推导，不另存页面位置副本。顶栏返回、系统返回、页面返回和预测返回必须统一调用 [back]。
  *
  * 不再暴露 Material3 Adaptive navigator 字段 — "当前在哪个业务位置"与"屏幕上同时画哪些区域"
@@ -179,15 +159,10 @@ internal class ProjectNavigationState(
 
     /** 统一返回入口：弹出一级工作区导航；已在作品根页时返回 false。 */
     fun back(): Boolean = navigator.back()
-
-    /** 预测返回手势进度：把导航器 seek 到对应过渡进度；取消时传 0f 复位。 */
-    fun seekBack(progress: Float) {
-        navigator.seekBack(progress)
-    }
 }
 
 /**
- * #624 评论12 第1项：工作区统一返回入口 — 顶栏返回、系统返回全部走这里。
+ * 工作区统一返回入口 — 顶栏返回、系统返回全部走这里。
  *
  * 先经 [ActiveDocumentGate.flushActiveDocument] 把活动正文保存到磁盘（保存失败
  * 返回 false，导航保持 Editor 目的地），保存成功才真正弹出工作区导航。
@@ -204,7 +179,7 @@ internal suspend fun ProjectNavigationState.guardedBack(): Boolean {
  * 恢复目的地由会话就绪后给出，之后导航只使用 navigator 自己保存/恢复的历史，
  * 不再从业务字段反复重建。
  *
- * #625 第二段：返回 `List<WorkspacePaneKey>`（业务身份历史），
+ * 返回 `List<WorkspacePaneKey>`（业务身份历史），
  * 不再返回 [androidx.compose.material3.adaptive.layout.ThreePaneScaffoldDestinationItem]。
  */
 internal fun buildInitialHistory(destination: SessionRestoreState.Destination): List<WorkspacePaneKey> =

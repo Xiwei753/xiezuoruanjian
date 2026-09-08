@@ -10,7 +10,7 @@ import com.xiwei.sujian.feature.sync.data.SyncProfileSnapshot
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 
 /**
- * #630 评论 #1：全量自动同步 Worker。
+ * 全量自动同步 Worker。
  *
  * 每次只读一个全局 profile、判断一次 enabled/autoSync/interval，然后调用一次
  * [com.xiwei.sujian.feature.sync.data.SyncCoordinator.runFullSync]（Auto）。
@@ -21,14 +21,14 @@ class AutoSyncWorker(
     workerParams: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
-        // #649 评论 5559763924：数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。Worker 可直接访问 appContainer。
+        // 数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。Worker 可直接访问 appContainer。
         val deps =
             (applicationContext as? com.xiwei.sujian.app.di.SujianAppDependenciesProvider)
                 ?.dependencies
                 ?: return Result.failure()
 
         val settingsRepository = deps.syncRepository
-        // #630 评论 5307423953 Part A：自动同步入口直接走 loadCommittedSyncProfile()，
+        // 自动同步入口直接走 loadCommittedSyncProfile()，
         // 与设置页/顶栏手动同步共用同一个全局 profile 读取/迁移入口。
         // loadCommittedSyncProfile() 内部已持有 SyncProfileGate.snapshotExclusive
         // 并执行 ensureGlobalProfileMigrated()，不再外层套 SyncProfileGate。
@@ -63,7 +63,7 @@ class AutoSyncWorker(
     }
 
     /**
-     * #630 评论 5307423953 Part B：判定全量同步是否到时间点（interval/elapsed 检查）。
+     * 判定全量同步是否到时间点（interval/elapsed 检查）。
      *
      * 全量同步间隔由全局 config.syncIntervalSeconds 决定；上次同步成功时间取自
      * [com.xiwei.sujian.feature.sync.data.SyncRepository.loadFullSyncState] 的
@@ -92,7 +92,7 @@ class AutoSyncWorker(
         private const val TAG = "AutoSyncWorker"
 
         /**
-         * #630 评论 5308040939 Part 2：SyncOutcome → WorkManager Result 映射。
+         * SyncOutcome → WorkManager Result 映射。
          *
          * RetryableFailure → [Result.retry]（下次自动重试）；Fatal/Dirty/Conflict 等
          * TerminalFailure → [Result.failure]（确定性失败，重试没有意义）。

@@ -1,4 +1,4 @@
-//! 同步状态查询 facade — per-target 本地状态 + 全量同步持久状态（Issue #630）。
+//! 同步状态查询 facade — per-target 本地状态 + 全量同步持久状态。
 //!
 //! 分层：
 //! - per-target `state.local.json`（`<root>/app-meta/sync/state.local.json`）记录每个
@@ -98,7 +98,7 @@ impl super::WriterCore {
         crate::sync::SyncService::save_sync_state(&self.app_data_root, state)
     }
 
-    // ── 全量同步持久状态（Issue #630 评论 5307423953 Part B） ──
+    // ── 全量同步持久状态 ──
     // 路径：<app_data_root>/app-meta/sync/full_state.local.json
     // 与 per-target state.local.json 分层：full_state 只记录"这一次全量事务整体是什么结果"。
 
@@ -143,7 +143,7 @@ impl super::WriterCore {
         crate::storage::atomic_write_string(&path, &content)
     }
 
-    /// 冷启动恢复中断的 `Syncing` 状态（Issue #630 评论 5308439467 Part 1）。
+    /// 冷启动恢复中断的 `Syncing` 状态。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
     /// `RecoverableError("previous_full_sync_interrupted")` + `failed_targets=["global"]`，

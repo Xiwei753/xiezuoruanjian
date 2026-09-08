@@ -6,7 +6,7 @@ use crate::api::{
 use crate::sync::{SyncConfig, SyncSecrets};
 
 impl super::WriterAppService {
-    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    /// 旧→新同步 profile 一次性迁移。
     ///
     /// 详见 `crate::storage::migration`。失败返回 `WriterError`；
     /// 冲突返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
@@ -14,7 +14,7 @@ impl super::WriterAppService {
         self.api.migrate_legacy_sync_profile()
     }
 
-    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata。
     pub fn migrate_legacy_sync_profile_with_metadata(
         &self,
         metadata: Vec<LegacyProfileMetadataDto>,
@@ -23,7 +23,7 @@ impl super::WriterAppService {
     }
 
     /**
-     * #592 六 / #644 评论 5462823517 第1节：secrets override 只在该进程尚未显式设置时从磁盘填充。
+     * secrets override 只在该进程尚未显式设置时从磁盘填充。
      * 同步启动前 Android 层会把 snapshot 的凭据显式写入 override，
      * 使整个操作只使用同一份 snapshot，不再从磁盘二次读取。
      *
@@ -38,19 +38,19 @@ impl super::WriterAppService {
         }
     }
 
-    /** #592 六 / #644 评论 5462823517 第1节：显式设置进程级 secrets override（同步启动前由平台层调用）。 */
+    /** 显式设置进程级 secrets override（同步启动前由平台层调用）。 */
     pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> Result<(), WriterError> {
         self.api.set_secrets_override(Some(secrets.into()));
         Ok(())
     }
 
-    /** #595 十 / #644 评论 5462823517 第1节：清除进程级 secrets override（同步操作结束后由平台层调用）。 */
+    /** 清除进程级 secrets override（同步操作结束后由平台层调用）。 */
     pub fn clear_sync_secrets_override(&self) -> Result<(), WriterError> {
         self.api.set_secrets_override(None);
         Ok(())
     }
 
-    /** #592 五：按 generation 保存凭据到安全存储。 */
+    /** 按 generation 保存凭据到安全存储。 */
     pub fn save_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -60,7 +60,7 @@ impl super::WriterAppService {
             .save_sync_secrets_for_generation(generation, secrets)
     }
 
-    /** #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。 */
+    /// 读取指定 generation 的安全存储凭据；缺失返回 None。
     pub fn load_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -68,7 +68,7 @@ impl super::WriterAppService {
         self.api.load_sync_secrets_for_generation(generation)
     }
 
-    /** #595 五：删除指定 generation 的安全存储凭据（旧版本清理）。 */
+    /// 删除指定 generation 的安全存储凭据（旧版本清理）。
     pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> Result<(), WriterError> {
         self.api.delete_sync_secrets_for_generation(generation)
     }
@@ -193,19 +193,19 @@ impl super::WriterAppService {
         self.api.save_app_sync_state(state)
     }
 
-    /// 全量同步持久状态（Issue #630 评论 5307423953 Part B）。
+    /// 全量同步持久状态。
     pub fn load_full_sync_state(&self) -> Result<Option<FullSyncStateDto>, WriterError> {
         self.api.load_full_sync_state()
     }
 
-    /// 冷启动恢复中断的 Syncing 状态（Issue #630 评论 5308439467 Part 1）。
+    /// 冷启动恢复中断的 Syncing 状态。
     ///
     /// 只能在新 WriterAppService 实例启动时执行一次。委托给 api 层。
     pub fn recover_interrupted_full_sync_state(&self) -> Result<bool, WriterError> {
         self.api.recover_interrupted_full_sync_state()
     }
 
-    /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+    /// 平台预处理失败写同一份 Core FullSyncState 的窄接口。
     ///
     /// `status` 为线格式状态码（与 `FullSyncStateDto.overall_status` 同一映射）；
     /// `failed_target` 传 `"preflight"`。只更新同一个 `full_state.local.json`。
