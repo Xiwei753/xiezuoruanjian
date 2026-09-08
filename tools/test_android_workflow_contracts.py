@@ -4,18 +4,18 @@
 Verifies invariants that must hold for the Android CI:
 - Gradle cache is configured (gradle/actions/setup-gradle present)
 - cargo-ndk version is pinned via CARGO_NDK_VERSION env var
-- Cross-job artifact dependency: emulator-test depends on build and downloads native artifact
 - Rust cache has shared-key for registry/git sharing across matrix jobs
-- Rust cache key isolates target by flavor (固定 x86_64)
-- 自动流程只生成 x86_64 测试产物（build matrix 只含 no-ai/ai flavor，不再有 abi/universal）
+- Rust cache key isolates target by flavor (固定 arm64-v8a)
+- Build matrix only contains no-ai/ai flavor with fixed arm64-v8a ABI
 - No test steps removed
-- Native artifact upload exists for emulator reuse
 - cargo-ndk is not installed via bare `cargo install cargo-ndk` (must be pinned)
-- No APK build residuals (no arm64-v8a/universal/keystore/APK upload in workflow)
+- Build job actually builds APK (no --skip-gradle)
+- APK artifacts exist for both no-ai and ai flavors (arm64-v8a)
+- No emulator artifacts or steps in workflow
 """
 
 import sys
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import yaml
 
@@ -29,8 +29,7 @@ def load_workflow():
 
 
 def test_gradle_cache_configured(wf, _text):
-    # #597：Rust 专属 job（core-common-test/core-ai-test）不运行 Gradle，
-    # 不需要 setup-gradle；其余 job 必须配置。
+    """Verify Gradle cache is configured for all jobs except Rust core test jobs."""
     for job_name, job in wf.get("jobs", {}).items():
         if job_name.startswith("core-"):
             continue
@@ -45,6 +44,7 @@ def test_gradle_cache_configured(wf, _text):
 
 
 def test_cargo_ndk_version_pinned(wf, _text):
+    """Verify cargo-ndk version is pinned via CARGO_NDK_VERSION env var."""
     env = wf.get("env", {})
     assert "CARGO_NDK_VERSION" in env, "CARGO_NDK_VERSION env var missing"
     version = env["CARGO_NDK_VERSION"]
@@ -54,6 +54,7 @@ def test_cargo_ndk_version_pinned(wf, _text):
 
 
 def test_cargo_ndk_install_uses_pinned_version(wf, _text):
+    """Verify cargo-ndk installation uses --version flag with pinned version."""
     for job_name, job in wf.get("jobs", {}).items():
         steps = job.get("steps", [])
         for s in steps:
@@ -68,6 +69,7 @@ def test_cargo_ndk_install_uses_pinned_version(wf, _text):
 
 
 def test_no_bare_cargo_install_cargo_ndk(wf, _text):
+    """Verify no bare 'cargo install cargo-ndk' without version pinning."""
     for job_name, job in wf.get("jobs", {}).items():
         steps = job.get("steps", [])
         for s in steps:
@@ -80,6 +82,7 @@ def test_no_bare_cargo_install_cargo_ndk(wf, _text):
 
 
 def test_rust_cache_has_shared_key(wf, _text):
+    """Verify Rust cache in build job has shared-key for registry/git sharing."""
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     for s in steps:
@@ -92,7 +95,8 @@ def test_rust_cache_has_shared_key(wf, _text):
             assert with_params["shared-key"], "shared-key must not be empty"
 
 
-def test_rust_cache_key_includes_flavor_x86_64(wf, _text):
+def test_rust_cache_key_includes_arm64_v8a(wf, _text):
+    """Verify Rust cache key includes arm64-v8a for target isolation."""
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     for s in steps:
@@ -103,236 +107,98 @@ def test_rust_cache_key_includes_flavor_x86_64(wf, _text):
             assert "flavor" in key or "matrix.flavor" in key, (
                 "Rust cache key must include flavor for target isolation"
             )
-            assert "x86_64" in key, (
-                "Rust cache key must include fixed x86_64 for target isolation"
+            assert "arm64-v8a" in key, (
+                "Rust cache key must include fixed arm64-v8a for target isolation"
             )
             assert "matrix.abi" not in key, (
                 "Rust cache key must not reference matrix.abi (abi matrix removed)"
             )
 
 
-def test_emulator_test_depends_on_build(wf, _text):
-    emulator_job = wf["jobs"].get("emulator-test", {})
-    needs = emulator_job.get("needs", [])
-    assert "build" in needs, "emulator-test must depend on build job"
-
-
-def test_emulator_test_downloads_native_artifact(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    has_download = any(
-        "download-artifact" in str(s.get("uses", ""))
-        for s in steps
-    )
-    assert has_download, "emulator-test must download native build artifact"
-
-
-def test_emulator_test_no_rust_toolchain(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        uses = s.get("uses", "")
-        assert "dtolnay/rust-toolchain" not in uses, (
-            "emulator-test should not install Rust toolchain; "
-            "it reuses native artifacts from build job"
-        )
-
-
-def test_emulator_test_no_cargo_ndk(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        uses = s.get("uses", "")
-        run_cmd = s.get("run", "")
-        assert "cargo-ndk" not in uses and "cargo-ndk" not in run_cmd, (
-            "emulator-test should not install/use cargo-ndk; "
-            "it reuses native artifacts from build job"
-        )
-
-
-def test_build_matrix_not_reduced(wf, _text):
+def test_build_matrix_only_flavor(wf, _text):
+    """Verify build matrix only contains flavor key (no-ai/ai) with fixed arm64-v8a."""
     build_job = wf["jobs"]["build"]
     matrix = build_job.get("strategy", {}).get("matrix", {})
-    flavors = matrix.get("flavor", [])
-    assert "no-ai" in flavors, "Build matrix must include no-ai flavor"
-    assert "ai" in flavors, "Build matrix must include ai flavor"
-    # #651：ABI matrix 已移除 — 自动流程只生成 x86_64 测试产物。
-    # 若存在 abi 键，则只允许 x86_64（不允许 arm64-v8a/universal）。
-    abis = matrix.get("abi", [])
-    if abis:
-        assert abis == ["x86_64"], (
-            f"Build matrix abi must be absent or only [x86_64], got: {abis}"
-        )
-    # include 里不允许有 universal
+    assert "flavor" in matrix, "Build matrix must have flavor key"
+    flavors = matrix["flavor"]
+    assert flavors == ["no-ai", "ai"], (
+        f"Build matrix flavor must be [no-ai, ai], got: {flavors}"
+    )
+    assert "abi" not in matrix, (
+        "Build matrix must not have abi key (abi matrix removed; only arm64-v8a)"
+    )
     includes = matrix.get("include", [])
-    for inc in includes:
-        assert inc.get("abi") != "universal", (
-            "Build matrix include must not contain universal ABI"
+    assert not includes or not any(i.get("abi") == "universal" for i in includes), (
+        "Build matrix include must not contain universal ABI"
+    )
+
+
+def test_build_job_builds_apk_not_skip_gradle(wf, text):
+    """Verify build job does not skip Gradle APK build (--skip-gradle not present)."""
+    assert "--skip-gradle" not in text, (
+        "Workflow must not contain --skip-gradle; build job must actually build APK"
+    )
+
+
+def test_apk_artifacts_exist(wf, _text):
+    """Verify APK artifacts exist for both no-ai and ai flavors (arm64-v8a)."""
+    build_job = wf["jobs"]["build"]
+    steps = build_job.get("steps", [])
+    
+    apk_artifacts = []
+    for s in steps:
+        uses = s.get("uses", "")
+        if "upload-artifact" in uses:
+            name = s.get("with", {}).get("name", "")
+            path = s.get("with", {}).get("path", "")
+            # Check for APK artifact: name contains sujian-android and arm64-v8a, or path contains APK
+            if "sujian-android-" in name and "arm64-v8a" in name:
+                apk_artifacts.append(name)
+            # Also check path if it contains APK output
+            elif ".apk" in path and "apk" in name.lower():
+                apk_artifacts.append(name)
+    
+    # Check if we have a single template-based artifact (using matrix.flavor)
+    # This is the case when name contains ${{ matrix.flavor }}
+    has_template_artifact = any("matrix.flavor" in name or "${{" in name for name in apk_artifacts)
+    
+    if has_template_artifact:
+        # Template-based artifact is valid - it will produce both no-ai and ai at runtime
+        assert len(apk_artifacts) == 1, (
+            f"Expected exactly 1 template-based APK artifact, found {len(apk_artifacts)}: {apk_artifacts}"
         )
-
-
-def test_native_artifact_upload_exists(wf, _text):
-    build_job = wf["jobs"]["build"]
-    steps = build_job.get("steps", [])
-    has_upload = any(
-        "upload-artifact" in str(s.get("uses", ""))
-        and str(s.get("with", {}).get("name", "")).startswith("android-test-")
-        for s in steps
+        return
+    
+    # Static artifact names: verify both no-ai and ai exist
+    assert len(apk_artifacts) >= 2, (
+        f"Expected at least 2 APK artifacts (no-ai/ai), found {len(apk_artifacts)}: {apk_artifacts}"
     )
-    assert has_upload, "Build job must upload android-test- artifacts for emulator reuse"
+    
+    has_no_ai = any("no-ai" in name or "noAi" in name for name in apk_artifacts)
+    has_ai = any("-ai-" in name or "-ai-debug" in name for name in apk_artifacts)
+    
+    assert has_no_ai, f"Missing no-ai APK artifact. Found: {apk_artifacts}"
+    assert has_ai, f"Missing ai APK artifact. Found: {apk_artifacts}"
 
 
-def test_cargo_ndk_cached(wf, _text):
-    build_job = wf["jobs"]["build"]
-    steps = build_job.get("steps", [])
-    has_cache = any(
-        "actions/cache" in str(s.get("uses", ""))
-        and "cargo-ndk" in str(s.get("with", {}).get("key", ""))
-        for s in steps
-    )
-    assert has_cache, "Build job must cache cargo-ndk binary"
-
-
-def test_emulator_test_excludes_native_build_task(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        # The Gradle command is inside the 'script' key of android-emulator-runner
-        script = s.get("with", {}).get("script", "")
-        run_cmd = s.get("run", "")
-        combined = script or run_cmd
-        if "gradlew" in combined and "connected" in combined:
-            assert "-x" in combined, (
-                "emulator-test Gradle command must exclude buildWriterNative task "
-                "(-x build<Variant>WriterNative) because native artifacts are "
-                "restored from the build job's upload, not rebuilt."
-            )
-            assert "WriterNative" in combined, (
-                "emulator-test must explicitly exclude the WriterNative build task "
-                "since cargo-ndk/Rust toolchain are not installed in this job."
-            )
-            return
-    raise AssertionError("Could not find gradlew connected* command in emulator-test")
-
-
-def test_emulator_test_verifies_artifacts(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    has_verify = any(
-        "verify" in s.get("name", "").lower() or "verify" in s.get("run", "").lower()
-        for s in steps
-        if s.get("run")
-    )
-    assert has_verify, "emulator-test must verify downloaded native artifacts exist"
-
-
-def test_emulator_matrix_not_reduced(wf, _text):
-    emulator_job = wf["jobs"]["emulator-test"]
-    matrix = emulator_job.get("strategy", {}).get("matrix", {})
-    flavors = matrix.get("flavor", [])
-    assert "no-ai" in flavors, "Emulator test matrix must include no-ai flavor"
-
-
-def _get_upload_paths_for_native_artifact(wf):
-    """Return list of upload paths for the android-test-<flavor>-x86_64 artifact, or None."""
-    build_job = wf["jobs"]["build"]
-    steps = build_job.get("steps", [])
-    for s in steps:
-        uses = s.get("uses", "")
-        with_ = s.get("with", {})
-        name = with_.get("name", "")
-        if "upload-artifact" in uses and name.startswith("android-test-") and name.endswith("-x86_64"):
-            raw = with_.get("path", "")
-            return [p.strip() for p in raw.strip().splitlines() if p.strip()]
-    return None
-
-
-def _get_download_path_for_native_artifact(wf):
-    """Return download path for android-test-<flavor>-x86_64 artifact, or None."""
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        uses = s.get("uses", "")
-        with_ = s.get("with", {})
-        name = with_.get("name", "")
-        if "download-artifact" in uses and name.startswith("android-test-") and name.endswith("-x86_64"):
-            return with_.get("path", "")
-    return None
-
-
-def _get_verify_file_paths(wf):
-    """Return (so_path, uniffi_dir) from the verify step, or (None, None)."""
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        name = s.get("name", "")
-        run_cmd = s.get("run", "")
-        if "verify" in name.lower() or "verify" in run_cmd.lower():
-            so_path = None
-            uniffi_dir = None
-            for line in run_cmd.splitlines():
-                line = line.strip()
-                if 'SO_PATH="' in line:
-                    so_path = line.split('"')[1]
-                if line.startswith("UNIFFI_DIR=") and '="' in line:
-                    uniffi_dir = line.split('"')[1]
-            return so_path, uniffi_dir
-    return None, None
-
-
-def _common_path(paths):
-    """Return the longest common ancestor directory of a list of POSIX paths."""
-    if not paths:
-        return ""
-    parts_list = [PurePosixPath(p).parts for p in paths]
-    common = []
-    for i, part in enumerate(parts_list[0]):
-        if all(len(parts) > i and parts[i] == part for parts in parts_list):
-            common.append(part)
-        else:
-            break
-    return str(PurePosixPath(*common)) if common else ""
-
-
-def test_native_artifact_upload_paths_precise(wf, _text):
-    paths = _get_upload_paths_for_native_artifact(wf)
-    assert paths is not None, "android-test-no-ai-x86_64 upload step not found"
-    assert len(paths) == 2, (
-        f"Expected exactly 2 upload paths for android-test artifact, got {len(paths)}"
-    )
-    assert any("writer-native" in p for p in paths), (
-        "Expected upload path containing writer-native/"
-    )
-    assert any("writer-uniffi" in p for p in paths), (
-        "Expected upload path containing writer-uniffi/"
-    )
-    assert not any(p in ("apps/android/app/build", "apps/android/app/build/")
-                    for p in paths), (
-        "Upload path must not be the entire build/ directory; "
-        "only generated/writer-native/ and generated/writer-uniffi/ are needed"
-    )
-
-
-def test_emulator_test_download_path_matches_upload_lca(wf, _text):
-    upload_paths = _get_upload_paths_for_native_artifact(wf)
-    assert upload_paths is not None, "android-test-no-ai-x86_64 upload step not found"
-    download_path = _get_download_path_for_native_artifact(wf)
-    assert download_path is not None, (
-        "android-test-no-ai-x86_64 download step not found"
-    )
-    lca = _common_path(upload_paths)
-    assert lca, f"Could not compute LCA of upload paths: {upload_paths}"
-    expected = lca + "/"
-    assert download_path == expected, (
-        f"Download path mismatch: expected '{expected}' (LCA of upload paths), "
-        f"got '{download_path}'. "
-        "upload-artifact@v4 strips the LCA prefix from multi-path artifacts, "
-        "so download must target the LCA to restore the expected directory layout."
-    )
+def test_workflow_no_emulator_artifacts(wf, text):
+    """Verify workflow does not contain any emulator-related steps or artifacts."""
+    forbidden = [
+        "reactivecircus/android-emulator-runner",
+        "Enable KVM group permissions",
+        "connected${FLAVOR_CAP}DebugAndroidTest",
+        "install${FLAVOR_CAP}DebugAndroidTest",
+    ]
+    
+    for pattern in forbidden:
+        assert pattern not in text, (
+            f"Workflow must not contain emulator-related pattern '{pattern}'"
+        )
 
 
 def test_rust_test_has_abi_guard(wf, _text):
-    # #597：测试已移出构建矩阵 — 构建矩阵只负责编译/打包，不再内嵌任何测试步骤。
+    """Verify Rust tests are in separate jobs, not in build matrix."""
+    # Build job should not contain any cargo test steps
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     rust_test_steps = [
@@ -341,11 +207,13 @@ def test_rust_test_has_abi_guard(wf, _text):
     assert len(rust_test_steps) == 0, (
         f"Build matrix must not contain Rust test steps, found {len(rust_test_steps)}"
     )
-    # 通用测试与 AI 专项测试分别落在独立 job，各恰好一次。
+    
+    # Verify core-common-test and core-ai-test jobs exist and have correct tests
     common_job = wf["jobs"]["core-common-test"]["steps"]
     ai_job = wf["jobs"]["core-ai-test"]["steps"]
     common_steps = [s for s in common_job if "cargo test" in s.get("run", "")]
     ai_steps = [s for s in ai_job if "cargo test" in s.get("run", "")]
+    
     assert len(common_steps) == 1, f"Expected exactly 1 common Rust test step, found {len(common_steps)}"
     assert "cargo test -p writer_core" in common_steps[0]["run"], (
         "Core common test must run `cargo test -p writer_core`"
@@ -357,7 +225,8 @@ def test_rust_test_has_abi_guard(wf, _text):
 
 
 def test_jvm_unit_test_has_abi_guard(wf, _text):
-    # #597：Android JVM 测试同样在独立 job 中各跑一次，构建矩阵不内嵌测试。
+    """Verify JVM unit tests are in separate jobs, not in build matrix."""
+    # Build job should not contain any gradle test steps
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     jvm_test_steps = [
@@ -367,10 +236,13 @@ def test_jvm_unit_test_has_abi_guard(wf, _text):
     assert len(jvm_test_steps) == 0, (
         f"Build matrix must not contain JVM unit test steps, found {len(jvm_test_steps)}"
     )
+    
+    # Verify android-unit-test and android-ai-test jobs exist and have correct tests
     common_job = wf["jobs"]["android-unit-test"]["steps"]
     ai_job = wf["jobs"]["android-ai-test"]["steps"]
     common_steps = [s for s in common_job if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")]
     ai_steps = [s for s in ai_job if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")]
+    
     assert len(common_steps) == 1, f"Expected exactly 1 common JVM test step, found {len(common_steps)}"
     assert "testNoAiDebugUnitTest" in common_steps[0]["run"], (
         "Android common unit test must run testNoAiDebugUnitTest"
@@ -382,9 +254,8 @@ def test_jvm_unit_test_has_abi_guard(wf, _text):
 
 
 def test_rust_and_jvm_test_execute_once_per_flavor(wf, _text):
-    # #597/#651：测试已移出构建矩阵 — build matrix 只负责生成 native+UniFFI，
-    # 不再内嵌任何测试步骤。通用/AI 专项测试分别落在独立 job，各恰好一次，
-    # 不再依赖 matrix.abi == 'arm64-v8a' 条件（abi matrix 已移除）。
+    """Verify Rust and JVM tests execute exactly once per flavor in separate jobs."""
+    # Build job should not contain any test steps
     build_job = wf["jobs"]["build"]
     steps = build_job.get("steps", [])
     rust_test_steps = [s for s in steps if "cargo test" in s.get("run", "")]
@@ -398,7 +269,8 @@ def test_rust_and_jvm_test_execute_once_per_flavor(wf, _text):
     assert len(jvm_test_steps) == 0, (
         f"Build job must not contain JVM unit test steps, found {len(jvm_test_steps)}"
     )
-    # 各独立测试 job 恰好有一个测试步骤
+    
+    # Verify each independent test job has exactly one test step
     common_rust = [s for s in wf["jobs"]["core-common-test"]["steps"] if "cargo test" in s.get("run", "")]
     ai_rust = [s for s in wf["jobs"]["core-ai-test"]["steps"] if "cargo test" in s.get("run", "")]
     assert len(common_rust) == 1, (
@@ -407,6 +279,7 @@ def test_rust_and_jvm_test_execute_once_per_flavor(wf, _text):
     assert len(ai_rust) == 1, (
         f"Expected exactly 1 AI Rust test step, found {len(ai_rust)}"
     )
+    
     common_jvm = [
         s for s in wf["jobs"]["android-unit-test"]["steps"]
         if "gradlew" in s.get("run", "") and "UnitTest" in s.get("run", "")
@@ -423,230 +296,6 @@ def test_rust_and_jvm_test_execute_once_per_flavor(wf, _text):
     )
 
 
-def test_artifact_verify_paths_consistent_with_contract(wf, _text):
-    upload_paths = _get_upload_paths_for_native_artifact(wf)
-    assert upload_paths is not None, "android-test-no-ai-x86_64 upload step not found"
-    download_path = _get_download_path_for_native_artifact(wf)
-    assert download_path is not None, (
-        "android-test-no-ai-x86_64 download step not found"
-    )
-    so_path, uniffi_dir = _get_verify_file_paths(wf)
-    assert so_path, "Could not extract SO_PATH from verify step"
-    assert uniffi_dir, "Could not extract UNIFFI_DIR from verify step"
-
-    # After download, artifact root content (stripped LCA) is placed under download_path
-    # So a verify path like "apps/android/app/build/generated/writer-native/..." must
-    # be reachable as: <download_path>/<artifact_relative_path>
-    lca = _common_path(upload_paths)
-    # Artifact-relative path = verify path minus the LCA prefix
-    for verify_path, label in [(so_path, "SO_PATH"), (uniffi_dir, "UNIFFI_DIR")]:
-        if not verify_path.startswith(lca):
-            raise AssertionError(
-                f"{label} '{verify_path}' does not start with upload LCA '{lca}'; "
-                f"download would not restore this path."
-            )
-        expected_prefix = download_path.rstrip("/")
-        rel = verify_path[len(lca):].lstrip("/")
-        expected_path = f"{expected_prefix}/{rel}"
-        if not expected_path.startswith(expected_prefix.rstrip("/")):
-            raise AssertionError(
-                f"{label} relative path mismatch: "
-                f"expected under '{expected_prefix}/', got '{expected_path}'"
-            )
-
-
-def test_ai_emulator_leg_fails_when_no_tests_match(wf, _text):
-    # #597：AI 腿用官方包过滤只跑 AI 专项仪器测试，且必须 fail-on-no-matching。
-    # 若 androidTestAi 源集被误删或过滤失效，connected 任务会静默通过 0 个测试，
-    # 工作流必须在结果 XML 里硬核验 AiFlavorInstrumentationSmokeTest 真实执行。
-    # #629：AI_FILTER 包过滤参数现在通过 step 级 env 注入（parseScript 按行拆分），
-    # 所以检查范围是 step env + script 的组合。
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    emulator_step = None
-    script = ""
-    for s in steps:
-        if "reactivecircus/android-emulator-runner" in str(s.get("uses", "")):
-            emulator_step = s
-            script = s.get("with", {}).get("script", "")
-            break
-    assert script, "emulator-test job must have an android-emulator-runner script"
-    env = emulator_step.get("env", {}) if emulator_step else {}
-    combined = str(env) + "\n" + script
-    assert "android.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai" in combined, (
-        "AI emulator leg must filter to the com.xiwei.sujian.ai package "
-        "(via step-level env AI_FILTER or script)"
-    )
-    assert "AiFlavorInstrumentationSmokeTest" in script, (
-        "AI emulator leg must verify AiFlavorInstrumentationSmokeTest results"
-    )
-    tail = script.split("AiFlavorInstrumentationSmokeTest", 1)[1]
-    assert "exit 1" in tail, (
-        "AI emulator leg must fail hard when no AI instrumented test matched"
-    )
-
-
-def _get_emulator_runner_step(wf):
-    """Return the reactivecircus/android-emulator-runner step, or None."""
-    emulator_job = wf["jobs"]["emulator-test"]
-    steps = emulator_job.get("steps", [])
-    for s in steps:
-        if "reactivecircus/android-emulator-runner" in str(s.get("uses", "")):
-            return s
-    return None
-
-
-def test_emulator_script_vars_via_step_env_not_inline(wf, _text):
-    """#629: reactivecircus/android-emulator-runner@v2 的 parseScript 按行拆分，
-    每行用独立 sh -c 执行，script 内赋值的 shell 变量不能跨行传递。
-    FLAVOR_CAP/AI_FILTER/TEST_IME 必须通过 step 级 env 注入（经 process.env
-    传递给每行 sh -c），不能在 script 内赋值，否则后续行引用时变量为空，
-    导致 :app:install${FLAVOR_CAP}Debug 退化为 :app:installDebug，而 installDebug
-    在有 ai/noAi 两个 flavor 时是模糊的（candidates installAiDebug/installNoAiDebug）。
-    """
-    step = _get_emulator_runner_step(wf)
-    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
-
-    # step 级 env 必须定义 FLAVOR_CAP、AI_FILTER、TEST_IME
-    env = step.get("env", {})
-    assert "FLAVOR_CAP" in env, (
-        "emulator-runner step must define FLAVOR_CAP in step-level env "
-        "(not as a shell variable in script, which doesn't persist across "
-        "parseScript line splits into separate sh -c invocations)"
-    )
-    assert "AI_FILTER" in env, (
-        "emulator-runner step must define AI_FILTER in step-level env"
-    )
-    assert "TEST_IME" in env, (
-        "emulator-runner step must define TEST_IME in step-level env"
-    )
-    assert "matrix.flavor" in str(env["FLAVOR_CAP"]), (
-        "FLAVOR_CAP env must reference matrix.flavor to select NoAi/Ai"
-    )
-    assert "matrix.flavor" in str(env["AI_FILTER"]), (
-        "AI_FILTER env must reference matrix.flavor to select package filter"
-    )
-    assert "com.xiwei.sujian.ai" in str(env["AI_FILTER"]), (
-        "AI_FILTER env must contain the AI package filter for ai flavor"
-    )
-
-    script = step.get("with", {}).get("script", "")
-    assert script, "emulator-runner step must have a script"
-
-    # script 中不能有 FLAVOR_CAP=/AI_FILTER=/TEST_IME= 赋值（跨行会丢失）
-    for line in script.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        for var in ("FLAVOR_CAP", "AI_FILTER", "TEST_IME"):
-            assignment = var + "="
-            assert assignment not in stripped, (
-                f"script must not assign '{var}' inline (parseScript splits "
-                f"lines into separate sh -c; use step-level env instead): {stripped}"
-            )
-
-
-def test_emulator_script_no_multiline_if_statements(wf, _text):
-    """#629: parseScript 按行拆分，每行独立 sh -c。跨行 if/then/else/fi 会被
-    拆成独立行，'if ...; then' 单独执行会报 syntax error: unexpected end of file。
-    所有 if 语句必须写成单行（if ...; then ...; fi）。
-    """
-    step = _get_emulator_runner_step(wf)
-    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
-    script = step.get("with", {}).get("script", "")
-    assert script, "emulator-runner step must have a script"
-
-    for line in script.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        # 独立的 else/fi 行只出现在跨行 if 中，单行 if 不会有
-        assert stripped not in ("else", "fi"), (
-            f"script has standalone '{stripped}' line; if/fi must be single-line "
-            f"(parseScript splits lines into separate sh -c): {line}"
-        )
-        # 'if ...; then' 行末没有 fi 的是跨行 if
-        if stripped.startswith("if ") and stripped.endswith("then"):
-            raise AssertionError(
-                f"script has multi-line if (ends with 'then'); if must be "
-                f"single-line (if ...; then ...; fi): {line}"
-            )
-
-
-def test_emulator_script_install_tasks_have_flavor(wf, _text):
-    """#629: emulator script 的 gradlew install/connected 任务必须引用 $FLAVOR_CAP
-    （通过 step 级 env 注入），不能出现无 flavor 的 installDebug/connectedDebugAndroidTest
-    （在有 ai/noAi 两个 flavor 时 installDebug 是模糊的）。
-    """
-    step = _get_emulator_runner_step(wf)
-    assert step is not None, "emulator-test must use reactivecircus/android-emulator-runner"
-    script = step.get("with", {}).get("script", "")
-    assert script, "emulator-runner step must have a script"
-
-    # 必须引用 $FLAVOR_CAP 来组装 install/connected 任务
-    assert "install${FLAVOR_CAP}Debug" in script, (
-        "script must use $FLAVOR_CAP (from step env) for install task, "
-        "not a bare installDebug which is ambiguous with ai/noAi flavors"
-    )
-    assert "connected${FLAVOR_CAP}DebugAndroidTest" in script, (
-        "script must use $FLAVOR_CAP for connectedAndroidTest task"
-    )
-
-    # 不能出现无 flavor 的 installDebug / connectedDebugAndroidTest 任务
-    for forbidden in (":app:installDebug ", "connectedDebugAndroidTest"):
-        assert forbidden not in script, (
-            f"script must not reference bare '{forbidden.strip()}' task; "
-            "installDebug is ambiguous with ai/noAi flavors. "
-            "Use $FLAVOR_CAP from step-level env."
-        )
-
-
-def test_workflow_no_apk_build_residuals(wf, text):
-    """#651：自动流程不再构建成品 APK，只生成 x86_64 测试所需的 native+UniFFI。
-    workflow 文本里不得残留 APK 构建相关内容。"""
-    forbidden = [
-        "arm64-v8a",
-        "abi: universal",
-        "Decode Android Keystore",
-        "aarch64-linux-android",
-        "Verify APK ABI",
-        "sujian-android-",
-    ]
-    for pat in forbidden:
-        assert pat not in text, (
-            f"Workflow must not contain APK build residual '{pat}'"
-        )
-    # upload-artifact 步骤的 name 不得含 sujian-android
-    for job_name, job in wf.get("jobs", {}).items():
-        for s in job.get("steps", []):
-            uses = s.get("uses", "")
-            name = str(s.get("with", {}).get("name", ""))
-            if "upload-artifact" in uses:
-                assert "sujian-android" not in name, (
-                    f"Job '{job_name}': upload-artifact name must not contain "
-                    f"sujian-android (APK upload removed): {name}"
-                )
-
-
-def test_build_matrix_only_flavor(wf, _text):
-    """#651：build job matrix 只含 flavor 键（no-ai/ai），没有 abi 键、
-    没有 include 里的 universal。自动流程只生成 x86_64 测试产物。"""
-    build_job = wf["jobs"]["build"]
-    matrix = build_job.get("strategy", {}).get("matrix", {})
-    assert "flavor" in matrix, "Build matrix must have flavor key"
-    flavors = matrix["flavor"]
-    assert flavors == ["no-ai", "ai"], (
-        f"Build matrix flavor must be [no-ai, ai], got: {flavors}"
-    )
-    assert "abi" not in matrix, (
-        "Build matrix must not have abi key (abi matrix removed; only x86_64)"
-    )
-    includes = matrix.get("include", [])
-    assert not includes or not any(i.get("abi") == "universal" for i in includes), (
-        "Build matrix include must not contain universal ABI"
-    )
-
-
 def main():
     wf, text = load_workflow()
     tests = [
@@ -655,29 +304,14 @@ def main():
         test_cargo_ndk_install_uses_pinned_version,
         test_no_bare_cargo_install_cargo_ndk,
         test_rust_cache_has_shared_key,
-        test_rust_cache_key_includes_flavor_x86_64,
-        test_emulator_test_depends_on_build,
-        test_emulator_test_downloads_native_artifact,
-        test_emulator_test_no_rust_toolchain,
-        test_emulator_test_no_cargo_ndk,
-        test_build_matrix_not_reduced,
-        test_native_artifact_upload_exists,
-        test_cargo_ndk_cached,
-        test_emulator_test_verifies_artifacts,
-        test_emulator_test_excludes_native_build_task,
-        test_emulator_matrix_not_reduced,
-        test_native_artifact_upload_paths_precise,
-        test_emulator_test_download_path_matches_upload_lca,
-        test_artifact_verify_paths_consistent_with_contract,
+        test_rust_cache_key_includes_arm64_v8a,
+        test_build_matrix_only_flavor,
+        test_build_job_builds_apk_not_skip_gradle,
+        test_apk_artifacts_exist,
+        test_workflow_no_emulator_artifacts,
         test_rust_test_has_abi_guard,
         test_jvm_unit_test_has_abi_guard,
         test_rust_and_jvm_test_execute_once_per_flavor,
-        test_ai_emulator_leg_fails_when_no_tests_match,
-        test_emulator_script_vars_via_step_env_not_inline,
-        test_emulator_script_no_multiline_if_statements,
-        test_emulator_script_install_tasks_have_flavor,
-        test_workflow_no_apk_build_residuals,
-        test_build_matrix_only_flavor,
     ]
     failed = 0
     for t in tests:

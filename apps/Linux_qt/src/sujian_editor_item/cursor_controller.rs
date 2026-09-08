@@ -135,10 +135,7 @@ impl CursorController {
                 self.visual_y = plan.cursor_y;
                 self.animation = None;
             }
-            CursorTransition::Tween {
-                old_rect,
-                new_rect,
-            } => {
+            CursorTransition::Tween { old_rect, new_rect } => {
                 let start_x = old_rect.x;
                 let start_y = old_rect.top;
                 let target_x = new_rect.x;

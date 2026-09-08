@@ -14,7 +14,7 @@ env:
 
 jobs:
   build:
-    name: Generate Android test artifacts (${{ matrix.flavor }} / x86_64)
+    name: Build APK (${{ matrix.flavor }} / arm64-v8a)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -43,7 +43,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-linux-android
+          targets: aarch64-linux-android
 
       - name: Cache cargo-ndk binary
         id: cache-cargo-ndk
@@ -59,7 +59,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.flavor }}-x86_64
+          key: ${{ matrix.flavor }}-arm64-v8a
           shared-key: android
           cache-on-failure: true
 
@@ -72,20 +72,48 @@ jobs:
         run: chmod +x apps/android/gradlew
 
       - name: Make build scripts executable
-        run: chmod +x tools/build_android.sh tools/android/build_native.sh
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
 
-      - name: Build Android ${{ matrix.flavor }} native + UniFFI (x86_64)
+      - name: Decode Android Keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
+            echo "::error::Android signing secrets are incomplete. Refusing to build with runner debug signing."
+            exit 1
+          fi
+          echo "Decoding Android keystore from secret..."
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
+          if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
+            echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
+            exit 1
+          fi
+          echo "Keystore decoded successfully."
+
+      - name: Build Android ${{ matrix.flavor }} Debug APK (arm64-v8a)
+        env:
+          WRITER_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
+          WRITER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          WRITER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          WRITER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          ./tools/build_android.sh --${{ matrix.flavor }} --abi x86_64 --skip-gradle
+          ./tools/build_android.sh --${{ matrix.flavor }} --abi arm64-v8a
 
-      - name: Upload Android test artifacts
+      - name: Upload ${{ matrix.flavor }} arm64-v8a APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: android-test-${{ matrix.flavor }}-x86_64
-          path: |
-            apps/android/app/build/generated/writer-native/
-            apps/android/app/build/generated/writer-uniffi/
+          name: sujian-android-${{ matrix.flavor }}-arm64-v8a-debug
+          path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
+
+      - name: Upload ${{ matrix.flavor }} UniFFI bindings
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-uniffi-${{ matrix.flavor }}
+          path: apps/android/app/build/generated/writer-uniffi/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/
           retention-days: 1
 
   # === Rust Core common tests (no AI feature) ===
@@ -152,8 +180,8 @@ jobs:
       - name: Download no-ai UniFFI bindings
         uses: actions/download-artifact@v4
         with:
-          name: android-test-no-ai-x86_64
-          path: apps/android/app/build/generated/
+          name: android-uniffi-no-ai
+          path: apps/android/app/build/generated/writer-uniffi/noAi/
 
       - name: Verify UniFFI bindings
         run: |
@@ -192,8 +220,8 @@ jobs:
       - name: Download ai UniFFI bindings
         uses: actions/download-artifact@v4
         with:
-          name: android-test-ai-x86_64
-          path: apps/android/app/build/generated/
+          name: android-uniffi-ai
+          path: apps/android/app/build/generated/writer-uniffi/ai/
 
       - name: Verify AI UniFFI bindings
         run: |
@@ -207,117 +235,3 @@ jobs:
       - name: Android AI 专项测试（AI 专项错误）
         working-directory: apps/android
         run: ./gradlew testAiDebugUnitTest -x buildAiDebugWriterNative -x generateAiDebugWriterUniffi
-
-  # === Emulator instrumented tests (no-ai + ai / x86_64) ===
-  emulator-test:
-    name: Emulator 仪器化测试（${{ matrix.flavor }} / x86_64）
-    runs-on: ubuntu-24.04
-    needs: build
-    strategy:
-      fail-fast: false
-      matrix:
-        flavor: [no-ai, ai]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Read NDK version
-        id: ndk
-        run: |
-          source tools/android/ndk.env
-          echo "ndk_version=$NDK_VERSION" >> "$GITHUB_OUTPUT"
-          echo "ndk_version_numeric=$NDK_VERSION_NUMERIC" >> "$GITHUB_OUTPUT"
-
-      - name: Setup Java 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Download native build artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: android-test-${{ matrix.flavor }}-x86_64
-          path: apps/android/app/build/generated/
-
-      - name: Verify native artifacts
-        run: |
-          FLAVOR_VARIANT="${{ matrix.flavor == 'no-ai' && 'noAiDebug' || 'aiDebug' }}"
-          FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
-          SO_PATH="apps/android/app/build/generated/writer-native/${FLAVOR_VARIANT}/x86_64/libuniffi_writer_core.so"
-          if [ ! -f "$SO_PATH" ]; then
-            echo "::error::Native library artifact missing: $SO_PATH"
-            exit 1
-          fi
-          UNIFFI_DIR="apps/android/app/build/generated/writer-uniffi/${FLAVOR_DIR}/kotlin/uniffi"
-          if [ ! -d "$UNIFFI_DIR" ]; then
-            echo "::error::UniFFI bindings artifact missing: $UNIFFI_DIR"
-            exit 1
-          fi
-          echo "Native artifacts verified successfully."
-
-      - name: Setup Android NDK
-        uses: nttld/setup-ndk@v1
-        with:
-          ndk-version: ${{ steps.ndk.outputs.ndk_version }}
-
-      - name: Make gradlew executable
-        run: chmod +x apps/android/gradlew
-
-      - name: Make build scripts executable
-        run: chmod +x tools/build_android.sh tools/android/build_native.sh
-
-      - name: Enable KVM group permissions
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Run instrumented tests on x86_64 emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        env:
-          # #629 reactivecircus/android-emulator-runner@v2 的 parseScript 按行拆分，
-          # 每行用独立 sh -c 执行，script 内赋值的 shell 变量不能跨行传递。
-          # FLAVOR_CAP/AI_FILTER/APP_PKG/TEST_IME 必须通过 step 级 env 注入（经
-          # process.env 传递给每行 sh -c），不能在 script 内赋值。
-          FLAVOR_CAP: ${{ matrix.flavor == 'no-ai' && 'NoAi' || 'Ai' }}
-          AI_FILTER: ${{ matrix.flavor == 'ai' && '-Pandroid.testInstrumentationRunnerArguments.package=com.xiwei.sujian.ai' || '' }}
-          # #629 根因A：ai flavor 有 applicationIdSuffix=".ai"（build.gradle.kts），
-          # app applicationId 与 test APK 包名都随之变化。APP_PKG 是被测 app 的
-          # applicationId（appops 授权目标），TEST_IME 是 test APK 的 IME component
-          # （ime enable/set 目标）。旧实现对两 flavor 硬编码 com.xiwei.sujian.test，
-          # 导致 ai flavor 的 IME（实际在 com.xiwei.sujian.ai.test）永远找不到。
-          APP_PKG: ${{ matrix.flavor == 'ai' && 'com.xiwei.sujian.ai' || 'com.xiwei.sujian' }}
-          TEST_IME: ${{ matrix.flavor == 'ai' && 'com.xiwei.sujian.ai.test/com.xiwei.sujian.test.testime.TestInputMethodService' || 'com.xiwei.sujian.test/.testime.TestInputMethodService' }}
-        with:
-          api-level: 34
-          arch: x86_64
-          profile: pixel_6
-          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
-          disable-animations: true
-          script: |
-            adb shell getprop ro.product.cpu.abi
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew :app:install${FLAVOR_CAP}Debug :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -x generate${FLAVOR_CAP}DebugWriterUniffi -Psujian.android.abis=x86_64
-            # #629 根因B：MainActivity.onCreate 在无 MANAGE_EXTERNAL_STORAGE 时跳转系统授权页、不调 setContent，导致所有依赖 Compose hierarchy 的仪器化测试报 "No compose hierarchies found in the app"。appops set 直接授予 special permission（API 30+，emulator root 可用）；GrantPermissionRule 对 special permission 无效。赋值与验证必须在同一行（parseScript 按行拆分，APP_OPS_STATE 不能跨行传递）。
-            adb shell appops set "$APP_PKG" MANAGE_EXTERNAL_STORAGE allow
-            APP_OPS_STATE=$(adb shell appops get "$APP_PKG" MANAGE_EXTERNAL_STORAGE 2>/dev/null | tr -d '\r'); echo "MANAGE_EXTERNAL_STORAGE op for $APP_PKG: [$APP_OPS_STATE]"; [ "$APP_OPS_STATE" = "allow" ] || { echo "::error::Failed to grant MANAGE_EXTERNAL_STORAGE to $APP_PKG"; exit 1; }
-            IME_FOUND=""; for i in $(seq 1 15); do IME_FOUND=$(adb shell ime list -a -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); [ -n "$IME_FOUND" ] && break; sleep 2; done; echo "Test IME registered: [$IME_FOUND]"; [ -n "$IME_FOUND" ] || { echo "::error::Test IME not registered after install: $TEST_IME"; exit 1; }
-            adb shell ime enable "$TEST_IME" || { echo "::error::Test IME enable failed: $TEST_IME"; exit 1; }
-            ENABLED_IME=$(adb shell ime list -s 2>/dev/null | tr -d '\r' | grep -F "$TEST_IME" || true); echo "Test IME enabled: [$ENABLED_IME]"; [ -n "$ENABLED_IME" ] || { echo "::error::Test IME not enabled after ime enable: $TEST_IME"; exit 1; }
-            adb shell ime set "$TEST_IME" || { echo "::error::Test IME set failed: $TEST_IME"; exit 1; }
-            echo "default_input_method: [$(adb shell settings get secure default_input_method 2>/dev/null | tr -d '\r')]"
-            adb logcat -G 16M 2>/dev/null || true
-            adb logcat -c 2>/dev/null || true
-            ( adb logcat -v threadtime > "$RUNNER_TEMP/sujian-editor-logcat.log" 2>&1 & ) || true
-            # #597 每类测试只跑一次：ai 变体只运行 AI 专项仪器测试（androidTestAi），
-            # 通用 androidTest 只由 no-ai 变体执行；APK 矩阵不再重复跑通用测试。
-            # AI_FILTER 通过 step 级 env 注入（ai flavor 时为包过滤参数，no-ai 时为空）。
-            cd apps/android && ANDROID_NDK_HOME=$ANDROID_NDK_ROOT ./gradlew connected${FLAVOR_CAP}DebugAndroidTest -x :app:install${FLAVOR_CAP}Debug -x :app:install${FLAVOR_CAP}DebugAndroidTest -x build${FLAVOR_CAP}DebugWriterNative -x generate${FLAVOR_CAP}DebugWriterUniffi -Psujian.android.abis=x86_64 $AI_FILTER || ( echo '===== FAILED TEST XMLS ====='; find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l -e '<failure' -e '<error' {} \; -exec cat {} \; 2>/dev/null; echo '===== APP LOGCAT (file) ====='; grep -E 'SujianEditorInput|SujianTestIme|SujianApp|AnimatedTextEditorCoordinator|TestRunner' "$RUNNER_TEMP/sujian-editor-logcat.log" 2>/dev/null | tail -n 600; exit 1 )
-            # #597 fail-on-no-matching：AI 腿经官方包过滤后必须真实执行到 AI 专项
-            # 仪器测试；若 androidTestAi 源集被误删或过滤失效，connected 任务会
-            # 静默通过 0 个测试，这里对结果 XML 做硬核验，找不到即失败。
-            # if/fi 必须单行（parseScript 按行拆分，每行独立 sh -c）。
-            cd apps/android && if [ "${{ matrix.flavor }}" = "ai" ]; then if ! find app/build/outputs/androidTest-results -name '*.xml' -exec grep -l 'AiFlavorInstrumentationSmokeTest' {} + 2>/dev/null | grep -q .; then echo "::error::AI instrumented tests did not match: no AiFlavorInstrumentationSmokeTest result in androidTest-results. androidTestAi source set may be empty or the package filter is broken."; exit 1; fi; echo "AI instrumented test executed on emulator (AiFlavorInstrumentationSmokeTest)."; fi

@@ -403,7 +403,7 @@ impl WriterCoreApi {
         if let Err(e) = self.create_restore_tree_with_staging_api(&staging_api, input) {
             // 失败时直接删除 staging 目录，不走正常 delete_project()
             let _ = fs::remove_dir_all(&staging_root);
-            return Err(self.rollback_restore_with_staging(input, e, &staging_root));
+            return Err(self.rollback_restore_with_staging(e, &staging_root));
         }
 
         // 5. 所有校验完成，原子 rename staging/<projectId> → 最终位置
@@ -761,14 +761,12 @@ impl WriterCoreApi {
     /// 返回原始错误，让调用方返回给 FFI 调用方。
     fn rollback_restore_with_staging(
         &self,
-        input: &RestoreProjectInputDto,
         err: crate::error::Error,
         staging_root: &std::path::Path,
     ) -> WriterError {
         use std::fs;
         log::warn!(
-            "restore_project_tree: rolling back staging for project {} due to an error; details propagated to caller",
-            input.project_id,
+            "restore_project_tree: rolling back staging due to an error; details propagated to caller",
         );
         // 直接删除 staging 目录，不走正常 delete_project()（避免走 history/tombstone）
         if let Err(del_err) = fs::remove_dir_all(staging_root) {
