@@ -84,30 +84,17 @@ class ReadableMirrorStateMigration(
             DiagnosticsLogger.w(TAG, "State migration: NeedsMigration but manifestUri is null")
             return Result.FAILURE
         }
-        // manifest 在镜像中的相对路径固定为 _meta/manifest.json
-        val manifestRelativePath = "$META_DIR/$MANIFEST_FILE_NAME"
-        val lookupResult = storage.lookup(manifestRelativePath)
-        val manifestRef =
-            when (lookupResult) {
-                is MirrorLookupResult.Found -> lookupResult.ref
-                is MirrorLookupResult.Missing -> {
-                    DiagnosticsLogger.w(
-                        TAG,
-                        "State migration: manifest file missing at $manifestRelativePath (uri=$manifestUri)",
-                    )
-                    return Result.FAILURE
-                }
-                is MirrorLookupResult.Failed -> {
-                    DiagnosticsLogger.w(
-                        TAG,
-                        "State migration: manifest lookup failed: ${lookupResult.cause?.message}",
-                    )
-                    return Result.FAILURE
-                }
-            }
+        // #649 评论 5577831998 问题 2：迁移器现在用 stateStore.getManifestUri() 返回的精确旧 URI，
+        // 不再按路径猜当前文件。SAF 允许出现同名文档，这里尤其不能猜。
+        // 旧 URI 失效就停止迁移，不要按同路径找到另一份文件后自动认成旧 committed manifest。
+        val oldManifestRef =
+            MirrorFileRef(
+                uri = manifestUri,
+                relativePath = "_meta/manifest.json",
+            )
         val (manifestJson, computedHash) =
-            storage.readTextAndHash(manifestRef) ?: run {
-                DiagnosticsLogger.w(TAG, "State migration: readTextAndHash failed for manifest")
+            storage.readTextAndHash(oldManifestRef) ?: run {
+                DiagnosticsLogger.w(TAG, "State migration: readTextAndHash failed for manifest at uri=$manifestUri")
                 return Result.FAILURE
             }
         // 严格解析 manifest
@@ -133,51 +120,129 @@ class ReadableMirrorStateMigration(
     }
 
     /**
-     * 校验 manifest 中每个 chapter 的 relativePath/contentHash 与 stateStore 的 private entries 对上。
+     * 校验 manifest 与 stateStore 的 private entries 完全相等。
      *
-     * 防止 manifest 与 state 不一致时把错误的 baseline 写入 committed。
-     * - manifest 中每个 chapter 必须在 stateStore 对应 project 的 entries 中存在
-     * - manifest chapter.contentFile == entry.relativePath
-     * - manifest chapter.contentHash == entry.contentHash
+     * #649 评论 5577831998 问题 2：旧实现只检查 manifest ⊆ state（允许 state 有额外 entries），
+     * 但迁移是在 ensurePendingRecovered 之后触发的，没有合法的"事务中间状态"需要容忍。
+     * 旧 private state 如果记录 A、B 两个已发布作品，而公共 manifest 只剩 A，
+     * 现在迁移会把 A-only manifest 接纳为 committed baseline，后续编辑 B 时不会回到 manifest。
+     * 零章节作品没有 chapter entry，旧校验对它完全是空的，根本没有检查 publishedProjectIds 是否对齐。
      *
-     * 注意：允许 stateStore 有 manifest 中没有的 entries（可能是迁移中间状态），
-     * 但不允许 manifest 有 stateStore 中没有的 chapter（manifest 引用了不存在的 state）。
+     * 新实现改成完全相等校验：
+     * - manifestProjectIds == stateProjectIds
+     * - manifestEntries.keys == stateEntries.keys
+     * - 每个 entry 的 relativePath / contentHash / revision 都相等
+     *
+     * @return true 表示 manifest 与 state 完全一致，可以作为 committed baseline
      */
     private fun verifyManifestAgainstState(manifest: MirrorManifest): Boolean {
-        for (project in manifest.projects) {
-            val stateEntries = stateStore.getProjectEntries(project.id)
-            for (volume in project.volumes) {
-                for (chapter in volume.chapters) {
-                    val key = ChapterKey(project.id, volume.id, chapter.id)
-                    val entry = stateEntries[key]
-                    if (entry == null) {
-                        DiagnosticsLogger.w(
-                            TAG,
-                            "State migration: manifest chapter $key not in state entries",
-                        )
-                        return false
-                    }
-                    if (chapter.contentFile != entry.relativePath) {
-                        DiagnosticsLogger.w(
-                            TAG,
-                            "State migration: contentFile mismatch for $key: " +
-                                "manifest=${chapter.contentFile}, state=${entry.relativePath}",
-                        )
-                        return false
-                    }
-                    if (chapter.contentHash != entry.contentHash) {
-                        DiagnosticsLogger.w(
-                            TAG,
-                            "State migration: contentHash mismatch for $key: " +
-                                "manifest=${chapter.contentHash}, state=${entry.contentHash}",
-                        )
-                        return false
-                    }
-                }
+        // 1. 检查 project IDs 完全相等
+        val manifestProjectIds = manifest.projects.map { it.id }.toSet()
+        val stateProjectIdsFromStore = stateStore.getAllProjectIds()
+        if (manifestProjectIds != stateProjectIdsFromStore) {
+            DiagnosticsLogger.w(
+                TAG,
+                "State migration: project IDs mismatch: manifest=${manifestProjectIds}, state=${stateProjectIdsFromStore}",
+            )
+            return false
+        }
+        // 2. 检查 chapter entries 完全相等（包括 revision）
+        val manifestEntries = flattenManifestEntries(manifest)
+        val stateResult = stateStore.getAllChapterEntriesStrict()
+        if (stateResult.isFailure) {
+            DiagnosticsLogger.w(
+                TAG,
+                "State migration: failed to read state entries: ${stateResult.exceptionOrNull()?.message}",
+            )
+            return false
+        }
+        val (stateProjectIds, stateEntries) = stateResult.getOrThrow()
+        // 把 stateProjectIds 也纳入校验（覆盖零章节作品）
+        val manifestProjectIdsFromEntries = manifestEntries.keys.map { it.projectId }.toSet()
+        if (manifestProjectIdsFromEntries != stateProjectIds) {
+            DiagnosticsLogger.w(
+                TAG,
+                "State migration: project IDs from entries mismatch: " +
+                    "manifest=$manifestProjectIdsFromEntries, state=$stateProjectIds",
+            )
+            return false
+        }
+        if (manifestEntries.keys != stateEntries.keys) {
+            val manifestKeys = manifestEntries.keys
+            val stateKeys = stateEntries.keys
+            val onlyInManifest = manifestKeys - stateKeys
+            val onlyInState = stateKeys - manifestKeys
+            DiagnosticsLogger.w(
+                TAG,
+                "State migration: chapter keys mismatch: onlyInManifest=$onlyInManifest, onlyInState=$onlyInState",
+            )
+            return false
+        }
+        for (key in manifestEntries.keys) {
+            val manifestEntry = manifestEntries.getValue(key)
+            val stateEntry = stateEntries.getValue(key)
+            if (manifestEntry.relativePath != stateEntry.relativePath) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "State migration: relativePath mismatch for $key: " +
+                        "manifest=${manifestEntry.relativePath}, state=${stateEntry.relativePath}",
+                )
+                return false
+            }
+            if (manifestEntry.contentHash != stateEntry.contentHash) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "State migration: contentHash mismatch for $key",
+                )
+                return false
+            }
+            if (manifestEntry.revision != stateEntry.revision) {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "State migration: revision mismatch for $key: " +
+                        "manifest=${manifestEntry.revision}, state=${stateEntry.revision}",
+                )
+                return false
             }
         }
         return true
     }
+
+    /**
+     * 把 manifest 的所有 chapter entries 拍平成 key -> entry 映射。
+     *
+     * 与 stateStore 的 [ReadableMirrorStateStore.getAllChapterEntriesStrict] 输出格式对齐，
+     * 方便做完全相等校验。
+     */
+    private fun flattenManifestEntries(manifest: MirrorManifest): Map<ChapterKey, ManifestChapterEntry> {
+        val result = mutableMapOf<ChapterKey, ManifestChapterEntry>()
+        for (project in manifest.projects) {
+            for (volume in project.volumes) {
+                for (chapter in volume.chapters) {
+                    val key = ChapterKey(project.id, volume.id, chapter.id)
+                    result[key] =
+                        ManifestChapterEntry(
+                            relativePath = chapter.contentFile,
+                            contentHash = chapter.contentHash,
+                            revision = chapter.revision,
+                        )
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * Manifest 中的 chapter 条目信息（用于与 state entries 比较）。
+     *
+     * 与 [ChapterMirrorEntry] 不同，这里不需要 uri（manifest 不记录 URI），
+     * 只比较 relativePath / contentHash / revision。
+     */
+    private data class ManifestChapterEntry(
+        val relativePath: String,
+        val contentHash: String,
+        val revision: Long,
+    )
 
     companion object {
         private const val TAG = "ReadableMirrorStateMigration"

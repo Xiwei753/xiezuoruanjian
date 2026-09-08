@@ -403,6 +403,97 @@ class ReadableMirrorStateStore(
         }
     }
 
+    /**
+     * 严格读取全量 published IDs + chapter entries 的 snapshot。
+     *
+     * #649 评论 5577831998 问题 2：迁移需要一个严格读取全量 published IDs + chapter entries 的 snapshot 接口，
+     * 不要继续用会在损坏时返回 `emptyMap()` 的宽松 getter 做迁移判断。
+     * 本方法在 state.json 损坏时返回 Result.failure，让调用方区分"不存在/损坏"与"确实没有条目"。
+     *
+     * @return Result.success 包含完整 published ID 集合和 chapter entries 映射；
+     *   Result.failure 包含读取失败或损坏的异常
+     */
+    fun getAllChapterEntriesStrict(): Result<Pair<Set<String>, Map<ChapterKey, ChapterMirrorEntry>>> {
+        synchronized(lock) {
+            return when (val result = readRoot()) {
+                is ReadResult.NotExists ->
+                    Result.success(emptySet<String>() to emptyMap())
+                is ReadResult.Corrupted -> Result.failure(result.error)
+                is ReadResult.Parsed -> {
+                    val root = result.root
+                    val ids = mutableSetOf<String>()
+                    val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+                    // publishedProjectIds
+                    val publishedObj = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
+                    if (publishedObj != null) {
+                        val keys = publishedObj.keys()
+                        while (keys.hasNext()) {
+                            ids.add(keys.next())
+                        }
+                    }
+                    // chapter entries
+                    val projectsObj = root.optJSONObject(PROJECTS_KEY)
+                    if (projectsObj != null) {
+                        val projectIds = projectsObj.keys()
+                        while (projectIds.hasNext()) {
+                            val projectId = projectIds.next()
+                            val projectObj = projectsObj.optJSONObject(projectId) ?: continue
+                            val chapterKeys = projectObj.keys()
+                            while (chapterKeys.hasNext()) {
+                                val chapterKeyStr = chapterKeys.next()
+                                val entryObj = projectObj.optJSONObject(chapterKeyStr) ?: continue
+                                val entry = decodeEntryOrNull(projectId, chapterKeyStr, entryObj)
+                                if (entry != null) {
+                                    // 从 chapterKeyStr 解析 volumeId/chapterId
+                                    val parts = chapterKeyStr.split("/")
+                                    if (parts.size == 2) {
+                                        val volumeId = parts[0]
+                                        val chapterId = parts[1]
+                                        entries[ChapterKey(projectId, volumeId, chapterId)] = entry
+                                        ids.add(projectId)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Result.success(ids to entries)
+                }
+            }
+        }
+    }
+
+    /**
+     * 安全解码 chapter entry，失败时返回 null（跳过损坏的单个 entry）。
+     *
+     * 用于 [getAllChapterEntriesStrict]，避免单个损坏的 entry 导致整个 snapshot 读取失败。
+     */
+    private fun decodeEntryOrNull(
+        projectId: String,
+        chapterKeyStr: String,
+        obj: JSONObject,
+    ): ChapterMirrorEntry? {
+        return try {
+            val parts = chapterKeyStr.split("/")
+            if (parts.size != 2) return null
+            val volumeId = parts[0]
+            val chapterId = parts[1]
+            val uri = obj.optString("uri").takeIf { it.isNotEmpty() } ?: return null
+            val relativePath = obj.optString("relativePath").takeIf { it.isNotEmpty() } ?: return null
+            val revision = obj.optLong("revision")
+            val contentHash = obj.optString("contentHash").takeIf { it.isNotEmpty() } ?: return null
+            // 用 ChapterKey 包装，但 ChapterMirrorEntry 本身不存 volumeId/chapterId，
+            // 这些信息在 key 里。这里只返回 entry，key 由调用方组装。
+            ChapterMirrorEntry(
+                uri = uri,
+                relativePath = relativePath,
+                revision = revision,
+                contentHash = contentHash,
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     // ── publishedProjectIds（#649 评论 5564820566 问题 5）──
 
     /**

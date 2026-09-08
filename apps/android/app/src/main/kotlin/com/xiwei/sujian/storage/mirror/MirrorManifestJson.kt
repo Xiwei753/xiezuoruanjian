@@ -163,10 +163,17 @@ private fun escapeJson(s: String): String =
  * project/volume/chapter 的 id、chapter 的 contentFile/contentHash 用 [JSONObject.getString]
  * 读取并校验非空（空 id/contentFile/contentHash 视为损坏）。
  *
+ * #649 评论 5577831998 问题 3：还必须校验 ID 唯一性：
+ * - 两个 project 不能使用同一个 projectId
+ * - 同一 project 下两个 volume 不能使用同一个 volumeId
+ * - 同一 volume 下两个 chapter 不能使用同一个 chapterId
+ * 重复 ID 会互相覆盖 Restorer 的正文预读缓存 key，导致部分恢复；
+ * 唯一性必须在任何 Core 写入之前由共享 strict codec 拦掉。
+ *
  * @param json manifest JSON 字符串
  * @return 解析后的 [MirrorManifest]
  * @throws JSONException 字段缺失或类型错误
- * @throws IllegalArgumentException schemaVersion 不支持或字段值为空
+ * @throws IllegalArgumentException schemaVersion 不支持、字段值为空或 ID 重复
  */
 internal fun mirrorManifestFromJsonStrict(json: String): MirrorManifest {
     val root = JSONObject(json)
@@ -181,8 +188,13 @@ internal fun mirrorManifestFromJsonStrict(json: String): MirrorManifest {
     // projects 必须是数组
     val projectsArray = root.getJSONArray(PROJECTS_KEY)
     val projects = mutableListOf<MirrorProject>()
+    val projectIds = mutableSetOf<String>()
     for (i in 0 until projectsArray.length()) {
-        projects.add(parseProjectStrict(projectsArray.getJSONObject(i)))
+        val project = parseProjectStrict(projectsArray.getJSONObject(i))
+        require(projectIds.add(project.id)) {
+            "Duplicate project id: ${project.id}"
+        }
+        projects.add(project)
     }
     return MirrorManifest(
         schemaVersion = schemaVersion,
@@ -204,8 +216,13 @@ private fun parseProjectStrict(obj: JSONObject): MirrorProject {
     val updatedAt = obj.getString(UPDATED_AT_KEY)
     val volumesArray = obj.getJSONArray(VOLUMES_KEY)
     val volumes = mutableListOf<MirrorVolume>()
+    val volumeIds = mutableSetOf<String>()
     for (i in 0 until volumesArray.length()) {
-        volumes.add(parseVolumeStrict(volumesArray.getJSONObject(i)))
+        val volume = parseVolumeStrict(volumesArray.getJSONObject(i))
+        require(volumeIds.add(volume.id)) {
+            "Duplicate volume id in project $id: ${volume.id}"
+        }
+        volumes.add(volume)
     }
     return MirrorProject(
         id = id,
@@ -229,8 +246,13 @@ private fun parseVolumeStrict(obj: JSONObject): MirrorVolume {
     val updatedAt = obj.getString(UPDATED_AT_KEY)
     val chaptersArray = obj.getJSONArray(CHAPTERS_KEY)
     val chapters = mutableListOf<MirrorChapter>()
+    val chapterIds = mutableSetOf<String>()
     for (i in 0 until chaptersArray.length()) {
-        chapters.add(parseChapterStrict(chaptersArray.getJSONObject(i)))
+        val chapter = parseChapterStrict(chaptersArray.getJSONObject(i))
+        require(chapterIds.add(chapter.id)) {
+            "Duplicate chapter id in volume $id: ${chapter.id}"
+        }
+        chapters.add(chapter)
     }
     return MirrorVolume(
         id = id,

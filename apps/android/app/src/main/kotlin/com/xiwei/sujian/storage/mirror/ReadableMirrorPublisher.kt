@@ -677,12 +677,11 @@ class ReadableMirrorPublisher(
         }
         // #649 评论 5576464076 问题 2：恢复路径也幂等写入 committed manifest，
         // 与正常发布路径保持一致，确保下一笔 frozen plan 基线正确。
-        // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入，
-        // 检查返回值；从 manifestResult.committedJournal 继续，不再从旧 journal 重建。
-        if (!persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
-            DiagnosticsLogger.w(TAG, "Recover promote: persistCommittedBaseline failed, keeping journal")
-            return
-        }
+        // #649 评论 5576949398 问题 1：recoverPromotePhase 不要写 committed baseline。
+        // 改成先写 PHASE_CLEANUP journal，再 recoverCleanupPhase；
+        // recoverCleanupPhase 开头已有 isManifestCommitted 检查，是恢复路径唯一写 baseline 的地方。
+        // 这样正常发布和崩溃恢复都是同一顺序：
+        // public manifest committed -> durable PHASE_CLEANUP -> private committed baseline -> private chapter state -> cleanup。
         // #649 评论 5573750754 修复 1：统一为先写 cleanup journal 再 recoverCleanupPhase。
         // 不直接写 stateStore，和正常发布（publishProject）顺序保持一致：
         // 先落 PHASE_CLEANUP journal，再进 cleanup 阶段（recoverCleanupPhase 会幂等执行
