@@ -192,9 +192,9 @@ pub struct GlyphRect {
     pub byte_end: Utf8ByteOffset,
 }
 
-/// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction` 替代。
+/// **DEPRECATED**: 已被 `EditorVisualTransaction` + `visual_transaction()` 替代。
 /// 保留仅为现有测试覆盖；生产代码不得调用此类型。
-/// 当前主链是 `EditorVisualTransaction`，见 `visual_transaction` 方法。
+/// 当前主链是 `EditorVisualTransaction`，见 `visual_transaction()` 方法。
 #[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -242,8 +242,8 @@ pub enum VisualCoordinateMode {
 /// 不使用 top+height 拼接 baseline。
 ///
 /// 这是 `EditorAnimationEvent` 的替代方案。
-/// 旧 API `animation_events` 返回多个事件（Insert + Cursor 等），
-/// 新 API `visual_transaction` 返回单个统一事务，平台层自行决定
+/// 旧 API `animation_events()` 返回多个事件（Insert + Cursor 等），
+/// 新 API `visual_transaction()` 返回单个统一事务，平台层自行决定
 /// 如何渲染动画和光标移动。
 ///
 /// 坐标字段（deleted_glyph_rects, insert_glyph_rects, old_cursor_rect,
@@ -377,15 +377,15 @@ pub struct PreeditVisualTransaction {
 // 不共享平台渲染结构（QImage / RenderNode / Bitmap 等）。
 //
 // 规则：
-// - Core 不保存 QImage / QTextLayout / RenderNode / Bitmap / StaticLayout / 像素坐标
-// - 平台视觉资源只存在于平台层
-// - 动画只能引用创建时的 old/new revision
-// - 进入动画协调器后只使用 document UTF-8 byte range；平台 UTF-16 index
-// 只存在于布局适配层
+//   - Core 不保存 QImage / QTextLayout / RenderNode / Bitmap / StaticLayout / 像素坐标
+//   - 平台视觉资源只存在于平台层
+//   - 动画只能引用创建时的 old/new revision
+//   - 进入动画协调器后只使用 document UTF-8 byte range；平台 UTF-16 index
+//     只存在于布局适配层
 
 /// 已提交正文的视觉修订 — committed document 的平台无关快照。
 ///
-/// 正文事实状态只有 committed document。
+/// #516: 正文事实状态只有 committed document。
 /// 每次正文变更（插入、删除、换行、段落合并）都产生新 VisualRevision。
 /// 预输入不产生 VisualRevision，只产生 CompositionVisualRevision。
 ///
@@ -433,7 +433,7 @@ pub enum CaretAffinity {
 /// 如果 composition_replace_range 为 None，默认在光标位置做零长度插入：
 /// virtualText = committedText + preeditText
 ///
-/// Linux 的 virtualText 只拼接正文前缀和 preedit 丢失光标后正文是错误实现。
+/// #516: Linux 的 virtualText 只拼接正文前缀和 preedit 丢失光标后正文是错误实现。
 /// 此函数是 virtualText 构造的唯一权威来源。
 pub fn build_virtual_text(
     committed_text: &str,
@@ -589,7 +589,7 @@ impl Timeline {
     /// - 未开始（first_visible_frame_time_ms == None）→ 0.0
     /// - Paused → paused_progress（暂停瞬间快照，不返回 0）
     /// - 正常播放 → clamp(effective_elapsed / duration, 0.0, 1.0)
-    /// effective_elapsed = frame_time - start - accumulated_paused_duration
+    ///   effective_elapsed = frame_time - start - accumulated_paused_duration
     /// - 完成 → 1.0
     pub fn progress(&self, frame_time_ms: u64) -> f64 {
         let start = match self.first_visible_frame_time_ms {
@@ -633,8 +633,8 @@ impl Timeline {
     /// 关键：resume 后 progress 必须从 paused_progress 平滑过渡。
     /// 调整 first_visible_frame_time_ms 使得
     /// progress(resume_time) = paused_progress，即：
-    /// new_start = resume_time - paused_progress * duration
-    // SAFETY: paused_progress ∈ [0.0, 1.0]（由 progress clamp 保证），
+    ///   new_start = resume_time - paused_progress * duration
+    // SAFETY: paused_progress ∈ [0.0, 1.0]（由 progress() clamp 保证），
     // duration_ms 为正整数，乘积 ≤ duration_ms ≤ u64::MAX，截断安全。
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     pub fn resume(&mut self, frame_time_ms: u64) {

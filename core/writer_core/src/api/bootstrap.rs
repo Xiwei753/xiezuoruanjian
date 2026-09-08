@@ -21,12 +21,12 @@ use crate::api::error::WriterError;
 use crate::api::types::PlatformInitDto;
 use crate::app_service::WriterAppService;
 
-/// 启动时恢复待处理的删除事务。
+/// #644 评论 5495945801 问题4：启动时恢复待处理的删除事务。
 ///
 /// 在创建 `WriterAppService` 之前调用，确保崩溃前的删除事务被完成。
 /// 恢复失败返回 Err（用 `?` 严格返回），让调用方决定。
 ///
-/// 缺口2修复：recover 返回 `Vec<RecoveredProjectDelete>`，
+/// #645 评论 5504296097 缺口2修复：recover 返回 `Vec<RecoveredProjectDelete>`，
 /// 每个含待补 history 的 change-set。bootstrap 用 layout 调
 /// `record_workspace_change_set` 写本地 history，成功后调
 /// `ack_project_delete_history` 推进 journal 到 `HistoryRecorded` → `Completed`
@@ -78,7 +78,7 @@ fn recover_storage_transactions(
     Ok(())
 }
 
-/// 第2点：应用打开 workspace 时初始化唯一 Git repo。
+/// #645 评论 5504296097 第2点：应用打开 workspace 时初始化唯一 Git repo。
 ///
 /// 本地 Git 仓库的生命周期独立于 SyncProvider — 只要 workspace 被打开，
 /// Git 历史层就存在，不依赖有没有启用远端同步。
@@ -89,7 +89,7 @@ fn ensure_workspace_git(
 ) -> std::result::Result<crate::storage::git_repo_layout::GitRepoLayout, WriterError> {
     let layout = crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root.to_path_buf());
     crate::storage::workspace_git::ensure_workspace_repo(&layout)?;
-    // bootstrap 初始化后实际调用 recover_workspace_crash，
+    // #645 评论 5504296097 问题4：bootstrap 初始化后实际调用 recover_workspace_crash，
     // 确保打开 workspace 时自动恢复 HEAD/index 损坏。
     match crate::storage::workspace_git::recover_workspace_crash(&layout) {
         Ok(result) => {
@@ -117,13 +117,13 @@ pub fn open_app_service(
     projects_root: String,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
-    // 第2点：应用打开时初始化 workspace Git。
+    // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    // 在创建服务之前先恢复待处理的删除事务。
-    // 缺口2修复：传 layout，recover 后用 layout 写 history。
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let service = Arc::new(WriterAppService::new(app_data_root, projects_root));
-    // 注入 bootstrap 计算的 layout 到 API 层。
+    // #645 评论 5504296097 问题3：注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service: {e}");
@@ -138,10 +138,10 @@ pub fn open_app_service_with_init(
     init: PlatformInitDto,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
-    // 第2点：应用打开时初始化 workspace Git。
+    // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    // 在创建服务之前先恢复待处理的删除事务。
-    // 缺口2修复：传 layout，recover 后用 layout 写 history。
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
@@ -167,7 +167,7 @@ pub fn open_app_service_with_init(
         projects_root,
         services,
     ));
-    // 注入 bootstrap 计算的 layout 到 API 层。
+    // #645 评论 5504296097 问题3：注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_init: {e}");
@@ -184,10 +184,10 @@ pub fn open_app_service_with_secure_storage(
     secure_storage: Option<Box<dyn SecureStorageProvider>>,
 ) -> std::result::Result<Arc<WriterAppService>, WriterError> {
     crate::storage::git_runtime::ensure_initialized()?;
-    // 第2点：应用打开时初始化 workspace Git。
+    // #645 评论 5504296097 第2点：应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    // 在创建服务之前先恢复待处理的删除事务。
-    // 缺口2修复：传 layout，recover 后用 layout 写 history。
+    // #644 评论 5495945801 问题4：在创建服务之前先恢复待处理的删除事务。
+    // #645 评论 5504296097 缺口2修复：传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
     let network_state: NetworkState = init.into();
@@ -220,7 +220,7 @@ pub fn open_app_service_with_secure_storage(
         projects_root,
         services,
     ));
-    // 注入 bootstrap 计算的 layout 到 API 层。
+    // #645 评论 5504296097 问题3：注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_secure_storage: {e}");

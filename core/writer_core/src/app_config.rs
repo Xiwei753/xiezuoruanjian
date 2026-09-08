@@ -6,13 +6,13 @@
 //!
 //! - **配置模型**：`AppConfig` 和 `NavigationState` 是纯数据模型，与存储无关。
 //! - **配置存储**：通过 `writer_platform_api::ConfigStore` trait 注入，Core 不再自行猜测平台目录。
-//! - **便利函数**：`load_app_config` / `save_app_config` 等函数使用全局默认 `ConfigStore`，
-//! 该默认存储由平台适配层在启动时通过 `set_default_config_store` 注入。
+//! - **便利函数**：`load_app_config()` / `save_app_config()` 等函数使用全局默认 `ConfigStore`，
+//!   该默认存储由平台适配层在启动时通过 `set_default_config_store` 注入。
 //!
 //! ## 依赖方向
 //!
 //! ```text
-//! 平台适配层 → set_default_config_store → app_config 便利函数
+//! 平台适配层 → set_default_config_store() → app_config 便利函数
 //! ```
 //!
 //! Core 业务模块通过 `ConfigStore` trait 消费配置，不直接访问文件系统或环境变量。

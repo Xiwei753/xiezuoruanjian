@@ -20,9 +20,9 @@
 //!
 //! ```text
 //! projects/{project_id}/volumes/{volume_id}/chapters/
-//! {chapter_id}/
-//! chapter.meta.json # 章节元数据（id、title、order、word_count、hash）
-//! chapter.md # 正文内容（纯文本）
+//!   {chapter_id}/
+//!     chapter.meta.json     # 章节元数据（id、title、order、word_count、hash）
+//!     chapter.md            # 正文内容（纯文本）
 //! ```
 
 use crate::error::Result;
@@ -188,7 +188,7 @@ pub fn create_chapter(project_root: &Path, volume_id: &str, title: &str) -> Resu
 /// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
 /// 不自动生成默认标题（标题已在 manifest 中）。
 ///
-/// 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
 /// Android Restorer 只把 manifest 转成 DTO 调此入口。
 pub fn create_chapter_with_id(
     project_root: &Path,
@@ -340,9 +340,9 @@ pub fn clear_chapter_content_verified(
 /// 当 `allow_empty_overwrite == false` 时，拒绝用真正的空字符串 `""` 覆盖非空章节。
 /// 这是防止客户端 bug 导致数据丢失的最后一道防线。
 ///
-/// 写作软件里 `"\n"`、连续空行、只含空格/制表符的段落都是用户正文，
-/// 必须原样保存 — 本防线只对真正的空字符串生效，不再用 `trim` 把纯空白正文
-/// 当成"空文档"拒绝（正文持久化链路不调用 `trim`，空覆盖判定只看原始字符串）。
+/// #624 评论1：写作软件里 `"\n"`、连续空行、只含空格/制表符的段落都是用户正文，
+/// 必须原样保存 — 本防线只对真正的空字符串生效，不再用 `trim()` 把纯空白正文
+/// 当成"空文档"拒绝（正文持久化链路不调用 `trim()`，空覆盖判定只看原始字符串）。
 ///
 /// ## 事务写入 + 写后验证
 ///
@@ -374,7 +374,7 @@ fn save_chapter_verified_with_options(
         String::new()
     };
 
-    // 空覆盖保护只看真正的空字符串 — 纯空白正文（"\n"、空格、制表符）
+    // #624 评论1：空覆盖保护只看真正的空字符串 — 纯空白正文（"\n"、空格、制表符）
     // 是用户正文，原样保存，不 trim、不拦截。
     if !allow_empty_overwrite && !old_content.is_empty() && content.is_empty() {
         let reason = "new_content_empty_without_allow_empty_overwrite".to_string();
@@ -610,7 +610,7 @@ pub fn reorder_chapters(
     Ok(())
 }
 
-/// 创建章节并返回变更集。
+/// #645 评论 5504296097：创建章节并返回变更集。
 ///
 /// 返回 `(Chapter, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(projects/{pid}/volumes/{vid}/chapters/{cid}/chapter.meta.json) + Upsert(chapter.md)`。
@@ -652,7 +652,7 @@ pub fn create_chapter_with_changes(
     Ok((chapter, change_set))
 }
 
-/// 保存章节正文并返回变更集。
+/// #645 评论 5504296097：保存章节正文并返回变更集。
 ///
 /// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(chapter.meta.json) + Upsert(chapter.md)`。
@@ -676,7 +676,7 @@ pub fn save_chapter_verified_with_changes(
     )
 }
 
-/// 保存章节正文并返回变更集（带空覆盖控制）。
+/// #645 评论 5504296097：保存章节正文并返回变更集（带空覆盖控制）。
 ///
 /// 返回 `(ChapterSaveReceipt, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(chapter.meta.json) + Upsert(chapter.md)`。
@@ -748,7 +748,7 @@ fn save_chapter_verified_with_changes_inner(
     Ok((receipt, change_set))
 }
 
-/// 重命名章节并返回变更集。
+/// #645 评论 5504296097：重命名章节并返回变更集。
 ///
 /// 返回 `(Chapter, WorkspaceChangeSet)`，变更集包含 `Upsert(chapter.meta.json)`。
 pub fn rename_chapter_with_changes(
@@ -782,7 +782,7 @@ pub fn rename_chapter_with_changes(
     Ok((chapter, change_set))
 }
 
-/// 删除章节并返回变更集。
+/// #645 评论 5504296097：删除章节并返回变更集。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `Delete(chapter.meta.json) + Delete(chapter.md)`。
@@ -822,7 +822,7 @@ pub fn delete_chapter_with_changes(
     Ok(change_set)
 }
 
-/// 重新排序章节并返回变更集。
+/// #645 评论 5504296097：重新排序章节并返回变更集。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 chapter.meta.json 的 Upsert 路径。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -874,7 +874,7 @@ pub fn reorder_chapters_with_changes(
     Ok(change_set)
 }
 
-/// 更新章节备注并返回变更集。
+/// #645 评论 5504296097：更新章节备注并返回变更集。
 ///
 /// 返回 `(Chapter, WorkspaceChangeSet)`，变更集包含 `Upsert(chapter.meta.json)`。
 pub fn update_chapter_note_with_changes(

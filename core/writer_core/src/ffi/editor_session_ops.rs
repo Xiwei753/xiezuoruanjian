@@ -470,7 +470,7 @@ pub unsafe extern "C" fn writer_core_editor_session_get_revision(session_id: u64
     }
 }
 
-/// 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+/// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
 ///
 /// 平台端 SujianEditor 的 Left/Backspace 通过此函数确定光标移动目标，
 /// 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
@@ -493,7 +493,7 @@ pub unsafe extern "C" fn writer_core_editor_session_previous_grapheme_boundary(
     }
 }
 
-/// 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+/// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
 ///
 /// 平台端 SujianEditor 的 Right/Delete 通过此函数确定光标移动目标，
 /// 不再自己用 UTF-16 ±1 猜字符边界（避免切进组合附加符 / ZWJ emoji）。
@@ -516,7 +516,7 @@ pub unsafe extern "C" fn writer_core_editor_session_next_grapheme_boundary(
     }
 }
 
-// composition 专用 grapheme 语义操作 FFI。
+// #629 R8: composition 专用 grapheme 语义操作 FFI。
 // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
 // 不修改 committed 正文，不把 raw platform event 带入 Core。
 

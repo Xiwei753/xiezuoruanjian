@@ -39,7 +39,7 @@ static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
 
 /// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
 ///
-/// FFI 写操作统一改走 `with_app_service`，
+/// #645 评论 5504296097 问题2：FFI 写操作统一改走 `with_app_service`，
 /// `WriterAppService` 由 bootstrap 流程初始化（`ensure_workspace_git` +
 /// `recover_storage_transactions`），持有 `GitRepoLayout`，写操作能记 history。
 ///
@@ -166,10 +166,10 @@ pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 /// `path` must be a valid null-terminated UTF-8 C string.
 ///
 /// Return codes:
-/// 0 = success
-/// -1 = null pointer
-/// -2 = invalid UTF-8
-/// -3 = mutex poisoned
+///   0  = success
+///  -1  = null pointer
+///  -2  = invalid UTF-8
+///  -3  = mutex poisoned
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
     let m = CORE.get_or_init(|| Mutex::new(None));
 
-    // FFI writer_core_init 复用 bootstrap 流程，
+    // #645 评论 5504296097 问题2：FFI writer_core_init 复用 bootstrap 流程，
     // 让 WriterAppService 持有 GitRepoLayout，写操作能记 workspace history。
     // bootstrap 流程：ensure_workspace_git → recover_storage_transactions →
     // 注入 layout → WriterAppService。与 api::bootstrap::open_app_service 一致。
@@ -245,7 +245,7 @@ pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns word count on success, -2 on invalid UTF-8, -3 on mutex error.
 #[no_mangle]
-// TODO: 既有代码可读性技术债，待后续重构拆分
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -271,7 +271,7 @@ pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
-        // SAFETY: ptr is null-checked above; ptr was originally created by CString::into_raw in rust_str_to_c; caller must ensure no double-free.
+        // SAFETY: ptr is null-checked above; ptr was originally created by CString::into_raw() in rust_str_to_c; caller must ensure no double-free.
         unsafe { drop(CString::from_raw(ptr)) };
     }
 }
@@ -281,7 +281,7 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
 /// already holding the Mutex (non-recursive lock, will deadlock).
 /// Returns 1 if AI is available, 0 if unavailable or on error.
 #[no_mangle]
-// TODO: 既有代码可读性技术债，待后续重构拆分
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,

@@ -11,14 +11,14 @@ use super::model::*;
 /// - 旧格式：`committed` 标记存在 → 清理目录（向后兼容）
 /// - 两者都不存在 → 无效目录，清理
 ///
-/// (b)：`FilesCommittedPendingGit` 变体已移除。
+/// #645 评论 5504296097 问题5(b)：`FilesCommittedPendingGit` 变体已移除。
 /// 旧 manifest 中 `"files_committed_pending_git"` 在反序列化时映射到
 /// `FilesCommitted`，因此会走 `FilesCommitted` 分支（清理目录）。
 /// 这与之前"直接 rollback"不同，但新代码不再产生 `FilesCommittedPendingGit`，
 /// 旧遗留事务的文件已 rename 完成（phase=FilesCommittedPendingGit 表示
 /// 文件已 commit 但 Git finalize 未完成），清理目录是安全的行为——
 /// 文件已在 live，无需 rollback。
-// TODO: 既有代码可读性技术债，待后续重构拆分
+// TODO(#597): 既有代码可读性技术债，待后续重构拆分
 #[cfg(test)]
 #[allow(
     clippy::too_many_lines,

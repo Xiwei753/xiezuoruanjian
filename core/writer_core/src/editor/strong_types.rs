@@ -123,7 +123,7 @@ impl Utf8ByteOffset {
         Ok(Self(offset))
     }
 
-    /// Rope 版边界校验（不 materialize 全文）。
+    /// #624 评论8：Rope 版边界校验（不 materialize 全文）。
     pub fn try_new_rope(rope: &crop::Rope, offset: usize) -> Result<Self, InvalidUtf8OffsetError> {
         if offset > rope.byte_len() {
             return Err(InvalidUtf8OffsetError::BeyondEnd {
@@ -146,7 +146,7 @@ impl Utf8ByteOffset {
         Self(clamped)
     }
 
-    /// Rope 版 clamp（不 materialize 全文）。
+    /// #624 评论8：Rope 版 clamp（不 materialize 全文）。
     pub fn clamp_rope(rope: &crop::Rope, offset: usize) -> Self {
         let clamped = if offset > rope.byte_len() {
             rope.byte_len()
@@ -175,7 +175,7 @@ impl Utf8ByteOffset {
 /// 只校验 `<= preedit_utf16_len`，不检查 char boundary——UTF-16 code unit 边界
 /// 就是任意 code unit（surrogate pair 的前/后都是合法 code unit 边界）。
 ///
-/// 第1项：此前 preedit cursor 用 `Utf8ByteOffset` 装载 UTF-16 值，
+/// #629 评论7 第1项：此前 preedit cursor 用 `Utf8ByteOffset` 装载 UTF-16 值，
 /// 语义错配（`Utf8ByteOffset::try_new` 会做 char boundary 校验，对 UTF-16
 /// 值无意义）。本类型只做 `<= len` 校验，匹配 IME 协议的 code unit 语义。
 #[derive(
@@ -207,7 +207,7 @@ impl std::error::Error for InvalidUtf16OffsetError {}
 impl Utf16CodeUnitOffset {
     /// 按 preedit 文本的 UTF-16 code unit 长度校验 offset。
     ///
-    /// `utf16_len` 应为 `preedit_text.chars.map(|c| c.len_utf16).sum`。
+    /// `utf16_len` 应为 `preedit_text.chars().map(|c| c.len_utf16()).sum()`。
     /// 合法条件：`offset <= utf16_len`。不做 char boundary 校验。
     pub fn try_new(utf16_len: usize, offset: usize) -> Result<Self, InvalidUtf16OffsetError> {
         if offset > utf16_len {
@@ -283,7 +283,7 @@ impl Utf8ByteRange {
         Ok(Self { start: s, end: e })
     }
 
-    /// Rope 版边界校验（不 materialize 全文）。
+    /// #624 评论8：Rope 版边界校验（不 materialize 全文）。
     pub fn try_new_rope(
         rope: &crop::Rope,
         start: usize,
@@ -309,7 +309,7 @@ impl Utf8ByteRange {
         }
     }
 
-    /// Rope 版 clamp（不 materialize 全文）— 供 Rust 平台适配器
+    /// #624 评论8：Rope 版 clamp（不 materialize 全文）— 供 Rust 平台适配器
     /// （Linux Qt 等）在输入热路径做坐标校验时避免整章复制。
     pub fn clamp_rope(rope: &crop::Rope, start: usize, end: usize) -> Self {
         let s = Utf8ByteOffset::clamp_rope(rope, start);
@@ -700,7 +700,7 @@ mod tests {
         );
     }
 
-    // ── 第1项：Utf16CodeUnitOffset 强类型 ──
+    // ── #629 评论7 第1项：Utf16CodeUnitOffset 强类型 ──
 
     #[test]
     fn utf16_code_unit_offset_try_new_valid() {

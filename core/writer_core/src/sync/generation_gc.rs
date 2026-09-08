@@ -1,4 +1,4 @@
-//! generation GC — provider-neutral 清理未引用 generation。
+//! #645 评论 5504296097 问题2：generation GC — provider-neutral 清理未引用 generation。
 //!
 //! LiveProject 每次创建新 generation（`projects/P/__generations__/G/`），CAS 成功后
 //! 旧 generation 成为未引用。本模块按保留期清理未引用 generation，不碰 active
@@ -39,19 +39,19 @@ pub const GENERATION_UPLOAD_LEASE_MS: i64 = 5 * 60 * 1000;
 /// 未引用 generation 安全保留期（7 天）。超过保留期且未引用的 generation 才可删。
 pub const GENERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-/// 运行 generation GC。
+/// #645 评论 5504296097 问题2 修复：运行 generation GC。
 ///
 /// 清理 `projects/P/__generations__/` 下未引用的 generation：
 ///
 /// 1. GC 开始重新 `load_remote_catalog` 掌握远端当前事实（不用调用方传入的过期 snapshot）。
 /// 2. list `projects/P/__generations__/*`，对每个 generation ID 调
-/// `validate_generation_id` 校验后再拼路径（防路径穿越）。
+///    `validate_generation_id` 校验后再拼路径（防路径穿越）。
 /// 3. 当前 `active_generation` 永远不删。
 /// 4. incomplete 且 lease 未过期 → 不删（上传中）。
 /// 5. unreferenced generation 超过安全保留期（`created_at_ms + retention_ms < now_ms`）
-/// 后才可删。
+///    后才可删。
 /// 6. **真正删除每个 generation 前再次 `load_remote_catalog`**，确认该 G 仍不是当前
-/// active_generation（Transfer 期间另一台设备可能 CAS 切了 active generation）。
+///    active_generation（Transfer 期间另一台设备可能 CAS 切了 active generation）。
 /// 7. delete 失败 → `Err`（`RecoverableError` 语义），下轮继续。
 /// 8. meta 缺失/损坏的 generation：保守保留（不删），log warn。
 ///
@@ -80,7 +80,7 @@ pub fn run_generation_gc(
         if !seen.insert(first_segment.to_string()) {
             continue;
         }
-        // validate_generation_id 后再拼路径。
+        // #645 评论 5504296097 问题2 修复：validate_generation_id 后再拼路径。
         crate::sync::target_lifecycle::validate_generation_id(first_segment)?;
         generation_ids.push(first_segment.to_string());
     }
@@ -142,7 +142,7 @@ pub fn run_generation_gc(
             continue;
         }
 
-        // 真正删除前再次 load_remote_catalog，
+        // #645 评论 5504296097 问题2 修复：真正删除前再次 load_remote_catalog，
         // 确认该 G 仍不是当前 active_generation（Transfer 期间另一台设备可能 CAS
         // 切了 active generation）。catalog 读取失败 → Err（不删，下轮重试）。
         let fresh_catalog = crate::sync::target_lifecycle::load_remote_catalog(provider)?;

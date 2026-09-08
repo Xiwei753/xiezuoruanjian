@@ -144,8 +144,8 @@ pub(crate) fn get_content_sha(
 /// GitHub PUT API 响应格式：
 /// ```json
 /// {
-/// "content": { "sha": "new_blob_sha", ... },
-/// "commit": { "sha": "commit_sha", ... }
+///   "content": { "sha": "new_blob_sha", ... },
+///   "commit": { "sha": "commit_sha", ... }
 /// }
 /// ```
 /// 新 SHA 从 `content.sha` 提取，用于避免写入后重新读取的竞态条件。

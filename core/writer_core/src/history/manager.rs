@@ -12,7 +12,7 @@ const DEFAULT_MAX_STACK: usize = 256;
 /// - `undo_stack`：已执行命令，undo 时从栈顶弹出并应用 inverse
 /// - `redo_stack`：已撤销命令，redo 时从栈顶弹出并重新应用 forward
 /// - **push 清空 redo**：新编辑丢弃所有可 redo 的命令（标准线性 undo 语义）
-/// - **空命令忽略**：`forward.is_empty` 的命令不入栈
+/// - **空命令忽略**：`forward.is_empty()` 的命令不入栈
 ///
 /// ## 线程安全
 ///

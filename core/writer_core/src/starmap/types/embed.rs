@@ -57,9 +57,9 @@ impl Default for StarMapEmbedViewport {
 ///
 /// 使用自定义 `Deserialize` 实现以兼容旧格式：
 /// - 旧格式 `viewport` 字段（`StarMapViewport`）会被合并到新格式的
-/// `placement`（width/height）和 `target_viewport`（scale/offset）中。
+///   `placement`（width/height）和 `target_viewport`（scale/offset）中。
 /// - 旧格式 `host_anchor` 字符串会被转换为 `host_endpoint::Anchor`，
-/// 但需要 `source_node_id` 同时存在才能构造完整端点。
+///   但需要 `source_node_id` 同时存在才能构造完整端点。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StarMapEmbed {
@@ -81,7 +81,7 @@ pub struct StarMapEmbed {
 ///
 /// 1. 旧 `viewport` → 新 `placement.width/height` + `target_viewport.scale/offset`
 /// 2. 旧 `host_anchor` (String) → 新 `host_endpoint::Anchor { node_id, anchor_id }`
-/// （需要 `source_node_id` 同时存在，否则 host_anchor 被丢弃）
+///    （需要 `source_node_id` 同时存在，否则 host_anchor 被丢弃）
 impl<'de> Deserialize<'de> for StarMapEmbed {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

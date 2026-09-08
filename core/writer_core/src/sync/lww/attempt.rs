@@ -4,7 +4,7 @@
 //! [`super::merge::merge_remote_into_local_snapshot`] 做文件级 LWW 合并，
 //! 然后根据 [`super::merge::LwwMergeOutcome`] 做远端写（upload / delete / upload_manifest）。
 //!
-//! 不再自己维护第二套合并逻辑，统一复用
+//! #645 评论 5504296097 问题1 修复：不再自己维护第二套合并逻辑，统一复用
 //! `merge_remote_into_local_snapshot`，与 `full_sync.rs` LiveProject 同源。
 
 use crate::sync::provider::SyncProvider;
@@ -31,7 +31,7 @@ pub(crate) fn execute_lww_sync_attempt(
     let scope = target.scope;
     log::debug!("[sync] lww step=正在合并 remote_prefix={}", remote_prefix);
 
-    // 调用统一 merge 核心。
+    // #645 评论 5504296097 问题1 修复：调用统一 merge 核心。
     let outcome =
         merge_remote_into_local_snapshot(sync_root, provider, remote_prefix, scope, state)?;
 
@@ -84,7 +84,7 @@ pub(crate) fn execute_lww_sync_attempt(
 
     result.uploaded_files = outcome.remote_upload_paths;
     result.downloaded_files = outcome.downloaded_files;
-    // result.local_deletes = 本地发起的删除（删了远端），
+    // #645 评论 5504296097 问题1：result.local_deletes = 本地发起的删除（删了远端），
     // result.remote_deletes = 远端发起的删除（删了本地，已 move_to_trash）。
     result.local_deletes = outcome.remote_delete_paths;
     result.remote_deletes = outcome.local_deletes;

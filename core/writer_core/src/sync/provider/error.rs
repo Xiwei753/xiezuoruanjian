@@ -56,8 +56,8 @@ impl ProviderError {
     /// - `Network` / `RateLimited` / `TemporaryUnavailable` / `Other` → 可重试。
     /// - `AuthFailed` / `PermissionDenied` / `NotFound` / `PreconditionFailed` → 不可重试。
     ///
-    /// `Other` 归为可重试是为了与 Core `Error::Other`（`recoverable = true`）对齐，
-    /// 保证 `ProviderError::is_retryable` 与 `crate::Error::from(err).recoverable`
+    /// `Other` 归为可重试是为了与 Core `Error::Other`（`recoverable() = true`）对齐，
+    /// 保证 `ProviderError::is_retryable()` 与 `crate::Error::from(err).recoverable()`
     /// 对每个变体都返回相同值，engine 据此决定是否进入退避重试循环。
     pub fn is_retryable(&self) -> bool {
         match self {
@@ -75,7 +75,7 @@ impl ProviderError {
     /// 映射到通用同步错误分类 [`SyncErrorCategory`]。
     ///
     /// 该映射让现有 UI/状态机继续工作，同时把 GitHub 特定错误名隔离在 Provider 实现内。
-    /// 第1点：`SyncErrorCategory` 已收成 provider-neutral
+    /// Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成 provider-neutral
     /// 分类，本映射直接对应到新通用变体。
     pub fn to_sync_error_category(&self) -> SyncErrorCategory {
         match self {
@@ -94,7 +94,7 @@ impl ProviderError {
 
 /// 将 [`ProviderError`] 转为 Core 统一 [`crate::Error`]。
 ///
-/// 映射规则：
+/// 映射规则（见 Issue #645 评论 5504296097 第1点）：
 /// - `AuthFailed` / `PermissionDenied` → `SyncAuthFailed`
 /// - `Network` / `TemporaryUnavailable` → `SyncNetworkUnavailable`
 /// - `RateLimited` → `SyncRateLimited`
@@ -187,9 +187,9 @@ mod tests {
         assert_eq!(e.code(), "SYNC_REMOTE_API_ERROR");
     }
 
-    /// 验证 ProviderError::is_retryable 与 crate::Error::from(err).recoverable
+    /// 验证 ProviderError::is_retryable() 与 crate::Error::from(err).recoverable()
     /// 对每个变体都返回相同值——provider 层与 core 层可恢复性语义必须一致，
-    /// engine 才能放心用 e.recoverable 决定是否重试。
+    /// engine 才能放心用 e.recoverable() 决定是否重试。
     #[test]
     fn retryable_matches_core_recoverable() {
         let cases: Vec<(ProviderError, bool)> = vec![

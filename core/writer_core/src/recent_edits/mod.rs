@@ -11,10 +11,10 @@
 //!
 //! ```text
 //! app_data_root/
-//! recent_edits.json # 最近编辑列表
+//!   recent_edits.json    # 最近编辑列表
 //! ```
 //!
-//! ## 章节归属校正
+//! ## 章节归属校正（Issue #632）
 //!
 //! `recent_edits.json` 里历史遗留的 `(project_id, volume_id, chapter_id)` 三元组
 //! 可能因为作品/卷/章节被移动、重建或导入而失效，也可能出现同一章节被记成
@@ -148,7 +148,7 @@ fn find_volume_containing_chapter(project_root: &Path, chapter_id: &str) -> Resu
 /// 获取最近编辑列表（优先从缓存读取，否则从磁盘加载）。
 ///
 /// 不管来源是磁盘还是进程缓存，都先对当前作品树重新规范化；
-/// 规范化结果和磁盘原始列表不同时，用 `atomic_write_string` 把
+/// 规范化结果和磁盘原始列表不同时，用 `atomic_write_string()` 把
 /// `recent_edits.json` 真正改干净，避免下次启动旧 alias 又回来。
 pub fn get_recent_edits(app_data_root: &Path, projects_root: &Path) -> Result<Vec<RecentEdit>> {
     let mutex = RECENT_EDITS_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
@@ -214,16 +214,16 @@ pub fn record_recent_edit(
         if recent_path.exists() {
             let content = fs::read_to_string(&recent_path)?;
             let raw: Vec<RecentEdit> = serde_json::from_str(&content).unwrap_or_default();
-            // 项1：磁盘数据进入缓存前统一走 normalize，
+            // #630 评论12 项1：磁盘数据进入缓存前统一走 normalize，
             // 确保旧数据里的重复项不会绕过去重进入缓存。
-            // normalize 现在按当前作品树校正章节归属。
+            // #632：normalize 现在按当前作品树校正章节归属。
             normalize_recent_edits(projects_root, raw)?
         } else {
             Vec::new()
         }
     };
 
-    // 不直接相信调用方传来的三元组，先解析 canonical owner。
+    // #632：不直接相信调用方传来的三元组，先解析 canonical owner。
     // 解析失败（章节尚未落盘等）时退回原始三元组，避免刚编辑的章节丢失入口。
     let candidate = RecentEdit {
         project_id: project_id.to_string(),
@@ -292,7 +292,7 @@ pub fn flush_recent_edits(app_data_root: &Path, projects_root: &Path) -> Result<
 /// 对最近编辑列表按**当前作品树**校正并去重：
 ///
 /// 1. 对每条 edit 解析其章节在当前作品树中的真实 (project_id, volume_id)；
-/// 找不到说明章节已不存在，直接丢弃（recent 本就不该继续展示）。
+///    找不到说明章节已不存在，直接丢弃（recent 本就不该继续展示）。
 /// 2. 用校正后的 project_id 作为身份按 project 只保留时间最新的一条。
 /// 3. 按 timestamp 降序排序，截断到 `MAX_RECENT_EDITS` 条。
 ///

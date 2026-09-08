@@ -1,19 +1,19 @@
 use std::path::{Path, PathBuf};
 
-/// + 问题2：把 target-relative `rel_path` 转成
+/// #645 评论 5504296097 Blocker 2 + 问题2：把 target-relative `rel_path` 转成
 /// workspace-relative path，供 `record_workspace_history` 精确 stage。
 ///
 /// - App target：`live_root = app_data_root`，`rel_path` 已是 workspace-relative。
 /// - Project target：`live_root = projects_root/<project_id>`，
-/// workspace-relative = `projects/<project_id>/<rel_path>`。
+///   workspace-relative = `projects/<project_id>/<rel_path>`。
 /// - DeletedProject target with `RemoteTargetWins`：`target_kind` 保持为
-/// `"deleted_project"`，但 `target_live_root` 已设为 `projects_root/<project_id>`，
-/// 所以 workspace-relative 也是 `projects/<project_id>/<rel_path>`。
+///   `"deleted_project"`，但 `target_live_root` 已设为 `projects_root/<project_id>`，
+///   所以 workspace-relative 也是 `projects/<project_id>/<rel_path>`。
 ///
 /// `target_kind` / `project_id` 来自 `TargetSyncResult`，与 staging_runs
 /// 按索引对应。未知 target_kind 时退化为直接返回 `rel_path`（保守不丢路径）。
 fn to_workspace_rel_path(target_kind: &str, project_id: Option<&str>, rel_path: &Path) -> PathBuf {
-    // deleted_project 的 RemoteTargetWins 恢复路径
+    // #645 评论 5504296097 问题2：deleted_project 的 RemoteTargetWins 恢复路径
     // 与普通 project 共用同一分支，不再走 rel-only 路径。
     if target_kind == "project" || target_kind == "deleted_project" {
         if let Some(pid) = project_id {
@@ -41,7 +41,7 @@ fn collect_action_paths(
 
 /// 将 commit plan 中的 Apply/Delete 变更通过 SaveTransaction 写回 live root。
 ///
-/// 第2点：删除 `git_finalize_recovery` 参数。
+/// #645 评论 5504296097 第2点：删除 `git_finalize_recovery` 参数。
 /// staging commit 不再承担 Git repo metadata finalize 职责；
 /// workspace 本地 Git 如果要参与本地版本历史，放在 commit 完成后的 workspace
 /// Git 层统一处理，不作为某个 remote provider 的 staging 模式。
@@ -95,7 +95,7 @@ pub(crate) enum TargetCommitResult {
 pub(crate) struct StagingCommitOutcome {
     pub(crate) target_results: Vec<TargetCommitResult>,
     pub(crate) target_conflicts: Vec<Vec<crate::sync::staging::StagingConflict>>,
-    /// 本次 commit 真正落盘（Apply/Delete）的
+    /// #645 评论 5504296097 Blocker 2：本次 commit 真正落盘（Apply/Delete）的
     /// workspace-relative paths。供 `record_workspace_history` 精确 stage，
     /// 替代全量 `&[]` 扫描。
     pub(crate) committed_paths: Vec<PathBuf>,
@@ -105,7 +105,7 @@ pub(crate) enum TargetCommitMode {
     Full,
     ConflictMetadataOnly,
     Skip,
-    /// ReplaceProject 走专用 replace plan
+    /// #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan
     /// （staging 有 → Apply；live 有但 staging 没有 → Delete），不走普通三方合并。
     ReplaceProject,
 }
@@ -123,7 +123,7 @@ pub(crate) fn target_commit_mode(status: &crate::sync::SyncStatus) -> TargetComm
     }
 }
 
-/// 第2点：staging commit 简化为纯文件级 commit。
+/// #645 评论 5504296097 第2点：staging commit 简化为纯文件级 commit。
 ///
 /// 旧 Git finalize 逻辑（`prepare_git_finalize` / `try_commit_git_finalize` /
 /// `cleanup_repo_create_owner_marker` / `coordinate_rollback_after_finalize_failure`）
@@ -143,10 +143,10 @@ pub(crate) fn apply_staging_commits_for_targets(
     let mut committed_paths: Vec<PathBuf> = Vec::new();
 
     for (idx, run) in staging_runs.iter().enumerate() {
-        // 有 DeleteProject lifecycle action 的 target
+        // #645 评论 5504296097 问题1：有 DeleteProject lifecycle action 的 target
         // 跳过 staging commit（本地删除由 commit_full_sync 的 lifecycle action 处理）。
         // 否则 staging commit 会把 staging 里的旧作品内容写回 live，复活刚删掉的作品。
-        // ReplaceProject 走整树替换 commit
+        // #645 评论 5504296097 问题2 修复：ReplaceProject 走整树替换 commit
         // （staging 有 → Apply；live 有但 staging 没有 → Delete），不再走普通
         // compute_commit_plan。在真正 Apply/Delete 之前用 snapshot_local_records_read_only
         // 重新计算当前 local target LWW，与 expected_local_lww guard 比较。
@@ -171,7 +171,7 @@ pub(crate) fn apply_staging_commits_for_targets(
         let mode = if has_delete_action {
             TargetCommitMode::Skip
         } else if has_replace_action {
-            // ReplaceProject 走专用 replace plan。
+            // #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan。
             TargetCommitMode::ReplaceProject
         } else if let Some(target) = transfer_targets.get(idx) {
             target_commit_mode(&target.result.status)
@@ -224,9 +224,9 @@ pub(crate) fn apply_staging_commits_for_targets(
 
                 match tx.finish() {
                     Ok(()) => {
-                        // 收集本 target 真正
+                        // #645 评论 5504296097 Blocker 2：收集本 target 真正
                         // Apply/Delete 的 rel_path，转成 workspace-relative。
-                        // committed_paths 只收集
+                        // #645 评论 5504296097 问题4：committed_paths 只收集
                         // content_actions，不收集 engine_state_actions——
                         // sync engine state（manifest.sync.json/state.local.json/
                         // conflicts.json 等）不进入本地 Git history。
@@ -306,9 +306,9 @@ pub(crate) fn apply_staging_commits_for_targets(
                     run.cleanup();
                     continue;
                 }
-                // ConflictMetadataOnly 也落盘了
+                // #645 评论 5504296097 Blocker 2：ConflictMetadataOnly 也落盘了
                 // safe_content_actions + engine_state_actions，收集它们的 rel_path。
-                // committed_paths 只收集
+                // #645 评论 5504296097 问题4：committed_paths 只收集
                 // safe_content_actions，不收集 engine_state_actions。
                 let (kind, pid) = transfer_targets
                     .get(idx)
@@ -320,13 +320,13 @@ pub(crate) fn apply_staging_commits_for_targets(
                 run.cleanup();
             }
             TargetCommitMode::ReplaceProject => {
-                // ReplaceProject 走专用 replace plan。
+                // #645 评论 5504296097 问题2 修复：ReplaceProject 走专用 replace plan。
                 let live_root = run.target_live_root();
                 let staging_root = run.staging_root();
 
                 // 1. guard 检查：用 snapshot_local_records_read_only 重新计算当前
-                // local target LWW，与 expected_local_lww 严格比较。
-                // expected_local_lww 非 Option —
+                //    local target LWW，与 expected_local_lww 严格比较。
+                // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
                 // 破坏性 action 必须携带 guard。
                 let expected_lww =
                     transfer_targets

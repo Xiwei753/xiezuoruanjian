@@ -1,4 +1,4 @@
-//! 待清理远端残留的持久化 — provider-neutral。
+//! 待清理远端残留的持久化 — provider-neutral（#645 评论 5504296097 问题3 修复）。
 //!
 //! 当 authoritative Delete 清 prefix（`delete_all_remote_objects(projects/P)`）失败时，
 //! 记录 `PendingRemoteTargetCleanup` 到
@@ -17,7 +17,7 @@
 //!
 //! 1. Transfer 阶段 `delete_all_remote_objects` 失败时调 [`record_pending_remote_cleanup`]；
 //! 2. `prepare_full_sync` 调 [`load_pending_remote_cleanups`] 加载，加入 plan
-//! （`PlannedTargetKind::RemoteCleanupProject`）；
+//!    （`PlannedTargetKind::RemoteCleanupProject`）；
 //! 3. `run_transfer` 对 `RemoteCleanupProject` target 走 `delete_all_remote_objects`；
 //! 4. 全部远端删除成功后调 [`remove_pending_remote_cleanup`] 移除该条目。
 
@@ -36,13 +36,13 @@ pub struct PendingRemoteTargetCleanup {
     pub last_error: String,
     /// 记录创建时间（Unix 毫秒）。
     pub created_at_ms: i64,
-    /// 绑定产生该 cleanup 的 Delete lifecycle identity。
+    /// #645 评论 5504296097 问题2 修复：绑定产生该 cleanup 的 Delete lifecycle identity。
     ///
     /// Transfer 前重新确认远端 catalog 时，用这两个字段校验当前 winner record
     /// 仍是同一条/更新的 Delete（lww_time 和 device_id 匹配，或当前 Delete 的
     /// lww_time >= expected）。当前是 Upsert → pending 过期，不删 prefix。
     pub expected_delete_lww_time_ms: i64,
-    /// 绑定 Delete 的 device_id（tie-break）。
+    /// #645 评论 5504296097 问题2 修复：绑定 Delete 的 device_id（tie-break）。
     pub expected_delete_device_id: String,
 }
 
@@ -88,7 +88,7 @@ pub fn load_pending_remote_cleanups(
 ///
 /// 文件损坏（解析失败）时返回 Err，不吞错误。
 ///
-/// `expected_delete_lww_time_ms` /
+/// #645 评论 5504296097 问题2 修复：`expected_delete_lww_time_ms` /
 /// `expected_delete_device_id` 绑定产生该 cleanup 的 Delete lifecycle identity，
 /// Transfer 前重新确认远端 catalog 时校验当前 winner 仍是同一条/更新的 Delete。
 pub fn record_pending_remote_cleanup(
@@ -136,7 +136,7 @@ pub fn record_pending_remote_cleanup(
 
 /// 移除一个已完成的待清理记录（按 `remote_prefix` 匹配）。
 ///
-/// 用 read-modify-write + atomic write。未找到时返回 Ok()（幂等）。
+/// 用 read-modify-write + atomic write。未找到时返回 Ok(())（幂等）。
 pub fn remove_pending_remote_cleanup(
     app_data_root: &Path,
     remote_prefix: &str,

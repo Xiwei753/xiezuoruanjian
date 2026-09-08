@@ -20,7 +20,7 @@ impl EditorKernel {
             cursor
         };
 
-        // load 是冷路径，允许全文统计与 materialize；
+        // #624 评论8：load 是冷路径，允许全文统计与 materialize；
         // offset map 用 from_single_edit（无静态区域）构造。
         let old_len = self.text.byte_len();
         let old_chars: u32 = self.text.chars().count() as u32;
@@ -158,7 +158,7 @@ impl EditorKernel {
         id
     }
 
-    /// Rope 版 char boundary clamp（不 materialize 全文）。
+    /// #624 评论8：Rope 版 char boundary clamp（不 materialize 全文）。
     pub(crate) fn clamp_to_char_boundary(rope: &crop::Rope, offset: usize) -> usize {
         if offset > rope.byte_len() {
             return rope.byte_len();

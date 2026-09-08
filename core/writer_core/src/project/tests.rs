@@ -32,7 +32,7 @@ fn test_create_project_does_not_initialize_per_project_git_repo() {
     let project = create_project(&data_root.join("projects"), "Test Git Repo").unwrap();
     let project_dir = data_root.join("projects").join(&project.id);
 
-    // 一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+    // #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
     // Git 仓库由 workspace 级别统一管理。create_project 后作品目录不应含 `.git/`。
     assert!(
         !project_dir.join(".git").exists(),

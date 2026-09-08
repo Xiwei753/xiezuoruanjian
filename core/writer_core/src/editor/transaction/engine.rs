@@ -248,7 +248,7 @@ impl EditorEngine {
     }
 }
 
-/// 检查两个事务是否在视觉区域上冲突。
+/// #516: 检查两个事务是否在视觉区域上冲突。
 pub fn transactions_overlap(
     old_kind: super::visual::UnifiedTransactionKind,
     old_affected_range: (usize, usize),
@@ -265,7 +265,7 @@ pub fn transactions_overlap(
     old_start < new_end && new_start < old_end
 }
 
-/// 统一 rebase — 新事务与旧事务冲突时的处理。
+/// #516/#606: 统一 rebase — 新事务与旧事务冲突时的处理。
 pub fn compute_rebase(
     cancelled_transaction_id: u64,
     old_progress: f64,

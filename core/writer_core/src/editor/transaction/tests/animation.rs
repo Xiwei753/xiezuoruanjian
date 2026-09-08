@@ -1164,7 +1164,7 @@ fn timeline_pause_resume_maintains_progress() {
 
 #[test]
 fn timeline_cursor_and_text_same_frame_progress() {
-    // 光标与正文同帧 progress
+    // #516: 光标与正文同帧 progress
     let mut tl = Timeline::new(160);
     tl.mark_first_visible_frame(1000);
     let p_at_1080 = tl.progress(1080);
@@ -1175,7 +1175,7 @@ fn timeline_cursor_and_text_same_frame_progress() {
 
 #[test]
 fn timeline_cursor_only_no_text_slice_still_executes() {
-    // CursorOnly 无正文切片也能完整执行
+    // #516: CursorOnly 无正文切片也能完整执行
     let mut engine = EditorEngine::new();
     let vt = engine.cursor_only_transaction("hello", 0, 3).unwrap();
     assert_eq!(vt.kind, EditorAnimationKind::Cursor);

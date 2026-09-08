@@ -13,7 +13,7 @@ fn map_git2_err(e: git2::Error) -> crate::Error {
 /// 只处理本地 commit/index/HEAD 自己的崩溃恢复。
 /// 不重新引入旧 `refs/remotes/*`、staging repo、`.sujian-sync-owner` 那套东西。
 ///
-/// 真正实现恢复动作，不再只标记 bool。
+/// #645 评论 5504296097 问题4：真正实现恢复动作，不再只标记 bool。
 ///
 /// 恢复逻辑：
 /// 1. 检查仓库能否正常打开（corrupt → 返回 Err）
@@ -101,7 +101,7 @@ fn find_local_branch_ref(repo: &git2::Repository, name: &str) -> Option<String> 
 /// （git2 会创建一个新的空 index）。如果 HEAD 有效，再 `checkout_head` 把 HEAD tree
 /// 写回 index，让 index 反映 HEAD 状态。
 fn rebuild_index(repo: &git2::Repository) -> std::result::Result<(), git2::Error> {
-    // git2::Repository 没有 index_path 方法，用 repo.path（.git 目录）拼接。
+    // git2::Repository 没有 index_path() 方法，用 repo.path()（.git 目录）拼接。
     let index_path: PathBuf = repo.path().join("index");
     if index_path.exists() {
         std::fs::remove_file(&index_path).map_err(|e| {
@@ -168,7 +168,7 @@ mod tests {
         assert!(!result.head_was_recovered);
     }
 
-    /// HEAD 无效时真正 set_head 修复。
+    /// #645 评论 5504296097 问题4：HEAD 无效时真正 set_head 修复。
     #[test]
     fn test_recover_invalid_head_sets_head_to_main() {
         let tmp = tempfile::tempdir().unwrap();

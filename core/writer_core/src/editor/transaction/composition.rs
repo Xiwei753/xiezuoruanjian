@@ -12,11 +12,11 @@ use crate::editor::strong_types::{
 /// 每次预输入变化生成新 CompositionVisualRevision，
 /// 使用相同 StaticLinePatch + AnimatedSlice 分类。
 ///
-/// virtualText 必须通过 `build_virtual_text` 构造，
+/// #516: virtualText 必须通过 `build_virtual_text()` 构造，
 /// 严格按 committedText[0..replaceStart] + preeditText + committedText[replaceEnd..] 拼接。
 /// 不得丢失 replaceEnd 后正文，也不得默认把预输入永远当成零长度插入。
 ///
-/// 增加不可变 revision 链接。每次更新必须从 previous visual revision 接续，
+/// #517: 增加不可变 revision 链接。每次更新必须从 previous visual revision 接续，
 /// 不允许从 committed revision 重新开始。replaceStart/replaceEndExclusive 始终是
 /// committed 正文坐标，preeditCursorOffset 始终是 preedit 内部坐标。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -79,7 +79,7 @@ pub struct CompositionVisualRevision {
     pub ime_cursor_range: Option<Utf8ByteRange>,
     /// 从上一 CompositionVisualRevision 的偏移映射
     ///
-    /// 连续更新必须从 previous visual revision 接续，
+    /// #517: 连续更新必须从 previous visual revision 接续，
     /// 不允许从 committed revision 重新开始。
     /// OffsetMap 记录 old virtualText → new virtualText 的字符映射，
     /// 用于后续正文 cluster 保持身份并生成 Move，而不是全部 Crossfade/Insert。
@@ -88,7 +88,7 @@ pub struct CompositionVisualRevision {
 }
 
 impl CompositionVisualRevision {
-    /// 使用 `build_virtual_text` 正确构造 CompositionVisualRevision。
+    /// 使用 `build_virtual_text()` 正确构造 CompositionVisualRevision。
     ///
     /// virtualText 由 committed_text、composition_replace_range 和 preedit_text
     /// 自动计算，不手动传入。
@@ -123,7 +123,7 @@ impl CompositionVisualRevision {
         }
     }
 
-    /// 从 previous visual revision 构造新 CompositionVisualRevision。
+    /// #517: 从 previous visual revision 构造新 CompositionVisualRevision。
     ///
     /// 更新链必须是：previous visual revision -> new visual revision，
     /// 而不是：committed revision -> 每一次新的 preedit。
@@ -164,7 +164,7 @@ impl CompositionVisualRevision {
 
     /// 预输入文本在 virtualText 中的字节范围。
     ///
-    /// 此范围只能表示 virtualText 中 preedit 的范围，
+    /// #517: 此范围只能表示 virtualText 中 preedit 的范围，
     /// 不能表示 committed replaceRange；两者必须分开命名和存储。
     pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
         match self.composition_replace_range {
@@ -180,7 +180,7 @@ impl CompositionVisualRevision {
     }
 }
 
-/// 偏移映射 — 两个 visualText 之间的字符身份映射。
+/// #517: 偏移映射 — 两个 visualText 之间的字符身份映射。
 ///
 /// 记录 old virtualText 中每个字符在 new virtualText 中的对应位置。
 /// 用于后续正文 cluster 保持身份并生成 Move，而不是全部 Crossfade/Insert。
@@ -196,7 +196,7 @@ pub struct OffsetMap {
     pub entries: Vec<OffsetMapEntry>,
 }
 
-/// 单个偏移映射条目。
+/// #517: 单个偏移映射条目。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OffsetMapEntry {
@@ -218,7 +218,7 @@ pub struct OffsetMapEntry {
     pub kind: OffsetMapKind,
 }
 
-/// 偏移映射类型。
+/// #517: 偏移映射类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum OffsetMapKind {
@@ -272,7 +272,7 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
-    /// 单次编辑的偏移映射 — `[0,start)` Identity + `[oldEnd,oldLen)` Shifted。
+    /// #624 评论8：单次编辑的偏移映射 — `[0,start)` Identity + `[oldEnd,oldLen)` Shifted。
     ///
     /// `old_len` 是编辑前文本的 UTF-8 byte 长度，`old_range` 是编辑前被替换的
     /// 半开范围 `(start, end)`，`inserted_len` 是插入文本的 UTF-8 byte 长度。
@@ -305,7 +305,7 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
-    /// 多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
+    /// #624 评论8：多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
     ///
     /// `edits` 为 `(old_start, old_end, new_start, new_end)` 元组列表（无需预排序，
     /// 内部按 `old_start` 升序处理；各编辑的 old range 必须互不重叠）。
@@ -336,7 +336,7 @@ impl OffsetMap {
             }
             first = false;
             old_pos = old_end;
-            // 第4项复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
+            // #624 评论10 第4项复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
             // delta 的 new_range 同点退化为零长（如 before/after 紧邻均 point(bs)），
             // 顺序赋值 `new_pos = new_end` 时后处理的端点会覆盖前面更大的端点，尾段
             // 静态区映射偏移。同点零长编辑在最终文本中占据同一插入间隙，取所有端点
@@ -378,7 +378,7 @@ impl OffsetMap {
         None
     }
 
-    /// 映射旧正文中的半开 byte range [old_start, old_end) 到新正文坐标。
+    /// #606: 映射旧正文中的半开 byte range [old_start, old_end) 到新正文坐标。
     ///
     /// 仅当整个 range 落在同一个映射条目内时返回 `Some`（range 跨越映射/未映射
     /// 区域边界时返回 `None` — 那不指向同一逻辑对象）。range 端点恰为条目末端
@@ -402,7 +402,7 @@ impl OffsetMap {
     }
 }
 
-/// 预输入会话 — 跨平台 composition 状态模型。
+/// #517: 预输入会话 — 跨平台 composition 状态模型。
 ///
 /// Android 和 Linux 都必须维护一个明确的 composition session，
 /// 而不是零散地存 preedit_text 和临时 snapshot。
@@ -413,7 +413,7 @@ impl OffsetMap {
 /// - virtualText 由 committed replaceRange 和 preeditText 构造
 /// - composing 更新不能修改 committed buffer、Undo、保存、同步和 Core 正文状态
 /// - 连续 setComposingText 必须保持原 session 的 committed replaceRange，
-/// 不能随着 preedit 长度变化而移动 end
+///   不能随着 preedit 长度变化而移动 end
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompositionSession {
@@ -451,7 +451,7 @@ pub struct CompositionSession {
 impl CompositionSession {
     /// 创建新的 composition session。
     ///
-    /// 普通 setComposingText 初次预输入默认是零长度插入：
+    /// #517: 普通 setComposingText 初次预输入默认是零长度插入：
     /// replace_start == replace_end_exclusive == 原 committed 光标位置。
     /// 只有 setComposingRegion 或平台明确给出替换范围时才能形成非零替换范围。
     pub fn new(
@@ -499,7 +499,7 @@ impl CompositionSession {
 
     /// 更新预输入文本。
     ///
-    /// 连续 setComposingText 必须保持原 session 的 committed replaceRange，
+    /// #517: 连续 setComposingText 必须保持原 session 的 committed replaceRange，
     /// 不能随着 preedit 长度变化而移动 end。
     pub fn update_preedit(
         &mut self,
@@ -546,8 +546,8 @@ impl CompositionSession {
     /// 通过 setComposingRegion 更新替换范围。
     ///
     /// `start`/`end` 为 committed 正文 UTF-8 byte offset（半开区间），
-    /// 会被 clamp 到 committed_text_at_start.len，并自动交换保证 start <= end。
-    /// 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
+    /// 会被 clamp 到 committed_text_at_start.len()，并自动交换保证 start <= end。
+    /// #517: 只有 setComposingRegion 或平台明确给出替换范围时才能修改 replaceRange。
     pub fn set_composing_region(&mut self, start: usize, end: usize) {
         self.replace_start =
             Utf8ByteOffset::unchecked(start.min(self.committed_text_at_start.len()));
@@ -589,7 +589,7 @@ impl CompositionSession {
 
     /// 预输入文本在 virtualText 中的字节范围。
     ///
-    /// 此范围只能表示 virtualText 中 preedit 的范围，
+    /// #517: 此范围只能表示 virtualText 中 preedit 的范围，
     /// 不能表示 committed replaceRange；两者必须分开命名和存储。
     pub fn preedit_byte_range_in_virtual_text(&self) -> (usize, usize) {
         let start = self.replace_start.value();
@@ -599,7 +599,7 @@ impl CompositionSession {
 
     /// 提交预输入。
     ///
-    /// commitText 必须使用 session 的 replaceRange 替换 committed 正文。
+    /// #517: commitText 必须使用 session 的 replaceRange 替换 committed 正文。
     /// 返回 (composition_visual_revision, committed_text_after)。
     /// 如果 commit 文字与当前视觉文字相同，调用方可标记 is_visual_same 以避免重复吐字。
     pub fn commit(&mut self, commit_text: &str) -> (CompositionVisualRevision, String) {
@@ -629,7 +629,7 @@ impl CompositionSession {
 
     /// 取消预输入。
     ///
-    /// cancel 删除 preedit 并让后续正文回流。
+    /// #517: cancel 删除 preedit 并让后续正文回流。
     /// 返回取消前的 composition_visual_revision。
     pub fn cancel(&mut self) -> CompositionVisualRevision {
         let composition_revision = self.current_visual_revision.clone().unwrap_or_else(|| {

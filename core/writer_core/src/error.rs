@@ -5,9 +5,9 @@
 //!
 //! ## 设计原则
 //!
-//! - **错误码稳定**：`code` 返回的字符串是跨端 API 契约，不可随意更改
-//! - **可恢复性**：`recoverable` 标记错误是否可重试或自动恢复
-//! - **结构化参数**：`params` 返回错误上下文，UI 层用参数做本地化，不靠正则匹配 message
+//! - **错误码稳定**：`code()` 返回的字符串是跨端 API 契约，不可随意更改
+//! - **可恢复性**：`recoverable()` 标记错误是否可重试或自动恢复
+//! - **结构化参数**：`params()` 返回错误上下文，UI 层用参数做本地化，不靠正则匹配 message
 //! - **debug_message 不展示**：仅用于日志和调试，不直接展示给普通用户
 
 use serde::Serialize;
@@ -19,13 +19,13 @@ use thiserror::Error;
 /// 所有错误变体都携带足够上下文，便于客户端决定如何展示给用户。
 ///
 /// 错误分类原则：
-/// - `code` 返回稳定字符串，是跨端 API 契约，不可随意更改
-/// - `recoverable` 标记是否可重试——UI 据此决定是否显示"重试"按钮
-/// - `params` 返回结构化参数，UI 用 code + params 做本地化，不依赖正则匹配 message
+/// - `code()` 返回稳定字符串，是跨端 API 契约，不可随意更改
+/// - `recoverable()` 标记是否可重试——UI 据此决定是否显示"重试"按钮
+/// - `params()` 返回结构化参数，UI 用 code + params 做本地化，不依赖正则匹配 message
 /// - `debug_message` 仅用于日志和调试，不直接展示给普通用户
 ///
 /// 平台端不得依赖错误文案的包含关系作为主判断（见 AGENTS.md），
-/// 必须使用 `code` 或 `SyncErrorCategory::from_code` 做分类。
+/// 必须使用 `code()` 或 `SyncErrorCategory::from_code()` 做分类。
 #[derive(Error, Debug)]
 pub enum Error {
     /// 文件系统 I/O 错误。可恢复（磁盘临时不可用等）。
@@ -196,7 +196,7 @@ impl Error {
             Error::SyncRemoteBranchNotFound { .. } => true,
             // SyncRemoteError 按 category 结构化判断可恢复性：
             // - precondition_failed：乐观并发冲突（IfMatch 不匹配或 CreateNew 时对象已存在），
-            // 不可重试，需上层拉取远端最新版本后重新决策或上报冲突让用户处理。
+            //   不可重试，需上层拉取远端最新版本后重新决策或上报冲突让用户处理。
             // - not_found：远端对象不存在，重试也不会出现，不可重试。
             // - 其他 category（如 api_error、network 类临时错误）：保守视为可恢复，允许重试。
             Error::SyncRemoteError { category, .. } => {
@@ -305,10 +305,10 @@ impl Error {
     /// 同步错误分类键，供 SyncErrorCategory::from_code 直接使用。
     ///
     /// 对于 SyncRemoteError，返回结构化的 category 字段；
-    /// 对于其他同步错误，返回与 code 相同的值。
+    /// 对于其他同步错误，返回与 code() 相同的值。
     /// 对于非同步错误，返回空字符串。
     ///
-    /// 第1点：返回值与新的 provider-neutral
+    /// Issue #645 评论 5504296097 第1点：返回值与新的 provider-neutral
     /// `SyncErrorCategory` 通用 code 对齐。
     pub fn sync_category(&self) -> &str {
         match self {

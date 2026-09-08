@@ -43,7 +43,7 @@ impl TextEditCommand {
 
     /// 应用反向变更序列（撤销）。
     ///
-    /// 关键：inverse 必须逆序应用（`.rev`），因为多步变更的 offset 依赖于
+    /// 关键：inverse 必须逆序应用（`.rev()`），因为多步变更的 offset 依赖于
     /// 前序变更的执行结果。例如 Insert(0, "ab") + Insert(2, "cd") 的逆操作
     /// 必须先删 "cd"（offset=2）再删 "ab"（offset=0），顺序颠倒会导致 offset 错位。
     pub fn apply_inverse(&self, text: &mut String, cursor: &mut usize) {
@@ -57,7 +57,7 @@ impl TextEditCommand {
 /// 从 forward 变更序列推导 inverse。
 ///
 /// 对称规则：Insert → Delete（保留原文），Delete → Insert（恢复原文）。
-/// inverse 的应用顺序必须与 forward 相反（`.rev`），以保证多步变更正确撤销。
+/// inverse 的应用顺序必须与 forward 相反（`.rev()`），以保证多步变更正确撤销。
 fn compute_inverse(changes: &[EditorChange]) -> Vec<EditorChange> {
     changes
         .iter()
@@ -77,7 +77,7 @@ fn compute_inverse(changes: &[EditorChange]) -> Vec<EditorChange> {
 /// 将单个变更应用到文本。
 ///
 /// 边界验证：如果 `index` 超出文本长度或不在 char boundary 上，静默跳过（不 panic）。
-/// 对于 Delete，还会验证 `index..index+text.len` 的结束位置是否在 char boundary 上。
+/// 对于 Delete，还会验证 `index..index+text.len()` 的结束位置是否在 char boundary 上。
 /// 这种防御策略保证损坏的命令不会破坏文本，但调用方应确保命令由合法编辑产生。
 fn apply_change(text: &mut String, change: &EditorChange) {
     match change {

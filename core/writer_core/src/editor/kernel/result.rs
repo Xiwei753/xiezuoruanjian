@@ -45,7 +45,7 @@ impl EditorEditOutcome {
     }
 }
 
-/// — 内容增量：本次编辑实际插入/删除的字符统计。
+/// #624 评论8 — 内容增量：本次编辑实际插入/删除的字符统计。
 ///
 /// 直接对本次 inserted_text / deleted_text 局部计算，不依赖 old/new 两份全文。
 /// Cursor/selection/composition-update 没有 committed 正文变化时为全 0；
@@ -133,7 +133,7 @@ pub struct EditorEditResult {
     pub old_selection_byte_range: Utf8ByteRange,
     pub new_selection_byte_range: Utf8ByteRange,
     pub visual_intent: EditorVisualIntent,
-    /// 本次编辑的字符增量（正文无变化时为全 0）。
+    /// #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
     pub content_delta: EditorContentDelta,
 }
 

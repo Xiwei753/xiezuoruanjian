@@ -41,7 +41,7 @@ fn test_get_sync_capability_scenarios() {
         Some("sync.block.secure_storage_unavailable")
     );
 
-    // - 场景 3: 有 URL 但未配置 Token
+    //- 场景 3: 有 URL 但未配置 Token
     let mut config = api.load_sync_config().unwrap();
     config.enabled = true;
     config.provider_config = Some(crate::api::ProviderConfigDto::GitHub {
@@ -180,7 +180,7 @@ fn test_app_sync_state_independent_from_project_sync_state() {
     assert_eq!(app_loaded.last_sync_time, Some(2_222_222_222));
 }
 
-/// 平台预处理失败窄接口 — 线格式状态码映射与
+/// #630 评论 5308040939 Part 1：平台预处理失败窄接口 — 线格式状态码映射与
 /// full_state 持久化（FatalError / "preflight"，保留旧 last_success_time）。
 #[test]
 fn test_record_full_sync_preflight_failure_wire_mapping() {

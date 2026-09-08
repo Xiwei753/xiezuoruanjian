@@ -6,10 +6,10 @@
 //! ## 语义
 //!
 //! - `list(prefix)`：返回路径以 `prefix + "/"` 开头的条目，剥掉前缀后返回。
-//! `prefix` 为空时返回全部条目（不剥前缀）。
+//!   `prefix` 为空时返回全部条目（不剥前缀）。
 //! - `read(path)`：返回完整 path 对应的对象内容。
 //! - `write(path, content, precondition)`：根据 precondition 检查后写入，
-//! 生成新的 `RemoteVersion`（UUID）。
+//!   生成新的 `RemoteVersion`（UUID）。
 //! - `delete(path, precondition)`：根据 precondition 检查后删除。
 //!
 //! ## 线程安全

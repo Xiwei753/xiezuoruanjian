@@ -2,8 +2,8 @@
 //!
 //! `SyncService` 是同步功能的业务编排层，提供：
 //! - LWW 同步（`perform_lww_sync`，`pub(crate)`）：内部 staging LWW 引擎，
-//! 唯一生产入口是 `WriterCoreApi::perform_full_sync`，不作为对 live root 的
-//! 独立同步入口
+//!   唯一生产入口是 `WriterCoreApi::perform_full_sync`，不作为对 live root 的
+//!   独立同步入口（#645 评论 5504296097 问题2 修复）
 //! - 诊断（`perform_sync_diagnostics`）：探测网络、认证、仓库和分支可用性
 //! - 路径过滤（`is_blacklisted_path`/`is_whitelisted_path`）：见 `config_store` 模块
 //!
@@ -32,7 +32,7 @@ pub struct SyncService {
 
 impl SyncService {
     /// 干运行——构建同步计划但不执行文件传输。config.enabled=false 时返回空计划。
-    /// `scope` 由调用方通过 `SyncTarget` 提供，`SyncConfig` 不再携带 scope。
+    /// `scope` 由调用方通过 `SyncTarget` 提供，`SyncConfig` 不再携带 scope（Issue #630）。
     pub fn perform_sync_dry_run(
         sync_root: &Path,
         config: &SyncConfig,
@@ -46,7 +46,7 @@ impl SyncService {
 }
 
 impl SyncService {
-    /// 内部 staging LWW 引擎，**不是**对 live root
+    /// #645 评论 5504296097 问题2 修复：内部 staging LWW 引擎，**不是**对 live root
     /// 的独立同步入口。
     ///
     /// 唯一生产入口是 `WriterCoreApi::perform_full_sync`（staging → LWW merge →

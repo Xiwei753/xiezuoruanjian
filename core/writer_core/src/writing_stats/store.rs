@@ -22,10 +22,10 @@
 //!
 //! ```text
 //! app-meta/stats/
-//! events.local/
-//! 2024-01-01.events.jsonl # 原始事件（JSONL 格式）
-//! daily/
-//! 2024-01-01.stats.json # 每日统计数据
+//!   events.local/
+//!     2024-01-01.events.jsonl    # 原始事件（JSONL 格式）
+//!   daily/
+//!     2024-01-01.stats.json      # 每日统计数据
 //! ```
 //!
 //! ## 依赖关系
@@ -440,7 +440,7 @@ impl StatsStore {
     }
 
     #[allow(clippy::cast_sign_loss)]
-    // TODO: 既有代码可读性技术债，待后续重构拆分
+    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,

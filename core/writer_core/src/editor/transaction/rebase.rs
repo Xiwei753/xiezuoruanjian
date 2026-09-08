@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::visual::{CursorRect, Rect};
 
-/// 快照所有权状态 — 单一所有权，不允许 Manager 与事务共享同一个可释放资源引用。
+/// #517: 快照所有权状态 — 单一所有权，不允许 Manager 与事务共享同一个可释放资源引用。
 ///
 /// 如果 Kotlin 层难以表达 move semantics，使用显式 owner token/state。
 /// 任何 release 前必须校验 owner。
@@ -17,7 +17,7 @@ pub enum SnapshotOwner {
     Released,
 }
 
-/// Rebase slice 对应关系的继续/结束语义。
+/// #606: Rebase slice 对应关系的继续/结束语义。
 ///
 /// 旧事务的某个逻辑 slice 在 rebase 后是否对应到新事务中的 slice。
 /// 平台端据此决定旧 slice 动画是接续到新 slice 还是直接结束。
@@ -30,7 +30,7 @@ pub enum RebaseContinuation {
     End,
 }
 
-/// Rebase 匹配依据 — 为什么旧 slice 对应到新 slice。
+/// #606: Rebase 匹配依据 — 为什么旧 slice 对应到新 slice。
 ///
 /// 平台端可据此调整动画接续策略（例如 OffsetMapMatched 时需要按映射偏移
 /// 调整起止坐标，SameByteRange 时直接复用旧坐标）。
@@ -45,7 +45,7 @@ pub enum RebaseReason {
     NoMapping,
 }
 
-/// 旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+/// #606: 旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
 ///
 /// Core 在 `compute_rebase` 时唯一计算，平台端不再自己匹配。
 /// 不在此结构中复述 byte range/role — 平台端持有旧/新事务的 slice 列表，
@@ -82,7 +82,7 @@ pub struct TransactionRebase {
     /// 旧事务当前帧的视觉状态快照（由平台层填充）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_frame_snapshot: Option<RebaseFrameSnapshot>,
-    /// 旧→新逻辑 slice 对应关系（平台无关，Android 不再自己匹配）。
+    /// #606: 旧→新逻辑 slice 对应关系（平台无关，Android 不再自己匹配）。
     ///
     /// 仅包含 `RebaseContinuation::Continue` 的映射；未出现的旧 slice
     /// 视为 `End`，由平台端按 Core 无映射处理。
@@ -105,7 +105,7 @@ pub struct RebaseFrameSnapshot {
     pub cursor_rect: Option<CursorRect>,
 }
 
-/// 事务取消原因 — 取消事务必须记录原因，用于 rebase 和资源释放判断。
+/// 事务取消原因 — #516: 取消事务必须记录原因，用于 rebase 和资源释放判断。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TransactionCancelReason {

@@ -1,8 +1,8 @@
 //! 同步 Provider 模块
 //!
 //! 本模块包含所有同步后端的实现：
-//! - `model.rs` / `capabilities.rs` / `error.rs` / `memory.rs` - provider-neutral 契约层
-//! - `github/` - GitHub API Provider 实现
+//! - `model.rs` / `capabilities.rs` / `error.rs` / `memory.rs` - provider-neutral 契约层（Issue #645）
+//! - `github/` - GitHub API Provider 实现（Issue #645）
 //!
 //! ## SyncProvider trait
 //!
@@ -18,7 +18,7 @@ pub mod model;
 #[cfg(feature = "github-api")]
 pub mod github;
 
-/// Provider 配置选择 — provider-neutral 的强类型枚举。
+/// Provider 配置选择 — provider-neutral 的强类型枚举（Issue #645 评论第 2 点）。
 ///
 /// 每个 Provider 的持久化配置定义在各自模块，通过此枚举统一容纳。
 /// 序列化使用 internally tagged enum（`#[serde(tag = "type")]`），
@@ -33,7 +33,7 @@ pub enum ProviderConfig {
     GitHub(github::config::GitHubProviderConfig),
 }
 
-/// Provider 密钥选择 — provider-neutral 的强类型枚举。
+/// Provider 密钥选择 — provider-neutral 的强类型枚举（Issue #645 评论第 2 点）。
 ///
 /// 敏感凭证不进 `ProviderConfig`（持久化到 config.json 不安全），
 /// 由 `SyncSecrets.provider_secrets` 携带，构造 Provider 时注入。
@@ -62,12 +62,12 @@ impl ProviderSecrets {
 ///
 /// ## 方法语义
 ///
-/// - `capabilities`：返回远端能力集合，engine 据此调整策略。
+/// - `capabilities()`：返回远端能力集合，engine 据此调整策略。
 /// - `list(prefix)`：枚举远端以 `prefix + "/"` 开头的对象，剥掉前缀返回路径。
-/// `prefix` 为空时返回全部。返回 `RemoteEntry`（path + version，无内容）。
+///   `prefix` 为空时返回全部。返回 `RemoteEntry`（path + version，无内容）。
 /// - `read(path)`：读取远端对象完整内容，返回 `Option<RemoteObject>`（None 表示不存在）。
 /// - `write(path, content, precondition)`：写入对象，返回新版本。
-/// precondition 检查失败返回 `ProviderError::PreconditionFailed`。
+///   precondition 检查失败返回 `ProviderError::PreconditionFailed`。
 /// - `delete(path, precondition)`：删除对象。
 ///
 /// ## 线程安全

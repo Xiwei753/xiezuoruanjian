@@ -46,9 +46,9 @@
 //! ## 调用链路示例
 //!
 //! ```text
-//! 客户端 → facade::WriterCore::create_chapter
-//! → chapter::create_chapter
-//! → storage::atomic_write_string
+//! 客户端 → facade::WriterCore::create_chapter()
+//!         → chapter::create_chapter()
+//!         → storage::atomic_write_string()
 //! ```
 
 pub mod action_registry;

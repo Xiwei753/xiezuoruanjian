@@ -10,7 +10,7 @@
 use crate::sync::types::SyncConflict;
 use std::path::Path;
 
-/// 读取 `app-meta/sync/conflicts.json`。
+/// #644 评论 5473789298 第4节：读取 `app-meta/sync/conflicts.json`。
 ///
 /// 文件不存在或内容损坏（半写/无效 JSON）时回退为空列表——丢失冲突记录比
 /// 阻塞后续同步更可接受，与 [`crate::sync::SyncService::remove_conflict_from_json`]
@@ -25,7 +25,7 @@ fn load_conflicts_json(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
     Ok(conflicts)
 }
 
-/// 一次事务写入 `state.local.json` + `conflicts.json`。
+/// #644 评论 5473789298 第4节：一次事务写入 `state.local.json` + `conflicts.json`。
 ///
 /// 用 [`crate::storage::transaction::SaveTransaction`] 保证两个文件原子提交，
 /// 不会出现"state 写了但 conflicts.json 没写"的中间不一致状态。
@@ -48,7 +48,7 @@ fn persist_conflict_state(
     Ok(())
 }
 
-/// 按 `local_path` 去重/替换加入冲突。
+/// #644 评论 5473789298 第4节：按 `local_path` 去重/替换加入冲突。
 ///
 /// 同一路径重复写入时替换已有记录，不无限 append。`state_conflicts` 和
 /// `conflicts_json` 都做同样的去重，保持两者一致。
@@ -72,7 +72,7 @@ fn upsert_conflict(
     }
 }
 
-/// 合并两批冲突，按 `local_path` 去重。
+/// #644 评论 5474772497 第3节：合并两批冲突，按 `local_path` 去重。
 ///
 /// `incoming` 中的记录覆盖 `existing` 中同路径的旧记录（外层同路径覆盖旧记录即可）。
 /// 返回合并后的完整列表。
@@ -97,15 +97,15 @@ pub fn merge_sync_conflicts(
     merged
 }
 
-/// staging 三方冲突 → `SyncConflict` 映射 + 持久化。
+/// #644 评论 5473551127 第3节：staging 三方冲突 → `SyncConflict` 映射 + 持久化。
 ///
-/// 改成完整事务——先在内存里构造新的 `SyncState` 和
+/// #644 评论 5473789298 第4节：改成完整事务——先在内存里构造新的 `SyncState` 和
 /// 完整 `Vec<SyncConflict>`，用 [`persist_conflict_state`] 一次提交
 /// `app-meta/sync/state.local.json` + `app-meta/sync/conflicts.json`。
 /// 不再循环调用 `record_sync_conflict` 一条一条落盘，中间写失败不会留下不一致。
 /// 同一路径重复写入时按 `local_path` 去重/替换。
 ///
-/// `existing_conflicts` 参数接收 Transfer 阶段已有的
+/// #644 评论 5474772497 第3节：`existing_conflicts` 参数接收 Transfer 阶段已有的
 /// 冲突（如 GitHub LWW 发现的正文冲突），与新 staging 冲突合并后一起持久化。
 /// 返回合并后的完整 `Vec<SyncConflict>`（Transfer + staging），供调用方填入
 /// `SyncResult.conflicts`。
@@ -130,7 +130,7 @@ pub fn record_staging_conflicts(
     let mut state = crate::sync::SyncService::load_sync_state(sync_root)?;
     let mut conflicts_json = load_conflicts_json(sync_root)?;
 
-    // 先把 existing_conflicts（Transfer 冲突）合并进来，
+    // #644 评论 5474772497 第3节：先把 existing_conflicts（Transfer 冲突）合并进来，
     // 确保持久化状态包含两层冲突。
     for ec in existing_conflicts {
         upsert_conflict(
@@ -170,7 +170,7 @@ pub fn record_staging_conflicts(
     // 一次事务写 state + conflicts.json。
     persist_conflict_state(sync_root, &state, &conflicts_json)?;
 
-    // 返回合并后的完整冲突列表（existing + new staging）。
+    // #644 评论 5474772497 第3节：返回合并后的完整冲突列表（existing + new staging）。
     Ok(merge_sync_conflicts(
         existing_conflicts,
         &new_staging_conflicts,
@@ -214,7 +214,7 @@ impl crate::sync::SyncService {
     /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
     /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
     ///
-    /// 改成完整事务——先在内存里构造新的 `SyncState`
+    /// #644 评论 5473789298 第4节：改成完整事务——先在内存里构造新的 `SyncState`
     /// 和完整 `Vec<SyncConflict>`，用 [`persist_conflict_state`] 一次提交
     /// `state.local.json` + `conflicts.json`。同时更新 `conflicted_files` 和
     /// `state.conflicts`，修复原来"调用前路径已加入 conflicted_files"的注释违反。

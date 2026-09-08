@@ -1,4 +1,4 @@
-//! — crop::Rope 局部编辑改造测试（TDD）。
+//! #624 评论8 — crop::Rope 局部编辑改造测试（TDD）。
 //!
 //! 覆盖：Rope UTF-8 边界访问器、光标附近 grapheme 边界迭代、
 //! delta Undo/Redo、deleteSurrounding 双 delta、replace-all 多 delta、
@@ -18,7 +18,7 @@ mod rope_tests {
     };
     use crate::editor::transaction::{EditorTransactionCause, OffsetMap, OffsetMapKind};
 
-    /// 模拟 Android 对原子 patch batch 的应用。
+    /// #624 评论10：模拟 Android 对原子 patch batch 的应用。
     ///
     /// 协议：一个 EditorEditResult 是一个原子 batch，batch 内所有 patch range 都使用
     /// base（编辑前）文档坐标；Android 按 replace_byte_range.start 降序局部应用，
@@ -360,7 +360,7 @@ mod rope_tests {
         // 两个 delta 各删除 1 个字符
         assert_eq!(r1.content_delta.deleted_chars, 2);
         assert_eq!(r1.content_delta.inserted_chars, 0);
-        // 原子 patch batch — 每条 delta 一条局部 DisplayPatch
+        // #624 评论10：原子 patch batch — 每条 delta 一条局部 DisplayPatch
         // （base 文档坐标，删除的 inserted_text 为空）。batch 内顺序不构成协议
         // （Android 按 start 降序应用），这里按 start 排序后断言两条局部 patch。
         let mut ranges: Vec<Utf8ByteRange> = r1
@@ -436,7 +436,7 @@ mod rope_tests {
         );
     }
 
-    /// 第4项补漏：deleteSurrounding 双 delta 的 **undo** patch 必须用
+    /// #624 评论10 第4项补漏：deleteSurrounding 双 delta 的 **undo** patch 必须用
     /// 最终文本坐标。旧实现 after delta 的 new_range=point(as_) 是在「仅删除 after、
     /// before 尚未删除」的时刻计算的；before 删除后该点在最终文本中左移
     /// before_deleted_len。顺序应用 undo delta（先恢复 before）恰好补偿正确，但 undo
@@ -471,7 +471,7 @@ mod rope_tests {
         );
     }
 
-    /// 第4项补漏：before/after 紧邻（as_ == be）时两个 undo patch 在
+    /// #624 评论10 第4项补漏：before/after 紧邻（as_ == be）时两个 undo patch 在
     /// 同一位置（均退化为 point(bs)），Android 稳定降序按列表顺序应用 — after（右侧）
     /// 必须排在 before 前面，否则 "b"、"c" 插入顺序颠倒成 "cb"。
     #[test]
@@ -509,7 +509,7 @@ mod rope_tests {
         );
     }
 
-    /// 第4项复审补漏：相邻 deleteSurrounding undo 的 OffsetMap 尾段映射。
+    /// #624 评论10 第4项复审补漏：相邻 deleteSurrounding undo 的 OffsetMap 尾段映射。
     ///
     /// "abcd" 光标 2，before=[1,2)="b"、after=[2,3)="c"（紧邻）→ "ad"。undo 时两条
     /// inverse delta 的 new_range 都退化为 point(1)（同点零长编辑），`from_edits` 必须
@@ -699,7 +699,7 @@ mod rope_tests {
         );
     }
 
-    /// 第4项：replace-all 的 **undo** patch 使用 undo 前文本（= 替换后
+    /// #624 评论10 第4项：replace-all 的 **undo** patch 使用 undo 前文本（= 替换后
     /// 最终文本）坐标。变长替换时 new_range 由累计长度差决定（X→YY 时第二处
     /// 从 [3,4) 变成 [4,6)），undo batch 按 start 降序应用必须与 Core snapshot 一致
     /// （mirror 一致性）；旧实现若把 new_range 误写成 base 坐标，降序应用会得到

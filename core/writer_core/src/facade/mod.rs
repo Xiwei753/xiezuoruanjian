@@ -14,8 +14,8 @@
 //! ## 调用链示例
 //!
 //! ```text
-//! Linux (Legacy): AppBackend/Linux adapter → facade::WriterCore::create_chapter → chapter::create_chapter
-//! Linux (New): AppBackend/Linux adapter → api::WriterCoreApi::create_chapter → facade::WriterCore::create_chapter → chapter::create_chapter
+//! Linux (Legacy): AppBackend/Linux adapter → facade::WriterCore::create_chapter() → chapter::create_chapter()
+//! Linux (New):    AppBackend/Linux adapter → api::WriterCoreApi::create_chapter() → facade::WriterCore::create_chapter() → chapter::create_chapter()
 //! ```
 //!
 //! ## 禁止事项
@@ -55,7 +55,7 @@ use crate::writing_stats::api::StatsApi;
 /// **不是平台稳定 API 边界**：Android/Linux/Harmony 不得把此结构体当主暴露层，
 /// 应走 `api::WriterCoreApi` 或其绑定适配层。
 ///
-/// 无状态：每次 API 调用通过 `core` 创建临时 `WriterCore` 实例，
+/// 无状态：每次 API 调用通过 `core()` 创建临时 `WriterCore` 实例，
 /// 不持有可变状态。`stats_api` 使用 `OnceLock` 懒初始化，首次访问后复用。
 pub struct WriterCore {
     pub(crate) app_data_root: PathBuf,
@@ -63,7 +63,7 @@ pub struct WriterCore {
     pub(crate) stats_api: OnceLock<StatsApi>,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
-    /// 删除 facade 层 secrets_override —
+    /// #644 评论 5462823517 第1节：删除 facade 层 secrets_override —
     /// 进程级 override 唯一存在于 `api::service::WriterCoreApi.secrets_override`，
     /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     #[cfg(feature = "github-api")]
     fn test_facade_generation_secrets_save_load_delete() {
-        // generation 凭据生命周期 — save → load → delete。
+        // #595 五：generation 凭据生命周期 — save → load → delete。
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(result_valid.message.unwrap(), "Font size updated");
     }
 
-    /// 全局同步配置唯一，所有作品共享同一份 config。
+    /// Issue #630：全局同步配置唯一，所有作品共享同一份 config。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_sync_config_isolated_per_project() {
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(loaded.github_remote_url(), "https://example.com/a.git");
     }
 
-    /// 全局同步凭据唯一，所有作品共享同一份 secrets。
+    /// Issue #630：全局同步凭据唯一，所有作品共享同一份 secrets。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_sync_secrets_isolated_per_project() {
@@ -497,7 +497,7 @@ mod tests {
         );
     }
 
-    /// 应用级白名单/黑名单正确过滤路径。
+    /// Issue #600 评论 #3 问题四：应用级白名单/黑名单正确过滤路径。
     /// 应用级同步根 = app_data_root，白名单 settings.sync.json/starmaps/themes，
     /// 黑名单 作品目录/日志/导出/备份/settings.local.json/sync secrets/device/缓存统计。
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         ));
     }
 
-    /// 全局同步配置唯一，不再有"应用级 vs 作品级"两套配置。
+    /// Issue #630：全局同步配置唯一，不再有"应用级 vs 作品级"两套配置。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_app_sync_config_independent_from_project() {

@@ -18,13 +18,13 @@ fn index_remove_path(index: &mut git2::Index, path: &Path) -> Result<()> {
     }
 }
 
-/// (b/c)：按目录前缀从 index 移除所有 tracked entries。
+/// #645 评论 5504296097 问题2(b/c)：按目录前缀从 index 移除所有 tracked entries。
 ///
 /// 遍历 index entries，对路径以前缀开头的条目调 `index.remove_path`。
 /// 不重新扫描整个 workspace。前缀可以是目录（`projects/{pid}`）或
 /// 带尾斜杠的形式（`projects/{pid}/`），内部统一按字符串前缀匹配。
 fn index_remove_tree(index: &mut git2::Index, prefix: &Path) -> Result<()> {
-    // (c)：统一用 '/' 分隔，避免 Windows 下
+    // #645 评论 5504296097 问题4(c)：统一用 '/' 分隔，避免 Windows 下
     // prefix 'projects\pid' 与 Git index 里的 'projects/pid/...' 匹配不上。
     // Git index 始终用正斜杠存储路径（POSIX 形式），无论平台。
     let prefix_str = prefix.to_string_lossy().replace('\\', "/");
@@ -49,7 +49,7 @@ fn index_remove_tree(index: &mut git2::Index, prefix: &Path) -> Result<()> {
     Ok(())
 }
 
-/// (a)：清理 index 中不属于 history 的旧 tracked 条目。
+/// #645 评论 5504296097 问题4(a)：清理 index 中不属于 history 的旧 tracked 条目。
 ///
 /// 旧版本可能已经把 secrets/sync engine state stage 进 index。新版本规则升级后，
 /// 这些文件不应出现在本地 Git history 的 tree 里。本函数遍历当前 index entries，
@@ -75,7 +75,7 @@ fn purge_non_history_index_entries(index: &mut git2::Index) -> Result<()> {
     Ok(())
 }
 
-/// (d)：应用自己的稳定签名。
+/// #645 评论 5504296097 问题2(d)：应用自己的稳定签名。
 ///
 /// 不依赖系统 Git 配置（Android/普通用户环境可能没有全局 Git identity）。
 /// 同时在 [`crate::storage::workspace_git::repo::ensure_workspace_repo`]
@@ -85,7 +85,7 @@ fn app_signature() -> Result<git2::Signature<'static>> {
     git2::Signature::now("Sujian", "local@sujian.invalid").map_err(map_git2_err)
 }
 
-/// 在 workspace 中记录**显式 paths** 的变更（本地 commit）。
+/// #645 评论 5504296097 问题1：在 workspace 中记录**显式 paths** 的变更（本地 commit）。
 ///
 /// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，
 /// 绝不触发全量扫描**——这是与 [`record_all_workspace_changes`] 的关键区别。
@@ -102,7 +102,7 @@ pub fn record_workspace_paths(
     paths: &[PathBuf],
     message: &str,
 ) -> Result<WorkspaceCommitResult> {
-    // 空 paths 直接返回空结果，绝不触发全量扫描。
+    // #645 评论 5504296097 问题1：空 paths 直接返回空结果，绝不触发全量扫描。
     if paths.is_empty() {
         return Ok(WorkspaceCommitResult {
             oid: None,
@@ -128,14 +128,14 @@ pub fn record_workspace_paths(
         }
         staged_count += 1;
     }
-    // (a)：显式 paths 路径处理完后，清理 index 中
+    // #645 评论 5504296097 问题4(a)：显式 paths 路径处理完后，清理 index 中
     // 旧版本误跟踪的内部文件（secrets/sync engine state），保证新 commit 的
     // tree 不再包含这些不应进入本地 history 的条目。不扫描 worktree。
     purge_non_history_index_entries(&mut index)?;
     finalize_commit(&repo, &mut index, message, staged_count)
 }
 
-/// 在 workspace 中记录 [`WorkspaceChangeSet`] 的变更。
+/// #645 评论 5504296097 问题2：在 workspace 中记录 [`WorkspaceChangeSet`] 的变更。
 ///
 /// 按 change 类型分别处理：
 /// - `Upsert(path)`：stage 文件（`add_path`）；
@@ -182,7 +182,7 @@ pub fn record_workspace_change_set(
                 staged_count += 1;
             }
             crate::storage::workspace_git::model::WorkspaceHistoryChange::DeleteTree(prefix) => {
-                // (b/c)：按 prefix 删除所有 tracked entries。
+                // #645 评论 5504296097 问题2(b/c)：按 prefix 删除所有 tracked entries。
                 // prefix 本身不经过 is_workspace_history_path 过滤——子文件可能
                 // 已被该函数排除（如 secrets），但 tracked 的用户内容子文件应被移除。
                 // 这里按 prefix 删 index entries，由 index_remove_tree 内部遍历。
@@ -191,14 +191,14 @@ pub fn record_workspace_change_set(
             }
         }
     }
-    // (a)：change_set 处理完后，清理 index 中
+    // #645 评论 5504296097 问题4(a)：change_set 处理完后，清理 index 中
     // 旧版本误跟踪的内部文件（secrets/sync engine state），保证新 commit 的
     // tree 不再包含这些不应进入本地 history 的条目。不扫描 worktree。
     purge_non_history_index_entries(&mut index)?;
     finalize_commit(&repo, &mut index, message, staged_count)
 }
 
-/// 在 workspace 中记录**全量**变更（本地 commit）。
+/// #645 评论 5504296097 问题1：在 workspace 中记录**全量**变更（本地 commit）。
 ///
 /// 显式全量扫描 worktree，stage 所有非内部文件并移除已删除的 tracked 文件。
 /// 只有真正需要"全量建立/修复本地历史快照"的地方（如 bootstrap/recovery/rollback）
@@ -225,7 +225,7 @@ fn finalize_commit(
 
     let new_tree_oid = index.write_tree().map_err(map_git2_err)?;
 
-    // (b)：比较新 tree 和 HEAD tree，无变化不造空 commit。
+    // #645 评论 5504296097 问题2(b)：比较新 tree 和 HEAD tree，无变化不造空 commit。
     let head_tree_oid = repo
         .head()
         .ok()
@@ -275,16 +275,16 @@ fn finalize_commit(
     })
 }
 
-/// 向后兼容的旧入口。
+/// #645 评论 5504296097 问题1：向后兼容的旧入口。
 ///
 /// 保留给 recovery/rollback 测试和旧代码用。**新代码不应再调用本函数**——
 /// 显式 paths 请用 [`record_workspace_paths`]，全量请用
 /// [`record_all_workspace_changes`]，变更集请用 [`record_workspace_change_set`]。
 ///
-/// 语义：`paths.is_empty` → 全量扫描（与旧行为一致，避免破坏 recovery/rollback）；
+/// 语义：`paths.is_empty()` → 全量扫描（与旧行为一致，避免破坏 recovery/rollback）；
 /// 非空 → 显式 paths。
 ///
-/// (b)：降级为 `pub(crate)`，不再对外公开。
+/// #645 评论 5504296097 问题4(b)：降级为 `pub(crate)`，不再对外公开。
 /// 外部调用方应改用三个明确入口（`record_workspace_paths` /
 /// `record_workspace_change_set` / `record_all_workspace_changes`）。
 ///
@@ -306,7 +306,7 @@ pub(crate) fn record_workspace_changes(
 
 /// 查看 workspace 未提交的变更 diff。
 ///
-/// (c)：`diff_workspace` 也使用
+/// #645 评论 5504296097 问题2(c)：`diff_workspace` 也使用
 /// [`is_workspace_history_path`] 过滤，被排除的 path 不出现在 diff 中。
 pub fn diff_workspace(layout: &GitRepoLayout) -> Result<Vec<WorkspaceDiffEntry>> {
     let repo = crate::storage::git_repo_layout::open_repo(layout)?;
@@ -389,7 +389,7 @@ pub fn list_workspace_history(
 
 /// 排除本地内部文件后 stage 所有变更。
 ///
-/// (a)：全量扫描时对比 index 中已有的 tracked paths
+/// #645 评论 5504296097 问题2(a)：全量扫描时对比 index 中已有的 tracked paths
 /// 和 worktree 中现存的文件，找出已删除的并 `remove_path`。
 fn stage_all_with_excludes(repo: &git2::Repository, index: &mut git2::Index) -> Result<()> {
     let workdir = repo
@@ -401,8 +401,8 @@ fn stage_all_with_excludes(repo: &git2::Repository, index: &mut git2::Index) -> 
     stage_dir_recursive(&workdir, &workdir, index)?;
 
     // 2. 扫描 index 中已 tracked 但 worktree 已删除的路径，调 remove_path。
-    // git2::Index::iter 返回当前 index 的所有条目；对每个条目检查 worktree
-    // 是否仍存在，不存在则 remove_path（让 commit 反映删除）。
+    //    git2::Index::iter() 返回当前 index 的所有条目；对每个条目检查 worktree
+    //    是否仍存在，不存在则 remove_path（让 commit 反映删除）。
     let tracked_paths: Vec<PathBuf> = index
         .iter()
         .filter_map(|e| {
@@ -416,7 +416,7 @@ fn stage_all_with_excludes(repo: &git2::Repository, index: &mut git2::Index) -> 
         .collect();
     for rel in tracked_paths {
         if !is_workspace_history_path(&rel) {
-            // 规则升级后，旧版本误跟踪的
+            // #645 评论 5504296097 Blocker 1：规则升级后，旧版本误跟踪的
             // 内部文件（如 secrets.local.json）从新 HEAD tree 里移除。
             // 不能只跳过——跳过会让旧 tracked 条目留在 index 里，凭据继续
             // 出现在后续 commit 的 tree 中。
@@ -435,7 +435,7 @@ fn stage_all_with_excludes(repo: &git2::Repository, index: &mut git2::Index) -> 
 
 /// 递归 stage 目录，跳过内部排除路径。
 ///
-/// 底层规则统一到
+/// #645 评论 5504296097 问题1：底层规则统一到
 /// [`crate::storage::workspace_paths::is_workspace_history_path`]，
 /// 不再 `use crate::sync::staging::commit_plan::is_internal_git_artifact`，
 /// 消除 `storage/workspace_git -> sync/staging` 反向依赖。
@@ -529,7 +529,7 @@ mod tests {
         assert!(diffs.iter().any(|d| d.path == PathBuf::from("new.txt")));
     }
 
-    /// (b)：无变化不造空 commit。
+    /// #645 评论 5504296097 问题2(b)：无变化不造空 commit。
     #[test]
     fn test_no_changes_returns_none_oid() {
         let tmp = tempfile::tempdir().unwrap();
@@ -550,7 +550,7 @@ mod tests {
         assert_eq!(history.len(), 1);
     }
 
-    /// (a)：删除文件用 remove_path，能进入 commit。
+    /// #645 评论 5504296097 问题2(a)：删除文件用 remove_path，能进入 commit。
     #[test]
     fn test_delete_file_enters_commit() {
         let tmp = tempfile::tempdir().unwrap();
@@ -575,7 +575,7 @@ mod tests {
         );
     }
 
-    /// (c)：显式 paths 也走过滤。
+    /// #645 评论 5504296097 问题2(c)：显式 paths 也走过滤。
     #[test]
     fn test_explicit_internal_path_is_skipped() {
         let tmp = tempfile::tempdir().unwrap();

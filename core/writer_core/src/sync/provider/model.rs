@@ -5,7 +5,7 @@
 //! - [`RemoteObject`]：远端对象内容（路径 + 字节 + 版本），用于 `read`。
 //! - [`RemoteVersion`]：远端版本标识 newtype，GitHub 为 blob SHA，MemoryProvider 可为 UUID。
 //! - [`WritePrecondition`] / [`DeletePrecondition`]：写入/删除前置条件，
-//! 让调用方表达乐观并发控制（If-Match / CreateNew / Unconditional）。
+//!   让调用方表达乐观并发控制（If-Match / CreateNew / Unconditional）。
 
 use serde::{Deserialize, Serialize};
 
@@ -60,9 +60,9 @@ pub struct RemoteObject {
 /// 写入前置条件 — 乐观并发控制，对应 HTTP `If-Match` 语义。
 ///
 /// - [`WritePrecondition::IfMatch`]：要求远端当前版本与给定版本一致才写入，
-/// 否则返回 `ProviderError::PreconditionFailed`。用于覆盖已存在对象。
+///   否则返回 `ProviderError::PreconditionFailed`。用于覆盖已存在对象。
 /// - [`WritePrecondition::CreateNew`]：要求对象不存在才写入，
-/// 否则返回 `ProviderError::PreconditionFailed`。用于创建新对象。
+///   否则返回 `ProviderError::PreconditionFailed`。用于创建新对象。
 /// - [`WritePrecondition::Unconditional`]：无前置条件，直接覆盖。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,7 +75,7 @@ pub enum WritePrecondition {
 /// 删除前置条件 — 乐观并发控制，对应 HTTP `If-Match` 语义。
 ///
 /// - [`DeletePrecondition::IfMatch`]：要求远端当前版本与给定版本一致才删除，
-/// 否则返回 `ProviderError::PreconditionFailed`。
+///   否则返回 `ProviderError::PreconditionFailed`。
 /// - [`DeletePrecondition::Unconditional`]：无前置条件，直接删除（若存在）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

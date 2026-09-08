@@ -99,7 +99,7 @@ impl super::WriterCore {
             "deleted" => EventSource::Deleted,
             "ai_inserted" => EventSource::AiInserted,
             "sync_remote" => EventSource::SyncRemote,
-            // Android 按 Core cause 明确分类后发送的字符串。
+            // #624 评论10：Android 按 Core cause 明确分类后发送的字符串。
             // Undo/Redo/Programmatic/纯光标移动不是人工输入 — 显式映射为 Unknown
             // （不计入分类计数器，但仍计入 net_delta_chars），不得落入默认 HumanTyped。
             "undo" | "redo" | "programmatic" | "selection" => EventSource::Unknown,

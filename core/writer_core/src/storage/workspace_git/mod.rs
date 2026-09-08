@@ -7,13 +7,13 @@
 //!
 //! ```text
 //! storage/workspace_git/*
-//! = 本地版本历史 / diff / rollback，唯一 workspace repo
+//!     = 本地版本历史 / diff / rollback，唯一 workspace repo
 //!
 //! sync/provider/*
-//! = 远端存储 Provider
+//!     = 远端存储 Provider
 //!
 //! sync/lww + full_sync + staging
-//! = provider-neutral 同步算法
+//!     = provider-neutral 同步算法
 //! ```
 
 pub mod history;
@@ -26,7 +26,7 @@ pub use history::{
     diff_workspace, list_workspace_history, record_all_workspace_changes,
     record_workspace_change_set, record_workspace_paths,
 };
-// (b)：`record_workspace_changes` 不再对外公开。
+// #645 评论 5504296097 问题4(b)：`record_workspace_changes` 不再对外公开。
 // 它仍以 `pub(crate)` 存在于 `history` 模块内，供 recovery/rollback 使用。
 // 外部调用方应改用 `record_workspace_paths` / `record_workspace_change_set` /
 // `record_all_workspace_changes` 三个明确入口。

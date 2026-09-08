@@ -75,7 +75,7 @@ fn test_project_stats_dto_serialization_roundtrip() {
 
 #[test]
 fn test_project_summary_dto_from_project_summary() {
-    // ProjectSummary → ProjectSummaryDto 字段映射。
+    // #625 第二段：ProjectSummary → ProjectSummaryDto 字段映射。
     let summary = ProjectSummary {
         id: "proj-1".to_string(),
         title: "Test Project".to_string(),
@@ -97,7 +97,7 @@ fn test_project_summary_dto_from_project_summary() {
 
 #[test]
 fn test_project_summary_dto_serialization_roundtrip() {
-    // ProjectSummaryDto camelCase 序列化契约。
+    // #625 第二段：ProjectSummaryDto camelCase 序列化契约。
     let dto = ProjectSummaryDto {
         id: "proj_1".to_string(),
         title: "Test Project".to_string(),

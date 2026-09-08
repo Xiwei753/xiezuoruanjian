@@ -226,7 +226,7 @@ impl EditorKernel {
             ));
         }
 
-        // 先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
         let deleted_text = self.text.byte_slice(replace_start..replace_end).to_string();
         self.text
             .replace(replace_start..replace_end, &committed_text);
@@ -311,7 +311,7 @@ impl EditorKernel {
                     should_animate: self.animation_enabled
                         && old_cursor.value() != resulting_cursor,
                 },
-                // 单次 composition commit 从 delta 直接构造 offset map。
+                // #624 评论8：单次 composition commit 从 delta 直接构造 offset map。
                 offset_map: Some(OffsetMap::from_single_edit(
                     self.text.byte_len() - committed_text.len() + (replace_end - replace_start),
                     (replace_start, replace_end),
@@ -409,7 +409,7 @@ impl EditorKernel {
         })
     }
 
-    // composition 专用 grapheme 语义操作。
+    // #629 R8: composition 专用 grapheme 语义操作。
     // 以下四个方法只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
     // 不修改 committed 正文，不把 raw platform event 带入 Core。
     // grapheme 边界由 Core 的 unicode_segmentation 裁判。
@@ -832,11 +832,11 @@ impl EditorKernel {
         utf16_count
     }
 
-    /// 返回当前 composition 完整状态（preedit 文本 + replace range + cursor）。
+    /// #629 评论6 Part B：返回当前 composition 完整状态（preedit 文本 + replace range + cursor）。
     ///
     /// 返回元组字段顺序：
     /// `(session_id, base_revision, generation, replace_byte_start, replace_byte_end_exclusive,
-    /// preedit_text, preedit_cursor_utf16)`
+    ///   preedit_text, preedit_cursor_utf16)`
     ///
     /// 无活跃 composition session 时返回 None。调用方（app_service）据此构造
     /// [crate::api::types::EditorCompositionStateDto] 暴露给平台端。

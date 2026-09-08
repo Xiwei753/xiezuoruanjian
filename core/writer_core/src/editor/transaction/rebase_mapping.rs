@@ -2,7 +2,7 @@ use super::composition::OffsetMap;
 use super::rebase::{RebaseContinuation, RebaseReason, RebaseSliceMapping};
 use super::visual::AnimatedSliceRole;
 
-/// 判断旧 slice 角色是否属于"当前屏幕上已经可见的新出现文字"。
+/// #639 评论 5420317382：判断旧 slice 角色是否属于"当前屏幕上已经可见的新出现文字"。
 fn is_emergence_role(role: AnimatedSliceRole) -> bool {
     matches!(
         role,
@@ -10,7 +10,7 @@ fn is_emergence_role(role: AnimatedSliceRole) -> bool {
     )
 }
 
-/// 对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
+/// #639 评论 5421085782：对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
 fn build_crossfade_pair_index(
     new_slice_roles: &[AnimatedSliceRole],
     new_slice_byte_ranges: &[(usize, usize)],
@@ -51,7 +51,7 @@ fn build_crossfade_pair_index(
     pairs
 }
 
-/// rebase slice 角色兼容性
+/// #606: rebase slice 角色兼容性
 fn compatible_rebase_roles(new_role: AnimatedSliceRole, old_role: AnimatedSliceRole) -> bool {
     use AnimatedSliceRole::*;
     matches!(
@@ -104,7 +104,7 @@ fn try_match_slice(
     None
 }
 
-/// rebase slice 匹配输入
+/// #606: rebase slice 匹配输入
 #[derive(Debug, Clone, Copy)]
 pub struct SliceMatchInput<'a> {
     pub old_slice_roles: &'a [AnimatedSliceRole],
@@ -114,7 +114,7 @@ pub struct SliceMatchInput<'a> {
     pub offset_map: Option<&'a OffsetMap>,
 }
 
-/// 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+/// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
 pub fn compute_rebase_slice_mappings(input: SliceMatchInput) -> Vec<RebaseSliceMapping> {
     let mut mappings = Vec::new();
     let mut used_new = std::collections::HashSet::new();

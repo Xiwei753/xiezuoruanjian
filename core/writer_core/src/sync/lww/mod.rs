@@ -4,12 +4,12 @@
 //! 与 `service.rs` 中的 Git 同步路径（依赖 git2 crate，需 `git-https` feature）并行存在，
 //! 两者目的相同但传输和冲突检测方式不同：
 //!
-//! | 维度 | LWW 路径（本模块） | Git 路径（service.rs） |
+//! | 维度         | LWW 路径（本模块）                    | Git 路径（service.rs）          |
 //! |-------------|--------------------------------------|-------------------------------|
-//! | 传输方式 | GitHub REST API 直接读写文件 | git2 clone/pull/push |
-//! | 冲突检测 | 三路比较（UserTextDocument）+ LWW 时间戳（Metadata/GeneratedCache） | dry-run checkout + index diff |
-//! | 清单文件 | `app-meta/sync/manifest.sync.json` | Git index |
-//! | feature 门控 | 无（始终可用） | `git-https` |
+//! | 传输方式     | GitHub REST API 直接读写文件           | git2 clone/pull/push          |
+//! | 冲突检测     | 三路比较（UserTextDocument）+ LWW 时间戳（Metadata/GeneratedCache） | dry-run checkout + index diff |
+//! | 清单文件     | `app-meta/sync/manifest.sync.json`    | Git index                     |
+//! | feature 门控 | 无（始终可用）                         | `git-https`                   |
 //!
 //! ## 核心不变量
 //!
@@ -34,26 +34,26 @@ mod manifest;
 mod merge;
 mod transfer;
 
-// 从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
-// 纯分类/比较提升为 sync::content_class（始终可用），
+// #644 评论 5462823517 第3节：从 lww.rs 抽出的子模块，保持 pub/pub(crate) 接口不变。
+// #644 评论 5473789298 第3节：纯分类/比较提升为 sync::content_class（始终可用），
 // 这里 re-export 保持原 lww.rs 的 pub(crate) 接口，让旧测试 `crate::sync::lww::*` 仍可用。
 #[allow(unused_imports)]
 pub(crate) use crate::sync::content_class::{
     classify_content_path, is_document_content_path, ContentClass,
 };
 
-// 把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
+// #648：把入口函数留在 lww 模块根的对外接口上，调用方仍用 `crate::sync::lww::perform_lww_sync`。
 pub(crate) use engine::perform_lww_sync;
 
-// re-export 只读 local record 投影 helper，
+// #645 评论 5504296097 问题1：re-export 只读 local record 投影 helper，
 // 供 `build_sync_plan`（plan/dry-run 路径）复用，保持 plan 与 LWW execute attempt
 // 同一 source of truth（per-file 真实 winner device_id + 真实删除时间）。
 pub(crate) use manifest::snapshot_local_records_read_only;
 
-// re-export 统一 merge 核心，
+// #645 评论 5504296097 问题1 修复：re-export 统一 merge 核心，
 // 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
 pub(crate) use merge::{merge_remote_into_local_snapshot, LwwMergeOutcome};
 
-// re-export SYNC_MANIFEST_PATH，
+// #645 评论 5504296097 问题1 修复：re-export SYNC_MANIFEST_PATH，
 // 供 `full_sync.rs` upload_merged_outcome_to_generation 构造 manifest 远端路径。
 pub(crate) use manifest::SYNC_MANIFEST_PATH;

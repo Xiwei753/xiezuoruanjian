@@ -78,7 +78,7 @@ impl From<crate::writing_stats::Platform> for PlatformDto {
     }
 }
 
-// ── Layout Contract DTOs（WindowCapabilitiesDto → WindowViewportDto） ──
+// ── Layout Contract DTOs（#628：WindowCapabilitiesDto → WindowViewportDto） ──
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum ShellModeDto {
@@ -111,7 +111,7 @@ impl From<ShellModeDto> for crate::presentation::layout::ShellMode {
     }
 }
 
-/// 工作区布局模式 DTO。
+/// 工作区布局模式 DTO（#628 验收点 1）。
 ///
 /// 不再输出旧的 `ListDetail` / `ThreePane`，改为产品语义 `SinglePane` / `Workbench`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
@@ -139,7 +139,7 @@ impl From<WorkspaceLayoutModeDto> for crate::presentation::layout::WorkspaceLayo
     }
 }
 
-/// 一级导航放置位置（平台无关）。
+/// #628 评论第 4 节：一级导航放置位置（平台无关）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum PrimaryNavigationPlacementDto {
     #[default]
@@ -169,11 +169,11 @@ impl From<PrimaryNavigationPlacementDto>
     }
 }
 
-/// / 验收点 4：共用布局尺寸 DTO。
+/// #628 评论第 6 节 / 验收点 4：共用布局尺寸 DTO。
 ///
 /// 把新出现的结构尺寸继续收回 `LayoutMetricsDto`，避免平台端各自硬编码。
 ///
-/// 再收回 `editor_min_width_dp` /
+/// #628 评论 5301021120 问题 3：再收回 `editor_min_width_dp` /
 /// `toolbar_height_dp` / `toolbar_leading_width_dp` / `toolbar_trailing_width_dp`
 /// 以及左右 pane 的最小压缩宽度。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -186,7 +186,7 @@ pub struct LayoutMetricsDto {
     pub tool_pane_width_dp: f32,
     /// 工具 rail 宽度，dp。原 Android `56.dp`。
     pub tool_rail_width_dp: f32,
-    /// 正文编辑器最小可编辑宽度，dp。
+    /// 正文编辑器最小可编辑宽度，dp（#628 评论 5301021120 问题 3）。
     pub editor_min_width_dp: f32,
     /// 工作台顶栏高度，dp。
     pub toolbar_height_dp: f32,
@@ -241,7 +241,7 @@ impl From<LayoutMetricsDto> for crate::presentation::layout::metrics::LayoutMetr
     }
 }
 
-/// 平台中立的窗口遮挡 DTO。
+/// #628 验收点 5：平台中立的窗口遮挡 DTO。
 ///
 /// 描述窗口中被系统 UI（折叠铰链、状态栏、导航条、IME、悬浮窗等）遮挡的矩形区域。
 /// `separating` 表示该遮挡是否把可用区域分割成互不连通的两部分。
@@ -279,7 +279,7 @@ impl From<WindowOcclusionDto> for crate::presentation::layout::resolver::WindowO
     }
 }
 
-/// 原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
+/// #628：原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
 ///
 /// 平台端只传宽高（dp）与遮挡列表，不再传 paneCount / has_separating_fold /
 /// pointer_class / keyboard_visible。
@@ -288,13 +288,13 @@ impl From<WindowOcclusionDto> for crate::presentation::layout::resolver::WindowO
 pub struct WindowViewportDto {
     pub width_dp: f32,
     pub height_dp: f32,
-    /// 窗口遮挡区域列表，默认为空。
+    /// 窗口遮挡区域列表（#628 验收点 5），默认为空。
     pub occlusions: Vec<WindowOcclusionDto>,
 }
 
 impl Default for WindowViewportDto {
     fn default() -> Self {
-        // 默认按窄窗口（手机竖屏）算，与 Core 内部 WindowViewport::default 对齐。
+        // 默认按窄窗口（手机竖屏）算，与 Core 内部 WindowViewport::default() 对齐。
         Self {
             width_dp: 360.0,
             height_dp: 640.0,
@@ -323,7 +323,7 @@ impl From<WindowViewportDto> for crate::presentation::layout::resolver::WindowVi
     }
 }
 
-/// 第 1 步：LayoutContractDto 删除 `show_primary_navigation`（改由 ScreenPolicy 提供），
+/// #628 评论 5301021120 第 1 步：LayoutContractDto 删除 `show_primary_navigation`（改由 ScreenPolicy 提供），
 /// 新增 `primary_navigation_placement` 与 `metrics`。
 /// 验收点 1：`workspace_pane_mode` → `workspace_layout_mode`（类型 `WorkspaceLayoutModeDto`）。
 /// 第 1 步：删除单数 `workbench_occlusion` 字段（死数据）。工作台布局计划改由

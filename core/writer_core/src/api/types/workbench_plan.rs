@@ -1,10 +1,10 @@
-//! # Workbench Layout Plan DTOs（第 1-3 步 + 02:59:39Z 版）
+//! # Workbench Layout Plan DTOs（#628 评论 5301021120 第 1-3 步 + 02:59:39Z 版）
 //!
 //! `resolve_workbench_layout` 输出链路的跨语言 DTO：布局矩形、七角色、可见性、
 //! 最终产品模式（Workbench/SinglePane）与布局计划。每个 `*_dto` 类型对应
 //! Core 内部类型（`crate::presentation::layout::resolver`），提供 `From` 双向转换。
 //!
-//! 02:59:39Z 版：`WorkbenchLayoutPlanDto.valid: bool` 删除，
+//! #628 评论 5301021120 02:59:39Z 版：`WorkbenchLayoutPlanDto.valid: bool` 删除，
 //! 改由 [`ResolvedWorkspaceModeDto`] 表达 Rust 决定的最终产品模式（Workbench / SinglePane）；
 //! 平台端只按 mode 映射壳层、按 bounds measure/place，不允许自己再决定模式。
 /// 平台无关的布局矩形 DTO（dp 坐标系）。
@@ -39,7 +39,7 @@ impl From<LayoutRectDto> for crate::presentation::layout::resolver::LayoutRect {
     }
 }
 
-/// 工作台角色 DTO — 七个产品语义角色（第 1 步）。
+/// 工作台角色 DTO — 七个产品语义角色（#628 评论 5301021120 第 1 步）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum WorkbenchRoleDto {
     #[default]
@@ -108,7 +108,7 @@ impl From<WorkbenchPlacementDto> for crate::presentation::layout::resolver::Work
     }
 }
 
-/// 工作台可见性 DTO — 端侧局部 UI 状态（第 1 步）。
+/// 工作台可见性 DTO — 端侧局部 UI 状态（#628 评论 5301021120 第 1 步）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchVisibilityDto {
@@ -134,7 +134,7 @@ impl From<WorkbenchVisibilityDto> for crate::presentation::layout::resolver::Wor
     }
 }
 
-/// 工作台布局计划的最终产品模式 DTO（02:59:39Z 版）。
+/// 工作台布局计划的最终产品模式 DTO（#628 评论 5301021120 02:59:39Z 版）。
 ///
 /// Rust 根据当前 viewport + occlusions + visibility 产出最终 mode + bounds；
 /// 平台端只按 mode 映射壳层、按 bounds measure/place，不允许自己再决定模式。
@@ -169,15 +169,15 @@ impl From<ResolvedWorkspaceModeDto>
     }
 }
 
-/// 工作台布局计划 DTO — `resolve_workbench_layout` 的输出（第 1 步）。
+/// 工作台布局计划 DTO — `resolve_workbench_layout` 的输出（#628 评论 5301021120 第 1 步）。
 ///
-/// 02:59:39Z 版：不再返回含糊的 `valid: bool`，
+/// #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 `valid: bool`，
 /// 改由 [`ResolvedWorkspaceModeDto`] 表达 Rust 决定的最终产品模式。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchLayoutPlanDto {
     pub placements: Vec<WorkbenchPlacementDto>,
-    /// Rust 决定的最终产品模式（02:59:39Z 版）。
+    /// Rust 决定的最终产品模式（#628 评论 5301021120 02:59:39Z 版）。
     ///
     /// - `Workbench`：七角色正常放置。
     /// - `SinglePane`：只返回 Editor 的最大连续安全 free-region bounds，其余 role 空。

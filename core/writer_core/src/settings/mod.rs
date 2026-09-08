@@ -3,12 +3,12 @@
 //! 管理两类设置：
 //!
 //! 1. **LocalSettings（本地设置）**：仅存储在本地，不同步
-//! - 窗口大小、自动保存开关、字号、行距、自动缩进、动画开关等
-//! - 文件路径：`<app_data_root>/settings.local.json`
+//!    - 窗口大小、自动保存开关、字号、行距、自动缩进、动画开关等
+//!    - 文件路径：`<app_data_root>/settings.local.json`
 //!
 //! 2. **SyncableSettings（可同步设置）**：跨设备同步候选
-//! - 字号、主题模式、Monet 颜色
-//! - 文件路径：`<app_data_root>/settings.sync.json`（应用级，不随作品仓库同步）
+//!    - 字号、主题模式、Monet 颜色
+//!    - 文件路径：`<app_data_root>/settings.sync.json`（应用级，不随作品仓库同步）
 //!
 //! ## 职责边界
 //!
@@ -535,7 +535,7 @@ pub fn save_syncable_settings(config_dir: &Path, settings: &SyncableSettings) ->
     crate::storage::atomic_write_string(&path, &content)
 }
 
-// ── settings 的 *_with_changes 入口 ──
+// ── #645 评论 5504296097 问题3：settings 的 *_with_changes 入口 ──
 //
 // settings 文件直接写在 `config_dir`（= `app_data_root`）下，
 // 所以 workspace-relative 路径就是文件名本身。
@@ -544,7 +544,7 @@ pub fn save_syncable_settings(config_dir: &Path, settings: &SyncableSettings) ->
 // 这些路径在 `classify_workspace_path_str` 中归为 UserSetting/UserContent，
 // `is_workspace_history_path` 返回 true，会进入本地 Git history。
 
-/// save_local_settings 的变更集版本。
+/// #645 评论 5504296097 问题3：save_local_settings 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含 `Upsert(settings.local.json)`。
 pub fn save_local_settings_with_changes(
@@ -557,7 +557,7 @@ pub fn save_local_settings_with_changes(
     Ok(change_set)
 }
 
-/// save_syncable_settings 的变更集版本。
+/// #645 评论 5504296097 问题3：save_syncable_settings 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含 `Upsert(settings.sync.json)`。
 pub fn save_syncable_settings_with_changes(
@@ -708,7 +708,7 @@ pub fn save_palette_record(config_dir: &Path, record: &ThemePaletteRecord) -> Re
     crate::storage::atomic_write_string(&path, &content)
 }
 
-/// save_palette_record 的变更集版本。
+/// #645 评论 5504296097 问题3：save_palette_record 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `Upsert(themes/palettes/<device_id>/<fingerprint>.json)`。
@@ -787,7 +787,7 @@ pub fn delete_palette_record(config_dir: &Path, device_id: &str, fingerprint: &s
     Ok(())
 }
 
-/// delete_palette_record 的变更集版本。
+/// #645 评论 5504296097 问题3：delete_palette_record 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `Delete(themes/palettes/<device_id>/<fingerprint>.json)`。

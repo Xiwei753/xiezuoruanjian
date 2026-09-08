@@ -1273,7 +1273,7 @@ mod tests {
         assert_eq!(kernel.snapshot_text(), "AXYE");
     }
 
-    // auto-indent 测试
+    // #606: auto-indent 测试
 
     #[test]
     fn insert_line_break_with_auto_indent_copies_leading_whitespace() {
@@ -1434,7 +1434,7 @@ mod tests {
         assert_eq!(kernel.snapshot_text(), "    hello");
     }
 
-    // composition 视觉分类通过共享逻辑确定
+    // #606: composition 视觉分类通过共享逻辑确定
 
     #[test]
     fn composition_update_visual_intent_uses_shared_classification() {
@@ -1525,7 +1525,7 @@ mod tests {
         assert_eq!(kernel.snapshot_text(), "hello world");
     }
 
-    // ── grapheme 边界 API 测试 ──
+    // ── #606: grapheme 边界 API 测试 ──
 
     #[test]
     fn grapheme_boundary_previous_ascii() {
@@ -1595,17 +1595,17 @@ mod tests {
         assert_eq!(kernel.previous_grapheme_boundary(0), 0);
         // offset=0 -> next=1
         assert_eq!(kernel.next_grapheme_boundary(0), 1);
-        // offset=text.len -> previous=len-1
+        // offset=text.len() -> previous=len-1
         assert_eq!(kernel.previous_grapheme_boundary(3), 2);
-        // offset=text.len -> next=len（没有更晚的边界，返回 len）
+        // offset=text.len() -> next=len（没有更晚的边界，返回 len）
         assert_eq!(kernel.next_grapheme_boundary(3), 3);
-        // offset > text.len -> previous 返回 len
+        // offset > text.len() -> previous 返回 len
         assert_eq!(kernel.previous_grapheme_boundary(100), 3);
-        // offset > text.len -> next 返回 len
+        // offset > text.len() -> next 返回 len
         assert_eq!(kernel.next_grapheme_boundary(100), 3);
     }
 
-    // ── EditorVisualIntent.offset_map 测试 ──
+    // ── #606: EditorVisualIntent.offset_map 测试 ──
 
     #[test]
     fn visual_intent_offset_map_insert() {
@@ -1715,7 +1715,7 @@ mod tests {
         );
     }
 
-    // ── composition grapheme semantic operation tests ──
+    // ── #629 R8: composition grapheme semantic operation tests ──
 
     fn begin_composition_at_end(kernel: &mut EditorKernel, text: &str) -> (u64, u64) {
         let byte_len = text.len();

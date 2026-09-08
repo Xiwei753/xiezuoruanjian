@@ -1,11 +1,11 @@
-//! LWW manifest/state/local record 构造。
+//! #644 评论 5462823517 第3节：LWW manifest/state/local record 构造。
 //!
 //! 从 lww.rs 抽出的 manifest 相关：SYNC_MANIFEST_PATH 常量、lww_record_time。
 //!
-//! local record / tombstone record / remote record 构造
+//! #644 评论 5473105049 第5节：local record / tombstone record / remote record 构造
 //! 也收归本模块，`mod.rs` 只保留重试和一次 attempt 的编排。
 //!
-//! `snapshot_local_records_read_only` 是真正的只读
+//! #645 评论 5504296097 问题1：`snapshot_local_records_read_only` 是真正的只读
 //! local record 投影 helper，保留 per-file LWW（含真实 winner device_id），
 //! 绝不伪造 now_ms 作为删除时间。`snapshot_local_target_lifecycle` 和 LWW
 //! `execute_lww_sync_attempt` 都复用它。
@@ -32,15 +32,15 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
     }
 }
 
-/// 真正的只读 local record 投影 helper。
+/// #645 评论 5504296097 问题1：真正的只读 local record 投影 helper。
 ///
 /// 读 old manifest + read-only SyncState → scan 当前文件，产出完整 LWW 投影：
 ///
 /// - 当前 hash 与 old manifest record hash 相同 → 直接 clone old manifest record，
-/// 保留原 `updated_at` / `deleted_at` / `device_id` / `op`（**不**丢 winner device_id）；
+///   保留原 `updated_at` / `deleted_at` / `device_id` / `op`（**不**丢 winner device_id）；
 /// - 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id 生成新 upsert；
 /// - known file 消失且有真实 tombstone → 用 tombstone 的 `deleted_at` + `deleted_by`/device_id
-/// 生成 delete record（**不**伪造 now_ms）；
+///   生成 delete record（**不**伪造 now_ms）；
 /// - known file 消失且无 tombstone → 返回 `Err`（调用方应走 Retry，绝不能用 now_ms 伪造删除时间）。
 ///
 /// 这个 helper 是真正只读的：用 [`SyncService::load_sync_state_read_only`] 加载 state，
@@ -55,7 +55,7 @@ pub fn snapshot_local_records_read_only(
     preferred_device_id: &str,
 ) -> crate::error::Result<HashMap<String, ManifestFileRecord>> {
     // 1. 读 old manifest（manifest.sync.json）→ HashMap<path, ManifestFileRecord>。
-    // manifest 存在但损坏 → 返回 Err（不静默 fallback）。
+    // #645 评论 5504296097 问题2：manifest 存在但损坏 → 返回 Err（不静默 fallback）。
     // 调用方（compute_local_project_lifecycle_candidate）据此返回 Retry，
     // 避免在无可靠本地 LWW 证据时做破坏性 DeleteLocalProject 决策。
     // manifest 不存在 → 空 HashMap（首次同步，正常）。
@@ -104,7 +104,7 @@ pub fn snapshot_local_records_read_only(
             let path = entry.relative_path.clone();
             let local_hash = entry.file_hash.clone();
 
-            // .1：当前 hash 与 old manifest record hash 相同
+            // #645 评论 5504296097 问题1.1：当前 hash 与 old manifest record hash 相同
             // → 直接 clone old manifest record，保留原 device_id。
             if let Some(old_rec) = old_manifest_records.get(&path) {
                 if old_rec.content_hash == local_hash && old_rec.op == "upsert" {
@@ -174,7 +174,7 @@ pub fn snapshot_local_records_read_only(
                     },
                 );
             } else {
-                // .2：无 tombstone → 绝不伪造 now_ms。
+                // #645 评论 5504296097 问题1.2：无 tombstone → 绝不伪造 now_ms。
                 // 返回 Err，调用方应走 Retry。
                 return Err(crate::Error::Io(std::io::Error::other(format!(
                     "snapshot_local_records_read_only: known file {} missing without tombstone \
@@ -185,13 +185,13 @@ pub fn snapshot_local_records_read_only(
         }
     }
 
-    // 5. manifest 中有 upsert record 但文件不在磁盘上
-    // 且不在 known_files → 不再把旧 upsert 冒充当前本地事实。
-    // - 文件实际存在 → 说明被 whitelisted/blacklisted 跳过，不管（上面 step 3 已处理）；
-    // - 文件不存在 + 有 tombstone（state.tombstones 中 original_path 匹配）
-    // → 生成 Delete record（用 tombstone 的 deleted_at*1000 作为 deleted_at_ms
-    // 和 updated_at_ms，device_id 用 tombstone.deleted_by 或 state.device_id）；
-    // - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
+    // 5. #645 评论 5504296097 问题1 修复：manifest 中有 upsert record 但文件不在磁盘上
+    //    且不在 known_files → 不再把旧 upsert 冒充当前本地事实。
+    //    - 文件实际存在 → 说明被 whitelisted/blacklisted 跳过，不管（上面 step 3 已处理）；
+    //    - 文件不存在 + 有 tombstone（state.tombstones 中 original_path 匹配）
+    //      → 生成 Delete record（用 tombstone 的 deleted_at*1000 作为 deleted_at_ms
+    //      和 updated_at_ms，device_id 用 tombstone.deleted_by 或 state.device_id）；
+    //    - 文件不存在 + 无 tombstone → 返回 Err（不能伪造当前本地事实）。
     for (path, old_rec) in &old_manifest_records {
         if records.contains_key(path) {
             continue;
@@ -234,7 +234,7 @@ pub fn snapshot_local_records_read_only(
     Ok(records)
 }
 
-/// 构建远端文件记录。
+/// #644 评论 5473105049 第5节：构建远端文件记录。
 ///
 /// 从远端 manifest 和 tree 构建 `path → ManifestFileRecord` 映射。
 /// 远端 tree 中存在但 manifest 中无记录的文件（首次同步或 manifest 损失），
@@ -276,7 +276,7 @@ pub(super) fn build_remote_records(
     remote_records
 }
 
-/// 读取文件 mtime，失败时返回 `Err`。
+/// #645 评论 5504296097 问题4 修复：读取文件 mtime，失败时返回 `Err`。
 ///
 /// 不再 `unwrap_or(fallback_ms)` — 二次 metadata 失败（竞态删/权限变）伪造
 /// "当前时间"的 LWW 记录会让本地文件错误地胜过远端。metadata / modified /
@@ -380,7 +380,7 @@ mod tests {
         assert_eq!(remote_time, 2000);
     }
 
-    /// snapshot_local_records_read_only 基本测试。
+    /// #645 评论 5504296097 问题1：snapshot_local_records_read_only 基本测试。
     /// 验证：当前文件 hash 与 old manifest record hash 相同时，保留原 device_id。
     #[test]
     fn test_snapshot_local_records_read_only_preserves_device_id() {
@@ -415,7 +415,7 @@ mod tests {
             snapshot_local_records_read_only(sync_root, SyncScope::Project, "current-device")
                 .unwrap();
         let rec = records.get("project.json").unwrap();
-        // .1：保留原 winner 的 device_id，不写 currentA当前设备。
+        // #645 评论 5504296097 问题1.1：保留原 winner 的 device_id，不写 currentA当前设备。
         assert_eq!(rec.device_id, "winner-device");
     }
 }

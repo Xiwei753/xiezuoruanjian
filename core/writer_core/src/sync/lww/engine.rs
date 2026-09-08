@@ -22,7 +22,7 @@ use super::attempt::execute_lww_sync_attempt;
 /// 重试策略：最多重试 2 次，间隔 500ms。仅对可恢复错误（网络/限流）重试；
 /// 认证/权限等不可恢复错误直接返回，不重试。
 ///
-/// 错误分类（`SyncErrorCategory`，provider-neutral）：
+/// 错误分类（`SyncErrorCategory`，Issue #645 评论 5504296097 第1点起 provider-neutral）：
 /// - `LocalIo` → Error（不可恢复）
 /// - `AuthFailed` / `PermissionDenied` → Error（不可恢复）
 /// - `NotFound` → Error("not_found")（不可恢复）
@@ -103,7 +103,7 @@ pub(crate) fn perform_lww_sync(
             Err(e) => {
                 // 不可恢复错误（认证/权限/precondition conflict/file_not_found 等）
                 // 直接分类返回，不 sleep 不重试——重试也不会成功，反而拖延用户感知。
-                // 可恢复性判断依赖 Error::recoverable 的结构化实现：
+                // 可恢复性判断依赖 Error::recoverable() 的结构化实现：
                 // SyncRemoteError 按 category 区分（precondition_failed/file_not_found 不可恢复），
                 // 其他变体（SyncAuthFailed 不可恢复、SyncNetworkUnavailable/SyncRateLimited 可恢复等）。
                 if !e.recoverable() {
@@ -131,7 +131,7 @@ pub(crate) fn perform_lww_sync(
 /// 供 [`perform_lww_sync`] 重试循环在不可恢复错误或达到最大重试次数时复用，
 /// 避免错误分类逻辑在两个分支重复。
 ///
-/// 第1点：分类规则与新的 provider-neutral
+/// Issue #645 评论 5504296097 第1点：分类规则与新的 provider-neutral
 /// `SyncErrorCategory` 对齐：
 /// - `LocalIo` → `Error("local_io")`
 /// - `AuthFailed` / `PermissionDenied` → `Error(to_ui_status)`（不可恢复）

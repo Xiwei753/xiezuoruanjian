@@ -1,4 +1,4 @@
-//! layout 模块整合测试 — 覆盖 resolve_layout 端到端决策表。
+//! #628：layout 模块整合测试 — 覆盖 resolve_layout 端到端决策表。
 //!
 //! 子模块 breakpoints/metrics/resolver 各自有单元测试，
 //! 这里只做端到端契约检查（避免重复真相）。

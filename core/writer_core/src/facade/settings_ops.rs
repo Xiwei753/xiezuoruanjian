@@ -19,7 +19,7 @@ impl super::WriterCore {
         settings::save_syncable_settings(&self.app_data_root, settings)
     }
 
-    // settings 的 *_with_changes 转发，
+    // #645 评论 5504296097 问题3：settings 的 *_with_changes 转发，
     // 返回 WorkspaceChangeSet 供 API 层记录本地历史。
 
     /// 保存本地设置并返回变更集。

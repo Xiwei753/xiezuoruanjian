@@ -7,7 +7,7 @@ use crate::sync::provider::error::ProviderError;
 
 /// 把 GitHub HTTP 响应映射为 [`ProviderError`]。
 ///
-/// 映射规则：
+/// 映射规则（见 Issue #645 评论 5504296097）：
 /// - 401 → `AuthFailed`
 /// - 403 + body 含 "Resource not accessible" → `PermissionDenied`
 /// - 403 其他 → `AuthFailed`

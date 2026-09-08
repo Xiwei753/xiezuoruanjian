@@ -95,22 +95,22 @@ fn starmap_meta_path(app_data_root: &Path, starmap_id: &str) -> std::path::PathB
     starmaps_dir(app_data_root).join(format!("{}.meta.json", starmap_id))
 }
 
-/// starmap meta 的 workspace-relative 路径。
+/// #645 评论 5504296097 问题3：starmap meta 的 workspace-relative 路径。
 fn starmap_meta_rel_path(starmap_id: &str) -> std::path::PathBuf {
     std::path::PathBuf::from("starmaps").join(format!("{}.meta.json", starmap_id))
 }
 
-/// starmaps/index.json 的 workspace-relative 路径。
+/// #645 评论 5504296097 问题3：starmaps/index.json 的 workspace-relative 路径。
 fn starmaps_index_rel_path() -> std::path::PathBuf {
     std::path::PathBuf::from("starmaps").join("index.json")
 }
 
-/// starmaps/{id}/ 目录的 workspace-relative 路径。
+/// #645 评论 5504296097 问题3：starmaps/{id}/ 目录的 workspace-relative 路径。
 fn starmap_dir_rel_path(starmap_id: &str) -> std::path::PathBuf {
     std::path::PathBuf::from("starmaps").join(starmap_id)
 }
 
-/// 构造单个 starmap meta + index 的变更集。
+/// #645 评论 5504296097 问题3：构造单个 starmap meta + index 的变更集。
 fn change_set_for_meta_and_index(
     starmap_id: &str,
 ) -> crate::storage::workspace_git::WorkspaceChangeSet {
@@ -234,7 +234,7 @@ pub fn create_starmap(
     Ok(meta)
 }
 
-/// create_starmap 的变更集版本。
+/// #645 评论 5504296097 问题3：create_starmap 的变更集版本。
 ///
 /// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
@@ -292,7 +292,7 @@ pub fn create_child_starmap(
     Ok(meta)
 }
 
-/// create_child_starmap 的变更集版本。
+/// #645 评论 5504296097 问题3：create_child_starmap 的变更集版本。
 ///
 /// 返回 `(StarMapMeta, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(child meta) + Upsert(parent meta) + Upsert(index.json)`。
@@ -334,7 +334,7 @@ pub fn rename_starmap(
     Ok(meta)
 }
 
-/// rename_starmap 的变更集版本。
+/// #645 评论 5504296097 问题3：rename_starmap 的变更集版本。
 ///
 /// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
 pub fn rename_starmap_with_changes(
@@ -396,7 +396,7 @@ pub fn delete_starmap(app_data_root: &Path, starmap_id: &str) -> Result<()> {
     Ok(())
 }
 
-/// delete_starmap 的变更集版本。
+/// #645 评论 5504296097 问题3：delete_starmap 的变更集版本。
 ///
 /// 变更集：`Delete(starmaps/{id}.meta.json) + DeleteTree(starmaps/{id}) +
 /// Upsert(starmaps/index.json) + 可选 Upsert(parent meta)`。
@@ -439,7 +439,7 @@ pub fn bind_starmap_to_project(
     Ok(())
 }
 
-/// bind_starmap_to_project 的变更集版本。
+/// #645 评论 5504296097 问题3：bind_starmap_to_project 的变更集版本。
 ///
 /// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
 pub fn bind_starmap_to_project_with_changes(
@@ -490,7 +490,7 @@ pub fn set_main_starmap_for_project(
     Ok(())
 }
 
-/// set_main_starmap_for_project 的变更集版本。
+/// #645 评论 5504296097 问题3：set_main_starmap_for_project 的变更集版本。
 ///
 /// 变更集：所有本次实际改过的 meta + `Upsert(starmaps/index.json)`。
 /// 包含被清除 main 标记的旧主星图 meta、新主星图 meta、index.json。
@@ -555,7 +555,7 @@ pub fn unbind_starmap_from_project(app_data_root: &Path, starmap_id: &str) -> Re
     Ok(())
 }
 
-/// unbind_starmap_from_project 的变更集版本。
+/// #645 评论 5504296097 问题3：unbind_starmap_from_project 的变更集版本。
 ///
 /// 变更集：`Upsert(starmaps/{id}.meta.json) + Upsert(starmaps/index.json)`。
 pub fn unbind_starmap_from_project_with_changes(

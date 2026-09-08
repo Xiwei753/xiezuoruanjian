@@ -124,7 +124,7 @@ fn test_record_recent_edit_limit_20() {
     assert_eq!(edits[0].chapter_id, "ch_1b");
 }
 
-/// 项1: 每个 project 只保留最后一次编辑的 chapter。
+/// #630 评论 5312333045 项1: 每个 project 只保留最后一次编辑的 chapter。
 #[test]
 fn test_record_recent_edit_per_project_dedup() {
     let dir = tempdir().unwrap();
@@ -141,7 +141,7 @@ fn test_record_recent_edit_per_project_dedup() {
     assert_eq!(edits[0].chapter_id, "c2", "latest chapter should be kept");
 }
 
-/// normalize_recent_edits 在加载旧数据时按当前作品树校正章节归属，
+/// #632: normalize_recent_edits 在加载旧数据时按当前作品树校正章节归属，
 /// 并按校正后的 project_id 去重。
 #[test]
 fn test_normalize_on_load() {
@@ -176,7 +176,7 @@ fn test_normalize_on_load() {
     assert_eq!(edits[0].chapter_id, "c2", "latest timestamp wins");
 }
 
-/// normalize 保留不同项目的条目。
+/// #630: normalize 保留不同项目的条目。
 #[test]
 fn test_normalize_keeps_different_projects() {
     let dir = tempdir().unwrap();
@@ -207,7 +207,7 @@ fn test_normalize_keeps_different_projects() {
     assert_eq!(edits.len(), 2, "different projects should both be kept");
 }
 
-/// 磁盘里残留的 alias（同一章节被记成两个不同 project_id）在读取时
+/// #632: 磁盘里残留的 alias（同一章节被记成两个不同 project_id）在读取时
 /// 被当前作品树校正为同一个 canonical project_id，再按 project 去重。
 #[test]
 fn test_normalize_collapses_alias_via_current_tree() {
@@ -247,7 +247,7 @@ fn test_normalize_collapses_alias_via_current_tree() {
     assert_eq!(edits[0].chapter_id, "c1");
 }
 
-/// 章节已不存在时，normalize 直接丢弃该条目。
+/// #632: 章节已不存在时，normalize 直接丢弃该条目。
 #[test]
 fn test_normalize_drops_orphan_chapter() {
     let dir = tempdir().unwrap();

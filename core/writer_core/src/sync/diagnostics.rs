@@ -91,7 +91,7 @@ impl crate::sync::SyncService {
                 // perform_sync_diagnostics 是静态方法，不持有 SyncTransport。
                 // 真正的网络探测由 facade 的 run_sync_diagnostics（持有 transport）完成。
                 // 此处仅做 config 级校验：GitHubRuntimeConfig::from_persisted 验证 token/URL，
-                // 通过后返回 network_probe_failed（与旧 GitHubApiBackend::new 无 transport 行为一致）。
+                // 通过后返回 network_probe_failed（与旧 GitHubApiBackend::new() 无 transport 行为一致）。
                 let github_config = match &config.provider_config {
                     Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => gh.clone(),
                     None => GitHubProviderConfig::defaults(),

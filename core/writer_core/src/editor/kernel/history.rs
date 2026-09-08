@@ -6,7 +6,7 @@ use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange}
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
-    /// Undo 通过 inverse delta 局部应用。
+    /// #624 评论8：Undo 通过 inverse delta 局部应用。
     ///
     /// 当前正文是编辑后的 new 文本；对 entry.edits 按 new_range 逆序应用
     /// inverse delta（把 new_range 处的内容替换回 deleted_text），光标/选区恢复
@@ -31,10 +31,10 @@ impl EditorKernel {
 
         let old_len_before_undo = self.text.byte_len();
 
-        // 第4项补漏：inverse delta 按 new_range.start 降序应用（先恢复右侧），
+        // #624 评论10 第4项补漏：inverse delta 按 new_range.start 降序应用（先恢复右侧），
         // 保证左侧 delta 的 new_range（最终文本坐标）在应用时仍然有效。旧实现固定
-        // iter.rev 隐含「edits 列表按 new_range 升序」——replace-all 满足，但
-        // deleteSurrounding 的 edits 是 [after, before]，rev 变成升序，before 先恢复
+        // iter().rev() 隐含「edits 列表按 new_range 升序」——replace-all 满足，但
+        // deleteSurrounding 的 edits 是 [after, before]，rev() 变成升序，before 先恢复
         // 会把 after 点坐标推偏（顺序应用碰巧对，但 DisplayPatch/OffsetMap 坐标是错的）。
         // 同起点（before/after 紧邻，均退化为 point(bs)）时按 old_range.start 降序决胜：
         // after（右侧）先插入，before 后插入，文本顺序才是先 before 后 after。
@@ -142,7 +142,7 @@ impl EditorKernel {
         })
     }
 
-    /// Redo 通过 forward delta 局部应用。
+    /// #624 评论8：Redo 通过 forward delta 局部应用。
     ///
     /// 当前正文是 undo 后的 old 文本；对 entry.edits 按 old_range 正序应用
     /// forward delta（把 old_range 处的内容替换回 inserted_text），光标/选区恢复
@@ -167,7 +167,7 @@ impl EditorKernel {
 
         let old_len_before_redo = self.text.byte_len();
 
-        // 按 old_range 从后往前应用 forward delta — 所有 old_range 都基于
+        // #624 评论8：按 old_range 从后往前应用 forward delta — 所有 old_range 都基于
         // 编辑前文本坐标，从右往左应用时先前的替换不会使后面 delta 的坐标漂移。
         // （edits 记录顺序 = 执行顺序，可能是升序或降序，不能直接依赖 iter/rev。）
         let mut forward: Vec<&super::TextEditDelta> = entry.edits.iter().collect();

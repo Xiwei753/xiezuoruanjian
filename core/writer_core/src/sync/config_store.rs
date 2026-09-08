@@ -46,7 +46,7 @@ impl crate::sync::SyncService {
     /// - `app-meta/logs`：日志（设备专属）
     /// - `sqlite_cache` / `tmp` / `cache` / `backups`：缓存与备份（可重建）
     ///
-    /// 同步根是单个作品目录：设置、凭证、统计、最近编辑、
+    /// 同步根是单个作品目录（Issue #600）：设置、凭证、统计、最近编辑、
     /// 设备信息、星图、日志等应用级数据位于 `app_data_root`，不在任何作品
     /// 仓库内，因此不需要（也不可能）出现在黑名单中。
     pub fn is_blacklisted_path(rel_path: &str, scope: SyncScope) -> bool {
@@ -189,7 +189,7 @@ impl crate::sync::SyncService {
 impl crate::sync::SyncService {
     /// 判断路径是否在同步白名单中。
     ///
-    /// 同步根是单个作品目录，`rel_path` 相对 `project_root`。
+    /// 同步根是单个作品目录（Issue #600），`rel_path` 相对 `project_root`。
     /// 黑名单优先——先排除黑名单再检查白名单。
     ///
     /// 同步语义按路径类型不同：
@@ -275,7 +275,7 @@ impl crate::sync::SyncService {
         Self::load_sync_state_with_preferred_device_id(sync_root, None)
     }
 
-    /// /5：只读加载同步状态 — 不写文件、不删旧文件。
+    /// #645 评论 5504296097 问题1/5：只读加载同步状态 — 不写文件、不删旧文件。
     ///
     /// 与 [`load_sync_state_with_preferred_device_id`] 的关键区别：
     /// - 旧格式 `sync_state.json` 迁移只在内存做，**不** `save_sync_state` 也**不** `remove_file`；
@@ -306,7 +306,7 @@ impl crate::sync::SyncService {
             // 旧格式迁移：只读不写。
             let old_path = sync_root.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
-                // 旧 sync_state.json 存在但读失败/JSON
+                // #645 评论 5504296097 问题4 修复：旧 sync_state.json 存在但读失败/JSON
                 // 损坏 → 返回 Err，不再回退 Default 把旧 state 损坏解释成"首次同步"，
                 // 丢 known_files / tombstones / conflicted_files / device_id。
                 let content = std::fs::read_to_string(&old_path).map_err(|e| {
@@ -322,7 +322,7 @@ impl crate::sync::SyncService {
                     )))
                 })?;
                 state.device_id = resolve_device_id(&state.device_id);
-                // read-only — 不 save、不 remove_file。
+                // #645 评论 5504296097 问题5：read-only — 不 save、不 remove_file。
                 return Ok(state);
             }
             let default_state = SyncState {
@@ -333,8 +333,8 @@ impl crate::sync::SyncService {
         }
 
         let content = std::fs::read_to_string(state_path)?;
-        // 文件存在但解析失败 → 返回 Err，
-        // 不再 unwrap_or_default 把损坏的 state.local.json 当成"首次同步"。
+        // #645 评论 5504296097 问题1 修复：文件存在但解析失败 → 返回 Err，
+        // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
         // 文件不存在的分支在上面已处理（返回 Default，正常首次同步）。
         let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
@@ -343,7 +343,7 @@ impl crate::sync::SyncService {
         })?;
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
-            // read-only — 只在内存补 device_id，不 save。
+            // #645 评论 5504296097 问题5：read-only — 只在内存补 device_id，不 save。
             state.device_id = new_device_id;
         }
         Ok(state)
@@ -380,7 +380,7 @@ impl crate::sync::SyncService {
         if !state_path.exists() {
             let old_path = sync_root.join("app-meta/sync/sync_state.json");
             if old_path.exists() {
-                // 严格迁移 —
+                // #645 评论 5504296097 问题4 修复：严格迁移 —
                 // - old 存在 + read fail -> Err
                 // - old 存在 + parse fail -> Err
                 // - old 合法 -> save new 必须成功
@@ -419,8 +419,8 @@ impl crate::sync::SyncService {
         }
 
         let content = std::fs::read_to_string(state_path)?;
-        // 文件存在但解析失败 → 返回 Err，
-        // 不再 unwrap_or_default 把损坏的 state.local.json 当成"首次同步"。
+        // #645 评论 5504296097 问题1 修复：文件存在但解析失败 → 返回 Err，
+        // 不再 unwrap_or_default() 把损坏的 state.local.json 当成"首次同步"。
         // 文件不存在的分支在上面已处理（返回 Default，正常首次同步）。
         let mut state: SyncState = serde_json::from_str(&content).map_err(|e| {
             crate::Error::Io(std::io::Error::other(format!(
@@ -430,7 +430,7 @@ impl crate::sync::SyncService {
         let new_device_id = resolve_device_id(&state.device_id);
         if new_device_id != state.device_id {
             state.device_id = new_device_id;
-            // 正式同步路径不能在 device identity
+            // #645 评论 5504296097 问题3 修复：正式同步路径不能在 device identity
             // 持久化失败时继续跑。原先 `let _ =` 吞掉 save_sync_state 的 Err，
             // 磁盘写失败时返回 Ok(state)，调用方拿到一个只存在内存里的 device_id，
             // 下次进程重启又会生成另一个 UUID，导致 LWW tie-break 漂移。

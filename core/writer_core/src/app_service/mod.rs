@@ -144,7 +144,7 @@ impl WriterAppService {
         self.platform_init = Some(init);
     }
 
-    /// 注入 workspace Git 布局。
+    /// #645 评论 5504296097 问题3：注入 workspace Git 布局。
     ///
     /// `bootstrap.rs` 在 `ensure_workspace_git` 后调用，把 Android 外置 git_dir
     /// 或标准布局注入 API 层，让写事务完成后能记录本地历史。
@@ -253,7 +253,7 @@ impl WriterAppService {
         contract.into()
     }
 
-    /// 第 3 步：FFI 直接返回 workbench 布局计划。
+    /// #628 评论 5301021120 第 3 步：FFI 直接返回 workbench 布局计划。
     ///
     /// 平台端调用此入口获取七角色 bounds，不再自己推导 hinge 布局。
     pub fn resolve_workbench_layout(
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn sync_secrets_override_set_and_clear_cycle() {
-        // set → has_override=true；clear → has_override=false。
+        // #595 十：set → has_override=true；clear → has_override=false。
         // 清除后 refresh_secrets_override 才会从磁盘重新填充，陈旧凭据不会泄漏。
         let dir = tempfile::TempDir::new().unwrap();
         let svc = WriterAppService::new(

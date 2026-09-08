@@ -2,12 +2,12 @@ use std::path::Path;
 
 use crate::error::Result;
 
-/// 从文件系统构造本地侧 LWW 记录。
+/// #644 评论 5474166587 问题3：从文件系统构造本地侧 LWW 记录。
 ///
 /// 读取文件 mtime 作为 `updated_at_ms`；`op` 按内容是否存在决定（Some → upsert，
 /// None → delete）。`device_id` 用 live 的 device_id。
 ///
-/// delete 时从 `tombstones` 查找 `deleted_at`，
+/// #644 评论 5475110422 第4节：delete 时从 `tombstones` 查找 `deleted_at`，
 /// 不再固定写 0。若 tombstones 中无记录，返回 `None`（调用方应报错或补 tombstone）。
 pub(crate) fn build_local_lww_record(
     root: &Path,
@@ -27,7 +27,7 @@ pub(crate) fn build_local_lww_record(
             (hash, "upsert", mtime, None)
         }
         None => {
-            // 从 tombstones 查找删除时间。
+            // #644 评论 5475110422 第4节：从 tombstones 查找删除时间。
             // 没有 tombstone 记录 → 无法确定删除时间，返回 None。
             let ts = tombstones.iter().find(|t| t.original_path == rel_str)?;
             let deleted_at = ts.deleted_at * 1000; // tombstone.deleted_at 是秒，LWW 用毫秒
@@ -44,7 +44,7 @@ pub(crate) fn build_local_lww_record(
     })
 }
 
-/// staging manifest 中的文件记录（JSON 反序列化用）。
+/// #644 评论 5474772497 第2节：staging manifest 中的文件记录（JSON 反序列化用）。
 ///
 /// 与 `types::ManifestFileRecord` 字段一致，但不依赖 `github-api` feature gate。
 /// 仅用于从 staging 的 `manifest.sync.json` 读取远端 LWW 元数据。
@@ -60,13 +60,13 @@ pub(crate) struct ManifestRecord {
     op: String,
 }
 
-/// 从 staging 的 manifest.sync.json 读取远端 LWW 记录。
+/// #644 评论 5474772497 第2节：从 staging 的 manifest.sync.json 读取远端 LWW 记录。
 ///
-/// 改为 `Result<Option<...>>`。
+/// #644 评论 5475805198 第4节：改为 `Result<Option<...>>`。
 /// - manifest 不存在 → `Ok(None)`（Git backend 不产生 manifest，mtime fallback）。
 /// - manifest 存在且解析成功 → `Ok(Some(map))`。
 /// - manifest 存在但读/解析失败 → `Err`（GithubApi backend 的 manifest 是事实来源，
-/// 解析失败不能静默切成另一套决策规则）。
+///   解析失败不能静默切成另一套决策规则）。
 ///
 /// 调用方根据 `is_github_api` 决定是否允许 `None`（mtime fallback）。
 pub(crate) fn read_staging_manifest(
@@ -101,7 +101,7 @@ pub(crate) fn read_staging_manifest(
     ))
 }
 
-/// 从 manifest 记录构造远端侧 LWW 记录。
+/// #644 评论 5474772497 第2节：从 manifest 记录构造远端侧 LWW 记录。
 ///
 /// 使用 manifest 中的真实 `updated_at_ms`、`device_id`、`op`，
 /// 而非文件系统 mtime 和固定 "remote" 字符串。
@@ -156,7 +156,7 @@ pub(crate) fn read_live_device_id(live_root: &Path) -> Option<String> {
     }
 }
 
-/// 读取 live 的完整 SyncState。
+/// #644 评论 5475110422 第4节：读取 live 的完整 SyncState。
 ///
 /// 用于获取 tombstones（delete 的 deleted_at 时间戳）。
 /// 读取失败时返回 None。

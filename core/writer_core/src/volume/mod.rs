@@ -12,9 +12,9 @@
 //!
 //! ```text
 //! projects/{project_id}/volumes/
-//! {volume_id}/
-//! volume.json # 卷元数据（id、title、order、时间戳）
-//! chapters/ # 所有章节
+//!   {volume_id}/
+//!     volume.json           # 卷元数据（id、title、order、时间戳）
+//!     chapters/             # 所有章节
 //! ```
 
 use crate::error::Result;
@@ -108,7 +108,7 @@ pub fn create_volume(project_root: &Path, title: &str) -> Result<Volume> {
 ///
 /// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
 ///
-/// 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
 /// Android Restorer 只把 manifest 转成 DTO 调此入口。
 pub fn create_volume_with_id(
     project_root: &Path,
@@ -220,7 +220,7 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
 /// `ordered_ids` 必须是当前项目所有卷 ID 的精确排列（集合完全一致，无遗漏无多余），
 /// 否则返回错误。每个卷的 `order` 字段被设置为该 ID 在列表中的索引。
 ///
-/// 本函数是 `reorder_volumes_with_changes` 的薄包装。
+/// #645 评论 5504296097 问题1：本函数是 `reorder_volumes_with_changes` 的薄包装。
 /// 真正的写循环在 `reorder_volumes_with_changes` 里——只对 order 实际变化的卷
 /// 重写 `volume.json`，避免磁盘事实（N 个文件变了）和 change_set（M < N 个）漂移。
 /// 旧接口不返回 change_set，`app_data_root` 用 `project_root` 作占位
@@ -230,7 +230,7 @@ pub fn reorder_volumes(project_root: &Path, ordered_ids: &[String]) -> Result<()
     reorder_volumes_with_changes(project_root, ordered_ids, project_root).map(|_| ())
 }
 
-// ── volume 的 *_with_changes 入口 ──
+// ── #645 评论 5504296097 问题3：volume 的 *_with_changes 入口 ──
 //
 // 模式参考 `chapter::save_chapter_verified_with_changes` 和
 // `project::create_project_with_changes`：先调原函数落盘，再根据真实写入的
@@ -247,7 +247,7 @@ fn workspace_rel(path: &Path, workspace_root: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// create_volume 的变更集版本。
+/// #645 评论 5504296097 问题3：create_volume 的变更集版本。
 ///
 /// 返回 `(Volume, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
@@ -267,7 +267,7 @@ pub fn create_volume_with_changes(
     Ok((volume, change_set))
 }
 
-/// rename_volume 的变更集版本。
+/// #645 评论 5504296097 问题3：rename_volume 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
@@ -288,7 +288,7 @@ pub fn rename_volume_with_changes(
     Ok(change_set)
 }
 
-/// delete_volume 的变更集版本。
+/// #645 评论 5504296097 问题3：delete_volume 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
@@ -307,11 +307,11 @@ pub fn delete_volume_with_changes(
     Ok(change_set)
 }
 
-/// reorder_volumes 的变更集版本。
+/// #645 评论 5504296097 问题3：reorder_volumes 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 volume.json 的 Upsert 路径。
 ///
-/// 把真正的写循环收进本函数，只对 order 实际变化的卷
+/// #645 评论 5504296097 问题1：把真正的写循环收进本函数，只对 order 实际变化的卷
 /// 重写 `volume.json`。这样"实际写了什么"和"history 记录什么"来自同一个循环，
 /// 不会再出现磁盘改了 N 个 volume.json 但 change_set 只有 M 个 (M < N) 的漂移。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
