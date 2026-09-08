@@ -44,7 +44,7 @@ val LocalAndroidCapabilities =
         AndroidCapabilities()
     }
 
-// #592 一：Compose UI 必须从同一个 Application 进程级容器取得依赖实例，
+// Compose UI 必须从同一个 Application 进程级容器取得依赖实例，
 // 不能再次 DefaultAppServiceContainer(context) 创建第二份容器。
 // 后台 Worker 也从同一容器取依赖，保证 SyncStatusRepository StateFlow
 // 和 SyncCoordinator 全进程唯一。
@@ -57,20 +57,18 @@ private fun rememberSujianAppDependencies(context: android.content.Context): Suj
     }
 }
 
-// #592 一：EditorWindowHost 是窗口级宿主，每个窗口创建一份。
-// #592 二：配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
+// EditorWindowHost 是窗口级宿主，每个窗口创建一份。
+// 配置变化时只释放窗口宿主（View、FrameClock），Rust 会话由
 // EditorSessionViewModel 持有并跨配置变化存活；Activity 永久结束时
 // ViewModel.onCleared() 调用 releaseHost() 关闭全部会话。
 @Composable
 private fun rememberSujianWindowHost(
-    context: android.content.Context,
     deps: SujianAppDependencies,
     sessionCoordinator: com.xiwei.sujian.feature.editor.session.EditorSessionCoordinator,
 ): EditorWindowHost {
     val windowCoordinator =
         remember(sessionCoordinator) {
             EditorWindowHost(
-                context.applicationContext,
                 sessionCoordinator,
                 deps.appServiceBridge,
             )
@@ -122,7 +120,7 @@ private fun SujianAppInitialization(
     context: android.content.Context,
     windowCoordinator: EditorWindowHost,
 ) {
-    // #614 评论二：单条 LaunchedEffect 链保证 initialize 先于 repeatOnLifecycle refresh，
+    // 单条 LaunchedEffect 链保证 initialize 先于 repeatOnLifecycle refresh，
     // 避免两个独立 LaunchedEffect 无顺序保证、refresh 可能在 initialize 前执行。
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     LaunchedEffect(lifecycleOwner, deps, vm) {
@@ -130,13 +128,13 @@ private fun SujianAppInitialization(
         vm.initialize(deps.projectRepository, projectUC, deps.settingsRepository, context)
         lifecycleOwner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
             deps.syncStatusRepository.refreshState()
-            // #625 项6：列表 UI 唯一数据源是 projectSummaries（含字数），
+            // 列表 UI 唯一数据源是 projectSummaries（含字数），
             // projects 第二数据源已删 — 只刷新 projectSummaries。
             vm.refreshProjectSummaries()
             vm.refreshRecentEdits()
         }
     }
-    // #625 项6：章节保存成功 → 及时刷新作品摘要（含字数），不再仅靠 RESUMED 生命周期。
+    // 章节保存成功 → 及时刷新作品摘要（含字数），不再仅靠 RESUMED 生命周期。
     // 信号由 EditorViewModel 落盘成功后经 sessionCoordinator 向上暴露，app 层向下收集；
     // editor feature 层不依赖 app 层，不新增第二数据源。
     LaunchedEffect(windowCoordinator, vm) {
@@ -144,7 +142,7 @@ private fun SujianAppInitialization(
             vm.refreshProjectSummaries()
         }
     }
-    // #630 评论 #1：全量同步完成 → 及时刷新作品摘要（含字数/修改时间），
+    // 全量同步完成 → 及时刷新作品摘要（含字数/修改时间），
     // 不再仅靠 RESUMED 生命周期。信号由 SyncCoordinator.runFullSync 映射成 Completed 后发出；
     // 手动同步 / 设置触发 / AutoSyncWorker 走同一 deps.syncCoordinator，同一条失效链。
     LaunchedEffect(deps, vm) {
@@ -207,10 +205,10 @@ fun SujianApp(initialDestination: String? = null) {
         sessionVm.getOrCreateSessionCoordinator(
             deps.appServiceBridge,
         )
-    val windowCoordinator = rememberSujianWindowHost(context, deps, sessionCoordinator)
-    // #609 一：主题控制器在 CompositionLocalProvider 建立之前初始化，
+    val windowCoordinator = rememberSujianWindowHost(deps, sessionCoordinator)
+    // 主题控制器在 CompositionLocalProvider 建立之前初始化，
     // 必须显式注入依赖，不得反向读取 CompositionLocal。
-    // #618 三：同步状态不再参与主题刷新（旧代码的 Synced 分支与无条件 reload
+    // 同步状态不再参与主题刷新（旧代码的 Synced 分支与无条件 reload
     // 动作完全相同，是重复解析），控制器只依赖 settings/theme 两个仓库。
     val themeController =
         rememberThemeController(
@@ -230,7 +228,7 @@ fun SujianApp(initialDestination: String? = null) {
     val foldingFeatures = rememberFoldFeatureCollection(activityRef)
     SujianAppAdaptiveWindowSync(capabilityProvider, foldingFeatures, deps)
 
-    // #617 评论六：只收集沉浸式全屏这一位 — 由 SettingsRepository 构造时从
+    // 只收集沉浸式全屏这一位 — 由 SettingsRepository 构造时从
     // SharedPreferences 初始化、保存成功后同步；其它本地设置变化不再触碰应用根。
     val immersiveFullscreenEnabled by
         deps.settingsRepository.immersiveFullscreenEnabled.collectAsState()
@@ -246,7 +244,7 @@ fun SujianApp(initialDestination: String? = null) {
             LocalAndroidCapabilities provides capabilities,
             LocalEditorWindowHost provides windowCoordinator,
             LocalSujianAppDependencies provides deps,
-            // #649 评论 5559763924：向设置页等无 appState 形参的 Composable 提供 appState，
+            // 向设置页等无 appState 形参的 Composable 提供 appState，
             // 用于构造 StorageRecoveryCoordinator 恢复入口。
             LocalWorkspaceAppState provides appState,
         ) {

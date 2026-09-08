@@ -4,8 +4,6 @@
 // QML/C++ 通过 cpp! 和 qmetaobject 宏调用的方法对 Rust 编译器不可见，
 // 因此 dead_code、unwrap_used 是误报；测试代码同理。
 // Qt FFI 边界大量 u32/i64/f32/f64 类型转换属于平台协议，无法避免。
-// SAFETY: dead_code/deprecated/unused — Qt/QML FFI 调用方对 Rust 不可见，crate-wide allow 不可避免
-#![allow(dead_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 #![allow(
     clippy::cast_possible_truncation,
@@ -67,8 +65,8 @@
 )]
 #![allow(clippy::manual_clamp, clippy::unnecessary_cast)]
 #![allow(clippy::wrong_self_convention)]
-// SAFETY: unused/deprecated — Qt/QML FFI 调用方对 Rust 不可见
-#![allow(unused_imports, unused_variables, unreachable_patterns, unused_mut)]
+// unreachable_patterns — Qt/cfg 条件编译造成的模式匹配冗余
+#![allow(unreachable_patterns)]
 #![allow(deprecated)]
 //
 //

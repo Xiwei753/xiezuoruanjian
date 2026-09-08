@@ -13,7 +13,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #595 九：首次 generation 提交必须原子（legacy → generation 迁移）行为测试。
+ * 首次 generation 提交必须原子（legacy → generation 迁移）行为测试。
  *
  * 结构契约（方法存在性）已移入
  * [com.xiwei.sujian.arch.CommitSyncProfileMigrationArchitectureTest]；本文件只保留运行时行为：
@@ -25,13 +25,15 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class CommitSyncProfileMigrationTest {
-    private fun createRepo(preferencesSuffix: String): SyncRepository {
+    private fun createRepo(): SyncRepository {
         return SyncRepository(
             androidx.test.core.app.ApplicationProvider.getApplicationContext(),
             AppServiceBridge(
-                WriterAppServiceHolder("/tmp/sujian_test_workspace_595", "/tmp/sujian_test_workspace_595"),
+                WriterAppServiceHolder(
+                    "/tmp/sujian_test_workspace_595",
+                    "/tmp/sujian_test_workspace_595",
+                ),
             ),
-            preferencesSuffix = preferencesSuffix,
         )
     }
 
@@ -54,7 +56,7 @@ class CommitSyncProfileMigrationTest {
     @Test
     fun firstCommitFailsWithoutNative_butNeverWritesLiveOrMarker() =
         runTest {
-            val repo = createRepo("migration_contract_1")
+            val repo = createRepo()
             storeOf(repo).clear()
             val result =
                 repo.commitSyncProfile(
@@ -80,7 +82,7 @@ class CommitSyncProfileMigrationTest {
     @Test
     fun snapshotSyncProfile_returnsFailedWhenSecretsReadFails() =
         runTest {
-            val repo = createRepo("migration_contract_2")
+            val repo = createRepo()
             val store = storeOf(repo)
             store.clear()
             store.commitGeneration(1L, "{\"enabled\":true}")
@@ -99,7 +101,7 @@ class CommitSyncProfileMigrationTest {
     @Test
     fun commitGenerationMarkerIsAtomicInSingleStore() =
         runTest {
-            val repo = createRepo("migration_contract_3")
+            val repo = createRepo()
             val store = storeOf(repo)
             store.clear()
             store.commitGeneration(5L, "{\"enabled\":true}")
@@ -112,7 +114,7 @@ class CommitSyncProfileMigrationTest {
     @Test
     fun snapshotSyncProfile_prefersGenerationStoreOverLegacy() =
         runTest {
-            val repo = createRepo("migration_contract_4")
+            val repo = createRepo()
             val store = storeOf(repo)
             store.clear()
             store.commitGeneration(

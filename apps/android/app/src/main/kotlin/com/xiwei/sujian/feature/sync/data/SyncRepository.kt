@@ -17,7 +17,7 @@ import com.xiwei.sujian.feature.sync.data.model.SyncStatus
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 
 /**
- * #630 评论 #1：全量同步统一 Repository。
+ * 全量同步统一 Repository。
  *
  * 全应用只存在一份全局 [SyncProfileStore] + 一份 config/secrets 真相，
  * 不再按 projectId 路由 config/secrets，也不再维护应用级 / 作品级两套入口。
@@ -26,7 +26,6 @@ import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 open class SyncRepository(
     context: Context,
     private val appBridge: AppServiceBridge,
-    preferencesSuffix: String = "",
 ) {
     private val appContext = context.applicationContext
     private val settingsBridge = appBridge.settingsBridge
@@ -35,11 +34,6 @@ open class SyncRepository(
     private val legacyMetadataReader by lazy { LegacySyncProfileMetadataReader(appContext, profileStore) }
     private val nativeUnavailableMessage = "Native library not loaded"
     private val configJson = com.google.gson.Gson()
-
-    init {
-        @Suppress("UNUSED_VARIABLE")
-        val ignoredSuffix = preferencesSuffix
-    }
 
     private fun warn(msg: String) {
         DiagnosticsLogger.w("SyncRepository", msg)
@@ -77,7 +71,7 @@ open class SyncRepository(
             BridgeResult.NotLoaded -> false
         }
 
-    // ── 全量同步持久状态（Issue #630 评论 5307423953 Part B） ──
+    // ── 全量同步持久状态 ──
 
     /**
      * 加载全量同步持久状态。文件不存在/损坏/Core 返回 null 时返回 null，
@@ -94,7 +88,7 @@ open class SyncRepository(
         }
 
     /**
-     * #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+     * 冷启动恢复中断的 Syncing 状态。
      *
      * 委托给 [syncBridge.recoverInterruptedFullSyncState]。返回 true 表示发生了恢复。
      * 失败只记日志，不抛异常（不阻断应用启动）。
@@ -110,7 +104,7 @@ open class SyncRepository(
         }
 
     /**
-     * #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+     * 平台预处理失败写同一份 Core FullSyncState 的窄接口。
      *
      * 与 [performFullSync] 写同一个 `<app_data_root>/app-meta/sync/full_state.local.json`，
      * 不新建 Android 第二份状态。[SyncCoordinator] 在正文 flush / app data barrier /
@@ -321,7 +315,7 @@ open class SyncRepository(
     // ── 全局 SyncProfile snapshot / commit ──
 
     /**
-     * #630 评论 5307423953 Part A：Repository 内部底层 — 读取当前 generation 的 committed profile。
+     * Repository 内部底层 — 读取当前 generation 的 committed profile。
      *
      * 不触发 [ensureGlobalProfileMigrated]；业务入口（设置页/顶栏手动同步/自动同步）
      * 必须走 [loadCommittedSyncProfile]，不得直接调用本函数。标记为 [internal] 仅供
@@ -383,7 +377,7 @@ open class SyncRepository(
         }
 
     /**
-     * #630 评论第 5 点 Part A：读时和写时共用的迁移 helper。
+     * 读时和写时共用的迁移 helper。
      *
      * 在 [loadCommittedSyncProfile]（设置页首次加载）和 [commitSyncProfile]（首次保存）
      * 前都执行一次：若已存在 committed profile 直接返回 null；否则触发
@@ -399,7 +393,7 @@ open class SyncRepository(
     }
 
     /**
-     * #630 评论第 4 点 / D + 第 5 点 Part C：旧→新同步 profile 迁移钩子。
+     * 旧→新同步 profile 迁移钩子。
      *
      * 先用 [legacyMetadataReader] 从旧 DataStore 读取精确
      * active_generation / committed_config_json，构造 metadata 列表传给 Core
@@ -414,7 +408,7 @@ open class SyncRepository(
      *   Core 不删旧凭据，用户可手动恢复；
      * - Core 抛错或原生库未加载：返回 [SettingsSaveResult.Failed]，不继续提交，不删旧凭据；
      * - `migrated` 但 outcome.config / outcome.secrets 缺失或未知 outcomeKind：
-     *   返回 [SettingsSaveResult.Failed]，不静默返回 null（#630 评论第 5 点 Part B）。
+     *   返回 [SettingsSaveResult.Failed]，不静默返回 null。
      *
      * 标记为 [internal] 供同模块单元测试直接验证迁移行为（不通过 [commitSyncProfile] 间接测）。
      */
@@ -442,7 +436,7 @@ open class SyncRepository(
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.SYNC_CONFIG, 0L)))
             }
             "migrated" -> {
-                // #630 评论第 5 点 Part B：完整事务 — 缺 config/secrets 直接类型化失败，
+                // 完整事务 — 缺 config/secrets 直接类型化失败，
                 // 不静默返回 null。secrets 通过 saveSyncSecretsForGeneration 写入安全存储，
                 // 避免 hasCommittedProfile==true 但 sync_token_global_gN 不存在。
                 val migratedConfig = outcome.config
@@ -459,7 +453,7 @@ open class SyncRepository(
                 if (secretResult is SettingsSaveResult.Failed) return secretResult
                 profileStore.stageSecrets(migrationGeneration)
                 profileStore.commitGeneration(migrationGeneration, configJson.toJson(migratedConfig.normalize()))
-                // #630 评论 5307423953 Part C：新 generation 的
+                // 新 generation 的
                 // saveSyncSecretsForGeneration → stageSecrets → commitGeneration 全部成功后，
                 // 清除旧 Android DataStore metadata。失败/needs_reconfigure 分支不调用，
                 // 保留旧 metadata 供用户手动恢复。
@@ -511,7 +505,7 @@ open class SyncRepository(
                 }
                 SettingsSaveResult.Success
             }
-        if (committed is SettingsSaveResult.Success) AutoSyncScheduler.scheduleFromSettings(appContext, this)
+        if (committed is SettingsSaveResult.Success) AutoSyncScheduler.scheduleFromSettings(appContext)
         return committed
     }
 

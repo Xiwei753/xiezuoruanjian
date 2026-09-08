@@ -1,4 +1,4 @@
-# Node
+# Node / Harmony build tooling
 node_modules/
 
 # Python
@@ -9,26 +9,8 @@ __pycache__/
 target/
 **/*.rs.bk
 
-# Flutter / Dart
-.dart_tool/
-.packages
+# Generic build artifacts
 build/
-.flutter-plugins
-.flutter-plugins-dependencies
-
-# Android
-*.apk
-*.aab
-*.so
-*.hap
-local.properties
-.gradle/
-captures/
-apps/android/app/build/
-apps/android/app/src/main/jniLibs/
-apps/android/build/
-
-# Binary / build artifacts (never commit)
 *.exe
 *.msi
 *.AppImage
@@ -36,46 +18,48 @@ apps/android/build/
 *.7z
 *.dmg
 *.dll
+*.apk
+*.aab
+*.so
+*.hap
 dist/
-# UniFFI 自动生成的 Kotlin 绑定（构建时自动生成）
-apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/
-
-# iOS
-*.pbxuser
-!default.pbxuser
-*.mode1v3
-!default.mode1v3
-*.mode2v3
-!default.mode2v3
-*.perspectivev3
-!default.perspectivev3
-xcuserdata/
-*.xccheckout
-*.moved-aside
-DerivedData/
-*.hmap
-*.ipa
-*.ida
-
-# Linux/C++ build
-apps/Linux_qt/build/
 compile_commands.json
 
-# IDEs
+# Android
+local.properties
+.gradle/
+captures/
+apps/android/app/build/
+apps/android/app/src/main/jniLibs/
+apps/android/build/
+apps/android/.kotlin/
+apps/android/app/src/main/kotlin/com/xiwei/sujian/uniffi/
+
+# Linux Qt
+apps/Linux_qt/build/
+
+# HarmonyOS
+apps/harmony/oh_modules/
+apps/harmony/.hvigor/
+apps/harmony/hvigor/wrapper/
+apps/harmony/entry/.cxx/
+apps/harmony/.appanalyzer/
+apps/harmony/.clang-tidy
+apps/harmony/.clangd
+apps/harmony/oh-package-lock.json5
+
+# IDE / OS
 .idea/
 .vscode/
 *.iml
 *.ipr
 *.iws
-
-# OS
 .DS_Store
 Thumbs.db
 
-# Data Safety & Workspace
+# App data / local workspace
 writer_app_workspace/
 /workspace/
-# data/   # DO NOT IGNORE apps/android/app/src/main/kotlin/com/xiwei/writerapp/data
 /data/
 backups/
 trash/
@@ -86,7 +70,7 @@ sqlite_cache/
 logs/
 tmp/
 
-# Secrets & Local Config
+# Secrets / local config
 .github-token
 .gitee-token
 .env*
@@ -96,10 +80,6 @@ local_settings.json
 settings.local.json
 app-meta/sync/sync_secrets.local.json
 app-meta/settings/settings.local.json
-android-ndk-r25c/
-android-ndk-r25c-linux.zip
-
-# Keystore files (never commit)
 *.jks
 *.keystore
 *.p12
@@ -107,32 +87,18 @@ android-ndk-r25c-linux.zip
 *.p7b
 *.cer
 
-# Local native deps doc (not for version control)
-WINDOWS_NATIVE_DEPS.md
-
-# HarmonyOS build artifacts & IDE
-apps/harmony/oh_modules/
-apps/harmony/.hvigor/
-apps/harmony/hvigor/wrapper/
-apps/harmony/entry/.cxx/
-apps/harmony/.appanalyzer/
-apps/harmony/.clang-tidy
-apps/harmony/.clangd
-apps/harmony/oh-package-lock.json5
-
-# Temp files
+# Local SDK / temporary files
+android-ndk-r25c/
+android-ndk-r25c-linux.zip
 aqtinstall.log
 temp_csr/
+WINDOWS_NATIVE_DEPS.md
 
-# Hermes CI logs and codearts
+# Local agent/runtime state
+.grok/
 .hermes/
-
-# Local config files
-.commit
+.pi/
 .arts/
 .codeartsdoer/
 .wrangler/
-
-# pi 代理运行时目录（不提交）
-.pi/
-apps/android/.kotlin/
+.commit

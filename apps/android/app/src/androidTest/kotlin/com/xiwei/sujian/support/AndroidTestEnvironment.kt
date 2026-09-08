@@ -191,7 +191,7 @@ class TestSujianAppDependencies(
         )
     override val appServiceBridge: AppServiceBridge = AppServiceBridge(testHolder)
 
-    // #618 一：androidTest 容器同样在创建时一次性解析静态页面契约（与
+    // androidTest 容器同样在创建时一次性解析静态页面契约（与
     // DefaultAppServiceContainer 一致），Compose 热路径只查内存 Map。
     override val presentationPolicyCatalog: PresentationPolicyCatalog =
         PresentationPolicyCatalog(
@@ -208,7 +208,7 @@ class TestSujianAppDependencies(
     override val recentEditsRepository: com.xiwei.sujian.feature.project.data.RecentEditsRepository =
         com.xiwei.sujian.feature.project.data.RecentEditsRepository(appContext, appServiceBridge)
 
-    // #624 评论11 第3项：测试环境 stats writer actor scope，与生产 DefaultAppServiceContainer
+    // 测试环境 stats writer actor scope，与生产 DefaultAppServiceContainer
     // 同语义（SupervisorJob + Dispatchers.IO）；releaseRuntime 时取消以隔离测试，避免跨用例泄漏。
     private val statsWriterScope: CoroutineScope =
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -218,7 +218,7 @@ class TestSujianAppDependencies(
     override val themeRepository: com.xiwei.sujian.app.theme.ThemeRepository =
         com.xiwei.sujian.app.theme.ThemeRepository(appContext, appServiceBridge)
     override val syncRepository: com.xiwei.sujian.feature.sync.data.SyncRepository =
-        com.xiwei.sujian.feature.sync.data.SyncRepository(appContext, appServiceBridge, prefsSuffix)
+        com.xiwei.sujian.feature.sync.data.SyncRepository(appContext, appServiceBridge)
     override val syncStatusRepository: com.xiwei.sujian.feature.sync.data.SyncStatusRepository =
         com.xiwei.sujian.feature.sync.data.SyncStatusRepository(
             syncRepository,
@@ -235,7 +235,6 @@ class TestSujianAppDependencies(
     private val _coordinator =
         lazy {
             EditorWindowHost(
-                appContext,
                 _sessionCoordinator.value,
                 appServiceBridge,
             )
