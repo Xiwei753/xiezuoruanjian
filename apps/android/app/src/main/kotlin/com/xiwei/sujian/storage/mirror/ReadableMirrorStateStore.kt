@@ -509,15 +509,33 @@ class ReadableMirrorStateStore(
      * 所有字段用 `obj.get(KEY)` + `require(value is T)` 做真正的类型检查。
      */
     private fun decodeStateRootStrict(root: JSONObject): StrictMirrorState {
-        val backend = parseBackend(root)
-        val treeUri = root.opt(TREE_URI_KEY)?.let {
-            require(it is String) { "State corruption: treeUri must be String, got ${it.javaClass.simpleName}" }
-            it
+        // #649 评论 5578666118：用 parseBackendStrict 区分"字段不存在"和"字段存在但空字符串"。
+        val backend = parseBackendStrict(root)
+
+        // #649 评论 5578666118：treeUri 存在时必须是非空字符串，空字符串是损坏状态。
+        val treeUri = root.opt(TREE_URI_KEY)?.let { raw ->
+            require(raw is String && raw.isNotEmpty()) {
+                "State corruption: treeUri must be a non-empty String"
+            }
+            raw
         }
-        val manifestUri = root.opt(MANIFEST_URI_KEY)?.let {
-            require(it is String) { "State corruption: manifestUri must be String, got ${it.javaClass.simpleName}" }
-            it
+
+        // #649 评论 5578666118：backend=document_tree 必须有非空 treeUri。
+        if (backend == MirrorBackend.DOCUMENT_TREE) {
+            require(treeUri != null) {
+                "State corruption: document_tree backend requires treeUri"
+            }
         }
+
+        // #649 评论 5578666118：manifestUri 存在时也必须是非空字符串；
+        // "没有 manifest"用字段不存在表达，不用空字符串。
+        val manifestUri = root.opt(MANIFEST_URI_KEY)?.let { raw ->
+            require(raw is String && raw.isNotEmpty()) {
+                "State corruption: manifestUri must be a non-empty String"
+            }
+            raw
+        }
+
         root.opt(PUBLISHED_PROJECTS_KEY)?.let {
             require(it is JSONObject) { "State corruption: publishedProjectIds must be JSONObject, got ${it.javaClass.simpleName}" }
         }
@@ -1049,19 +1067,28 @@ class ReadableMirrorStateStore(
         }
 
     /**
-     * 从 root 对象解析 backend（#649 评论 5565862745 问题 5）。
+     * 从 root 对象严格解析 backend（#649 评论 5578666118）。
      *
-     * - 旧 state.json 没有 backend 字段时返回 [MirrorBackend.MEDIA_STORE]（向后兼容）。
-     * - 字段存在但值未知时抛出 [IllegalArgumentException]，让调用方返回 Result.failure。
-     *  不能把未知值回退到 MEDIA_STORE，否则会掩盖数据损坏。
+     * 与旧 `parseBackend()` 的区别：
+     * - 字段不存在 → 向后兼容为 [MirrorBackend.MEDIA_STORE]（旧版 state 无该字段）。
+     * - 字段存在但值为空字符串 / 非字符串 / 未知值 → 抛 [IllegalArgumentException]。
+     *   旧代码把 `backend=""` 当 null 再回退到 MEDIA_STORE，掩盖损坏状态，
+     *   导致新事务写进 MediaStore 而旧镜像在用户选中的 DocumentTree。
      */
-    private fun parseBackend(root: JSONObject): MirrorBackend {
-        val name = root.optString(BACKEND_KEY).takeIf { it.isNotEmpty() }
-        return when (name) {
-            BACKEND_VALUE_DOCUMENT_TREE -> MirrorBackend.DOCUMENT_TREE
+    private fun parseBackendStrict(root: JSONObject): MirrorBackend {
+        if (!root.has(BACKEND_KEY)) {
+            return MirrorBackend.MEDIA_STORE
+        }
+
+        val raw = root.get(BACKEND_KEY)
+        require(raw is String && raw.isNotEmpty()) {
+            "State corruption: backend must be a non-empty String, got ${if (raw is String) "empty" else raw?.javaClass?.simpleName}"
+        }
+
+        return when (raw) {
             BACKEND_VALUE_MEDIA_STORE -> MirrorBackend.MEDIA_STORE
-            null -> MirrorBackend.MEDIA_STORE // 字段不存在，向后兼容
-            else -> throw IllegalArgumentException("Unknown backend value: $name")
+            BACKEND_VALUE_DOCUMENT_TREE -> MirrorBackend.DOCUMENT_TREE
+            else -> throw IllegalArgumentException("Unknown backend value: $raw")
         }
     }
 
