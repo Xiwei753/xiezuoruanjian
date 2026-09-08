@@ -136,18 +136,9 @@ class ReadableMirrorStateMigration(
      * @return true 表示 manifest 与 state 完全一致，可以作为 committed baseline
      */
     private fun verifyManifestAgainstState(manifest: MirrorManifest): Boolean {
-        // 1. 检查 project IDs 完全相等
-        val manifestProjectIds = manifest.projects.map { it.id }.toSet()
-        val stateProjectIdsFromStore = stateStore.getAllProjectIds()
-        if (manifestProjectIds != stateProjectIdsFromStore) {
-            DiagnosticsLogger.w(
-                TAG,
-                "State migration: project IDs mismatch: manifest=${manifestProjectIds}, state=${stateProjectIdsFromStore}",
-            )
-            return false
-        }
-        // 2. 检查 chapter entries 完全相等（包括 revision）
-        val manifestEntries = flattenManifestEntries(manifest)
+        // #649 评论 5578053805 问题 1：用一份 strict snapshot 同时校验 projectIds 和 chapterEntries，
+        // 不再单独调 getAllProjectIds()（会从 publishedProjectIds 拿到零章节作品，
+        // 与 manifestEntries.keys（不含零章节作品）对比必定失败）。
         val stateResult = stateStore.getAllChapterEntriesStrict()
         if (stateResult.isFailure) {
             DiagnosticsLogger.w(
@@ -157,16 +148,17 @@ class ReadableMirrorStateMigration(
             return false
         }
         val (stateProjectIds, stateEntries) = stateResult.getOrThrow()
-        // 把 stateProjectIds 也纳入校验（覆盖零章节作品）
-        val manifestProjectIdsFromEntries = manifestEntries.keys.map { it.projectId }.toSet()
-        if (manifestProjectIdsFromEntries != stateProjectIds) {
+        // 检查 project IDs 完全相等（stateProjectIds 含 publishedProjectIds，能覆盖零章节作品）
+        val manifestProjectIds = manifest.projects.map { it.id }.toSet()
+        if (manifestProjectIds != stateProjectIds) {
             DiagnosticsLogger.w(
                 TAG,
-                "State migration: project IDs from entries mismatch: " +
-                    "manifest=$manifestProjectIdsFromEntries, state=$stateProjectIds",
+                "State migration: project IDs mismatch: manifest=${manifestProjectIds}, state=${stateProjectIds}",
             )
             return false
         }
+        // 检查 chapter entries 完全相等（包括 revision）
+        val manifestEntries = flattenManifestEntries(manifest)
         if (manifestEntries.keys != stateEntries.keys) {
             val manifestKeys = manifestEntries.keys
             val stateKeys = stateEntries.keys

@@ -358,14 +358,38 @@ impl WriterCoreApi {
         use std::fs;
         use uuid::Uuid;
 
-        // 1. 校验输入（ID 格式、唯一性、project_id 不已存在）
-        self.validate_restore_input(input)?;
+        // #649 评论 5578053805 问题 3：精确幂等恢复。
+        // 只校验输入格式（ID 格式、唯一性），不检查 project 是否已存在。
+        Self::validate_restore_input_shape(input)?;
+
+        // 如果 project 已存在，检查是否与恢复输入完全一致（上一次恢复已成功）。
+        // 完全一致 → 幂等返回已有 ProjectDto；不同 → 冲突，拒绝覆盖。
+        if self.project_exists(input)? {
+            if self.restored_project_matches_input(input)? {
+                let project_dto: ProjectDto = self
+                    .core_read()
+                    .list_projects()
+                    .map_err(WriterError::from)?
+                    .into_iter()
+                    .find(|p| p.id == input.project_id)
+                    .map(Into::into)
+                    .ok_or(WriterError::ProjectNotFound)?;
+                return Ok(project_dto);
+            }
+            return Err(WriterError::Other(format!(
+                "restore_project_tree: existing project differs from restore input: {}",
+                input.project_id
+            )));
+        }
 
         // 2. 生成事务 ID，创建 staging 目录
         // 路径：app_data_root/.restore-staging/<txId>/
         // 项目会创建在：app_data_root/.restore-staging/<txId>/<projectId>/
         let transaction_id = Uuid::new_v4().to_string();
-        let staging_root = self.app_data_root.join(".restore-staging").join(&transaction_id);
+        let staging_root = self
+            .app_data_root
+            .join(".restore-staging")
+            .join(&transaction_id);
 
         // 3. 创建临时 WriterCoreApi，使用 staging 目录作为 projects_root
         // 这样 create_project_with_id 会在 staging_root/<projectId>/ 下创建项目
@@ -415,24 +439,15 @@ impl WriterCoreApi {
         Ok(project_dto)
     }
 
-    /// 校验恢复输入：ID 非空、UUID 格式、唯一性、project_id 不已存在。
-    fn validate_restore_input(&self, input: &RestoreProjectInputDto) -> ApiResult<()> {
+    /// 校验恢复输入的格式：ID 非空、UUID 格式、唯一性。
+    ///
+    /// #649 评论 5578053805 问题 3：不再检查 project_id 是否已存在，
+    /// 改由 [restore_project_tree] 做幂等匹配。
+    fn validate_restore_input_shape(input: &RestoreProjectInputDto) -> ApiResult<()> {
         use std::collections::HashSet;
 
         Self::validate_id_non_empty(&input.project_id, "project_id")?;
         Self::validate_uuid_format(&input.project_id, "project_id")?;
-
-        // 校验 project_id 不已存在
-        let existing_projects = self
-            .core_read()
-            .list_projects()
-            .map_err(WriterError::from)?;
-        if existing_projects.iter().any(|p| p.id == input.project_id) {
-            return Err(WriterError::Other(format!(
-                "restore_project_tree: project_id already exists: {}",
-                input.project_id
-            )));
-        }
 
         // 校验 volume_id 唯一、非空、UUID 格式；chapter_id 同理
         let mut seen_volume_ids: HashSet<&str> = HashSet::new();
@@ -491,6 +506,87 @@ impl WriterCoreApi {
         Ok(())
     }
 
+    /// #649 评论 5578053805 问题 3：检查 project 是否已存在。
+    fn project_exists(&self, input: &RestoreProjectInputDto) -> ApiResult<bool> {
+        let existing = self
+            .core_read()
+            .list_projects()
+            .map_err(WriterError::from)?;
+        Ok(existing.iter().any(|p| p.id == input.project_id))
+    }
+
+    /// #649 评论 5578053805 问题 3：比较已有 project 与恢复输入是否完全一致。
+    ///
+    /// 比较维度：
+    /// - project title
+    /// - volume 数量、每个 volume 的 id/title/order（按 order 排序后逐个比较）
+    /// - 每个 volume 下的 chapter 数量、每个 chapter 的 id/title/order/content
+    ///
+    /// 任何一个维度不同就返回 false，不会尝试合并或覆盖。
+    fn restored_project_matches_input(&self, input: &RestoreProjectInputDto) -> ApiResult<bool> {
+        // 比较 project title
+        let existing_project = self
+            .core_read()
+            .list_projects()
+            .map_err(WriterError::from)?
+            .into_iter()
+            .find(|p| p.id == input.project_id);
+        match existing_project {
+            Some(ep) if ep.title == input.title => {}
+            _ => return Ok(false),
+        }
+
+        // 读取已有 project 的 volumes，按 order 排序后与 input 比较
+        let mut existing_vols = self.list_volumes(&input.project_id)?;
+        existing_vols.sort_by_key(|v| v.order);
+        let mut input_vols: Vec<_> = input.volumes.iter().collect();
+        input_vols.sort_by_key(|v| v.order);
+
+        if existing_vols.len() != input_vols.len() {
+            return Ok(false);
+        }
+
+        for (ev, iv) in existing_vols.iter().zip(input_vols.iter()) {
+            if ev.id != iv.volume_id || ev.title != iv.title || ev.order != iv.order {
+                return Ok(false);
+            }
+            if !self.volume_matches_input(&input.project_id, ev, iv)? {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// 比较单个卷的 chapters 是否与恢复输入完全一致。
+    fn volume_matches_input(
+        &self,
+        project_id: &str,
+        existing_vol: &VolumeDto,
+        input_vol: &RestoreVolumeInputDto,
+    ) -> ApiResult<bool> {
+        let mut existing_chs = self.list_chapters(project_id, &existing_vol.id)?;
+        existing_chs.sort_by_key(|c| c.order);
+        let mut input_chs: Vec<_> = input_vol.chapters.iter().collect();
+        input_chs.sort_by_key(|c| c.order);
+
+        if existing_chs.len() != input_chs.len() {
+            return Ok(false);
+        }
+
+        for (ec, ic) in existing_chs.iter().zip(input_chs.iter()) {
+            if ec.id != ic.chapter_id || ec.title != ic.title || ec.order != ic.order {
+                return Ok(false);
+            }
+            let existing_content = self.open_chapter(project_id, &existing_vol.id, &ec.id)?;
+            if existing_content.content != ic.content {
+                return Ok(false);
+            }
+        }
+
+        Ok(true)
+    }
+
     /// 使用 staging API 创建恢复项目树：项目 → 卷 → 章节 → 正文 → reorder，返回变更集。
     /// 用于在 staging 目录下创建项目，调用方负责在失败时回滚。
     fn create_restore_tree_with_staging_api(
@@ -501,9 +597,11 @@ impl WriterCoreApi {
         use crate::storage::workspace_git::WorkspaceChangeSet;
 
         // 创建项目（使用 staging API，会在 staging 目录下创建）
-        staging_api
-            .core_write()
-            .create_project_with_id(&input.project_id, &input.title, input.order)?;
+        staging_api.core_write().create_project_with_id(
+            &input.project_id,
+            &input.title,
+            input.order,
+        )?;
 
         let mut change_set = WorkspaceChangeSet::new().add_upsert(
             std::path::PathBuf::from("projects")
@@ -513,9 +611,8 @@ impl WriterCoreApi {
 
         // 逐卷创建
         for vol in &input.volumes {
-            change_set = self.create_restore_volume_with_staging_api(
-                staging_api, input, vol, change_set,
-            )?;
+            change_set =
+                self.create_restore_volume_with_staging_api(staging_api, input, vol, change_set)?;
         }
 
         // 按 input 顺序 reorder volumes（确保 order 连续 0,1,2,...）
@@ -531,49 +628,11 @@ impl WriterCoreApi {
         // 按 input 顺序 reorder 每个卷的 chapters
         for vol in &input.volumes {
             change_set = self.reorder_restore_chapters_with_staging_api(
-                staging_api, input, vol, change_set,
+                staging_api,
+                input,
+                vol,
+                change_set,
             )?;
-        }
-
-        Ok(change_set)
-    }
-
-    /// 创建恢复项目树（旧版，直接写最终目录）。
-    /// 保留用于向后兼容。
-    fn create_restore_tree(
-        &self,
-        input: &RestoreProjectInputDto,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        use crate::storage::workspace_git::WorkspaceChangeSet;
-
-        // 创建项目
-        self.core_write()
-            .create_project_with_id(&input.project_id, &input.title, input.order)?;
-
-        let mut change_set = WorkspaceChangeSet::new().add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("project.json"),
-        );
-
-        // 逐卷创建
-        for vol in &input.volumes {
-            change_set = self.create_restore_volume(input, vol, change_set)?;
-        }
-
-        // 按 input 顺序 reorder volumes（确保 order 连续 0,1,2,...）
-        if !input.volumes.is_empty() {
-            let ordered_volume_ids: Vec<String> =
-                input.volumes.iter().map(|v| v.volume_id.clone()).collect();
-            let vol_change_set = self
-                .core_write()
-                .reorder_volumes_with_changes(&input.project_id, &ordered_volume_ids)?;
-            change_set = change_set.merge(vol_change_set);
-        }
-
-        // 按 input 顺序 reorder 每个卷的 chapters
-        for vol in &input.volumes {
-            change_set = self.reorder_restore_chapters(input, vol, change_set)?;
         }
 
         Ok(change_set)
@@ -605,38 +664,12 @@ impl WriterCoreApi {
         // 逐章创建 + 保存正文
         for ch in &vol.chapters {
             change_set = self.create_restore_chapter_with_staging_api(
-                staging_api, input, vol, ch, change_set,
+                staging_api,
+                input,
+                vol,
+                ch,
+                change_set,
             )?;
-        }
-
-        Ok(change_set)
-    }
-
-    /// 创建单个恢复卷及其章节，返回更新后的变更集。
-    fn create_restore_volume(
-        &self,
-        input: &RestoreProjectInputDto,
-        vol: &RestoreVolumeInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        let volume = self.core_write().create_volume_with_id(
-            &input.project_id,
-            &vol.volume_id,
-            &vol.title,
-            vol.order,
-        )?;
-
-        change_set = change_set.add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("volumes")
-                .join(&volume.id)
-                .join("volume.json"),
-        );
-
-        // 逐章创建 + 保存正文
-        for ch in &vol.chapters {
-            change_set = self.create_restore_chapter(input, vol, ch, change_set)?;
         }
 
         Ok(change_set)
@@ -686,49 +719,6 @@ impl WriterCoreApi {
         Ok(change_set)
     }
 
-    /// 创建单个恢复章节并保存正文，返回更新后的变更集。
-    fn create_restore_chapter(
-        &self,
-        input: &RestoreProjectInputDto,
-        vol: &RestoreVolumeInputDto,
-        ch: &RestoreChapterInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        let chapter = self.core_write().create_chapter_with_id(
-            &input.project_id,
-            &vol.volume_id,
-            &ch.chapter_id,
-            &ch.title,
-            ch.order,
-        )?;
-
-        change_set = change_set.add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("volumes")
-                .join(&vol.volume_id)
-                .join("chapters")
-                .join(&chapter.id)
-                .join("chapter.meta.json"),
-        );
-
-        // 保存正文：content 非空时才写入（create_chapter_with_id 已创建空 chapter.md）
-        if !ch.content.is_empty() {
-            let (_receipt, ch_change_set) = self
-                .core_write()
-                .save_chapter_verified_with_changes_with_options(
-                    &input.project_id,
-                    &vol.volume_id,
-                    &ch.chapter_id,
-                    &ch.content,
-                    true,
-                )?;
-            change_set = change_set.merge(ch_change_set);
-        }
-
-        Ok(change_set)
-    }
-
     /// 使用 staging API reorder 单个卷的章节，返回更新后的变更集。
     fn reorder_restore_chapters_with_staging_api(
         &self,
@@ -749,49 +739,6 @@ impl WriterCoreApi {
         )?;
         change_set = change_set.merge(ch_change_set);
         Ok(change_set)
-    }
-
-    /// reorder 单个卷的章节，返回更新后的变更集。
-    fn reorder_restore_chapters(
-        &self,
-        input: &RestoreProjectInputDto,
-        vol: &RestoreVolumeInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        if vol.chapters.is_empty() {
-            return Ok(change_set);
-        }
-        let ordered_chapter_ids: Vec<String> =
-            vol.chapters.iter().map(|c| c.chapter_id.clone()).collect();
-        let ch_change_set = self.core_write().reorder_chapters_with_changes(
-            &input.project_id,
-            &vol.volume_id,
-            &ordered_chapter_ids,
-        )?;
-        change_set = change_set.merge(ch_change_set);
-        Ok(change_set)
-    }
-
-    /// 回滚恢复操作：删除已创建的项目，记录警告。
-    /// 返回原始错误，让调用方返回给 FFI 调用方。
-    fn rollback_restore(
-        &self,
-        input: &RestoreProjectInputDto,
-        err: crate::error::Error,
-    ) -> WriterError {
-        log::warn!(
-            "restore_project_tree: rolling back project {} due to error: {}",
-            input.project_id,
-            err
-        );
-        if let Err(del_err) = self.delete_project(&input.project_id) {
-            log::warn!(
-                "restore_project_tree: rollback delete_project failed: {} — \
-                 partial state may remain",
-                del_err
-            );
-        }
-        WriterError::from(err)
     }
 
     /// 回滚恢复操作（staging 模式）：直接删除 staging 目录，不走正常 delete_project()。
@@ -959,15 +906,19 @@ mod tests {
     fn restore_project_tree_project_id_conflict_returns_err_and_no_partial() {
         let (_dir, api) = make_api();
 
-        // 先创建一个项目
+        // 先创建一个项目（标题和结构都与 input 不同）
         let existing = api.create_project("已有作品").unwrap();
 
-        // 尝试用相同 project_id 恢复
+        // 尝试用相同 project_id 但不同内容恢复 → 应报冲突
         let mut input = make_full_input();
         input.project_id = existing.id.clone();
 
         let err = api.restore_project_tree(&input).unwrap_err();
-        assert!(matches!(err, WriterError::Other(ref msg) if msg.contains("already exists")));
+        assert!(
+            matches!(err, WriterError::Other(ref msg) if msg.contains("differs from restore input")),
+            "expected 'differs from restore input' error, got: {:?}",
+            err,
+        );
 
         // 验证原有项目仍然完好（没有被破坏）
         let projects = api.list_projects().unwrap();
@@ -977,6 +928,45 @@ mod tests {
         // 验证原有项目的卷仍然存在（create_project 会创建默认卷）
         let volumes = api.list_volumes(&existing.id).unwrap();
         assert!(!volumes.is_empty());
+    }
+
+    #[test]
+    fn restore_project_tree_idempotent_when_project_matches() {
+        let (_dir, api) = make_api();
+        let input = make_full_input();
+
+        // 第一次恢复：成功创建
+        let first = api.restore_project_tree(&input).unwrap();
+        assert_eq!(first.id, input.project_id);
+
+        // 第二次恢复：内容完全一致 → 幂等返回，不报错
+        let second = api.restore_project_tree(&input).unwrap();
+        assert_eq!(second.id, input.project_id);
+        assert_eq!(second.title, input.title);
+
+        // 验证项目仍然只有一个（没有重复创建）
+        let projects = api.list_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+    }
+
+    #[test]
+    fn restore_project_tree_non_idempotent_when_content_differs() {
+        let (_dir, api) = make_api();
+        let input = make_full_input();
+
+        // 第一次恢复：成功创建
+        api.restore_project_tree(&input).unwrap();
+
+        // 第二次恢复：同一 project_id 但 title 不同 → 冲突
+        let mut input2 = input.clone();
+        input2.title = "不同标题".to_string();
+
+        let err = api.restore_project_tree(&input2).unwrap_err();
+        assert!(
+            matches!(err, WriterError::Other(ref msg) if msg.contains("differs from restore input")),
+            "expected 'differs from restore input' error for title mismatch, got: {:?}",
+            err,
+        );
     }
 
     #[test]

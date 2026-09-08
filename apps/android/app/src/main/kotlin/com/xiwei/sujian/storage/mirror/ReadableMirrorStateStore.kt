@@ -431,28 +431,31 @@ class ReadableMirrorStateStore(
                             ids.add(keys.next())
                         }
                     }
-                    // chapter entries
+                    // chapter entries — #649 评论 5578053805 问题 2：fail-closed，
+                    // 任何损坏都返回 Result.failure，不再跳过坏数据。
                     val projectsObj = root.optJSONObject(PROJECTS_KEY)
                     if (projectsObj != null) {
                         val projectIds = projectsObj.keys()
                         while (projectIds.hasNext()) {
                             val projectId = projectIds.next()
-                            val projectObj = projectsObj.optJSONObject(projectId) ?: continue
+                            val projectObj = projectsObj.optJSONObject(projectId)
+                                ?: return Result.failure(
+                                    IllegalStateException(
+                                        "State corruption: projects[$projectId] is not a JSON object",
+                                    ),
+                                )
                             val chapterKeys = projectObj.keys()
                             while (chapterKeys.hasNext()) {
                                 val chapterKeyStr = chapterKeys.next()
-                                val entryObj = projectObj.optJSONObject(chapterKeyStr) ?: continue
-                                val entry = decodeEntryOrNull(projectId, chapterKeyStr, entryObj)
-                                if (entry != null) {
-                                    // 从 chapterKeyStr 解析 volumeId/chapterId
-                                    val parts = chapterKeyStr.split("/")
-                                    if (parts.size == 2) {
-                                        val volumeId = parts[0]
-                                        val chapterId = parts[1]
-                                        entries[ChapterKey(projectId, volumeId, chapterId)] = entry
-                                        ids.add(projectId)
-                                    }
-                                }
+                                val entryObj = projectObj.optJSONObject(chapterKeyStr)
+                                    ?: return Result.failure(
+                                        IllegalStateException(
+                                            "State corruption: projects[$projectId][$chapterKeyStr] is not a JSON object",
+                                        ),
+                                    )
+                                val entry = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
+                                ids.add(projectId)
+                                entries[entry.first] = entry.second
                             }
                         }
                     }
@@ -463,35 +466,40 @@ class ReadableMirrorStateStore(
     }
 
     /**
-     * 安全解码 chapter entry，失败时返回 null（跳过损坏的单个 entry）。
+     * 严格解码 chapter entry，任一字段缺失/类型错误/空值都抛异常。
      *
-     * 用于 [getAllChapterEntriesStrict]，避免单个损坏的 entry 导致整个 snapshot 读取失败。
+     * #649 评论 5578053805 问题 2：供 [getAllChapterEntriesStrict] 使用，
+     * 不能用 optXxx / null fallback / continue 跳过损坏数据。
+     * 迁移判断必须 fail-closed：坏 state 被静默裁掉会导致
+     * verifyManifestAgainstState 误判 manifest 与 state 一致。
      */
-    private fun decodeEntryOrNull(
+    private fun decodeEntryStrict(
         projectId: String,
-        chapterKeyStr: String,
+        chapterKey: String,
         obj: JSONObject,
-    ): ChapterMirrorEntry? {
-        return try {
-            val parts = chapterKeyStr.split("/")
-            if (parts.size != 2) return null
-            val volumeId = parts[0]
-            val chapterId = parts[1]
-            val uri = obj.optString("uri").takeIf { it.isNotEmpty() } ?: return null
-            val relativePath = obj.optString("relativePath").takeIf { it.isNotEmpty() } ?: return null
-            val revision = obj.optLong("revision")
-            val contentHash = obj.optString("contentHash").takeIf { it.isNotEmpty() } ?: return null
-            // 用 ChapterKey 包装，但 ChapterMirrorEntry 本身不存 volumeId/chapterId，
-            // 这些信息在 key 里。这里只返回 entry，key 由调用方组装。
-            ChapterMirrorEntry(
-                uri = uri,
-                relativePath = relativePath,
-                revision = revision,
-                contentHash = contentHash,
-            )
-        } catch (e: Exception) {
-            null
+    ): Pair<ChapterKey, ChapterMirrorEntry> {
+        val parts = chapterKey.split("/", limit = 2)
+        require(parts.size == 2 && parts[0].isNotEmpty() && parts[1].isNotEmpty()) {
+            "State corruption: invalid chapter key '$chapterKey' in project $projectId"
         }
+
+        val uri = obj.getString(URI_KEY)
+        val relativePath = obj.getString(RELATIVE_PATH_KEY)
+        val revision = obj.getLong(REVISION_KEY)
+        val contentHash = obj.getString(CONTENT_HASH_KEY)
+
+        require(uri.isNotEmpty()) {
+            "State corruption: empty uri for chapter key '$chapterKey' in project $projectId"
+        }
+        require(relativePath.isNotEmpty()) {
+            "State corruption: empty relativePath for chapter key '$chapterKey' in project $projectId"
+        }
+        require(contentHash.isNotEmpty()) {
+            "State corruption: empty contentHash for chapter key '$chapterKey' in project $projectId"
+        }
+
+        return ChapterKey(projectId, parts[0], parts[1]) to
+            ChapterMirrorEntry(uri, relativePath, revision, contentHash)
     }
 
     // ── publishedProjectIds（#649 评论 5564820566 问题 5）──

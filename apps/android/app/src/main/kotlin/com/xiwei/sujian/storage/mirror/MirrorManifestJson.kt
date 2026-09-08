@@ -207,9 +207,10 @@ internal fun mirrorManifestFromJsonStrict(json: String): MirrorManifest {
 /** 严格解析单个 project。 */
 private fun parseProjectStrict(obj: JSONObject): MirrorProject {
     val id = obj.getString(ID_KEY)
-    if (id.isEmpty()) {
-        throw IllegalArgumentException("Project id is empty")
+    require(id.isEmpty().not()) {
+        "Project id is empty"
     }
+    requireUuid(id, "project")
     val title = obj.getString(TITLE_KEY)
     val order = obj.getInt(ORDER_KEY)
     val revision = obj.getLong(REVISION_KEY)
@@ -237,9 +238,10 @@ private fun parseProjectStrict(obj: JSONObject): MirrorProject {
 /** 严格解析单个 volume。 */
 private fun parseVolumeStrict(obj: JSONObject): MirrorVolume {
     val id = obj.getString(ID_KEY)
-    if (id.isEmpty()) {
-        throw IllegalArgumentException("Volume id is empty")
+    require(id.isEmpty().not()) {
+        "Volume id is empty"
     }
+    requireUuid(id, "volume")
     val title = obj.getString(TITLE_KEY)
     val order = obj.getInt(ORDER_KEY)
     val revision = obj.getLong(REVISION_KEY)
@@ -267,9 +269,10 @@ private fun parseVolumeStrict(obj: JSONObject): MirrorVolume {
 /** 严格解析单个 chapter。contentFile/contentHash 用 getString 读取并校验非空。 */
 private fun parseChapterStrict(obj: JSONObject): MirrorChapter {
     val id = obj.getString(ID_KEY)
-    if (id.isEmpty()) {
-        throw IllegalArgumentException("Chapter id is empty")
+    require(id.isEmpty().not()) {
+        "Chapter id is empty"
     }
+    requireUuid(id, "chapter")
     val title = obj.getString(TITLE_KEY)
     val order = obj.getInt(ORDER_KEY)
     val revision = obj.getLong(REVISION_KEY)
@@ -291,6 +294,16 @@ private fun parseChapterStrict(obj: JSONObject): MirrorChapter {
         contentFile = contentFile,
         contentHash = contentHash,
     )
+}
+
+// #649 评论 5578053805 问题 3：UUID 格式预检 — 在 manifest strict parser 阶段就拦截非 UUID ID，
+// 不等恢复循环跑到第 N 个项目才由 Core 发现 ID 非法。
+private fun requireUuid(id: String, field: String) {
+    try {
+        java.util.UUID.fromString(id)
+    } catch (e: IllegalArgumentException) {
+        throw IllegalArgumentException("Invalid $field UUID: $id", e)
+    }
 }
 
 // 严格解析用的 JSON key 常量（与 [MirrorManifest] schema 对齐）
