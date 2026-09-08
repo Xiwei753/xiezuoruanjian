@@ -8,7 +8,7 @@ impl super::WriterAppService {
         self.api.list_volumes(&project_id)
     }
 
-    /// #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+    /// 一次返回作品的全部卷 章节 统计快照。
     pub fn get_project_workspace_snapshot(
         &self,
         project_id: String,
@@ -24,7 +24,7 @@ impl super::WriterAppService {
         self.api.create_volume(&project_id, &title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    /// 恢复/导入卷——使用 manifest 中的稳定 ID。
     pub fn create_volume_with_id(
         &self,
         project_id: String,
@@ -78,7 +78,7 @@ impl super::WriterAppService {
         self.api.create_chapter(&project_id, &volume_id, &title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    /// 恢复/导入章节——使用 manifest 中的稳定 ID。
     pub fn create_chapter_with_id(
         &self,
         project_id: String,

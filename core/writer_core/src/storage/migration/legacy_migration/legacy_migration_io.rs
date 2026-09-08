@@ -40,7 +40,7 @@ pub(crate) fn read_nonempty_secret(
 
 /// 从 secrets 文件读非空 token（文件不存在或解析失败返回 None）。
 ///
-/// Issue #645 评论第 2 点：先尝试新格式（`provider_secrets`），失败则尝试旧格式
+/// 先尝试新格式（`provider_secrets`），失败则尝试旧格式
 /// （顶层 `token`/`ssh_private_key`）。
 pub(crate) fn read_token_from_secrets_file(path: &Path) -> Option<String> {
     if !path.exists() {
@@ -68,7 +68,7 @@ pub(crate) fn read_token_from_secrets_file(path: &Path) -> Option<String> {
 /// 删除安全存储 key，失败时记日志（不阻塞迁移成功）。
 ///
 /// 日志只记录"删除旧凭据失败"与错误对象，不写入 key 名或任何凭据派生信息，
-/// 避免 cleartext-logging（Issue #648）。
+/// 避免 cleartext-logging。
 pub(crate) fn delete_secret_or_warn(
     storage: &dyn writer_platform_api::SecureStorage,
     storage_key_name: &str,
@@ -93,7 +93,7 @@ pub(crate) fn remove_file_or_warn(file: &Path) {
 
 /// 两个旧 profile 是否完全一致（仓库 + branch + token）。
 ///
-/// Issue #645 评论第 2 点：`remote_url`/`branch` 从 `provider_config` 读取。
+/// `remote_url`/`branch` 从 `provider_config` 读取。
 pub(crate) fn profiles_equivalent(a: &LegacyProfile, b: &LegacyProfile) -> bool {
     github_remote_url_from_config(&a.config) == github_remote_url_from_config(&b.config)
         && github_branch_from_config(&a.config) == github_branch_from_config(&b.config)

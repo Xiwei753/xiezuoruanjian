@@ -13,7 +13,7 @@ fn map_git2_err(e: git2::Error) -> crate::Error {
 /// 只处理本地 commit/index/HEAD 自己的崩溃恢复。
 /// 不重新引入旧 `refs/remotes/*`、staging repo、`.sujian-sync-owner` 那套东西。
 ///
-/// #645 评论 5504296097 问题4：真正实现恢复动作，不再只标记 bool。
+///   真正实现恢复动作，不再只标记 bool。
 ///
 /// 恢复逻辑：
 /// 1. 检查仓库能否正常打开（corrupt → 返回 Err）
@@ -168,7 +168,7 @@ mod tests {
         assert!(!result.head_was_recovered);
     }
 
-    /// #645 评论 5504296097 问题4：HEAD 无效时真正 set_head 修复。
+    ///   HEAD 无效时真正 set_head 修复。
     #[test]
     fn test_recover_invalid_head_sets_head_to_main() {
         let tmp = tempfile::tempdir().unwrap();

@@ -1,10 +1,10 @@
-//! #645 评论 5504296097 问题1/4：workspace 路径分类的统一事实来源。
+//!   workspace 路径分类的统一事实来源。
 //!
 //! 本模块属于 `storage` 层，不依赖 `sync`。`sync::staging` 与
 //! `storage::workspace_git` 都委托到这里，消除 `storage/workspace_git ->
 //! sync/staging` 的反向依赖。
 //!
-//! #645 评论 5504296097 问题4：把路径规则从一个 bool 拆成真正的分类
+//!   把路径规则从一个 bool 拆成真正的分类
 //! [`WorkspacePathClass`]，再分别决定 [`is_sync_staging_path`] 与
 //! [`is_workspace_history_path`]：
 //! - `UserContent` / `UserSetting` → 可以进本地 Git history，也可以进 staging；
@@ -19,13 +19,13 @@
 //!   `cache`、`.tmp`、`.lock`；
 //! - `sync/staging/run.rs::walk_commit_candidates` 跳过规则：
 //!   `.git*`、`full-sync-staging`、`app-meta/transactions`；
-//! - #645 评论 5504296097 问题3：`sync/trash`（删除回收站）和
+//! - `sync/trash`（删除回收站）和
 //!   `app-meta/delete-journals`（删除事务 journal）也归 `InternalRuntime`，
 //!   staging/history 都不进。
 
 use std::path::Path;
 
-/// #645 评论 5504296097 问题4：workspace 路径分类。
+/// workspace 路径分类。
 ///
 /// 把路径规则从一个 bool 拆成真正的分类，再分别决定
 /// [`is_sync_staging_path`] 与 [`is_workspace_history_path`]。
@@ -94,7 +94,7 @@ fn normalize_workspace_path(path: &str) -> String {
 
 /// 判断路径是否为 workspace 内部凭据文件。
 ///
-/// #645 评论 5504296097 Blocker 1：真实凭据文件名是
+/// 真实凭据文件名是
 /// `secrets.local.json` / `secrets_g1.local.json` / `secrets_g2.local.json`，
 /// 路径段是 `secrets.local.json` 而非 `secrets`，原段名匹配 `seg == "secrets"`
 /// 会漏判，导致凭据被写进本地 Git 历史。
@@ -110,7 +110,7 @@ fn is_workspace_secret_path(path: &str) -> bool {
         || path.ends_with("sync_secrets.local.json")
 }
 
-/// #645 评论 5504296097 问题4：判断路径是否为同步引擎运行状态文件。
+///   判断路径是否为同步引擎运行状态文件。
 ///
 /// 这些文件是远端同步自己的运行状态，不是用户 workspace 本地版本历史内容：
 /// - `app-meta/sync/manifest.sync.json`：同步清单；
@@ -119,7 +119,7 @@ fn is_workspace_secret_path(path: &str) -> bool {
 /// - `app-meta/sync/conflicts.json`：冲突记录；
 /// - `app-meta/sync/config.local.json`：同步配置；
 /// - `app-meta/sync/pending_deleted_targets.json`：待删除 target tombstone 列表
-///   （#645 评论 5504296097 问题4：deleted target durable handoff 的 provider-neutral
+///   （  deleted target durable handoff 的 provider-neutral
 ///   持久状态，由 sync engine 自己读写，不是用户内容）。
 ///
 /// staging 可以使用这些文件（同步需要），但 [`is_workspace_history_path`]
@@ -188,12 +188,12 @@ pub fn is_workspace_internal_path_str(path: &str) -> bool {
         return true;
     }
 
-    // #645 评论 5504296097 问题3：sync/trash/（删除回收站，运行时数据）
+    //   sync/trash/（删除回收站，运行时数据）
     if normalized == "sync/trash" || normalized.starts_with("sync/trash/") {
         return true;
     }
 
-    // #645 评论 5504296097 问题3：app-meta/delete-journals/（删除事务 journal，崩溃恢复数据）
+    //   app-meta/delete-journals/（删除事务 journal，崩溃恢复数据）
     if normalized == "app-meta/delete-journals"
         || normalized.starts_with("app-meta/delete-journals/")
     {
@@ -201,7 +201,7 @@ pub fn is_workspace_internal_path_str(path: &str) -> bool {
     }
 
     // secrets：真实内部凭据路径（app-meta/sync/secrets*.local.json 等）。
-    // #645 评论 5504296097 Blocker 1：原段名匹配 seg == "secrets" 漏判
+    // 原段名匹配 seg == "secrets" 漏判
     // secrets.local.json，改成精确路径匹配。
     if is_workspace_secret_path(&normalized) {
         return true;
@@ -225,7 +225,7 @@ pub fn is_workspace_internal_path_str(path: &str) -> bool {
 
 /// 判断路径是否允许进入本地版本历史（非内部/非 secrets/非 cache/非 log/非 runtime/非 sync engine state）。
 ///
-/// #645 评论 5504296097 问题4：不再等于 `!is_workspace_internal_path`，
+///   不再等于 `!is_workspace_internal_path`，
 /// 而是进一步排除 [`is_sync_engine_state_path`]。sync engine state
 /// （manifest.sync.json / state.local.json / config.local.json /
 /// conflicts.json / full_state.local.json）staging 可以用，但不进本地 Git history。
@@ -240,7 +240,7 @@ pub fn is_workspace_history_path_str(path: &str) -> bool {
     !is_workspace_internal_path_str(path) && !is_sync_engine_state_path(path)
 }
 
-/// #645 评论 5504296097 问题4：判断路径是否允许进入同步 staging。
+///   判断路径是否允许进入同步 staging。
 ///
 /// staging 可以看见用户内容、用户设置和同步引擎状态，但不能看见
 /// 凭据、缓存和内部运行时。等于 `!is_workspace_internal_path`，
@@ -254,7 +254,7 @@ pub fn is_sync_staging_path_str(path: &str) -> bool {
     !is_workspace_internal_path_str(path)
 }
 
-/// #645 评论 5504296097 问题4：把路径分类成 [`WorkspacePathClass`]。
+///   把路径分类成 [`WorkspacePathClass`]。
 ///
 /// 分类顺序：先判 InternalRuntime（Git 工件/full-sync-staging/transactions/logs/
 /// sync/trash/app-meta/delete-journals/.tmp/.lock），再判 Secret（凭据），
@@ -270,7 +270,7 @@ pub fn classify_workspace_path_str(path: &str) -> WorkspacePathClass {
     let normalized = normalize_workspace_path(path);
 
     // InternalRuntime：Git 工件、full-sync-staging、transactions、logs、
-    // #645 评论 5504296097 问题3：sync/trash、app-meta/delete-journals、.tmp、.lock
+    //   sync/trash、app-meta/delete-journals、.tmp、.lock
     if is_internal_git_artifact(&normalized)
         || normalized == "full-sync-staging"
         || normalized.starts_with("full-sync-staging/")
@@ -366,7 +366,7 @@ mod tests {
         assert!(is_workspace_history_path(&PathBuf::from(
             "projects/p1/chapter.md"
         )));
-        // #645 评论 5504296097 问题4：sync engine state 不再是 history path。
+        //   sync engine state 不再是 history path。
         assert!(!is_workspace_history_path(&PathBuf::from(
             "app-meta/sync/manifest.sync.json"
         )));
@@ -386,7 +386,7 @@ mod tests {
         )));
     }
 
-    /// #645 评论 5504296097 Blocker 1：真实凭据文件必须被识别为内部路径。
+    /// 真实凭据文件必须被识别为内部路径。
     #[test]
     fn secret_paths_are_internal() {
         assert!(is_workspace_internal_path_str(
@@ -413,7 +413,7 @@ mod tests {
         assert!(!is_workspace_internal_path_str(
             "projects/my-secrets-book/ch1.md"
         ));
-        // #645 评论 5504296097 问题4：sync manifest 不再允许进历史
+        //   sync manifest 不再允许进历史
         // （归为 SyncEngineState，staging 可用但 history 排除）。
         assert!(!is_workspace_history_path_str(
             "app-meta/sync/manifest.sync.json"
@@ -435,7 +435,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题4：WorkspacePathClass 分类。
+    ///   WorkspacePathClass 分类。
     #[test]
     fn classify_paths() {
         use WorkspacePathClass::*;
@@ -478,7 +478,7 @@ mod tests {
             classify_workspace_path(&PathBuf::from("app-meta/sync/conflicts.json")),
             SyncEngineState
         );
-        // #645 评论 5504296097 问题4：pending_deleted_targets.json 归
+        //   pending_deleted_targets.json 归
         // SyncEngineState（staging 可用、不进本地 Git history）。
         assert_eq!(
             classify_workspace_path(&PathBuf::from("app-meta/sync/pending_deleted_targets.json")),
@@ -517,7 +517,7 @@ mod tests {
             classify_workspace_path(&PathBuf::from("scratch.tmp")),
             InternalRuntime
         );
-        // #645 评论 5504296097 问题3：sync/trash 和 app-meta/delete-journals
+        //   sync/trash 和 app-meta/delete-journals
         // 归 InternalRuntime，staging/history 都不进。
         assert_eq!(
             classify_workspace_path(&PathBuf::from("sync/trash")),
@@ -551,7 +551,7 @@ mod tests {
         )));
     }
 
-    /// #645 评论 5504296097 问题4：is_sync_staging_path 与 is_workspace_history_path
+    ///   is_sync_staging_path 与 is_workspace_history_path
     /// 在 SyncEngineState 上分歧——staging 可用，history 排除。
     #[test]
     fn staging_vs_history_diverge_on_sync_engine_state() {

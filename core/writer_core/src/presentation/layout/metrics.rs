@@ -1,10 +1,10 @@
-//! # 共用布局尺寸 — 平台无关的共享数值（#628）
+//! # 共用布局尺寸 — 平台无关的共享数值
 //!
 //! 列表栏宽度、内容最大宽度等"产品语义尺寸"集中在此。
 //! 平台端通过 `LayoutContract.metrics` 读取后做 `.dp` 映射，
 //! 不再各自硬编码 `320.dp` 这类数值。
 //!
-//! #628 评论 5301021120 问题 3：`editor_min_width_dp` / `toolbar_height_dp` /
+//!   `editor_min_width_dp` / `toolbar_height_dp` /
 //! `toolbar_leading_width_dp` / `toolbar_trailing_width_dp` 以及左右 pane 的最小宽度
 //! 全部收回此处，避免 `resolver.rs` 散落 `64 / 200 / 200 / 1` 字面量。
 
@@ -14,10 +14,10 @@ use serde::{Deserialize, Serialize};
 ///
 /// 平台端只做 dp → 像素映射，不再自行决定列表栏宽度等数值。
 ///
-/// #628 验收点 4：把新出现的结构尺寸继续收回 `LayoutMetrics`，
+///  验收点 4：把新出现的结构尺寸继续收回 `LayoutMetrics`，
 /// 避免平台端各自硬编码 `180.dp` / `240.dp` / `56.dp`。
 ///
-/// #628 评论 5301021120 问题 3：再收回 `editor_min_width_dp` /
+/// 再收回 `editor_min_width_dp` /
 /// `toolbar_height_dp` / `toolbar_leading_width_dp` / `toolbar_trailing_width_dp`，
 /// 以及左右 pane 的最小压缩宽度。`resolver.rs` 不再出现 `1.0` / `64.0` / `200.0`
 /// 这类散落字面量。
@@ -32,7 +32,7 @@ pub struct LayoutMetrics {
     pub tool_pane_width_dp: f32,
     /// 工具 rail 宽度，dp。原 Android 端写死的 `56.dp`。
     pub tool_rail_width_dp: f32,
-    /// 正文编辑器最小可编辑宽度，dp（#628 评论 5301021120 问题 3）。
+    /// 正文编辑器最小可编辑宽度，dp。
     ///
     /// 不再用"非零就算可用"的 `1.0`：低于此宽度时正文已无法正常编辑，
     /// Rust 直接判定本次布局语义失效（`WorkbenchLayoutPlan.mode = SinglePane`），
@@ -46,12 +46,12 @@ pub struct LayoutMetrics {
     pub toolbar_leading_width_dp: f32,
     /// 顶栏右组（同步/搜索/设置）宽度，dp。原 `resolver.rs` 散落的 `200.0`。
     pub toolbar_trailing_width_dp: f32,
-    /// 列表栏最小压缩宽度，dp（#628 评论 5301021120 问题 3）。
+    /// 列表栏最小压缩宽度，dp。
     ///
     /// 空间紧张时列表栏可在 `list_pane_width_dp` 与此值之间压缩，
     /// 但不会无限压成细线。低于此值时由 visibility 决定是否完全收起。
     pub list_pane_min_width_dp: f32,
-    /// 工具面板最小压缩宽度，dp（#628 评论 5301021120 问题 3）。
+    /// 工具面板最小压缩宽度，dp。
     ///
     /// 空间紧张时工具面板可在 `tool_pane_width_dp` 与此值之间压缩，
     /// 但不会无限压成细线。低于此值时由 visibility 决定是否完全收起。
@@ -77,13 +77,13 @@ impl Default for LayoutMetrics {
 
 /// 列表栏默认宽度（dp）。原 Android 端写死的 `320.dp`。
 pub const DEFAULT_LIST_PANE_WIDTH_DP: f32 = 320.0;
-/// 作品卡最小默认宽度（dp）。原 Android 端写死的 `180.dp`（#628 验收点 4）。
+/// 作品卡最小默认宽度（dp）。原 Android 端写死的 `180.dp`（ 验收点 4）。
 pub const DEFAULT_PROJECT_CARD_MIN_WIDTH_DP: f32 = 180.0;
-/// 工作台工具栏默认宽度（dp）。原 Android 端写死的 `240.dp`（#628 验收点 4）。
+/// 工作台工具栏默认宽度（dp）。原 Android 端写死的 `240.dp`（ 验收点 4）。
 pub const DEFAULT_TOOL_PANE_WIDTH_DP: f32 = 240.0;
-/// 工具 rail 默认宽度（dp）。原 Android 端写死的 `56.dp`（#628 验收点 4）。
+/// 工具 rail 默认宽度（dp）。原 Android 端写死的 `56.dp`（ 验收点 4）。
 pub const DEFAULT_TOOL_RAIL_WIDTH_DP: f32 = 56.0;
-/// 正文编辑器最小可编辑宽度（dp）。#628 评论 5301021120 问题 3。
+/// 正文编辑器最小可编辑宽度（dp）。  。
 ///
 /// 240 dp 是真正能放下"行号 + 一行可读字符"的最小宽度，低于此值正文
 /// 已不可正常编辑——不再用"非零就算可用"的 1dp。
@@ -117,7 +117,7 @@ mod tests {
         assert_eq!(m.tool_pane_width_dp, 240.0);
         assert_eq!(m.tool_rail_width_dp, DEFAULT_TOOL_RAIL_WIDTH_DP);
         assert_eq!(m.tool_rail_width_dp, 56.0);
-        // #628 评论 5301021120 问题 3：新字段默认值。
+        // 新字段默认值。
         assert_eq!(m.editor_min_width_dp, DEFAULT_EDITOR_MIN_WIDTH_DP);
         assert_eq!(m.editor_min_width_dp, 240.0);
         assert_eq!(m.toolbar_height_dp, DEFAULT_TOOLBAR_HEIGHT_DP);
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn test_editor_min_width_is_real_editable_not_one_dp() {
-        // #628 评论 5301021120 问题 3：editor_min_width_dp 必须是真正可编辑宽度，不是 1dp。
+        //   editor_min_width_dp 必须是真正可编辑宽度，不是 1dp。
         let m = LayoutMetrics::default();
         assert!(
             m.editor_min_width_dp >= 240.0,

@@ -308,7 +308,7 @@ impl Error {
     /// 对于其他同步错误，返回与 code() 相同的值。
     /// 对于非同步错误，返回空字符串。
     ///
-    /// Issue #645 评论 5504296097 第1点：返回值与新的 provider-neutral
+    /// 返回值与新的 provider-neutral
     /// `SyncErrorCategory` 通用 code 对齐。
     pub fn sync_category(&self) -> &str {
         match self {

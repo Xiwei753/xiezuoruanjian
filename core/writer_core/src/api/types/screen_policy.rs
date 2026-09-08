@@ -88,9 +88,9 @@ pub enum ActionRoleDto {
     CreateChapter,
     Delete,
     Rename,
-    /// #610 评论四：真实存在的顺序动作（上移）。
+    /// 真实存在的顺序动作（上移）。
     MoveEarlier,
-    /// #610 评论四：真实存在的顺序动作（下移）。
+    /// 真实存在的顺序动作（下移）。
     MoveLater,
     Settings,
     Sync,
@@ -134,7 +134,7 @@ impl From<ActionRoleDto> for crate::presentation::screen::ActionRole {
     }
 }
 
-/// 动作的业务目标（#610 评论二）：平台层据此绑定业务操作，不靠区域/顺序猜身份。
+/// 动作的业务目标：平台层据此绑定业务操作，不靠区域/顺序猜身份。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Default)]
 pub enum ActionTargetDto {
     #[default]
@@ -171,7 +171,7 @@ pub enum ActionRegionDto {
     #[default]
     HeaderLeading,
     HeaderTrailing,
-    /// #610 评论四：页面主操作区域（新建作品等）。
+    /// 页面主操作区域（新建作品等）。
     PrimaryAction,
     ListHeader,
     ItemTrailing,
@@ -241,7 +241,7 @@ impl From<ActionSlotDto> for crate::presentation::screen::ActionSlot {
     }
 }
 
-/// #628 评论第 5 节：`ScreenPolicyDto` 新增 `show_primary_navigation`，
+/// `ScreenPolicyDto` 新增 `show_primary_navigation`，
 /// 由 Rust 根据页面角色决定，平台端直接读，不再传 `contractShowsPrimaryNavigation`。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn test_action_target_dto_roundtrip() {
-        // #610 评论二：业务目标身份必须穿过 DTO 往返。
+        // 业务目标身份必须穿过 DTO 往返。
         let targets = vec![
             crate::presentation::screen::ActionTarget::App,
             crate::presentation::screen::ActionTarget::Project,
@@ -369,7 +369,7 @@ mod tests {
         assert!(json.contains("\"requiresConfirmation\""));
         assert!(json.contains("\"target\":\"App\""));
         assert!(json.contains("\"order\":10"));
-        // #628：ScreenPolicyDto 必须包含 showPrimaryNavigation。
+        // ScreenPolicyDto 必须包含 showPrimaryNavigation。
         assert!(json.contains("\"showPrimaryNavigation\""));
 
         let deserialized: ScreenPolicyDto = serde_json::from_str(&json).unwrap();

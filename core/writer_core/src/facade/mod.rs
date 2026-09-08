@@ -63,7 +63,7 @@ pub struct WriterCore {
     pub(crate) stats_api: OnceLock<StatsApi>,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
-    /// #644 评论 5462823517 第1节：删除 facade 层 secrets_override —
+    /// 删除 facade 层 secrets_override —
     /// 进程级 override 唯一存在于 `api::service::WriterCoreApi.secrets_override`，
     /// 避免两份状态漂移。
     pub(crate) search_service: std::sync::Mutex<SearchIndexService>,
@@ -289,7 +289,7 @@ mod tests {
     #[test]
     #[cfg(feature = "github-api")]
     fn test_facade_generation_secrets_save_load_delete() {
-        // #595 五：generation 凭据生命周期 — save → load → delete。
+        //  五：generation 凭据生命周期 — save → load → delete。
         let temp_dir = tempdir().unwrap();
         let core = WriterCore::new(temp_dir.path(), temp_dir.path().join("projects"));
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
@@ -427,7 +427,7 @@ mod tests {
         assert_eq!(result_valid.message.unwrap(), "Font size updated");
     }
 
-    /// Issue #630：全局同步配置唯一，所有作品共享同一份 config。
+    /// 全局同步配置唯一，所有作品共享同一份 config。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_sync_config_isolated_per_project() {
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(loaded.github_remote_url(), "https://example.com/a.git");
     }
 
-    /// Issue #630：全局同步凭据唯一，所有作品共享同一份 secrets。
+    /// 全局同步凭据唯一，所有作品共享同一份 secrets。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_sync_secrets_isolated_per_project() {
@@ -497,7 +497,7 @@ mod tests {
         );
     }
 
-    /// Issue #600 评论 #3 问题四：应用级白名单/黑名单正确过滤路径。
+    ///   应用级白名单/黑名单正确过滤路径。
     /// 应用级同步根 = app_data_root，白名单 settings.sync.json/starmaps/themes，
     /// 黑名单 作品目录/日志/导出/备份/settings.local.json/sync secrets/device/缓存统计。
     #[test]
@@ -568,7 +568,7 @@ mod tests {
         ));
     }
 
-    /// Issue #630：全局同步配置唯一，不再有"应用级 vs 作品级"两套配置。
+    /// 全局同步配置唯一，不再有"应用级 vs 作品级"两套配置。
     #[test]
     #[cfg(feature = "github-api")]
     fn test_app_sync_config_independent_from_project() {

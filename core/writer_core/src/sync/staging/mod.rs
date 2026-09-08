@@ -1,4 +1,4 @@
-//! #644 评论 5462823517 第2/4节：full sync staging run。
+//!   第2/4节：full sync staging run。
 //!
 //! 只负责 staging：创建 run 目录、从 live 建 base snapshot、比较 base/live/staging、
 //! 生成 commit plan、清理 run。能 hard-link 就 hard-link，失败回退 copy。

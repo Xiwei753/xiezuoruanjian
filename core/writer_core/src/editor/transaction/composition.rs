@@ -272,7 +272,7 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
-    /// #624 评论8：单次编辑的偏移映射 — `[0,start)` Identity + `[oldEnd,oldLen)` Shifted。
+    /// 单次编辑的偏移映射 — `[0,start)` Identity `[oldEnd,oldLen)` Shifted。
     ///
     /// `old_len` 是编辑前文本的 UTF-8 byte 长度，`old_range` 是编辑前被替换的
     /// 半开范围 `(start, end)`，`inserted_len` 是插入文本的 UTF-8 byte 长度。
@@ -305,7 +305,7 @@ impl OffsetMap {
         OffsetMap { entries }
     }
 
-    /// #624 评论8：多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
+    /// 多次编辑（replace-all / delete-surrounding / undo 多 delta）的偏移映射。
     ///
     /// `edits` 为 `(old_start, old_end, new_start, new_end)` 元组列表（无需预排序，
     /// 内部按 `old_start` 升序处理；各编辑的 old range 必须互不重叠）。
@@ -336,7 +336,7 @@ impl OffsetMap {
             }
             first = false;
             old_pos = old_end;
-            // #624 评论10 第4项复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
+            //   复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
             // delta 的 new_range 同点退化为零长（如 before/after 紧邻均 point(bs)），
             // 顺序赋值 `new_pos = new_end` 时后处理的端点会覆盖前面更大的端点，尾段
             // 静态区映射偏移。同点零长编辑在最终文本中占据同一插入间隙，取所有端点

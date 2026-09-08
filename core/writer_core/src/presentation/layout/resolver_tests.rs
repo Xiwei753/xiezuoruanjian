@@ -1,4 +1,4 @@
-//! resolver 单元测试 — 从 resolver.rs 内嵌测试模块提取（#629 源码结构门禁）。
+//! resolver 单元测试 — 从 resolver.rs 内嵌测试模块提取（ 源码结构门禁）。
 //!
 //! 覆盖 resolve_layout 决策表与 resolve_workbench_layout 二维 free-region 遮挡/七角色 bounds。
 //! workbench 计算已拆到 [`super::workbench`]，测试通过公共 API 验证。
@@ -195,7 +195,7 @@ fn test_default_occlusion_is_empty_and_non_separating() {
     assert_eq!(o.bottom_dp, 0.0);
 }
 
-// ── resolve_workbench_layout 单测（#628 评论 5301021120 第 2 步） ──
+// ── resolve_workbench_layout 单测（  第 2 步） ──
 
 #[test]
 fn test_workbench_plan_has_seven_roles() {
@@ -578,7 +578,7 @@ fn test_layout_rect_is_empty() {
     assert!(!non_empty.is_empty());
 }
 
-// ── #628 评论 5301021120 问题 2：二维 free-region 三类场景测试 ──
+// ──   ：二维 free-region 三类场景测试 ──
 
 /// 测试辅助：构造一个 separating 横向铰链（横贯全宽）。
 fn horizontal_hinge(top: f32, bottom: f32, width: f32) -> WindowOcclusion {
@@ -638,7 +638,7 @@ fn test_workbench_plan_full_height_vertical_hinge_valid() {
 
 #[test]
 fn test_workbench_plan_full_width_horizontal_hinge_valid() {
-    // 场景 2：全宽横向 separating hinge（#628 评论 5301021120 问题 2 核心场景）。
+    // 场景 2：全宽横向 separating hinge（   核心场景）。
     // viewport 2000x1000，hinge [0,2000]x[490,510] 横贯全宽。
     // 旧的一维算法会把 [0,2000] 当整条横向禁区，七角色全塌。
     // 新二维算法：free regions = [0,2000]x[0,490] + [0,2000]x[510,1000]，
@@ -714,7 +714,7 @@ fn test_workbench_plan_vertical_plus_horizontal_hinge_valid() {
 
 #[test]
 fn test_workbench_plan_single_pane_when_free_region_too_small() {
-    // #628 评论 5301021120 问题 3：free region 放不下最小 workbench 时 mode=SinglePane。
+    //   free region 放不下最小 workbench 时 mode=SinglePane。
     // viewport 600x800 无遮挡，free region = [0,600]x[0,800]，
     // workbench_min_w = list_pane_min(200) + tool_pane_min(200) + tool_rail(56) + editor_min(240) = 696。
     // 600 < 696，放不下，mode=SinglePane，Editor 占满整个 viewport，其余角色 bounds 为空。

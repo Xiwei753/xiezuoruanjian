@@ -12,7 +12,7 @@ impl super::WriterCore {
     /// 启动时调用，遍历 app_meta/delete-journals/ 下所有 journal，
     /// 根据 phase 和 from/trash 路径实际存在状态决定下一步。
     ///
-    /// #645 评论 5504296097 缺口2修复：返回 `Vec<RecoveredProjectDelete>`，
+    /// 返回 `Vec<RecoveredProjectDelete>`，
     /// 每个元素含待补 history 的 change-set。调用方（bootstrap）用 change-set
     /// 调 `record_workspace_change_set` 写 history 后调 `ack_project_delete_history`
     /// 推进 journal 到 `HistoryRecorded` → `Completed` 并清 journal。

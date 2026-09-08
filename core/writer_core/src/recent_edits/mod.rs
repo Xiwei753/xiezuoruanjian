@@ -14,7 +14,7 @@
 //!   recent_edits.json    # 最近编辑列表
 //! ```
 //!
-//! ## 章节归属校正（Issue #632）
+//! ## 章节归属校正
 //!
 //! `recent_edits.json` 里历史遗留的 `(project_id, volume_id, chapter_id)` 三元组
 //! 可能因为作品/卷/章节被移动、重建或导入而失效，也可能出现同一章节被记成
@@ -214,16 +214,16 @@ pub fn record_recent_edit(
         if recent_path.exists() {
             let content = fs::read_to_string(&recent_path)?;
             let raw: Vec<RecentEdit> = serde_json::from_str(&content).unwrap_or_default();
-            // #630 评论12 项1：磁盘数据进入缓存前统一走 normalize，
+            //   项1：磁盘数据进入缓存前统一走 normalize，
             // 确保旧数据里的重复项不会绕过去重进入缓存。
-            // #632：normalize 现在按当前作品树校正章节归属。
+            // normalize 现在按当前作品树校正章节归属。
             normalize_recent_edits(projects_root, raw)?
         } else {
             Vec::new()
         }
     };
 
-    // #632：不直接相信调用方传来的三元组，先解析 canonical owner。
+    // 不直接相信调用方传来的三元组，先解析 canonical owner。
     // 解析失败（章节尚未落盘等）时退回原始三元组，避免刚编辑的章节丢失入口。
     let candidate = RecentEdit {
         project_id: project_id.to_string(),

@@ -39,7 +39,7 @@ dictionary ProjectStatsDto {
     u32 chapter_count;
 };
 
-// #625 第二段：项目摘要 — 元数据 + 统计一次性返回，作品卡片显示字数用。
+// 项目摘要 — 元数据 + 统计一次性返回，作品卡片显示字数用。
 dictionary ProjectSummaryDto {
     string id;
     string title;
@@ -69,13 +69,13 @@ dictionary ChapterMetaDto {
     string? note;
 };
 
-// #644 评论 5467821839 第7节：卷及其章节 — 一次跨 FFI 返回的卷 + 章节列表。
+// 卷及其章节 — 一次跨 FFI 返回的卷 + 章节列表。
 dictionary VolumeWithChaptersDto {
     VolumeDto volume;
     sequence<ChapterMetaDto> chapters;
 };
 
-// #644 评论 5467821839 第7节：作品工作区快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
+// 作品工作区快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
 dictionary ProjectWorkspaceSnapshotDto {
     ProjectDto project;
     ProjectStatsDto stats;
@@ -96,7 +96,7 @@ dictionary ChapterSaveReceiptDto {
     u32 word_count;
 };
 
-// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 一次跨 FFI 传入完整作品树，
+// 恢复作品树输入 DTO — 一次跨 FFI 传入完整作品树，
 // Core 负责校验 ID、校验目标不冲突、原子发布到 projects/<projectId>。
 dictionary RestoreChapterInputDto {
     string chapter_id;
@@ -240,7 +240,7 @@ dictionary DeviceInfoDto {
     string platform;
 };
 
-// Issue #645 评论第 2 点：SyncConfigDto/SyncSecretsDto 改成 provider-neutral，
+// SyncConfigDto/SyncSecretsDto 改成 provider-neutral，
 // GitHub 特定字段只在 ProviderConfigDto::GitHub / ProviderSecretsDto::GitHub 中。
 [Enum]
 interface ProviderConfigDto {
@@ -394,7 +394,7 @@ dictionary FullSyncDiagnosticsResultDto {
     SyncDiagnosticsResultDto diagnostics;
 };
 
-// Issue #630 评论 5307423953 Part B：全量同步持久状态。
+    // 全量同步持久状态。
 // 路径：<app_data_root>/app-meta/sync/full_state.local.json
 // overall_status: 与 FullSyncResultDto.overall_status 同一映射
 dictionary FullSyncStateDto {
@@ -404,7 +404,7 @@ dictionary FullSyncStateDto {
     sequence<string> failed_targets;
 };
 
-// Issue #630 评论第 4 点 / D：旧→新同步 profile 迁移结果。
+// 旧→新同步 profile 迁移结果。
 // outcome_kind: "not_needed" | "migrated" | "needs_reconfigure" | "no_legacy_config"
 dictionary LegacyMigrationOutcomeDto {
     string outcome_kind;
@@ -413,7 +413,7 @@ dictionary LegacyMigrationOutcomeDto {
     string? reason;
 };
 
-// Issue #630 评论第 5 点 Part C：旧 profile 精确 generation metadata。
+// 旧 profile 精确 generation metadata。
 // source: "app" 或 "project:<id>"
 // active_generation: Some(n) → 精确读 sync_token_<base>_g{n}；None → 回退 base key / 文件
 dictionary LegacyProfileMetadataDto {
@@ -1072,7 +1072,7 @@ interface WriterAppService {
     [Throws=WriterError]
     sequence<ProjectDto> list_projects();
 
-    // #625 第二段：批量返回项目摘要（元数据 + 统计），作品卡片显示字数用。
+    // 批量返回项目摘要（元数据 + 统计），作品卡片显示字数用。
     [Throws=WriterError]
     sequence<ProjectSummaryDto> list_project_summaries();
 
@@ -1091,7 +1091,7 @@ interface WriterAppService {
     [Throws=WriterError]
     ProjectStatsDto get_project_stats(string project_id);
 
-    // #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计快照。
+    // 一次返回作品的全部卷 + 章节 + 统计快照。
     [Throws=WriterError]
     ProjectWorkspaceSnapshotDto get_project_workspace_snapshot(string project_id);
 
@@ -1128,7 +1128,7 @@ interface WriterAppService {
     [Throws=WriterError]
     ChapterMetaDto create_chapter_in_project(string project_id, string title);
 
-    // #649 评论 5561465552 第 2 点：恢复作品树 — 一次跨 FFI 传入完整作品树，
+    // 恢复作品树 — 一次跨 FFI 传入完整作品树，
     // Core 负责校验 ID、校验目标不冲突、原子发布到 projects/<projectId>、记录 workspace Git 变更。
     [Throws=WriterError]
     ProjectDto restore_project_tree(RestoreProjectInputDto input);
@@ -1166,13 +1166,13 @@ interface WriterAppService {
     [Throws=WriterError]
     boolean save_syncable_settings(SyncableSettingsDto settings);
 
-    // 全量同步统一入口（Issue #630）：一个全局 config + 一份全局凭据。
+    // 全量同步统一入口：一个全局 config + 一份全局凭据。
 
-    // Issue #630 评论第 4 点 / D：旧→新同步 profile 一次性迁移。
+    // 旧→新同步 profile 一次性迁移。
     [Throws=WriterError]
     LegacyMigrationOutcomeDto migrate_legacy_sync_profile();
 
-    // Issue #630 评论第 5 点 Part C：旧→新同步 profile 迁移，接受精确 generation metadata。
+    // 旧→新同步 profile 迁移，接受精确 generation metadata。
     [Throws=WriterError]
     LegacyMigrationOutcomeDto migrate_legacy_sync_profile_with_metadata(
         sequence<LegacyProfileMetadataDto> metadata
@@ -1215,16 +1215,16 @@ interface WriterAppService {
     [Throws=WriterError]
     void save_app_sync_state(SyncStateDto state);
 
-    // Issue #630 评论 5307423953 Part B：全量同步持久状态。
+// 全量同步持久状态。
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
 
-    // Issue #630 评论 5308439467 Part 1：冷启动恢复中断的 Syncing 状态。
+    // 冷启动恢复中断的 Syncing 状态。
     // 只有旧状态是 Syncing 才原子改成 RecoverableError("previous_full_sync_interrupted")。
     [Throws=WriterError]
     boolean recover_interrupted_full_sync_state();
 
-    // Issue #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState。
+    // 平台预处理失败写同一份 Core FullSyncState。
     // status 为线格式状态码（"fatal_error" 等，与 FullSyncStateDto.overall_status
     // 同一映射）；failed_target 传 "preflight"（或 "global"），不要伪造 project id。
     [Throws=WriterError]
@@ -1425,21 +1425,21 @@ interface WriterAppService {
 
     sequence<BuiltinThemeDto> list_builtin_themes();
 
-    // ── Layout Contract（#628：输入为原始窗口尺寸，不再接收平台已判断好的窗口能力） ──
+    // ── Layout Contract（输入为原始窗口尺寸，不再接收平台已判断好的窗口能力） ──
 
     LayoutContractDto resolve_layout(WindowViewportDto viewport);
 
-    // ── Workbench Layout Plan（#628 评论 5301021120 第 3 步：FFI 直接返回 plan，
+    // ── Workbench Layout Plan：FFI 直接返回 plan，
     //     Android 不再自己推导 hinge 布局） ──
 
     WorkbenchLayoutPlanDto resolve_workbench_layout(WindowViewportDto viewport, WorkbenchVisibilityDto visibility);
 
-    // ── Screen Contract（#610 / #628：动作区域/顺序是产品语义，不随壳层变化；
+    // ── Screen Contract（动作区域/顺序是产品语义，不随壳层变化；
     //     ScreenPolicy 含 show_primary_navigation 由 Rust 决定） ──
 
     ScreenPolicyDto resolve_screen_policy(ScreenRoleDto screen_role);
 
-    // ── #535: Editor V2 Kernel ──
+    // ── Editor V2 Kernel ──
 
     EditorEditResultDto editor_kernel_insert(u32 byte_offset, string text, EditorTransactionCauseDto cause, u64 expected_revision);
     EditorEditResultDto editor_kernel_delete(u32 byte_start, u32 byte_end_exclusive, EditorTransactionCauseDto cause, u64 expected_revision);
@@ -1461,10 +1461,10 @@ interface WriterAppService {
     u32 editor_kernel_get_cursor();
     u32 editor_kernel_get_selection_anchor();
     EditorSessionSnapshotDto editor_kernel_session_snapshot();
-    // #606: grapheme cluster 边界由 Core 唯一计算，平台端不再依赖 ICU BreakIterator
+    // grapheme cluster 边界由 Core 唯一计算，平台端不再依赖 ICU BreakIterator
     u32 editor_kernel_previous_grapheme_boundary(u32 byte_offset);
     u32 editor_kernel_next_grapheme_boundary(u32 byte_offset);
-    // #606: rebase slice 逻辑对应关系由 Core 唯一计算，平台端不再自己匹配。
+    // rebase slice 逻辑对应关系由 Core 唯一计算，平台端不再自己匹配。
     // offset_map 为本次事务的旧正文 → 新正文偏移映射（EditorVisualIntentDto.offset_map），
     // 用于旧/新 slice range 坐标不同时的 OffsetMapMatched 匹配。
     sequence<RebaseSliceMappingDto> editor_kernel_compute_rebase_slice_mappings(
@@ -1477,7 +1477,7 @@ interface WriterAppService {
     EditorEditResultDto editor_kernel_replace_all(string search, string replacement, u64 expected_revision);
     EditorEditResultDto editor_kernel_insert_line_break(u32 byte_offset, u8 auto_indent_enabled, EditorTransactionCauseDto cause, u64 expected_revision);
 
-    // ── #541: Text Edit Session API ──
+    // ── Text Edit Session API ──
 
     u64? text_edit_session_create(string target_id, string initial_text, u32 initial_cursor_byte_offset, u8 is_persistent);
     u8 text_edit_session_close(u64 session_id);
@@ -1497,12 +1497,12 @@ interface WriterAppService {
     EditorEditResultDto text_edit_session_cancel_composition(u64 session_id, u64 composition_session_id, u64 composition_generation, u64 expected_revision);
     void text_edit_session_set_animation_enabled(u64 session_id, u8 enabled);
     void text_edit_session_set_animation_duration_ms(u64 session_id, u64 duration_ms);
-    // #606: grapheme cluster 边界由 Core 唯一计算（session-scoped 版本）。
+    // grapheme cluster 边界由 Core 唯一计算（session-scoped 版本）。
     // 平台端 TextEditSessionBridge 通过这两个方法调用 Core 的 unicode_segmentation，
     // 不再依赖 ICU BreakIterator。
     u32 text_edit_session_previous_grapheme_boundary(u64 session_id, u32 byte_offset);
     u32 text_edit_session_next_grapheme_boundary(u64 session_id, u32 byte_offset);
-    // #606: rebase slice 逻辑对应关系由 Core 唯一计算（session-scoped 版本）。
+    // rebase slice 逻辑对应关系由 Core 唯一计算（session-scoped 版本）。
     // offset_map 为本次事务的旧正文 → 新正文偏移映射（EditorVisualIntentDto.offset_map），
     // 用于旧/新 slice range 坐标不同时的 OffsetMapMatched 匹配。
     sequence<RebaseSliceMappingDto> text_edit_session_compute_rebase_slice_mappings(
@@ -1534,7 +1534,7 @@ interface WriterAppService {
     boolean enqueue_search_update(string action, string object_id, string scope, string title, string body);
 };
 
-// ── Layout Contract DTOs（#628：WindowCapabilitiesDto → WindowViewportDto） ──
+// ── Layout Contract DTOs（WindowCapabilitiesDto → WindowViewportDto） ──
 
 enum ShellModeDto {
     "SinglePane",
@@ -1548,13 +1548,13 @@ enum WorkspaceLayoutModeDto {
     "Workbench",
 };
 
-// #628 评论第 4 节：一级导航放置位置（平台无关）。
+// 一级导航放置位置（平台无关）。
 enum PrimaryNavigationPlacementDto {
     "Bottom",
     "Side",
 };
 
-// #628 评论第 6 节 / 验收点 4：共用布局尺寸 DTO。
+// 共用布局尺寸 DTO。
 dictionary LayoutMetricsDto {
     f32 list_pane_width_dp;
     f32 project_card_min_width_dp;
@@ -1568,7 +1568,7 @@ dictionary LayoutMetricsDto {
     f32 tool_pane_min_width_dp;
 };
 
-// #628 验收点 5：平台中立的窗口遮挡 DTO。
+// 平台中立的窗口遮挡 DTO。
 dictionary WindowOcclusionDto {
     f32 left_dp;
     f32 top_dp;
@@ -1577,7 +1577,7 @@ dictionary WindowOcclusionDto {
     boolean separating;
 };
 
-// #628：原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
+// 原始窗口尺寸 DTO，替代旧的 WindowCapabilitiesDto。
 // 平台端只传宽高（dp）与遮挡列表，不再传 paneCount / has_separating_fold /
 // pointer_class / keyboard_visible。
 dictionary WindowViewportDto {
@@ -1586,10 +1586,10 @@ dictionary WindowViewportDto {
     sequence<WindowOcclusionDto> occlusions;
 };
 
-// #628 评论 5301021120 第 1 步：LayoutContractDto 删除 show_primary_navigation（改由 ScreenPolicy 提供），
+// LayoutContractDto 删除 show_primary_navigation（改由 ScreenPolicy 提供），
 // 新增 primary_navigation_placement 与 metrics。
-// 验收点 1：workspace_pane_mode → workspace_layout_mode（WorkspaceLayoutModeDto）。
-// 第 1 步：删除单数 workbench_occlusion 字段（死数据）。工作台布局计划改由
+// workspace_pane_mode → workspace_layout_mode（WorkspaceLayoutModeDto）。
+// 删除单数 workbench_occlusion 字段（死数据）。工作台布局计划改由
 // WorkbenchLayoutPlanDto 单独提供（resolve_workbench_layout 接口）。
 dictionary LayoutContractDto {
     ShellModeDto shell_mode;
@@ -1598,7 +1598,7 @@ dictionary LayoutContractDto {
     LayoutMetricsDto metrics;
 };
 
-// ── Workbench Layout Plan DTOs（#628 评论 5301021120 第 1-3 步） ──
+// ── Workbench Layout Plan DTOs ──
 
 dictionary LayoutRectDto {
     f32 left_dp;
@@ -1627,7 +1627,7 @@ dictionary WorkbenchVisibilityDto {
     boolean tool_pane_visible;
 };
 
-// #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 boolean valid，
+// 不再返回含糊的 boolean valid，
 // 改由 ResolvedWorkspaceModeDto 表达 Rust 决定的最终产品模式。
 // - Workbench：七角色正常放置；
 // - SinglePane：只返回 Editor 的最大连续安全 free-region bounds，其余 role 空。
@@ -1677,7 +1677,7 @@ enum ActionRoleDto {
     "Search"
 };
 
-// #610 评论二：平台无关的业务目标身份。
+// 平台无关的业务目标身份。
 enum ActionTargetDto {
     "App",
     "Project",
@@ -1703,7 +1703,7 @@ dictionary ActionSlotDto {
     boolean requires_confirmation;
 };
 
-// #628 评论第 5 节：ScreenPolicyDto 新增 show_primary_navigation，
+// ScreenPolicyDto 新增 show_primary_navigation，
 // 由 Rust 根据页面角色决定，平台端直接读，不再传 contractShowsPrimaryNavigation。
 dictionary ScreenPolicyDto {
     ScreenRoleDto screen_role;
@@ -1735,7 +1735,7 @@ enum EditorTransactionCauseDto {
     "Programmatic",
 };
 
-// ── #535: Editor V2 Kernel DTOs ──
+// ── Editor V2 Kernel DTOs ──
 
 enum EditorOperationKindDto {
     "Insert",
@@ -1779,7 +1779,7 @@ dictionary EditorVisualIntentDto {
     AnimationModeDto animation_mode;
     u64 duration_ms;
     CoordinatedCursorDto coordinated_cursor;
-    // #606: Core 计算的 old/new 正文偏移映射，平台端 AffectedLayoutPlanner 不再独立推导
+    // Core 计算的 old/new 正文偏移映射，平台端 AffectedLayoutPlanner 不再独立推导
     OffsetMapDto? offset_map;
 };
 
@@ -1788,7 +1788,7 @@ dictionary EditorByteRangeDto {
     u32 end_exclusive;
 };
 
-// #606: 动画切片角色 — 与 Core `AnimatedSliceRole` 一一对应。
+// 动画切片角色 — 与 Core `AnimatedSliceRole` 一一对应。
 enum AnimatedSliceRoleDto {
     "Insert",
     "Delete",
@@ -1797,20 +1797,20 @@ enum AnimatedSliceRoleDto {
     "CrossfadeNew"
 };
 
-// #606: Rebase slice 继续/结束语义 — 与 Core `RebaseContinuation` 一一对应。
+// Rebase slice 继续/结束语义 — 与 Core `RebaseContinuation` 一一对应。
 enum RebaseContinuationDto {
     "Continue",
     "End"
 };
 
-// #606: Rebase 匹配依据 — 与 Core `RebaseReason` 一一对应。
+// Rebase 匹配依据 — 与 Core `RebaseReason` 一一对应。
 enum RebaseReasonDto {
     "SameByteRange",
     "OffsetMapMatched",
     "NoMapping"
 };
 
-// #606: 旧→新逻辑 slice 对应关系 — 与 Core `RebaseSliceMapping` 一一对应。
+// 旧→新逻辑 slice 对应关系 — 与 Core `RebaseSliceMapping` 一一对应。
 dictionary RebaseSliceMappingDto {
     u32 old_slice_index;
     u32 new_slice_index;
@@ -1856,9 +1856,9 @@ dictionary EditorEditResultDto {
     u32 new_selection_end;
     EditorVisualIntentDto visual_intent;
     CompositionSessionDto? composition_session;
-    // #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
+    // 本次编辑的字符增量（正文无变化时为全 0）。
     EditorContentDeltaDto content_delta;
-    // #629 评论6 Part B：当前 composition 完整状态（preedit + replace range + cursor）。
+    // 当前 composition 完整状态（preedit + replace range + cursor）。
     EditorCompositionStateDto? composition;
 };
 
@@ -1868,7 +1868,7 @@ dictionary CompositionSessionDto {
     u64 generation;
 };
 
-// #629 评论6 Part B：Composition 完整状态 DTO。
+// Composition 完整状态 DTO。
 dictionary EditorCompositionStateDto {
     u64 session_id;
     u64 base_revision;
@@ -1886,6 +1886,6 @@ dictionary EditorSessionSnapshotDto {
     u32 selection_anchor;
     u64 generation;
      string chapter_id;
-    // #629 评论6 Part B：composition 活跃时非空。
+    // composition 活跃时非空。
     EditorCompositionStateDto? composition;
 };

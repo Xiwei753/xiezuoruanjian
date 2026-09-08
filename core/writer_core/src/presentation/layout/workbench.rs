@@ -1,11 +1,11 @@
-//! # 工作台布局计算 — 七角色 bounds 推导（#628 评论 5301021120 第 1-2 步，问题 2/3）
+//! # 工作台布局计算 — 七角色 bounds 推导（  第 1-2 步，）
 //!
 //! 从 [`super::resolver`] 拆出的纯计算职责：输入 [`WindowViewport`] +
 //! [`WorkbenchVisibility`]，处理全部 `separating == true` 遮挡，二维 free-region
 //! 网格 cell 算法（收集 X/Y 切线→网格 cell→合并相邻可用 cell），给七个
 //! [`WorkbenchRole`] 计算最终 [`LayoutRect`] bounds。
 //!
-//! #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 `valid: bool`，改由
+//!   02:59:39Z 版：不再返回含糊的 `valid: bool`，改由
 //! [`ResolvedWorkspaceMode`] 表达 Rust 决定的最终产品模式（Workbench / SinglePane）；
 //! 平台端只按 mode 映射壳层、按 bounds measure/place，不允许自己再决定模式。
 //!
@@ -24,7 +24,7 @@ use super::resolver::{
     WorkbenchPlacement, WorkbenchRole, WorkbenchVisibility,
 };
 
-/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步�，问题 2/3）。
+/// 解析工作台布局计划（  第 1-2 步�，）。
 ///
 /// 平台无关纯函数，处理全部 `separating == true` 的遮挡：
 ///
@@ -119,7 +119,7 @@ pub fn resolve_workbench_layout(
     }
 }
 
-/// 计算二维 free regions（#628 评论 5301021120 问题 2）。
+/// 计算二维 free regions。
 ///
 /// 网格 cell 算法：
 /// 1. 把 separating occlusion 的 left/top/right/bottom 全部 clamp 到 viewport，空矩形删除；
@@ -408,7 +408,7 @@ fn compute_toolbar_bounds(
 }
 
 /// `mode = SinglePane` 退化：只返回 Editor 占满给定 region（最大连续安全 free-region），
-/// 其余角色 bounds 为空（#628 评论 5301021120 问题 3）。
+/// 其余角色 bounds 为空。
 fn degrade_to_editor_only(region: LayoutRect) -> Vec<WorkbenchPlacement> {
     vec![
         WorkbenchPlacement {

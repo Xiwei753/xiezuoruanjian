@@ -1,17 +1,17 @@
-//! 同步配置与凭据 facade — 全局唯一配置 / 凭据 / 旧 profile 迁移（Issue #630）。
+//! 同步配置与凭据 facade — 全局唯一配置 / 凭据 / 旧 profile 迁移。
 //!
 //! 旧"作品同步 + 应用数据同步"两套用户配置入口已删除，这里只有一份全局
 //! `SyncConfig`（`<app_data_root>/app-meta/sync/config.local.json`）与一份全局凭据
 //! （安全存储 key `sync_token_global` / generation key `sync_token_global_g{N}`）。
 //!
-//! Issue #645 评论第 2 点：旧 JSON 顶层 GitHub 字段（`remote_url`/`branch`/`username`/
+//!  ：旧 JSON 顶层 GitHub 字段（`remote_url`/`branch`/`username`/
 //! `transport`/`backend_type`）在 `load_sync_config` 边界一次性迁移为
 //! `provider_config = ProviderConfig::GitHub(...)`，保存新格式后旧字段不再出现。
 
 impl super::WriterCore {
-    // ── 全局配置 + 全局凭据（Issue #630：唯一一份） ──
+    // ── 全局配置 全局凭据（：唯一一份） ──
 
-    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    /// 旧→新同步 profile 一次性迁移（  / D）。
     ///
     /// 新全局 profile 已存在时返回 `NotNeeded`；否则依次探测旧应用级 / 旧作品级
     /// profile，多项目一致迁一份，不一致返回 `NeedsReconfigure`。提交成功后清理
@@ -42,7 +42,7 @@ impl super::WriterCore {
 
     /// 加载全局同步配置。路径：`<app_data_root>/app-meta/sync/config.local.json`。
     ///
-    /// Issue #645 评论第 2 点：旧 JSON 顶层 GitHub 字段在 load 边界一次性迁移为
+    /// 旧 JSON 顶层 GitHub 字段在 load 边界一次性迁移为
     /// `provider_config = ProviderConfig::GitHub(...)`，保存新格式后旧字段不再出现。
     /// 检测旧格式的判据：JSON 中有顶层 `remote_url`/`backend_type`/`branch`/`username`/
     /// `transport` 任一字段，且 `provider_config` 不存在或为 null。
@@ -57,7 +57,7 @@ impl super::WriterCore {
 
         // 新格式：直接反序列化（provider_config 字段已存在或为 None）。
         if let Ok(mut config) = serde_json::from_str::<crate::sync::SyncConfig>(&content) {
-            // #645 评论 5504296097 第3点：如果已持久化的配置里 active_provider == "git"，
+            // 如果已持久化的配置里 active_provider == "git"，
             // 这是旧版本迁移遗留的死配置。修正为 github_api 并禁用同步。
             if config.active_provider == "git" {
                 log::warn!(
@@ -136,7 +136,7 @@ impl super::WriterCore {
         clippy::type_complexity
     )]
     pub fn load_sync_secrets(&self) -> crate::error::Result<crate::sync::SyncSecrets> {
-        // #644 评论 5462823517 第1节：facade 不再持有 secrets_override。
+        // facade 不再持有 secrets_override。
         // 进程级 override 由 api::service::WriterCoreApi.secrets_override_snapshot() 统一提供，
         // 同步编排层（full_sync）在 Prepare 阶段取 snapshot 后传入。
         const GLOBAL_KEY: &str = "sync_token_global";
@@ -161,7 +161,7 @@ impl super::WriterCore {
         self.load_sync_secrets_from_file()
     }
 
-    /// #592 五：按 generation 保存凭据到安全存储（key: sync_token_global_g{N}）。
+    ///  五：按 generation 保存凭据到安全存储（key: sync_token_global_g{N}）。
     pub fn save_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -190,7 +190,7 @@ impl super::WriterCore {
         )
     }
 
-    /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
+    ///  五：读取指定 generation 的安全存储凭据；缺失返回 None。
     pub fn load_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -217,7 +217,7 @@ impl super::WriterCore {
         Ok(Some(secrets))
     }
 
-    /// #595 五：删除指定 generation 的安全存储凭据。
+    ///  五：删除指定 generation 的安全存储凭据。
     pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> crate::error::Result<()> {
         let key = format!("sync_token_global_g{}", generation);
         if let Some(ref storage) = self.secure_storage {
@@ -392,7 +392,7 @@ fn migrate_legacy_sync_config(
         .and_then(|v| v.as_str())
         .unwrap_or("github_api");
 
-    // #645 评论 5504296097 第3点：旧 Git 配置不写回 `active_provider = "git"`。
+    // 旧 Git 配置不写回 `active_provider = "git"`。
     // - GitHub HTTPS → 升级为 github_api
     // - 其他 backend_type（非 github_api）→ 禁用同步，要求用户重新配置
     let is_git = backend_type == "git";
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(config.active_provider, "github_api");
     }
 
-    /// #645 评论 5504296097 第3点：旧 Git backend 不是 GitHub HTTPS 时，
+    /// 旧 Git backend 不是 GitHub HTTPS 时，
     /// 禁用同步并要求重新配置，不写 `"git"` 到 active_provider。
     #[test]
     #[cfg(feature = "github-api")]

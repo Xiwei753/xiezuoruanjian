@@ -75,7 +75,7 @@ impl ProviderError {
     /// 映射到通用同步错误分类 [`SyncErrorCategory`]。
     ///
     /// 该映射让现有 UI/状态机继续工作，同时把 GitHub 特定错误名隔离在 Provider 实现内。
-    /// Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成 provider-neutral
+    /// `SyncErrorCategory` 已收成 provider-neutral
     /// 分类，本映射直接对应到新通用变体。
     pub fn to_sync_error_category(&self) -> SyncErrorCategory {
         match self {
@@ -94,7 +94,7 @@ impl ProviderError {
 
 /// 将 [`ProviderError`] 转为 Core 统一 [`crate::Error`]。
 ///
-/// 映射规则（见 Issue #645 评论 5504296097 第1点）：
+/// 映射规则（见   ）：
 /// - `AuthFailed` / `PermissionDenied` → `SyncAuthFailed`
 /// - `Network` / `TemporaryUnavailable` → `SyncNetworkUnavailable`
 /// - `RateLimited` → `SyncRateLimited`

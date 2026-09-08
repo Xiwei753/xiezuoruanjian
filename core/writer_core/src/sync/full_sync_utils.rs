@@ -13,7 +13,7 @@ pub(crate) fn transport_init_failure_error(category: &str, message: &str) -> cra
 
 /// 判断 target 状态是否为协议错误。
 ///
-/// #645 评论 5504296097 问题2：只被 facade 旧编排 `aggregate_full_sync_result` 用，
+///   只被 facade 旧编排 `aggregate_full_sync_result` 用，
 /// 旧编排已降级为 `#[cfg(test)]`，本函数同步标 `#[cfg(test)]`。
 /// 生产路径用 `crate::sync::full_sync` 内部的同名私有函数。
 #[cfg(test)]
@@ -26,7 +26,7 @@ pub(crate) fn is_protocol_error_status(status: &crate::sync::SyncStatus) -> bool
     )
 }
 
-/// #645 评论 5504296097 问题2：只被 facade 旧编排用，标 `#[cfg(test)]`。
+///   只被 facade 旧编排用，标 `#[cfg(test)]`。
 #[cfg(test)]
 pub(crate) type ProtocolErrorFields = (
     crate::sync::SyncStatus,
@@ -35,7 +35,7 @@ pub(crate) type ProtocolErrorFields = (
     Option<String>,
 );
 
-/// #645 评论 5504296097 问题2：只被 facade 旧编排用，标 `#[cfg(test)]`。
+///   只被 facade 旧编排用，标 `#[cfg(test)]`。
 #[cfg(test)]
 pub(crate) fn build_protocol_error_fields(
     targets: &[crate::sync::types::TargetSyncResult],
@@ -63,7 +63,7 @@ pub(crate) fn build_protocol_error_fields(
     Some((overall_status, error, error_category, message_key))
 }
 
-/// #645 评论 5504296097 问题2：只被 facade 旧编排用，标 `#[cfg(test)]`。
+///   只被 facade 旧编排用，标 `#[cfg(test)]`。
 #[cfg(test)]
 pub(crate) fn sync_error_category_to_message_key_string(code: &str) -> String {
     use crate::sync::types::SyncErrorCategory;
@@ -74,7 +74,7 @@ pub(crate) fn sync_error_category_to_message_key_string(code: &str) -> String {
 
 /// 聚合成功类终态。
 ///
-/// #645 评论 5504296097 问题2：只被 facade 旧编排用，标 `#[cfg(test)]`。
+///   只被 facade 旧编排用，标 `#[cfg(test)]`。
 #[cfg(test)]
 pub(crate) fn aggregate_success_status(
     targets: &[crate::sync::types::TargetSyncResult],
@@ -100,7 +100,7 @@ pub(crate) fn aggregate_success_status(
 /// 单个 target 状态在聚合中的优先级：
 /// 4=Fatal/Error，3=Conflict/PartialConflict，1=Recoverable，0=其余（成功类）。
 ///
-/// #645 评论 5504296097 问题2：只被 facade 旧编排用，标 `#[cfg(test)]`。
+///   只被 facade 旧编排用，标 `#[cfg(test)]`。
 #[cfg(test)]
 pub(crate) fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 {
     match status {
@@ -113,7 +113,7 @@ pub(crate) fn full_sync_status_priority(status: &crate::sync::SyncStatus) -> u8 
 
 /// 执行单个 target 的同步，把 `Err` 转为该 target 的 `SyncResult::error(...)`。
 ///
-/// #645 评论 5504296097 问题2：只被 facade 旧编排 `perform_full_sync_with_provider` 用，
+///   只被 facade 旧编排 `perform_full_sync_with_provider` 用，
 /// 旧编排已降级为 `#[cfg(test)]`，本函数同步标 `#[cfg(test)]`。
 /// 生产路径用 `crate::sync::full_sync::run_transfer`（内部调 `run_single_target`）。
 #[cfg(test)]

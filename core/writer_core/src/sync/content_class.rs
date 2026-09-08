@@ -1,4 +1,4 @@
-//! #644 评论 5473789298 第3节：内容分类与三方比较（始终可用）。
+//!   ：内容分类与三方比较（始终可用）。
 //!
 //! 从 `lww/compare.rs` 提升为 `sync` 的直接子模块，让 `staging.rs`（不在
 //! `github-api` feature gate 下）也能调用纯分类/比较逻辑。
@@ -8,7 +8,7 @@
 //! - [`ContentClass`] / [`classify_content_path`] / [`is_document_content_path`]
 //! - [`three_way_resolve`] / [`ThreeWayResult`]
 //! - [`LwwRecord`] / [`LwwWinner`] / [`resolve_lww`] / [`lww_record_time`]
-//!   （#644 评论 5474166587 问题3：纯 LWW 决策提升到始终可用的模块）
+//!   （  纯 LWW 决策提升到始终可用的模块）
 //!
 //! 依赖 `ManifestFileRecord` 的 `PathDecision` / `resolve_path_decision` 仍留在
 //! `lww/compare.rs`（在 `github-api` feature gate 下）。
@@ -146,7 +146,7 @@ pub(crate) enum ThreeWayResult {
     BothChanged,
 }
 
-// ── 纯 LWW 决策（#644 评论 5474166587 问题3） ──
+// ── 纯 LWW 决策 ──
 
 /// 轻量 LWW 比较记录 — 不依赖 `ManifestFileRecord`，始终可用。
 ///

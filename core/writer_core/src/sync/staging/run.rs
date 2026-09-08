@@ -16,7 +16,7 @@ const STAGING_SUBDIR: &str = "staging";
 /// `run_root` = `<parent>/<run_id>`，下含 `base/`（Prepare 时 live 快照）与
 /// `staging/`（Transfer 后远端内容）。run 结束调 [StagingRun::cleanup] 整体删除。
 ///
-/// #645 评论 5504296097 第2点：`StagingRun` 不再携带 `active_provider` /
+/// `StagingRun` 不再携带 `active_provider` /
 /// `git_seed_state` / `git_layout` 字段。staging 统一走文件级 `seed_from_live`，
 /// 不再按 Git/GithubApi backend 走不同 seed 路径。workspace Git 由 bootstrap 阶段
 /// 初始化，staging 不负责 Git 生命周期。
@@ -92,7 +92,7 @@ impl StagingRun {
         Ok(())
     }
 
-    /// #644 评论 5473105049 第1节：从 live 完整初始化 staging run。
+    /// 从 live 完整初始化 staging run。
     ///
     /// 1. 递归扫描 `live_root` 下所有文件（跳过 `.git/`、`full-sync-staging/`、
     ///    `app-meta/transactions/`），把每个文件 hard-link/copy 到 `base/`；
@@ -120,22 +120,22 @@ impl StagingRun {
 
     /// 三方比较生成 commit plan。
     ///
-    /// #644 评论 5473105049 第2节：按 `base ∪ staging` 的路径全集做真正的三方比较，
+    /// 按 `base ∪ staging` 的路径全集做真正的三方比较，
     /// 值统一用 `Option<bytes>`。`incoming=None` 表示远端删除。
     ///
     /// - `base` = Prepare 时 live（[Self::base_root] 下）
     /// - `local` = 现在 live（`live_root` 下）
     /// - `incoming` = Transfer 后 staging（[Self::staging_root] 下）
     ///
-    /// #644 评论 5473789298 第3节：按 [`ContentClass`] 分类决策，不再统一字节比较：
+    /// 按 [`ContentClass`] 分类决策，不再统一字节比较：
     /// - [`ContentClass::UserTextDocument`]：走 [`three_way_resolve`]，
     ///   `BothChanged` → [`StagingConflict`]；其余按 NoOp/KeepLocal/Apply。
     /// - [`ContentClass::Metadata`] / [`ContentClass::GeneratedCache`]：真正 LWW
-    ///   （#644 评论 5474166587 问题3：时间戳 + device_id 决胜，不再固定 remote-wins）。
+    ///   （时间戳 device_id 决胜，不再固定 remote-wins）。
     /// - [`ContentClass::LocalOnly`]：按 [`StagingCommitClass`] 进一步细分——
     ///   EngineState 写回 live，PlatformConfig/Skip 不写回。
     ///
-    /// #644 评论 5474166587 问题1：CommitPlan 拆 `content_actions` + `engine_state_actions`。
+    /// CommitPlan 拆 `content_actions` `engine_state_actions`。
     /// `app-meta/sync/manifest.sync.json` 和 `app-meta/sync/state.local.json` 作为
     /// EngineState 写回 live；`.git/`、`full-sync-staging/`、`app-meta/transactions/`
     /// 永不进 commit；`config.local.json` / secrets 不从 staging 覆盖 live。
@@ -161,7 +161,7 @@ impl StagingRun {
         // 退化为纯时间戳比较（仍优于固定 remote-wins）。
         let live_device_id = read_live_device_id(live_root).unwrap_or_default();
 
-        // #644 评论 5475110422 第4节：加载 live 的 SyncState，获取 tombstones。
+        // 加载 live 的 SyncState，获取 tombstones。
         // delete 参与 LWW 时需要 tombstones 里的 deleted_at 时间戳。
         let live_sync_state = read_live_sync_state(live_root);
         let live_tombstones = live_sync_state
@@ -169,12 +169,12 @@ impl StagingRun {
             .map(|s| s.tombstones.clone())
             .unwrap_or_default();
 
-        // #644 评论 5474772497 第2节：读取 staging 的 manifest.sync.json，
+        // 读取 staging 的 manifest.sync.json，
         // 获取远端文件的真实 LWW 元数据（updated_at_ms、device_id、op）。
         // Transfer 阶段会写入 manifest；manifest 不存在或解析失败时回退到
         // mtime-based LWW（空 HashMap），不再区分 Git/GithubApi backend 的不同错误处理。
         //
-        // #645 评论 5504296097 第2点：staging 不再按 active_provider 分支。
+        // staging 不再按 active_provider 分支。
         // 通用 Provider 的 manifest 是 LWW 决策依据但不是硬性事实来源——
         // 缺失或损坏时回退到 mtime-based LWW，让同步继续而不是直接失败。
         let staging_manifest = match read_staging_manifest(&staging_root) {
@@ -195,10 +195,10 @@ impl StagingRun {
         };
 
         // 收集 base ∪ staging 的路径全集。
-        // #644 评论 5473789298 第2节：base 和 staging 都走 list_commit_candidate_paths，
+        // base 和 staging 都走 list_commit_candidate_paths，
         // 排除 `.git/`、`full-sync-staging/`、`app-meta/transactions/`，
         // 不让 Git 元数据被当成正文比较。
-        // #645 评论 5504296097 问题2 修复：ReplaceProject 不再走 compute_commit_plan
+        // ReplaceProject 不再走 compute_commit_plan
         // （改走 build_replace_project_plan），普通三方 commit 不需要 live-only 文件
         // 做 Delete，不再把 live_paths 加入 all_paths。
         let base_paths = list_commit_candidate_paths(&base_root)?;
@@ -214,7 +214,7 @@ impl StagingRun {
         for rel in all_paths {
             let rel_str = rel.to_string_lossy().to_string();
 
-            // #644 评论 5474166587 问题1：按 StagingCommitClass 决定 staging commit 写回语义。
+            //   按 StagingCommitClass 决定 staging commit 写回语义。
             // 远端同步语义（ContentClass）和 staging commit 写回语义（StagingCommitClass）
             // 是两个正交维度，不再复用 LocalOnly。
             match classify_staging_commit_path(&rel_str) {
@@ -293,7 +293,7 @@ impl StagingRun {
                     }
                 }
             } else {
-                // #644 评论 5474166587 问题3：Metadata/GeneratedCache 走真正 LWW——
+                //   Metadata/GeneratedCache 走真正 LWW——
                 // 时间戳较大方获胜；同时间 device_id 字典序决胜。不再固定 remote-wins。
                 let content_class = classify_content_path(&rel_str);
                 debug_assert!(
@@ -312,11 +312,11 @@ impl StagingRun {
                     plan.noop.push(rel);
                 } else {
                     // 双方都改 → 真正 LWW 决策。
-                    // #644 评论 5474772497 第2节：本地侧用 live 文件 hash + mtime + device_id；
+                    // 本地侧用 live 文件 hash mtime device_id；
                     // 远端侧优先从 staging manifest 读取真实 LWW 元数据
                     // （updated_at_ms、device_id、op），回退到 mtime-based。
                     //
-                    // #644 评论 5475110422 第4节：delete 时从 tombstones 查找 deleted_at。
+                    // delete 时从 tombstones 查找 deleted_at。
                     // 若本地 delete 无 tombstone 记录，跳过此路径（不参与 LWW）。
                     let local_rec = build_local_lww_record(
                         live_root,
@@ -373,16 +373,16 @@ impl StagingRun {
     }
 }
 
-/// #644 评论 5473401065 第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。
+///   第1/2节：在**无 Core 锁**状态下创建并 seed 所有 staging runs。
 ///
 /// 纯函数，不依赖 `WriterCore`，可在无锁状态下调用。
 /// 对每个 target 创建 `StagingRun`，统一调 `seed_from_live`（文件级复制，跳过 `.git/`）。
 ///
-/// #644 评论 5473401065 第2节：seed 失败**不再**被 `log::warn!` 吞掉。
+/// seed 失败**不再**被 `log::warn!` 吞掉。
 /// 任何一个 target 的 seed 失败都意味着该 target 的 staging 是半成品，
 /// 不能拿来做三方比较。seed 失败直接返回 Err，让调用方终止本次 full sync。
 ///
-/// #645 评论 5504296097 第2点：不再在此函数中初始化 workspace Git。
+/// 不再在此函数中初始化 workspace Git。
 /// 本地 Git 仓库由 bootstrap 阶段初始化，staging 只负责文件级快照。
 /// 不再按 `active_provider` 分 Git/GithubApi 走不同 seed 路径。
 ///
@@ -394,12 +394,12 @@ pub fn prepare_staging_runs(
 
     for planned in &mut plan.targets {
         let run = StagingRun::create(&plan.app_data_root, planned.target_live_root.clone())?;
-        // #645 评论 5504296097 问题1：deleted target 不 seed（不读本地目录，
+        //   deleted target 不 seed（不读本地目录，
         // 只枚举远端删除）。创建空 staging run 保持索引对齐，commit 阶段
         // compute_commit_plan 会发现 staging 为空，自然 Skip。
         if !planned.is_deleted_target() {
-            // #644 评论 5473401065 第2节：seed 失败必须传播，不能继续拿半成品 staging。
-            // #645 评论 5504296097 第2点：统一调 seed_from_live，不再按 backend 分支。
+            // seed 失败必须传播，不能继续拿半成品 staging。
+            // 统一调 seed_from_live，不再按 backend 分支。
             run.seed_from_live(&planned.target_live_root)?;
         }
         planned.staging_root = Some(run.staging_root());
@@ -429,7 +429,7 @@ fn list_live_file_paths(live_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(out)
 }
 
-/// #644 评论 5473789298 第2节：列出 base/staging 下参与 commit 比较的候选路径。
+/// 列出 base/staging 下参与 commit 比较的候选路径。
 ///
 /// 与 [`list_live_file_paths`] 共用同一套跳过规则，确保 base/staging/live
 /// 三方比较只看同步业务文件，不会把 `.git/`、`full-sync-staging/`、
@@ -449,13 +449,13 @@ fn list_commit_candidate_paths(root: &Path) -> Result<Vec<PathBuf>> {
 ///
 /// 跳过规则（与 live 扫描、commit candidate 共用同一套）：
 /// - `.git/`（目录）：Git 仓库元数据，不是用户内容；
-/// - `.git`（文件）：评论 5491531984 问题2 — gitlink file，同样不是用户内容；
+/// - `.git`（文件）： — gitlink file，同样不是用户内容；
 /// - `.git.sujian-tmp-*`：迁移/恢复过程中的临时目录；
 /// - `.git.sujian-migrate-source-*`：迁移崩溃后残留的源仓库快照；
 /// - `full-sync-staging/`：staging run 自身，避免递归；
 /// - `app-meta/transactions/`：事务暂存目录，commit 中间态。
 ///
-/// #645 评论 5504296097 问题1：底层规则统一到
+/// 底层规则统一到
 /// [`crate::storage::workspace_paths`]，本函数不再持有规则副本。
 #[allow(clippy::excessive_nesting)]
 pub(crate) fn walk_commit_candidates(

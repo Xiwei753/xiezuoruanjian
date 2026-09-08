@@ -18,7 +18,7 @@ use crate::editor::strong_types::{
 };
 use crop::Rope;
 
-/// #624 评论8 — 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
+///   — 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
 ///
 /// `old_range` 是编辑前正文中的半开 byte range，`new_range` 是编辑后正文中的
 /// 半开 byte range（同一逻辑编辑位置）；`deleted_text`/`inserted_text` 只保存
@@ -31,7 +31,7 @@ pub(crate) struct TextEditDelta {
     pub(crate) inserted_text: String,
 }
 
-/// #624 评论8 — Undo 栈条目：编辑 delta 列表 + 编辑前后选区。
+///   — Undo 栈条目：编辑 delta 列表 编辑前后选区。
 ///
 /// 普通编辑一个 delta；deleteSurrounding 两个；replace-all 多个。
 /// Undo 按 new_range 逆序应用 inverse delta，Redo 按 old_range 从后往前（降序）
@@ -122,19 +122,19 @@ impl EditorKernel {
         self.animation_enabled = enabled;
     }
 
-    /// #624 评论8 — 热路径访问器：UTF-8 byte 长度，O(1)。
+    ///   — 热路径访问器：UTF-8 byte 长度，O(1)。
     pub fn byte_len(&self) -> usize {
         self.text.byte_len()
     }
 
-    /// #624 评论8 — 热路径访问器：offset 是否 UTF-8 char 边界（O(1)）。
+    ///   — 热路径访问器：offset 是否 UTF-8 char 边界（O(1)）。
     ///
     /// 越界 offset 一律返回 false（crop 自身在越界时 panic，调用方需先自查）。
     pub fn is_char_boundary(&self, byte_offset: usize) -> bool {
         byte_offset <= self.text.byte_len() && self.text.is_char_boundary(byte_offset)
     }
 
-    /// #624 评论8 — 热路径访问器：局部 byte slice（不 materialize 全文）。
+    ///   — 热路径访问器：局部 byte slice（不 materialize 全文）。
     ///
     /// `start`/`end` 为 UTF-8 byte offset 半开区间，必须已通过 [Self::is_char_boundary]
     /// 或其它边界验证；越界会 panic（调用方契约保证）。
@@ -142,7 +142,7 @@ impl EditorKernel {
         self.text.byte_slice(start..end)
     }
 
-    /// #624 评论8 — 冷路径访问器：全文 String。
+    ///   — 冷路径访问器：全文 String。
     ///
     /// 只在 session snapshot、save/load、global search、replace-all 等明确需要
     /// 全文的边界调用；普通输入热路径不得使用。
@@ -175,7 +175,7 @@ impl EditorKernel {
 
     /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
     ///
-    /// #624 评论8：从光标附近 RopeSlice 迭代 — 取 `[0, offset)` slice 的最后一个
+    /// 从光标附近 RopeSlice 迭代 — 取 `[0, offset)` slice 的最后一个
     /// grapheme（`next_back()`），不再从全文开头 `grapheme_indices(true)` 扫到光标。
     ///
     /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
@@ -199,7 +199,7 @@ impl EditorKernel {
 
     /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
     ///
-    /// #624 评论8：从光标附近 RopeSlice 迭代 — 只取光标后一个小窗口（每次最多
+    /// 从光标附近 RopeSlice 迭代 — 只取光标后一个小窗口（每次最多
     /// 64 个 Unicode scalar）用标准分段规则求第一个 cluster 边界；若 cluster 延伸
     /// 出窗口则自动向后扩展。不从全文开头 `grapheme_indices(true)` 扫描，也不依赖
     /// crop 前向 grapheme 迭代（crop 0.4.3 前向迭代不合并 regional-indicator 对）。

@@ -1,4 +1,4 @@
-//! FFI 层页面契约操作（#610 / #628：动作区域与顺序是产品语义，不随壳层变化；
+//! FFI 层页面契约操作（：动作区域与顺序是产品语义，不随壳层变化；
 //! ScreenPolicy 含 show_primary_navigation 由 Rust 决定）
 
 use std::os::raw::c_char;

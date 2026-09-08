@@ -902,7 +902,7 @@ pub struct CompositionSessionDto {
     pub generation: u64,
 }
 
-/// #629 评论6 Part B：Composition 完整状态 DTO — 暴露 preedit 文本和 replace range
+/// Composition 完整状态 DTO — 暴露 preedit 文本和 replace range
 /// 给平台静态写作区，使其能在不复制业务状态机的前提下显示预输入文本和下划线。
 ///
 /// 字段语义：
@@ -912,7 +912,7 @@ pub struct CompositionSessionDto {
 ///   指明 committed text 中将被 preedit_text 替换的范围。平台端据此构造临时显示文本。
 /// - `preedit_text`：当前预输入文本（未提交到正文）。Core 不把它写进正文持久化。
 /// - `preedit_cursor_utf16`：preedit 内部光标的 UTF-16 code unit offset（IME 协议要求）。
-///   Core 内部用 `Utf16CodeUnitOffset` 强类型承载（#629 评论7 第1项），DTO 边界仍 u32。
+///   Core 内部用 `Utf16CodeUnitOffset` 强类型承载，DTO 边界仍 u32。
 ///
 /// 平台端构造临时显示文本时：把 committed text 的
 /// `[replace_byte_start, replace_byte_end_exclusive)` 替换为 `preedit_text`，
@@ -930,7 +930,7 @@ pub struct EditorCompositionStateDto {
     pub preedit_cursor_utf16: u32,
 }
 
-/// #624 评论8：内容增量 DTO — 本次编辑实际插入/删除的字符统计。
+/// 内容增量 DTO — 本次编辑实际插入/删除的字符统计。
 ///
 /// `_chars` 按 Unicode scalar 计数（非 UTF-8 byte、非 UTF-16 code unit）；
 /// Cursor/selection/composition-update 没有 committed 正文变化时为全 0；
@@ -979,10 +979,10 @@ pub struct EditorEditResultDto {
     pub visual_intent: EditorVisualIntentDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_session: Option<CompositionSessionDto>,
-    /// #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
+    /// 本次编辑的字符增量（正文无变化时为全 0）。
     #[serde(default)]
     pub content_delta: EditorContentDeltaDto,
-    /// #629 评论6 Part B：当前 composition 完整状态（preedit 文本 + replace range + cursor）。
+    /// 当前 composition 完整状态（preedit 文本 replace range cursor）。
     /// 仅在 composition 活跃（begin/update 成功）时非 None；finish/cancel/普通编辑后为 None。
     /// 平台端据此构造临时显示文本和下划线范围，不复制 Core 的 composition 状态机。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1137,7 +1137,7 @@ pub struct EditorSessionSnapshotDto {
     pub selection_anchor: u32,
     pub generation: u64,
     pub chapter_id: String,
-    /// #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 None，
+    /// 当前 composition 完整状态。composition 活跃时非 None，
     /// 平台端据此构造临时显示文本和下划线范围。无 composition 时为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<EditorCompositionStateDto>,
@@ -1227,7 +1227,7 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
 mod tests {
     use super::*;
 
-    /// #624 评论8: EditorEditResultDto 映射 content_delta（插入/删除/空白统计）。
+    ///  : EditorEditResultDto 映射 content_delta（插入/删除/空白统计）。
     #[test]
     fn edit_result_dto_maps_content_delta() {
         use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
@@ -1253,7 +1253,7 @@ mod tests {
         assert_eq!(dto.content_delta.inserted_non_whitespace_chars, 0u32);
     }
 
-    /// #624 评论8: selection-only 结果 content_delta 为全 0，DTO 默认值正确。
+    ///  : selection-only 结果 content_delta 为全 0，DTO 默认值正确。
     #[test]
     fn edit_result_dto_selection_only_has_zero_content_delta() {
         use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
@@ -1272,7 +1272,7 @@ mod tests {
         assert_eq!(dto.content_delta, EditorContentDeltaDto::default());
     }
 
-    /// #624 评论8: EditorContentDeltaDto 序列化 camelCase（Android 直接消费）。
+    ///  : EditorContentDeltaDto 序列化 camelCase（Android 直接消费）。
     #[test]
     fn content_delta_dto_serializes_camel_case() {
         let dto = EditorContentDeltaDto {

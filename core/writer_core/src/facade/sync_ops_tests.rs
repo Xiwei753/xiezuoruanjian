@@ -1545,7 +1545,7 @@ fn q1_commit_full_sync_executes_delete_project_action() {
     );
 }
 
-/// 问题1：RemoteLifecycle origin 的删除不生成 PendingDeletedTarget。
+/// RemoteLifecycle origin 的删除不生成 PendingDeletedTarget。
 /// （远端已删，不反向要求删远端。User origin 才会生成 PendingDeletedTarget。）
 #[test]
 fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
@@ -1621,7 +1621,7 @@ fn q1_remote_lifecycle_delete_does_not_generate_pending_deleted_target() {
     );
 }
 
-/// 问题1：commit_full_sync 对没有 DeleteProject action 的 target 不做删除。
+/// commit_full_sync 对没有 DeleteProject action 的 target 不做删除。
 #[test]
 fn q1_commit_full_sync_without_delete_action_preserves_project() {
     let (_temp_dir, core) = new_core_with_projects();

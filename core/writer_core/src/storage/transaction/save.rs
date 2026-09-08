@@ -10,7 +10,7 @@ use crate::error::Result;
 /// 生命周期：`new` → `add_file`/`add_bytes`×N → `commit`。
 /// `Drop` 只在 `committed == true` 时清理事务目录；未提交的事务留给 `recover_pending_transactions`。
 ///
-/// #644 评论 5462823517 第4节：内部字段/参数名 `target_root`（原 `project_root`）—
+/// 内部字段/参数名 `target_root`（原 `project_root`）—
 /// full sync Commit 用这一套 staging + manifest + rename 提交，target_root 可以是
 /// 任意根（project root / app-data root / staging root），不限于 project。
 pub struct SaveTransaction {
@@ -19,14 +19,14 @@ pub struct SaveTransaction {
     pub(crate) tx_dir: std::path::PathBuf,
     pub(crate) entries: Vec<TransactionEntry>,
     committed: bool,
-    /// #644 评论 5475110422 第3节：备份模式标志。
+    /// 备份模式标志。
     /// 为 `true` 时，commit 前先把被覆盖/删除的旧文件备份到 `tx_dir/backup/`，
     /// 使 `rollback()` 能恢复到 commit 前的状态。
     backup_mode: bool,
-    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节：
+    ///
     /// commit 时备份的旧文件列表。用 `BackupEntry` 枚举替代空字符串哨兵。
     backed_up_files: Vec<BackupEntry>,
-    /// #644 评论 5475413230 第1节：backup_mode 时 commit 不再 cleanup，
+    /// backup_mode 时 commit 不再 cleanup，
     /// 必须等事务完成后由调用方显式调用 `finish()` 清理。
     finished: bool,
 }
@@ -51,7 +51,7 @@ impl SaveTransaction {
         &self.transaction_id
     }
 
-    /// #644 评论 5462823517 第4节：原子写入字节内容到事务暂存区。
+    /// 原子写入字节内容到事务暂存区。
     /// `add_file(&str)` 转成 bytes 后委托本方法。full sync Commit 用本方法提交
     /// staging 里已就绪的字节内容，不新建第二套 SyncTransaction。
     pub fn add_bytes(&mut self, target_relative: &str, content: &[u8]) -> Result<()> {
@@ -72,7 +72,7 @@ impl SaveTransaction {
         self.add_bytes(target_relative, content.as_bytes())
     }
 
-    /// #644 评论 5473105049 第2节：记录一条删除操作。
+    /// 记录一条删除操作。
     /// commit 时会删除 `target_relative` 对应的文件；崩溃恢复时也会重放删除。
     pub fn add_delete(&mut self, target_relative: &str) {
         self.entries.push(TransactionEntry {
@@ -90,8 +90,8 @@ impl SaveTransaction {
         self.backup_mode = true;
     }
 
-    /// #644 评论 5475110422 第3节 + #644 评论 5475413230 第1节 +
-    /// #644 评论 5475805198 第1节：
+    ///
+    ///
     /// 回滚 commit 写入的文件变更，更新 manifest phase 为 RolledBack 并清理事务目录。
     ///
     /// 仅在 `backup_mode` 且已 `commit` 后调用有效。
@@ -112,7 +112,7 @@ impl SaveTransaction {
         }
         let backup_dir = self.tx_dir.join("backup");
 
-        // #644 评论 5488655439 问题2 + #644 评论 5488871385 问题1：
+        //
         // 在第一笔 durable_copy_file/remove_file 前先检查完 self.backed_up_files，
         // 不能恢复到一半才发现后面的 backup 缺失。
         // 用 File::open() 确认真正可读，不用 metadata() 冒充。
@@ -150,7 +150,7 @@ impl SaveTransaction {
                     if let Some(parent) = target_path.parent() {
                         fs::create_dir_all(parent)?;
                     }
-                    // #644 评论 5484539222 缺陷2：durable copy + fsync 父目录。
+                    //   缺陷2：durable copy fsync 父目录。
                     crate::storage::durable_copy_file(&backup_path, &target_path)?;
                 }
                 BackupEntry::RemoveCreated { target_relative } => {
@@ -160,14 +160,14 @@ impl SaveTransaction {
                             return Err(crate::Error::Io(e));
                         }
                     } else {
-                        // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录持久化目录项。
+                        //   缺陷2：remove 后 fsync 父目录持久化目录项。
                         crate::storage::sync_parent(&target_path)?;
                     }
                 }
             }
         }
-        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1 +
-        // #644 评论 5483920624 问题1：不在 phase 落盘前单独删 backup_dir。
+        //
+        //   不在 phase 落盘前单独删 backup_dir。
         // 正确顺序：1.Git rollback → 2.live 文件恢复 → 3.原子写 RolledBack phase
         // → 4.phase 成功后 cleanup 整个 tx_dir（含 backup）。
         // 若 phase 写盘失败，backup 仍在，下次启动重试 rollback 可用。
@@ -187,7 +187,7 @@ impl SaveTransaction {
     /// `write_manifest_phase(Finished)` 失败时返回 Err，**不**设 finished、
     /// **不**调 cleanup，保留 tx_dir 给下次恢复。
     pub fn finish(&mut self) -> Result<()> {
-        // #644 评论 5475805198 第1节 + #644 评论 5483239422 问题1：
+        //
         // 更新 manifest phase 为 Finished。用 `?` 传播错误，不吞错。
         let manifest_path = self.tx_dir.join(MANIFEST_FILENAME);
         self.write_manifest_phase(&manifest_path, TransactionPhase::Finished)?;
@@ -222,7 +222,7 @@ impl SaveTransaction {
                 // 备份被覆盖或被删除的旧文件。
                 if target_path.exists() {
                     let backup_name = format!("backup_{}", idx);
-                    // #644 评论 5484539222 缺陷2：durable copy（copy + fsync backup 文件 + 父目录）。
+                    //   缺陷2：durable copy（copy fsync backup 文件 父目录）。
                     crate::storage::durable_copy_file(
                         &target_path,
                         &backup_dir.join(&backup_name),
@@ -238,7 +238,7 @@ impl SaveTransaction {
                 }
             }
 
-            // #644 评论 5484539222 缺陷2：所有 backup entry 完成后 fsync backup/ 目录，
+            //   缺陷2：所有 backup entry 完成后 fsync backup/ 目录，
             // 持久化 backup 目录项，再允许写 Prepared phase。
             crate::storage::sync_dir(&backup_dir)?;
 
@@ -253,7 +253,7 @@ impl SaveTransaction {
                 if entry.is_delete {
                     match fs::remove_file(&target_path) {
                         Ok(()) => {
-                            // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                            //   缺陷2：remove 后 fsync 父目录。
                             crate::storage::sync_parent(&target_path)?;
                         }
                         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -268,7 +268,7 @@ impl SaveTransaction {
                         }
                     }
                     fs::rename(&staging_path, &target_path)?;
-                    // #644 评论 5484539222 缺陷2：rename 后 fsync 目标父目录持久化目录项。
+                    //   缺陷2：rename 后 fsync 目标父目录持久化目录项。
                     // staging 文件已由 atomic_write_bytes fsync，rename 原子，但目录项需 fsync 父目录。
                     crate::storage::sync_parent(&target_path)?;
                 }
@@ -291,7 +291,7 @@ impl SaveTransaction {
             if entry.is_delete {
                 match fs::remove_file(&target_path) {
                     Ok(()) => {
-                        // #644 评论 5484539222 缺陷2：remove 后 fsync 父目录。
+                        //   缺陷2：remove 后 fsync 父目录。
                         crate::storage::sync_parent(&target_path)?;
                     }
                     Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -306,7 +306,7 @@ impl SaveTransaction {
                     }
                 }
                 fs::rename(&staging_path, &target_path)?;
-                // #644 评论 5484539222 缺陷2：rename 后 fsync 目标父目录。
+                //   缺陷2：rename 后 fsync 目标父目录。
                 crate::storage::sync_parent(&target_path)?;
             }
         }
@@ -354,12 +354,12 @@ impl SaveTransaction {
         Ok(())
     }
 
-    /// #644 评论 5475805198 第1节：更新 manifest 中的 phase 字段。
+    /// 更新 manifest 中的 phase 字段。
     ///
     /// 读取现有 manifest（若存在），更新 phase 和 backup_entries，原子写回。
     /// manifest 不存在时（首次写入）创建最小 manifest。
     ///
-    /// #644 评论 5483239422 问题1：manifest 存在但反序列化失败时返回 Err，
+    ///   manifest 存在但反序列化失败时返回 Err，
     /// **不**自动重建最小 manifest——重建会丢掉 backup_entries 崩溃恢复材料。
     /// 调用方收到 Err 应保留 tx_dir 给下次恢复或显式修复。
     fn write_manifest_phase(&self, manifest_path: &Path, phase: TransactionPhase) -> Result<()> {
@@ -390,7 +390,7 @@ impl SaveTransaction {
         Ok(())
     }
 
-    /// #644 评论 5483239422 问题1：cleanup 不完全吞错。
+    ///   cleanup 不完全吞错。
     ///
     /// 调用方（finish/rollback/commit）已确保 phase 持久化成功，cleanup 只是尽力
     /// 删除 tx_dir。删除失败时 log::warn，不影响业务正确性——下次启动
@@ -409,7 +409,7 @@ impl SaveTransaction {
 
 impl Drop for SaveTransaction {
     fn drop(&mut self) {
-        // #644 评论 5475413230 第1节：backup_mode 时 commit 不再自动 cleanup。
+        // backup_mode 时 commit 不再自动 cleanup。
         // 只在以下情况清理：
         // - 非 backup_mode 且已 committed（原有行为）
         // - 已 finish()（finished == true）

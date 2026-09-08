@@ -1,4 +1,4 @@
-//! #645 评论 5504296097 问题2：generation GC — provider-neutral 清理未引用 generation。
+//!   generation GC — provider-neutral 清理未引用 generation。
 //!
 //! LiveProject 每次创建新 generation（`projects/P/__generations__/G/`），CAS 成功后
 //! 旧 generation 成为未引用。本模块按保留期清理未引用 generation，不碰 active
@@ -39,7 +39,7 @@ pub const GENERATION_UPLOAD_LEASE_MS: i64 = 5 * 60 * 1000;
 /// 未引用 generation 安全保留期（7 天）。超过保留期且未引用的 generation 才可删。
 pub const GENERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
-/// #645 评论 5504296097 问题2 修复：运行 generation GC。
+/// 运行 generation GC。
 ///
 /// 清理 `projects/P/__generations__/` 下未引用的 generation：
 ///
@@ -80,7 +80,7 @@ pub fn run_generation_gc(
         if !seen.insert(first_segment.to_string()) {
             continue;
         }
-        // #645 评论 5504296097 问题2 修复：validate_generation_id 后再拼路径。
+        // validate_generation_id 后再拼路径。
         crate::sync::target_lifecycle::validate_generation_id(first_segment)?;
         generation_ids.push(first_segment.to_string());
     }
@@ -142,7 +142,7 @@ pub fn run_generation_gc(
             continue;
         }
 
-        // #645 评论 5504296097 问题2 修复：真正删除前再次 load_remote_catalog，
+        // 真正删除前再次 load_remote_catalog，
         // 确认该 G 仍不是当前 active_generation（Transfer 期间另一台设备可能 CAS
         // 切了 active generation）。catalog 读取失败 → Err（不删，下轮重试）。
         let fresh_catalog = crate::sync::target_lifecycle::load_remote_catalog(provider)?;

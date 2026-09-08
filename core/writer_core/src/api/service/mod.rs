@@ -15,15 +15,15 @@ pub struct WriterCoreApi {
     pub(crate) projects_root: PathBuf,
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
     pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
-    /// #644 评论 5462823517 第1节：API 层唯一的进程级 secrets override。
+    /// API 层唯一的进程级 secrets override。
     /// facade::WriterCore 不再持有自己的 secrets_override，避免两份状态漂移。
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
-    /// #644 评论 5462823517 第1节：Mutex → RwLock。
+    /// Mutex → RwLock。
     /// 纯读取（项目/卷/章/统计/设置读取）用 [Self::core_read]；
     /// 会修改本地文件或 Core 运行状态的操作用 [Self::core_write]。
     /// 全量同步三段式（Prepare/Transfer/Commit）在 Transfer 阶段完全不持锁。
     core_instance: std::sync::RwLock<WriterCore>,
-    /// #645 评论 5504296097 问题3：本地 workspace Git 布局。
+    ///   本地 workspace Git 布局。
     ///
     /// 持有本地 `GitRepoLayout`，让写事务完成后能调
     /// [`crate::storage::workspace_git::record_workspace_paths`] /
@@ -85,7 +85,7 @@ impl WriterCoreApi {
         let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
         core.sync_transport = sync_transport_factory.clone();
-        // #592 五：secure storage 必须注入 facade，load/save_sync_secrets 与
+        //  五：secure storage 必须注入 facade，load/save_sync_secrets 与
         // 按 generation 保存的凭据才能真正写入平台 Keystore；此前只挂在
         // WriterCoreApi 上，facade 侧永远走文件路径。
         core.secure_storage = secure_storage.clone();
@@ -102,7 +102,7 @@ impl WriterCoreApi {
         }
     }
 
-    /// #645 评论 5504296097 问题3：注入 workspace Git 布局。
+    ///   注入 workspace Git 布局。
     ///
     /// `bootstrap.rs` 在 `ensure_workspace_git` 后调用本方法，把 Android 外置
     /// git_dir 或标准布局注入 API 层。默认构造时已用标准布局，本方法仅用于
@@ -116,7 +116,7 @@ impl WriterCoreApi {
         }
     }
 
-    /// #645 评论 5504296097 问题1：在写事务完成后记录本地历史（显式 paths）。
+    ///   在写事务完成后记录本地历史（显式 paths）。
     ///
     /// `paths` 为 workspace-relative paths。**空 paths 直接返回空结果，
     /// 绝不触发全量扫描**。失败时 `log::warn` 但不阻断主操作——本地历史是
@@ -150,12 +150,12 @@ impl WriterCoreApi {
         }
     }
 
-    /// #645 评论 5504296097 问题2 修复：在写事务完成后记录本地历史（变更集）。
+    /// 在写事务完成后记录本地历史（变更集）。
     ///
     /// 按 [`WorkspaceChangeSet`] 中的 change 类型分别处理 Upsert/Delete/DeleteTree。
     /// 空变更集直接返回，绝不触发全量扫描。
     ///
-    /// #645 评论 5504296097 问题4 修复：返回 `Result`，失败时调用方不 ack
+    /// 返回 `Result`，失败时调用方不 ack
     /// （journal 保留 StarMapsUnbound，下次启动 recover 补记）。不再是无条件
     /// best-effort void helper。
     pub(crate) fn record_workspace_change_set_history(
@@ -198,7 +198,7 @@ impl WriterCoreApi {
         }
     }
 
-    /// #644 评论 5462823517 第1节：API 层 secrets override 唯一入口。
+    /// API 层 secrets override 唯一入口。
     /// 直接写 API 层 Mutex，不再透传到 facade::WriterCore.secrets_override。
     pub fn set_secrets_override(&self, secrets: Option<crate::sync::SyncSecrets>) {
         if let Ok(mut guard) = self.secrets_override.lock() {
@@ -206,7 +206,7 @@ impl WriterCoreApi {
         }
     }
 
-    /// #644 评论 5462823517 第1节：API 层 secrets override 快照。
+    /// API 层 secrets override 快照。
     /// 语义：API override 有值就 clone；没有就短暂 [Self::core_read] 从
     /// secure storage/file 读取，然后立即释放 guard。网络阶段不持锁。
     pub(crate) fn secrets_override_snapshot(&self) -> Option<crate::sync::SyncSecrets> {
@@ -222,7 +222,7 @@ impl WriterCoreApi {
         core.load_sync_secrets().ok().filter(|s| !s.is_empty())
     }
 
-    /// #644 评论 5462823517 第1节：API 层是否已显式设置 override。
+    /// API 层是否已显式设置 override。
     pub(crate) fn has_secrets_override(&self) -> bool {
         self.secrets_override
             .lock()
@@ -230,13 +230,13 @@ impl WriterCoreApi {
             .unwrap_or(false)
     }
 
-    /// #644 评论 5462823517 第1节：读锁 — 纯读取操作用这个。
+    /// 读锁 — 纯读取操作用这个。
     /// 网络阶段（full_sync Transfer）不持任何 Core 锁。
     pub(crate) fn core_read(&self) -> std::sync::RwLockReadGuard<'_, WriterCore> {
         self.core_instance.read().unwrap_or_else(|e| e.into_inner())
     }
 
-    /// #644 评论 5462823517 第1节：写锁 — 会修改本地文件或 Core 运行状态的操作用这个。
+    /// 写锁 — 会修改本地文件或 Core 运行状态的操作用这个。
     pub(crate) fn core_write(&self) -> std::sync::RwLockWriteGuard<'_, WriterCore> {
         self.core_instance
             .write()

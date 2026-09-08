@@ -1,8 +1,8 @@
-//! #610 / #628：页面契约纯函数测试（从 screen_contract_tests.rs 迁移）。
+//! ：页面契约纯函数测试（从 screen_contract_tests.rs 迁移）。
 //!
 //! 覆盖：页面角色/面板角色/动作角色/动作区域枚举、各页面动作槽位表、
-//! 产品顺序（#597）、共享契约不含平台控件名、序列化往返，
-//! 以及 #628 新增的 `show_primary_navigation` 决策。
+//! 产品顺序、共享契约不含平台控件名、序列化往返，
+//! 以及  新增的 `show_primary_navigation` 决策。
 
 use super::policy::*;
 
@@ -36,9 +36,9 @@ fn test_pane_role_variants() {
 
 #[test]
 fn test_action_role_variants() {
-    // #610 评论二：Save（自动保存）/Sort（未实现）已从共享契约删除，
+    // Save（自动保存）/Sort（未实现）已从共享契约删除，
     // Core 不再声明平台上不存在于当前 UI 的动作。
-    // #610 评论四：上移/下移是真实功能，以 MoveEarlier/MoveLater 进入契约。
+    // 上移/下移是真实功能，以 MoveEarlier/MoveLater 进入契约。
     let variants = vec![
         ActionRole::Back,
         ActionRole::CreateProject,
@@ -57,7 +57,7 @@ fn test_action_role_variants() {
 
 #[test]
 fn test_action_target_variants() {
-    // #610 评论二：平台无关的业务目标身份。
+    // 平台无关的业务目标身份。
     let variants = [
         ActionTarget::App,
         ActionTarget::Project,
@@ -83,7 +83,7 @@ fn test_action_region_variants() {
 
 #[test]
 fn test_contract_has_no_platform_widget_names() {
-    // #610：共享契约不得出现平台控件名。
+    // 共享契约不得出现平台控件名。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let all_json = serde_json::to_string(&policy).unwrap();
     for platform_name in [
@@ -111,7 +111,7 @@ fn test_writing_header_actions_order() {
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
-    // #624：写作区顶栏恢复 同步 → 搜索 → 设置（搜索入口由 #477 接管，
+    // 写作区顶栏恢复 同步 → 搜索 → 设置（搜索入口由  接管，
     // 功能未完成可点击无动作，但图标不得从产品契约消失）。
     assert_eq!(header.len(), 3);
     assert_eq!(header[0].role, ActionRole::Sync);
@@ -122,7 +122,7 @@ fn test_writing_header_actions_order() {
 
 #[test]
 fn test_writing_has_no_save_slot() {
-    // #610 评论二：Core 不得声明平台上被过滤掉的动作（Save 是第二真相）。
+    // Core 不得声明平台上被过滤掉的动作（Save 是第二真相）。
     // 枚举已删除 Save，此处用序列化结果做门禁：任何死动作名不得出现在契约里。
     let policy = resolve_screen_policy(ScreenRole::Writing);
     let json = serde_json::to_string(&policy).unwrap();
@@ -134,7 +134,7 @@ fn test_writing_has_no_save_slot() {
 
 #[test]
 fn test_workspace_has_no_sort_slot() {
-    // #610 评论二：Sort 未实现，不得在共享契约中声明。
+    // Sort 未实现，不得在共享契约中声明。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let json = serde_json::to_string(&policy).unwrap();
     assert!(
@@ -151,8 +151,8 @@ fn test_workspace_header_actions_product_order() {
         .iter()
         .filter(|s| s.region == ActionRegion::HeaderTrailing)
         .collect();
-    // #597：作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
-    // 代码顺序（order 升序）为 同步 → 搜索 → 设置；Sort 已删除（#610 评论二）。
+    // 作品页顶栏右侧产品顺序（从右往左）为 设置/搜索/同步状态，
+    // 代码顺序（order 升序）为 同步 → 搜索 → 设置；Sort 已删除。
     assert_eq!(header.len(), 3);
     assert_eq!(header[0].role, ActionRole::Sync);
     assert_eq!(header[1].role, ActionRole::Search);
@@ -162,8 +162,8 @@ fn test_workspace_header_actions_product_order() {
 
 #[test]
 fn test_workspace_context_actions_have_business_targets() {
-    // #610 评论二：Delete/Rename 靠 ActionTarget 区分"删卷/删章节"、"重命名卷/重命名章节"。
-    // #610 评论四：MoveEarlier/MoveLater 同样按目标区分卷/章节的顺序动作。
+    // Delete/Rename 靠 ActionTarget 区分"删卷/删章节"、"重命名卷/重命名章节"。
+    // MoveEarlier/MoveLater 同样按目标区分卷/章节的顺序动作。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let context: Vec<_> = policy
         .action_slots
@@ -198,7 +198,7 @@ fn test_workspace_context_actions_have_business_targets() {
 
 #[test]
 fn test_move_actions_are_real_sequence_actions() {
-    // #610 评论四：MoveEarlier/MoveLater 是真实存在的顺序动作，不是笼统的 Sort。
+    // MoveEarlier/MoveLater 是真实存在的顺序动作，不是笼统的 Sort。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let moves: Vec<_> = policy
         .action_slots
@@ -213,7 +213,7 @@ fn test_move_actions_are_real_sequence_actions() {
 
 #[test]
 fn test_create_project_is_primary_action() {
-    // #610 评论四：新建作品是页面主操作（PrimaryAction），
+    // 新建作品是页面主操作（PrimaryAction），
     // 不再一边声明 HeaderTrailing、一边实际画在右下角 FAB。
     let policy = resolve_screen_policy(ScreenRole::ProjectList);
     let create = policy
@@ -228,7 +228,7 @@ fn test_create_project_is_primary_action() {
 
 #[test]
 fn test_create_volume_is_primary_action() {
-    // #625 第二段：新建卷是 ProjectWorkspace 的页面主操作（PrimaryAction），
+    // 新建卷是 ProjectWorkspace 的页面主操作（PrimaryAction），
     // 与 CreateProject 同 region — Android compact 画成 FAB，宽窗口按平台 M3 映射。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let create_volume = policy
@@ -253,7 +253,7 @@ fn test_create_chapter_targets_volume() {
     assert_eq!(create_chapters.len(), 2);
     assert_eq!(create_chapters[0].region, ActionRegion::ItemTrailing);
     assert_eq!(create_chapters[1].region, ActionRegion::EmptyState);
-    // #610 评论二：CreateChapter + Volume。
+    // CreateChapter Volume。
     assert!(create_chapters
         .iter()
         .all(|s| s.target == ActionTarget::Volume));
@@ -268,7 +268,7 @@ fn test_create_chapter_targets_volume() {
 
 #[test]
 fn test_project_list_targets_project() {
-    // #610 评论二：ProjectList 的删除/重命名目标就是 Project。
+    // ProjectList 的删除/重命名目标就是 Project。
     let policy = resolve_screen_policy(ScreenRole::ProjectList);
     let delete = policy
         .action_slots
@@ -292,7 +292,7 @@ fn test_project_list_targets_project() {
 
 #[test]
 fn test_app_actions_have_app_target() {
-    // #610 评论二：Settings/Search/Sync/Back 这类没有业务对象的动作使用 App。
+    // Settings/Search/Sync/Back 这类没有业务对象的动作使用 App。
     for role in [
         ScreenRole::Home,
         ScreenRole::ProjectList,
@@ -338,7 +338,7 @@ fn test_settings_policy_only_back() {
 
 #[test]
 fn test_starmap_and_stats_have_no_slots() {
-    // #597 正文四：星图根页没有返回动作；统计根页是独立一级入口。
+    //  正文四：星图根页没有返回动作；统计根页是独立一级入口。
     assert!(resolve_screen_policy(ScreenRole::StarMap)
         .action_slots
         .is_empty());
@@ -401,21 +401,21 @@ fn test_action_slot_serialization() {
 
 #[test]
 fn test_slot_order_is_product_level_not_shell_dependent() {
-    // #610：同一页面同一区域的槽位不随壳层变化 — 平台呈现差异由平台端决定。
+    // 同一页面同一区域的槽位不随壳层变化 — 平台呈现差异由平台端决定。
     let policy = resolve_screen_policy(ScreenRole::ProjectList);
     let create = policy
         .action_slots
         .iter()
         .find(|s| s.role == ActionRole::CreateProject)
         .unwrap();
-    // #610 评论四：新建作品位于页面主操作区域（Android compact 画成 FAB）。
+    // 新建作品位于页面主操作区域（Android compact 画成 FAB）。
     assert_eq!(create.region, ActionRegion::PrimaryAction);
     assert_eq!(create.order, 10);
 }
 
 #[test]
 fn test_project_list_has_header_actions() {
-    // #610 评论五：作品列表顶栏右侧与 ProjectWorkspace 一致。
+    // 作品列表顶栏右侧与 ProjectWorkspace 一致。
     let policy = resolve_screen_policy(ScreenRole::ProjectList);
     let header: Vec<_> = policy
         .action_slots
@@ -434,14 +434,14 @@ fn test_project_list_has_header_actions() {
 
 #[test]
 fn test_project_list_full_slot_count() {
-    // #610 评论五：ProjectList 总槽位 = 3 顶栏 + CreateProject + Delete + Rename。
+    // ProjectList 总槽位 = 3 顶栏 CreateProject Delete Rename。
     let policy = resolve_screen_policy(ScreenRole::ProjectList);
     assert_eq!(policy.action_slots.len(), 6);
 }
 
 #[test]
 fn test_workspace_has_back_leading() {
-    // #610 评论五：作品工作区顶栏左侧返回动作。
+    // 作品工作区顶栏左侧返回动作。
     let policy = resolve_screen_policy(ScreenRole::ProjectWorkspace);
     let back = policy
         .action_slots
@@ -452,7 +452,7 @@ fn test_workspace_has_back_leading() {
     assert_eq!(back.target, ActionTarget::App);
 }
 
-// ── #628 新增：show_primary_navigation 决策 ──
+// ──  新增：show_primary_navigation 决策 ──
 
 #[test]
 fn test_show_primary_navigation_writing_is_false() {

@@ -97,7 +97,7 @@ fn url_decode(s: String) -> String {
 ///
 /// `git@` 或 `ssh://` 开头返回 `SshDeployKey`，其余返回 `HttpsToken`。
 ///
-/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
+/// `SyncProtocol` 已移到
 /// `sync/provider/github/config.rs::GitHubTransport`，本函数返回 GitHub 特定枚举。
 #[cfg(feature = "github-api")]
 pub fn detect_transport(
@@ -119,7 +119,7 @@ pub fn is_github_https_remote(remote_url: &str) -> bool {
 }
 
 /// 解析最终使用的 active_provider 字符串 — 若配置为 "git" 但 GitHub Provider 的
-/// remote_url 为 GitHub HTTPS，自动切换为 "github_api"（Issue #645 评论第 2 点）。
+/// remote_url 为 GitHub HTTPS，自动切换为 "github_api"。
 ///
 /// GitHub HTTPS 远程仓库使用 REST API 更高效（无需 clone 整个仓库），
 /// 因此当 `active_provider == "git"` 且 GitHub `remote_url` 为 `https://github.com/`

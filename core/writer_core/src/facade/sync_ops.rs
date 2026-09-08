@@ -1,11 +1,11 @@
-//! 同步 facade — 全量同步统一入口（Issue #630）。
+//! 同步 facade — 全量同步统一入口。
 //!
 //! 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
 //! 把不同本地根映射到同一个远端仓库的不同前缀：
 //! - App target：`<app_data_root>` → `app/`
 //! - Project target：`<project_root>` → `projects/<project_id>/`
 //!
-//! ## FullSyncState 生命周期（Issue #630 评论 5308040939 Part 1）
+//! ## FullSyncState 生命周期
 //!
 //! 全量同步持久状态（`<app_data_root>/app-meta/sync/full_state.local.json`）在
 //! 三个时点原子写入，保证失败/中断不会留下旧绿灯：
@@ -20,7 +20,7 @@
 //!
 //! 三个时点都保留旧 `last_success_time`，只有整体成功类才更新它。
 //!
-//! ## 聚合优先级（Issue #630 评论 5308040939 Part 2）
+//! ## 聚合优先级
 //!
 //! `aggregate_full_sync_result` 按"需要用户处理的终态 > 可重试 > 成功"保留错误类型：
 //! `Fatal/Error > Dirty > Conflict > Recoverable > Success`。`error` /
@@ -42,24 +42,24 @@ impl super::WriterCore {
         Ok(crate::sync::types::FullSyncDiagnosticsResult { diagnostics })
     }
 
-    /// #645 评论 5504296097 问题4：全量同步 dry-run — 枚举 App target + 所有 Project target + pending deleted targets，
+    ///   全量同步 dry-run — 枚举 App target 所有 Project target pending deleted targets，
     /// 构建每个 target 的计划。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     ///
-    /// #645 评论 5504296097 问题4：调用共享 `build_full_sync_target_plan` 枚举 targets，
+    ///   调用共享 `build_full_sync_target_plan` 枚举 targets，
     /// dry-run 也包含 pending deleted target（`target_kind="deleted_project"`），
     /// 不再只看 live Project targets。deleted target 的 `SyncPlan` 为空（dry-run 不读远端，
     /// 无法知道远端对象数；调用方据 `target_kind` 判断将删除/恢复）。
     ///
-    /// #645 评论 5504296097 问题5：dry-run 读真实远端 catalog（read-only 网络 IO），
+    ///   dry-run 读真实远端 catalog（read-only 网络 IO），
     /// 不再传空 catalog。catalog 读取失败时返回错误（dry-run 是预览，不能返回假的远端事实）。
     pub fn perform_full_sync_dry_run(
         &self,
         config: &crate::sync::SyncConfig,
         secrets: &crate::sync::SyncSecrets,
     ) -> crate::error::Result<crate::sync::types::FullSyncDryRunResult> {
-        // #645 评论 5504296097 问题6：catalog 读取（网络 IO）由 API 层在
+        //   catalog 读取（网络 IO）由 API 层在
         // core_write() 锁外执行，传入已加载的 catalog。此处只做本地 plan 构建。
         // 保留 fallback：若 API 层未预加载 catalog（旧调用方），在此加载。
         let remote_catalog = if config.enabled {
@@ -70,7 +70,7 @@ impl super::WriterCore {
         self.perform_full_sync_dry_run_with_catalog(config, &remote_catalog)
     }
 
-    /// #645 评论 5504296097 问题6：dry-run plan 构建（纯本地 IO，不做网络 IO）。
+    ///   dry-run plan 构建（纯本地 IO，不做网络 IO）。
     ///
     /// `remote_catalog` 由 API 层在 core_write() 锁外预加载后传入。
     pub(crate) fn perform_full_sync_dry_run_with_catalog(
@@ -82,22 +82,22 @@ impl super::WriterCore {
 
         let projects = self.list_projects()?;
 
-        // #645 评论 5504296097 问题4：加载 pending deleted targets，让 dry-run 也能看到 deleted target。
+        //   加载 pending deleted targets，让 dry-run 也能看到 deleted target。
         let pending_deleted =
             crate::sync::pending_deleted::load_pending_deleted_targets(&self.app_data_root)?;
 
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
-        // #645 评论 5504296097 问题1：device_id 来自真实 DeviceInfo。
+        //   device_id 来自真实 DeviceInfo。
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|info| info.device_id)
             .unwrap_or_default();
 
-        // #645 评论 5504296097 问题4：调用共享 planner 枚举 targets，
+        //   调用共享 planner 枚举 targets，
         // 不复制一套 target 枚举逻辑。
-        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups，
+        // 加载 pending_remote_cleanups，
         // 让上一轮 cleanup 失败的远端残留能在本轮重试。
-        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
+        // 持久化错误向上传递，不再 unwrap_or_default。
         let pending_remote_cleanups =
             crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)?;
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
@@ -114,7 +114,7 @@ impl super::WriterCore {
 
         let mut targets: Vec<TargetSyncPlan> = Vec::new();
         for planned in &planned_targets {
-            // #645 评论 5504296097 问题5：dry-run 用 read-only state loader,
+            //   dry-run 用 read-only state loader,
             // build_sync_plan 内部已改用 load_sync_state_read_only.
             let plan = if !config.enabled || planned.is_deleted_target() {
                 SyncPlan::new()
@@ -168,7 +168,7 @@ impl super::WriterCore {
         })
     }
 
-    /// #645 评论 5504296097 回退问题：锁外构建 dry-run plan。
+    ///   回退问题：锁外构建 dry-run plan。
     ///
     /// 与 [`perform_full_sync_dry_run_with_catalog`] 的区别：本函数不持任何 Core 锁，
     /// 所有磁盘读取（list_projects / pending / device / planner / scan）在锁外执行。
@@ -192,8 +192,8 @@ impl super::WriterCore {
             .map(|info| info.device_id)
             .unwrap_or_default();
 
-        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
-        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
+        // 加载 pending_remote_cleanups。
+        // 持久化错误向上传递，不再 unwrap_or_default。
         let pending_remote_cleanups =
             crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)?;
         let planned_targets = crate::sync::full_sync::build_full_sync_target_plan(
@@ -262,7 +262,7 @@ impl super::WriterCore {
         })
     }
 
-    /// #645 评论 5504296097 问题5：dry-run 读真实远端 catalog 的 helper。
+    ///   dry-run 读真实远端 catalog 的 helper。
     ///
     /// 创建 provider + 读 catalog。任一步骤失败时返回错误
     /// （dry-run 是预览，不能返回假的远端事实）。
@@ -286,7 +286,7 @@ impl super::WriterCore {
     /// 失败）或全局配置无法解析/transport 初始化失败这类无法开始事务的错误才让
     /// 整个 `perform_full_sync` 返回 `Err`。
     ///
-    /// #645 评论 5504296097 问题2：降级为 `pub(crate)` + `#[cfg(test)]`，只给内部测试用作底层 helper。
+    ///   降级为 `pub(crate)` `#[cfg(test)]`，只给内部测试用作底层 helper。
     /// 生产同步唯一 pipeline 是 `WriterAppService::perform_full_sync` →
     /// `WriterCoreApi::perform_full_sync`（Prepare → Seed → Transfer → Commit），
     /// 它会加载 pending deleted targets、走三段式 staging + workspace history。
@@ -298,7 +298,7 @@ impl super::WriterCore {
         config: &crate::sync::SyncConfig,
         force_sync: bool,
     ) -> crate::error::Result<crate::sync::types::FullSyncResult> {
-        // #630 评论 5308040939 Part 1：一进正式事务先原子写 Syncing + 本次 attempt
+        // 一进正式事务先原子写 Syncing 本次 attempt
         // 时间（保留旧 last_success_time）。进程中断/被杀后重启读到的是 Syncing，
         // 而不是上一次 Success 绿灯。
         self.persist_full_sync_started();
@@ -309,18 +309,18 @@ impl super::WriterCore {
         self.perform_full_sync_with_provider(provider.as_ref(), &sync_policy, force_sync)
     }
 
-    /// #644 评论 5467821839 第7节：三段式全量同步 — Prepare 阶段（短写锁内调用）。
+    /// 三段式全量同步 — Prepare 阶段（短写锁内调用）。
     ///
     /// 写 `Syncing` 状态、枚举 targets、算出每个 target 的 `local_root`，
     /// 产出 [`crate::sync::full_sync::FullSyncPlan`]（owned，不依赖 core）。
     ///
-    /// #644 评论 5473401065 第1节：**不在**写锁内创建或 seed `StagingRun`。
+    /// **不在**写锁内创建或 seed `StagingRun`。
     /// seed 涉及磁盘扫描/复制，会把"短写锁"变成"磁盘长锁"，阻塞冷启动卷章读取。
     /// staging 的创建和 seed 积到 `prepare_staging_runs`，在无锁状态下执行。
     ///
     /// `secrets` 由调用方传入（API 层已 snapshot override），不再内部加载。
     ///
-    /// #645 评论 5504296097 问题1：`remote_catalog` 由调用方传入（在创建 provider 后
+    ///   `remote_catalog` 由调用方传入（在创建 provider 后
     /// 读取），planner 真正使用它做 target-level LWW 决策。`device_id` 来自真实
     /// `DeviceInfo.device_id`。
     ///
@@ -350,7 +350,7 @@ impl super::WriterCore {
             }
         };
 
-        // #645 评论 5504296097 问题1：加载 pending deleted targets，
+        //   加载 pending deleted targets，
         // 让 prepare_full_sync 为已删除作品生成 target，run_transfer 走
         // target-delete 计划清理远端 projects/<id>/ 下所有对象。
         let pending_deleted =
@@ -368,15 +368,15 @@ impl super::WriterCore {
 
         let sync_policy = crate::sync::types::SyncPolicy::from_config(config);
 
-        // #645 评论 5504296097 问题1：device_id 来自真实 DeviceInfo。
+        //   device_id 来自真实 DeviceInfo。
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|info| info.device_id)
             .unwrap_or_default();
 
-        // #645 评论 5504296097 问题1：调用共享 planner，传入真实 remote_catalog
+        //   调用共享 planner，传入真实 remote_catalog
         // 做 target-level LWW 决策。
-        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
-        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
+        // 加载 pending_remote_cleanups。
+        // 持久化错误向上传递，不再 unwrap_or_default。
         let pending_remote_cleanups =
             crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(&self.app_data_root)?;
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
@@ -391,7 +391,7 @@ impl super::WriterCore {
             &pending_remote_cleanups,
         );
 
-        // #645 评论 5504296097 第2点：不再携带 workspace_git_layout。
+        // 不再携带 workspace_git_layout。
         // 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
 
         Ok(FullSyncPlan {
@@ -403,7 +403,7 @@ impl super::WriterCore {
         })
     }
 
-    /// #645 评论 5504296097 回退问题：锁外构建 full sync plan。
+    ///   回退问题：锁外构建 full sync plan。
     ///
     /// 与 [`prepare_full_sync`] 的区别：本函数不调 `persist_full_sync_started`（调用方
     /// 已在短锁内完成），不持任何 Core 锁，所有磁盘读取（list_projects / pending /
@@ -431,8 +431,8 @@ impl super::WriterCore {
             .map(|info| info.device_id)
             .unwrap_or_default();
 
-        // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups。
-        // #645 评论 5504296097 问题3 修复：持久化错误向上传递，不再 unwrap_or_default()。
+        // 加载 pending_remote_cleanups。
+        // 持久化错误向上传递，不再 unwrap_or_default。
         let pending_remote_cleanups =
             crate::sync::pending_remote_cleanup::load_pending_remote_cleanups(app_data_root)?;
         let targets = crate::sync::full_sync::build_full_sync_target_plan(
@@ -456,7 +456,7 @@ impl super::WriterCore {
         })
     }
 
-    /// #644 评论 5467821839 第7节：三段式全量同步 — 创建 provider（Prepare 阶段、写锁内）。
+    /// 三段式全量同步 — 创建 provider（Prepare 阶段、写锁内）。
     ///
     /// transport 初始化失败时返回 Err（已持久化失败状态）。
     /// 根据 `config.active_provider` 选择对应的 Provider 实现。
@@ -498,16 +498,16 @@ impl super::WriterCore {
         }
     }
 
-    /// #644 评论 5467821839 第7节：三段式全量同步 — Commit 阶段（短写锁内调用）。
+    /// 三段式全量同步 — Commit 阶段（短写锁内调用）。
     ///
     /// 聚合 [`crate::sync::full_sync::FullSyncTransferResult`] → `FullSyncResult`，
     /// 原子写终态 `FullSyncState`，成功类重建搜索索引。
     ///
-    /// #644 评论 5472584126 第1节：staging run 的三方 commit 逻辑正式接入。
-    /// #644 评论 5473105049 第3节：逐 target 判断 — 只有该 target 的 Transfer 结果
+    /// staging run 的三方 commit 逻辑正式接入。
+    /// 逐 target 判断 — 只有该 target 的 Transfer 结果
     /// 属于允许提交的终态，才计算/应用它的 commit plan；失败 target 直接丢弃 staging。
     ///
-    /// #644 评论 5473401065 第4节：三方冲突不再只改 overall_status。
+    /// 三方冲突不再只改 overall_status。
     /// 冲突按 target 保留完整元数据（rel_path + base/local/incoming hash），
     /// 映射成 `SyncConflict` 写入对应 target 的 `SyncResult.conflicts`，
     /// 同时持久化到该 target live root 的 `SyncState.conflicts/conflicted_files`。
@@ -515,7 +515,7 @@ impl super::WriterCore {
     /// `staging_runs` 来自 Prepare 阶段，与 `transfer_result.targets` 按索引对应；
     /// commit 完成后显式 cleanup（`Drop` 也会兜底）。
     ///
-    /// #645 评论 5504296097 Blocker 2：返回 `(FullSyncResult, committed_paths, lifecycle_receipts)`，
+    /// 返回 `(FullSyncResult, committed_paths, lifecycle_receipts)`，
     /// `committed_paths` 是本次 commit 真正落盘的 workspace-relative paths，
     /// `lifecycle_receipts` 是 RemoteLifecycle 删除事务的完整 receipt，
     /// 供 API 层调 `record_workspace_change_set` + `ack_project_delete_history`。
@@ -529,24 +529,24 @@ impl super::WriterCore {
         Vec<std::path::PathBuf>,
         Vec<crate::sync::types::LocalLifecycleCommitReceipt>,
     ) {
-        // #645 评论 5504296097 问题1：先处理 local_lifecycle_action（DeleteProject）。
+        //   先处理 local_lifecycle_action（DeleteProject）。
         // 对有 DeleteProject action 的 target，执行完整 Project 本地删除事务
         // （move worktree / unbind starmaps / history），不生成 PendingDeletedTarget
         // （远端已删，不反向要求删远端）。staging commit 会跳过这些 target。
-        // #645 评论 5504296097 问题2修复：收集 LocalLifecycleCommitReceipt，
+        // 收集 LocalLifecycleCommitReceipt，
         // API 层负责记 history + ack（facade 没有 workspace_git_layout）。
         let mut targets = transfer_result.targets;
         let (lifecycle_committed_paths, lifecycle_receipts) =
             self.apply_local_lifecycle_deletes(&mut targets);
 
-        // #644 评论 5473105049 第3/4节：逐 target 判断 transfer 结果，
+        //   第3/4节：逐 target 判断 transfer 结果，
         // 只对成功终态的 target 做 staging commit；commit IO 失败向上传播。
         let commit_outcome =
             crate::sync::commit_helpers::apply_staging_commits_for_targets(&staging_runs, &targets);
 
-        // #644 评论 5473105049 第4节：commit 失败的 target 需要把失败信息
+        // commit 失败的 target 需要把失败信息
         // 注入到对应的 TargetSyncResult 中，让聚合逻辑产生 Recoverable/Fatal 状态。
-        // #645 评论 5504296097 问题1：targets 已在上方 lifecycle 循环中声明并修改，
+        //   targets 已在上方 lifecycle 循环中声明并修改，
         // 不再重新从 transfer_result.targets 取值（否则会丢失 lifecycle 修改）。
         for (idx, commit_result) in commit_outcome.target_results.iter().enumerate() {
             if let crate::sync::commit_helpers::TargetCommitResult::Failed(msg) = commit_result {
@@ -561,12 +561,12 @@ impl super::WriterCore {
             }
         }
 
-        // #644 评论 5473401065 第4节 + #644 评论 5473551127 第3节：
+        //
         // 三方冲突按 target 映射成 SyncConflict，复用 conflict.rs 的
         // record_staging_conflicts() 统一写 conflicts.json + SyncState。
         // 持久化失败必须传播到对应 target 的错误状态，不能只打日志。
         //
-        // #644 评论 5474772497 第3节：不再用 `=` 覆盖 target.result.conflicts，
+        // 不再用 `=` 覆盖 target.result.conflicts，
         // 而是把 Transfer 阶段已有的冲突（如 GitHub LWW 发现的正文冲突）
         // 传给 record_staging_conflicts 做合并，保留两层冲突。
         for (idx, target_conflicts) in commit_outcome.target_conflicts.iter().enumerate() {
@@ -584,7 +584,7 @@ impl super::WriterCore {
                     &existing_conflicts,
                 ) {
                     Ok(merged_conflicts) => {
-                        // #644 评论 5474772497 第3节：合并后的完整冲突列表
+                        // 合并后的完整冲突列表
                         // （Transfer + staging），不再覆盖。
                         target.result.conflicts = merged_conflicts;
                         target.result.status = crate::sync::SyncStatus::Conflict;
@@ -604,7 +604,7 @@ impl super::WriterCore {
 
         let mut result = crate::sync::full_sync::aggregate_full_sync_result(targets);
 
-        // #645 评论 5504296097 问题2 修复：generation GC 失败 → 聚合进 FullSyncResult。
+        // generation GC 失败 → 聚合进 FullSyncResult。
         // GC 出错是 RecoverableError（下一轮 full-sync 自然再次执行 GC）。
         // 只在当前 overall_status 是成功类时升级，避免覆盖更严重的 FatalError/Conflict。
         if let Some(Err(gc_err)) = &transfer_result.generation_gc_result {
@@ -622,7 +622,7 @@ impl super::WriterCore {
             }
         }
 
-        // #645 评论 5504296097 问题1：deleted target 远端清理成功后，
+        //   deleted target 远端清理成功后，
         // 从 pending_deleted_targets.json 移除该条目。
         self.cleanup_completed_deleted_targets(&result);
 
@@ -645,19 +645,19 @@ impl super::WriterCore {
             }
         }
 
-        // #645 评论 5504296097 问题1：合并 lifecycle 删除产生的 committed_paths
+        //   合并 lifecycle 删除产生的 committed_paths
         // 与 staging commit 产生的 committed_paths。
         let mut all_committed_paths = lifecycle_committed_paths;
         all_committed_paths.extend(commit_outcome.committed_paths);
         (result, all_committed_paths, lifecycle_receipts)
     }
 
-    /// #645 评论 5504296097 问题1/2 修复：对有 `DeleteProject` lifecycle action 的 target
+    ///    修复：对有 `DeleteProject` lifecycle action 的 target
     /// 执行完整 Project 本地删除事务（move worktree / unbind starmaps / history），
     /// 不生成 PendingDeletedTarget（远端已删，不反向要求删远端）。staging commit 会
     /// 跳过这些 target。
     ///
-    /// #645 评论 5504296097 问题2 修复：DeleteProject 在执行删除前先用
+    /// DeleteProject 在执行删除前先用
     /// `snapshot_local_records_read_only` 重新计算当前 local target LWW，与
     /// `expected_local_lww` guard 比较。current_local > expected → 不动 live →
     /// target 进入 RecoverableError（下次同步重试）。ReplaceProject 的 guard
@@ -683,11 +683,11 @@ impl super::WriterCore {
                 expected_local_lww,
             } = &target.local_lifecycle_action
             {
-                // #645 评论 5504296097 问题2 修复：DeleteProject guard —
+                // DeleteProject guard —
                 // 用 snapshot_local_records_read_only 重新计算当前 local target LWW，
                 // 与 expected_local_lww 严格比较。current_local == expected 才放行，
                 // 其他任何情况都拒绝。
-                // #645 评论 5504296097 问题2 修复：expected_local_lww 非 Option —
+                // expected_local_lww 非 Option —
                 // 破坏性 action 必须携带 guard。
                 let expected_lww = crate::sync::full_sync::LiveTargetLww {
                     lww_time_ms: expected_local_lww.lww_time_ms,
@@ -731,7 +731,7 @@ impl super::WriterCore {
                     }
                 }
 
-                // #645 评论 5504296097 问题1：RemoteLifecycle origin — 不生成
+                //   RemoteLifecycle origin — 不生成
                 // PendingDeletedTarget（远端已删，不反向要求删远端）。
                 log::info!(
                     "[sync] commit_full_sync: DeleteProject (remote lifecycle) project_id={}",
@@ -748,7 +748,7 @@ impl super::WriterCore {
                     crate::project::ProjectDeleteOrigin::RemoteLifecycle,
                 ) {
                     Ok(outcome) => {
-                        // #645 评论 5504296097 问题4 修复：RemoteLifecycle delete 走单一
+                        // RemoteLifecycle delete 走单一
                         // durable 路线 — 不把 outcome.changes.to_flat_paths() 塞进
                         // lifecycle_committed_paths（避免与 receipt.change_set 双重记 history）。
                         // API 层用 receipt.change_set 调 record_workspace_change_set_history，
@@ -759,7 +759,7 @@ impl super::WriterCore {
                             unbound_starmap_ids: outcome.unbound_starmap_ids.clone(),
                             origin: crate::project::ProjectDeleteOrigin::RemoteLifecycle,
                         });
-                        // #645 评论 5504296097 问题2修复：真实删除是实际变更，
+                        // 真实删除是实际变更，
                         // 用 Success 触发 rebuild_search_index（NoChanges 不触发）。
                         target.result = crate::sync::types::SyncResult::success();
                     }
@@ -775,7 +775,7 @@ impl super::WriterCore {
         (lifecycle_committed_paths, lifecycle_receipts)
     }
 
-    /// #645 评论 5504296097 问题1/2：deleted target 远端清理/恢复成功后，
+    ///   deleted target 远端清理/恢复成功后，
     /// 从 pending_deleted_targets.json 移除该条目。
     ///
     /// 按 typed `DeletedTargetResolution` 精确确认（不再按 `SyncStatus` 猜）：
@@ -804,14 +804,14 @@ impl super::WriterCore {
             };
             if should_remove {
                 self.remove_pending_deleted_by_prefix(&t.remote_prefix);
-                // #645 评论 5504296097 问题3 修复：同时移除 pending_remote_cleanup
+                // 同时移除 pending_remote_cleanup
                 // （RemoteCleanupProject 成功时）。如果不存在则是幂等 no-op。
                 self.remove_pending_remote_cleanup_by_prefix(&t.remote_prefix);
             }
         }
     }
 
-    /// #645 评论 5504296097 问题3 修复：按 remote_prefix 移除 pending_remote_cleanup。
+    /// 按 remote_prefix 移除 pending_remote_cleanup。
     fn remove_pending_remote_cleanup_by_prefix(&self, remote_prefix: &str) {
         if let Err(e) = crate::sync::pending_remote_cleanup::remove_pending_remote_cleanup(
             &self.app_data_root,
@@ -856,7 +856,7 @@ impl super::WriterCore {
     /// 语义与 `perform_full_sync` 一致：单个 target 的 `Err` 转为该 target 的
     /// `SyncResult::error(...)` 后继续，只有 `list_projects` 失败才整体 `Err`。
     ///
-    /// #645 评论 5504296097 问题2：降级为 `#[cfg(test)]`，只给内部测试用。
+    ///   降级为 `#[cfg(test)]`，只给内部测试用。
     #[cfg(test)]
     pub(crate) fn perform_full_sync_with_provider(
         &self,
@@ -867,7 +867,7 @@ impl super::WriterCore {
         use crate::sync::types::{SyncTarget, TargetSyncResult};
 
         // 无法建立 target 列表才整体 Err —— 此时连 App target 都无法有序执行。
-        // #630 评论 5308040939 Part 1：list_projects 失败也要先持久化提前失败状态
+        // list_projects 失败也要先持久化提前失败状态
         let projects = match self.list_projects() {
             Ok(projects) => projects,
             Err(err) => {
@@ -922,7 +922,7 @@ impl super::WriterCore {
 
         let result = Self::aggregate_full_sync_result(targets);
 
-        // #630 评论 5307423953 Part B + 5308040939 Part 1：聚合后把 FullSyncState
+        //    5308040939 ：聚合后把 FullSyncState
         // 原子写到 <app_data_root>/app-meta/sync/full_state.local.json，覆盖事务开始
         // 时写入的 Syncing。每次尝试更新 last_attempt_time；仅整体成功类更新
         // last_success_time；部分失败保留旧值。
@@ -951,7 +951,7 @@ impl super::WriterCore {
         Ok(result)
     }
 
-    /// #630 评论 5308040939 Part 1：平台端预处理失败写同一份 Core FullSyncState 的窄接口。
+    /// 平台端预处理失败写同一份 Core FullSyncState 的窄接口。
     ///
     /// 只负责更新 `<app_data_root>/app-meta/sync/full_state.local.json`（与
     /// `perform_full_sync` 同一份），不新建平台第二份状态、不恢复旧双同步 API。
@@ -973,7 +973,7 @@ impl super::WriterCore {
 
     /// 正式事务开始：原子写 `Syncing` + 本次 attempt 时间，保留旧 last_success_time。
     /// 写失败只记录警告（同步本身继续，状态持久化是副作用）。
-    /// #645 评论 5504296097 回退问题：改为 `pub(crate)` 供 API 层在短锁内调用。
+    ///   回退问题：改为 `pub(crate)` 供 API 层在短锁内调用。
     pub(crate) fn persist_full_sync_started(&self) {
         let previous = self.load_full_sync_state().unwrap_or(None);
         let state = crate::sync::full_sync_state::FullSyncState::started(
@@ -1008,13 +1008,13 @@ impl super::WriterCore {
     /// 将各 target 的结果聚合为 `FullSyncResult`：统计上传/下载/删除/冲突数，
     /// 总体状态保留错误类型，优先级按"需要用户处理的终态 > 可重试 > 成功"：
     /// `Fatal/Error > Dirty > Conflict/PartialConflict > Recoverable > Success`
-    /// （Issue #630 评论 5308040939 Part 2）。
+    /// 。
     ///
     /// `error` / `error_category` / `message_key` 从与 `overall_status` 同优先级的
     /// 第一个 dominant target 取得，避免"总体是认证失败、文案却拿到前一个网络错误"
     /// 的错位。
     ///
-    /// #645 评论 5504296097 问题2：降级为 `#[cfg(test)]`，只给 `perform_full_sync_with_provider` 用。
+    ///   降级为 `#[cfg(test)]`，只给 `perform_full_sync_with_provider` 用。
     /// 生产路径用 `crate::sync::full_sync::aggregate_full_sync_result`（pub 函数）。
     #[cfg(test)]
     fn aggregate_full_sync_result(
@@ -1052,7 +1052,7 @@ impl super::WriterCore {
             .map(|t| u32::try_from(t.result.conflicts.len()).unwrap_or(u32::MAX))
             .sum();
 
-        // Issue #630 评论 5308439467 Part 3：终态分两步聚合。
+        // 终态分两步聚合。
         // 第一步：任何 target 返回 Syncing/Idle/ConfiguredNotTested 都是协议错误
         // （这三个是非终态/未测试状态，不应出现在 target 结果里），直接生成
         // FatalError，绝不能当成功。

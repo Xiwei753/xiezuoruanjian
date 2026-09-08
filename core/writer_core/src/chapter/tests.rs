@@ -181,7 +181,7 @@ fn non_empty_chapter_blocks_empty_overwrite_and_keeps_original() {
     .unwrap();
     assert_eq!(content.content, "Original content");
 
-    // #624 评论1：纯空白正文（换行/空格/制表符）是用户正文，原样保存 —
+    // 纯空白正文（换行/空格/制表符）是用户正文，原样保存 —
     // 只有真正的空字符串才受空覆盖保护，不再用 trim() 拦截空白正文。
     let whitespace_body = " \n\t\n";
     let whitespace_receipt = save_chapter_verified(

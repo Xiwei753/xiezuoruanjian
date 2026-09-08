@@ -516,7 +516,7 @@ pub unsafe extern "C" fn writer_core_editor_session_next_grapheme_boundary(
     }
 }
 
-// #629 R8: composition 专用 grapheme 语义操作 FFI。
+//  R8: composition 专用 grapheme 语义操作 FFI。
 // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
 // 不修改 committed 正文，不把 raw platform event 带入 Core。
 

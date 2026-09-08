@@ -326,7 +326,7 @@ fn apply_diagnose_status(result: &mut SyncDiagnosticsResult, status: u16, body: 
         result.network_status = "ok".to_string();
         result.auth_ok = false;
         result.auth_status = "failed".to_string();
-        // Issue #645 评论 5504296097 第1点：GitHub 401/403 在 provider 层转成通用
+        // GitHub 401/403 在 provider 层转成通用
         // AuthFailed/PermissionDenied code（from_code 仍兼容旧 token_invalid/
         // token_permission_denied 字符串）。
         let category = if status == 401 {

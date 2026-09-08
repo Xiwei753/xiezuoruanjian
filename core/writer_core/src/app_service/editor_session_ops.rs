@@ -436,7 +436,7 @@ impl super::WriterAppService {
             selection_anchor: s.kernel.selection_anchor() as u32,
             generation: s.generation,
             chapter_id: s.chapter_id.clone().unwrap_or_default(),
-            // #629 评论6 Part B：composition 活跃时返回当前 composition 完整状态。
+            // composition 活跃时返回当前 composition 完整状态。
             composition: s.kernel.composition_state().map(|state| {
                 crate::api::EditorCompositionStateDto {
                     session_id: state.0,

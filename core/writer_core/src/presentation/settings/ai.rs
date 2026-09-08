@@ -1,4 +1,4 @@
-//! # 设置页 ai section（#628 拆分）
+//! # 设置页 ai section（ 拆分）
 
 use super::{PlatformVisibility, SettingItemDef, SettingSectionDef};
 

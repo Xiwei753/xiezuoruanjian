@@ -10,7 +10,7 @@ fn make_service() -> (WriterAppService, tempfile::TempDir) {
     (svc, dir)
 }
 
-/// #629 评论5306513458 问题2：`text_edit_session_update_composition` 成功后必须把
+///   `text_edit_session_update_composition` 成功后必须把
 /// Core 真实的 composition_session（session_id / base_revision / generation）写回 DTO，
 /// 不能只返回 `result.into()` 让 composition_session 保持 None。
 #[test]
@@ -96,7 +96,7 @@ fn update_composition_skips_writeback_on_stale_outcome() {
     );
 }
 
-/// #629 评论6 Part B：begin/update_composition 成功后必须把 Core 真实的 composition
+/// begin/update_composition 成功后必须把 Core 真实的 composition
 /// 完整状态（preedit_text + replace range + cursor）写回 DTO.composition，
 /// 平台端据此构造临时显示文本和下划线。snapshot 在 composition 活跃时也返回 composition。
 #[test]
@@ -165,7 +165,7 @@ fn composition_state_is_exposed_in_edit_result_and_snapshot() {
     );
 }
 
-/// #629 评论7 第1项：composition preedit cursor 现在用 `Utf16CodeUnitOffset` 强类型，
+/// composition preedit cursor 现在用 `Utf16CodeUnitOffset` 强类型，
 /// 按 UTF-16 code unit 长度校验。中文 "你" UTF-16 len=1，cursor=1 合法。
 #[test]
 fn composition_update_chinese_preedit_cursor_utf16_valid() {
@@ -191,7 +191,7 @@ fn composition_update_chinese_preedit_cursor_utf16_valid() {
     assert_eq!(upd_comp.preedit_cursor_utf16, 1);
 }
 
-/// #629 评论7 第1项：中文 "你" UTF-16 len=1，cursor=3 越界 → InvalidOffset。
+/// 中文 "你" UTF-16 len=1，cursor=3 越界 → InvalidOffset。
 #[test]
 fn composition_update_chinese_preedit_cursor_utf16_beyond_end_rejected() {
     let (svc, _dir) = make_service();
@@ -213,7 +213,7 @@ fn composition_update_chinese_preedit_cursor_utf16_beyond_end_rejected() {
     assert_eq!(upd.outcome, EditorEditOutcomeDto::InvalidOffset);
 }
 
-/// #629 评论7 第1项：emoji "👨‍👩‍👧"（ZWJ 序列）UTF-16 len=8，cursor=4 合法。
+/// emoji "👨‍👩‍👧"（ZWJ 序列）UTF-16 len=8，cursor=4 合法。
 #[test]
 fn composition_update_emoji_zwj_preedit_cursor_utf16_valid() {
     let (svc, _dir) = make_service();
@@ -241,7 +241,7 @@ fn composition_update_emoji_zwj_preedit_cursor_utf16_valid() {
     assert_eq!(upd_comp.preedit_cursor_utf16, 4);
 }
 
-/// #629 评论8 第4项：所有 Core 命令统一 composition 回填出口。
+/// 所有 Core 命令统一 composition 回填出口。
 /// setSelection（outcome NoChange）在 composition 活跃期间必须回填 composition_session/composition，
 /// 与 kernel 真实状态一致——这是"Core 有 composition、平台 DTO 却是 null"的直接修复场景。
 /// finish 后再 setSelection：composition 已清，DTO 保持 None。
@@ -310,7 +310,7 @@ fn set_selection_during_composition_backfills_dto() {
     );
 }
 
-/// #629 评论8 第4项：text-modifying 命令（insert/delete/undo/redo/commitText/
+/// text-modifying 命令（insert/delete/undo/redo/commitText/
 /// deleteSurrounding/replaceAll/insertLineBreak）成功时 kernel 会清掉 composition——
 /// DTO 必须同样反映"无活跃 composition"（None），与 snapshot() 一致，平台端不会
 /// 看到 Core 有 composition、DTO 却是 null 的脱节。
@@ -466,7 +466,7 @@ fn text_modifying_commands_report_cleared_composition_consistently() {
     expect_cleared("commitText", &ct);
 }
 
-/// #629 评论8 第4项：cancel_composition 成功后 DTO composition 保持 None。
+/// cancel_composition 成功后 DTO composition 保持 None。
 #[test]
 fn cancel_composition_leaves_dto_composition_none() {
     let (svc, _dir) = make_service();

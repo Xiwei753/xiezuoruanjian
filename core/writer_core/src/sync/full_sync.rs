@@ -1,4 +1,4 @@
-//! 全量同步三段式编排 — Prepare → Transfer → Commit（Issue #644 评论 5467821839）。
+//! 全量同步三段式编排 — Prepare → Transfer → Commit。
 //!
 //! 把全量同步从"整个流程持一把写锁"拆成三段，每段只持短锁，Transfer 阶段完全不持锁：
 //!
@@ -13,7 +13,7 @@
 //! 本模块只放纯编排逻辑（无 `&self`、无锁、无磁盘状态读写）；
 //! 持锁、持久化、搜索索引等副作用留在 `facade/sync_ops.rs` 的薄转发方法里。
 //!
-//! ## 聚合优先级（Issue #630 评论 5308040939 Part 2）
+//! ## 聚合优先级
 //!
 //! [`aggregate_full_sync_result`] 按"需要用户处理的终态 > 可重试 > 成功"保留错误类型：
 //! `Fatal/Error > Dirty > Conflict > Recoverable > Success`。`error` /
@@ -26,7 +26,7 @@ use crate::sync::provider::SyncProvider;
 use crate::sync::types::{FullSyncResult, SyncPolicy, SyncResult, SyncTarget, TargetSyncResult};
 use crate::sync::SyncStatus;
 
-// ── #645 评论 5504296097 问题2：generation 原子发布 helpers ──
+// ──   generation 原子发布 helpers ──
 
 /// generation 原子发布 — 不可见 generation prefix 的子目录名。
 ///
@@ -39,7 +39,7 @@ const GENERATION_SUBDIR: &str = "__generations__";
 ///
 /// `projects/P` + `G` → `projects/P/__generations__/G`。
 ///
-/// #645 评论 5504296097 问题4：防御性校验 `generation_id` 是合法单 path segment，
+///   防御性校验 `generation_id` 是合法单 path segment，
 /// 不只依赖 catalog loader。非法 `generation_id`（空、`.`、`..`、含 `/`/`\`）→ `Err`。
 fn generation_remote_prefix(
     project_remote_prefix: &str,
@@ -67,10 +67,10 @@ fn is_generation_path(rel_path: &str) -> bool {
 /// 包含 sync_policy、force_sync 标志和已枚举的 target 列表（含每个 target
 /// 的 `local_root`）。Transfer 阶段只读这份 plan，不再回 core 取数据。
 ///
-/// #645 评论 5504296097 第2点：不再携带 `workspace_git_layout`。
+/// 不再携带 `workspace_git_layout`。
 /// 本地 Git 仓库由 bootstrap 阶段初始化，同步计划不负责 Git 生命周期。
 ///
-/// #645 评论 5504296097 问题4：携带 `remote_catalog_snapshot` —
+///   携带 `remote_catalog_snapshot` —
 /// Prepare 阶段在写锁外读取的远端 catalog 完整 snapshot（含 version）。
 /// Transfer 阶段用这份 snapshot 作为 lifecycle CAS 起点，不再无条件再读一次
 /// catalog（避免 target discovery 和执行使用两套时间点的 catalog）。
@@ -80,10 +80,10 @@ pub struct FullSyncPlan {
     pub sync_policy: SyncPolicy,
     pub force_sync: bool,
     pub targets: Vec<PlannedTarget>,
-    /// #644 评论 5473401065 第1节：app_data_root 供 API 层在无锁状态下
+    /// app_data_root 供 API 层在无锁状态下
     /// 调用 `prepare_staging_runs` 时传给 `StagingRun::create`。
     pub app_data_root: PathBuf,
-    /// #645 评论 5504296097 问题4：Prepare 阶段读取的远端 catalog snapshot。
+    ///   Prepare 阶段读取的远端 catalog snapshot。
     ///
     /// Transfer 阶段 `run_transfer` 用它作为 lifecycle CAS 起点。
     /// `apply_lifecycle_record` 在 CAS 冲突时重读远端最新 snapshot。
@@ -98,22 +98,22 @@ pub struct PlannedTarget {
     /// staging root for isolated transfer（三段式 staging 路径）。
     /// `Some` 时 Transfer 阶段写 staging 而非 live；`None` 时回退 `local_root`。
     pub staging_root: Option<PathBuf>,
-    /// #645 评论 5504296097 问题1：强类型决策结果，替代字符串 `target_kind`。
+    ///   强类型决策结果，替代字符串 `target_kind`。
     ///
     /// `build_full_sync_target_plan` 按 `target_id` 合并 local live project /
     /// local pending delete / remote lifecycle record 生成此类型，
     /// `run_transfer` 按此走对应执行路径。
     pub target_kind: crate::sync::types::PlannedTargetKind,
     pub project_id: Option<String>,
-    /// #644 评论 5473401065 第1节：target 对应的 live root，
+    /// target 对应的 live root，
     /// 供 `prepare_staging_runs` 在无锁状态下创建 staging 时使用。
     pub target_live_root: PathBuf,
-    /// #645 评论 5504296097 问题1：待删除 target 的 journal_token，
+    ///   待删除 target 的 journal_token，
     /// 全部远端删除成功后用于从 pending_deleted_targets.json 移除该条目。
     /// `None` 表示普通 target（app/project），非 deleted target。
     #[allow(clippy::struct_field_names)]
     pub deleted_journal_token: Option<String>,
-    /// #645 评论 5504296097 问题3：deleted target 的 LWW 元数据。
+    ///   deleted target 的 LWW 元数据。
     ///
     /// `deleted_at_ms` 与远端 manifest 的 `max(lww_record_time)` 比较，
     /// 本地 tombstone 胜出才删远端；远端更晚则不删（远端有更新，下次正常 sync
@@ -121,13 +121,13 @@ pub struct PlannedTarget {
     /// 与 `resolve_lww_path` 一致）。
     /// `None` 表示非 deleted target。
     pub deleted_lww: Option<DeletedTargetLww>,
-    /// #645 评论 5504296097 问题1：live project 的 LWW 元数据。
+    ///   live project 的 LWW 元数据。
     ///
     /// 从本地 sync manifest 计算（`max(updated_at_ms / deleted_at_ms)`），
     /// 用于与远端 catalog 的 delete tombstone 做 target-level LWW 决策。
     /// `None` 表示非 live project target 或 manifest 读取失败。
     pub live_lww: Option<LiveTargetLww>,
-    /// #645 评论 5504296097 问题2 修复：RemoteCleanupProject target 携带的
+    /// RemoteCleanupProject target 携带的
     /// 产生该 cleanup 的 Delete lifecycle identity。
     ///
     /// `run_transfer` 在执行 `delete_all_remote_objects` 前重新读远端 catalog，
@@ -138,7 +138,7 @@ pub struct PlannedTarget {
     pub expected_delete_lww: Option<DeletedTargetLww>,
 }
 
-/// #645 评论 5504296097 问题3：deleted target 的 LWW 决策元数据。
+///   deleted target 的 LWW 决策元数据。
 ///
 /// 从 `PendingDeletedTarget` 提取，传给 `run_transfer` → `run_deleted_target_sync`
 /// 做 provider-neutral 的 LWW 比较。
@@ -150,7 +150,7 @@ pub struct DeletedTargetLww {
     pub device_id: String,
 }
 
-/// #645 评论 5504296097 问题1：live project 的 LWW 决策元数据。
+///   live project 的 LWW 决策元数据。
 ///
 /// 从本地 sync manifest 计算（`max(updated_at_ms / deleted_at_ms)`），
 /// 用于与远端 catalog 的 delete tombstone 做 target-level LWW 决策。
@@ -170,7 +170,7 @@ impl PlannedTarget {
     }
 }
 
-/// #645 评论 5504296097 问题4：无副作用共享 target planner。
+///   无副作用共享 target planner。
 ///
 /// 正式 `prepare_full_sync` 和 `perform_full_sync_dry_run` 都调用本函数枚举 targets，
 /// 不复制一套 target 枚举逻辑。正式同步再在结果上创建 staging/provider transfer。
@@ -178,7 +178,7 @@ impl PlannedTarget {
 /// 产出的 `PlannedTarget` 列表顺序：App target → live Project targets → pending
 /// deleted targets。`staging_root` 全部为 `None`（由 `prepare_staging_runs` 填充）。
 ///
-/// #645 评论 5504296097 问题1：`remote_catalog` 真正参与 target 决策。按 `target_id`
+///   `remote_catalog` 真正参与 target 决策。按 `target_id`
 /// 合并 local live project / local pending delete / remote lifecycle record，
 /// 生成 `PlannedTargetKind` 明确类型：
 /// - 远端无 delete tombstone 或本地更新 → `LiveProject`；
@@ -220,13 +220,13 @@ pub fn build_full_sync_target_plan(
         expected_delete_lww: None,
     });
 
-    // Project targets — #645 评论 5504296097 问题1：按 remote catalog 决策。
+    // Project targets —   按 remote catalog 决策。
     for project in live_projects {
         let target = crate::sync::types::SyncTarget::project(&project.id);
         let project_local_root = projects_root.join(&project.id);
         let target_id = &target.remote_prefix;
 
-        // #645 评论 5504296097 问题1 修复：lifecycle candidate 走 snapshot_local_records_read_only
+        // lifecycle candidate 走 snapshot_local_records_read_only
         // 单一来源，不再读旧 manifest / 手写 initial scanner。失败 → Retry。
         let candidate = compute_local_project_lifecycle_candidate(&project_local_root, device_id);
         let (live_lww, kind) = match &candidate {
@@ -236,7 +236,7 @@ pub fn build_full_sync_target_plan(
                 (Some(lww_clone), kind)
             }
             LifecycleCandidate::Retry => {
-                // #645 评论 5504296097 问题2：无法可靠求本地 LWW → 不 DeleteLocalProject
+                //   无法可靠求本地 LWW → 不 DeleteLocalProject
                 // （无证据证明远端 delete 更新），让 target 走 Retry 保留 pending。
                 (None, PlannedTargetKind::Retry)
             }
@@ -256,13 +256,13 @@ pub fn build_full_sync_target_plan(
         });
     }
 
-    // #645 评论 5504296097 问题1/2/4：Pending deleted targets —
+    //   Pending deleted targets —
     // 已删除作品的远端前缀需要清理。按 remote catalog 决策：
     // - 本地 tombstone 胜出 → DeleteRemoteProject（删远端 + 写 tombstone）；
     // - 远端 upsert 胜出 → RestoreProject（下载恢复）；
     // - 无法决策 → Retry。
     for pending in pending_deleted {
-        // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
+        //   用 parse_project_target_id 严格验证 target_id，
         // 非法记录跳过（不恢复、不删除、不 panic），不再 unwrap_or_default()。
         let project_id = match crate::sync::target_lifecycle::parse_project_target_id(
             &pending.target.remote_prefix,
@@ -299,10 +299,10 @@ pub fn build_full_sync_target_plan(
         });
     }
 
-    // #645 评论 5504296097 问题1：遍历 remote_catalog.records 补远端独有 target。
+    //   遍历 remote_catalog.records 补远端独有 target。
     // 对本地既没有 live project 也没有 pending delete 的远端记录：
     // - 远端 Upsert → RestoreProject（下载远端恢复，让新设备发现远端独有作品）；
-    // - 远端 Delete → RemoteCleanupProject（#645 评论 5504296097 问题3 修复：
+    // - 远端 Delete → RemoteCleanupProject（  ：
     //   不再跳过，让远端 Delete tombstone 本身成为 durable cleanup queue）。
     {
         use std::collections::HashSet;
@@ -314,7 +314,7 @@ pub fn build_full_sync_target_plan(
             if local_target_ids.contains(&remote_rec.target_id) {
                 continue;
             }
-            // #645 评论 5504296097 问题6：用 parse_project_target_id 严格验证 target_id，
+            //   用 parse_project_target_id 严格验证 target_id，
             // 非法记录跳过并 log warn（不恢复、不删除、不 panic），不再 unwrap_or_default()。
             let project_id =
                 match crate::sync::target_lifecycle::parse_project_target_id(&remote_rec.target_id)
@@ -330,7 +330,7 @@ pub fn build_full_sync_target_plan(
                     }
                 };
             let project_root = projects_root.join(&project_id);
-            // #645 评论 5504296097 问题3 修复：remote-only Delete 直接生成
+            // remote-only Delete 直接生成
             // RemoteCleanupProject target（不再跳过）。这让远端 Delete tombstone
             // 本身成为 durable cleanup queue — 即使本地 pending_remote_cleanups.json
             // 没成功持久化，下一轮看到 remote Delete + local absent 仍会生成
@@ -378,7 +378,7 @@ pub fn build_full_sync_target_plan(
         }
     }
 
-    // #645 评论 5504296097 问题3 修复：加载 pending_remote_cleanups，为每个未已在
+    // 加载 pending_remote_cleanups，为每个未已在
     // targets 中的 remote_prefix 生成 RemoteCleanupProject target。这让上一轮
     // authoritative Delete 清 prefix 失败的远端残留能在下一轮被重试清理，
     // 即使本地没有该 Project（remote-only cleanup 场景）。
@@ -415,7 +415,7 @@ pub fn build_full_sync_target_plan(
                 deleted_journal_token: None,
                 deleted_lww: None,
                 live_lww: None,
-                // #645 评论 5504296097 问题2 修复：从 PendingRemoteTargetCleanup
+                // 从 PendingRemoteTargetCleanup
                 // 填入 Delete lifecycle identity，run_transfer 时 CAS 校验。
                 expected_delete_lww: Some(DeletedTargetLww {
                     deleted_at_ms: cleanup.expected_delete_lww_time_ms,
@@ -428,7 +428,7 @@ pub fn build_full_sync_target_plan(
     targets
 }
 
-/// #645 评论 5504296097 问题2（评论 5504296097 问题1 修复）：本地 project lifecycle candidate。
+///   本地 project lifecycle candidate。
 ///
 /// `compute_local_project_lifecycle_candidate` 只做：
 /// 1. `snapshot_local_records_read_only(project_root, SyncScope::Project, device_id)`
@@ -445,7 +445,7 @@ pub(crate) enum LifecycleCandidate {
     Retry,
 }
 
-/// #645 评论 5504296097 问题1 修复：从 `snapshot_local_records_read_only` 单一来源
+/// 从 `snapshot_local_records_read_only` 单一来源
 /// 建立 lifecycle candidate。
 ///
 /// 不再自己读旧 manifest，也不再手写 initial scanner。snapshot 失败 → `Retry`
@@ -515,16 +515,16 @@ fn compute_local_project_lifecycle_candidate(
     }
 }
 
-/// #645 评论 5504296097 问题1：live project 的 target-level LWW 决策。
+///   live project 的 target-level LWW 决策。
 ///
 /// - 远端无记录或远端是 upsert → `LiveProject`（正常同步）；
 /// - 远端是 delete tombstone 且本地 live 更新（`live_lww` 胜出）→ `LiveProject`（重新 upsert）；
 /// - 远端是 delete tombstone 且远端胜出 → `DeleteLocalProject`（不上传，本地应删除）；
 /// - 远端是 delete tombstone 且无 `live_lww`（manifest 读取失败）→ `Retry`
-///   （#645 评论 5504296097 问题2：无证据证明远端 delete 更新，绝不破坏性删除，
+///   （无证据证明远端 delete 更新，绝不破坏性删除，
 ///   也不伪造 now 复活远端 delete。让 target 保留 pending，下次同步重试）。
 ///
-/// #645 评论 5504296097 问题2：远端无记录/upsert 且 manifest 缺失时仍返回 `LiveProject`，
+/// 远端无记录/upsert 且 manifest 缺失时仍返回 `LiveProject`，
 /// 但 `run_transfer` 的 LiveProject 分支在 `live_lww=None` 时不伪造 now()，
 /// 返回 `RecoverableError`（防御性，不写 catalog，不改 remote lifecycle）。
 fn decide_live_project_kind(
@@ -547,7 +547,7 @@ fn decide_live_project_kind(
 
     // 远端是 delete tombstone → 需要与本地 live LWW 比较。
     let Some(live) = live_lww else {
-        // #645 评论 5504296097 问题2：无本地 LWW（manifest 读取失败）→
+        //   无本地 LWW（manifest 读取失败）→
         // 不 DeleteLocalProject（无证据证明远端 delete 更新），
         // 也不伪造 now 复活远端 delete。返回 Retry，pending 保留。
         return PlannedTargetKind::Retry;
@@ -566,7 +566,7 @@ fn decide_live_project_kind(
     }
 }
 
-/// #645 评论 5504296097 问题1：pending deleted target 的 target-level LWW 决策。
+///   pending deleted target 的 target-level LWW 决策。
 ///
 /// - 远端无记录或远端是 upsert 且本地 tombstone 胜出 → `DeleteRemoteProject`；
 /// - 远端是 upsert 且远端胜出 → `RestoreProject`；
@@ -614,7 +614,7 @@ fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecor
     }
 }
 
-/// #645 评论 5504296097 问题3修复：从 manifest 取 target-level LWW，携带 winner 的 device_id。
+/// 从 manifest 取 target-level LWW，携带 winner 的 device_id。
 ///
 /// 按 `(lww_record_time(record), record.device_id)` 取最大 record，
 /// 返回完整 `LiveTargetLww { lww_time_ms, device_id: winner_record.device_id }`。
@@ -635,13 +635,13 @@ fn manifest_target_lww(manifest: &crate::sync::types::SyncManifest) -> Option<Li
     })
 }
 
-/// #645 评论 5504296097 问题3修复：读 post-transfer staging manifest，算最终 LWW。
+/// 读 post-transfer staging manifest，算最终 LWW。
 ///
 /// 正文 transfer 成功后，publish candidate 必须用 staging manifest 的
 /// `max(lww_record_time)` 作为 lifecycle 时间，不能用 Transfer 前的旧 live_lww
 /// （那只是"本机有没有资格尝试同步"的判断，不是正文 LWW 合并后的最终状态）。
 ///
-/// #645 评论 5504296097 问题3修复：返回完整 `LiveTargetLww`（含 winner 的 device_id），
+/// 返回完整 `LiveTargetLww`（含 winner 的 device_id），
 /// 不再只返回 `i64` 时间。调用方用 winner 的 device_id 构造 candidate，
 /// 不再硬塞本机设备。
 ///
@@ -658,7 +658,7 @@ fn read_post_transfer_lww(root: &Path) -> Option<LiveTargetLww> {
 #[derive(Debug, Clone)]
 pub struct FullSyncTransferResult {
     pub targets: Vec<TargetSyncResult>,
-    /// #645 评论 5504296097 问题2 修复：generation GC 的 provider-neutral 维护结果。
+    /// generation GC 的 provider-neutral 维护结果。
     ///
     /// `None` 表示未执行 GC（sync disabled 或无 project target）。
     /// `Some(Ok(()))` 表示 GC 成功；`Some(Err(msg))` 表示 GC 失败（RecoverableError），
@@ -671,14 +671,14 @@ pub struct FullSyncTransferResult {
 
 /// 执行 Transfer 阶段：对 plan 中每个 target 调对应同步函数，收集结果。
 ///
-/// #645 评论 5504296097 问题1：按 `PlannedTargetKind` 分派执行路径：
+///   按 `PlannedTargetKind` 分派执行路径：
 /// - `App` / `LiveProject`：先写 catalog upsert（lifecycle CAS 是完成条件），再 LWW 同步；
 /// - `DeleteRemoteProject`：先写 catalog delete tombstone（CAS 是完成条件），再删远端对象；
 /// - `DeleteLocalProject`：不上传，返回 `NoChanges`（本地删除由后续流程处理）；
 /// - `RestoreProject`：下载远端内容到 staging；
 /// - `Retry`：不删不恢复，pending 保留。
 ///
-/// #645 评论 5504296097 问题5：CAS — 执行破坏性动作前重新读远端 catalog 确认 winner。
+///   CAS — 执行破坏性动作前重新读远端 catalog 确认 winner。
 ///
 /// 重新从远端加载 catalog，返回该 target_id 的当前记录。
 /// - `Ok(Some(record))`：远端有记录，调用方按 `record.op` 和 LWW 重新决策；
@@ -692,12 +692,12 @@ fn resolve_current_target_lifecycle(
     Ok(crate::sync::target_lifecycle::find_record(&snapshot.catalog, target_id).cloned())
 }
 
-/// #645 评论 5504296097 问题2：catalog 写入用 `apply_lifecycle_record` 原子决策。
+///   catalog 写入用 `apply_lifecycle_record` 原子决策。
 /// `Applied` 才继续；`LostToRemote` 改走恢复/删除本地；`Retry` 不删。
 ///
-/// #645 评论 5504296097 问题3：catalog 写接口返回完整 snapshot，调用方更新本地 catalog。
+///   catalog 写接口返回完整 snapshot，调用方更新本地 catalog。
 ///
-/// #645 评论 5504296097 问题4：lifecycle 写失败进入 target 失败状态（RecoverableError），
+///   lifecycle 写失败进入 target 失败状态（RecoverableError），
 /// 不只 warn。lifecycle 决策在文件 transfer 前完成，避免半状态。
 ///
 /// 单个 target 的 `Err` 不提前打断：转为该 target 的 `SyncResult::error(...)` 后 push。
@@ -713,7 +713,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         DeletedTargetResolution, PlannedTargetKind, TargetLifecycleApplyResult,
     };
 
-    // #645 评论 5504296097 问题3 修复：sync disabled → 在创建 generation_id / merge /
+    // sync disabled → 在创建 generation_id / merge /
     // publish / lifecycle CAS 之前直接返回 no-op。这样内部调用即使绕过 API 层
     // perform_full_sync 的 guard，也不可能在 disabled 状态写远端。
     if !plan.sync_policy.enabled {
@@ -724,7 +724,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         };
     }
 
-    // #645 评论 5504296097 问题4：不再无条件再读一次 catalog。
+    //   不再无条件再读一次 catalog。
     // 用 plan 携带的 `remote_catalog_snapshot`（Prepare 阶段在写锁外读取的）
     // 作为 lifecycle CAS 起点。`apply_lifecycle_record` 在 CAS 冲突时仍会重读
     // 远端最新 snapshot。这避免 target discovery（用 Prepare 阶段 catalog）
@@ -750,18 +750,18 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 (r, None, None)
             }
             PlannedTargetKind::LiveProject => {
-                // #645 评论 5504296097 问题5：先传正文，成功后再发布 lifecycle upsert。
+                //   先传正文，成功后再发布 lifecycle upsert。
                 // 绝不在正文未传成功时留下假的已发布 upsert target。
-                // #645 评论 5504296097 问题2：lifecycle 时间从 sync manifest LWW 计算，
+                //   lifecycle 时间从 sync manifest LWW 计算，
                 // 不用 now() 伪造。live_lww 为 None 时 decide_live_project_kind 已转
                 // DeleteLocalProject/Retry，不应进入此分支；防御性返回 RecoverableError。
-                // #645 评论 5504296097 问题4：catalog 已由 Prepare 阶段读取并装入 plan，
+                //   catalog 已由 Prepare 阶段读取并装入 plan，
                 // 失败在 API 层提前返回 RecoverableError，不进入 run_transfer。
                 if planned.live_lww.is_some() {
                     // 1. 先执行 LWW 文件同步（正文 transfer）。
-                    // #645 评论 5504296097 问题3修复：live_lww 只用于资格判断
+                    // live_lww 只用于资格判断
                     // （None 时不进入 LiveProject），post-transfer LWW 用 winner 的 device_id。
-                    // #645 评论 5504296097 问题2：generation 原子发布 — 先上传到不可见
+                    //   generation 原子发布 — 先上传到不可见
                     // generation prefix（projects/P/__generations__/G/），全部成功后
                     // CAS targets.sync.json 写 active_generation=G。CAS 成功后 G 才成为
                     // 可见版本；CAS 输给 Delete 则 G 是未引用 generation，后续 GC。
@@ -770,7 +770,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         .staging_root
                         .as_deref()
                         .unwrap_or(&planned.local_root);
-                    // #645 评论 5504296097 问题1 修复：先从当前可见 generation 用统一
+                    // 先从当前可见 generation 用统一
                     // LWW merge 核心合并远端到 staging，再上传 staging 到新 generation。
                     // 不再用"存在就本地赢"的 merge_remote_into_staging，统一复用
                     // merge_remote_into_local_snapshot（与普通 LWW 同源），正确处理
@@ -807,7 +807,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         }
                         Ok(None)
                     })();
-                    // #645 评论 5504296097 问题4：generation_remote_prefix 防御性校验
+                    //   generation_remote_prefix 防御性校验
                     // generation_id（UUID 总是合法，但不依赖调用方不变式）。
                     match generation_remote_prefix(&planned.target.remote_prefix, &generation_id) {
                         Ok(gen_remote_prefix) => {
@@ -818,7 +818,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     );
                             let content_result = match merge_outcome {
                                 Ok(Some(outcome)) => {
-                                    // #645 评论 5504296097 问题1 修复：有正文冲突 →
+                                    // 有正文冲突 →
                                     // 不发布新 generation，不改 active_generation，
                                     // 返回 PartialConflict。
                                     if !outcome.conflicts.is_empty() {
@@ -874,10 +874,10 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 (content_result, None, None)
                             } else {
                                 // 2. 正文 transfer 成功 → 从 post-transfer staging manifest
-                                //    算最终 LWW（#645 评论 5504296097 问题3修复）。
+                                //    算最终 LWW（  。
                                 //    live_lww 只是 Transfer 前的资格判断，不是最终状态。
                                 //    用 winner 的 device_id 构造 candidate，不再硬塞本机设备。
-                                //    #645 评论 5504296097 问题2：candidate 携带 active_generation=G，
+                                //      candidate 携带 active_generation=G，
                                 //    CAS 成功后 G 成为可见版本。
                                 let post_transfer_root = planned
                                     .staging_root
@@ -899,14 +899,14 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                             candidate,
                                         ) {
                                             TargetLifecycleApplyResult::Applied(persisted) => {
-                                                // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
+                                                //   更新本地 catalog snapshot。
                                                 catalog_snapshot = persisted;
                                                 (content_result, None, None)
                                             }
                                             TargetLifecycleApplyResult::AlreadyCurrent(
                                                 persisted,
                                             ) => {
-                                                // #645 评论 5504296097 问题1修复：candidate 与远端
+                                                // candidate 与远端
                                                 // 完全相等，不需要写 catalog，保持 live（不删本地）。
                                                 catalog_snapshot = persisted;
                                                 (content_result, None, None)
@@ -916,13 +916,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 record: winner,
                                             } => {
                                                 catalog_snapshot = persisted;
-                                                // #645 评论 5504296097 问题1修复：按真实 winner.op
+                                                // 按真实 winner.op
                                                 // 决策，不再猜 op 反转。
                                                 // - Upsert → 保持 live（远端是 upsert，不删本地）；
                                                 // - Delete → 远端 delete 赢，安排 DeleteProject。
                                                 match winner.op {
                                                     crate::sync::types::TargetOp::Upsert => {
-                                                        // #645 评论 5504296097 问题1 修复：
+                                                        //
                                                         // RemoteWinner(Upsert) 说明 merge 期间
                                                         // 远端已切到新 generation，本次 staging
                                                         // 基于旧 source，必须 Retry（下一轮从
@@ -947,13 +947,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                         )
                                                     }
                                                     crate::sync::types::TargetOp::Delete => {
-                                                        // #645 评论 5504296097 问题1：不在 Transfer 里
+                                                        //   不在 Transfer 里
                                                         // remove_dir_all()。返回 DeleteProject action，
                                                         // 由 Commit 阶段执行完整 Project 本地删除事务。
-                                                        // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
-                                                        // #645 评论 5504296097 问题2 修复：guard 非 Option —
+                                                        //   携带 expected_local_lww guard。
+                                                        // guard 非 Option —
                                                         // 必须有 live_lww 才能生成 DeleteProject。
-                                                        // #645 评论 5504296097 问题4：RemoteWinner(Delete) 后
+                                                        //   RemoteWinner(Delete) 后
                                                         // 清理远端 projects/P/ 下所有对象（含本轮上传正文 +
                                                         // manifest.sync.json + 旧残留），删对 prefix。
                                                         log::info!(
@@ -973,15 +973,15 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                                 | SyncStatus::NoChanges
                                                         );
                                                         if !cleanup_ok {
-                                                            // #645 评论 5504296097 问题4：远端清理失败 →
+                                                            //   远端清理失败 →
                                                             // RecoverableError，不删本地（catalog Delete 已持久，
                                                             // 下轮重新清理远端残留）。
-                                                            // #645 评论 5504296097 问题3 修复：cleanup 失败 →
+                                                            // cleanup 失败 →
                                                             // record pending remote cleanup，下轮 Prepare
                                                             // 生成 RemoteCleanupProject 重试。
-                                                            // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                                            // 传入当前 Delete
                                                             // 的 lww_time 和 device_id，绑定 lifecycle identity。
-                                                            // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                                            // record 失败也向上
                                                             // 传递，不再 let _ = 吞掉。
                                                             let expected_time = crate::sync::target_lifecycle::record_lww_time(&winner);
                                                             let expected_device = &winner.device_id;
@@ -1027,13 +1027,13 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 }
                                             }
                                             TargetLifecycleApplyResult::Retry(e) => {
-                                                // #645 评论 5504296097：lifecycle 写失败 → 按 Error 语义映射。
+                                                // lifecycle 写失败 → 按 Error 语义映射。
                                                 (sync_result_from_error(e), None, None)
                                             }
                                         }
                                     }
                                     None => {
-                                        // #645 评论 5504296097 问题3：post-transfer staging manifest
+                                        //   post-transfer staging manifest
                                         // 读取失败 → RecoverableError，不伪造旧 live_lww 时间。
                                         let msg =
                                             "post-transfer staging manifest unreadable".to_string();
@@ -1063,20 +1063,20 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 }
             }
             PlannedTargetKind::DeleteLocalProject => {
-                // #645 评论 5504296097 问题1：不在 Transfer 里裸 remove_dir_all()。
+                //   不在 Transfer 里裸 remove_dir_all。
                 // 返回 NoChanges + LocalLifecycleCommitAction::DeleteProject，
                 // 由 Commit 阶段执行完整 Project 本地删除事务（move worktree /
                 // unbind starmaps / history），避免 staging commit 把刚删掉的
                 // 旧作品重新写回来。
                 //
-                // #645 评论 5504296097 问题5：CAS — 执行破坏性删除前重新读远端
+                //   CAS — 执行破坏性删除前重新读远端
                 // catalog 确认 winner 仍是 delete tombstone。若远端已变成 upsert
                 // 且更晚，改走 ReplaceProject 整树替换，绝不按过期 snapshot 删本地。
                 //
-                // #645 评论 5504296097 问题3：Ok(None) 直接 Retry（不再 "plan confirmed"），
+                //   Ok(None) 直接 Retry（不再 "plan confirmed"），
                 // 与 RestoreProject 已修成 Retry 的语义一致。
                 //
-                // #645 评论 5504296097 问题5 修复：DeleteLocalProject -> current Delete
+                // DeleteLocalProject -> current Delete
                 // 也必须先执行 delete_all_remote_objects()，成功后才返回 DeleteProject action。
                 // remote lifecycle 已确认 Delete winner -> delete_all_remote_objects(projects/P)
                 // -> 全部成功 -> 才允许 DeleteProject 本地提交。
@@ -1086,9 +1086,9 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         use crate::sync::types::TargetOp;
                         match current_rec.op {
                             TargetOp::Upsert => {
-                                // #645 评论 5504296097 问题2：远端已变成 upsert 且本地已有 Project
+                                //   远端已变成 upsert 且本地已有 Project
                                 // → ReplaceProject 整树替换（不再用空 staging + 普通三方 commit 冒充）。
-                                // #645 评论 5504296097 问题2 修复：guard 非 Option —
+                                // guard 非 Option —
                                 // 必须有 live_lww 才能生成 ReplaceProject。live_lww 为 None
                                 // 时返回 RecoverableError（decide_live_project_kind 在 manifest
                                 // 读取失败时已转 Retry，不应进入此分支）。
@@ -1118,7 +1118,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             }
                             TargetOp::Delete => {
                                 // 远端仍是 delete — 先清远端 residue，成功后才 defer to Commit。
-                                // #645 评论 5504296097 问题5 修复：DeleteLocalProject -> current Delete
+                                // DeleteLocalProject -> current Delete
                                 // 也必须先执行 delete_all_remote_objects()，成功后才返回 DeleteProject action。
                                 log::info!(
                                     "[sync] run_transfer: DeleteLocalProject {} — \
@@ -1135,12 +1135,12 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                 );
                                 if !cleanup_ok {
                                     // 远端清理失败 → 不删本地 → 下轮 DeleteLocalProject 再次先清 remote prefix。
-                                    // #645 评论 5504296097 问题3 修复：cleanup 失败 →
+                                    // cleanup 失败 →
                                     // record pending remote cleanup，下轮 Prepare
                                     // 生成 RemoteCleanupProject 重试。
-                                    // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                    // 传入当前 Delete
                                     // 的 lww_time 和 device_id，绑定 lifecycle identity。
-                                    // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                    // record 失败也向上
                                     // 传递，不再 let _ = 吞掉。
                                     let expected_time =
                                         crate::sync::target_lifecycle::record_lww_time(
@@ -1165,8 +1165,8 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     }
                                 } else {
                                     // 远端清理成功 → defer to Commit。
-                                    // #645 评论 5504296097 问题3：携带 expected_local_lww guard。
-                                    // #645 评论 5504296097 问题2 修复：guard 非 Option —
+                                    //   携带 expected_local_lww guard。
+                                    // guard 非 Option —
                                     // 必须有 live_lww 才能生成 DeleteProject。
                                     let action = planned
                                         .project_id
@@ -1186,7 +1186,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         }
                     }
                     Ok(None) => {
-                        // #645 评论 5504296097 问题3：远端无记录 → 无法确认 delete winner
+                        //   远端无记录 → 无法确认 delete winner
                         // → 直接 Retry（不再 "plan confirmed"），与 RestoreProject 语义一致。
                         log::info!(
                             "[sync] run_transfer: DeleteLocalProject {} — \
@@ -1221,9 +1221,9 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 }
             }
             PlannedTargetKind::DeleteRemoteProject => {
-                // #645 评论 5504296097 问题2/4：先写 catalog delete tombstone（CAS 是完成条件），
+                //   先写 catalog delete tombstone（CAS 是完成条件），
                 // 再删远端对象。用 apply_lifecycle_record 原子决策。
-                // #645 评论 5504296097 问题4：catalog 已由 Prepare 阶段读取并装入 plan，
+                //   catalog 已由 Prepare 阶段读取并装入 plan，
                 // 失败在 API 层提前返回 RecoverableError，不进入 run_transfer。
                 {
                     let deleted_at_ms = planned
@@ -1250,7 +1250,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         candidate,
                     ) {
                         TargetLifecycleApplyResult::Applied(persisted) => {
-                            // #645 评论 5504296097 问题3：更新本地 catalog snapshot。
+                            //   更新本地 catalog snapshot。
                             catalog_snapshot = persisted;
                             // catalog tombstone 写成功，再删远端对象。
                             let del_result =
@@ -1264,7 +1264,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             )
                         }
                         TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
-                            // #645 评论 5504296097 问题1修复：candidate 与远端完全相等
+                            // candidate 与远端完全相等
                             // （都是 delete tombstone），catalog 已有 tombstone，
                             // 继续清理远端残留对象。
                             catalog_snapshot = persisted;
@@ -1286,7 +1286,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             record: winner,
                         } => {
                             catalog_snapshot = persisted;
-                            // #645 评论 5504296097 问题1修复：按真实 winner.op 决策。
+                            // 按真实 winner.op 决策。
                             // - Delete → 远端已是 delete，继续清理远端残留；
                             // - Upsert → 远端 upsert 赢，改走 RestoreProject 下载恢复。
                             match winner.op {
@@ -1326,7 +1326,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             }
                         }
                         TargetLifecycleApplyResult::Retry(e) => {
-                            // #645 评论 5504296097：lifecycle 写失败 → 按 Error 语义映射，Retry，不删远端。
+                            // lifecycle 写失败 → 按 Error 语义映射，Retry，不删远端。
                             (
                                 sync_result_from_error(e),
                                 Some(DeletedTargetResolution::Retry),
@@ -1337,14 +1337,14 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 }
             }
             PlannedTargetKind::RestoreProject => {
-                // #645 评论 5504296097 问题1：远端 upsert 胜出，下载远端内容到 staging。
+                //   远端 upsert 胜出，下载远端内容到 staging。
                 //
-                // #645 评论 5504296097 问题5：CAS — 执行恢复前重新读远端 catalog
+                //   CAS — 执行恢复前重新读远端 catalog
                 // 确认 winner 仍是 upsert。若远端已变成 delete tombstone 且更晚，
                 // 改走 DeleteLocalProject（defer to Commit），绝不按过期 snapshot
                 // 恢复一个已被删除的作品。
                 //
-                // #645 评论 5504296097 问题3 修复：
+                //
                 // - Ok(None) -> Retry（不再 "plan confirmed" download）；
                 // - current=Delete && local project 不存在 -> 不生成 DeleteProject action
                 //   -> 清理 authoritative Delete 下的远端 residue（delete_all_remote_objects）；
@@ -1356,7 +1356,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         match current_rec.op {
                             TargetOp::Delete => {
                                 // 远端已变成 delete。
-                                // #645 评论 5504296097 问题3 修复：检查 local project 是否存在。
+                                // 检查 local project 是否存在。
                                 let local_project_exists = planned.local_root.exists() && {
                                     // 简单存在性检查：local_root 非空目录。
                                     std::fs::read_dir(&planned.local_root)
@@ -1382,16 +1382,16 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                         SyncStatus::Success | SyncStatus::NoChanges
                                     );
                                     if !cleanup_ok {
-                                        // #645 评论 5504296097 问题3 修复：remote-only cleanup 失败 →
+                                        // remote-only cleanup 失败 →
                                         // record pending remote cleanup，下轮 Prepare
                                         // 生成 RemoteCleanupProject 重试。
                                         // 这是问题3的核心场景：本地没有 P，remote catalog 已是 Delete(P)，
                                         // 下一轮 planner 对"remote Delete + 本地无 live + 无 pending delete"
                                         // 会直接跳过，再也没有 target 会清这个 prefix。
                                         // pending_remote_cleanup 让下一轮重试。
-                                        // #645 评论 5504296097 问题2 修复：传入当前 Delete
+                                        // 传入当前 Delete
                                         // 的 lww_time 和 device_id，绑定 lifecycle identity。
-                                        // #645 评论 5504296097 问题3 修复：record 失败也向上
+                                        // record 失败也向上
                                         // 传递，不再 let _ = 吞掉。
                                         let expected_time =
                                             crate::sync::target_lifecycle::record_lww_time(
@@ -1436,7 +1436,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                 .map(|l| l.device_id.as_str())
                                                 .unwrap_or(""),
                                         );
-                                    // #645 评论 5504296097 问题2 修复：snapshot 失败（Retry）时
+                                    // snapshot 失败（Retry）时
                                     // 不生成 DeleteProject（不把"无法确认本地当前状态"解释成"可以删"）。
                                     // 直接返回 Retry，让 pending 保留，下次同步重试。
                                     match current_candidate {
@@ -1451,7 +1451,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                                         > current_rec.device_id);
                                             let delete_wins = !local_wins;
                                             if delete_wins {
-                                                // #645 评论 5504296097 问题2 修复：guard 非 Option —
+                                                // guard 非 Option —
                                                 // current_lww 已确认存在（Live 分支），直接用它。
                                                 let action = planned.project_id.as_ref().map(|pid| {
                                                     crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
@@ -1499,11 +1499,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                             }
                             TargetOp::Upsert => {
                                 // 远端仍是 upsert — 确认恢复，下载远端内容。
-                                // #645 评论 5504296097 问题2：如果 catalog winner 有
+                                //   如果 catalog winner 有
                                 // active_generation=G，从 generation prefix
                                 // （projects/P/__generations__/G/）下载；否则从 legacy
                                 // prefix（projects/P/）下载（兼容旧数据/无 generation 记录）。
-                                // #645 评论 5504296097 问题4：generation_remote_prefix 防御性
+                                //   generation_remote_prefix 防御性
                                 // 校验 active_generation（catalog 已校验，但 CAS 重读可能绕过）。
                                 let download_prefix: crate::error::Result<String> =
                                     match &current_rec.active_generation {
@@ -1553,7 +1553,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                         }
                     }
                     Ok(None) => {
-                        // #645 评论 5504296097 问题3 修复：远端无记录 → 无法确认 upsert winner
+                        // 远端无记录 → 无法确认 upsert winner
                         // → 直接 Retry（不再 "plan confirmed" download），与 DeleteLocalProject
                         // 语义一致。Prepare 明明看到 Upsert，Transfer 时这条 lifecycle record
                         // 整体消失，说明远端事实已经变化，不能继续相信旧 plan。
@@ -1590,7 +1590,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 }
             }
             PlannedTargetKind::Retry => {
-                // #645 评论 5504296097 问题1：无法决策，pending 保留。
+                //   无法决策，pending 保留。
                 let msg = "target lifecycle decision retry".to_string();
                 (
                     SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
@@ -1599,11 +1599,11 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                 )
             }
             PlannedTargetKind::RemoteCleanupProject => {
-                // #645 评论 5504296097 问题3 修复：远端残留清理重试。
+                // 远端残留清理重试。
                 // 上一轮 authoritative Delete 清 prefix 失败时记录了
                 // PendingRemoteTargetCleanup，本轮 Prepare 生成此 target。
                 //
-                // #645 评论 5504296097 问题2 修复：Transfer 前重新查询远端 catalog
+                // Transfer 前重新查询远端 catalog
                 // 当前该 target 的 lifecycle，校验当前 winner 仍是同一条/更新的 Delete：
                 // - 当前是 Upsert → pending 过期，返回 Success + LocalDeleteWins
                 //   （pending 应被移除），**绝不删 prefix**；
@@ -1726,7 +1726,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
         });
     }
 
-    // #645 评论 5504296097 问题2 修复：generation GC — 清理未引用 generation。
+    // generation GC — 清理未引用 generation。
     // 对每个 project target 调一次 run_generation_gc。不在 CAS 成功后立刻删旧
     // generation（另一台设备可能正拿着旧 catalog 下载）。
     //
@@ -1767,7 +1767,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
     }
 }
 
-/// #645 评论 5504296097 问题1：RestoreProject / DeleteRemoteProject LostToRemote 时
+///   RestoreProject / DeleteRemoteProject LostToRemote 时
 /// 把远端 `projects/<id>/` 下所有对象下载到 staging，commit 阶段把 staging 写回 live 恢复本地 project。
 ///
 /// `staging_root` 为 `None` 时只记录 `downloaded_files`，不落盘（调用方需保证
@@ -1801,7 +1801,7 @@ fn download_remote_to_staging(
     result
 }
 
-/// #645 评论 5504296097 问题2：generation 原子发布 — 上传 staging 到新 generation prefix，
+///   generation 原子发布 — 上传 staging 到新 generation prefix，
 /// 写 `generation.meta.json`（complete=false → 内容 → complete=true）。
 ///
 /// 步骤：
@@ -1852,7 +1852,7 @@ fn publish_generation(
 
     // 2. 上传 staging 内容到 generation prefix。
     let content_result = if let Some(outcome) = merge_outcome {
-        // #645 评论 5504296097 问题1 修复：已 merge → 上传完整快照到新
+        // 已 merge → 上传完整快照到新
         // generation prefix，不再做第二次 LWW 同步。
         // 关键：必须上传 merged_manifest 里所有 upsert 文件，不能只上传
         // outcome.remote_upload_paths（delta 动作）。NoOp/DownloadRemote/
@@ -1924,7 +1924,7 @@ fn publish_generation(
     content_result
 }
 
-/// #645 评论 5504296097 问题1 修复：把完整 merged manifest 快照上传到新 generation prefix。
+/// 把完整 merged manifest 快照上传到新 generation prefix。
 ///
 /// 新 generation 是不可变完整快照。本函数遍历 `merged_manifest.files`，
 /// 对每个 `op=upsert` 的 record：
@@ -2044,7 +2044,7 @@ fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Res
 /// `err.recoverable()` 决定 `SyncStatus::RecoverableError` / `FatalError`，
 /// `err.sync_category()` 决定 `error_category`（空字符串视为无分类）。
 ///
-/// #645 评论 5504296097：full-sync 所有错误转换都共用此函数，
+/// full-sync 所有错误转换都共用此函数，
 /// 不再各自猜 recoverable/fatal 或硬编码 error_category=None。
 fn sync_result_from_error(err: crate::Error) -> SyncResult {
     let msg = err.to_string();
@@ -2075,7 +2075,7 @@ fn sync_result_from_provider_error(err: crate::sync::provider::ProviderError) ->
 /// 全部删除成功返回 `SyncResult::success()`（`remote_deletes` 记录已删路径）。
 /// 远端 list 失败 → `RecoverableError`。单个 delete 失败 → `RecoverableError`（已删的保留）。
 ///
-/// #645 评论 5504296097 问题2：跳过 `__generations__/` 下的对象 — 不碰并发 Upsert
+///   跳过 `__generations__/` 下的对象 — 不碰并发 Upsert
 /// 正在上传的 generation prefix。Delete cleanup 只清 legacy prefix（`projects/P/`
 /// 下非 generation 的对象），generation prefix 由 GC 单独清理（未引用 generation）。
 /// 这修复了"设备 B 已上传新正文到 generation prefix 但还没 CAS catalog，设备 A
@@ -2088,7 +2088,7 @@ fn delete_all_remote_objects(provider: &dyn SyncProvider, remote_prefix: &str) -
 
     let mut remote_deletes: Vec<String> = Vec::new();
     for entry in &remote_entries {
-        // #645 评论 5504296097 问题2：跳过 generation prefix 下的对象，
+        //   跳过 generation prefix 下的对象，
         // 不碰并发 Upsert 正在上传的 generation。
         if is_generation_path(&entry.path) {
             log::debug!(
@@ -2130,7 +2130,7 @@ fn run_single_target(
     target: &SyncTarget,
     force_sync: bool,
 ) -> SyncResult {
-    // #645 评论 5504296097 问题2 修复：通过 SyncService::perform_lww_sync
+    // 通过 SyncService::perform_lww_sync
     // （pub(crate) 内部 staging 引擎）调用，保持唯一调用路径。
     match crate::sync::SyncService::perform_lww_sync(
         local_root,
@@ -2149,7 +2149,7 @@ fn run_single_target(
 /// 将各 target 的结果聚合为 [`FullSyncResult`]：统计上传/下载/删除/冲突数，
 /// 总体状态保留错误类型，优先级按"需要用户处理的终态 > 可重试 > 成功"：
 /// `Fatal/Error > Dirty > Conflict/PartialConflict > Recoverable > Success`
-/// （Issue #630 评论 5308040939 Part 2）。
+/// 。
 ///
 /// `error` / `error_category` / `message_key` 从与 `overall_status` 同优先级的
 /// 第一个 dominant target 取得，避免"总体是认证失败、文案却拿到前一个网络错误"
@@ -2184,7 +2184,7 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
         .map(|t| u32::try_from(t.result.conflicts.len()).unwrap_or(u32::MAX))
         .sum();
 
-    // Issue #630 评论 5308439467 Part 3：终态分两步聚合。
+    // 终态分两步聚合。
     // 第一步：任何 target 返回 Syncing/Idle/ConfiguredNotTested 都是协议错误
     // （这三个是非终态/未测试状态，不应出现在 target 结果里），直接生成
     // FatalError，绝不能当成功。
@@ -2253,7 +2253,7 @@ pub fn aggregate_full_sync_result(targets: Vec<TargetSyncResult>) -> FullSyncRes
 
 // ── 纯辅助函数（从 facade/sync_ops.rs 搬移） ──
 
-/// transport 初始化失败的类型化 Error 转换（Issue #630 评论 5308439467 Part 2）。
+/// transport 初始化失败的类型化 Error 转换。
 ///
 /// 唯一一份转换，同时用于持久化 FullSyncState 状态和返回给调用方，避免
 /// "磁盘写 FatalError 但返回 Io → Android 视为 Retryable"的错位。
@@ -2303,7 +2303,7 @@ fn is_protocol_error_status(status: &SyncStatus) -> bool {
 /// 协议错误聚合字段：(overall_status, error, error_category, message_key)。
 type ProtocolErrorFields = (SyncStatus, Option<String>, Option<String>, Option<String>);
 
-/// 协议错误聚合字段构造（Issue #630 评论 5308439467 Part 3）。
+/// 协议错误聚合字段构造。
 ///
 /// 任何 target 返回 Syncing/Idle/ConfiguredNotTested 时，返回
 /// (FatalError("invalid_target_status_for_aggregation"), error, error_category, message_key)，
@@ -2339,7 +2339,7 @@ fn sync_error_category_to_message_key_string(code: &str) -> String {
         .to_string()
 }
 
-/// 聚合成功类终态（Issue #630 评论 5311102143）。
+/// 聚合成功类终态。
 ///
 /// 失败优先级为 0 时调用。用语义判断而非数字优先级：
 /// - `LatestWinsApplied` 存在 → `LatestWinsApplied`
@@ -2387,7 +2387,7 @@ mod tests {
     };
     use tempfile::TempDir;
 
-    /// #645 评论 5504296097 问题4：测试用空 catalog snapshot。
+    ///   测试用空 catalog snapshot。
     fn test_empty_catalog_snapshot() -> crate::sync::types::RemoteTargetCatalogSnapshot {
         crate::sync::types::RemoteTargetCatalogSnapshot {
             catalog: crate::sync::types::TargetLifecycleCatalog::default(),
@@ -2464,7 +2464,7 @@ mod tests {
         }
     }
 
-    /// #645 评论 5504296097 问题4：build_full_sync_target_plan 包含 pending deleted target。
+    ///   build_full_sync_target_plan 包含 pending deleted target。
     #[test]
     fn build_plan_includes_pending_deleted_targets() {
         use crate::sync::types::{PendingDeletedTarget, PlannedTargetKind};
@@ -2506,11 +2506,11 @@ mod tests {
         assert_eq!(planned[1].target.remote_prefix, "projects/p-deleted");
         assert_eq!(planned[1].deleted_journal_token.as_deref(), Some("token-1"));
         assert!(planned[1].deleted_lww.is_some());
-        // #645 评论 5504296097 问题2：target_live_root 应指向 projects_root/<id>。
+        //   target_live_root 应指向 projects_root/<id>。
         assert_eq!(planned[1].target_live_root, projects_root.join("p-deleted"));
     }
 
-    /// #645 评论 5504296097 问题4：build_full_sync_target_plan 包含 live project targets。
+    ///   build_full_sync_target_plan 包含 live project targets。
     #[test]
     fn build_plan_includes_live_projects() {
         use crate::project::Project;
@@ -2529,7 +2529,7 @@ mod tests {
             updated_at: "2024-01-01T00:00:00Z".to_string(),
             order: 0,
         }];
-        // #645 评论 5504296097 问题2：首次同步 manifest 缺失，需要 project.json
+        //   首次同步 manifest 缺失，需要 project.json
         // 元数据建立初始 LWW。写一份合法 project.json。
         let project_root = projects_root.join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
@@ -2561,7 +2561,7 @@ mod tests {
         assert_eq!(planned[1].local_root, projects_root.join("p1"));
     }
 
-    /// #645 评论 5504296097 问题1：远端 catalog 有 delete tombstone 且本地 live 更晚 → LiveProject。
+    ///   远端 catalog 有 delete tombstone 且本地 live 更晚 → LiveProject。
     #[test]
     fn build_plan_live_project_with_remote_delete_local_wins() {
         use crate::project::Project;
@@ -2592,7 +2592,7 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        // #645 评论 5504296097 问题1 修复：同时创建实际文件（whitelisted 路径），
+        // 同时创建实际文件（whitelisted 路径），
         // 让 snapshot_local_records_read_only 第 3 步处理（当前文件存在 + hash 匹配），
         // 直接 clone old manifest record 保留 updated_at_ms = 12000。
         std::fs::create_dir_all(project_root.join("volumes/v1")).unwrap();
@@ -2634,7 +2634,7 @@ mod tests {
         assert_eq!(planned[1].target_kind, PlannedTargetKind::LiveProject);
     }
 
-    /// #645 评论 5504296097 问题1：远端 catalog 有 delete tombstone 且远端更晚 → DeleteLocalProject。
+    ///   远端 catalog 有 delete tombstone 且远端更晚 → DeleteLocalProject。
     #[test]
     fn build_plan_live_project_with_remote_delete_remote_wins() {
         use crate::project::Project;
@@ -2665,7 +2665,7 @@ mod tests {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        // #645 评论 5504296097 问题1 修复：同时创建实际文件（whitelisted 路径），
+        // 同时创建实际文件（whitelisted 路径），
         // 让 snapshot_local_records_read_only 第 3 步处理（当前文件存在 + hash 匹配），
         // 直接 clone old manifest record 保留 updated_at_ms = 11000。
         std::fs::create_dir_all(project_root.join("volumes/v1")).unwrap();
@@ -2710,7 +2710,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题1：pending delete + 远端 upsert 且本地 tombstone 胜出 → DeleteRemoteProject。
+    ///   pending delete 远端 upsert 且本地 tombstone 胜出 → DeleteRemoteProject。
     #[test]
     fn build_plan_pending_delete_local_tombstone_wins() {
         use crate::sync::types::{PendingDeletedTarget, PlannedTargetKind};
@@ -2756,7 +2756,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题1：pending delete + 远端 upsert 且远端胜出 → RestoreProject。
+    ///   pending delete 远端 upsert 且远端胜出 → RestoreProject。
     #[test]
     fn build_plan_pending_delete_remote_upsert_wins() {
         use crate::sync::types::{PendingDeletedTarget, PlannedTargetKind};
@@ -2799,7 +2799,7 @@ mod tests {
         assert_eq!(planned[1].target_kind, PlannedTargetKind::RestoreProject);
     }
 
-    /// #645 评论 5504296097 问题3：run_transfer 在 DeleteRemoteProject 时先写 catalog tombstone 再删远端。
+    ///   run_transfer 在 DeleteRemoteProject 时先写 catalog tombstone 再删远端。
     #[test]
     fn run_transfer_catalog_tombstone_before_remote_delete() {
         use crate::sync::types::{PlannedTargetKind, SyncPolicy};
@@ -2851,7 +2851,7 @@ mod tests {
         assert!(provider.read("projects/p1/chapter.md").unwrap().is_none());
     }
 
-    /// #645 评论 5504296097 问题4：catalog 写失败时 deleted target 走 Retry，pending 保留。
+    ///   catalog 写失败时 deleted target 走 Retry，pending 保留。
     ///
     /// 使用 AlwaysFailCatalogProvider 模拟 catalog 写入始终失败的场景。
     #[test]
@@ -2893,7 +2893,7 @@ mod tests {
             transfer.targets[0].deleted_resolution,
             Some(DeletedTargetResolution::Retry)
         );
-        // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError，不只 warn。
+        //   lifecycle 写失败 → RecoverableError，不只 warn。
         assert!(matches!(
             transfer.targets[0].result.status,
             SyncStatus::RecoverableError(_)
@@ -2902,7 +2902,7 @@ mod tests {
         assert!(provider.read("projects/p1/chapter.md").unwrap().is_some());
     }
 
-    /// #645 评论 5504296097 问题1/4：run_transfer 对 LiveProject 先写 catalog upsert（lifecycle CAS 是完成条件）。
+    ///   run_transfer 对 LiveProject 先写 catalog upsert（lifecycle CAS 是完成条件）。
     #[test]
     fn run_transfer_writes_catalog_upsert_for_live_project() {
         use crate::sync::types::{ManifestFileRecord, PlannedTargetKind, SyncManifest, SyncPolicy};
@@ -2911,9 +2911,9 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let project_root = tmp.path().join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
-        // #645 评论 5504296097 问题3：post-transfer LWW 从 staging manifest 读取。
+        //   post-transfer LWW 从 staging manifest 读取。
         // staging_root 为 None → 用 local_root。写一份 manifest 让 LWW 能读到。
-        // #645 评论 5504296097 问题1 修复：merge_remote_into_local_snapshot 会调
+        // merge_remote_into_local_snapshot 会调
         // snapshot_local_records_read_only，要求 manifest 中 upsert record 对应的
         // 文件必须存在或有 tombstone，否则返回 Err。补上实际 project.json 文件。
         std::fs::write(project_root.join("project.json"), b"project content").unwrap();
@@ -2971,7 +2971,7 @@ mod tests {
         assert_eq!(rec.unwrap().op, crate::sync::types::TargetOp::Upsert);
     }
 
-    /// #645 评论 5504296097 问题4：LiveProject lifecycle 写失败 → RecoverableError，不只 warn。
+    ///   LiveProject lifecycle 写失败 → RecoverableError，不只 warn。
     #[test]
     fn run_transfer_live_project_lifecycle_failure_returns_error() {
         use crate::sync::types::{PlannedTargetKind, SyncPolicy};
@@ -3009,14 +3009,14 @@ mod tests {
 
         let transfer = run_transfer(&provider, &plan);
         assert_eq!(transfer.targets.len(), 1);
-        // #645 评论 5504296097 问题4：lifecycle 写失败 → RecoverableError，不只 warn。
+        //   lifecycle 写失败 → RecoverableError，不只 warn。
         assert!(matches!(
             transfer.targets[0].result.status,
             SyncStatus::RecoverableError(_)
         ));
     }
 
-    /// #645 评论 5504296097 问题1：DeleteLocalProject 不上传，返回 NoChanges。
+    ///   DeleteLocalProject 不上传，返回 NoChanges。
     #[test]
     fn run_transfer_delete_local_project_skips_upload() {
         use crate::sync::types::{PlannedTargetKind, SyncPolicy};
@@ -3051,7 +3051,7 @@ mod tests {
 
         let transfer = run_transfer(&provider, &plan);
         assert_eq!(transfer.targets.len(), 1);
-        // #645 评论 5504296097 问题3修复：DeleteLocalProject + 远端无记录 → Retry
+        // DeleteLocalProject 远端无记录 → Retry
         // （不再 "plan confirmed" 继续 DeleteProject）。
         assert!(matches!(
             transfer.targets[0].result.status,
@@ -3062,7 +3062,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // #645 评论 5504296097 复现测试 — 6 个实质问题
+    //   复现测试 — 6 个实质问题
     //
     // 以下测试断言"期望的修复后行为"，对当前（未修复）代码会 FAIL，
     // 从而证明 bug 存在。测试名以 `repro_issue_645_qN_` 为前缀。
@@ -3337,12 +3337,12 @@ mod tests {
     ///
     /// 场景：远端已明确 delete(P)，本地 P 一直存在。
     ///
-    /// #645 评论 5504296097 问题1：run_transfer 对 DeleteLocalProject 不再直接删除
+    ///   run_transfer 对 DeleteLocalProject 不再直接删除
     /// 本地目录，而是返回 `DeleteProject` action，由 `commit_full_sync` 执行删除事务。
     /// 这样删除走完整 ProjectDeleteTransaction（move worktree / unbind starmap /
     /// journal），不绕过 delete_guard。
     ///
-    /// #645 评论 5504296097 问题3修复：远端必须有 Delete record（CAS 确认），
+    /// 远端必须有 Delete record（CAS 确认），
     /// 否则 Ok(None) 直接 Retry。本测试用有 Delete record 的 catalog。
     #[test]
     fn repro_issue_645_q4_delete_local_project_no_actual_deletion() {
@@ -3389,7 +3389,7 @@ mod tests {
             target_live_root: project_root.clone(),
             deleted_journal_token: None,
             deleted_lww: None,
-            // #645 评论 5504296097 问题2 修复：DeleteLocalProject 的 live_lww
+            // DeleteLocalProject 的 live_lww
             // 在 Prepare 阶段由 compute_local_project_lifecycle_candidate 算出。
             // 正常流程中 live_lww 总是 Some（None 时 decide_live_project_kind
             // 返回 Retry 而非 DeleteLocalProject）。测试直接构造 PlannedTarget，
@@ -3413,14 +3413,14 @@ mod tests {
 
         let transfer = run_transfer(&provider, &plan);
 
-        // #645 评论 5504296097 问题1：run_transfer 返回 NoChanges
+        //   run_transfer 返回 NoChanges
         // （不在此阶段做文件 IO 删除）。
         assert!(
             matches!(transfer.targets[0].result.status, SyncStatus::NoChanges),
             "DeleteLocalProject 返回 NoChanges（删除延迟到 commit 阶段）"
         );
 
-        // #645 评论 5504296097 问题1：run_transfer 返回 DeleteProject action，
+        //   run_transfer 返回 DeleteProject action，
         // commit_full_sync 会据此执行 ProjectDeleteTransaction。
         assert!(
             matches!(
@@ -3432,7 +3432,7 @@ mod tests {
             transfer.targets[0].local_lifecycle_action
         );
 
-        // #645 评论 5504296097 问题1：run_transfer 阶段不删除本地目录
+        //   run_transfer 阶段不删除本地目录
         // （删除由 commit_full_sync 走 ProjectDeleteTransaction 完成）。
         assert!(
             project_root.exists(),
@@ -3593,7 +3593,7 @@ mod tests {
     }
 
     /// 问题 6 复现：为在 planner 前读 remote catalog，把网络 IO 放回了 core_write()，
-    /// 把 #644 已拆掉的网络长锁重新引进来。
+    /// 把  已拆掉的网络长锁重新引进来。
     ///
     /// 这是静态代码路径证据 — perform_full_sync 在 core_write() 作用域内调用
     /// load_remote_catalog（网络 IO），阻塞正文/作品读取。
@@ -3603,7 +3603,7 @@ mod tests {
     #[test]
     fn repro_issue_645_q6_network_io_inside_core_write_lock_static_evidence() {
         // 读取 sync_api.rs 源码，确认 discover_legacy_remote_catalog 在 core_write() 作用域外。
-        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        //   回退问题：恢复短锁+锁外扫描。
         // prepare_full_sync → build_full_sync_plan_unlocked（锁外）。
         // load_remote_catalog → discover_legacy_remote_catalog（锁外）。
         let source = include_str!("../api/sync_api.rs");
@@ -3614,7 +3614,7 @@ mod tests {
         );
         let start = perform_full_sync_start.unwrap();
         // 取函数体做检查（覆盖整个 Prepare 阶段）。
-        // #645 评论 5504296097 回退问题：用整个剩余 source 而非固定字节窗口，
+        //   回退问题：用整个剩余 source 而非固定字节窗口，
         // 避免中文注释多字节字符导致切片落在 char boundary 内 panic。
         let body = &source[start..];
 
@@ -3658,10 +3658,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // #645 评论 5504296097 问题6：parse_project_target_id 验证测试
+    //   parse_project_target_id 验证测试
     // ─────────────────────────────────────────────────────────────────────
 
-    /// #645 评论 5504296097 问题6：合法 target_id 正确解析。
+    ///   合法 target_id 正确解析。
     #[test]
     fn q6_parse_project_target_id_valid() {
         assert_eq!(
@@ -3674,7 +3674,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题6：非法 target_id 被拒绝。
+    ///   非法 target_id 被拒绝。
     #[test]
     fn q6_parse_project_target_id_invalid() {
         // 缺前缀
@@ -3692,7 +3692,7 @@ mod tests {
         assert!(crate::sync::target_lifecycle::parse_project_target_id("projects/a\\b").is_err());
     }
 
-    /// #645 评论 5504296097 问题6：remote-only discovery 遇到非法 target_id 跳过。
+    ///   remote-only discovery 遇到非法 target_id 跳过。
     #[test]
     fn q6_build_plan_skips_invalid_remote_target_id() {
         let tmp = TempDir::new().unwrap();
@@ -3754,7 +3754,7 @@ mod tests {
         assert!(has_legit, "问题6: 合法 target_id 应进入 plan");
     }
 
-    /// #645 评论 5504296097 问题6：pending deleted 非法 target_id 跳过。
+    ///   pending deleted 非法 target_id 跳过。
     #[test]
     fn q6_build_plan_skips_invalid_pending_deleted_target_id() {
         use crate::sync::types::PendingDeletedTarget;
@@ -3804,10 +3804,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // #645 评论 5504296097 问题4：catalog 读取失败不吞、plan 携带 snapshot 测试
+    //   catalog 读取失败不吞、plan 携带 snapshot 测试
     // ─────────────────────────────────────────────────────────────────────
 
-    /// #645 评论 5504296097 问题4：run_transfer 用 plan 携带的 snapshot 作为起点，
+    ///   run_transfer 用 plan 携带的 snapshot 作为起点，
     /// 不再无条件再读一次 catalog。
     ///
     /// plan 携带的 snapshot 含 delete(P, 12000)。LiveProject candidate upsert(P, 10000)
@@ -3877,10 +3877,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // #645 评论 5504296097 问题2：manifest 缺失/损坏处理测试
+    //   manifest 缺失/损坏处理测试
     // ─────────────────────────────────────────────────────────────────────
 
-    /// #645 评论 5504296097 问题2：manifest 损坏 → Retry，不 DeleteLocalProject。
+    ///   manifest 损坏 → Retry，不 DeleteLocalProject。
     #[test]
     fn q2_manifest_corrupt_returns_retry() {
         use crate::project::Project;
@@ -3944,7 +3944,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题2：首次同步 manifest 不存在 + project.json 合法
+    ///   首次同步 manifest 不存在 project.json 合法
     /// → 建立初始 manifest → LiveProject（正常同步）。
     #[test]
     fn q2_first_sync_establishes_initial_manifest() {
@@ -3997,7 +3997,7 @@ mod tests {
             p_target.live_lww.is_some(),
             "问题2: 首次同步应产出初始 live_lww"
         );
-        // #645 评论 5504296097 问题4修复：planner 不再落盘 manifest，
+        // planner 不再落盘 manifest，
         // initial_manifest 由正式同步在 staging 阶段写入。
         // 此处只验证 planner 产出了 live_lww，不验证 manifest 文件存在。
         assert!(
@@ -4008,8 +4008,8 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题2/4：manifest 不存在 + project.json 损坏 →
-    /// 问题4修复后 scan_sync_file 用 mtime fallback，仍能建立 LWW → LiveProject。
+    ///   manifest 不存在 project.json 损坏 →
+    /// 后 scan_sync_file 用 mtime fallback，仍能建立 LWW → LiveProject。
     #[test]
     fn q2_no_manifest_and_corrupt_project_json_returns_retry() {
         use crate::project::Project;
@@ -4048,7 +4048,7 @@ mod tests {
             .iter()
             .find(|t| t.target.remote_prefix == "projects/P")
             .expect("P target should exist");
-        // #645 评论 5504296097 问题4修复：scan_sync_file 用 mtime fallback，
+        // scan_sync_file 用 mtime fallback，
         // 损坏 JSON 仍能建立 LWW → LiveProject（不再 Retry）。
         assert_eq!(
             p_target.target_kind,
@@ -4058,10 +4058,10 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // #645 评论 5504296097 问题3：post-transfer staging LWW 测试
+    //   post-transfer staging LWW 测试
     // ─────────────────────────────────────────────────────────────────────
 
-    /// #645 评论 5504296097 问题3：lifecycle publish 用 post-transfer staging manifest LWW，
+    ///   lifecycle publish 用 post-transfer staging manifest LWW，
     /// 不是 Transfer 前的旧 live_lww。
     ///
     /// live_lww.lww_time_ms = 1000（旧）。staging manifest max lww = 5000（post-transfer）。
@@ -4075,7 +4075,7 @@ mod tests {
         let project_root = tmp.path().join("projects").join("p1");
         std::fs::create_dir_all(&project_root).unwrap();
         // staging_root 单独设一个目录，里面放 post-transfer manifest（max=5000）。
-        // #645 评论 5504296097 问题1 修复：merge_remote_into_local_snapshot 会调
+        // merge_remote_into_local_snapshot 会调
         // snapshot_local_records_read_only，要求 manifest 中 upsert record 对应的
         // 文件必须存在或有 tombstone。补上实际 chapter.md 文件。
         let staging_root = tmp.path().join("staging-p1");
@@ -4144,7 +4144,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题3：post-transfer staging manifest 读取失败 → RecoverableError。
+    ///   post-transfer staging manifest 读取失败 → RecoverableError。
     #[test]
     fn q3_post_transfer_manifest_unreadable_returns_error() {
         use crate::sync::types::{PlannedTargetKind, SyncPolicy};
@@ -4201,7 +4201,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题5：dry-run 应使用真实 catalog 做 target 决策。
+    ///   dry-run 应使用真实 catalog 做 target 决策。
     ///
     /// 场景：远端 catalog 有 project P 的 upsert 记录，本地也有 P。
     /// 用真实 catalog 调 build_full_sync_target_plan，P 应被计划为 LiveProject
@@ -4285,7 +4285,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题5：dry-run 用空 catalog 时，
+    ///   dry-run 用空 catalog 时，
     /// 本地有但 catalog 无记录的 project 应被计划为 LiveProject（首次同步）。
     #[test]
     fn q5_dry_run_empty_catalog_first_sync() {
@@ -4327,7 +4327,7 @@ mod tests {
             .iter()
             .find(|t| t.project_id.as_deref() == Some("P"))
             .expect("P should be in plan");
-        // 首次同步：本地有，catalog 无 → LiveProject（问题2 修复后不再 DeleteLocalProject）。
+        // 首次同步：本地有，catalog 无 → LiveProject（后不再 DeleteLocalProject）。
         assert!(
             matches!(p_target.target_kind, PlannedTargetKind::LiveProject),
             "首次同步 P 应为 LiveProject，实际: {:?}",
@@ -4335,7 +4335,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题2：LiveProject generation 原子发布。
+    ///   LiveProject generation 原子发布。
     ///
     /// 验证：LiveProject 上传到不可见 generation prefix
     /// （`projects/P/__generations__/G/`），catalog Upsert 记录携带 active_generation=G，
@@ -4435,7 +4435,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题2：delete_all_remote_objects 跳过 generation prefix。
+    ///   delete_all_remote_objects 跳过 generation prefix。
     ///
     /// 验证：legacy 文件被删，generation prefix 下的文件保留（不碰并发 Upsert
     /// 正在上传的 generation）。这修复了"设备 B 已上传新正文到 generation prefix
@@ -4487,7 +4487,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题2：RestoreProject 从 generation prefix 下载。
+    ///   RestoreProject 从 generation prefix 下载。
     ///
     /// 验证：catalog winner 是 Upsert with active_generation=G 时，RestoreProject
     /// 从 generation prefix（`projects/P/__generations__/G/`）下载，而非 legacy prefix。
@@ -4567,7 +4567,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题3：remote-only Delete 直接生成 RemoteCleanupProject。
+    ///   remote-only Delete 直接生成 RemoteCleanupProject。
     ///
     /// 场景：远端 catalog 有 Delete(P) tombstone，本地无 P（无 live project、
     /// 无 pending delete）。修复前 planner 跳过 remote Delete + local absent；
@@ -4632,7 +4632,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题3：remote-only Delete 的 RemoteCleanupProject
+    ///   remote-only Delete 的 RemoteCleanupProject
     /// 实际执行 cleanup（delete_all_remote_objects），清理远端残留。
     ///
     /// 验证端到端：catalog 有 Delete(P)，远端有 legacy 残留文件，

@@ -47,7 +47,7 @@ fn test_full_delete_flow() {
     fs::create_dir_all(&git_dir_from).unwrap();
     fs::write(git_dir_from.join("HEAD"), "ref: refs/heads/main\n").unwrap();
 
-    // #644 评论 5495945801 问题2：传 trash root，token 在 new() 内部生成。
+    //   传 trash root，token 在 new 内部生成。
     let worktree_trash_root = app_data_root.join("sync/trash");
     let git_dir_trash_root = app_data_root.join("private/trash");
 
@@ -88,7 +88,7 @@ fn test_full_delete_flow() {
     // write_tombstone。
     tx.write_tombstone().unwrap();
 
-    // #645 评论 5504296097 问题2：unbind_starmaps（空 starmap_ids，应直接推进 phase）。
+    //   unbind_starmaps（空 starmap_ids，应直接推进 phase）。
     tx.unbind_starmaps().unwrap();
     assert_eq!(tx.journal.phase, ProjectDeletePhase::StarMapsUnbound);
 
@@ -240,7 +240,7 @@ fn test_recovery_from_git_moved() {
     let journal_path = tx.journal_path.clone();
     let recovered = recover_pending_delete_transactions(app_data_root).unwrap();
     assert_eq!(recovered.len(), 1);
-    // #645 评论 5504296097 缺口2修复：recover 不 complete/cleanup，journal 保留。
+    // recover 不 complete/cleanup，journal 保留。
     // 调用方（bootstrap）需 ack 后才清理。这里验证 journal 仍存在。
     assert!(
         journal_path.exists(),
@@ -279,7 +279,7 @@ fn test_delete_without_private_git() {
     tx.move_worktree().unwrap();
     tx.move_git().unwrap(); // 无 private git，应直接推进到 GitMoved。
     tx.write_tombstone().unwrap();
-    // #645 评论 5504296097 问题2：unbind_starmaps（空 starmap_ids）。
+    //   unbind_starmaps（空 starmap_ids）。
     tx.unbind_starmaps().unwrap();
     tx.complete().unwrap();
 
@@ -292,7 +292,7 @@ fn test_delete_without_private_git() {
     assert!(!journal_path.exists());
 }
 
-/// #645 评论 5504296097 问题1：ack_project_delete_history 推进到
+///   ack_project_delete_history 推进到
 /// HistoryRecorded → RemoteDeleteQueued → Completed，并写 PendingDeletedTarget。
 #[test]
 fn test_ack_writes_pending_deleted_target_and_completes() {
@@ -349,7 +349,7 @@ fn test_ack_writes_pending_deleted_target_and_completes() {
     );
 }
 
-/// #645 评论 5504296097 问题1：HistoryRecorded phase 崩溃恢复时，
+///   HistoryRecorded phase 崩溃恢复时，
 /// recover 先补写 PendingDeletedTarget，再推进到 Completed 并清 journal。
 #[test]
 fn test_recovery_from_history_recorded_writes_pending_target() {
@@ -409,7 +409,7 @@ fn test_recovery_from_history_recorded_writes_pending_target() {
     assert_eq!(pending_after[0].journal_token, token);
 }
 
-/// #645 评论 5504296097 问题1：RemoteDeleteQueued phase 崩溃恢复时，
+///   RemoteDeleteQueued phase 崩溃恢复时，
 /// recover 直接推进到 Completed 并清 journal（pending target 已落盘）。
 #[test]
 fn test_recovery_from_remote_delete_queued() {
@@ -455,7 +455,7 @@ fn test_recovery_from_remote_delete_queued() {
     assert!(!journal_path.exists(), "recover 后 journal 应已清理");
 }
 
-/// #645 评论 5504296097 问题1：record_pending_deleted_target 不吞文件损坏错误。
+///   record_pending_deleted_target 不吞文件损坏错误。
 /// 文件损坏时返回 Err，不覆盖丢失其他 pending target。
 #[test]
 fn test_record_pending_deleted_target_fails_on_corrupted_file() {

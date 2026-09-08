@@ -1,4 +1,4 @@
-//! # 布局契约 — 平台无关的产品壳层语义（#610 / #628）
+//! # 布局契约 — 平台无关的产品壳层语义（ / ）
 //!
 //! 本模块不碰 UI、不碰平台 API、不访问文件系统。
 //! 只描述"产品有几栏、栏里放什么角色、一级导航放底栏还是侧栏、共用尺寸"，
@@ -9,7 +9,7 @@
 //! 各端测量自己的窗口系统后传入 [`resolver::WindowViewport`]（宽高 dp）。
 //! 不再接收"Android 已经算好的 paneCount / has_separating_fold /
 //! pointer_class / keyboard_visible"——这些平台判断不再参与
-//! "窗口尺寸 → 页面结构"（#628）。
+//! "窗口尺寸 → 页面结构"。
 //!
 //! ## 子模块
 //!
@@ -23,7 +23,7 @@
 //! [`LayoutContract`] 含产品角色：壳层模式、工作区布局模式、
 //! 一级导航放置（[`PrimaryNavigationPlacement`]）、共用尺寸（[`metrics::LayoutMetrics`]）。
 //! 是否显示一级导航不再放在 `LayoutContract`，改由 [`super::screen::ScreenPolicy`] 提供
-//! （#628 评论第 5 节）。
+//! 。
 
 pub mod breakpoints;
 pub mod metrics;
@@ -49,11 +49,11 @@ pub enum ShellMode {
     ThreePane,
 }
 
-/// 工作区布局模式 — 决定项目列表/章节树/编辑器的产品级组合方式（#628 验收点 1）。
+/// 工作区布局模式 — 决定项目列表/章节树/编辑器的产品级组合方式（ 验收点 1）。
 ///
 /// 不再输出旧的"三窗格"语义（`ListDetail` / `ThreePane`），改为产品语义：
 /// - `SinglePane`：窄屏单栏（手机/小平板竖屏）。
-/// - `Workbench`：#625 定下的稳定大屏结构——章节导航 + 正文 + 工具 pane + 工具 rail，
+/// - `Workbench`： 定下的稳定大屏结构——章节导航 正文 工具 pane 工具 rail，
 ///   左右 pane 由用户主动收起，不因为 Medium/Large 自动变成另一套页面。
 ///
 /// Rust 内部仍保留 Narrow/Medium/Wide/Large/ExtraLarge（在 [`breakpoints`]）
@@ -64,7 +64,7 @@ pub enum WorkspaceLayoutMode {
     Workbench,
 }
 
-/// 一级导航放置位置 — 平台无关（#628 评论第 4 节）。
+/// 一级导航放置位置 — 平台无关。
 ///
 /// Rust 根据窗口 class 决定 Bottom / Side；平台端只做映射：
 /// - Android：`Bottom -> NavigationBar`，`Side -> NavigationRail`。
@@ -81,10 +81,10 @@ pub enum PrimaryNavigationPlacement {
 
 /// 布局契约 — `resolve_layout` 的纯函数输出，平台端据此绘制 UI。
 ///
-/// #628：删除 `show_primary_navigation`（改由 `ScreenPolicy` 提供），
+/// 删除 `show_primary_navigation`（改由 `ScreenPolicy` 提供），
 /// 新增 `primary_navigation_placement` 与 `metrics`。
 ///
-/// #628 评论 5301021120 第 1 步：删除单数 `workbench_occlusion` 字段
+///   第 1 步：删除单数 `workbench_occlusion` 字段
 /// （死数据，结构上无法表达多个遮挡）。工作台布局计划改由
 /// [`resolver::resolve_workbench_layout`] 单独提供（平台端按需调用）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,7 +106,7 @@ pub fn resolve_layout(viewport: &resolver::WindowViewport) -> LayoutContract {
     resolver::resolve_layout(viewport)
 }
 
-/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步）。
+/// 解析工作台布局计划（  第 1-2 步）。
 ///
 /// 详见 [`resolver::resolve_workbench_layout`]。
 pub fn resolve_workbench_layout(

@@ -11,7 +11,7 @@ use super::model::*;
 /// - 旧格式：`committed` 标记存在 → 清理目录（向后兼容）
 /// - 两者都不存在 → 无效目录，清理
 ///
-/// #645 评论 5504296097 问题5(b)：`FilesCommittedPendingGit` 变体已移除。
+/// `FilesCommittedPendingGit` 变体已移除。
 /// 旧 manifest 中 `"files_committed_pending_git"` 在反序列化时映射到
 /// `FilesCommitted`，因此会走 `FilesCommitted` 分支（清理目录）。
 /// 这与之前"直接 rollback"不同，但新代码不再产生 `FilesCommittedPendingGit`，

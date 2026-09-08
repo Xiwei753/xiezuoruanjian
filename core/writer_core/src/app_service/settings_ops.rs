@@ -23,7 +23,7 @@ impl super::WriterAppService {
         self.api.save_syncable_settings(settings)
     }
 
-    /// 全局同步配置（Issue #630）。
+    /// 全局同步配置。
     pub fn load_sync_config(&self) -> Result<SyncConfigDto, WriterError> {
         self.api.load_sync_config()
     }
@@ -56,7 +56,7 @@ impl super::WriterAppService {
         let message_args = std::collections::HashMap::new();
         let mut can_run = true;
 
-        // 从 provider_config 读 remote_url（Issue #645 评论第 2 点）。
+        // 从 provider_config 读 remote_url。
         let remote_url = config
             .provider_config
             .as_ref()

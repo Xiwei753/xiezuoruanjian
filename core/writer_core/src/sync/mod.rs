@@ -31,24 +31,24 @@
 pub(crate) mod commit_helpers;
 pub mod config_store;
 pub mod conflict;
-/// #644 评论 5473789298 第3节：纯内容分类/三方比较（始终可用，不依赖 feature gate）。
+/// 纯内容分类/三方比较（始终可用，不依赖 feature gate）。
 pub mod content_class;
 pub mod diagnostics;
 pub mod full_sync;
 pub mod full_sync_state;
 pub(crate) mod full_sync_utils;
-/// #645 评论 5504296097 问题2：generation GC（provider-neutral 清理未引用 generation）。
+///   generation GC（provider-neutral 清理未引用 generation）。
 pub mod generation_gc;
 pub mod lww;
-/// #645 评论 5504296097 问题1：待删除同步 target 的持久化（provider-neutral）。
+///   待删除同步 target 的持久化（provider-neutral）。
 pub mod pending_deleted;
-/// #645 评论 5504296097 问题3 修复：待清理远端残留的持久化（provider-neutral）。
+/// 待清理远端残留的持久化（provider-neutral）。
 pub mod pending_remote_cleanup;
 pub mod provider;
 pub mod scanner;
 pub mod service;
 pub mod staging;
-/// #645 评论 5504296097 问题3：target 生命周期 catalog（远端持久、provider-neutral）。
+///   target 生命周期 catalog（远端持久、provider-neutral）。
 pub mod target_lifecycle;
 pub mod tests;
 pub mod types;

@@ -2,7 +2,7 @@ use super::composition::OffsetMap;
 use super::rebase::{RebaseContinuation, RebaseReason, RebaseSliceMapping};
 use super::visual::AnimatedSliceRole;
 
-/// #639 评论 5420317382：判断旧 slice 角色是否属于"当前屏幕上已经可见的新出现文字"。
+/// 判断旧 slice 角色是否属于"当前屏幕上已经可见的新出现文字"。
 fn is_emergence_role(role: AnimatedSliceRole) -> bool {
     matches!(
         role,
@@ -10,7 +10,7 @@ fn is_emergence_role(role: AnimatedSliceRole) -> bool {
     )
 }
 
-/// #639 评论 5421085782：对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
+/// 对新事务中的 `CrossfadeOld + CrossfadeNew` pair 建索引。
 fn build_crossfade_pair_index(
     new_slice_roles: &[AnimatedSliceRole],
     new_slice_byte_ranges: &[(usize, usize)],

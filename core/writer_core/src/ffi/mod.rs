@@ -39,7 +39,7 @@ static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
 
 /// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
 ///
-/// #645 评论 5504296097 问题2：FFI 写操作统一改走 `with_app_service`，
+///   FFI 写操作统一改走 `with_app_service`，
 /// `WriterAppService` 由 bootstrap 流程初始化（`ensure_workspace_git` +
 /// `recover_storage_transactions`），持有 `GitRepoLayout`，写操作能记 history。
 ///
@@ -187,7 +187,7 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
     let m = CORE.get_or_init(|| Mutex::new(None));
 
-    // #645 评论 5504296097 问题2：FFI writer_core_init 复用 bootstrap 流程，
+    //   FFI writer_core_init 复用 bootstrap 流程，
     // 让 WriterAppService 持有 GitRepoLayout，写操作能记 workspace history。
     // bootstrap 流程：ensure_workspace_git → recover_storage_transactions →
     // 注入 layout → WriterAppService。与 api::bootstrap::open_app_service 一致。

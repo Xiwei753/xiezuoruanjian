@@ -171,7 +171,7 @@ fn build_virtual_text_replaces_range_correctly() {
 
 #[test]
 fn build_virtual_text_preserves_text_after_replace_end() {
-    // #516 关键验收：不得丢失 replaceEnd 后正文
+    //  关键验收：不得丢失 replaceEnd 后正文
     let vt = build_virtual_text("hello world", Some((0, 5)), "goodbye");
     assert_eq!(vt, "goodbye world", "Must preserve text after replaceEnd");
 }

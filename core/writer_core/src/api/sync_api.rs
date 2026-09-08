@@ -1,13 +1,13 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
 
-/// 同步 API — 全量同步统一入口（Issue #630）。
+/// 同步 API — 全量同步统一入口。
 ///
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
 /// 把不同本地根映射到同一个远端仓库的不同前缀。
 /// 旧的"作品同步 + 应用数据同步"两套用户配置 API 已删除。
 impl WriterCoreApi {
-    /// 旧→新同步 profile 一次性迁移（Issue #630 评论第 4 点 / D）。
+    /// 旧→新同步 profile 一次性迁移（  / D）。
     ///
     /// 详见 `crate::storage::migration`。失败时返回 `WriterError`；
     /// 冲突时返回 `NeedsReconfigure`（非 Err），由 UI 引导用户重选全局仓库。
@@ -18,7 +18,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+    /// 旧→新同步 profile 一次性迁移，接受精确 generation metadata。
     ///
     /// 详见 `crate::storage::migration::LegacySyncProfileMigrator::migrate_with_metadata`。
     /// 当 metadata 中某 source 有 `active_generation = Some(n)` 时，精确读取
@@ -49,7 +49,7 @@ impl WriterCoreApi {
             .save_sync_config(&config.into())
             .map(|_| true)
             .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 问题4：sync config 是同步引擎运行状态
+        //   sync config 是同步引擎运行状态
         // （app-meta/sync/config.local.json），不进入本地用户版本历史。
         // is_workspace_history_path 已把 SyncEngineState 排除，这里不再调
         // record_workspace_history。
@@ -57,7 +57,7 @@ impl WriterCoreApi {
     }
 
     /// 加载全局同步密钥（token 等）。
-    /// #644 评论 5462823517 第1节：先查 API 层 override snapshot，
+    /// 先查 API 层 override snapshot，
     /// 没有再短暂 core_read 从 secure storage/file 读取。
     pub fn load_sync_secrets(&self) -> ApiResult<SyncSecretsDto> {
         if let Some(secrets) = self.secrets_override_snapshot() {
@@ -71,7 +71,7 @@ impl WriterCoreApi {
 
     /// 保存全局同步密钥。成功返回 true。
     ///
-    /// #645 评论 5504296097 Blocker 1：凭据写入根本不是历史内容，
+    /// 凭据写入根本不是历史内容，
     /// 不调用 `record_workspace_history`。凭据路径由
     /// [`crate::storage::workspace_paths::is_workspace_secret_path`]
     /// 在底层统一排除，永不进入 history change set。
@@ -82,20 +82,20 @@ impl WriterCoreApi {
             .map_err(crate::api::error::WriterError::from)
     }
 
-    /// #592 五 / #644 评论 5462823517 第1节：设置进程级 secrets override。
+    ///  五：设置进程级 secrets override。
     /// 直接写 API 层 Mutex，不再透传到 facade::WriterCore。
     pub fn set_sync_secrets_override(&self, secrets: SyncSecretsDto) -> ApiResult<()> {
         self.set_secrets_override(Some(secrets.into()));
         Ok(())
     }
 
-    /// #595 十 / #644 评论 5462823517 第1节：清除进程级 secrets override。
+    ///  十：清除进程级 secrets override。
     pub fn clear_sync_secrets_override(&self) -> ApiResult<()> {
         self.set_secrets_override(None);
         Ok(())
     }
 
-    /// #592 五：按 generation 保存凭据到安全存储。
+    ///  五：按 generation 保存凭据到安全存储。
     pub fn save_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -107,7 +107,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #592 五：读取指定 generation 的安全存储凭据；缺失返回 None。
+    ///  五：读取指定 generation 的安全存储凭据；缺失返回 None。
     pub fn load_sync_secrets_for_generation(
         &self,
         generation: u64,
@@ -118,7 +118,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #595 五：删除指定 generation 的安全存储凭据。
+    ///  五：删除指定 generation 的安全存储凭据。
     pub fn delete_sync_secrets_for_generation(&self, generation: u64) -> ApiResult<()> {
         self.core_write()
             .delete_sync_secrets_for_generation(generation)
@@ -146,14 +146,14 @@ impl WriterCoreApi {
         self.core_write()
             .save_app_sync_state(&state.into())
             .map_err(crate::api::error::WriterError::from)?;
-        // #645 评论 5504296097 问题4：App target 同步状态是同步引擎运行状态
+        //   App target 同步状态是同步引擎运行状态
         // （app-meta/sync/state.local.json），不进入本地用户版本历史。
         // is_workspace_history_path 已把 SyncEngineState 排除，这里不再调
         // record_workspace_history。
         Ok(())
     }
 
-    /// 全量同步持久状态（Issue #630 评论 5307423953 Part B）。
+    /// 全量同步持久状态。
     ///
     /// 读取 `<app_data_root>/app-meta/sync/full_state.local.json`。
     /// 文件不存在或 JSON 损坏时返回 None，不报错。
@@ -164,7 +164,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// 冷启动恢复中断的 Syncing 状态（Issue #630 评论 5308439467 Part 1）。
+    /// 冷启动恢复中断的 Syncing 状态。
     ///
     /// 读取 `full_state.local.json`，只有旧状态是 `Syncing` 才原子改成
     /// `RecoverableError("previous_full_sync_interrupted")`；其它终态不动。
@@ -175,7 +175,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #630 评论 5308040939 Part 1：平台预处理失败写同一份 Core FullSyncState 的窄接口。
+    /// 平台预处理失败写同一份 Core FullSyncState 的窄接口。
     ///
     /// 只负责更新 `<app_data_root>/app-meta/sync/full_state.local.json`（与
     /// `perform_full_sync` 同一份），不新建平台第二份状态。覆盖 Android 正文 flush /
@@ -211,9 +211,9 @@ impl WriterCoreApi {
 
     /// 全量同步 dry-run — 枚举 App target + 所有 Project target。
     ///
-    /// #645 评论 5504296097 问题6：dry-run 网络 IO（读远端 catalog）在 core_write()
+    ///   dry-run 网络 IO（读远端 catalog）在 core_write
     /// 锁外执行，拆三段短锁，避免阻塞正文/作品读取。
-    /// #645 评论 5504296097 问题5：dry-run 用 core_read() + read-only state loader，
+    ///   dry-run 用 core_read read-only state loader，
     /// 绝不写本地文件，绝不写远端（discover_legacy_remote_catalog 只读）。
     pub fn perform_full_sync_dry_run(
         &self,
@@ -222,14 +222,14 @@ impl WriterCoreApi {
         let sync_config: crate::sync::SyncConfig = config.into();
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 
-        // #645 评论 5504296097 问题6：三段短锁 — 网络 IO 不持 core 写锁。
+        //   三段短锁 — 网络 IO 不持 core 写锁。
         // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
         let provider = if sync_config.enabled {
             let core = self.core_write();
             match core.create_sync_provider_for_plan(&sync_config, &secrets) {
                 Ok(p) => p,
                 Err(e) => {
-                    // #645 评论 5504296097 问题6：provider 创建失败 → 返回错误，
+                    //   provider 创建失败 → 返回错误，
                     // 不降级为空 catalog（dry-run 是预览，但不能返回假的远端事实）。
                     log::warn!("[sync] dry-run: create_sync_provider_for_plan failed: {e}");
                     return Err(crate::api::error::WriterError::from(e));
@@ -237,7 +237,7 @@ impl WriterCoreApi {
             }
         } else {
             // sync disabled → 不做网络 IO，用空 catalog。
-            // #645 评论 5504296097 回退问题：短锁 snapshot paths，锁外扫描。
+            //   回退问题：短锁 snapshot paths，锁外扫描。
             let (app_data_root, projects_root) = {
                 let core = self.core_read();
                 (core.app_data_root.clone(), core.projects_root.clone())
@@ -253,7 +253,7 @@ impl WriterCoreApi {
         };
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        // #645 评论 5504296097 问题5：用 discover_legacy_remote_catalog（只读，不写远端）。
+        //   用 discover_legacy_remote_catalog（只读，不写远端）。
         // dry-run 绝不在远端创建 targets.sync.json。
         let remote_catalog_snapshot =
             crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref())
@@ -263,7 +263,7 @@ impl WriterCoreApi {
                 })?;
 
         // 1c. 短锁 B（read）：snapshot paths，锁外扫描。
-        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        //   回退问题：恢复短锁+锁外扫描。
         let (app_data_root, projects_root) = {
             let core = self.core_read();
             (core.app_data_root.clone(), core.projects_root.clone())
@@ -280,13 +280,13 @@ impl WriterCoreApi {
 
     /// 全量同步 — 四段式：Prepare（短写锁）→ Seed staging（不持锁）→ Transfer（不持锁）→ Commit（短写锁）。
     ///
-    /// #644 评论 5467821839 第7节：网络阶段完全不持 Core 锁，
+    /// 网络阶段完全不持 Core 锁，
     /// 避免全量同步期间阻塞所有读操作。
     ///
-    /// #644 评论 5473401065 第1节：staging seed（磁盘扫描/复制）也移出写锁，
+    /// staging seed（磁盘扫描/复制）也移出写锁，
     /// 避免冷启动读取卷章被同步 Prepare 卡住。
     ///
-    /// #645 评论 5504296097 第2点：通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
+    /// 通用 full-sync 入口不再 `#[cfg(feature = "github-api")]`
     /// 门控。具体 Provider 能否创建由 [`crate::facade::WriterCore::create_sync_provider_for_plan`]
     /// 决定（未启用 github-api feature 时 `github_api` 分支返回 `NotImplemented`）。
     #[allow(clippy::too_many_lines)]
@@ -297,7 +297,7 @@ impl WriterCoreApi {
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
-        // #645 评论 5504296097 问题3 修复：sync disabled → 直接返回 no-op，
+        // sync disabled → 直接返回 no-op，
         // 不创建 provider、不读 catalog、不建 plan、不进入 run_transfer。
         // 防止 disabled 状态下仍写远端（LiveProject 会发布只有 generation.meta.json
         // 没有 正文/manifest 的空 active generation）。
@@ -324,8 +324,8 @@ impl WriterCoreApi {
         let secrets = self.secrets_override_snapshot().unwrap_or_default();
 
         // Phase 1: Prepare — 拆成三段短锁，网络 IO 不持 core 写锁。
-        // #645 评论 5504296097 问题6：load_remote_catalog 是网络 IO，必须在
-        // core_write() 作用域外执行，不阻塞正文/作品读取（#644 拆锁路线）。
+        //   load_remote_catalog 是网络 IO，必须在
+        // core_write 作用域外执行，不阻塞正文/作品读取（ 拆锁路线）。
         //
         // 1a. 短锁 A：创建 provider（transport 初始化可能涉及本地 IO）。
         let provider = {
@@ -334,10 +334,10 @@ impl WriterCoreApi {
         };
         // 写锁已释放。
         // 1b. 无锁：读 remote catalog（网络 IO，只读一个文件）。
-        // #645 评论 5504296097 问题4：catalog 读取失败直接结束本次 full sync，
+        //   catalog 读取失败直接结束本次 full sync，
         // 返回 RecoverableError，不构造空 catalog 继续 plan（空 catalog 会让
         // planner 误判"远端无记录"做破坏性删除/复活决策）。
-        // #645 评论 5504296097 问题6：用 discover_legacy_remote_catalog（真做 legacy 枚举），
+        //   用 discover_legacy_remote_catalog（真做 legacy 枚举），
         // 不再用 load_remote_catalog（只读 catalog 文件，不做 legacy 发现）。
         let remote_catalog_snapshot =
             match crate::sync::target_lifecycle::discover_legacy_remote_catalog(provider.as_ref()) {
@@ -353,7 +353,7 @@ impl WriterCoreApi {
                 }
             };
 
-        // #645 评论 5504296097 问题6：catalog 文件不存在于远端（version == __nonexistent__）
+        //   catalog 文件不存在于远端（version == __nonexistent__）
         // → 正式 sync 需要把 discover 合成的 bootstrap catalog 落盘，后续 CAS 写入才有 base version。
         // dry-run 不走本路径（dry-run 用 perform_full_sync_dry_run_with_catalog，不 persist）。
         let remote_catalog_snapshot =
@@ -384,7 +384,7 @@ impl WriterCoreApi {
                 remote_catalog_snapshot
             };
         // 1c. 短锁 B：只 persist Syncing + snapshot app_data_root/projects_root。
-        // #645 评论 5504296097 回退问题：恢复短锁+锁外扫描。
+        //   回退问题：恢复短锁+锁外扫描。
         // 短锁只拿 app_data_root/projects_root/sync_policy/remote snapshot + persist Syncing，
         // 释放锁后 list_projects/pending/device/planner/scan 全部锁外执行，
         // 避免阻塞正文/作品读取。
@@ -415,13 +415,13 @@ impl WriterCoreApi {
         };
 
         // Phase 2: Seed staging（不持锁）— 磁盘扫描/复制，创建隔离 staging 目录。
-        // #644 评论 5473401065 第2节：seed 失败直接终止本次同步，不继续拿半成品。
+        // seed 失败直接终止本次同步，不继续拿半成品。
         // prepare_staging_runs 是纯函数，不依赖 WriterCore，无需持锁。
         //
-        // #644 评论 5473551127 第1节：seed 失败时必须把 FullSyncState 从 Syncing
+        // seed 失败时必须把 FullSyncState 从 Syncing
         // 改为失败终态，否则下次启动/同步会永久看到上一次遗留的 Syncing。
         //
-        // #645 评论 5504296097 第2点：staging 不再按 active_provider 分 Git/GithubApi
+        // staging 不再按 active_provider 分 Git/GithubApi
         // backend 走不同 seed 路径；统一调 `seed_from_live`（文件级复制）。
         // workspace 级别的 Git layout 迁移仍由 `prepare_staging_runs` 内部完成，
         // 但不作为某个 remote provider 的 staging 模式。
@@ -451,17 +451,17 @@ impl WriterCoreApi {
             core.commit_full_sync(transfer_result, staging_runs)
         };
 
-        // #645 评论 5504296097 Blocker 2：用 commit 阶段返回的 committed_paths
+        // 用 commit 阶段返回的 committed_paths
         // 精确 stage，替代全量 &[] 扫描。committed_paths 是 workspace-relative paths。
-        // 问题1：空 committed_paths 不触发全量扫描（record_workspace_paths_history
+        // 空 committed_paths 不触发全量扫描（record_workspace_paths_history
         // 空 paths 直接返回空结果）。
-        // #645 评论 5504296097 问题4 修复：committed_paths 不再包含 RemoteLifecycle 删除
+        // committed_paths 不再包含 RemoteLifecycle 删除
         // 的 paths（apply_local_lifecycle_deletes 已改为走 receipt.change_set 单一路径），
         // 避免同一删除记两次 history。
         self.record_workspace_paths_history(&committed_paths, "full_sync_commit");
 
-        // #645 评论 5504296097 问题2修复：处理 RemoteLifecycle 删除事务的 receipts。
-        // #645 评论 5504296097 问题4 修复：恢复单一 durable 路线 —
+        // 处理 RemoteLifecycle 删除事务的 receipts。
+        // 恢复单一 durable 路线 —
         // 对每个 receipt：用 change_set 调 record_workspace_change_set_history 记本地 history，
         // 成功后才调 ack_project_delete_history 推进 journal。
         // history 失败 → 不 ack → journal 保留 StarMapsUnbound → bootstrap/recover 下次补记。
@@ -472,7 +472,7 @@ impl WriterCoreApi {
         Ok(result.into())
     }
 
-    /// #645 评论 5504296097 问题4：处理单个 lifecycle receipt — history + ack。
+    ///   处理单个 lifecycle receipt — history ack。
     ///
     /// history 成功 → ack 推进 journal；history 失败 → 不 ack → journal 保留 → 下次补记。
     fn process_lifecycle_receipt(&self, receipt: &crate::sync::types::LocalLifecycleCommitReceipt) {
@@ -537,7 +537,7 @@ impl WriterCoreApi {
         let message_args = std::collections::HashMap::new();
         let mut can_run = true;
 
-        // 从 provider_config 读 remote_url（Issue #645 评论第 2 点）。
+        // 从 provider_config 读 remote_url。
         let remote_url = config
             .provider_config
             .as_ref()

@@ -8,7 +8,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    /// 批量返回项目摘要（元数据 统计）。
     pub fn list_project_summaries(&self) -> ApiResult<Vec<ProjectSummaryDto>> {
         self.core_read()
             .list_project_summaries()
@@ -17,7 +17,7 @@ impl WriterCoreApi {
     }
 
     pub fn create_project(&self, title: &str) -> ApiResult<ProjectDto> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集，
+        //   用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let (project, change_set) = self
             .core_write()
@@ -54,7 +54,7 @@ impl WriterCoreApi {
         Ok(project.into())
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入项目入口——使用 manifest 中的稳定 ID。
+    /// 恢复/导入项目入口——使用 manifest 中的稳定 ID。
     ///
     /// 不自动创建"第一卷"（卷信息在 manifest 中已包含，由调用方逐卷恢复）。
     /// 不记录 workspace history（恢复场景下 manifest 是已有事实来源）。
@@ -80,7 +80,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #644 评论 5467821839 第7节：一次返回作品的全部卷 + 章节 + 统计。
+    /// 一次返回作品的全部卷 章节 统计。
     ///
     /// Android `ProjectViewModel` 不再逐卷调 `list_chapters`，
     /// 而是一次拿到完整快照，减少 FFI 调用次数和中间状态不一致窗口。
@@ -126,7 +126,7 @@ impl WriterCoreApi {
     }
 
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        //   用 _with_changes 版本拿变更集。
         let (_project, change_set) = self
             .core_write()
             .rename_project_with_changes(project_id, new_title)?;
@@ -144,7 +144,7 @@ impl WriterCoreApi {
     }
 
     pub fn delete_project(&self, project_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 缺口1/缺口2修复：
+        //
         // - core 层不再吞 list_starmaps_bound_to_project 错误，index.json 损坏时删除返回 Err。
         // - 不再二次枚举绑定 starmap——用 outcome.unbound_starmap_ids（journal 里记录的
         //   唯一事实来源）刷搜索索引。
@@ -152,7 +152,7 @@ impl WriterCoreApi {
         //   ack_project_delete_history 推进到 HistoryRecorded → Completed 并清 journal。
         //   history 失败时 journal 保留在 StarMapsUnbound，下次启动 recover 补记。
 
-        // #645 评论 5504296097 问题3：读取 device_id 传给 delete_project_with_changes，
+        //   读取 device_id 传给 delete_project_with_changes，
         // 写入 journal 供 ack/recover 构造 PendingDeletedTarget（LWW tie-break）。
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|i| i.device_id)
@@ -174,13 +174,13 @@ impl WriterCoreApi {
             self.remove_search_index_by_prefix(prefix);
         }
 
-        // #645 评论 5504296097 缺口1修复：用 outcome.unbound_starmap_ids 刷搜索索引，
+        // 用 outcome.unbound_starmap_ids 刷搜索索引，
         // 不再二次枚举 list_starmaps_bound_to_project（避免与 core 层结果不一致）。
         for sm_id in &outcome.unbound_starmap_ids {
             self.refresh_starmap_search_index(sm_id);
         }
 
-        // #645 评论 5504296097 缺口2修复：用 outcome.changes 记本地 history，
+        // 用 outcome.changes 记本地 history，
         // 成功后 ack 推进 journal。history 失败时 log::warn 并保留 journal，
         // 下次启动 recover 补记——不让 history 失败把删除变成失败（项目已删）。
         let layout_guard = match self.workspace_git_layout.read() {
@@ -230,7 +230,7 @@ impl WriterCoreApi {
     }
 
     pub fn reorder_projects(&self, ordered_project_ids: &[String]) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        //   用 _with_changes 版本拿变更集。
         let change_set = self
             .core_write()
             .reorder_projects_with_changes(ordered_project_ids)?;
@@ -246,7 +246,7 @@ impl WriterCoreApi {
     }
 
     pub fn create_volume(&self, project_id: &str, title: &str) -> ApiResult<VolumeDto> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        //   用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let (volume, change_set) = self
             .core_write()
@@ -267,7 +267,7 @@ impl WriterCoreApi {
         Ok(volume)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    /// 恢复/导入卷——使用 manifest 中的稳定 ID。
     ///
     /// 恢复场景：不记录 workspace history（manifest 是已有事实来源）。
     pub fn create_volume_with_id(
@@ -290,7 +290,7 @@ impl WriterCoreApi {
         volume_id: &str,
         new_title: &str,
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        //   用 _with_changes 版本拿变更集。
         let change_set = self
             .core_write()
             .rename_volume_with_changes(project_id, volume_id, new_title)?;
@@ -309,7 +309,7 @@ impl WriterCoreApi {
     }
 
     pub fn delete_volume(&self, project_id: &str, volume_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        //   用 _with_changes 版本拿变更集。
         // change_set 由底层 delete_volume_with_changes 返回，包含
         // DeleteTree(projects/{pid}/volumes/{vid})，不再手拼路径。
         let change_set = self
@@ -332,7 +332,7 @@ impl WriterCoreApi {
         project_id: &str,
         ordered_volume_ids: &[String],
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        //   用 _with_changes 版本拿变更集。
         let change_set = self
             .core_write()
             .reorder_volumes_with_changes(project_id, ordered_volume_ids)?;
@@ -340,7 +340,7 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    /// #649 评论 5561465552 第 2 点：恢复作品树——一次跨 FFI 传入完整作品树。
+    /// 恢复作品树——一次跨 FFI 传入完整作品树。
     ///
     /// Core 负责：
     /// 1. 校验 project/volume/chapter ID 非空、格式合法（UUID）；
@@ -351,20 +351,20 @@ impl WriterCoreApi {
     /// 5. 全部成功后把这次恢复作为一次 workspace Git 变更记录下来；
     /// 6. 返回创建的 ProjectDto。
     ///
-    /// #649 评论 5561974464 第4点：staging 原子发布——
+    /// staging 原子发布——
     /// 先在 `.restore-staging/<txId>/<projectId>/` 下完整生成，
     /// 所有 ID/正文校验完成后再 rename 到 `projects/<projectId>/`。
     pub fn restore_project_tree(&self, input: &RestoreProjectInputDto) -> ApiResult<ProjectDto> {
         use std::fs;
         use uuid::Uuid;
 
-        // #649 评论 5578053805 问题 3：精确幂等恢复。
+        // 精确幂等恢复。
         // 只校验输入格式（ID 格式、唯一性），不检查 project 是否已存在。
         Self::validate_restore_input_shape(input)?;
 
         // 如果 project 已存在，检查是否与恢复输入完全一致（上一次恢复已成功）。
         // 完全一致 → 幂等返回已有 ProjectDto；不同 → 冲突，拒绝覆盖。
-        // #649 评论 5578289530 问题 1.1：幂等匹配成功时也必须补记 Git history，
+        // 幂等匹配成功时也必须补记 Git history，
         // 防止 rename 成功后进程死亡导致 Git history 永久缺失。
         // history 失败返回 Err，下次重试会再次进入此分支直到 Git 也进入完成态。
         if self.project_exists(input)? {
@@ -424,7 +424,7 @@ impl WriterCoreApi {
         // 6. 清理空的 staging 目录（如果存在）
         let _ = fs::remove_dir(&staging_root);
 
-        // #649 评论 5578289530 问题 1.1：history 失败返回 Err，不再用 let _ = 忽略。
+        //   history 失败返回 Err，不再用 let _ = 忽略。
         // canonical 目录已经存在，下一次恢复会命中"内容完全一致"分支，
         // 再次调用 ensure_restore_history()，直到 Git 也真正进入完成态。
         self.ensure_restore_history(input)?;
@@ -444,7 +444,7 @@ impl WriterCoreApi {
 
     /// 校验恢复输入的格式：ID 非空、UUID 格式、唯一性。
     ///
-    /// #649 评论 5578053805 问题 3：不再检查 project_id 是否已存在，
+    /// 不再检查 project_id 是否已存在，
     /// 改由 [restore_project_tree] 做幂等匹配。
     fn validate_restore_input_shape(input: &RestoreProjectInputDto) -> ApiResult<()> {
         use std::collections::HashSet;
@@ -509,7 +509,7 @@ impl WriterCoreApi {
         Ok(())
     }
 
-    /// #649 评论 5578053805 问题 3：检查 project 是否已存在。
+    /// 检查 project 是否已存在。
     fn project_exists(&self, input: &RestoreProjectInputDto) -> ApiResult<bool> {
         let existing = self
             .core_read()
@@ -518,7 +518,7 @@ impl WriterCoreApi {
         Ok(existing.iter().any(|p| p.id == input.project_id))
     }
 
-    /// #649 评论 5578053805 问题 3：比较已有 project 与恢复输入是否完全一致。
+    /// 比较已有 project 与恢复输入是否完全一致。
     ///
     /// 比较维度：
     /// - project title
@@ -590,7 +590,7 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    /// #649 评论 5578289530 问题 1.2：staging helper 只负责在 staging 目录下生成完整项目树，
+    ///   staging helper 只负责在 staging 目录下生成完整项目树，
     /// 不再零散累加 change set。恢复 change set 由 build_restore_workspace_change_set() 统一构造。
     fn create_restore_tree_with_staging_api(
         &self,
@@ -650,7 +650,7 @@ impl WriterCoreApi {
 
     /// 使用 staging API 创建单个恢复章节并保存正文。
     ///
-    /// #649 评论 5578289530 问题 1.2：不再零散累加 change set。
+    /// 不再零散累加 change set。
     /// chapter.md 始终由 save_chapter_verified_with_changes_with_options 写入 staging，
     /// 空正文时 create_chapter_with_id 也创建空 chapter.md，文件磁盘上一定存在。
     /// 恢复 change set 由 build_restore_workspace_change_set() 统一构造，
@@ -706,7 +706,7 @@ impl WriterCoreApi {
         Ok(())
     }
 
-    /// #649 评论 5578289530 问题 1.2：从 RestoreProjectInputDto 构造唯一一份确定性的
+    /// 从 RestoreProjectInputDto 构造唯一一份确定性的
     /// restore change set，确保空正文章节的 chapter.md 也包含在内。
     ///
     /// 不再由 staging helper 零散累加 change set；恢复只有一份 change-set 真值。
@@ -745,7 +745,7 @@ impl WriterCoreApi {
         cs
     }
 
-    /// #649 评论 5578289530 问题 1.1：把 Git history 记录收成幂等 helper。
+    /// 把 Git history 记录收成幂等 helper。
     ///
     /// 两条成功路径（幂等匹配 + 新恢复）都必须调用它。history 失败返回 Err，
     /// 因为 canonical 目录已存在，下一次恢复会命中"内容完全一致"分支，
@@ -1135,7 +1135,7 @@ mod tests {
         );
     }
 
-    /// #649 评论 5578289530 问题 1.2：验证 build_restore_workspace_change_set 包含
+    /// 验证 build_restore_workspace_change_set 包含
     /// 空正文章节的 chapter.md。
     #[test]
     fn build_restore_change_set_includes_chapter_md_for_empty_content() {

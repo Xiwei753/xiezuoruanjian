@@ -1715,7 +1715,7 @@ mod tests {
         );
     }
 
-    // ── #629 R8: composition grapheme semantic operation tests ──
+    // ──  R8: composition grapheme semantic operation tests ──
 
     fn begin_composition_at_end(kernel: &mut EditorKernel, text: &str) -> (u64, u64) {
         let byte_len = text.len();

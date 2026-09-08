@@ -65,7 +65,7 @@ pub fn move_chapter_to_trash(
 /// - `purge_after`：30 天后可清理（`scanner::build_sync_plan` 据此清理）
 /// - `original_hash`：从 `known_files` 中查找，缺失则为空字符串
 ///
-/// #645 评论 5504296097 问题3（缺口3修复）：幂等 upsert/skip。
+///   ）：幂等 upsert/skip。
 ///
 /// 对同一 trash 目录多次调用（崩溃恢复重放）不会重复追加 tombstone。
 /// 按 `(original_path, trash_path, kind)` 三元组判定已有 tombstone，
@@ -99,7 +99,7 @@ pub(crate) fn generate_tombstones(
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace("\\", "/");
-        // #645 评论 5504296097 缺口3：跳过 sync 引擎内部状态文件
+        // 跳过 sync 引擎内部状态文件
         // （app-meta/ 下）。这些是 save_sync_state 写到 trash 里的引擎状态，
         // 不是被删除的用户内容，不应生成 tombstone 通知远端。
         // 同时保证 write_tombstone 重放幂等——save_sync_state 的副作用不会

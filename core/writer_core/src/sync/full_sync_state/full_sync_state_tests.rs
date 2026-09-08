@@ -1,4 +1,4 @@
-//! 全量同步持久状态行为测试（Issue #630 评论 5307423953 Part B / 5308040939 Part 1）。
+//! 全量同步持久状态行为测试（   / 5308040939 ）。
 
 use super::*;
 
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(state.last_success_time, Some(100));
     }
 
-    // ── Issue #630 评论 5308040939 Part 1：started / failed_before_targets ──
+    // ──   ：started / failed_before_targets ──
 
     #[test]
     fn started_writes_syncing_and_preserves_previous_last_success() {
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(state.failed_targets, vec!["global".to_string()]);
     }
 
-    // ── Issue #630 评论 5308439467 Part 1：recover_interrupted ──
+    // ──   ：recover_interrupted ──
 
     fn make_recover_state(
         status: SyncStatus,

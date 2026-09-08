@@ -4,7 +4,7 @@ use crate::api::{
     RebaseSliceMappingDto,
 };
 
-/// #629 评论6 Part B：把 EditorKernel.composition_state() 返回的元组转成 DTO。
+/// 把 EditorKernel.composition_state 返回的元组转成 DTO。
 ///
 /// 元组字段顺序：(session_id, base_revision, generation, replace_byte_start,
 /// replace_byte_end_exclusive, preedit_text, preedit_cursor_utf16)。
@@ -24,7 +24,7 @@ fn make_composition_state_dto(
     }
 }
 
-/// #629 评论8 第4项：统一 composition 回填出口。
+/// 统一 composition 回填出口。
 ///
 /// 任何 Core 命令成功后（Applied/AppliedWithAdjustedSelection/NoChange），只要 kernel 里
 /// composition 仍然活跃，DTO 的 `composition_session`/`composition` 就必须反映真实 kernel 状态；
@@ -457,7 +457,7 @@ impl super::WriterAppService {
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
-            // #629 评论8 第4项：统一回填出口（begin 时 preedit_text 为空，但 composition 已活跃）。
+            // 统一回填出口（begin 时 preedit_text 为空，但 composition 已活跃）。
             backfill_active_composition(&mut dto, &s.kernel);
             dto
         })
@@ -496,7 +496,7 @@ impl super::WriterAppService {
                 expected_revision: EditorRevision::new(expected_revision),
             });
             let mut dto: EditorEditResultDto = result.into();
-            // #629 评论8 第4项：统一回填出口（update 后 preedit_text 为最新值）。
+            // 统一回填出口（update 后 preedit_text 为最新值）。
             backfill_active_composition(&mut dto, &s.kernel);
             dto
         })
@@ -557,7 +557,7 @@ impl super::WriterAppService {
         .unwrap_or_else(EditorEditResultDto::stale_fallback)
     }
 
-    // #629 R8: composition 专用 grapheme 语义操作。
+    //  R8: composition 专用 grapheme 语义操作。
     // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
     // 不修改 committed 正文，不把 raw platform event 带入 Core。
 
@@ -704,7 +704,7 @@ impl super::WriterAppService {
             selection_anchor: s.kernel.selection_anchor() as u32,
             generation: s.generation,
             chapter_id: s.target_id.clone(),
-            // #629 评论6 Part B：composition 活跃时返回当前 composition 完整状态，
+            // composition 活跃时返回当前 composition 完整状态，
             // 平台端据此构造临时显示文本和下划线。无 composition 时为 None。
             composition: s.kernel.composition_state().map(make_composition_state_dto),
         })

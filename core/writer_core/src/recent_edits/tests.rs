@@ -124,7 +124,7 @@ fn test_record_recent_edit_limit_20() {
     assert_eq!(edits[0].chapter_id, "ch_1b");
 }
 
-/// #630 评论 5312333045 项1: 每个 project 只保留最后一次编辑的 chapter。
+///   项1: 每个 project 只保留最后一次编辑的 chapter。
 #[test]
 fn test_record_recent_edit_per_project_dedup() {
     let dir = tempdir().unwrap();

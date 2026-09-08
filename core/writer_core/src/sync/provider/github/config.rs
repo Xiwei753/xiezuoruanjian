@@ -1,4 +1,4 @@
-//! GitHub Provider 配置 — 持久化配置 + 运行时配置（Issue #645 评论第 2 点）。
+//! GitHub Provider 配置 — 持久化配置 运行时配置。
 //!
 //! 持久化配置 [`GitHubProviderConfig`] 只含可安全写入 config.json 的字段
 //! （remote_url / branch / username / transport），不含 token。
@@ -11,9 +11,9 @@ use crate::sync::provider::error::ProviderError;
 use crate::sync::provider::ProviderSecrets;
 use crate::sync::url::sanitize_remote_url;
 
-/// GitHub 传输方式 — HTTPS token 或 SSH deploy key（Issue #645 评论 5504296097 第1点）。
+/// GitHub 传输方式 — HTTPS token 或 SSH deploy key。
 ///
-/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已从通用 `sync/types.rs` 移到
+/// `SyncProtocol` 已从通用 `sync/types.rs` 移到
 /// `sync/provider/github/config.rs`，重命名为 `GitHubTransport`。通用 core 不再认识
 /// SSH deploy key，GitHub 特定认证方式只在 GitHub provider 配置中存在。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]

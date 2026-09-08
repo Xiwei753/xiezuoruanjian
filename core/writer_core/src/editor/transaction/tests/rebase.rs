@@ -494,9 +494,9 @@ fn rebase_slice_mapping_serializes_camel_case() {
     assert!(json.contains("\"reason\":\"noMapping\""));
 }
 
-// ── #639 评论 5420317382 修复后验证测试 ─────────────────────────────
+// ──   修复后验证测试 ─────────────────────────────
 
-/// #639 评论 5420317382 问题 1 修复后验证：旧 Move slice rebase 到新
+///   后验证：旧 Move slice rebase 到新
 /// CrossfadeOld+CrossfadeNew pair 时，Core 应把旧 Move 映射到 CrossfadeOld
 /// （index 0）而非 CrossfadeNew（index 1）。
 ///
@@ -563,7 +563,7 @@ fn repro_639_comment_5420317382_move_rebased_to_crossfade_new_not_crossfade_old(
     );
 }
 
-/// #639 评论 5420317382 问题 1 修复后验证：Crossfade pair 优先映射 + 没有 pair
+///   后验证：Crossfade pair 优先映射 没有 pair
 /// 时现有 continuation 规则保留。
 ///
 /// 修复后行为：
@@ -657,7 +657,7 @@ fn repro_639_comment_5420317382_move_and_crossfade_new_treated_as_same_emergence
     );
 }
 
-/// #639 评论 5421085782 问题1 复现：`build_crossfade_pair_index` 只在
+///    复现：`build_crossfade_pair_index` 只在
 /// `CrossfadeOld.range == CrossfadeNew.range` 时才认成一对。但 CrossfadeOld.range
 /// 是 old 文档坐标、CrossfadeNew.range 是 new 文档坐标，被 OffsetMap 平移后不同
 /// （例如插字/回车后保留字符 old [30,33) → new [33,36)）。pair 建不出来 →

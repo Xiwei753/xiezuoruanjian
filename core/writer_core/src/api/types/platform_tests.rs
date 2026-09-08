@@ -1,4 +1,4 @@
-//! platform DTO 单元测试 — 从 platform.rs 内嵌测试模块提取（#629 源码结构门禁）。
+//! platform DTO 单元测试 — 从 platform.rs 内嵌测试模块提取（ 源码结构门禁）。
 //!
 //! 覆盖各 Layout DTO 的双向 From 转换、默认值与 resolve_workbench_layout 端到端契约。
 
@@ -85,7 +85,7 @@ fn test_window_viewport_dto_camel_case_fields() {
     assert!(json.contains("\"widthDp\""));
     assert!(json.contains("\"heightDp\""));
     assert!(json.contains("\"occlusions\""));
-    // #628：不得再出现旧字段。
+    // 不得再出现旧字段。
     assert!(!json.contains("availablePaneCount"));
     assert!(!json.contains("hasSeparatingFold"));
     assert!(!json.contains("pointerClass"));
@@ -204,9 +204,9 @@ fn test_layout_contract_dto_roundtrip() {
 
 #[test]
 fn test_layout_contract_dto_no_legacy_fields() {
-    // #628：LayoutContractDto 不得再含 showPrimaryNavigation（改由 ScreenPolicy 提供），
+    // LayoutContractDto 不得再含 showPrimaryNavigation（改由 ScreenPolicy 提供），
     // 也不得再含旧字段 workspacePaneMode（已重命名为 workspaceLayoutMode）。
-    // #628 评论 5301021120 第 1 步：不得再含 workbenchOcclusion（已删除）。
+    //   第 1 步：不得再含 workbenchOcclusion（已删除）。
     let contract = crate::presentation::layout::LayoutContract {
         shell_mode: crate::presentation::layout::ShellMode::SinglePane,
         workspace_layout_mode: crate::presentation::layout::WorkspaceLayoutMode::SinglePane,
@@ -221,7 +221,7 @@ fn test_layout_contract_dto_no_legacy_fields() {
     assert!(json.contains("\"workspaceLayoutMode\""));
     assert!(json.contains("\"primaryNavigationPlacement\""));
     assert!(json.contains("\"metrics\""));
-    // #628 评论 5301021120 第 1 步：workbenchOcclusion 已删除。
+    //   第 1 步：workbenchOcclusion 已删除。
     assert!(!json.contains("workbenchOcclusion"));
 }
 

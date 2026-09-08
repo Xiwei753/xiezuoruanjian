@@ -1,4 +1,4 @@
-//! 旧同步配置迁移行为测试（Issue #630 评论第 4 点 / D、第 5 点 Part C）。
+//! 旧同步配置迁移行为测试（  / D、 ）。
 //!
 //! 覆盖：app/project 探测优先级、精确 generation metadata、多项目一致/冲突、
 //! 失败保留旧凭据、成功后清理旧凭据。
@@ -145,7 +145,7 @@ mod tests {
     ///
     /// 测试断言失败时用于 panic 诊断：只暴露变体名与非敏感的 config/reason，
     /// 不读取 `SyncSecrets.token` / `ssh_private_key` 的任何派生信息，
-    /// 避免 cleartext-logging（Issue #648）。
+    /// 避免 cleartext-logging。
     fn outcome_kind_redacted(outcome: &LegacyMigrationOutcome) -> String {
         match outcome {
             LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),

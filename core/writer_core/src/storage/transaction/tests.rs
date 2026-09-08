@@ -146,7 +146,7 @@ fn test_transaction_commit_with_delete() {
     );
 }
 
-/// #644 评论 5483239422 问题1：`SaveTransaction::finish()` 吞掉
+///   `SaveTransaction::finish()` 吞掉
 /// `write_manifest_phase(Finished)` 的错误，随后仍调用 `cleanup()` 删除 tx_dir。
 ///
 /// 复现策略：构造 backup_mode 事务 commit 成功（phase=FilesCommitted），
@@ -194,7 +194,7 @@ fn finish_should_preserve_tx_dir_when_manifest_write_fails() {
     );
 }
 
-/// #644 评论 5483239422 问题4：`recover_pending_transactions()` 在 manifest
+///   `recover_pending_transactions()` 在 manifest
 /// 读/解析失败时直接 `remove_dir_all(tx_dir)`，销毁崩溃恢复材料。
 ///
 /// 复现策略：构造 tx_dir 含损坏 manifest（无效 JSON）+ backup 恢复材料

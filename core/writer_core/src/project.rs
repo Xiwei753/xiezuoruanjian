@@ -18,7 +18,7 @@
 //!     characters/           # 角色数据（预留）
 //! ```
 //!
-//! #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+//!  ：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
 //! Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
 
 use crate::error::Result;
@@ -45,9 +45,9 @@ pub fn list_projects(projects_root: &Path) -> Result<Vec<Project>> {
 
 /// 纯读取项目元数据，不调用 `workspace_git::ensure_workspace_repo`。
 ///
-/// #644 评论 5493295108 问题1：冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移
+///   冷启动/同步不能把 Core 卡住——列表/摘要不能顺手迁移
 /// 所有旧作品。迁移职责移到 `sync::staging::prepare_staging_runs`（已释放 Core 写锁之后）。
-/// #645 评论第 1 点：作品目录不再各自养 Git 仓库，list 永远只读 `project.json`。
+/// 作品目录不再各自养 Git 仓库，list 永远只读 `project.json`。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
@@ -71,10 +71,10 @@ fn list_projects_inner(projects_root: &Path) -> Result<Vec<Project>> {
             match fs::read_to_string(&meta_path) {
                 Ok(content) => {
                     if let Ok(project) = serde_json::from_str::<Project>(&content) {
-                        // #644 评论 5493295108 问题1：纯读取，不触发迁移。
+                        //   纯读取，不触发迁移。
                         // 旧作品（无 .git/）的 Git 迁移由 `sync::staging::prepare_staging_runs`
                         // 在已释放 Core 写锁之后执行，不堵住冷启动卷章读取。
-                        // #645 评论第 1 点：作品不再各自养 Git 仓库，list 永远只读元数据。
+                        // 作品不再各自养 Git 仓库，list 永远只读元数据。
                         projects.push(project);
                     }
                 }
@@ -99,7 +99,7 @@ pub struct ProjectStats {
     pub chapter_count: u32,
 }
 
-/// 项目摘要 — 元数据 + 统计一次性返回（#625 第二段）。
+/// 项目摘要 — 元数据 统计一次性返回。
 ///
 /// 作品卡片要显示字数，需要在列表时一次拿到所有项目的 summary，
 /// 避免端侧逐卡跨 FFI 调 `get_project_stats`（N 次 FFI + N 次遍历）。
@@ -176,7 +176,7 @@ pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
     Ok(stats)
 }
 
-/// 列出所有项目摘要（元数据 + 统计），#625 第二段新增批量 API。
+/// 列出所有项目摘要（元数据 统计）， 新增批量 API。
 ///
 /// 复用 `list_projects_inner`（纯读取元数据 + 排序）和 `get_project_stats`（字数累加），
 /// 一次遍历返回带 `total_word_count`/`volume_count`/`chapter_count` 的列表。
@@ -184,7 +184,7 @@ pub fn get_project_stats(project_root: &Path) -> Result<ProjectStats> {
 ///
 /// 错误处理：磁盘/IO 错误显式向上传播，不用 unwrap/expect。
 ///
-/// #645 评论第 1 点：作品不再各自养 Git 仓库，摘要路径只读 `project.json` + 统计。
+/// 作品不再各自养 Git 仓库，摘要路径只读 `project.json` 统计。
 pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary>> {
     let projects = list_projects_inner(projects_root)?;
     let mut summaries = Vec::with_capacity(projects.len());
@@ -209,7 +209,7 @@ pub fn list_project_summaries(projects_root: &Path) -> Result<Vec<ProjectSummary
 /// `order` 字段取现有项目最大 order + 1，保证新项目排在最后。
 /// 自动调用 `volume::create_volume` 创建默认卷，保持产品一致性。
 ///
-/// #645 评论第 1 点：一个工作区一个 Git 仓库。`create_project` 只创建作品目录、
+/// 一个工作区一个 Git 仓库。`create_project` 只创建作品目录、
 /// `project.json`、`volumes/`、`characters/` 和默认卷，**不再初始化作品级 `.git/`**。
 /// Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
 pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
@@ -229,7 +229,7 @@ pub fn create_project(projects_root: &Path, title: &str) -> Result<Project> {
 /// 用于镜像恢复、导入等场景，调用方传入 manifest 中保存的稳定 ID。
 /// 不自动创建"第一卷"（卷信息在 manifest 中已包含，由调用方逐卷恢复）。
 ///
-/// #649 评论 5561286861 第 4 点：Core 在私有真相源里按原 ID 重建，
+/// Core 在私有真相源里按原 ID 重建，
 /// Android Restorer 只把 manifest 转成 DTO 调此入口。
 pub fn create_project_with_id(
     projects_root: &Path,
@@ -270,7 +270,7 @@ fn create_project_with_id_and_order(
 
     let project_dir = projects_root.join(&id);
     fs::create_dir_all(&project_dir)?;
-    // #645 评论第 1 点：一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
+    // 一个工作区一个 Git 仓库。作品目录不再各自初始化 `.git/`，
     // Git 仓库由 workspace 级别统一管理（见 `sync::staging`）。
     fs::create_dir_all(project_dir.join("volumes"))?;
     fs::create_dir_all(project_dir.join("characters"))?;
@@ -293,7 +293,7 @@ fn create_project_with_id_and_order(
 /// 同一作品根下不允许重名（title 唯一性检查）。
 /// 如果新标题已被其他项目使用，返回 `Error::Other`。
 ///
-/// #645 评论第 1 点：重命名只改 `project.json`，不涉及 Git 仓库。
+/// 重命名只改 `project.json`，不涉及 Git 仓库。
 pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -> Result<()> {
     let projects = list_projects_inner(projects_root)?;
     if projects
@@ -324,7 +324,7 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
     Ok(())
 }
 
-/// #645 评论 5504296097 问题1：Project 本地删除的发起来源。
+///   Project 本地删除的发起来源。
 ///
 /// `delete_project_with_changes` 共同执行 move worktree / unbind starmaps /
 /// WorkspaceChangeSet / workspace history。区别在后续是否生成 `PendingDeletedTarget`：
@@ -336,7 +336,7 @@ pub fn rename_project(projects_root: &Path, project_id: &str, new_title: &str) -
 /// `delete_project_with_changes` 本身只做到 `StarMapsUnbound` phase，
 /// `PendingDeletedTarget` 落盘由 ack 控制（`RemoteLifecycle` 调用方不调 ack）。
 ///
-/// #645 评论 5504296097 问题2修复：`origin` 必须进入 durable journal，
+/// `origin` 必须进入 durable journal，
 /// `ack_project_delete_history` 和 `recover_single_journal` 按 origin 分流：
 /// - `User` → 推进到 `RemoteDeleteQueued`（写 PendingDeletedTarget）；
 /// - `RemoteLifecycle` → 跳过 `RemoteDeleteQueued`，直接 `Completed`。
@@ -350,7 +350,7 @@ pub enum ProjectDeleteOrigin {
     RemoteLifecycle,
 }
 
-/// #645 评论 5504296097 缺口1/缺口2修复：删除作品的业务结果。
+/// 删除作品的业务结果。
 ///
 /// `delete_project_with_changes` 返回此结构，把删除产生的变更集、被解绑的
 /// starmap ids 和 journal token 显式交给调用方：
@@ -436,7 +436,7 @@ pub fn get_project_updated_at_aggregated(project_root: &Path) -> Result<String> 
     Ok(Utc::now().to_rfc3339())
 }
 
-/// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不涉及 Git 仓库。
+/// 重排只改各 `project.json` 的 `order` 字段，不涉及 Git 仓库。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
 pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<()> {
     let mut projects = list_projects_inner(projects_root)?;
@@ -476,7 +476,7 @@ pub fn reorder_projects(projects_root: &Path, ordered_ids: &[String]) -> Result<
     Ok(())
 }
 
-/// #645 评论 5504296097 问题2：create_project 的变更集版本。
+///   create_project 的变更集版本。
 ///
 /// 返回 `(Project, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(projects/{project_id}/project.json) + Upsert(projects/{project_id}/volumes/{volume_id}/volume.json)`。
@@ -510,7 +510,7 @@ pub fn create_project_with_changes(
     Ok((project, change_set))
 }
 
-/// #645 评论 5504296097 问题2：rename_project 的变更集版本。
+///   rename_project 的变更集版本。
 ///
 /// 返回 `(Project, WorkspaceChangeSet)`，变更集包含
 /// `Upsert(projects/{project_id}/project.json)`。
@@ -537,7 +537,7 @@ pub fn rename_project_with_changes(
     Ok((project, change_set))
 }
 
-/// #645 评论 5504296097 问题2：delete_project 的变更集版本。
+///   delete_project 的变更集版本。
 ///
 /// 返回 [`ProjectDeleteOutcome`]，包含：
 /// - `changes`：`DeleteTree(projects/{project_id})` + 每个被解绑 starmap 的
@@ -547,12 +547,12 @@ pub fn rename_project_with_changes(
 ///
 /// 使用 DeleteTree 而不是 Delete，因为要移除整个作品目录。
 ///
-/// #645 评论 5504296097 问题2：把 starmap 解绑收进 durable delete transaction，
+///   把 starmap 解绑收进 durable delete transaction，
 /// 执行顺序：prepare → move_worktree → write_tombstone → unbind_starmaps。
 /// journal 保留在 `StarMapsUnbound`，由调用方记 history 后调
 /// `ack_project_delete_history` 推进到 `HistoryRecorded` → `Completed` 并清 journal。
 ///
-/// #645 评论 5504296097 缺口1修复：不再用 `unwrap_or_default()` 吞掉
+/// 不再用 `unwrap_or_default()` 吞掉
 /// `list_starmaps_bound_to_project` 的错误——index.json 损坏等情况下删除返回 Err，
 /// 绑定的 starmap 不会被悄悄漏解绑。
 #[allow(
@@ -569,7 +569,7 @@ pub fn delete_project_with_changes(
     device_id: &str,
     origin: ProjectDeleteOrigin,
 ) -> Result<ProjectDeleteOutcome> {
-    // #645 评论 5504296097 问题1：记录删除发起来源。
+    //   记录删除发起来源。
     // origin 影响后续是否生成 PendingDeletedTarget：
     // - User → 调用方调 ack_project_delete_history → 落盘 PendingDeletedTarget；
     // - RemoteLifecycle → 调用方不调 ack → 不落盘 PendingDeletedTarget（远端已删）。
@@ -583,7 +583,7 @@ pub fn delete_project_with_changes(
     let target_canon =
         crate::delete_guard::validate_delete_target(projects_root, &project_dir, "project.json")?;
 
-    // #645 评论 5504296097 缺口1修复：不再用 unwrap_or_default() 吞掉枚举错误。
+    // 不再用 unwrap_or_default 吞掉枚举错误。
     // index.json 损坏等情况下 list_starmaps_bound_to_project 返回 Err，
     // 删除直接返回 Err，避免绑定的 starmap 被悄悄漏解绑。
     // journal 里记录的 starmap_ids 是唯一事实来源，API 层不再二次枚举。
@@ -593,12 +593,12 @@ pub fn delete_project_with_changes(
         .map(|m| m.starmap_id.clone())
         .collect();
 
-    // #644 评论 5495945801 问题2：只传 trash root，token 在事务内部生成。
+    //   只传 trash root，token 在事务内部生成。
     let worktree_trash_root = app_data_root.join("sync/trash");
 
-    // #645 评论第 1 点：workspace 共享 git_dir 不因删除单个作品而移动。
+    // workspace 共享 git_dir 不因删除单个作品而移动。
     // 创建 durable delete transaction，不传 private git_dir。
-    // #645 评论 5504296097 问题2修复：把 origin 写进 durable journal。
+    // 把 origin 写进 durable journal。
     let mut tx = crate::storage::journal::project_delete::ProjectDeleteTransaction::new(
         project_id,
         &target_canon,
@@ -618,19 +618,19 @@ pub fn delete_project_with_changes(
     // 2. 移动 worktree 到 trash。
     tx.move_worktree()?;
 
-    // 3. #644 评论 5495945801 问题3：生成 tombstone（收进事务，错误直接返回不吞）。
-    //    #645 评论 5504296097 缺口3：write_tombstone 成功后推进到 TombstoneWritten。
+    // 3.   生成 tombstone（收进事务，错误直接返回不吞）。
+    // write_tombstone 成功后推进到 TombstoneWritten。
     tx.write_tombstone()?;
 
-    // 4. #645 评论 5504296097 问题2：解除该作品所有 StarMap 绑定（收进事务）。
+    // 4.   解除该作品所有 StarMap 绑定（收进事务）。
     tx.unbind_starmaps()?;
 
-    // #645 评论 5504296097 缺口2修复：不在 core 内 complete/cleanup journal。
+    // 不在 core 内 complete/cleanup journal。
     // journal 保留在 StarMapsUnbound，由调用方记 history 后调
     // ack_project_delete_history 推进到 HistoryRecorded → RemoteDeleteQueued →
     // Completed 并清 journal。
     //
-    // #645 评论 5504296097 问题1修复：不在 core 内调 record_pending_deleted_target。
+    // 不在 core 内调 record_pending_deleted_target。
     // PendingDeletedTarget 的落盘收进 delete journal durable 生命周期，由
     // ack_project_delete_history 在推进到 HistoryRecorded 后幂等写，写失败
     // journal 保留在 HistoryRecorded，下次启动 recover 补写——不让 pending target 丢失。
@@ -650,7 +650,7 @@ pub fn delete_project_with_changes(
     })
 }
 
-/// #645 评论 5504296097 问题2：reorder_projects 的变更集版本。
+///   reorder_projects 的变更集版本。
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含所有被改 order 的 project.json 的 Upsert 路径。
 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
@@ -895,7 +895,7 @@ mod inline_tests {
         }
     }
 
-    /// #625 第二段：空目录返回空 summary 列表。
+    /// 空目录返回空 summary 列表。
     #[test]
     fn test_list_project_summaries_empty_dir() {
         let temp_dir = tempdir().unwrap();
@@ -906,7 +906,7 @@ mod inline_tests {
         assert!(summaries.is_empty());
     }
 
-    /// #625 第二段：有项目时返回正确 summary，含 total_word_count/volume_count/chapter_count。
+    /// 有项目时返回正确 summary，含 total_word_count/volume_count/chapter_count。
     #[test]
     fn test_list_project_summaries_with_stats() {
         let temp_dir = tempdir().unwrap();
@@ -957,7 +957,7 @@ mod inline_tests {
         assert_eq!(s1.updated_at, project1.updated_at);
     }
 
-    /// #625 第二段：list_project_summaries 与 list_projects 排序一致（按 order）。
+    /// list_project_summaries 与 list_projects 排序一致（按 order）。
     #[test]
     fn test_list_project_summaries_order_consistent_with_list_projects() {
         let temp_dir = tempdir().unwrap();

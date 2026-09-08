@@ -1,19 +1,19 @@
-//! #644 评论 5462823517 第3节：LWW 内容分类与三方比较。
+//!   ：LWW 内容分类与三方比较。
 //!
-//! #644 评论 5473789298 第3节：纯分类/比较部分（`ContentClass`、
+//!   ：纯分类/比较部分（`ContentClass`、
 //! `classify_content_path`、`is_document_content_path`、`three_way_resolve`、
 //! `ThreeWayResult`）提升为 [`crate::sync::content_class`]（始终可用，
 //! 不依赖 `github-api` feature）。本模块只保留依赖 `ManifestFileRecord` 的
 //! `PathDecision` / `resolve_path_decision`，供 `lww::mod` 在 feature gate 下调用。
 //!
-//! #644 评论 5473105049 第5节：逐路径三方/LWW 决策也收归本模块。
+//!   ：逐路径三方/LWW 决策也收归本模块。
 //! `resolve_path_decision` 对单个路径做三方或 LWW 决策，返回 `PathDecision`，
 //! 由调用方（`mod.rs`）执行实际 IO（下载/上传/冲突副本保存）。
 
 use crate::sync::content_class::{three_way_resolve, ThreeWayResult};
 use crate::sync::types::ManifestFileRecord;
 
-/// #644 评论 5473105049 第5节：单个路径的同步决策结果。
+/// 单个路径的同步决策结果。
 ///
 /// 纯计算结果，不含 IO 副作用。调用方根据决策执行实际的下载/上传/冲突处理。
 pub(super) enum PathDecision {
@@ -39,7 +39,7 @@ pub(super) enum PathDecision {
     DocumentConflictRemoteDeleted,
 }
 
-/// #644 评论 5473105049 第5节：对单个路径做三方或 LWW 决策。
+/// 对单个路径做三方或 LWW 决策。
 ///
 /// 纯计算，不执行 IO。返回 `PathDecision` 和是否需要标记 overwritten。
 ///

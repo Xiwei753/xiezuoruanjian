@@ -97,7 +97,7 @@ fn test_parse_cause_empty() {
 }
 
 // ── FFI 端到端集成测试 ──
-// 验证 editor_session C ABI 全生命周期，闭环 Issue #629 评论第 4 节
+// 验证 editor_session C ABI 全生命周期，闭环
 // "接通自研写作区到 Rust TextEditSession"。
 // byte offset 始终是 UTF-8 byte offset（评论明确要求），用非 ASCII 文本验证。
 
@@ -385,7 +385,7 @@ fn test_ffi_editor_session_composition_lifecycle() {
     assert_success(&v);
 }
 
-// ── #629 R8: composition grapheme semantic operation FFI tests ──
+// ──  R8: composition grapheme semantic operation FFI tests ──
 
 /// 辅助：创建 session + begin composition + update preedit，返回 (session_id, comp_session_id, comp_generation, revision)
 #[allow(clippy::cast_possible_truncation)]
