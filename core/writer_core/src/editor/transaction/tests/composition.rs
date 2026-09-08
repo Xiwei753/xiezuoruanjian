@@ -171,7 +171,7 @@ fn build_virtual_text_replaces_range_correctly() {
 
 #[test]
 fn build_virtual_text_preserves_text_after_replace_end() {
-    // #516 关键验收：不得丢失 replaceEnd 后正文
+    // 关键验收：不得丢失 replaceEnd 后正文
     let vt = build_virtual_text("hello world", Some((0, 5)), "goodbye");
     assert_eq!(vt, "goodbye world", "Must preserve text after replaceEnd");
 }
@@ -727,7 +727,7 @@ fn composition_session_emoji_boundary() {
     assert_eq!(session.virtual_text(), "👨‍👩‍👧‍👦abchello");
 }
 
-// #606: classify_composition_visual 共享视觉分类测试
+// classify_composition_visual 共享视觉分类测试
 
 #[test]
 fn classify_composition_visual_update_insert() {
@@ -849,7 +849,7 @@ fn classify_composition_visual_complex_grapheme() {
     );
 }
 
-// ── #606: composition 的 offset_map 通过 kernel visual intent 暴露 ──
+// ── composition 的 offset_map 通过 kernel visual intent 暴露 ──
 
 #[test]
 fn composition_finish_exposes_offset_map_via_visual_intent() {

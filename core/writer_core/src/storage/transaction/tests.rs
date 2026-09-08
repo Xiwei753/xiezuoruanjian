@@ -146,17 +146,17 @@ fn test_transaction_commit_with_delete() {
     );
 }
 
-/// #644 评论 5483239422 问题1：`SaveTransaction::finish()` 吞掉
-/// `write_manifest_phase(Finished)` 的错误，随后仍调用 `cleanup()` 删除 tx_dir。
+/// `SaveTransaction::finish` 吞掉
+/// `write_manifest_phase(Finished)` 的错误，随后仍调用 `cleanup` 删除 tx_dir。
 ///
 /// 复现策略：构造 backup_mode 事务 commit 成功（phase=FilesCommitted），
 /// 然后使 manifest 读取失败（把 manifest 文件替换为同名目录，使
-/// `fs::read_to_string` 返回 Err）。此时调用 `finish()`：
+/// `fs::read_to_string` 返回 Err）。此时调用 `finish`：
 /// - 当前行为：`let _ = write_manifest_phase(...)` 吞错，`finished=true`，
-///   `cleanup()` 执行 `remove_dir_all(tx_dir)`，tx_dir 被删，恢复证据丢失。
-///   调用方（sync_ops）完全不知道 Finished 没写成功，仍会删 owner marker。
-/// - 预期行为：`finish()` 应返回 `Err`，不调用 `cleanup()`，tx_dir 保留，
-///   manifest 仍停在 FilesCommitted，下次恢复可重试。
+/// `cleanup` 执行 `remove_dir_all(tx_dir)`，tx_dir 被删，恢复证据丢失。
+/// 调用方（sync_ops）完全不知道 Finished 没写成功，仍会删 owner marker。
+/// - 预期行为：`finish` 应返回 `Err`，不调用 `cleanup`，tx_dir 保留，
+/// manifest 仍停在 FilesCommitted，下次恢复可重试。
 ///
 /// 此测试断言预期行为（tx_dir 应保留），当前代码下断言失败。
 #[test]
@@ -176,8 +176,8 @@ fn finish_should_preserve_tx_dir_when_manifest_write_fails() {
     fs::remove_file(&manifest_path).unwrap();
     fs::create_dir(&manifest_path).unwrap();
 
-    // 当前：finish() 返回 ()，吞错，cleanup() 删 tx_dir。
-    // 预期：finish() 应返回 Err，不 cleanup，tx_dir 保留。
+    // 当前：finish 返回，吞错，cleanup 删 tx_dir。
+    // 预期：finish 应返回 Err，不 cleanup，tx_dir 保留。
     let finish_result = tx.finish();
     assert!(
         finish_result.is_err(),
@@ -194,14 +194,14 @@ fn finish_should_preserve_tx_dir_when_manifest_write_fails() {
     );
 }
 
-/// #644 评论 5483239422 问题4：`recover_pending_transactions()` 在 manifest
+/// `recover_pending_transactions` 在 manifest
 /// 读/解析失败时直接 `remove_dir_all(tx_dir)`，销毁崩溃恢复材料。
 ///
 /// 复现策略：构造 tx_dir 含损坏 manifest（无效 JSON）+ backup 恢复材料
 /// （backup_entries + staging 文件），调用 `recover_pending_transactions`。
 /// - 当前行为：manifest 解析失败，`remove_dir_all(tx_dir)`，恢复证据被销毁。
 /// - 预期行为：记录错误并保留 tx_dir，不继续改 live，不删除 backup，
-///   等下次启动重试或显式修复入口。
+/// 等下次启动重试或显式修复入口。
 ///
 /// 此测试断言预期行为（tx_dir 应保留），当前代码下断言失败。
 #[test]

@@ -1,4 +1,4 @@
-//! # 设置页 sync section（#628 拆分）
+//! # 设置页 sync section
 
 use super::{PlatformVisibility, SettingItemDef, SettingSectionDef};
 

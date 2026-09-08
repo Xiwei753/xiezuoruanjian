@@ -1,4 +1,4 @@
-//! 同步相关 FFI 函数 — 全量同步统一入口（Issue #630）。
+//! 同步相关 FFI 函数 — 全量同步统一入口。
 //!
 //! 一个全局 `SyncConfig` + 一份全局凭据。旧的"作品同步 + 应用数据同步"两套
 //! C ABI 已删除，新增 `writer_core_perform_full_sync` 等全量同步入口。
@@ -23,7 +23,7 @@ use super::{c_str_to_rust, err_json, ok_json, with_app_service, with_core};
 pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
     match with_core(|core| {
         let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
-        // Issue #645 评论第 2 点：FFI 暴露的旧字段从 provider_config 读取，
+        // FFI 暴露的旧字段从 provider_config 读取，
         // 保持 C ABI 兼容（旧调用方仍读 remoteUrl/branch/provider）。
         let (remote_url, branch, provider) = match &config.provider_config {
             #[cfg(feature = "github-api")]
@@ -73,7 +73,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
             config.enabled = v;
         }
-        // Issue #645 评论第 2 点：FFI 仍接受旧字段 remoteUrl/branch，
+        // FFI 仍接受旧字段 remoteUrl/branch，
         // 写入 provider_config: ProviderConfig::GitHub。
         // provider::github 模块仅在 github-api feature 下编译，整段逻辑需门控；
         // 无 github-api 时该 block 不编译，FFI 仍保存 enabled/autoSync 等通用字段。
@@ -119,9 +119,9 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
     }
 }
 
-/// 全量同步 dry-run C ABI（Issue #630）。
+/// 全量同步 dry-run C ABI。
 ///
-/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline，
+/// 改走 `with_app_service` 唯一 pipeline，
 /// 经 `WriterAppService::perform_full_sync_dry_run` →
 /// `WriterCoreApi::perform_full_sync_dry_run` →
 /// `WriterCore::perform_full_sync_dry_run`。旧 facade `with_core` 路径
@@ -144,9 +144,9 @@ pub unsafe extern "C" fn writer_core_full_sync_dry_run() -> *mut c_char {
     }
 }
 
-/// 全量同步诊断 C ABI（Issue #630）— 只测一次仓库、分支、token。
+/// 全量同步诊断 C ABI— 只测一次仓库、分支、token。
 ///
-/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline。
+/// 改走 `with_app_service` 唯一 pipeline。
 ///
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
@@ -165,9 +165,9 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
     }
 }
 
-/// 全量同步 C ABI（Issue #630）— 先 App target，再所有 Project target。
+/// 全量同步 C ABI— 先 App target，再所有 Project target。
 ///
-/// #645 评论 5504296097 问题2：改走 `with_app_service` 唯一 pipeline，
+/// 改走 `with_app_service` 唯一 pipeline，
 /// 经 `WriterAppService::perform_full_sync` →
 /// `WriterCoreApi::perform_full_sync`（Prepare → Seed → Transfer → Commit）。
 /// 旧 facade `with_core(|core| core.perform_full_sync(...))` 不加载

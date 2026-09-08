@@ -1,4 +1,4 @@
-//! # 设置页 appearance section（#628 拆分）
+//! # 设置页 appearance section
 
 use super::{PlatformVisibility, SettingItemDef, SettingSectionDef};
 

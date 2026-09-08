@@ -6,16 +6,16 @@
 //!
 //! 初始化通过 `OnceLock` 保证只执行一次，线程安全。
 //!
-//! #644 评论 5486167472 问题3：libgit2 的 `GIT_OPT_ENABLE_FSYNC_GITDIR` 默认 disabled，
+//! libgit2 的 `GIT_OPT_ENABLE_FSYNC_GITDIR` 默认 disabled，
 //! libgit2 写 objects/refs 后无统一 durable barrier，崩溃时可能先于 Finished 丢盘。
 //! 通过 `libgit2-sys` 直接依赖（见 `core/writer_core/Cargo.toml`）暴露
-//! `git_libgit2_opts` / `GIT_OPT_ENABLE_FSYNC_GITDIR` FFI，本模块在 `configure()`
+//! `git_libgit2_opts` / `GIT_OPT_ENABLE_FSYNC_GITDIR` FFI，本模块在 `configure`
 //! 的唯一初始化入口对所有 target 统一调用 `git_libgit2_opts(GIT_OPT_ENABLE_FSYNC_GITDIR, 1)`。
 //! 这必须在所有 target 启用（libgit2 默认 disabled 不分平台，objects/refs 丢盘风险
-//! 不分平台）。workspace git finalize 在 `live_index.write()` 后的显式
+//! 不分平台）。workspace git finalize 在 `live_index.write` 后的显式
 //! fsync index + 父目录保留为事务自身的边界，但 libgit2 自己写 ODB/ref 的 durability
 //! 由这里统一打开。NotGitRepo 路径的 `copy_dir_recursive` 也已是 durable recursive copy
-//!（copy 后 fsync 文件 + 父目录，每层目录 bottom-up fsync）。
+//! （copy 后 fsync 文件 + 父目录，每层目录 bottom-up fsync）。
 
 use std::sync::OnceLock;
 
@@ -33,7 +33,7 @@ pub fn ensure_initialized() -> crate::Result<()> {
     }
 }
 
-/// #644 评论 5486167472 问题3：对所有 target 启用 libgit2 fsync-gitdir。
+/// 对所有 target 启用 libgit2 fsync-gitdir。
 ///
 /// libgit2 默认不 fsync gitdir（`GIT_OPT_ENABLE_FSYNC_GITDIR` 默认 disabled），
 /// 写 objects/refs 后无 durable barrier。这里通过 `libgit2-sys` 直接 FFI 调用
@@ -63,7 +63,7 @@ fn enable_fsync_gitdir() -> Result<(), String> {
     }
 }
 
-/// #644 评论 5486852142 问题4：统一 configure 入口。
+/// 统一 configure 入口。
 ///
 /// 所有 target 先通过 git2-rs 公开入口 `set_verify_owner_validation` 触发 libgit2
 /// crate 初始化（`git_libgit2_init`），再调 `enable_fsync_gitdir` 的 raw
@@ -84,7 +84,7 @@ fn configure() -> Result<(), String> {
     unsafe { git2::opts::set_verify_owner_validation(verify_owner) }.map_err(|e| e.to_string())?;
 
     // 现在可以安全调用 raw git_libgit2_opts，因为 git2-rs 已完成初始化。
-    // #644 评论 5486167472 问题3：所有 target 启用 fsync-gitdir。
+    // 所有 target 启用 fsync-gitdir。
     enable_fsync_gitdir()
 }
 

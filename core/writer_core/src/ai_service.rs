@@ -279,14 +279,14 @@ impl Default for StreamFlushConfig {
 /// ```rust
 /// use writer_core::ai_service::{StreamFlusher, StreamFlushConfig};
 ///
-/// let mut flusher = StreamFlusher::new(StreamFlushConfig::default());
+/// let mut flusher = StreamFlusher::new(StreamFlushConfig::default);
 /// flusher.push("你");
 /// flusher.push("好");
 /// flusher.push("，");
 /// flusher.push("世界");
 /// flusher.push("。\n");
 /// // flush_on_sentence_end + flush_on_newline 触发
-/// let batch = flusher.flush();
+/// let batch = flusher.flush;
 /// assert_eq!(batch, "你好，世界。\n");
 /// ```
 pub struct StreamFlusher {

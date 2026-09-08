@@ -34,7 +34,7 @@ impl WriterCoreApi {
             .map_err(Into::into)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    /// 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
     ///
     /// 恢复场景：不记录 workspace history（manifest 是已有事实来源）。
     pub fn create_chapter_with_id(
@@ -59,7 +59,7 @@ impl WriterCoreApi {
         volume_id: &str,
         title: &str,
     ) -> ApiResult<ChapterMetaDto> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let (chapter, change_set) = self
             .core_write()
             .create_chapter_with_changes(project_id, volume_id, title)
@@ -106,7 +106,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         new_title: &str,
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let (chapter, change_set) = self
             .core_write()
             .rename_chapter_with_changes(project_id, volume_id, chapter_id, new_title)?;
@@ -170,7 +170,7 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         // 不再先调 delete_chapter，由 delete_chapter_with_changes 统一处理删除和变更集。
         for prefix in &[
             format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -200,7 +200,7 @@ impl WriterCoreApi {
         volume_id: &str,
         ordered_chapter_ids: &[String],
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let change_set = self.core_write().reorder_chapters_with_changes(
             project_id,
             volume_id,
@@ -231,7 +231,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         content: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let (receipt, change_set) = self
             .core_write()
             .write_chapter_verified_with_changes(project_id, volume_id, chapter_id, content)
@@ -261,7 +261,7 @@ impl WriterCoreApi {
         content: &str,
         allow_empty_overwrite: bool,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let (receipt, change_set) = self
             .core_write()
             .save_chapter_verified_with_changes_with_options(
@@ -295,7 +295,7 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<ChapterSaveReceiptDto> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         // 清空正文需要 allow_empty_overwrite=true。
         let (receipt, change_set) = self
             .core_write()
@@ -323,7 +323,7 @@ impl WriterCoreApi {
         chapter_id: &str,
         note: &str,
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题2：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let (chapter, change_set) = self
             .core_write()
             .update_chapter_note_with_changes(project_id, volume_id, chapter_id, note)?;

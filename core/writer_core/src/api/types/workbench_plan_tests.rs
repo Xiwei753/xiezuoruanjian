@@ -1,11 +1,11 @@
-//! #628 评论 5301021120 第 3 步 + 02:59:39Z 版：workbench plan DTO 测试。
+//! 第 3 步 + 02:59:39Z 版：workbench plan DTO 测试。
 //! 独立 _tests.rs 文件（结构守卫 production-test-bloat：生产文件内嵌测试模块 >100 行应拆分）。
 
 use super::workbench_plan::*;
 // 跨模块 DTO：WindowViewportDto / WindowOcclusionDto 留在 platform.rs。
 use crate::api::types::platform::{WindowOcclusionDto, WindowViewportDto};
 
-// ── Workbench Layout Plan DTO 测试（#628 评论 5301021120 第 3 步） ──
+// ── Workbench Layout Plan DTO 测试（第 3 步） ──
 #[test]
 fn test_layout_rect_dto_roundtrip() {
     let r = crate::presentation::layout::resolver::LayoutRect {

@@ -1,4 +1,4 @@
-//! 旧同步配置一次性迁移（Issue #630 评论第 4 点 / D、第 5 点 Part C）。
+//! 旧同步配置一次性迁移。
 //!
 //! # 背景
 //!
@@ -18,9 +18,9 @@
 //!
 //! 1. 新全局 profile 已存在 → `NotNeeded`
 //! 2. 优先探测旧应用级 profile（config + `sync_token_app` 或精确 generation key）
-//!    - 有旧 app profile → 直接迁移，不检查 project（app 优先级高于 project）
+//! - 有旧 app profile → 直接迁移，不检查 project（app 优先级高于 project）
 //! 3. 无 app profile 时探测旧作品级 profile（每个 project 的 config + token）
-//!    - 多个 project 互相一致 → 迁一份；不一致 → `NeedsReconfigure`
+//! - 多个 project 互相一致 → 迁一份；不一致 → `NeedsReconfigure`
 //! 4. 提交到新全局（save config + `set_secret(sync_token_global, ...)`）
 //! 5. 提交成功后对所有参与迁移的等价旧 profile 删除旧 token / 旧 config 文件；失败时不删
 //!
@@ -77,7 +77,7 @@ const GLOBAL_TOKEN_KEY: &str = "sync_token_global";
 const LEGACY_APP_TOKEN_KEY: &str = "sync_token_app";
 const LEGACY_PROJECT_TOKEN_KEY_PREFIX: &str = "sync_token_";
 
-/// 旧 profile 的精确 generation metadata（Issue #630 评论第 5 点 Part C）。
+/// 旧 profile 的精确 generation metadata。
 ///
 /// 调用方（平台层 DataStore）知道每个旧 profile 当前 committed 的 generation，
 /// 通过此结构精确告诉 Core 应该读取哪个 `sync_token_<base>_g<N>` key，
@@ -451,7 +451,7 @@ impl<'a> LegacySyncProfileMigrator<'a> {
 
 /// 从 `SyncConfig` 读取 GitHub `remote_url`（若为 GitHub provider）；否则空字符串。
 ///
-/// Issue #645 评论第 2 点：`remote_url` 不再在 `SyncConfig` 顶层，
+/// `remote_url` 不再在 `SyncConfig` 顶层，
 /// 从 `provider_config: ProviderConfig::GitHub` 读取。
 fn github_remote_url_from_config(config: &SyncConfig) -> String {
     match &config.provider_config {

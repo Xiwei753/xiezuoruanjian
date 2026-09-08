@@ -67,12 +67,12 @@ pub fn calculate_grid_layout(node_ids: &[String], existing: &StarMapLayout) -> S
 /// 1. 识别根节点（无父节点或父节点不在 node_ids 集合中的节点）
 /// 2. 根节点均匀分布在第一环（距中心 RADIAL_RING_SPACING）
 /// 3. BFS 逐层展开：每层子节点围绕父节点均匀分布，
-///    环半径随深度递减 `ring_radius = RADIAL_RING_SPACING / max(depth+1, 1.5)`
+/// 环半径随深度递减 `ring_radius = RADIAL_RING_SPACING / max(depth+1, 1.5)`
 /// 4. 每层子节点角度偏移 `depth * 0.3` 弧度，避免父子节点重叠
 ///
 /// 已有位置的节点保留原位（从 existing 中克隆），仅计算新增节点位置。
 /// 已被前驱层级定位的节点不会被子节点重新定位（`positions.contains_key` 检查）。
-// TODO(#597): 既有代码可读性技术债，待后续重构拆分
+// TODO: 既有代码可读性技术债，待后续重构拆分
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,

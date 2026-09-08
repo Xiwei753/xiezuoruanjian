@@ -4,7 +4,7 @@ use crate::error::Error;
 
 /// FFI 边界错误类型 — 跨语言传递的唯一错误形式。
 ///
-/// 平台端通过 `code()` 和 `message_key()` 做错误分类和 i18n 映射，
+/// 平台端通过 `code` 和 `message_key` 做错误分类和 i18n 映射，
 /// 不得依赖错误文案的包含关系作为主判断（见 AGENTS.md）。
 ///
 /// 与 `crate::error::Error` 的区别：
@@ -44,7 +44,7 @@ pub enum WriterError {
     /// 同步失败——网络/认证/API 等非冲突性错误
     #[error("Sync failed: {0}")]
     SyncFailed(String),
-    // --- #592 七：类型化同步失败 ---
+    // --- 类型化同步失败 ---
     /// 明确网络失败（网络不可用/限流）——可重试
     #[error("Retryable network failure: {0}")]
     RetryableNetwork(String),
@@ -259,10 +259,10 @@ impl From<crate::error::Error> for WriterError {
                 status,
                 body_preview,
             } => {
-                // #592 七：远端 Provider 错误按类别映射为类型化失败；
+                // 远端 Provider 错误按类别映射为类型化失败；
                 // 只有明确网络/认证类别进入对应类型，其余默认 Fatal。
                 //
-                // Issue #645 评论 5504296097 第1点：`SyncErrorCategory` 已收成
+                // 第1点：`SyncErrorCategory` 已收成
                 // provider-neutral 分类，这里使用新变体。先查旧 GitHub/Git code
                 // 兼容映射（legacy_category_compat），再回退 provider-neutral from_code。
                 let cat =
@@ -373,7 +373,7 @@ mod tests {
 
     #[test]
     fn test_typed_sync_failure_codes() {
-        // #592 七：类型化失败的错误码是跨端契约，不得落入 "OTHER"。
+        // 类型化失败的错误码是跨端契约，不得落入 "OTHER"。
         assert_eq!(
             WriterError::RetryableNetwork("n".into()).code(),
             "RETRYABLE_NETWORK"
@@ -394,7 +394,7 @@ mod tests {
 
     #[test]
     fn test_from_error_maps_to_typed_kinds() {
-        // #592 七：Core 内部错误映射到类型化失败，不再折叠为笼统 SyncFailed。
+        // Core 内部错误映射到类型化失败，不再折叠为笼统 SyncFailed。
         use crate::error::Error;
         let auth = WriterError::from(Error::SyncAuthFailed {
             reason: "bad token".into(),

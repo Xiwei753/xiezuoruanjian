@@ -131,7 +131,7 @@ fn commit_plan_both_changed_is_conflict() {
     let tmp = TempDir::new().unwrap();
     let live = tmp.path().join("live");
     fs::create_dir_all(&live).unwrap();
-    // #644 评论 5473789298 第3节：UserTextDocument 双方都改才冲突。
+    // UserTextDocument 双方都改才冲突。
     // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW 不冲突）。
     fs::write(live.join("note.md"), "base").unwrap();
 
@@ -193,7 +193,7 @@ fn commit_plan_local_changed_remote_deleted_is_conflict() {
     let tmp = TempDir::new().unwrap();
     let live = tmp.path().join("live");
     fs::create_dir_all(&live).unwrap();
-    // #644 评论 5473789298 第3节：UserTextDocument local 改了 + 远端删除 → 冲突。
+    // UserTextDocument local 改了 + 远端删除 → 冲突。
     // 用 note.md（正文类）而非 .txt（GeneratedCache 走 LWW：Apply Delete 不冲突）。
     fs::write(live.join("note.md"), "base").unwrap();
 

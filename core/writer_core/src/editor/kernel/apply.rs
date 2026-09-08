@@ -239,7 +239,7 @@ impl EditorKernel {
                 old_cursor,
                 old_selection,
             ),
-            // #629 R8: composition 专用 grapheme 语义操作
+            // composition 专用 grapheme 语义操作
             EditorCommand::CompositionMoveGraphemeLeft {
                 composition_session_id,
                 composition_generation,
@@ -313,7 +313,7 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        // #624 评论8：局部 Rope edit，不 clone 全文。
+        // 局部 Rope edit，不 clone 全文。
         self.text.insert(byte_offset, text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
@@ -381,7 +381,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            // #624 评论8：单次编辑从 delta 直接构造 offset map，不再扫全文。
+            // 单次编辑从 delta 直接构造 offset map，不再扫全文。
             offset_map: Some(OffsetMap::from_single_edit(
                 self.text.byte_len() - text.len(),
                 (byte_offset, byte_offset),
@@ -401,7 +401,7 @@ impl EditorKernel {
         })
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: 既有代码可读性技术债，待后续重构拆分
     #[allow(clippy::too_many_lines)]
     fn apply_delete(
         &mut self,
@@ -438,7 +438,7 @@ impl EditorKernel {
             ));
         }
 
-        // #624 评论8：先取局部删除文本，再局部 Rope delete，不 clone 全文。
+        // 先取局部删除文本，再局部 Rope delete，不 clone 全文。
         let deleted_text = self
             .text
             .byte_slice(byte_start..byte_end_exclusive)
@@ -512,7 +512,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            // #624 评论8：单次删除从 delta 直接构造 offset map。
+            // 单次删除从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
                 self.text.byte_len() + (byte_end_exclusive - byte_start),
                 (byte_start, byte_end_exclusive),
@@ -533,7 +533,7 @@ impl EditorKernel {
     }
 
     #[allow(clippy::too_many_arguments)]
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,
@@ -568,7 +568,7 @@ impl EditorKernel {
             ));
         }
 
-        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        // 先取局部删除文本，再局部 Rope replace，不 clone 全文。
         let deleted_text = self
             .text
             .byte_slice(byte_start..byte_end_exclusive)
@@ -662,7 +662,7 @@ impl EditorKernel {
                     && !is_loading
                     && !is_format,
             },
-            // #624 评论8：单次替换从 delta 直接构造 offset map。
+            // 单次替换从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
                 self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
                 (byte_start, byte_end_exclusive),
@@ -705,10 +705,10 @@ impl EditorKernel {
                 old_selection,
             ));
         }
-        // #606: Core 端 auto-indent — 从正文按 UTF-8 安全边界找到当前逻辑行开头，
+        // Core 端 auto-indent — 从正文按 UTF-8 安全边界找到当前逻辑行开头，
         // 读取已有前导空白（空格/Tab），构造插入文本为 \n + prefix。
         // auto_indent_enabled 为 false 时只插入 \n。
-        // #624 评论8：行首定位与前导空白读取都基于光标附近 RopeSlice，不 materialize 全文。
+        // 行首定位与前导空白读取都基于光标附近 RopeSlice，不 materialize 全文。
         let text = if auto_indent_enabled {
             let prefix = Self::compute_auto_indent_prefix(&self.text, byte_offset);
             format!("\n{}", prefix)
@@ -718,7 +718,7 @@ impl EditorKernel {
 
         self.composition_session = None;
 
-        // #624 评论8：局部 Rope insert，不 clone 全文。
+        // 局部 Rope insert，不 clone 全文。
         self.text.insert(byte_offset, &text);
         self.revision = self.revision.next();
         let new_cursor_val = byte_offset + text.len();
@@ -781,7 +781,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
             },
-            // #624 评论8：单次换行插入从 delta 直接构造 offset map。
+            // 单次换行插入从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
                 self.text.byte_len() - text.len(),
                 (byte_offset, byte_offset),
@@ -801,20 +801,20 @@ impl EditorKernel {
         })
     }
 
-    /// #606: Core 端 auto-indent 前导空白计算。
+    /// Core 端 auto-indent 前导空白计算。
     ///
-    /// 从正文按 UTF-8 安全边界找到  所在逻辑行的开头，
+    /// 从正文按 UTF-8 安全边界找到 所在逻辑行的开头，
     /// 读取该行已有的前导空白（空格和 Tab），返回前导空白字符串。
     ///
     /// 规则：
-    /// - 找到  之前最后一个换行符的位置，下一字节即为行首
+    /// - 找到 之前最后一个换行符的位置，下一字节即为行首
     /// - 从行首开始逐字节检查，只收集连续的空格和 Tab
     /// - 遇到其他字符（包括多字节字符的首字节）立即停止
     /// - UTF-8 安全：空格和 Tab 都是单字节 ASCII，不会出现在多字节字符的续字节中
     ///
     /// 返回的前导空白会被追加到新行之后，实现自动缩进。
-    /// #624 评论8：Rope 局部版本 — 只在光标前 `[0, byte_offset)` slice 上迭代，
-    /// 不 materialize 全文。`bytes().rev()` 从光标向前找行首，再从行首收集前导空白。
+    /// Rope 局部版本 — 只在光标前 `[0, byte_offset)` slice 上迭代，
+    /// 不 materialize 全文。`bytes.rev` 从光标向前找行首，再从行首收集前导空白。
     fn compute_auto_indent_prefix(rope: &crop::Rope, byte_offset: usize) -> String {
         // 找到 byte_offset 所在行的行首
         let prefix_slice = rope.byte_slice(0..byte_offset);
@@ -913,7 +913,7 @@ impl EditorKernel {
             ));
         }
 
-        // #624 评论8：先取局部删除文本，再局部 Rope replace，不 clone 全文。
+        // 先取局部删除文本，再局部 Rope replace，不 clone 全文。
         let deleted_text = self
             .text
             .byte_slice(byte_start..byte_end_exclusive)
@@ -1008,7 +1008,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(sel_head),
                 should_animate: self.animation_enabled && old_cursor.value() != sel_head,
             },
-            // #624 评论8：单次 commit 从 delta 直接构造 offset map。
+            // 单次 commit 从 delta 直接构造 offset map。
             offset_map: Some(OffsetMap::from_single_edit(
                 self.text.byte_len() - replacement_text.len() + (byte_end_exclusive - byte_start),
                 (byte_start, byte_end_exclusive),
@@ -1074,7 +1074,7 @@ impl EditorKernel {
         } else {
             None
         };
-        // #624 评论10 第4项补漏：before 删除长度（after delta 的最终坐标需要它）。
+        // 第4项补漏：before 删除长度（after delta 的最终坐标需要它）。
         // 纯几何计算，不依赖正文状态，可提前求值。
         let before_deleted_len: usize = before_range.map_or(0, |(bs, be)| be.saturating_sub(bs));
 
@@ -1097,12 +1097,12 @@ impl EditorKernel {
                     old_selection,
                 ));
             }
-            // #624 评论8：局部 Rope delete + 记录 delta。
+            // 局部 Rope delete + 记录 delta。
             let deleted = self.text.byte_slice(as_..ae).to_string();
             self.text.delete(as_..ae);
             edits.push(TextEditDelta {
                 old_range: Utf8ByteRange::from_ordered(as_, ae),
-                // #624 评论10 第4项补漏：new_range 必须是 **最终文本**（两次删除都完成
+                // 第4项补漏：new_range 必须是 **最终文本**（两次删除都完成
                 // 之后）的坐标。after 先于 before 删除，删除 after 瞬间正文仍含 before
                 // 区间，point(as_) 是「仅删除 after」时的坐标；随后 before 删除会把该点
                 // 左移 before_deleted_len。若这里保留 point(as_)，undo 的 DisplayPatch
@@ -1134,7 +1134,7 @@ impl EditorKernel {
                     old_selection,
                 ));
             }
-            // #624 评论8：局部 Rope delete + 记录 delta。
+            // 局部 Rope delete + 记录 delta。
             let deleted = self.text.byte_slice(bs..be).to_string();
             self.text.delete(bs..be);
             edits.push(TextEditDelta {
@@ -1171,7 +1171,7 @@ impl EditorKernel {
 
         let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
 
-        // #624 评论8：content delta / offset map / affected ranges 全部从 delta 构造，
+        // content delta / offset map / affected ranges 全部从 delta 构造，
         // 计算完成后才把 edits 移入 Undo 栈。
         let mut content_delta = EditorContentDelta::default();
         let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
@@ -1190,7 +1190,7 @@ impl EditorKernel {
         let old_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.old_range).collect();
         let new_revision = self.revision;
 
-        // #624 评论10：原子 patch batch — 每条 delta 一条局部 DisplayPatch
+        // 原子 patch batch — 每条 delta 一条局部 DisplayPatch
         // （base 文档坐标，删除的 inserted_text 为空）。不再合成最外层单条 patch
         // （把 before/after 之间的保留段 middle 重新拼接进 inserted_text）：
         // 两个相距很远的删除会复制中间整段正文，且与 batch 协议不一致。

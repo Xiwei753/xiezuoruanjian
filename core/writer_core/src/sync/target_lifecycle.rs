@@ -1,4 +1,4 @@
-//! Target 生命周期 catalog — 远端持久、provider-neutral（Issue #645 评论 5504296097 问题3）。
+//! Target 生命周期 catalog — 远端持久、provider-neutral。
 //!
 //! catalog 放在不会随 `projects/<id>/` 一起被删除的位置：
 //! `app/app-meta/sync/targets.sync.json`（app target 的 remote_prefix 下）。
@@ -6,9 +6,9 @@
 //! ## 职责
 //!
 //! - 远端 `targets.sync.json`（本模块）：负责"跨设备都必须知道这个 target 的生命周期"，
-//!   离线旧设备上线时先读 catalog，看到 delete tombstone 就不会把旧 project 重新上传。
+//! 离线旧设备上线时先读 catalog，看到 delete tombstone 就不会把旧 project 重新上传。
 //! - 本地 `pending_deleted_targets.json`（`pending_deleted` 模块）：负责
-//!   "本机删除事务还没同步完成"，本机状态。两个职责不混。
+//! "本机删除事务还没同步完成"，本机状态。两个职责不混。
 //!
 //! ## provider-neutral
 //!
@@ -25,11 +25,11 @@ use crate::sync::types::{
 /// 这个位置不会随 `projects/<id>/` 一起被删除，保证 delete tombstone 持久存在。
 pub const TARGET_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/targets.sync.json";
 
-/// #645 评论 5504296097 问题1：解析当前可见远端 project prefix。
+/// 解析当前可见远端 project prefix。
 ///
 /// LiveProject 两步发布的第一步 — 从 catalog record 解析当前可见远端 source：
 /// - `Upsert` + `active_generation=Some(G)` → `Ok(Some("projects/P/__generations__/G"))`
-///   （`G` 经 [`validate_generation_id`] 校验，防路径穿越）；
+/// （`G` 经 [`validate_generation_id`] 校验，防路径穿越）；
 /// - `Upsert` + `active_generation=None` → `Ok(Some("projects/P"))`（legacy，无 generation）；
 /// - `Delete` → `Ok(None)`（target 已删除，无可见远端）。
 ///
@@ -54,10 +54,10 @@ pub fn resolve_visible_project_prefix(
     }
 }
 
-/// #645 评论 5504296097 问题6：统一解析 remote target_id，验证前缀 + 单段合法 id。
+/// 统一解析 remote target_id，验证前缀 + 单段合法 id。
 ///
 /// remote catalog 里的 `target_id` 是远端持久数据，可能损坏或被恶意构造。
-/// 直接 `strip_prefix("projects/").unwrap_or_default()` 会把非法记录当成
+/// 直接 `strip_prefix("projects/").unwrap_or_default` 会把非法记录当成
 /// `projects/` 路径拼接，存在路径穿越风险（如 `projects/../app`）。
 ///
 /// 本函数严格校验：
@@ -83,7 +83,7 @@ pub(crate) fn parse_project_target_id(target_id: &str) -> crate::error::Result<S
     Ok(validated.to_string())
 }
 
-/// #645 评论 5504296097 问题4：校验 generation ID 是合法的单 path segment。
+/// 校验 generation ID 是合法的单 path segment。
 ///
 /// generation ID 用作 `projects/P/__generations__/G/` 中的 `G` 段，必须不能
 /// 越过 generation 目录（空、`.`、`..`、含 `/`、含 `\` 都拒绝）。
@@ -95,7 +95,7 @@ pub(crate) fn validate_generation_id(id: &str) -> crate::error::Result<&str> {
     crate::delete_guard::validate_id_segment(id)
 }
 
-/// #645 评论 5504296097 问题4：校验单条 record 的 `active_generation` 合法性。
+/// 校验单条 record 的 `active_generation` 合法性。
 ///
 /// - `Delete` 记录不应有 `active_generation`（必须 `None`）；
 /// - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
@@ -126,7 +126,7 @@ fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::e
     Ok(())
 }
 
-/// #645 评论 5504296097 问题6：校验整个 catalog — 损坏/非法 record 返回错误。
+/// 校验整个 catalog — 损坏/非法 record 返回错误。
 ///
 /// 校验规则：
 /// - `target_id` 合法（`parse_project_target_id` 通过）
@@ -134,10 +134,10 @@ fn validate_record_active_generation(record: &TargetLifecycleRecord) -> crate::e
 /// - `schema_version` 支持（当前只支持 1）
 /// - 同 `target_id` 不重复（合并后唯一）
 /// - `Delete` 必须有合法 `deleted_at_ms`
-/// - #645 评论 5504296097 问题4：`active_generation` 合法性
-///   - `Delete` 记录不应有 `active_generation`（必须 `None`）；
-///   - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
-///   - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
+/// - `active_generation` 合法性
+/// - `Delete` 记录不应有 `active_generation`（必须 `None`）；
+/// - `Upsert` + `None` → 允许（legacy，无 generation 记录）；
+/// - `Upsert` + `Some(G)` → `G` 必须通过 [`validate_generation_id`]（合法单 path segment）。
 ///
 /// 任一不合法 → `Err`，调用方不应在此假 catalog 上继续规划。
 fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()> {
@@ -179,13 +179,13 @@ fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()
                 record.target_id
             ))));
         }
-        // 6. #645 评论 5504296097 问题4：active_generation 合法性
+        // 6. active_generation 合法性
         validate_record_active_generation(record)?;
     }
     Ok(())
 }
 
-/// #645 评论 5504296097 问题6：加载远端 catalog，返回带版本标识的快照。
+/// 加载远端 catalog，返回带版本标识的快照。
 ///
 /// - 远端不存在 catalog → 返回空 catalog + 写入方应用 `CreateNew`；
 /// - 解析失败 → 返回 `Err`（不吞错误，调用方决定 Retry）；
@@ -193,7 +193,7 @@ fn validate_catalog(catalog: &TargetLifecycleCatalog) -> crate::error::Result<()
 ///
 /// 返回的 `version` 用于后续 CAS 写入（`IfMatch`），防止多设备并发覆盖。
 ///
-/// #645 评论 5504296097 问题5：本函数是纯只读的（只 `provider.read`，不 `provider.write`）。
+/// 本函数是纯只读的（只 `provider.read`，不 `provider.write`）。
 /// dry-run 安全调用。`__nonexistent__` version 只是标记"远端不存在"，不会自动写远端 —
 /// 只有显式调 [`persist_bootstrap_catalog`] 或 [`write_catalog_once`] 才落盘。
 pub fn load_remote_catalog(
@@ -204,7 +204,7 @@ pub fn load_remote_catalog(
         .map_err(crate::Error::from)?;
     let Some(obj) = obj else {
         // 文件不存在：首次写应用 CreateNew，版本用 sentinel 表示不存在。
-        // #645 评论 5504296097 问题5：此处不写远端，只返回 sentinel version。
+        // 此处不写远端，只返回 sentinel version。
         // dry-run 可以安全调用本函数 — 不会在远端创建 targets.sync.json。
         return Ok(RemoteTargetCatalogSnapshot {
             catalog: TargetLifecycleCatalog::default(),
@@ -218,25 +218,25 @@ pub fn load_remote_catalog(
             TARGET_CATALOG_REMOTE_PATH
         )))
     })?;
-    // #645 评论 5504296097 问题6：校验整个 catalog，损坏 record 不应被静默隐藏。
+    // 校验整个 catalog，损坏 record 不应被静默隐藏。
     validate_catalog(&catalog)?;
     Ok(RemoteTargetCatalogSnapshot { catalog, version })
 }
 
-/// #645 评论 5504296097 问题6：发现远端 catalog（只读，不写远端）。
+/// 发现远端 catalog（只读，不写远端）。
 ///
 /// 真做只读 legacy 枚举：
 /// 1. 先读 `targets.sync.json`（[`load_remote_catalog`]）。存在 → 直接返回。
 /// 2. 不存在 → `provider.list("projects")` 枚举所有 project 前缀，
-///    对每个 project 读 `projects/<id>/app-meta/sync/manifest.sync.json`，
-///    取 manifest 中所有 record 的最大 `updated_at_ms` 和对应 `device_id`，
-///    合成一条 Upsert `TargetLifecycleRecord`。
+/// 对每个 project 读 `projects/<id>/app-meta/sync/manifest.sync.json`，
+/// 取 manifest 中所有 record 的最大 `updated_at_ms` 和对应 `device_id`，
+/// 合成一条 Upsert `TargetLifecycleRecord`。
 /// 3. 返回合成 catalog + `__nonexistent__` version（catalog 文件仍不存在于远端）。
 ///
 /// **绝不**写远端。dry-run 安全调用。正式 sync 在确认 `version == __nonexistent__`
 /// 后调 [`persist_bootstrap_catalog`] 把合成 catalog 落盘。
 ///
-/// #645 评论 5504296097 问题4 修复：远端 manifest 不存在 / 损坏 / 非法 project id
+/// 远端 manifest 不存在 / 损坏 / 非法 project id
 /// 不再 fallback 或 warn+skip。直接返回 `Err`（`RecoverableError`），不写
 /// `targets.sync.json`，不把这个 Project 写成合法 Upsert。让真实远端 target
 /// 不会静默消失，也不会被伪造的 `(0, "legacy")` LWW 错误地建成合法 record。
@@ -269,7 +269,7 @@ pub fn discover_legacy_remote_catalog(
     project_ids.sort();
 
     // 3. 对每个 project 读 manifest，合成 Upsert record。
-    // #645 评论 5504296097 问题4 修复：非法 project id 不 skip，直接返回 Err。
+    // 非法 project id 不 skip，直接返回 Err。
     // read_legacy_project_lww 返回 Err 时整个 bootstrap 返回 Err。
     let mut records = Vec::with_capacity(project_ids.len());
     for project_id in &project_ids {
@@ -293,15 +293,15 @@ pub fn discover_legacy_remote_catalog(
     })
 }
 
-/// #645 评论 5504296097 问题4 修复：读 legacy project 的 manifest，提取 LWW 时间和 device_id。
+/// 读 legacy project 的 manifest，提取 LWW 时间和 device_id。
 ///
 /// 远端 manifest 路径：`projects/<id>/app-meta/sync/manifest.sync.json`。
 ///
-/// #645 评论 5504296097 问题4 修复：不再伪造 `(0, "legacy")` fallback。
+/// 不再伪造 `(0, "legacy")` fallback。
 /// - manifest 存在且合法 → 取所有 file record 的最大 `(updated_at_ms, device_id)`；
 /// - manifest 不存在 / 损坏 / records 无法可靠判断 → 返回 `Err`，
-///   调用方（`discover_legacy_remote_catalog`）应让整个 bootstrap 返回
-///   `RecoverableError`，不写 `targets.sync.json`，不把这个 Project 写成合法 Upsert。
+/// 调用方（`discover_legacy_remote_catalog`）应让整个 bootstrap 返回
+/// `RecoverableError`，不写 `targets.sync.json`，不把这个 Project 写成合法 Upsert。
 fn read_legacy_project_lww(
     provider: &dyn SyncProvider,
     project_id: &str,
@@ -322,7 +322,7 @@ fn read_legacy_project_lww(
                  — cannot fabricate LWW"
             )))
         })?;
-    // #645 评论 5504296097 问题4 修复：取所有 record 的最大 (lww_time, device_id)。
+    // 取所有 record 的最大 (lww_time, device_id)。
     // manifest 存在但 files 为空 → 返回 Err（不伪造 (0, "") LWW）。
     // 空 manifest 无法可靠判断该 project 的真实 LWW — 调用方（discover_legacy_remote_catalog）
     // 应让整个 bootstrap 返回 RecoverableError，不写 targets.sync.json，
@@ -356,7 +356,7 @@ fn read_legacy_project_lww(
     Ok((winner_time, winner.device_id.clone()))
 }
 
-/// #645 评论 5504296097 问题5：持久化 bootstrap catalog（正式 sync 才调用）。
+/// 持久化 bootstrap catalog（正式 sync 才调用）。
 ///
 /// 当 `snapshot.version` 为 `__nonexistent__` 时用 `CreateNew` 首次写入远端。
 /// dry-run **不**调本函数 — 只用 [`discover_legacy_remote_catalog`] 发现 catalog，
@@ -373,7 +373,7 @@ pub fn persist_bootstrap_catalog(
     write_catalog_once(provider, &snapshot)
 }
 
-/// #645 评论 5504296097 问题3/4：CAS 写远端 catalog，返回持久化后的完整 snapshot。
+/// /4：CAS 写远端 catalog，返回持久化后的完整 snapshot。
 ///
 /// 使用 `WritePrecondition::IfMatch(version)` 防止多设备并发覆盖。
 /// `PreconditionFailed` 时自动重读远端 catalog、LWW 合并本地变更、再 IfMatch 写入。
@@ -382,7 +382,7 @@ pub fn persist_bootstrap_catalog(
 /// `snapshot.version` 为 `__nonexistent__` 时使用 `CreateNew`（首次写入）。
 /// 序列化失败或 provider.write 失败 → `Err`。
 ///
-/// #645 评论 5504296097 问题3：返回 `RemoteTargetCatalogSnapshot`（实际持久化后的完整
+/// 返回 `RemoteTargetCatalogSnapshot`（实际持久化后的完整
 /// catalog + version），调用方必须用返回值更新本地 catalog 和 version，避免
 /// "version 是新的、内容还是旧的"非法组合。
 ///
@@ -415,7 +415,7 @@ pub fn write_remote_catalog(
                     "[sync] write_remote_catalog: succeeded (attempt={})",
                     attempt + 1
                 );
-                // #645 评论 5504296097 问题3：返回实际持久化后的完整 snapshot。
+                // 返回实际持久化后的完整 snapshot。
                 // provider.write 成功后远端内容就是 current_catalog，version 是 new_version。
                 return Ok(RemoteTargetCatalogSnapshot {
                     catalog: current_catalog.clone(),
@@ -423,7 +423,7 @@ pub fn write_remote_catalog(
                 });
             }
             Err(crate::sync::provider::error::ProviderError::PreconditionFailed { .. }) => {
-                // #645 评论 5504296097 问题4：CAS 冲突 → 重读远端最新 catalog，
+                // CAS 冲突 → 重读远端最新 catalog，
                 // LWW 合并本地变更后重试。
                 log::info!(
                     "[sync] write_remote_catalog: PreconditionFailed (attempt={}), \
@@ -445,7 +445,7 @@ pub fn write_remote_catalog(
     ))))
 }
 
-/// #645 评论 5504296097 问题3：单次 CAS 原语 — 只做一次 CreateNew/IfMatch 写入。
+/// 单次 CAS 原语 — 只做一次 CreateNew/IfMatch 写入。
 ///
 /// 与 [`write_remote_catalog`] 的关键区别：`PreconditionFailed` **原样返回**，
 /// 不在内部重读/merge/重试。调用方（[`apply_lifecycle_record`]）负责在 CAS 冲突后
@@ -481,7 +481,7 @@ pub fn write_catalog_once(
     })
 }
 
-/// #645 评论 5504296097 问题2：provider-neutral 原子决策接口。
+/// provider-neutral 原子决策接口。
 ///
 /// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
 /// 重读最新 snapshot → candidate 与最新 remote record 重新做 target-level LWW：
@@ -490,11 +490,11 @@ pub fn write_catalog_once(
 /// - remote 严格赢 → `RemoteWinner { record }`（携带真实赢的 record，调用方按 record.op 决策）；
 /// - Retry → 不删任何远端文件 → pending 保留。
 ///
-/// #645 评论 5504296097 问题1修复：不再用含糊的 `LostToRemote(snapshot)` 让调用方猜 op 反转。
+/// 不再用含糊的 `LostToRemote(snapshot)` 让调用方猜 op 反转。
 /// 完全相等的 record 返回 `AlreadyCurrent`，远端严格赢返回 `RemoteWinner { record }`，
 /// 调用方按真实 `record.op` 走对应路径，避免 LWW 相等时误判为"远端 delete 赢"或"远端 upsert 赢"。
 ///
-/// #645 评论 5504296097 问题3：用 [`write_catalog_once`] 单次 CAS 原语，
+/// 用 [`write_catalog_once`] 单次 CAS 原语，
 /// 不再用 [`write_remote_catalog`] 的内部 retry（会把 PreconditionFailed 吞成 Ok，
 /// 外层看不到冲突误判 Applied）。CAS 冲突由本函数重读 snapshot + 重新判定 winner 处理。
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
@@ -520,12 +520,12 @@ pub fn apply_lifecycle_record(
         if !candidate_wins {
             // remote 不输给 candidate — 可能完全相等或严格赢。
             let Some(existing) = remote_record else {
-                // candidate_wins == false 蕴含 remote_record.is_some()，防御性 Retry。
+                // candidate_wins == false 蕴含 remote_record.is_some，防御性 Retry。
                 return TargetLifecycleApplyResult::Retry(crate::Error::Io(std::io::Error::other(
                     "apply_lifecycle_record: invariant violation — candidate_wins=false but remote_record=None",
                 )));
             };
-            // #645 评论 5504296097 问题1修复：完全相等 → AlreadyCurrent；
+            // 完全相等 → AlreadyCurrent；
             // 远端严格赢 → RemoteWinner { record: existing }（携带真实 op）。
             if records_equal(&current_candidate, existing) {
                 log::info!(
@@ -559,7 +559,7 @@ pub fn apply_lifecycle_record(
 
         match write_catalog_once(provider, &write_snapshot) {
             Ok(persisted) => {
-                // #645 评论 5504296097 问题3：验证持久化后的该 target_id record
+                // 验证持久化后的该 target_id record
                 // 确实就是 candidate winner，不能只是"写请求成功"。
                 let persisted_rec = find_record(&persisted.catalog, &current_candidate.target_id);
                 let candidate_persisted = persisted_rec
@@ -624,12 +624,12 @@ pub fn apply_lifecycle_record(
     ))))
 }
 
-/// #645 评论 5504296097 问题1修复：判断两条 record 是否完全相等
+/// 判断两条 record 是否完全相等
 /// （同 op / 同 lww_time / 同 device_id / 同 target_id / 同 remote_prefix /
 /// 同 active_generation）。
 ///
 /// 用于 `apply_lifecycle_record` 区分 `AlreadyCurrent`（完全相等）和 `RemoteWinner`（远端严格赢）。
-/// #645 评论 5504296097 问题2：active_generation 也参与相等判断 — 两条 Upsert 只有
+/// active_generation 也参与相等判断 — 两条 Upsert 只有
 /// 指向同一 generation 才算完全相等，否则 candidate 仍需 CAS 写入新 active_generation。
 fn records_equal(a: &TargetLifecycleRecord, b: &TargetLifecycleRecord) -> bool {
     a.target_id == b.target_id

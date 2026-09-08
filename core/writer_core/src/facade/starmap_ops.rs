@@ -34,7 +34,7 @@ impl super::WriterCore {
         crate::starmap::create_starmap(&self.app_data_root, title, description, accent_color)
     }
 
-    /// #645 评论 5504296097 问题3：create_starmap 的变更集版本。
+    /// create_starmap 的变更集版本。
     pub fn create_starmap_with_changes(
         &self,
         title: &str,
@@ -68,7 +68,7 @@ impl super::WriterCore {
         )
     }
 
-    /// #645 评论 5504296097 问题3：create_child_starmap 的变更集版本。
+    /// create_child_starmap 的变更集版本。
     pub fn create_child_starmap_with_changes(
         &self,
         parent_id: &str,
@@ -96,7 +96,7 @@ impl super::WriterCore {
         crate::starmap::rename_starmap(&self.app_data_root, starmap_id, new_title)
     }
 
-    /// #645 评论 5504296097 问题3：rename_starmap 的变更集版本。
+    /// rename_starmap 的变更集版本。
     pub fn rename_starmap_with_changes(
         &self,
         starmap_id: &str,
@@ -137,7 +137,7 @@ impl super::WriterCore {
         crate::starmap::delete_starmap(&self.app_data_root, starmap_id)
     }
 
-    /// #645 评论 5504296097 问题3：delete_starmap 的变更集版本。
+    /// delete_starmap 的变更集版本。
     pub fn delete_starmap_with_changes(
         &self,
         starmap_id: &str,
@@ -175,7 +175,7 @@ impl super::WriterCore {
         crate::starmap::bind_starmap_to_project(&self.app_data_root, starmap_id, project_id)
     }
 
-    /// #645 评论 5504296097 问题3：bind_starmap_to_project 的变更集版本。
+    /// bind_starmap_to_project 的变更集版本。
     pub fn bind_starmap_to_project_with_changes(
         &self,
         starmap_id: &str,
@@ -192,7 +192,7 @@ impl super::WriterCore {
         crate::starmap::set_main_starmap_for_project(&self.app_data_root, starmap_id, project_id)
     }
 
-    /// #645 评论 5504296097 问题3：set_main_starmap_for_project 的变更集版本。
+    /// set_main_starmap_for_project 的变更集版本。
     pub fn set_main_starmap_for_project_with_changes(
         &self,
         starmap_id: &str,
@@ -216,7 +216,7 @@ impl super::WriterCore {
         crate::starmap::unbind_starmap_from_project(&self.app_data_root, starmap_id)
     }
 
-    /// #645 评论 5504296097 问题3：unbind_starmap_from_project 的变更集版本。
+    /// unbind_starmap_from_project 的变更集版本。
     pub fn unbind_starmap_from_project_with_changes(
         &self,
         starmap_id: &str,

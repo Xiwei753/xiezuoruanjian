@@ -15,21 +15,21 @@
 //!
 //! ```text
 //! app-meta/starmaps/<starmap_id>/
-//! ├── graph.json                          -- 星图元信息、成员 ID 列表、规范顺序、package revision
-//! ├── nodes/<bucket>/<node_id>.json       -- 单个节点（bucket = hex 高 4 bit）
-//! ├── edges/<bucket>/<edge_id>.json       -- 单条边
+//! ├── graph.json -- 星图元信息、成员 ID 列表、规范顺序、package revision
+//! ├── nodes/<bucket>/<node_id>.json -- 单个节点（bucket = hex 高 4 bit）
+//! ├── edges/<bucket>/<edge_id>.json -- 单条边
 //! ├── child_starmaps/<bucket>/<instance_id>.json -- 子星图放置
-//! ├── hyperlinks/<bucket>/<hyperlink_id>.json    -- 超链接
-//! ├── links/<bucket>/<link_id>.json      -- 链接
+//! ├── hyperlinks/<bucket>/<hyperlink_id>.json -- 超链接
+//! ├── links/<bucket>/<link_id>.json -- 链接
 //! ├── layouts/default/
-//! │   ├── kind.json                       -- 布局类型
-//! │   └── nodes/<bucket>.json            -- 布局节点分片
+//! │ ├── kind.json -- 布局类型
+//! │ └── nodes/<bucket>.json -- 布局节点分片
 //! └── metadata/
-//!     ├── migration.json                  -- 迁移记录
-//!     └── recovery.json                  -- 解析失败对象的恢复记录
+//! ├── migration.json -- 迁移记录
+//! └── recovery.json -- 解析失败对象的恢复记录
 //!
 //! session/starmaps/<starmap_id>/
-//! └── viewport.json                       -- 设备本地视口（不进入同步数据）
+//! └── viewport.json -- 设备本地视口（不进入同步数据）
 //! ```
 
 use std::collections::{HashMap, HashSet, VecDeque};

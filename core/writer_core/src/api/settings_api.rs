@@ -10,7 +10,7 @@ impl WriterCoreApi {
     }
 
     pub fn save_local_settings(&self, settings: LocalSettingsDto) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let change_set = self
             .core_write()
@@ -37,7 +37,7 @@ impl WriterCoreApi {
     }
 
     pub fn save_syncable_settings(&self, settings: SyncableSettingsDto) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let change_set = self
             .core_write()
             .save_syncable_settings_with_changes(&settings.clone().into())?;
@@ -69,7 +69,7 @@ impl WriterCoreApi {
     }
 
     pub fn save_palette_record(&self, record: ThemePaletteRecordDto) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let r: crate::settings::ThemePaletteRecord = record.into();
         let change_set = self
@@ -97,7 +97,7 @@ impl WriterCoreApi {
     }
 
     pub fn delete_palette_record(&self, device_id: &str, fingerprint: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集。
+        // 用 _with_changes 版本拿变更集。
         let change_set = self
             .core_write()
             .delete_palette_record_with_changes(device_id, fingerprint)

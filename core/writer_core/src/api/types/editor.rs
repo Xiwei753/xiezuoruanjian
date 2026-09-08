@@ -10,7 +10,7 @@
 //! - 平台端 UTF-16 index 只存在于平台 TextIndexMap 内，传入 Core 前必须转换
 //! - DTO 的 u32 字段对应 Kotlin ULong/Int——平台端需注意溢出和符号
 //! - `has_inserted_range` / `has_deleted_range` 必须先检查，不能依赖 start/end == 0 判断
-//!   因为 0..0 在 Kotlin IntRange 中包含一个元素（0），不是空范围
+//! 因为 0..0 在 Kotlin IntRange 中包含一个元素（0），不是空范围
 
 /// Kind of animation event emitted by the editor engine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -275,7 +275,7 @@ impl From<crate::editor::EditorVisualTransaction> for EditorVisualTransactionDto
     }
 }
 
-// ── #515: Unified Timeline DTO ──
+// ── Unified Timeline DTO ──
 
 /// 统一时钟 DTO — 文字切片、光标、预输入装饰全部消费同一个 progress。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -312,7 +312,7 @@ impl From<crate::editor::Timeline> for TimelineDto {
     }
 }
 
-// ── #515: Unified Transaction Kind DTO ──
+// ── Unified Transaction Kind DTO ──
 
 /// 统一事务类型 DTO — 最终 Linux 和 Android 只保留四种事务。
 ///
@@ -341,7 +341,7 @@ impl From<crate::editor::UnifiedTransactionKind> for UnifiedTransactionKindDto {
     }
 }
 
-// ── #515: Visual Class Kind DTO ──
+// ── Visual Class Kind DTO ──
 
 /// 视觉对象分类 DTO — 通过 old/new VisualRevision、OffsetMap 和 shaping identity 分类。
 ///
@@ -369,7 +369,7 @@ impl From<crate::editor::VisualClassKind> for VisualClassKindDto {
     }
 }
 
-// ── #515: Decoration Slice DTO ──
+// ── Decoration Slice DTO ──
 
 /// 装饰切片类型 DTO — 预输入下划线、分段颜色、背景色和 IME 光标。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
@@ -393,7 +393,7 @@ impl From<crate::editor::DecorationSliceKind> for DecorationSliceKindDto {
     }
 }
 
-// ── #515: PlatformVisualTransaction DTO ──
+// ── PlatformVisualTransaction DTO ──
 
 /// 跨平台视觉事务 DTO — 包含统一时钟和分类。
 ///
@@ -459,7 +459,7 @@ impl From<crate::editor::PlatformVisualTransaction> for PlatformVisualTransactio
     }
 }
 
-// ── #535: Editor V2 Kernel DTOs ──
+// ── Editor V2 Kernel DTOs ──
 
 /// 操作类型 DTO — 区分不同编辑操作的视觉语义。
 /// Core 根据此枚举决定动画策略和光标行为。
@@ -553,7 +553,7 @@ impl From<crate::editor::strong_types::Utf8ByteRange> for EditorByteRangeDto {
     }
 }
 
-/// #606: 偏移映射类型 DTO — 与 Core `OffsetMapKind` 一一对应。
+/// 偏移映射类型 DTO — 与 Core `OffsetMapKind` 一一对应。
 ///
 /// 平台端 AffectedLayoutPlanner 直接消费此字段决定 cluster 身份映射策略，
 /// 不再在 Kotlin 中独立推导 offset mapping。
@@ -582,7 +582,7 @@ impl From<OffsetMapKindDto> for crate::editor::OffsetMapKind {
     }
 }
 
-/// #606: 单个偏移映射条目 DTO — 与 Core `OffsetMapEntry` 一一对应。
+/// 单个偏移映射条目 DTO — 与 Core `OffsetMapEntry` 一一对应。
 ///
 /// `old_byte_offset` / `new_byte_offset` 均为 UTF-8 byte offset。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -624,7 +624,7 @@ impl From<OffsetMapEntryDto> for crate::editor::OffsetMapEntry {
     }
 }
 
-/// #606: 偏移映射 DTO — 与 Core `OffsetMap` 一一对应。
+/// 偏移映射 DTO — 与 Core `OffsetMap` 一一对应。
 ///
 /// 记录 old 正文 → new 正文的字符身份映射，用于后续正文 cluster 保持身份
 /// 并生成 Move 动画，而不是全部 Crossfade/Insert。
@@ -650,7 +650,7 @@ impl From<OffsetMapDto> for crate::editor::OffsetMap {
     }
 }
 
-/// #606: 动画切片角色 DTO — 与 Core `AnimatedSliceRole` 一一对应。
+/// 动画切片角色 DTO — 与 Core `AnimatedSliceRole` 一一对应。
 ///
 /// 平台端通过 UniFFI 接收此枚举，用于 `editor_kernel_compute_rebase_slice_mappings`
 /// 的入参，不再在 Kotlin 中独立维护一套角色定义。
@@ -690,7 +690,7 @@ impl From<AnimatedSliceRoleDto> for crate::editor::AnimatedSliceRole {
     }
 }
 
-/// #606: Rebase slice 继续/结束语义 DTO — 与 Core `RebaseContinuation` 一一对应。
+/// Rebase slice 继续/结束语义 DTO — 与 Core `RebaseContinuation` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RebaseContinuationDto {
@@ -716,7 +716,7 @@ impl From<RebaseContinuationDto> for crate::editor::RebaseContinuation {
     }
 }
 
-/// #606: Rebase 匹配依据 DTO — 与 Core `RebaseReason` 一一对应。
+/// Rebase 匹配依据 DTO — 与 Core `RebaseReason` 一一对应。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RebaseReasonDto {
@@ -745,7 +745,7 @@ impl From<RebaseReasonDto> for crate::editor::RebaseReason {
     }
 }
 
-/// #606: 旧→新逻辑 slice 对应关系 DTO — 与 Core `RebaseSliceMapping` 一一对应。
+/// 旧→新逻辑 slice 对应关系 DTO — 与 Core `RebaseSliceMapping` 一一对应。
 ///
 /// `old_slice_index` / `new_slice_index` 为对应事务 slice 列表中的索引。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -787,7 +787,7 @@ pub struct EditorVisualIntentDto {
     pub animation_mode: AnimationModeDto,
     pub duration_ms: u64,
     pub coordinated_cursor: CoordinatedCursorDto,
-    /// #606: Core 计算的 old/new 正文偏移映射。
+    /// Core 计算的 old/new 正文偏移映射。
     ///
     /// 正文变更时由 Core 填充；纯选区/光标操作为 `None`。
     /// 平台端 AffectedLayoutPlanner 直接消费此字段。
@@ -902,21 +902,21 @@ pub struct CompositionSessionDto {
     pub generation: u64,
 }
 
-/// #629 评论6 Part B：Composition 完整状态 DTO — 暴露 preedit 文本和 replace range
+/// Composition 完整状态 DTO — 暴露 preedit 文本和 replace range
 /// 给平台静态写作区，使其能在不复制业务状态机的前提下显示预输入文本和下划线。
 ///
 /// 字段语义：
 /// - `session_id` / `base_revision` / `generation`：与 [CompositionSessionDto] 同义，
-///   平台端用过期检测守卫后续 UpdateComposition/FinishComposition/CancelComposition。
+/// 平台端用过期检测守卫后续 UpdateComposition/FinishComposition/CancelComposition。
 /// - `replace_byte_start` / `replace_byte_end_exclusive`：UTF-8 byte offset 半开区间，
-///   指明 committed text 中将被 preedit_text 替换的范围。平台端据此构造临时显示文本。
+/// 指明 committed text 中将被 preedit_text 替换的范围。平台端据此构造临时显示文本。
 /// - `preedit_text`：当前预输入文本（未提交到正文）。Core 不把它写进正文持久化。
 /// - `preedit_cursor_utf16`：preedit 内部光标的 UTF-16 code unit offset（IME 协议要求）。
-///   Core 内部用 `Utf16CodeUnitOffset` 强类型承载（#629 评论7 第1项），DTO 边界仍 u32。
+/// Core 内部用 `Utf16CodeUnitOffset` 强类型承载（第1项），DTO 边界仍 u32。
 ///
 /// 平台端构造临时显示文本时：把 committed text 的
 /// `[replace_byte_start, replace_byte_end_exclusive)` 替换为 `preedit_text`，
-/// composition 下划线范围 = `[replace_byte_start, replace_byte_start + preedit_text.len_utf8())`。
+/// composition 下划线范围 = `[replace_byte_start, replace_byte_start + preedit_text.len_utf8)`。
 /// 保存正文仍只取 committed text（snapshot.text），不把 preedit 写进文件。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -930,7 +930,7 @@ pub struct EditorCompositionStateDto {
     pub preedit_cursor_utf16: u32,
 }
 
-/// #624 评论8：内容增量 DTO — 本次编辑实际插入/删除的字符统计。
+/// 内容增量 DTO — 本次编辑实际插入/删除的字符统计。
 ///
 /// `_chars` 按 Unicode scalar 计数（非 UTF-8 byte、非 UTF-16 code unit）；
 /// Cursor/selection/composition-update 没有 committed 正文变化时为全 0；
@@ -956,7 +956,7 @@ impl From<crate::editor::EditorContentDelta> for EditorContentDeltaDto {
     }
 }
 
-/// 编辑结果 DTO — EditorKernel.apply() 的跨平台返回值。
+/// 编辑结果 DTO — EditorKernel.apply 的跨平台返回值。
 ///
 /// 包含正文变化（display_patches）、选区变化、视觉意图和 composition 会话状态。
 /// 平台端按此结果增量更新显示镜像、布局和动画。
@@ -979,10 +979,10 @@ pub struct EditorEditResultDto {
     pub visual_intent: EditorVisualIntentDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_session: Option<CompositionSessionDto>,
-    /// #624 评论8：本次编辑的字符增量（正文无变化时为全 0）。
+    /// 本次编辑的字符增量（正文无变化时为全 0）。
     #[serde(default)]
     pub content_delta: EditorContentDeltaDto,
-    /// #629 评论6 Part B：当前 composition 完整状态（preedit 文本 + replace range + cursor）。
+    /// 当前 composition 完整状态（preedit 文本 + replace range + cursor）。
     /// 仅在 composition 活跃（begin/update 成功）时非 None；finish/cancel/普通编辑后为 None。
     /// 平台端据此构造临时显示文本和下划线范围，不复制 Core 的 composition 状态机。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1137,13 +1137,13 @@ pub struct EditorSessionSnapshotDto {
     pub selection_anchor: u32,
     pub generation: u64,
     pub chapter_id: String,
-    /// #629 评论6 Part B：当前 composition 完整状态。composition 活跃时非 None，
+    /// 当前 composition 完整状态。composition 活跃时非 None，
     /// 平台端据此构造临时显示文本和下划线范围。无 composition 时为 None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition: Option<EditorCompositionStateDto>,
 }
 
-// ── #516: VisualRevision DTO ──
+// ── VisualRevision DTO ──
 
 /// 已提交正文的视觉修订 DTO。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1175,7 +1175,7 @@ impl From<crate::editor::VisualRevision> for VisualRevisionDto {
     }
 }
 
-// ── #516: CaretAffinity DTO ──
+// ── CaretAffinity DTO ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1193,7 +1193,7 @@ impl From<crate::editor::CaretAffinity> for CaretAffinityDto {
     }
 }
 
-// ── #516: TransactionCancelReason DTO ──
+// ── TransactionCancelReason DTO ──
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1227,7 +1227,7 @@ impl From<crate::editor::TransactionCancelReason> for TransactionCancelReasonDto
 mod tests {
     use super::*;
 
-    /// #624 评论8: EditorEditResultDto 映射 content_delta（插入/删除/空白统计）。
+    /// EditorEditResultDto 映射 content_delta（插入/删除/空白统计）。
     #[test]
     fn edit_result_dto_maps_content_delta() {
         use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
@@ -1253,7 +1253,7 @@ mod tests {
         assert_eq!(dto.content_delta.inserted_non_whitespace_chars, 0u32);
     }
 
-    /// #624 评论8: selection-only 结果 content_delta 为全 0，DTO 默认值正确。
+    /// selection-only 结果 content_delta 为全 0，DTO 默认值正确。
     #[test]
     fn edit_result_dto_selection_only_has_zero_content_delta() {
         use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
@@ -1272,7 +1272,7 @@ mod tests {
         assert_eq!(dto.content_delta, EditorContentDeltaDto::default());
     }
 
-    /// #624 评论8: EditorContentDeltaDto 序列化 camelCase（Android 直接消费）。
+    /// EditorContentDeltaDto 序列化 camelCase（Android 直接消费）。
     #[test]
     fn content_delta_dto_serializes_camel_case() {
         let dto = EditorContentDeltaDto {
@@ -1505,7 +1505,7 @@ mod tests {
         assert!(!json.contains("\"coordinate_mode\":"));
     }
 
-    // --- #515: TimelineDto tests ---
+    // --- TimelineDto tests ---
 
     #[test]
     fn timeline_dto_from_core_timeline() {
@@ -1550,7 +1550,7 @@ mod tests {
         assert!(!json_zero.contains("\"pausedProgress\":"));
     }
 
-    // --- #515: UnifiedTransactionKindDto tests ---
+    // --- UnifiedTransactionKindDto tests ---
 
     #[test]
     fn unified_transaction_kind_dto_from_core() {
@@ -1582,7 +1582,7 @@ mod tests {
         assert!(json.contains("\"compositionUpdate\""));
     }
 
-    // --- #515: VisualClassKindDto tests ---
+    // --- VisualClassKindDto tests ---
 
     #[test]
     fn visual_class_kind_dto_from_core() {
@@ -1608,7 +1608,7 @@ mod tests {
         );
     }
 
-    // --- #515: PlatformVisualTransactionDto tests ---
+    // --- PlatformVisualTransactionDto tests ---
 
     #[test]
     fn platform_visual_transaction_dto_from_core() {
@@ -1683,7 +1683,7 @@ mod tests {
         assert!(!json.contains("\"timeline\":"));
     }
 
-    // --- #535: EditorKernel V2 DTO tests ---
+    // --- EditorKernel V2 DTO tests ---
 
     #[test]
     fn editor_operation_kind_dto_from_core() {

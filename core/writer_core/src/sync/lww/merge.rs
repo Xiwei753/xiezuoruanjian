@@ -1,4 +1,4 @@
-//! #645 评论 5504296097 问题1 修复：唯一的文件级 LWW merge 核心。
+//! 唯一的文件级 LWW merge 核心。
 //!
 //! 把 `attempt.rs` 里真正的文件级合并抽成 [`merge_remote_into_local_snapshot`]，
 //! 供 `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 两条路径
@@ -27,7 +27,7 @@
 //!
 //! - 只有一份 LWW 判断逻辑（本模块）。调用方不再自己比较时间戳/做三路决策。
 //! - 远端 Delete tombstone 通过 remote manifest 看到（不只看 provider.list 物理对象），
-//!   修复"远端删除被本地复活"。
+//! 修复"远端删除被本地复活"。
 //! - 远端同路径更新通过 LWW 时间戳比较进入合并，修复"远端更新丢失"。
 
 use crate::sync::content_class::is_document_content_path;
@@ -49,7 +49,7 @@ use super::transfer::{
     move_to_trash, save_conflict_copy,
 };
 
-/// #645 评论 5504296097 问题1 修复：LWW merge 核心产出。
+/// LWW merge 核心产出。
 ///
 /// [`merge_remote_into_local_snapshot`] 返回此结构，调用方根据字段做远端写。
 #[derive(Debug, Clone)]
@@ -76,7 +76,7 @@ pub(crate) struct LwwMergeOutcome {
     pub remote_manifest_path: String,
     /// manifest JSON（供调用方上传 manifest）。
     pub manifest_json: String,
-    /// #645 评论 5504296097 问题1 修复：合并后的完整强类型 manifest 快照。
+    /// 合并后的完整强类型 manifest 快照。
     ///
     /// generation publisher 必须用此字段发布完整快照，不能只上传
     /// `remote_upload_paths`（delta 动作）。`remote_upload_paths` 只给普通
@@ -84,7 +84,7 @@ pub(crate) struct LwwMergeOutcome {
     pub merged_manifest: SyncManifest,
 }
 
-/// #645 评论 5504296097 问题1 修复：唯一的只读 merge 核心。
+/// 唯一的只读 merge 核心。
 ///
 /// 把 `attempt.rs` 里真正的文件级合并抽成本函数，供
 /// `execute_lww_sync_attempt`（普通 LWW）和 `full_sync.rs` LiveProject 复用。
@@ -98,7 +98,7 @@ pub(crate) struct LwwMergeOutcome {
 /// - `sync_root`：本地同步根（普通 LWW = live root；LiveProject = staging root）。
 /// - `provider`：远端 provider。
 /// - `source_remote_prefix`：拉取远端 manifest/tree 的 prefix（普通 LWW = target.remote_prefix；
-///   LiveProject = source generation prefix）。
+/// LiveProject = source generation prefix）。
 /// - `scope`：同步范围。
 /// - `state`：可变 SyncState（pending_take_remote / known_files / conflicted_files 等）。
 #[allow(
@@ -438,7 +438,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
     Ok(LwwMergeOutcome {
         conflicts: doc_conflicts,
         downloaded_files: all_downloaded,
-        // #645 评论 5504296097 问题1：local_deletes_count 是本地发起的 delete
+        // local_deletes_count 是本地发起的 delete
         // （LwwLocalWinsDeleteRecord），调用方用此列表调 delete_remote_files 删远端。
         // remote_deletes_count 是远端发起的 delete（DeleteLocal / LwwRemoteWinsDelete），
         // 已在 merge 内 move_to_trash，作为 result.remote_deletes 报告。
@@ -451,7 +451,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
         remote_tree_files,
         remote_manifest_path,
         manifest_json,
-        // #645 评论 5504296097 问题1 修复：携带完整强类型 manifest 快照，
+        // 携带完整强类型 manifest 快照，
         // 供 generation publisher 上传完整快照（不只是 delta 动作）。
         merged_manifest: sync_manifest,
     })

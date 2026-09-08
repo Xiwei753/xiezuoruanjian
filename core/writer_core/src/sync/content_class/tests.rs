@@ -56,7 +56,7 @@ fn three_way_both_changed() {
     );
 }
 
-// ── 纯 LWW 决策测试（#644 评论 5474166587 问题3） ──
+// ── 纯 LWW 决策测试 ──
 
 fn lww_rec(hash: &str, time: i64, device: &str, op: &str) -> LwwRecord {
     LwwRecord {

@@ -36,7 +36,7 @@ impl From<crate::project::ProjectStats> for ProjectStatsDto {
     }
 }
 
-/// 项目摘要 DTO — 元数据 + 统计一次性返回（#625 第二段）。
+/// 项目摘要 DTO — 元数据 + 统计一次性返回。
 ///
 /// 作品卡片显示字数需要在列表时一次拿到所有项目的 summary，
 /// 避免端侧逐卡跨 FFI 调 `get_project_stats`。
@@ -66,7 +66,7 @@ impl From<crate::project::ProjectSummary> for ProjectSummaryDto {
     }
 }
 
-/// #644 评论 5467821839 第7节：作品首次卷章快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
+/// 作品首次卷章快照 — 一次跨 FFI 返回全部卷 + 章节 + 统计。
 ///
 /// Android `ProjectViewModel` 不再逐卷调 `list_chapters`，而是一次拿到完整快照。
 /// 每个 `VolumeWithChaptersDto` 包含卷元数据和该卷下所有章节元数据。
@@ -85,7 +85,7 @@ pub struct ProjectWorkspaceSnapshotDto {
     pub volumes: Vec<VolumeWithChaptersDto>,
 }
 
-/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 单个章节的恢复输入。
+/// 第 2 点：恢复作品树输入 DTO — 单个章节的恢复输入。
 ///
 /// 携带 manifest 中的稳定 `chapter_id`、标题、order 和正文内容。
 /// Core 负责校验 ID 格式、唯一性，并按指定 ID 重建章节、写入正文。
@@ -98,7 +98,7 @@ pub struct RestoreChapterInputDto {
     pub content: String,
 }
 
-/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 单个卷的恢复输入。
+/// 第 2 点：恢复作品树输入 DTO — 单个卷的恢复输入。
 ///
 /// 携带 manifest 中的稳定 `volume_id`、标题、order 和该卷下所有章节的恢复输入。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -110,7 +110,7 @@ pub struct RestoreVolumeInputDto {
     pub chapters: Vec<RestoreChapterInputDto>,
 }
 
-/// #649 评论 5561465552 第 2 点：恢复作品树输入 DTO — 完整作品树的恢复输入。
+/// 第 2 点：恢复作品树输入 DTO — 完整作品树的恢复输入。
 ///
 /// 一次跨 FFI 传入完整作品树（作品 + 卷 + 章节 + 正文），Core 负责校验 ID、
 /// 校验目标不冲突、原子发布到 `projects/<projectId>`、记录 workspace Git 变更。

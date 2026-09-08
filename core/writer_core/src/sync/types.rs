@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// 同步错误分类 — provider-neutral 纯枚举，不携带可变文案，不含 GitHub/Git 特定语义。
 ///
-/// Issue #645 评论 5504296097 第1点：通用 core 只保留 provider-neutral 分类，
+/// 第1点：通用 core 只保留 provider-neutral 分类，
 /// GitHub/Git 特定变体（TokenMissing/TokenInvalid/RepoNotFoundOrNoPermission/
 /// BranchMissing/RemoteBranchMissing/NetworkProbeFailed/DnsFailed/TlsFailed/
 /// NonFastForward/CheckoutConflict/LocalBlockingFile/UnrelatedHistories/
@@ -10,9 +10,9 @@ use serde::{Deserialize, Serialize};
 /// GitHub 401/403/404/409/422 在 `sync/provider/github/error.rs` 转成
 /// 通用 `ProviderError` 变体（AuthFailed/PermissionDenied/NotFound/PreconditionFailed）。
 ///
-/// 平台端通过 `to_ui_status()` 和 `to_message_key()` 做错误分类和 i18n 映射，
+/// 平台端通过 `to_ui_status` 和 `to_message_key` 做错误分类和 i18n 映射，
 /// 不得依赖错误文案的包含范围作为主判断（见 AGENTS.md）。
-/// `from_code()` 将字符串反序列化回枚举，只认识 provider-neutral code，未知 code
+/// `from_code` 将字符串反序列化回枚举，只认识 provider-neutral code，未知 code
 /// 统一映射为 `Other`；旧 GitHub/Git legacy code 兼容由 [`legacy_category_compat`]
 /// 在 migration 边界显式处理。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -84,7 +84,7 @@ impl SyncErrorCategory {
 
     /// 从线格式 code 字符串反序列化。未知 code 映射为 `Other`。
     ///
-    /// #645 评论 5504296097 第2点：`from_code` 只认识 provider-neutral code
+    /// 第2点：`from_code` 只认识 provider-neutral code
     /// （`auth_failed`/`auth_error`/`permission_denied`/`token_permission_denied`/
     /// `missing_permission`/`not_found`/`precondition_failed`/`remote_sha_conflict`/
     /// `conflict`/`rate_limited`/`network`/`network_failed`/`network_error`/
@@ -112,7 +112,7 @@ impl SyncErrorCategory {
     }
 }
 
-/// 旧 GitHub/Git 特定 code → 新通用 `SyncErrorCategory` 的兼容映射（#645 评论 5504296097 第2点）。
+/// 旧 GitHub/Git 特定 code → 新通用 `SyncErrorCategory` 的兼容映射（第2点）。
 ///
 /// `from_code` 只认识 provider-neutral code；本函数显式处理旧 GitHub/Git code
 /// 字符串（`token_missing`/`token_invalid`/`github_unauthorized`/`github_forbidden`/
@@ -146,7 +146,7 @@ pub fn legacy_category_compat(code: &str) -> Option<SyncErrorCategory> {
     }
 }
 
-/// 同步范围 — 内部路径过滤语义，不再携带产品配置含义（Issue #630）。
+/// 同步范围 — 内部路径过滤语义，不再携带产品配置含义。
 ///
 /// 一个全局 `SyncConfig` + 一份全局凭据，`perform_full_sync` 内部按 `SyncTarget`
 /// 把不同本地根映射到同一个远端仓库的不同前缀：
@@ -164,7 +164,7 @@ pub enum SyncScope {
     App,
 }
 
-/// 同步目标 — 一次全量同步中的一个本地根 → 远端前缀映射（Issue #630）。
+/// 同步目标 — 一次全量同步中的一个本地根 → 远端前缀映射。
 ///
 /// 一个远端仓库内部按目录分流：
 /// - App 目标固定 `remote_prefix = "app"`
@@ -202,7 +202,7 @@ impl SyncTarget {
     }
 }
 
-/// 同步配置 — 全局唯一，持久化为 `<app_data_root>/app-meta/sync/config.local.json`（Issue #630）。
+/// 同步配置 — 全局唯一，持久化为 `<app_data_root>/app-meta/sync/config.local.json`。
 ///
 /// 一次全量同步 = 设置 + 全局星图 + 主题调色板 + 全部作品。
 /// App/Project 的区分由 `SyncTarget` 内部携带，`SyncConfig` 不再携带"我是应用同步还是作品同步"的产品配置含义。
@@ -213,7 +213,7 @@ impl SyncTarget {
 /// 敏感字段（token）不在 SyncConfig 中，由 [`SyncSecrets`] 单独管理，
 /// 平台端安全存储注入。
 ///
-/// ## 通用字段 vs Provider 特定字段（Issue #645 评论第 2 点）
+/// ## 通用字段 vs Provider 特定字段
 ///
 /// `enabled / auto_sync / sync_interval_seconds / active_provider / provider_config`
 /// 为通用字段，所有 Provider 共用。GitHub 特定字段（remote_url / branch / username /
@@ -326,7 +326,7 @@ pub(crate) fn default_active_provider() -> String {
     "github_api".to_string()
 }
 
-/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入（Issue #645 评论第 2 点）。
+/// 同步密钥 — 敏感凭证，不持久化到 config.json，由平台端安全存储注入。
 ///
 /// `provider_secrets` 为 provider-neutral 强类型枚举，当前仅 GitHub { token }。
 /// 旧 `token`/`ssh_private_key` 顶层字段已删除，由 `ProviderSecrets::GitHub { token }` 容纳。
@@ -371,7 +371,7 @@ impl SyncSecrets {
     }
 }
 
-/// 通用同步策略 — LWW engine 所需的 provider-neutral 配置（Issue #645）。
+/// 通用同步策略 — LWW engine 所需的 provider-neutral 配置。
 ///
 /// 从 [`SyncConfig`] 转换而来，只携带 engine 决策需要的通用字段，
 /// 不含任何 GitHub 特定参数（token/api_base_url 等在创建 Provider 时解析）。
@@ -474,7 +474,7 @@ pub struct SyncConflict {
 
 /// 同步诊断结果 — provider-neutral，逐步检查网络、认证、远端可达性。
 ///
-/// #645 评论 5504296097 第2点：删除旧 Git/GitHub 远端假设字段
+/// 第2点：删除旧 Git/GitHub 远端假设字段
 /// （`backend_type`/`repo_ok`/`branch_ok`/`repo_status`/`branch_status`/
 /// `remote_url_sanitized`/`transport`），改为 provider-neutral 结构。
 /// `provider_type` 标识 Provider 类型（"github_api"/"webdav"/"cloudkit" 等），
@@ -596,7 +596,7 @@ impl SyncResult {
         }
     }
 
-    /// #645 评论 5504296097 问题3：创建"无变更"结果——跳过删除（远端 LWW 胜出时）。
+    /// 创建"无变更"结果——跳过删除（远端 LWW 胜出时）。
     pub fn no_changes() -> Self {
         Self {
             status: SyncStatus::NoChanges,
@@ -820,7 +820,7 @@ impl Default for SyncState {
 /// `target_kind` 为 `"app"` 或 `"project"`；`project_id` 仅在 Project target 时有值。
 /// `result` 为该 target 的 `SyncResult`；`error` 为该 target 执行失败时的错误描述。
 ///
-/// #645 评论 5504296097 问题1/2：`deleted_resolution` 仅 deleted_project target 有值，
+/// /2：`deleted_resolution` 仅 deleted_project target 有值，
 /// `cleanup_completed_deleted_targets` 按此精确确认是否移除本地 `PendingDeletedTarget`，
 /// 不再按 `SyncStatus` 猜。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -829,40 +829,40 @@ pub struct TargetSyncResult {
     pub project_id: Option<String>,
     pub remote_prefix: String,
     pub result: SyncResult,
-    /// #645 评论 5504296097 问题1/2：deleted target 的 LWW 决策结果。
+    /// /2：deleted target 的 LWW 决策结果。
     ///
     /// 仅 `target_kind == "deleted_project"` 时有值。`cleanup_completed_deleted_targets`
     /// 按此精确确认：`LocalDeleteWins` 且远端删除+catalog tombstone 写入成功才移除 pending；
     /// `RemoteTargetWins` 且本地恢复成功才移除 pending；`Retry` 保留。
     #[serde(default)]
     pub deleted_resolution: Option<DeletedTargetResolution>,
-    /// #645 评论 5504296097 问题1：本地 lifecycle commit action —
+    /// 本地 lifecycle commit action —
     /// Transfer 阶段产出，Commit 阶段执行。
     ///
     /// - `None`：无 lifecycle action，走普通 staging commit；
     /// - `DeleteProject { project_id }`：远端 delete 胜出，Commit 阶段执行完整
-    ///   Project 本地删除事务（move worktree / unbind starmaps / history），
-    ///   **不**生成 `PendingDeletedTarget`（不反向要求删远端，远端已删）；
+    /// Project 本地删除事务（move worktree / unbind starmaps / history），
+    /// **不**生成 `PendingDeletedTarget`（不反向要求删远端，远端已删）；
     /// - `RestoreProject { project_id }`：预留，当前 RestoreProject 在 Transfer 直接下载。
     #[serde(default)]
     pub local_lifecycle_action: LocalLifecycleCommitAction,
 }
 
-/// #645 评论 5504296097 问题1：本地 lifecycle commit action —
+/// 本地 lifecycle commit action —
 /// Transfer 阶段产出，Commit 阶段执行。
 ///
 /// 把"删除本地 project"从 Transfer 阶段（裸 `remove_dir_all`）移到 Commit 阶段
 /// （完整业务删除事务），避免 staging commit 把刚删掉的旧作品重新写回来。
 ///
-/// #645 评论 5504296097 问题2：新增 `ReplaceProject` 变体 —
+/// 新增 `ReplaceProject` 变体 —
 /// DeleteLocalProject → remote 又 Upsert 时，本地已有 Project 需要整树替换，
 /// 不再用<空 staging + 普通三方 commit>冒充 replace。`ReplaceProject` 的 Commit
 /// 语义：对 live ∪ staging 做整树替换（staging 有 → Apply；live 有但 staging 没有 → Delete）。
 ///
-/// #645 评论 5504296097C 问题3：`DeleteProject` / `ReplaceProject` 携带
+/// C 问题3：`DeleteProject` / `ReplaceProject` 携带
 /// `expected_local_lww` guard，Commit 时再确认本地没有前进。
 ///
-/// #645 评论 5504296097 问题2 修复：`expected_local_lww` 是**非 Option** 的
+/// `expected_local_lww` 是**非 Option** 的
 /// `LiveTargetLwwSerde`。破坏性 lifecycle action（DeleteProject / ReplaceProject）
 /// 必须携带 guard — 不允许"无 guard 也允许删/替换"。Transfer 阶段生成这些 action
 /// 时必须先成功获取当前 local LWW（snapshot 失败 → Retry，不生成 action）。
@@ -876,7 +876,7 @@ pub enum LocalLifecycleCommitAction {
     DeleteProject {
         /// 被删除的 project id。
         project_id: String,
-        /// #645 评论 5504296097 问题2 修复：Commit 时再确认本地没有前进的 guard。
+        /// Commit 时再确认本地没有前进的 guard。
         /// 非 Option — 破坏性 action 必须携带 guard，Commit 严格比较
         /// `current_local == expected_local_lww`，其他任何情况都拒绝执行。
         expected_local_lww: LiveTargetLwwSerde,
@@ -886,7 +886,7 @@ pub enum LocalLifecycleCommitAction {
         /// 被恢复的 project id。
         project_id: String,
     },
-    /// #645 评论 5504296097 问题&2：远端 Upsert 胜出且本地已有 Project → 整树替换。
+    /// 问题&2：远端 Upsert 胜出且本地已有 Project → 整树替换。
     ///
     /// Commit 语义：对 live ∪ staging 做整树替换：
     /// 1. Commit 前再次确认本地没有比 guard 更新的编辑；
@@ -895,13 +895,13 @@ pub enum LocalLifecycleCommitAction {
     ReplaceProject {
         /// 被替换的 project id。
         project_id: String,
-        /// #645 评论 5504296097 问题2 修复：Commit 时再确认本地没有前进的 guard。
+        /// Commit 时再确认本地没有前进的 guard。
         /// 非 Option — 破坏性 action 必须携带 guard。
         expected_local_lww: LiveTargetLwwSerde,
     },
 }
 
-/// #645 评论 5504296097 问题3：`LiveTargetLww` 的 serde 友好包装。
+/// `LiveTargetLww` 的 serde 友好包装。
 ///
 /// `LiveTargetLww` 定义在 `full_sync.rs`（非 Serialize），lifecycle action 需要
 /// Serialize。此结构提供 serde 桥接，Commit 时转回 `LiveTargetLww` 做 guard 比较。
@@ -921,7 +921,7 @@ impl LiveTargetLwwSerde {
     }
 }
 
-/// #645 评论 5504296097 问题2修复：本地 lifecycle commit 的完整 receipt。
+/// 本地 lifecycle commit 的完整 receipt。
 ///
 /// `commit_full_sync` 返回 `Vec<LocalLifecycleCommitReceipt>`，每个元素对应一个
 /// RemoteLifecycle 删除事务。API 层用 `change_set` 调 `record_workspace_change_set`
@@ -949,7 +949,7 @@ pub struct TargetSyncPlan {
     pub plan: SyncPlan,
 }
 
-/// 全量同步聚合结果 — 一次 `perform_full_sync` 的完整输出（Issue #630）。
+/// 全量同步聚合结果 — 一次 `perform_full_sync` 的完整输出。
 ///
 /// `overall_status` 为总体状态（Success/PartialConflict/Error 等）：
 /// - 所有 target 成功 → Success
@@ -986,7 +986,7 @@ pub struct FullSyncDryRunResult {
     pub total_conflicts: u32,
 }
 
-/// 全量同步诊断结果 — 只测一次仓库、分支、token（Issue #630）。
+/// 全量同步诊断结果 — 只测一次仓库、分支、token。
 ///
 /// `diagnostics` 为单次诊断结果；`error` 为诊断失败时的错误描述。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -994,10 +994,10 @@ pub struct FullSyncDiagnosticsResult {
     pub diagnostics: SyncDiagnosticsResult,
 }
 
-/// 待删除的同步 target — provider-neutral 持久状态（Issue #645 评论 5504296097 问题1）。
+/// 待删除的同步 target — provider-neutral 持久状态。
 ///
 /// 整部作品删除后，远端 `projects/<project_id>/` 下的对象需要被清理。
-/// 但 `prepare_full_sync` 只通过 `list_projects()` 枚举现存作品生成 target，
+/// 但 `prepare_full_sync` 只通过 `list_projects` 枚举现存作品生成 target，
 /// 已删除作品不在列表里，远端前缀没有任何 target 会去清理。
 ///
 /// `PendingDeletedTarget` 是 sync engine 自己的 provider-neutral 持久状态
@@ -1007,11 +1007,11 @@ pub struct FullSyncDiagnosticsResult {
 /// ## 生命周期
 ///
 /// 1. `delete_project_with_changes` 时记录：把 `PendingDeletedTarget` 持久化到
-///    `<app_data_root>/app-meta/sync/pending_deleted_targets.json`；
+/// `<app_data_root>/app-meta/sync/pending_deleted_targets.json`；
 /// 2. `prepare_full_sync` 加载 pending deleted targets，加入 `FullSyncPlan.targets`，
-///    `target_kind = "deleted_project"`；
+/// `target_kind = "deleted_project"`；
 /// 3. `run_transfer` 对 `deleted_project` target 走 target-delete 计划：
-///    `provider.list(remote_prefix)` 枚举远端对象 → 逐个 `provider.delete(...)`；
+/// `provider.list(remote_prefix)` 枚举远端对象 → 逐个 `provider.delete(...)`；
 /// 4. 全部远端删除成功后从 pending 列表移除该条目。
 ///
 /// ## provider-neutral
@@ -1019,7 +1019,7 @@ pub struct FullSyncDiagnosticsResult {
 /// 只使用 `SyncProvider::list/delete` 和 capabilities，不写 GitHub 专用逻辑。
 /// GitHub 的 SHA/branch/API 细节由 `GitHubProvider` 自己处理。
 ///
-/// #645 评论 5504296097 问题3：`deleted_at_ms` / `device_id` 参与 LWW 决策。
+/// `deleted_at_ms` / `device_id` 参与 LWW 决策。
 /// `run_deleted_target_sync` 先读远端 manifest，用 `deleted_at_ms` 与远端
 /// manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端，
 /// 远端更晚则不删（远端有更新，下次正常 sync 会下载恢复）。
@@ -1029,14 +1029,14 @@ pub struct PendingDeletedTarget {
     pub target: SyncTarget,
     /// 删除时间戳（Unix 毫秒）。
     ///
-    /// #645 评论 5504296097 问题3：参与 LWW 决策，不再只用于排序和日志。
+    /// 参与 LWW 决策，不再只用于排序和日志。
     /// 与远端 manifest 的 `max(lww_record_time)` 比较，本地 tombstone 胜出才删远端。
     pub deleted_at_ms: i64,
     /// 关联的 delete journal token，用于 ack 推进 journal。
     pub journal_token: String,
     /// 发起删除的设备 ID，用于 LWW 平局决胜。
     ///
-    /// #645 评论 5504296097 问题3：时间戳相同时，字典序大的 device_id 获胜
+    /// 时间戳相同时，字典序大的 device_id 获胜
     /// （与 `sync/lww/compare.rs::resolve_lww_path` 的 tie-break 规则一致）。
     /// `#[serde(default)]` 保持向后兼容：旧文件反序列化得到空字符串。
     #[serde(default)]
@@ -1056,7 +1056,7 @@ impl PendingDeletedTarget {
     ///
     /// `paths` 为 `None`：删除整个 `projects/<project_id>/` 前缀下所有远端对象。
     ///
-    /// #645 评论 5504296097 问题3：`device_id` 参与 LWW 决策，必传。
+    /// `device_id` 参与 LWW 决策，必传。
     pub fn for_project(
         project_id: &str,
         deleted_at_ms: i64,
@@ -1073,11 +1073,11 @@ impl PendingDeletedTarget {
     }
 }
 
-// ── #645 评论 5504296097 问题3：Target 生命周期 catalog（远端持久、provider-neutral） ──
+// ── Target 生命周期 catalog（远端持久、provider-neutral） ──
 
 /// target 生命周期操作类型 — provider-neutral，持久化到远端 catalog。
 ///
-/// #645 评论 5504296097 问题3：`TargetLifecycleRecord` 记录单个 sync target
+/// `TargetLifecycleRecord` 记录单个 sync target
 /// （如 `projects/<project_id>`）的生命周期操作，让离线旧设备上线时能读到
 /// target 的 delete tombstone，不会把本地旧 project 重新上传（P 被复活）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1106,9 +1106,9 @@ impl TargetOp {
 /// ## 与 `PendingDeletedTarget` 的职责区分
 ///
 /// - 本地 `pending_deleted_targets.json`（`PendingDeletedTarget`）：负责
-///   "本机删除事务还没同步完成"，本机状态。
+/// "本机删除事务还没同步完成"，本机状态。
 /// - 远端 `targets.sync.json`（`TargetLifecycleRecord`）：负责
-///   "跨设备都必须知道这个 target 的生命周期"，跨设备共识。
+/// "跨设备都必须知道这个 target 的生命周期"，跨设备共识。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TargetLifecycleRecord {
     /// target 标识，如 `"projects/<project_id>"`，与 `SyncTarget.remote_prefix` 对齐。
@@ -1125,7 +1125,7 @@ pub struct TargetLifecycleRecord {
     /// 发起操作的设备 ID，用于 LWW tie-break（字典序大的胜出，与 `resolve_lww_path` 同规则）。
     #[serde(default)]
     pub device_id: String,
-    /// #645 评论 5504296097 问题2：generation 原子发布 — Upsert 记录指向的当前可见
+    /// generation 原子发布 — Upsert 记录指向的当前可见
     /// generation ID。
     ///
     /// LiveProject 先把完整 Project 上传到不可见 generation prefix
@@ -1134,9 +1134,9 @@ pub struct TargetLifecycleRecord {
     /// 则 G 是未引用 generation，后续 GC。
     ///
     /// - `Some(G)`：Upsert 的当前可见 generation，RestoreProject 从
-    ///   `projects/P/__generations__/G/` 下载；Delete cleanup 不碰此 generation prefix。
+    /// `projects/P/__generations__/G/` 下载；Delete cleanup 不碰此 generation prefix。
     /// - `None`：legacy（无 generation）或 Delete 记录，RestoreProject 从 legacy
-    ///   `projects/P/` 下载。
+    /// `projects/P/` 下载。
     #[serde(default)]
     pub active_generation: Option<String>,
     /// schema 版本。
@@ -1187,7 +1187,7 @@ impl TargetLifecycleRecord {
         }
     }
 
-    /// #645 评论 5504296097 问题2：builder 方法 — 给 Upsert 记录设置 active_generation。
+    /// builder 方法 — 给 Upsert 记录设置 active_generation。
     ///
     /// 用于 LiveProject generation 原子发布：先上传到 generation prefix，成功后
     /// 构造 `upsert(...).with_active_generation(G)` 作为 CAS candidate。
@@ -1209,7 +1209,7 @@ pub struct TargetLifecycleCatalog {
     pub records: Vec<TargetLifecycleRecord>,
 }
 
-/// #645 评论 5504296097 问题4：带远端版本的 catalog 快照。
+/// 带远端版本的 catalog 快照。
 ///
 /// `load_remote_catalog` 返回此结构，携带远端当前版本。
 /// `write_remote_catalog` 用 `version` 做 CAS 写入（`IfMatch`），
@@ -1222,11 +1222,11 @@ pub struct RemoteTargetCatalogSnapshot {
     pub version: crate::sync::provider::model::RemoteVersion,
 }
 
-// ── #645 评论 5504296097 问题1/2：DeletedTargetResolution ──
+// ── /2：DeletedTargetResolution ──
 
 /// deleted target 的 LWW 决策结果 — provider-neutral typed resolution。
 ///
-/// #645 评论 5504296097 问题1/2：`run_deleted_target_sync` 做完 target-level LWW
+/// /2：`run_deleted_target_sync` 做完 target-level LWW
 /// 后返回这个 typed resolution（而非 `SyncResult`），`cleanup_completed_deleted_targets`
 /// 按此精确确认是否移除本地 `PendingDeletedTarget`，不再按 `SyncStatus` 猜。
 ///
@@ -1244,11 +1244,11 @@ pub enum DeletedTargetResolution {
     Retry,
 }
 
-// ── #645 评论 5504296097 问题1：PlannedTargetKind ──
+// ── PlannedTargetKind ──
 
 /// 计划阶段 target 的明确类型 — 替代字符串 `target_kind`，强类型决策结果。
 ///
-/// #645 评论 5504296097 问题1：`build_full_sync_target_plan` 按 `target_id` 合并
+/// `build_full_sync_target_plan` 按 `target_id` 合并
 /// local live project / local pending delete / remote lifecycle record，
 /// 生成此明确类型，`run_transfer` 按此走对应执行路径。
 ///
@@ -1260,9 +1260,9 @@ pub enum DeletedTargetResolution {
 /// - `DeleteLocalProject`：本地 live project，远端 delete tombstone 更新 → 不上传，本地 project 应删除。
 /// - `RestoreProject`：本地 pending delete，远端 upsert 更新 → 下载远端恢复本地 project。
 /// - `Retry`：无法决策（catalog/manifest 读取失败）→ 不删不恢复，pending 保留。
-/// - `RemoteCleanupProject`：#645 评论 5504296097 问题3 修复 — 远端残留清理重试。
-///   上一轮 authoritative Delete 清 prefix 失败时记录 `PendingRemoteTargetCleanup`，
-///   下一轮 Prepare 加载 pending 生成此 target，重试 `delete_all_remote_objects`。
+/// - `RemoteCleanupProject`：— 远端残留清理重试。
+/// 上一轮 authoritative Delete 清 prefix 失败时记录 `PendingRemoteTargetCleanup`，
+/// 下一轮 Prepare 加载 pending 生成此 target，重试 `delete_all_remote_objects`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlannedTargetKind {
@@ -1272,7 +1272,7 @@ pub enum PlannedTargetKind {
     DeleteLocalProject,
     RestoreProject,
     Retry,
-    /// #645 评论 5504296097 问题3 修复：远端残留清理重试。
+    /// 远端残留清理重试。
     RemoteCleanupProject,
 }
 
@@ -1282,7 +1282,7 @@ impl PlannedTargetKind {
     /// - `App` → `"app"`
     /// - `LiveProject` / `DeleteLocalProject` → `"project"`（都是 live project target）
     /// - `DeleteRemoteProject` / `RestoreProject` / `Retry` / `RemoteCleanupProject`
-    ///   → `"deleted_project"`（都是 pending delete / cleanup target）
+    /// → `"deleted_project"`（都是 pending delete / cleanup target）
     pub fn as_target_kind_str(&self) -> &'static str {
         match self {
             PlannedTargetKind::App => "app",
@@ -1309,18 +1309,18 @@ impl PlannedTargetKind {
     }
 }
 
-// ── #645 评论 5504296097 问题2：TargetLifecycleApplyResult ──
+// ── TargetLifecycleApplyResult ──
 
 /// provider-neutral 原子决策接口的返回值 — catalog CAS 写入后的决策结果。
 ///
-/// #645 评论 5504296097 问题1修复：原 `LostToRemote(snapshot)` 让调用方猜 op 反转，
+/// 原 `LostToRemote(snapshot)` 让调用方猜 op 反转，
 /// 导致 LWW 相等时被误判为"远端 delete 赢"或"远端 upsert 赢"。新枚举明确四种结果：
 ///
 /// - `Applied(snapshot)` → candidate 严格赢，merge + IfMatch 写成功，携带持久化后的完整 snapshot；
 /// - `AlreadyCurrent(snapshot)` → candidate 与远端 record 完全相等（同 op/同时间/同 device_id），
-///   不需要再写 catalog，调用方按 candidate.op 继续后续动作（不删本地/不恢复）；
+/// 不需要再写 catalog，调用方按 candidate.op 继续后续动作（不删本地/不恢复）；
 /// - `RemoteWinner { snapshot, record }` → 远端严格赢，携带远端最新 snapshot 和**真实**赢的 record，
-///   调用方按 `record.op` 决策（Delete → 删本地；Upsert → 恢复本地），不再猜 op 反转；
+/// 调用方按 `record.op` 决策（Delete → 删本地；Upsert → 恢复本地），不再猜 op 反转；
 /// - `Retry(err)` → 无法写入（重试耗尽/网络错误等），不删任何远端文件，pending 保留。
 #[derive(Debug)]
 pub enum TargetLifecycleApplyResult {

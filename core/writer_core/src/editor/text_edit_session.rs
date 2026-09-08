@@ -33,7 +33,7 @@ impl TextEditSessionId {
 /// 否则 updateComposition/finishComposition/cancelComposition 会被内核拒绝。
 /// 这防止了异步 composition 操作写入已被 reset 的会话。
 ///
-/// [generation] 字段为 u64，对应平台端 Kotlin Long（通过 toULong() 恢复无符号语义）。
+/// [generation] 字段为 u64，对应平台端 Kotlin Long（通过 toULong 恢复无符号语义）。
 pub struct TextEditSession {
     pub kernel: EditorKernel,
     pub session_id: TextEditSessionId,
@@ -90,7 +90,7 @@ impl TextEditSessionRegistry {
         }
     }
 
-    /// 创建新会话并返回其 ID。空文本使用 `new()`，非空使用 `with_text()`。
+    /// 创建新会话并返回其 ID。空文本使用 `new`，非空使用 `with_text`。
     /// `initial_cursor` 仅在 `initial_text` 非空时有效。
     pub fn create_session(
         &mut self,

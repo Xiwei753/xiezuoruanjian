@@ -1179,7 +1179,7 @@ fn aggregate_all_no_changes_overall_is_no_changes() {
 }
 
 /// `Success + NoChanges -> Success`：有 target 实际上传/下载了，不能丢成 NoChanges。
-/// 修复 max() 把 NoChanges(2) 压过 Success(1) 的聚合错误
+/// 修复 max 把 NoChanges(2) 压过 Success(1) 的聚合错误
 #[test]
 fn aggregate_success_plus_no_changes_is_success() {
     let (_temp_dir, core) = new_core_with_projects();

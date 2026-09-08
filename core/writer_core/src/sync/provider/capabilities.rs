@@ -4,11 +4,11 @@
 //! - GitHub：支持条件写入、服务端时间戳、远端历史，但不支持原子批量/移动。
 //! - MemoryProvider：支持原子批量、原子移动、目录语义，但无远端历史。
 //!
-//! engine 通过 `capabilities()` 查询后决定：
+//! engine 通过 `capabilities` 查询后决定：
 //! - `conditional_write` 为真时使用 `IfMatch`/`CreateNew` 前置条件，
-//!   为假时降级为 `Unconditional` 写入。
+//! 为假时降级为 `Unconditional` 写入。
 //! - `max_parallel_downloads` 用于控制并行下载线程数，
-//!   低于 `MAX_PARALLEL_DOWNLOADS` 上限时按此值取较小值。
+//! 低于 `MAX_PARALLEL_DOWNLOADS` 上限时按此值取较小值。
 //!
 //! 当前实际使用的字段：`conditional_write`、`max_parallel_downloads`。
 //! 以下字段为后续 Provider（WebDAV、CloudKit 等）预留，当前 engine 暂未使用：

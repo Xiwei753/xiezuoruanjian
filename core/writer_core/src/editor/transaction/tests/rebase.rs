@@ -39,7 +39,7 @@ fn transaction_rebase_serializes_camel_case() {
     assert!(json.contains("\"sliceRects\":"));
     assert!(json.contains("\"sliceAlphas\":"));
     assert!(json.contains("\"cursorRect\":"));
-    // #606: sliceMappings 序列化为 camelCase
+    // sliceMappings 序列化为 camelCase
     assert!(json.contains("\"sliceMappings\":"));
     assert!(json.contains("\"oldSliceIndex\":"));
     assert!(json.contains("\"newSliceIndex\":"));
@@ -57,7 +57,7 @@ fn transaction_rebase_skips_none() {
     };
     let json = serde_json::to_string(&rebase).unwrap();
     assert!(!json.contains("\"oldFrameSnapshot\":"));
-    // #606: 空 slice_mappings 不序列化
+    // 空 slice_mappings 不序列化
     assert!(!json.contains("\"sliceMappings\":"));
 }
 
@@ -76,7 +76,7 @@ fn compute_rebase_creates_transaction_rebase() {
             slice_alphas: vec![0.8],
             cursor_rect: None,
         }),
-        // #606: 旧事务 1 个 Insert slice @ [0,3)，新事务 1 个 Insert slice @ [0,3)
+        // 旧事务 1 个 Insert slice @ [0,3)，新事务 1 个 Insert slice @ [0,3)
         SliceMatchInput {
             old_slice_roles: &[AnimatedSliceRole::Insert],
             old_slice_byte_ranges: &[(0, 3)],
@@ -88,7 +88,7 @@ fn compute_rebase_creates_transaction_rebase() {
     assert_eq!(rebase.cancelled_transaction_id, 42);
     assert!((rebase.old_progress - 0.6).abs() < f64::EPSILON);
     assert!(rebase.old_frame_snapshot.is_some());
-    // #606: slice_mappings 应包含 1 个 Continue 映射
+    // slice_mappings 应包含 1 个 Continue 映射
     assert_eq!(rebase.slice_mappings.len(), 1);
     assert_eq!(rebase.slice_mappings[0].old_slice_index, 0);
     assert_eq!(rebase.slice_mappings[0].new_slice_index, 0);
@@ -131,7 +131,7 @@ fn transactions_overlap_non_overlapping_ranges() {
 
 #[test]
 fn rebase_covers_all_transaction_kinds() {
-    // #516: rebase 必须覆盖四种事务
+    // rebase 必须覆盖四种事务
     // 测试 CursorOnly 与 BodyEdit 冲突
     assert!(transactions_overlap(
         UnifiedTransactionKind::CursorOnly,
@@ -148,7 +148,7 @@ fn rebase_covers_all_transaction_kinds() {
     ));
 }
 
-// #606: compute_rebase_slice_mappings 行为测试
+// compute_rebase_slice_mappings 行为测试
 
 #[test]
 fn compute_rebase_slice_mappings_empty_inputs() {
@@ -494,13 +494,13 @@ fn rebase_slice_mapping_serializes_camel_case() {
     assert!(json.contains("\"reason\":\"noMapping\""));
 }
 
-// ── #639 评论 5420317382 修复后验证测试 ─────────────────────────────
+// ── 修复后验证测试 ─────────────────────────────
 
-/// #639 评论 5420317382 问题 1 修复后验证：旧 Move slice rebase 到新
+/// 后验证：旧 Move slice rebase 到新
 /// CrossfadeOld+CrossfadeNew pair 时，Core 应把旧 Move 映射到 CrossfadeOld
 /// （index 0）而非 CrossfadeNew（index 1）。
 ///
-/// 修复前：`compatible_rebase_roles()` 把 Move/Insert/CrossfadeNew 全当成同一
+/// 修复前：`compatible_rebase_roles` 把 Move/Insert/CrossfadeNew 全当成同一
 /// 出现态，`try_match_slice` 跳过不兼容的 CrossfadeOld，命中 CrossfadeNew →
 /// 旧 Move 映射到 CrossfadeNew (index 1)，`RebasePlanner` 把旧 Move 的
 /// currentAlpha(==1) 填给新 CrossfadeNew 的 startAlpha → 新位置字直接全亮，
@@ -563,12 +563,12 @@ fn repro_639_comment_5420317382_move_rebased_to_crossfade_new_not_crossfade_old(
     );
 }
 
-/// #639 评论 5420317382 问题 1 修复后验证：Crossfade pair 优先映射 + 没有 pair
+/// 后验证：Crossfade pair 优先映射 + 没有 pair
 /// 时现有 continuation 规则保留。
 ///
 /// 修复后行为：
 /// 1. 旧 Move/Insert/CrossfadeNew → 新 CrossfadeOld+CrossfadeNew pair：优先映射到
-///    CrossfadeOld，CrossfadeNew 不接旧状态。
+/// CrossfadeOld，CrossfadeNew 不接旧状态。
 /// 2. 没有 pair 时，旧 Move → 新单独 CrossfadeNew 仍兼容（现有 continuation 保留）。
 /// 3. 旧 CrossfadeNew → 新单独 Move 仍兼容（现有 continuation 保留）。
 #[test]
@@ -657,7 +657,7 @@ fn repro_639_comment_5420317382_move_and_crossfade_new_treated_as_same_emergence
     );
 }
 
-/// #639 评论 5421085782 问题1 复现：`build_crossfade_pair_index` 只在
+/// 复现：`build_crossfade_pair_index` 只在
 /// `CrossfadeOld.range == CrossfadeNew.range` 时才认成一对。但 CrossfadeOld.range
 /// 是 old 文档坐标、CrossfadeNew.range 是 new 文档坐标，被 OffsetMap 平移后不同
 /// （例如插字/回车后保留字符 old [30,33) → new [33,36)）。pair 建不出来 →

@@ -122,7 +122,7 @@ pub unsafe extern "C" fn writer_core_create_project(name: *const c_char) -> *mut
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARGUMENT", &format!("Invalid name: error {}", e)),
     };
-    // #645 评论 5504296097 问题2：FFI 写操作改走 with_app_service，
+    // FFI 写操作改走 with_app_service，
     // 经 WriterAppService → WriterCoreApi → *_with_changes → record_workspace_change_set → ack，
     // 不再绕过 workspace history 协议。
     match with_app_service(|svc| {
@@ -489,7 +489,7 @@ pub unsafe extern "C" fn writer_core_delete_project(project_id: *const c_char) -
             )
         }
     };
-    // #645 评论 5504296097 问题2：FFI 写操作改走 with_app_service，
+    // FFI 写操作改走 with_app_service，
     // 经 WriterAppService → WriterCoreApi → delete_project_with_changes →
     // record_workspace_change_set → ack_project_delete_history，
     // 不再绕过 workspace history 协议。

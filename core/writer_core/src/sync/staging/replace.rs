@@ -1,6 +1,6 @@
-//! #645 评论 5504296097 问题2 修复：ReplaceProject 整树替换 commit plan。
+//! ReplaceProject 整树替换 commit plan。
 //!
-//! `ReplaceProject` 不再走普通 `compute_commit_plan()`（三方合并 + metadata LWW），
+//! `ReplaceProject` 不再走普通 `compute_commit_plan`（三方合并 + metadata LWW），
 //! 而是用本模块的 `build_replace_project_plan` 生成固定语义的 commit plan：
 //!
 //! - `live ∪ staging` 的路径全集；
@@ -9,18 +9,18 @@
 //! - 不要正文 three-way，不要 metadata LWW。
 //!
 //! 在真正 Apply/Delete 之前，调用方（`apply_staging_commits_for_targets`）用
-//! `snapshot_local_records_read_only()` 重新计算当前 local target LWW，与
+//! `snapshot_local_records_read_only` 重新计算当前 local target LWW，与
 //! `expected_local_lww` guard 比较：
 //! - `current_local == expected_local_lww` → 可以 Replace/Delete；
 //! - `current_local > expected_local_lww` / 内容已变化 → 不动 live →
-//!   返回 `Err(GuardFailed)`，target 进入 `RecoverableError` / `Retry`。
+//! 返回 `Err(GuardFailed)`，target 进入 `RecoverableError` / `Retry`。
 
 use std::path::{Path, PathBuf};
 
 use super::commit_plan::{CommitAction, CommitPlan};
 use super::run::walk_commit_candidates;
 
-/// #645 评论 5504296097 问题2 修复：ReplaceProject guard 失败错误。
+/// ReplaceProject guard 失败错误。
 #[derive(Debug)]
 pub(crate) enum ReplaceProjectGuardError {
     /// 当前本地 LWW 比 expected 更新（用户在 Transfer 后又编辑了）→ 不动 live。
@@ -32,7 +32,7 @@ pub(crate) enum ReplaceProjectGuardError {
     SnapshotFailed(crate::Error),
 }
 
-/// #645 评论 5504296097 问题2 修复：ReplaceProject guard 检查结果。
+/// ReplaceProject guard 检查结果。
 pub(crate) enum ReplaceProjectGuardResult {
     /// Guard 通过，可以执行 replace plan。
     Ok,
@@ -40,15 +40,15 @@ pub(crate) enum ReplaceProjectGuardResult {
     Err(ReplaceProjectGuardError),
 }
 
-/// #645 评论 5504296097 问题2 修复：检查 ReplaceProject guard。
+/// 检查 ReplaceProject guard。
 ///
-/// 用 `snapshot_local_records_read_only()` 重新计算当前 local target LWW，
+/// 用 `snapshot_local_records_read_only` 重新计算当前 local target LWW，
 /// 与 `expected_local_lww` 严格比较：
 /// - `current_local == expected_local_lww` → `Ok`；
 /// - 其他任何情况（`current_local > expected` / `current_local < expected` /
-///   snapshot 失败）→ `Err`。
+/// snapshot 失败）→ `Err`。
 ///
-/// #645 评论 5504296097 问题2 修复：`expected` 改为非 Option — 破坏性 action
+/// `expected` 改为非 Option — 破坏性 action
 /// 必须携带 guard，不再有"无 guard 也允许删/替换"的口子。
 pub(crate) fn check_replace_project_guard(
     live_root: &Path,
@@ -88,7 +88,7 @@ pub(crate) fn check_replace_project_guard(
         },
     };
 
-    // #645 评论 5504296097 问题2 修复：严格相等才放行，其他任何情况都拒绝。
+    // 严格相等才放行，其他任何情况都拒绝。
     // 不再有 current < expected → warn+Ok 的口子，也不再有 None → Ok 的口子。
     let equal = current_lww.lww_time_ms == expected.lww_time_ms
         && current_lww.device_id == expected.device_id;
@@ -119,7 +119,7 @@ pub(crate) fn check_replace_project_guard(
     })
 }
 
-/// #645 评论 5504296097 问题2 修复：计算 manifest record 的 LWW 时间。
+/// 计算 manifest record 的 LWW 时间。
 fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecord) -> i64 {
     if r.op == "delete" {
         r.deleted_at_ms.unwrap_or(r.updated_at_ms)
@@ -128,7 +128,7 @@ fn lww_record_time_for_manifest_record(r: &crate::sync::types::ManifestFileRecor
     }
 }
 
-/// #645 评论 5504296097 问题2 修复：构建 ReplaceProject 整树替换 commit plan。
+/// 构建 ReplaceProject 整树替换 commit plan。
 ///
 /// 语义固定为：
 /// - `live ∪ staging` 的路径全集；
@@ -287,7 +287,7 @@ mod tests {
         assert!(matches!(result, ReplaceProjectGuardResult::Ok));
     }
 
-    /// #645 评论 5504296097 问题2 修复：current < expected 也必须拒绝（严格相等）。
+    /// current < expected 也必须拒绝（严格相等）。
     #[test]
     fn replace_guard_current_older_rejects() {
         let live = TempDir::new().unwrap();

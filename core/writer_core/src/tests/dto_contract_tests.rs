@@ -106,7 +106,7 @@ fn ffi_project_maps_title_to_title() {
 
 #[test]
 fn window_viewport_dto_fields_match_harmony() {
-    // #628：WindowViewportDto 替代 WindowCapabilitiesDto，只含 width_dp / height_dp。
+    // WindowViewportDto 替代 WindowCapabilitiesDto，只含 width_dp / height_dp。
     let viewport = crate::presentation::layout::resolver::WindowViewport::default();
     let _json = serde_json::to_value(&viewport).unwrap();
     let ffi_json = json!({
@@ -123,7 +123,7 @@ fn window_viewport_dto_fields_match_harmony() {
 
 #[test]
 fn layout_contract_dto_fields_match_harmony() {
-    // #628：LayoutContract 不再含 show_primary_navigation（改由 ScreenPolicy 提供），
+    // LayoutContract 不再含 show_primary_navigation（改由 ScreenPolicy 提供），
     // 新增 primary_navigation_placement 与 metrics。
     let viewport = crate::presentation::layout::resolver::WindowViewport::default();
     let contract = crate::presentation::layout::resolve_layout(&viewport);
@@ -144,7 +144,7 @@ fn layout_contract_dto_fields_match_harmony() {
         json.get("metrics").is_some(),
         "Core internal LayoutContract uses snake_case 'metrics'"
     );
-    // #610：Core 不再输出 Material 断点 / dp / 导航呈现等平台值。
+    // Core 不再输出 Material 断点 / dp / 导航呈现等平台值。
     assert!(
         json.get("content_max_width_dp").is_none()
             && json.get("page_padding_dp").is_none()
@@ -152,7 +152,7 @@ fn layout_contract_dto_fields_match_harmony() {
             && json.get("width_class").is_none(),
         "LayoutContract 不得包含 Material 断点/dp/导航呈现等平台值"
     );
-    // #628：Core 内部不再含 show_primary_navigation（改由 ScreenPolicy 提供）。
+    // Core 内部不再含 show_primary_navigation（改由 ScreenPolicy 提供）。
     assert!(
         json.get("show_primary_navigation").is_none(),
         "LayoutContract 不得再含 show_primary_navigation（改由 ScreenPolicy 提供）"

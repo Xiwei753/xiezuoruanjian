@@ -436,7 +436,7 @@ impl super::WriterAppService {
             selection_anchor: s.kernel.selection_anchor() as u32,
             generation: s.generation,
             chapter_id: s.chapter_id.clone().unwrap_or_default(),
-            // #629 评论6 Part B：composition 活跃时返回当前 composition 完整状态。
+            // composition 活跃时返回当前 composition 完整状态。
             composition: s.kernel.composition_state().map(|state| {
                 crate::api::EditorCompositionStateDto {
                     session_id: state.0,
@@ -451,7 +451,7 @@ impl super::WriterAppService {
         })
     }
 
-    /// #606: 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    /// 返回严格在 `byte_offset` 之前的最近 grapheme cluster 边界（UTF-8 byte offset）。
     ///
     /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
     /// 不再依赖 ICU BreakIterator。
@@ -459,7 +459,7 @@ impl super::WriterAppService {
         self.with_session(|s| s.kernel.previous_grapheme_boundary(byte_offset))
     }
 
-    /// #606: 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
+    /// 返回严格在 `byte_offset` 之后的最近 grapheme cluster 边界（UTF-8 byte offset）。
     ///
     /// 平台端 Backspace/Delete 的 grapheme 边界计算由 Core 唯一决定，
     /// 不再依赖 ICU BreakIterator。
@@ -467,7 +467,7 @@ impl super::WriterAppService {
         self.with_session(|s| s.kernel.next_grapheme_boundary(byte_offset))
     }
 
-    /// #606: 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
+    /// 计算旧事务逻辑 slice → 新事务逻辑 slice 的对应关系。
     ///
     /// 平台无关的唯一事实来源 — Android `RebasePlanner` 不再自己匹配，
     /// 直接消费此结果。方法本身不依赖 editor session 状态（无 `with_session`），

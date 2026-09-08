@@ -2,7 +2,7 @@ use super::types::{AnimationMode, EditorChange, EditorTransactionCause};
 use super::visual::{ClusterRect, ClusterRun, VisualClassKind};
 use crate::editor::strong_types::{Utf8ByteOffset, Utf8ByteRange};
 
-/// #606: Composition 操作类型
+/// Composition 操作类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompositionOperationKind {
     Update,
@@ -10,7 +10,7 @@ pub enum CompositionOperationKind {
     Cancel,
 }
 
-/// #606: Composition 视觉分类结果
+/// Composition 视觉分类结果
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompositionVisualClassification {
     pub old_affected_byte_ranges: Vec<Utf8ByteRange>,
@@ -20,7 +20,7 @@ pub struct CompositionVisualClassification {
     pub visual_class_kinds: Vec<VisualClassKind>,
 }
 
-/// #606: 统一的 composition 视觉分类入口
+/// 统一的 composition 视觉分类入口
 #[allow(clippy::too_many_arguments)]
 pub fn classify_composition_visual(
     old_visual_text: &str,
@@ -148,7 +148,7 @@ fn compute_composition_animation_mode(
     )
 }
 
-/// #516: 视觉对象分类器
+/// 视觉对象分类器
 pub fn classify_visual_diff(old_text: &str, new_text: &str) -> Vec<VisualClassKind> {
     if old_text == new_text {
         return Vec::new();

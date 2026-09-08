@@ -1,17 +1,17 @@
-//! # 工作台布局计算 — 七角色 bounds 推导（#628 评论 5301021120 第 1-2 步，问题 2/3）
+//! # 工作台布局计算 — 七角色 bounds 推导（第 1-2 步，问题 2/3）
 //!
 //! 从 [`super::resolver`] 拆出的纯计算职责：输入 [`WindowViewport`] +
 //! [`WorkbenchVisibility`]，处理全部 `separating == true` 遮挡，二维 free-region
 //! 网格 cell 算法（收集 X/Y 切线→网格 cell→合并相邻可用 cell），给七个
 //! [`WorkbenchRole`] 计算最终 [`LayoutRect`] bounds。
 //!
-//! #628 评论 5301021120 02:59:39Z 版：不再返回含糊的 `valid: bool`，改由
+//! 02:59:39Z 版：不再返回含糊的 `valid: bool`，改由
 //! [`ResolvedWorkspaceMode`] 表达 Rust 决定的最终产品模式（Workbench / SinglePane）；
 //! 平台端只按 mode 映射壳层、按 bounds measure/place，不允许自己再决定模式。
 //!
 //! - 越界矩形 clamp 到 viewport；空矩形丢弃；
 //! - 二维 free-region 几何算法（[`compute_free_regions`]）：收集 X/Y 切线形成网格 cell，
-//!   与任一 separating occlusion 相交的 cell 不可用，合并相邻可用 cell 成连续区域；
+//! 与任一 separating occlusion 相交的 cell 不可用，合并相邻可用 cell 成连续区域；
 //! - 七角色 bounds 都不与任何 separating 相交；
 //! - Editor 拿到连续可编辑区域，不跨两个物理区域；
 //! - 多 separating 同时存在时同样处理，不退化成单 hinge；
@@ -24,7 +24,7 @@ use super::resolver::{
     WorkbenchPlacement, WorkbenchRole, WorkbenchVisibility,
 };
 
-/// 解析工作台布局计划（#628 评论 5301021120 第 1-2 步�，问题 2/3）。
+/// 解析工作台布局计划（第 1-2 步�，问题 2/3）。
 ///
 /// 平台无关纯函数，处理全部 `separating == true` 的遮挡：
 ///
@@ -34,12 +34,12 @@ use super::resolver::{
 /// 4. 用相邻 X/Y 区间形成网格 cell；与任一 separating occlusion 相交的 cell 标记不可用；
 /// 5. 把相邻可用 cell 合并成连续 [`LayoutRect`] 区域（[`compute_free_regions`]）；
 /// 6. 选一个能放下 Workbench 最小需求（`editor_min_width_dp` + 可见 pane min + tool_rail）
-///    的 free region 作为 placement region；
+/// 的 free region 作为 placement region；
 /// 7. 放不下时 `mode = SinglePane`，placements 只返回 Editor 占最大连续安全 free-region
-///    bounds（单栏），其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件；
+/// bounds（单栏），其余角色 bounds 为空——由 Rust 判定语义失效，而不是 Android 临时隐藏控件；
 /// 8. 放得下时 `mode = Workbench`，七角色在该 region 内按 [`LayoutMetrics`] 尺寸排列，
-///    pane 在 preferred 与 min 间压缩（不压到 0 除非 visibility 不可见），
-///    所有 bounds 不与 separating 相交，Editor 连续。
+/// pane 在 preferred 与 min 间压缩（不压到 0 除非 visibility 不可见），
+/// 所有 bounds 不与 separating 相交，Editor 连续。
 ///
 /// 竖直 hinge、横向 hinge、多个横竖混合 hinge 都走同一套二维几何算法，
 /// 不新增 Android/Foldable 分支，也不在 Rust 建 FoldingFeature.orientation 平台枚举。
@@ -119,7 +119,7 @@ pub fn resolve_workbench_layout(
     }
 }
 
-/// 计算二维 free regions（#628 评论 5301021120 问题 2）。
+/// 计算二维 free regions。
 ///
 /// 网格 cell 算法：
 /// 1. 把 separating occlusion 的 left/top/right/bottom 全部 clamp 到 viewport，空矩形删除；
@@ -181,7 +181,7 @@ fn compute_free_regions(occlusions: &[WindowOcclusion], vw: f32, vh: f32) -> Vec
     let ny = ys.len().saturating_sub(1);
 
     // 3. form grid cells; cell (i,j) covers [xs[i],xs[i+1]] x [ys[j],ys[j+1]].
-    //    cell is usable iff it doesn't intersect any separating occlusion.
+    // cell is usable iff it doesn't intersect any separating occlusion.
     let mut usable: Vec<Vec<bool>> = vec![vec![false; ny]; nx];
     for i in 0..nx {
         for j in 0..ny {
@@ -200,7 +200,7 @@ fn compute_free_regions(occlusions: &[WindowOcclusion], vw: f32, vh: f32) -> Vec
     }
 
     // 4. for each usable cell, compute maximal rectangle with that cell as top-left:
-    //    extend right to farthest, then extend down row by row (each row must be fully usable).
+    // extend right to farthest, then extend down row by row (each row must be fully usable).
     let mut regions: Vec<LayoutRect> = Vec::new();
     for i0 in 0..nx {
         for j0 in 0..ny {
@@ -408,7 +408,7 @@ fn compute_toolbar_bounds(
 }
 
 /// `mode = SinglePane` 退化：只返回 Editor 占满给定 region（最大连续安全 free-region），
-/// 其余角色 bounds 为空（#628 评论 5301021120 问题 3）。
+/// 其余角色 bounds 为空。
 fn degrade_to_editor_only(region: LayoutRect) -> Vec<WorkbenchPlacement> {
     vec![
         WorkbenchPlacement {

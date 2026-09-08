@@ -5,25 +5,25 @@ use crate::storage::workspace_git::WorkspaceChangeSet;
 use crate::volume::{self, Volume};
 
 impl super::WriterCore {
-    /// #645 评论第 1 点：一个工作区一个 Git 仓库。list 直接读 `project.json`，
+    /// 一个工作区一个 Git 仓库。list 直接读 `project.json`，
     /// 不再按 project_id 构造 layout_fn / git_dir。
     pub fn list_projects(&self) -> Result<Vec<Project>> {
         project::list_projects(&self.projects_root)
     }
 
-    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
-    /// #645 评论第 1 点：直接走 `project::list_project_summaries`，不再构造 layout_fn。
+    /// 批量返回项目摘要（元数据 + 统计）。
+    /// 直接走 `project::list_project_summaries`，不再构造 layout_fn。
     pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummary>> {
         project::list_project_summaries(&self.projects_root)
     }
 
-    /// #645 评论第 1 点：一个工作区一个 Git 仓库。create_project 只创建作品目录、
+    /// 一个工作区一个 Git 仓库。create_project 只创建作品目录、
     /// `project.json`、`volumes/`、`characters/` 和默认卷，不再初始化作品级 `.git/`。
     pub fn create_project(&self, title: &str) -> Result<Project> {
         project::create_project(&self.projects_root, title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
+    /// 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
     pub fn create_project_with_id(&self, id: &str, title: &str, order: i32) -> Result<Project> {
         project::create_project_with_id(&self.projects_root, id, title, order)
     }
@@ -38,7 +38,7 @@ impl super::WriterCore {
         volume::create_volume(&project_root, title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
+    /// 第 4 点：恢复/导入卷——使用 manifest 中的稳定 ID。
     pub fn create_volume_with_id(
         &self,
         project_id: &str,
@@ -77,7 +77,7 @@ impl super::WriterCore {
         chapter::create_chapter(&project_root, volume_id, title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
+    /// 第 4 点：恢复/导入章节——使用 manifest 中的稳定 ID。
     pub fn create_chapter_with_id(
         &self,
         project_id: &str,
@@ -160,7 +160,7 @@ impl super::WriterCore {
         chapter::save_chapter_verified(&project_root, volume_id, chapter_id, content)
     }
 
-    /// #645 评论 5504296097 问题2：保存章节正文并返回变更集。
+    /// 保存章节正文并返回变更集。
     pub fn write_chapter_verified_with_changes(
         &self,
         project_id: &str,
@@ -207,23 +207,23 @@ impl super::WriterCore {
         chapter::update_chapter_note(&project_root, volume_id, chapter_id, note)
     }
 
-    /// #645 评论第 1 点：重命名只改 `project.json`，不再构造 layout_fn。
+    /// 重命名只改 `project.json`，不再构造 layout_fn。
     pub fn rename_project(&self, project_id: &str, new_title: &str) -> crate::error::Result<()> {
         crate::project::rename_project(&self.projects_root, project_id, new_title)
     }
 
-    // #645 评论 5504296097 问题2：`WriterCore::delete_project`（facade 层绕过
+    // `WriterCore::delete_project`（facade 层绕过
     // workspace history 的旧入口）已删除。写操作统一走
     // `with_app_service → WriterAppService → WriterCoreApi →
     // delete_project_with_changes → record_workspace_change_set → ack`。
     // 保留 `delete_project_with_changes` 供 API 层使用。
 
-    /// #645 评论第 1 点：重排只改各 `project.json` 的 `order` 字段，不再构造 layout_fn。
+    /// 重排只改各 `project.json` 的 `order` 字段，不再构造 layout_fn。
     pub fn reorder_projects(&self, ordered_ids: &[String]) -> crate::error::Result<()> {
         crate::project::reorder_projects(&self.projects_root, ordered_ids)
     }
 
-    // #645 评论 5504296097 问题2：*_with_changes 版本，返回 WorkspaceChangeSet 供 API 层记录本地历史。
+    // *_with_changes 版本，返回 WorkspaceChangeSet 供 API 层记录本地历史。
 
     /// 创建作品并返回变更集。
     pub fn create_project_with_changes(
@@ -244,7 +244,7 @@ impl super::WriterCore {
 
     /// 删除作品并返回业务结果（变更集 + 解绑 starmap ids + journal token）。
     ///
-    /// #645 评论 5504296097 缺口1/缺口2修复：返回 `ProjectDeleteOutcome`，
+    /// 缺口1/缺口2修复：返回 `ProjectDeleteOutcome`，
     /// journal 保留在 `StarMapsUnbound`，由 API 层记 history 后调
     /// `ack_project_delete_history` 推进并清 journal。
     pub fn delete_project_with_changes(
@@ -411,7 +411,7 @@ impl super::WriterCore {
         crate::volume::reorder_volumes(&project_root, ordered_ids)
     }
 
-    // #645 评论 5504296097 问题3：volume 的 *_with_changes 转发，
+    // volume 的 *_with_changes 转发，
     // 返回 WorkspaceChangeSet 供 API 层记录本地历史。
 
     /// 创建卷并返回变更集。

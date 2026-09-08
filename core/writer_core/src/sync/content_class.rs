@@ -1,4 +1,4 @@
-//! #644 评论 5473789298 第3节：内容分类与三方比较（始终可用）。
+//! 内容分类与三方比较（始终可用）。
 //!
 //! 从 `lww/compare.rs` 提升为 `sync` 的直接子模块，让 `staging.rs`（不在
 //! `github-api` feature gate 下）也能调用纯分类/比较逻辑。
@@ -8,7 +8,7 @@
 //! - [`ContentClass`] / [`classify_content_path`] / [`is_document_content_path`]
 //! - [`three_way_resolve`] / [`ThreeWayResult`]
 //! - [`LwwRecord`] / [`LwwWinner`] / [`resolve_lww`] / [`lww_record_time`]
-//!   （#644 评论 5474166587 问题3：纯 LWW 决策提升到始终可用的模块）
+//! （纯 LWW 决策提升到始终可用的模块）
 //!
 //! 依赖 `ManifestFileRecord` 的 `PathDecision` / `resolve_path_decision` 仍留在
 //! `lww/compare.rs`（在 `github-api` feature gate 下）。
@@ -16,7 +16,7 @@
 /// 内容分类 — 决定同步策略。
 ///
 /// - UserTextDocument：用户创作的文本（章节正文、笔记等），走三路比较，
-///   BothChanged 时记录冲突，不静默覆盖。
+/// BothChanged 时记录冲突，不静默覆盖。
 /// - Metadata：项目/卷/章元数据 JSON，走 LWW 或逐键语义合并。
 /// - LocalOnly：本地专用数据（备份、app-meta 内部文件），不同步。
 /// - GeneratedCache：生成/缓存数据，LWW 可接受。
@@ -106,10 +106,10 @@ pub(crate) fn is_document_content_path(path: &str) -> bool {
 ///
 /// 不变量：
 /// - local_hash == remote_hash 时一定返回 NoConflict（即使两者都 != base），
-///   因为内容相同无需选择。
+/// 因为内容相同无需选择。
 /// - 三路比较仅用于 UserTextDocument；Metadata/GeneratedCache 走 LWW 时间戳决胜。
 /// - LWW 决胜不变量：时间戳较大方获胜；时间戳相同时按 device_id 字典序决胜
-///   （字典序较大的 device_id 获胜），保证双方独立计算结果一致。
+/// （字典序较大的 device_id 获胜），保证双方独立计算结果一致。
 pub(crate) fn three_way_resolve(
     base_hash: &str,
     local_hash: &str,
@@ -146,7 +146,7 @@ pub(crate) enum ThreeWayResult {
     BothChanged,
 }
 
-// ── 纯 LWW 决策（#644 评论 5474166587 问题3） ──
+// ── 纯 LWW 决策 ──
 
 /// 轻量 LWW 比较记录 — 不依赖 `ManifestFileRecord`，始终可用。
 ///
@@ -206,7 +206,7 @@ pub(crate) fn lww_record_time(record: &LwwRecord) -> i64 {
 /// - 时间戳较大方获胜
 /// - 时间戳相同时：内容相同且操作相同 → `Tie`；否则字典序较大的 device_id 获胜
 /// - 决策结果与 `resolve_lww_path` 一致，保证 GitHub API 内层和 staging 外层
-///   不会出现两套相反的 Metadata 语义
+/// 不会出现两套相反的 Metadata 语义
 pub(crate) fn resolve_lww(local: &LwwRecord, remote: &LwwRecord) -> LwwWinner {
     let local_time = lww_record_time(local);
     let remote_time = lww_record_time(remote);

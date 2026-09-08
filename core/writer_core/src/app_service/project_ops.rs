@@ -8,7 +8,7 @@ impl super::WriterAppService {
         self.api.list_projects()
     }
 
-    /// #625 第二段：批量返回项目摘要（元数据 + 统计）。
+    /// 批量返回项目摘要（元数据 + 统计）。
     pub fn list_project_summaries(&self) -> Result<Vec<ProjectSummaryDto>, WriterError> {
         self.api.list_project_summaries()
     }
@@ -35,7 +35,7 @@ impl super::WriterAppService {
         self.api.create_project(&title)
     }
 
-    /// #649 评论 5561286861 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
+    /// 第 4 点：恢复/导入项目——使用 manifest 中的稳定 ID。
     pub fn create_project_with_id(
         &self,
         id: String,
@@ -45,7 +45,7 @@ impl super::WriterAppService {
         self.api.create_project_with_id(&id, &title, order)
     }
 
-    /// #649 评论 5561465552 第 2 点：恢复作品树——一次跨 FFI 传入完整作品树。
+    /// 第 2 点：恢复作品树——一次跨 FFI 传入完整作品树。
     ///
     /// Core 负责校验 ID、校验目标不冲突、原子发布、记录 workspace Git 变更。
     pub fn restore_project_tree(

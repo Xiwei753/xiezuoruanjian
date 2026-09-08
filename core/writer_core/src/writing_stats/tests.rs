@@ -636,7 +636,7 @@ fn test_facade_record_writing_event() {
     assert_eq!(summary["totalNetDeltaChars"], 55);
 }
 
-/// #624 评论10：Android 直接按 Core cause 分类后传回的 source 字符串必须显式映射，
+/// Android 直接按 Core cause 分类后传回的 source 字符串必须显式映射，
 /// undo/redo/programmatic/selection 不得靠 `_ => HumanTyped` 默认分支落入人工输入。
 #[test]
 fn test_facade_record_writing_event_non_typed_sources_never_human_typed() {
@@ -649,7 +649,7 @@ fn test_facade_record_writing_event_non_typed_sources_never_human_typed() {
     // - "pasted"（Paste）→ Pasted；
     // - "deleted"（Delete）→ Deleted；
     // - "undo"/"redo"/"programmatic"（Undo/Redo/Programmatic）→ 明确的非 HumanTyped
-    //   （Unknown：不计入分类计数器，但仍计入 net_delta）。
+    // （Unknown：不计入分类计数器，但仍计入 net_delta）。
     // - "selection"（纯光标移动不进入统计，防御性显式映射）。
     core.record_writing_event(
         "dev-1", "linux", "desktop", "proj1", "vol1", "chap1", "typing", 10, 0, 0, 0, 0, "s1",
@@ -719,7 +719,7 @@ fn test_facade_record_writing_event_non_typed_sources_never_human_typed() {
 
 #[test]
 fn test_sync_stats_paths_outside_repo_not_blacklisted() {
-    // 统计事件/缓存位于 app_data_root/app-meta/stats，不在作品仓库内（Issue #600）。
+    // 统计事件/缓存位于 app_data_root/app-meta/stats，不在作品仓库内。
     // events.local 不再被黑名单特判；cache/ 仍被通用 cache 模式覆盖（防御性）。
     assert!(!crate::sync::SyncService::is_blacklisted_path(
         "app-meta/stats/events.local/2025-01-15.events.jsonl",

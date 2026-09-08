@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 /// Commit plan — Commit 阶段对每个 staging 变化的处理决策。
 ///
-/// #644 评论 5474166587 问题1：拆 `content_actions` + `engine_state_actions`。
+/// 拆 `content_actions` + `engine_state_actions`。
 /// - `content_actions`：用户内容（正文、元数据、缓存）的写回动作。
 /// - `engine_state_actions`：同步引擎自身状态（manifest.sync.json、
-///   state.local.json、conflicts.json）的写回动作。
+/// state.local.json、conflicts.json）的写回动作。
 ///
 /// 两类最后用同一个 `SaveTransaction` 一次写回 live，不另起第二套保存路径。
 #[derive(Default, Debug)]
@@ -20,12 +20,12 @@ pub struct CommitPlan {
     /// local==incoming，内容相同，无需操作。
     pub noop: Vec<PathBuf>,
     /// 两边都改，三方冲突（正文走三方合并语义，metadata 走 LWW，由调用方决定）。
-    /// #644 评论 5473401065 第4节：用 `StagingConflict` 替代 `PathBuf`，
+    /// 用 `StagingConflict` 替代 `PathBuf`，
     /// 保留 base/local/incoming 哈希，让 Commit 阶段能映射成 `SyncConflict` 并持久化。
     pub conflict: Vec<StagingConflict>,
 }
 
-/// #644 评论 5473401065 第4节：三方冲突的完整信息。
+/// 三方冲突的完整信息。
 ///
 /// 保留 `rel_path` + 三方哈希，Commit 阶段映射成 `SyncConflict` 时不再丢失信息。
 #[derive(Debug, Clone)]
@@ -45,14 +45,14 @@ pub enum CommitAction {
     Delete { rel_path: PathBuf },
 }
 
-/// #644 评论 5474166587 问题1：staging commit 写回语义分类。
+/// staging commit 写回语义分类。
 ///
 /// 与 [`ContentClass`]（远端同步语义）正交。决定 Transfer 在 staging 里产生的
 /// 哪些本地状态必须写回 live：
 /// - `Content`：用户内容，走三方比较/LWW 决策。
 /// - `EngineState`：同步引擎自身状态（manifest/state/conflicts），直接写回 live。
 /// - `Skip`：永不进 commit（.git/、full-sync-staging/、app-meta/transactions/、
-///   config.local.json、secrets）。
+/// config.local.json、secrets）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StagingCommitClass {
     /// 用户内容：正文、元数据、缓存。走三方比较/LWW 决策。
@@ -67,7 +67,7 @@ pub(crate) enum StagingCommitClass {
 
 /// 判断路径是否为内部 Git 工件（不应被当成用户内容同步）。
 ///
-/// #645 评论 5504296097 问题1：规则统一到
+/// 规则统一到
 /// [`crate::storage::workspace_paths::is_internal_git_artifact`]，
 /// 本函数保留为薄包装（sync 内部仍在用），不再持有规则副本，
 /// 消除 `storage/workspace_git -> sync/staging` 反向依赖。
@@ -75,7 +75,7 @@ pub(crate) fn is_internal_git_artifact(path: &str) -> bool {
     crate::storage::workspace_paths::is_internal_git_artifact(path)
 }
 
-/// #644 评论 5474166587 问题1：按 staging commit 写回语义分类。
+/// 按 staging commit 写回语义分类。
 ///
 /// 与 [`crate::sync::content_class::classify_content_path`]（远端同步语义）正交。
 /// `app-meta/` 下只有 `sync/manifest.sync.json`、`sync/state.local.json`、
@@ -132,7 +132,7 @@ pub(crate) fn opt_bytes_eq(a: &Option<Vec<u8>>, b: &Option<Vec<u8>>) -> bool {
     }
 }
 
-/// #644 评论 5473789298 第3节：把 incoming 内容推入 plan 的 actions 列表。
+/// 把 incoming 内容推入 plan 的 actions 列表。
 ///
 /// `incoming = Some` → [`CommitAction::Apply`]；`incoming = None`（远端删除）→
 /// [`CommitAction::Delete`]。按 `class` 决定推入 `content_actions` 还是

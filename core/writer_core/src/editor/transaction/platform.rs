@@ -16,7 +16,7 @@ use crate::editor::strong_types::{EditorSessionGeneration, Utf8ByteOffset, Utf8B
 ///
 /// `visualResource` 字段由平台各自实现，不进入此结构。
 ///
-/// #516: 四种事务（BodyEdit、CompositionUpdate、CompositionCommitOrCancel、CursorOnly）
+/// 四种事务（BodyEdit、CompositionUpdate、CompositionCommitOrCancel、CursorOnly）
 /// 全部进入同一队列和 Timeline。不再存在独立预输入覆盖主路径、
 /// 独立光标位移动画时间源。
 ///
@@ -60,28 +60,28 @@ pub struct PlatformVisualTransaction {
     pub duration_ms: u64,
     pub rendering_started_at_ms: Option<u64>,
     pub accumulated_paused_duration_ms: u64,
-    /// #516: 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress
+    /// 统一时钟 — 文字切片、光标、预输入装饰全部消费同一个 progress
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline: Option<Timeline>,
-    /// #516: 统一事务类型（必填，不再允许 None）
+    /// 统一事务类型（必填，不再允许 None）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unified_kind: Option<UnifiedTransactionKind>,
-    /// #516: 视觉对象分类列表（与 slice_roles/slice_document_byte_ranges 对应）
+    /// 视觉对象分类列表（与 slice_roles/slice_document_byte_ranges 对应）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visual_class_kinds: Vec<VisualClassKind>,
-    /// #516: 装饰切片（预输入下划线、分段颜色、IME cursor）
+    /// 装饰切片（预输入下划线、分段颜色、IME cursor）
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub decoration_slices: Vec<DecorationSlice>,
-    /// #516: 光标路径（使用同一 Timeline）
+    /// 光标路径（使用同一 Timeline）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor_path: Option<CursorPath>,
-    /// #516: 预输入视觉修订（仅 CompositionUpdate/CompositionCommitOrCancel 事务）
+    /// 预输入视觉修订（仅 CompositionUpdate/CompositionCommitOrCancel 事务）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_revision: Option<CompositionVisualRevision>,
-    /// #516: 连续事务 rebase 信息
+    /// 连续事务 rebase 信息
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rebase: Option<TransactionRebase>,
-    /// #516: 取消原因（仅 Cancelled 状态有值）
+    /// 取消原因（仅 Cancelled 状态有值）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cancel_reason: Option<TransactionCancelReason>,
 }

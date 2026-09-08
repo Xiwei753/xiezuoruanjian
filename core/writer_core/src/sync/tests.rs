@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn test_app_level_paths_outside_repo_not_blacklisted() {
-        // 应用级数据位于 app_data_root，不在作品仓库内（Issue #600），
+        // 应用级数据位于 app_data_root，不在作品仓库内，
         // 黑名单只管作品仓库内的路径。
         assert!(!SyncService::is_blacklisted_path(
             "app-meta/ai/secrets.local.json",
@@ -644,7 +644,7 @@ mod tests {
     #[cfg(feature = "github-api")]
     fn test_sync_state_does_not_leak_tokens() {
         let dir = tempdir().unwrap();
-        // #645 评论 5504296097 第2点：SyncState 不再携带 remote_url/transport，
+        // 第2点：SyncState 不再携带 remote_url/transport，
         // 用 last_error 携带 URL 字符串来验证 state 序列化不含 token 的核心回归意图。
         let state = SyncState {
             last_sync_time: None,
@@ -780,7 +780,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题1：build_sync_plan 的 remote delete 直接从
+    /// build_sync_plan 的 remote delete 直接从
     /// snapshot_local_records_read_only 的 delete op 推导，不再遍历 state.known_files。
     ///
     /// 不一致场景：old manifest 有 project.json upsert，state.known_files 不含
@@ -854,7 +854,7 @@ mod tests {
         );
     }
 
-    /// #645 评论 5504296097 问题1：build_sync_plan 的 upload 动作也从 snapshot
+    /// build_sync_plan 的 upload 动作也从 snapshot
     /// records 的 upsert op 推导（动作来源是 snapshot，hash 比较优化用 known_files）。
     ///
     /// 场景：磁盘有 project.json，old manifest 无记录，state.known_files 为空
@@ -1551,7 +1551,7 @@ mod tests {
         };
 
         let res = lww_sync(dir.path(), &config, &secrets, false).unwrap();
-        // #645 评论 5504296097 第2点：DirtyRepoBlocked 变体已删除，
+        // 第2点：DirtyRepoBlocked 变体已删除，
         // 同步不再因 dirty repo 返回专用阻塞状态。断言同步未落入 FatalError
         // 保留"同步不被自身配置文件拦死"的核心回归意图。
         assert!(
@@ -3197,11 +3197,11 @@ mod tests {
             "pending_take_remote should bypass debounce"
         );
     }
-    // ── Issue #600 评论 #7: tree diff 填充 downloaded_files/remote_deletes 的测试 ──
+    // ── tree diff 填充 downloaded_files/remote_deletes 的测试 ──
 
-    // ── Issue #600 评论 #9: 首次同步边界（CloneIntoEmptyProject / unborn repo）──
+    // ── 首次同步边界（CloneIntoEmptyProject / unborn repo）──
 
-    // ===== Issue #645 评论 5504296097：MemoryProvider + LWW engine 集成测试 =====
+    // ===== MemoryProvider + LWW engine 集成测试 =====
     //
     // 这组测试用 MemoryProvider 直接调用 SyncService::perform_lww_sync，
     // 证明 LWW engine 通过 &dyn SyncProvider trait 与具体后端解耦：
@@ -3211,7 +3211,7 @@ mod tests {
     // 也不需要 SyncSecrets/SyncTransport。MemoryProvider 是进程内 HashMap，
     // 所有操作在锁内同步完成。
     //
-    // #645 评论 5504296097 第2点：去掉 `#[cfg(feature = "github-api")]` 门控。
+    // 第2点：去掉 `#[cfg(feature = "github-api")]` 门控。
     // 这组测试只依赖 LWW engine + MemoryProvider，不需要 GitHub feature。
     // 类型引用走 fully-qualified path，避免与顶部 `#[cfg(feature = "github-api")]`
     // imports 在 all-features 下产生重复 import 冲突。
@@ -3297,7 +3297,7 @@ mod tests {
         // snapshot_local_records_read_only 生成 delete 墓碑。远端 manifest 记录 upsert
         // （updated_at_ms 较小），LWW 本地 delete 时间戳获胜 →
         // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
-        // #645 评论 5504296097 问题1.2修复：必须有 tombstone 才能生成 delete record
+        // .2修复：必须有 tombstone 才能生成 delete record
         // （无 tombstone 不伪造 now_ms 作为删除时间）。
         let dir = tempdir().unwrap();
 

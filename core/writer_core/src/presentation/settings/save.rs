@@ -1,4 +1,4 @@
-//! # 设置页 save section（#628 拆分）
+//! # 设置页 save section
 
 use super::{PlatformVisibility, SettingItemDef, SettingSectionDef};
 

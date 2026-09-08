@@ -86,7 +86,7 @@ pub enum EditorCommand {
         composition_generation: EditorSessionGeneration,
         expected_revision: EditorRevision,
     },
-    // #629 R8: composition 专用 grapheme 语义操作。
+    // composition 专用 grapheme 语义操作。
     // 只改 composition session 的 preeditText / preeditCursorUtf16 / generation；
     // 不修改 committed 正文，不把 raw platform event 带入 Core。
     CompositionMoveGraphemeLeft {
@@ -131,7 +131,7 @@ pub struct EditorVisualIntent {
     pub animation_mode: AnimationMode,
     pub duration_ms: u64,
     pub coordinated_cursor: CoordinatedCursor,
-    /// #606: Core 计算的 old/new 正文偏移映射。
+    /// Core 计算的 old/new 正文偏移映射。
     ///
     /// 正文变更时由 `OffsetMap::build(&old_text, &new_text)` 填充；
     /// 纯选区/光标操作（不修改正文）为 `None`。平台端 AffectedLayoutPlanner

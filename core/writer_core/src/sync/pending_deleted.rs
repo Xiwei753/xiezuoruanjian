@@ -1,4 +1,4 @@
-//! 待删除同步 target 的持久化 — provider-neutral（Issue #645 评论 5504296097 问题1）。
+//! 待删除同步 target 的持久化 — provider-neutral。
 //!
 //! `PendingDeletedTarget` 列表存到
 //! `<app_data_root>/app-meta/sync/pending_deleted_targets.json`，用 atomic write。
@@ -55,8 +55,8 @@ pub fn load_pending_deleted_targets(
 ///
 /// 用 read-modify-write + atomic write。幂等：相同 `journal_token` 不重复追加。
 ///
-/// #645 评论 5504296097 问题1修复：read-modify-write 用
-/// `load_pending_deleted_targets(app_data_root)?`，不用 `unwrap_or_default()`。
+/// read-modify-write 用
+/// `load_pending_deleted_targets(app_data_root)?`，不用 `unwrap_or_default`。
 /// 文件损坏（解析失败）时返回 Err，不吞错误——吞掉会让 pending target 列表
 /// 被空列表覆盖，丢失其他已记录的待删除 target，导致远端前缀不被清理。
 pub fn record_pending_deleted_target(
@@ -67,7 +67,7 @@ pub fn record_pending_deleted_target(
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    // #645 评论 5504296097 问题1：不用 unwrap_or_default() 吞掉文件损坏错误。
+    // 不用 unwrap_or_default 吞掉文件损坏错误。
     // 文件损坏时返回 Err，让调用方（ack_project_delete_history / recover）决定
     // 重试还是保留 journal，不会悄悄覆盖丢失其他 pending target。
     let mut current = load_pending_deleted_targets(app_data_root)?;
@@ -90,7 +90,7 @@ pub fn record_pending_deleted_target(
 
 /// 移除一个已完成的待删除 target（按 `journal_token` 匹配）。
 ///
-/// 用 read-modify-write + atomic write。未找到时返回 Ok(())（幂等）。
+/// 用 read-modify-write + atomic write。未找到时返回 Ok()（幂等）。
 pub fn remove_pending_deleted_target(
     app_data_root: &Path,
     journal_token: &str,

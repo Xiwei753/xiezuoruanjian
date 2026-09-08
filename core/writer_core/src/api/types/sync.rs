@@ -3,14 +3,14 @@
 //! 本模块定义跨语言边界（FFI/HTTP）使用的数据传输对象。
 //! 线格式约定：
 //! - 枚举使用字符串表示（如 `"idle"`, `"syncing"`），而非数字或嵌套 JSON，
-//!   以保证 UniFFI/JNI/JSON 各端可无损解析
+//! 以保证 UniFFI/JNI/JSON 各端可无损解析
 //! - `_to_wire` 后缀函数将 Rust 枚举转换为线格式字符串
 //! - `From<Dto>` / `From<Internal>` 实现双向转换
 //!
-//! Issue #645 评论第 2 点：`SyncConfigDto`/`SyncSecretsDto` 改成 provider-neutral，
+//! `SyncConfigDto`/`SyncSecretsDto` 改成 provider-neutral，
 //! GitHub 特定字段只在 `ProviderConfigDto::GitHub` / `ProviderSecretsDto::GitHub` 中。
 
-/// Provider 配置 DTO — provider-neutral 强类型枚举（Issue #645 评论第 2 点）。
+/// Provider 配置 DTO — provider-neutral 强类型枚举。
 ///
 /// 与 `crate::sync::provider::ProviderConfig` 一一对应，线格式使用 internally tagged enum。
 /// UniFFI `[Enum] interface` 生成带命名字段的 Rust 枚举变体。
@@ -124,7 +124,7 @@ impl From<SyncConfigDto> for crate::sync::SyncConfig {
     }
 }
 
-/// Provider 密钥 DTO — provider-neutral 强类型枚举（Issue #645 评论第 2 点）。
+/// Provider 密钥 DTO — provider-neutral 强类型枚举。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderSecretsDto {
@@ -310,7 +310,7 @@ impl From<crate::sync::SyncDiagnosticsResult> for SyncDiagnosticsResultDto {
 ///
 /// - `can_run`：同步是否可立即执行
 /// - `block_reason_code`：阻塞原因代码（如 `"no_internet"`、`"sync_in_progress"`），
-///   平台端 i18n 层根据此代码映射用户可见提示
+/// 平台端 i18n 层根据此代码映射用户可见提示
 /// - `block_message_key`：阻塞原因的 i18n key（备选，当 reason_code 不够描述时使用）
 /// - `message_args`：i18n 模板参数（如同步进度百分比）
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -412,7 +412,7 @@ impl From<crate::sync::SyncResult> for SyncResultDto {
 /// `GitHubTransport` → 线格式字符串。
 /// 保留供 UniFFI/JNI 层或其他 DTO 转换使用。
 ///
-/// Issue #645 评论 5504296097 第1点：`SyncProtocol` 已移到
+/// 第1点：`SyncProtocol` 已移到
 /// `sync/provider/github/config.rs::GitHubTransport`。
 #[cfg(feature = "github-api")]
 fn sync_transport_to_wire(
@@ -473,12 +473,12 @@ fn sync_status_to_wire(status: &crate::sync::SyncStatus) -> String {
     .to_string()
 }
 
-/// 将线格式状态字符串反序列化为 `SyncStatus`（Issue #630 评论 5308040939 Part 1）。
+/// 将线格式状态字符串反序列化为 `SyncStatus`。
 ///
 /// 与 `sync_status_to_wire` 同一映射。未知 code 映射为 `FatalError`：平台预处理
 /// 失败宁可落在终态（需要用户处理），不给"可自动重试"的错觉。
 ///
-/// #645 评论 5504296097 第2点：删除 `dirty_repo_blocked` / `branch_missing_recovered`
+/// 第2点：删除 `dirty_repo_blocked` / `branch_missing_recovered`
 /// 映射——这两个变体已从 `SyncStatus` 删除。旧持久化数据中的这两个 code 会落到
 /// 兜底 `FatalError("preflight")`，调用方可在 migration 边界显式处理。
 pub(crate) fn sync_status_from_wire(s: &str) -> crate::sync::SyncStatus {
@@ -515,7 +515,7 @@ pub struct TargetSyncPlanDto {
     pub plan: SyncPlanDto,
 }
 
-/// 全量同步聚合结果 DTO（Issue #630）。
+/// 全量同步聚合结果 DTO。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
 pub struct FullSyncResultDto {
     pub overall_status: String,
@@ -613,7 +613,7 @@ impl From<crate::sync::types::FullSyncDiagnosticsResult> for FullSyncDiagnostics
     }
 }
 
-/// 全量同步持久状态 DTO（Issue #630 评论 5307423953 Part B）。
+/// 全量同步持久状态 DTO。
 ///
 /// 与 `crate::sync::full_sync_state::FullSyncState` 对齐。overall_status 用线格式字符串
 /// （与 `FullSyncResultDto.overall_status` 同一映射），last_*_time 为 Unix 秒。
@@ -636,7 +636,7 @@ impl From<crate::sync::full_sync_state::FullSyncState> for FullSyncStateDto {
     }
 }
 
-/// 旧→新同步 profile 迁移结果 DTO（Issue #630 评论第 4 点 / D）。
+/// 旧→新同步 profile 迁移结果 DTO。
 ///
 /// 用 `outcome_kind` 字段区分变体，避免 UniFFI enum-with-data 的复杂性：
 /// - `"not_needed"`：新全局已存在，无需迁移
@@ -686,7 +686,7 @@ impl From<crate::storage::migration::LegacyMigrationOutcome> for LegacyMigration
     }
 }
 
-/// 旧 profile 的精确 generation metadata DTO（Issue #630 评论第 5 点 Part C）。
+/// 旧 profile 的精确 generation metadata DTO。
 ///
 /// 详见 [`crate::storage::migration::LegacyProfileMetadata`]。
 /// 调用方（平台层 DataStore）通过此结构精确告诉 Core 应该读取哪个

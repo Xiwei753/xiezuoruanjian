@@ -93,7 +93,7 @@ impl WriterCoreApi {
     }
 
     pub fn create_starmap_json(&self, title: &str, desc: &str) -> ApiResult<String> {
-        // #645 评论 5504296097 问题1：走 _with_changes 入口，记录本地 history。
+        // 走 _with_changes 入口，记录本地 history。
         // 之前调用 create_starmap(title, desc, None) 没有走 change set，
         // 导致 create_starmap_json 写的 meta/index 文件不进本地 Git history。
         let (value, change_set) = self
@@ -343,7 +343,7 @@ impl WriterCoreApi {
         desc: &str,
         template_id: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本拿变更集，
+        // 用 _with_changes 版本拿变更集，
         // 调 record_workspace_change_set_history 记录本地历史。
         let (result, change_set) = self
             .core_write()
@@ -490,7 +490,7 @@ impl WriterCoreApi {
         starmap_id: &str,
         new_title: &str,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let (result, change_set) = self
             .core_write()
             .rename_starmap_with_changes(starmap_id, new_title)
@@ -515,7 +515,7 @@ impl WriterCoreApi {
     }
 
     pub fn delete_starmap(&self, starmap_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let change_set = self.core_write().delete_starmap_with_changes(starmap_id)?;
         for prefix in &[
             format!("starmap:{}", starmap_id),
@@ -531,7 +531,7 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,
@@ -540,7 +540,7 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn bind_starmap_to_project(&self, starmap_id: &str, project_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
             .bind_starmap_to_project_with_changes(starmap_id, project_id)?;
@@ -662,7 +662,7 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: 既有代码可读性技术债，待后续重构拆分
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,
@@ -671,7 +671,7 @@ impl WriterCoreApi {
         clippy::type_complexity
     )]
     pub fn unbind_starmap_from_project(&self, starmap_id: &str) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
             .unbind_starmap_from_project_with_changes(starmap_id)?;
@@ -788,7 +788,7 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    /// #645 评论 5504296097 问题2：刷新单个 starmap 在搜索索引中的条目。
+    /// 刷新单个 starmap 在搜索索引中的条目。
     ///
     /// 只更新搜索索引，不调用 core 层 unbind，不记录 history。
     /// 供 `delete_project` 在 core 层 `unbind_starmaps` 成功后刷新搜索索引使用。
@@ -911,7 +911,7 @@ impl WriterCoreApi {
         starmap_id: &str,
         project_id: &str,
     ) -> ApiResult<bool> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let change_set = self
             .core_write()
             .set_main_starmap_for_project_with_changes(starmap_id, project_id)
@@ -938,7 +938,7 @@ impl WriterCoreApi {
         desc: &str,
         accent_color: Option<&str>,
     ) -> ApiResult<crate::api::types::StarMapMetaDto> {
-        // #645 评论 5504296097 问题3：用 _with_changes 版本记录本地历史。
+        // 用 _with_changes 版本记录本地历史。
         let (result, change_set) = self
             .core_write()
             .create_child_starmap_with_changes(parent_id, title, desc, accent_color)

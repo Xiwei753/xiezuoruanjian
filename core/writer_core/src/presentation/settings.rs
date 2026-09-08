@@ -1,4 +1,4 @@
-//! # 设置页展示契约（#628 拆分）
+//! # 设置页展示契约
 //!
 //! 定义设置页的 section / item 顺序、控件类型、平台可见性等，
 //! 作为三端（Android / Qt / 鸿蒙）设置页的统一契约。
@@ -14,7 +14,7 @@
 //! - [`about`]：关于 section（order 70）。
 //!
 //! `stats`（order 60）当前是空 section，直接在 [`default_settings_presentation`]
-//! 中组装，不单独建空文件（#628）。
+//! 中组装，不单独建空文件。
 
 pub mod about;
 pub mod ai;
@@ -106,7 +106,7 @@ pub fn default_settings_presentation() -> SettingsPresentation {
             save::build_save_section(),
             sync::build_sync_section(),
             ai::build_ai_section(),
-            // stats 当前是空 section，直接组装（#628）。
+            // stats 当前是空 section，直接组装。
             SettingSectionDef {
                 id: "stats".into(),
                 title_key: "settings.section.stats".into(),

@@ -1,7 +1,7 @@
 //! Git 仓库布局模型。
 //!
 //! git_dir 固定在 `worktree_root/.git`（标准 Git 布局）。
-//! 初始化入口统一走 `workspace_git::ensure_workspace_repo()`。
+//! 初始化入口统一走 `workspace_git::ensure_workspace_repo`。
 
 use std::path::{Path, PathBuf};
 
@@ -50,7 +50,7 @@ pub(crate) fn try_open_repo(path: &Path) -> crate::Result<RepoOpenResult> {
 
 /// 确保 Git 仓库存在（init if missing）。
 ///
-/// #645 评论 5504296097 第2点：公开入口统一走 `workspace_git::ensure_workspace_repo()`，
+/// 第2点：公开入口统一走 `workspace_git::ensure_workspace_repo`，
 /// 本函数是内部实现，由 `workspace_git::repo` 委托调用。
 pub(crate) fn ensure_repo_layout_initialized(layout: &GitRepoLayout) -> crate::Result<()> {
     crate::storage::git_runtime::ensure_initialized()?;

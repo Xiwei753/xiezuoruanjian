@@ -6,7 +6,7 @@
 //! 提供：
 //! - `global_search(query, scope, limit, cursor)` — 分页搜索
 //! - `rebuild_search_index(project_id)` — 重建索引
-//! - `get_search_index_status()` — 索引状态
+//! - `get_search_index_status` — 索引状态
 //! - `enqueue_search_index_update(update)` — 增量更新队列
 //!
 //! 索引属于可删除、可重建的本地缓存。

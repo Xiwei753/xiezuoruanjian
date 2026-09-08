@@ -6,11 +6,11 @@ use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange}
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
 
 impl EditorKernel {
-    /// #624 评论8：replace-all 是冷路径（明确需要全文的边界），允许 materialize
+    /// replace-all 是冷路径（明确需要全文的边界），允许 materialize
     /// 旧文本一次做全文匹配；但正文修改与 UndoEntry 都只保存局部 delta：
     /// 按旧文本坐标从后往前对 Rope 做局部 replace，UndoEntry 记录每个匹配位置的
     /// old/new range 与局部文本，不再保存两份全文。
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: 既有代码可读性技术债，待后续重构拆分
     #[allow(clippy::too_many_lines)]
     pub(crate) fn apply_replace_all(
         &mut self,
@@ -50,7 +50,7 @@ impl EditorKernel {
         let search_len = search.len();
         let replacement_len = replacement.len();
         let mut edits: Vec<TextEditDelta> = Vec::with_capacity(match_starts.len());
-        // #624 评论8：长度差可能为负（替换变短），用 i128 累积避免 usize 溢出。
+        // 长度差可能为负（替换变短），用 i128 累积避免 usize 溢出。
         // 第 i 个替换的 new_start = search 起点 + 前 i 次长度差；数学上恒 >= 0
         // （search 起点按 search_len 递增，长度差下界为 -（search_len - replacement_len）），
         // 因此 i128 → usize 转换不可能符号丢失，也不会截断（正文受 usize 约束）。
@@ -81,7 +81,7 @@ impl EditorKernel {
         self.composition_session = None;
 
         let new_selection = Utf8ByteRange::point(new_cursor_val);
-        // #624 评论8：content delta / offset map / affected ranges 从 delta 构造，
+        // content delta / offset map / affected ranges 从 delta 构造，
         // 计算完成后才把 edits 移入 Undo 栈。
         let mut content_delta = EditorContentDelta::default();
         let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
@@ -101,7 +101,7 @@ impl EditorKernel {
         let new_affected: Vec<Utf8ByteRange> = edits.iter().map(|e| e.new_range).collect();
         let new_revision = self.revision;
 
-        // #624 评论10：一个 EditorEditResult 是一个原子 patch batch — 每条 delta 一条
+        // 一个 EditorEditResult 是一个原子 patch batch — 每条 delta 一条
         // 局部 DisplayPatch（base 文档坐标，inserted_text 只含本次替换文本）。
         // 不再合成覆盖 [outer_start, outer_end) 的单条外层 patch：旧实现的
         // `saturating_sub` 总长度差在替换变长时变成 0，从新 Rope 截出错误 retained
@@ -137,7 +137,7 @@ impl EditorKernel {
                 new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
                 should_animate: false,
             },
-            // #624 评论8：从 delta 直接构造 offset map，不再全文 diff。
+            // 从 delta 直接构造 offset map，不再全文 diff。
             offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),
         };
 

@@ -2,10 +2,10 @@
 //!
 //! 分层：
 //! - per-target `state.local.json`（`<root>/app-meta/sync/state.local.json`）记录每个
-//!   target 自己的 manifest/LWW 状态；
+//! target 自己的 manifest/LWW 状态；
 //! - `full_state.local.json`（`<app_data_root>/app-meta/sync/full_state.local.json`）
-//!   只记录"这一次全量事务整体是什么结果"，由 [`super::sync_ops`] 在事务开始 /
-//!   提前失败 / 聚合完成时写入，本模块只负责读取与原子落盘。
+//! 只记录"这一次全量事务整体是什么结果"，由 [`super::sync_ops`] 在事务开始 /
+//! 提前失败 / 聚合完成时写入，本模块只负责读取与原子落盘。
 //!
 //! 这两层不混用：全量同步的总体状态不允许拿某个 target 的 per-target state 冒充。
 
@@ -151,7 +151,7 @@ impl super::WriterCore {
     /// FatalError / RecoverableError / None 等）不动。
     ///
     /// 该动作只能在新 Core/WriterAppService 实例启动时执行一次，不能塞进
-    /// `load_full_sync_state()`：后者是纯读探针，每次状态查询都会调用，若在其中
+    /// `load_full_sync_state`：后者是纯读探针，每次状态查询都会调用，若在其中
     /// 落盘会反复改写磁盘并掩盖真正的事务进度。
     ///
     /// 返回值：是否实际发生了恢复落盘（true 表示旧状态是 Syncing 并已原子改写）。

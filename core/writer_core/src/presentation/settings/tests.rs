@@ -1,4 +1,4 @@
-//! #628：设置页展示契约测试（从 settings_presentation.rs 迁移）。
+//! 设置页展示契约测试（从 settings_presentation.rs 迁移）。
 
 use super::*;
 
@@ -63,7 +63,7 @@ fn test_settings_presentation_json_ffi() {
 
 #[test]
 fn test_section_order_matches_product_design() {
-    // #628：section 顺序为 appearance(10), editor(20), save(30), sync(40),
+    // section 顺序为 appearance(10), editor(20), save(30), sync(40),
     // ai(50), stats(60, 空), about(70)。
     let presentation = default_settings_presentation();
     let orders: Vec<u32> = presentation.sections.iter().map(|s| s.order).collect();
@@ -89,7 +89,7 @@ fn test_section_order_matches_product_design() {
 
 #[test]
 fn test_stats_section_is_empty() {
-    // #628：stats 是空 section，直接在 settings.rs 组装。
+    // stats 是空 section，直接在 settings.rs 组装。
     let presentation = default_settings_presentation();
     let stats = presentation
         .sections

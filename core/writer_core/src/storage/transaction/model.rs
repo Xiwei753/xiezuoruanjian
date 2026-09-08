@@ -10,11 +10,11 @@ pub struct TransactionManifest {
     pub transaction_id: String,
     pub created_at_ms: i64,
     pub entries: Vec<TransactionEntry>,
-    /// #644 评论 5475805198 第1节：事务生命周期阶段。
+    /// 事务生命周期阶段。
     /// 旧 manifest 中无此字段时反序列化为 `FilesCommitted`（向后兼容）。
     #[serde(default = "default_phase")]
     pub phase: TransactionPhase,
-    /// #644 评论 5475805198 第1节：backup 模式的备份条目，写入 manifest 供崩溃恢复。
+    /// backup 模式的备份条目，写入 manifest 供崩溃恢复。
     /// 旧 manifest 中无此字段时反序列化为空 Vec（向后兼容）。
     #[serde(default)]
     pub backup_entries: Vec<BackupEntry>,
@@ -28,7 +28,7 @@ fn default_phase() -> TransactionPhase {
 pub struct TransactionEntry {
     pub staging_filename: String,
     pub target_relative: String,
-    /// #644 评论 5473105049 第2节：支持 delete 操作。
+    /// 支持 delete 操作。
     /// `true` 表示 commit 时应删除 `target_relative`（staging_filename 忽略）。
     /// 旧 manifest 中无此字段时反序列化为 `false`（向后兼容）。
     #[serde(default)]
@@ -43,7 +43,7 @@ pub struct TransactionEntry {
 /// - `Finished`：事务成功完成，可以清理。
 /// - `RolledBack`：rollback 已执行，可以清理。
 ///
-/// #645 评论 5504296097 问题5(b)：`FilesCommittedPendingGit` 变体已移除。
+/// (b)：`FilesCommittedPendingGit` 变体已移除。
 /// 新代码不再产生此变体。旧 manifest 中可能存在 `"files_committed_pending_git"`
 /// 字符串，反序列化时通过自定义 [`Deserialize`] impl 映射到 `FilesCommitted`
 /// （恢复时按 `FilesCommitted` + rollback 处理）。`Serialize` 用 derive，
@@ -57,7 +57,7 @@ pub enum TransactionPhase {
     RolledBack,
 }
 
-/// #645 评论 5504296097 问题5(b)：自定义 `Deserialize`，把旧遗留字符串
+/// (b)：自定义 `Deserialize`，把旧遗留字符串
 /// `files_committed_pending_git` 映射到 `FilesCommitted`。
 ///
 /// 旧 manifest 反序列化时遇到 `"files_committed_pending_git"` 不会失败，
@@ -86,13 +86,13 @@ impl<'de> Deserialize<'de> for TransactionPhase {
     }
 }
 
-/// #644 评论 5475413230 第1节：备份条目，替代空字符串哨兵。
+/// 备份条目，替代空字符串哨兵。
 ///
-/// `String::new()` 表示"旧文件不存在"时，`backup_dir.join("")` 就是 backup 目录本身，
-/// `exists()` 为 true，随后 `fs::copy(目录, 文件)` 会失败。
+/// `String::new` 表示"旧文件不存在"时，`backup_dir.join("")` 就是 backup 目录本身，
+/// `exists` 为 true，随后 `fs::copy(目录, 文件)` 会失败。
 /// 用明确枚举消除歧义。
 ///
-/// #644 评论 5475805198 第1节：可序列化，写入 manifest 供崩溃恢复使用。
+/// 可序列化，写入 manifest 供崩溃恢复使用。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BackupEntry {
     /// 旧文件存在，rollback 时从备份恢复。
@@ -129,7 +129,7 @@ mod tests {
         }
     }
 
-    /// #645 评论 5504296097 问题5(b)：旧遗留字符串映射到 FilesCommitted。
+    /// (b)：旧遗留字符串映射到 FilesCommitted。
     #[test]
     fn phase_legacy_files_committed_pending_git_maps_to_files_committed() {
         let back: TransactionPhase =

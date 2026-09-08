@@ -1,20 +1,20 @@
-//! # 窗口尺寸断点 — 素笺自己的窗口分类（#628）
+//! # 窗口尺寸断点 — 素笺自己的窗口分类
 //!
 //! 本文件集中所有"窗口宽度/高度 → 窗口 class"的常量与分类函数。
 //! 不引入 Android `WindowWidthSizeClass` 等平台类型；Core 自定义平台无关枚举。
 //!
-//! 断点表（与 Issue #628 评论一致）：
+//! 断点表：
 //!
 //! ```text
-//! width  < 600          -> Narrow
-//! 600 <= width  < 840   -> Medium
-//! 840 <= width  < 1200  -> Wide
-//! 1200 <= width < 1600  -> Large
-//! width  >= 1600        -> ExtraLarge
+//! width < 600 -> Narrow
+//! 600 <= width < 840 -> Medium
+//! 840 <= width < 1200 -> Wide
+//! 1200 <= width < 1600 -> Large
+//! width >= 1600 -> ExtraLarge
 //!
-//! height < 480          -> Compact
-//! 480 <= height < 900   -> Medium
-//! height >= 900         -> Tall
+//! height < 480 -> Compact
+//! 480 <= height < 900 -> Medium
+//! height >= 900 -> Tall
 //! ```
 
 use serde::{Deserialize, Serialize};
