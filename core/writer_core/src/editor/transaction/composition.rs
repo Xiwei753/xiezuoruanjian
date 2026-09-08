@@ -336,7 +336,7 @@ impl OffsetMap {
             }
             first = false;
             old_pos = old_end;
-            //   复审补漏：相邻 deleteSurrounding 的 undo 两条 inverse
+            // 相邻 deleteSurrounding 的 undo 两条 inverse
             // delta 的 new_range 同点退化为零长（如 before/after 紧邻均 point(bs)），
             // 顺序赋值 `new_pos = new_end` 时后处理的端点会覆盖前面更大的端点，尾段
             // 静态区映射偏移。同点零长编辑在最终文本中占据同一插入间隙，取所有端点

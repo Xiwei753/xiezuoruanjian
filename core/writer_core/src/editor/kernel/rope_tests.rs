@@ -1,4 +1,4 @@
-//!   — crop::Rope 局部编辑改造测试（TDD）。
+//! crop::Rope 局部编辑改造测试（TDD）。
 //!
 //! 覆盖：Rope UTF-8 边界访问器、光标附近 grapheme 边界迭代、
 //! delta Undo/Redo、deleteSurrounding 双 delta、replace-all 多 delta、
@@ -436,7 +436,7 @@ mod rope_tests {
         );
     }
 
-    ///   补漏：deleteSurrounding 双 delta 的 **undo** patch 必须用
+    /// deleteSurrounding 双 delta 的 **undo** patch 必须用
     /// 最终文本坐标。旧实现 after delta 的 new_range=point(as_) 是在「仅删除 after、
     /// before 尚未删除」的时刻计算的；before 删除后该点在最终文本中左移
     /// before_deleted_len。顺序应用 undo delta（先恢复 before）恰好补偿正确，但 undo
@@ -471,7 +471,7 @@ mod rope_tests {
         );
     }
 
-    ///   补漏：before/after 紧邻（as_ == be）时两个 undo patch 在
+    /// before/after 紧邻（as_ == be）时两个 undo patch 在
     /// 同一位置（均退化为 point(bs)），Android 稳定降序按列表顺序应用 — after（右侧）
     /// 必须排在 before 前面，否则 "b"、"c" 插入顺序颠倒成 "cb"。
     #[test]
@@ -509,7 +509,7 @@ mod rope_tests {
         );
     }
 
-    ///   复审补漏：相邻 deleteSurrounding undo 的 OffsetMap 尾段映射。
+    /// 相邻 deleteSurrounding undo 的 OffsetMap 尾段必须保持正确映射。
     ///
     /// "abcd" 光标 2，before=[1,2)="b"、after=[2,3)="c"（紧邻）→ "ad"。undo 时两条
     /// inverse delta 的 new_range 都退化为 point(1)（同点零长编辑），`from_edits` 必须

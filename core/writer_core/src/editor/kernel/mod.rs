@@ -18,7 +18,7 @@ use crate::editor::strong_types::{
 };
 use crop::Rope;
 
-///   — 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
+/// 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
 ///
 /// `old_range` 是编辑前正文中的半开 byte range，`new_range` 是编辑后正文中的
 /// 半开 byte range（同一逻辑编辑位置）；`deleted_text`/`inserted_text` 只保存
@@ -31,7 +31,7 @@ pub(crate) struct TextEditDelta {
     pub(crate) inserted_text: String,
 }
 
-///   — Undo 栈条目：编辑 delta 列表 编辑前后选区。
+/// Undo 栈条目：保存编辑 delta 列表和编辑前后选区。
 ///
 /// 普通编辑一个 delta；deleteSurrounding 两个；replace-all 多个。
 /// Undo 按 new_range 逆序应用 inverse delta，Redo 按 old_range 从后往前（降序）

@@ -428,7 +428,7 @@ impl ActionRegistry {
         });
     }
 
-    // TODO(#597): 既有代码可读性技术债，待后续重构拆分
+    // TODO: register_sync_actions 过长，后续按动作类别拆分。
     #[allow(
         clippy::too_many_lines,
         clippy::cognitive_complexity,

@@ -31,7 +31,7 @@ impl EditorKernel {
 
         let old_len_before_undo = self.text.byte_len();
 
-        //   补漏：inverse delta 按 new_range.start 降序应用（先恢复右侧），
+        // inverse delta 按 new_range.start 降序应用，先恢复右侧。
         // 保证左侧 delta 的 new_range（最终文本坐标）在应用时仍然有效。旧实现固定
         // iter().rev() 隐含「edits 列表按 new_range 升序」——replace-all 满足，但
         // deleteSurrounding 的 edits 是 [after, before]，rev() 变成升序，before 先恢复

@@ -1074,7 +1074,7 @@ impl EditorKernel {
         } else {
             None
         };
-        //   补漏：before 删除长度（after delta 的最终坐标需要它）。
+        // before 删除长度用于计算 after delta 的最终文本坐标。
         // 纯几何计算，不依赖正文状态，可提前求值。
         let before_deleted_len: usize = before_range.map_or(0, |(bs, be)| be.saturating_sub(bs));
 
@@ -1102,8 +1102,8 @@ impl EditorKernel {
             self.text.delete(as_..ae);
             edits.push(TextEditDelta {
                 old_range: Utf8ByteRange::from_ordered(as_, ae),
-                //   补漏：new_range 必须是 **最终文本**（两次删除都完成
-                // 之后）的坐标。after 先于 before 删除，删除 after 瞬间正文仍含 before
+                // new_range 必须使用两次删除都完成后的最终文本坐标。
+                // after 先于 before 删除，删除 after 瞬间正文仍含 before
                 // 区间，point(as_) 是「仅删除 after」时的坐标；随后 before 删除会把该点
                 // 左移 before_deleted_len。若这里保留 point(as_)，undo 的 DisplayPatch
                 // 以 base 坐标降序应用时 after patch 会插到错误位置（"abXYcd" undo 后

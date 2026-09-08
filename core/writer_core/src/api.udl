@@ -394,7 +394,7 @@ dictionary FullSyncDiagnosticsResultDto {
     SyncDiagnosticsResultDto diagnostics;
 };
 
-    // 全量同步持久状态。
+// 全量同步持久状态。
 // 路径：<app_data_root>/app-meta/sync/full_state.local.json
 // overall_status: 与 FullSyncResultDto.overall_status 同一映射
 dictionary FullSyncStateDto {
@@ -1215,7 +1215,7 @@ interface WriterAppService {
     [Throws=WriterError]
     void save_app_sync_state(SyncStateDto state);
 
-// 全量同步持久状态。
+    // 全量同步持久状态。
     [Throws=WriterError]
     FullSyncStateDto? load_full_sync_state();
 

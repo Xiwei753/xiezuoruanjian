@@ -89,7 +89,7 @@ fn ensure_workspace_git(
 ) -> std::result::Result<crate::storage::git_repo_layout::GitRepoLayout, WriterError> {
     let layout = crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root.to_path_buf());
     crate::storage::workspace_git::ensure_workspace_repo(&layout)?;
-    //   bootstrap 初始化后实际调用 recover_workspace_crash，
+    // bootstrap 初始化后实际调用 recover_workspace_crash，
     // 确保打开 workspace 时自动恢复 HEAD/index 损坏。
     match crate::storage::workspace_git::recover_workspace_crash(&layout) {
         Ok(result) => {
@@ -119,11 +119,11 @@ pub fn open_app_service(
     crate::storage::git_runtime::ensure_initialized()?;
     // 应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    //   在创建服务之前先恢复待处理的删除事务。
+    // 在创建服务之前先恢复待处理的删除事务。
     // 传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let service = Arc::new(WriterAppService::new(app_data_root, projects_root));
-    //   注入 bootstrap 计算的 layout 到 API 层。
+    // 注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service: {e}");
@@ -140,7 +140,7 @@ pub fn open_app_service_with_init(
     crate::storage::git_runtime::ensure_initialized()?;
     // 应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    //   在创建服务之前先恢复待处理的删除事务。
+    // 在创建服务之前先恢复待处理的删除事务。
     // 传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
@@ -167,7 +167,7 @@ pub fn open_app_service_with_init(
         projects_root,
         services,
     ));
-    //   注入 bootstrap 计算的 layout 到 API 层。
+    // 注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_init: {e}");
@@ -186,7 +186,7 @@ pub fn open_app_service_with_secure_storage(
     crate::storage::git_runtime::ensure_initialized()?;
     // 应用打开时初始化 workspace Git。
     let layout = ensure_workspace_git(Path::new(&app_data_root))?;
-    //   在创建服务之前先恢复待处理的删除事务。
+    // 在创建服务之前先恢复待处理的删除事务。
     // 传 layout，recover 后用 layout 写 history。
     recover_storage_transactions(Path::new(&app_data_root), &layout)?;
     let platform_init: PlatformInit = init.clone().into();
@@ -220,7 +220,7 @@ pub fn open_app_service_with_secure_storage(
         projects_root,
         services,
     ));
-    //   注入 bootstrap 计算的 layout 到 API 层。
+    // 注入 bootstrap 计算的 layout 到 API 层。
     service.set_workspace_git_layout(layout);
     if let Err(e) = service.rebuild_search_index(None) {
         log::warn!("Failed to rebuild search index on open_app_service_with_secure_storage: {e}");
