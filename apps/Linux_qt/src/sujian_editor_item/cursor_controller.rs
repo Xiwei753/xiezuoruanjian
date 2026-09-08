@@ -44,7 +44,6 @@ pub struct CursorController {
     pub visible: bool,
     pub dirty: bool,
     pub affinity: CaretAffinity,
-    pub current_visual_line_id: Option<usize>,
     pub last_scroll_y: f64,
     pub ime_cursor_rect_h: f64,
     pub anchor_visual_x: Option<f64>,
@@ -67,7 +66,6 @@ impl CursorController {
             visible: false,
             dirty: false,
             affinity: CaretAffinity::Downstream,
-            current_visual_line_id: None,
             last_scroll_y: 0.0,
             ime_cursor_rect_h: 0.0,
             anchor_visual_x: None,
@@ -140,7 +138,6 @@ impl CursorController {
             CursorTransition::Tween {
                 old_rect,
                 new_rect,
-                duration_ms: _,
             } => {
                 let start_x = old_rect.x;
                 let start_y = old_rect.top;

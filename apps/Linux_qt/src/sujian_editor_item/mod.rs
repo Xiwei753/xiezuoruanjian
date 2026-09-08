@@ -715,10 +715,7 @@ impl SujianEditorItem {
         }
     }
 
-    pub(crate) fn positive_id_string_to_u64(value: &str) -> Option<u64> {
-        value.parse::<u64>().ok().filter(|id| *id > 0)
-    }
-
+    #[cfg(test)]
     pub(crate) fn animation_mode_from_core(mode: CoreAnimationMode) -> AnimationMode {
         match mode {
             CoreAnimationMode::GlyphAnimation => AnimationMode::GlyphAnimation,
@@ -731,49 +728,8 @@ impl SujianEditorItem {
         }
     }
 
-    pub(crate) fn finish_insert_animation(
-        &mut self,
-        transaction_id: Option<u64>,
-        range_id: Option<u64>,
-        byte_start: i32,
-        byte_end: i32,
-        skipped: bool,
-    ) {
-        let _ = (range_id, byte_start, byte_end);
-        if let Some(tid) = transaction_id {
-            let key = VisualTransactionKey {
-                transaction_id: tid,
-                generation: tid,
-            };
-            let removed = self.pipeline.animation_coordinator_mut().finish_by_key(key);
-            if let Some(ids) = removed {
-                editor_animation_debug_log(&format!(
-                    "on_insert_animation_{}: tid={}, cleared, has_active_insert={}",
-                    if skipped { "skipped" } else { "finished" },
-                    tid,
-                    self.pipeline
-                        .animation_coordinator_mut()
-                        .has_active_insert()
-                ));
-                self.pipeline
-                    .texture_cache_mut()
-                    .remove_for_transaction(&ids);
-                self.request_static_repaint();
-                self.cursor_rect_changed();
-            }
-        }
-    }
-
     pub(crate) fn has_active_insert_animation(&self) -> bool {
         self.pipeline.animation_coordinator().has_active_insert()
-    }
-
-    pub(crate) fn active_insert_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.pipeline.animation_coordinator().insert_byte_ranges()
-    }
-
-    pub(crate) fn active_reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.pipeline.animation_coordinator().reflow_byte_ranges()
     }
 
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {

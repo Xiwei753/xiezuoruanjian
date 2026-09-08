@@ -1,8 +1,4 @@
-use super::linux_coordinator::{
-    AutocorrectPolicy, CapitalizationPolicy, CopyPolicy, EditableTextTarget,
-    LinuxTextEditorCoordinator, PastePolicy, SecretPolicy, SelectionPolicy, TextEditorProfile,
-    TextInputType,
-};
+use super::linux_coordinator::{EditableTextTarget, LinuxTextEditorCoordinator, TextEditorProfile};
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
 

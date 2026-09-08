@@ -141,26 +141,6 @@ mod tests {
         }
     }
 
-    /// 返回 `LegacyMigrationOutcome` 的变体描述，**完全不碰 secrets**。
-    ///
-    /// 测试断言失败时用于 panic 诊断：只暴露变体名与非敏感的 config/reason，
-    /// 不读取 `SyncSecrets.token` / `ssh_private_key` 的任何派生信息，
-    /// 避免 cleartext-logging。
-    fn outcome_kind_redacted(outcome: &LegacyMigrationOutcome) -> String {
-        match outcome {
-            LegacyMigrationOutcome::NotNeeded => "NotNeeded".to_string(),
-            LegacyMigrationOutcome::Migrated { config, .. } => format!(
-                "Migrated {{ remote_url: {}, branch: {} }}",
-                config.github_remote_url(),
-                config.github_branch(),
-            ),
-            LegacyMigrationOutcome::NeedsReconfigure { reason } => {
-                format!("NeedsReconfigure {{ reason: {} }}", reason)
-            }
-            LegacyMigrationOutcome::NoLegacyConfig => "NoLegacyConfig".to_string(),
-        }
-    }
-
     /// 1. 旧 app token（base key）：新全局不存在；旧 `sync_token_app` 有值 + app 配置 → 迁移成功。
     #[test]
     fn test_legacy_app_token_migration() {
@@ -183,7 +163,7 @@ mod tests {
                 );
                 assert_eq!(s.github_token().as_deref(), Some("legacy_app_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
 
         assert!(env.storage.contains_key("sync_token_global"));
@@ -209,7 +189,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("gen3_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_app_g3"));
@@ -253,7 +233,7 @@ mod tests {
                 );
                 assert_eq!(s.github_token().as_deref(), Some("proj1_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -293,7 +273,7 @@ mod tests {
                 );
                 assert_eq!(s.github_token().as_deref(), Some("shared_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -366,10 +346,7 @@ mod tests {
                 assert!(reason.contains("project:proj1"));
                 assert!(reason.contains("project:proj2"));
             }
-            other => panic!(
-                "expected NeedsReconfigure, got {}",
-                outcome_kind_redacted(&other)
-            ),
+            _ => panic!("expected NeedsReconfigure, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_proj1"));
         assert!(env.storage.contains_key("sync_token_proj2"));
@@ -506,7 +483,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("file_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(!secrets_path.exists());
     }
@@ -540,10 +517,7 @@ mod tests {
                 );
                 assert_eq!(s.github_token().as_deref(), Some("app_token"));
             }
-            other => panic!(
-                "expected Migrated (app priority), got {}",
-                outcome_kind_redacted(&other)
-            ),
+            _ => panic!("expected Migrated (app priority), got a different variant"),
         }
         assert!(!env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_proj1"));
@@ -575,10 +549,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("app_gen7_token"));
             }
-            other => panic!(
-                "expected Migrated (app priority), got {}",
-                outcome_kind_redacted(&other)
-            ),
+            _ => panic!("expected Migrated (app priority), got a different variant"),
         }
         assert!(!env.storage.contains_key("sync_token_app_g7"));
         assert!(env.storage.contains_key("sync_token_proj1"));
@@ -603,7 +574,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("gen15_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_app_g15"));
@@ -629,7 +600,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("gen20_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1_g20"));
@@ -651,7 +622,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("proj1_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(env.storage.contains_key("sync_token_global"));
         assert!(!env.storage.contains_key("sync_token_proj1"));
@@ -679,7 +650,7 @@ mod tests {
             LegacyMigrationOutcome::Migrated { secrets: s, .. } => {
                 assert_eq!(s.github_token().as_deref(), Some("base_token"));
             }
-            other => panic!("expected Migrated, got {}", outcome_kind_redacted(&other)),
+            _ => panic!("expected Migrated, got a different variant"),
         }
         assert!(!env.storage.contains_key("sync_token_app"));
         assert!(env.storage.contains_key("sync_token_app_g5"));

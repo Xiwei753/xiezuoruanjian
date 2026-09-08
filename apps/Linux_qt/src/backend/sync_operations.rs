@@ -20,8 +20,6 @@
 use super::*;
 use crate::sync_bridge::{mask_sync_error, sync_error_category_from_code, SyncTaskOutcome};
 
-use writer_core::api::WriterCoreApi;
-
 impl AppBackend {
     pub(crate) fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
         if outcome.operation_id != self.current_sync_operation_id {
@@ -143,28 +141,24 @@ impl AppBackend {
         }
 
         // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        let project_id = match self.selected_project_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                self.current_sync_status = "error".to_string();
-                let state = writer_core::api::SyncOperationStateDto {
-                    operation_id: op_id.clone(),
-                    operation_kind: "dry_run".to_string(),
-                    status_code: "error".to_string(),
-                    phase_key: None,
-                    summary_key: Some("sync.block.no_project_selected".to_string()),
-                    summary_args: std::collections::HashMap::new(),
-                    counts: writer_core::api::SyncOperationCountsDto::default(),
-                    raw_error: None,
-                };
-                self.current_sync_operation_state =
-                    serde_json::to_string(&state).unwrap_or_default();
-                self.sync_status_changed();
-                self.sync_action_completed();
-                self.debug_error("sync", "perform_sync_dry_run_failed", "no_project_selected");
-                return op_id.into();
-            }
-        };
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            self.current_sync_status = "error".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_project_selected".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_dry_run_failed", "no_project_selected");
+            return op_id.into();
+        }
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
@@ -231,12 +225,11 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
-        let project_id_capture = project_id.clone();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture, project_id_capture) which
-            // auto-implement UnwindSafe. No shared mutable state or borrows are captured, so the
-            // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
+            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
+            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
@@ -441,28 +434,24 @@ impl AppBackend {
         }
 
         // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        let project_id = match self.selected_project_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                self.current_sync_status = "error".to_string();
-                let state = writer_core::api::SyncOperationStateDto {
-                    operation_id: op_id.clone(),
-                    operation_kind: "sync".to_string(),
-                    status_code: "error".to_string(),
-                    phase_key: None,
-                    summary_key: Some("sync.block.no_project_selected".to_string()),
-                    summary_args: std::collections::HashMap::new(),
-                    counts: writer_core::api::SyncOperationCountsDto::default(),
-                    raw_error: None,
-                };
-                self.current_sync_operation_state =
-                    serde_json::to_string(&state).unwrap_or_default();
-                self.sync_status_changed();
-                self.sync_action_completed();
-                self.debug_error("sync", "perform_sync_failed", "no_project_selected");
-                return op_id.into();
-            }
-        };
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            self.current_sync_status = "error".to_string();
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "sync".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_project_selected".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_status_changed();
+            self.sync_action_completed();
+            self.debug_error("sync", "perform_sync_failed", "no_project_selected");
+            return op_id.into();
+        }
 
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
@@ -541,13 +530,12 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
-        let project_id_capture = project_id.clone();
         let trigger = trigger.to_string();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture, project_id_capture) which
-            // auto-implement UnwindSafe. No shared mutable state or borrows are captured, so the
-            // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
+            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
+            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {

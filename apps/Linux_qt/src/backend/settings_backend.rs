@@ -664,11 +664,6 @@ impl AppBackend {
     // Included inside impl AppBackend from app_backend.rs.
     // Deprecated compatibility methods for this Linux backend domain.
 
-    // AppBackend::setting_font_size
-    pub(crate) fn setting_font_size(&self) -> f32 {
-        self.current_setting_font_size
-    }
-
     // AppBackend::set_setting_font_size
     // NOTE: No longer calls save_local_settings() immediately.
     // Saving is debounced at the QML layer (debouncedSave/flushSave).
@@ -677,20 +672,10 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_line_spacing
-    pub(crate) fn setting_line_spacing(&self) -> f32 {
-        self.current_setting_line_spacing
-    }
-
     // AppBackend::set_setting_line_spacing
     pub(crate) fn set_setting_line_spacing(&mut self, val: f32) {
         self.current_setting_line_spacing = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_auto_save_enabled
-    pub(crate) fn setting_auto_save_enabled(&self) -> bool {
-        self.current_setting_auto_save_enabled
     }
 
     // AppBackend::set_setting_auto_save_enabled
@@ -699,31 +684,16 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_auto_save_delay_ms
-    pub(crate) fn setting_auto_save_delay_ms(&self) -> u32 {
-        self.current_setting_auto_save_delay_ms
-    }
-
     // AppBackend::set_setting_auto_save_delay_ms
     pub(crate) fn set_setting_auto_save_delay_ms(&mut self, val: u32) {
         self.current_setting_auto_save_delay_ms = val;
         self.settings_changed();
     }
 
-    // AppBackend::setting_auto_indent_enabled
-    pub(crate) fn setting_auto_indent_enabled(&self) -> bool {
-        self.current_setting_auto_indent_enabled
-    }
-
     // AppBackend::set_setting_auto_indent_enabled
     pub(crate) fn set_setting_auto_indent_enabled(&mut self, val: bool) {
         self.current_setting_auto_indent_enabled = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_auto_indent_width
-    pub(crate) fn setting_auto_indent_width(&self) -> f32 {
-        self.current_setting_auto_indent_width
     }
 
     // AppBackend::set_setting_auto_indent_width
@@ -767,10 +737,6 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    pub(crate) fn setting_dynamic_color_enabled(&self) -> bool {
-        self.current_setting_dynamic_color_enabled
-    }
-
     pub(crate) fn set_setting_dynamic_color_enabled(&mut self, val: bool) {
         self.current_setting_dynamic_color_enabled = val;
         self.settings_changed();
@@ -796,20 +762,10 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_typing_animation_enabled
-    pub(crate) fn setting_typing_animation_enabled(&self) -> bool {
-        self.current_setting_typing_animation_enabled
-    }
-
     // AppBackend::set_setting_typing_animation_enabled
     pub(crate) fn set_setting_typing_animation_enabled(&mut self, val: bool) {
         self.current_setting_typing_animation_enabled = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_smooth_cursor_enabled
-    pub(crate) fn setting_smooth_cursor_enabled(&self) -> bool {
-        self.current_setting_smooth_cursor_enabled
     }
 
     // AppBackend::set_setting_smooth_cursor_enabled
@@ -818,20 +774,10 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_typing_animation_duration_ms
-    pub(crate) fn setting_typing_animation_duration_ms(&self) -> u32 {
-        self.current_setting_typing_animation_duration_ms
-    }
-
     // AppBackend::set_setting_typing_animation_duration_ms
     pub(crate) fn set_setting_typing_animation_duration_ms(&mut self, val: u32) {
         self.current_setting_typing_animation_duration_ms = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_smooth_cursor_duration_ms
-    pub(crate) fn setting_smooth_cursor_duration_ms(&self) -> u32 {
-        self.current_setting_smooth_cursor_duration_ms
     }
 
     // AppBackend::set_setting_smooth_cursor_duration_ms
@@ -840,20 +786,10 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_coordinated_text_cursor_animation_enabled
-    pub(crate) fn setting_coordinated_text_cursor_animation_enabled(&self) -> bool {
-        self.current_setting_coordinated_text_cursor_animation_enabled
-    }
-
     // AppBackend::set_setting_coordinated_text_cursor_animation_enabled
     pub(crate) fn set_setting_coordinated_text_cursor_animation_enabled(&mut self, val: bool) {
         self.current_setting_coordinated_text_cursor_animation_enabled = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_diagnostics_enabled
-    pub(crate) fn setting_diagnostics_enabled(&self) -> bool {
-        self.current_setting_diagnostics_enabled
     }
 
     // AppBackend::set_setting_diagnostics_enabled
@@ -862,31 +798,16 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_diagnostics_verbose
-    pub(crate) fn setting_diagnostics_verbose(&self) -> bool {
-        self.current_setting_diagnostics_verbose
-    }
-
     // AppBackend::set_setting_diagnostics_verbose
     pub(crate) fn set_setting_diagnostics_verbose(&mut self, val: bool) {
         self.current_setting_diagnostics_verbose = val;
         self.settings_changed();
     }
 
-    // AppBackend::setting_desktop_sidebar_width
-    pub(crate) fn setting_desktop_sidebar_width(&self) -> f64 {
-        self.current_setting_desktop_sidebar_width
-    }
-
     // AppBackend::set_setting_desktop_sidebar_width
     pub(crate) fn set_setting_desktop_sidebar_width(&mut self, val: f64) {
         self.current_setting_desktop_sidebar_width = val;
         self.settings_changed();
-    }
-
-    // AppBackend::setting_desktop_editor_width
-    pub(crate) fn setting_desktop_editor_width(&self) -> f64 {
-        self.current_setting_desktop_editor_width
     }
 
     // AppBackend::set_setting_desktop_editor_width

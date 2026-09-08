@@ -30,7 +30,6 @@ pub(crate) use qt_surface::{focus_item, install_event_filter};
 mod tests {
     use super::controller::*;
     use super::events::*;
-    use super::*;
     use crate::sujian_editor_item::PreeditAttribute;
 
     #[derive(Default)]

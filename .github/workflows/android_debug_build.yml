@@ -14,16 +14,12 @@ env:
 
 jobs:
   build:
-    name: Build APK (${{ matrix.flavor }} / ${{ matrix.abi }})
+    name: Generate Android test artifacts (${{ matrix.flavor }} / x86_64)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         flavor: [no-ai, ai]
-        abi: [arm64-v8a, x86_64]
-        include:
-          - flavor: no-ai
-            abi: universal
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -47,7 +43,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android,x86_64-linux-android
+          targets: x86_64-linux-android
 
       - name: Cache cargo-ndk binary
         id: cache-cargo-ndk
@@ -63,7 +59,7 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.flavor }}-${{ matrix.abi }}
+          key: ${{ matrix.flavor }}-x86_64
           shared-key: android
           cache-on-failure: true
 
@@ -76,88 +72,17 @@ jobs:
         run: chmod +x apps/android/gradlew
 
       - name: Make build scripts executable
-        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh
 
-      - name: Decode Android Keystore
-        env:
-          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: |
-          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$ANDROID_KEYSTORE_PASSWORD" ] || [ -z "$ANDROID_KEY_ALIAS" ] || [ -z "$ANDROID_KEY_PASSWORD" ]; then
-            echo "::error::Android signing secrets are incomplete. Refusing to build with runner debug signing."
-            exit 1
-          fi
-          echo "Decoding Android keystore from secret..."
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/keystore.jks"
-          if [ ! -s "$RUNNER_TEMP/keystore.jks" ]; then
-            echo "::error::Keystore decode failed: output file is empty or missing. Check ANDROID_KEYSTORE_BASE64 secret."
-            exit 1
-          fi
-          echo "Keystore decoded successfully."
-
-      - name: Build Android ${{ matrix.flavor }} Debug APK (${{ matrix.abi }})
-        env:
-          WRITER_ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/keystore.jks
-          WRITER_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          WRITER_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          WRITER_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Build Android ${{ matrix.flavor }} native + UniFFI (x86_64)
         run: |
           export ANDROID_NDK_HOME=$ANDROID_NDK_ROOT
-          ./tools/build_android.sh --${{ matrix.flavor }} --abi ${{ matrix.abi }}
+          ./tools/build_android.sh --${{ matrix.flavor }} --abi x86_64 --skip-gradle
 
-      - name: Verify APK ABI
-        run: |
-          FLAVOR_DIR="${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}"
-          APK_PATH=$(ls apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/sujian-android-*.apk 2>/dev/null | head -1 || true)
-          if [ -z "$APK_PATH" ]; then
-            echo "::error::ABI verification aborted: renamed APK not found in apps/android/app/build/outputs/apk/$FLAVOR_DIR/debug/"
-            exit 1
-          fi
-          ./tools/android/verify_apk_abis.sh "$APK_PATH" "${{ matrix.abi }}"
-
-      - name: Upload ${{ matrix.flavor }} ${{ matrix.abi }} Artifact
+      - name: Upload Android test artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: sujian-android-${{ matrix.flavor }}-${{ matrix.abi }}-debug
-          path: apps/android/app/build/outputs/apk/${{ matrix.flavor == 'no-ai' && 'noAi' || 'ai' }}/debug/sujian-android-*.apk
-
-      # === Independent UniFFI binding artifacts: no-ai flavor x86_64 ===
-      - name: Upload no-ai UniFFI bindings
-        if: matrix.flavor == 'no-ai' && matrix.abi == 'x86_64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: uniffi-bindings-no-ai
-          path: apps/android/app/build/generated/writer-uniffi/noAi/
-          retention-days: 1
-
-      # === Independent UniFFI binding artifacts: ai flavor x86_64 ===
-      - name: Upload ai UniFFI bindings
-        if: matrix.flavor == 'ai' && matrix.abi == 'x86_64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: uniffi-bindings-ai
-          path: apps/android/app/build/generated/writer-uniffi/ai/
-          retention-days: 1
-
-      # === Native build artifacts: no-ai flavor x86_64 (for emulator test) ===
-      - name: Upload native build artifacts for no-ai emulator test
-        if: matrix.flavor == 'no-ai' && matrix.abi == 'x86_64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-no-ai-x86_64
-          path: |
-            apps/android/app/build/generated/writer-native/
-            apps/android/app/build/generated/writer-uniffi/
-          retention-days: 1
-
-      # === Native build artifacts: ai flavor x86_64 (for emulator test) ===
-      - name: Upload native build artifacts for ai emulator test
-        if: matrix.flavor == 'ai' && matrix.abi == 'x86_64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-ai-x86_64
+          name: android-test-${{ matrix.flavor }}-x86_64
           path: |
             apps/android/app/build/generated/writer-native/
             apps/android/app/build/generated/writer-uniffi/
@@ -227,8 +152,8 @@ jobs:
       - name: Download no-ai UniFFI bindings
         uses: actions/download-artifact@v4
         with:
-          name: uniffi-bindings-no-ai
-          path: apps/android/app/build/generated/writer-uniffi/noAi/
+          name: android-test-no-ai-x86_64
+          path: apps/android/app/build/generated/
 
       - name: Verify UniFFI bindings
         run: |
@@ -267,8 +192,8 @@ jobs:
       - name: Download ai UniFFI bindings
         uses: actions/download-artifact@v4
         with:
-          name: uniffi-bindings-ai
-          path: apps/android/app/build/generated/writer-uniffi/ai/
+          name: android-test-ai-x86_64
+          path: apps/android/app/build/generated/
 
       - name: Verify AI UniFFI bindings
         run: |
@@ -315,7 +240,7 @@ jobs:
       - name: Download native build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: native-${{ matrix.flavor }}-x86_64
+          name: android-test-${{ matrix.flavor }}-x86_64
           path: apps/android/app/build/generated/
 
       - name: Verify native artifacts
@@ -343,7 +268,7 @@ jobs:
         run: chmod +x apps/android/gradlew
 
       - name: Make build scripts executable
-        run: chmod +x tools/build_android.sh tools/android/build_native.sh tools/android/verify_apk_abis.sh
+        run: chmod +x tools/build_android.sh tools/android/build_native.sh
 
       - name: Enable KVM group permissions
         run: |

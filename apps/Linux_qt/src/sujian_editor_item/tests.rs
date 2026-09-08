@@ -1,12 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::sujian_editor_item::animation_coordinator::{AnimationMode, VisualTransactionKey};
     use crate::sujian_editor_item::is_complex_grapheme;
-    use crate::sujian_editor_item::PreeditAttributeKind;
     use crate::sujian_editor_item::SujianEditorItem;
-    use qmetaobject::prelude::*;
-    use writer_core::editor::CursorRect;
 
     #[test]
     fn test_is_complex_grapheme_emoji() {
@@ -306,7 +302,7 @@ mod tests {
     fn ime_commit_after_initials_cursor_moves_forward() {
         use writer_core::editor::{EditorEngine, EditorSelection, EditorTransactionCause};
 
-        let mut engine = EditorEngine::with_animation_limits(8, 160);
+        let engine = EditorEngine::with_animation_limits(8, 160);
 
         let preedit_text = "fhrl";
         let tx_preedit = engine.create_transaction(
@@ -407,7 +403,7 @@ mod tests {
     #[test]
     fn newline_commit_cursor_vertical_animation() {
         use writer_core::editor::{
-            CursorRect, EditorAnimationKind, EditorEngine, EditorSelection, EditorTransactionCause,
+            CursorRect, EditorEngine, EditorSelection, EditorTransactionCause,
         };
 
         let mut engine = EditorEngine::with_animation_limits(8, 160);

@@ -160,10 +160,6 @@ impl AppRef {
         }
     }
 
-    pub fn rc(&self) -> &std::rc::Rc<std::cell::RefCell<AppBackend>> {
-        &self.inner
-    }
-
     pub fn snapshot(&self) -> &std::rc::Rc<std::cell::RefCell<DomainSnapshot>> {
         &self.snapshot
     }

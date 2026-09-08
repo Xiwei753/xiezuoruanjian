@@ -26,10 +26,7 @@
 
 use std::time::Instant;
 
-use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap, Utf8ByteOffset,
-    Utf8ByteRange,
-};
+use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap};
 
 use super::animated_slice::AnimatedSlice;
 pub(crate) use super::animation_mode::AnimationMode;
@@ -337,7 +334,6 @@ impl LinuxEditorAnimationCoordinator {
                             CursorTransition::Tween {
                                 old_rect: old_cursor_rect.clone().unwrap(),
                                 new_rect: new_cursor_rect.clone().unwrap(),
-                                duration_ms: vt.duration_ms,
                             }
                         } else {
                             CursorTransition::Snap
@@ -537,7 +533,6 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
-                        duration_ms: vt.duration_ms,
                     }
                 } else {
                     CursorTransition::Snap
@@ -578,7 +573,6 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
-                        duration_ms: vt.duration_ms,
                     }
                 } else {
                     CursorTransition::Snap
@@ -614,7 +608,6 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn handle_composition_update(
         &mut self,
-        duration_ms: u64,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
         composition_byte_start: usize,
@@ -834,7 +827,6 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn handle_composition_commit_or_cancel(
         &mut self,
-        duration_ms: u64,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
         preedit_byte_start: usize,
@@ -1331,7 +1323,6 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn handle_cursor_only(
         &mut self,
-        duration_ms: u64,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
@@ -1418,10 +1409,6 @@ impl LinuxEditorAnimationCoordinator {
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.prepared_queue.is_empty()
-    }
-
     fn collect_decoration_slices(&self) -> Vec<DecorationSlice> {
         self.prepared_queue
             .active_transactions()
@@ -1443,22 +1430,6 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn current_static_render_plan(&self) -> StaticTextPlan {
         self.build_static_render_plan()
-    }
-
-    pub fn insert_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.prepared_queue.insert_byte_ranges()
-    }
-
-    pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.prepared_queue
-            .active_transactions()
-            .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .flat_map(|t| t.reflow_byte_ranges())
-            .collect()
     }
 
     fn build_static_render_plan(&self) -> StaticTextPlan {
@@ -1570,7 +1541,6 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             } else {
                 CursorTransition::Snap
@@ -1585,7 +1555,6 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
-                        duration_ms: u64::from(smooth_cursor_duration_ms),
                     }
                 } else {
                     CursorTransition::Tween {
@@ -1601,7 +1570,6 @@ impl LinuxEditorAnimationCoordinator {
                             bottom: cursor_y + cursor_h,
                             baseline_y: cursor_y + cursor_h * 0.8,
                         },
-                        duration_ms: u64::from(smooth_cursor_duration_ms),
                     }
                 }
             } else {
@@ -1616,7 +1584,6 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             } else {
                 CursorTransition::Tween {
@@ -1632,7 +1599,6 @@ impl LinuxEditorAnimationCoordinator {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
-                    duration_ms: u64::from(smooth_cursor_duration_ms),
                 }
             }
         } else {
@@ -1665,18 +1631,6 @@ impl LinuxEditorAnimationCoordinator {
             cursor_changed: position_changed,
             anchor_changed: false,
         }
-    }
-
-    fn active_transaction_duration_ms(&self) -> Option<u64> {
-        self.prepared_queue
-            .active_transactions()
-            .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .map(|t| t.duration_ms())
-            .min()
     }
 
     pub(crate) fn pause_all(&mut self) {
@@ -1773,6 +1727,7 @@ impl LinuxEditorAnimationCoordinator {
 mod tests {
     use super::*;
     use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
+    use writer_core::editor::Utf8ByteOffset;
 
     #[test]
     fn test_coordinator_suppress_all() {
@@ -2445,8 +2400,7 @@ mod tests {
         };
         let clusters: Vec<LineClusterSnapshot> = line_clusters
             .iter()
-            .enumerate()
-            .map(|(i, (bs, be, x, _y, sid))| LineClusterSnapshot {
+            .map(|(bs, be, x, _y, sid)| LineClusterSnapshot {
                 byte_start: *bs,
                 byte_end: *be,
                 source_rect: SourceRect {

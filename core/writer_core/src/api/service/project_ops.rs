@@ -767,9 +767,8 @@ impl WriterCoreApi {
     ) -> WriterError {
         use std::fs;
         log::warn!(
-            "restore_project_tree: rolling back staging for project {} due to error: {}",
+            "restore_project_tree: rolling back staging for project {} due to an error; details propagated to caller",
             input.project_id,
-            err
         );
         // 直接删除 staging 目录，不走正常 delete_project()（避免走 history/tombstone）
         if let Err(del_err) = fs::remove_dir_all(staging_root) {

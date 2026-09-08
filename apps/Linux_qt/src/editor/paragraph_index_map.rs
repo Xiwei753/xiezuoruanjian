@@ -6,12 +6,9 @@
 ///
 /// `qchar_to_document_byte`：每个 QChar 位置 → 文档级 UTF-8 byte offset。
 ///   代理对中的两个 QChar 位置映射到同一个 byte offset（字符起始）。
-/// `document_byte_to_qchar`：每个 UTF-8 byte 位置 → QChar offset。
-///   多字节字符的每个 byte 位置映射到同一个 QChar offset。
 #[derive(Clone)]
 pub struct ParagraphIndexMap {
     qchar_to_document_byte: Vec<usize>,
-    document_byte_to_qchar: Vec<usize>,
     paragraph_text_len_byte: usize,
     paragraph_text_len_qchar: usize,
 }
@@ -20,7 +17,6 @@ impl ParagraphIndexMap {
     pub fn build(paragraph_text: &str, paragraph_document_byte_start: usize) -> Self {
         let text_len = paragraph_text.len();
         let mut qchar_to_byte = Vec::new();
-        let mut byte_to_qchar = Vec::with_capacity(text_len + 1);
 
         let mut qchar_offset: usize = 0;
 
@@ -30,17 +26,11 @@ impl ParagraphIndexMap {
             for _ in 0..utf16_len {
                 qchar_to_byte.push(abs_byte);
             }
-            let char_len = ch.len_utf8();
-            for _ in 0..char_len {
-                byte_to_qchar.push(qchar_offset);
-            }
             qchar_offset += utf16_len;
         }
-        byte_to_qchar.push(qchar_offset);
 
         Self {
             qchar_to_document_byte: qchar_to_byte,
-            document_byte_to_qchar: byte_to_qchar,
             paragraph_text_len_byte: text_len,
             paragraph_text_len_qchar: qchar_offset,
         }
@@ -69,21 +59,6 @@ impl ParagraphIndexMap {
             })
     }
 
-    /// 文档级 UTF-8 byte offset → QChar index。
-    ///
-    /// 越界回退：byte offset 超出段落范围时返回段落的 QChar 长度（末尾位置）。
-    pub fn document_byte_to_qchar(
-        &self,
-        document_byte: usize,
-        paragraph_document_byte_start: usize,
-    ) -> usize {
-        let local_byte = document_byte.saturating_sub(paragraph_document_byte_start);
-        self.document_byte_to_qchar
-            .get(local_byte)
-            .copied()
-            .unwrap_or(self.paragraph_text_len_qchar)
-    }
-
     pub fn qchar_range_to_document_byte_range(
         &self,
         qchar_start: usize,
@@ -92,25 +67,6 @@ impl ParagraphIndexMap {
         let byte_start = self.qchar_to_document_byte(qchar_start);
         let byte_end = self.qchar_to_document_byte(qchar_end);
         (byte_start, byte_end)
-    }
-
-    pub fn document_byte_range_to_qchar_range(
-        &self,
-        byte_start: usize,
-        byte_end: usize,
-        paragraph_document_byte_start: usize,
-    ) -> (usize, usize) {
-        let qchar_start = self.document_byte_to_qchar(byte_start, paragraph_document_byte_start);
-        let qchar_end = self.document_byte_to_qchar(byte_end, paragraph_document_byte_start);
-        (qchar_start, qchar_end)
-    }
-
-    pub fn paragraph_qchar_len(&self) -> usize {
-        self.paragraph_text_len_qchar
-    }
-
-    pub fn paragraph_byte_len(&self) -> usize {
-        self.paragraph_text_len_byte
     }
 }
 
@@ -156,8 +112,6 @@ mod tests {
         let map = ParagraphIndexMap::build("hello", 100);
         assert_eq!(map.qchar_to_document_byte(0), 100);
         assert_eq!(map.qchar_to_document_byte(4), 104);
-        assert_eq!(map.document_byte_to_qchar(100, 100), 0);
-        assert_eq!(map.document_byte_to_qchar(104, 100), 4);
     }
 
     #[test]
@@ -166,9 +120,6 @@ mod tests {
         assert_eq!(map.qchar_to_document_byte(0), 0);
         assert_eq!(map.qchar_to_document_byte(1), 3);
         assert_eq!(map.qchar_to_document_byte(2), 6);
-        assert_eq!(map.document_byte_to_qchar(0, 0), 0);
-        assert_eq!(map.document_byte_to_qchar(3, 0), 1);
-        assert_eq!(map.document_byte_to_qchar(6, 0), 2);
     }
 
     #[test]
@@ -178,11 +129,6 @@ mod tests {
         assert_eq!(map.qchar_to_document_byte(1), 1);
         assert_eq!(map.qchar_to_document_byte(2), 4);
         assert_eq!(map.qchar_to_document_byte(3), 5);
-
-        assert_eq!(map.document_byte_to_qchar(0, 0), 0);
-        assert_eq!(map.document_byte_to_qchar(1, 0), 1);
-        assert_eq!(map.document_byte_to_qchar(4, 0), 2);
-        assert_eq!(map.document_byte_to_qchar(5, 0), 3);
     }
 
     #[test]
@@ -191,10 +137,6 @@ mod tests {
         let (bs, be) = map.qchar_range_to_document_byte_range(0, 2);
         assert_eq!(bs, 10);
         assert_eq!(be, 16);
-
-        let (qs, qe) = map.document_byte_range_to_qchar_range(10, 16, 10);
-        assert_eq!(qs, 0);
-        assert_eq!(qe, 2);
     }
 
     #[test]
@@ -202,22 +144,12 @@ mod tests {
         let map = ParagraphIndexMap::build("abc", 50);
         assert_eq!(map.qchar_to_document_byte(0), 50);
         assert_eq!(map.qchar_to_document_byte(2), 52);
-        assert_eq!(map.document_byte_to_qchar(50, 50), 0);
-        assert_eq!(map.document_byte_to_qchar(52, 50), 2);
     }
 
     #[test]
     fn test_out_of_bounds() {
         let map = ParagraphIndexMap::build("abc", 0);
         assert!(map.qchar_to_document_byte(100) >= 3);
-        assert_eq!(map.document_byte_to_qchar(100, 0), 3);
-    }
-
-    #[test]
-    fn test_empty_text() {
-        let map = ParagraphIndexMap::build("", 0);
-        assert_eq!(map.paragraph_qchar_len(), 0);
-        assert_eq!(map.paragraph_byte_len(), 0);
     }
 
     #[test]
@@ -227,10 +159,6 @@ mod tests {
         assert_eq!(map.qchar_to_document_byte(1), 1);
         assert_eq!(map.qchar_to_document_byte(2), 1);
         assert_eq!(map.qchar_to_document_byte(3), 5);
-
-        assert_eq!(map.document_byte_to_qchar(0, 0), 0);
-        assert_eq!(map.document_byte_to_qchar(1, 0), 1);
-        assert_eq!(map.document_byte_to_qchar(5, 0), 3);
     }
 
     #[test]

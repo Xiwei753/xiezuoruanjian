@@ -1137,11 +1137,6 @@ impl EditorLayout {
         })
     }
 
-    #[cfg(test)]
-    pub fn replace_snapshot(&mut self, snapshot: LayoutSnapshot) {
-        self.cache = Some(snapshot);
-    }
-
     pub fn hit_test(
         &self,
         snapshot: &LayoutSnapshot,
@@ -1899,8 +1894,6 @@ pub fn qchar_offset_to_byte_offset(text: &str, qchar_offset: usize) -> usize {
 
 #[derive(Clone, Debug)]
 pub struct CanonicalClusterSnapshot {
-    pub qchar_start: usize,
-    pub qchar_end: usize,
     pub document_byte_start: usize,
     pub document_byte_end: usize,
     pub source_rect_x: f64,
@@ -1929,11 +1922,8 @@ pub struct CanonicalLineSnapshot {
     pub document_byte_end: usize,
     pub x_pos: f64,
     pub width: f64,
-    pub height: f64,
     pub ascent: f64,
     pub descent: f64,
-    pub y: f64,
-    pub x_end_leading: f64,
     pub x_end_trailing: f64,
     pub image: Option<qmetaobject::QImage>,
     pub clusters: Vec<CanonicalClusterSnapshot>,
@@ -2187,8 +2177,6 @@ pub fn prepare_paragraph_visual_snapshot(
             };
 
             clusters.push(CanonicalClusterSnapshot {
-                qchar_start: c_qchar_start,
-                qchar_end: c_qchar_end,
                 document_byte_start: c_doc_byte_start,
                 document_byte_end: c_doc_byte_end,
                 source_rect_x: c_src_x,
@@ -2251,11 +2239,8 @@ pub fn prepare_paragraph_visual_snapshot(
             document_byte_end: doc_byte_end,
             x_pos,
             width,
-            height,
             ascent,
             descent,
-            y,
-            x_end_leading,
             x_end_trailing,
             image,
             clusters,
@@ -2281,7 +2266,6 @@ pub struct CanonicalDocumentVisualSnapshot {
     pub padding: f64,
     pub width: f64,
     pub dpr: f64,
-    pub text_color: String,
     pub paragraphs: Vec<CanonicalParagraphSnapshot>,
     pub visual_lines: Vec<VisualLine>,
     pub content_height: f64,
@@ -2610,7 +2594,6 @@ pub fn prepare_document_visual_snapshot(
         padding,
         width,
         dpr,
-        text_color: text_color.to_string(),
         paragraphs,
         visual_lines,
         content_height,
@@ -2998,7 +2981,6 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         padding,
         width,
         dpr,
-        text_color: text_color.to_string(),
         paragraphs,
         visual_lines,
         content_height,

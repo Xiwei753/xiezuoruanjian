@@ -3,33 +3,6 @@
 //! Linux Qt 输入最终转换为这些事件类型。
 //! EditorInputController 消费这些事件，调用 EditorInputHost 修改正文。
 
-use crate::sujian_editor_item::PreeditAttribute;
-
-/// 归一化输入事件 — Layer 2 → Layer 3 的唯一数据流
-#[derive(Clone, Debug)]
-pub(crate) enum EditorInputEvent {
-    /// 普通文本插入（键盘直接输入、Linux 符号）
-    PlainText { text: String },
-    /// 快捷键（Ctrl+A/C/V/X/Z/Y 等）
-    Shortcut { key: i32, modifiers: i32 },
-    /// Preedit 文本变化（IME 组合输入）
-    PreeditChanged {
-        text: String,
-        cursor: usize,
-        attributes: Vec<PreeditAttribute>,
-    },
-    /// IME commit 上屏
-    ImeCommit { text: String },
-    /// IME commit 带替换语义（fcitx5 拼音修正等）
-    ImeReplacementCommit {
-        text: String,
-        replace_start: i32,
-        replace_length: i32,
-    },
-    /// IME 取消
-    ImeCancel,
-}
-
 pub(crate) const KEY_BACKSPACE: i32 = 0x0100_0003;
 pub(crate) const KEY_TAB: i32 = 0x0100_0001;
 pub(crate) const KEY_ENTER: i32 = 0x0100_0005;

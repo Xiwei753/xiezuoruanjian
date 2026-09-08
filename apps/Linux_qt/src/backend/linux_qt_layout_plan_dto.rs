@@ -83,17 +83,6 @@ impl LinuxQtLayoutPlanDto {
     }
 }
 
-/// Qt 侧窗口能力换算：窗口宽 → 可用栏数（Qt 平台自己的断点，不在 Core）。
-pub fn qt_available_pane_count(window_width_vp: f32) -> u8 {
-    if window_width_vp < 600.0 {
-        1
-    } else if window_width_vp < 840.0 {
-        2
-    } else {
-        3
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

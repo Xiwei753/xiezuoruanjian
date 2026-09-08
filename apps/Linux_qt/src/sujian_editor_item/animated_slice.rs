@@ -40,7 +40,6 @@ pub(crate) enum AnimatedSliceKind {
 /// - `byte_start`/`byte_end`：用于事务冲突判断和静态层隐藏，不参与逐帧排版。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimatedSlice {
-    pub key: VisualTransactionKey,
     pub kind: AnimatedSliceKind,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
@@ -61,7 +60,7 @@ impl AnimatedSlice {
     /// `cursor_x`/`cursor_y` 为文档坐标（不含滚动偏移），作为动画起始位置。
     /// 文字从光标位置淡入移动到 `to_document_rect`。
     pub fn insert_fade_in(
-        key: VisualTransactionKey,
+        _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         to_document_rect: SourceRect,
@@ -72,7 +71,6 @@ impl AnimatedSlice {
         shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
         Self {
-            key,
             kind: AnimatedSliceKind::InsertFadeIn,
             snapshot_id,
             source_rect,
@@ -98,7 +96,7 @@ impl AnimatedSlice {
     /// `cursor_x`/`cursor_y` 为文档坐标（不含滚动偏移），作为动画终止位置。
     /// 文字从 `from_document_rect` 收缩到光标位置并淡出。
     pub fn delete_fade_out(
-        key: VisualTransactionKey,
+        _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         from_document_rect: SourceRect,
@@ -111,7 +109,6 @@ impl AnimatedSlice {
         let shrink_w = from_document_rect.w * 0.7;
         let shrink_h = from_document_rect.h * 0.7;
         Self {
-            key,
             kind: AnimatedSliceKind::DeleteFadeOut,
             snapshot_id,
             source_rect,
@@ -137,7 +134,7 @@ impl AnimatedSlice {
     /// `_new_snapshot_id`/`_new_source_rect` 当前未使用（Move 复用旧纹理），
     /// 保留参数签名与 ReflowCrossFade 对称，未来可能用于纹理缓存优化。
     pub fn reflow_move(
-        key: VisualTransactionKey,
+        _key: VisualTransactionKey,
         old_snapshot_id: LineSnapshotId,
         old_source_rect: SourceRect,
         from_document_rect: SourceRect,
@@ -149,7 +146,6 @@ impl AnimatedSlice {
         shaping_identity: Option<ShapingIdentity>,
     ) -> Self {
         Self {
-            key,
             kind: AnimatedSliceKind::ReflowMove,
             snapshot_id: old_snapshot_id,
             source_rect: old_source_rect,
@@ -166,7 +162,7 @@ impl AnimatedSlice {
     }
 
     pub fn reflow_crossfade_old(
-        key: VisualTransactionKey,
+        _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         from_document_rect: SourceRect,
@@ -175,7 +171,6 @@ impl AnimatedSlice {
         byte_end: usize,
     ) -> Self {
         Self {
-            key,
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
             source_rect,
@@ -192,7 +187,7 @@ impl AnimatedSlice {
     }
 
     pub fn reflow_crossfade_new(
-        key: VisualTransactionKey,
+        _key: VisualTransactionKey,
         snapshot_id: LineSnapshotId,
         source_rect: SourceRect,
         from_document_rect: SourceRect,
@@ -201,7 +196,6 @@ impl AnimatedSlice {
         byte_end: usize,
     ) -> Self {
         Self {
-            key,
             kind: AnimatedSliceKind::ReflowCrossFade,
             snapshot_id,
             source_rect,
@@ -215,14 +209,6 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
         }
-    }
-
-    pub fn is_insert(&self) -> bool {
-        matches!(self.kind, AnimatedSliceKind::InsertFadeIn)
-    }
-
-    pub fn is_delete(&self) -> bool {
-        matches!(self.kind, AnimatedSliceKind::DeleteFadeOut)
     }
 
     /// 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。

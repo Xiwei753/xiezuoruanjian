@@ -17,11 +17,6 @@ pub(crate) fn borrow_conflict_error_json() -> String {
     ))
 }
 
-/// 将成功数据包装为 ResultEnvelope JSON 字符串。
-pub(crate) fn envelope_ok_json<T: serde::Serialize>(data: T) -> String {
-    writer_core::api::ResultEnvelope::success(data).to_json_string()
-}
-
 /// serde_json::Value → QJsonValue 递归转换。
 ///
 /// Null → QJsonValue::default()，Number 统一转为 f64（Qt JSON 无整数类型）。

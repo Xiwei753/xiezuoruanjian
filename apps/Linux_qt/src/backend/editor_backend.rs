@@ -614,51 +614,16 @@ impl AppBackend {
     // Included inside impl AppBackend from app_backend.rs.
     // Deprecated compatibility methods for this Linux backend domain.
 
-    // AppBackend::save_status
-    pub(crate) fn save_status(&self) -> QString {
-        self.current_save_status.clone().into()
-    }
-
     // AppBackend::set_save_status
     pub(crate) fn set_save_status(&mut self, status: QString) {
         self.current_save_status = status.to_string();
         self.save_status_changed();
     }
 
-    // AppBackend::word_count
-    pub(crate) fn word_count(&self) -> i32 {
-        self.current_word_count
-    }
-
     // AppBackend::set_word_count
     pub(crate) fn set_word_count(&mut self, count: i32) {
         self.current_word_count = count;
         self.word_count_changed();
-    }
-
-    // AppBackend::error_message
-    pub(crate) fn error_message(&self) -> QString {
-        self.current_error_message.clone().into()
-    }
-
-    // AppBackend::has_selected_chapter
-    pub(crate) fn has_selected_chapter(&self) -> bool {
-        self.selected_chapter_id.is_some()
-    }
-
-    // AppBackend::selected_chapter_exists
-    pub(crate) fn selected_chapter_exists(&self) -> bool {
-        if let (Some(api), Some(p), Some(v), Some(c)) = (
-            self.core_api(),
-            &self.selected_project_id,
-            &self.selected_volume_id,
-            &self.selected_chapter_id,
-        ) {
-            if let Ok(chapters) = api.list_chapters(p, v) {
-                return chapters.iter().any(|chap| chap.id == *c);
-            }
-        }
-        false
     }
 
     // AppBackend::list_registered_actions
@@ -714,56 +679,6 @@ impl AppBackend {
         self.selected_item_changed();
         self.chapter_path_changed();
         self.clear_editor();
-    }
-
-    // AppBackend::chapter_path
-    pub(crate) fn chapter_path(&self) -> QString {
-        if let (Some(api), Some(p), Some(v), Some(c)) = (
-            self.core_api(),
-            &self.selected_project_id,
-            &self.selected_volume_id,
-            &self.selected_chapter_id,
-        ) {
-            let mut path = String::new();
-            if let Ok(projects) = api.list_projects() {
-                if let Some(proj) = projects.iter().find(|x| x.id == *p) {
-                    path.push_str(&proj.title);
-                }
-            }
-            if let Ok(volumes) = api.list_volumes(p) {
-                if let Some(vol) = volumes.iter().find(|x| x.id == *v) {
-                    path.push_str(" > ");
-                    path.push_str(&vol.title);
-                }
-            }
-            if let Ok(chapters) = api.list_chapters(p, v) {
-                if let Some(chap) = chapters.iter().find(|x| x.id == *c) {
-                    path.push_str(" > ");
-                    path.push_str(&chap.title);
-                }
-            }
-            return path.into();
-        }
-        "".into()
-    }
-
-    // AppBackend::has_selected_chapter_prop
-    pub(crate) fn has_selected_chapter_prop(&self) -> bool {
-        self.selected_chapter_id.is_some()
-    }
-
-    // AppBackend::selected_item_id
-    pub(crate) fn selected_item_id(&self) -> QString {
-        if let Some(ref id) = self.selected_chapter_id {
-            return id.clone().into();
-        }
-        if let Some(ref id) = self.selected_volume_id {
-            return id.clone().into();
-        }
-        if let Some(ref id) = self.selected_project_id {
-            return id.clone().into();
-        }
-        "".into()
     }
 
     // AppBackend::set_error

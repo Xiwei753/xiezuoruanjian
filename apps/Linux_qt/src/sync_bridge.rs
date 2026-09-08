@@ -18,7 +18,6 @@
 // =============================================================================
 
 use writer_core::api::types::SyncDiagnosticsResultDto;
-use writer_core::api::WriterCoreApi;
 use writer_core::sync::{SyncConfig, SyncSecrets};
 
 /// 同步任务结果封装。
@@ -158,22 +157,18 @@ mod tests {
     fn make_success_dto() -> SyncDiagnosticsResultDto {
         SyncDiagnosticsResultDto {
             success: true,
-            backend_type: "github".to_string(),
+            provider_type: "github_api".to_string(),
             has_network_permission: false,
             has_network_state_permission: false,
             network_state: String::new(),
             network_ok: true,
             auth_ok: true,
-            repo_ok: true,
-            branch_ok: true,
+            remote_ok: true,
             network_status: String::new(),
             auth_status: String::new(),
-            repo_status: String::new(),
-            branch_status: String::new(),
-            remote_url_sanitized: String::new(),
-            transport: String::new(),
             error_category: String::new(),
             raw_error: None,
+            provider_details: None,
         }
     }
 
@@ -238,12 +233,11 @@ pub fn determine_diagnostics_status(result: &SyncDiagnosticsResultDto) -> String
 
 pub fn save_sync_configs(
     path: &str,
-    project_id: &str,
     config: &SyncConfig,
     secrets: &SyncSecrets,
 ) -> Result<(), String> {
-    // path 是作品目录绝对路径；projects_root 为其父目录，project_id 为目录名。
-    // 这样 project_root(project_id) = projects_root/project_id = path。
+    // path 是作品目录绝对路径；projects_root 为其父目录。
+    // 这样作品目录 = projects_root/path 的 file_name = path。
     let path_obj = std::path::Path::new(path);
     let projects_root = path_obj
         .parent()

@@ -84,16 +84,10 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
-        // 从作品目录路径推断 project_id（目录名即作品 ID）。
-        let project_id_str = std::path::Path::new(&path_str)
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default();
         thread::spawn(move || {
             let result = Self::do_github_init(
                 &op_id_capture,
                 &path_str,
-                &project_id_str,
                 &remote_url_str,
                 &branch_str,
                 &token_str,
@@ -105,14 +99,14 @@ impl AppBackend {
     pub(crate) fn do_github_init(
         operation_id: &str,
         path: &str,
-        project_id: &str,
         remote_url: &str,
         branch: &str,
         token: &str,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
-            provider::github::config::GitHubProviderConfig, provider::ProviderConfig,
-            sanitize_remote_url, SyncConfig, SyncProtocol, SyncSecrets,
+            provider::github::config::{GitHubProviderConfig, GitHubTransport},
+            provider::ProviderConfig,
+            sanitize_remote_url, SyncConfig, SyncSecrets,
         };
 
         let parsed = sanitize_remote_url(remote_url);
@@ -148,7 +142,7 @@ impl AppBackend {
                 remote_url: sanitized_url.clone(),
                 branch: branch.to_string(),
                 username: parsed.extracted_username.clone().unwrap_or_default(),
-                transport: SyncProtocol::HttpsToken,
+                transport: GitHubTransport::HttpsToken,
             })),
             auto_sync: false,
             sync_interval_seconds: 300,
@@ -206,7 +200,6 @@ impl AppBackend {
                 cfg_ref,
                 sec_ref,
                 path,
-                project_id,
                 "sync.result.clone_init_success",
             )
         } else if has_directory() {
@@ -217,7 +210,6 @@ impl AppBackend {
                 cfg_ref,
                 sec_ref,
                 path,
-                project_id,
                 "sync.result.remote_configured_sync_success",
             )
         } else if is_git_repo() {
@@ -268,7 +260,6 @@ impl AppBackend {
         config: &writer_core::sync::SyncConfig,
         secrets: &writer_core::sync::SyncSecrets,
         path: &str,
-        project_id: &str,
         success_summary_key: &str,
     ) -> SyncTaskOutcome {
         match api.perform_full_sync(config_dto.clone(), true) {
@@ -276,7 +267,7 @@ impl AppBackend {
                 let status = result.overall_status.as_str();
                 if matches!(status, "success" | "latest_wins_applied" | "no_changes") {
                     // 同步成功后保存配置。
-                    match save_sync_configs(path, project_id, config, secrets) {
+                    match save_sync_configs(path, config, secrets) {
                         Ok(()) => SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
                             sync_status: "success".to_string(),

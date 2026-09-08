@@ -12,6 +12,7 @@
 //! 超出文本长度的 offset 会被 clamp 到文本末尾。
 
 /// UTF-16 offset → UTF-8 byte offset
+#[cfg(test)]
 pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
     let mut utf8_pos = 0;
     let mut utf16_count = 0;
@@ -29,6 +30,7 @@ pub fn utf16_to_utf8_offset(text: &str, utf16_offset: usize) -> usize {
 }
 
 /// UTF-8 byte offset → UTF-16 offset
+#[cfg(test)]
 pub fn utf8_to_utf16_offset(text: &str, utf8_offset: usize) -> usize {
     let mut remaining = utf8_offset;
     let mut utf16_count = 0;

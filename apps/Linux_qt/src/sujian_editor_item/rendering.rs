@@ -844,7 +844,6 @@ impl SujianEditorItem {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
-                    duration_ms: u64::from(self.current_cursor_animation_duration_ms),
                 }
             } else {
                 CursorTransition::Snap
@@ -992,7 +991,6 @@ mod tests {
 
     #[test]
     fn test_visual_revision_mismatch_causes_buffer_miss() {
-        let vp_h: f64 = 1000.0;
         let content_h: f64 = 5000.0;
 
         let scroll_buffer = ScrollBuffer {

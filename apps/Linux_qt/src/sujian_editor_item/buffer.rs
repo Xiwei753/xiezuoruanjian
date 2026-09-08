@@ -39,6 +39,7 @@ impl EditorBuffer {
         }
     }
 
+    #[cfg(test)]
     pub fn restore(&mut self, snapshot: EditorSnapshot) {
         self.text = snapshot.text;
         self.cursor = clamp_to_char_boundary(&self.text, snapshot.cursor);
@@ -67,14 +68,7 @@ impl EditorBuffer {
         self.text[start..end].to_string()
     }
 
-    pub fn set_text(&mut self, text: String) {
-        self.text = text;
-        self.cursor = 0;
-        self.selection_anchor = self.cursor;
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-    }
-
+    #[cfg(test)]
     pub fn push_undo(&mut self, snapshot: EditorSnapshot) {
         if self.undo_stack.last() != Some(&snapshot) {
             self.undo_stack.push(snapshot);
@@ -85,6 +79,7 @@ impl EditorBuffer {
         self.redo_stack.clear();
     }
 
+    #[cfg(test)]
     pub fn replace_selection_or_insert(&mut self, inserted: &str) {
         if inserted.is_empty() {
             return;
@@ -96,6 +91,7 @@ impl EditorBuffer {
         self.selection_anchor = self.cursor;
     }
 
+    #[cfg(test)]
     pub fn delete_selection(&mut self) -> bool {
         if !self.has_selection() {
             return false;
@@ -107,6 +103,7 @@ impl EditorBuffer {
         true
     }
 
+    #[cfg(test)]
     pub fn delete_backward(&mut self) -> bool {
         if self.delete_selection() {
             return true;
@@ -120,31 +117,7 @@ impl EditorBuffer {
         true
     }
 
-    pub fn delete_forward(&mut self) -> bool {
-        if self.delete_selection() {
-            return true;
-        }
-        let Some(next) = next_char_boundary(&self.text, self.cursor) else {
-            return false;
-        };
-        self.text.replace_range(self.cursor..next, "");
-        self.selection_anchor = self.cursor;
-        true
-    }
-
-    pub fn move_cursor(&mut self, index: usize, extend: bool) {
-        let next = clamp_to_char_boundary(&self.text, index);
-        if !extend {
-            self.selection_anchor = next;
-        }
-        self.cursor = next;
-    }
-
-    pub fn select_all(&mut self) {
-        self.selection_anchor = 0;
-        self.cursor = self.text.len();
-    }
-
+    #[cfg(test)]
     pub fn undo(&mut self) -> Option<(EditorSnapshot, EditorSnapshot)> {
         let previous = self.undo_stack.pop()?;
         let current = self.snapshot();
@@ -153,6 +126,7 @@ impl EditorBuffer {
         Some((current, previous))
     }
 
+    #[cfg(test)]
     pub fn redo(&mut self) -> Option<(EditorSnapshot, EditorSnapshot)> {
         let next = self.redo_stack.pop()?;
         let current = self.snapshot();

@@ -14,7 +14,6 @@ pub(crate) enum CursorTransition {
     Tween {
         old_rect: CursorRect,
         new_rect: CursorRect,
-        duration_ms: u64,
     },
 }
 

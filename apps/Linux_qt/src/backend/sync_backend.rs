@@ -24,7 +24,6 @@ use crate::backend::DomainSnapshot;
 use crate::sync_bridge::{
     determine_diagnostics_status, mask_sync_error, sync_error_category_from_code, SyncTaskOutcome,
 };
-use writer_core::api::WriterCoreApi;
 
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
@@ -295,11 +294,6 @@ impl AppBackend {
         self.current_sync_status.clone().into()
     }
 
-    // AppBackend::sync_in_progress
-    pub(crate) fn sync_in_progress(&self) -> bool {
-        self.current_sync_in_progress
-    }
-
     // AppBackend::set_sync_status
     pub(crate) fn set_sync_status(&mut self, val: QString) {
         self.current_sync_status = val.to_string();
@@ -320,11 +314,6 @@ impl AppBackend {
             self.current_sync_status = "configured_not_tested".to_string();
         }
         self.sync_status_changed();
-    }
-
-    // AppBackend::sync_enabled
-    pub(crate) fn sync_enabled(&self) -> bool {
-        self.current_sync_enabled
     }
 
     // AppBackend::set_sync_enabled
@@ -366,20 +355,10 @@ impl AppBackend {
         self.sync_config_changed();
     }
 
-    // AppBackend::sync_auto_sync
-    pub(crate) fn sync_auto_sync(&self) -> bool {
-        self.current_sync_auto_sync
-    }
-
     // AppBackend::set_sync_auto_sync
     pub(crate) fn set_sync_auto_sync(&mut self, val: bool) {
         self.current_sync_auto_sync = val;
         self.sync_config_changed();
-    }
-
-    // AppBackend::sync_interval
-    pub(crate) fn sync_interval(&self) -> u32 {
-        self.current_sync_interval
     }
 
     // AppBackend::set_sync_interval
@@ -399,20 +378,6 @@ impl AppBackend {
         self.sync_config_changed();
     }
 
-    // AppBackend::has_sync_token
-    pub(crate) fn has_sync_token(&self) -> bool {
-        !self.current_sync_token.is_empty()
-    }
-
-    // AppBackend::sync_can_run
-    pub(crate) fn sync_can_run(&self) -> bool {
-        self.current_has_data_root
-            && !self.current_data_root.is_empty()
-            && !self.current_sync_remote_url.is_empty()
-            && !self.current_sync_token.is_empty()
-            && self.current_sync_enabled
-    }
-
     // AppBackend::sync_block_reason
     pub(crate) fn sync_block_reason(&self) -> QString {
         if !self.current_has_data_root || self.current_data_root.is_empty() {
@@ -420,10 +385,9 @@ impl AppBackend {
         }
 
         // per-project sync：需要选中作品才能判断同步能力。
-        let project_id = match self.selected_project_id.as_deref() {
-            Some(id) if !id.is_empty() => id,
-            _ => return "sync.block.no_project_selected".into(),
-        };
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            return "sync.block.no_project_selected".into();
+        }
 
         if let Some(api) = self.core_api() {
             if let Ok(cap) = api.get_sync_capability() {
@@ -461,30 +425,26 @@ impl AppBackend {
         self.current_sync_operation_kind = "diagnose".to_string();
 
         // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        let project_id = match self.selected_project_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                let state = writer_core::api::SyncOperationStateDto {
-                    operation_id: op_id.clone(),
-                    operation_kind: "diagnose".to_string(),
-                    status_code: "error".to_string(),
-                    phase_key: None,
-                    summary_key: Some("sync.block.no_project_selected".to_string()),
-                    summary_args: std::collections::HashMap::new(),
-                    counts: writer_core::api::SyncOperationCountsDto::default(),
-                    raw_error: None,
-                };
-                self.current_sync_operation_state =
-                    serde_json::to_string(&state).unwrap_or_default();
-                self.sync_action_completed();
-                self.debug_error(
-                    "sync",
-                    "perform_sync_diagnostics_failed",
-                    "no_project_selected",
-                );
-                return op_id.into();
-            }
-        };
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "diagnose".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_project_selected".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_action_completed();
+            self.debug_error(
+                "sync",
+                "perform_sync_diagnostics_failed",
+                "no_project_selected",
+            );
+            return op_id.into();
+        }
 
         if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
@@ -527,12 +487,11 @@ impl AppBackend {
         });
 
         let op_id_capture = op_id.clone();
-        let project_id_capture = project_id.clone();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture, project_id_capture) which
-            // auto-implement UnwindSafe. No shared mutable state or borrows are captured, so the
-            // closure is UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
+            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
+            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
                 let mut config = match api.load_sync_config() {
@@ -644,20 +603,17 @@ impl AppBackend {
     pub(crate) fn load_sync_config(&mut self) {
         self.debug_log("sync", "load_sync_config_start", "");
         // per-project sync：需要选中作品才能加载该作品的同步配置。
-        let project_id = match self.selected_project_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                self.current_sync_enabled = false;
-                self.current_sync_remote_url = "".to_string();
-                self.current_sync_branch = "main".to_string();
-                self.current_sync_token = "".to_string();
-                self.current_sync_status = "no_workspace".to_string();
-                self.sync_status_changed();
-                self.sync_config_changed();
-                self.debug_warn("sync", "load_sync_config_skipped", "no_project_selected");
-                return;
-            }
-        };
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            self.current_sync_enabled = false;
+            self.current_sync_remote_url = "".to_string();
+            self.current_sync_branch = "main".to_string();
+            self.current_sync_token = "".to_string();
+            self.current_sync_status = "no_workspace".to_string();
+            self.sync_status_changed();
+            self.sync_config_changed();
+            self.debug_warn("sync", "load_sync_config_skipped", "no_project_selected");
+            return;
+        }
         if let Some(api) = self.core_api() {
             let config_opt = api.load_sync_config().ok();
             // Issue #645：token 从 provider_secrets → ProviderSecretsDto::GitHub 提取。
@@ -665,8 +621,8 @@ impl AppBackend {
                 .load_sync_secrets()
                 .ok()
                 .and_then(|s| s.provider_secrets)
-                .and_then(|ps| match ps {
-                    writer_core::api::types::ProviderSecretsDto::GitHub { token } => Some(token),
+                .map(|ps| match ps {
+                    writer_core::api::types::ProviderSecretsDto::GitHub { token } => token,
                 });
             if let Some(config) = config_opt {
                 self.current_sync_enabled = config.enabled;
@@ -727,34 +683,31 @@ impl AppBackend {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
         // per-project sync：需要选中作品才能保存该作品的同步配置。
-        let project_id = match self.selected_project_id.clone() {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                error_state = Some(writer_core::api::SyncOperationStateDto {
-                    operation_id: String::new(),
-                    operation_kind: "save_config".to_string(),
-                    status_code: "error".to_string(),
-                    phase_key: None,
-                    summary_key: Some("sync.block.no_project_selected".to_string()),
-                    summary_args: std::collections::HashMap::new(),
-                    counts: writer_core::api::SyncOperationCountsDto::default(),
-                    raw_error: None,
-                });
-                if let Some(state) = error_state {
-                    let msg = format!(
-                        "{}: {}",
-                        state.summary_key.as_deref().unwrap_or("error.other"),
-                        state.raw_error.as_deref().unwrap_or("")
-                    );
-                    self.set_error(&msg);
-                    self.current_sync_operation_state =
-                        serde_json::to_string(&state).unwrap_or_default();
-                    self.sync_action_completed();
-                    self.debug_error("sync", "save_sync_config_failed", "no_project_selected");
-                }
-                return false;
+        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
+            error_state = Some(writer_core::api::SyncOperationStateDto {
+                operation_id: String::new(),
+                operation_kind: "save_config".to_string(),
+                status_code: "error".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.block.no_project_selected".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            });
+            if let Some(state) = error_state {
+                let msg = format!(
+                    "{}: {}",
+                    state.summary_key.as_deref().unwrap_or("error.other"),
+                    state.raw_error.as_deref().unwrap_or("")
+                );
+                self.set_error(&msg);
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default();
+                self.sync_action_completed();
+                self.debug_error("sync", "save_sync_config_failed", "no_project_selected");
             }
-        };
+            return false;
+        }
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
             // Issue #645：SyncConfigDto 改为 provider-neutral 结构，

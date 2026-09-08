@@ -88,16 +88,6 @@ pub(crate) trait EditorInputHost {
     fn input_set_suppress_next_ime_commit(&mut self, value: bool);
     fn input_take_suppress_next_ime_commit(&mut self) -> bool;
     fn input_request_repaint(&mut self);
-
-    fn input_preedit_text(&self) -> String {
-        String::new()
-    }
-    fn input_preedit_cursor(&self) -> usize {
-        0
-    }
-    fn input_preedit_attributes(&self) -> Vec<PreeditAttribute> {
-        Vec::new()
-    }
 }
 
 pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(
