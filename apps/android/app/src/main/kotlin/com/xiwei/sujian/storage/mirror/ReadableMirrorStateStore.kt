@@ -420,46 +420,45 @@ class ReadableMirrorStateStore(
                     Result.success(emptySet<String>() to emptyMap())
                 is ReadResult.Corrupted -> Result.failure(result.error)
                 is ReadResult.Parsed -> {
-                    val root = result.root
-                    val ids = mutableSetOf<String>()
-                    val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-                    // publishedProjectIds
-                    val publishedObj = root.optJSONObject(PUBLISHED_PROJECTS_KEY)
-                    if (publishedObj != null) {
-                        val keys = publishedObj.keys()
-                        while (keys.hasNext()) {
-                            ids.add(keys.next())
-                        }
-                    }
-                    // chapter entries — #649 评论 5578053805 问题 2：fail-closed，
-                    // 任何损坏都返回 Result.failure，不再跳过坏数据。
-                    val projectsObj = root.optJSONObject(PROJECTS_KEY)
-                    if (projectsObj != null) {
-                        val projectIds = projectsObj.keys()
-                        while (projectIds.hasNext()) {
-                            val projectId = projectIds.next()
-                            val projectObj = projectsObj.optJSONObject(projectId)
-                                ?: return Result.failure(
-                                    IllegalStateException(
-                                        "State corruption: projects[$projectId] is not a JSON object",
-                                    ),
-                                )
-                            val chapterKeys = projectObj.keys()
-                            while (chapterKeys.hasNext()) {
-                                val chapterKeyStr = chapterKeys.next()
-                                val entryObj = projectObj.optJSONObject(chapterKeyStr)
-                                    ?: return Result.failure(
-                                        IllegalStateException(
-                                            "State corruption: projects[$projectId][$chapterKeyStr] is not a JSON object",
-                                        ),
-                                    )
-                                val entry = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
-                                ids.add(projectId)
-                                entries[entry.first] = entry.second
+                    // #649 评论 5578289530 问题 2.2：用 runCatching 包住整个 strict 解析，
+                    // decodeEntryStrict() 或 publishedProjectIds 严格读取抛出的异常
+                    // 都会被捕获并转成 Result.failure，确保迁移判断 fail-closed。
+                    runCatching {
+                        val root = result.root
+                        val ids = mutableSetOf<String>()
+                        val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+
+                        // publishedProjectIds — #649 评论 5578289530 问题 2.1：
+                        // 字段存在时必须是 JSONObject；类型错误直接抛 JSONException。
+                        // 里面每个值应是 `true`，忽略值内容但确认 key 存在。
+                        val publishedObj = optionalObjectStrict(root, PUBLISHED_PROJECTS_KEY)
+                        if (publishedObj != null) {
+                            val keys = publishedObj.keys()
+                            while (keys.hasNext()) {
+                                ids.add(keys.next())
                             }
                         }
+
+                        // chapter entries — fail-closed，任何损坏都抛异常，不再跳过坏数据。
+                        val projectsObj = optionalObjectStrict(root, PROJECTS_KEY)
+                        if (projectsObj != null) {
+                            val projectIds = projectsObj.keys()
+                            while (projectIds.hasNext()) {
+                                val projectId = projectIds.next()
+                                val projectObj = projectsObj.getJSONObject(projectId)
+                                ids.add(projectId)
+                                val chapterKeys = projectObj.keys()
+                                while (chapterKeys.hasNext()) {
+                                    val chapterKeyStr = chapterKeys.next()
+                                    val entryObj = projectObj.getJSONObject(chapterKeyStr)
+                                    val entry = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
+                                    entries[entry.first] = entry.second
+                                }
+                            }
+                        }
+
+                        ids to entries
                     }
-                    Result.success(ids to entries)
                 }
             }
         }
@@ -640,47 +639,59 @@ class ReadableMirrorStateStore(
                 is ReadResult.Corrupted -> CommittedManifestReadResult.Corrupted(result.error)
                 is ReadResult.Parsed -> {
                     val root = result.root
-                    val json = root.optString(COMMITTED_MANIFEST_JSON_KEY).takeIf { it.isNotEmpty() }
-                    val hash = root.optString(COMMITTED_MANIFEST_HASH_KEY).takeIf { it.isNotEmpty() }
-                    when {
-                        // json/hash 都存在：校验 hash + 严格解析
-                        json != null && hash != null -> {
-                            val computedHash = computeContentHash(json)
-                            if (computedHash != hash) {
+                    // #649 评论 5578289530 问题 2.1：用 try/catch 包住整个 strict 解析，
+                    // 任何 JSONException/IllegalArgumentException 都返回 Corrupted，
+                    // 不再用 optJSONObject/optString 把类型损坏降级成"不存在"。
+                    try {
+                        val json = root.optString(COMMITTED_MANIFEST_JSON_KEY).takeIf { it.isNotEmpty() }
+                        val hash = root.optString(COMMITTED_MANIFEST_HASH_KEY).takeIf { it.isNotEmpty() }
+                        when {
+                            // json/hash 都存在：校验 hash + 严格解析
+                            json != null && hash != null -> {
+                                val computedHash = computeContentHash(json)
+                                if (computedHash != hash) {
+                                    CommittedManifestReadResult.Corrupted(
+                                        IllegalArgumentException(
+                                            "Committed manifest hash mismatch: stored=$hash, computed=$computedHash",
+                                        ),
+                                    )
+                                } else {
+                                    try {
+                                        val manifest = mirrorManifestFromJsonStrict(json)
+                                        CommittedManifestReadResult.Found(json, hash, manifest)
+                                    } catch (e: Exception) {
+                                        CommittedManifestReadResult.Corrupted(e)
+                                    }
+                                }
+                            }
+                            // json/hash 只存在一个：状态不完整，视为损坏
+                            json != null || hash != null ->
                                 CommittedManifestReadResult.Corrupted(
                                     IllegalArgumentException(
-                                        "Committed manifest hash mismatch: stored=$hash, computed=$computedHash",
+                                        "Committed manifest partial state: json=${json != null}, hash=${hash != null}",
                                     ),
                                 )
-                            } else {
-                                try {
-                                    val manifest = mirrorManifestFromJsonStrict(json)
-                                    CommittedManifestReadResult.Found(json, hash, manifest)
-                                } catch (e: Exception) {
-                                    CommittedManifestReadResult.Corrupted(e)
+                            // json/hash 都不存在：检查是否有旧 mirror state 字段
+                            else -> {
+                                // #649 评论 5578289530 问题 2.1：用 strict helpers 区分
+                                // "字段不存在"和"字段存在但类型错误"。类型错误直接抛异常，
+                                // 被外层 try/catch 转成 Corrupted，不会降级成 NotExists/NeedsMigration。
+                                val hasManifestUri = optionalStringStrict(root, MANIFEST_URI_KEY)?.isNotEmpty() == true
+                                val hasPublishedProjects = optionalObjectStrict(root, PUBLISHED_PROJECTS_KEY)?.length() ?: 0 > 0
+                                val hasProjects = optionalObjectStrict(root, PROJECTS_KEY)?.length() ?: 0 > 0
+                                if (hasManifestUri || hasPublishedProjects || hasProjects) {
+                                    // 旧 state 有 mirror state 但无 committed baseline，需迁移
+                                    CommittedManifestReadResult.NeedsMigration
+                                } else {
+                                    // 真正全空 state，首次发布
+                                    CommittedManifestReadResult.NotExists
                                 }
                             }
                         }
-                        // json/hash 只存在一个：状态不完整，视为损坏
-                        json != null || hash != null ->
-                            CommittedManifestReadResult.Corrupted(
-                                IllegalArgumentException(
-                                    "Committed manifest partial state: json=${json != null}, hash=${hash != null}",
-                                ),
-                            )
-                        // json/hash 都不存在：检查是否有旧 mirror state 字段
-                        else -> {
-                            val hasManifestUri = root.optString(MANIFEST_URI_KEY).isNotEmpty()
-                            val hasPublishedProjects = root.optJSONObject(PUBLISHED_PROJECTS_KEY)?.length() ?: 0 > 0
-                            val hasProjects = root.optJSONObject(PROJECTS_KEY)?.length() ?: 0 > 0
-                            if (hasManifestUri || hasPublishedProjects || hasProjects) {
-                                // 旧 state 有 mirror state 但无 committed baseline，需迁移
-                                CommittedManifestReadResult.NeedsMigration
-                            } else {
-                                // 真正全空 state，首次发布
-                                CommittedManifestReadResult.NotExists
-                            }
-                        }
+                    } catch (e: JSONException) {
+                        CommittedManifestReadResult.Corrupted(e)
+                    } catch (e: IllegalArgumentException) {
+                        CommittedManifestReadResult.Corrupted(e)
                     }
                 }
             }
@@ -966,6 +977,27 @@ class ReadableMirrorStateStore(
             put(REVISION_KEY, entry.revision)
             put(CONTENT_HASH_KEY, entry.contentHash)
         }
+
+    /**
+     * #649 评论 5578289530 问题 2.1：严格读取可选 JSONObject 字段。
+     *
+     * 字段不存在 → null；字段存在但类型不是 JSONObject → 抛 JSONException。
+     * 不再用 optJSONObject() 把类型损坏降级成 null。
+     */
+    private fun optionalObjectStrict(root: JSONObject, key: String): JSONObject? {
+        if (!root.has(key)) return null
+        return root.getJSONObject(key)
+    }
+
+    /**
+     * #649 评论 5578289530 问题 2.1：严格读取可选 String 字段。
+     *
+     * 字段不存在 → null；字段存在但类型不是 String → 抛 JSONException。
+     */
+    private fun optionalStringStrict(root: JSONObject, key: String): String? {
+        if (!root.has(key)) return null
+        return root.getString(key)
+    }
 
     /**
      * 从 root 对象解析 backend（#649 评论 5565862745 问题 5）。

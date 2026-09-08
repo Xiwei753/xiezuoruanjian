@@ -364,8 +364,12 @@ impl WriterCoreApi {
 
         // 如果 project 已存在，检查是否与恢复输入完全一致（上一次恢复已成功）。
         // 完全一致 → 幂等返回已有 ProjectDto；不同 → 冲突，拒绝覆盖。
+        // #649 评论 5578289530 问题 1.1：幂等匹配成功时也必须补记 Git history，
+        // 防止 rename 成功后进程死亡导致 Git history 永久缺失。
+        // history 失败返回 Err，下次重试会再次进入此分支直到 Git 也进入完成态。
         if self.project_exists(input)? {
             if self.restored_project_matches_input(input)? {
+                self.ensure_restore_history(input)?;
                 let project_dto: ProjectDto = self
                     .core_read()
                     .list_projects()
@@ -395,15 +399,12 @@ impl WriterCoreApi {
         // 这样 create_project_with_id 会在 staging_root/<projectId>/ 下创建项目
         let staging_api = WriterCoreApi::new(&self.app_data_root, &staging_root);
 
-        // 4. 在 staging 目录下创建项目树，收集变更集
-        let change_set = match self.create_restore_tree_with_staging_api(&staging_api, input) {
-            Ok(cs) => cs,
-            Err(e) => {
-                // 失败时直接删除 staging 目录，不走正常 delete_project()
-                let _ = fs::remove_dir_all(&staging_root);
-                return Err(self.rollback_restore_with_staging(input, e, &staging_root));
-            }
-        };
+        // 4. 在 staging 目录下创建项目树
+        if let Err(e) = self.create_restore_tree_with_staging_api(&staging_api, input) {
+            // 失败时直接删除 staging 目录，不走正常 delete_project()
+            let _ = fs::remove_dir_all(&staging_root);
+            return Err(self.rollback_restore_with_staging(input, e, &staging_root));
+        }
 
         // 5. 所有校验完成，原子 rename staging/<projectId> → 最终位置
         let staging_project_dir = staging_root.join(&input.project_id);
@@ -423,8 +424,10 @@ impl WriterCoreApi {
         // 6. 清理空的 staging 目录（如果存在）
         let _ = fs::remove_dir(&staging_root);
 
-        // 7. 全部成功后记录 workspace Git 变更
-        let _ = self.record_workspace_change_set_history(&change_set, "restore_project_tree");
+        // #649 评论 5578289530 问题 1.1：history 失败返回 Err，不再用 let _ = 忽略。
+        // canonical 目录已经存在，下一次恢复会命中"内容完全一致"分支，
+        // 再次调用 ensure_restore_history()，直到 Git 也真正进入完成态。
+        self.ensure_restore_history(input)?;
 
         // 8. 返回创建的 ProjectDto
         let project_dto: ProjectDto = self
@@ -587,15 +590,13 @@ impl WriterCoreApi {
         Ok(true)
     }
 
-    /// 使用 staging API 创建恢复项目树：项目 → 卷 → 章节 → 正文 → reorder，返回变更集。
-    /// 用于在 staging 目录下创建项目，调用方负责在失败时回滚。
+    /// #649 评论 5578289530 问题 1.2：staging helper 只负责在 staging 目录下生成完整项目树，
+    /// 不再零散累加 change set。恢复 change set 由 build_restore_workspace_change_set() 统一构造。
     fn create_restore_tree_with_staging_api(
         &self,
         staging_api: &WriterCoreApi,
         input: &RestoreProjectInputDto,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        use crate::storage::workspace_git::WorkspaceChangeSet;
-
+    ) -> crate::error::Result<()> {
         // 创建项目（使用 staging API，会在 staging 目录下创建）
         staging_api.core_write().create_project_with_id(
             &input.project_id,
@@ -603,88 +604,65 @@ impl WriterCoreApi {
             input.order,
         )?;
 
-        let mut change_set = WorkspaceChangeSet::new().add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("project.json"),
-        );
-
         // 逐卷创建
         for vol in &input.volumes {
-            change_set =
-                self.create_restore_volume_with_staging_api(staging_api, input, vol, change_set)?;
+            self.create_restore_volume_with_staging_api(staging_api, input, vol)?;
         }
 
         // 按 input 顺序 reorder volumes（确保 order 连续 0,1,2,...）
         if !input.volumes.is_empty() {
             let ordered_volume_ids: Vec<String> =
                 input.volumes.iter().map(|v| v.volume_id.clone()).collect();
-            let vol_change_set = staging_api
+            staging_api
                 .core_write()
                 .reorder_volumes_with_changes(&input.project_id, &ordered_volume_ids)?;
-            change_set = change_set.merge(vol_change_set);
         }
 
         // 按 input 顺序 reorder 每个卷的 chapters
         for vol in &input.volumes {
-            change_set = self.reorder_restore_chapters_with_staging_api(
-                staging_api,
-                input,
-                vol,
-                change_set,
-            )?;
+            self.reorder_restore_chapters_with_staging_api(staging_api, input, vol)?;
         }
 
-        Ok(change_set)
+        Ok(())
     }
 
-    /// 使用 staging API 创建单个恢复卷及其章节，返回更新后的变更集。
+    /// 使用 staging API 创建单个恢复卷及其章节。
     fn create_restore_volume_with_staging_api(
         &self,
         staging_api: &WriterCoreApi,
         input: &RestoreProjectInputDto,
         vol: &RestoreVolumeInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        let volume = staging_api.core_write().create_volume_with_id(
+    ) -> crate::error::Result<()> {
+        staging_api.core_write().create_volume_with_id(
             &input.project_id,
             &vol.volume_id,
             &vol.title,
             vol.order,
         )?;
 
-        change_set = change_set.add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("volumes")
-                .join(&volume.id)
-                .join("volume.json"),
-        );
-
         // 逐章创建 + 保存正文
         for ch in &vol.chapters {
-            change_set = self.create_restore_chapter_with_staging_api(
-                staging_api,
-                input,
-                vol,
-                ch,
-                change_set,
-            )?;
+            self.create_restore_chapter_with_staging_api(staging_api, input, vol, ch)?;
         }
 
-        Ok(change_set)
+        Ok(())
     }
 
-    /// 使用 staging API 创建单个恢复章节并保存正文，返回更新后的变更集。
+    /// 使用 staging API 创建单个恢复章节并保存正文。
+    ///
+    /// #649 评论 5578289530 问题 1.2：不再零散累加 change set。
+    /// chapter.md 始终由 save_chapter_verified_with_changes_with_options 写入 staging，
+    /// 空正文时 create_chapter_with_id 也创建空 chapter.md，文件磁盘上一定存在。
+    /// 恢复 change set 由 build_restore_workspace_change_set() 统一构造，
+    /// 无论正文是否为空都包含 chapter.md。
     fn create_restore_chapter_with_staging_api(
         &self,
         staging_api: &WriterCoreApi,
         input: &RestoreProjectInputDto,
         vol: &RestoreVolumeInputDto,
         ch: &RestoreChapterInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
-        let chapter = staging_api.core_write().create_chapter_with_id(
+    ) -> crate::error::Result<()> {
+        staging_api.core_write().create_chapter_with_id(
             &input.project_id,
             &vol.volume_id,
             &ch.chapter_id,
@@ -692,19 +670,9 @@ impl WriterCoreApi {
             ch.order,
         )?;
 
-        change_set = change_set.add_upsert(
-            std::path::PathBuf::from("projects")
-                .join(&input.project_id)
-                .join("volumes")
-                .join(&vol.volume_id)
-                .join("chapters")
-                .join(&chapter.id)
-                .join("chapter.meta.json"),
-        );
-
         // 保存正文：content 非空时才写入（create_chapter_with_id 已创建空 chapter.md）
         if !ch.content.is_empty() {
-            let (_receipt, ch_change_set) = staging_api
+            staging_api
                 .core_write()
                 .save_chapter_verified_with_changes_with_options(
                     &input.project_id,
@@ -713,32 +681,80 @@ impl WriterCoreApi {
                     &ch.content,
                     true,
                 )?;
-            change_set = change_set.merge(ch_change_set);
         }
 
-        Ok(change_set)
+        Ok(())
     }
 
-    /// 使用 staging API reorder 单个卷的章节，返回更新后的变更集。
+    /// 使用 staging API reorder 单个卷的章节。
     fn reorder_restore_chapters_with_staging_api(
         &self,
         staging_api: &WriterCoreApi,
         input: &RestoreProjectInputDto,
         vol: &RestoreVolumeInputDto,
-        mut change_set: crate::storage::workspace_git::WorkspaceChangeSet,
-    ) -> crate::error::Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    ) -> crate::error::Result<()> {
         if vol.chapters.is_empty() {
-            return Ok(change_set);
+            return Ok(());
         }
         let ordered_chapter_ids: Vec<String> =
             vol.chapters.iter().map(|c| c.chapter_id.clone()).collect();
-        let ch_change_set = staging_api.core_write().reorder_chapters_with_changes(
+        staging_api.core_write().reorder_chapters_with_changes(
             &input.project_id,
             &vol.volume_id,
             &ordered_chapter_ids,
         )?;
-        change_set = change_set.merge(ch_change_set);
-        Ok(change_set)
+        Ok(())
+    }
+
+    /// #649 评论 5578289530 问题 1.2：从 RestoreProjectInputDto 构造唯一一份确定性的
+    /// restore change set，确保空正文章节的 chapter.md 也包含在内。
+    ///
+    /// 不再由 staging helper 零散累加 change set；恢复只有一份 change-set 真值。
+    fn build_restore_workspace_change_set(
+        input: &RestoreProjectInputDto,
+    ) -> crate::storage::workspace_git::WorkspaceChangeSet {
+        let mut cs = crate::storage::workspace_git::WorkspaceChangeSet::new().add_upsert(
+            std::path::PathBuf::from("projects")
+                .join(&input.project_id)
+                .join("project.json"),
+        );
+
+        for vol in &input.volumes {
+            cs = cs.add_upsert(
+                std::path::PathBuf::from("projects")
+                    .join(&input.project_id)
+                    .join("volumes")
+                    .join(&vol.volume_id)
+                    .join("volume.json"),
+            );
+
+            for ch in &vol.chapters {
+                let chapter_dir = std::path::PathBuf::from("projects")
+                    .join(&input.project_id)
+                    .join("volumes")
+                    .join(&vol.volume_id)
+                    .join("chapters")
+                    .join(&ch.chapter_id);
+
+                cs = cs
+                    .add_upsert(chapter_dir.join("chapter.meta.json"))
+                    .add_upsert(chapter_dir.join("chapter.md"));
+            }
+        }
+
+        cs
+    }
+
+    /// #649 评论 5578289530 问题 1.1：把 Git history 记录收成幂等 helper。
+    ///
+    /// 两条成功路径（幂等匹配 + 新恢复）都必须调用它。history 失败返回 Err，
+    /// 因为 canonical 目录已存在，下一次恢复会命中"内容完全一致"分支，
+    /// 再次调用 `ensure_restore_history()`，直到 Git 也真正进入完成态。
+    fn ensure_restore_history(&self, input: &RestoreProjectInputDto) -> ApiResult<()> {
+        let cs = Self::build_restore_workspace_change_set(input);
+        self.record_workspace_change_set_history(&cs, "restore_project_tree")
+            .map_err(WriterError::from)?;
+        Ok(())
     }
 
     /// 回滚恢复操作（staging 模式）：直接删除 staging 目录，不走正常 delete_project()。
@@ -839,11 +855,16 @@ mod tests {
         }
     }
 
-    /// 创建测试用 WriterCoreApi 实例。
+    /// 创建测试用 WriterCoreApi 实例（含初始化 workspace Git 仓库）。
     fn make_api() -> (tempfile::TempDir, WriterCoreApi) {
         let temp_dir = tempdir().unwrap();
         std::fs::create_dir_all(temp_dir.path().join("projects")).unwrap();
         let api = WriterCoreApi::new(temp_dir.path(), temp_dir.path().join("projects"));
+        // 初始化 workspace Git 仓库，让 record_workspace_change_set_history 可用
+        let layout =
+            crate::storage::git_repo_layout::GitRepoLayout::new(temp_dir.path().to_path_buf());
+        crate::storage::workspace_git::ensure_workspace_repo(&layout).unwrap();
+        api.set_workspace_git_layout(layout);
         (temp_dir, api)
     }
 
@@ -1112,5 +1133,59 @@ mod tests {
         assert!(
             matches!(err, WriterError::Other(ref msg) if msg.contains("invalid chapter_id format"))
         );
+    }
+
+    /// #649 评论 5578289530 问题 1.2：验证 build_restore_workspace_change_set 包含
+    /// 空正文章节的 chapter.md。
+    #[test]
+    fn build_restore_change_set_includes_chapter_md_for_empty_content() {
+        let input = make_full_input();
+        // make_full_input 的第四章 content 为空
+        assert!(
+            input.volumes[1].chapters[1].content.is_empty(),
+            "test precondition: chapter 4 content should be empty"
+        );
+
+        let cs = WriterCoreApi::build_restore_workspace_change_set(&input);
+
+        // 展开所有 Upsert 路径
+        let paths: Vec<std::path::PathBuf> = cs
+            .changes
+            .iter()
+            .filter_map(|c| match c {
+                crate::storage::workspace_git::WorkspaceHistoryChange::Upsert(p) => Some(p.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // 每个章节应该有 chapter.meta.json 和 chapter.md
+        for vol in &input.volumes {
+            for ch in &vol.chapters {
+                let meta_path = std::path::PathBuf::from("projects")
+                    .join(&input.project_id)
+                    .join("volumes")
+                    .join(&vol.volume_id)
+                    .join("chapters")
+                    .join(&ch.chapter_id)
+                    .join("chapter.meta.json");
+                let content_path = std::path::PathBuf::from("projects")
+                    .join(&input.project_id)
+                    .join("volumes")
+                    .join(&vol.volume_id)
+                    .join("chapters")
+                    .join(&ch.chapter_id)
+                    .join("chapter.md");
+                assert!(
+                    paths.contains(&meta_path),
+                    "change set should contain {}",
+                    meta_path.display()
+                );
+                assert!(
+                    paths.contains(&content_path),
+                    "change set should contain {} (even for empty content)",
+                    content_path.display()
+                );
+            }
+        }
     }
 }
