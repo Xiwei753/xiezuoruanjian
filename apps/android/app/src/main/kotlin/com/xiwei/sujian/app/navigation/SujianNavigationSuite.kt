@@ -58,6 +58,7 @@ import com.xiwei.sujian.feature.stats.ui.StatsScreen
 import com.xiwei.sujian.feature.sync.data.model.SyncIndicatorState
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -368,7 +369,13 @@ internal suspend fun runPredictiveWorkspaceBack(
     onFlushActiveDocument: suspend () -> Boolean,
     onBack: () -> Unit,
 ) {
-    progressFlow.collect()
+    // 空收集器：只消费 flow 元素，不做任何处理
+    // 这里不需要处理每个元素，只需要等待 flow 完成
+    // ensureActive() 用于检查当前协程是否被取消，确保取消异常能正确传播
+    progressFlow.collect {
+        @Suppress("EXPERIMENTAL_API_USAGE")
+        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+    }
     if (onFlushActiveDocument()) {
         onBack()
     }
