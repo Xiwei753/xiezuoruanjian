@@ -60,7 +60,8 @@ RULES: tuple[PatternRule, ...] = (
     PatternRule(
         "cfg-attr-dead-code-allow",
         re.compile(
-            r"#\s*\[\s*cfg_attr\s*\(.*?\ballow\s*\([^)]*\bdead_code\b[^)]*\)\s*\)\s*\]"
+            r"#\s*\[\s*cfg_attr\s*\(.*?\ballow\s*\([^)]*\bdead_code\b[^)]*\)\s*\)\s*\]",
+            re.DOTALL,
         ),
         "禁止用 #[cfg_attr(..., allow(dead_code))] 绕过 dead_code 检查；"
         "应删除未使用代码或让渲染链真正消费",
@@ -285,6 +286,29 @@ _CRATE_WIDE_ALLOW_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/main.rs"),
 }
 
+_CFG_ATTR_MULTILINE_PATTERN = re.compile(
+    r"#\s*\[\s*cfg_attr\s*\(.*?\ballow\s*\([^)]*\bdead_code\b[^)]*\)\s*\)\s*\]",
+    re.DOTALL,
+)
+
+
+def _strip_line_comments(text: str) -> str:
+    """去掉行注释（//…），保留多行结构，用于跨行 cfg_attr 扫描。"""
+    result: list[str] = []
+    for line in text.splitlines():
+        in_string = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if ch == '"' and (i == 0 or line[i - 1] != '\\'):
+                in_string = not in_string
+            elif ch == '/' and not in_string and i + 1 < len(line) and line[i + 1] == '/':
+                line = line[:i]
+                break
+            i += 1
+        result.append(line)
+    return "\n".join(result)
+
 
 def scan_text(path: Path, text: str) -> list[Finding]:
     findings: list[Finding] = []
@@ -325,6 +349,16 @@ def scan_text(path: Path, text: str) -> list[Finding]:
                     "unsafe 块前必须有 SAFETY: 注释说明生命周期、别名和线程前提",
                 )
             )
+
+    # 多行 cfg_attr 扫描：单行扫描的 .*? 不跨行，需要单独处理
+    cfg_attr_rule = next(r for r in RULES if r.name == "cfg-attr-dead-code-allow")
+    already_found_cfg_attr = any(f.rule == "cfg-attr-dead-code-allow" for f in findings)
+    if not already_found_cfg_attr:
+        stripped_text = _strip_line_comments(text)
+        m = _CFG_ATTR_MULTILINE_PATTERN.search(stripped_text)
+        if m is not None:
+            line_no = stripped_text[:m.start()].count("\n") + 1
+            findings.append(Finding(path, line_no, cfg_attr_rule.name, cfg_attr_rule.message))
 
     return findings
 

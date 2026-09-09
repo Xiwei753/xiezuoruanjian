@@ -127,6 +127,16 @@ struct Foo { x: i32 }
         rules = self.rule_names(source)
         self.assertIn("cfg-attr-dead-code-allow", rules)
 
+    def test_detects_multiline_cfg_attr_dead_code_allow(self) -> None:
+        source = '''#[cfg_attr(
+    all(),
+    allow(dead_code)
+)]
+struct Foo { x: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cfg-attr-dead-code-allow", rules)
+
     def test_detects_cfg_attr_any_dead_code_allow(self) -> None:
         source = r'''
 #[cfg_attr(any(), allow(dead_code))]
