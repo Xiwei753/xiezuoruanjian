@@ -147,100 +147,54 @@ class Issue649Comment5573750754RegressionTest {
     fun fix2_manifestSubTransaction_mergesItemsIntoCurrentJournal() {
         val key = ChapterKey(PROJ_1, "v1", "c1")
         val txId = TX_1
+        val oldItem = buildStagedItem(key, txId)
+        val currentItems = mapOf(key to oldItem.copy(promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD), state = PendingItem.STATE_PROMOTED))
+        val desiredEntries = mapOf(key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"))
+        val journalContext = buildJournalContext(txId, key, oldItem)
+        var currentJournal = journalContext.copy(items = currentItems, newEntries = desiredEntries)
+        currentJournal = currentJournal.copy(manifestSwapState = ManifestTransactionState.MANIFEST_STAGED, manifestNewContentHash = "sha256:newmanifest", manifestTargetJson = "{}")
 
-        // 旧 journal 的 items（recovery 进入时的状态，正文已 stage 但未 promote）
-        val oldItem =
-            PendingItem(
-                key = key,
-                stagedRef =
-                    StagedMirrorRef(
-                        txId,
-                        "content://staging/1",
-                        ".staging/tx-1/Ch.md",
-                        P_V_CH_MD,
-                        "text/markdown",
-                    ),
-                oldRef = MirrorFileRef("content://old/1", P_V_CH_MD),
-                backupOldRef = null,
-                promotedRef = null,
-                state = PendingItem.STATE_STAGED,
-            )
-
-        // recoverPromotePhase() 推进正文后，currentItems 已更新为 PROMOTED
-        val promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD)
-        val currentItem =
-            oldItem.copy(
-                promotedRef = promotedRef,
-                state = PendingItem.STATE_PROMOTED,
-            )
-        val currentItems = mapOf(key to currentItem)
-        val desiredEntries =
-            mapOf(
-                key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"),
-            )
-
-        // 旧 journal（journalContext）的 items 仍是 STAGED
-        val journalContext =
-            PendingMirrorPublish(
-                txId = txId,
-                backend = MirrorBackend.MEDIA_STORE,
-                treeUri = null,
-                projectId = PROJ_1,
-                transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_PROMOTE,
-                oldEntries = emptyMap(),
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = mapOf(key to oldItem), // 旧状态 STAGED
-                removedProjectIds = emptySet(),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-            )
-
-        // ── 模拟修复后的 publishManifestWithDesiredTransactional() line 3205-3209 ──
-        // 修复后：入口先把调用方当前状态合进去
-        var currentJournal: PendingMirrorPublish =
-            journalContext.copy(
-                items = currentItems, // ★ 合并 items ★
-                newEntries = desiredEntries, // ★ 合并 newEntries ★
-            )
-
-        // 后续从 currentJournal 前进（line 3241-3249）
-        currentJournal =
-            currentJournal.copy(
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                manifestNewContentHash = "sha256:newmanifest",
-                manifestOldContentHash = null,
-                manifestTargetJson = "{}",
-            )
-
-        // ── 断言修复后的正确行为 ──
         val journalItemState = currentJournal.items[key]?.state
         val passedItemState = currentItems[key]?.state
-        assertEquals(
-            "传入的 items 参数（currentItems）已是 PROMOTED",
-            PendingItem.STATE_PROMOTED,
-            passedItemState,
-        )
-        assertEquals(
-            "修复后：currentJournal.items 与传入的 items 一致（PROMOTED），不会倒退回 STAGED",
-            PendingItem.STATE_PROMOTED,
-            journalItemState,
-        )
-        assertEquals(
-            "修复后：currentJournal.newEntries 与传入的 desiredEntries 一致",
-            desiredEntries,
-            currentJournal.newEntries,
-        )
-        assertTrue(
-            "修复后：persistPendingJournal(currentJournal) 会把 PROMOTED 状态写入磁盘，不倒退",
-            journalItemState == passedItemState,
-        )
+        assertEquals("传入的 items 参数（currentItems）已是 PROMOTED", PendingItem.STATE_PROMOTED, passedItemState)
+        assertEquals("修复后：currentJournal.items 与传入的 items 一致（PROMOTED），不会倒退回 STAGED", PendingItem.STATE_PROMOTED, journalItemState)
+        assertEquals("修复后：currentJournal.newEntries 与传入的 desiredEntries 一致", desiredEntries, currentJournal.newEntries)
+        assertTrue("修复后：persistPendingJournal(currentJournal) 会把 PROMOTED 状态写入磁盘，不倒退", journalItemState == passedItemState)
     }
+
+    private fun buildStagedItem(
+        key: ChapterKey,
+        txId: String,
+    ) = PendingItem(
+        key = key,
+        stagedRef = StagedMirrorRef(txId, "content://staging/1", ".staging/tx-1/Ch.md", P_V_CH_MD, "text/markdown"),
+        oldRef = MirrorFileRef("content://old/1", P_V_CH_MD),
+        backupOldRef = null,
+        promotedRef = null,
+        state = PendingItem.STATE_STAGED,
+    )
+
+    private fun buildJournalContext(
+        txId: String,
+        key: ChapterKey,
+        oldItem: PendingItem,
+    ) = PendingMirrorPublish(
+        txId = txId,
+        backend = MirrorBackend.MEDIA_STORE,
+        treeUri = null,
+        projectId = PROJ_1,
+        transactionType = MirrorTransactionType.UPSERT_PROJECT,
+        phase = PendingMirrorPublish.PHASE_PROMOTE,
+        oldEntries = emptyMap(),
+        newEntries = emptyMap(),
+        stagedRefs = emptyMap(),
+        items = mapOf(key to oldItem),
+        removedProjectIds = emptySet(),
+        manifestOldRef = null,
+        manifestStagedRef = null,
+        manifestNewRef = null,
+        manifestBackupRef = null,
+    )
 
     // ══════════════════════════════════════════════════════════════════════
     // 修复3：rollbackManifest() 用 manifestTargetJson==null 作为"未开始"标记

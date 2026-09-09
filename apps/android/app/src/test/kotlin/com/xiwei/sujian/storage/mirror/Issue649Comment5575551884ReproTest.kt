@@ -490,104 +490,43 @@ class Issue649Comment5575551884ReproTest {
      */
     @Test
     fun problem3b_frozenPlanToManifestJson_matchesMirrorManifestSchema() {
-        // 构建 frozen plan
-        val plan =
-            FrozenManifestPlan(
-                schemaVersion = 1,
-                revision = 1694123456789L,
-                updatedAt = S_2026_09_07T00_00_00Z,
-                targetProjectId = PROJ_1,
-                projects =
-                    listOf(
-                        FrozenManifestProject(
-                            id = PROJ_1,
-                            title = S_1,
-                            order = 0,
-                            revision = 1694123456789L,
-                            updatedAt = S_2026_09_07T00_00_00Z,
-                            volumes =
-                                listOf(
-                                    FrozenManifestVolume(
-                                        id = VOL_1,
-                                        title = "卷1",
-                                        order = 0,
-                                        revision = 1694123456789L,
-                                        updatedAt = S_2026_09_07T00_00_00Z,
-                                        chapters =
-                                            listOf(
-                                                FrozenManifestChapter(
-                                                    id = CHAP_1,
-                                                    title = "章1",
-                                                    order = 0,
-                                                    revision = 1694123456789L,
-                                                    updatedAt = S_2026_09_07T00_00_00Z,
-                                                    contentFile = "",
-                                                    contentHash = "",
-                                                ),
-                                            ),
-                                    ),
-                                ),
-                        ),
-                    ),
-            )
-
-        // promotedEntries 覆盖目标章节
+        val plan = buildSampleFrozenPlan()
         val key = ChapterKey(PROJ_1, VOL_1, CHAP_1)
-        val promotedEntries =
-            mapOf(
-                key to
-                    ChapterMirrorEntry(
-                        uri = "content://mirror/chap.md",
-                        relativePath = "作品/项目1/卷1/章1.md",
-                        revision = 1694123456789L,
-                        contentHash = SHA256_ABC,
-                    ),
-            )
-
-        // 生成 manifest JSON
+        val promotedEntries = mapOf(key to ChapterMirrorEntry(uri = "content://mirror/chap.md", relativePath = "作品/项目1/卷1/章1.md", revision = 1694123456789L, contentHash = SHA256_ABC))
         val manifestJson = frozenPlanToManifestJson(plan, promotedEntries)
         assertNotNull("manifestJson 生成成功", manifestJson)
-
         val manifestRoot = org.json.JSONObject(manifestJson!!)
 
-        // ── 断言 1：与 MirrorManifest schema 一致 ──
         assertTrue("★ 有 schemaVersion ★", manifestRoot.has(SCHEMAVERSION))
         assertEquals("schemaVersion = 1", 1, manifestRoot.getInt(SCHEMAVERSION))
         assertTrue("★ 有 projects 数组（全局 manifest）★", manifestRoot.has("projects"))
         assertFalse("★ 无顶层 projectId ★", manifestRoot.has("projectId"))
         assertFalse("★ 无顶层 volumes ★", manifestRoot.has("volumes"))
 
-        // ── 断言 2：projects 数组包含目标项目 ──
         val projectsArray = manifestRoot.getJSONArray("projects")
         assertEquals("projects 长度 = 1", 1, projectsArray.length())
         val projectObj = projectsArray.getJSONObject(0)
         assertTrue("★ project 用 id 字段（不是 projectId）★", projectObj.has("id"))
         assertEquals("project id", PROJ_1, projectObj.getString("id"))
 
-        // ── 断言 3：章节字段与 MirrorChapter 一致 ──
-        val volumes = projectObj.getJSONArray("volumes")
-        val volumeObj = volumes.getJSONObject(0)
+        val volumeObj = projectObj.getJSONArray("volumes").getJSONObject(0)
         assertTrue("★ volume 用 id 字段（不是 volumeId）★", volumeObj.has("id"))
-
-        val chapters = volumeObj.getJSONArray("chapters")
-        val chapterObj = chapters.getJSONObject(0)
+        val chapterObj = volumeObj.getJSONArray("chapters").getJSONObject(0)
         assertTrue("★ chapter 用 id 字段（不是 chapterId）★", chapterObj.has("id"))
         assertTrue("★ chapter 用 contentFile 字段（不是 uri）★", chapterObj.has("contentFile"))
         assertTrue("★ chapter 有 contentHash 字段 ★", chapterObj.has("contentHash"))
         assertFalse("★ chapter 无 uri 字段 ★", chapterObj.has("uri"))
-
-        // ── 断言 4：目标章节用 promotedEntries 的真实 URI/hash ──
-        assertEquals(
-            "★ contentFile 用 promotedEntries 的 relativePath ★",
-            "作品/项目1/卷1/章1.md",
-            chapterObj.getString("contentFile"),
-        )
-        assertEquals(
-            "★ contentHash 用 promotedEntries 的 contentHash ★",
-            SHA256_ABC,
-            chapterObj.getString("contentHash"),
-        )
+        assertEquals("★ contentFile 用 promotedEntries 的 relativePath ★", "作品/项目1/卷1/章1.md", chapterObj.getString("contentFile"))
+        assertEquals("★ contentHash 用 promotedEntries 的 contentHash ★", SHA256_ABC, chapterObj.getString("contentHash"))
     }
+
+    private fun buildSampleFrozenPlan() = FrozenManifestPlan(
+        schemaVersion = 1,
+        revision = 1694123456789L,
+        updatedAt = S_2026_09_07T00_00_00Z,
+        targetProjectId = PROJ_1,
+        projects = listOf(FrozenManifestProject(id = PROJ_1, title = S_1, order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, volumes = listOf(FrozenManifestVolume(id = VOL_1, title = "卷1", order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, chapters = listOf(FrozenManifestChapter(id = CHAP_1, title = "章1", order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, contentFile = "", contentHash = "")))))),
+    )
 
     /**
      * rollbackManifest：manifestOldRef != null && manifestOldContentHash == null → 拒绝回滚。
