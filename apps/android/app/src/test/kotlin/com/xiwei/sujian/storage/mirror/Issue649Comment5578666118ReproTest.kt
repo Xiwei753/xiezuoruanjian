@@ -2,7 +2,6 @@ package com.xiwei.sujian.storage.mirror
 
 import androidx.core.util.AtomicFile
 import androidx.test.core.app.ApplicationProvider
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -29,7 +28,6 @@ import java.io.FileOutputStream
 @Config(sdk = [34])
 @Suppress("TooManyFunctions", "StringLiteralDuplication")
 class Issue649Comment5578666118ReproTest {
-
     private lateinit var store: ReadableMirrorStateStore
 
     @Before
@@ -41,7 +39,8 @@ class Issue649Comment5578666118ReproTest {
     // ── helper ──
 
     private fun writeStateJson(json: String) {
-        val dir = File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
+        val dir =
+            File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
         dir.mkdirs()
         val file = File(dir, "state.json")
         val atomicFile = AtomicFile(file)
@@ -117,12 +116,17 @@ class Issue649Comment5578666118ReproTest {
      */
     @Test
     fun readSnapshotStrict_documentTreeValidTreeUri_success() {
-        writeStateJson("""{"backend": "document_tree", "treeUri": "content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian"}""")
+        writeStateJson(
+            """{"backend": "document_tree", "treeUri": "content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian"}""",
+        )
         val result = store.readSnapshotStrict()
         assertTrue("document_tree + 合法 treeUri → success", result.isSuccess)
         val snapshot = result.getOrNull()!!
         assertEquals(MirrorBackend.DOCUMENT_TREE, snapshot.backend)
-        assertEquals("content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian", snapshot.treeUri)
+        assertEquals(
+            "content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian",
+            snapshot.treeUri,
+        )
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -193,10 +197,11 @@ class Issue649Comment5578666118ReproTest {
     @Test
     fun saveRestoredState_backendEmpty_returnsFalse() {
         writeStateJson("""{"backend": ""}""")
-        val result = store.saveRestoredState(
-            manifestUri = "content://m",
-            chapterEntries = emptyMap(),
-        )
+        val result =
+            store.saveRestoredState(
+                manifestUri = "content://m",
+                chapterEntries = emptyMap(),
+            )
         assertTrue("旧 state backend=\"\" → false（decodeStateRootStrict 拒绝）", !result)
     }
 }

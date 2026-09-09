@@ -1,5 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -12,7 +13,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
-import androidx.test.core.app.ApplicationProvider
 
 /**
  * #649 评论 5575052682：两个影响镜像最终一致性的硬问题复现测试。
@@ -51,7 +51,6 @@ class Issue649Comment5575052682ReproTest {
         private const val UPDATEDAT = "updatedAt"
         private const val VOL_1 = "vol-1"
     }
-
 
     // ══════════════════════════════════════════════════════════════════════
     // 硬问题 1：MirrorChangeSink canonical 已保存、mirror 事务还没开始时，
@@ -331,49 +330,56 @@ class Issue649Comment5575052682ReproTest {
         val r1RelativePath = "作品/项目1/卷1/章1.md"
         val r1Revision = 100L
         val promotedEntriesR1 = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-        promotedEntriesR1[key] = ChapterMirrorEntry(
-            uri = r1Uri,
-            relativePath = r1RelativePath,
-            revision = r1Revision,
-            contentHash = r1ContentHash,
-        )
+        promotedEntriesR1[key] =
+            ChapterMirrorEntry(
+                uri = r1Uri,
+                relativePath = r1RelativePath,
+                revision = r1Revision,
+                contentHash = r1ContentHash,
+            )
 
         // ── 模拟 R2 snapshot（canonical 后来已经变成 R2）──
         val r2Title = "项目1-改后标题-R2"
         val r2Revision = 200L
         val r2UpdatedAt = "2026-09-08T03:00:00Z"
-        val r2SnapshotMetadata = mapOf(
-            TITLE to r2Title,
-            REVISION to r2Revision.toString(),
-            UPDATEDAT to r2UpdatedAt,
-        )
+        val r2SnapshotMetadata =
+            mapOf(
+                TITLE to r2Title,
+                REVISION to r2Revision.toString(),
+                UPDATEDAT to r2UpdatedAt,
+            )
 
         // ── 旧 journal（T1/R1），manifest 子事务未开始 ──
-        val journalT1 = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = projectId,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = promotedEntriesR1,
-            stagedRefs = emptyMap(),
-            items = mapOf(key to PendingItem(
-                key = key,
-                stagedRef = null,
-                oldRef = null,
-                backupOldRef = null,
-                promotedRef = MirrorFileRef(r1Uri, r1RelativePath),
-                state = PendingItem.STATE_PROMOTED,
-            )),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestTargetJson = null, // ★ manifest 子事务未开始 ★
-        )
+        val journalT1 =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = projectId,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = promotedEntriesR1,
+                stagedRefs = emptyMap(),
+                items =
+                    mapOf(
+                        key to
+                            PendingItem(
+                                key = key,
+                                stagedRef = null,
+                                oldRef = null,
+                                backupOldRef = null,
+                                promotedRef = MirrorFileRef(r1Uri, r1RelativePath),
+                                state = PendingItem.STATE_PROMOTED,
+                            ),
+                    ),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestTargetJson = null, // ★ manifest 子事务未开始 ★
+            )
 
         return MixedManifestSetup(
             r1ContentHash = r1ContentHash,
@@ -400,14 +406,15 @@ class Issue649Comment5575052682ReproTest {
             TITLE to snapshotData[TITLE],
             REVISION to snapshotData[REVISION],
             UPDATEDAT to snapshotData[UPDATEDAT],
-            "chapters" to desiredEntries.map { (_, v) ->
-                mapOf(
-                    "uri" to v.uri,
-                    "relativePath" to v.relativePath,
-                    "contentHash" to v.contentHash,
-                    "chapterRevision" to v.revision,
-                )
-            },
+            "chapters" to
+                desiredEntries.map { (_, v) ->
+                    mapOf(
+                        "uri" to v.uri,
+                        "relativePath" to v.relativePath,
+                        "contentHash" to v.contentHash,
+                        "chapterRevision" to v.revision,
+                    )
+                },
         )
 
     /**
@@ -418,44 +425,47 @@ class Issue649Comment5575052682ReproTest {
      */
     @Test
     fun hardProblem2_pendingMirrorPublish_hasFrozenSnapshotPlanField() {
-        val plan = FrozenManifestPlan(
-            schemaVersion = 1,
-            revision = 100L,
-            updatedAt = S_2026_09_01T00_00_00Z,
-            targetProjectId = PROJ_1,
-            projects = listOf(
-                FrozenManifestProject(
-                    id = PROJ_1,
-                    title = "T1",
-                    order = 0,
-                    revision = 100L,
-                    updatedAt = S_2026_09_01T00_00_00Z,
-                    volumes = emptyList(),
-                ),
-            ),
-        )
+        val plan =
+            FrozenManifestPlan(
+                schemaVersion = 1,
+                revision = 100L,
+                updatedAt = S_2026_09_01T00_00_00Z,
+                targetProjectId = PROJ_1,
+                projects =
+                    listOf(
+                        FrozenManifestProject(
+                            id = PROJ_1,
+                            title = "T1",
+                            order = 0,
+                            revision = 100L,
+                            updatedAt = S_2026_09_01T00_00_00Z,
+                            volumes = emptyList(),
+                        ),
+                    ),
+            )
         val frozenPlanJson = frozenManifestPlanToJson(plan)
         val frozenPlanHash = computeContentHash(frozenPlanJson)
-        val journal = PendingMirrorPublish(
-            txId = TX_1,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJ_1,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestTargetJson = null,
-            frozenManifestPlan = frozenPlanJson,
-            frozenManifestPlanHash = frozenPlanHash,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = TX_1,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJ_1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestTargetJson = null,
+                frozenManifestPlan = frozenPlanJson,
+                frozenManifestPlanHash = frozenPlanHash,
+            )
 
         // manifestTargetJson 仍为 null（manifest 子事务未开始）
         assertNull("manifestTargetJson 是 null（manifest 子事务未开始）", journal.manifestTargetJson)
@@ -466,7 +476,11 @@ class Issue649Comment5575052682ReproTest {
         val roundTripped = PendingMirrorPublish.fromJson(journal.toJson())
         assertNotNull("round-trip 成功", roundTripped)
         assertEquals("frozenManifestPlan round-trip", journal.frozenManifestPlan, roundTripped!!.frozenManifestPlan)
-        assertEquals("frozenManifestPlanHash round-trip", journal.frozenManifestPlanHash, roundTripped.frozenManifestPlanHash)
+        assertEquals(
+            "frozenManifestPlanHash round-trip",
+            journal.frozenManifestPlanHash,
+            roundTripped.frozenManifestPlanHash,
+        )
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -576,35 +590,38 @@ class Issue649Comment5575052682ReproTest {
             revision = 100L,
             updatedAt = S_2026_09_01T00_00_00Z,
             targetProjectId = projectId,
-            projects = listOf(
-                FrozenManifestProject(
-                    id = projectId,
-                    title = "测试作品",
-                    order = 0,
-                    revision = 100L,
-                    updatedAt = S_2026_09_01T00_00_00Z,
-                    volumes = listOf(
-                        FrozenManifestVolume(
-                            id = VOL_1,
-                            title = "卷一",
-                            order = 0,
-                            revision = 100L,
-                            updatedAt = S_2026_09_01T00_00_00Z,
-                            chapters = listOf(
-                                FrozenManifestChapter(
-                                    id = CHAP_1,
-                                    title = "第一章",
+            projects =
+                listOf(
+                    FrozenManifestProject(
+                        id = projectId,
+                        title = "测试作品",
+                        order = 0,
+                        revision = 100L,
+                        updatedAt = S_2026_09_01T00_00_00Z,
+                        volumes =
+                            listOf(
+                                FrozenManifestVolume(
+                                    id = VOL_1,
+                                    title = "卷一",
                                     order = 0,
                                     revision = 100L,
                                     updatedAt = S_2026_09_01T00_00_00Z,
-                                    contentFile = "",
-                                    contentHash = "",
+                                    chapters =
+                                        listOf(
+                                            FrozenManifestChapter(
+                                                id = CHAP_1,
+                                                title = "第一章",
+                                                order = 0,
+                                                revision = 100L,
+                                                updatedAt = S_2026_09_01T00_00_00Z,
+                                                contentFile = "",
+                                                contentHash = "",
+                                            ),
+                                        ),
                                 ),
                             ),
-                        ),
                     ),
                 ),
-            ),
         )
 
     /**
@@ -624,25 +641,29 @@ class Issue649Comment5575052682ReproTest {
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_PROMOTE,
             oldEntries = emptyMap(),
-            newEntries = mapOf(
-                key to ChapterMirrorEntry(
-                    uri = "content://mirror/chap.md",
-                    relativePath = "作品/测试作品/卷一/第一章.md",
-                    revision = 100L,
-                    contentHash = "sha256:abc123",
+            newEntries =
+                mapOf(
+                    key to
+                        ChapterMirrorEntry(
+                            uri = "content://mirror/chap.md",
+                            relativePath = "作品/测试作品/卷一/第一章.md",
+                            revision = 100L,
+                            contentHash = "sha256:abc123",
+                        ),
                 ),
-            ),
             stagedRefs = emptyMap(),
-            items = mapOf(
-                key to PendingItem(
-                    key = key,
-                    stagedRef = null,
-                    oldRef = null,
-                    backupOldRef = null,
-                    promotedRef = MirrorFileRef("content://mirror/chap.md", "作品/测试作品/卷一/第一章.md"),
-                    state = PendingItem.STATE_PROMOTED,
+            items =
+                mapOf(
+                    key to
+                        PendingItem(
+                            key = key,
+                            stagedRef = null,
+                            oldRef = null,
+                            backupOldRef = null,
+                            promotedRef = MirrorFileRef("content://mirror/chap.md", "作品/测试作品/卷一/第一章.md"),
+                            state = PendingItem.STATE_PROMOTED,
+                        ),
                 ),
-            ),
             removedProjectIds = emptySet(),
             manifestOldRef = null,
             manifestStagedRef = null,
@@ -658,8 +679,9 @@ class Issue649Comment5575052682ReproTest {
      * 计算字符串的 SHA-256 hash（与生产代码一致）。
      */
     private fun computeContentHash(text: String): String {
-        return "sha256:" + java.security.MessageDigest.getInstance("SHA-256")
-            .digest(text.toByteArray(Charsets.UTF_8))
-            .joinToString("") { "%02x".format(it) }
+        return "sha256:" +
+            java.security.MessageDigest.getInstance("SHA-256")
+                .digest(text.toByteArray(Charsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
     }
 }

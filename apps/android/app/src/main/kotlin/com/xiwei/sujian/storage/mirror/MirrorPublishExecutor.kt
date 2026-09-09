@@ -25,16 +25,17 @@ internal class MirrorPublishExecutor(
 ) {
     private val manifestExecutor = MirrorManifestTransactionExecutor(stateStore, journalWriter, planner)
     private val cleanupTransactionExecutor = MirrorCleanupTransactionExecutor(stateStore)
-    private val publishProjectExecutor = MirrorPublishProjectExecutor(
-        stateStore = stateStore,
-        journalWriter = journalWriter,
-        planner = planner,
-        rollbackExecutor = rollbackExecutor,
-        manifestExecutor = manifestExecutor,
-        source = source,
-        router = router,
-        callbacks = callbacks,
-    )
+    private val publishProjectExecutor =
+        MirrorPublishProjectExecutor(
+            stateStore = stateStore,
+            journalWriter = journalWriter,
+            planner = planner,
+            rollbackExecutor = rollbackExecutor,
+            manifestExecutor = manifestExecutor,
+            source = source,
+            router = router,
+            callbacks = callbacks,
+        )
     private val ensurePendingRecovered get() = callbacks.ensurePendingRecovered
     private val logNotLoaded get() = callbacks.logNotLoaded
     private val logPublishAborted get() = callbacks.logPublishAborted
@@ -57,7 +58,6 @@ internal class MirrorPublishExecutor(
 
         data object Stop : CommittedManifestResolution
     }
-
 
     /**
      * 读取并解析 committed manifest，处理四种情况（#649 评论 5576949398 问题 1）。
@@ -164,77 +164,79 @@ internal class MirrorPublishExecutor(
     }
 
     private suspend fun executeDeleteProject(projectId: String): MirrorPublishResult {
-            // 门控：确保 pending 已恢复
-            if (!ensurePendingRecovered()) {
-                return MirrorPublishResult.PendingRecovery
-            }
-            // #649 评论 5565862745 问题 4：使用 currentTransactionResult() 获取完整事务上下文
-            val txContextResult = router.currentTransactionResult()
-            if (txContextResult.isFailure) {
-                val error = txContextResult.exceptionOrNull()
-                DiagnosticsLogger.e(TAG, "Failed to get transaction context for delete: ${error?.message}")
-                return MirrorPublishResult.RetryableFailure
-            }
-            val txContext = txContextResult.getOrThrow()
-            val storage = txContext.storage
-            if (!storage.isSupported()) {
-                DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
-                return MirrorPublishResult.RetryableFailure
-            }
-            // 1. 获取旧条目 + 2. 读取 committed manifest 并生成 frozen plan（#649 评论 5576464076 问题 3）
-            //    #649 评论 5562715833 问题 7：不在 removed.isEmpty() 时 early return，即使空作品也继续走事务流程
-            //    #649 评论 5576949398 问题 1：用 getCommittedManifestStrict 三态读取，不再把损坏当首次发布
-            val preparation = prepareDeleteFrozenPlan(projectId, storage)
+        // 门控：确保 pending 已恢复
+        if (!ensurePendingRecovered()) {
+            return MirrorPublishResult.PendingRecovery
+        }
+        // #649 评论 5565862745 问题 4：使用 currentTransactionResult() 获取完整事务上下文
+        val txContextResult = router.currentTransactionResult()
+        if (txContextResult.isFailure) {
+            val error = txContextResult.exceptionOrNull()
+            DiagnosticsLogger.e(TAG, "Failed to get transaction context for delete: ${error?.message}")
+            return MirrorPublishResult.RetryableFailure
+        }
+        val txContext = txContextResult.getOrThrow()
+        val storage = txContext.storage
+        if (!storage.isSupported()) {
+            DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
+            return MirrorPublishResult.RetryableFailure
+        }
+        // 1. 获取旧条目 + 2. 读取 committed manifest 并生成 frozen plan（#649 评论 5576464076 问题 3）
+        //    #649 评论 5562715833 问题 7：不在 removed.isEmpty() 时 early return，即使空作品也继续走事务流程
+        //    #649 评论 5576949398 问题 1：用 getCommittedManifestStrict 三态读取，不再把损坏当首次发布
+        val preparation =
+            prepareDeleteFrozenPlan(projectId, storage)
                 ?: return MirrorPublishResult.RetryableFailure
 
-            // 3. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
-            //    #649 评论 5563333323 缺口 2：journal 写入失败则停止
-            val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
-            if (!writeDeletePendingJournal(projectId, txId, txContext, preparation)) {
-                return MirrorPublishResult.RetryableFailure
-            }
-            // 3. 事务提交新 manifest（已不含该项目）
-            //    #649 评论 5562715833 问题 7：snapshot=null 确保 manifest 不再引用该项目
-            //    #649 评论 5576464076 问题 3：使用 frozen plan 生成 manifestTargetJson
-            val manifestTargetJson = buildDeleteManifestTargetJson(projectId, preparation.frozenPlan)
+        // 3. 写 pending journal（transactionType=DELETE_PROJECT, phase=CLEANUP）
+        //    #649 评论 5563333323 缺口 2：journal 写入失败则停止
+        val txId = "${System.currentTimeMillis()}-${projectId.take(8)}"
+        if (!writeDeletePendingJournal(projectId, txId, txContext, preparation)) {
+            return MirrorPublishResult.RetryableFailure
+        }
+        // 3. 事务提交新 manifest（已不含该项目）
+        //    #649 评论 5562715833 问题 7：snapshot=null 确保 manifest 不再引用该项目
+        //    #649 评论 5576464076 问题 3：使用 frozen plan 生成 manifestTargetJson
+        val manifestTargetJson =
+            buildDeleteManifestTargetJson(projectId, preparation.frozenPlan)
                 ?: return MirrorPublishResult.RetryableFailure
-            // #649 评论 5562715833 问题 5：传 journalContext，manifest 事务每步落 journal
-            // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-            val deleteJournalContext = buildDeleteJournalContext(projectId, txId, txContext, preparation)
-            val manifestResult =
-                publishManifestWithDesiredTransactional(
-                    ManifestTransactionParams(
-                        projectId = projectId,
-                        snapshot = null,
-                        desiredEntries = emptyMap(),
-                        txId = txId,
-                        journalContext = deleteJournalContext,
-                        items = emptyMap(),
-                        storage = storage,
-                        prebuiltTargetJson = manifestTargetJson,
-                    ),
-                )
-            if (manifestResult == null) {
-                DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
-                // manifest 失败不清除 journal，下次恢复会重试
-                return MirrorPublishResult.RetryableFailure
-            }
-            // 4. manifest 成功后更新 journal + committed baseline
-            //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
-            //    #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
-            // #649 评论 5576949398 问题 2：从 manifestResult.committedJournal 继续，不再用 writePendingPublishJournal 从旧字段重建。
-            if (!persistDeleteCommittedBaseline(projectId, manifestResult)) {
-                return MirrorPublishResult.RetryableFailure
-            }
-            // 5. 从 state store 删除该项目条目
-            //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
-            if (!removeDeleteProjectState(projectId)) {
-                return MirrorPublishResult.RetryableFailure
-            }
-            // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
-            //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
-            // #649 评论 5576949398 问题 2：直接用 manifestResult.committedJournal 作为 cleanup journal，
-            return finalizeDeleteCleanup(projectId, manifestResult, storage)
+        // #649 评论 5562715833 问题 5：传 journalContext，manifest 事务每步落 journal
+        // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
+        val deleteJournalContext = buildDeleteJournalContext(projectId, txId, txContext, preparation)
+        val manifestResult =
+            publishManifestWithDesiredTransactional(
+                ManifestTransactionParams(
+                    projectId = projectId,
+                    snapshot = null,
+                    desiredEntries = emptyMap(),
+                    txId = txId,
+                    journalContext = deleteJournalContext,
+                    items = emptyMap(),
+                    storage = storage,
+                    prebuiltTargetJson = manifestTargetJson,
+                ),
+            )
+        if (manifestResult == null) {
+            DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
+            // manifest 失败不清除 journal，下次恢复会重试
+            return MirrorPublishResult.RetryableFailure
+        }
+        // 4. manifest 成功后更新 journal + committed baseline
+        //    #649 评论 5562462046 问题 4：恢复时需区分 manifest 是否已提交
+        //    #649 评论 5563333323 缺口 2：journal 写入失败则保留 journal 重试
+        // #649 评论 5576949398 问题 2：从 manifestResult.committedJournal 继续，不再用 writePendingPublishJournal 从旧字段重建。
+        if (!persistDeleteCommittedBaseline(projectId, manifestResult)) {
+            return MirrorPublishResult.RetryableFailure
+        }
+        // 5. 从 state store 删除该项目条目
+        //    #649 评论 5563333323 缺口 2：removeAllProjectEntries 返回 Result
+        if (!removeDeleteProjectState(projectId)) {
+            return MirrorPublishResult.RetryableFailure
+        }
+        // 6. 调用统一 cleanup 删旧正文 + manifestBackup + tx staging
+        //    #649 评论 5563333323 缺口 3：统一 cleanupCommittedTransaction
+        // #649 评论 5576949398 问题 2：直接用 manifestResult.committedJournal 作为 cleanup journal，
+        return finalizeDeleteCleanup(projectId, manifestResult, storage)
     }
 
     private data class DeletePreparation(
@@ -282,26 +284,28 @@ internal class MirrorPublishExecutor(
         preparation: DeletePreparation,
     ): Boolean {
         // 使用 txContext 中的 backend/treeUri（#649 评论 5565862745 问题 4）
-        if (!journalWriter.writePendingPublishJournal(PendingJournalParams(
-                projectId = projectId,
-                transactionType = MirrorTransactionType.DELETE_PROJECT,
-                phase = PendingMirrorPublish.PHASE_CLEANUP,
-                txId = txId,
-                backend = txContext.backend,
-                treeUri = txContext.treeUri,
-                oldEntries = preparation.removed,
-                newEntries = emptyMap(),
-                stagedRefs = emptyMap(),
-                items = emptyMap(),
-                removedProjectIds = setOf(projectId),
-                manifestOldRef = null,
-                manifestStagedRef = null,
-                manifestNewRef = null,
-                manifestBackupRef = null,
-                manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-                frozenManifestPlan = preparation.frozenPlanJson,
-                frozenManifestPlanHash = preparation.frozenPlanHash,
-            ))
+        if (!journalWriter.writePendingPublishJournal(
+                PendingJournalParams(
+                    projectId = projectId,
+                    transactionType = MirrorTransactionType.DELETE_PROJECT,
+                    phase = PendingMirrorPublish.PHASE_CLEANUP,
+                    txId = txId,
+                    backend = txContext.backend,
+                    treeUri = txContext.treeUri,
+                    oldEntries = preparation.removed,
+                    newEntries = emptyMap(),
+                    stagedRefs = emptyMap(),
+                    items = emptyMap(),
+                    removedProjectIds = setOf(projectId),
+                    manifestOldRef = null,
+                    manifestStagedRef = null,
+                    manifestNewRef = null,
+                    manifestBackupRef = null,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                    frozenManifestPlan = preparation.frozenPlanJson,
+                    frozenManifestPlanHash = preparation.frozenPlanHash,
+                ),
+            )
         ) {
             DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
             return false

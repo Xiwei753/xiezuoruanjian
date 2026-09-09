@@ -30,7 +30,6 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5573750754ReproTest {
-
     private companion object {
         const val PROJECT_ID = "proj-1"
         const val CHAPTER_PATH = "作品/P/V/Ch.md"
@@ -130,41 +129,51 @@ class Issue649Comment5573750754ReproTest {
         val txId = "tx-1"
 
         // 旧 journal 的 items（recovery 进入时的状态，正文已 stage 但未 promote）
-        val oldItem = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef(txId, "content://staging/1", ".staging/tx-1/Ch.md", CHAPTER_PATH, "text/markdown"),
-            oldRef = MirrorFileRef("content://old/1", CHAPTER_PATH),
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val oldItem =
+            PendingItem(
+                key = key,
+                stagedRef =
+                    StagedMirrorRef(
+                        txId,
+                        "content://staging/1",
+                        ".staging/tx-1/Ch.md",
+                        CHAPTER_PATH,
+                        "text/markdown",
+                    ),
+                oldRef = MirrorFileRef("content://old/1", CHAPTER_PATH),
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
 
         // recoverPromotePhase() 推进正文后，currentItems 已更新为 PROMOTED
         val promotedRef = MirrorFileRef("content://promoted/new", CHAPTER_PATH)
-        val currentItem = oldItem.copy(
-            promotedRef = promotedRef,
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val currentItem =
+            oldItem.copy(
+                promotedRef = promotedRef,
+                state = PendingItem.STATE_PROMOTED,
+            )
         val currentItems = mapOf(key to currentItem)
 
         // 旧 journal（journalContext）的 items 仍是 STAGED
-        val journalContext = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJECT_ID,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = mapOf(key to oldItem), // ★ 旧状态 STAGED ★
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJECT_ID,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = mapOf(key to oldItem), // ★ 旧状态 STAGED ★
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         // ── 复现 publishManifestWithDesiredTransactional() line 3084/3114-3122 的当前逻辑 ──
         // line 3084: var currentJournal = journalContext
@@ -172,14 +181,15 @@ class Issue649Comment5573750754ReproTest {
 
         // line 3114-3122: currentJournal = journalContext.copy(manifest 相关字段...)
         // ★ 关键缺陷：copy 没有设置 items = items 参数 ★
-        currentJournal = journalContext.copy(
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
-            manifestNewContentHash = "sha256:newmanifest",
-            manifestOldContentHash = null,
-            manifestTargetJson = "{}",
-        )
+        currentJournal =
+            journalContext.copy(
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                manifestNewContentHash = "sha256:newmanifest",
+                manifestOldContentHash = null,
+                manifestTargetJson = "{}",
+            )
         // currentJournal.items 仍然是 journalContext.items（旧 STAGED 状态）
 
         // ── 断言错误行为：currentJournal.items 是旧状态，不是传入的 currentItems ──
@@ -232,26 +242,27 @@ class Issue649Comment5573750754ReproTest {
         // journal 状态：manifest 子事务未开始
         // manifestTargetJson==null, manifestOldRef==null,
         // manifestNewContentHash==null, manifestOldContentHash==null
-        val journalContext = PendingMirrorPublish(
-            txId = "tx-1",
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJECT_ID,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null, // 未开始
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestTargetJson = null, // ★ 未开始标记 ★
-            manifestNewContentHash = null, // null
-            manifestOldContentHash = null, // null
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = "tx-1",
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJECT_ID,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null, // 未开始
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestTargetJson = null, // ★ 未开始标记 ★
+                manifestNewContentHash = null, // null
+                manifestOldContentHash = null, // null
+            )
 
         // ── 复现 rollbackManifest() line 2177-2265 的当前逻辑 ──
         // line 2177: val finalLookup = storage.lookup(manifestRelativePath)
@@ -266,18 +277,19 @@ class Issue649Comment5573750754ReproTest {
                 assertNotNull(hashResult)
                 val (_, finalHash) = hashResult!!
                 // line 2186-2265: when { finalHash == manifestNewContentHash ... finalHash == manifestOldContentHash ... else -> return false }
-                rollbackResult = when {
-                    finalHash == journalContext.manifestNewContentHash -> {
-                        true // final 是新 manifest → 删除
+                rollbackResult =
+                    when {
+                        finalHash == journalContext.manifestNewContentHash -> {
+                            true // final 是新 manifest → 删除
+                        }
+                        finalHash == journalContext.manifestOldContentHash -> {
+                            true // final 已经是 old manifest → setManifestUri
+                        }
+                        else -> {
+                            // line 2262-2264: "final hash matches neither old nor new, state unknown"
+                            false // ★ rollback 卡住 ★
+                        }
                     }
-                    finalHash == journalContext.manifestOldContentHash -> {
-                        true // final 已经是 old manifest → setManifestUri
-                    }
-                    else -> {
-                        // line 2262-2264: "final hash matches neither old nor new, state unknown"
-                        false // ★ rollback 卡住 ★
-                    }
-                }
             }
             else -> {
                 rollbackResult = true
@@ -327,23 +339,24 @@ class Issue649Comment5573750754ReproTest {
 
         // journal 状态：manifestBackupRef 仍是 null（MANIFEST_BACKUP_READY journal 未写成功）
         val manifestOldRef = MirrorFileRef("content://old/manifest", manifestPath)
-        val journalContext = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJECT_ID,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = manifestOldRef, // 有旧 manifest
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null, // ★ journal 里仍是 null ★
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJECT_ID,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = manifestOldRef, // 有旧 manifest
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null, // ★ journal 里仍是 null ★
+            )
 
         // ── 复现 rollbackManifest() line 2354-2389 的当前逻辑 ──
         val backup = journalContext.manifestBackupRef
@@ -457,14 +470,15 @@ class Issue649Comment5573750754ReproTest {
 
         // journal item：STATE_PROMOTED + promotedRef != null
         val promotedRef = MirrorFileRef(tamperedUri, finalPath)
-        val item = PendingItem(
-            key = key,
-            stagedRef = null,
-            oldRef = null,
-            backupOldRef = null,
-            promotedRef = promotedRef,
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = null,
+                oldRef = null,
+                backupOldRef = null,
+                promotedRef = promotedRef,
+                state = PendingItem.STATE_PROMOTED,
+            )
         val newEntries = mapOf(key to ChapterMirrorEntry("", finalPath, 100L, newContentHash))
 
         // ── 复现 recoverPromotePhase() line 221-234 的当前逻辑 ──
@@ -524,10 +538,11 @@ class Issue649Comment5573750754ReproTest {
         val operationOrder = mutableListOf<String>()
 
         // 模拟两个章节的 writePlan
-        val planEntries = listOf(
-            "作品/P/V/Ch1.md" to "content1",
-            "作品/P/V/Ch2.md" to "content2",
-        )
+        val planEntries =
+            listOf(
+                "作品/P/V/Ch1.md" to "content1",
+                "作品/P/V/Ch2.md" to "content2",
+            )
 
         // ── 复现 publishProject() line 941-1011 的当前执行顺序 ──
         // line 942-944: val stagedRefs = ...; val desiredEntries = ...; val items = ...
@@ -598,7 +613,10 @@ class Issue649Comment5573750754ReproTest {
             return MirrorFileRef(uri, path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean {
             committedFiles[ref.uri] = text
             operationLog.add("replaceText:${ref.relativePath}")
             return true
@@ -675,14 +693,20 @@ class Issue649Comment5573750754ReproTest {
             return MirrorLookupResult.Found(MirrorFileRef(uri, relativePath))
         }
 
-        override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+        override fun resolveBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorFileRef? {
             operationLog.add("resolveBackup:$relativePath")
             val backupPath = ".staging/$txId/backup/$relativePath"
             val uri = backupPathToUri[backupPath] ?: return null
             return MirrorFileRef(uri, backupPath)
         }
 
-        override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+        override fun lookupBackup(
+            txId: String,
+            relativePath: String,
+        ): MirrorLookupResult {
             operationLog.add("lookupBackup:$relativePath")
             val backupPath = ".staging/$txId/backup/$relativePath"
             val uri = backupPathToUri[backupPath] ?: return MirrorLookupResult.Missing

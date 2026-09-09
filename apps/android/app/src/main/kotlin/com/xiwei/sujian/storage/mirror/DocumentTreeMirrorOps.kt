@@ -58,15 +58,16 @@ internal class DocumentTreeMirrorOps(
     fun writeToUri(
         uri: Uri,
         text: String,
-    ): Boolean = try {
-        contentResolver.openOutputStream(uri)?.use { os ->
-            os.write(text.toByteArray(Charsets.UTF_8))
-            true
-        } ?: false
-    } catch (e: Exception) {
-        DiagnosticsLogger.w(TAG, "writeToUri failed: ${e.message}")
-        false
-    }
+    ): Boolean =
+        try {
+            contentResolver.openOutputStream(uri)?.use { os ->
+                os.write(text.toByteArray(Charsets.UTF_8))
+                true
+            } ?: false
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "writeToUri failed: ${e.message}")
+            false
+        }
 
     fun tryParseUri(uriString: String): Uri? =
         try {

@@ -90,8 +90,7 @@ internal class MirrorJournalWriter(
     /**
      * 前进式持久化 journal：把当前 journal 状态写入磁盘。
      */
-    fun persistPendingJournal(journal: PendingMirrorPublish): Boolean =
-        stateStore.writePendingPublish(journal.toJson())
+    fun persistPendingJournal(journal: PendingMirrorPublish): Boolean = stateStore.writePendingPublish(journal.toJson())
 
     /**
      * 从 journal 持久化 committed manifest baseline（#649 评论 5576949398 问题 2）。

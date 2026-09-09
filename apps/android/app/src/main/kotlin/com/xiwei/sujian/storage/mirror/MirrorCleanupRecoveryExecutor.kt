@@ -10,7 +10,6 @@ internal class MirrorCleanupRecoveryExecutor(
     private val journalWriter: MirrorJournalWriter,
     private val publishExecutor: MirrorPublishExecutor,
 ) {
-
     internal suspend fun recoverCleanupPhase(
         journal: PendingMirrorPublish,
         storage: ReadableMirrorStorage,
@@ -108,16 +107,17 @@ internal class MirrorCleanupRecoveryExecutor(
                 desiredWithoutDeleted[key] = entry
             }
         }
-        val manifestParams = MirrorPublishExecutor.ManifestTransactionParams(
-            projectId = journal.projectId,
-            snapshot = null,
-            desiredEntries = if (recoveryManifestTargetJson != null) emptyMap() else desiredWithoutDeleted,
-            txId = journal.txId,
-            journalContext = journal,
-            items = journal.items,
-            storage = storage,
-            prebuiltTargetJson = recoveryManifestTargetJson,
-        )
+        val manifestParams =
+            MirrorPublishExecutor.ManifestTransactionParams(
+                projectId = journal.projectId,
+                snapshot = null,
+                desiredEntries = if (recoveryManifestTargetJson != null) emptyMap() else desiredWithoutDeleted,
+                txId = journal.txId,
+                journalContext = journal,
+                items = journal.items,
+                storage = storage,
+                prebuiltTargetJson = recoveryManifestTargetJson,
+            )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {
             DiagnosticsLogger.w(
@@ -138,6 +138,7 @@ internal class MirrorCleanupRecoveryExecutor(
 
     private sealed interface DeleteManifestTargetJsonOutcome {
         data class Resolved(val json: String?) : DeleteManifestTargetJsonOutcome
+
         data object Failed : DeleteManifestTargetJsonOutcome
     }
 
@@ -155,13 +156,14 @@ internal class MirrorCleanupRecoveryExecutor(
                 )
                 return DeleteManifestTargetJsonOutcome.Failed
             }
-            val plan = frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
-                DiagnosticsLogger.w(
-                    TAG,
-                    "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal",
-                )
-                return DeleteManifestTargetJsonOutcome.Failed
-            }
+            val plan =
+                frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal",
+                    )
+                    return DeleteManifestTargetJsonOutcome.Failed
+                }
             return DeleteManifestTargetJsonOutcome.Resolved(frozenPlanToManifestJson(plan, emptyMap()))
         }
         return DeleteManifestTargetJsonOutcome.Resolved(null)

@@ -499,7 +499,10 @@ class DocumentTreeMirrorStorage(
     }
 
     /** 记录 createDocument 失败日志（#651 评论 5592465805：消除 StringLiteralDuplication）。 */
-    private fun logCreateDocumentFailed(displayName: String, e: Exception) {
+    private fun logCreateDocumentFailed(
+        displayName: String,
+        e: Exception,
+    ) {
         DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
     }
 

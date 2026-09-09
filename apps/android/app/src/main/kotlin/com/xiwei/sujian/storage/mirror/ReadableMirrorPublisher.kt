@@ -39,26 +39,29 @@ class ReadableMirrorPublisher(
     private val journalWriter = MirrorJournalWriter(stateStore)
     private val planner = MirrorPublishPlanner(source, stateStore, codec)
     private val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter)
-    private val publishExecutor = MirrorPublishExecutor(
-        stateStore = stateStore,
-        journalWriter = journalWriter,
-        codec = codec,
-        planner = planner,
-        rollbackExecutor = rollbackExecutor,
-        source = source,
-        router = router,
-        callbacks = MirrorPublishExecutorCallbacks(
-            ensurePendingRecovered = ::ensurePendingRecovered,
-            logNotLoaded = ::logNotLoaded,
-            logPublishAborted = ::logPublishAborted,
-        ),
-    )
-    private val recoveryExecutor = MirrorRecoveryExecutor(
-        stateStore = stateStore,
-        journalWriter = journalWriter,
-        rollbackExecutor = rollbackExecutor,
-        publishExecutor = publishExecutor,
-    )
+    private val publishExecutor =
+        MirrorPublishExecutor(
+            stateStore = stateStore,
+            journalWriter = journalWriter,
+            codec = codec,
+            planner = planner,
+            rollbackExecutor = rollbackExecutor,
+            source = source,
+            router = router,
+            callbacks =
+                MirrorPublishExecutorCallbacks(
+                    ensurePendingRecovered = ::ensurePendingRecovered,
+                    logNotLoaded = ::logNotLoaded,
+                    logPublishAborted = ::logPublishAborted,
+                ),
+        )
+    private val recoveryExecutor =
+        MirrorRecoveryExecutor(
+            stateStore = stateStore,
+            journalWriter = journalWriter,
+            rollbackExecutor = rollbackExecutor,
+            publishExecutor = publishExecutor,
+        )
 
     private suspend fun ensurePendingRecovered(): Boolean {
         return when (stateStore.readPendingPublish()) {
@@ -136,11 +139,9 @@ class ReadableMirrorPublisher(
         }
     }
 
-    suspend fun publishProject(projectId: String): MirrorPublishResult =
-        publishExecutor.publishProject(projectId)
+    suspend fun publishProject(projectId: String): MirrorPublishResult = publishExecutor.publishProject(projectId)
 
-    suspend fun deleteProject(projectId: String): MirrorPublishResult =
-        publishExecutor.deleteProject(projectId)
+    suspend fun deleteProject(projectId: String): MirrorPublishResult = publishExecutor.deleteProject(projectId)
 
     suspend fun publishChapter(
         projectId: String,
@@ -206,7 +207,10 @@ class ReadableMirrorPublisher(
         }
     }
 
-    private fun logPublishAborted(projectId: String, detail: String) {
+    private fun logPublishAborted(
+        projectId: String,
+        detail: String,
+    ) {
         DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: $detail")
     }
 

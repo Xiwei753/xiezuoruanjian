@@ -234,7 +234,6 @@ data class PendingMirrorPublish(
     // ═══ 冻结全局 manifest 计划（#649 评论 5575551884 问题 3 / 5575950895 问题 4）═══
     // #649 评论 5575950895 问题 4：删除旧的 frozenManifestMetadata/frozenManifestMetadataHash 字段，
     // 只保留 FrozenManifestPlan 一个冻结真值。
-
     /**
      * 冻结的全局 manifest 计划（JSON 字符串）。
      * 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存。
@@ -243,7 +242,6 @@ data class PendingMirrorPublish(
      * 不重新读取当前 Core，不丢掉其他作品。
      */
     val frozenManifestPlan: String? = null,
-
     /**
      * 冻结的全局 manifest 计划的 content hash（SHA-256）。
      * 用于恢复时校验计划完整性。
@@ -383,12 +381,12 @@ data class PendingMirrorPublish(
         private const val KEY_MANIFEST_NEW_CONTENT_HASH = "manifestNewContentHash"
         private const val KEY_MANIFEST_OLD_CONTENT_HASH = "manifestOldContentHash"
         private const val KEY_OLD_CONTENT_HASH = "oldContentHash"
+
         // #649 评论 5575950895 问题 4：删除 KEY_FROZEN_MANIFEST_METADATA/KEY_FROZEN_MANIFEST_METADATA_HASH
         private const val KEY_FROZEN_MANIFEST_PLAN = "frozenManifestPlan"
         private const val KEY_FROZEN_MANIFEST_PLAN_HASH = "frozenManifestPlanHash"
 
-        private fun chapterKeyToString(key: ChapterKey): String =
-            "${key.projectId}/${key.volumeId}/${key.chapterId}"
+        private fun chapterKeyToString(key: ChapterKey): String = "${key.projectId}/${key.volumeId}/${key.chapterId}"
 
         /**
          * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。

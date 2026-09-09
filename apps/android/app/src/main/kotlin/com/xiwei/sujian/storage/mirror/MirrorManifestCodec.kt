@@ -9,7 +9,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
  * #649 评论 5560971132 重构：拆分 LargeClass。
  */
 internal class MirrorManifestCodec {
-
     fun manifestToJson(manifest: MirrorManifest): String {
         val sb = StringBuilder()
         sb.appendLine("{")

@@ -298,7 +298,10 @@ private fun parseChapterStrict(obj: JSONObject): MirrorChapter {
 
 // #649 评论 5578053805 问题 3：UUID 格式预检 — 在 manifest strict parser 阶段就拦截非 UUID ID，
 // 不等恢复循环跑到第 N 个项目才由 Core 发现 ID 非法。
-private fun requireUuid(id: String, field: String) {
+private fun requireUuid(
+    id: String,
+    field: String,
+) {
     try {
         java.util.UUID.fromString(id)
     } catch (e: IllegalArgumentException) {

@@ -141,41 +141,44 @@ private fun encodeChapterJson(
     chapter: FrozenManifestChapter,
     contentFile: String,
     contentHash: String,
-): JSONObject = JSONObject().apply {
-    put(KEY_ID, chapter.id)
-    put(KEY_TITLE, chapter.title)
-    put(KEY_ORDER, chapter.order)
-    put(KEY_REVISION, chapter.revision)
-    put(KEY_UPDATED_AT, chapter.updatedAt)
-    put(KEY_CONTENT_FILE, contentFile)
-    put(KEY_CONTENT_HASH, contentHash)
-}
+): JSONObject =
+    JSONObject().apply {
+        put(KEY_ID, chapter.id)
+        put(KEY_TITLE, chapter.title)
+        put(KEY_ORDER, chapter.order)
+        put(KEY_REVISION, chapter.revision)
+        put(KEY_UPDATED_AT, chapter.updatedAt)
+        put(KEY_CONTENT_FILE, contentFile)
+        put(KEY_CONTENT_HASH, contentHash)
+    }
 
 /** 编码卷到 [JSONObject]（含 chapters 数组）。 */
 private fun encodeVolumeJson(
     volume: FrozenManifestVolume,
     chaptersJson: JSONArray,
-): JSONObject = JSONObject().apply {
-    put(KEY_ID, volume.id)
-    put(KEY_TITLE, volume.title)
-    put(KEY_ORDER, volume.order)
-    put(KEY_REVISION, volume.revision)
-    put(KEY_UPDATED_AT, volume.updatedAt)
-    put(KEY_CHAPTERS, chaptersJson)
-}
+): JSONObject =
+    JSONObject().apply {
+        put(KEY_ID, volume.id)
+        put(KEY_TITLE, volume.title)
+        put(KEY_ORDER, volume.order)
+        put(KEY_REVISION, volume.revision)
+        put(KEY_UPDATED_AT, volume.updatedAt)
+        put(KEY_CHAPTERS, chaptersJson)
+    }
 
 /** 编码项目到 [JSONObject]（含 volumes 数组）。 */
 private fun encodeProjectJson(
     project: FrozenManifestProject,
     volumesJson: JSONArray,
-): JSONObject = JSONObject().apply {
-    put(KEY_ID, project.id)
-    put(KEY_TITLE, project.title)
-    put(KEY_ORDER, project.order)
-    put(KEY_REVISION, project.revision)
-    put(KEY_UPDATED_AT, project.updatedAt)
-    put(KEY_VOLUMES, volumesJson)
-}
+): JSONObject =
+    JSONObject().apply {
+        put(KEY_ID, project.id)
+        put(KEY_TITLE, project.title)
+        put(KEY_ORDER, project.order)
+        put(KEY_REVISION, project.revision)
+        put(KEY_UPDATED_AT, project.updatedAt)
+        put(KEY_VOLUMES, volumesJson)
+    }
 
 /** 编码 manifest 根到 [JSONObject]。 */
 private fun encodeManifestRoot(
@@ -183,12 +186,13 @@ private fun encodeManifestRoot(
     revision: Long,
     updatedAt: String,
     projectsJson: JSONArray,
-): JSONObject = JSONObject().apply {
-    put(KEY_SCHEMA_VERSION, schemaVersion)
-    put(KEY_REVISION, revision)
-    put(KEY_UPDATED_AT, updatedAt)
-    put(KEY_PROJECTS, projectsJson)
-}
+): JSONObject =
+    JSONObject().apply {
+        put(KEY_SCHEMA_VERSION, schemaVersion)
+        put(KEY_REVISION, revision)
+        put(KEY_UPDATED_AT, updatedAt)
+        put(KEY_PROJECTS, projectsJson)
+    }
 
 // ── JSON 解码 helper（单实体）──
 
@@ -207,9 +211,10 @@ private fun decodeChapterFromJson(obj: JSONObject): FrozenManifestChapter =
 /** 从 [JSONObject] 解码卷。 */
 private fun decodeVolumeFromJson(obj: JSONObject): FrozenManifestVolume {
     val chaptersArray = obj.getJSONArray(KEY_CHAPTERS)
-    val chapters = (0 until chaptersArray.length()).map { i ->
-        decodeChapterFromJson(chaptersArray.getJSONObject(i))
-    }
+    val chapters =
+        (0 until chaptersArray.length()).map { i ->
+            decodeChapterFromJson(chaptersArray.getJSONObject(i))
+        }
     return FrozenManifestVolume(
         id = obj.getString(KEY_ID),
         title = obj.getString(KEY_TITLE),
@@ -223,9 +228,10 @@ private fun decodeVolumeFromJson(obj: JSONObject): FrozenManifestVolume {
 /** 从 [JSONObject] 解码项目。 */
 private fun decodeProjectFromJson(obj: JSONObject): FrozenManifestProject {
     val volumesArray = obj.getJSONArray(KEY_VOLUMES)
-    val volumes = (0 until volumesArray.length()).map { j ->
-        decodeVolumeFromJson(volumesArray.getJSONObject(j))
-    }
+    val volumes =
+        (0 until volumesArray.length()).map { j ->
+            decodeVolumeFromJson(volumesArray.getJSONObject(j))
+        }
     return FrozenManifestProject(
         id = obj.getString(KEY_ID),
         title = obj.getString(KEY_TITLE),
@@ -291,30 +297,32 @@ private fun buildTargetFrozenProject(
     targetSnapshot: ProjectWorkspaceSnapshot,
     targetDesiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
 ): FrozenManifestProject {
-    val targetVolumes = targetSnapshot.volumes.map { vol ->
-        FrozenManifestVolume(
-            id = vol.volume.id,
-            title = vol.volume.title,
-            order = vol.volume.order,
-            revision = vol.volume.updatedAt.toEpochMillis(),
-            updatedAt = vol.volume.updatedAt,
-            chapters = vol.chapters.map { ch ->
-                val key = ChapterKey(targetProjectId, vol.volume.id, ch.id)
-                val entry = targetDesiredEntries[key]
-                FrozenManifestChapter(
-                    id = ch.id,
-                    title = ch.title,
-                    order = ch.order,
-                    revision = ch.updatedAt.toEpochMillis(),
-                    updatedAt = ch.updatedAt,
-                    // 目标项目：用 targetDesiredEntries 的真实 URI/hash（promote 后填）；
-                    // 若 desiredEntries 缺失则用空占位，恢复时由 promotedEntries 替换。
-                    contentFile = entry?.relativePath ?: "",
-                    contentHash = entry?.contentHash ?: "",
-                )
-            },
-        )
-    }
+    val targetVolumes =
+        targetSnapshot.volumes.map { vol ->
+            FrozenManifestVolume(
+                id = vol.volume.id,
+                title = vol.volume.title,
+                order = vol.volume.order,
+                revision = vol.volume.updatedAt.toEpochMillis(),
+                updatedAt = vol.volume.updatedAt,
+                chapters =
+                    vol.chapters.map { ch ->
+                        val key = ChapterKey(targetProjectId, vol.volume.id, ch.id)
+                        val entry = targetDesiredEntries[key]
+                        FrozenManifestChapter(
+                            id = ch.id,
+                            title = ch.title,
+                            order = ch.order,
+                            revision = ch.updatedAt.toEpochMillis(),
+                            updatedAt = ch.updatedAt,
+                            // 目标项目：用 targetDesiredEntries 的真实 URI/hash（promote 后填）；
+                            // 若 desiredEntries 缺失则用空占位，恢复时由 promotedEntries 替换。
+                            contentFile = entry?.relativePath ?: "",
+                            contentHash = entry?.contentHash ?: "",
+                        )
+                    },
+            )
+        }
     return FrozenManifestProject(
         id = targetProjectId,
         title = targetSnapshot.project.title,
@@ -343,8 +351,9 @@ fun frozenPlanToManifestJson(
 ): String? {
     val projectsJson = JSONArray()
     for (frozenProject in plan.projects) {
-        val volumesJson = encodeProjectVolumesForManifest(plan, frozenProject, promotedEntries)
-            ?: return null
+        val volumesJson =
+            encodeProjectVolumesForManifest(plan, frozenProject, promotedEntries)
+                ?: return null
         projectsJson.put(encodeProjectJson(frozenProject, volumesJson))
     }
     return encodeManifestRoot(plan.schemaVersion, plan.revision, plan.updatedAt, projectsJson).toString()
@@ -358,8 +367,9 @@ private fun encodeProjectVolumesForManifest(
 ): JSONArray? {
     val volumesJson = JSONArray()
     for (frozenVolume in frozenProject.volumes) {
-        val chaptersJson = encodeVolumeChaptersForManifest(plan, frozenProject, frozenVolume, promotedEntries)
-            ?: return null
+        val chaptersJson =
+            encodeVolumeChaptersForManifest(plan, frozenProject, frozenVolume, promotedEntries)
+                ?: return null
         volumesJson.put(encodeVolumeJson(frozenVolume, chaptersJson))
     }
     return volumesJson
@@ -375,8 +385,9 @@ private fun encodeVolumeChaptersForManifest(
     val chaptersJson = JSONArray()
     for (frozenChapter in frozenVolume.chapters) {
         val chapterKey = ChapterKey(frozenProject.id, frozenVolume.id, frozenChapter.id)
-        val chapterJson = encodeChapterForManifest(plan, frozenProject, frozenChapter, chapterKey, promotedEntries)
-            ?: return null
+        val chapterJson =
+            encodeChapterForManifest(plan, frozenProject, frozenChapter, chapterKey, promotedEntries)
+                ?: return null
         chaptersJson.put(chapterJson)
     }
     return chaptersJson
@@ -432,9 +443,10 @@ fun frozenManifestPlanFromJson(json: String): FrozenManifestPlan? =
     try {
         val root = JSONObject(json)
         val projectsArray = root.getJSONArray(KEY_PROJECTS)
-        val projects = (0 until projectsArray.length()).map { i ->
-            decodeProjectFromJson(projectsArray.getJSONObject(i))
-        }
+        val projects =
+            (0 until projectsArray.length()).map { i ->
+                decodeProjectFromJson(projectsArray.getJSONObject(i))
+            }
         FrozenManifestPlan(
             schemaVersion = root.getInt(KEY_SCHEMA_VERSION),
             revision = root.getLong(KEY_REVISION),

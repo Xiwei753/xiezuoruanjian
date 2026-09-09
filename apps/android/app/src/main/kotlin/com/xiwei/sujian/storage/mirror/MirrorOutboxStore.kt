@@ -110,12 +110,13 @@ class MirrorOutboxStore(
             val intent = OutboxProjectIntent(projectId, generation, OutboxIntentKind.UPSERT)
             val projects = snapshot.projects.toMutableMap()
             projects[projectId] = intent
-            val newSnapshot = OutboxSnapshot(
-                nextGeneration = generation + 1,
-                projects = projects,
-                fullDirtyGeneration = snapshot.fullDirtyGeneration,
-                lastSignalTime = snapshot.lastSignalTime,
-            )
+            val newSnapshot =
+                OutboxSnapshot(
+                    nextGeneration = generation + 1,
+                    projects = projects,
+                    fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                    lastSignalTime = snapshot.lastSignalTime,
+                )
             return if (writeSnapshot(newSnapshot)) intent else null
         }
     }
@@ -129,12 +130,13 @@ class MirrorOutboxStore(
         synchronized(lock) {
             val snapshot = readSnapshotForUpdate() ?: return null
             val generation = snapshot.nextGeneration
-            val newSnapshot = OutboxSnapshot(
-                nextGeneration = generation + 1,
-                projects = snapshot.projects,
-                fullDirtyGeneration = generation,
-                lastSignalTime = snapshot.lastSignalTime,
-            )
+            val newSnapshot =
+                OutboxSnapshot(
+                    nextGeneration = generation + 1,
+                    projects = snapshot.projects,
+                    fullDirtyGeneration = generation,
+                    lastSignalTime = snapshot.lastSignalTime,
+                )
             return if (writeSnapshot(newSnapshot)) generation else null
         }
     }
@@ -151,12 +153,13 @@ class MirrorOutboxStore(
             val intent = OutboxProjectIntent(projectId, generation, OutboxIntentKind.DELETE)
             val projects = snapshot.projects.toMutableMap()
             projects[projectId] = intent
-            val newSnapshot = OutboxSnapshot(
-                nextGeneration = generation + 1,
-                projects = projects,
-                fullDirtyGeneration = snapshot.fullDirtyGeneration,
-                lastSignalTime = snapshot.lastSignalTime,
-            )
+            val newSnapshot =
+                OutboxSnapshot(
+                    nextGeneration = generation + 1,
+                    projects = projects,
+                    fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                    lastSignalTime = snapshot.lastSignalTime,
+                )
             return if (writeSnapshot(newSnapshot)) intent else null
         }
     }
@@ -167,7 +170,11 @@ class MirrorOutboxStore(
      *
      * @return true 表示 ACK 成功（条目已清除）；false 表示 generation 不匹配或持久化失败。
      */
-    fun ackProject(projectId: String, generation: Long, kind: OutboxIntentKind): Boolean {
+    fun ackProject(
+        projectId: String,
+        generation: Long,
+        kind: OutboxIntentKind,
+    ): Boolean {
         synchronized(lock) {
             val snapshot = readSnapshotForUpdate() ?: return false
             val current = snapshot.projects[projectId]
@@ -176,12 +183,13 @@ class MirrorOutboxStore(
             }
             val projects = snapshot.projects.toMutableMap()
             projects.remove(projectId)
-            val newSnapshot = OutboxSnapshot(
-                nextGeneration = snapshot.nextGeneration,
-                projects = projects,
-                fullDirtyGeneration = snapshot.fullDirtyGeneration,
-                lastSignalTime = snapshot.lastSignalTime,
-            )
+            val newSnapshot =
+                OutboxSnapshot(
+                    nextGeneration = snapshot.nextGeneration,
+                    projects = projects,
+                    fullDirtyGeneration = snapshot.fullDirtyGeneration,
+                    lastSignalTime = snapshot.lastSignalTime,
+                )
             return writeSnapshot(newSnapshot)
         }
     }
@@ -210,12 +218,13 @@ class MirrorOutboxStore(
             // #649 评论 5575950895 问题 1：保留 generation > 本轮 generation 的更晚新事件，
             // 不再无条件清空 projects。
             val remainingProjects = snapshot.projects.filterValues { it.generation > generation }
-            val newSnapshot = OutboxSnapshot(
-                nextGeneration = snapshot.nextGeneration,
-                projects = remainingProjects,
-                fullDirtyGeneration = null,
-                lastSignalTime = snapshot.lastSignalTime,
-            )
+            val newSnapshot =
+                OutboxSnapshot(
+                    nextGeneration = snapshot.nextGeneration,
+                    projects = remainingProjects,
+                    fullDirtyGeneration = null,
+                    lastSignalTime = snapshot.lastSignalTime,
+                )
             return writeSnapshot(newSnapshot)
         }
     }
@@ -302,11 +311,12 @@ class MirrorOutboxStore(
 
     private fun parseNewFormat(root: JSONObject): OutboxSnapshot {
         val nextGeneration = root.optLong(NEXT_GENERATION_KEY, 1L)
-        val fullDirtyGeneration = if (root.has(FULL_DIRTY_GENERATION_KEY)) {
-            root.optLong(FULL_DIRTY_GENERATION_KEY, 0L).takeIf { it > 0 }
-        } else {
-            null
-        }
+        val fullDirtyGeneration =
+            if (root.has(FULL_DIRTY_GENERATION_KEY)) {
+                root.optLong(FULL_DIRTY_GENERATION_KEY, 0L).takeIf { it > 0 }
+            } else {
+                null
+            }
         val projectsObj = root.optJSONObject(PROJECTS_KEY)
         val projects = mutableMapOf<String, OutboxProjectIntent>()
         if (projectsObj != null) {
@@ -316,10 +326,11 @@ class MirrorOutboxStore(
                 val intentObj = projectsObj.optJSONObject(pid) ?: continue
                 val gen = intentObj.optLong("generation", 1L)
                 val kindStr = intentObj.optString("kind", "upsert")
-                val kind = when (kindStr) {
-                    "delete" -> OutboxIntentKind.DELETE
-                    else -> OutboxIntentKind.UPSERT
-                }
+                val kind =
+                    when (kindStr) {
+                        "delete" -> OutboxIntentKind.DELETE
+                        else -> OutboxIntentKind.UPSERT
+                    }
                 projects[pid] = OutboxProjectIntent(pid, gen, kind)
             }
         }
@@ -376,10 +387,13 @@ class MirrorOutboxStore(
         for ((pid, intent) in snapshot.projects) {
             val intentObj = JSONObject()
             intentObj.put("generation", intent.generation)
-            intentObj.put("kind", when (intent.kind) {
-                OutboxIntentKind.UPSERT -> "upsert"
-                OutboxIntentKind.DELETE -> "delete"
-            })
+            intentObj.put(
+                "kind",
+                when (intent.kind) {
+                    OutboxIntentKind.UPSERT -> "upsert"
+                    OutboxIntentKind.DELETE -> "delete"
+                },
+            )
             projectsObj.put(pid, intentObj)
         }
         root.put(PROJECTS_KEY, projectsObj)
@@ -428,7 +442,9 @@ class MirrorOutboxStore(
 
     private sealed class ReadResult {
         object NotExists : ReadResult()
+
         data class Parsed(val root: JSONObject) : ReadResult()
+
         data class Corrupted(val error: Exception) : ReadResult()
     }
 

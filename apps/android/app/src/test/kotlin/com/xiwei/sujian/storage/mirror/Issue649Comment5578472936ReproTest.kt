@@ -5,7 +5,6 @@ import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -30,7 +29,6 @@ import java.io.FileOutputStream
 @Config(sdk = [34])
 @Suppress("TooManyFunctions", "StringLiteralDuplication")
 class Issue649Comment5578472936ReproTest {
-
     private lateinit var store: ReadableMirrorStateStore
 
     @Before
@@ -42,7 +40,8 @@ class Issue649Comment5578472936ReproTest {
     // ── helper ──
 
     private fun writeStateJson(json: String) {
-        val dir = File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
+        val dir =
+            File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
         dir.mkdirs()
         val file = File(dir, "state.json")
         val atomicFile = AtomicFile(file)
@@ -57,11 +56,12 @@ class Issue649Comment5578472936ReproTest {
     }
 
     private fun buildValidStateJson(): String {
-        val obj = JSONObject().apply {
-            put("backend", "media_store")
-            put("committedManifestJson", "{}")
-            put("committedManifestHash", computeContentHash("{}"))
-        }
+        val obj =
+            JSONObject().apply {
+                put("backend", "media_store")
+                put("committedManifestJson", "{}")
+                put("committedManifestHash", computeContentHash("{}"))
+            }
         return obj.toString()
     }
 
@@ -117,7 +117,9 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun readSnapshotStrict_rejectsMalformedChapterKey() {
-        writeStateJson("""{"backend": "media_store", "projects": {"p1": {"badkey": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""")
+        writeStateJson(
+            """{"backend": "media_store", "projects": {"p1": {"badkey": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""",
+        )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应返回 failure", result.isFailure)
     }
@@ -130,7 +132,9 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun readSnapshotStrict_rejectsNumericUri() {
-        writeStateJson("""{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": 42, "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""")
+        writeStateJson(
+            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": 42, "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""",
+        )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝数字 uri", result.isFailure)
     }
@@ -140,7 +144,9 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun readSnapshotStrict_rejectsStringRevision() {
-        writeStateJson("""{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": "abc", "contentHash": "h"}}}}""")
+        writeStateJson(
+            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": "abc", "contentHash": "h"}}}}""",
+        )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝字符串 revision", result.isFailure)
     }
@@ -150,7 +156,9 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun readSnapshotStrict_rejectsNumericContentHash() {
-        writeStateJson("""{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": 42}}}}""")
+        writeStateJson(
+            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": 42}}}}""",
+        )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝数字 contentHash", result.isFailure)
     }
@@ -199,7 +207,8 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun readSnapshotStrict_validWithChapters_returnsChapters() {
-        val json = """
+        val json =
+            """
             {
                 "backend": "document_tree",
                 "treeUri": "content://tree/doc",
@@ -218,7 +227,7 @@ class Issue649Comment5578472936ReproTest {
                 "committedManifestJson": "{}",
                 "committedManifestHash": "${computeContentHash("{}")}"
             }
-        """.trimIndent()
+            """.trimIndent()
         writeStateJson(json)
         val result = store.readSnapshotStrict()
         assertTrue(result.isSuccess)
@@ -240,7 +249,8 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun readSnapshotStrict_notExists_returnsDefaultSnapshot() {
         // 删除 state.json（如果存在）
-        val dir = File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
+        val dir =
+            File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
         File(dir, "state.json").delete()
         val result = store.readSnapshotStrict()
         assertTrue(result.isSuccess)
@@ -272,7 +282,8 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun getAllChapterEntriesStrict_validState_returnsCorrectData() {
-        val json = """
+        val json =
+            """
             {
                 "backend": "media_store",
                 "projects": {
@@ -284,7 +295,7 @@ class Issue649Comment5578472936ReproTest {
                 "committedManifestJson": "{}",
                 "committedManifestHash": "${computeContentHash("{}")}"
             }
-        """.trimIndent()
+            """.trimIndent()
         writeStateJson(json)
         val result = store.getAllChapterEntriesStrict()
         assertTrue(result.isSuccess)
@@ -304,14 +315,15 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun getCommittedManifestStrict_hashMismatch_returnsCorrupted() {
-        val json = """
+        val json =
+            """
             {
                 "backend": "media_store",
                 "committedManifestJson": "{}",
                 "committedManifestHash": "wrong-hash",
                 "projects": {"proj1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}
             }
-        """.trimIndent()
+            """.trimIndent()
         writeStateJson(json)
         val result = store.getCommittedManifestStrict()
         assertTrue("hash 不匹配 → Corrupted", result is CommittedManifestReadResult.Corrupted)
@@ -322,14 +334,17 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun getCommittedManifestStrict_validHash_returnsFound() {
-        val json = """
+        val json =
+            """
             {
                 "backend": "media_store",
                 "committedManifestJson": "{\"schemaVersion\":1,\"revision\":1,\"updatedAt\":\"2024-01-01T00:00:00Z\",\"projects\":[]}",
-                "committedManifestHash": "${computeContentHash("""{"schemaVersion":1,"revision":1,"updatedAt":"2024-01-01T00:00:00Z","projects":[]}""")}",
+                "committedManifestHash": "${computeContentHash(
+                """{"schemaVersion":1,"revision":1,"updatedAt":"2024-01-01T00:00:00Z","projects":[]}""",
+            )}",
                 "projects": {"proj1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}
             }
-        """.trimIndent()
+            """.trimIndent()
         writeStateJson(json)
         val result = store.getCommittedManifestStrict()
         assertTrue("valid hash → Found", result is CommittedManifestReadResult.Found)
@@ -345,14 +360,15 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun getCommittedManifestStrict_validManifestButCorruptedProjects_returnsCorrupted() {
         val validManifest = """{"schemaVersion":1,"revision":1,"updatedAt":"2024-01-01T00:00:00Z","projects":[]}"""
-        val json = """
+        val json =
+            """
             {
                 "backend": "media_store",
                 "committedManifestJson": "$validManifest",
                 "committedManifestHash": "${computeContentHash(validManifest)}",
                 "projects": {"p1": "bad-value"}
             }
-        """.trimIndent()
+            """.trimIndent()
         writeStateJson(json)
         val result = store.getCommittedManifestStrict()
         assertTrue(
@@ -401,10 +417,11 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun saveRestoredState_corruptedExistingState_returnsFalse() {
         writeStateJson("""{"backend": "media_store", "projects": {"p1": 42}}""")
-        val result = store.saveRestoredState(
-            manifestUri = "content://m",
-            chapterEntries = emptyMap(),
-        )
+        val result =
+            store.saveRestoredState(
+                manifestUri = "content://m",
+                chapterEntries = emptyMap(),
+            )
         assertFalse("旧 state 损坏 → false（不覆盖）", result)
     }
 
@@ -414,10 +431,11 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun saveRestoredState_corruptedTreeUri_returnsFalse() {
         writeStateJson("""{"backend": "media_store", "treeUri": 123}""")
-        val result = store.saveRestoredState(
-            manifestUri = "content://m",
-            chapterEntries = emptyMap(),
-        )
+        val result =
+            store.saveRestoredState(
+                manifestUri = "content://m",
+                chapterEntries = emptyMap(),
+            )
         assertFalse("旧 treeUri 损坏 → false", result)
     }
 
@@ -426,12 +444,14 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun saveRestoredState_notExists_writesNewState() {
-        val dir = File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
+        val dir =
+            File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
         File(dir, "state.json").delete()
-        val result = store.saveRestoredState(
-            manifestUri = "content://m",
-            chapterEntries = emptyMap(),
-        )
+        val result =
+            store.saveRestoredState(
+                manifestUri = "content://m",
+                chapterEntries = emptyMap(),
+            )
         assertTrue("不存在 → true（新写入）", result)
         // 验证写入后的 backend
         assertEquals(MirrorBackend.DOCUMENT_TREE, store.getBackend())
@@ -442,14 +462,16 @@ class Issue649Comment5578472936ReproTest {
      */
     @Test
     fun saveRestoredState_corruptedJson_returnsFalse() {
-        val dir = File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
+        val dir =
+            File(ApplicationProvider.getApplicationContext<android.app.Application>().noBackupFilesDir, "sujian-mirror")
         dir.mkdirs()
         val file = File(dir, "state.json")
         file.writeText("not valid json {{{", Charsets.UTF_8)
-        val result = store.saveRestoredState(
-            manifestUri = "content://m",
-            chapterEntries = emptyMap(),
-        )
+        val result =
+            store.saveRestoredState(
+                manifestUri = "content://m",
+                chapterEntries = emptyMap(),
+            )
         assertFalse("JSON 损坏 → false", result)
     }
 }

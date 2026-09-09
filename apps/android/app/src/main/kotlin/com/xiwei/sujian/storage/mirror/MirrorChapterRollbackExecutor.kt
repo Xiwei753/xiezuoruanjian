@@ -9,7 +9,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
  * [MirrorRollbackExecutor] 和 [MirrorRecoveryExecutor.recoverRollbackPhase] 共用此类。
  */
 internal class MirrorChapterRollbackExecutor {
-
     /**
      * 回滚单个章节到旧状态。
      *
@@ -36,8 +35,9 @@ internal class MirrorChapterRollbackExecutor {
         item: PendingItem,
         storage: ReadableMirrorStorage,
     ): RollbackItemResult {
-        val ctx = prepareRollbackChapterContext(journal, key, item)
-            ?: return RollbackItemResult.StateUnknown
+        val ctx =
+            prepareRollbackChapterContext(journal, key, item)
+                ?: return RollbackItemResult.StateUnknown
         val finalLookup = storage.lookup(ctx.newFinalPath)
         return when (finalLookup) {
             is MirrorLookupResult.Found -> handleRollbackFinalFound(ctx, storage, finalLookup)
@@ -201,14 +201,15 @@ internal class MirrorChapterRollbackExecutor {
     private fun restoreBackupToFinal(
         ctx: RollbackChapterContext,
         storage: ReadableMirrorStorage,
-    ): RestoreBackupResult = restoreBackupToFinal(
-        journal = ctx.journal,
-        key = ctx.key,
-        newFinalPath = ctx.newFinalPath,
-        oldFinalPath = ctx.oldFinalPath,
-        expectedOldHash = ctx.expectedOldHash,
-        storage = storage,
-    )
+    ): RestoreBackupResult =
+        restoreBackupToFinal(
+            journal = ctx.journal,
+            key = ctx.key,
+            newFinalPath = ctx.newFinalPath,
+            oldFinalPath = ctx.oldFinalPath,
+            expectedOldHash = ctx.expectedOldHash,
+            storage = storage,
+        )
 
     /**
      * 从 backup 恢复旧正文到 final 位置。
@@ -250,24 +251,25 @@ internal class MirrorChapterRollbackExecutor {
     private fun mapRestoreResultToRollbackItem(
         restoreResult: RestoreBackupResult,
         key: ChapterKey,
-    ): RollbackItemResult = when (restoreResult) {
-        is RestoreBackupResult.Restored -> RollbackItemResult.Restored(restoreResult.ref)
-        is RestoreBackupResult.AlreadyRestored -> RollbackItemResult.Restored(restoreResult.ref)
-        is RestoreBackupResult.Conflict -> {
-            DiagnosticsLogger.w(
-                TAG,
-                "rollback: conflict restoring backup for ${key.chapterId} - final has wrong content",
-            )
-            RollbackItemResult.Failed
+    ): RollbackItemResult =
+        when (restoreResult) {
+            is RestoreBackupResult.Restored -> RollbackItemResult.Restored(restoreResult.ref)
+            is RestoreBackupResult.AlreadyRestored -> RollbackItemResult.Restored(restoreResult.ref)
+            is RestoreBackupResult.Conflict -> {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "rollback: conflict restoring backup for ${key.chapterId} - final has wrong content",
+                )
+                RollbackItemResult.Failed
+            }
+            is RestoreBackupResult.Failed -> {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "rollback: failed to restore backup for ${key.chapterId}: ${restoreResult.cause?.message}",
+                )
+                RollbackItemResult.Failed
+            }
         }
-        is RestoreBackupResult.Failed -> {
-            DiagnosticsLogger.w(
-                TAG,
-                "rollback: failed to restore backup for ${key.chapterId}: ${restoreResult.cause?.message}",
-            )
-            RollbackItemResult.Failed
-        }
-    }
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"

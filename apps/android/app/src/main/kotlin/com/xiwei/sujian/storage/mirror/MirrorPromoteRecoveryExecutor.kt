@@ -11,10 +11,11 @@ internal class MirrorPromoteRecoveryExecutor(
     private val rollbackExecutor: MirrorRollbackExecutor,
     private val publishExecutor: MirrorPublishExecutor,
 ) {
-
     internal sealed interface PromoteItemResult {
         data class Promoted(val entry: ChapterMirrorEntry) : PromoteItemResult
+
         data object Reused : PromoteItemResult
+
         data object RollbackDone : PromoteItemResult
     }
 
@@ -79,9 +80,7 @@ internal class MirrorPromoteRecoveryExecutor(
         return promoteStagedForRecoverItem(ctx, staged)
     }
 
-    private suspend fun reusePromotedItemForRecover(
-        ctx: RecoverPromoteItemContext,
-    ): PromoteItemResult? {
+    private suspend fun reusePromotedItemForRecover(ctx: RecoverPromoteItemContext): PromoteItemResult? {
         val journal = ctx.journal
         val key = ctx.key
         val promotedLookup = ctx.storage.lookup(ctx.item.promotedRef!!.relativePath)
@@ -159,10 +158,11 @@ internal class MirrorPromoteRecoveryExecutor(
                     return false
                 }
             }
-        ctx.currentItems[key] = ctx.item.copy(
-            backupOldRef = backupReady.backupRef,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
+        ctx.currentItems[key] =
+            ctx.item.copy(
+                backupOldRef = backupReady.backupRef,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
             DiagnosticsLogger.w(
                 TAG,
@@ -230,12 +230,13 @@ internal class MirrorPromoteRecoveryExecutor(
             rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
             return PromoteItemResult.RollbackDone
         }
-        val entry = ChapterMirrorEntry(
-            uri = newRef.uri,
-            relativePath = newRef.relativePath,
-            revision = journal.newEntries[key]?.revision ?: 0L,
-            contentHash = journal.newEntries[key]?.contentHash ?: "",
-        )
+        val entry =
+            ChapterMirrorEntry(
+                uri = newRef.uri,
+                relativePath = newRef.relativePath,
+                revision = journal.newEntries[key]?.revision ?: 0L,
+                contentHash = journal.newEntries[key]?.contentHash ?: "",
+            )
         ctx.currentItems[key] = ctx.currentItems[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
             DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
@@ -247,7 +248,9 @@ internal class MirrorPromoteRecoveryExecutor(
 
     private sealed interface FinalCheckOutcome {
         data class Reuse(val ref: MirrorFileRef) : FinalCheckOutcome
+
         data object Proceed : FinalCheckOutcome
+
         data object RollbackDone : FinalCheckOutcome
     }
 
@@ -317,25 +320,34 @@ internal class MirrorPromoteRecoveryExecutor(
         promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
         onCleanupReady: suspend (PendingMirrorPublish, ReadableMirrorStorage) -> Unit,
     ) {
-        val manifestJson = resolveRecoveryManifestJson(journal, storage, currentItems, promotedEntries)
-            ?: return
-        val manifestParams = MirrorPublishExecutor.ManifestTransactionParams(
-            projectId = journal.projectId,
-            snapshot = null,
-            desiredEntries = promotedEntries,
-            txId = journal.txId,
-            journalContext = journal,
-            items = currentItems,
-            storage = storage,
-            prebuiltTargetJson = manifestJson,
-        )
+        val manifestJson =
+            resolveRecoveryManifestJson(journal, storage, currentItems, promotedEntries)
+                ?: return
+        val manifestParams =
+            MirrorPublishExecutor.ManifestTransactionParams(
+                projectId = journal.projectId,
+                snapshot = null,
+                desiredEntries = promotedEntries,
+                txId = journal.txId,
+                journalContext = journal,
+                items = currentItems,
+                storage = storage,
+                prebuiltTargetJson = manifestJson,
+            )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {
             DiagnosticsLogger.w(TAG, "Failed to write manifest during recovery")
             rollbackRecoveryOnly(journal, currentItems, storage)
             return
         }
-        writeCleanupJournalAndRecover(journal, storage, currentItems, promotedEntries, manifestResult.committedJournal, onCleanupReady)
+        writeCleanupJournalAndRecover(
+            journal,
+            storage,
+            currentItems,
+            promotedEntries,
+            manifestResult.committedJournal,
+            onCleanupReady,
+        )
     }
 
     private suspend fun resolveRecoveryManifestJson(
@@ -368,11 +380,12 @@ internal class MirrorPromoteRecoveryExecutor(
             rollbackRecoveryOnly(journal, currentItems, storage)
             return null
         }
-        val plan = frozenManifestPlanFromJson(frozenPlanJson) ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
-            rollbackRecoveryOnly(journal, currentItems, storage)
-            return null
-        }
+        val plan =
+            frozenManifestPlanFromJson(frozenPlanJson) ?: run {
+                DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
+                rollbackRecoveryOnly(journal, currentItems, storage)
+                return null
+            }
         return frozenPlanToManifestJson(plan, promotedEntries) ?: run {
             DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
             rollbackRecoveryOnly(journal, currentItems, storage)
@@ -392,12 +405,13 @@ internal class MirrorPromoteRecoveryExecutor(
         onCleanupReady: suspend (PendingMirrorPublish, ReadableMirrorStorage) -> Unit = { _, _ -> },
     ) {
         val committedItems = currentItems.mapValues { it.value.copy(state = PendingItem.STATE_COMMITTED) }
-        val cleanupJournal = committedJournal.copy(
-            phase = PendingMirrorPublish.PHASE_CLEANUP,
-            newEntries = promotedEntries,
-            stagedRefs = emptyMap(),
-            items = committedItems,
-        )
+        val cleanupJournal =
+            committedJournal.copy(
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
+                newEntries = promotedEntries,
+                stagedRefs = emptyMap(),
+                items = committedItems,
+            )
         if (!journalWriter.persistPendingJournal(cleanupJournal)) {
             DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
             return
@@ -410,7 +424,13 @@ internal class MirrorPromoteRecoveryExecutor(
         currentItems: Map<ChapterKey, PendingItem>,
         storage: ReadableMirrorStorage,
     ) {
-        rollbackExecutor.rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+        rollbackExecutor.rollbackWholePublishTransaction(
+            journal.txId,
+            currentItems,
+            journal.stagedRefs,
+            storage,
+            journal,
+        )
     }
 
     private suspend fun rollbackRecoveryWithCleanup(
@@ -422,33 +442,40 @@ internal class MirrorPromoteRecoveryExecutor(
         for ((_, entry) in promotedEntries) {
             storage.delete(MirrorFileRef(uri = entry.uri, relativePath = entry.relativePath))
         }
-        rollbackExecutor.rollbackWholePublishTransaction(journal.txId, currentItems, journal.stagedRefs, storage, journal)
+        rollbackExecutor.rollbackWholePublishTransaction(
+            journal.txId,
+            currentItems,
+            journal.stagedRefs,
+            storage,
+            journal,
+        )
     }
 
     private fun writeRecoveryPromoteJournal(
         journal: PendingMirrorPublish,
         currentItems: Map<ChapterKey, PendingItem>,
-    ): Boolean = journalWriter.writePendingPublishJournal(
-        PendingJournalParams(
-            projectId = journal.projectId,
-            transactionType = journal.transactionType,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            txId = journal.txId,
-            backend = journal.backend,
-            treeUri = journal.treeUri,
-            oldEntries = journal.oldEntries,
-            newEntries = journal.newEntries,
-            stagedRefs = journal.stagedRefs,
-            items = currentItems,
-            removedProjectIds = journal.removedProjectIds,
-            manifestOldRef = journal.manifestOldRef,
-            manifestStagedRef = journal.manifestStagedRef,
-            manifestNewRef = journal.manifestNewRef,
-            manifestBackupRef = journal.manifestBackupRef,
-            manifestSwapState = journal.manifestSwapState,
-            journalContext = journal,
-        ),
-    )
+    ): Boolean =
+        journalWriter.writePendingPublishJournal(
+            PendingJournalParams(
+                projectId = journal.projectId,
+                transactionType = journal.transactionType,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                txId = journal.txId,
+                backend = journal.backend,
+                treeUri = journal.treeUri,
+                oldEntries = journal.oldEntries,
+                newEntries = journal.newEntries,
+                stagedRefs = journal.stagedRefs,
+                items = currentItems,
+                removedProjectIds = journal.removedProjectIds,
+                manifestOldRef = journal.manifestOldRef,
+                manifestStagedRef = journal.manifestStagedRef,
+                manifestNewRef = journal.manifestNewRef,
+                manifestBackupRef = journal.manifestBackupRef,
+                manifestSwapState = journal.manifestSwapState,
+                journalContext = journal,
+            ),
+        )
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"

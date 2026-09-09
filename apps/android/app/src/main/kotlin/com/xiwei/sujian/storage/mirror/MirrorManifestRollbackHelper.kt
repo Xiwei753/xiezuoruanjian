@@ -60,12 +60,13 @@ internal class MirrorManifestRollbackHelper(
                     return false
                 }
             }
-        val ctx = ManifestRollbackContext(
-            journalContext = journalContext,
-            storage = storage,
-            items = items,
-            manifestRelativePath = manifestRelativePath,
-        )
+        val ctx =
+            ManifestRollbackContext(
+                journalContext = journalContext,
+                storage = storage,
+                items = items,
+                manifestRelativePath = manifestRelativePath,
+            )
 
         // 步骤 1：处理 final 上的 manifest
         var currentJournal: PendingMirrorPublish = journalContext
@@ -145,11 +146,18 @@ internal class MirrorManifestRollbackHelper(
             return RollbackManifestStep.Failed
         }
         // 写 MANIFEST_ROLLBACK_NEW_REMOVED
-        val nextJournal = currentJournal.copy(
-            manifestNewRef = null,
-            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
-        )
-        if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED, manifestNewRef = null)) {
+        val nextJournal =
+            currentJournal.copy(
+                manifestNewRef = null,
+                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+            )
+        if (!writeRollbackJournal(
+                nextJournal,
+                ctx.items,
+                ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+                manifestNewRef = null,
+            )
+        ) {
             DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "NEW_REMOVED")
             return RollbackManifestStep.Failed
         }
@@ -166,9 +174,10 @@ internal class MirrorManifestRollbackHelper(
             DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed (final already old)")
             return RollbackManifestStep.Failed
         }
-        val nextJournal = currentJournal.copy(
-            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-        )
+        val nextJournal =
+            currentJournal.copy(
+                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+            )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
             DiagnosticsLogger.w(
                 TAG,
@@ -186,11 +195,18 @@ internal class MirrorManifestRollbackHelper(
         // final 已空，无需删除新 manifest
         // 如果 manifestNewRef 不为 null（journal 记录过），仍写一次 NEW_REMOVED 推进状态
         if (ctx.journalContext.manifestNewRef != null) {
-            val nextJournal = currentJournal.copy(
-                manifestNewRef = null,
-                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
-            )
-            if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED, manifestNewRef = null)) {
+            val nextJournal =
+                currentJournal.copy(
+                    manifestNewRef = null,
+                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+                )
+            if (!writeRollbackJournal(
+                    nextJournal,
+                    ctx.items,
+                    ManifestTransactionState.MANIFEST_ROLLBACK_NEW_REMOVED,
+                    manifestNewRef = null,
+                )
+            ) {
                 DiagnosticsLogger.w(
                     TAG,
                     ROLLBACK_MANIFEST_JOURNAL_FAILED + "NEW_REMOVED (final missing)",
@@ -229,9 +245,10 @@ internal class MirrorManifestRollbackHelper(
             DiagnosticsLogger.w(TAG, "rollback manifest: clearManifestUri failed (no-old manifest rollback)")
             return false
         }
-        val nextJournal = currentJournal.copy(
-            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-        )
+        val nextJournal =
+            currentJournal.copy(
+                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+            )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
             DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (no-old)")
             return false
@@ -282,10 +299,16 @@ internal class MirrorManifestRollbackHelper(
                     )
                     return false
                 }
-                val nextJournal = currentJournal.copy(
-                    manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-                )
-                if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
+                val nextJournal =
+                    currentJournal.copy(
+                        manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                    )
+                if (!writeRollbackJournal(
+                        nextJournal,
+                        ctx.items,
+                        ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+                    )
+                ) {
                     DiagnosticsLogger.w(
                         TAG,
                         ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (backup null, old verified)",
@@ -352,7 +375,12 @@ internal class MirrorManifestRollbackHelper(
                 if (hash == manifestOldHash) {
                     // hash 匹配 → 真的是旧 manifest，必须先 setManifestUri 再推进状态
                     DiagnosticsLogger.i(TAG, "rollback manifest: final already restored, verified by hash")
-                    return finalizeManifestRestored(ctx, currentJournal, restoredFinalLookup.ref.uri, "already restored")
+                    return finalizeManifestRestored(
+                        ctx,
+                        currentJournal,
+                        restoredFinalLookup.ref.uri,
+                        "already restored",
+                    )
                 }
                 // hash 不匹配 → final 上是新 manifest 拮留，继续 restore
             }
@@ -368,23 +396,24 @@ internal class MirrorManifestRollbackHelper(
         ctx: ManifestRollbackContext,
         currentJournal: PendingMirrorPublish,
         restoreResult: RestoreBackupResult,
-    ): Boolean = when (restoreResult) {
-        is RestoreBackupResult.Restored ->
-            finalizeManifestRestored(ctx, currentJournal, restoreResult.ref.uri, "after restoring manifest backup")
-        is RestoreBackupResult.AlreadyRestored ->
-            finalizeManifestRestored(ctx, currentJournal, restoreResult.ref.uri, "already restored")
-        is RestoreBackupResult.Conflict -> {
-            DiagnosticsLogger.w(TAG, "rollback manifest: conflict - final has wrong content")
-            false
+    ): Boolean =
+        when (restoreResult) {
+            is RestoreBackupResult.Restored ->
+                finalizeManifestRestored(ctx, currentJournal, restoreResult.ref.uri, "after restoring manifest backup")
+            is RestoreBackupResult.AlreadyRestored ->
+                finalizeManifestRestored(ctx, currentJournal, restoreResult.ref.uri, "already restored")
+            is RestoreBackupResult.Conflict -> {
+                DiagnosticsLogger.w(TAG, "rollback manifest: conflict - final has wrong content")
+                false
+            }
+            is RestoreBackupResult.Failed -> {
+                DiagnosticsLogger.w(
+                    TAG,
+                    "rollback manifest: failed to restore manifest backup: ${restoreResult.cause?.message}",
+                )
+                false
+            }
         }
-        is RestoreBackupResult.Failed -> {
-            DiagnosticsLogger.w(
-                TAG,
-                "rollback manifest: failed to restore manifest backup: ${restoreResult.cause?.message}",
-            )
-            false
-        }
-    }
 
     /**
      * setManifestUri + 写 MANIFEST_ROLLBACK_OLD_RESTORED journal 的公共尾部。
@@ -400,9 +429,10 @@ internal class MirrorManifestRollbackHelper(
             DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed ($failureReason)")
             return false
         }
-        val nextJournal = currentJournal.copy(
-            manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
-        )
+        val nextJournal =
+            currentJournal.copy(
+                manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
+            )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
             DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + OLD_RESTORED)
             return false
@@ -415,34 +445,37 @@ internal class MirrorManifestRollbackHelper(
         items: Map<ChapterKey, PendingItem>,
         manifestSwapState: ManifestTransactionState,
         manifestNewRef: MirrorFileRef? = journal.manifestNewRef,
-    ): Boolean = journalWriter.writePendingPublishJournal(
-        PendingJournalParams(
-            projectId = journal.projectId,
-            transactionType = journal.transactionType,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            txId = journal.txId,
-            backend = journal.backend,
-            treeUri = journal.treeUri,
-            oldEntries = journal.oldEntries,
-            newEntries = journal.newEntries,
-            stagedRefs = journal.stagedRefs,
-            items = items,
-            removedProjectIds = journal.removedProjectIds,
-            manifestOldRef = journal.manifestOldRef,
-            manifestStagedRef = journal.manifestStagedRef,
-            manifestNewRef = manifestNewRef,
-            manifestBackupRef = journal.manifestBackupRef,
-            isManifestCommitted = journal.isManifestCommitted,
-            manifestSwapState = manifestSwapState,
-            manifestNewContentHash = journal.manifestNewContentHash,
-            manifestOldContentHash = journal.manifestOldContentHash,
-            journalContext = journal,
-        ),
-    )
+    ): Boolean =
+        journalWriter.writePendingPublishJournal(
+            PendingJournalParams(
+                projectId = journal.projectId,
+                transactionType = journal.transactionType,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                txId = journal.txId,
+                backend = journal.backend,
+                treeUri = journal.treeUri,
+                oldEntries = journal.oldEntries,
+                newEntries = journal.newEntries,
+                stagedRefs = journal.stagedRefs,
+                items = items,
+                removedProjectIds = journal.removedProjectIds,
+                manifestOldRef = journal.manifestOldRef,
+                manifestStagedRef = journal.manifestStagedRef,
+                manifestNewRef = manifestNewRef,
+                manifestBackupRef = journal.manifestBackupRef,
+                isManifestCommitted = journal.isManifestCommitted,
+                manifestSwapState = manifestSwapState,
+                manifestNewContentHash = journal.manifestNewContentHash,
+                manifestOldContentHash = journal.manifestOldContentHash,
+                journalContext = journal,
+            ),
+        )
 
     private sealed interface RollbackManifestStep {
         data class Continue(val journal: PendingMirrorPublish) : RollbackManifestStep
+
         data object Done : RollbackManifestStep
+
         data object Failed : RollbackManifestStep
     }
 

@@ -451,8 +451,10 @@ class MediaStoreMirrorStorage(
                 "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
                 "${MediaStore.Downloads.IS_PENDING} = 0"
 
-        private fun txPath(txId: String, subDir: String? = null): String =
-            if (subDir != null) "$STAGING_DIR/$txId/$subDir" else "$STAGING_DIR/$txId"
+        private fun txPath(
+            txId: String,
+            subDir: String? = null,
+        ): String = if (subDir != null) "$STAGING_DIR/$txId/$subDir" else "$STAGING_DIR/$txId"
 
         // #649 评论 5564624383 问题 5：查询三态结果
         private enum class QueryResult { FOUND, MISSING, FAILED }

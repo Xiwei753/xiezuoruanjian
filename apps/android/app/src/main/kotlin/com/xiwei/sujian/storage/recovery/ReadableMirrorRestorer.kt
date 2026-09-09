@@ -120,14 +120,15 @@ class ReadableMirrorRestorer {
             // #649 评论 5561465552 第 2 点：保留 manifest 里的 project.id/volume.id/chapter.id，
             // 不再生成新 ID。
             val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-            val restoreError = restoreAllProjects(
-                manifest,
-                preloadedContents,
-                appServiceBridge,
-                mirrorTreeUri,
-                documentTreeReader,
-                allChapterEntries,
-            )
+            val restoreError =
+                restoreAllProjects(
+                    manifest,
+                    preloadedContents,
+                    appServiceBridge,
+                    mirrorTreeUri,
+                    documentTreeReader,
+                    allChapterEntries,
+                )
             if (restoreError != null) return@withContext restoreError
 
             // 3. 保存恢复后的状态到 ReadableMirrorStateStore。
@@ -173,14 +174,15 @@ class ReadableMirrorRestorer {
     private fun loadManifestInfo(
         manifestUri: Uri,
         reader: DocumentTreeReader,
-    ): ManifestLoadOutcome = try {
-        val manifestJson = reader.readText(manifestUri)
-        val manifest = mirrorManifestFromJsonStrict(manifestJson)
-        val normalizedJson = mirrorManifestToJson(manifest)
-        ManifestLoadOutcome.Loaded(manifest, normalizedJson, computeContentHash(normalizedJson))
-    } catch (e: Exception) {
-        ManifestLoadOutcome.Failed(RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}"))
-    }
+    ): ManifestLoadOutcome =
+        try {
+            val manifestJson = reader.readText(manifestUri)
+            val manifest = mirrorManifestFromJsonStrict(manifestJson)
+            val normalizedJson = mirrorManifestToJson(manifest)
+            ManifestLoadOutcome.Loaded(manifest, normalizedJson, computeContentHash(normalizedJson))
+        } catch (e: Exception) {
+            ManifestLoadOutcome.Failed(RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}"))
+        }
 
     /** 对每个 project 调 restoreProjectTree 并收集 chapter entries；失败返回 RestoreFailed。 */
     private fun restoreAllProjects(
@@ -190,18 +192,19 @@ class ReadableMirrorRestorer {
         mirrorTreeUri: Uri,
         reader: DocumentTreeReader,
         allChapterEntries: MutableMap<ChapterKey, ChapterMirrorEntry>,
-    ): RestoreResult.RestoreFailed? = try {
-        for (project in manifest.projects) {
-            val dto = buildRestoreProjectInputDto(project, preloadedContents)
-            appServiceBridge.restoreProjectTree(dto).unwrapOrThrow()
-            // restore_project_tree 保留 manifest ID，所以这里用 manifest 的 ID 组装条目
-            val projectEntries = buildChapterEntries(project, mirrorTreeUri, reader)
-            allChapterEntries.putAll(projectEntries)
+    ): RestoreResult.RestoreFailed? =
+        try {
+            for (project in manifest.projects) {
+                val dto = buildRestoreProjectInputDto(project, preloadedContents)
+                appServiceBridge.restoreProjectTree(dto).unwrapOrThrow()
+                // restore_project_tree 保留 manifest ID，所以这里用 manifest 的 ID 组装条目
+                val projectEntries = buildChapterEntries(project, mirrorTreeUri, reader)
+                allChapterEntries.putAll(projectEntries)
+            }
+            null
+        } catch (e: Exception) {
+            RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
         }
-        null
-    } catch (e: Exception) {
-        RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
-    }
 
     /**
      * 预检查所有章节 + 预读正文到 [preloadedContents]。

@@ -111,27 +111,28 @@ internal class MirrorRollbackExecutor(
     private fun writeRollbackJournalForItems(
         journal: PendingMirrorPublish,
         items: Map<ChapterKey, PendingItem>,
-    ): Boolean = journalWriter.writePendingPublishJournal(
-        PendingJournalParams(
-            projectId = journal.projectId,
-            transactionType = journal.transactionType,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            txId = journal.txId,
-            backend = journal.backend,
-            treeUri = journal.treeUri,
-            oldEntries = journal.oldEntries,
-            newEntries = journal.newEntries,
-            stagedRefs = journal.stagedRefs,
-            items = items,
-            removedProjectIds = journal.removedProjectIds,
-            manifestOldRef = journal.manifestOldRef,
-            manifestStagedRef = journal.manifestStagedRef,
-            manifestNewRef = journal.manifestNewRef,
-            manifestBackupRef = journal.manifestBackupRef,
-            manifestSwapState = journal.manifestSwapState,
-            journalContext = journal,
-        ),
-    )
+    ): Boolean =
+        journalWriter.writePendingPublishJournal(
+            PendingJournalParams(
+                projectId = journal.projectId,
+                transactionType = journal.transactionType,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                txId = journal.txId,
+                backend = journal.backend,
+                treeUri = journal.treeUri,
+                oldEntries = journal.oldEntries,
+                newEntries = journal.newEntries,
+                stagedRefs = journal.stagedRefs,
+                items = items,
+                removedProjectIds = journal.removedProjectIds,
+                manifestOldRef = journal.manifestOldRef,
+                manifestStagedRef = journal.manifestStagedRef,
+                manifestNewRef = journal.manifestNewRef,
+                manifestBackupRef = journal.manifestBackupRef,
+                manifestSwapState = journal.manifestSwapState,
+                journalContext = journal,
+            ),
+        )
 
     /**
      * 阶段 1：幂等删除 promotedRef（跳过已处理的 item）。

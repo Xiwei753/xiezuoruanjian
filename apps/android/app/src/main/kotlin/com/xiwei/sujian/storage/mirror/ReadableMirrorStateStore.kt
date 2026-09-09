@@ -272,19 +272,21 @@ class ReadableMirrorStateStore(
                         ),
                     )
                 is ReadResult.Corrupted -> Result.failure(result.error)
-                is ReadResult.Parsed -> runCatching {
-                    // #649 评论 5578472936：统一走 decodeStateRootStrict，
-                    // 不再用 optString/optJSONObject/continue 静默裁掉坏 state。
-                    val s = decodeStateRootStrict(result.root)
-                    MirrorStateSnapshot(
-                        backend = s.backend,
-                        treeUri = s.treeUri,
-                        manifestUri = s.manifestUri,
-                        projects = s.entries.entries
-                            .groupBy { it.key.projectId }
-                            .mapValues { (_, values) -> values.associate { it.toPair() } },
-                    )
-                }
+                is ReadResult.Parsed ->
+                    runCatching {
+                        // #649 评论 5578472936：统一走 decodeStateRootStrict，
+                        // 不再用 optString/optJSONObject/continue 静默裁掉坏 state。
+                        val s = decodeStateRootStrict(result.root)
+                        MirrorStateSnapshot(
+                            backend = s.backend,
+                            treeUri = s.treeUri,
+                            manifestUri = s.manifestUri,
+                            projects =
+                                s.entries.entries
+                                    .groupBy { it.key.projectId }
+                                    .mapValues { (_, values) -> values.associate { it.toPair() } },
+                        )
+                    }
             }
         }
     }
@@ -428,16 +430,17 @@ class ReadableMirrorStateStore(
                 is ReadResult.NotExists ->
                     Result.success(emptySet<String>() to emptyMap())
                 is ReadResult.Corrupted -> Result.failure(result.error)
-                is ReadResult.Parsed -> runCatching {
-                    // #649 评论 5578472936：直接从同一份 StrictMirrorState 返回
-                    // publishedProjectIds + entries，不再重复遍历 JSON。
-                    val s = decodeStateRootStrict(result.root)
-                    val ids = s.publishedProjectIds.toMutableSet()
-                    for (key in s.entries.keys) {
-                        ids.add(key.projectId)
+                is ReadResult.Parsed ->
+                    runCatching {
+                        // #649 评论 5578472936：直接从同一份 StrictMirrorState 返回
+                        // publishedProjectIds + entries，不再重复遍历 JSON。
+                        val s = decodeStateRootStrict(result.root)
+                        val ids = s.publishedProjectIds.toMutableSet()
+                        for (key in s.entries.keys) {
+                            ids.add(key.projectId)
+                        }
+                        ids to s.entries
                     }
-                    ids to s.entries
-                }
             }
         }
     }
@@ -513,12 +516,13 @@ class ReadableMirrorStateStore(
         val backend = parseBackendStrict(root)
 
         // #649 评论 5578666118：treeUri 存在时必须是非空字符串，空字符串是损坏状态。
-        val treeUri = root.opt(TREE_URI_KEY)?.let { raw ->
-            require(raw is String && raw.isNotEmpty()) {
-                "State corruption: treeUri must be a non-empty String"
+        val treeUri =
+            root.opt(TREE_URI_KEY)?.let { raw ->
+                require(raw is String && raw.isNotEmpty()) {
+                    "State corruption: treeUri must be a non-empty String"
+                }
+                raw
             }
-            raw
-        }
 
         // #649 评论 5578666118：backend=document_tree 必须有非空 treeUri。
         if (backend == MirrorBackend.DOCUMENT_TREE) {
@@ -529,34 +533,48 @@ class ReadableMirrorStateStore(
 
         // #649 评论 5578666118：manifestUri 存在时也必须是非空字符串；
         // "没有 manifest"用字段不存在表达，不用空字符串。
-        val manifestUri = root.opt(MANIFEST_URI_KEY)?.let { raw ->
-            require(raw is String && raw.isNotEmpty()) {
-                "State corruption: manifestUri must be a non-empty String"
+        val manifestUri =
+            root.opt(MANIFEST_URI_KEY)?.let { raw ->
+                require(raw is String && raw.isNotEmpty()) {
+                    "State corruption: manifestUri must be a non-empty String"
+                }
+                raw
             }
-            raw
-        }
 
         root.opt(PUBLISHED_PROJECTS_KEY)?.let {
-            require(it is JSONObject) { "State corruption: publishedProjectIds must be JSONObject, got ${it.javaClass.simpleName}" }
+            require(
+                it is JSONObject,
+            ) { "State corruption: publishedProjectIds must be JSONObject, got ${it.javaClass.simpleName}" }
         }
         val projectsRaw = root.opt(PROJECTS_KEY)
         if (projectsRaw != null) {
-            require(projectsRaw is JSONObject) { "State corruption: projects must be JSONObject, got ${projectsRaw.javaClass.simpleName}" }
+            require(projectsRaw is JSONObject) {
+                "State corruption: projects must be JSONObject, got ${projectsRaw.javaClass.simpleName}"
+            }
         }
         val entries = decodeEntriesStrict(projectsRaw)
-        val committedJson = root.opt(COMMITTED_MANIFEST_JSON_KEY)?.let {
-            require(it is String) { "State corruption: committedManifestJson must be String, got ${it.javaClass.simpleName}" }
-            it
-        }
-        val committedHash = root.opt(COMMITTED_MANIFEST_HASH_KEY)?.let {
-            require(it is String) { "State corruption: committedManifestHash must be String, got ${it.javaClass.simpleName}" }
-            it
-        }
+        val committedJson =
+            root.opt(COMMITTED_MANIFEST_JSON_KEY)?.let {
+                require(
+                    it is String,
+                ) { "State corruption: committedManifestJson must be String, got ${it.javaClass.simpleName}" }
+                it
+            }
+        val committedHash =
+            root.opt(COMMITTED_MANIFEST_HASH_KEY)?.let {
+                require(
+                    it is String,
+                ) { "State corruption: committedManifestHash must be String, got ${it.javaClass.simpleName}" }
+                it
+            }
         return StrictMirrorState(
             backend = backend,
             treeUri = treeUri,
             manifestUri = manifestUri,
-            publishedProjectIds = root.opt(PUBLISHED_PROJECTS_KEY)?.let { (it as JSONObject).keys().asSequence().toSet() } ?: emptySet(),
+            publishedProjectIds =
+                root.opt(PUBLISHED_PROJECTS_KEY)?.let {
+                    (it as JSONObject).keys().asSequence().toSet()
+                } ?: emptySet(),
             entries = entries,
             committedManifestJson = committedJson,
             committedManifestHash = committedHash,

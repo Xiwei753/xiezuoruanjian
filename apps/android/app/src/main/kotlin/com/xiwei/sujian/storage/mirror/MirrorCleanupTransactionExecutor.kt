@@ -10,7 +10,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 internal class MirrorCleanupTransactionExecutor(
     private val stateStore: ReadableMirrorStateStore,
 ) {
-
     internal fun cleanupCommittedTransaction(
         journal: PendingMirrorPublish,
         storage: ReadableMirrorStorage,
@@ -34,7 +33,10 @@ internal class MirrorCleanupTransactionExecutor(
         return allSuccess
     }
 
-    private fun deleteBackupOldRef(item: PendingItem, storage: ReadableMirrorStorage): Boolean {
+    private fun deleteBackupOldRef(
+        item: PendingItem,
+        storage: ReadableMirrorStorage,
+    ): Boolean {
         val ref = item.backupOldRef ?: return true
         return try {
             deleteRefByLookup(storage, ref.relativePath) { cause ->
@@ -77,7 +79,10 @@ internal class MirrorCleanupTransactionExecutor(
         return allSuccess
     }
 
-    private fun deleteOldEntry(entry: ChapterMirrorEntry, storage: ReadableMirrorStorage): Boolean {
+    private fun deleteOldEntry(
+        entry: ChapterMirrorEntry,
+        storage: ReadableMirrorStorage,
+    ): Boolean {
         return try {
             deleteRefByLookup(storage, entry.relativePath) { cause ->
                 "cleanup: lookup old entry failed ${entry.uri}: ${cause?.message}"

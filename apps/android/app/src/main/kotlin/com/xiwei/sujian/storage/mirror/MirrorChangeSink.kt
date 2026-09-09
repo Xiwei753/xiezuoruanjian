@@ -25,11 +25,20 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * - publishAll 成功后用 ackFullDirty 清 fullDirty（不再只清内存 wildcard）。
  */
 interface MirrorChangeSink {
-    fun chapterChanged(projectId: String, volumeId: String, chapterId: String)
+    fun chapterChanged(
+        projectId: String,
+        volumeId: String,
+        chapterId: String,
+    )
+
     fun projectStructureChanged(projectId: String)
+
     fun projectDeleted(projectId: String)
+
     fun everythingChanged()
+
     fun close()
+
     fun getDirtyCount(): Int
 }
 
@@ -102,44 +111,48 @@ class DefaultMirrorChangeSink(
         chapterId: String,
     ) {
         val key = MirrorKey(projectId, volumeId, chapterId)
-        val intent = outboxStore.markDirty(projectId) ?: run {
-            DiagnosticsLogger.e(TAG, "Failed to write outbox for chapterChanged: $projectId")
-            return
-        }
+        val intent =
+            outboxStore.markDirty(projectId) ?: run {
+                DiagnosticsLogger.e(TAG, "Failed to write outbox for chapterChanged: $projectId")
+                return
+            }
         // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
         // markDirty 遇到已有 DELETE 返回已有 DELETE intent；此时不应再 publish 该项目。
         if (intent.kind == OutboxIntentKind.DELETE) {
             signal.trySend(Unit)
             return
         }
-        dirtyMap[key] = DirtyEntry(
-            timestamp = System.currentTimeMillis(),
-            generation = intent.generation,
-            // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
-            // 若磁盘里项目已是 DELETE，markDirty 返回已有 DELETE intent，
-            // 调用方不能再把它硬塞成 UPSERT。
-            kind = intent.kind,
-        )
+        dirtyMap[key] =
+            DirtyEntry(
+                timestamp = System.currentTimeMillis(),
+                generation = intent.generation,
+                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+                // 若磁盘里项目已是 DELETE，markDirty 返回已有 DELETE intent，
+                // 调用方不能再把它硬塞成 UPSERT。
+                kind = intent.kind,
+            )
         outboxStore.recordSignalTime()
         signal.trySend(Unit)
     }
 
     override fun projectStructureChanged(projectId: String) {
-        val intent = outboxStore.markDirty(projectId) ?: run {
-            DiagnosticsLogger.e(TAG, "Failed to write outbox for projectStructureChanged: $projectId")
-            return
-        }
+        val intent =
+            outboxStore.markDirty(projectId) ?: run {
+                DiagnosticsLogger.e(TAG, "Failed to write outbox for projectStructureChanged: $projectId")
+                return
+            }
         // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
         if (intent.kind == OutboxIntentKind.DELETE) {
             signal.trySend(Unit)
             return
         }
-        dirtyMap[MirrorKey(projectId, "", "")] = DirtyEntry(
-            timestamp = System.currentTimeMillis(),
-            generation = intent.generation,
-            // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
-            kind = intent.kind,
-        )
+        dirtyMap[MirrorKey(projectId, "", "")] =
+            DirtyEntry(
+                timestamp = System.currentTimeMillis(),
+                generation = intent.generation,
+                // #649 评论 5575950895 问题 2：用 intent.kind 而非硬编码 UPSERT。
+                kind = intent.kind,
+            )
         outboxStore.recordSignalTime()
         signal.trySend(Unit)
     }
@@ -147,10 +160,11 @@ class DefaultMirrorChangeSink(
     override fun projectDeleted(projectId: String) {
         // #649 评论 5575950895 问题 2：先 durable outbox 成功再改内存。
         // 旧实现"先 add 占位再 poll"会 poll 掉队头其他删除事件（ConcurrentLinkedQueue FIFO）。
-        val intent = outboxStore.markDeleted(projectId) ?: run {
-            DiagnosticsLogger.e(TAG, "Failed to write outbox for projectDeleted: $projectId")
-            return
-        }
+        val intent =
+            outboxStore.markDeleted(projectId) ?: run {
+                DiagnosticsLogger.e(TAG, "Failed to write outbox for projectDeleted: $projectId")
+                return
+            }
 
         // durable outbox 已成功，再改内存：清掉该项目的脏标记，加入带 generation 的删除事件。
         dirtyMap.keys.removeAll { it.projectId == projectId }
@@ -163,11 +177,12 @@ class DefaultMirrorChangeSink(
         dirtyMap.clear()
         val fullGen = outboxStore.markDirtyAll()
         if (fullGen != null) {
-            dirtyMap[MirrorKey(WILDCARD_PROJECT, "", "")] = DirtyEntry(
-                timestamp = System.currentTimeMillis(),
-                generation = fullGen,
-                kind = OutboxIntentKind.UPSERT,
-            )
+            dirtyMap[MirrorKey(WILDCARD_PROJECT, "", "")] =
+                DirtyEntry(
+                    timestamp = System.currentTimeMillis(),
+                    generation = fullGen,
+                    kind = OutboxIntentKind.UPSERT,
+                )
             outboxStore.recordSignalTime()
             signal.trySend(Unit)
         } else {
@@ -196,22 +211,24 @@ class DefaultMirrorChangeSink(
 
         // 加载全量标记
         if (snapshot.fullDirtyGeneration != null) {
-            dirtyMap[MirrorKey(WILDCARD_PROJECT, "", "")] = DirtyEntry(
-                timestamp = System.currentTimeMillis(),
-                generation = snapshot.fullDirtyGeneration,
-                kind = OutboxIntentKind.UPSERT,
-            )
+            dirtyMap[MirrorKey(WILDCARD_PROJECT, "", "")] =
+                DirtyEntry(
+                    timestamp = System.currentTimeMillis(),
+                    generation = snapshot.fullDirtyGeneration,
+                    kind = OutboxIntentKind.UPSERT,
+                )
         }
 
         // 加载所有项目意图（无论 fullDirty 状态）
         for ((pid, intent) in snapshot.projects) {
             when (intent.kind) {
                 OutboxIntentKind.UPSERT -> {
-                    dirtyMap[MirrorKey(pid, "", "")] = DirtyEntry(
-                        timestamp = System.currentTimeMillis(),
-                        generation = intent.generation,
-                        kind = OutboxIntentKind.UPSERT,
-                    )
+                    dirtyMap[MirrorKey(pid, "", "")] =
+                        DirtyEntry(
+                            timestamp = System.currentTimeMillis(),
+                            generation = intent.generation,
+                            kind = OutboxIntentKind.UPSERT,
+                        )
                 }
                 OutboxIntentKind.DELETE -> {
                     deleteQueue.add(DeleteEvent(pid, intent.generation))

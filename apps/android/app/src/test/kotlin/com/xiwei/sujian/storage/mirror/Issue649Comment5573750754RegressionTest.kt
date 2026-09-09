@@ -37,7 +37,6 @@ class Issue649Comment5573750754RegressionTest {
         private const val TX_1 = "tx-1"
     }
 
-
     // ══════════════════════════════════════════════════════════════════════
     // 修复1：recoverPromotePhase() 先写 PHASE_CLEANUP journal 再 recoverCleanupPhase
     // 源：ReadableMirrorPublisher.recoverPromotePhase line 623-649
@@ -67,35 +66,38 @@ class Issue649Comment5573750754RegressionTest {
 
         // ── 模拟修复后的 recoverPromotePhase() line 623-649 执行顺序 ──
         // 修复后：先构造 cleanupJournal 并 persistPendingJournal(cleanupJournal)
-        val committedItems = mapOf(
-            key to PendingItem(
-                key = key,
-                stagedRef = null,
-                oldRef = null,
-                backupOldRef = null,
-                promotedRef = MirrorFileRef("content://new/1", P_V_CH_MD),
-                state = PendingItem.STATE_COMMITTED,
-            ),
-        )
-        val cleanupJournal = PendingMirrorPublish(
-            txId = TX_1,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = projectId,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_CLEANUP, // ★ PHASE_CLEANUP ★
-            oldEntries = emptyMap(),
-            newEntries = promotedEntries,
-            stagedRefs = emptyMap(),
-            items = committedItems,
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = MirrorFileRef("content://manifest/new", META_MANIFEST_JSON),
-            manifestBackupRef = null,
-            isManifestCommitted = true,
-            manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
-        )
+        val committedItems =
+            mapOf(
+                key to
+                    PendingItem(
+                        key = key,
+                        stagedRef = null,
+                        oldRef = null,
+                        backupOldRef = null,
+                        promotedRef = MirrorFileRef("content://new/1", P_V_CH_MD),
+                        state = PendingItem.STATE_COMMITTED,
+                    ),
+            )
+        val cleanupJournal =
+            PendingMirrorPublish(
+                txId = TX_1,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = projectId,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_CLEANUP, // ★ PHASE_CLEANUP ★
+                oldEntries = emptyMap(),
+                newEntries = promotedEntries,
+                stagedRefs = emptyMap(),
+                items = committedItems,
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = MirrorFileRef("content://manifest/new", META_MANIFEST_JSON),
+                manifestBackupRef = null,
+                isManifestCommitted = true,
+                manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
+            )
         // line 644: persistPendingJournal(cleanupJournal)
         journalOps.add("persistPendingJournal:PHASE_CLEANUP")
 
@@ -147,44 +149,55 @@ class Issue649Comment5573750754RegressionTest {
         val txId = TX_1
 
         // 旧 journal 的 items（recovery 进入时的状态，正文已 stage 但未 promote）
-        val oldItem = PendingItem(
-            key = key,
-            stagedRef = StagedMirrorRef(txId, "content://staging/1", ".staging/tx-1/Ch.md", P_V_CH_MD, "text/markdown"),
-            oldRef = MirrorFileRef("content://old/1", P_V_CH_MD),
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
+        val oldItem =
+            PendingItem(
+                key = key,
+                stagedRef =
+                    StagedMirrorRef(
+                        txId,
+                        "content://staging/1",
+                        ".staging/tx-1/Ch.md",
+                        P_V_CH_MD,
+                        "text/markdown",
+                    ),
+                oldRef = MirrorFileRef("content://old/1", P_V_CH_MD),
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
 
         // recoverPromotePhase() 推进正文后，currentItems 已更新为 PROMOTED
         val promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD)
-        val currentItem = oldItem.copy(
-            promotedRef = promotedRef,
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val currentItem =
+            oldItem.copy(
+                promotedRef = promotedRef,
+                state = PendingItem.STATE_PROMOTED,
+            )
         val currentItems = mapOf(key to currentItem)
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"),
-        )
+        val desiredEntries =
+            mapOf(
+                key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"),
+            )
 
         // 旧 journal（journalContext）的 items 仍是 STAGED
-        val journalContext = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJ_1,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = mapOf(key to oldItem), // 旧状态 STAGED
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJ_1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = mapOf(key to oldItem), // 旧状态 STAGED
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+            )
 
         // ── 模拟修复后的 publishManifestWithDesiredTransactional() line 3205-3209 ──
         // 修复后：入口先把调用方当前状态合进去
@@ -247,26 +260,27 @@ class Issue649Comment5573750754RegressionTest {
         // journal 状态：manifest 子事务未开始
         // manifestTargetJson==null, manifestOldRef==null,
         // manifestNewContentHash==null, manifestOldContentHash==null
-        val journalContext = PendingMirrorPublish(
-            txId = TX_1,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJ_1,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            manifestTargetJson = null, // ★ 未开始标记 ★
-            manifestNewContentHash = null,
-            manifestOldContentHash = null,
-        )
+        val journalContext =
+            PendingMirrorPublish(
+                txId = TX_1,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJ_1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = null,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null,
+                manifestTargetJson = null, // ★ 未开始标记 ★
+                manifestNewContentHash = null,
+                manifestOldContentHash = null,
+            )
 
         // ── 模拟修复后的 rollbackManifest() line 2215-2222 ──
         // line 2215: if (journalContext == null) return true
@@ -320,33 +334,35 @@ class Issue649Comment5573750754RegressionTest {
         storage.backupPathToUri[".staging/$txId/backup/$manifestPath"] = backupUri
 
         val manifestOldRef = MirrorFileRef("content://old/manifest", manifestPath)
-        val journalContext1 = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = PROJ_1,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_ROLLBACK,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = manifestOldRef,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null, // journal 里仍是 null
-            manifestTargetJson = "{}", // manifest 子事务已开始
-            manifestNewContentHash = "sha256:new",
-            manifestOldContentHash = computeContentHash(oldManifestContent),
-        )
+        val journalContext1 =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJ_1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = manifestOldRef,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null, // journal 里仍是 null
+                manifestTargetJson = "{}", // manifest 子事务已开始
+                manifestNewContentHash = "sha256:new",
+                manifestOldContentHash = computeContentHash(oldManifestContent),
+            )
 
         // 模拟修复后的 rollbackManifest() line 2240-2250
-        val backup1 = when (val r = storage.lookupBackup(txId, manifestPath)) {
-            is MirrorLookupResult.Found -> r.ref
-            is MirrorLookupResult.Missing -> null
-            is MirrorLookupResult.Failed -> null
-        }
+        val backup1 =
+            when (val r = storage.lookupBackup(txId, manifestPath)) {
+                is MirrorLookupResult.Found -> r.ref
+                is MirrorLookupResult.Missing -> null
+                is MirrorLookupResult.Failed -> null
+            }
         assertNotNull(
             "修复后：lookupBackup 发现物理 backup 存在，backup != null",
             backup1,
@@ -362,11 +378,12 @@ class Issue649Comment5573750754RegressionTest {
         // 没有 backup，没有 final
 
         // 模拟修复后的 rollbackManifest() line 2240-2250 + 2439-2507
-        val backup2 = when (val r = storage2.lookupBackup(txId, manifestPath)) {
-            is MirrorLookupResult.Found -> r.ref
-            is MirrorLookupResult.Missing -> null
-            is MirrorLookupResult.Failed -> null
-        }
+        val backup2 =
+            when (val r = storage2.lookupBackup(txId, manifestPath)) {
+                is MirrorLookupResult.Found -> r.ref
+                is MirrorLookupResult.Missing -> null
+                is MirrorLookupResult.Failed -> null
+            }
         assertNull(
             "修复后：lookupBackup 明确返回 Missing，backup == null",
             backup2,
@@ -464,7 +481,6 @@ class Issue649Comment5573750754RegressionTest {
             returnedCommitted2,
         )
     }
-
 }
 
 /**
@@ -502,14 +518,15 @@ class Issue649Comment5573750754RecoveryTest {
         val correctUri = "content://correct/chapter"
         storage1.committedFiles[correctUri] = newContent
         storage1.committedPathToUri[finalPath] = correctUri
-        val item1 = PendingItem(
-            key = key,
-            stagedRef = null,
-            oldRef = null,
-            backupOldRef = null,
-            promotedRef = MirrorFileRef(correctUri, finalPath),
-            state = PendingItem.STATE_PROMOTED,
-        )
+        val item1 =
+            PendingItem(
+                key = key,
+                stagedRef = null,
+                oldRef = null,
+                backupOldRef = null,
+                promotedRef = MirrorFileRef(correctUri, finalPath),
+                state = PendingItem.STATE_PROMOTED,
+            )
         val (promotedEntries1, rolledBack1) = runRecoverPromotePhaseHashCheck(item1, storage1, newEntries)
         assertTrue(
             "修复后：promotedRef hash 匹配 → 复用真实 ref",
@@ -619,10 +636,11 @@ class Issue649Comment5573750754RecoveryTest {
         val operationOrder = mutableListOf<String>()
 
         // 模拟两个章节的 writePlan
-        val planEntries = listOf(
-            "作品/P/V/Ch1.md" to "content1",
-            "作品/P/V/Ch2.md" to "content2",
-        )
+        val planEntries =
+            listOf(
+                "作品/P/V/Ch1.md" to "content1",
+                "作品/P/V/Ch2.md" to "content2",
+            )
 
         // ── 模拟修复后的 publishProject() line 972-1011 执行顺序 ──
         // line 976-997: 先落 PHASE_STAGE journal（在第一笔 stageText 之前）
@@ -740,7 +758,10 @@ private class RegrFakeStorage5573750754 : ReadableMirrorStorage {
         return MirrorFileRef(uri, path)
     }
 
-    override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+    override fun replaceText(
+        ref: MirrorFileRef,
+        text: String,
+    ): Boolean {
         committedFiles[ref.uri] = text
         operationLog.add("replaceText:${ref.relativePath}")
         return true
@@ -817,14 +838,20 @@ private class RegrFakeStorage5573750754 : ReadableMirrorStorage {
         return MirrorLookupResult.Found(MirrorFileRef(uri, relativePath))
     }
 
-    override fun resolveBackup(txId: String, relativePath: String): MirrorFileRef? {
+    override fun resolveBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorFileRef? {
         operationLog.add("resolveBackup:$relativePath")
         val backupPath = ".staging/$txId/backup/$relativePath"
         val uri = backupPathToUri[backupPath] ?: return null
         return MirrorFileRef(uri, backupPath)
     }
 
-    override fun lookupBackup(txId: String, relativePath: String): MirrorLookupResult {
+    override fun lookupBackup(
+        txId: String,
+        relativePath: String,
+    ): MirrorLookupResult {
         operationLog.add("lookupBackup:$relativePath")
         val backupPath = ".staging/$txId/backup/$relativePath"
         val uri = backupPathToUri[backupPath] ?: return MirrorLookupResult.Missing

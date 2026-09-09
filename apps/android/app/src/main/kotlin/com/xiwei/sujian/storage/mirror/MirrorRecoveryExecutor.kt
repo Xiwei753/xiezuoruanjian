@@ -18,18 +18,20 @@ internal class MirrorRecoveryExecutor(
     private val rollbackExecutor: MirrorRollbackExecutor,
     private val publishExecutor: MirrorPublishExecutor,
 ) {
-    private val promoteExecutor = MirrorPromoteRecoveryExecutor(
-        stateStore = stateStore,
-        journalWriter = journalWriter,
-        rollbackExecutor = rollbackExecutor,
-        publishExecutor = publishExecutor,
-    )
+    private val promoteExecutor =
+        MirrorPromoteRecoveryExecutor(
+            stateStore = stateStore,
+            journalWriter = journalWriter,
+            rollbackExecutor = rollbackExecutor,
+            publishExecutor = publishExecutor,
+        )
 
-    private val cleanupExecutor = MirrorCleanupRecoveryExecutor(
-        stateStore = stateStore,
-        journalWriter = journalWriter,
-        publishExecutor = publishExecutor,
-    )
+    private val cleanupExecutor =
+        MirrorCleanupRecoveryExecutor(
+            stateStore = stateStore,
+            journalWriter = journalWriter,
+            publishExecutor = publishExecutor,
+        )
 
     internal suspend fun recoverPromotePhase(
         journal: PendingMirrorPublish,
@@ -88,13 +90,19 @@ internal class MirrorRecoveryExecutor(
             if (item.state != PendingItem.STATE_ROLLBACK_NEW_REMOVED) {
                 val removed = item.promotedRef?.let { storage.delete(it) } ?: true
                 if (!removed) {
-                    DiagnosticsLogger.w(TAG, "Recover rollback: delete promotedRef failed for ${key.chapterId}, keeping journal")
+                    DiagnosticsLogger.w(
+                        TAG,
+                        "Recover rollback: delete promotedRef failed for ${key.chapterId}, keeping journal",
+                    )
                     return false
                 }
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
             }
             if (!writeRollbackJournal(journal, currentItems)) {
-                DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Recover rollback: journal write failed after NEW_REMOVED for ${key.chapterId}",
+                )
                 return false
             }
         }
@@ -112,12 +120,22 @@ internal class MirrorRecoveryExecutor(
             if (item.state == PendingItem.STATE_ROLLBACK_OLD_RESTORED) continue
             when (val result = rollbackExecutor.rollbackChapterToOldState(journal, key, item, storage)) {
                 is RollbackItemResult.Restored -> {
-                    val oldEntry = journal.oldEntries[key] ?: run {
-                        DiagnosticsLogger.w(TAG, "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal")
-                        return false
-                    }
-                    if (!stateStore.putChapterEntry(key.projectId, key.volumeId, key.chapterId, oldEntry.copy(uri = result.ref.uri, relativePath = result.ref.relativePath))) {
-                        DiagnosticsLogger.w(TAG, "Recover rollback: putChapterEntry failed for ${key.chapterId}, keeping journal")
+                    val oldEntry =
+                        journal.oldEntries[key] ?: run {
+                            DiagnosticsLogger.w(TAG, "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal")
+                            return false
+                        }
+                    if (!stateStore.putChapterEntry(
+                            key.projectId,
+                            key.volumeId,
+                            key.chapterId,
+                            oldEntry.copy(uri = result.ref.uri, relativePath = result.ref.relativePath),
+                        )
+                    ) {
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Recover rollback: putChapterEntry failed for ${key.chapterId}, keeping journal",
+                        )
                         return false
                     }
                     currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
@@ -136,7 +154,10 @@ internal class MirrorRecoveryExecutor(
                 }
             }
             if (!writeRollbackJournal(journal, currentItems)) {
-                DiagnosticsLogger.w(TAG, "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
+                DiagnosticsLogger.w(
+                    TAG,
+                    "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}",
+                )
                 return false
             }
         }
@@ -147,25 +168,28 @@ internal class MirrorRecoveryExecutor(
     private fun writeRollbackJournal(
         journal: PendingMirrorPublish,
         items: Map<ChapterKey, PendingItem>,
-    ): Boolean = journalWriter.writePendingPublishJournal(PendingJournalParams(
-        projectId = journal.projectId,
-        transactionType = journal.transactionType,
-        phase = PendingMirrorPublish.PHASE_ROLLBACK,
-        txId = journal.txId,
-        backend = journal.backend,
-        treeUri = journal.treeUri,
-        oldEntries = journal.oldEntries,
-        newEntries = journal.newEntries,
-        stagedRefs = journal.stagedRefs,
-        items = items,
-        removedProjectIds = journal.removedProjectIds,
-        manifestOldRef = journal.manifestOldRef,
-        manifestStagedRef = journal.manifestStagedRef,
-        manifestNewRef = journal.manifestNewRef,
-        manifestBackupRef = journal.manifestBackupRef,
-        manifestSwapState = journal.manifestSwapState,
-        journalContext = journal,
-    ))
+    ): Boolean =
+        journalWriter.writePendingPublishJournal(
+            PendingJournalParams(
+                projectId = journal.projectId,
+                transactionType = journal.transactionType,
+                phase = PendingMirrorPublish.PHASE_ROLLBACK,
+                txId = journal.txId,
+                backend = journal.backend,
+                treeUri = journal.treeUri,
+                oldEntries = journal.oldEntries,
+                newEntries = journal.newEntries,
+                stagedRefs = journal.stagedRefs,
+                items = items,
+                removedProjectIds = journal.removedProjectIds,
+                manifestOldRef = journal.manifestOldRef,
+                manifestStagedRef = journal.manifestStagedRef,
+                manifestNewRef = journal.manifestNewRef,
+                manifestBackupRef = journal.manifestBackupRef,
+                manifestSwapState = journal.manifestSwapState,
+                journalContext = journal,
+            ),
+        )
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"

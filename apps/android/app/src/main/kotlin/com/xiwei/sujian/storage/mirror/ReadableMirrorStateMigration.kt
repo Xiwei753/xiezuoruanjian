@@ -153,7 +153,7 @@ class ReadableMirrorStateMigration(
         if (manifestProjectIds != stateProjectIds) {
             DiagnosticsLogger.w(
                 TAG,
-                "State migration: project IDs mismatch: manifest=${manifestProjectIds}, state=${stateProjectIds}",
+                "State migration: project IDs mismatch: manifest=$manifestProjectIds, state=$stateProjectIds",
             )
             return false
         }
