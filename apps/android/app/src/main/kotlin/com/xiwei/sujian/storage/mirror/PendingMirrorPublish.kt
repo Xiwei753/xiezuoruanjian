@@ -231,11 +231,8 @@ data class PendingMirrorPublish(
     val manifestOldContentHash: String? = null,
     // 冻结 manifest 事务的目标 JSON，恢复时不再重新生成
     val manifestTargetJson: String? = null,
-    // ═══ 冻结全局 manifest 计划（#649 评论 5575551884 问题 3 / 5575950895 问题 4）═══
-    // #649 评论 5575950895 问题 4：删除旧的 frozenManifestMetadata/frozenManifestMetadataHash 字段，
-    // 只保留 FrozenManifestPlan 一个冻结真值。
-
     /**
+     * ═══ 冻结全局 manifest 计划（#649 评论 5575551884 问题 3 / 5575950895 问题 4）═══
      * 冻结的全局 manifest 计划（JSON 字符串）。
      * 在正文 prepareBackup/vacateCommitted/promoteStaged 之前保存。
      * 包含 schemaVersion + revision + 所有项目的逻辑状态。
