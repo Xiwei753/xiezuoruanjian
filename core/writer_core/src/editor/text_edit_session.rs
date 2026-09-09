@@ -4,9 +4,9 @@
 //! 通过独立会话接入 Editor V2 主链。不同目标之间不共享 revision、
 //! composition token 或 Undo 栈。
 //!
-//! 会话分为两种：
-//! - 持久内容会话：章节正文等持续编辑内容，拥有独立长期会话。
-//! - 临时草稿会话：项目名、搜索词等短文本，编辑时创建，确认/取消后关闭。
+//! 持久/临时的生命周期区分由平台端自行管理（例如通过 persistent_session_ids
+//! 映射保留长期会话 ID），Core 不再持有 `is_persistent` 字段——该字段此前
+//! 仅作存储用，没有任何生命周期行为分支，属于死数据。
 
 use super::kernel::result::EditorInputError;
 use super::EditorKernel;
@@ -39,18 +39,16 @@ pub struct TextEditSession {
     pub session_id: TextEditSessionId,
     pub target_id: String,
     pub generation: u64,
-    pub is_persistent: bool,
 }
 
 impl TextEditSession {
-    /// 创建空文本会话。generation 初始为 0，is_persistent 标识是否为长期会话。
-    pub fn new(session_id: TextEditSessionId, target_id: String, is_persistent: bool) -> Self {
+    /// 创建空文本会话。generation 初始为 0。
+    pub fn new(session_id: TextEditSessionId, target_id: String) -> Self {
         Self {
             kernel: EditorKernel::new(),
             session_id,
             target_id,
             generation: 0,
-            is_persistent,
         }
     }
 
@@ -58,7 +56,6 @@ impl TextEditSession {
     pub fn with_text(
         session_id: TextEditSessionId,
         target_id: String,
-        is_persistent: bool,
         text: String,
         cursor: usize,
     ) -> Result<Self, EditorInputError> {
@@ -68,7 +65,6 @@ impl TextEditSession {
             session_id,
             target_id,
             generation: 0,
-            is_persistent,
         })
     }
 }
@@ -105,7 +101,6 @@ impl TextEditSessionRegistry {
         target_id: String,
         initial_text: String,
         initial_cursor: usize,
-        is_persistent: bool,
     ) -> Result<TextEditSessionId, EditorInputError> {
         if let Some(&existing_id) = self.target_to_session.get(&target_id) {
             return Ok(TextEditSessionId(existing_id));
@@ -113,12 +108,11 @@ impl TextEditSessionRegistry {
         let id = self.next_session_id;
         self.next_session_id = self.next_session_id.saturating_add(1);
         let session = if initial_text.is_empty() {
-            TextEditSession::new(TextEditSessionId(id), target_id.clone(), is_persistent)
+            TextEditSession::new(TextEditSessionId(id), target_id.clone())
         } else {
             TextEditSession::with_text(
                 TextEditSessionId(id),
                 target_id.clone(),
-                is_persistent,
                 initial_text,
                 initial_cursor,
             )?
@@ -205,7 +199,7 @@ mod tests {
     fn create_and_close_session() {
         let mut registry = TextEditSessionRegistry::new();
         let id = registry
-            .open_session("project-title:1".to_string(), "Hello".to_string(), 5, false)
+            .open_session("project-title:1".to_string(), "Hello".to_string(), 5)
             .unwrap();
         assert!(registry.session_exists(TextEditSessionId::new(id.as_u64())));
         assert_eq!(registry.active_session_count(), 1);
@@ -215,7 +209,6 @@ mod tests {
             .unwrap();
         assert_eq!(session.kernel.snapshot_text(), "Hello");
         assert_eq!(session.target_id, "project-title:1");
-        assert!(!session.is_persistent);
 
         assert!(registry.close_session(TextEditSessionId::new(id.as_u64())));
         assert!(!registry.session_exists(TextEditSessionId::new(id.as_u64())));
@@ -226,24 +219,19 @@ mod tests {
     fn create_persistent_session() {
         let mut registry = TextEditSessionRegistry::new();
         let id = registry
-            .open_session(
-                "chapter-body:1:1:1".to_string(),
-                "正文".to_string(),
-                6,
-                true,
-            )
+            .open_session("chapter-body:1:1:1".to_string(), "正文".to_string(), 6)
             .unwrap();
         let session = registry
             .get_session(TextEditSessionId::new(id.as_u64()))
             .unwrap();
-        assert!(session.is_persistent);
+        assert_eq!(session.kernel.snapshot_text(), "正文");
     }
 
     #[test]
     fn create_empty_session() {
         let mut registry = TextEditSessionRegistry::new();
         let id = registry
-            .open_session("search:1".to_string(), "".to_string(), 0, false)
+            .open_session("search:1".to_string(), "".to_string(), 0)
             .unwrap();
         let session = registry
             .get_session(TextEditSessionId::new(id.as_u64()))
@@ -255,7 +243,7 @@ mod tests {
     fn reset_session() {
         let mut registry = TextEditSessionRegistry::new();
         let id = registry
-            .open_session("volume-title:1".to_string(), "Old".to_string(), 3, false)
+            .open_session("volume-title:1".to_string(), "Old".to_string(), 3)
             .unwrap();
         registry
             .reset_session(TextEditSessionId::new(id.as_u64()), "New".to_string(), 3)
@@ -277,10 +265,10 @@ mod tests {
     fn multiple_sessions_independent() {
         let mut registry = TextEditSessionRegistry::new();
         let id1 = registry
-            .open_session("project-title:1".to_string(), "Alpha".to_string(), 5, false)
+            .open_session("project-title:1".to_string(), "Alpha".to_string(), 5)
             .unwrap();
         let id2 = registry
-            .open_session("chapter-title:1".to_string(), "Beta".to_string(), 4, false)
+            .open_session("chapter-title:1".to_string(), "Beta".to_string(), 4)
             .unwrap();
         assert_ne!(id1.as_u64(), id2.as_u64());
 

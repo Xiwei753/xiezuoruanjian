@@ -85,15 +85,9 @@ impl super::WriterAppService {
         target_id: String,
         initial_text: String,
         initial_cursor_byte_offset: u32,
-        is_persistent: u8,
     ) -> Option<u64> {
         let result = self.with_registry(|r| {
-            r.open_session(
-                target_id,
-                initial_text,
-                initial_cursor_byte_offset as usize,
-                is_persistent != 0,
-            )
+            r.open_session(target_id, initial_text, initial_cursor_byte_offset as usize)
         });
         match result {
             Ok(id) => Some(id.as_u64()),

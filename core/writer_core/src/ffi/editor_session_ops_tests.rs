@@ -166,7 +166,6 @@ fn test_ffi_editor_session_lifecycle() {
             target.as_ptr(),
             initial.as_ptr(),
             0,
-            0,
         ))
     };
     let session_id: u64 = assert_success(&v).as_u64().expect("create 未返回 u64");
@@ -251,7 +250,6 @@ fn test_ffi_editor_session_utf8_byte_offset() {
             target.as_ptr(),
             initial.as_ptr(),
             0,
-            0,
         ))
     };
     let session_id: u64 = assert_success(&v).as_u64().unwrap();
@@ -314,7 +312,6 @@ fn test_ffi_editor_session_composition_lifecycle() {
         call_ffi(super::writer_core_editor_session_create(
             target.as_ptr(),
             initial.as_ptr(),
-            0,
             0,
         ))
     };
@@ -397,7 +394,6 @@ fn setup_composition(target: &str, initial: &str, preedit: &str) -> (u64, u64, u
         call_ffi(super::writer_core_editor_session_create(
             target_cstr.as_ptr(),
             initial_cstr.as_ptr(),
-            0,
             0,
         ))
     };

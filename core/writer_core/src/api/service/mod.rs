@@ -13,8 +13,6 @@ pub type ApiResult<T> = Result<T, WriterError>;
 pub struct WriterCoreApi {
     pub(crate) app_data_root: PathBuf,
     pub(crate) projects_root: PathBuf,
-    pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
-    pub(crate) secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     /// API 层唯一的进程级 secrets override。
     /// facade::WriterCore 不再持有自己的 secrets_override，避免两份状态漂移。
     secrets_override: std::sync::Mutex<Option<crate::sync::SyncSecrets>>,
@@ -22,6 +20,9 @@ pub struct WriterCoreApi {
     /// 纯读取（项目/卷/章/统计/设置读取）用 [Self::core_read]；
     /// 会修改本地文件或 Core 运行状态的操作用 [Self::core_write]。
     /// 全量同步三段式（Prepare/Transfer/Commit）在 Transfer 阶段完全不持锁。
+    ///
+    /// `sync_transport` / `secure_storage` 只存在于内部 `WriterCore` 中，
+    /// 不再在 API 层保留副本——避免双份状态漂移。
     core_instance: std::sync::RwLock<WriterCore>,
     ///   本地 workspace Git 布局。
     ///
@@ -45,8 +46,6 @@ impl WriterCoreApi {
         Self {
             app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
-            sync_transport: None,
-            secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
             workspace_git_layout: std::sync::RwLock::new(
@@ -62,12 +61,10 @@ impl WriterCoreApi {
     ) -> Self {
         let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
-        core.sync_transport = Some(transport_factory.clone());
+        core.sync_transport = Some(transport_factory);
         Self {
             app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
-            sync_transport: Some(transport_factory),
-            secure_storage: None,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
             workspace_git_layout: std::sync::RwLock::new(
@@ -84,16 +81,13 @@ impl WriterCoreApi {
     ) -> Self {
         let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
-        // 平台安全存储单一来源：只在 WriterCoreApi 持有，同时注入到 WriterCore
-        // 供 facade 方法（load_sync_secrets / save_sync_secrets 等）直接使用。
-        core.secure_storage = secure_storage.clone();
-        // 同步传输 factory 同样注入到 WriterCore，供 facade 同步方法直接使用。
-        core.sync_transport = sync_transport_factory.clone();
+        // 平台能力单一来源：sync_transport / secure_storage 只存于内部 WriterCore，
+        // API 层不再保留副本，避免双份状态漂移。
+        core.secure_storage = secure_storage;
+        core.sync_transport = sync_transport_factory;
         Self {
             app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),
-            sync_transport: sync_transport_factory,
-            secure_storage,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
             workspace_git_layout: std::sync::RwLock::new(

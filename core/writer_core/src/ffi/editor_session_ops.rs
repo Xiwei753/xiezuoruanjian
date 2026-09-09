@@ -50,7 +50,6 @@ pub unsafe extern "C" fn writer_core_editor_session_create(
     target_id: *const c_char,
     initial_text: *const c_char,
     initial_cursor_byte_offset: u32,
-    is_persistent: u8,
 ) -> *mut c_char {
     let target = match c_str_to_rust(target_id) {
         Ok(s) => s,
@@ -66,8 +65,7 @@ pub unsafe extern "C" fn writer_core_editor_session_create(
         }
     };
     match with_app_service(|svc| {
-        match svc.text_edit_session_open(target, initial, initial_cursor_byte_offset, is_persistent)
-        {
+        match svc.text_edit_session_open(target, initial, initial_cursor_byte_offset) {
             Some(id) => Ok(id),
             None => Err("create failed".to_string()),
         }

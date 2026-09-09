@@ -124,7 +124,7 @@ impl LinuxTextEditorCoordinator {
                         .close_session(TextEditSessionId::new(existing_raw));
                     match self
                         .registry
-                        .create_session(target_id.to_string(), text, cursor, true)
+                        .open_session(target_id.to_string(), text, cursor)
                     {
                         Ok(id) => {
                             let raw = id.as_u64();
@@ -138,7 +138,7 @@ impl LinuxTextEditorCoordinator {
             } else {
                 match self
                     .registry
-                    .create_session(target_id.to_string(), text, cursor, true)
+                    .open_session(target_id.to_string(), text, cursor)
                 {
                     Ok(id) => {
                         let raw = id.as_u64();
@@ -152,7 +152,7 @@ impl LinuxTextEditorCoordinator {
         } else {
             match self
                 .registry
-                .create_session(target_id.to_string(), text, cursor, false)
+                .open_session(target_id.to_string(), text, cursor)
             {
                 Ok(id) => id.as_u64(),
                 Err(_) => return false,

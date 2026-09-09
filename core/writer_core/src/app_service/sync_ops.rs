@@ -127,7 +127,8 @@ impl super::WriterAppService {
 
     pub fn load_sync_token_from_secure_storage(&self) -> Option<String> {
         const GLOBAL_KEY: &str = "sync_token_global";
-        self.api.secure_storage.as_ref().and_then(|storage| {
+        let core = self.api.core_read();
+        core.secure_storage.as_ref().and_then(|storage| {
             storage
                 .get_secret(GLOBAL_KEY)
                 .ok()
@@ -138,7 +139,8 @@ impl super::WriterAppService {
 
     pub fn save_sync_token_to_secure_storage(&self, token: &str) -> Result<(), WriterError> {
         const GLOBAL_KEY: &str = "sync_token_global";
-        if let Some(storage) = &self.api.secure_storage {
+        let core = self.api.core_read();
+        if let Some(storage) = &core.secure_storage {
             storage
                 .set_secret(GLOBAL_KEY, token.as_bytes())
                 .map_err(WriterError::Other)?;
@@ -148,7 +150,8 @@ impl super::WriterAppService {
 
     pub fn delete_sync_token_from_secure_storage(&self) -> Result<(), WriterError> {
         const GLOBAL_KEY: &str = "sync_token_global";
-        if let Some(storage) = &self.api.secure_storage {
+        let core = self.api.core_read();
+        if let Some(storage) = &core.secure_storage {
             storage
                 .delete_secret(GLOBAL_KEY)
                 .map_err(WriterError::Other)?;

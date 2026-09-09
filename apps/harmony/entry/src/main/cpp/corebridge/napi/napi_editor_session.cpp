@@ -57,19 +57,18 @@ static char* arg_str(napi_env env, const napi_value* args, size_t argc, size_t i
 
 // ── Editor Session handlers ──
 
-// NativeEditorSessionCreate(target_id, initial_text, initial_cursor_byte_offset, is_persistent)
+// NativeEditorSessionCreate(target_id, initial_text, initial_cursor_byte_offset)
 static napi_value NativeEditorSessionCreate(napi_env env, napi_callback_info info) {
-    size_t argc = 4;
-    napi_value args[4];
+    size_t argc = 3;
+    napi_value args[3];
     napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
 
     char* target_id = arg_str(env, args, argc, 0);
     char* initial_text = arg_str(env, args, argc, 1);
     uint32_t initial_cursor_byte_offset = arg_u32(env, args, argc, 2);
-    uint8_t is_persistent = static_cast<uint8_t>(arg_u32(env, args, argc, 3));
 
     napi_value result = ReturnJsonString(env,
-        writer_core_editor_session_create(target_id, initial_text, initial_cursor_byte_offset, is_persistent));
+        writer_core_editor_session_create(target_id, initial_text, initial_cursor_byte_offset));
     delete[] target_id;
     delete[] initial_text;
     return result;

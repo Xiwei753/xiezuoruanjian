@@ -262,28 +262,40 @@ pub(super) fn build_remote_records(
     scope: SyncScope,
 ) -> crate::Result<HashMap<String, ManifestFileRecord>> {
     let mut remote_records = HashMap::new();
-    for rec in remote_manifest.files {
+    // 两个来源（remote_manifest.files / remote_tree_files）按同一顺序处理：
+    //   ValidatedSyncPath::new → is_whitelisted_path / is_blacklisted_path → 插入 map。
+    // 用 ValidatedSyncPath::as_str() 的标准化路径写回 record.path 和 map key，
+    // 避免 `volumes\a\chapter.md` 与 `volumes/a/chapter.md` 成为两份逻辑路径。
+    for mut rec in remote_manifest.files {
         if rec.path == SYNC_MANIFEST_PATH {
             continue;
         }
-        ValidatedSyncPath::new(&rec.path)?;
-        remote_records.insert(rec.path.clone(), rec);
+        let validated = ValidatedSyncPath::new(&rec.path)?;
+        let normalized = validated.as_str();
+        if !SyncService::is_whitelisted_path(normalized, scope)
+            || SyncService::is_blacklisted_path(normalized, scope)
+        {
+            continue;
+        }
+        rec.path = normalized.to_string();
+        remote_records.insert(normalized.to_string(), rec);
     }
 
     for (path, sha) in remote_tree_files {
         if path == SYNC_MANIFEST_PATH || remote_records.contains_key(path) {
             continue;
         }
-        ValidatedSyncPath::new(path)?;
-        if !SyncService::is_whitelisted_path(path, scope)
-            || SyncService::is_blacklisted_path(path, scope)
+        let validated = ValidatedSyncPath::new(path)?;
+        let normalized = validated.as_str();
+        if !SyncService::is_whitelisted_path(normalized, scope)
+            || SyncService::is_blacklisted_path(normalized, scope)
         {
             continue;
         }
         remote_records.insert(
-            path.clone(),
+            normalized.to_string(),
             ManifestFileRecord {
-                path: path.clone(),
+                path: normalized.to_string(),
                 content_hash: sha.clone(),
                 updated_at_ms: 0,
                 deleted_at_ms: None,

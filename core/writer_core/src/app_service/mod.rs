@@ -131,8 +131,8 @@ impl WriterAppService {
         self.api.set_workspace_git_layout(layout);
     }
 
-    pub fn sync_transport_factory(&self) -> Option<&writer_platform_api::SyncTransportFactory> {
-        self.api.sync_transport.as_ref()
+    pub fn sync_transport_factory(&self) -> Option<writer_platform_api::SyncTransportFactory> {
+        self.api.core_read().sync_transport.clone()
     }
 
     pub fn network_state(&self) -> Option<writer_platform_api::NetworkState> {
@@ -154,11 +154,12 @@ impl WriterAppService {
     }
 
     pub fn secure_storage_available(&self) -> bool {
-        self.api.secure_storage.is_some()
+        self.api.core_read().secure_storage.is_some()
     }
 
     pub fn secure_storage_get(&self, key: String) -> Result<Option<Vec<u8>>, WriterError> {
-        if let Some(storage) = &self.api.secure_storage {
+        let core = self.api.core_read();
+        if let Some(storage) = &core.secure_storage {
             storage.get_secret(&key).map_err(WriterError::Other)
         } else {
             Err(WriterError::Other(
@@ -168,7 +169,8 @@ impl WriterAppService {
     }
 
     pub fn secure_storage_set(&self, key: String, value: Vec<u8>) -> Result<(), WriterError> {
-        if let Some(storage) = &self.api.secure_storage {
+        let core = self.api.core_read();
+        if let Some(storage) = &core.secure_storage {
             storage.set_secret(&key, &value).map_err(WriterError::Other)
         } else {
             Err(WriterError::Other(
@@ -178,7 +180,8 @@ impl WriterAppService {
     }
 
     pub fn secure_storage_delete(&self, key: String) -> Result<(), WriterError> {
-        if let Some(storage) = &self.api.secure_storage {
+        let core = self.api.core_read();
+        if let Some(storage) = &core.secure_storage {
             storage.delete_secret(&key).map_err(WriterError::Other)
         } else {
             Err(WriterError::Other(
@@ -326,7 +329,7 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let session_id = svc
-            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
+            .text_edit_session_open("test".to_string(), String::new(), 0)
             .unwrap();
         let result = svc.text_edit_session_load_text(session_id, "你好".to_string(), 4);
         assert_eq!(
@@ -343,7 +346,7 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let session_id = svc
-            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
+            .text_edit_session_open("test".to_string(), String::new(), 0)
             .unwrap();
         let result = svc.text_edit_session_reset(session_id, "你好".to_string(), 4);
         assert_eq!(result, 0);
@@ -357,7 +360,7 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let session_id = svc
-            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
+            .text_edit_session_open("test".to_string(), String::new(), 0)
             .unwrap();
         let load = svc.text_edit_session_load_text(session_id, String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);

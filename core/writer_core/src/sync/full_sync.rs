@@ -1783,15 +1783,25 @@ fn download_remote_to_staging(
     };
     let mut downloaded: Vec<String> = Vec::new();
     for entry in &entries {
-        let full_remote_path = format!("{}/{}", remote_prefix, entry.path);
+        // 远端路径进入 staging 落盘前的唯一安全边界：
+        // 拒绝绝对路径、`..` 穿越、Windows prefix/UNC，统一 `/` 分隔。
+        // 非法远端路径让该 target 返回错误，不能跳过继续同步。
+        let validated = match crate::sync::path::ValidatedSyncPath::new(&entry.path) {
+            Ok(vp) => vp,
+            Err(e) => return sync_result_from_error(crate::Error::from(e)),
+        };
+        let full_remote_path = format!("{}/{}", remote_prefix, validated.as_str());
         let obj = match provider.read(&full_remote_path) {
             Ok(Some(obj)) => obj,
             Ok(None) => continue, // 已被删，跳过
             Err(e) => return sync_result_from_provider_error(e),
         };
         if let Some(staging) = staging_root {
-            if let Err(e) = write_staging_file(staging, &entry.path, &obj.content) {
-                return sync_result_from_error(crate::Error::Io(e));
+            let dest = validated.join_under(staging);
+            if let Err(e) = crate::storage::transaction::atomic_write_bytes(&dest, &obj.content) {
+                return sync_result_from_error(crate::Error::Io(std::io::Error::other(
+                    e.to_string(),
+                )));
             }
         }
         downloaded.push(full_remote_path);
@@ -2028,13 +2038,6 @@ fn upload_complete_generation_snapshot(
     )?;
 
     Ok(())
-}
-
-/// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
-fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Result<()> {
-    let dest = staging.join(rel);
-    crate::storage::transaction::atomic_write_bytes(&dest, content)
-        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// `crate::Error` → `SyncResult::error(...)` 的统一转换。

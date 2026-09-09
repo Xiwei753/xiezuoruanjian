@@ -118,7 +118,7 @@ char*  writer_core_list_builtin_themes(void);
 int32_t writer_core_is_ai_available(void);
 
 // ── Editor Session（TextEditSession C ABI）── 返回 JSON ResultEnvelope，须 writer_core_free_string 释放
-char* writer_core_editor_session_create(const char* target_id, const char* initial_text, uint32_t initial_cursor_byte_offset, uint8_t is_persistent);
+char* writer_core_editor_session_create(const char* target_id, const char* initial_text, uint32_t initial_cursor_byte_offset);
 char* writer_core_editor_session_close(uint64_t session_id);
 char* writer_core_editor_session_snapshot(uint64_t session_id);
 char* writer_core_editor_session_insert(uint64_t session_id, uint32_t byte_offset, const char* text, const char* cause, uint64_t expected_revision);

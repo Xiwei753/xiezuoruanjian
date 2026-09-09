@@ -36,7 +36,6 @@ use crate::sync::scanner::scan_for_sync;
 use crate::sync::types::{
     ManifestFileRecord, SyncConflict, SyncKind, SyncManifest, SyncScope, SyncState,
 };
-use crate::sync::SyncService;
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -363,12 +362,18 @@ pub(crate) fn merge_remote_into_local_snapshot(
     };
 
     let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
-    let full_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
-    crate::storage::transaction::atomic_write_string(&full_manifest_path, &manifest_json)
-        .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
+    // 在内存中收集冲突到 state.conflicts 和 conflicts_json，
+    // 不再逐条调用 record_sync_conflict（每次内部写盘）。
+    // 冲突记录失败必须向上返回 Err，不再 let _ = 吞错误。
+    let mut conflicts_json = crate::sync::conflict::load_conflicts_json(sync_root)?;
     for conflict in &doc_conflicts {
-        let _ = SyncService::record_sync_conflict(sync_root, conflict.clone(), None);
+        crate::sync::conflict::upsert_conflict(
+            &mut conflicts_json,
+            &mut state.conflicts,
+            &mut state.conflicted_files,
+            conflict.clone(),
+        );
     }
 
     state.last_sync_time = Some(chrono::Utc::now().timestamp());
@@ -426,7 +431,15 @@ pub(crate) fn merge_remote_into_local_snapshot(
         .tombstones
         .retain(|t| t.purge_after > chrono::Utc::now().timestamp());
 
-    crate::sync::SyncService::save_sync_state(sync_root, state)?;
+    // 一次事务原子提交 manifest + state + conflicts.json，
+    // 避免分多次独立写入中间崩溃导致三者不一致。
+    crate::sync::conflict::persist_sync_merge_result(
+        sync_root,
+        SYNC_MANIFEST_PATH,
+        &manifest_json,
+        state,
+        &conflicts_json,
+    )?;
 
     let mut all_downloaded = pending_take_remote_downloaded;
     all_downloaded.extend(to_download);

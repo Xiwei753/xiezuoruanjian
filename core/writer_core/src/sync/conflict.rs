@@ -13,9 +13,8 @@ use std::path::Path;
 /// 读取 `app-meta/sync/conflicts.json`。
 ///
 /// 文件不存在或内容损坏（半写/无效 JSON）时回退为空列表——丢失冲突记录比
-/// 阻塞后续同步更可接受，与 [`crate::sync::SyncService::remove_conflict_from_json`]
-/// 的容错策略一致。
-fn load_conflicts_json(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
+/// 阻塞后续同步更可接受。
+pub(crate) fn load_conflicts_json(sync_root: &Path) -> crate::Result<Vec<SyncConflict>> {
     let conflicts_path = sync_root.join("app-meta/sync/conflicts.json");
     if !conflicts_path.exists() {
         return Ok(Vec::new());
@@ -48,11 +47,35 @@ fn persist_conflict_state(
     Ok(())
 }
 
+/// 一次事务写入 `manifest.sync.json` + `state.local.json` + `conflicts.json`。
+///
+/// 用于 LWW merge 完成后原子提交三个文件，避免分多次独立写入中间崩溃
+/// 导致 manifest / state / conflicts 不一致。manifest_json 由调用方序列化好传入。
+pub(crate) fn persist_sync_merge_result(
+    sync_root: &Path,
+    manifest_path: &str,
+    manifest_json: &str,
+    state: &crate::sync::types::SyncState,
+    conflicts: &[SyncConflict],
+) -> crate::Result<()> {
+    let state_json = serde_json::to_string_pretty(state)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+    let conflicts_json = serde_json::to_string_pretty(conflicts)
+        .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
+
+    let mut tx = crate::storage::transaction::SaveTransaction::new(sync_root);
+    tx.add_bytes(manifest_path, manifest_json.as_bytes())?;
+    tx.add_bytes("app-meta/sync/state.local.json", state_json.as_bytes())?;
+    tx.add_bytes("app-meta/sync/conflicts.json", conflicts_json.as_bytes())?;
+    tx.commit()?;
+    Ok(())
+}
+
 /// 按 `local_path` 去重/替换加入冲突。
 ///
 /// 同一路径重复写入时替换已有记录，不无限 append。`state_conflicts` 和
 /// `conflicts_json` 都做同样的去重，保持两者一致。
-fn upsert_conflict(
+pub(crate) fn upsert_conflict(
     conflicts_json: &mut Vec<SyncConflict>,
     state_conflicts: &mut Vec<SyncConflict>,
     conflicted_files: &mut std::collections::HashSet<String>,
@@ -178,37 +201,6 @@ pub fn record_staging_conflicts(
 }
 
 impl crate::sync::SyncService {
-    /// Remove conflict records for `path` from the `conflicts.json` file.
-    /// This keeps the on-disk conflict list in sync with `state.conflicts`.
-    ///
-    /// 如果 `conflicts.json` 不存在或内容损坏（半写/无效 JSON），
-    /// 回退为空列表——丢失冲突记录比阻塞后续同步更可接受。
-    #[allow(
-        clippy::too_many_lines,
-        clippy::cognitive_complexity,
-        clippy::excessive_nesting,
-        clippy::too_many_arguments,
-        clippy::type_complexity
-    )]
-    fn remove_conflict_from_json(sync_root: &Path, path: &str) {
-        let conflicts_path = sync_root.join("app-meta/sync/conflicts.json");
-        if !conflicts_path.exists() {
-            return;
-        }
-        if let Ok(content) = std::fs::read_to_string(&conflicts_path) {
-            let mut conflicts: Vec<SyncConflict> =
-                serde_json::from_str(&content).unwrap_or_default();
-            let before = conflicts.len();
-            conflicts.retain(|c| c.local_path != path && c.remote_path != path);
-            if conflicts.len() != before {
-                if let Ok(json) = serde_json::to_string_pretty(&conflicts) {
-                    let _ =
-                        crate::storage::transaction::atomic_write_string(&conflicts_path, &json);
-                }
-            }
-        }
-    }
-
     /// 记录同步冲突——将冲突元数据追加到 `app-meta/sync/conflicts.json`，
     /// 并将本地内容备份为 `{path}.conflict.{timestamp}` 文件。
     ///
@@ -302,8 +294,10 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(sync_root, path);
-        Self::save_sync_state(sync_root, &state)?;
+        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }
 
@@ -332,8 +326,10 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(sync_root, path);
-        Self::save_sync_state(sync_root, &state)?;
+        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }
 
@@ -378,8 +374,10 @@ impl crate::sync::SyncService {
         state
             .conflicts
             .retain(|c| c.local_path != path && c.remote_path != path);
-        Self::remove_conflict_from_json(sync_root, path);
-        Self::save_sync_state(sync_root, &state)?;
+        // 一次事务写 state + conflicts.json，避免两次独立写入中间崩溃导致不一致。
+        let mut conflicts_json = load_conflicts_json(sync_root)?;
+        conflicts_json.retain(|c| c.local_path != path && c.remote_path != path);
+        persist_conflict_state(sync_root, &state, &conflicts_json)?;
         Ok(())
     }
 }
