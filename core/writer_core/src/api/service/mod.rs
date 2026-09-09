@@ -40,12 +40,24 @@ pub struct WriterCoreApi {
 }
 
 impl WriterCoreApi {
-    pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
+    /// 私有统一构造函数：一次性完成路径规范化、`WriterCore::new`、
+    /// 平台能力注入与 `Self{...}` 构造，消除三个公开入口的构造分叉。
+    fn build<P1: AsRef<Path>, P2: AsRef<Path>>(
+        app_data_root: P1,
+        projects_root: P2,
+        sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+        secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+    ) -> Self {
         let app_data_root_buf = app_data_root.as_ref().to_path_buf();
-        let core = WriterCore::new(&app_data_root, &projects_root);
+        let projects_root_buf = projects_root.as_ref().to_path_buf();
+        let mut core = WriterCore::new(&app_data_root, &projects_root);
+        // 平台能力单一来源：sync_transport / secure_storage 只存于内部 WriterCore，
+        // API 层不再保留副本，避免双份状态漂移。
+        core.sync_transport = sync_transport_factory;
+        core.secure_storage = secure_storage;
         Self {
             app_data_root: app_data_root_buf.clone(),
-            projects_root: projects_root.as_ref().to_path_buf(),
+            projects_root: projects_root_buf,
             secrets_override: std::sync::Mutex::new(None),
             core_instance: std::sync::RwLock::new(core),
             workspace_git_layout: std::sync::RwLock::new(
@@ -54,23 +66,16 @@ impl WriterCoreApi {
         }
     }
 
+    pub fn new<P1: AsRef<Path>, P2: AsRef<Path>>(app_data_root: P1, projects_root: P2) -> Self {
+        Self::build(app_data_root, projects_root, None, None)
+    }
+
     pub fn with_sync_transport<P1: AsRef<Path>, P2: AsRef<Path>>(
         app_data_root: P1,
         projects_root: P2,
         transport_factory: writer_platform_api::SyncTransportFactory,
     ) -> Self {
-        let app_data_root_buf = app_data_root.as_ref().to_path_buf();
-        let mut core = WriterCore::new(&app_data_root, &projects_root);
-        core.sync_transport = Some(transport_factory);
-        Self {
-            app_data_root: app_data_root_buf.clone(),
-            projects_root: projects_root.as_ref().to_path_buf(),
-            secrets_override: std::sync::Mutex::new(None),
-            core_instance: std::sync::RwLock::new(core),
-            workspace_git_layout: std::sync::RwLock::new(
-                crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
-            ),
-        }
+        Self::build(app_data_root, projects_root, Some(transport_factory), None)
     }
 
     pub fn with_platform_services<P1: AsRef<Path>, P2: AsRef<Path>>(
@@ -79,21 +84,12 @@ impl WriterCoreApi {
         sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
         secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
     ) -> Self {
-        let app_data_root_buf = app_data_root.as_ref().to_path_buf();
-        let mut core = WriterCore::new(&app_data_root, &projects_root);
-        // 平台能力单一来源：sync_transport / secure_storage 只存于内部 WriterCore，
-        // API 层不再保留副本，避免双份状态漂移。
-        core.secure_storage = secure_storage;
-        core.sync_transport = sync_transport_factory;
-        Self {
-            app_data_root: app_data_root_buf.clone(),
-            projects_root: projects_root.as_ref().to_path_buf(),
-            secrets_override: std::sync::Mutex::new(None),
-            core_instance: std::sync::RwLock::new(core),
-            workspace_git_layout: std::sync::RwLock::new(
-                crate::storage::git_repo_layout::GitRepoLayout::new(app_data_root_buf),
-            ),
-        }
+        Self::build(
+            app_data_root,
+            projects_root,
+            sync_transport_factory,
+            secure_storage,
+        )
     }
 
     ///   注入 workspace Git 布局。
