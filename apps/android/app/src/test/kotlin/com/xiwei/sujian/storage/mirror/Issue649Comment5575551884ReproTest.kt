@@ -398,22 +398,24 @@ class Issue649Comment5575551884ReproTest {
         )
 
     /**
-     * 问题 2 补充：writePendingPublishJournal 签名包含 frozen 参数。
+     * 问题 2 补充：writePendingPublishJournal 已迁移至 MirrorJournalWriter，
+     * 接受单个 PendingJournalParams 参数对象（消掉 LongParameterList）。
      *
-     * 修复后：writePendingPublishJournal 有 frozenManifestPlan/frozenManifestPlanHash 参数
-     * （通过 journalContext 继承也可不传）。已删除旧的 frozenManifestMetadata/frozenManifestMetadataHash。
+     * 验证新契约：journal writer 只吃一个参数对象，冻结计划和 hash 没有在重构中丢失。
      */
     @Test
     fun problem2_writePendingPublishJournalSignature_hasFrozenParams() {
-        val publisherClass = ReadableMirrorPublisher::class.java
-        val methods = publisherClass.declaredMethods.filter { it.name == "writePendingPublishJournal" }
-        assertTrue("writePendingPublishJournal 方法存在", methods.isNotEmpty())
+        val method =
+            MirrorJournalWriter::class.java.getDeclaredMethod(
+                "writePendingPublishJournal",
+                PendingJournalParams::class.java,
+            )
 
-        val realMethodParamCount = methods.map { it.parameterCount }.min()
-        assertTrue(
-            "★ writePendingPublishJournal 有 $realMethodParamCount 个参数（含 frozen plan 参数）★",
-            realMethodParamCount >= 20,
-        )
+        assertEquals(Boolean::class.javaPrimitiveType, method.returnType)
+
+        val fields = PendingJournalParams::class.java.declaredFields.map { it.name }.toSet()
+        assertTrue("PendingJournalParams 包含 frozenManifestPlan", "frozenManifestPlan" in fields)
+        assertTrue("PendingJournalParams 包含 frozenManifestPlanHash", "frozenManifestPlanHash" in fields)
     }
 
     // ══════════════════════════════════════════════════════════════════════

@@ -151,10 +151,11 @@ class Issue649Comment5573750754RegressionTest {
         val oldItem = buildStagedItem(key, txId)
         val currentItems =
             mapOf(
-                key to oldItem.copy(
-                    promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD),
-                    state = PendingItem.STATE_PROMOTED,
-                ),
+                key to
+                    oldItem.copy(
+                        promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD),
+                        state = PendingItem.STATE_PROMOTED,
+                    ),
             )
         val desiredEntries = mapOf(key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"))
         val journalContext = buildJournalContext(txId, key, oldItem)
