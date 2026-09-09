@@ -301,15 +301,7 @@ pub(crate) struct LinuxEditorPipeline {
     text_revision: u64,
     /// 任何需要重绘的变化时递增——比 text_revision 更频繁
     visual_revision: u64,
-    #[cfg_attr(all(), allow(dead_code))]
-    animation_enabled: bool,
-    #[cfg_attr(all(), allow(dead_code))]
-    typing_animation_enabled: bool,
     typing_animation_duration_ms: u32,
-    #[cfg_attr(all(), allow(dead_code))]
-    coordinated_cursor_animation_enabled: bool,
-    #[cfg_attr(all(), allow(dead_code))]
-    smooth_cursor_enabled: bool,
     cursor_animation_duration_ms: u32,
     /// 当前布局快照——包含视觉行信息和 QChar 边界
     current_layout_snapshot: Option<EditorLayoutSnapshot>,
@@ -320,7 +312,6 @@ pub(crate) struct LinuxEditorPipeline {
     layout_revision: LayoutRevision,
 }
 
-#[cfg_attr(all(), allow(dead_code))] // 公共 API getter/setter，保留用于 QML/FFI 绑定和未来渲染路径
 impl LinuxEditorPipeline {
     pub fn new() -> Self {
         Self {
@@ -333,25 +324,13 @@ impl LinuxEditorPipeline {
             clipboard_adapter: LinuxQtClipboardFocusAdapter::new(),
             text_revision: 0,
             visual_revision: 0,
-            animation_enabled: true,
-            typing_animation_enabled: true,
             typing_animation_duration_ms: 160,
-            coordinated_cursor_animation_enabled: false,
-            smooth_cursor_enabled: true,
             cursor_animation_duration_ms: 120,
             current_layout_snapshot: None,
             previous_layout_snapshot: None,
             previous_canonical_snapshot: None,
             layout_revision: LayoutRevision::initial(),
         }
-    }
-
-    pub fn kernel(&self) -> &EditorKernel {
-        &self.kernel
-    }
-
-    pub fn kernel_mut(&mut self) -> &mut EditorKernel {
-        &mut self.kernel
     }
 
     pub fn swap_kernel(&mut self, new_kernel: EditorKernel) -> EditorKernel {
@@ -369,10 +348,6 @@ impl LinuxEditorPipeline {
 
     pub fn mirror(&self) -> &CommittedTextMirror {
         &self.mirror
-    }
-
-    pub fn mirror_mut(&mut self) -> &mut CommittedTextMirror {
-        &mut self.mirror
     }
 
     pub fn composition(&self) -> &CompositionState {
@@ -407,20 +382,12 @@ impl LinuxEditorPipeline {
         &mut self.texture_cache
     }
 
-    pub fn clipboard_adapter(&self) -> &LinuxQtClipboardFocusAdapter {
-        &self.clipboard_adapter
-    }
-
     pub fn clipboard_adapter_mut(&mut self) -> &mut LinuxQtClipboardFocusAdapter {
         &mut self.clipboard_adapter
     }
 
     pub fn text_revision(&self) -> u64 {
         self.text_revision
-    }
-
-    pub fn set_text_revision(&mut self, rev: u64) {
-        self.text_revision = rev;
     }
 
     pub fn visual_revision(&self) -> u64 {
@@ -435,53 +402,12 @@ impl LinuxEditorPipeline {
         self.text_revision = self.text_revision.wrapping_add(1);
     }
 
-    pub fn animation_enabled(&self) -> bool {
-        self.animation_enabled
-    }
-
-    pub fn set_animation_enabled(&mut self, enabled: bool) {
-        self.animation_enabled = enabled;
-        self.kernel.set_animation_enabled(enabled);
-    }
-
-    pub fn typing_animation_enabled(&self) -> bool {
-        self.typing_animation_enabled
-    }
-
-    pub fn set_typing_animation_enabled(&mut self, enabled: bool) {
-        self.typing_animation_enabled = enabled;
-    }
-
-    pub fn typing_animation_duration_ms(&self) -> u32 {
-        self.typing_animation_duration_ms
-    }
-
     pub fn set_typing_animation_duration_ms(&mut self, ms: u32) {
         self.typing_animation_duration_ms = ms;
         self.engine.set_animation_duration_ms(u64::from(ms));
         self.kernel.set_animation_duration_ms(u64::from(ms));
         self.animation_coordinator
             .set_typing_animation_duration_ms(ms);
-    }
-
-    pub fn coordinated_cursor_animation_enabled(&self) -> bool {
-        self.coordinated_cursor_animation_enabled
-    }
-
-    pub fn set_coordinated_cursor_animation_enabled(&mut self, enabled: bool) {
-        self.coordinated_cursor_animation_enabled = enabled;
-    }
-
-    pub fn smooth_cursor_enabled(&self) -> bool {
-        self.smooth_cursor_enabled
-    }
-
-    pub fn set_smooth_cursor_enabled(&mut self, enabled: bool) {
-        self.smooth_cursor_enabled = enabled;
-    }
-
-    pub fn cursor_animation_duration_ms(&self) -> u32 {
-        self.cursor_animation_duration_ms
     }
 
     pub fn set_cursor_animation_duration_ms(&mut self, ms: u32) {
@@ -747,19 +673,6 @@ impl LinuxEditorPipeline {
         }
     }
 
-    pub fn reload_from_kernel(&mut self) -> bool {
-        self.mirror.load_from_snapshot(
-            self.kernel.snapshot_text(),
-            self.kernel.cursor(),
-            self.kernel.revision(),
-            self.kernel.selection_anchor(),
-        );
-        self.composition.clear();
-        self.animation_coordinator
-            .cancel_active_composition("reload_from_kernel");
-        true
-    }
-
     pub fn clear_undo_redo(&mut self) {
         let text = self.kernel.snapshot_text();
         let cursor = self.kernel.cursor();
@@ -827,18 +740,8 @@ impl LinuxEditorPipeline {
         self.current_layout_snapshot = snapshot;
     }
 
-    pub fn previous_layout_snapshot(&self) -> &Option<EditorLayoutSnapshot> {
-        &self.previous_layout_snapshot
-    }
-
     pub fn set_previous_layout_snapshot(&mut self, snapshot: Option<EditorLayoutSnapshot>) {
         self.previous_layout_snapshot = snapshot;
-    }
-
-    pub fn previous_canonical_snapshot(
-        &self,
-    ) -> &Option<crate::editor::layout::CanonicalDocumentVisualSnapshot> {
-        &self.previous_canonical_snapshot
     }
 
     pub fn set_previous_canonical_snapshot(
@@ -846,19 +749,6 @@ impl LinuxEditorPipeline {
         snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
     ) {
         self.previous_canonical_snapshot = snapshot;
-    }
-
-    pub fn layout_revision_val(&self) -> LayoutRevision {
-        self.layout_revision
-    }
-
-    pub fn set_layout_revision_val(&mut self, rev: LayoutRevision) {
-        self.layout_revision = rev;
-    }
-
-    pub fn bump_layout_revision(&mut self) -> LayoutRevision {
-        self.layout_revision = LayoutRevision::next();
-        self.layout_revision
     }
 
     pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {

@@ -2,126 +2,41 @@ use std::collections::HashMap;
 use writer_core::editor::text_edit_session::{TextEditSessionId, TextEditSessionRegistry};
 
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum TextInputType {
-    #[default]
-    Text,
-    MultiLine,
-    Password,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) enum SecretPolicy {
     #[default]
     None,
     MaskAndClearOnCommit,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum AutocorrectPolicy {
-    #[default]
-    Default,
-    Disabled,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum CapitalizationPolicy {
-    #[default]
-    None,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum CopyPolicy {
-    #[default]
-    Allow,
-    Block,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum PastePolicy {
-    #[default]
-    Allow,
-}
-
-#[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) enum SelectionPolicy {
-    #[default]
-    Allow,
-    CursorOnly,
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct TextEditorProfile {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub single_line: bool,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub input_type: TextInputType,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub autocorrect_policy: AutocorrectPolicy,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub capitalization_policy: CapitalizationPolicy,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub selection_policy: SelectionPolicy,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub copy_policy: CopyPolicy,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub paste_policy: PastePolicy,
     pub secret_policy: SecretPolicy,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub commit_on_focus_loss: bool,
 }
 
 impl Default for TextEditorProfile {
     fn default() -> Self {
         Self {
-            single_line: false,
-            input_type: TextInputType::MultiLine,
-            autocorrect_policy: AutocorrectPolicy::Default,
-            capitalization_policy: CapitalizationPolicy::None,
-            selection_policy: SelectionPolicy::Allow,
-            copy_policy: CopyPolicy::Allow,
-            paste_policy: PastePolicy::Allow,
             secret_policy: SecretPolicy::None,
-            commit_on_focus_loss: true,
         }
     }
 }
 
 impl TextEditorProfile {
     pub fn short_title() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn search_query() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            autocorrect_policy: AutocorrectPolicy::Disabled,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn repository_url() -> Self {
-        Self {
-            single_line: true,
-            input_type: TextInputType::Text,
-            autocorrect_policy: AutocorrectPolicy::Disabled,
-            ..Self::default()
-        }
+        Self::default()
     }
 
     pub fn secret_token() -> Self {
         Self {
-            single_line: true,
-            input_type: TextInputType::Password,
-            selection_policy: SelectionPolicy::CursorOnly,
-            copy_policy: CopyPolicy::Block,
-            paste_policy: PastePolicy::Allow,
             secret_policy: SecretPolicy::MaskAndClearOnCommit,
-            ..Self::default()
         }
     }
 
@@ -523,14 +438,9 @@ mod tests {
     fn profile_presets_correct() {
         let secret = TextEditorProfile::secret_token();
         assert!(secret.is_secret());
-        assert_eq!(secret.input_type, TextInputType::Password);
-        assert_eq!(secret.copy_policy, CopyPolicy::Block);
-        assert_eq!(secret.selection_policy, SelectionPolicy::CursorOnly);
 
         let search = TextEditorProfile::search_query();
         assert!(!search.is_secret());
-        assert_eq!(search.autocorrect_policy, AutocorrectPolicy::Disabled);
-        assert!(search.single_line);
     }
 
     #[test]

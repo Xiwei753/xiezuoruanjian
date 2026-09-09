@@ -58,6 +58,14 @@ RULES: tuple[PatternRule, ...] = (
         "dead_code 只能精确标注到确有宏误报的最小成员",
     ),
     PatternRule(
+        "cfg-attr-dead-code-allow",
+        re.compile(
+            r"#\s*\[\s*cfg_attr\s*\(.*?\ballow\s*\([^)]*\bdead_code\b[^)]*\)\s*\)\s*\]"
+        ),
+        "禁止用 #[cfg_attr(..., allow(dead_code))] 绕过 dead_code 检查；"
+        "应删除未使用代码或让渲染链真正消费",
+    ),
+    PatternRule(
         "app-backend-mut-pointer-cast",
         re.compile(r"\bas\s+\*mut\s+AppBackend\b"),
         "禁止把共享 AppBackend 引用强转成可变裸指针",

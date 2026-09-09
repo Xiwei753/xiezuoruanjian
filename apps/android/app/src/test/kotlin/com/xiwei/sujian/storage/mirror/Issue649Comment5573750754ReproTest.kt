@@ -31,6 +31,12 @@ import org.robolectric.annotation.Config
 @Config(sdk = [34])
 class Issue649Comment5573750754ReproTest {
 
+    private companion object {
+        const val PROJECT_ID = "proj-1"
+        const val CHAPTER_PATH = "作品/P/V/Ch.md"
+        const val MANIFEST_PATH = "_meta/manifest.json"
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // 问题1：recoverPromotePhase() 先改 stateStore，后写 cleanup journal
     // 源：ReadableMirrorPublisher.recoverPromotePhase line 565-605
@@ -55,13 +61,13 @@ class Issue649Comment5573750754ReproTest {
 
         // 模拟 promotedEntries 已计算完成
         val promotedEntriesWritten = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-        val projectId = "proj-1"
+        val projectId = PROJECT_ID
 
         // ── 复现 recoverPromotePhase() line 565-605 的当前执行顺序 ──
         // line 567: stateStore.putChapterEntries(promotedEntries)
         stateStoreOps.add("putChapterEntries")
         promotedEntriesWritten[ChapterKey(projectId, "v1", "c1")] =
-            ChapterMirrorEntry("content://new/1", "作品/P/V/Ch.md", 100L, computeContentHash("new"))
+            ChapterMirrorEntry("content://new/1", CHAPTER_PATH, 100L, computeContentHash("new"))
         // line 573: stateStore.addPublishedProjectId(projectId)
         stateStoreOps.add("addPublishedProjectId")
 
@@ -120,21 +126,21 @@ class Issue649Comment5573750754ReproTest {
      */
     @Test
     fun problem2_manifestSubTransaction_usesStaleJournalItems() {
-        val key = ChapterKey("proj-1", "v1", "c1")
+        val key = ChapterKey(PROJECT_ID, "v1", "c1")
         val txId = "tx-1"
 
         // 旧 journal 的 items（recovery 进入时的状态，正文已 stage 但未 promote）
         val oldItem = PendingItem(
             key = key,
-            stagedRef = StagedMirrorRef(txId, "content://staging/1", ".staging/tx-1/Ch.md", "作品/P/V/Ch.md", "text/markdown"),
-            oldRef = MirrorFileRef("content://old/1", "作品/P/V/Ch.md"),
+            stagedRef = StagedMirrorRef(txId, "content://staging/1", ".staging/tx-1/Ch.md", CHAPTER_PATH, "text/markdown"),
+            oldRef = MirrorFileRef("content://old/1", CHAPTER_PATH),
             backupOldRef = null,
             promotedRef = null,
             state = PendingItem.STATE_STAGED,
         )
 
         // recoverPromotePhase() 推进正文后，currentItems 已更新为 PROMOTED
-        val promotedRef = MirrorFileRef("content://promoted/new", "作品/P/V/Ch.md")
+        val promotedRef = MirrorFileRef("content://promoted/new", CHAPTER_PATH)
         val currentItem = oldItem.copy(
             promotedRef = promotedRef,
             state = PendingItem.STATE_PROMOTED,
@@ -146,7 +152,7 @@ class Issue649Comment5573750754ReproTest {
             txId = txId,
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
-            projectId = "proj-1",
+            projectId = PROJECT_ID,
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_PROMOTE,
             oldEntries = emptyMap(),
@@ -216,7 +222,7 @@ class Issue649Comment5573750754ReproTest {
     @Test
     fun problem3_rollbackManifest_cannotDistinguishManifestSubTransactionNotStarted() {
         val storage = ReproFakeStorage5573750754()
-        val manifestPath = "_meta/manifest.json"
+        val manifestPath = MANIFEST_PATH
 
         // 设备上有上一版 manifest（manifest 子事务未开始，但设备已有旧 manifest）
         val existingManifestUri = "content://existing/manifest"
@@ -230,7 +236,7 @@ class Issue649Comment5573750754ReproTest {
             txId = "tx-1",
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
-            projectId = "proj-1",
+            projectId = PROJECT_ID,
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_ROLLBACK,
             oldEntries = emptyMap(),
@@ -309,7 +315,7 @@ class Issue649Comment5573750754ReproTest {
     @Test
     fun problem4_rollbackManifest_manifestBackupRefNullButPhysicalBackupExists() {
         val storage = ReproFakeStorage5573750754()
-        val manifestPath = "_meta/manifest.json"
+        val manifestPath = MANIFEST_PATH
         val txId = "tx-1"
 
         // 物理状态：old manifest 已被 move 到 backup（prepareBackup 已执行）
@@ -325,7 +331,7 @@ class Issue649Comment5573750754ReproTest {
             txId = txId,
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
-            projectId = "proj-1",
+            projectId = PROJECT_ID,
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_ROLLBACK,
             oldEntries = emptyMap(),
@@ -386,7 +392,7 @@ class Issue649Comment5573750754ReproTest {
     @Test
     fun problem5a_manifestPromotedCommittedRecovery_noContentHashVerification() {
         val storage = ReproFakeStorage5573750754()
-        val manifestPath = "_meta/manifest.json"
+        val manifestPath = MANIFEST_PATH
 
         // 本事务的新 manifest hash
         val newManifestContent = "{\"version\":\"new\"}"
@@ -436,8 +442,8 @@ class Issue649Comment5573750754ReproTest {
     @Test
     fun problem5b_recoverPromotePhase_reusesPromotedRefWithoutHashVerification() {
         val storage = ReproFakeStorage5573750754()
-        val key = ChapterKey("proj-1", "v1", "c1")
-        val finalPath = "作品/P/V/Ch.md"
+        val key = ChapterKey(PROJECT_ID, "v1", "c1")
+        val finalPath = CHAPTER_PATH
 
         // 本事务的新正文 hash
         val newContent = "new chapter content"

@@ -91,17 +91,14 @@ class ReadableMirrorRestorer {
             val manifestUri =
                 findDescendant(mirrorTreeUri, MANIFEST_PATH, documentTreeReader)
                     ?: return@withContext RestoreResult.ManifestMissing
-            val manifest: MirrorManifest
-            val normalizedManifestJson: String
-            val committedHash: String
-            try {
-                val manifestJson = documentTreeReader.readText(manifestUri)
-                manifest = mirrorManifestFromJsonStrict(manifestJson)
-                normalizedManifestJson = mirrorManifestToJson(manifest)
-                committedHash = computeContentHash(normalizedManifestJson)
-            } catch (e: Exception) {
-                return@withContext RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}")
+            val manifestLoaded = loadManifestInfo(manifestUri, documentTreeReader)
+            if (manifestLoaded is ManifestLoadOutcome.Failed) {
+                return@withContext manifestLoaded.result
             }
+            val manifestInfo = manifestLoaded as ManifestLoadOutcome.Loaded
+            val manifest = manifestInfo.manifest
+            val normalizedManifestJson = manifestInfo.normalizedJson
+            val committedHash = manifestInfo.committedHash
 
             // 1.1 预检查 + 预读所有章节正文到内存。
             // #649 评论 5560971132 修复 8：任一章节读取失败或 hash 不匹配立即返回 RestoreFailed，
@@ -123,17 +120,15 @@ class ReadableMirrorRestorer {
             // #649 评论 5561465552 第 2 点：保留 manifest 里的 project.id/volume.id/chapter.id，
             // 不再生成新 ID。
             val allChapterEntries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-            try {
-                for (project in manifest.projects) {
-                    val dto = buildRestoreProjectInputDto(project, preloadedContents)
-                    val result = appServiceBridge.restoreProjectTree(dto).unwrapOrThrow()
-                    // restore_project_tree 保留 manifest ID，所以这里用 manifest 的 ID 组装条目
-                    val projectEntries = buildChapterEntries(project, mirrorTreeUri, documentTreeReader)
-                    allChapterEntries.putAll(projectEntries)
-                }
-            } catch (e: Exception) {
-                return@withContext RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
-            }
+            val restoreError = restoreAllProjects(
+                manifest,
+                preloadedContents,
+                appServiceBridge,
+                mirrorTreeUri,
+                documentTreeReader,
+                allChapterEntries,
+            )
+            if (restoreError != null) return@withContext restoreError
 
             // 3. 保存恢复后的状态到 ReadableMirrorStateStore。
             // #649 评论 5561465552 第 3 点：backend=document_tree，treeUri=mirrorTreeUri。
@@ -162,6 +157,51 @@ class ReadableMirrorRestorer {
             changeSink.everythingChanged()
             RestoreResult.Success
         }
+
+    /** manifest 读取+严格解析结果（#651 评论 5592465805：拆分降低 restore 复杂度）。 */
+    private sealed interface ManifestLoadOutcome {
+        data class Loaded(
+            val manifest: MirrorManifest,
+            val normalizedJson: String,
+            val committedHash: String,
+        ) : ManifestLoadOutcome
+
+        data class Failed(val result: RestoreResult.RestoreFailed) : ManifestLoadOutcome
+    }
+
+    /** 读取并严格解析 manifest，计算 normalized JSON 和 committed hash。 */
+    private fun loadManifestInfo(
+        manifestUri: Uri,
+        reader: DocumentTreeReader,
+    ): ManifestLoadOutcome = try {
+        val manifestJson = reader.readText(manifestUri)
+        val manifest = mirrorManifestFromJsonStrict(manifestJson)
+        val normalizedJson = mirrorManifestToJson(manifest)
+        ManifestLoadOutcome.Loaded(manifest, normalizedJson, computeContentHash(normalizedJson))
+    } catch (e: Exception) {
+        ManifestLoadOutcome.Failed(RestoreResult.RestoreFailed("Failed to read/parse manifest: ${e.message}"))
+    }
+
+    /** 对每个 project 调 restoreProjectTree 并收集 chapter entries；失败返回 RestoreFailed。 */
+    private fun restoreAllProjects(
+        manifest: MirrorManifest,
+        preloadedContents: Map<String, String>,
+        appServiceBridge: AppServiceBridge,
+        mirrorTreeUri: Uri,
+        reader: DocumentTreeReader,
+        allChapterEntries: MutableMap<ChapterKey, ChapterMirrorEntry>,
+    ): RestoreResult.RestoreFailed? = try {
+        for (project in manifest.projects) {
+            val dto = buildRestoreProjectInputDto(project, preloadedContents)
+            appServiceBridge.restoreProjectTree(dto).unwrapOrThrow()
+            // restore_project_tree 保留 manifest ID，所以这里用 manifest 的 ID 组装条目
+            val projectEntries = buildChapterEntries(project, mirrorTreeUri, reader)
+            allChapterEntries.putAll(projectEntries)
+        }
+        null
+    } catch (e: Exception) {
+        RestoreResult.RestoreFailed(e.message ?: "Unknown restore error")
+    }
 
     /**
      * 预检查所有章节 + 预读正文到 [preloadedContents]。

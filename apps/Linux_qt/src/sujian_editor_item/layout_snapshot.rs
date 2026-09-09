@@ -82,8 +82,6 @@ pub(crate) struct PreparedLineSnapshot {
     pub clusters: Vec<LineClusterSnapshot>,
     pub document_origin_y: f64,
     pub dpr: f64,
-    pub line_height: f64,
-    pub line_width: f64,
     pub byte_start: usize,
     pub byte_end: usize,
     pub visual_x: f64,

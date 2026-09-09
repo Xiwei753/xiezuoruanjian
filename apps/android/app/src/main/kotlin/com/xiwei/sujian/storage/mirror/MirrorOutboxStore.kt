@@ -255,7 +255,7 @@ class MirrorOutboxStore(
      */
     fun recordSignalTime(): Boolean {
         synchronized(lock) {
-            val root = readRootForUpdate() ?: return false
+            val root = readRootOrNull(JSONObject()) ?: return false
             root.put(LAST_SIGNAL_TIME_KEY, System.currentTimeMillis())
             return writeRoot(root)
         }
@@ -266,7 +266,7 @@ class MirrorOutboxStore(
      */
     fun getLastSignalTime(): Long {
         synchronized(lock) {
-            val root = readRootForRead() ?: return 0L
+            val root = readRootOrNull() ?: return 0L
             return root.optLong(LAST_SIGNAL_TIME_KEY, 0L)
         }
     }
@@ -401,17 +401,9 @@ class MirrorOutboxStore(
         }
     }
 
-    private fun readRootForUpdate(): JSONObject? {
+    private fun readRootOrNull(notExistsDefault: JSONObject? = null): JSONObject? {
         return when (val result = readRoot()) {
-            is ReadResult.NotExists -> JSONObject()
-            is ReadResult.Parsed -> result.root
-            is ReadResult.Corrupted -> null
-        }
-    }
-
-    private fun readRootForRead(): JSONObject? {
-        return when (val result = readRoot()) {
-            is ReadResult.NotExists -> null
+            is ReadResult.NotExists -> notExistsDefault
             is ReadResult.Parsed -> result.root
             is ReadResult.Corrupted -> null
         }

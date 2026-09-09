@@ -119,6 +119,38 @@ pub struct EditorBackend {
         rules = self.rule_names(source)
         self.assertNotIn("broad-dead-code-allow", rules)
 
+    def test_detects_cfg_attr_dead_code_allow(self) -> None:
+        source = r'''
+#[cfg_attr(all(), allow(dead_code))]
+struct Foo { x: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cfg-attr-dead-code-allow", rules)
+
+    def test_detects_cfg_attr_any_dead_code_allow(self) -> None:
+        source = r'''
+#[cfg_attr(any(), allow(dead_code))]
+struct Bar { y: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cfg-attr-dead-code-allow", rules)
+
+    def test_detects_cfg_attr_dead_code_allow_with_other_lints(self) -> None:
+        source = r'''
+#[cfg_attr(all(), allow(unused, dead_code))]
+struct Baz { z: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertIn("cfg-attr-dead-code-allow", rules)
+
+    def test_accepts_cfg_attr_test_allow_unused(self) -> None:
+        source = r'''
+#[cfg_attr(test, allow(unused))]
+struct Quux { w: i32 }
+'''
+        rules = self.rule_names(source)
+        self.assertNotIn("cfg-attr-dead-code-allow", rules)
+
     def test_flags_assert_unwind_safe_even_with_comment(self) -> None:
         source = r'''
 fn ffi_boundary() {

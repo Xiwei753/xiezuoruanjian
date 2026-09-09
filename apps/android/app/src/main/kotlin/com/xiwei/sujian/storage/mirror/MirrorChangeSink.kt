@@ -274,55 +274,53 @@ class DefaultMirrorChangeSink(
 
         // 通配键表示全量
         if (snapshot.any { it.first == wildcardKey }) {
-            // #649 评论 5575950895 问题 1：用本轮 snapshot 中 wildcard 的 DirtyEntry.generation
-            // 做 ACK，不再用全局 loadedFullDirtyGeneration（运行期 everythingChanged 不给它赋值）。
-            // 发布期间若来了新一代 wildcard，remove(key, oldValue) 和 ackFullDirty(oldGeneration)
-            // 都不会误删新事件。
-            val processedWildcard = snapshot.first { it.first == wildcardKey }.second
-            val result = publisher.publishAll()
-            when (result) {
-                is MirrorPublishResult.Committed -> {
-                    dirtyMap.remove(wildcardKey, processedWildcard)
-                    // #649 评论 5575551884：用 generation-aware ACK 清 fullDirty
-                    if (processedWildcard.generation > 0) {
-                        outboxStore.ackFullDirty(processedWildcard.generation)
-                    }
-                }
-                is MirrorPublishResult.PendingRecovery,
-                is MirrorPublishResult.RetryableFailure,
-                -> {
-                    DiagnosticsLogger.w(TAG, "publishAll pending/failed, keeping event for retry")
-                    signal.trySend(Unit)
-                    return
-                }
-            }
+            processWildcardSnapshot(snapshot, wildcardKey)
             return
         }
 
         // 按项目去重发布
+        processPerProjectSnapshot(snapshot)
+    }
+
+    /**
+     * 处理全量（wildcard）快照。
+     *
+     * #649 评论 5575950895 问题 1：用本轮 snapshot 中 wildcard 的 DirtyEntry.generation
+     * 做 ACK，不再用全局 loadedFullDirtyGeneration（运行期 everythingChanged 不给它赋值）。
+     * 发布期间若来了新一代 wildcard，remove(key, oldValue) 和 ackFullDirty(oldGeneration)
+     * 都不会误删新事件。
+     */
+    private suspend fun processWildcardSnapshot(
+        snapshot: List<Pair<MirrorKey, DirtyEntry>>,
+        wildcardKey: MirrorKey,
+    ) {
+        val processedWildcard = snapshot.first { it.first == wildcardKey }.second
+        val result = publisher.publishAll()
+        when (result) {
+            is MirrorPublishResult.Committed -> {
+                dirtyMap.remove(wildcardKey, processedWildcard)
+                // #649 评论 5575551884：用 generation-aware ACK 清 fullDirty
+                if (processedWildcard.generation > 0) {
+                    outboxStore.ackFullDirty(processedWildcard.generation)
+                }
+            }
+            is MirrorPublishResult.PendingRecovery,
+            is MirrorPublishResult.RetryableFailure,
+            -> {
+                DiagnosticsLogger.w(TAG, "publishAll pending/failed, keeping event for retry")
+                signal.trySend(Unit)
+            }
+        }
+    }
+
+    /** 按项目去重发布。 */
+    private suspend fun processPerProjectSnapshot(snapshot: List<Pair<MirrorKey, DirtyEntry>>) {
         val projectIds = snapshot.map { it.first.projectId }.distinct()
         for (pid in projectIds) {
             val projectEntries = snapshot.filter { it.first.projectId == pid }
             val result = publisher.publishProject(pid)
             when (result) {
-                is MirrorPublishResult.Committed -> {
-                    for ((key, value) in projectEntries) {
-                        dirtyMap.remove(key, value)
-                    }
-                    // #649 评论 5575551884：用 generation-aware ACK
-                    // 只清除仍在脏 map 中且 generation 未变的项目
-                    val entry = dirtyMap.entries.firstOrNull { it.key.projectId == pid }
-                    if (entry == null) {
-                        // 项目已全部移除：用本轮 snapshot 的最大 generation ACK
-                        // #649 评论 5576464076 问题 4.2：取 maxOf 而非 firstOrNull，
-                        // 避免多个 dirty key（如 gen 10 + gen 11）时 ACK 拿到旧的 gen 10 失败。
-                        val processedGeneration = projectEntries.maxOf { it.second.generation }
-                        if (processedGeneration > 0) {
-                            outboxStore.ackProject(pid, processedGeneration, OutboxIntentKind.UPSERT)
-                        }
-                    }
-                    // 如果 entry 仍在 map 中（处理期间有新 dirty），generation 已变，ACK 会失败，保留新 dirty
-                }
+                is MirrorPublishResult.Committed -> ackCommittedProject(pid, projectEntries)
                 is MirrorPublishResult.PendingRecovery,
                 is MirrorPublishResult.RetryableFailure,
                 -> {
@@ -335,6 +333,31 @@ class DefaultMirrorChangeSink(
                 }
             }
         }
+    }
+
+    /**
+     * ACK 已成功提交的项目：清除脏标记 + generation-aware ACK outbox。
+     *
+     * #649 评论 5575551884：用 generation-aware ACK，只清除仍在脏 map 中且 generation 未变的项目。
+     * #649 评论 5576464076 问题 4.2：取 maxOf 而非 firstOrNull，避免多个 dirty key
+     * （如 gen 10 + gen 11）时 ACK 拿到旧的 gen 10 失败。
+     */
+    private fun ackCommittedProject(
+        pid: String,
+        projectEntries: List<Pair<MirrorKey, DirtyEntry>>,
+    ) {
+        for ((key, value) in projectEntries) {
+            dirtyMap.remove(key, value)
+        }
+        val entry = dirtyMap.entries.firstOrNull { it.key.projectId == pid }
+        if (entry == null) {
+            // 项目已全部移除：用本轮 snapshot 的最大 generation ACK
+            val processedGeneration = projectEntries.maxOf { it.second.generation }
+            if (processedGeneration > 0) {
+                outboxStore.ackProject(pid, processedGeneration, OutboxIntentKind.UPSERT)
+            }
+        }
+        // 如果 entry 仍在 map 中（处理期间有新 dirty），generation 已变，ACK 会失败，保留新 dirty
     }
 
     companion object {

@@ -608,6 +608,8 @@ class DiagnosticsPersistenceChainTest {
     @org.junit.Before
     fun setUp() {
         context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
+        // 隔离 PersistentLogWriter 单例（Robolectric 每方法独立 dataDir）。
+        com.xiwei.sujian.core.diagnostics.PersistentLogWriter.resetForTest(context)
         com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.setEnabled(true)
         com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer.clear()
         com.xiwei.sujian.core.diagnostics.DiagnosticsLogger.init(context, isEnabled = true, isVerbose = false)
@@ -870,12 +872,11 @@ class PersistentLogWriterTest {
     @Before
     fun setUp() {
         context = androidx.test.core.app.ApplicationProvider.getApplicationContext()
-        PersistentLogWriter.init(context)
-        PersistentLogWriter.setEnabled(true)
-        // 先等待之前可能残留的写完成（writer 空闲），再清空队列与文件，
-        // 确保 clearLogs 不会与 writer 的 writeBatch 并发产生竞态。
-        PersistentLogWriter.flushBlocking()
-        PersistentLogWriter.clearLogs()
+        // Robolectric 为每个测试方法创建独立 Application 沙箱（独立 filesDir），
+        // 但 PersistentLogWriter 是常驻单例，init 后 initialized 永不重置 → appContext
+        // 卡在首个测试的 dataDir。resetForTest 把 appContext/buildIdentity/persistenceHealthy
+        // /enabled 重置到当前测试沙箱并排空队列与文件，确保用例间真正隔离。
+        PersistentLogWriter.resetForTest(context)
     }
 
     @After
@@ -1226,10 +1227,10 @@ class PersistentLogWriterRotationPruneTest {
 
     @Before
     fun setUp() {
-        PersistentLogWriter.init(context)
-        PersistentLogWriter.setEnabled(true)
-        PersistentLogWriter.flushBlocking()
-        PersistentLogWriter.clearLogs()
+        // 与 PersistentLogWriterTest 同理：resetForTest 把单例 appContext 重置到当前
+        // 测试沙箱，避免 Robolectric 每方法独立 dataDir 与单例 initialized 永不重置
+        // 导致的写盘/断言 dataDir 错位。
+        PersistentLogWriter.resetForTest(context)
     }
 
     @After
@@ -1801,6 +1802,12 @@ class PersistentLogWriterDeleteLogFilesTest {
 @org.robolectric.annotation.Config(sdk = [34])
 class ClearLogsFailurePropagationTest {
     private val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
+
+    @Before
+    fun setUp() {
+        // 隔离：确保单例 appContext 指向当前测试沙箱，clearLogs 删除的是当前 dataDir。
+        PersistentLogWriter.resetForTest(context)
+    }
 
     @Test
     fun clearLogsReturnsFalseWhenLogsDirIsNotDirectory() {

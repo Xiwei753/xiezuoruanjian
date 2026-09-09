@@ -543,27 +543,7 @@ class ReadableMirrorStateStore(
         if (projectsRaw != null) {
             require(projectsRaw is JSONObject) { "State corruption: projects must be JSONObject, got ${projectsRaw.javaClass.simpleName}" }
         }
-        val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
-        if (projectsRaw is JSONObject) {
-            val projectIds = projectsRaw.keys()
-            while (projectIds.hasNext()) {
-                val projectId = projectIds.next()
-                val projectObj = projectsRaw.get(projectId)
-                require(projectObj is JSONObject) {
-                    "State corruption: project '$projectId' must be JSONObject, got ${projectObj?.javaClass?.simpleName}"
-                }
-                val chapterKeys = projectObj.keys()
-                while (chapterKeys.hasNext()) {
-                    val chapterKeyStr = chapterKeys.next()
-                    val entryObj = projectObj.get(chapterKeyStr)
-                    require(entryObj is JSONObject) {
-                        "State corruption: chapter entry '$chapterKeyStr' in project '$projectId' must be JSONObject, got ${entryObj?.javaClass?.simpleName}"
-                    }
-                    val (key, entry) = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
-                    entries[key] = entry
-                }
-            }
-        }
+        val entries = decodeEntriesStrict(projectsRaw)
         val committedJson = root.opt(COMMITTED_MANIFEST_JSON_KEY)?.let {
             require(it is String) { "State corruption: committedManifestJson must be String, got ${it.javaClass.simpleName}" }
             it
@@ -583,7 +563,40 @@ class ReadableMirrorStateStore(
         )
     }
 
-    // ── publishedProjectIds（#649 评论 5564820566 问题 5）──
+    /** 严格解码 projects 节点为 chapter entries 映射（#651 评论 5592465805：拆分降低 decodeStateRootStrict 复杂度）。 */
+    private fun decodeEntriesStrict(projectsRaw: Any?): MutableMap<ChapterKey, ChapterMirrorEntry> {
+        val entries = mutableMapOf<ChapterKey, ChapterMirrorEntry>()
+        if (projectsRaw is JSONObject) {
+            val projectIds = projectsRaw.keys()
+            while (projectIds.hasNext()) {
+                val projectId = projectIds.next()
+                val projectObj = projectsRaw.get(projectId)
+                require(projectObj is JSONObject) {
+                    "State corruption: project '$projectId' must be JSONObject, got ${projectObj?.javaClass?.simpleName}"
+                }
+                decodeProjectEntriesStrict(projectId, projectObj, entries)
+            }
+        }
+        return entries
+    }
+
+    /** 严格解码单个 project 的所有 chapter entries。 */
+    private fun decodeProjectEntriesStrict(
+        projectId: String,
+        projectObj: JSONObject,
+        entries: MutableMap<ChapterKey, ChapterMirrorEntry>,
+    ) {
+        val chapterKeys = projectObj.keys()
+        while (chapterKeys.hasNext()) {
+            val chapterKeyStr = chapterKeys.next()
+            val entryObj = projectObj.get(chapterKeyStr)
+            require(entryObj is JSONObject) {
+                "State corruption: chapter entry '$chapterKeyStr' in project '$projectId' must be JSONObject, got ${entryObj?.javaClass?.simpleName}"
+            }
+            val (key, entry) = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
+            entries[key] = entry
+        }
+    }
 
     /**
      * 标记作品已发布到镜像（manifest 提交成功后调用）。

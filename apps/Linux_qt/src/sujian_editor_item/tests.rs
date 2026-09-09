@@ -44,9 +44,6 @@ mod tests {
 
     #[test]
     fn visual_transaction_inserted_range_creates_prepared_transaction() {
-        use crate::sujian_editor_item::animation_mode::AnimationMode;
-        use crate::sujian_editor_item::cursor_animation::CursorTransition;
-        use crate::sujian_editor_item::layout_revision::LayoutRevision;
         use crate::sujian_editor_item::text_visual_transaction::{
             PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
             TextVisualTransactionState, TransactionTimeline,
@@ -61,22 +58,16 @@ mod tests {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(160),
-            old_revision: LayoutRevision::initial(),
-            new_revision: LayoutRevision::next(),
             slices: Vec::new(),
             static_patches: vec![
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                    key,
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
                     Vec::new(),
                     5,
                     10,
                 ),
             ],
-            decoration_slices: Vec::new(),
-            cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
@@ -85,7 +76,6 @@ mod tests {
             new_snapshot: None,
         };
         queue.enqueue(tx);
-        assert_eq!(queue.insert_byte_ranges(), vec![(5, 10)]);
         assert!(queue.has_active_insert());
     }
 
@@ -108,9 +98,6 @@ mod tests {
 
     #[test]
     fn delete_creates_prepared_transaction() {
-        use crate::sujian_editor_item::animation_mode::AnimationMode;
-        use crate::sujian_editor_item::cursor_animation::CursorTransition;
-        use crate::sujian_editor_item::layout_revision::LayoutRevision;
         use crate::sujian_editor_item::text_visual_transaction::{
             PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
             TextVisualTransactionState, TransactionTimeline,
@@ -125,14 +112,9 @@ mod tests {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Delete,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(160),
-            old_revision: LayoutRevision::initial(),
-            new_revision: LayoutRevision::next(),
             slices: Vec::new(),
             static_patches: Vec::new(),
-            decoration_slices: Vec::new(),
-            cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
@@ -141,7 +123,6 @@ mod tests {
             new_snapshot: None,
         };
         queue.enqueue(tx);
-        assert!(queue.insert_byte_ranges().is_empty());
         assert!(queue.has_active_insert());
         queue.cancel_all("test");
         assert!(queue.is_empty());
@@ -547,9 +528,6 @@ mod tests {
 
     #[test]
     fn prepared_queue_finish_clears_transaction() {
-        use crate::sujian_editor_item::animation_mode::AnimationMode;
-        use crate::sujian_editor_item::cursor_animation::CursorTransition;
-        use crate::sujian_editor_item::layout_revision::LayoutRevision;
         use crate::sujian_editor_item::text_visual_transaction::{
             PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
             TextVisualTransactionState, TransactionTimeline,
@@ -564,22 +542,16 @@ mod tests {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(160),
-            old_revision: LayoutRevision::initial(),
-            new_revision: LayoutRevision::next(),
             slices: Vec::new(),
             static_patches: vec![
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                    key,
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
                     Vec::new(),
                     10,
                     22,
                 ),
             ],
-            decoration_slices: Vec::new(),
-            cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
@@ -589,12 +561,10 @@ mod tests {
         };
         queue.enqueue(tx);
         assert!(queue.has_active_insert());
-        assert_eq!(queue.insert_byte_ranges(), vec![(10, 22)]);
 
         let removed = queue.complete(key);
         assert!(removed.is_some());
         assert!(queue.is_empty());
-        assert!(queue.insert_byte_ranges().is_empty());
 
         queue.enqueue(PreparedTextVisualTransaction {
             key: VisualTransactionKey {
@@ -603,25 +573,16 @@ mod tests {
             },
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Insert,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(160),
-            old_revision: LayoutRevision::initial(),
-            new_revision: LayoutRevision::next(),
             slices: Vec::new(),
             static_patches: vec![
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
-                    VisualTransactionKey {
-                        transaction_id: 2,
-                        generation: 2,
-                    },
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
                     Vec::new(),
                     30,
                     42,
                 ),
             ],
-            decoration_slices: Vec::new(),
-            cursor_transition: CursorTransition::Snap,
             old_cursor_rect: None,
             new_cursor_rect: None,
             cancel_reason: None,
@@ -635,7 +596,6 @@ mod tests {
         });
         assert!(removed_wrong.is_none());
         assert!(queue.has_active_insert());
-        assert_eq!(queue.insert_byte_ranges(), vec![(30, 42)]);
 
         queue.cancel_all("test");
         assert!(queue.is_empty());

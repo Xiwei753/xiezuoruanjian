@@ -387,6 +387,9 @@ data class PendingMirrorPublish(
         private const val KEY_FROZEN_MANIFEST_PLAN = "frozenManifestPlan"
         private const val KEY_FROZEN_MANIFEST_PLAN_HASH = "frozenManifestPlanHash"
 
+        private fun chapterKeyToString(key: ChapterKey): String =
+            "${key.projectId}/${key.volumeId}/${key.chapterId}"
+
         /**
          * 校验 phase 值是否合法（#649 评论 5565862745 问题 5）。
          *
@@ -493,7 +496,7 @@ data class PendingMirrorPublish(
         private fun encodeEntries(entries: Map<ChapterKey, ChapterMirrorEntry>): JSONObject {
             val obj = JSONObject()
             for ((key, entry) in entries) {
-                val keyStr = "${key.projectId}/${key.volumeId}/${key.chapterId}"
+                val keyStr = chapterKeyToString(key)
                 obj.put(
                     keyStr,
                     JSONObject().apply {
@@ -530,7 +533,7 @@ data class PendingMirrorPublish(
         private fun encodeStagedRefs(refs: Map<ChapterKey, StagedMirrorRef>): JSONObject {
             val obj = JSONObject()
             for ((key, ref) in refs) {
-                val keyStr = "${key.projectId}/${key.volumeId}/${key.chapterId}"
+                val keyStr = chapterKeyToString(key)
                 obj.put(keyStr, encodeStagedRef(ref))
             }
             return obj
@@ -598,7 +601,7 @@ data class PendingMirrorPublish(
         private fun encodeItems(items: Map<ChapterKey, PendingItem>): JSONObject {
             val obj = JSONObject()
             for ((key, item) in items) {
-                val keyStr = "${key.projectId}/${key.volumeId}/${key.chapterId}"
+                val keyStr = chapterKeyToString(key)
                 obj.put(keyStr, encodeItem(item))
             }
             return obj

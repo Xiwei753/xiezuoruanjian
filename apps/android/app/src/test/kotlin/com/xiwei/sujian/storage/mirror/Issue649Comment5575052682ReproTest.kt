@@ -41,6 +41,17 @@ import androidx.test.core.app.ApplicationProvider
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5575052682ReproTest {
+    companion object {
+        private const val CHAP_1 = "chap-1"
+        private const val PROJ_1 = "proj-1"
+        private const val REVISION = "revision"
+        private const val S_2026_09_01T00_00_00Z = "2026-09-01T00:00:00Z"
+        private const val TITLE = "title"
+        private const val TX_1 = "tx-1"
+        private const val UPDATEDAT = "updatedAt"
+        private const val VOL_1 = "vol-1"
+    }
+
 
     // ══════════════════════════════════════════════════════════════════════
     // 硬问题 1：MirrorChangeSink canonical 已保存、mirror 事务还没开始时，
@@ -67,9 +78,9 @@ class Issue649Comment5575052682ReproTest {
      */
     @Test
     fun hardProblem1_mirrorChangeSink_inMemoryStateLostOnRestart() {
-        val projectId = "proj-1"
-        val volumeId = "vol-1"
-        val chapterId = "chap-1"
+        val projectId = PROJ_1
+        val volumeId = VOL_1
+        val chapterId = CHAP_1
 
         // ── 模拟 DefaultMirrorChangeSink 的内存字段（line 103-105）──
         // 这些都是纯内存对象，没有任何持久化 backing store。
@@ -154,7 +165,7 @@ class Issue649Comment5575052682ReproTest {
         val deleteQueue = ConcurrentLinkedQueue<DeleteEvent>()
 
         // 模拟 projectStructureChanged (line 132-135)
-        dirtyMap[MirrorKey("proj-1", "", "")] = DirtyEntry(System.currentTimeMillis())
+        dirtyMap[MirrorKey(PROJ_1, "", "")] = DirtyEntry(System.currentTimeMillis())
         // signal.trySend(Unit) —— 内存
 
         // 模拟 projectDeleted (line 137-142)
@@ -208,12 +219,113 @@ class Issue649Comment5575052682ReproTest {
      */
     @Test
     fun hardProblem2_recoverPromotePhase_mixesFreshSnapshotWithOldPromotedEntries() {
-        val projectId = "proj-1"
-        val txId = "tx-1"
-        val key = ChapterKey(projectId, "vol-1", "chap-1")
+        val key = ChapterKey(PROJ_1, VOL_1, CHAP_1)
+        val setup = setupMixedManifestScenario(PROJ_1, TX_1, key)
 
+        // ── 复现 recoverPromotePhase() line 620-637 的当前逻辑 ──
+        // line 621: val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
+        // ★ 关键缺陷：重新读取当前 snapshot（R2），而不是用 T1/R1 冻结的 metadata ★
+        val snapshotResultData = setup.r2SnapshotMetadata // source 返回 R2 的当前 snapshot
+
+        // line 3237: val isResumingManifest = journalContext.manifestTargetJson != null
+        val isResumingManifest = setup.journalT1.manifestTargetJson != null
+        assertFalse(
+            "manifestTargetJson == null：manifest 子事务未开始，isResumingManifest=false",
+            isResumingManifest,
+        )
+
+        // line 3278: if (journalContext.manifestTargetJson != null) { ... } else { ... }
+        // ★ 走 else 分支（line 3288-3324），重新生成 manifest ★
+        val useFrozenJson = isResumingManifest
+        assertFalse(
+            "★ 当前代码缺陷：manifestTargetJson==null 时走 else 分支重新生成，而非用冻结 metadata ★",
+            useFrozenJson,
+        )
+
+        // ── 复现 buildManifestJsonForDesired() line 3135-3172 的当前逻辑 ──
+        // line 3290: val builtJson = buildManifestJsonForDesired(projectId, snapshot, desiredEntries)
+        // line 3149: mirrorProjects.add(snapshot.toMirrorProject(desiredEntries))
+        // ★ 混合点：snapshot=R2 metadata + desiredEntries=R1 promotedEntries ★
+        val mixedManifestProject = buildMixedManifestProject(snapshotResultData, setup.promotedEntriesR1)
+
+        // ── 断言错误行为：manifest 是 R2 metadata + R1 正文的混合状态 ──
+        assertEquals(
+            "manifest 项目标题是 R2 的（当前 snapshot）",
+            setup.r2Title,
+            mixedManifestProject[TITLE],
+        )
+        assertEquals(
+            "manifest 项目 revision 是 R2 的（当前 snapshot）",
+            setup.r2Revision.toString(),
+            mixedManifestProject[REVISION],
+        )
+        assertEquals(
+            "manifest 项目 updatedAt 是 R2 的（当前 snapshot）",
+            setup.r2UpdatedAt,
+            mixedManifestProject[UPDATEDAT],
+        )
+
+        @Suppress("UNCHECKED_CAST")
+        val mixedChapters = mixedManifestProject["chapters"] as List<Map<String, Any>>
+        assertEquals(
+            "manifest 章节 uri 是 R1 的（旧 promotedEntries）",
+            setup.r1Uri,
+            mixedChapters[0]["uri"],
+        )
+        assertEquals(
+            "manifest 章节 contentHash 是 R1 的（旧 promotedEntries）",
+            setup.r1ContentHash,
+            mixedChapters[0]["contentHash"],
+        )
+        assertEquals(
+            "manifest 章节 chapterRevision 是 R1 的（旧 promotedEntries）",
+            setup.r1Revision,
+            mixedChapters[0]["chapterRevision"],
+        )
+
+        // ── 核心矛盾：snapshot revision (R2) != promotedEntries revision (R1) ──
+        assertNotEquals(
+            "★ 混合状态：项目 revision(R2)=${setup.r2Revision} != 章节 revision(R1)=${setup.r1Revision} ★",
+            setup.r2Revision,
+            setup.r1Revision,
+        )
+
+        // ── PendingMirrorPublish 没有冻结 manifest 元数据字段 ──
+        // 字段列表（PendingMirrorPublish.kt line 200-233）只有 manifestTargetJson: String? = null
+        // 没有 frozenProjectManifest / frozenManifestModelJson / frozenSnapshotMetadata
+        // manifestTargetJson 只在 manifest 子事务开始后才设置（line 3315），
+        // 所以 manifestTargetJson==null 同时承担"目标还没冻结"和"manifest 子事务还没开始"两个语义。
+        assertNull(
+            "★ PendingMirrorPublish 无冻结 manifest 元数据字段，manifestTargetJson==null 双语义 ★",
+            setup.journalT1.manifestTargetJson,
+        )
+    }
+
+    /**
+     * 混合 manifest 测试场景的 setup 数据（#651 评论 5592465805：提取 setup 减少 LongMethod）。
+     */
+    private data class MixedManifestSetup(
+        val r1ContentHash: String,
+        val r1Uri: String,
+        val r1RelativePath: String,
+        val r1Revision: Long,
+        val promotedEntriesR1: Map<ChapterKey, ChapterMirrorEntry>,
+        val r2Title: String,
+        val r2Revision: Long,
+        val r2UpdatedAt: String,
+        val r2SnapshotMetadata: Map<String, String>,
+        val journalT1: PendingMirrorPublish,
+    )
+
+    /**
+     * 构建混合 manifest 测试场景的 setup（R1 promotedEntries + R2 snapshot + T1 journal）。
+     */
+    private fun setupMixedManifestScenario(
+        projectId: String,
+        txId: String,
+        key: ChapterKey,
+    ): MixedManifestSetup {
         // ── T1/R1 的 promotedEntries（旧事务正文已 promote 到公共镜像）──
-        // 这些是 R1 的路径、hash、URI、revision
         val r1ContentHash = "sha256:r1-content-hash"
         val r1Uri = "content://mirror/r1/chap.md"
         val r1RelativePath = "作品/项目1/卷1/章1.md"
@@ -227,19 +339,16 @@ class Issue649Comment5575052682ReproTest {
         )
 
         // ── 模拟 R2 snapshot（canonical 后来已经变成 R2）──
-        // R2 的 metadata：标题/顺序/revision/updatedAt 都和 R1 不同
         val r2Title = "项目1-改后标题-R2"
         val r2Revision = 200L
         val r2UpdatedAt = "2026-09-08T03:00:00Z"
-        // 用一个简单的 holder 模拟 ProjectWorkspaceSnapshot 的 metadata
         val r2SnapshotMetadata = mapOf(
-            "title" to r2Title,
-            "revision" to r2Revision.toString(),
-            "updatedAt" to r2UpdatedAt,
+            TITLE to r2Title,
+            REVISION to r2Revision.toString(),
+            UPDATEDAT to r2UpdatedAt,
         )
 
         // ── 旧 journal（T1/R1），manifest 子事务未开始 ──
-        // manifestTargetJson == null 表示 manifest 子事务还没开始
         val journalT1 = PendingMirrorPublish(
             txId = txId,
             backend = MirrorBackend.MEDIA_STORE,
@@ -266,100 +375,40 @@ class Issue649Comment5575052682ReproTest {
             manifestTargetJson = null, // ★ manifest 子事务未开始 ★
         )
 
-        // ── 复现 recoverPromotePhase() line 620-637 的当前逻辑 ──
-        // line 621: val snapshotResult = source.getProjectWorkspaceSnapshot(journal.projectId)
-        // ★ 关键缺陷：重新读取当前 snapshot（R2），而不是用 T1/R1 冻结的 metadata ★
-        val snapshotResultData = r2SnapshotMetadata // source 返回 R2 的当前 snapshot
-
-        // line 3237: val isResumingManifest = journalContext.manifestTargetJson != null
-        val isResumingManifest = journalT1.manifestTargetJson != null
-        assertFalse(
-            "manifestTargetJson == null：manifest 子事务未开始，isResumingManifest=false",
-            isResumingManifest,
+        return MixedManifestSetup(
+            r1ContentHash = r1ContentHash,
+            r1Uri = r1Uri,
+            r1RelativePath = r1RelativePath,
+            r1Revision = r1Revision,
+            promotedEntriesR1 = promotedEntriesR1,
+            r2Title = r2Title,
+            r2Revision = r2Revision,
+            r2UpdatedAt = r2UpdatedAt,
+            r2SnapshotMetadata = r2SnapshotMetadata,
+            journalT1 = journalT1,
         )
+    }
 
-        // line 3278: if (journalContext.manifestTargetJson != null) { ... } else { ... }
-        // ★ 走 else 分支（line 3288-3324），重新生成 manifest ★
-        val useFrozenJson = isResumingManifest
-        assertFalse(
-            "★ 当前代码缺陷：manifestTargetJson==null 时走 else 分支重新生成，而非用冻结 metadata ★",
-            useFrozenJson,
-        )
-
-        // ── 复现 buildManifestJsonForDesired() line 3135-3172 的当前逻辑 ──
-        // line 3290: val builtJson = buildManifestJsonForDesired(projectId, snapshot, desiredEntries)
-        // line 3149: mirrorProjects.add(snapshot.toMirrorProject(desiredEntries))
-        // ★ 混合点：snapshot=R2 metadata + desiredEntries=R1 promotedEntries ★
-        val snapshotPassedToBuild = snapshotResultData // R2
-        val desiredEntriesPassedToBuild = promotedEntriesR1 // R1
-
-        // 模拟 snapshot.toMirrorProject(desiredEntries) 的混合结果
-        val mixedManifestProject = mapOf(
-            "title" to snapshotPassedToBuild["title"],         // R2 的标题
-            "revision" to snapshotPassedToBuild["revision"],   // R2 的 revision
-            "updatedAt" to snapshotPassedToBuild["updatedAt"], // R2 的 updatedAt
-            "chapters" to desiredEntriesPassedToBuild.map { (k, v) ->
+    /**
+     * 模拟 buildManifestJsonForDesired 的混合结果：snapshot metadata + desiredEntries 正文（#651 评论 5592465805）。
+     */
+    private fun buildMixedManifestProject(
+        snapshotData: Map<String, String>,
+        desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
+    ): Map<String, Any> =
+        mapOf(
+            TITLE to snapshotData[TITLE],
+            REVISION to snapshotData[REVISION],
+            UPDATEDAT to snapshotData[UPDATEDAT],
+            "chapters" to desiredEntries.map { (_, v) ->
                 mapOf(
-                    "uri" to v.uri,                   // R1 的 uri
-                    "relativePath" to v.relativePath, // R1 的 path
-                    "contentHash" to v.contentHash,   // R1 的 hash
-                    "chapterRevision" to v.revision,  // R1 的 revision
+                    "uri" to v.uri,
+                    "relativePath" to v.relativePath,
+                    "contentHash" to v.contentHash,
+                    "chapterRevision" to v.revision,
                 )
             },
         )
-
-        // ── 断言错误行为：manifest 是 R2 metadata + R1 正文的混合状态 ──
-        assertEquals(
-            "manifest 项目标题是 R2 的（当前 snapshot）",
-            r2Title,
-            mixedManifestProject["title"],
-        )
-        assertEquals(
-            "manifest 项目 revision 是 R2 的（当前 snapshot）",
-            r2Revision.toString(),
-            mixedManifestProject["revision"],
-        )
-        assertEquals(
-            "manifest 项目 updatedAt 是 R2 的（当前 snapshot）",
-            r2UpdatedAt,
-            mixedManifestProject["updatedAt"],
-        )
-
-        @Suppress("UNCHECKED_CAST")
-        val mixedChapters = mixedManifestProject["chapters"] as List<Map<String, Any>>
-        assertEquals(
-            "manifest 章节 uri 是 R1 的（旧 promotedEntries）",
-            r1Uri,
-            mixedChapters[0]["uri"],
-        )
-        assertEquals(
-            "manifest 章节 contentHash 是 R1 的（旧 promotedEntries）",
-            r1ContentHash,
-            mixedChapters[0]["contentHash"],
-        )
-        assertEquals(
-            "manifest 章节 chapterRevision 是 R1 的（旧 promotedEntries）",
-            r1Revision,
-            mixedChapters[0]["chapterRevision"],
-        )
-
-        // ── 核心矛盾：snapshot revision (R2) != promotedEntries revision (R1) ──
-        assertNotEquals(
-            "★ 混合状态：项目 revision(R2)=${r2Revision} != 章节 revision(R1)=$r1Revision ★",
-            r2Revision,
-            r1Revision,
-        )
-
-        // ── PendingMirrorPublish 没有冻结 manifest 元数据字段 ──
-        // 字段列表（PendingMirrorPublish.kt line 200-233）只有 manifestTargetJson: String? = null
-        // 没有 frozenProjectManifest / frozenManifestModelJson / frozenSnapshotMetadata
-        // manifestTargetJson 只在 manifest 子事务开始后才设置（line 3315），
-        // 所以 manifestTargetJson==null 同时承担"目标还没冻结"和"manifest 子事务还没开始"两个语义。
-        assertNull(
-            "★ PendingMirrorPublish 无冻结 manifest 元数据字段，manifestTargetJson==null 双语义 ★",
-            journalT1.manifestTargetJson,
-        )
-    }
 
     /**
      * 硬问题 2 修复验证：PendingMirrorPublish 数据类已有冻结 manifest 计划字段。
@@ -372,15 +421,15 @@ class Issue649Comment5575052682ReproTest {
         val plan = FrozenManifestPlan(
             schemaVersion = 1,
             revision = 100L,
-            updatedAt = "2026-09-01T00:00:00Z",
-            targetProjectId = "proj-1",
+            updatedAt = S_2026_09_01T00_00_00Z,
+            targetProjectId = PROJ_1,
             projects = listOf(
                 FrozenManifestProject(
-                    id = "proj-1",
+                    id = PROJ_1,
                     title = "T1",
                     order = 0,
                     revision = 100L,
-                    updatedAt = "2026-09-01T00:00:00Z",
+                    updatedAt = S_2026_09_01T00_00_00Z,
                     volumes = emptyList(),
                 ),
             ),
@@ -388,10 +437,10 @@ class Issue649Comment5575052682ReproTest {
         val frozenPlanJson = frozenManifestPlanToJson(plan)
         val frozenPlanHash = computeContentHash(frozenPlanJson)
         val journal = PendingMirrorPublish(
-            txId = "tx-1",
+            txId = TX_1,
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
-            projectId = "proj-1",
+            projectId = PROJ_1,
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_PROMOTE,
             oldEntries = emptyMap(),
@@ -440,7 +489,7 @@ class Issue649Comment5575052682ReproTest {
         outboxStore.clearAll()
 
         // 模拟 chapterChanged
-        val projectId = "proj-1"
+        val projectId = PROJ_1
         outboxStore.markDirty(projectId)
 
         // 验证 outbox 已持久化
@@ -471,14 +520,14 @@ class Issue649Comment5575052682ReproTest {
         outboxStore.clearAll()
 
         // 先标记 dirty
-        outboxStore.markDirty("proj-1")
+        outboxStore.markDirty(PROJ_1)
 
         // 再标记删除（tombstone 优先）
-        outboxStore.markDeleted("proj-1")
+        outboxStore.markDeleted(PROJ_1)
 
         // proj-1 的 intent 应该是 DELETE（tombstone 优先于 dirty）
         val snapshot = outboxStore.readSnapshot()
-        val projIntent = snapshot?.projects?.get("proj-1")
+        val projIntent = snapshot?.projects?.get(PROJ_1)
         assertNotNull("proj-1 intent 存在", projIntent)
         assertEquals(
             "★ proj-1 是 DELETE（tombstone 优先）★",
@@ -503,11 +552,29 @@ class Issue649Comment5575052682ReproTest {
     @Test
     fun hardProblem2_frozenPlanUsedInRecovery() {
         // 构建一个包含 frozenManifestPlan 的 journal
-        val projectId = "proj-1"
-        val plan = FrozenManifestPlan(
+        val projectId = PROJ_1
+        val plan = buildFrozenPlanWithVolumeAndChapter(projectId)
+        val frozenPlanJson = frozenManifestPlanToJson(plan)
+        val frozenPlanHash = computeContentHash(frozenPlanJson)
+        val journal = buildJournalWithFrozenPlan(projectId, frozenPlanJson, frozenPlanHash)
+
+        // 验证 journal 包含冻结的计划
+        assertNotNull(journal.frozenManifestPlan)
+        assertNotNull(journal.frozenManifestPlanHash)
+
+        // 验证计划 hash 正确
+        val computedHash = computeContentHash(frozenPlanJson)
+        assertEquals(computedHash, journal.frozenManifestPlanHash)
+    }
+
+    /**
+     * 构建 frozen manifest plan（含 volume 和 chapter）（#651 评论 5592465805：提取 setup 减少 LongMethod）。
+     */
+    private fun buildFrozenPlanWithVolumeAndChapter(projectId: String): FrozenManifestPlan =
+        FrozenManifestPlan(
             schemaVersion = 1,
             revision = 100L,
-            updatedAt = "2026-09-01T00:00:00Z",
+            updatedAt = S_2026_09_01T00_00_00Z,
             targetProjectId = projectId,
             projects = listOf(
                 FrozenManifestProject(
@@ -515,21 +582,21 @@ class Issue649Comment5575052682ReproTest {
                     title = "测试作品",
                     order = 0,
                     revision = 100L,
-                    updatedAt = "2026-09-01T00:00:00Z",
+                    updatedAt = S_2026_09_01T00_00_00Z,
                     volumes = listOf(
                         FrozenManifestVolume(
-                            id = "vol-1",
+                            id = VOL_1,
                             title = "卷一",
                             order = 0,
                             revision = 100L,
-                            updatedAt = "2026-09-01T00:00:00Z",
+                            updatedAt = S_2026_09_01T00_00_00Z,
                             chapters = listOf(
                                 FrozenManifestChapter(
-                                    id = "chap-1",
+                                    id = CHAP_1,
                                     title = "第一章",
                                     order = 0,
                                     revision = 100L,
-                                    updatedAt = "2026-09-01T00:00:00Z",
+                                    updatedAt = S_2026_09_01T00_00_00Z,
                                     contentFile = "",
                                     contentHash = "",
                                 ),
@@ -539,11 +606,18 @@ class Issue649Comment5575052682ReproTest {
                 ),
             ),
         )
-        val frozenPlanJson = frozenManifestPlanToJson(plan)
-        val frozenPlanHash = computeContentHash(frozenPlanJson)
 
-        val journal = PendingMirrorPublish(
-            txId = "tx-1",
+    /**
+     * 构建 PendingMirrorPublish 并注入 frozen plan（#651 评论 5592465805：提取 setup 减少 LongMethod）。
+     */
+    private fun buildJournalWithFrozenPlan(
+        projectId: String,
+        frozenPlanJson: String,
+        frozenPlanHash: String,
+    ): PendingMirrorPublish {
+        val key = ChapterKey(projectId, VOL_1, CHAP_1)
+        return PendingMirrorPublish(
+            txId = TX_1,
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
             projectId = projectId,
@@ -551,23 +625,23 @@ class Issue649Comment5575052682ReproTest {
             phase = PendingMirrorPublish.PHASE_PROMOTE,
             oldEntries = emptyMap(),
             newEntries = mapOf(
-                ChapterKey(projectId, "vol-1", "chap-1") to ChapterMirrorEntry(
+                key to ChapterMirrorEntry(
                     uri = "content://mirror/chap.md",
                     relativePath = "作品/测试作品/卷一/第一章.md",
                     revision = 100L,
-                    contentHash = "sha256:abc123"
-                )
+                    contentHash = "sha256:abc123",
+                ),
             ),
             stagedRefs = emptyMap(),
             items = mapOf(
-                ChapterKey(projectId, "vol-1", "chap-1") to PendingItem(
-                    key = ChapterKey(projectId, "vol-1", "chap-1"),
+                key to PendingItem(
+                    key = key,
                     stagedRef = null,
                     oldRef = null,
                     backupOldRef = null,
                     promotedRef = MirrorFileRef("content://mirror/chap.md", "作品/测试作品/卷一/第一章.md"),
-                    state = PendingItem.STATE_PROMOTED
-                )
+                    state = PendingItem.STATE_PROMOTED,
+                ),
             ),
             removedProjectIds = emptySet(),
             manifestOldRef = null,
@@ -578,14 +652,6 @@ class Issue649Comment5575052682ReproTest {
             frozenManifestPlan = frozenPlanJson,
             frozenManifestPlanHash = frozenPlanHash,
         )
-
-        // 验证 journal 包含冻结的计划
-        assertNotNull(journal.frozenManifestPlan)
-        assertNotNull(journal.frozenManifestPlanHash)
-
-        // 验证计划 hash 正确
-        val computedHash = computeContentHash(frozenPlanJson)
-        assertEquals(computedHash, journal.frozenManifestPlanHash)
     }
 
     /**

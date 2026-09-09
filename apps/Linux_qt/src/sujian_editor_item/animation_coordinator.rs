@@ -31,12 +31,11 @@ use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransacti
 use super::animated_slice::AnimatedSlice;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
-use super::decoration_slice::DecorationSlice;
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
 pub(crate) use super::render_plan::{
-    HiddenClipRect, ImeUpdateKind, ImeUpdatePlan, PreeditRange, RenderPlan, SelectionPreeditPlan,
-    SelectionRange, StaticTextPlan, TextAnimationGlyphInfo, TextAnimationPlan,
+    HiddenClipRect, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange, StaticTextPlan,
+    TextAnimationGlyphInfo, TextAnimationPlan,
 };
 use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::{
@@ -249,7 +248,6 @@ impl LinuxEditorAnimationCoordinator {
                             ));
 
                             static_patches.push(StaticLinePatch::insert_patch(
-                                key,
                                 new_line.id,
                                 vec![source_rect],
                                 range_start,
@@ -335,7 +333,6 @@ impl LinuxEditorAnimationCoordinator {
                                 }
 
                                 static_patches.push(StaticLinePatch::reflow_patch(
-                                    key,
                                     new_line.id,
                                     vec![new_src],
                                     new_line.byte_start,
@@ -345,16 +342,6 @@ impl LinuxEditorAnimationCoordinator {
                         }
                     }
 
-                    let cursor_transition =
-                        if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
-                            CursorTransition::Tween {
-                                old_rect: old_cursor_rect.clone().unwrap(),
-                                new_rect: new_cursor_rect.clone().unwrap(),
-                            }
-                        } else {
-                            CursorTransition::Snap
-                        };
-
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
 
@@ -362,14 +349,9 @@ impl LinuxEditorAnimationCoordinator {
                         key,
                         state: TextVisualTransactionState::Pending,
                         operation_kind: TextVisualOperationKind::Insert,
-                        animation_mode: mode,
                         timeline: TransactionTimeline::new(vt.duration_ms),
-                        old_revision: self.layout_revision,
-                        new_revision,
                         slices,
                         static_patches,
-                        decoration_slices: Vec::new(),
-                        cursor_transition,
                         old_cursor_rect,
                         new_cursor_rect,
                         cancel_reason: None,
@@ -535,7 +517,6 @@ impl LinuxEditorAnimationCoordinator {
                             }
 
                             static_patches.push(StaticLinePatch::reflow_patch(
-                                key,
                                 new_line.id,
                                 vec![new_src],
                                 new_line.byte_start,
@@ -545,15 +526,6 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                let cursor_transition = if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
-                    CursorTransition::Tween {
-                        old_rect: old_cursor_rect.clone().unwrap(),
-                        new_rect: new_cursor_rect.clone().unwrap(),
-                    }
-                } else {
-                    CursorTransition::Snap
-                };
-
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                 match_rebase_frames(&rebase_frames, &mut slices, &delete_offset_map);
 
@@ -561,14 +533,9 @@ impl LinuxEditorAnimationCoordinator {
                     key,
                     state: TextVisualTransactionState::Pending,
                     operation_kind: TextVisualOperationKind::Delete,
-                    animation_mode: mode,
                     timeline: TransactionTimeline::new(vt.duration_ms),
-                    old_revision: self.layout_revision,
-                    new_revision,
                     slices,
                     static_patches,
-                    decoration_slices: Vec::new(),
-                    cursor_transition,
                     old_cursor_rect: old_cursor_rect.clone(),
                     new_cursor_rect: new_cursor_rect.clone(),
                     cancel_reason: None,
@@ -585,27 +552,13 @@ impl LinuxEditorAnimationCoordinator {
                 let key = self.alloc_key();
                 let new_revision = LayoutRevision::next();
 
-                let cursor_transition = if old_cursor_rect.is_some() && new_cursor_rect.is_some() {
-                    CursorTransition::Tween {
-                        old_rect: old_cursor_rect.clone().unwrap(),
-                        new_rect: new_cursor_rect.clone().unwrap(),
-                    }
-                } else {
-                    CursorTransition::Snap
-                };
-
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
                     operation_kind: TextVisualOperationKind::Cursor,
-                    animation_mode: mode,
                     timeline: TransactionTimeline::new(vt.duration_ms),
-                    old_revision: self.layout_revision,
-                    new_revision,
                     slices: Vec::new(),
                     static_patches: Vec::new(),
-                    decoration_slices: Vec::new(),
-                    cursor_transition,
                     old_cursor_rect,
                     new_cursor_rect,
                     cancel_reason: None,
@@ -669,17 +622,8 @@ impl LinuxEditorAnimationCoordinator {
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
 
-        let cursor_transition = match (&old_cursor_rect, &new_cursor_rect) {
-            (Some(old), Some(new)) => CursorTransition::Tween {
-                old_rect: old.clone(),
-                new_rect: new.clone(),
-            },
-            _ => CursorTransition::Snap,
-        };
-
         let mut slices = Vec::new();
         let mut static_patches = Vec::new();
-        let mut decoration_slices = Vec::new();
 
         let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
         let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
@@ -707,24 +651,12 @@ impl LinuxEditorAnimationCoordinator {
                 ));
 
                 static_patches.push(StaticLinePatch::insert_patch(
-                    key,
                     new_line.id,
                     vec![source_rect],
                     composition_byte_start,
                     composition_byte_end,
                 ));
             }
-
-            decoration_slices.push(DecorationSlice::underline(
-                key,
-                composition_byte_start.max(new_line.byte_start),
-                composition_byte_end.min(new_line.byte_end),
-                new_line.visual_x,
-                new_line.document_origin_y + new_line.line_height - 2.0,
-                new_line.line_width,
-                2.0,
-                "#000000".to_string(),
-            ));
         }
 
         let _reflow_start = composition_byte_end;
@@ -803,7 +735,6 @@ impl LinuxEditorAnimationCoordinator {
                     }
 
                     static_patches.push(StaticLinePatch::reflow_patch(
-                        key,
                         new_line.id,
                         vec![new_src],
                         new_line.byte_start,
@@ -819,14 +750,9 @@ impl LinuxEditorAnimationCoordinator {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            old_revision: self.layout_revision,
-            new_revision,
             slices,
             static_patches,
-            decoration_slices,
-            cursor_transition,
             old_cursor_rect,
             new_cursor_rect,
             cancel_reason: None,
@@ -894,14 +820,6 @@ impl LinuxEditorAnimationCoordinator {
 
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
-
-        let cursor_transition = match (&old_cursor_rect, &new_cursor_rect) {
-            (Some(old), Some(new)) => CursorTransition::Tween {
-                old_rect: old.clone(),
-                new_rect: new.clone(),
-            },
-            _ => CursorTransition::Snap,
-        };
 
         let mut slices = Vec::new();
         let mut static_patches = Vec::new();
@@ -1056,7 +974,6 @@ impl LinuxEditorAnimationCoordinator {
                                     Some(new_cluster.shaping_identity.clone()),
                                 ));
                                 static_patches.push(StaticLinePatch::insert_patch(
-                                    key,
                                     new_line.id,
                                     vec![new_sr],
                                     new_cluster.byte_start,
@@ -1103,7 +1020,6 @@ impl LinuxEditorAnimationCoordinator {
                                             new_cluster.byte_end,
                                         ));
                                         static_patches.push(StaticLinePatch::insert_patch(
-                                            key,
                                             new_line.id,
                                             vec![new_sr],
                                             new_cluster.byte_start,
@@ -1143,7 +1059,6 @@ impl LinuxEditorAnimationCoordinator {
                                                 Some(new_cluster.shaping_identity.clone()),
                                             ));
                                             static_patches.push(StaticLinePatch::insert_patch(
-                                                key,
                                                 new_line.id,
                                                 vec![new_sr],
                                                 new_cluster.byte_start,
@@ -1231,7 +1146,6 @@ impl LinuxEditorAnimationCoordinator {
                             }
 
                             static_patches.push(StaticLinePatch::reflow_patch(
-                                key,
                                 new_line.id,
                                 vec![new_src],
                                 new_line.byte_start,
@@ -1260,7 +1174,6 @@ impl LinuxEditorAnimationCoordinator {
 
                 if !hidden_source_rects.is_empty() {
                     static_patches.push(StaticLinePatch::reflow_patch(
-                        key,
                         new_line.id,
                         hidden_source_rects,
                         new_line.byte_start,
@@ -1276,14 +1189,9 @@ impl LinuxEditorAnimationCoordinator {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            old_revision: self.layout_revision,
-            new_revision,
             slices,
             static_patches,
-            decoration_slices: Vec::new(),
-            cursor_transition,
             old_cursor_rect,
             new_cursor_rect,
             cancel_reason: None,
@@ -1343,26 +1251,13 @@ impl LinuxEditorAnimationCoordinator {
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
 
-        let cursor_transition = match (&old_cursor_rect, &new_cursor_rect) {
-            (Some(old), Some(new)) => CursorTransition::Tween {
-                old_rect: old.clone(),
-                new_rect: new.clone(),
-            },
-            _ => CursorTransition::Snap,
-        };
-
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Cursor,
-            animation_mode: AnimationMode::GlyphAnimation,
             timeline: TransactionTimeline::new(u64::from(self.cursor_animation_duration_ms)),
-            old_revision: self.layout_revision,
-            new_revision,
             slices: Vec::new(),
             static_patches: Vec::new(),
-            decoration_slices: Vec::new(),
-            cursor_transition,
             old_cursor_rect: old_cursor_rect.clone(),
             new_cursor_rect: new_cursor_rect.clone(),
             cancel_reason: None,
@@ -1422,18 +1317,6 @@ impl LinuxEditorAnimationCoordinator {
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
     }
 
-    fn collect_decoration_slices(&self) -> Vec<DecorationSlice> {
-        self.prepared_queue
-            .active_transactions()
-            .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .flat_map(|t| t.decoration_slices.clone())
-            .collect()
-    }
-
     pub fn has_prepared_or_rendering(&self) -> bool {
         self.prepared_queue.active_transactions().iter().any(|t| {
             t.state == TextVisualTransactionState::Prepared
@@ -1472,24 +1355,18 @@ impl LinuxEditorAnimationCoordinator {
                         let doc_w = sr.w / line_snap.dpr;
                         let doc_h = sr.h / line_snap.dpr;
                         hidden_clip_rects.push(HiddenClipRect {
-                            key: tx.key,
                             x: doc_x,
                             y: doc_y,
                             w: doc_w,
                             h: doc_h,
-                            byte_start: patch.byte_start,
-                            byte_end: patch.byte_end,
                         });
                     }
                 } else {
                     hidden_clip_rects.push(HiddenClipRect {
-                        key: tx.key,
                         x: 0.0,
                         y: 0.0,
                         w: 0.0,
                         h: 0.0,
-                        byte_start: patch.byte_start,
-                        byte_end: patch.byte_end,
                     });
                 }
             }
@@ -1630,22 +1507,6 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    pub(crate) fn build_ime_plan(
-        &self,
-        position_changed: bool,
-        scroll_changed: bool,
-    ) -> ImeUpdatePlan {
-        ImeUpdatePlan {
-            kind: if position_changed || scroll_changed {
-                ImeUpdateKind::QueryInput
-            } else {
-                ImeUpdateKind::None
-            },
-            cursor_changed: position_changed,
-            anchor_changed: false,
-        }
-    }
-
     pub(crate) fn pause_all(&mut self) {
         for tx in self.prepared_queue.active_transactions_mut() {
             tx.pause();
@@ -1661,14 +1522,11 @@ impl LinuxEditorAnimationCoordinator {
     pub(crate) fn build_render_plan_full(
         &mut self,
         cursor_plan: CursorAnimationPlan,
-        ime_plan: ImeUpdatePlan,
         selection_preedit: SelectionPreeditPlan,
         mut frame_context: super::render_plan::FrameContext,
         cursor_style: super::render_plan::CursorStyle,
     ) -> RenderPlan {
-        let static_text = self.build_static_render_plan();
         let (text_animation, keys_to_complete) = self.build_text_animation_plan();
-        let decorations = self.collect_decoration_slices();
         frame_context.keys_to_complete = keys_to_complete;
         let active_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -1678,12 +1536,9 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         frame_context.active_transaction_keys = active_keys;
         RenderPlan {
-            static_text,
             text_animation,
             selection_preedit,
-            decorations,
             cursor: cursor_plan,
-            ime: ime_plan,
             frame_context,
             cursor_style,
         }
@@ -1718,14 +1573,11 @@ impl LinuxEditorAnimationCoordinator {
             for slice in &tx.slices {
                 let frame = slice.compute_frame(progress);
                 glyphs.push(TextAnimationGlyphInfo {
-                    key: tx.key,
                     x: frame.x,
                     y: frame.y,
                     w: frame.w,
                     h: frame.h,
                     opacity: frame.opacity,
-                    animation_mode: tx.animation_mode,
-                    is_delete: tx.is_delete(),
                     snapshot_id: frame.snapshot_id,
                     source_rect: frame.source_rect,
                 });
@@ -1756,21 +1608,6 @@ mod tests {
         let key = VisualTransactionKey::new(1, 1);
         let removed = coord.finish_by_key(key);
         assert!(removed.is_none());
-    }
-
-    #[test]
-    fn test_ime_plan_position_changed() {
-        let coord = LinuxEditorAnimationCoordinator::new();
-        let plan = coord.build_ime_plan(true, false);
-        assert_eq!(plan.kind, ImeUpdateKind::QueryInput);
-        assert!(plan.cursor_changed);
-    }
-
-    #[test]
-    fn test_ime_plan_no_change() {
-        let coord = LinuxEditorAnimationCoordinator::new();
-        let plan = coord.build_ime_plan(false, false);
-        assert_eq!(plan.kind, ImeUpdateKind::None);
     }
 
     #[test]
@@ -2431,8 +2268,6 @@ mod tests {
             clusters,
             document_origin_y: 0.0,
             dpr: 1.0,
-            line_height: 20.0,
-            line_width: 800.0,
             byte_start: line_clusters.first().map(|c| c.0).unwrap_or(0),
             byte_end: line_clusters.last().map(|c| c.1).unwrap_or(0),
             visual_x: 0.0,
@@ -2550,10 +2385,8 @@ mod tests {
             has_move,
             "commit with same shaping but different geometry should create ReflowMove slice"
         );
-        let move_patches: Vec<&StaticLinePatch> =
-            tx.static_patches.iter().filter(|p| p.is_insert).collect();
         assert!(
-            !move_patches.is_empty(),
+            !tx.static_patches.is_empty(),
             "Move slices should have corresponding StaticLinePatch::insert_patch"
         );
     }
@@ -2642,10 +2475,8 @@ mod tests {
             "commit with different shaping should create paired Crossfade slices (old+new), got {}",
             crossfade_count
         );
-        let insert_patches: Vec<&StaticLinePatch> =
-            tx.static_patches.iter().filter(|p| p.is_insert).collect();
         assert!(
-            !insert_patches.is_empty(),
+            !tx.static_patches.is_empty(),
             "Crossfade new should have StaticLinePatch::insert_patch to prevent double-draw"
         );
     }

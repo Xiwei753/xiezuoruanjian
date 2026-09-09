@@ -28,6 +28,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5565067997ReproTest {
+    companion object {
+        private const val CONTENT___MANIFEST_BACKUP = "content://manifest/backup"
+        private const val CONTENT___MANIFEST_NEW = "content://manifest/new"
+        private const val CONTENT___NEW = "content://new"
+        private const val CONTENT___OLD = "content://old"
+        private const val F_MD = "f.md"
+        private const val META_MANIFEST_JSON = "_meta/manifest.json"
+        private const val OLD_MANIFEST_CONTENT = "OLD manifest content"
+        private const val TEXT_MARKDOWN = "text/markdown"
+        private const val TX1 = "tx1"
+    }
+
     // ══════════════════════════════════════════════════════════════════════
     // 修复 1：PendingItem 增加 STATE_BACKUP_READY / STATE_OLD_VACATED 中间状态
     // ══════════════════════════════════════════════════════════════════════
@@ -83,20 +95,20 @@ class Issue649Comment5565067997ReproTest {
     @Test
     fun fix1A_fallbackCopy_usesBackupReadyState() {
         val storage = DefectFakeStorage()
-        storage.committedFiles["content://old"] = "old content"
+        storage.committedFiles[CONTENT___OLD] = "old content"
 
-        val old = MirrorFileRef("content://old", "作品/P/V/Ch.md")
+        val old = MirrorFileRef(CONTENT___OLD, "作品/P/V/Ch.md")
 
-        val prepared = storage.prepareBackup("tx1", old, "text/markdown")
+        val prepared = storage.prepareBackup(TX1, old, TEXT_MARKDOWN)
         assertNotNull(prepared)
         assertFalse("prepareBackup 后 old 仍在 final", prepared!!.vacated)
-        assertTrue("old 仍在 committedFiles", storage.committedFiles.containsKey("content://old"))
+        assertTrue("old 仍在 committedFiles", storage.committedFiles.containsKey(CONTENT___OLD))
 
         // 修复确认：prepareBackup 后写 STATE_BACKUP_READY（不是 STATE_OLD_BACKED_UP）
         val item =
             PendingItem(
                 key = ChapterKey("p1", "v1", "ch1"),
-                stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
+                stagedRef = StagedMirrorRef(TX1, "content://staging", ".staging/tx1/f.md", F_MD, TEXT_MARKDOWN),
                 oldRef = old,
                 backupOldRef = prepared.backupRef,
                 promotedRef = null,
@@ -107,7 +119,7 @@ class Issue649Comment5565067997ReproTest {
         // old 还在 final，状态是 BACKUP_READY（不是 OLD_VACATED）→ 恢复时知道需要 vacate
         assertTrue(
             "old 还在 final，状态是 BACKUP_READY → 恢复时知道需要 vacate",
-            storage.committedFiles.containsKey("content://old"),
+            storage.committedFiles.containsKey(CONTENT___OLD),
         )
         assertFalse(
             "状态是 BACKUP_READY 不是 OLD_VACATED → 恢复时不会跳过 vacate",
@@ -127,9 +139,9 @@ class Issue649Comment5565067997ReproTest {
         storage.backupFiles["content://backup/moved"] = "old content"
         storage.backupPathToUri[backupPath] = "content://backup/moved"
 
-        val oldRef = MirrorFileRef("content://old", "作品/P/V/Ch.md")
+        val oldRef = MirrorFileRef(CONTENT___OLD, "作品/P/V/Ch.md")
 
-        val existingBackup = storage.resolveBackup("tx1", oldRef.relativePath)
+        val existingBackup = storage.resolveBackup(TX1, oldRef.relativePath)
         assertNotNull("backup 已存在（原子 move 已完成）", existingBackup)
 
         // 修复确认：用 lookup() 判断 old 是否已 vacate（不再硬编码 vacated=false）
@@ -199,14 +211,14 @@ class Issue649Comment5565067997ReproTest {
     fun fix2_backupPlusFinal_usesManifestSwapStateNotGuessing() {
         val storage = DefectFakeStorage()
         // 模拟 fallback copy 中间状态：backup 已复制，old manifest 还在 final（还没 vacate）
-        storage.committedFiles["content://manifest/final"] = "OLD manifest content"
-        storage.committedPathToUri["_meta/manifest.json"] = "content://manifest/final"
-        storage.backupFiles["content://manifest/backup"] = "OLD manifest content (backup copy)"
-        storage.backupPathToUri[".staging/tx1/backup/_meta/manifest.json"] = "content://manifest/backup"
+        storage.committedFiles["content://manifest/final"] = OLD_MANIFEST_CONTENT
+        storage.committedPathToUri[META_MANIFEST_JSON] = "content://manifest/final"
+        storage.backupFiles[CONTENT___MANIFEST_BACKUP] = "OLD manifest content (backup copy)"
+        storage.backupPathToUri[".staging/tx1/backup/_meta/manifest.json"] = CONTENT___MANIFEST_BACKUP
 
-        val manifestPath = "_meta/manifest.json"
+        val manifestPath = META_MANIFEST_JSON
 
-        val existingBackup = storage.resolveBackup("tx1", manifestPath)
+        val existingBackup = storage.resolveBackup(TX1, manifestPath)
         val existingFinal = storage.resolve(manifestPath)
 
         assertNotNull("backup 已存在", existingBackup)
@@ -226,7 +238,7 @@ class Issue649Comment5565067997ReproTest {
         val content = storage.committedFiles[existingFinal!!.uri]
         assertEquals(
             "existingFinal 是 OLD manifest（还没 vacate），不应被当作 new manifest 提交",
-            "OLD manifest content",
+            OLD_MANIFEST_CONTENT,
             content,
         )
     }
@@ -247,21 +259,21 @@ class Issue649Comment5565067997ReproTest {
     @Test
     fun fix3_manifestRollbackOrder_deleteNewRefBeforeRestore() {
         val storage = DefectFakeStorage()
-        val manifestPath = "_meta/manifest.json"
+        val manifestPath = META_MANIFEST_JSON
 
         // 初始状态：new manifest 在 final，old manifest 在 backup
-        storage.committedFiles["content://manifest/new"] = "NEW manifest content"
-        storage.committedPathToUri["_meta/manifest.json"] = "content://manifest/new"
-        storage.backupFiles["content://manifest/backup"] = "OLD manifest content"
-        storage.backupPathToUri[".staging/tx1/backup/_meta/manifest.json"] = "content://manifest/backup"
+        storage.committedFiles[CONTENT___MANIFEST_NEW] = "NEW manifest content"
+        storage.committedPathToUri[META_MANIFEST_JSON] = CONTENT___MANIFEST_NEW
+        storage.backupFiles[CONTENT___MANIFEST_BACKUP] = OLD_MANIFEST_CONTENT
+        storage.backupPathToUri[".staging/tx1/backup/_meta/manifest.json"] = CONTENT___MANIFEST_BACKUP
 
-        val manifestNewRef = MirrorFileRef("content://manifest/new", manifestPath)
-        val backup = MirrorFileRef("content://manifest/backup", manifestPath)
+        val manifestNewRef = MirrorFileRef(CONTENT___MANIFEST_NEW, manifestPath)
+        val backup = MirrorFileRef(CONTENT___MANIFEST_BACKUP, manifestPath)
 
         // 修复确认：正确顺序 — 1.先删 manifestNewRef
         val newRemoved = storage.delete(manifestNewRef)
         assertTrue("步骤1：删 manifestNewRef 成功", newRemoved)
-        assertFalse("new manifest 已从 final 删除", storage.committedFiles.containsKey("content://manifest/new"))
+        assertFalse("new manifest 已从 final 删除", storage.committedFiles.containsKey(CONTENT___MANIFEST_NEW))
 
         // 2. restoreBackup（final 已腾空，不会覆盖 new manifest）
         val restoreResult = storage.restoreBackup(backup, manifestPath, "application/json", null)
@@ -299,16 +311,16 @@ class Issue649Comment5565067997ReproTest {
     fun fix4_rollbackDeleteFailure_stopsStateAdvancement() {
         val storage = DefectFakeStorage()
         storage.failDelete = true // 让 delete 返回 false
-        storage.committedFiles["content://new"] = "new content"
+        storage.committedFiles[CONTENT___NEW] = "new content"
 
         val key = ChapterKey("p1", "v1", "ch1")
         val item =
             PendingItem(
                 key = key,
-                stagedRef = StagedMirrorRef("tx1", "content://staging", ".staging/tx1/f.md", "f.md", "text/markdown"),
-                oldRef = MirrorFileRef("content://old", "f.md"),
+                stagedRef = StagedMirrorRef(TX1, "content://staging", ".staging/tx1/f.md", F_MD, TEXT_MARKDOWN),
+                oldRef = MirrorFileRef(CONTENT___OLD, F_MD),
                 backupOldRef = MirrorFileRef("content://backup", "backup/f.md"),
-                promotedRef = MirrorFileRef("content://new", "f.md"),
+                promotedRef = MirrorFileRef(CONTENT___NEW, F_MD),
                 state = PendingItem.STATE_PROMOTED,
             )
 
@@ -333,7 +345,7 @@ class Issue649Comment5565067997ReproTest {
         )
         assertTrue(
             "修复4确认：新正文还在 final（delete 失败），状态未推进，不会制造同名冲突",
-            storage.committedFiles.containsKey("content://new"),
+            storage.committedFiles.containsKey(CONTENT___NEW),
         )
     }
 

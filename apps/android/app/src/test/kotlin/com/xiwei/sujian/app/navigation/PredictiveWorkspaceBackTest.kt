@@ -101,6 +101,9 @@ class PredictiveWorkspaceBackTest {
                     }
                 }
 
+            // 先推进让 child 真正进入 runPredictiveWorkspaceBack 并开始 collect flow：
+            // launch 只是调度任务，立刻 cancel 时 child 可能还没进入 collect，catch 无机会执行。
+            runCurrent()
             // 真正 cancel child job — 模拟 Activity Compose PredictiveBackHandler 的 job.cancel()。
             job.cancel()
             // 推进让 collect 响应取消。

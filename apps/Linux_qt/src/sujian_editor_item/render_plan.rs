@@ -1,21 +1,13 @@
-use super::animation_mode::AnimationMode;
 use super::cursor_animation::CursorAnimationPlan;
-use super::decoration_slice::DecorationSlice;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
 pub(crate) struct HiddenClipRect {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub key: VisualTransactionKey,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub byte_start: usize,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub byte_end: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -48,17 +40,11 @@ impl StaticTextPlan {
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub key: VisualTransactionKey,
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
     pub opacity: f64,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub animation_mode: AnimationMode,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub is_delete: bool,
     pub snapshot_id: LineSnapshotId,
     pub source_rect: SourceRect,
 }
@@ -95,31 +81,8 @@ pub(crate) struct PreeditRange {
     pub underline: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum ImeUpdateKind {
-    #[default]
-    None,
-    QueryInput,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ImeUpdatePlan {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub kind: ImeUpdateKind,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub cursor_changed: bool,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub anchor_changed: bool,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) struct FrameContext {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub viewport_height: f64,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub scroll_offset_y: f64,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub dpr: f64,
     pub active_transaction_keys: Vec<VisualTransactionKey>,
     pub keys_to_complete: Vec<VisualTransactionKey>,
     pub keys_to_cancel: Vec<VisualTransactionKey>,
@@ -142,15 +105,9 @@ impl Default for CursorStyle {
 
 #[derive(Clone, Debug)]
 pub(crate) struct RenderPlan {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub static_text: StaticTextPlan,
     pub text_animation: TextAnimationPlan,
     pub selection_preedit: SelectionPreeditPlan,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub decorations: Vec<DecorationSlice>,
     pub cursor: CursorAnimationPlan,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub ime: ImeUpdatePlan,
     pub frame_context: FrameContext,
     pub cursor_style: CursorStyle,
 }

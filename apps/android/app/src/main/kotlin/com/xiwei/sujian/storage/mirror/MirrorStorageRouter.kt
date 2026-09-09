@@ -87,7 +87,7 @@ class MirrorStorageRouter(
                     MirrorBackend.DOCUMENT_TREE -> {
                         requireNotNull(treeUri) {
                             "Mirror state claims DOCUMENT_TREE backend but treeUri is missing. " +
-                                "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                                REFUSING_FALLBACK_MSG
                         }
                         val treeUriParsed = Uri.parse(treeUri)
                         documentTreeFactory(treeUriParsed)
@@ -183,7 +183,7 @@ class MirrorStorageRouter(
                     // #649 评论 5563798095：DOCUMENT_TREE 缺 treeUri 时返回错误，不回退 MediaStore
                     requireNotNull(treeUri) {
                         "forBackend(DOCUMENT_TREE, treeUri=null) is invalid. " +
-                            "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
+                            REFUSING_FALLBACK_MSG
                     }
                     documentTreeFactory(Uri.parse(treeUri))
                 }
@@ -220,5 +220,10 @@ class MirrorStorageRouter(
             }
             MirrorBackend.MEDIA_STORE -> mediaStoreStorage
         }
+    }
+
+    companion object {
+        private const val REFUSING_FALLBACK_MSG =
+            "Refusing to fall back to MEDIA_STORE to avoid writing to wrong backend."
     }
 }

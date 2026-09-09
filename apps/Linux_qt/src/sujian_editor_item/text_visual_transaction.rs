@@ -3,10 +3,6 @@ use std::time::Instant;
 use writer_core::editor::CursorRect;
 
 use super::animated_slice::AnimatedSlice;
-use super::animation_mode::AnimationMode;
-use super::cursor_animation::CursorTransition;
-use super::decoration_slice::DecorationSlice;
-use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
@@ -101,11 +97,6 @@ impl TransactionTimeline {
         self.first_render_frame.is_some()
     }
 
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn is_paused(&self) -> bool {
-        self.pause_start.is_some()
-    }
-
     pub fn effective_start(&self) -> Option<Instant> {
         self.rendering_started_at.or(self.first_render_frame)
     }
@@ -113,7 +104,7 @@ impl TransactionTimeline {
 
 /// 一次平台视觉事务持有的全部资源。
 ///
-/// 它拥有一次动画所需的 slices、patches、cursor transition、decoration slices
+/// 它拥有一次动画所需的 slices、patches、cursor transition
 /// 和 old/new snapshots。
 /// `texture_prepared` 为 true 后，静态层才允许隐藏对应范围，否则会出现一帧空洞。
 /// 事务完成、取消或超时移除后，对应快照资源才可以释放。
@@ -124,17 +115,9 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub key: VisualTransactionKey,
     pub state: TextVisualTransactionState,
     pub operation_kind: TextVisualOperationKind,
-    pub animation_mode: AnimationMode,
     pub timeline: TransactionTimeline,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub old_revision: LayoutRevision,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub new_revision: LayoutRevision,
     pub slices: Vec<AnimatedSlice>,
     pub static_patches: Vec<StaticLinePatch>,
-    pub decoration_slices: Vec<DecorationSlice>,
-    #[cfg_attr(all(), allow(dead_code))]
-    pub cursor_transition: CursorTransition,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
     pub cancel_reason: Option<String>,
@@ -144,20 +127,6 @@ pub(crate) struct PreparedTextVisualTransaction {
 }
 
 impl PreparedTextVisualTransaction {
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn duration_ms(&self) -> u64 {
-        self.timeline.duration_ms
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn is_insert(&self) -> bool {
-        self.operation_kind == TextVisualOperationKind::Insert
-    }
-
-    pub fn is_delete(&self) -> bool {
-        self.operation_kind == TextVisualOperationKind::Delete
-    }
-
     pub fn is_cursor(&self) -> bool {
         self.operation_kind == TextVisualOperationKind::Cursor
     }
@@ -197,37 +166,6 @@ impl PreparedTextVisualTransaction {
             self.timeline.resume(Instant::now());
             self.state = TextVisualTransactionState::Rendering;
         }
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn mark_first_render(&mut self) {
-        self.timeline.mark_first_frame();
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn inserted_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.static_patches
-            .iter()
-            .filter(|p| p.is_insert)
-            .map(|p| (p.byte_start, p.byte_end))
-            .collect()
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn reflow_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.static_patches
-            .iter()
-            .filter(|p| !p.is_insert)
-            .map(|p| (p.byte_start, p.byte_end))
-            .collect()
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn all_hidden_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.static_patches
-            .iter()
-            .map(|p| (p.byte_start, p.byte_end))
-            .collect()
     }
 
     pub fn overlaps_byte_range(&self, byte_start: usize, byte_end: usize) -> bool {
@@ -273,27 +211,6 @@ impl PreparedTransactionQueue {
 
     pub fn enqueue(&mut self, tx: PreparedTextVisualTransaction) {
         self.transactions.push(tx);
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn mark_prepared(&mut self, key: VisualTransactionKey) -> bool {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
-            if tx.state == TextVisualTransactionState::Pending {
-                tx.state = TextVisualTransactionState::Prepared;
-                return true;
-            }
-        }
-        false
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn mark_rendering(&mut self, key: VisualTransactionKey) {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
-            if tx.state == TextVisualTransactionState::Prepared {
-                tx.state = TextVisualTransactionState::Rendering;
-                tx.mark_first_render();
-            }
-        }
     }
 
     pub fn mark_texture_prepared(&mut self, key: VisualTransactionKey) {
@@ -370,11 +287,6 @@ impl PreparedTransactionQueue {
         &mut self.transactions
     }
 
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn has_active(&self) -> bool {
-        !self.transactions.is_empty()
-    }
-
     pub fn has_active_insert(&self) -> bool {
         self.transactions.iter().any(|t| {
             t.state != TextVisualTransactionState::Cancelled
@@ -384,30 +296,5 @@ impl PreparedTransactionQueue {
 
     pub fn is_empty(&self) -> bool {
         self.transactions.is_empty()
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn insert_byte_ranges(&self) -> Vec<(usize, usize)> {
-        self.transactions
-            .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-            })
-            .flat_map(|t| t.inserted_byte_ranges())
-            .collect()
-    }
-
-    #[cfg_attr(all(), allow(dead_code))]
-    pub fn all_hidden_ranges(&self) -> Vec<(usize, usize)> {
-        self.transactions
-            .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-                    && t.texture_prepared
-            })
-            .flat_map(|t| t.all_hidden_byte_ranges())
-            .collect()
     }
 }

@@ -93,7 +93,7 @@ class MediaStoreMirrorStorage(
         text: String,
     ): StagedMirrorRef? {
         // MediaStore 暂存：用 txId 作为临时目录，避免覆盖 committed ref
-        val stagingDir = "$STAGING_DIR/$txId"
+        val stagingDir = txPath(txId)
         // #649 评论 5562462046 问题 6：路径拼接修复，避免少一个 `/`
         val parent = relativePath.substringBeforeLast('/', "")
         val relativeDir = if (parent.isBlank()) stagingDir else "$stagingDir/$parent"
@@ -140,7 +140,7 @@ class MediaStoreMirrorStorage(
         // 最终路径真正腾空。promoteStaged 之后最终路径才被 staged 占据，不会冲突。
         // 优先用 update RELATIVE_PATH 移动；失败回退到 read+createText 到 backup + delete old。
         val oldUri = tryParseUri(old.uri) ?: return null
-        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupBase = txPath(txId, BACKUP_DIR)
         val backupRelativePath = "$backupBase/${old.relativePath}"
         // 1. 优先尝试 update RELATIVE_PATH 移动 old 到 backup
         val movedRef = tryMoveByRelativePath(oldUri, backupRelativePath, mimeType)
@@ -170,7 +170,7 @@ class MediaStoreMirrorStorage(
         mimeType: String,
     ): BackupReadyRef? {
         val oldUri = tryParseUri(old.uri) ?: return null
-        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupBase = txPath(txId, BACKUP_DIR)
         val backupRelativePath = "$backupBase/${old.relativePath}"
         // 1. 优先尝试 update RELATIVE_PATH 移动 old 到 backup（原子 move）
         val movedRef = tryMoveByRelativePath(oldUri, backupRelativePath, mimeType)
@@ -204,7 +204,34 @@ class MediaStoreMirrorStorage(
         if (!mediaStore.isSupported()) return null
         val directory = mediaStoreDirectory(relativePath)
         val displayName = relativePath.substringAfterLast('/')
-        return queryByPathAndName(directory, displayName, relativePath)
+        // 内联 queryByPathAndName（#651 评论 5592465805：减少函数数量）
+        val cursor =
+            try {
+                contentResolver
+                    .query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        arrayOf(MediaStore.Downloads._ID),
+                        SELECTION_BY_PATH_AND_NAME,
+                        arrayOf(directory, displayName),
+                        null,
+                    )
+            } catch (_: Exception) {
+                return null
+            }
+        return cursor?.use { c ->
+            if (!c.moveToFirst()) return null
+            if (c.count > 1) {
+                android.util.Log.w(
+                    TAG,
+                    "resolve: multiple matches for $relativePath, " +
+                        "count=${c.count}, returning null to avoid binding wrong file",
+                )
+                return null
+            }
+            val id = c.getLong(0)
+            val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+            MirrorFileRef(uri = uri.toString(), relativePath = relativePath)
+        }
     }
 
     /**
@@ -228,9 +255,7 @@ class MediaStoreMirrorStorage(
                 .query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
-                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
-                        "${MediaStore.Downloads.IS_PENDING} = 0",
+                    SELECTION_BY_PATH_AND_NAME,
                     arrayOf(directory, displayName),
                     null,
                 )
@@ -262,12 +287,9 @@ class MediaStoreMirrorStorage(
         relativePath: String,
     ): MirrorFileRef? {
         // #649 评论 5563798095：检查 backup 路径是否已有文件，避免崩溃窗口后重复 backup。
-        if (!mediaStore.isSupported()) return null
-        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
-        val backupRelativePath = "$backupBase/$relativePath"
-        val directory = mediaStoreDirectory(backupRelativePath)
-        val displayName = backupRelativePath.substringAfterLast('/')
-        return queryByPathAndName(directory, displayName, backupRelativePath)
+        // 复用 [resolve]：backup 路径就是 tx backup 目录下的 relativePath。
+        val backupRelativePath = "${txPath(txId, BACKUP_DIR)}/$relativePath"
+        return resolve(backupRelativePath)
     }
 
     /**
@@ -288,7 +310,7 @@ class MediaStoreMirrorStorage(
         if (!mediaStore.isSupported()) {
             return MirrorLookupResult.Failed(IllegalStateException("MediaStore backend not supported"))
         }
-        val backupBase = "$STAGING_DIR/$txId/$BACKUP_DIR"
+        val backupBase = txPath(txId, BACKUP_DIR)
         val backupRelativePath = "$backupBase/$relativePath"
         val directory = mediaStoreDirectory(backupRelativePath)
         val displayName = backupRelativePath.substringAfterLast('/')
@@ -297,9 +319,7 @@ class MediaStoreMirrorStorage(
                 .query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
-                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
-                        "${MediaStore.Downloads.IS_PENDING} = 0",
+                    SELECTION_BY_PATH_AND_NAME,
                     arrayOf(directory, displayName),
                     null,
                 )
@@ -326,49 +346,6 @@ class MediaStoreMirrorStorage(
         }
     }
 
-    /**
-     * MediaStore 公共查询：按 RELATIVE_PATH + DISPLAY_NAME 查找文件。
-     *
-     * #649 评论 5563798095：命中多条时返回 null 并记日志，不随便拿第一条绑定章节。
-     */
-    private fun queryByPathAndName(
-        directory: String,
-        displayName: String,
-        resultRelativePath: String,
-    ): MirrorFileRef? {
-        return try {
-            contentResolver
-                .query(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
-                        "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
-                        "${MediaStore.Downloads.IS_PENDING} = 0",
-                    arrayOf(directory, displayName),
-                    null,
-                )
-                ?.use { cursor ->
-                    if (cursor.moveToFirst()) {
-                        if (cursor.count > 1) {
-                            android.util.Log.w(
-                                TAG,
-                                "queryByPathAndName: multiple matches for $resultRelativePath, " +
-                                    "count=${cursor.count}, returning null to avoid binding wrong file",
-                            )
-                            return null
-                        }
-                        val id = cursor.getLong(0)
-                        val uri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
-                        MirrorFileRef(uri = uri.toString(), relativePath = resultRelativePath)
-                    } else {
-                        null
-                    }
-                }
-        } catch (_: Exception) {
-            null
-        }
-    }
-
     override fun restoreBackup(
         backup: MirrorFileRef,
         finalRelativePath: String,
@@ -377,31 +354,18 @@ class MediaStoreMirrorStorage(
     ): RestoreBackupResult {
         val backupUri = tryParseUri(backup.uri) ?: return RestoreBackupResult.Failed(null)
         // 1. 先 lookup final 路径，校验内容身份
-        when (val lookupResult = lookup(finalRelativePath)) {
-            is MirrorLookupResult.Found -> {
-                // final 已存在，需要校验内容身份，不能只看"文件在不在"
-                if (expectedOldContentHash != null) {
-                    // 读取 final 内容并计算 hash
-                    val finalHashResult = readTextAndHash(lookupResult.ref)
-                    if (finalHashResult != null) {
-                        val (_, hash) = finalHashResult
-                        return if (hash == expectedOldContentHash) {
-                            // hash 匹配 → 真的是旧正文已恢复
-                            RestoreBackupResult.AlreadyRestored(lookupResult.ref)
-                        } else {
-                            // hash 不匹配 → final 上是新文件残留，冲突
-                            RestoreBackupResult.Conflict
-                        }
-                    }
-                    // 读取失败 → 无法确认状态
-                    return RestoreBackupResult.Failed(null)
-                }
-                // 无 hash 校验（如新建章节）→ 文件已存在视为已恢复
-                return RestoreBackupResult.AlreadyRestored(lookupResult.ref)
+        val lookupResult = lookup(finalRelativePath)
+        if (lookupResult is MirrorLookupResult.Found) {
+            if (expectedOldContentHash == null) return RestoreBackupResult.AlreadyRestored(lookupResult.ref)
+            val finalHashResult = readTextAndHash(lookupResult.ref) ?: return RestoreBackupResult.Failed(null)
+            val (_, hash) = finalHashResult
+            return if (hash == expectedOldContentHash) {
+                RestoreBackupResult.AlreadyRestored(lookupResult.ref)
+            } else {
+                RestoreBackupResult.Conflict
             }
-            is MirrorLookupResult.Failed -> return RestoreBackupResult.Failed(lookupResult.cause)
-            is MirrorLookupResult.Missing -> { /* final 不存在，继续 restore */ }
         }
+        if (lookupResult is MirrorLookupResult.Failed) return RestoreBackupResult.Failed(lookupResult.cause)
         // 2. final 不存在，从 backup 读取内容并创建到 final 位置
         val content = mediaStore.readText(backupUri) ?: return RestoreBackupResult.Failed(null)
         val relativeDir = finalRelativePath.substringBeforeLast('/', "")
@@ -424,7 +388,7 @@ class MediaStoreMirrorStorage(
         // 旧实现调完 deleteByPrefix 后直接 return true，deleteByPrefix 用 Int=0 同时表示
         // "没有记录"和"删除失败"，rollback 无法区分，会误删 journal 留下事务垃圾。
         // 新实现：deleteByPrefix 返回 Result<Int>，只有 Success 才返回 true。
-        val stagingDir = "$STAGING_DIR/$txId"
+        val stagingDir = txPath(txId)
         return mediaStore.deleteByPrefix(stagingDir).isSuccess
     }
 
@@ -482,6 +446,13 @@ class MediaStoreMirrorStorage(
         private const val STAGING_DIR = ".staging"
         private const val BACKUP_DIR = "backup"
         private const val MIRROR_ROOT_NAME = "Sujian"
+        private const val SELECTION_BY_PATH_AND_NAME =
+            "${MediaStore.Downloads.RELATIVE_PATH} = ? AND " +
+                "${MediaStore.Downloads.DISPLAY_NAME} = ? AND " +
+                "${MediaStore.Downloads.IS_PENDING} = 0"
+
+        private fun txPath(txId: String, subDir: String? = null): String =
+            if (subDir != null) "$STAGING_DIR/$txId/$subDir" else "$STAGING_DIR/$txId"
 
         // #649 评论 5564624383 问题 5：查询三态结果
         private enum class QueryResult { FOUND, MISSING, FAILED }

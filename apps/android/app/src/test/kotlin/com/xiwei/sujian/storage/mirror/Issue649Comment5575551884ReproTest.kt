@@ -36,6 +36,18 @@ import androidx.test.core.app.ApplicationProvider
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue649Comment5575551884ReproTest {
+    companion object {
+        private const val CHAP_1 = "chap-1"
+        private const val OUTBOX = "outbox 仍可读"
+        private const val PROJ_1 = "proj-1"
+        private const val SCHEMAVERSION = "schemaVersion"
+        private const val SHA256_ABC = "sha256:abc"
+        private const val S_1 = "项目1"
+        private const val S_2026_09_07T00_00_00Z = "2026-09-07T00:00:00Z"
+        private const val TX_1 = "tx-1"
+        private const val VOL_1 = "vol-1"
+    }
+
 
     // ══════════════════════════════════════════════════════════════════════
     // 问题 1：generation-aware outbox ACK
@@ -53,7 +65,7 @@ class Issue649Comment5575551884ReproTest {
         val outboxStore = MirrorOutboxStore(context)
         outboxStore.clearAll()
 
-        val pid = "proj-1"
+        val pid = PROJ_1
 
         // 步骤 1：R1 保存
         val r1Intent = outboxStore.markDirty(pid)
@@ -76,7 +88,7 @@ class Issue649Comment5575551884ReproTest {
 
         // outbox 中仍保留 R2 的 intent
         val snapshotAfterAck = outboxStore.readSnapshot()
-        assertNotNull("outbox 仍可读", snapshotAfterAck)
+        assertNotNull(OUTBOX, snapshotAfterAck)
         val r2StillPresent = snapshotAfterAck!!.projects[pid]
         assertNotNull("★ R2 intent 仍在 outbox 中：ACK R1 没有删除 generation=2 的 R2 ★", r2StillPresent)
         assertEquals("★ R2 generation 仍为 2 ★", 2L, r2StillPresent!!.generation)
@@ -116,7 +128,7 @@ class Issue649Comment5575551884ReproTest {
 
         // tombstone 已被移除
         val snapshotAfterAck = outboxStore.readSnapshot()
-        assertNotNull("outbox 仍可读", snapshotAfterAck)
+        assertNotNull(OUTBOX, snapshotAfterAck)
         assertFalse(
             "★ ackProject 后 tombstone 已移除 ★",
             snapshotAfterAck!!.projects.containsKey(pid),
@@ -154,7 +166,7 @@ class Issue649Comment5575551884ReproTest {
 
         // fullDirty 已被清除
         val snapshotAfterAck = outboxStore.readSnapshot()
-        assertNotNull("outbox 仍可读", snapshotAfterAck)
+        assertNotNull(OUTBOX, snapshotAfterAck)
         assertNull(
             "★ ackFullDirty 后 fullDirtyGeneration 已清除 ★",
             snapshotAfterAck!!.fullDirtyGeneration,
@@ -215,7 +227,7 @@ class Issue649Comment5575551884ReproTest {
         val outboxStore = MirrorOutboxStore(context)
         outboxStore.clearAll()
 
-        val pid = "proj-1"
+        val pid = PROJ_1
         val intent = outboxStore.markDirty(pid)
         assertNotNull(intent)
 
@@ -280,48 +292,14 @@ class Issue649Comment5575551884ReproTest {
      */
     @Test
     fun problem2_journalContextInheritsFrozenFields() {
-        val projectId = "proj-1"
-        val txId = "tx-1"
-        val key = ChapterKey(projectId, "vol-1", "chap-1")
+        val projectId = PROJ_1
+        val txId = TX_1
 
         // 模拟 journalContext 带 frozen 字段
-        val plan = FrozenManifestPlan(
-            schemaVersion = 1,
-            revision = 100L,
-            updatedAt = "2026-09-01T00:00:00Z",
-            targetProjectId = projectId,
-            projects = listOf(
-                FrozenManifestProject(
-                    id = projectId,
-                    title = "T1",
-                    order = 0,
-                    revision = 100L,
-                    updatedAt = "2026-09-01T00:00:00Z",
-                    volumes = emptyList(),
-                ),
-            ),
-        )
+        val plan = buildFrozenManifestPlan(projectId)
         val frozenPlanJson = frozenManifestPlanToJson(plan)
         val frozenPlanHash = computeContentHash(frozenPlanJson)
-        val journalContext = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = projectId,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            frozenManifestPlan = frozenPlanJson,
-            frozenManifestPlanHash = frozenPlanHash,
-        )
+        val journalContext = buildPendingPublishWithFrozen(txId, projectId, frozenPlanJson, frozenPlanHash)
 
         // writePendingPublishJournal 传 journalContext，不传 frozenManifestPlan 参数
         // frozen 字段应从 journalContext 继承
@@ -340,25 +318,7 @@ class Issue649Comment5575551884ReproTest {
         )
 
         // 模拟磁盘 journal 序列化/反序列化
-        val diskJournal = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = projectId,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = null,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null,
-            frozenManifestPlan = effectiveFrozenPlan,
-            frozenManifestPlanHash = effectiveFrozenPlanHash,
-        )
+        val diskJournal = buildPendingPublishWithFrozen(txId, projectId, effectiveFrozenPlan, effectiveFrozenPlanHash)
 
         val diskJson = diskJournal.toJson()
         val recoveredJournal = PendingMirrorPublish.fromJson(diskJson)
@@ -381,6 +341,56 @@ class Issue649Comment5575551884ReproTest {
             useFrozenPlan,
         )
     }
+
+    /**
+     * 构建 frozen manifest plan（#651 评论 5592465805：提取 setup 减少 LongMethod）。
+     */
+    private fun buildFrozenManifestPlan(projectId: String): FrozenManifestPlan =
+        FrozenManifestPlan(
+            schemaVersion = 1,
+            revision = 100L,
+            updatedAt = "2026-09-01T00:00:00Z",
+            targetProjectId = projectId,
+            projects = listOf(
+                FrozenManifestProject(
+                    id = projectId,
+                    title = "T1",
+                    order = 0,
+                    revision = 100L,
+                    updatedAt = "2026-09-01T00:00:00Z",
+                    volumes = emptyList(),
+                ),
+            ),
+        )
+
+    /**
+     * 构建 PendingMirrorPublish 并注入 frozen 字段（#651 评论 5592465805：提取 setup 减少 LongMethod）。
+     */
+    private fun buildPendingPublishWithFrozen(
+        txId: String,
+        projectId: String,
+        frozenPlanJson: String?,
+        frozenPlanHash: String?,
+    ): PendingMirrorPublish =
+        PendingMirrorPublish(
+            txId = txId,
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = projectId,
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = null,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null,
+            frozenManifestPlan = frozenPlanJson,
+            frozenManifestPlanHash = frozenPlanHash,
+        )
 
     /**
      * 问题 2 补充：writePendingPublishJournal 签名包含 frozen 参数。
@@ -416,8 +426,8 @@ class Issue649Comment5575551884ReproTest {
      */
     @Test
     fun problem3a_publishManifestFromFrozen_usesPrebuiltTargetJson_notManifestTargetJson() {
-        val projectId = "proj-1"
-        val txId = "tx-1"
+        val projectId = PROJ_1
+        val txId = TX_1
 
         // 模拟恢复入口：正文已 promote，manifest 还没开始 stage
         val journalBeforeFrozen = PendingMirrorPublish(
@@ -442,7 +452,7 @@ class Issue649Comment5575551884ReproTest {
         // 修复后：recoverPromotePhase 用 frozenManifestPlan 生成 manifestJson，
         // 传 prebuiltTargetJson 给 publishManifestWithDesiredTransactional，
         // 不修改 journalContext.manifestTargetJson
-        val manifestJson = """{"schemaVersion":1,"revision":100,"updatedAt":"2026-09-01","projects":[]}"""
+        val manifestJson = """{SCHEMAVERSION:1,"revision":100,"updatedAt":"2026-09-01","projects":[]}"""
 
         // 模拟调用 publishManifestWithDesiredTransactional 传 prebuiltTargetJson
         // journalContext.manifestTargetJson 保持 null
@@ -478,29 +488,29 @@ class Issue649Comment5575551884ReproTest {
         val plan = FrozenManifestPlan(
             schemaVersion = 1,
             revision = 1694123456789L,
-            updatedAt = "2026-09-07T00:00:00Z",
-            targetProjectId = "proj-1",
+            updatedAt = S_2026_09_07T00_00_00Z,
+            targetProjectId = PROJ_1,
             projects = listOf(
                 FrozenManifestProject(
-                    id = "proj-1",
-                    title = "项目1",
+                    id = PROJ_1,
+                    title = S_1,
                     order = 0,
                     revision = 1694123456789L,
-                    updatedAt = "2026-09-07T00:00:00Z",
+                    updatedAt = S_2026_09_07T00_00_00Z,
                     volumes = listOf(
                         FrozenManifestVolume(
-                            id = "vol-1",
+                            id = VOL_1,
                             title = "卷1",
                             order = 0,
                             revision = 1694123456789L,
-                            updatedAt = "2026-09-07T00:00:00Z",
+                            updatedAt = S_2026_09_07T00_00_00Z,
                             chapters = listOf(
                                 FrozenManifestChapter(
-                                    id = "chap-1",
+                                    id = CHAP_1,
                                     title = "章1",
                                     order = 0,
                                     revision = 1694123456789L,
-                                    updatedAt = "2026-09-07T00:00:00Z",
+                                    updatedAt = S_2026_09_07T00_00_00Z,
                                     contentFile = "",
                                     contentHash = "",
                                 ),
@@ -512,13 +522,13 @@ class Issue649Comment5575551884ReproTest {
         )
 
         // promotedEntries 覆盖目标章节
-        val key = ChapterKey("proj-1", "vol-1", "chap-1")
+        val key = ChapterKey(PROJ_1, VOL_1, CHAP_1)
         val promotedEntries = mapOf(
             key to ChapterMirrorEntry(
                 uri = "content://mirror/chap.md",
                 relativePath = "作品/项目1/卷1/章1.md",
                 revision = 1694123456789L,
-                contentHash = "sha256:abc",
+                contentHash = SHA256_ABC,
             ),
         )
 
@@ -529,8 +539,8 @@ class Issue649Comment5575551884ReproTest {
         val manifestRoot = org.json.JSONObject(manifestJson!!)
 
         // ── 断言 1：与 MirrorManifest schema 一致 ──
-        assertTrue("★ 有 schemaVersion ★", manifestRoot.has("schemaVersion"))
-        assertEquals("schemaVersion = 1", 1, manifestRoot.getInt("schemaVersion"))
+        assertTrue("★ 有 schemaVersion ★", manifestRoot.has(SCHEMAVERSION))
+        assertEquals("schemaVersion = 1", 1, manifestRoot.getInt(SCHEMAVERSION))
         assertTrue("★ 有 projects 数组（全局 manifest）★", manifestRoot.has("projects"))
         assertFalse("★ 无顶层 projectId ★", manifestRoot.has("projectId"))
         assertFalse("★ 无顶层 volumes ★", manifestRoot.has("volumes"))
@@ -540,7 +550,7 @@ class Issue649Comment5575551884ReproTest {
         assertEquals("projects 长度 = 1", 1, projectsArray.length())
         val projectObj = projectsArray.getJSONObject(0)
         assertTrue("★ project 用 id 字段（不是 projectId）★", projectObj.has("id"))
-        assertEquals("project id", "proj-1", projectObj.getString("id"))
+        assertEquals("project id", PROJ_1, projectObj.getString("id"))
 
         // ── 断言 3：章节字段与 MirrorChapter 一致 ──
         val volumes = projectObj.getJSONArray("volumes")
@@ -562,7 +572,7 @@ class Issue649Comment5575551884ReproTest {
         )
         assertEquals(
             "★ contentHash 用 promotedEntries 的 contentHash ★",
-            "sha256:abc",
+            SHA256_ABC,
             chapterObj.getString("contentHash"),
         )
     }
@@ -574,10 +584,10 @@ class Issue649Comment5575551884ReproTest {
     fun problem3_rollbackManifest_rejectsOldRefWithoutOldHash() {
         // 验证 validateInvariants 拒绝这种组合
         val journal = PendingMirrorPublish(
-            txId = "tx-1",
+            txId = TX_1,
             backend = MirrorBackend.MEDIA_STORE,
             treeUri = null,
-            projectId = "proj-1",
+            projectId = PROJ_1,
             transactionType = MirrorTransactionType.UPSERT_PROJECT,
             phase = PendingMirrorPublish.PHASE_PROMOTE,
             oldEntries = emptyMap(),
@@ -609,31 +619,31 @@ class Issue649Comment5575551884ReproTest {
         val plan = FrozenManifestPlan(
             schemaVersion = 1,
             revision = 1694123456789L,
-            updatedAt = "2026-09-07T00:00:00Z",
-            targetProjectId = "proj-1",
+            updatedAt = S_2026_09_07T00_00_00Z,
+            targetProjectId = PROJ_1,
             projects = listOf(
                 FrozenManifestProject(
-                    id = "proj-1",
-                    title = "项目1",
+                    id = PROJ_1,
+                    title = S_1,
                     order = 0,
                     revision = 1694123456789L,
-                    updatedAt = "2026-09-07T00:00:00Z",
+                    updatedAt = S_2026_09_07T00_00_00Z,
                     volumes = listOf(
                         FrozenManifestVolume(
-                            id = "vol-1",
+                            id = VOL_1,
                             title = "卷1",
                             order = 0,
                             revision = 1694123456789L,
-                            updatedAt = "2026-09-07T00:00:00Z",
+                            updatedAt = S_2026_09_07T00_00_00Z,
                             chapters = listOf(
                                 FrozenManifestChapter(
-                                    id = "chap-1",
+                                    id = CHAP_1,
                                     title = "章1",
                                     order = 0,
                                     revision = 1694123456789L,
-                                    updatedAt = "2026-09-07T00:00:00Z",
+                                    updatedAt = S_2026_09_07T00_00_00Z,
                                     contentFile = "test.md",
-                                    contentHash = "sha256:abc",
+                                    contentHash = SHA256_ABC,
                                 ),
                             ),
                         ),
@@ -646,17 +656,17 @@ class Issue649Comment5575551884ReproTest {
         val recovered = frozenManifestPlanFromJson(json)
 
         assertNotNull("反序列化成功", recovered)
-        assertEquals("schemaVersion", plan.schemaVersion, recovered!!.schemaVersion)
+        assertEquals(SCHEMAVERSION, plan.schemaVersion, recovered!!.schemaVersion)
         assertEquals("revision", plan.revision, recovered.revision)
         assertEquals("updatedAt", plan.updatedAt, recovered.updatedAt)
         assertEquals("targetProjectId", plan.targetProjectId, recovered.targetProjectId)
         assertEquals("projects.size", 1, recovered.projects.size)
-        assertEquals("project.id", "proj-1", recovered.projects[0].id)
-        assertEquals("project.title", "项目1", recovered.projects[0].title)
+        assertEquals("project.id", PROJ_1, recovered.projects[0].id)
+        assertEquals("project.title", S_1, recovered.projects[0].title)
         assertEquals("volumes.size", 1, recovered.projects[0].volumes.size)
         assertEquals("chapters.size", 1, recovered.projects[0].volumes[0].chapters.size)
         assertEquals("chapter.contentFile", "test.md", recovered.projects[0].volumes[0].chapters[0].contentFile)
-        assertEquals("chapter.contentHash", "sha256:abc", recovered.projects[0].volumes[0].chapters[0].contentHash)
+        assertEquals("chapter.contentHash", SHA256_ABC, recovered.projects[0].volumes[0].chapters[0].contentHash)
     }
 
     /**

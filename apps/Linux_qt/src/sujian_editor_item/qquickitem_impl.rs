@@ -211,16 +211,9 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_ctrl.force_snap_next,
                 self.cursor_ctrl.animation.as_ref(),
             );
-            let ime_plan = self
-                .pipeline
-                .animation_coordinator_mut()
-                .build_ime_plan(has_active_txs, false);
             let selection_preedit = self.build_selection_preedit_plan();
 
             let frame_context = FrameContext {
-                viewport_height: vp_h,
-                scroll_offset_y: scroll_y,
-                dpr,
                 active_transaction_keys: Vec::new(),
                 keys_to_complete: Vec::new(),
                 keys_to_cancel: Vec::new(),
@@ -235,7 +228,6 @@ impl QQuickItem for SujianEditorItem {
                 .animation_coordinator_mut()
                 .build_render_plan_full(
                     cursor_plan,
-                    ime_plan,
                     selection_preedit,
                     frame_context,
                     cursor_style,

@@ -4,6 +4,20 @@ import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 import org.json.JSONArray
 import org.json.JSONObject
 
+// manifest JSON 字段 key 常量（#651 评论 5592465805：消除 StringLiteralDuplication）。
+private const val KEY_SCHEMA_VERSION = "schemaVersion"
+private const val KEY_REVISION = "revision"
+private const val KEY_UPDATED_AT = "updatedAt"
+private const val KEY_PROJECTS = "projects"
+private const val KEY_VOLUMES = "volumes"
+private const val KEY_CHAPTERS = "chapters"
+private const val KEY_TARGET_PROJECT_ID = "targetProjectId"
+private const val KEY_ID = "id"
+private const val KEY_TITLE = "title"
+private const val KEY_ORDER = "order"
+private const val KEY_CONTENT_FILE = "contentFile"
+private const val KEY_CONTENT_HASH = "contentHash"
+
 /**
  * FrozenManifestPlan — 冻结的全局 manifest 计划。
  *
@@ -84,6 +98,144 @@ data class FrozenManifestChapter(
     val contentHash: String,
 )
 
+// ── 已提交 manifest → frozen plan 映射 helper（保留原样 metadata + contentFile + contentHash）──
+
+/** 把已提交 [MirrorChapter] 原样映射成 [FrozenManifestChapter]。 */
+private fun frozenChapterFromCommitted(chapter: MirrorChapter): FrozenManifestChapter =
+    FrozenManifestChapter(
+        id = chapter.id,
+        title = chapter.title,
+        order = chapter.order,
+        revision = chapter.revision,
+        updatedAt = chapter.updatedAt,
+        contentFile = chapter.contentFile,
+        contentHash = chapter.contentHash,
+    )
+
+/** 把已提交 [MirrorVolume] 原样映射成 [FrozenManifestVolume]。 */
+private fun frozenVolumeFromCommitted(volume: MirrorVolume): FrozenManifestVolume =
+    FrozenManifestVolume(
+        id = volume.id,
+        title = volume.title,
+        order = volume.order,
+        revision = volume.revision,
+        updatedAt = volume.updatedAt,
+        chapters = volume.chapters.map { frozenChapterFromCommitted(it) },
+    )
+
+/** 把已提交 [MirrorProject] 原样映射成 [FrozenManifestProject]。 */
+private fun frozenProjectFromCommitted(project: MirrorProject): FrozenManifestProject =
+    FrozenManifestProject(
+        id = project.id,
+        title = project.title,
+        order = project.order,
+        revision = project.revision,
+        updatedAt = project.updatedAt,
+        volumes = project.volumes.map { frozenVolumeFromCommitted(it) },
+    )
+
+// ── JSON 编码 helper（单字段/单实体）──
+
+/** 编码章节公共字段 + 指定的 contentFile/contentHash 到 [JSONObject]。 */
+private fun encodeChapterJson(
+    chapter: FrozenManifestChapter,
+    contentFile: String,
+    contentHash: String,
+): JSONObject = JSONObject().apply {
+    put(KEY_ID, chapter.id)
+    put(KEY_TITLE, chapter.title)
+    put(KEY_ORDER, chapter.order)
+    put(KEY_REVISION, chapter.revision)
+    put(KEY_UPDATED_AT, chapter.updatedAt)
+    put(KEY_CONTENT_FILE, contentFile)
+    put(KEY_CONTENT_HASH, contentHash)
+}
+
+/** 编码卷到 [JSONObject]（含 chapters 数组）。 */
+private fun encodeVolumeJson(
+    volume: FrozenManifestVolume,
+    chaptersJson: JSONArray,
+): JSONObject = JSONObject().apply {
+    put(KEY_ID, volume.id)
+    put(KEY_TITLE, volume.title)
+    put(KEY_ORDER, volume.order)
+    put(KEY_REVISION, volume.revision)
+    put(KEY_UPDATED_AT, volume.updatedAt)
+    put(KEY_CHAPTERS, chaptersJson)
+}
+
+/** 编码项目到 [JSONObject]（含 volumes 数组）。 */
+private fun encodeProjectJson(
+    project: FrozenManifestProject,
+    volumesJson: JSONArray,
+): JSONObject = JSONObject().apply {
+    put(KEY_ID, project.id)
+    put(KEY_TITLE, project.title)
+    put(KEY_ORDER, project.order)
+    put(KEY_REVISION, project.revision)
+    put(KEY_UPDATED_AT, project.updatedAt)
+    put(KEY_VOLUMES, volumesJson)
+}
+
+/** 编码 manifest 根到 [JSONObject]。 */
+private fun encodeManifestRoot(
+    schemaVersion: Int,
+    revision: Long,
+    updatedAt: String,
+    projectsJson: JSONArray,
+): JSONObject = JSONObject().apply {
+    put(KEY_SCHEMA_VERSION, schemaVersion)
+    put(KEY_REVISION, revision)
+    put(KEY_UPDATED_AT, updatedAt)
+    put(KEY_PROJECTS, projectsJson)
+}
+
+// ── JSON 解码 helper（单实体）──
+
+/** 从 [JSONObject] 解码章节。 */
+private fun decodeChapterFromJson(obj: JSONObject): FrozenManifestChapter =
+    FrozenManifestChapter(
+        id = obj.getString(KEY_ID),
+        title = obj.getString(KEY_TITLE),
+        order = obj.getInt(KEY_ORDER),
+        revision = obj.getLong(KEY_REVISION),
+        updatedAt = obj.getString(KEY_UPDATED_AT),
+        contentFile = obj.optString(KEY_CONTENT_FILE, ""),
+        contentHash = obj.optString(KEY_CONTENT_HASH, ""),
+    )
+
+/** 从 [JSONObject] 解码卷。 */
+private fun decodeVolumeFromJson(obj: JSONObject): FrozenManifestVolume {
+    val chaptersArray = obj.getJSONArray(KEY_CHAPTERS)
+    val chapters = (0 until chaptersArray.length()).map { i ->
+        decodeChapterFromJson(chaptersArray.getJSONObject(i))
+    }
+    return FrozenManifestVolume(
+        id = obj.getString(KEY_ID),
+        title = obj.getString(KEY_TITLE),
+        order = obj.getInt(KEY_ORDER),
+        revision = obj.getLong(KEY_REVISION),
+        updatedAt = obj.getString(KEY_UPDATED_AT),
+        chapters = chapters,
+    )
+}
+
+/** 从 [JSONObject] 解码项目。 */
+private fun decodeProjectFromJson(obj: JSONObject): FrozenManifestProject {
+    val volumesArray = obj.getJSONArray(KEY_VOLUMES)
+    val volumes = (0 until volumesArray.length()).map { j ->
+        decodeVolumeFromJson(volumesArray.getJSONObject(j))
+    }
+    return FrozenManifestProject(
+        id = obj.getString(KEY_ID),
+        title = obj.getString(KEY_TITLE),
+        order = obj.getInt(KEY_ORDER),
+        revision = obj.getLong(KEY_REVISION),
+        updatedAt = obj.getString(KEY_UPDATED_AT),
+        volumes = volumes,
+    )
+}
+
 /**
  * 构建 frozen manifest plan。
  *
@@ -117,41 +269,28 @@ fun buildFrozenManifestPlan(
     if (committedManifest != null) {
         for (project in committedManifest.projects) {
             if (project.id == targetProjectId) continue
-            frozenProjects.add(
-                FrozenManifestProject(
-                    id = project.id,
-                    title = project.title,
-                    order = project.order,
-                    revision = project.revision,
-                    updatedAt = project.updatedAt,
-                    volumes = project.volumes.map { vol ->
-                        FrozenManifestVolume(
-                            id = vol.id,
-                            title = vol.title,
-                            order = vol.order,
-                            revision = vol.revision,
-                            updatedAt = vol.updatedAt,
-                            chapters = vol.chapters.map { ch ->
-                                FrozenManifestChapter(
-                                    id = ch.id,
-                                    title = ch.title,
-                                    order = ch.order,
-                                    revision = ch.revision,
-                                    updatedAt = ch.updatedAt,
-                                    // #649 评论 5575950895 问题 5：保留已提交 manifest 的真实值，
-                                    // 不再写空字符串占位。
-                                    contentFile = ch.contentFile,
-                                    contentHash = ch.contentHash,
-                                )
-                            },
-                        )
-                    },
-                ),
-            )
+            frozenProjects.add(frozenProjectFromCommitted(project))
         }
     }
 
     // 2. 目标项目：复用 targetSnapshot + targetDesiredEntries，不再次 getProjectWorkspaceSnapshot
+    frozenProjects.add(buildTargetFrozenProject(targetProjectId, targetSnapshot, targetDesiredEntries))
+
+    return FrozenManifestPlan(
+        schemaVersion = 1,
+        revision = revision,
+        updatedAt = updatedAt,
+        targetProjectId = targetProjectId,
+        projects = frozenProjects,
+    )
+}
+
+/** 用 targetSnapshot + targetDesiredEntries 构建目标项目的 [FrozenManifestProject]。 */
+private fun buildTargetFrozenProject(
+    targetProjectId: String,
+    targetSnapshot: ProjectWorkspaceSnapshot,
+    targetDesiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
+): FrozenManifestProject {
     val targetVolumes = targetSnapshot.volumes.map { vol ->
         FrozenManifestVolume(
             id = vol.volume.id,
@@ -176,23 +315,13 @@ fun buildFrozenManifestPlan(
             },
         )
     }
-    frozenProjects.add(
-        FrozenManifestProject(
-            id = targetProjectId,
-            title = targetSnapshot.project.title,
-            order = 0,
-            revision = targetSnapshot.project.updatedAt.toEpochMillis(),
-            updatedAt = targetSnapshot.project.updatedAt,
-            volumes = targetVolumes,
-        ),
-    )
-
-    return FrozenManifestPlan(
-        schemaVersion = 1,
-        revision = revision,
-        updatedAt = updatedAt,
-        targetProjectId = targetProjectId,
-        projects = frozenProjects,
+    return FrozenManifestProject(
+        id = targetProjectId,
+        title = targetSnapshot.project.title,
+        order = 0,
+        revision = targetSnapshot.project.updatedAt.toEpochMillis(),
+        updatedAt = targetSnapshot.project.updatedAt,
+        volumes = targetVolumes,
     )
 }
 
@@ -213,186 +342,109 @@ fun frozenPlanToManifestJson(
     promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
 ): String? {
     val projectsJson = JSONArray()
-
     for (frozenProject in plan.projects) {
-        val volumesJson = JSONArray()
-
-        for (frozenVolume in frozenProject.volumes) {
-            val chaptersJson = JSONArray()
-
-            for (frozenChapter in frozenVolume.chapters) {
-                val chapterKey = ChapterKey(frozenProject.id, frozenVolume.id, frozenChapter.id)
-
-                if (frozenProject.id == plan.targetProjectId) {
-                    // 目标项目：用 promotedEntries 的真实 URI/hash
-                    val entry = promotedEntries[chapterKey]
-                    if (entry == null) {
-                        // 章节在 frozen plan 中存在但没有 promotedEntries → 不完整，停止
-                        return null
-                    }
-                    chaptersJson.put(JSONObject().apply {
-                        put("id", frozenChapter.id)
-                        put("title", frozenChapter.title)
-                        put("order", frozenChapter.order)
-                        put("revision", frozenChapter.revision)
-                        put("updatedAt", frozenChapter.updatedAt)
-                        put("contentFile", entry.relativePath)
-                        put("contentHash", entry.contentHash)
-                    })
-                } else {
-                    // #649 评论 5575950895 问题 5：非目标项目原样输出冻结的真实 contentFile/contentHash
-                    // （来自已提交 manifest），不再输出空字符串占位。
-                    chaptersJson.put(JSONObject().apply {
-                        put("id", frozenChapter.id)
-                        put("title", frozenChapter.title)
-                        put("order", frozenChapter.order)
-                        put("revision", frozenChapter.revision)
-                        put("updatedAt", frozenChapter.updatedAt)
-                        put("contentFile", frozenChapter.contentFile)
-                        put("contentHash", frozenChapter.contentHash)
-                    })
-                }
-            }
-
-            volumesJson.put(JSONObject().apply {
-                put("id", frozenVolume.id)
-                put("title", frozenVolume.title)
-                put("order", frozenVolume.order)
-                put("revision", frozenVolume.revision)
-                put("updatedAt", frozenVolume.updatedAt)
-                put("chapters", chaptersJson)
-            })
-        }
-
-        projectsJson.put(JSONObject().apply {
-            put("id", frozenProject.id)
-            put("title", frozenProject.title)
-            put("order", frozenProject.order)
-            put("revision", frozenProject.revision)
-            put("updatedAt", frozenProject.updatedAt)
-            put("volumes", volumesJson)
-        })
+        val volumesJson = encodeProjectVolumesForManifest(plan, frozenProject, promotedEntries)
+            ?: return null
+        projectsJson.put(encodeProjectJson(frozenProject, volumesJson))
     }
-
-    return JSONObject().apply {
-        put("schemaVersion", plan.schemaVersion)
-        put("revision", plan.revision)
-        put("updatedAt", plan.updatedAt)
-        put("projects", projectsJson)
-    }.toString()
+    return encodeManifestRoot(plan.schemaVersion, plan.revision, plan.updatedAt, projectsJson).toString()
 }
+
+/** 编码单个项目的所有卷为 manifest JSON 数组；目标项目章节缺失 promotedEntries 时返回 null。 */
+private fun encodeProjectVolumesForManifest(
+    plan: FrozenManifestPlan,
+    frozenProject: FrozenManifestProject,
+    promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
+): JSONArray? {
+    val volumesJson = JSONArray()
+    for (frozenVolume in frozenProject.volumes) {
+        val chaptersJson = encodeVolumeChaptersForManifest(plan, frozenProject, frozenVolume, promotedEntries)
+            ?: return null
+        volumesJson.put(encodeVolumeJson(frozenVolume, chaptersJson))
+    }
+    return volumesJson
+}
+
+/** 编码单卷所有章节为 manifest JSON 数组；目标项目章节缺失 promotedEntries 时返回 null。 */
+private fun encodeVolumeChaptersForManifest(
+    plan: FrozenManifestPlan,
+    frozenProject: FrozenManifestProject,
+    frozenVolume: FrozenManifestVolume,
+    promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
+): JSONArray? {
+    val chaptersJson = JSONArray()
+    for (frozenChapter in frozenVolume.chapters) {
+        val chapterKey = ChapterKey(frozenProject.id, frozenVolume.id, frozenChapter.id)
+        val chapterJson = encodeChapterForManifest(plan, frozenProject, frozenChapter, chapterKey, promotedEntries)
+            ?: return null
+        chaptersJson.put(chapterJson)
+    }
+    return chaptersJson
+}
+
+/** 编码单章节为 manifest JSON：目标项目用 promotedEntries 真实值，非目标项目用冻结值。 */
+private fun encodeChapterForManifest(
+    plan: FrozenManifestPlan,
+    frozenProject: FrozenManifestProject,
+    frozenChapter: FrozenManifestChapter,
+    chapterKey: ChapterKey,
+    promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
+): JSONObject? =
+    if (frozenProject.id == plan.targetProjectId) {
+        // 目标项目：用 promotedEntries 的真实 URI/hash
+        val entry = promotedEntries[chapterKey] ?: return null
+        encodeChapterJson(frozenChapter, entry.relativePath, entry.contentHash)
+    } else {
+        // #649 评论 5575950895 问题 5：非目标项目原样输出冻结的真实 contentFile/contentHash
+        encodeChapterJson(frozenChapter, frozenChapter.contentFile, frozenChapter.contentHash)
+    }
 
 /**
  * 序列化 FrozenManifestPlan 为 JSON 字符串。
  */
 fun frozenManifestPlanToJson(plan: FrozenManifestPlan): String {
-    val root = JSONObject()
-    root.put("schemaVersion", plan.schemaVersion)
-    root.put("revision", plan.revision)
-    root.put("updatedAt", plan.updatedAt)
-    root.put("targetProjectId", plan.targetProjectId)
-
     val projectsArray = JSONArray()
     for (project in plan.projects) {
         val volumesArray = JSONArray()
         for (volume in project.volumes) {
             val chaptersArray = JSONArray()
             for (chapter in volume.chapters) {
-                chaptersArray.put(JSONObject().apply {
-                    put("id", chapter.id)
-                    put("title", chapter.title)
-                    put("order", chapter.order)
-                    put("revision", chapter.revision)
-                    put("updatedAt", chapter.updatedAt)
-                    put("contentFile", chapter.contentFile)
-                    put("contentHash", chapter.contentHash)
-                })
+                chaptersArray.put(encodeChapterJson(chapter, chapter.contentFile, chapter.contentHash))
             }
-            volumesArray.put(JSONObject().apply {
-                put("id", volume.id)
-                put("title", volume.title)
-                put("order", volume.order)
-                put("revision", volume.revision)
-                put("updatedAt", volume.updatedAt)
-                put("chapters", chaptersArray)
-            })
+            volumesArray.put(encodeVolumeJson(volume, chaptersArray))
         }
-        projectsArray.put(JSONObject().apply {
-            put("id", project.id)
-            put("title", project.title)
-            put("order", project.order)
-            put("revision", project.revision)
-            put("updatedAt", project.updatedAt)
-            put("volumes", volumesArray)
-        })
+        projectsArray.put(encodeProjectJson(project, volumesArray))
     }
-    root.put("projects", projectsArray)
-    return root.toString()
+    // 保持原 key 顺序：schemaVersion, revision, updatedAt, targetProjectId, projects
+    return JSONObject().apply {
+        put(KEY_SCHEMA_VERSION, plan.schemaVersion)
+        put(KEY_REVISION, plan.revision)
+        put(KEY_UPDATED_AT, plan.updatedAt)
+        put(KEY_TARGET_PROJECT_ID, plan.targetProjectId)
+        put(KEY_PROJECTS, projectsArray)
+    }.toString()
 }
 
 /**
  * 反序列化 FrozenManifestPlan 从 JSON 字符串。
  */
-fun frozenManifestPlanFromJson(json: String): FrozenManifestPlan? {
-    return try {
+fun frozenManifestPlanFromJson(json: String): FrozenManifestPlan? =
+    try {
         val root = JSONObject(json)
-        val schemaVersion = root.getInt("schemaVersion")
-        val revision = root.getLong("revision")
-        val updatedAt = root.getString("updatedAt")
-        val targetProjectId = root.getString("targetProjectId")
-
-        val projectsArray = root.getJSONArray("projects")
-        val projects = mutableListOf<FrozenManifestProject>()
-        for (i in 0 until projectsArray.length()) {
-            val projectObj = projectsArray.getJSONObject(i)
-            val volumesArray = projectObj.getJSONArray("volumes")
-            val volumes = mutableListOf<FrozenManifestVolume>()
-            for (j in 0 until volumesArray.length()) {
-                val volumeObj = volumesArray.getJSONObject(j)
-                val chaptersArray = volumeObj.getJSONArray("chapters")
-                val chapters = mutableListOf<FrozenManifestChapter>()
-                for (k in 0 until chaptersArray.length()) {
-                    val chapterObj = chaptersArray.getJSONObject(k)
-                    chapters.add(FrozenManifestChapter(
-                        id = chapterObj.getString("id"),
-                        title = chapterObj.getString("title"),
-                        order = chapterObj.getInt("order"),
-                        revision = chapterObj.getLong("revision"),
-                        updatedAt = chapterObj.getString("updatedAt"),
-                        contentFile = chapterObj.optString("contentFile", ""),
-                        contentHash = chapterObj.optString("contentHash", ""),
-                    ))
-                }
-                volumes.add(FrozenManifestVolume(
-                    id = volumeObj.getString("id"),
-                    title = volumeObj.getString("title"),
-                    order = volumeObj.getInt("order"),
-                    revision = volumeObj.getLong("revision"),
-                    updatedAt = volumeObj.getString("updatedAt"),
-                    chapters = chapters,
-                ))
-            }
-            projects.add(FrozenManifestProject(
-                id = projectObj.getString("id"),
-                title = projectObj.getString("title"),
-                order = projectObj.getInt("order"),
-                revision = projectObj.getLong("revision"),
-                updatedAt = projectObj.getString("updatedAt"),
-                volumes = volumes,
-            ))
+        val projectsArray = root.getJSONArray(KEY_PROJECTS)
+        val projects = (0 until projectsArray.length()).map { i ->
+            decodeProjectFromJson(projectsArray.getJSONObject(i))
         }
-
         FrozenManifestPlan(
-            schemaVersion = schemaVersion,
-            revision = revision,
-            updatedAt = updatedAt,
-            targetProjectId = targetProjectId,
+            schemaVersion = root.getInt(KEY_SCHEMA_VERSION),
+            revision = root.getLong(KEY_REVISION),
+            updatedAt = root.getString(KEY_UPDATED_AT),
+            targetProjectId = root.getString(KEY_TARGET_PROJECT_ID),
             projects = projects,
         )
     } catch (_: Exception) {
         null
     }
-}
 
 /**
  * 为删除项目构建 frozen manifest plan。
@@ -417,35 +469,7 @@ fun buildFrozenDeleteManifestPlan(
     // 非被删项目：从 committedManifest 取原样 metadata + contentFile + contentHash
     for (project in committedManifest.projects) {
         if (project.id == deletedProjectId) continue
-        frozenProjects.add(
-            FrozenManifestProject(
-                id = project.id,
-                title = project.title,
-                order = project.order,
-                revision = project.revision,
-                updatedAt = project.updatedAt,
-                volumes = project.volumes.map { vol ->
-                    FrozenManifestVolume(
-                        id = vol.id,
-                        title = vol.title,
-                        order = vol.order,
-                        revision = vol.revision,
-                        updatedAt = vol.updatedAt,
-                        chapters = vol.chapters.map { ch ->
-                            FrozenManifestChapter(
-                                id = ch.id,
-                                title = ch.title,
-                                order = ch.order,
-                                revision = ch.revision,
-                                updatedAt = ch.updatedAt,
-                                contentFile = ch.contentFile,
-                                contentHash = ch.contentHash,
-                            )
-                        },
-                    )
-                },
-            )
-        )
+        frozenProjects.add(frozenProjectFromCommitted(project))
     }
 
     return FrozenManifestPlan(

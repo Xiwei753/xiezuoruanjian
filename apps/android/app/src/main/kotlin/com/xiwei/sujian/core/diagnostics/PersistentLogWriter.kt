@@ -57,6 +57,21 @@ internal sealed interface LogWriterCommand {
         val latch: CountDownLatch,
         val deleted: AtomicBoolean,
     ) : LogWriterCommand
+
+    /**
+     * reset 屏障（仅供测试，Issue #651 评论 5592465805）：writer 处理到此命令时
+     * 丢弃前序 batch，把 [PersistentLogWriter.appContext]/[PersistentLogWriter.buildIdentity]/
+     * [PersistentLogWriter.enabled]/[PersistentLogWriter.persistenceHealthy] 重置为干净默认，
+     * 并删除当前 logsDir 下所有文件，最后 countDown。调用方在 latch 后看到完全重置的单例。
+     *
+     * 必须由 writer 线程处理：字段重置与文件删除和 writeBatch 串行，无并发竞态；
+     * 调用方在 latch.await 后通过 CountDownLatch 的 happens-before 看到所有写入。
+     */
+    data class ResetBarrier(
+        val latch: CountDownLatch,
+        val context: Context,
+        val identity: DiagnosticsBuildIdentity,
+    ) : LogWriterCommand
 }
 
 /**
@@ -146,7 +161,7 @@ internal object PersistentLogWriter {
      */
     fun init(
         context: Context,
-        identity: DiagnosticsBuildIdentity,
+        identity: DiagnosticsBuildIdentity = DiagnosticsBuildIdentity.fromBuildConfig(),
     ) {
         synchronized(lock) {
             if (initialized) return
@@ -164,14 +179,48 @@ internal object PersistentLogWriter {
     }
 
     /**
-     * 向后兼容重载：未提供构建身份时从 BuildConfig 生成。
+     * 仅供测试：把单例恢复到干净状态（Issue #651 评论 5592465805）。
      *
-     * 生产路径走 [DiagnosticsLogger.init] -> init(context, identity)；
-     * 此重载供测试直接初始化 [PersistentLogWriter] 时使用，确保日志文件名同样
-     * 按当前 BuildConfig 的 build key 分界（#623 评论 3）。
+     * 生产路径仍走 [init] 常驻单例，不调用此入口。Robolectric 为每个测试方法创建
+     * 独立 Application 沙箱（独立 filesDir），但单例 [appContext] 一经 [init] 设置
+     * 且 [initialized] 永不重置，后续测试方法的 [init] 变 no-op，writer 写盘仍指向
+     * 第一个测试的 dataDir，而断言用当前测试的 dataDir → 文件找不到。此入口一次性：
+     * - 排空待写队列并等待 writer 线程处理完前序命令（drain）；
+     * - 把 [appContext]/[buildIdentity] 更新到当前测试的 context；
+     * - [enabled] 恢复 true、[persistenceHealthy] 恢复 true；
+     * - 删除当前 logsDir 下所有文件，恢复干净目录。
+     *
+     * 字段重置与文件删除由 writer 线程在 [ResetBarrier] 处理时执行（与 writeBatch 串行，
+     * 无竞态）；调用方在 latch.await 后通过 happens-before 看到完全重置的单例。
      */
-    fun init(context: Context) {
-        init(context, DiagnosticsBuildIdentity.fromBuildConfig())
+    @androidx.annotation.VisibleForTesting
+    internal fun resetForTest(
+        context: Context,
+        identity: DiagnosticsBuildIdentity = DiagnosticsBuildIdentity.fromBuildConfig(),
+    ) {
+        val latch = CountDownLatch(1)
+        synchronized(lock) {
+            if (!initialized) {
+                // 首次：启动 writer 线程。ResetBarrier 会再次重置字段（幂等）。
+                initialized = true
+                enabled = true
+                appContext = context.applicationContext
+                buildIdentity = identity
+                val thread = Thread({ writerLoop() }, "sujian-logger")
+                thread.priority = Thread.MIN_PRIORITY
+                thread.isDaemon = true
+                thread.start()
+            }
+            // 清空可能残留的命令，再入队 ResetBarrier 让 writer 线程排空并重置字段。
+            queue.clear()
+            queue.addLast(LogWriterCommand.ResetBarrier(latch, context.applicationContext, identity))
+            lock.notifyAll()
+        }
+        try {
+            latch.await(FLUSH_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     /**
@@ -179,14 +228,8 @@ internal object PersistentLogWriter {
      * sujian-current-v1234-e2ce827-ai-debug.log；未设置身份时回退到裸
      * sujian-current.log（仅用于旧历史文件兼容，不作为新构建的当前文件）。
      */
-    private fun currentLogFileName(): String {
-        val identity = buildIdentity
-        return if (identity != null) {
-            "$LOG_PREFIX-${identity.buildKey}.log"
-        } else {
-            "$LOG_PREFIX.log"
-        }
-    }
+    private val currentLogFileName: String
+        get() = if (buildIdentity != null) "$LOG_PREFIX-${buildIdentity!!.buildKey}.log" else "$LOG_PREFIX.log"
 
     fun setEnabled(enabled: Boolean) {
         synchronized(lock) {
@@ -325,6 +368,7 @@ internal object PersistentLogWriter {
                 is LogWriterCommand.Append -> batch.add(cmd.request)
                 is LogWriterCommand.FlushBarrier -> handleFlushBarrier(cmd, batch)
                 is LogWriterCommand.ClearBarrier -> handleClearBarrier(cmd, batch)
+                is LogWriterCommand.ResetBarrier -> handleResetBarrier(cmd, batch)
             }
         }
         // 尾部连续 Append 写盘：尾部 batch 写失败要更新 persistenceHealthy。
@@ -369,6 +413,34 @@ internal object PersistentLogWriter {
                 persistenceHealthy = true
             }
             cmd.deleted.set(deleted)
+        } finally {
+            cmd.latch.countDown()
+        }
+    }
+
+    /**
+     * 处理 ResetBarrier（仅供测试，Issue #651 评论 5592465805）：丢弃前序 batch，
+     * 把单例字段重置到干净默认，并删除当前 logsDir 下所有文件。
+     *
+     * 必须在 writer 线程执行：与 writeBatch/deleteLogFiles 串行，无并发竞态。
+     * batch.clear() 丢弃前序 Append（测试要干净状态，不写前序日志）。字段重置后，
+     * 后续 Append 写到新 [appContext] 的 logsDir。latch 在 finally 必定释放。
+     */
+    private fun handleResetBarrier(
+        cmd: LogWriterCommand.ResetBarrier,
+        batch: MutableList<LogRequest>,
+    ) {
+        try {
+            // 丢弃所有 pending batch：测试要干净状态，不写前序日志。
+            batch.clear()
+            // 重置单例字段（writer 线程独占，无竞态）。appContext 更新到当前测试沙箱。
+            appContext = cmd.context
+            buildIdentity = cmd.identity
+            enabled = true
+            persistenceHealthy = true
+            // 删除当前 logsDir 下所有文件，恢复干净目录（新沙箱本就空，幂等）。
+            logsDir()?.takeIf { it.exists() && it.isDirectory }
+                ?.listFiles()?.forEach { f -> if (f.isFile) f.delete() }
         } finally {
             cmd.latch.countDown()
         }
@@ -434,7 +506,7 @@ internal object PersistentLogWriter {
         return try {
             ensureLogsDirOrThrow()
             val dir = logsDir() ?: return false
-            val currentFile = File(dir, currentLogFileName())
+            val currentFile = File(dir, currentLogFileName)
             if (!rotateIfNeeded(currentFile)) return false
             FileOutputStream(currentFile, true)
                 .bufferedWriter(Charsets.UTF_8)
