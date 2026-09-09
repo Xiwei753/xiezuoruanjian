@@ -117,7 +117,10 @@ class Issue649Comment5578666118ReproTest {
     @Test
     fun readSnapshotStrict_documentTreeValidTreeUri_success() {
         writeStateJson(
-            """{"backend": "document_tree", "treeUri": "content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian"}""",
+            """
+            {"backend": "document_tree",
+            "treeUri": "content://com.android.providers.downloads.documents/tree/primary%3ADownload%2FSujian"}
+            """.trimIndent(),
         )
         val result = store.readSnapshotStrict()
         assertTrue("document_tree + 合法 treeUri → success", result.isSuccess)

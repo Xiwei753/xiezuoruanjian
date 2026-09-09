@@ -35,7 +35,8 @@ internal class MirrorCleanupRecoveryExecutor(
         if (!stateStore.addPublishedProjectId(journal.projectId)) {
             DiagnosticsLogger.w(
                 TAG,
-                "Recover cleanup: addPublishedProjectId failed for UPSERT_PROJECT ${journal.projectId}, keeping journal",
+                "Recover cleanup: addPublishedProjectId failed for UPSERT_PROJECT" +
+                    " ${journal.projectId}, keeping journal",
             )
             return
         }
@@ -108,7 +109,7 @@ internal class MirrorCleanupRecoveryExecutor(
             }
         }
         val manifestParams =
-            MirrorPublishExecutor.ManifestTransactionParams(
+            ManifestTransactionParams(
                 projectId = journal.projectId,
                 snapshot = null,
                 desiredEntries = if (recoveryManifestTargetJson != null) emptyMap() else desiredWithoutDeleted,

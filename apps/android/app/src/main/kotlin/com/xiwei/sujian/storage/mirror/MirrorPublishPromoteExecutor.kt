@@ -95,7 +95,7 @@ internal class MirrorPublishPromoteExecutor(
         return PromoteResult(promotedEntries, items, currentJournal)
     }
 
-    private fun backupAndVacateItem(
+    private suspend fun backupAndVacateItem(
         ctx: ItemBackupContext,
         item: PendingItem,
     ): PendingMirrorPublish? {
@@ -144,7 +144,7 @@ internal class MirrorPublishPromoteExecutor(
         return currentJournal
     }
 
-    private fun prepareItemBackup(ctx: ItemBackupContext): ItemBackupOutcome? {
+    private suspend fun prepareItemBackup(ctx: ItemBackupContext): ItemBackupOutcome? {
         val backupResult = ctx.storage.lookupBackup(ctx.txId, ctx.oldRef.relativePath)
         return when (backupResult) {
             is MirrorLookupResult.Found -> {

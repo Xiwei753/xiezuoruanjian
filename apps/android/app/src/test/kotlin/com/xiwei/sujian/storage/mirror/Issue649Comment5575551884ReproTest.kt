@@ -452,7 +452,8 @@ class Issue649Comment5575551884ReproTest {
                 manifestStagedRef = null,
                 manifestNewRef = null,
                 manifestBackupRef = null,
-                manifestTargetJson = null, // manifest 子事务未开始
+                // manifest 子事务未开始
+                manifestTargetJson = null,
             )
 
         // 修复后：recoverPromotePhase 用 frozenManifestPlan 生成 manifestJson，
@@ -492,7 +493,16 @@ class Issue649Comment5575551884ReproTest {
     fun problem3b_frozenPlanToManifestJson_matchesMirrorManifestSchema() {
         val plan = buildSampleFrozenPlan()
         val key = ChapterKey(PROJ_1, VOL_1, CHAP_1)
-        val promotedEntries = mapOf(key to ChapterMirrorEntry(uri = "content://mirror/chap.md", relativePath = "作品/项目1/卷1/章1.md", revision = 1694123456789L, contentHash = SHA256_ABC))
+        val promotedEntries =
+            mapOf(
+                key to
+                    ChapterMirrorEntry(
+                        uri = "content://mirror/chap.md",
+                        relativePath = "作品/项目1/卷1/章1.md",
+                        revision = 1694123456789L,
+                        contentHash = SHA256_ABC,
+                    ),
+            )
         val manifestJson = frozenPlanToManifestJson(plan, promotedEntries)
         assertNotNull("manifestJson 生成成功", manifestJson)
         val manifestRoot = org.json.JSONObject(manifestJson!!)
@@ -516,17 +526,54 @@ class Issue649Comment5575551884ReproTest {
         assertTrue("★ chapter 用 contentFile 字段（不是 uri）★", chapterObj.has("contentFile"))
         assertTrue("★ chapter 有 contentHash 字段 ★", chapterObj.has("contentHash"))
         assertFalse("★ chapter 无 uri 字段 ★", chapterObj.has("uri"))
-        assertEquals("★ contentFile 用 promotedEntries 的 relativePath ★", "作品/项目1/卷1/章1.md", chapterObj.getString("contentFile"))
+        assertEquals(
+            "★ contentFile 用 promotedEntries 的 relativePath ★",
+            "作品/项目1/卷1/章1.md",
+            chapterObj.getString("contentFile"),
+        )
         assertEquals("★ contentHash 用 promotedEntries 的 contentHash ★", SHA256_ABC, chapterObj.getString("contentHash"))
     }
 
-    private fun buildSampleFrozenPlan() = FrozenManifestPlan(
-        schemaVersion = 1,
-        revision = 1694123456789L,
-        updatedAt = S_2026_09_07T00_00_00Z,
-        targetProjectId = PROJ_1,
-        projects = listOf(FrozenManifestProject(id = PROJ_1, title = S_1, order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, volumes = listOf(FrozenManifestVolume(id = VOL_1, title = "卷1", order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, chapters = listOf(FrozenManifestChapter(id = CHAP_1, title = "章1", order = 0, revision = 1694123456789L, updatedAt = S_2026_09_07T00_00_00Z, contentFile = "", contentHash = "")))))),
-    )
+    private fun buildSampleFrozenPlan(): FrozenManifestPlan {
+        return FrozenManifestPlan(
+            schemaVersion = 1,
+            revision = 1694123456789L,
+            updatedAt = S_2026_09_07T00_00_00Z,
+            targetProjectId = PROJ_1,
+            projects =
+                listOf(
+                    FrozenManifestProject(
+                        id = PROJ_1,
+                        title = S_1,
+                        order = 0,
+                        revision = 1694123456789L,
+                        updatedAt = S_2026_09_07T00_00_00Z,
+                        volumes =
+                            listOf(
+                                FrozenManifestVolume(
+                                    id = VOL_1,
+                                    title = "卷1",
+                                    order = 0,
+                                    revision = 1694123456789L,
+                                    updatedAt = S_2026_09_07T00_00_00Z,
+                                    chapters =
+                                        listOf(
+                                            FrozenManifestChapter(
+                                                id = CHAP_1,
+                                                title = "章1",
+                                                order = 0,
+                                                revision = 1694123456789L,
+                                                updatedAt = S_2026_09_07T00_00_00Z,
+                                                contentFile = "",
+                                                contentHash = "",
+                                            ),
+                                        ),
+                                ),
+                            ),
+                    ),
+                ),
+        )
+    }
 
     /**
      * rollbackManifest：manifestOldRef != null && manifestOldContentHash == null → 拒绝回滚。
@@ -551,8 +598,10 @@ class Issue649Comment5575551884ReproTest {
                 manifestStagedRef = null,
                 manifestNewRef = null,
                 manifestBackupRef = null,
-                manifestTargetJson = "some-json", // manifest 子事务已开始
-                manifestOldContentHash = null, // 但 old hash 缺失
+                // manifest 子事务已开始
+                manifestTargetJson = "some-json",
+                // 但 old hash 缺失
+                manifestOldContentHash = null,
             )
 
         // validateInvariants 应拒绝：manifestTargetJson != null && manifestOldRef != null

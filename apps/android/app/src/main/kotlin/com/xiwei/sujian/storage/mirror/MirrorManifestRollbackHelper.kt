@@ -274,7 +274,8 @@ internal class MirrorManifestRollbackHelper(
             is MirrorLookupResult.Failed -> {
                 DiagnosticsLogger.w(
                     TAG,
-                    "rollback manifest: lookup final failed (backup missing): ${oldStillInFinal.cause?.message}, keeping journal",
+                    "rollback manifest: lookup final failed (backup missing):" +
+                        " ${oldStillInFinal.cause?.message}, keeping journal",
                 )
                 false
             }
@@ -321,7 +322,8 @@ internal class MirrorManifestRollbackHelper(
         // hash 不匹配/读取失败/无 hash：final 上不是 old manifest，无法恢复，保留 journal
         DiagnosticsLogger.w(
             TAG,
-            "rollback manifest: backup missing, final exists but not old manifest (hash mismatch/read fail), keeping journal",
+            "rollback manifest: backup missing, final exists but not old manifest" +
+                " (hash mismatch/read fail), keeping journal",
         )
         return false
     }

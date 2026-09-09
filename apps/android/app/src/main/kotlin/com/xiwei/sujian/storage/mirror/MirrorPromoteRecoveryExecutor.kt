@@ -324,7 +324,7 @@ internal class MirrorPromoteRecoveryExecutor(
             resolveRecoveryManifestJson(journal, storage, currentItems, promotedEntries)
                 ?: return
         val manifestParams =
-            MirrorPublishExecutor.ManifestTransactionParams(
+            ManifestTransactionParams(
                 projectId = journal.projectId,
                 snapshot = null,
                 desiredEntries = promotedEntries,
@@ -373,8 +373,8 @@ internal class MirrorPromoteRecoveryExecutor(
         currentItems: MutableMap<ChapterKey, PendingItem>,
         promotedEntries: Map<ChapterKey, ChapterMirrorEntry>,
     ): String? {
-        val frozenPlanJson = journal.frozenManifestPlan
-        val frozenPlanHash = journal.frozenManifestPlanHash
+        val frozenPlanJson = journal.frozenManifestPlan ?: return null
+        val frozenPlanHash = journal.frozenManifestPlanHash ?: return null
         if (computeContentHash(frozenPlanJson) != frozenPlanHash) {
             DiagnosticsLogger.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
             rollbackRecoveryOnly(journal, currentItems, storage)

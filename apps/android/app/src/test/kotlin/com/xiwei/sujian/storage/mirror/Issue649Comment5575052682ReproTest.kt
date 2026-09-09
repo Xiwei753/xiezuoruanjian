@@ -378,7 +378,8 @@ class Issue649Comment5575052682ReproTest {
                 manifestStagedRef = null,
                 manifestNewRef = null,
                 manifestBackupRef = null,
-                manifestTargetJson = null, // ★ manifest 子事务未开始 ★
+                // ★ manifest 子事务未开始 ★
+                manifestTargetJson = null,
             )
 
         return MixedManifestSetup(
@@ -403,9 +404,9 @@ class Issue649Comment5575052682ReproTest {
         desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
     ): Map<String, Any> =
         mapOf(
-            TITLE to snapshotData[TITLE],
-            REVISION to snapshotData[REVISION],
-            UPDATEDAT to snapshotData[UPDATEDAT],
+            TITLE to snapshotData[TITLE]!!,
+            REVISION to snapshotData[REVISION]!!,
+            UPDATEDAT to snapshotData[UPDATEDAT]!!,
             "chapters" to
                 desiredEntries.map { (_, v) ->
                     mapOf(

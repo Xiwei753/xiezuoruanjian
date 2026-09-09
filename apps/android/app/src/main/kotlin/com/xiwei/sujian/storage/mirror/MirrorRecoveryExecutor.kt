@@ -122,7 +122,10 @@ internal class MirrorRecoveryExecutor(
                 is RollbackItemResult.Restored -> {
                     val oldEntry =
                         journal.oldEntries[key] ?: run {
-                            DiagnosticsLogger.w(TAG, "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal")
+                            DiagnosticsLogger.w(
+                                TAG,
+                                "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal",
+                            )
                             return false
                         }
                     if (!stateStore.putChapterEntry(
