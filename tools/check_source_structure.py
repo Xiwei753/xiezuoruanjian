@@ -157,22 +157,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
     (Path("apps/Linux_qt/src/sujian_editor_item/rendering.rs"), "god-file"):
         "Qt 编辑器项渲染逻辑：文本/光标/选区/背景共享同一绘制上下文，"
         "拆分会破坏绘制批次合并优化；TODO(#597) 后续按绘制层提取子模块",
-    (Path("core/writer_core/src/chapter.rs"), "god-file"):
-        "章节 CRUD 聚合根：create/list/save/rename/delete/reorder 共享 workspace 路径、"
-        "meta 读写和 hash 校验上下文；含 _with_changes 双层 API 包装和 clear-then-save 事务协议；"
-        "TODO(#597) 后续把 _with_changes 包装提取到 chapter_changes.rs",
-    (Path("core/writer_core/src/facade/sync_ops.rs"), "god-file"):
-        "同步操作门面层：perform_full_sync/dry_run/diagnostics/prepare/commit 共享 SyncService "
-        "配置上下文与 plan 数据流；commit_full_sync(335行) 和 dry_run(270行) 是独立子协议；"
-        "TODO(#597) 后续按 prepare/commit/dry_run 拆分子模块",
-    (Path("core/writer_core/src/sync/full_sync.rs"), "god-file"):
-        "全量同步引擎：target_plan 构建(465行) + run_transfer(1065行) + result 聚合 共享 "
-        "FullSyncContext 生命周期与 generation 原子发布协议；是多设备同步的唯一状态机入口；"
-        "TODO(#597) 后续按 plan/transfer/aggregate/generation 拆分子模块",
-    (Path("core/writer_core/src/api/service/project_ops.rs"), "god-file"):
-        "项目/卷 API 操作聚合层：CRUD + restore_project_tree 共享 WorkspaceContext 和 staging API；"
-        "restore_project_tree(425行) 含独立验证/回滚/幂等/审计子协议；"
-        "TODO(#597) 后续把 restore 提取到 project_restore.rs",
 
     # --- production-test-bloat: 既有内嵌测试模块，待后续拆分到独立 _tests.rs ---
     (Path("core/writer_platform_api/src/lib.rs"), "production-test-bloat"):
@@ -225,27 +209,6 @@ ALLOWED_EXCEPTIONS: dict[tuple[Path, str], str] = {
         "既有 Linux 协调器测试，验证平台事件路由；待拆分到独立 _tests.rs",
     (Path("core/writer_core/src/app_service/mod.rs"), "production-test-bloat"):
         "既有应用服务模块测试，验证生命周期/初始化契约；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/storage/workspace_paths.rs"), "production-test-bloat"):
-        "既有路径分类单元测试，验证 secret/internal/history 路径判定和 segment 级匹配边界；"
-        "待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/target_lifecycle.rs"), "production-test-bloat"):
-        "既有同步目标生命周期测试，验证 catalog CAS 语义、merge 冲突解决和 parse 容错；"
-        "待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/full_sync.rs"), "production-test-bloat"):
-        "既有全量同步引擎测试（2344行），含 target_plan/transfer/generation/aggregate 四类测试、"
-        "#645 回归测试和 mock provider 契约；待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/provider/memory.rs"), "production-test-bloat"):
-        "既有内存存储 provider 测试，作为其他 provider（GitHub 等）的契约参考实现；"
-        "待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/provider/error.rs"), "production-test-bloat"):
-        "既有 provider 错误分类测试，验证 is_retryable 与 core Error::recoverable 一致性契约；"
-        "待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/sync/lww/manifest.rs"), "production-test-bloat"):
-        "既有 LWW manifest 测试，验证 last-write-wins 时间解析和 device_id 保留语义；"
-        "待拆分到独立 _tests.rs",
-    (Path("core/writer_core/src/api/service/project_ops.rs"), "production-test-bloat"):
-        "既有项目 API 测试（405行），含 restore_project_tree 端到端/幂等/回滚/验证测试；"
-        "待拆分到独立 _tests.rs",
 
     # --- broad-suppression: 既有 crate 级 suppression，待精确收窄 ---
     (Path("apps/Linux_qt/src/main.rs"), "broad-suppression"):
