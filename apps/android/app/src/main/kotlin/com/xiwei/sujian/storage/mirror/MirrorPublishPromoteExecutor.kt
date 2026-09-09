@@ -9,7 +9,6 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
  * promoteItemStaged、findExistingPromotedRef，以及只属于 promote 阶段的类型。
  */
 internal class MirrorPublishPromoteExecutor(
-    private val stateStore: ReadableMirrorStateStore,
     private val journalWriter: MirrorJournalWriter,
     private val rollbackExecutor: MirrorRollbackExecutor,
 ) {
