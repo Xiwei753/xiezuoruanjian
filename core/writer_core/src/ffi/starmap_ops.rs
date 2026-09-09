@@ -1,6 +1,6 @@
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 #[no_mangle]
 /// # Safety
@@ -8,8 +8,8 @@ use super::{c_str_to_rust, err_json, ok_json, with_core};
 /// This function does not take any pointer arguments, so there are no additional
 /// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_list_starmaps() -> *mut c_char {
-    match with_core(|core| {
-        let starmaps = core.list_starmaps().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let starmaps = svc.list_starmaps().map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = starmaps
             .iter()
             .map(|sm| {
@@ -50,8 +50,8 @@ pub unsafe extern "C" fn writer_core_list_starmaps_for_project(
             )
         }
     };
-    match with_core(|core| {
-        let starmaps = core
+    match with_app_service(|svc| {
+        let starmaps = svc
             .list_starmaps_for_project(&pid)
             .map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = starmaps
@@ -92,8 +92,8 @@ pub unsafe extern "C" fn writer_core_get_starmap(starmap_id: *const c_char) -> *
             )
         }
     };
-    match with_core(|core| {
-        let sm = core.get_starmap(&sid).map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let sm = svc.get_starmap(&sid).map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": sm.starmap_id,
             "title": sm.title,
@@ -126,8 +126,8 @@ pub unsafe extern "C" fn writer_core_get_starmap_graph(starmap_id: *const c_char
             )
         }
     };
-    match with_core(|core| {
-        let graph = core.get_starmap_graph(&sid).map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let graph = svc.get_starmap_graph(sid).map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&graph).unwrap_or_default())
     }) {
         Ok(data) => ok_json(data),
@@ -157,10 +157,8 @@ pub unsafe extern "C" fn writer_core_create_starmap(
             )
         }
     };
-    match with_core(|core| {
-        let sm = core
-            .create_starmap(&t, &d, None)
-            .map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let sm = svc.create_starmap(t, d).map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": sm.starmap_id,
             "title": sm.title,
@@ -193,8 +191,8 @@ pub unsafe extern "C" fn writer_core_delete_starmap(starmap_id: *const c_char) -
             )
         }
     };
-    match with_core(|core| {
-        core.delete_starmap(&sid).map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        svc.delete_starmap_raw(&sid).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -229,9 +227,9 @@ pub unsafe extern "C" fn writer_core_rename_starmap(
             )
         }
     };
-    match with_core(|core| {
-        let sm = core
-            .rename_starmap(&sid, &t)
+    match with_app_service(|svc| {
+        let sm = svc
+            .rename_starmap_raw(&sid, &t)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": sm.starmap_id,
@@ -254,8 +252,10 @@ pub unsafe extern "C" fn writer_core_rename_starmap(
 /// Returns a caller-owned C string containing JSON StarMapMotionPolicyDto. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_starmap_motion_policy() -> *mut c_char {
-    match with_core(|core| {
-        let policy = core.get_motion_policy().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let policy = svc
+            .get_starmap_motion_policy_raw()
+            .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&policy).unwrap_or_default())
     }) {
         Ok(data) => ok_json(data),
@@ -277,9 +277,9 @@ pub unsafe extern "C" fn writer_core_get_starmap_layout(starmap_id: *const c_cha
             )
         }
     };
-    match with_core(|core| {
-        let layout = core
-            .get_starmap_layout(&sid)
+    match with_app_service(|svc| {
+        let layout = svc
+            .get_starmap_layout_raw(&sid)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&layout).unwrap_or_default())
     }) {
@@ -324,8 +324,8 @@ pub unsafe extern "C" fn writer_core_save_starmap_layout(
             )
         }
     };
-    match with_core(|core| {
-        core.save_starmap_layout(&sid, &layout)
+    match with_app_service(|svc| {
+        svc.save_starmap_layout(sid, layout.into())
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -371,8 +371,8 @@ pub unsafe extern "C" fn writer_core_save_starmap_viewport(
             )
         }
     };
-    match with_core(|core| {
-        core.save_starmap_viewport(&sid, &viewport)
+    match with_app_service(|svc| {
+        svc.save_starmap_viewport(sid, viewport.into())
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -419,10 +419,10 @@ pub unsafe extern "C" fn writer_core_compute_starmap_edge_renders(
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         // Get layout for the starmap to compute node centers
-        let layout = core
-            .get_starmap_layout(&graph.starmap_id)
+        let layout = svc
+            .get_starmap_layout_raw(&graph.starmap_id)
             .map_err(|e| format!("{}", e))?;
         let node_centers: std::collections::HashMap<String, (f32, f32)> = layout
             .nodes
@@ -484,8 +484,8 @@ pub unsafe extern "C" fn writer_core_flush_starmap_store(
             )
         }
     };
-    match with_core(|core| {
-        core.flush_starmap_store(&starmap_id)
+    match with_app_service(|svc| {
+        svc.flush_starmap_store(starmap_id)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -511,8 +511,8 @@ pub unsafe extern "C" fn writer_core_close_starmap_store(
             )
         }
     };
-    match with_core(|core| {
-        core.close_starmap_store(&starmap_id)
+    match with_app_service(|svc| {
+        svc.close_starmap_store(starmap_id)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -527,8 +527,8 @@ pub unsafe extern "C" fn writer_core_close_starmap_store(
 /// This function does not take any pointer arguments, so there are no additional
 /// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_flush_all_starmap_stores() -> *mut c_char {
-    match with_core(|core| {
-        core.flush_all_starmap_stores()
+    match with_app_service(|svc| {
+        svc.flush_all_starmap_stores()
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {

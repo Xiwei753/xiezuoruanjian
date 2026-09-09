@@ -80,7 +80,7 @@ impl super::WriterAppService {
             .map(f)
     }
 
-    pub fn text_edit_session_create(
+    pub fn text_edit_session_open(
         &self,
         target_id: String,
         initial_text: String,
@@ -88,7 +88,7 @@ impl super::WriterAppService {
         is_persistent: u8,
     ) -> Option<u64> {
         let result = self.with_registry(|r| {
-            r.create_session(
+            r.open_session(
                 target_id,
                 initial_text,
                 initial_cursor_byte_offset as usize,

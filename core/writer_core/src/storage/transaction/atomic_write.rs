@@ -88,6 +88,20 @@ pub fn sync_parent(path: &Path) -> crate::Result<()> {
     Ok(())
 }
 
+/// durable rename — rename 成功后同步源父目录和目标父目录。
+///
+/// 跨文件系统时 `fs::rename` 可能失败（EXDEV），调用方应明确处理。
+/// 同目录只同步一次父目录。rename 失败返回错误，不假装成功。
+pub fn durable_rename(from: &Path, to: &Path) -> crate::Result<()> {
+    fs::rename(from, to)?;
+    sync_parent(from)?;
+    // 同目录只同步一次
+    if from.parent() != to.parent() {
+        sync_parent(to)?;
+    }
+    Ok(())
+}
+
 /// durable copy — copy 后对目标文件 + 目标父目录 fsync。
 ///
 /// 与 `atomic_write_bytes` 的 fsync 做法对齐：文件内容 `sync_all` + 父目录 `sync_all`

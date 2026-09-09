@@ -10,14 +10,14 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_local_settings() -> *mut c_char {
-    match with_core(|core| {
-        let settings = core.load_local_settings().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let settings = svc.load_local_settings().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "fontSize": settings.editor_font_size,
             "lineHeight": settings.editor_line_spacing_multiplier,
@@ -71,8 +71,8 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
             )
         }
     };
-    match with_core(|core| {
-        let mut settings = core.load_local_settings().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let mut settings = svc.load_local_settings().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("fontSize").and_then(|v| v.as_f64()) {
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
         if let Some(v) = val.get("selectedPaletteId").and_then(|v| v.as_str()) {
             settings.selected_palette_id = v.to_string();
         }
-        core.save_local_settings(&settings)
+        svc.save_local_settings(settings)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -135,17 +135,13 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
     deprecated
 )]
 pub unsafe extern "C" fn writer_core_load_syncable_settings() -> *mut c_char {
-    match with_core(|core| {
-        let settings = core
-            .load_syncable_settings()
-            .map_err(|e| format!("{}", e))?;
-        // theme_palette 字段被标记为 deprecated，但 FFI 仍需读取它序列化给平台端。
-        // 用 struct 的 Serialize 实现作为唯一事实来源，避免手写巨型 JSON 宏
-        // 与 struct 字段漂移，同时规避 serde_json::json! 嵌套过深触发递归限制。
-        #[allow(deprecated)]
-        let palette_value = serde_json::to_value(&settings.theme_palette)
-            .map_err(|e| format!("palette serialize error: {}", e))?;
-        #[allow(deprecated)]
+    match with_app_service(|svc| {
+        let settings = svc.load_syncable_settings().map_err(|e| format!("{}", e))?;
+        // theme_palette_json 是 ThemePaletteDto 的 JSON 字符串表示。
+        // 解析为 serde_json::Value 透传给平台端，保持与旧 theme_palette struct 契约一致。
+        let palette_value: serde_json::Value =
+            serde_json::from_str(&settings.theme_palette_json)
+                .map_err(|e| format!("palette parse error: {}", e))?;
         let monet_color = settings.monet_color.clone();
         Ok(serde_json::json!({
             "fontSize": settings.font_size,
@@ -183,10 +179,8 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             )
         }
     };
-    match with_core(|core| {
-        let mut settings = core
-            .load_syncable_settings()
-            .map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let mut settings = svc.load_syncable_settings().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("fontSize").and_then(|v| v.as_f64()) {
@@ -201,7 +195,8 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
         }
         // Parse themePalette object
         if let Some(tp) = val.get("themePalette") {
-            let palette = &mut settings.theme_palette;
+            let mut palette: crate::api::ThemePaletteDto =
+                serde_json::from_str(&settings.theme_palette_json).unwrap_or_default();
             if let Some(v) = tp.get("source").and_then(|v| v.as_str()) {
                 palette.source = v.to_string();
             }
@@ -376,8 +371,10 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
             if let Some(v) = tp.get("darkOutlineVariant").and_then(|v| v.as_str()) {
                 palette.dark_outline_variant = v.to_string();
             }
+            settings.theme_palette_json = serde_json::to_string(&palette)
+                .map_err(|e| format!("palette serialize error: {}", e))?;
         }
-        core.save_syncable_settings(&settings)
+        svc.save_syncable_settings(settings)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -390,8 +387,8 @@ pub unsafe extern "C" fn writer_core_save_syncable_settings(
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_palette_records() -> *mut c_char {
-    match with_core(|core| {
-        let records = core.list_palette_records().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let records = svc.list_palette_records().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!(records))
     }) {
         Ok(data) => ok_json(data),
@@ -415,9 +412,9 @@ pub unsafe extern "C" fn writer_core_load_palette_record(
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARG", &format!("fingerprint error: {}", e)),
     };
-    match with_core(|core| {
-        let record = core
-            .load_palette_record(&device_id_str, &fingerprint_str)
+    match with_app_service(|svc| {
+        let record = svc
+            .load_palette_record(device_id_str, fingerprint_str)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!(record))
     }) {
@@ -442,8 +439,8 @@ pub unsafe extern "C" fn writer_core_delete_palette_record(
         Ok(s) => s,
         Err(e) => return err_json("INVALID_ARG", &format!("fingerprint error: {}", e)),
     };
-    match with_core(|core| {
-        core.delete_palette_record(&device_id_str, &fingerprint_str)
+    match with_app_service(|svc| {
+        svc.delete_palette_record(device_id_str, fingerprint_str)
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -458,8 +455,8 @@ pub unsafe extern "C" fn writer_core_delete_palette_record(
 /// This function does not take any pointer arguments, so there are no additional
 /// safety requirements beyond those inherent to FFI boundary calls.
 pub unsafe extern "C" fn writer_core_list_builtin_themes() -> *mut c_char {
-    match with_core(|core| {
-        let themes = core.list_builtin_themes();
+    match with_app_service(|svc| {
+        let themes = svc.list_builtin_themes();
         Ok(serde_json::json!(themes))
     }) {
         Ok(data) => ok_json(data),

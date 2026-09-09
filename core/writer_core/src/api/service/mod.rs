@@ -84,11 +84,11 @@ impl WriterCoreApi {
     ) -> Self {
         let app_data_root_buf = app_data_root.as_ref().to_path_buf();
         let mut core = WriterCore::new(&app_data_root, &projects_root);
-        core.sync_transport = sync_transport_factory.clone();
-        //  五：secure storage 必须注入 facade，load/save_sync_secrets 与
-        // 按 generation 保存的凭据才能真正写入平台 Keystore；此前只挂在
-        // WriterCoreApi 上，facade 侧永远走文件路径。
+        // 平台安全存储单一来源：只在 WriterCoreApi 持有，同时注入到 WriterCore
+        // 供 facade 方法（load_sync_secrets / save_sync_secrets 等）直接使用。
         core.secure_storage = secure_storage.clone();
+        // 同步传输 factory 同样注入到 WriterCore，供 facade 同步方法直接使用。
+        core.sync_transport = sync_transport_factory.clone();
         Self {
             app_data_root: app_data_root_buf.clone(),
             projects_root: projects_root.as_ref().to_path_buf(),

@@ -455,9 +455,7 @@ impl crate::sync::SyncService {
         let content = serde_json::to_string_pretty(state)
             .map_err(|e| crate::Error::Io(std::io::Error::other(e.to_string())))?;
 
-        let tmp_path = state_path.with_extension("tmp");
-        std::fs::write(&tmp_path, content)?;
-        std::fs::rename(tmp_path, state_path)?;
+        crate::storage::transaction::atomic_write_string(&state_path, &content)?;
 
         Ok(())
     }

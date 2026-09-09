@@ -2033,10 +2033,8 @@ fn upload_complete_generation_snapshot(
 /// 把单个远端对象内容写入 staging（创建父目录 + 写文件）。
 fn write_staging_file(staging: &Path, rel: &str, content: &[u8]) -> std::io::Result<()> {
     let dest = staging.join(rel);
-    if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(&dest, content)
+    crate::storage::transaction::atomic_write_bytes(&dest, content)
+        .map_err(|e| std::io::Error::other(e.to_string()))
 }
 
 /// `crate::Error` → `SyncResult::error(...)` 的统一转换。

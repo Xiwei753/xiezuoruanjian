@@ -3297,8 +3297,9 @@ mod tests {
         // snapshot_local_records_read_only 生成 delete 墓碑。远端 manifest 记录 upsert
         // （updated_at_ms 较小），LWW 本地 delete 时间戳获胜 →
         // LwwLocalWinsDeleteRecord → delete_remote_files 删除远端文件。
-        // 必须有 tombstone 才能生成 delete record
-        // （无 tombstone 不伪造 now_ms 作为删除时间）。
+        // 此测试用 tombstone 记录真实删除时间（deleted_at=2 → 2000ms > remote 900ms）。
+        // 无 tombstone 时用 now_ms 作为删除检测时间（见
+        // test_perform_lww_sync_local_delete_generates_manifest_delete）。
         let dir = tempdir().unwrap();
 
         let mut state = crate::sync::types::SyncState::default();

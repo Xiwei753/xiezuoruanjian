@@ -1,19 +1,19 @@
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_writing_stats() -> *mut c_char {
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let now = chrono::Utc::now();
         let end = now.format("%Y-%m-%d").to_string();
         let start = (now - chrono::Duration::days(30))
             .format("%Y-%m-%d")
             .to_string();
-        let summary = core
-            .get_writing_stats_summary(&start, &end)
+        let summary = svc
+            .get_writing_stats_summary(start, end)
             .map_err(|e| format!("{}", e))?;
         Ok(summary)
     }) {
@@ -51,7 +51,7 @@ pub unsafe extern "C" fn writer_core_process_writing_event(
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         let device_id = val.get("deviceId").and_then(|v| v.as_str()).unwrap_or("");
@@ -70,16 +70,16 @@ pub unsafe extern "C" fn writer_core_process_writing_event(
             .unwrap_or(0) as u32;
         let session_id = val.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
 
-        core.process_writing_event(
-            device_id,
-            platform,
-            project_id,
-            volume_id,
-            chapter_id,
-            old_text,
-            new_text,
+        svc.process_writing_event(
+            device_id.to_string(),
+            platform.to_string(),
+            project_id.to_string(),
+            volume_id.to_string(),
+            chapter_id.to_string(),
+            old_text.to_string(),
+            new_text.to_string(),
             duration_seconds,
-            session_id,
+            session_id.to_string(),
         )
         .map_err(|e| format!("{}", e))?;
         Ok(true)

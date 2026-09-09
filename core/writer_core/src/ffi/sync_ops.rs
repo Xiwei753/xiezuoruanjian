@@ -5,7 +5,7 @@
 //!
 //! ## 线程安全契约
 //!
-//! 所有函数通过 `with_core` 获取全局 `WriterCore` 单例的 `Mutex` 锁。
+//! 所有函数通过 `with_app_service` 获取全局 `WriterAppService` 单例的 `Mutex` 锁。
 //! 调用方不得在回调中再次调用任何 FFI 函数（非递归锁，会死锁）。
 //!
 //! ## JSON 传递语义
@@ -15,23 +15,32 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_app_service, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
+
+/// 从 `ProviderConfigDto` 提取已有的 GitHub provider 配置（github-api feature 下）。
+#[cfg(feature = "github-api")]
+fn extract_existing_github_config(
+    provider_config: &Option<crate::api::ProviderConfigDto>,
+) -> Option<crate::sync::provider::github::config::GitHubProviderConfig> {
+    provider_config.as_ref().and_then(|pc| {
+        let internal: Option<crate::sync::provider::ProviderConfig> = pc.clone().into();
+        internal.map(|crate::sync::provider::ProviderConfig::GitHub(gh)| gh)
+    })
+}
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_sync_config() -> *mut c_char {
-    match with_core(|core| {
-        let config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         // FFI 暴露的旧字段从 provider_config 读取，
         // 保持 C ABI 兼容（旧调用方仍读 remoteUrl/branch/provider）。
         let (remote_url, branch, provider) = match &config.provider_config {
             #[cfg(feature = "github-api")]
-            Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => (
-                gh.remote_url.clone(),
-                gh.branch.clone(),
-                "github_api".to_string(),
-            ),
+            Some(crate::api::ProviderConfigDto::GitHub {
+                remote_url, branch, ..
+            }) => (remote_url.clone(), branch.clone(), "github_api".to_string()),
             _ => (
                 String::new(),
                 "main".to_string(),
@@ -66,8 +75,8 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
             )
         }
     };
-    match with_core(|core| {
-        let mut config = core.load_sync_config().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let mut config = svc.load_sync_config().map_err(|e| format!("{}", e))?;
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
         if let Some(v) = val.get("enabled").and_then(|v| v.as_bool()) {
@@ -88,10 +97,7 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string());
             if remote_url.is_some() || branch.is_some() {
-                let existing_gh = match &config.provider_config {
-                    Some(crate::sync::provider::ProviderConfig::GitHub(gh)) => Some(gh.clone()),
-                    _ => None,
-                };
+                let existing_gh = extract_existing_github_config(&config.provider_config);
                 let defaults =
                     crate::sync::provider::github::config::GitHubProviderConfig::defaults();
                 let prev_remote = existing_gh.as_ref().map(|g| g.remote_url.clone());
@@ -104,14 +110,14 @@ pub unsafe extern "C" fn writer_core_save_sync_config(config_json: *const c_char
                     username: prev_username.unwrap_or(defaults.username),
                     transport: prev_transport.unwrap_or(defaults.transport),
                 };
-                config.provider_config = Some(crate::sync::provider::ProviderConfig::GitHub(gh));
+                config.provider_config =
+                    Some(crate::sync::provider::ProviderConfig::GitHub(gh).into());
             }
         }
         if let Some(v) = val.get("autoSync").and_then(|v| v.as_bool()) {
             config.auto_sync = v;
         }
-        core.save_sync_config(&config)
-            .map_err(|e| format!("{}", e))?;
+        svc.save_sync_config(config).map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -170,7 +176,7 @@ pub unsafe extern "C" fn writer_core_full_sync_diagnostics() -> *mut c_char {
 ///   改走 `with_app_service` 唯一 pipeline，
 /// 经 `WriterAppService::perform_full_sync` →
 /// `WriterCoreApi::perform_full_sync`（Prepare → Seed → Transfer → Commit）。
-/// 旧 facade `with_core(|core| core.perform_full_sync(...))` 不加载
+/// 旧 facade `with_app_service(|svc| svc.perform_full_sync(...))` 不加载
 /// pending deleted targets，已删除作品的远端前缀不会被清理；且不走
 /// 三段式 staging + workspace history，是第二套并行 pipeline。删除。
 ///
@@ -197,8 +203,8 @@ pub unsafe extern "C" fn writer_core_perform_full_sync() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_app_sync_state() -> *mut c_char {
-    match with_core(|core| {
-        let state = core.load_app_sync_state().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let state = svc.load_app_sync_state().map_err(|e| format!("{}", e))?;
         Ok(serde_json::to_value(&state).unwrap_or_default())
     }) {
         Ok(data) => ok_json(data),
@@ -222,10 +228,10 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let state: crate::sync::SyncState =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        core.save_app_sync_state(&state)
+        svc.save_app_sync_state(state.into())
             .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
@@ -238,8 +244,8 @@ pub unsafe extern "C" fn writer_core_save_app_sync_state(state_json: *const c_ch
 /// `platform` and `device_class` must be valid null-terminated UTF-8 C strings.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_load_device_info() -> *mut c_char {
-    match with_core(|core| {
-        let info = core.load_device_info().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let info = svc.load_device_info().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "deviceId": info.device_id,
             "deviceClass": info.device_class,
@@ -266,10 +272,10 @@ pub unsafe extern "C" fn writer_core_save_device_info(
             )
         }
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let val: serde_json::Value =
             serde_json::from_str(&json_str).map_err(|e| format!("JSON parse error: {}", e))?;
-        let mut info = core.load_device_info().map_err(|e| format!("{}", e))?;
+        let mut info = svc.load_device_info().map_err(|e| format!("{}", e))?;
         if let Some(v) = val.get("deviceId").and_then(|v| v.as_str()) {
             info.device_id = v.to_string();
         }
@@ -279,7 +285,8 @@ pub unsafe extern "C" fn writer_core_save_device_info(
         if let Some(v) = val.get("platform").and_then(|v| v.as_str()) {
             info.platform = v.to_string();
         }
-        core.save_device_info(&info).map_err(|e| format!("{}", e))?;
+        svc.save_device_info_raw(&info)
+            .map_err(|e| format!("{}", e))?;
         Ok(true)
     }) {
         Ok(data) => ok_json(data),
@@ -330,10 +337,10 @@ pub unsafe extern "C" fn writer_core_ensure_device_info(
             )
         }
     };
-    match with_core(|core| {
-        let info = core
-            .ensure_device_info(&platform_str, &device_class_str, None)
+    match with_app_service(|svc| {
+        svc.ensure_device_info(platform_str, device_class_str)
             .map_err(|e| format!("{}", e))?;
+        let info = svc.load_device_info().map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "deviceId": info.device_id,
             "deviceClass": info.device_class,

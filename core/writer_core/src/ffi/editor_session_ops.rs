@@ -66,12 +66,8 @@ pub unsafe extern "C" fn writer_core_editor_session_create(
         }
     };
     match with_app_service(|svc| {
-        match svc.text_edit_session_create(
-            target,
-            initial,
-            initial_cursor_byte_offset,
-            is_persistent,
-        ) {
+        match svc.text_edit_session_open(target, initial, initial_cursor_byte_offset, is_persistent)
+        {
             Some(id) => Ok(id),
             None => Err("create failed".to_string()),
         }

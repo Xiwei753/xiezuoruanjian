@@ -424,16 +424,6 @@ fn migrate_legacy_sync_config(
     config
 }
 
-/// 非 github-api feature 下无法构造 `ProviderConfig::GitHub`，迁移为空操作，
-/// 直接返回原 config（旧顶层 GitHub 字段被忽略）。
-#[cfg(not(feature = "github-api"))]
-fn migrate_legacy_sync_config(
-    _raw: &serde_json::Value,
-    config: crate::sync::SyncConfig,
-) -> crate::sync::SyncConfig {
-    config
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

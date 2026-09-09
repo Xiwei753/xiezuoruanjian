@@ -692,7 +692,7 @@ open class EditorSessionCoordinator(
     ): ULong? {
         return when (
             val result =
-                appServiceBridge.textEditSessionCreate(
+                appServiceBridge.textEditSessionOpen(
                     targetId,
                     text,
                     cursorByteOffset.toUInt(),

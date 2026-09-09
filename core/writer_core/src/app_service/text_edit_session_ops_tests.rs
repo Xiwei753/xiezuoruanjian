@@ -17,7 +17,7 @@ fn make_service() -> (WriterAppService, tempfile::TempDir) {
 fn update_composition_writes_back_composition_session_dto() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+        .text_edit_session_open("test".to_string(), String::new(), 0, 0)
         .expect("session created");
 
     // begin_composition 已正确写回 composition_session，作为 update 的输入基准。
@@ -73,7 +73,7 @@ fn update_composition_writes_back_composition_session_dto() {
 fn update_composition_skips_writeback_on_stale_outcome() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+        .text_edit_session_open("test".to_string(), String::new(), 0, 0)
         .expect("session created");
     let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, 0);
     let begin_cs = begin
@@ -103,7 +103,7 @@ fn update_composition_skips_writeback_on_stale_outcome() {
 fn composition_state_is_exposed_in_edit_result_and_snapshot() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 0, 0)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 0, 0)
         .expect("session created");
 
     // begin_composition replace range [1, 2)（"b"）。
@@ -171,7 +171,7 @@ fn composition_state_is_exposed_in_edit_result_and_snapshot() {
 fn composition_update_chinese_preedit_cursor_utf16_valid() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 3)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 3)
         .expect("session created");
     let begin = svc.text_edit_session_begin_composition(session_id, 3, 3, 0);
     assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
@@ -196,7 +196,7 @@ fn composition_update_chinese_preedit_cursor_utf16_valid() {
 fn composition_update_chinese_preedit_cursor_utf16_beyond_end_rejected() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 3)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 3)
         .expect("session created");
     let begin = svc.text_edit_session_begin_composition(session_id, 3, 3, 0);
     assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
@@ -218,7 +218,7 @@ fn composition_update_chinese_preedit_cursor_utf16_beyond_end_rejected() {
 fn composition_update_emoji_zwj_preedit_cursor_utf16_valid() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 3)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 3)
         .expect("session created");
     let begin = svc.text_edit_session_begin_composition(session_id, 3, 3, 0);
     assert_eq!(begin.outcome, EditorEditOutcomeDto::Applied);
@@ -250,7 +250,7 @@ fn composition_update_emoji_zwj_preedit_cursor_utf16_valid() {
 fn set_selection_during_composition_backfills_dto() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 0)
         .expect("session created");
 
     let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);
@@ -320,7 +320,7 @@ fn set_selection_during_composition_backfills_dto() {
 fn text_modifying_commands_report_cleared_composition_consistently() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 0)
         .expect("session created");
 
     // 每次命令前重新 begin+update 一个活跃 composition（replace range 取当前文本末尾）。
@@ -471,7 +471,7 @@ fn text_modifying_commands_report_cleared_composition_consistently() {
 fn cancel_composition_leaves_dto_composition_none() {
     let (svc, _dir) = make_service();
     let session_id = svc
-        .text_edit_session_create("test".to_string(), "abc".to_string(), 3, 0)
+        .text_edit_session_open("test".to_string(), "abc".to_string(), 3, 0)
         .expect("session created");
 
     let begin = svc.text_edit_session_begin_composition(session_id, 1, 2, 0);

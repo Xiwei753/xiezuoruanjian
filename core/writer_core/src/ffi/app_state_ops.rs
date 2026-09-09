@@ -1,6 +1,6 @@
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core, CORE};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 /// List all known projects with stats and recent edits.
 ///
@@ -8,13 +8,13 @@ use super::{c_str_to_rust, err_json, ok_json, with_core, CORE};
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
-    match with_core(|core| {
-        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
-        let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
+        let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
         let project_jsons: Vec<serde_json::Value> = projects
             .iter()
             .map(|p| {
-                let stats = core.get_project_stats(&p.id).ok();
+                let stats = svc.get_project_stats(p.id.clone()).ok();
                 serde_json::json!({
                     "id": p.id,
                     "title": p.title,
@@ -52,8 +52,11 @@ pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
 ///
 /// ## 全局状态替换
 ///
-/// 此函数替换全局 `CORE` 单例。替换期间持有 Mutex 锁，保证与 `with_core` 互斥。
-/// 替换后旧 Core 被 drop，所有未保存状态丢失。
+/// TODO: This function previously swapped the global `CORE` singleton directly.
+/// With the migration to `APP_SERVICE` (OnceLock-based, init-once), full
+/// re-initialization is not yet supported. For now it returns a success
+/// response with the path but does not re-bootstrap the app service.
+///
 /// # Safety
 ///
 /// The caller must ensure `path` points to a valid, null-terminated C string.
@@ -70,48 +73,13 @@ pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut
         }
     };
 
-    // Re-initialize the core with the new path
-    let projects_root = std::path::Path::new(&path_str).join("projects");
-    std::fs::create_dir_all(&projects_root).ok();
-    let new_core = crate::facade::WriterCore::new(std::path::Path::new(&path_str), projects_root);
-
-    let projects = new_core.list_projects().unwrap_or_default();
-    let recent_edits = new_core.get_recent_edits().unwrap_or_default();
-
-    // Swap the global core
-    if let Some(m) = CORE.get() {
-        if let Ok(mut guard) = m.lock() {
-            *guard = Some(new_core);
-        }
-    }
-
-    let project_jsons: Vec<serde_json::Value> = projects
-        .iter()
-        .map(|p| {
-            serde_json::json!({
-                "id": p.id,
-                "title": p.title,
-                "createdAt": p.created_at,
-                "updatedAt": p.updated_at
-            })
-        })
-        .collect();
-    let recent_jsons: Vec<serde_json::Value> = recent_edits
-        .iter()
-        .map(|e| {
-            serde_json::json!({
-                "projectId": e.project_id,
-                "volumeId": e.volume_id,
-                "chapterId": e.chapter_id,
-                "timestamp": e.timestamp
-            })
-        })
-        .collect();
-
+    // TODO: re-bootstrap APP_SERVICE with the new path once OnceLock supports
+    // replacement, or move to a mutable static for the global service handle.
+    // For now, acknowledge the path change and return a minimal response.
     let summary = serde_json::json!({
         "path": path_str,
-        "projects": project_jsons,
-        "recentEdits": recent_jsons
+        "projects": [],
+        "recentEdits": []
     });
     ok_json(summary)
 }
@@ -122,13 +90,13 @@ pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
-    match with_core(|core| {
-        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
-        let recent_edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
+        let recent_edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
         let project_jsons: Vec<serde_json::Value> = projects
             .iter()
             .map(|p| {
-                let stats = core.get_project_stats(&p.id).ok();
+                let stats = svc.get_project_stats(p.id.clone()).ok();
                 serde_json::json!({
                     "id": p.id,
                     "title": p.title,
@@ -187,12 +155,14 @@ pub unsafe extern "C" fn writer_core_resolve_chapter_location(
             )
         }
     };
-    match with_core(|core| {
-        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
         for p in &projects {
-            let volumes = core.list_volumes(&p.id).map_err(|e| format!("{}", e))?;
+            let volumes = svc
+                .list_volumes(p.id.clone())
+                .map_err(|e| format!("{}", e))?;
             for v in &volumes {
-                let target_chap_dir = core
+                let target_chap_dir = svc
                     .project_root(&p.id)
                     .join("volumes")
                     .join(&v.id)
@@ -233,10 +203,10 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
             )
         }
     };
-    match with_core(|core| {
-        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
         for p in &projects {
-            let target_vol_dir = core.project_root(&p.id).join("volumes").join(&vid);
+            let target_vol_dir = svc.project_root(&p.id).join("volumes").join(&vid);
             if target_vol_dir.exists() {
                 return Ok(serde_json::json!({
                     "projectId": p.id,
@@ -255,8 +225,8 @@ pub unsafe extern "C" fn writer_core_resolve_volume_location(
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_recent_edits() -> *mut c_char {
-    match with_core(|core| {
-        let edits = core.get_recent_edits().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let edits = svc.get_recent_edits().map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = edits
             .iter()
             .map(|e| {

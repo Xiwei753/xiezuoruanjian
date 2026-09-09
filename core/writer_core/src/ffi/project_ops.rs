@@ -7,18 +7,18 @@
 
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_app_service, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 /// # Safety
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_list_projects() -> *mut c_char {
-    match with_core(|core| {
-        let projects = core.list_projects().map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let projects = svc.list_projects().map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = projects
             .iter()
             .map(|p| {
-                let stats = core.get_project_stats(&p.id).ok();
+                let stats = svc.get_project_stats(p.id.clone()).ok();
                 serde_json::json!({
                     "id": p.id,
                     "title": p.title,
@@ -51,15 +51,15 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
             )
         }
     };
-    match with_core(|core| {
-        let project = core
+    match with_app_service(|svc| {
+        let project = svc
             .list_projects()
             .map_err(|e| format!("{}", e))?
             .into_iter()
             .find(|p| p.id == pid)
             .ok_or_else(|| "project not found".to_string())?;
 
-        let stats = core.get_project_stats(&pid).ok();
+        let stats = svc.get_project_stats(pid.clone()).ok();
         let project_json = serde_json::json!({
             "id": project.id,
             "title": project.title,
@@ -70,10 +70,14 @@ pub unsafe extern "C" fn writer_core_get_project_tree(project_id: *const c_char)
             "updatedAt": project.updated_at
         });
 
-        let volumes = core.list_volumes(&pid).map_err(|e| format!("{}", e))?;
+        let volumes = svc
+            .list_volumes(pid.clone())
+            .map_err(|e| format!("{}", e))?;
         let mut volume_trees = Vec::new();
         for vol in volumes {
-            let chapters = core.list_chapters(&pid, &vol.id).unwrap_or_default();
+            let chapters = svc
+                .list_chapters(pid.clone(), vol.id.clone())
+                .unwrap_or_default();
             let vol_json = serde_json::json!({
                 "id": vol.id,
                 "projectId": pid,
@@ -156,12 +160,16 @@ pub unsafe extern "C" fn writer_core_list_volumes(project_id: *const c_char) -> 
             )
         }
     };
-    match with_core(|core| {
-        let volumes = core.list_volumes(&pid).map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let volumes = svc
+            .list_volumes(pid.clone())
+            .map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = volumes
             .iter()
             .map(|v| {
-                let chapters = core.list_chapters(&pid, &v.id).unwrap_or_default();
+                let chapters = svc
+                    .list_chapters(pid.clone(), v.id.clone())
+                    .unwrap_or_default();
                 serde_json::json!({
                     "id": v.id,
                     "projectId": pid,
@@ -246,9 +254,9 @@ pub unsafe extern "C" fn writer_core_list_chapters(
             )
         }
     };
-    match with_core(|core| {
-        let chapters = core
-            .list_chapters(&pid, &vid)
+    match with_app_service(|svc| {
+        let chapters = svc
+            .list_chapters(pid.clone(), vid.clone())
             .map_err(|e| format!("{}", e))?;
         let json_arr: Vec<serde_json::Value> = chapters
             .iter()
@@ -357,9 +365,9 @@ pub unsafe extern "C" fn writer_core_open_chapter(
             )
         }
     };
-    match with_core(|core| {
-        let result = core
-            .open_chapter(&pid, &vid, &cid)
+    match with_app_service(|svc| {
+        let result = svc
+            .open_chapter(pid.clone(), vid.clone(), cid)
             .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "id": result.meta.id,
@@ -516,8 +524,10 @@ pub unsafe extern "C" fn writer_core_get_project_stats(project_id: *const c_char
             )
         }
     };
-    match with_core(|core| {
-        let stats = core.get_project_stats(&pid).map_err(|e| format!("{}", e))?;
+    match with_app_service(|svc| {
+        let stats = svc
+            .get_project_stats(pid.clone())
+            .map_err(|e| format!("{}", e))?;
         Ok(serde_json::json!({
             "totalWordCount": stats.total_word_count,
             "volumeCount": stats.volume_count,

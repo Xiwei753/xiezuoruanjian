@@ -202,10 +202,8 @@ impl crate::sync::SyncService {
             conflicts.retain(|c| c.local_path != path && c.remote_path != path);
             if conflicts.len() != before {
                 if let Ok(json) = serde_json::to_string_pretty(&conflicts) {
-                    let tmp_path = conflicts_path.with_extension("tmp");
-                    if std::fs::write(&tmp_path, &json).is_ok() {
-                        let _ = std::fs::rename(tmp_path, conflicts_path);
-                    }
+                    let _ =
+                        crate::storage::transaction::atomic_write_string(&conflicts_path, &json);
                 }
             }
         }
@@ -233,10 +231,10 @@ impl crate::sync::SyncService {
                 "{}.conflict.{}",
                 conflict.local_path, conflict.created_at
             ));
-            if let Some(parent) = conflict_file_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&conflict_file_path, content)?;
+            crate::storage::transaction::atomic_write_bytes(
+                &conflict_file_path,
+                content.as_bytes(),
+            )?;
         }
 
         // 先在内存里构造完整的新状态。

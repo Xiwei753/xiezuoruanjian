@@ -6,11 +6,6 @@ pub(crate) fn now_epoch_seconds() -> i64 {
         .unwrap_or(0)
 }
 
-/// transport 初始化失败的类型化 Error 转换（从 `full_sync::transport_init_failure_error` 转发）。
-pub(crate) fn transport_init_failure_error(category: &str, message: &str) -> crate::Error {
-    crate::sync::full_sync::transport_init_failure_error(category, message)
-}
-
 /// 判断 target 状态是否为协议错误。
 ///
 ///   只被 facade 旧编排 `aggregate_full_sync_result` 用，

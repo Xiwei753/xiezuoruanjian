@@ -128,7 +128,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     let local_records = snapshot_local_records_read_only(sync_root, scope, &state.device_id)?;
-    let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope);
+    let remote_records = build_remote_records(remote_manifest, &remote_tree_files, scope)?;
 
     let unresolved_conflict_paths: std::collections::HashSet<String> =
         state.conflicted_files.clone();
@@ -347,7 +347,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
         }
     }
 
-    move_to_trash(sync_root, &to_delete_local);
+    move_to_trash(sync_root, &to_delete_local)?;
 
     download_remote_files(sync_root, provider, source_remote_prefix, &to_download)?;
 
@@ -364,11 +364,7 @@ pub(crate) fn merge_remote_into_local_snapshot(
 
     let manifest_json = serde_json::to_string_pretty(&sync_manifest).unwrap_or_default();
     let full_manifest_path = sync_root.join(SYNC_MANIFEST_PATH);
-    if let Some(parent) = full_manifest_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| crate::Error::Io(std::io::Error::other(format!("manifest dir: {}", e))))?;
-    }
-    std::fs::write(&full_manifest_path, &manifest_json)
+    crate::storage::transaction::atomic_write_string(&full_manifest_path, &manifest_json)
         .map_err(|e| crate::Error::Io(std::io::Error::other(format!("write manifest: {}", e))))?;
 
     for conflict in &doc_conflicts {

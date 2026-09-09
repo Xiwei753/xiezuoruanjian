@@ -1,4 +1,3 @@
-mod editor_session_ops;
 mod project_ops;
 mod search_ops;
 mod settings_ops;
@@ -13,25 +12,18 @@ use crate::api::{WriterCoreApi, WriterError};
 
 use std::sync::Mutex;
 
-struct EditorSession {
-    kernel: crate::editor::EditorKernel,
-    chapter_id: Option<String>,
-    generation: u64,
-}
-
 /// Thin UniFFI adapter. Stable Core API behavior lives in `api::WriterCoreApi`.
 ///
 /// ## 线程安全
 ///
-/// `editor_session` 和 `session_registry` 各自用 `Mutex` 保护，保证线程安全。
+/// `session_registry` 用 `Mutex` 保护，保证线程安全。
 /// `Mutex` 只在单次 FFI 调用期间持有，不跨调用持有，避免死锁。
-/// **不得在持有 `editor_session` 锁的同时获取 `session_registry` 锁**（锁序：先 session 后 registry）。
 ///
-/// ## 双会话路径
+/// ## 单链会话路径
 ///
-/// `editor_session` 是旧版正文章节专用路径（单 EditorKernel，单 generation），
-/// `session_registry` 是新版多目标会话路径（项目名/章节名/星图标题/正文等，各自独立 EditorKernel 和 generation）。
-/// 两者独立维护，不共享 EditorKernel 实例。同一时刻同一章节只能通过一条路径访问。
+/// `session_registry` 是唯一的编辑会话路径（项目名/章节名/星图标题/正文等，
+/// 各自独立 EditorKernel 和 generation）。同一 target_id 只能有一个活跃 session，
+/// 关闭时清理反向索引。
 ///
 /// ## 平台初始化
 ///
@@ -47,7 +39,6 @@ struct EditorSession {
 /// 同步操作优先使用 `SecureStorage` 获取 token，不再将凭据作为普通 JSON 存盘。
 pub struct WriterAppService {
     api: WriterCoreApi,
-    editor_session: Mutex<EditorSession>,
     session_registry: Mutex<crate::editor::TextEditSessionRegistry>,
     platform_init: Option<writer_platform_api::PlatformInit>,
     network_state: Mutex<Option<writer_platform_api::NetworkState>>,
@@ -57,11 +48,6 @@ impl WriterAppService {
     pub fn new(app_data_root: String, projects_root: String) -> Self {
         Self {
             api: WriterCoreApi::new(app_data_root, projects_root),
-            editor_session: Mutex::new(EditorSession {
-                kernel: crate::editor::EditorKernel::new(),
-                chapter_id: None,
-                generation: 0,
-            }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: None,
             network_state: Mutex::new(None),
@@ -75,11 +61,6 @@ impl WriterAppService {
     ) -> Self {
         Self {
             api: WriterCoreApi::new(app_data_root, projects_root),
-            editor_session: Mutex::new(EditorSession {
-                kernel: crate::editor::EditorKernel::new(),
-                chapter_id: None,
-                generation: 0,
-            }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(init),
             network_state: Mutex::new(None),
@@ -106,11 +87,6 @@ impl WriterAppService {
 
         Self {
             api,
-            editor_session: Mutex::new(EditorSession {
-                kernel: crate::editor::EditorKernel::new(),
-                chapter_id: None,
-                generation: 0,
-            }),
             session_registry: Mutex::new(crate::editor::TextEditSessionRegistry::new()),
             platform_init: Some(services.init),
             network_state: Mutex::new(services.network_state),
@@ -153,15 +129,6 @@ impl WriterAppService {
         layout: crate::storage::git_repo_layout::GitRepoLayout,
     ) {
         self.api.set_workspace_git_layout(layout);
-    }
-
-    pub fn set_sync_transport_factory(
-        &mut self,
-        factory: writer_platform_api::SyncTransportFactory,
-    ) {
-        let app_data_root = self.api.app_data_root.clone();
-        let projects_root = self.api.projects_root.clone();
-        self.api = WriterCoreApi::with_sync_transport(app_data_root, projects_root, factory);
     }
 
     pub fn sync_transport_factory(&self) -> Option<&writer_platform_api::SyncTransportFactory> {
@@ -283,37 +250,73 @@ impl WriterAppService {
             show_primary_navigation: policy.show_primary_navigation,
         }
     }
+
+    // ── Thin wrappers for FFI that need WriterCore methods through WriterAppService ──
+
+    pub fn project_root(&self, project_id: &str) -> std::path::PathBuf {
+        self.api.core_read().project_root(project_id)
+    }
+
+    pub fn list_starmaps_for_project(
+        &self,
+        project_id: &str,
+    ) -> crate::error::Result<Vec<crate::starmap::StarMapMeta>> {
+        self.api.core_read().list_starmaps_for_project(project_id)
+    }
+
+    pub fn get_starmap(
+        &self,
+        starmap_id: &str,
+    ) -> crate::error::Result<crate::starmap::StarMapMeta> {
+        self.api.core_read().get_starmap(starmap_id)
+    }
+
+    pub fn get_starmap_layout_raw(
+        &self,
+        starmap_id: &str,
+    ) -> crate::error::Result<crate::starmap::types::StarMapLayout> {
+        self.api.core_read().get_starmap_layout(starmap_id)
+    }
+
+    pub fn get_starmap_motion_policy_raw(
+        &self,
+    ) -> crate::error::Result<crate::starmap::types::StarMapMotionPolicyDto> {
+        self.api.core_read().get_motion_policy()
+    }
+
+    pub fn rename_starmap_raw(
+        &self,
+        starmap_id: &str,
+        new_title: &str,
+    ) -> crate::error::Result<crate::starmap::StarMapMeta> {
+        self.api.core_write().rename_starmap(starmap_id, new_title)
+    }
+
+    pub fn delete_starmap_raw(&self, starmap_id: &str) -> crate::error::Result<()> {
+        self.api.core_write().delete_starmap(starmap_id)
+    }
+
+    pub fn save_device_info_raw(
+        &self,
+        info: &crate::api::types::DeviceInfoDto,
+    ) -> crate::error::Result<()> {
+        let internal = crate::settings::DeviceInfo {
+            device_id: info.device_id.clone(),
+            device_class: info.device_class.clone(),
+            platform: info.platform.clone(),
+        };
+        self.api.core_write().save_device_info(&internal)
+    }
+
+    pub fn enqueue_search_index_update(&self, update: crate::search::SearchIndexUpdate) {
+        self.api.enqueue_search_index_update(update);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn editor_kernel_load_text_rejects_invalid_offset() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(
-            dir.path().to_string_lossy().to_string(),
-            dir.path().join("projects").to_string_lossy().to_string(),
-        );
-        let result = svc.editor_kernel_load_text("你好".to_string(), 4);
-        assert_eq!(
-            result.outcome,
-            crate::api::EditorEditOutcomeDto::InvalidOffset
-        );
-    }
-
-    #[test]
-    fn editor_kernel_load_text_accepts_valid_offset() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(
-            dir.path().to_string_lossy().to_string(),
-            dir.path().join("projects").to_string_lossy().to_string(),
-        );
-        let result = svc.editor_kernel_load_text("你好".to_string(), 3);
-        assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
-    }
 
     #[test]
     fn text_edit_session_load_text_rejects_invalid_offset() {
@@ -323,7 +326,7 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let session_id = svc
-            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
             .unwrap();
         let result = svc.text_edit_session_load_text(session_id, "你好".to_string(), 4);
         assert_eq!(
@@ -340,24 +343,28 @@ mod tests {
             dir.path().join("projects").to_string_lossy().to_string(),
         );
         let session_id = svc
-            .text_edit_session_create("test".to_string(), String::new(), 0, 0)
+            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
             .unwrap();
         let result = svc.text_edit_session_reset(session_id, "你好".to_string(), 4);
         assert_eq!(result, 0);
     }
 
     #[test]
-    fn editor_kernel_update_composition_accepts_preedit_utf16_cursor_offset() {
+    fn text_edit_session_composition_roundtrip() {
         let dir = tempfile::TempDir::new().unwrap();
         let svc = WriterAppService::new(
             dir.path().to_string_lossy().to_string(),
             dir.path().join("projects").to_string_lossy().to_string(),
         );
-        let load = svc.editor_kernel_load_text(String::new(), 0);
+        let session_id = svc
+            .text_edit_session_open("test".to_string(), String::new(), 0, 0)
+            .unwrap();
+        let load = svc.text_edit_session_load_text(session_id, String::new(), 0);
         assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
-        let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
+        let begin = svc.text_edit_session_begin_composition(session_id, 0, 0, load.new_revision);
         let session = begin.composition_session.expect("composition session");
-        let result = svc.editor_kernel_update_composition(
+        let result = svc.text_edit_session_update_composition(
+            session_id,
             session.session_id,
             session.generation,
             "你好".to_string(),
@@ -365,30 +372,6 @@ mod tests {
             load.new_revision,
         );
         assert_eq!(result.outcome, crate::api::EditorEditOutcomeDto::Applied);
-    }
-
-    #[test]
-    fn editor_kernel_update_composition_rejects_cursor_beyond_preedit() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let svc = WriterAppService::new(
-            dir.path().to_string_lossy().to_string(),
-            dir.path().join("projects").to_string_lossy().to_string(),
-        );
-        let load = svc.editor_kernel_load_text(String::new(), 0);
-        assert_eq!(load.outcome, crate::api::EditorEditOutcomeDto::Applied);
-        let begin = svc.editor_kernel_begin_composition(0, 0, load.new_revision);
-        let session = begin.composition_session.expect("composition session");
-        let result = svc.editor_kernel_update_composition(
-            session.session_id,
-            session.generation,
-            "你好".to_string(),
-            3,
-            load.new_revision,
-        );
-        assert_eq!(
-            result.outcome,
-            crate::api::EditorEditOutcomeDto::InvalidOffset
-        );
     }
 
     #[test]

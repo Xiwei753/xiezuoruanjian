@@ -7,9 +7,10 @@
 //!
 //!   `snapshot_local_records_read_only` 是真正的只读
 //! local record 投影 helper，保留 per-file LWW（含真实 winner device_id），
-//! 绝不伪造 now_ms 作为删除时间。`snapshot_local_target_lifecycle` 和 LWW
-//! `execute_lww_sync_attempt` 都复用它。
+//! 无 tombstone 时用 now_ms（删除检测时间）生成 delete record。
+//! `snapshot_local_target_lifecycle` 和 LWW `execute_lww_sync_attempt` 都复用它。
 
+use crate::sync::path::ValidatedSyncPath;
 use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope};
 use crate::sync::SyncService;
 use std::collections::HashMap;
@@ -40,8 +41,9 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
 ///   保留原 `updated_at` / `deleted_at` / `device_id` / `op`（**不**丢 winner device_id）；
 /// - 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id 生成新 upsert；
 /// - known file 消失且有真实 tombstone → 用 tombstone 的 `deleted_at` + `deleted_by`/device_id
-///   生成 delete record（**不**伪造 now_ms）；
-/// - known file 消失且无 tombstone → 返回 `Err`（调用方应走 Retry，绝不能用 now_ms 伪造删除时间）。
+///   生成 delete record；
+/// - known file 消失且无 tombstone → 用 `now_ms`（删除检测时间）生成 delete record，
+///   使本地删除能传播到远端（文件被用户手动删除或 tombstone 被 GC 的场景）。
 ///
 /// 这个 helper 是真正只读的：用 [`SyncService::load_sync_state_read_only`] 加载 state，
 /// 不写文件、不删旧文件。
@@ -143,7 +145,9 @@ pub fn snapshot_local_records_read_only(
         }
     }
 
-    // 4. known file 消失 → 有 tombstone 用真实删除时间；无 tombstone 返回 Err。
+    // 4. known file 消失 → 有 tombstone 用真实删除时间；
+    //    无 tombstone 用 now_ms 作为删除检测时间。
+    let now_ms = chrono::Utc::now().timestamp_millis();
     for path in state.known_files.keys() {
         if records.contains_key(path) {
             continue;
@@ -174,13 +178,22 @@ pub fn snapshot_local_records_read_only(
                     },
                 );
             } else {
-                // 无 tombstone → 绝不伪造 now_ms。
-                // 返回 Err，调用方应走 Retry。
-                return Err(crate::Error::Io(std::io::Error::other(format!(
-                    "snapshot_local_records_read_only: known file {} missing without tombstone \
-                     — cannot fabricate delete time",
-                    path
-                ))));
+                // 无 tombstone → 用 now_ms 作为删除检测时间。
+                // 文件在 known_files 中但不在磁盘上，说明已被删除（可能被用户手动
+                // 删除或 tombstone 被 GC）。now_ms 是删除发生时间的上界，用于 LWW
+                // 比较：远端更新时间 < now_ms → 本地删除赢，删除传播到远端。
+                records.insert(
+                    path.clone(),
+                    ManifestFileRecord {
+                        path: path.clone(),
+                        content_hash: String::new(),
+                        updated_at_ms: now_ms,
+                        deleted_at_ms: Some(now_ms),
+                        device_id: state.device_id.clone(),
+                        op: "delete".to_string(),
+                        schema_version: 1,
+                    },
+                );
             }
         }
     }
@@ -239,41 +252,49 @@ pub fn snapshot_local_records_read_only(
 /// 从远端 manifest 和 tree 构建 `path → ManifestFileRecord` 映射。
 /// 远端 tree 中存在但 manifest 中无记录的文件（首次同步或 manifest 损失），
 /// 用 tree SHA 作为 content_hash 补充记录。
+///
+/// 所有远端路径在进入同步逻辑前必须通过 [`ValidatedSyncPath`] 验证；
+/// 非法路径（绝对路径、`..` 穿越、Windows prefix 等）直接返回错误，
+/// 不做"清洗后继续用"。
 pub(super) fn build_remote_records(
     remote_manifest: SyncManifest,
     remote_tree_files: &HashMap<String, String>,
     scope: SyncScope,
-) -> HashMap<String, ManifestFileRecord> {
+) -> crate::Result<HashMap<String, ManifestFileRecord>> {
     let mut remote_records = HashMap::new();
     for rec in remote_manifest.files {
-        if rec.path != SYNC_MANIFEST_PATH {
-            remote_records.insert(rec.path.clone(), rec);
+        if rec.path == SYNC_MANIFEST_PATH {
+            continue;
         }
+        ValidatedSyncPath::new(&rec.path)?;
+        remote_records.insert(rec.path.clone(), rec);
     }
 
     for (path, sha) in remote_tree_files {
-        if path != SYNC_MANIFEST_PATH && !remote_records.contains_key(path) {
-            if !SyncService::is_whitelisted_path(path, scope)
-                || SyncService::is_blacklisted_path(path, scope)
-            {
-                continue;
-            }
-            remote_records.insert(
-                path.clone(),
-                ManifestFileRecord {
-                    path: path.clone(),
-                    content_hash: sha.clone(),
-                    updated_at_ms: 0,
-                    deleted_at_ms: None,
-                    device_id: "remote".to_string(),
-                    op: "upsert".to_string(),
-                    schema_version: 1,
-                },
-            );
+        if path == SYNC_MANIFEST_PATH || remote_records.contains_key(path) {
+            continue;
         }
+        ValidatedSyncPath::new(path)?;
+        if !SyncService::is_whitelisted_path(path, scope)
+            || SyncService::is_blacklisted_path(path, scope)
+        {
+            continue;
+        }
+        remote_records.insert(
+            path.clone(),
+            ManifestFileRecord {
+                path: path.clone(),
+                content_hash: sha.clone(),
+                updated_at_ms: 0,
+                deleted_at_ms: None,
+                device_id: "remote".to_string(),
+                op: "upsert".to_string(),
+                schema_version: 1,
+            },
+        );
     }
 
-    remote_records
+    Ok(remote_records)
 }
 
 /// 读取文件 mtime，失败时返回 `Err`。

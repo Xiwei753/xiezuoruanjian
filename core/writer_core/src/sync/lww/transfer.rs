@@ -11,6 +11,7 @@ use std::path::Path;
 
 use rayon::prelude::*;
 
+use crate::sync::path::ValidatedSyncPath;
 use crate::sync::provider::model::{DeletePrecondition, RemoteVersion, WritePrecondition};
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncManifest;
@@ -42,12 +43,15 @@ pub(super) fn sync_download_pool(
 ///
 /// 文件名格式：`{原文件名}.remote-conflict-{时间戳}`，保存在原文件同目录下。
 /// 此备份供用户手动对比本地与远端内容，不参与自动合并逻辑。
+///
+/// `path` 必须通过 [`ValidatedSyncPath`] 验证（调用方已在上层校验）。
 pub(super) fn save_conflict_copy(
     sync_root: &Path,
     path: &str,
     remote_content: &[u8],
 ) -> crate::Result<String> {
-    let full_path = sync_root.join(path);
+    let validated = ValidatedSyncPath::new(path)?;
+    let full_path = validated.join_under(sync_root);
     let filename = full_path
         .file_name()
         .unwrap_or_default()
@@ -62,16 +66,14 @@ pub(super) fn save_conflict_copy(
         .unwrap_or(&full_path)
         .join(&conflict_filename);
 
-    if let Some(parent) = conflict_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-
-    std::fs::write(&conflict_path, remote_content).map_err(|e| {
-        crate::Error::Io(std::io::Error::other(format!(
-            "write conflict copy {}: {}",
-            path, e
-        )))
-    })?;
+    crate::storage::transaction::atomic_write_bytes(&conflict_path, remote_content).map_err(
+        |e| {
+            crate::Error::Io(std::io::Error::other(format!(
+                "write conflict copy {}: {}",
+                path, e
+            )))
+        },
+    )?;
 
     Ok(conflict_filename)
 }
@@ -122,6 +124,8 @@ pub(super) fn fetch_remote_manifest(
 /// 并行下载 pending_take_remote 列表中的文件。
 ///
 /// 返回 `Vec<(path, Option<content>)>`，`None` 表示远端文件缺失。
+///
+/// 所有远端路径通过 [`ValidatedSyncPath`] 验证后才 join 到本地。
 #[allow(clippy::excessive_nesting, clippy::type_complexity)]
 pub(super) fn download_pending_take_remote(
     sync_root: &Path,
@@ -135,6 +139,7 @@ pub(super) fn download_pending_take_remote(
         pending_paths
             .par_iter()
             .map(|path| {
+                let validated = ValidatedSyncPath::new(path)?;
                 let remote_path = format!("{}/{}", remote_prefix, path);
                 let remote = provider.read(&remote_path)?;
                 let Some(obj) = remote else {
@@ -142,28 +147,15 @@ pub(super) fn download_pending_take_remote(
                 };
                 let content = obj.content;
 
-                let full_path = sync_root.join(path);
-                if let Some(parent) = full_path.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
+                let full_path = validated.join_under(sync_root);
+                crate::storage::transaction::atomic_write_bytes(&full_path, &content).map_err(
+                    |e| {
                         crate::Error::Io(std::io::Error::other(format!(
-                            "create pending_take_remote dir {}: {}",
+                            "write pending_take_remote {}: {}",
                             path, e
                         )))
-                    })?;
-                }
-                let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-                std::fs::write(&tmp_path, &content).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "write pending_take_remote {}: {}",
-                        path, e
-                    )))
-                })?;
-                std::fs::rename(&tmp_path, &full_path).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!(
-                        "rename pending_take_remote {}: {}",
-                        path, e
-                    )))
-                })?;
+                    },
+                )?;
                 Ok((path.clone(), Some(content)))
             })
             .collect()
@@ -173,10 +165,12 @@ pub(super) fn download_pending_take_remote(
 /// 将远端已删除的文件移至 trash 目录而非直接删除。
 ///
 /// trash 文件名格式：`{timestamp}_{uuid}_{original_filename}`。
-/// rename 失败时静默忽略：文件可能被其他进程占用或权限不足。
-pub(super) fn move_to_trash(sync_root: &Path, paths: &[String]) {
+/// 返回 `Result`——rename 失败必须显式报错；远端 tombstone 要删除本地文件时，
+/// 如果移动失败，这一轮 merge 就失败；真实文件还在时不能先把 manifest 当成"已经删除"。
+pub(super) fn move_to_trash(sync_root: &Path, paths: &[String]) -> crate::Result<()> {
     for path in paths {
-        let full_path = sync_root.join(path);
+        let validated = ValidatedSyncPath::new(path)?;
+        let full_path = validated.join_under(sync_root);
         if full_path.exists() {
             let filename = full_path
                 .file_name()
@@ -184,25 +178,30 @@ pub(super) fn move_to_trash(sync_root: &Path, paths: &[String]) {
                 .to_string_lossy()
                 .to_string();
             let trash_dir = sync_root.join("app-meta/sync/trash");
-            let _ = std::fs::create_dir_all(&trash_dir);
+            std::fs::create_dir_all(&trash_dir)?;
             let trash_path = trash_dir.join(format!(
                 "{}_{}_{}",
                 chrono::Utc::now().timestamp_millis(),
                 uuid::Uuid::new_v4(),
                 filename
             ));
-            // rename 失败时静默忽略：文件可能被其他进程占用或权限不足。
-            // 后果是本地文件残留，但 manifest 已记录远端删除，下次同步时
-            // 该文件会被视为本地新增（local-only），不会静默丢失用户数据。
-            let _ = std::fs::rename(&full_path, &trash_path);
+            crate::storage::transaction::durable_rename(&full_path, &trash_path).map_err(|e| {
+                crate::Error::Io(std::io::Error::other(format!(
+                    "move_to_trash: failed to move {} to trash: {}",
+                    path, e
+                )))
+            })?;
         }
     }
+    Ok(())
 }
 
 /// 并行下载远端较新文件到本地。
 ///
 /// 使用 rayon 并行线程池，每个文件先写入临时文件（带随机后缀），再 rename 替换目标文件，
 /// 保证下载中断不会留下半写入文件。
+///
+/// 所有远端路径通过 [`ValidatedSyncPath`] 验证后才 join 到本地。
 #[allow(clippy::excessive_nesting)]
 pub(super) fn download_remote_files(
     sync_root: &Path,
@@ -217,6 +216,7 @@ pub(super) fn download_remote_files(
     let download_pool = sync_download_pool(to_download.len(), caps.max_parallel_downloads)?;
     let download_result: crate::Result<()> = download_pool.install(|| {
         to_download.par_iter().try_for_each(|path| {
+            let validated = ValidatedSyncPath::new(path)?;
             let remote_path = format!("{}/{}", remote_prefix, path);
             let Some(obj) = provider.read(&remote_path)? else {
                 return Err(crate::Error::SyncRemoteError {
@@ -227,16 +227,8 @@ pub(super) fn download_remote_files(
                 });
             };
             let content = obj.content;
-            let full_path = sync_root.join(path);
-            if let Some(parent) = full_path.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e)))
-                })?;
-            }
-            let tmp_path = full_path.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-            std::fs::write(&tmp_path, content)
-                .map_err(|e| crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e))))?;
-            std::fs::rename(tmp_path, &full_path)
+            let full_path = validated.join_under(sync_root);
+            crate::storage::transaction::atomic_write_bytes(&full_path, &content)
                 .map_err(|e| crate::Error::Io(std::io::Error::other(format!("{}: {}", path, e))))?;
             Ok(())
         })

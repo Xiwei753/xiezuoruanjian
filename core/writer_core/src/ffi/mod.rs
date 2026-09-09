@@ -27,15 +27,6 @@ use std::os::raw::c_char;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::app_service::WriterAppService;
-use crate::facade::WriterCore;
-
-/// 全局 `WriterCore` 单例，由 `writer_core_init` 初始化。
-///
-/// ## 线程安全
-///
-/// `OnceLock` 保证只初始化一次；`Mutex` 保证同一时刻只有一个线程访问。
-/// 非递归锁：不得在 `with_core` 闭包中再次调用 `with_core`。
-static CORE: OnceLock<Mutex<Option<WriterCore>>> = OnceLock::new();
 
 /// 全局 `WriterAppService` 单例，由 `writer_core_init` 初始化。
 ///
@@ -62,30 +53,6 @@ fn set_last_error(msg: &str) {
             *guard = msg.to_string();
         }
     }
-}
-
-/// 获取全局 `WriterCore` 单例的互斥锁并执行闭包。
-///
-/// ## 线程安全
-///
-/// `CORE` 是全局 `OnceLock<Mutex<Option<WriterCore>>>`。同一时刻只有一个线程可以访问 Core。
-/// 调用方不得在闭包中再次调用 `with_core`（非递归锁，会死锁）。
-///
-/// ## 所有权
-///
-/// 闭包只获得 `&WriterCore` 不可变引用。所有修改操作通过内部可变性
-/// （`WriterAppService` 内部的 `Mutex<EditorSession>` 等）实现，
-/// 不违反 `with_core` 的只读约束。
-pub(crate) fn with_core<F, R>(f: F) -> Result<R, String>
-where
-    F: FnOnce(&WriterCore) -> Result<R, String>,
-{
-    let guard = CORE
-        .get()
-        .and_then(|m| m.lock().ok())
-        .ok_or("core not initialized")?;
-    let core = guard.as_ref().ok_or("core not initialized")?;
-    f(core)
 }
 
 /// 获取全局 `WriterAppService` 单例的互斥锁并执行闭包。
@@ -170,6 +137,7 @@ pub(crate) fn c_str_to_rust(s: *const c_char) -> Result<String, i32> {
 ///  -1  = null pointer
 ///  -2  = invalid UTF-8
 ///  -3  = mutex poisoned
+///  -4  = bootstrap failed
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     let _ = LAST_ERROR.get_or_init(|| Mutex::new(String::new()));
@@ -184,9 +152,6 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
     std::fs::create_dir_all(&projects_root).ok();
     let app_data_root_str = c_str.clone();
     let projects_root_str = projects_root.to_string_lossy().to_string();
-    let core = WriterCore::new(std::path::Path::new(&c_str), projects_root);
-    let m = CORE.get_or_init(|| Mutex::new(None));
-
     //   FFI writer_core_init 复用 bootstrap 流程，
     // 让 WriterAppService 持有 GitRepoLayout，写操作能记 workspace history。
     // bootstrap 流程：ensure_workspace_git → recover_storage_transactions →
@@ -196,22 +161,11 @@ pub unsafe extern "C" fn writer_core_init(path: *const c_char) -> i32 {
             Ok(svc) => svc,
             Err(e) => {
                 set_last_error(&format!("bootstrap failed: {}", e));
-                // bootstrap 失败仍保留 CORE（只读操作可用），但 APP_SERVICE 未初始化，
-                // 写操作会返回 "app service not initialized"。
-                if let Ok(mut guard) = m.lock() {
-                    *guard = Some(core);
-                }
                 return -4;
             }
         };
     APP_SERVICE.get_or_init(|| Mutex::new(app_service));
-    if let Ok(mut guard) = m.lock() {
-        *guard = Some(core);
-        0
-    } else {
-        set_last_error("mutex poisoned");
-        -3
-    }
+    0
 }
 
 /// # Safety
@@ -232,7 +186,7 @@ pub unsafe extern "C" fn writer_core_get_last_error() -> *mut c_char {
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_load_status() -> *mut c_char {
-    let status = match with_core(|_| Ok::<_, String>("native_loaded".to_string())) {
+    let status = match with_app_service(|_| Ok::<_, String>("native_loaded".to_string())) {
         Ok(s) => s,
         Err(e) => e,
     };
@@ -263,7 +217,7 @@ pub unsafe extern "C" fn writer_core_calculate_word_count(text: *const c_char) -
         Ok(s) => s,
         Err(e) => return e,
     };
-    with_core(|core| Ok(core.calculate_word_count(&text_str) as i32)).unwrap_or(-3)
+    with_app_service(|svc| Ok(svc.calculate_word_count(text_str) as i32)).unwrap_or(-3)
 }
 
 /// # Safety
@@ -295,5 +249,5 @@ pub unsafe extern "C" fn writer_core_free_string(ptr: *mut c_char) {
     deprecated
 )]
 pub unsafe extern "C" fn writer_core_is_ai_available() -> i32 {
-    with_core(|core| Ok(core.ai_available() as i32)).unwrap_or_default()
+    with_app_service(|svc| Ok(svc.ai_available() as i32)).unwrap_or_default()
 }

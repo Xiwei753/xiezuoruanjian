@@ -40,7 +40,7 @@ class DocumentOperationLeaseTest {
 
     /**
      * 提交一个携带可控非零 sessionId 的 prepared handle，建立活动 session。
-     * 等价于 Fake Bridge 的 textEditSessionCreate 返回 [sessionId]。
+     * 等价于 Fake Bridge 的 textEditSessionOpen 返回 [sessionId]。
      */
     private fun commitWithSession(
         coordinator: EditorSessionCoordinator,

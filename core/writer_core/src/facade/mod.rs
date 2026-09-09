@@ -61,7 +61,13 @@ pub struct WriterCore {
     pub(crate) app_data_root: PathBuf,
     pub(crate) projects_root: PathBuf,
     pub(crate) stats_api: OnceLock<StatsApi>,
+    /// 平台同步传输 factory——由 `WriterCoreApi` 构造时注入，单一来源。
+    /// facade 同步方法（create_sync_provider_for_plan / run_sync_diagnostics）
+    /// 直接从此字段读取，不再各自持有副本。
     pub(crate) sync_transport: Option<writer_platform_api::SyncTransportFactory>,
+    /// 平台安全存储——由 `WriterCoreApi` 构造时注入，单一来源。
+    /// facade 方法（load_sync_secrets / save_sync_secrets 等）直接从此字段读取，
+    /// 不再各自持有副本。
     pub(crate) secure_storage: Option<Arc<dyn writer_platform_api::SecureStorage>>,
     /// 删除 facade 层 secrets_override —
     /// 进程级 override 唯一存在于 `api::service::WriterCoreApi.secrets_override`，

@@ -1159,14 +1159,16 @@ impl super::WriterCore {
     /// 初始化同步传输 — 从平台注入的 factory 构造 `Arc<dyn SyncTransport>`。
     ///
     /// transport 初始化失败返回类型化 `Error`；调用方决定是否持久化失败状态。
-    /// 把 `match backend` → `if let Some(factory)` → `match factory()` 三层嵌套收成一个方法。
     fn init_sync_transport(
         &self,
     ) -> crate::error::Result<std::sync::Arc<dyn writer_platform_api::SyncTransport>> {
         match self.sync_transport.as_ref() {
             Some(transport_fn) => match transport_fn() {
                 Ok(t) => Ok(std::sync::Arc::from(t)),
-                Err(e) => Err(transport_init_failure_error(&e.category, &e.message)),
+                Err(e) => Err(crate::sync::full_sync::transport_init_failure_error(
+                    &e.category,
+                    &e.message,
+                )),
             },
             None => Err(crate::Error::SyncNetworkUnavailable {
                 reason: "no SyncTransport configured".to_string(),

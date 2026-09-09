@@ -1,6 +1,6 @@
 use std::os::raw::c_char;
 
-use super::{c_str_to_rust, err_json, ok_json, with_core};
+use super::{c_str_to_rust, err_json, ok_json, with_app_service};
 
 fn parse_scope(s: &str) -> crate::search::SearchScope {
     match s {
@@ -55,9 +55,10 @@ pub unsafe extern "C" fn writer_core_global_search(
     } else {
         c_str_to_rust(cursor).ok()
     };
-    match with_core(|core| {
-        let scope = parse_scope(&scope_str);
-        let results = core.global_search(&query_str, scope, limit as usize, cursor_opt.as_deref());
+    match with_app_service(|svc| {
+        let results = svc
+            .global_search(query_str, scope_str, limit, cursor_opt)
+            .map_err(|e| format!("{}", e))?;
         Ok(results)
     }) {
         Ok(data) => ok_json(data),
@@ -85,9 +86,9 @@ pub unsafe extern "C" fn writer_core_rebuild_search_index(
             }
         }
     };
-    match with_core(|core| {
-        let status = core
-            .rebuild_search_index(pid.as_deref())
+    match with_app_service(|svc| {
+        let status = svc
+            .rebuild_search_index(pid)
             .map_err(|e| format!("{}", e))?;
         Ok(status)
     }) {
@@ -100,8 +101,10 @@ pub unsafe extern "C" fn writer_core_rebuild_search_index(
 /// Returns a caller-owned C string. Free with `writer_core_free_string`.
 #[no_mangle]
 pub unsafe extern "C" fn writer_core_get_search_index_status() -> *mut c_char {
-    match with_core(|core| {
-        let status = core.get_search_index_status();
+    match with_app_service(|svc| {
+        let status = svc
+            .get_search_index_status()
+            .map_err(|e| format!("{}", e))?;
         Ok(status)
     }) {
         Ok(data) => ok_json(data),
@@ -140,13 +143,13 @@ pub unsafe extern "C" fn writer_core_enqueue_search_update(
         Ok(s) => s,
         Err(_) => return 0,
     };
-    match with_core(|core| {
+    match with_app_service(|svc| {
         let action = match action_str.as_str() {
             "delete" => crate::search::SearchIndexAction::Delete,
             _ => crate::search::SearchIndexAction::Upsert,
         };
         let scope = parse_scope(&scope_str);
-        core.enqueue_search_index_update(crate::search::SearchIndexUpdate {
+        svc.enqueue_search_index_update(crate::search::SearchIndexUpdate {
             action,
             object_id: oid_str,
             scope,
