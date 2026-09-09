@@ -451,14 +451,14 @@ class EditorViewModel(
         val coordinator =
             _sessionCoordinator
                 ?: error(
-                    "EditorViewModel.bridgeForTarget: sessionCoordinator 未注入 " +
-                        "— 必须通过 Factory(SujianAppDependencies) 创建，依赖由初始化保证",
+                    "EditorViewModel.bridgeForTarget: sessionCoordinator not injected " + // i18n-exempt
+                        "— must be created via Factory(SujianAppDependencies)",
                 )
         val bridge =
             _appServiceBridge
                 ?: error(
-                    "EditorViewModel.bridgeForTarget: appServiceBridge 未注入 " +
-                        "— 必须通过 Factory(SujianAppDependencies) 创建，依赖由初始化保证",
+                    "EditorViewModel.bridgeForTarget: appServiceBridge not injected " + // i18n-exempt
+                        "— must be created via Factory(SujianAppDependencies)",
                 )
 
         val snapshot = coordinator.queryTargetSnapshot(targetId)

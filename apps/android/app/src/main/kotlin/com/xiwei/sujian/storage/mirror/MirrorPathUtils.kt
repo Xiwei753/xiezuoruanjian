@@ -41,7 +41,7 @@ fun sanitizeFileName(title: String): String {
 fun chapterRelativeDir(
     projectTitle: String,
     volumeTitle: String,
-): String = "作品/${sanitizeFileName(projectTitle)}/${sanitizeFileName(volumeTitle)}"
+): String = "作品/${sanitizeFileName(projectTitle)}/${sanitizeFileName(volumeTitle)}" // i18n-exempt
 
 /**
  * 章节正文文件名：`<净化章节名>.md`。

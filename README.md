@@ -1,7 +1,6 @@
 # 素笺写作
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL%203.0-blue.svg)](LICENSE)
-[![Linux Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/linux_build.yml)
 [![Android Build](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml/badge.svg)](https://github.com/Xiwei753/xiezuoruanjian/actions/workflows/android_debug_build.yml)
 
 素笺写作是一款面向长篇创作的开源写作工具。正文与作品数据使用开放格式保存，业务规则由 Rust Core 统一维护，各平台客户端负责系统交互和原生界面。
