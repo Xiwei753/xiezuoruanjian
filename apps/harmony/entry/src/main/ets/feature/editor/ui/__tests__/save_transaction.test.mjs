@@ -7,8 +7,8 @@
 //   2. 保存事务复用：保存进行中并发调用 ensureSnapshotSaved 同 text 复用结果（bridge.saveChapter 只调一次）。
 //   3. 保存事务顺序：flush → whenIdle → snapshot(targetText) → bridge.saveChapter(targetText)。
 //   4. 保存失败：返回 false，lastSavedContent/hasUnsavedChanges 不被错误推进。
-//   5. persistent 章节会话：coordinator.open(..., true) 的 isPersistent 只供 ArkTS lifecycle 使用，
-//      不再穿过 bridge.create 传给 Core（Core 的 text_edit_session_open 已是 3 参数）。
+//   5. open 桥接：coordinator.open(targetId, text) 不接收 isPersistent 参数（Harmony 无 persistent/temporary
+//      两套宿主生命周期），bridge.create 也不接收（Core 的 text_edit_session_open 已是 3 参数）。
 //   6. ensureSnapshotSaved 精确保存：同 text 复用旧任务结果；不同 text 先 await 旧任务再启动新事务。
 //
 // Issue #629 评论10(5308748920) 问题3：与生产代码 WritingScreen.ets 对齐。
@@ -334,44 +334,44 @@ await testAsync('保存抛异常: 返回 false，isSaving 释放', async () => {
   assert.equal(state.lastSaveFailed, true)
 })
 
-// ── 5. persistent 章节会话 ──
+// ── 5. open 桥接 ──
 
-await testAsync('persistent 会话: coordinator.open(targetId, text, true) 不再把 isPersistent 传给 bridge.create（Core 3 参数）', async () => {
+await testAsync('open(targetId, text) 不再把 isPersistent 传给 bridge.create（Core 3 参数）', async () => {
   const createCalls = []
   const bridge = {
     create: async (targetId, initialText, initialCursorByteOffset) => { createCalls.push({ targetId, initialText, initialCursorByteOffset }); return { success: true, data: 1, warnings: [], changedPaths: [], changedEntities: [] } },
     snapshot: async (sessionId) => ({ success: true, data: { text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }, warnings: [], changedPaths: [], changedEntities: [] }),
     close: async () => ({ success: true, data: true, warnings: [], changedPaths: [], changedEntities: [] }),
   }
-  async function open(targetId, initialText, isPersistent) {
-    // isPersistent 保留供 ArkTS lifecycle 使用，不再传给 bridge.create。
+  async function open(targetId, initialText) {
+    // Issue #653 评论 5608056955：open 不再接收 isPersistent，bridge.create 也不接收。
     const createResult = await bridge.create(targetId, initialText, 0)
     if (!createResult.success) { return { success: false } }
     const snapResult = await bridge.snapshot(createResult.data)
     if (!snapResult.success) { return { success: false } }
     return { success: true, data: snapResult.data }
   }
-  const result = await open('c1', 'hello', true)
+  const result = await open('c1', 'hello')
   assert.equal(result.success, true)
   assert.equal(createCalls.length, 1)
   assert.equal(createCalls[0].targetId, 'c1')
   assert.equal(createCalls[0].initialCursorByteOffset, 0)
 })
 
-await testAsync('persistent 会话: open(targetId, text, false) 不再把 isPersistent 传给 bridge.create', async () => {
+await testAsync('open(targetId, text) 短文本草稿会话同样走 bridge.create', async () => {
   const createCalls = []
   const bridge = {
     create: async (targetId, initialText, initialCursorByteOffset) => { createCalls.push({ targetId, initialText, initialCursorByteOffset }); return { success: true, data: 2, warnings: [], changedPaths: [], changedEntities: [] } },
     snapshot: async () => ({ success: true, data: { text: 'x', revision: 1, cursor: 1, selectionAnchor: 1, generation: 0, chapterId: 'tmp', composition: null }, warnings: [], changedPaths: [], changedEntities: [] }),
     close: async () => ({ success: true, data: true, warnings: [], changedPaths: [], changedEntities: [] }),
   }
-  async function open(targetId, initialText, isPersistent) {
-    // isPersistent 保留供 ArkTS lifecycle 使用，不再传给 bridge.create。
+  async function open(targetId, initialText) {
+    // Issue #653 评论 5608056955：open 不再接收 isPersistent，bridge.create 也不接收。
     const createResult = await bridge.create(targetId, initialText, 0)
     if (!createResult.success) { return { success: false } }
     return { success: true }
   }
-  await open('tmp', 'x', false)
+  await open('tmp', 'x')
   assert.equal(createCalls.length, 1)
   assert.equal(createCalls[0].targetId, 'tmp')
 })

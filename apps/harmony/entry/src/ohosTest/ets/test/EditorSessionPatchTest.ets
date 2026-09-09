@@ -41,8 +41,8 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   insertCalls: Array<{ byteOffset: number, text: string, cause: EditorTransactionCause }> = []
   deleteCalls: Array<{ start: number, end: number, cause: EditorTransactionCause }> = []
   replaceCalls: Array<{ start: number, end: number, text: string, originalText: string, cause: EditorTransactionCause }> = []
-  // Issue #629 评论8 第5项：记录 create 调用，验证 persistent 章节会话。
-  // isPersistent 不再穿过 bridge.create 传给 Core（Core 的 text_edit_session_open 已是 3 参数）。
+  // Issue #629 评论8 第5项：记录 create 调用，验证 open 桥接。
+  // Issue #653 评论 5608056955：open 不再接收 isPersistent 参数（Harmony 无 persistent/temporary 两套宿主生命周期）。
   createCalls: Array<{ targetId: string, initialCursorByteOffset: number }> = []
   beginCompositionCalls: Array<{ start: number, end: number }> = []
   // mock 当前 snapshot（由测试设置）
@@ -374,7 +374,7 @@ export default function editorSessionPatchTest() {
         text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null
       })
       // open 设置 state（mockSnapshot 空选区：cursor=5, anchor=5）
-      await coordinator.open('c1', 'hello', true)
+      await coordinator.open('c1', 'hello')
       await adapter.onTextInput('!')
       // 应调用 bridge.insert 一次，不调用 replace
       expect(bridge.insertCalls.length).assertEqual(1)
@@ -387,7 +387,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world', true)
+      await coordinator.open('c1', 'hello world')
       // 选区 [3,7) = "lo w"
       await adapter.onTextInput('XYZ')
       // 应调用 bridge.replace 一次，不调用 insert
@@ -403,7 +403,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world', true)
+      await coordinator.open('c1', 'hello world')
       await adapter.onPaste('PASTED')
       expect(bridge.replaceCalls.length).assertEqual(1)
       expect(bridge.insertCalls.length).assertEqual(0)
@@ -420,7 +420,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world', true)
+      await coordinator.open('c1', 'hello world')
       const selectionController: SelectionController = new SelectionController(coordinator)
       const dispatcher: EditorSemanticDispatcher = new EditorSemanticDispatcher(adapter, selectionController, coordinator)
       await dispatcher.dispatch({ kind: 'graphemeBackspace' })
@@ -433,7 +433,7 @@ export default function editorSessionPatchTest() {
       const { bridge, coordinator, adapter } = setup({
         text: 'hello world', revision: 1, cursor: 7, selectionAnchor: 3, generation: 0, chapterId: 'c1', composition: null
       })
-      await coordinator.open('c1', 'hello world', true)
+      await coordinator.open('c1', 'hello world')
       await adapter.onCompositionBegin()
       expect(bridge.beginCompositionCalls.length).assertEqual(1)
       expect(bridge.beginCompositionCalls[0].start).assertEqual(3)
@@ -468,28 +468,27 @@ export default function editorSessionPatchTest() {
       expect(true).assertTrue()
     })
   })
-  // ── Issue #629 评论8 第5项：persistent 章节会话 ──
+  // ── Issue #629 评论8 第5项：open 桥接 ──
   // 环境阻塞：无 hvigor/ohpm/SDK，需真实 HarmonyOS 环境运行。
-  // coordinator.open 的 isPersistent 只供 ArkTS lifecycle 使用，不再穿过 bridge.create 传给 Core
-  // （Core 的 text_edit_session_open 已是 3 参数）：
-  // 章节正文（WritingScreen/WorkspaceScreen）传 true，短文本草稿会话传 false。
-  describe('persistent 章节会话（环境阻塞：无 hvigor/ohpm/SDK）', () => {
-    it('open(targetId, text, true) → bridge.create 不再接收 isPersistent（Core 3 参数）', async () => {
+  // Issue #653 评论 5608056955：Harmony 没有 persistent/temporary 两套宿主生命周期，
+  // open 不再接收 isPersistent 参数，bridge.create 也不接收（Core 的 text_edit_session_open 已是 3 参数）。
+  describe('open 桥接（环境阻塞：无 hvigor/ohpm/SDK）', () => {
+    it('open(targetId, text) → bridge.create 不接收 isPersistent', async () => {
       const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
       bridge.mockSnapshot = { text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }
       const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
-      const result = await coordinator.open('c1', 'hello', true)
+      const result = await coordinator.open('c1', 'hello')
       expect(result.success).assertTrue()
       expect(bridge.createCalls.length).assertEqual(1)
       expect(bridge.createCalls[0].targetId).assertEqual('c1')
       expect(bridge.createCalls[0].initialCursorByteOffset).assertEqual(0)
     })
 
-    it('open(targetId, text, false) → bridge.create 不再接收 isPersistent（短文本草稿会话）', async () => {
+    it('open(targetId, text) 短文本草稿会话同样走 bridge.create', async () => {
       const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
       bridge.mockSnapshot = { text: 'x', revision: 1, cursor: 1, selectionAnchor: 1, generation: 0, chapterId: 'tmp', composition: null }
       const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
-      const result = await coordinator.open('tmp', 'x', false)
+      const result = await coordinator.open('tmp', 'x')
       expect(result.success).assertTrue()
       expect(bridge.createCalls.length).assertEqual(1)
       expect(bridge.createCalls[0].targetId).assertEqual('tmp')
@@ -523,7 +522,7 @@ export default function editorSessionPatchTest() {
 
     it('compositionMoveGraphemeLeft：从 snapshot 读 sessionId/generation，经 coordinator 带 revision 调 bridge', async () => {
       const { bridge, coordinator, adapter } = setupComposition()
-      await coordinator.open('c1', 'committed', true)
+      await coordinator.open('c1', 'committed')
       const result = await adapter.compositionMoveGraphemeLeft()
       expect(result.success).assertTrue()
       expect(bridge.compositionMoveLeftCalls.length).assertEqual(1)
@@ -539,7 +538,7 @@ export default function editorSessionPatchTest() {
 
     it('四种 composition grapheme 操作分别路由到对应 bridge 方法', async () => {
       const { bridge, coordinator, adapter } = setupComposition()
-      await coordinator.open('c1', 'committed', true)
+      await coordinator.open('c1', 'committed')
       // 依次执行四种操作，每次都从更新后的 snapshot 取最新 generation（mock 每次 +1）
       await adapter.compositionMoveGraphemeLeft()
       await adapter.compositionMoveGraphemeRight()
@@ -559,7 +558,7 @@ export default function editorSessionPatchTest() {
       const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
       bridge.mockSnapshot = { text: 'committed', revision: 4, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }
       const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
-      await coordinator.open('c1', 'committed', true)
+      await coordinator.open('c1', 'committed')
       const adapter: EditorInputAdapter = new EditorInputAdapter(coordinator)
       const result = await adapter.compositionDeleteGraphemeBackward()
       expect(result.success).assertFalse()
@@ -570,7 +569,7 @@ export default function editorSessionPatchTest() {
     it('bridge 失败真实传播（不吞错误、不伪造成功）', async () => {
       const { bridge, coordinator, adapter } = setupComposition()
       bridge.compositionOpFailure = true
-      await coordinator.open('c1', 'committed', true)
+      await coordinator.open('c1', 'committed')
       const result = await adapter.compositionMoveGraphemeRight()
       expect(result.success).assertFalse()
       expect(result.errorCode).assertEqual('CORE_COMPOSITION_OP_FAILED')

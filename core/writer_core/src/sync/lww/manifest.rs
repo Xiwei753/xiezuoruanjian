@@ -263,15 +263,20 @@ pub(super) fn build_remote_records(
 ) -> crate::Result<HashMap<String, ManifestFileRecord>> {
     let mut remote_records = HashMap::new();
     // 两个来源（remote_manifest.files / remote_tree_files）按同一顺序处理：
-    //   ValidatedSyncPath::new → is_whitelisted_path / is_blacklisted_path → 插入 map。
+    //   ValidatedSyncPath::new → 用 normalized 判断 SYNC_MANIFEST_PATH
+    //   → is_whitelisted_path / is_blacklisted_path → 插入 map。
+    // manifest 和 tree 两个远端来源都先标准化再判断 SYNC_MANIFEST_PATH，
+    // 共用同一条边界：远端给出 `app-meta\sync\manifest.sync.json`（反斜杠形式）
+    // 时标准化后正好是保留的 manifest 路径，会被这里 continue 跳过，
+    // 不会作为普通 ManifestFileRecord 插进 remote_records。
     // 用 ValidatedSyncPath::as_str() 的标准化路径写回 record.path 和 map key，
     // 避免 `volumes\a\chapter.md` 与 `volumes/a/chapter.md` 成为两份逻辑路径。
     for mut rec in remote_manifest.files {
-        if rec.path == SYNC_MANIFEST_PATH {
-            continue;
-        }
         let validated = ValidatedSyncPath::new(&rec.path)?;
         let normalized = validated.as_str();
+        if normalized == SYNC_MANIFEST_PATH {
+            continue;
+        }
         if !SyncService::is_whitelisted_path(normalized, scope)
             || SyncService::is_blacklisted_path(normalized, scope)
         {
