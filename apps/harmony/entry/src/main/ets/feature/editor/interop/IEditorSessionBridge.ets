@@ -10,7 +10,7 @@ import { ResultEnvelope } from '../../../corebridge/dto/ResultEnvelope'
 import { EditorTransactionCause, EditorSessionSnapshot, EditorEditResult } from '../../../corebridge/dto/EditorDtos'
 
 export interface IEditorSessionBridge {
-  create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<number>>
+  create(targetId: string, initialText: string, initialCursorByteOffset: number): Promise<ResultEnvelope<number>>
   close(sessionId: number): Promise<ResultEnvelope<boolean>>
   snapshot(sessionId: number): Promise<ResultEnvelope<EditorSessionSnapshot>>
   insert(sessionId: number, byteOffset: number, text: string, cause: EditorTransactionCause, expectedRevision: number): Promise<ResultEnvelope<EditorEditResult>>

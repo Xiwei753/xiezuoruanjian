@@ -397,7 +397,8 @@ export struct WritingScreen {
         this.sessionStartTime = Date.now()
         // 打开编辑会话，用 Core 管理正文。open 成功后 listener 自动回流 editorSnapshot/content/hasUnsaved/wordCount。
         // Issue #629 评论8 第5项：章节正文是持续编辑内容，传 isPersistent=true（persistent session），
-        // 不再把章节伪装成 temporary session。
+        // 不再把章节伪装成 temporary session。isPersistent 现在只供 ArkTS session lifecycle 使用，
+        // 不再穿过 C ABI 传给 Core（Core 的 text_edit_session_open 已是 3 参数）。
         const snapResult = await this.coordinator.open(this.chapterId, result.data.content, true)
         if (!snapResult.success) {
           this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_chapter').id)

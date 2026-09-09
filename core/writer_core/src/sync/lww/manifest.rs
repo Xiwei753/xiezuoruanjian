@@ -282,11 +282,13 @@ pub(super) fn build_remote_records(
     }
 
     for (path, sha) in remote_tree_files {
-        if path == SYNC_MANIFEST_PATH || remote_records.contains_key(path) {
-            continue;
-        }
         let validated = ValidatedSyncPath::new(path)?;
         let normalized = validated.as_str();
+        // 用标准化后的路径判断，避免反斜杠形式和 / 形式指向同一逻辑路径时
+        // tree 记录覆盖 manifest 的 LWW 元数据。
+        if normalized == SYNC_MANIFEST_PATH || remote_records.contains_key(normalized) {
+            continue;
+        }
         if !SyncService::is_whitelisted_path(normalized, scope)
             || SyncService::is_blacklisted_path(normalized, scope)
         {

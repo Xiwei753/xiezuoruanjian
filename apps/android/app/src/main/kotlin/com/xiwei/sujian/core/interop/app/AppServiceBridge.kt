@@ -526,14 +526,12 @@ open class AppServiceBridge(
         targetId: String,
         initialText: String,
         initialCursorByteOffset: UInt,
-        isPersistent: Boolean,
     ): BridgeResult<ULong?> =
         holder.wrapResult {
             holder.service.textEditSessionOpen(
                 targetId,
                 initialText,
                 initialCursorByteOffset,
-                if (isPersistent) 1u else 0u,
             )
         }
 

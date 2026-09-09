@@ -66,8 +66,10 @@ export class EditorSessionCoordinator {
   // open 不进命令队列：它是初始化，必须先完成才能 enqueue 编辑命令。
   // Issue #629 评论8 第5项：isPersistent 显式传入 bridge——章节正文等持续编辑内容传 true
   // （persistent session），项目名/搜索词等临时草稿会话传 false，不内部固定。
+  // isPersistent 现在只供 ArkTS session lifecycle 使用，不再穿过 C ABI 传给 Core
+  // （Core 的 text_edit_session_open 已是 3 参数）。
   async open(targetId: string, initialText: string, isPersistent: boolean): Promise<ResultEnvelope<EditorSessionSnapshot>> {
-    const createResult = await this.bridge.create(targetId, initialText, 0, isPersistent)
+    const createResult = await this.bridge.create(targetId, initialText, 0)
     if (!createResult.success || createResult.data === undefined || createResult.data === null) {
       return {
         success: false,

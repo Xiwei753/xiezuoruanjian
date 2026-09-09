@@ -1101,6 +1101,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                     provider,
                                     &planned.target.remote_prefix,
                                     planned.staging_root.as_deref(),
+                                    crate::sync::types::SyncScope::Project,
                                 );
                                 let action = planned
                                     .project_id
@@ -1316,6 +1317,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                         provider,
                                         &planned.target.remote_prefix,
                                         planned.staging_root.as_deref(),
+                                        crate::sync::types::SyncScope::Project,
                                     );
                                     (
                                         restore_result,
@@ -1540,6 +1542,7 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                                             provider,
                                             &download_prefix,
                                             planned.staging_root.as_deref(),
+                                            crate::sync::types::SyncScope::Project,
                                         );
                                         (
                                             result,
@@ -1776,6 +1779,7 @@ fn download_remote_to_staging(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
     staging_root: Option<&Path>,
+    scope: crate::sync::types::SyncScope,
 ) -> SyncResult {
     let entries = match provider.list(remote_prefix) {
         Ok(e) => e,
@@ -1790,7 +1794,15 @@ fn download_remote_to_staging(
             Ok(vp) => vp,
             Err(e) => return sync_result_from_error(crate::Error::from(e)),
         };
-        let full_remote_path = format!("{}/{}", remote_prefix, validated.as_str());
+        // 业务白/黑名单：只允许属于该 scope 的作品同步路径落 staging。
+        // 与 build_remote_records 保持同一顺序：路径安全验证 → 业务白/黑名单 → 使用标准化路径。
+        let normalized = validated.as_str();
+        if !crate::sync::SyncService::is_whitelisted_path(normalized, scope)
+            || crate::sync::SyncService::is_blacklisted_path(normalized, scope)
+        {
+            continue;
+        }
+        let full_remote_path = format!("{}/{}", remote_prefix, normalized);
         let obj = match provider.read(&full_remote_path) {
             Ok(Some(obj)) => obj,
             Ok(None) => continue, // 已被删，跳过
@@ -4498,12 +4510,12 @@ mod tests {
 
         let provider = MemoryProvider::new();
 
-        // 在 generation prefix 写远端正文。
+        // 在 generation prefix 写远端正文（白名单要求章节正文在 volumes/ 下）。
         let gen_id = "gen-restore-1";
         let gen_prefix = generation_remote_prefix("projects/P", gen_id).unwrap();
         provider
             .write(
-                &format!("{}/chapter.md", gen_prefix),
+                &format!("{}/volumes/v1/chapter.md", gen_prefix),
                 b"remote-content",
                 crate::sync::provider::model::WritePrecondition::CreateNew,
             )
@@ -4557,11 +4569,11 @@ mod tests {
 
         let transfer = run_transfer(&provider, &plan);
 
-        // 验证 staging 从 generation prefix 下载了 chapter.md。
-        let staged_content = std::fs::read(staging_root.join("chapter.md"));
+        // 验证 staging 从 generation prefix 下载了 volumes/v1/chapter.md。
+        let staged_content = std::fs::read(staging_root.join("volumes/v1/chapter.md"));
         assert!(
             staged_content.as_deref().ok() == Some(b"remote-content".as_slice()),
-            "RestoreProject should download chapter.md from generation prefix, \
+            "RestoreProject should download volumes/v1/chapter.md from generation prefix, \
              staged_content: {:?}, transfer status: {:?}",
             staged_content.map(|c| String::from_utf8_lossy(&c).into_owned()),
             transfer.targets[0].result.status

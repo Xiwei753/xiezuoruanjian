@@ -12,9 +12,9 @@ import { NativeCoreModule } from '../../../corebridge/native/NativeCoreModule'
 export class NativeEditorSessionBridge implements IEditorSessionBridge {
   private core: NativeCoreModule = new NativeCoreModule()
 
-  async create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<number>> {
+  async create(targetId: string, initialText: string, initialCursorByteOffset: number): Promise<ResultEnvelope<number>> {
     try {
-      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCreate(targetId, initialText, initialCursorByteOffset, isPersistent ? 1 : 0) as string
+      const jsonStr: string = this.core.getNativeModule().nativeEditorSessionCreate(targetId, initialText, initialCursorByteOffset) as string
       return this.core.parseEnvelope<number>(jsonStr)
     } catch (e) {
       return this.nativeError<number>(e)

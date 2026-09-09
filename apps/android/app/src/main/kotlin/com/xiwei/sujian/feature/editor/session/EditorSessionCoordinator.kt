@@ -690,13 +690,14 @@ open class EditorSessionCoordinator(
         cursorByteOffset: Int,
         isPersistent: Boolean,
     ): ULong? {
+        // isPersistent 保留供 Android 生命周期逻辑使用（子类 override 决定 detach 时关闭还是保留
+        // session），不再穿过 UniFFI 传给 Core（Core 的 text_edit_session_open 已是 3 参数）。
         return when (
             val result =
                 appServiceBridge.textEditSessionOpen(
                     targetId,
                     text,
                     cursorByteOffset.toUInt(),
-                    isPersistent,
                 )
         ) {
             is BridgeResult.Success -> {

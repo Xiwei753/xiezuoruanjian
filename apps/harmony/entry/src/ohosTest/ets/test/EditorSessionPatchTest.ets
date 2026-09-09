@@ -41,16 +41,17 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
   insertCalls: Array<{ byteOffset: number, text: string, cause: EditorTransactionCause }> = []
   deleteCalls: Array<{ start: number, end: number, cause: EditorTransactionCause }> = []
   replaceCalls: Array<{ start: number, end: number, text: string, originalText: string, cause: EditorTransactionCause }> = []
-  // Issue #629 评论8 第5项：记录 create 的 isPersistent，验证 persistent 章节会话。
-  createCalls: Array<{ targetId: string, isPersistent: boolean }> = []
+  // Issue #629 评论8 第5项：记录 create 调用，验证 persistent 章节会话。
+  // isPersistent 不再穿过 bridge.create 传给 Core（Core 的 text_edit_session_open 已是 3 参数）。
+  createCalls: Array<{ targetId: string, initialCursorByteOffset: number }> = []
   beginCompositionCalls: Array<{ start: number, end: number }> = []
   // mock 当前 snapshot（由测试设置）
   mockSnapshot: EditorSessionSnapshot = {
     text: '', revision: 1, cursor: 0, selectionAnchor: 0, generation: 0, chapterId: 'c1', composition: null
   }
 
-  async create(targetId: string, initialText: string, initialCursorByteOffset: number, isPersistent: boolean): Promise<ResultEnvelope<number>> {
-    this.createCalls.push({ targetId, isPersistent })
+  async create(targetId: string, initialText: string, initialCursorByteOffset: number): Promise<ResultEnvelope<number>> {
+    this.createCalls.push({ targetId, initialCursorByteOffset })
     return { success: true, data: 1, warnings: [], changedPaths: [], changedEntities: [] }
   }
   async close(sessionId: number): Promise<ResultEnvelope<boolean>> {
@@ -469,10 +470,11 @@ export default function editorSessionPatchTest() {
   })
   // ── Issue #629 评论8 第5项：persistent 章节会话 ──
   // 环境阻塞：无 hvigor/ohpm/SDK，需真实 HarmonyOS 环境运行。
-  // coordinator.open 把 isPersistent 显式传给 bridge.create：
+  // coordinator.open 的 isPersistent 只供 ArkTS lifecycle 使用，不再穿过 bridge.create 传给 Core
+  // （Core 的 text_edit_session_open 已是 3 参数）：
   // 章节正文（WritingScreen/WorkspaceScreen）传 true，短文本草稿会话传 false。
   describe('persistent 章节会话（环境阻塞：无 hvigor/ohpm/SDK）', () => {
-    it('open(targetId, text, true) → bridge.create isPersistent=true', async () => {
+    it('open(targetId, text, true) → bridge.create 不再接收 isPersistent（Core 3 参数）', async () => {
       const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
       bridge.mockSnapshot = { text: 'hello', revision: 1, cursor: 5, selectionAnchor: 5, generation: 0, chapterId: 'c1', composition: null }
       const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
@@ -480,17 +482,17 @@ export default function editorSessionPatchTest() {
       expect(result.success).assertTrue()
       expect(bridge.createCalls.length).assertEqual(1)
       expect(bridge.createCalls[0].targetId).assertEqual('c1')
-      expect(bridge.createCalls[0].isPersistent).assertTrue()
+      expect(bridge.createCalls[0].initialCursorByteOffset).assertEqual(0)
     })
 
-    it('open(targetId, text, false) → bridge.create isPersistent=false（短文本草稿会话）', async () => {
+    it('open(targetId, text, false) → bridge.create 不再接收 isPersistent（短文本草稿会话）', async () => {
       const bridge: MockEditorSessionBridge = new MockEditorSessionBridge()
       bridge.mockSnapshot = { text: 'x', revision: 1, cursor: 1, selectionAnchor: 1, generation: 0, chapterId: 'tmp', composition: null }
       const coordinator: EditorSessionCoordinator = new EditorSessionCoordinator(bridge)
       const result = await coordinator.open('tmp', 'x', false)
       expect(result.success).assertTrue()
       expect(bridge.createCalls.length).assertEqual(1)
-      expect(bridge.createCalls[0].isPersistent).assertFalse()
+      expect(bridge.createCalls[0].targetId).assertEqual('tmp')
     })
   })
 
