@@ -1,5 +1,4 @@
 use super::*;
-use crate::editor::layout;
 
 impl SujianEditorItem {
     pub(crate) fn record_transaction(
@@ -53,11 +52,15 @@ impl SujianEditorItem {
             vt = self
                 .pipeline
                 .record_visual_transaction(&ctx, &old, &new, cause);
-        } else {
-            if let Some(ref mut vt) = vt {
-                self.fill_visual_transaction_coords_legacy(vt, &new.text, &old.text);
-            }
         }
+        // Issue #658 评论 5622188166 问题 1: 动画关闭/滚动抑制时不再走
+        // fill_visual_transaction_coords_legacy 生成 old/new 动画坐标。
+        // 该 legacy 路径通过 layout_snapshot_for_text 复用同一 EditorLayout，
+        // 连续 snapshot 会互相清 generation，导致 caret_rect 取已失效的 generation
+        // 返回 0.0，光标 x 塌缩到行首。删除 legacy 路径后，vt 的
+        // old_cursor_rect/new_cursor_rect 保持 None（事务元数据仍保留，
+        // 动画坐标不生成）。正常光标位置由 cursor controller / 当前正文 snapshot
+        // 处理，不依赖 legacy 坐标。
 
         self.last_event_count = if vt.is_some() { 1 } else { 0 };
         self.last_summary = format!(
@@ -83,119 +86,10 @@ impl SujianEditorItem {
         vt
     }
 
-    pub(crate) fn fill_visual_transaction_coords_legacy(
-        &mut self,
-        vt: &mut EditorVisualTransaction,
-        text: &str,
-        old_text: &str,
-    ) {
-        let width = self.bounding_width();
-        let _font_size = f64::from(self.current_font_pixel_size);
-        let font_family = &self.current_font_family.to_string();
-        let scroll_y = f64::from(self.current_scroll_y);
-        let viewport_h = f64::from(self.current_viewport_height.max(1.0));
-
-        match vt.kind {
-            EditorAnimationKind::Insert => {
-                let insert_snapshot = self.layout_snapshot_for_text(text, width);
-
-                if vt.inserted_range.is_some() {
-                    let old_snapshot = self.layout_snapshot_for_text(old_text, width);
-                    let old_caret = self.editor_layout.caret_rect(
-                        &old_snapshot,
-                        vt.old_selection.head.index.value(),
-                        CaretAffinity::Downstream,
-                        scroll_y,
-                        viewport_h,
-                    );
-                    vt.old_cursor_rect = Some(make_cursor_rect_from_caret(
-                        &old_caret,
-                        &old_snapshot,
-                        font_family,
-                        scroll_y,
-                    ));
-
-                    let new_caret = self.editor_layout.caret_rect(
-                        &insert_snapshot,
-                        vt.new_selection.head.index.value(),
-                        CaretAffinity::Downstream,
-                        scroll_y,
-                        viewport_h,
-                    );
-                    vt.new_cursor_rect = Some(make_cursor_rect_from_caret(
-                        &new_caret,
-                        &insert_snapshot,
-                        font_family,
-                        scroll_y,
-                    ));
-                }
-
-                vt.insert_glyph_rects = Some(Vec::new());
-                vt.reflow_glyph_rects = None;
-            }
-            EditorAnimationKind::Delete => {
-                let delete_snapshot = self.layout_snapshot_for_text(old_text, width);
-
-                let old_caret = self.editor_layout.caret_rect(
-                    &delete_snapshot,
-                    vt.old_selection.head.index.value(),
-                    CaretAffinity::Downstream,
-                    scroll_y,
-                    viewport_h,
-                );
-                vt.old_cursor_rect = Some(make_cursor_rect_from_caret(
-                    &old_caret,
-                    &delete_snapshot,
-                    font_family,
-                    scroll_y,
-                ));
-
-                let new_snapshot = self.layout_snapshot_for_text(text, width);
-                let new_caret = self.editor_layout.caret_rect(
-                    &new_snapshot,
-                    vt.new_selection.head.index.value(),
-                    CaretAffinity::Downstream,
-                    scroll_y,
-                    viewport_h,
-                );
-                vt.new_cursor_rect = Some(make_cursor_rect_from_caret(
-                    &new_caret,
-                    &new_snapshot,
-                    font_family,
-                    scroll_y,
-                ));
-
-                vt.deleted_glyph_rects = None;
-            }
-            EditorAnimationKind::Cursor => {}
-        }
-    }
-
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
         self.pipeline.prepare_transaction_textures(key);
         // 纹理准备完成后，静态层裁剪区域变化，需要重建 Scene Graph。
         // 布局未变，不需要重新排版，只需要 scene rebuild。
         self.request_scene_rebuild();
-    }
-}
-
-fn make_cursor_rect_from_caret(
-    caret: &CursorLayoutRect,
-    snapshot: &LayoutSnapshot,
-    font_family: &str,
-    scroll_y: f64,
-) -> CursorRect {
-    let line = snapshot.lines.iter().find(|l| l.id == caret.visual_line_id);
-    let baseline_y = match line {
-        Some(l) => {
-            layout::text_baseline_y(l, f64::from(snapshot.font_size), font_family) - scroll_y
-        }
-        None => caret.y + caret.h * 0.8,
-    };
-    CursorRect {
-        x: caret.x,
-        top: caret.y,
-        bottom: caret.y + caret.h,
-        baseline_y,
     }
 }

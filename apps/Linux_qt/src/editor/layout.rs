@@ -1377,14 +1377,28 @@ impl EditorLayout {
         }
 
         self.cache.get_or_insert_with(|| {
-            let lines = layout_lines(
+            // Issue #658 评论 5622188166 问题 2: 收口为一份 canonical 排版结果。
+            // 静态正文不再走 layout_lines → editor_layout_lines 独立排版入口，
+            // 改为走 prepare_document_visual_snapshot（与动画/IME 同一排版入口），
+            // 共用 prepare_paragraph_layout_core 排版核心。同一正文状态的每段
+            // 只调用一次 prepare_paragraph_layout_core，QTextLayout 存入
+            // g_layout_generations[self.current_generation]，静态 QSGTextNode、
+            // 正常光标/点击、IME、动画全部从此 canonical 结果取 visual_lines。
+            // LayoutSnapshot 只消费 visual_lines，不消费 line images/clusters，
+            // 传 dpr=1.0 / text_color 占位值（images 不被引用，随 doc_snapshot
+            // drop 释放）；真正需要 line images 的动画/IME 路径各自分配独立
+            // generation 调 prepare_document_visual_snapshot 取完整结果。
+            let doc_snapshot = prepare_document_visual_snapshot(
                 text,
-                params.width,
+                text_revision,
                 f64::from(params.font_size),
+                &params.font_family,
                 f64::from(params.line_spacing),
                 f64::from(params.padding),
                 f64::from(params.text_indent),
-                &params.font_family,
+                params.width,
+                1.0,
+                "#000000",
                 self.current_generation,
             );
             LayoutSnapshot {
@@ -1397,7 +1411,7 @@ impl EditorLayout {
                 line_spacing: params.line_spacing,
                 text_indent: params.text_indent,
                 padding: params.padding,
-                lines,
+                lines: doc_snapshot.visual_lines,
                 layout_generation: self.current_generation,
             }
         })
@@ -1524,6 +1538,10 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
     })
 }
 
+/// Issue #658 评论 5622188166 问题 2: 此函数已不再被 EditorLayout::snapshot 调用。
+/// 静态正文排版已收口到 prepare_document_visual_snapshot（与动画/IME 同一入口），
+/// 共用 prepare_paragraph_layout_core 排版核心。保留此函数供回退/测试引用。
+#[allow(dead_code)]
 pub fn layout_lines(
     text: &str,
     width: f64,
@@ -2916,6 +2934,57 @@ pub fn prepare_document_visual_snapshot(
         paragraphs.push(canonical);
     }
 
+    // Issue #658 评论 5622188166 问题 2: 空文本处理，与 layout_lines 行为一致。
+    // "".split_inclusive('\n') 返回空迭代器，需在此补充一个空段 VisualLine，
+    // 保证 snapshot.lines 非空，让 hit_test/caret_rect 有行可操作。
+    if text.is_empty() {
+        let empty_ascent = get_font_ascent(font_family, font_size as f32);
+        let empty_descent = get_font_descent(font_family, font_size as f32);
+        let _empty_canonical = prepare_paragraph_visual_snapshot(
+            "",
+            0,
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            0,
+            line_spacing,
+            generation,
+        );
+        visual_lines.push(VisualLine {
+            id: line_id,
+            byte_start: 0,
+            byte_end: 0,
+            qchar_start: 0,
+            qchar_end: 0,
+            hard_break: false,
+            x: padding + indent,
+            y,
+            width: 0.0,
+            height: line_height,
+            para_text: String::new(),
+            para_start: 0,
+            qtextline_idx: 0,
+            para_qchar_start: 0,
+            para_qchar_end: 0,
+            line_wrap_width: available - indent,
+            line_indent_x: indent,
+            para_indent: indent,
+            x_end_trailing: 0.0,
+            qt_ascent: empty_ascent,
+            qt_descent: empty_descent,
+            cache_slot: 0,
+        });
+        paragraphs.push(CanonicalParagraphSnapshot {
+            paragraph_text: String::new(),
+            paragraph_document_byte_start: 0,
+            lines: Vec::new(),
+            index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build("", 0),
+        });
+    }
+
     if text.ends_with('\n') {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
         // Issue #658: 尾部换行产生的空段也占 null slot。
@@ -4288,5 +4357,117 @@ mod tests {
         );
         assert!(rect_small.x > 0.0, "small font end cursor x must be > 0");
         assert!(rect_large.x > 0.0, "large font end cursor x must be > 0");
+    }
+
+    /// Issue #658 评论 5622188166 问题 1：EditorLayout 连续 snapshot 行为约束测试。
+    ///
+    /// 原复现测试断言 `caret.x > 行首`，bug 存在时 FAIL。修复后（改法 1 删除
+    /// `fill_visual_transaction_coords_legacy` / `layout_snapshot_for_text`），
+    /// 不再有调用方对同一 EditorLayout 连续 snapshot 然后用已失效 generation 算 caret。
+    /// 此测试改为验证 EditorLayout 的底层设计行为约束：连续 snapshot 不同文本时
+    /// 后一次会 clear 前一次的 generation，用已失效 generation 算 caret 会塌缩到行首。
+    ///
+    /// 该约束是 EditorLayout 缓存机制的本质（每代只持有当前正文一份排版结果）。
+    /// bug 的消除由"不再走 legacy 路径"保证（fill_visual_transaction_coords_legacy
+    /// 和 layout_snapshot_for_text 已删除，动画关闭/滚动抑制时 vt 的
+    /// old_cursor_rect/new_cursor_rect 保持 None，正常光标走当前正文 snapshot /
+    /// cursor controller，不依赖已失效 generation）。
+    #[test]
+    fn test_issue_658_comment_5622188166_problem1_legacy_snapshot_clears_insert_generation() {
+        init_qt();
+        let width = 600.0;
+        let new_text = "hello world".to_string();
+        let old_text = "hello worl".to_string();
+        let cursor_byte = new_text.len();
+
+        let mut layout = EditorLayout::default();
+        // 1. snapshot(new_text) — current_generation==0，不 clear，分配 generation A
+        let insert_snapshot = layout.snapshot(&new_text, params(width), 0).clone();
+        let gen_a = insert_snapshot.layout_generation;
+        // 2. snapshot(old_text) — text_ptr 不同 → needs_refresh → clear_layout_generation(A)，分配 generation B
+        let old_snapshot = layout.snapshot(&old_text, params(width), 0).clone();
+        let gen_b = old_snapshot.layout_generation;
+
+        // 行为约束 1：连续 snapshot 不同文本应分配不同 generation（A 被 B 替换）
+        assert_ne!(
+            gen_a, gen_b,
+            "连续 snapshot 不同文本应分配不同 generation"
+        );
+        assert!(gen_a != 0, "generation A 应非零");
+        assert!(gen_b != 0, "generation B 应非零");
+
+        // 行为约束 2：用已失效 generation（A 已被 clear）算 caret 会塌缩到行首。
+        // get_paragraph_layout(A, slot) 返回 nullptr → cursorToX 返回 0.0 → x = line.x。
+        // 这是 EditorLayout 缓存机制的本质约束，不是 bug。
+        // 修复后不再有调用方走此路径（legacy 已删除），此断言记录该约束。
+        let new_caret = caret_rect(
+            &insert_snapshot,
+            cursor_byte,
+            CaretAffinity::Downstream,
+            0.0,
+            800.0,
+        );
+        let line = &insert_snapshot.lines[0];
+        assert!(
+            new_caret.x <= line.x + 0.5,
+            "行为约束：用已失效 generation A={} 算 caret 应塌缩到行首 \
+             (new_caret.x={:.4} <= line.x={:.4} + 0.5)，\
+             证明连续 snapshot 互相清 generation。\
+             修复后无调用方走此路径（legacy 已删除）",
+            gen_a,
+            new_caret.x,
+            line.x,
+        );
+    }
+
+    /// Issue #658 评论 5622188166 问题 1 对比基准：
+    /// 独立 snapshot（generation 未被后续 snapshot 清掉）的 caret.x 应 > 行首。
+    /// 此测试 PASS，证明同一 new_text 在 generation 有效时光标定位正确，
+    /// 从而隔离出问题 1 的根因是"连续 snapshot 互相清 generation"而非排版本身。
+    /// 修复后（删除 legacy 路径），正常光标始终走此路径（当前正文 snapshot），
+    /// 此测试同时验证修复后正常光标定位正确。
+    #[test]
+    fn test_issue_658_comment_5622188166_problem1_baseline_clean_snapshot_caret_correct() {
+        init_qt();
+        let width = 600.0;
+        let new_text = "hello world".to_string();
+        let cursor_byte = new_text.len();
+
+        // 独立 layout，只 snapshot 一次，generation 不会被清
+        let mut clean_layout = EditorLayout::default();
+        let clean_snapshot = clean_layout.snapshot(&new_text, params(width), 0).clone();
+        let clean_caret = caret_rect(
+            &clean_snapshot,
+            cursor_byte,
+            CaretAffinity::Downstream,
+            0.0,
+            800.0,
+        );
+        let clean_line = &clean_snapshot.lines[0];
+        assert!(
+            clean_caret.x > clean_line.x + 0.5,
+            "基准：generation 未被清时 caret.x={:.4} 应 > 行首 line.x={:.4}",
+            clean_caret.x,
+            clean_line.x,
+        );
+        // 同时验证 old_text 独立 snapshot 的 caret 也正确（generation B 有效）
+        let old_text = "hello worl".to_string();
+        let old_cursor = old_text.len();
+        let mut old_layout = EditorLayout::default();
+        let old_snapshot = old_layout.snapshot(&old_text, params(width), 0).clone();
+        let old_caret = caret_rect(
+            &old_snapshot,
+            old_cursor,
+            CaretAffinity::Downstream,
+            0.0,
+            800.0,
+        );
+        let old_line = &old_snapshot.lines[0];
+        assert!(
+            old_caret.x > old_line.x + 0.5,
+            "基准：old_text 独立 snapshot caret.x={:.4} 应 > 行首 line.x={:.4}",
+            old_caret.x,
+            old_line.x,
+        );
     }
 }

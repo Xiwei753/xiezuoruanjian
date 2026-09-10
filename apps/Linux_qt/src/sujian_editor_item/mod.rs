@@ -68,7 +68,7 @@ use std::cell::Cell;
 use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::{
-    CompositionSession, CursorRect, EditorAnimationKind, EditorCursor, EditorSelection,
+    CompositionSession, CursorRect, EditorCursor, EditorSelection,
     EditorTransactionCause, EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
 };
 

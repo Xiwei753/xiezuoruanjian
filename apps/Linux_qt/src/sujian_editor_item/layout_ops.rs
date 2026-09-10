@@ -47,10 +47,10 @@ impl SujianEditorItem {
             .clone()
     }
 
-    pub(crate) fn layout_snapshot_for_text(&mut self, text: &str, width: f64) -> LayoutSnapshot {
-        let params = self.layout_params(width);
-        self.editor_layout.snapshot(text, params, 0).clone()
-    }
+    // Issue #658 评论 5622188166 问题 1: 删除 layout_snapshot_for_text。
+    // 该函数为 fill_visual_transaction_coords_legacy 专用，用同一 EditorLayout
+    // 对任意 text 做 snapshot，连续调用会互相清 generation，导致光标 x 塌缩到行首。
+    // legacy 路径已删除，正文/动画/IME 各自走独立 generation 的 canonical 排版入口。
 
     pub(crate) fn build_editor_layout_snapshot(&mut self, width: f64) -> EditorLayoutSnapshot {
         let scroll_y = f64::from(self.current_scroll_y);
