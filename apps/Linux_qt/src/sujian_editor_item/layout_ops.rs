@@ -106,6 +106,14 @@ impl SujianEditorItem {
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = self.buffer.text.clone();
+
+        // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
+        // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor
+        // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
+        // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
+        // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
+        crate::editor::layout::clear_layout_generation(generation);
+
         snapshot
     }
 
@@ -173,6 +181,14 @@ impl SujianEditorItem {
         snapshot.caret_rect = Some(caret);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = virtual_text.to_string();
+
+        // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
+        // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor
+        // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
+        // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
+        // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
+        crate::editor::layout::clear_layout_generation(generation);
+
         snapshot
     }
 

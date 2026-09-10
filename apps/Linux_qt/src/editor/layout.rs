@@ -39,8 +39,13 @@ cpp! {{
     };
     static std::vector<LayoutGeneration> g_layout_generations;
     static uint64_t g_next_generation = 1;
-    // 保留最近 N 代 generation，超过的自动释放最老的，避免内存泄漏。
-    static const size_t MAX_LAYOUT_GENERATIONS = 8;
+    // Issue #658 评论 5621512329 问题 1: 不再用固定数量阈值强制淘汰最老 generation。
+    // generation 生命周期由持有方显式管理：
+    // - 静态正文：EditorLayout 持有 current_generation，invalidate/snapshot 失效时 clear。
+    // - 动画/IME 临时 generation：build_editor_layout_snapshot /
+    //   build_virtual_layout_snapshot / record_visual_transaction 在提取完
+    //   canonical line/image/cursor 数据后显式 clear_layout_generation 释放。
+    // 这样避免仍被静态正文引用的 QTextLayout 被提前删掉。
 
     static std::vector<QTextLayout*>* find_layout_generation(uint64_t gen) {
         for (auto& lg : g_layout_generations) {
@@ -54,14 +59,6 @@ cpp! {{
     static std::vector<QTextLayout*>* ensure_layout_generation(uint64_t gen) {
         auto* existing = find_layout_generation(gen);
         if (existing) return existing;
-        // 超过阈值时释放最老的 generation。
-        while (g_layout_generations.size() >= MAX_LAYOUT_GENERATIONS) {
-            auto& oldest = g_layout_generations.front();
-            for (auto* l : oldest.layouts) {
-                delete l;
-            }
-            g_layout_generations.erase(g_layout_generations.begin());
-        }
         g_layout_generations.push_back(LayoutGeneration{gen, {}});
         return &g_layout_generations.back().layouts;
     }
@@ -96,6 +93,42 @@ cpp! {{
         if (!layouts) return nullptr;
         if (slot < 0 || slot >= (int)layouts->size()) return nullptr;
         return (*layouts)[slot];
+    }
+
+    // Issue #658 评论 5621512329 问题 2: 光标/命中不再重新 new QTextLayout 重新排版，
+    // 直接从已排好的 generation cache 中取 QTextLine 调用 cursorToX / xToCursor。
+    // gen/slot 对应的 layout 由 EditorLayout 生命周期管理（invalidate 时 clear），
+    // 调用方保证 snapshot.layout_generation 在调用时有效。
+    double get_paragraph_layout_cursor_to_x_on_line(
+        uint64_t gen, int slot, int qline, int cursor_qchar, bool use_trailing
+    ) {
+        QTextLayout* layout = get_paragraph_layout(gen, slot);
+        if (!layout) return 0.0;
+        if (qline < 0 || qline >= layout->lineCount()) return 0.0;
+        QTextLine line = layout->lineAt(qline);
+        if (!line.isValid()) return 0.0;
+        int line_start = line.textStart();
+        int line_end = line_start + line.textLength();
+        int pos = cursor_qchar;
+        if (pos < line_start) pos = line_start;
+        if (pos > line_end) pos = line_end;
+        return line.cursorToX(pos, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
+    }
+
+    int get_paragraph_layout_x_to_cursor_on_line(
+        uint64_t gen, int slot, int qline, double x
+    ) {
+        QTextLayout* layout = get_paragraph_layout(gen, slot);
+        if (!layout) return 0;
+        if (qline < 0 || qline >= layout->lineCount()) return 0;
+        QTextLine line = layout->lineAt(qline);
+        if (!line.isValid()) return 0;
+        int line_start = line.textStart();
+        int line_end = line_start + line.textLength();
+        int pos = line.xToCursor(x);
+        if (pos < line_start) pos = line_start;
+        if (pos > line_end) pos = line_end;
+        return pos;
     }
 
     // Issue #658 评论 5620035970 问题 1+2: 按 generation + cache_slot 写指定位置，
@@ -285,6 +318,53 @@ cpp! {{
         return target_idx;
     }
 
+    // Issue #658 评论 5621512329 问题 2: 共享的段落排版核心。
+    // editor_layout_lines（静态正文）和 editor_prepare_paragraph_visual_snapshot
+    //（动画/IME）共用此核心，消除两套重复的 QTextLayout 创建/排版代码。
+    // 创建 QTextLayout，执行 beginLayout/createLine/setLineWidth/setPosition/endLayout，
+    // 返回 layout 指针和 textLines 列表。调用方负责在用完后 delete layout
+    // 或存入 generation cache。
+    struct PreparedParagraphLayoutCore {
+        QTextLayout* layout;
+        QVector<QTextLine> textLines;
+    };
+
+    static PreparedParagraphLayoutCore prepare_paragraph_layout_core(
+        const QString& paraText, const QFont& font,
+        double wrap_w, double indent_w, double fs, double line_spacing, double metrics_h
+    ) {
+        PreparedParagraphLayoutCore result;
+        result.layout = new QTextLayout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        result.layout->setTextOption(option);
+        result.layout->setCacheEnabled(true);
+        result.layout->beginLayout();
+
+        bool first = true;
+        // local_y 按 canonical 行高累加，与 Rust 侧 VisualLine.y 一致。
+        // 给每个 QTextLine 写入最终 setPosition，使 layout 完整排版。
+        double local_y = 0.0;
+        while (true) {
+            QTextLine line = result.layout->createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            line.setLineWidth(lineWrap);
+            // canonical 行高公式与 Rust 侧 actual_line_h 完全一致：
+            // max(font_size * line_spacing, font_size + 4.0, metrics_h, line.ascent()+line.descent())
+            double qt_metrics_h = line.ascent() + line.descent();
+            double canonical_line_h = std::max(fs * line_spacing,
+                std::max(fs + 4.0, std::max(metrics_h, qt_metrics_h)));
+            double line_x = first ? indent_w : 0.0;
+            line.setPosition(QPointF(line_x, local_y));
+            local_y += canonical_line_h;
+            result.textLines.push_back(line);
+            first = false;
+        }
+        result.layout->endLayout();
+        return result;
+    }
+
     void editor_layout_lines(
         const QString& text_qstr, double fs, const QString& ff,
         double wrap_w, double indent_w, double line_spacing,
@@ -303,8 +383,6 @@ cpp! {{
         font.setPixelSize(static_cast<int>(fs));
         QFontMetricsF fm(font);
         double metrics_h = fm.ascent() + fm.descent();
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
 
         g_editor_layout_buf.clear();
 
@@ -331,28 +409,16 @@ cpp! {{
             if (para_text.isEmpty()) {
                 set_null_paragraph_layout_slot_gen(generation, cur_slot);
             } else {
-                auto* layout = new QTextLayout(para_text, font);
-                layout->setTextOption(option);
-                layout->beginLayout();
-
-                bool first = true;
-                // Issue #658: local_y 按 canonical 行高累加，与 Rust 侧 VisualLine.y 一致。
-                // 给每个 QTextLine 写入最终 setPosition，使 layout 完整排版，
-                // QSGTextNode::addTextLayout 才能正确绘制每行。
-                double local_y = 0.0;
-                while (true) {
-                    QTextLine line = layout->createLine();
-                    if (!line.isValid()) break;
-                    double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
-                    line.setLineWidth(lineWrap);
-                    // Issue #658: canonical 行高公式与 Rust 侧 actual_line_h 完全一致：
-                    // max(font_size * line_spacing, font_size + 4.0, metrics_h, line.ascent()+line.descent())
+                // Issue #658 评论 5621512329 问题 2: 用共享排版核心，
+                // 与 editor_prepare_paragraph_visual_snapshot 共用同一份排版逻辑。
+                auto core = prepare_paragraph_layout_core(
+                    para_text, font, wrap_w, indent_w, fs, line_spacing, metrics_h);
+                for (int i = 0; i < core.textLines.size(); i++) {
+                    const QTextLine& line = core.textLines[i];
                     double qt_metrics_h = line.ascent() + line.descent();
                     double canonical_line_h = std::max(fs * line_spacing,
                         std::max(fs + 4.0, std::max(metrics_h, qt_metrics_h)));
-                    double line_x = first ? indent_w : 0.0;
-                    line.setPosition(QPointF(line_x, local_y));
-                    local_y += canonical_line_h;
+                    double line_x = (i == 0) ? indent_w : 0.0;
                     EditorLayoutEntry e;
                     e.qcharStart = line.textStart();
                     e.qcharEnd = line.textStart() + line.textLength();
@@ -365,10 +431,8 @@ cpp! {{
                     e.descent = line.descent();
                     e.lineHeight = canonical_line_h;
                     g_editor_layout_buf.push_back(e);
-                    first = false;
                 }
-                layout->endLayout();
-                set_paragraph_layout_slot_gen(generation, cur_slot, layout);
+                set_paragraph_layout_slot_gen(generation, cur_slot, core.layout);
             }
 
             cur_slot++;
@@ -920,37 +984,14 @@ cpp! {{
         QFontMetricsF fm(font);
         double metrics_h = fm.ascent() + fm.descent();
 
-        // Issue #658: 只创建一次 QTextLayout（heap allocated），从这个实例同时提取
-        // line/cluster/cursor 数据并 setPosition，直接存入 g_paragraph_layout_cache，
-        // 不再为了 cache 排第二遍。消除第二次 QTextLayout 重复排版。
-        auto* layout = new QTextLayout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout->setTextOption(option);
-        layout->setCacheEnabled(true);
-        layout->beginLayout();
-
-        QVector<QTextLine> textLines;
-        bool first = true;
-        // Issue #658: local_y 按 canonical 行高累加，与 Rust 侧 VisualLine.y 一致。
-        // 给每个 QTextLine 写入最终 setPosition，使 layout 完整排版。
-        double local_y = 0.0;
-        while (true) {
-            QTextLine line = layout->createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
-            line.setLineWidth(lineWrap);
-            // Issue #658: canonical 行高公式与 Rust 侧 actual_line_h 完全一致。
-            double qt_metrics_h = line.ascent() + line.descent();
-            double canonical_line_h = std::max(fs * line_spacing,
-                std::max(fs + 4.0, std::max(metrics_h, qt_metrics_h)));
-            double line_x = first ? indent_w : 0.0;
-            line.setPosition(QPointF(line_x, local_y));
-            local_y += canonical_line_h;
-            textLines.push_back(line);
-            first = false;
-        }
-        layout->endLayout();
+        // Issue #658 评论 5621512329 问题 2: 用共享排版核心，
+        // 与 editor_layout_lines 共用同一份排版逻辑。
+        // 从这一个已排好版（含 setPosition）的 layout 同时提取 line/cluster/cursor 数据，
+        // 然后存入 g_layout_generations[generation]，供 rebuild_text_node_from_paragraphs() 消费。
+        auto core = prepare_paragraph_layout_core(
+            paraText, font, wrap_w, indent_w, fs, line_spacing, metrics_h);
+        auto* layout = core.layout;
+        QVector<QTextLine>& textLines = core.textLines;
 
         for (int i = 0; i < textLines.size(); i++) {
             const QTextLine& line = textLines[i];
@@ -1436,6 +1477,53 @@ pub fn clear_layout_generation(gen: u64) {
     });
 }
 
+/// Issue #658 评论 5621512329 问题 2: 从已排好的 generation cache 中取 QTextLine，
+/// 调用 cursorToX，不再重新 new QTextLayout 重新排版。
+///
+/// `gen` / `slot` 定位段落 layout，`qline` 是段落内的视觉行索引，
+/// `cursor_qchar` 是段落内的 QChar (UTF-16) offset。
+/// 返回该 cursor 在行内的 x 坐标（行局部坐标，不含行 x 偏移）。
+/// 若 generation/slot/layout 不存在则返回 0.0。
+/// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理，
+/// 调用方保证 snapshot.layout_generation 在调用时有效。
+pub fn get_paragraph_layout_cursor_to_x_on_line(
+    gen: u64,
+    slot: i32,
+    qline: i32,
+    cursor_qchar: i32,
+    use_trailing: bool,
+) -> f64 {
+    cpp!(unsafe [
+        gen as "uint64_t",
+        slot as "int",
+        qline as "int",
+        cursor_qchar as "int",
+        use_trailing as "bool"
+    ] -> f64 as "double" {
+        return get_paragraph_layout_cursor_to_x_on_line(gen, slot, qline, cursor_qchar, use_trailing);
+    })
+}
+
+/// Issue #658 评论 5621512329 问题 2: 从已排好的 generation cache 中取 QTextLine，
+/// 调用 xToCursor，不再重新 new QTextLayout 重新排版。
+///
+/// `gen` / `slot` 定位段落 layout，`qline` 是段落内的视觉行索引，
+/// `x` 是行内 x 坐标（行局部坐标，不含行 x 偏移）。
+/// 返回该 x 对应的 QChar (UTF-16) offset（段落内）。
+/// 若 generation/slot/layout 不存在则返回 0。
+/// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理，
+/// 调用方保证 snapshot.layout_generation 在调用时有效。
+pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32, x: f64) -> i32 {
+    cpp!(unsafe [
+        gen as "uint64_t",
+        slot as "int",
+        qline as "int",
+        x as "double"
+    ] -> i32 as "int" {
+        return get_paragraph_layout_x_to_cursor_on_line(gen, slot, qline, x);
+    })
+}
+
 pub fn layout_lines(
     text: &str,
     width: f64,
@@ -1895,17 +1983,17 @@ pub fn index_at_line_x(snapshot: &LayoutSnapshot, line: &VisualLine, x: f64) -> 
     if line.para_text.is_empty() {
         return line.byte_start;
     }
-    let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
-    qtextlayout_x_to_cursor_on_line(
-        &line.para_text,
-        relative,
-        line.para_start,
-        f64::from(snapshot.font_size),
-        &snapshot.font_family,
-        paragraph_wrap_w,
-        line.para_indent,
+    // Issue #658 评论 5621512329 问题 2: 不再 new QTextLayout 重新排版，
+    // 直接从 snapshot.layout_generation + line.cache_slot 取已排好的 QTextLine，
+    // 调用 xToCursor。para_text 仅用于 QChar↔byte offset 转换，不用于重新排版。
+    let qchar_off = get_paragraph_layout_x_to_cursor_on_line(
+        snapshot.layout_generation,
+        line.cache_slot,
         line.qtextline_idx,
-    )
+        relative,
+    );
+    let para_byte = qchar_offset_to_byte_offset(&line.para_text, qchar_off as usize);
+    line.para_start + para_byte
 }
 
 pub fn cursor_line_and_x(
@@ -1942,26 +2030,23 @@ pub fn calculate_cursor_x_for_line(
             line.x
         }
     } else {
-        // Always use real-time QTextLine::cursorToX() for cursor position.
-        // The cached x_end_trailing is only used as a fallback when the
-        // real-time calculation fails (returns 0 for non-empty lines).
+        // Issue #658 评论 5621512329 问题 2: 不再 new QTextLayout 重新排版，
+        // 直接从 snapshot.layout_generation + line.cache_slot 取已排好的 QTextLine，
+        // 调用 cursorToX。para_text 仅用于 QChar↔byte offset 转换，不用于重新排版。
         let use_trailing = affinity == CaretAffinity::Upstream && cursor == line.byte_end;
-        let paragraph_wrap_w = line.line_wrap_width + line.line_indent_x;
+        let cursor_in_para = cursor.saturating_sub(line.para_start);
+        let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para) as i32;
         let x = line.x
-            + qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                cursor,
-                line.para_start,
-                f64::from(snapshot.font_size),
-                &snapshot.font_family,
-                paragraph_wrap_w,
-                line.para_indent,
+            + get_paragraph_layout_cursor_to_x_on_line(
+                snapshot.layout_generation,
+                line.cache_slot,
                 line.qtextline_idx,
+                cursor_qchar,
                 use_trailing,
             );
 
-        // Fallback: if real-time cursorToX returns near-zero for a non-empty
-        // line, use the cached x_end_trailing as a last resort.
+        // Fallback: if cursorToX returns near-zero for a non-empty line,
+        // use the cached x_end_trailing as a last resort.
         if x <= line.x + 0.5
             && line.byte_start != line.byte_end
             && affinity == CaretAffinity::Upstream
@@ -1974,45 +2059,6 @@ pub fn calculate_cursor_x_for_line(
                     cursor, line.byte_end, line.x_end_trailing, x, fallback_x
                 ));
             return fallback_x;
-        }
-
-        if x <= 1.0
-            && line.byte_start != line.byte_end
-            && std::env::var("SUJIAN_EDITOR_DEBUG").is_ok()
-        {
-            let cursor_in_para = cursor.saturating_sub(line.para_start);
-            let cursor_qchar = byte_offset_to_qchar_offset(&line.para_text, cursor_in_para);
-            let line_end_byte_in_para = line.byte_end.saturating_sub(line.para_start);
-            let line_end_qchar =
-                byte_offset_to_qchar_offset(&line.para_text, line_end_byte_in_para);
-            eprintln!(
-                "[INVARIANT] cursor_x <= 1.0 for non-empty line!\n\
-                 VisualLine: para_qchar_start={}, para_qchar_end={}, start={}, end={}\n\
-                 Qt helper: textStart=para_qchar_start ({}), lineEnd={} (from qcharEnd)\n\
-                 input cursor_qchar={}, cursor_abs_byte={}, qtextline_idx={}\n\
-                 line.byte_end byte -> qchar offset={}\n\
-                 Qt cursorToX result={:.4}, line.x={:.4}",
-                line.para_qchar_start,
-                line.para_qchar_end,
-                line.byte_start,
-                line.byte_end,
-                line.para_qchar_start,
-                line_end_qchar,
-                cursor_qchar,
-                cursor,
-                line.qtextline_idx,
-                line_end_qchar,
-                x,
-                line.x
-            );
-            debug_line_metrics(
-                &line.para_text,
-                f64::from(snapshot.font_size),
-                &snapshot.font_family,
-                paragraph_wrap_w,
-                line.para_indent,
-                line.qtextline_idx,
-            );
         }
 
         x
@@ -2035,6 +2081,10 @@ pub fn qtextlayout_cursor_to_x(
     })
 }
 
+/// Issue #658 评论 5621512329 问题 2: 旧的光标定位 helper，重新 new QTextLayout 排版。
+/// 生产代码已改用 `get_paragraph_layout_cursor_to_x_on_line` 从已排好的 generation cache
+/// 读取 QTextLine。此函数保留供测试交叉验证（验证 cache 中的 layout 与重新排版结果一致）。
+#[cfg(test)]
 pub fn qtextlayout_cursor_to_x_on_line(
     para_text: &str,
     cursor_abs_byte: usize,
@@ -2092,6 +2142,10 @@ pub fn debug_line_metrics(
     });
 }
 
+/// Issue #658 评论 5621512329 问题 2: 旧的命中定位 helper，重新 new QTextLayout 排版。
+/// 生产代码已改用 `get_paragraph_layout_x_to_cursor_on_line` 从已排好的 generation cache
+/// 读取 QTextLine。此函数保留供测试交叉验证（验证 cache 中的 layout 与重新排版结果一致）。
+#[cfg(test)]
 pub fn qtextlayout_x_to_cursor_on_line(
     para_text: &str,
     x: f64,

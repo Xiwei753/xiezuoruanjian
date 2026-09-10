@@ -2293,6 +2293,7 @@ mod tests {
                 qt_descent: 4.0,
                 cache_slot: 0,
             }],
+            layout_generation: 0,
         };
         EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, CaretAffinity::Downstream)
             .with_virtual_text(virtual_text.to_string())

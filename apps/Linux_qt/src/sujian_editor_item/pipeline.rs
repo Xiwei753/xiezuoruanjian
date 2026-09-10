@@ -989,6 +989,17 @@ impl LinuxEditorPipeline {
                 self.current_layout_snapshot = Some(new_snap);
                 self.previous_canonical_snapshot = Some(new_doc_snapshot);
 
+                // Issue #658 评论 5621512329 问题 1: 临时 old/new generation 的
+                // QTextLayout 已在 prepare_affected_paragraphs_visual_snapshot 内部
+                // 提取完 canonical line/image/cursor 数据。old/new_doc_snapshot 的
+                // visual_lines/paragraphs 是纯 Rust 数据，不持有 C++ layout 指针；
+                // to_layout_snapshot() 把 layout_generation 填 0，不被
+                // rebuild_text_node_from_paragraphs 消费。previous_canonical_snapshot
+                // 后续只用于复用未受影响段落的 VisualLine，同样不依赖 layout 指针。
+                // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
+                layout::clear_layout_generation(old_generation);
+                layout::clear_layout_generation(new_generation);
+
                 super::editor_animation_debug_log(&format!(
                     "record_visual_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",
                     vt.kind,
