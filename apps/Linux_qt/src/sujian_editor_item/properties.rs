@@ -107,7 +107,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_font_pixel_size = value.max(8.0);
-        self.visual_changed();
+        self.layout_property_changed();
     }
 
     pub(crate) fn font_family(&self) -> QString {
@@ -119,7 +119,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_font_family = value;
-        self.visual_changed();
+        self.layout_property_changed();
     }
 
     pub(crate) fn line_spacing(&self) -> f32 {
@@ -131,7 +131,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_line_spacing = value.max(1.0);
-        self.visual_changed();
+        self.layout_property_changed();
     }
 
     pub(crate) fn text_indent(&self) -> f32 {
@@ -143,7 +143,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_text_indent = value.max(0.0);
-        self.visual_changed();
+        self.layout_property_changed();
     }
 
     pub(crate) fn padding(&self) -> f32 {
@@ -155,7 +155,7 @@ impl SujianEditorItem {
             return;
         }
         self.current_padding = value.max(0.0);
-        self.visual_changed();
+        self.layout_property_changed();
     }
 
     pub(crate) fn text_color(&self) -> QString {
@@ -172,7 +172,7 @@ impl SujianEditorItem {
             self.current_text_color, v
         ));
         self.current_text_color = value;
-        self.visual_changed();
+        self.color_only_changed();
     }
 
     pub(crate) fn selection_color(&self) -> QString {
@@ -193,7 +193,7 @@ impl SujianEditorItem {
             self.current_selection_color, v
         ));
         self.current_selection_color = value;
-        self.visual_changed();
+        self.color_only_changed();
     }
 
     pub(crate) fn selected_text_color(&self) -> QString {
@@ -214,7 +214,7 @@ impl SujianEditorItem {
             self.current_selected_text_color, v
         ));
         self.current_selected_text_color = value;
-        self.visual_changed();
+        self.color_only_changed();
     }
 
     pub(crate) fn cursor_color(&self) -> QString {
@@ -235,7 +235,7 @@ impl SujianEditorItem {
             self.current_cursor_color, v
         ));
         self.current_cursor_color = value;
-        self.visual_changed();
+        self.color_only_changed();
     }
 
     pub(crate) fn smooth_cursor_enabled(&self) -> bool {
@@ -564,7 +564,7 @@ impl SujianEditorItem {
         self.request_frame_update();
     }
 
-    pub(crate) fn visual_changed(&mut self) {
+    pub(crate) fn layout_property_changed(&mut self) {
         self.invalidate_layout_cache();
         self.bump_visual_revision();
         self.clear_active_text_animations();
@@ -573,6 +573,14 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.recalculate_content_height_and_emit();
         self.visual_settings_changed();
+        self.request_static_repaint();
+    }
+
+    /// Issue #658: 纯颜色属性变化不需要重新排版，只请求 Scene Graph 重建。
+    pub(crate) fn color_only_changed(&mut self) {
+        self.bump_visual_revision();
+        self.visual_settings_changed();
+        self.request_scene_rebuild();
     }
 
     pub(crate) fn emit_content_changed(&mut self) {

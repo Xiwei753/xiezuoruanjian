@@ -93,14 +93,10 @@ fn compute_clip_rects_from_patches(plan: &RenderPlan) -> Vec<qt_text_node::Anima
 
     let mut clip_rects = Vec::new();
     for patch in &plan.static_patches {
-        // 优先使用已转换的 doc_hidden_rects（文档逻辑坐标）。
-        // 若为空则回退到 hidden_source_rects（旧路径兼容）。
-        let rects = if !patch.doc_hidden_rects.is_empty() {
-            &patch.doc_hidden_rects
-        } else {
-            &patch.hidden_source_rects
-        };
-        for sr in rects {
+        // Issue #658: 只使用已转换的 doc_hidden_rects（文档逻辑坐标）。
+        // hidden_source_rects 是行纹理局部物理像素坐标，不能回退使用。
+        // 事务准备阶段应保证 doc_hidden_rects 一定被正确填充。
+        for sr in &patch.doc_hidden_rects {
             if sr.h > 0.0 && sr.w > 0.0 {
                 clip_rects.push(qt_text_node::AnimationClipRect {
                     x: sr.x,

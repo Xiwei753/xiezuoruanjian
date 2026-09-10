@@ -120,84 +120,93 @@ cpp! {{
 
         textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
-        // ── 动画裁剪：complement geometry ──
+        // Issue #658: 动画裁剪 — 按视觉行使用精确文档 x/y/w/h 裁剪。
+        // 不再按 Y 整条裁剪（会丢掉 x/w 信息，导致同行其他文字消失）。
         if (clip_count > 0) {
-            // Issue #658: 按 y 排序裁剪区间（x/y/w/h 文档坐标）。
-            struct ClipRange { double x, y, w, h; };
-            std::vector<ClipRange> ranges;
+            struct ClipRect { double x, y, w, h; };
+            std::vector<ClipRect> clipRects;
             for (int c = 0; c < clip_count; c++) {
                 double cx = clip_x_arr[c];
                 double cy = clip_y_arr[c];
                 double cw = clip_w_arr[c];
                 double ch = clip_h_arr[c];
                 if (ch > 0.0 && cw > 0.0) {
-                    ranges.push_back({cx, cy, cw, ch});
+                    clipRects.push_back({cx, cy, cw, ch});
                 }
             }
-            std::sort(ranges.begin(), ranges.end(),
-                [](const ClipRange& a, const ClipRange& b) { return a.y < b.y; });
-
-            // 按 y 合并重叠区间
-            struct MergedY { double y, b; };
-            std::vector<MergedY> merged;
-            for (const auto& r : ranges) {
-                if (!merged.empty() && r.y <= merged.back().b) {
-                    merged.back().b = std::max(merged.back().b, r.y + r.h);
-                } else {
-                    merged.push_back({r.y, r.y + r.h});
-                }
-            }
-
-            if (!merged.empty()) {
+            if (!clipRects.empty()) {
                 staticLayer->removeChildNode(textNode);
 
-                double docTop = 0.0;
-                double docBottom = 1e9;
+                for (int i = 0; i < para_count; i++) {
+                    int cacheIdx = cache_idx_arr[i];
+                    double py = para_y_arr[i];
+                    double dw = doc_width_arr[i];
+                    double nextY = (i + 1 < para_count) ? para_y_arr[i + 1] : py + 30.0;
+                    double ph = nextY - py;
+                    if (ph < 1.0) ph = 30.0;
 
-                // 收集 complement 区间
-                std::vector<MergedY> complements;
-                if (merged[0].y > docTop) {
-                    complements.push_back({docTop, merged[0].y});
-                }
-                for (size_t i = 1; i < merged.size(); i++) {
-                    if (merged[i].y > merged[i-1].b) {
-                        complements.push_back({merged[i-1].b, merged[i].y});
-                    }
-                }
-                if (merged.back().b < docBottom) {
-                    double h = docBottom - merged.back().b;
-                    if (h > 1e8) h = 99999.0;
-                    complements.push_back({merged.back().b, merged.back().b + h});
-                }
+                    struct XRange { double left, right; };
+                    std::vector<XRange> mergedClips;
 
-                for (const auto& comp : complements) {
-                    auto *clipNode = new QSGClipNode;
-                    clipNode->setIsRectangular(true);
-                    clipNode->setClipRect(QRectF(0, comp.y, 99999.0, comp.b - comp.y));
-                    staticLayer->appendChildNode(clipNode);
-
-                    QSGTextNode* clipTextNode = window->createTextNode();
-                    if (clipTextNode) {
-                        clipTextNode->setColor(textColor);
-                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-                        clipNode->appendChildNode(clipTextNode);
-
-                        // Issue #658: 为 complement 区间内的段落添加已排好的 QTextLayout。
-                        for (int i = 0; i < para_count; i++) {
-                            int cacheIdx = cache_idx_arr[i];
-                            double y = para_y_arr[i];
-                            double dw = doc_width_arr[i];
-
-                            if (y + dw > comp.y && y < comp.b) {
-                                if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
-                                    QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
-                                    if (cachedLayout) {
-                                        clipTextNode->addTextLayout(QPointF(0, y), cachedLayout);
-                                    }
-                                }
+                    struct TempXClip { double x, x2; };
+                    std::vector<TempXClip> xClips;
+                    for (const auto& cr : clipRects) {
+                        if (cr.y < py + ph && cr.y + cr.h > py) {
+                            double crLeft = cr.x;
+                            double crRight = cr.x + cr.w;
+                            if (crLeft < 0) crLeft = 0;
+                            if (crRight > dw) crRight = dw;
+                            if (crLeft < crRight) {
+                                xClips.push_back({crLeft, crRight});
                             }
                         }
-                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                    }
+
+                    std::sort(xClips.begin(), xClips.end(),
+                        [](const TempXClip& a, const TempXClip& b) { return a.x < b.x; });
+                    for (const auto& xc : xClips) {
+                        if (!mergedClips.empty() && xc.x <= mergedClips.back().right) {
+                            mergedClips.back().right = std::max(mergedClips.back().right, xc.x2);
+                        } else {
+                            mergedClips.push_back({xc.x, xc.x2});
+                        }
+                    }
+
+                    std::vector<XRange> complements;
+                    double curX = 0.0;
+                    for (const auto& mc : mergedClips) {
+                        if (mc.left > curX) {
+                            complements.push_back({curX, mc.left});
+                        }
+                        curX = mc.right;
+                    }
+                    if (curX < dw) {
+                        complements.push_back({curX, dw});
+                    }
+
+                    for (const auto& comp : complements) {
+                        double clipW = comp.right - comp.left;
+                        if (clipW < 0.5) continue;
+
+                        auto *clipNode = new QSGClipNode;
+                        clipNode->setIsRectangular(true);
+                        clipNode->setClipRect(QRectF(comp.left, py, clipW, ph));
+                        staticLayer->appendChildNode(clipNode);
+
+                        QSGTextNode* clipTextNode = window->createTextNode();
+                        if (clipTextNode) {
+                            clipTextNode->setColor(textColor);
+                            clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                            clipNode->appendChildNode(clipTextNode);
+
+                            if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
+                                QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
+                                if (cachedLayout) {
+                                    clipTextNode->addTextLayout(QPointF(0, py), cachedLayout);
+                                }
+                            }
+                            clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                        }
                     }
                 }
             }

@@ -223,13 +223,13 @@ cpp! {{
         // Issue #658: 按段落拆分文本，为每段创建 QTextLayout 并存入
         // g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs 消费。
         // 同时将每行排版结果写入 g_editor_layout_buf（供 Rust 侧构建 VisualLine）。
+        // g_paragraph_layout_cache 的 clear 由调用方（Rust layout_lines）在批次开始前统一调用。
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
 
         g_editor_layout_buf.clear();
-        clear_paragraph_layout_cache();
 
         QByteArray text_bytes = text_qstr.toUtf8();
         int total_len = text_bytes.size();
@@ -802,7 +802,8 @@ cpp! {{
         const QString& paraText,
         double fs, const QString& ff,
         double wrap_w, double indent_w,
-        double dpr, const QColor& textColor
+        double dpr, const QColor& textColor,
+        int cache_slot
     ) {
         g_canonical_line_buf.clear();
         g_canonical_cluster_buf.clear();
@@ -833,9 +834,34 @@ cpp! {{
         }
         layout.endLayout();
 
-        // Issue #658: 不再从 editor_prepare_paragraph_visual_snapshot 调用 store_paragraph_layout。
-        // g_paragraph_layout_cache 由 editor_layout_lines() 统一填充，
-        // 供 rebuild_text_node_from_paragraphs 消费，避免两套 QTextLayout 实例。
+        // Issue #658: 将 QTextLayout 存入 g_paragraph_layout_cache，供
+        // rebuild_text_node_from_paragraphs() 消费。不再由两套路径各自维护。
+        if (cache_slot >= 0) {
+            // 确保 cache 足够大
+            while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
+                g_paragraph_layout_cache.push_back(nullptr);
+            }
+            // 释放旧 layout（如果有）
+            if (g_paragraph_layout_cache[cache_slot]) {
+                delete g_paragraph_layout_cache[cache_slot];
+            }
+            // 复制一份新的 layout 存入 cache（因为原始 layout 在函数结束时会被销毁）
+            auto* cachedLayout = new QTextLayout(paraText, font);
+            QTextOption cacheOption;
+            cacheOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+            cachedLayout->setTextOption(cacheOption);
+            cachedLayout->beginLayout();
+            bool firstCache = true;
+            while (true) {
+                QTextLine cacheLine = cachedLayout->createLine();
+                if (!cacheLine.isValid()) break;
+                double lineWrap = firstCache ? (wrap_w - indent_w) : wrap_w;
+                cacheLine.setLineWidth(lineWrap);
+                firstCache = false;
+            }
+            cachedLayout->endLayout();
+            g_paragraph_layout_cache[cache_slot] = cachedLayout;
+        }
 
         for (int i = 0; i < textLines.size(); i++) {
             const QTextLine& line = textLines[i];
@@ -1287,6 +1313,12 @@ pub fn layout_lines(
     let mut paragraph_start = 0;
     let mut paragraph_qchar_start = 0;
     let mut line_id: usize = 0;
+
+    // Issue #658: 一个"整篇文档排版批次"只清一次 g_paragraph_layout_cache。
+    // editor_layout_lines() 不再每段落清，由 Rust 调用方在批次开始时统一清。
+    cpp!(unsafe [] {
+        clear_paragraph_layout_cache();
+    });
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
@@ -1972,6 +2004,7 @@ pub fn prepare_paragraph_visual_snapshot(
     indent_w: f64,
     dpr: f64,
     text_color: &str,
+    cache_slot: i32,
 ) -> CanonicalParagraphSnapshot {
     let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
         paragraph_text,
@@ -2000,9 +2033,10 @@ pub fn prepare_paragraph_visual_snapshot(
         wrap_w as "double",
         indent_w as "double",
         dpr as "double",
-        color as "QColor"
+        color as "QColor",
+        cache_slot as "int"
     ] -> i32 as "int" {
-        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color);
+        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot);
         return static_cast<int>(g_canonical_line_buf.size());
     });
 
@@ -2458,11 +2492,9 @@ pub fn prepare_document_visual_snapshot(
     dpr: f64,
     text_color: &str,
 ) -> CanonicalDocumentVisualSnapshot {
-    // Issue #658: 在新批次段落排版前清除布局缓存，释放旧的 QTextLayout 内存。
-    // clear_paragraph_layout_cache 由本文件 cpp! 块中的 C++ 定义提供。
-    cpp!(unsafe [] {
-        clear_paragraph_layout_cache();
-    });
+    // Issue #658: g_paragraph_layout_cache 由调用方在批次开始前统一清一次，
+    // 不再在此函数内清除。本函数对每个段落传入 cache_slot，
+    // 由 editor_prepare_paragraph_visual_snapshot 存入 cache。
 
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
@@ -2477,6 +2509,7 @@ pub fn prepare_document_visual_snapshot(
     let mut paragraph_start: usize = 0;
     let mut paragraph_qchar_start: usize = 0;
     let mut line_id: usize = 0;
+    let mut paragraph_idx: i32 = 0;
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
@@ -2535,7 +2568,9 @@ pub fn prepare_document_visual_snapshot(
             indent,
             dpr,
             text_color,
+            paragraph_idx,
         );
+        paragraph_idx += 1;
 
         for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
             let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
@@ -2814,6 +2849,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         indent,
                         dpr,
                         text_color,
+                        current_para_idx as i32,
                     );
                     for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
                         let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
@@ -2917,6 +2953,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             indent,
             dpr,
             text_color,
+            current_para_idx as i32,
         );
 
         for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {

@@ -71,6 +71,12 @@ impl SujianEditorItem {
         let text_color = &self.current_text_color.to_string();
         let revision = LayoutRevision::next();
 
+        // Issue #658: 在新批次段落排版前清除布局缓存，释放旧 QTextLayout 内存。
+        // clear_paragraph_layout_cache 由 editor/layout.rs 的 cpp! 块定义。
+        cpp!(unsafe [] {
+            clear_paragraph_layout_cache();
+        });
+
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             &self.buffer.text,
             self.pipeline.text_revision(),
@@ -126,6 +132,11 @@ impl SujianEditorItem {
         };
         let text_color = &self.current_text_color.to_string();
         let revision = LayoutRevision::next();
+
+        // Issue #658: 在新批次段落排版前清除布局缓存，释放旧 QTextLayout 内存。
+        cpp!(unsafe [] {
+            clear_paragraph_layout_cache();
+        });
 
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             virtual_text,

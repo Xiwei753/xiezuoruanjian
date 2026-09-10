@@ -703,6 +703,10 @@ impl SujianEditorItem {
     pub(crate) fn request_static_repaint(&mut self) {
         self.layout_dirty = true;
         self.scene_dirty = true;
+        // Issue #658: 先清除旧缓存，确保后续 prepare 一定重新排版。
+        // 不清缓存时 prepare_static_snapshot_on_gui_thread 会跳过重建，
+        // 导致 emit_content_changed / visual_changed 后仍显示旧正文。
+        self.cached_static_snapshot = None;
         self.prepare_static_snapshot_on_gui_thread();
         let item = self as &dyn QQuickItem;
         item.update();
