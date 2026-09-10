@@ -23,6 +23,7 @@ impl QQuickItem for SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
+        self.ensure_static_snapshot();
     }
 
     fn mouse_event(&mut self, event: QMouseEvent) -> bool {
@@ -151,13 +152,12 @@ impl QQuickItem for SujianEditorItem {
                     cursor_style,
                 );
 
-            // 静态正文层参数 — 交给 QSGTextNode
-            // 注意 borrow 顺序：layout_snapshot() 需要 &mut self（计算后即释放），
-            // 之后再取 &self 的不可变引用给 render_frame。
-            let width = self.bounding_width();
-            let snapshot = self.layout_snapshot(width);
+            // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
+            // update_paint_node() 不再自行排版，只消费 ensure_static_snapshot()
+            // 在正常编辑阶段准备好的不可变快照。
+            self.ensure_static_snapshot();
             let static_text = StaticTextParams {
-                layout_snapshot: Some(&snapshot),
+                layout_snapshot: self.cached_static_snapshot.as_ref(),
                 scroll_y,
                 color: &self.current_text_color.to_string(),
                 needs_relayout,

@@ -73,7 +73,8 @@ cpp! {{
 }}
 
 /// 确保场景图四层结构——从上到下：staticText(0), animatedText(1), decorations(2), cursor(3)。
-/// 每层由 QSGOpacityNode 包裹，支持独立透明度控制。必须在 GUI 线程调用。
+/// 每层由 QSGOpacityNode 包裹，支持独立透明度控制。
+/// 在 threaded render loop 下，此函数在 render thread 上的 updatePaintNode() 中调用。
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [

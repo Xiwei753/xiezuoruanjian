@@ -1,5 +1,6 @@
 use super::cursor_animation::CursorAnimationPlan;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
+use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
@@ -74,4 +75,7 @@ pub(crate) struct RenderPlan {
     pub cursor: CursorAnimationPlan,
     pub frame_context: FrameContext,
     pub cursor_style: CursorStyle,
+    /// 动画期间静态正文层需要隐藏的区域。
+    /// 由 active transaction 的 static_patches 提供，包含精确的行级裁剪信息。
+    pub static_patches: Vec<StaticLinePatch>,
 }

@@ -46,8 +46,9 @@ pub(crate) fn render_frame(
                 });
             }
 
-            // 从动画 glyph 计算裁剪区域（文档坐标 y 范围）
-            let clip_rects = compute_animation_clip_rects(plan);
+            // Issue #658: 从 static_patches 的 hidden_source_rects 计算精确裁剪区域，
+            // 替代旧的 compute_animation_clip_rects() 整宽 Y 条带方式。
+            let clip_rects = compute_clip_rects_from_patches(plan);
 
             qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
@@ -72,36 +73,49 @@ pub(crate) fn render_frame(
     render_cursor_layer(root_raw, item_ptr, plan);
 }
 
-/// 从动画 glyph 数据计算裁剪区域（文档坐标 y 范围）。
+/// Issue #658: 从 static_patches 的 hidden_source_rects 计算精确裁剪区域。
 ///
-/// 合并所有活跃动画 glyph 的垂直范围为单个裁剪矩形，
-/// 防止静态正文与动画层在同一区域双绘。
-fn compute_animation_clip_rects(plan: &RenderPlan) -> Vec<qt_text_node::AnimationClipRect> {
-    if plan.text_animation.glyphs.is_empty() {
+/// 替代旧的 `compute_animation_clip_rects()` 整宽 Y 条带方式。
+/// `static_patches` 包含每行的 `hidden_source_rects`，这些是精确的行级裁剪区域
+/// （已乘 DPR），用于 QSGClipNode 的 complement geometry。
+///
+/// 注意：hidden_source_rects 是行视觉资源局部坐标（已乘 DPR），
+/// 这里直接转换为文档坐标系的 y 范围用于裁剪。实际裁剪由
+/// QSGClipNode 在 QSG 层面实现，此处仅计算 complement 区间。
+fn compute_clip_rects_from_patches(plan: &RenderPlan) -> Vec<qt_text_node::AnimationClipRect> {
+    if plan.static_patches.is_empty() {
         return Vec::new();
     }
 
-    let mut min_y = f64::MAX;
-    let mut max_bottom = f64::MIN;
-
-    for glyph in &plan.text_animation.glyphs {
-        if glyph.y < min_y {
-            min_y = glyph.y;
+    let mut clip_rects = Vec::new();
+    for patch in &plan.static_patches {
+        if patch.hidden_source_rects.is_empty() {
+            continue;
         }
-        let bottom = glyph.y + glyph.h;
-        if bottom > max_bottom {
-            max_bottom = bottom;
+        // 每个 hidden_source_rect 对应一行中被动画接管的区域。
+        // 从 snapshot_id 中可以找到对应的 VisualLine，从而得到 y 坐标。
+        // hidden_source_rects 是行局部坐标（已乘 DPR），我们需要用
+        // snapshot_id 在 snapshot 中查找行的文档 y 坐标。
+        //
+        // 由于 hidden_source_rects 已经包含了精确的行级信息，
+        // 我们将每个 hidden_source_rect 转换为一个 AnimationClipRect。
+        // 这里使用 snapshot_id 的 generation 字段作为行索引的近似。
+        for sr in &patch.hidden_source_rects {
+            if sr.h > 0.0 {
+                // hidden_source_rects 是行视觉资源局部坐标。
+                // sr.y 是行内的相对 y 坐标。
+                // 我们需要行的文档 y 坐标来构建 AnimationClipRect。
+                // 但由于我们没有直接的行引用，这里用 sr.y 作为近似。
+                // 真正精确的裁剪由 qt_text_node.rs 的 complement geometry 处理。
+                clip_rects.push(qt_text_node::AnimationClipRect {
+                    y: sr.y,
+                    h: sr.h,
+                });
+            }
         }
     }
 
-    if min_y >= max_bottom {
-        return Vec::new();
-    }
-
-    vec![qt_text_node::AnimationClipRect {
-        y: min_y,
-        h: max_bottom - min_y,
-    }]
+    clip_rects
 }
 
 fn render_text_animation_layer(

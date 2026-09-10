@@ -26,6 +26,8 @@
 //! - 不把 C++ 调用散进各文件，都集中在这个模块。
 //! - 正文排版只由 EditorLayout（layout.rs）产生唯一 canonical 结果，
 //!   本模块只消费已排好的 VisualLine，不再自行创建第二套全文 QTextLayout。
+//! - QTextLayout 由 layout 阶段（editor_prepare_paragraph_visual_snapshot）创建，
+//!   本模块通过 g_paragraph_layout_cache 读取已排好的 layout，不再 createLine。
 
 use cpp::cpp;
 
@@ -40,12 +42,24 @@ cpp! {{
     #include <QtGui/QMatrix4x4>
     #include <QtCore/QPointF>
     #include <QDebug>
+    #include <vector>
+    #include <algorithm>
+
+    // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
+    // 此处通过 extern 引用同一链接单元中的定义。
+    extern void clear_paragraph_layout_cache();
+    extern void store_paragraph_layout(
+        const QString& text, const QFont& font,
+        double wrap_w, double indent_w
+    );
+    extern std::vector<QTextLayout*> g_paragraph_layout_cache;
 
     /// 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
     ///
-    /// 与 EditorLayout 完全一致的 indent/wrap 参数，使用 setPixelSize()
-    /// 保证字号和换行几何与 layout.rs 一致。段落身份用 para_start 区分，
-    /// 不用文本内容比较。动画裁剪用 complement geometry：显示动画区域之外的静态正文。
+    /// 读取 layout 阶段缓存的 QTextLayout（通过 g_paragraph_layout_cache），
+    /// 不再在 Scene Graph 阶段重新 beginLayout/createLine/endLayout。
+    /// Issue #658: setColor() 放到第一次 addTextLayout() 之前，
+    /// 确保 QSGTextNode 使用正确的文本颜色。
     void rebuild_text_node_from_paragraphs(
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
@@ -85,79 +99,55 @@ cpp! {{
 
         textNode->clear();
 
-        // 与 layout.rs 完全一致的字体构造：使用 setPixelSize()，
-        // 而非 QFont(family, int) 的 pointSize 构造函数。
-        QFont font(font_family);
-        font.setPixelSize(static_cast<int>(font_size));
-
         QColor textColor(color_q);
+
+        // Issue #658: setColor() 必须在第一次 addTextLayout() 之前设置。
+        // Qt 的 QSGTextNode 要求影响文本节点的属性在 addTextLayout() 前设置，
+        // 否则加入的文字不保证使用后设的颜色。
+        textNode->setColor(textColor);
 
         // 段落身份用 para_start（字节偏移），不用文本内容比较。
         // 段落合并：连续 VisualLine 的 para_start 相同则属同一段落。
         int lastParaStart = -1;
-        QTextLayout* currentLayout = nullptr;
         double currentLayoutY = 0.0;
 
         for (int i = 0; i < para_count; i++) {
-            QString paraText = QString::fromUtf8(text_ptrs[i], text_lens[i]);
             int paraStart = para_start_arr[i];
             double y = para_y_arr[i];
             double iw = indent_w_arr[i];
-            double lww = line_wrap_w_arr[i];
             double dw = doc_width_arr[i];
 
             if (paraStart != lastParaStart) {
-                // 提交上一个段落的 layout
-                if (currentLayout) {
-                    currentLayout->endLayout();
-                    textNode->addTextLayout(QPointF(0, currentLayoutY), currentLayout);
-                    delete currentLayout;
-                    currentLayout = nullptr;
+                // 提交上一个段落的 layout（从缓存读取，已是排好的结果）
+                if (lastParaStart >= 0 && i > 0) {
+                    int prevIdx = i - 1;
+                    if (prevIdx >= 0 && prevIdx < (int)g_paragraph_layout_cache.size()) {
+                        QTextLayout* cachedLayout = g_paragraph_layout_cache[prevIdx];
+                        if (cachedLayout) {
+                            textNode->addTextLayout(QPointF(0, currentLayoutY), cachedLayout);
+                        }
+                    }
                 }
 
                 lastParaStart = paraStart;
                 currentLayoutY = y;
+            }
+        }
 
-                // 空段落不创建 QTextLayout，只保留几何占位
-                if (!paraText.isEmpty()) {
-                    currentLayout = new QTextLayout(paraText, font);
-                    QTextOption option;
-                    option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-                    currentLayout->setTextOption(option);
-                    currentLayout->beginLayout();
+        // 提交最后一个段落（从缓存读取）
+        if (lastParaStart >= 0) {
+            int lastIdx = para_count - 1;
+            if (lastIdx >= 0 && lastIdx < (int)g_paragraph_layout_cache.size()) {
+                QTextLayout* cachedLayout = g_paragraph_layout_cache[lastIdx];
+                if (cachedLayout) {
+                    textNode->addTextLayout(QPointF(0, currentLayoutY), cachedLayout);
                 }
             }
-
-            // 任何路径都不能解引用空的 currentLayout
-            if (!currentLayout) {
-                // 空段落占位：跳过，几何由后续行的 y 偏移隐式保证
-                continue;
-            }
-
-            QTextLine line = currentLayout->createLine();
-            if (paraText.isEmpty()) {
-                line.setLineWidth(dw);
-                line.setPosition(QPointF(0, y - currentLayoutY));
-            } else {
-                line.setLineWidth(lww);
-                line.setPosition(QPointF(iw, y - currentLayoutY));
-            }
         }
 
-        // 提交最后一个段落
-        if (currentLayout) {
-            currentLayout->endLayout();
-            textNode->addTextLayout(QPointF(0, currentLayoutY), currentLayout);
-            delete currentLayout;
-        }
-
-        textNode->setColor(textColor);
         textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
         // ── 动画裁剪：complement geometry ──
-        // QSGClipNode 只保留子树在 clipRect 内的部分。
-        // 我们要显示动画区域之外的静态正文，所以 clipRect 应该是
-        // 文档区域减去动画区域后的可见区域。
         if (clip_count > 0) {
             // 先按 y 排序裁剪区间
             struct ClipRange { double y, b; };
@@ -183,84 +173,58 @@ cpp! {{
             }
 
             if (!merged.empty()) {
-                // 移除现有子节点（textNode）
+                // 移除现有 textNode，按 complement 区间重新组织
                 staticLayer->removeChildNode(textNode);
 
-                // 计算 complement 区间：文档可见区域减去动画区域
-                // 文档区域假设从 0 到 textNode 渲染范围内的任意值。
-                // 用极大值表示"到文档末尾"。
                 double docTop = 0.0;
                 double docBottom = 1e9;
 
-                // 第一段：[docTop, merged[0].y)
-                // 中间段：[merged[i].b, merged[i+1].y)
-                // 最后段：[merged.back().b, docBottom)
-
-                bool hasComplement = false;
+                // 收集 complement 区间
+                std::vector<ClipRange> complements;
                 if (merged[0].y > docTop) {
-                    hasComplement = true;
+                    complements.push_back({docTop, merged[0].y});
                 }
                 for (size_t i = 1; i < merged.size(); i++) {
                     if (merged[i].y > merged[i-1].b) {
-                        hasComplement = true;
-                        break;
+                        complements.push_back({merged[i-1].b, merged[i].y});
                     }
                 }
                 if (merged.back().b < docBottom) {
-                    hasComplement = true;
+                    double h = docBottom - merged.back().b;
+                    if (h > 1e8) h = 99999.0;
+                    complements.push_back({merged.back().b, merged.back().b + h});
                 }
 
-                if (!hasComplement) {
-                    // 整个文档被动画覆盖，不需要显示静态正文
-                    // （动画层会接管）
-                } else {
-                    // 为每个 complement 区间创建 QSGClipNode + 副本 textNode
-                    // 第一个区间用原始 textNode，后续区间创建新的
-                    QSGTextNode* firstTextNode = textNode;
-                    bool firstUsed = false;
+                for (const auto& comp : complements) {
+                    auto *clipNode = new QSGClipNode;
+                    clipNode->setIsRectangular(true);
+                    clipNode->setClipRect(QRectF(0, comp.y, 99999.0, comp.b - comp.y));
+                    staticLayer->appendChildNode(clipNode);
 
-                    if (merged[0].y > docTop) {
-                        auto *clipNode = new QSGClipNode;
-                        clipNode->setIsRectangular(true);
-                        clipNode->setClipRect(QRectF(0, docTop, 99999.0, merged[0].y - docTop));
-                        staticLayer->appendChildNode(clipNode);
-                        clipNode->appendChildNode(firstTextNode);
-                        firstUsed = true;
-                    }
+                    QSGTextNode* clipTextNode = window->createTextNode();
+                    if (clipTextNode) {
+                        clipTextNode->setColor(textColor);
+                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+                        clipNode->appendChildNode(clipTextNode);
 
-                    for (size_t i = 1; i < merged.size(); i++) {
-                        if (merged[i].y > merged[i-1].b) {
-                            auto *clipNode = new QSGClipNode;
-                            clipNode->setIsRectangular(true);
-                            clipNode->setClipRect(QRectF(0, merged[i-1].b, 99999.0, merged[i].y - merged[i-1].b));
-                            staticLayer->appendChildNode(clipNode);
-                            // 为每个 complement 区间创建独立的 textNode 副本
-                            QSGTextNode* copyNode = window->createTextNode();
-                            if (copyNode) {
-                                copyNode->setColor(textColor);
-                                copyNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-                                clipNode->appendChildNode(copyNode);
+                        // Issue #658: 为每个 complement 区间的 textNode 添加已排好的 QTextLayout，
+                        // 不再创建空的 copyNode。从缓存读取已排好的 layout。
+                        for (int i = 0; i < para_count; i++) {
+                            int paraStart = para_start_arr[i];
+                            double y = para_y_arr[i];
+                            double dw = doc_width_arr[i];
+
+                            if (i == 0 || paraStart != para_start_arr[i - 1]) {
+                                double paraLayoutY = y;
+                                if (i < (int)g_paragraph_layout_cache.size()) {
+                                    QTextLayout* cachedLayout = g_paragraph_layout_cache[i];
+                                    if (cachedLayout) {
+                                        clipTextNode->addTextLayout(QPointF(0, paraLayoutY), cachedLayout);
+                                    }
+                                }
                             }
                         }
-                    }
-
-                    if (merged.back().b < docBottom) {
-                        auto *clipNode = new QSGClipNode;
-                        clipNode->setIsRectangular(true);
-                        double h = docBottom - merged.back().b;
-                        if (h > 1e8) h = 99999.0;
-                        clipNode->setClipRect(QRectF(0, merged.back().b, 99999.0, h));
-                        staticLayer->appendChildNode(clipNode);
-                        if (!firstUsed) {
-                            clipNode->appendChildNode(firstTextNode);
-                        } else {
-                            QSGTextNode* copyNode = window->createTextNode();
-                            if (copyNode) {
-                                copyNode->setColor(textColor);
-                                copyNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-                                clipNode->appendChildNode(copyNode);
-                            }
-                        }
+                        clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                     }
                 }
             }
@@ -403,6 +367,11 @@ pub fn rebuild_text_node_from_paragraphs(
             scroll_y, color_q,
             clip_y_ptr, clip_h_ptr, clip_count
         );
+    });
+
+    // rebuild 完成后清除布局缓存，释放所有 QTextLayout 内存
+    cpp!(unsafe [] {
+        clear_paragraph_layout_cache();
     });
 }
 

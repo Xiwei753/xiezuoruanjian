@@ -22,6 +22,46 @@ cpp! {{
     #include <QGuiApplication>
     #include <vector>
 
+    // ── Issue #658: 段落布局缓存 ──
+    // layout 阶段（editor_prepare_paragraph_visual_snapshot）创建 QTextLayout 后
+    // 存入缓存，rebuild 阶段（rebuild_text_node_from_paragraphs）读取已排好的
+    // layout，不在 Scene Graph 阶段重新 beginLayout/createLine/endLayout。
+    // 该变量在 editor_prepare_paragraph_visual_snapshot 中使用后由
+    // rebuild_text_node_from_paragraphs 读取，两者在 GUI 线程上严格串行。
+    static std::vector<QTextLayout*> g_paragraph_layout_cache;
+
+    void clear_paragraph_layout_cache() {
+        for (auto* l : g_paragraph_layout_cache) {
+            delete l;
+        }
+        g_paragraph_layout_cache.clear();
+    }
+
+    void store_paragraph_layout(
+        const QString& text, const QFont& font,
+        double wrap_w, double indent_w
+    ) {
+        if (text.isEmpty()) {
+            g_paragraph_layout_cache.push_back(nullptr);
+            return;
+        }
+        auto* layout = new QTextLayout(text, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout->setTextOption(option);
+        layout->beginLayout();
+        bool first = true;
+        while (true) {
+            QTextLine line = layout->createLine();
+            if (!line.isValid()) break;
+            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+            line.setLineWidth(lineWrap);
+            first = false;
+        }
+        layout->endLayout();
+        g_paragraph_layout_cache.push_back(layout);
+    }
+
     /// 单行排版结果 — 跨 C++/Rust 边界的数据结构。
     ///
     /// 所有 QChar index 为 UTF-16 code unit offset（与 QTextLayout API 一致），
@@ -752,6 +792,10 @@ cpp! {{
             first = false;
         }
         layout.endLayout();
+
+        // Issue #658: 缓存已排好的 QTextLayout，供 rebuild_text_node_from_paragraphs 消费。
+        // rebuild 阶段不再重新 beginLayout/createLine/endLayout，只从缓存读取。
+        store_paragraph_layout(paraText, font, wrap_w, indent_w);
 
         for (int i = 0; i < textLines.size(); i++) {
             const QTextLine& line = textLines[i];
@@ -2374,6 +2418,12 @@ pub fn prepare_document_visual_snapshot(
     dpr: f64,
     text_color: &str,
 ) -> CanonicalDocumentVisualSnapshot {
+    // Issue #658: 在新批次段落排版前清除布局缓存，释放旧的 QTextLayout 内存。
+    // clear_paragraph_layout_cache 由本文件 cpp! 块中的 C++ 定义提供。
+    cpp!(unsafe [] {
+        clear_paragraph_layout_cache();
+    });
+
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
     let line_height = (font_size * line_spacing)

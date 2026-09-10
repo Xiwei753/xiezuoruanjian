@@ -393,6 +393,10 @@ pub struct SujianEditorItem {
     last_event_count: u32,
     editor_layout: EditorLayout,
     render_dirty: bool,
+    /// 预计算的静态正文排版快照，在 GUI 线程上准备好，由 update_paint_node() 消费。
+    /// 不变性：render_dirty=true 后 ensure_static_snapshot() 会刷新此字段；
+    /// update_paint_node() 不再调用 layout_snapshot()，只读取此缓存。
+    cached_static_snapshot: Option<LayoutSnapshot>,
     cursor_ctrl: cursor_controller::CursorController,
 }
 
@@ -524,6 +528,7 @@ impl Default for SujianEditorItem {
             last_event_count: 0,
             editor_layout: EditorLayout::default(),
             render_dirty: true,
+            cached_static_snapshot: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
         }
     }
@@ -689,8 +694,26 @@ impl SujianEditorItem {
 
     pub(crate) fn request_static_repaint(&mut self) {
         self.render_dirty = true;
+        self.cached_static_snapshot = None;
         let item = self as &dyn QQuickItem;
         item.update();
+    }
+
+    /// 在正常编辑/布局阶段准备好静态正文排版快照。
+    ///
+    /// 正文、宽度、字体、行距、缩进变化时调用，预计算不可变快照。
+    /// update_paint_node() 只读取此快照，不再自行排版。
+    pub(crate) fn ensure_static_snapshot(&mut self) {
+        if self.cached_static_snapshot.is_some() {
+            return;
+        }
+        let width = self.bounding_width();
+        let params = self.layout_params(width);
+        let snapshot = self
+            .editor_layout
+            .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
+            .clone();
+        self.cached_static_snapshot = Some(snapshot);
     }
 
     pub(crate) fn request_frame_update(&mut self) {

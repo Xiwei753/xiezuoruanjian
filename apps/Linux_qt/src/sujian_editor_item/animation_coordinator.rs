@@ -1476,12 +1476,24 @@ impl LinuxEditorAnimationCoordinator {
             .map(|t| t.key)
             .collect();
         frame_context.active_transaction_keys = active_keys;
+
+        // Issue #658: 收集已准备好的 static_patches 供静态正文裁剪。
+        // 只有 texture_prepared == true 的事务才允许静态层隐藏，
+        // 避免纹理准备完成前出现空白帧。
+        let mut static_patches = Vec::new();
+        for tx in self.prepared_queue.active_transactions() {
+            if tx.texture_prepared {
+                static_patches.extend(tx.static_patches.iter().cloned());
+            }
+        }
+
         RenderPlan {
             text_animation,
             selection_preedit,
             cursor: cursor_plan,
             frame_context,
             cursor_style,
+            static_patches,
         }
     }
 

@@ -10,7 +10,8 @@ use super::layout_snapshot::{LineSnapshotId, SourceRect};
 #[derive(Clone, Debug)]
 pub(crate) struct StaticLinePatch {
     pub snapshot_id: LineSnapshotId,
-    #[allow(dead_code)]
+    /// 被动画切片接管的区域（行视觉资源局部坐标，已乘 DPR）。
+    /// 静态层据此裁剪以避免与动画层双绘。
     pub hidden_source_rects: Vec<SourceRect>,
     pub byte_start: usize,
     pub byte_end: usize,

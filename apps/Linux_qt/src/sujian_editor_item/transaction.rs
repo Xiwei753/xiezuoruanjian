@@ -174,6 +174,7 @@ impl SujianEditorItem {
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
         self.pipeline.prepare_transaction_textures(key);
         self.render_dirty = true;
+        self.cached_static_snapshot = None;
     }
 }
 
