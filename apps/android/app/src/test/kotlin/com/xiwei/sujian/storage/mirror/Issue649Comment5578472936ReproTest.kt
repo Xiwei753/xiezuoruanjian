@@ -118,7 +118,10 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun readSnapshotStrict_rejectsMalformedChapterKey() {
         writeStateJson(
-            """{"backend": "media_store", "projects": {"p1": {"badkey": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""",
+            """
+            {"backend": "media_store",
+            "projects": {"p1": {"badkey": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": "h"}}}}
+            """.trimIndent(),
         )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应返回 failure", result.isFailure)
@@ -133,7 +136,10 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun readSnapshotStrict_rejectsNumericUri() {
         writeStateJson(
-            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": 42, "relativePath": "p", "revision": 1, "contentHash": "h"}}}}""",
+            """
+            {"backend": "media_store",
+            "projects": {"p1": {"v1/ch1": {"uri": 42, "relativePath": "p", "revision": 1, "contentHash": "h"}}}}
+            """.trimIndent(),
         )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝数字 uri", result.isFailure)
@@ -145,7 +151,10 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun readSnapshotStrict_rejectsStringRevision() {
         writeStateJson(
-            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": "abc", "contentHash": "h"}}}}""",
+            """
+            {"backend": "media_store",
+            "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": "abc", "contentHash": "h"}}}}
+            """.trimIndent(),
         )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝字符串 revision", result.isFailure)
@@ -157,7 +166,10 @@ class Issue649Comment5578472936ReproTest {
     @Test
     fun readSnapshotStrict_rejectsNumericContentHash() {
         writeStateJson(
-            """{"backend": "media_store", "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": 42}}}}""",
+            """
+            {"backend": "media_store",
+            "projects": {"p1": {"v1/ch1": {"uri": "u", "relativePath": "p", "revision": 1, "contentHash": 42}}}}
+            """.trimIndent(),
         )
         val result = store.readSnapshotStrict()
         assertTrue("readSnapshotStrict 应拒绝数字 contentHash", result.isFailure)

@@ -1,6 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
 import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.common.BridgeResult
 
 /**
  * MirrorPublishExecutor — 项目发布、删除和清理执行器。
@@ -12,6 +13,16 @@ internal data class MirrorPublishExecutorCallbacks(
     val logNotLoaded: (BridgeResult<*>, String) -> Unit,
     val logPublishAborted: (String, String) -> Unit,
 )
+
+/**
+ * manifest 事务参数。保留类型别名供 recovery/cleanup 等同包调用方使用。
+ */
+internal typealias ManifestTransactionParams = MirrorManifestTransactionExecutor.ManifestTransactionParams
+
+/**
+ * manifest 事务结果。保留类型别名供 recovery/cleanup 等同包调用方使用。
+ */
+internal typealias ManifestTransactionResult = MirrorManifestTransactionExecutor.ManifestTransactionResult
 
 internal class MirrorPublishExecutor(
     private val stateStore: ReadableMirrorStateStore,
@@ -426,16 +437,6 @@ internal class MirrorPublishExecutor(
     internal suspend fun publishManifestWithDesiredTransactional(
         params: ManifestTransactionParams,
     ): ManifestTransactionResult? = manifestExecutor.publishManifestWithDesiredTransactional(params)
-
-    /**
-     * manifest 事务参数。保留类型别名供 recovery/cleanup 等同包调用方使用。
-     */
-    internal typealias ManifestTransactionParams = MirrorManifestTransactionExecutor.ManifestTransactionParams
-
-    /**
-     * manifest 事务结果。保留类型别名供 recovery/cleanup 等同包调用方使用。
-     */
-    internal typealias ManifestTransactionResult = MirrorManifestTransactionExecutor.ManifestTransactionResult
 
     private fun projectIdKeepingJournal(projectId: String): String = "$projectId, keeping journal"
 

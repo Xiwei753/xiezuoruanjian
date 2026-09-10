@@ -167,7 +167,8 @@ class Issue649Comment5573750754ReproTest {
                 oldEntries = emptyMap(),
                 newEntries = emptyMap(),
                 stagedRefs = emptyMap(),
-                items = mapOf(key to oldItem), // ★ 旧状态 STAGED ★
+                // ★ 旧状态 STAGED ★
+                items = mapOf(key to oldItem),
                 removedProjectIds = emptySet(),
                 manifestOldRef = null,
                 manifestStagedRef = null,
@@ -255,13 +256,17 @@ class Issue649Comment5573750754ReproTest {
                 stagedRefs = emptyMap(),
                 items = emptyMap(),
                 removedProjectIds = emptySet(),
-                manifestOldRef = null, // 未开始
+                // 未开始
+                manifestOldRef = null,
                 manifestStagedRef = null,
                 manifestNewRef = null,
                 manifestBackupRef = null,
-                manifestTargetJson = null, // ★ 未开始标记 ★
-                manifestNewContentHash = null, // null
-                manifestOldContentHash = null, // null
+                // ★ 未开始标记 ★
+                manifestTargetJson = null,
+                // null
+                manifestNewContentHash = null,
+                // null
+                manifestOldContentHash = null,
             )
 
         // ── 复现 rollbackManifest() line 2177-2265 的当前逻辑 ──
@@ -352,10 +357,12 @@ class Issue649Comment5573750754ReproTest {
                 stagedRefs = emptyMap(),
                 items = emptyMap(),
                 removedProjectIds = emptySet(),
-                manifestOldRef = manifestOldRef, // 有旧 manifest
+                // 有旧 manifest
+                manifestOldRef = manifestOldRef,
                 manifestStagedRef = null,
                 manifestNewRef = null,
-                manifestBackupRef = null, // ★ journal 里仍是 null ★
+                // ★ journal 里仍是 null ★
+                manifestBackupRef = null,
             )
 
         // ── 复现 rollbackManifest() line 2354-2389 的当前逻辑 ──
@@ -583,7 +590,8 @@ class Issue649Comment5573750754ReproTest {
         val firstStageTextIndex = operationOrder.indexOfFirst { it.startsWith("stageText:") }
         val firstJournalIndex = operationOrder.indexOfFirst { it.startsWith("writePendingPublishJournal") }
         assertTrue(
-            "★ 当前代码：第一笔 stageText 在第一份 journal 之前（firstStageTextIndex=$firstStageTextIndex, firstJournalIndex=$firstJournalIndex）★",
+            "★ 当前代码：第一笔 stageText 在第一份 journal 之前" +
+                "（firstStageTextIndex=$firstStageTextIndex, firstJournalIndex=$firstJournalIndex）★",
             firstStageTextIndex >= 0 && (firstJournalIndex < 0 || firstStageTextIndex < firstJournalIndex),
         )
     }

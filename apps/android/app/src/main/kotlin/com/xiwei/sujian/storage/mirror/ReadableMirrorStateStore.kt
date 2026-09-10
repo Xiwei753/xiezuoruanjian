@@ -465,25 +465,29 @@ class ReadableMirrorStateStore(
 
         val uriRaw = obj.get(URI_KEY)
         require(uriRaw is String) {
-            "State corruption: uri must be String for chapter key '$chapterKey' in project $projectId, got ${uriRaw?.javaClass?.simpleName}"
+            "State corruption: uri must be String for chapter key '$chapterKey'" +
+                " in project $projectId, got ${uriRaw?.javaClass?.simpleName}"
         }
         val uri = uriRaw
 
         val relativePathRaw = obj.get(RELATIVE_PATH_KEY)
         require(relativePathRaw is String) {
-            "State corruption: relativePath must be String for chapter key '$chapterKey' in project $projectId, got ${relativePathRaw?.javaClass?.simpleName}"
+            "State corruption: relativePath must be String for chapter key '$chapterKey'" +
+                " in project $projectId, got ${relativePathRaw?.javaClass?.simpleName}"
         }
         val relativePath = relativePathRaw
 
         val revisionRaw = obj.get(REVISION_KEY)
         require(revisionRaw is Number) {
-            "State corruption: revision must be Number for chapter key '$chapterKey' in project $projectId, got ${revisionRaw?.javaClass?.simpleName}"
+            "State corruption: revision must be Number for chapter key '$chapterKey'" +
+                " in project $projectId, got ${revisionRaw?.javaClass?.simpleName}"
         }
         val revision = revisionRaw.toLong()
 
         val contentHashRaw = obj.get(CONTENT_HASH_KEY)
         require(contentHashRaw is String) {
-            "State corruption: contentHash must be String for chapter key '$chapterKey' in project $projectId, got ${contentHashRaw?.javaClass?.simpleName}"
+            "State corruption: contentHash must be String for chapter key '$chapterKey'" +
+                " in project $projectId, got ${contentHashRaw?.javaClass?.simpleName}"
         }
         val contentHash = contentHashRaw
 
@@ -590,7 +594,8 @@ class ReadableMirrorStateStore(
                 val projectId = projectIds.next()
                 val projectObj = projectsRaw.get(projectId)
                 require(projectObj is JSONObject) {
-                    "State corruption: project '$projectId' must be JSONObject, got ${projectObj?.javaClass?.simpleName}"
+                    "State corruption: project '$projectId' must be JSONObject," +
+                        " got ${projectObj?.javaClass?.simpleName}"
                 }
                 decodeProjectEntriesStrict(projectId, projectObj, entries)
             }
@@ -609,7 +614,8 @@ class ReadableMirrorStateStore(
             val chapterKeyStr = chapterKeys.next()
             val entryObj = projectObj.get(chapterKeyStr)
             require(entryObj is JSONObject) {
-                "State corruption: chapter entry '$chapterKeyStr' in project '$projectId' must be JSONObject, got ${entryObj?.javaClass?.simpleName}"
+                "State corruption: chapter entry '$chapterKeyStr' in project '$projectId' must be JSONObject," +
+                    " got ${entryObj?.javaClass?.simpleName}"
             }
             val (key, entry) = decodeEntryStrict(projectId, chapterKeyStr, entryObj)
             entries[key] = entry
@@ -1113,7 +1119,8 @@ class ReadableMirrorStateStore(
 
         val raw = root.get(BACKEND_KEY)
         require(raw is String && raw.isNotEmpty()) {
-            "State corruption: backend must be a non-empty String, got ${if (raw is String) "empty" else raw?.javaClass?.simpleName}"
+            "State corruption: backend must be a non-empty String," +
+                " got ${if (raw is String) "empty" else raw?.javaClass?.simpleName}"
         }
 
         return when (raw) {

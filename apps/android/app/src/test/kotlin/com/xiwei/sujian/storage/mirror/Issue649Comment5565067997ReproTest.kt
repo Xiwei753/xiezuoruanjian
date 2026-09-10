@@ -372,9 +372,9 @@ class Issue649Comment5565067997ReproTest {
             mirrorLookupResultClassExists,
         )
 
-        // 修复确认：lookup 方法存在，返回 MirrorLookupResult
+        // 修复确认：lookup 方法存在（通过 MirrorStorageLookup 继承），返回 MirrorLookupResult
         val lookupMethod =
-            ReadableMirrorStorage::class.java.getDeclaredMethod(
+            ReadableMirrorStorage::class.java.getMethod(
                 "lookup",
                 String::class.java,
             )

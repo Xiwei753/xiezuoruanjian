@@ -132,7 +132,7 @@ internal class MirrorManifestPrepareExecutor(
         )
     }
 
-    private fun buildAndStageManifest(
+    private suspend fun buildAndStageManifest(
         ctx: ManifestTransactionContext,
         oldIdentity: ManifestOldIdentity,
         currentJournal: PendingMirrorPublish,

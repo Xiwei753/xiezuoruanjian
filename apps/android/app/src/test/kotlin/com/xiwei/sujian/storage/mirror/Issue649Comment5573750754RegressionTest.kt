@@ -85,7 +85,8 @@ class Issue649Comment5573750754RegressionTest {
                 treeUri = null,
                 projectId = projectId,
                 transactionType = MirrorTransactionType.UPSERT_PROJECT,
-                phase = PendingMirrorPublish.PHASE_CLEANUP, // ★ PHASE_CLEANUP ★
+                // ★ PHASE_CLEANUP ★
+                phase = PendingMirrorPublish.PHASE_CLEANUP,
                 oldEntries = emptyMap(),
                 newEntries = promotedEntries,
                 stagedRefs = emptyMap(),
@@ -148,18 +149,37 @@ class Issue649Comment5573750754RegressionTest {
         val key = ChapterKey(PROJ_1, "v1", "c1")
         val txId = TX_1
         val oldItem = buildStagedItem(key, txId)
-        val currentItems = mapOf(key to oldItem.copy(promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD), state = PendingItem.STATE_PROMOTED))
+        val currentItems =
+            mapOf(
+                key to
+                    oldItem.copy(
+                        promotedRef = MirrorFileRef("content://promoted/new", P_V_CH_MD),
+                        state = PendingItem.STATE_PROMOTED,
+                    ),
+            )
         val desiredEntries = mapOf(key to ChapterMirrorEntry("content://promoted/new", P_V_CH_MD, 100L, "sha256:new"))
         val journalContext = buildJournalContext(txId, key, oldItem)
         var currentJournal = journalContext.copy(items = currentItems, newEntries = desiredEntries)
-        currentJournal = currentJournal.copy(manifestSwapState = ManifestTransactionState.MANIFEST_STAGED, manifestNewContentHash = "sha256:newmanifest", manifestTargetJson = "{}")
+        currentJournal =
+            currentJournal.copy(
+                manifestSwapState = ManifestTransactionState.MANIFEST_STAGED,
+                manifestNewContentHash = "sha256:newmanifest",
+                manifestTargetJson = "{}",
+            )
 
         val journalItemState = currentJournal.items[key]?.state
         val passedItemState = currentItems[key]?.state
         assertEquals("传入的 items 参数（currentItems）已是 PROMOTED", PendingItem.STATE_PROMOTED, passedItemState)
-        assertEquals("修复后：currentJournal.items 与传入的 items 一致（PROMOTED），不会倒退回 STAGED", PendingItem.STATE_PROMOTED, journalItemState)
+        assertEquals(
+            "修复后：currentJournal.items 与传入的 items 一致（PROMOTED），不会倒退回 STAGED",
+            PendingItem.STATE_PROMOTED,
+            journalItemState,
+        )
         assertEquals("修复后：currentJournal.newEntries 与传入的 desiredEntries 一致", desiredEntries, currentJournal.newEntries)
-        assertTrue("修复后：persistPendingJournal(currentJournal) 会把 PROMOTED 状态写入磁盘，不倒退", journalItemState == passedItemState)
+        assertTrue(
+            "修复后：persistPendingJournal(currentJournal) 会把 PROMOTED 状态写入磁盘，不倒退",
+            journalItemState == passedItemState,
+        )
     }
 
     private fun buildStagedItem(
@@ -231,7 +251,8 @@ class Issue649Comment5573750754RegressionTest {
                 manifestStagedRef = null,
                 manifestNewRef = null,
                 manifestBackupRef = null,
-                manifestTargetJson = null, // ★ 未开始标记 ★
+                // ★ 未开始标记 ★
+                manifestTargetJson = null,
                 manifestNewContentHash = null,
                 manifestOldContentHash = null,
             )
@@ -304,8 +325,10 @@ class Issue649Comment5573750754RegressionTest {
                 manifestOldRef = manifestOldRef,
                 manifestStagedRef = null,
                 manifestNewRef = null,
-                manifestBackupRef = null, // journal 里仍是 null
-                manifestTargetJson = "{}", // manifest 子事务已开始
+                // journal 里仍是 null
+                manifestBackupRef = null,
+                // manifest 子事务已开始
+                manifestTargetJson = "{}",
                 manifestNewContentHash = "sha256:new",
                 manifestOldContentHash = computeContentHash(oldManifestContent),
             )
