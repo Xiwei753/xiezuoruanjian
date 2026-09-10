@@ -877,6 +877,229 @@ cpp! {{
     thread_local std::vector<CanonicalClusterGlyphEntry> g_canonical_cluster_glyph_buf;
     thread_local std::vector<QImage> g_canonical_line_images;
 
+    // Issue #658 评论 5624570557 问题 1+2: 从已有 QTextLine 提取动画视觉。
+    // 不创建新的 QTextLayout，直接从已排好的 line 提取 QImage/glyphRuns/cluster。
+    // 按 (generation, cache_slot, qtextline_idx) 读取现成 QTextLine，
+    // 避免动画 old 帧重新排版。
+    // 返回提取的 line 数据到 g_canonical_line_buf/g_canonical_cluster_buf/g_canonical_cluster_glyph_buf。
+    static void extract_animation_visuals_from_existing_line(
+        uint64_t gen, int slot, int qtextline_idx,
+        double dpr, const QColor& textColor
+    ) {
+        QTextLayout* layout = get_paragraph_layout(gen, slot);
+        if (!layout) return;
+        if (qtextline_idx < 0 || qtextline_idx >= layout->lineCount()) return;
+
+        QTextLine line = layout->lineAt(qtextline_idx);
+        if (!line.isValid()) return;
+
+        // 清空之前的 buffers
+        g_canonical_line_buf.clear();
+        g_canonical_cluster_buf.clear();
+        g_canonical_cluster_glyph_buf.clear();
+        g_canonical_line_images.clear();
+
+        CanonicalLineEntry entry;
+        entry.qcharStart = line.textStart();
+        entry.qcharEnd = line.textStart() + line.textLength();
+        entry.xPos = (qtextline_idx == 0) ? 0.0 : 0.0; // 缩进由调用方处理
+        entry.width = line.naturalTextWidth();
+        entry.height = line.height();
+        entry.ascent = line.ascent();
+        entry.descent = line.descent();
+        entry.y = line.y();
+        entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading);
+        entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing);
+
+        double logical_w = line.naturalTextWidth();
+        double logical_h = line.height();
+        int phys_w = (int)ceil(logical_w * dpr);
+        int phys_h = (int)ceil(logical_h * dpr);
+
+        // 1. 绘制到 QImage
+        if (phys_w > 0 && phys_h > 0 && phys_w <= 8192 && phys_h <= 4096) {
+            QImage img(phys_w, phys_h, QImage::Format_ARGB32_Premultiplied);
+            img.setDevicePixelRatio(dpr);
+            img.fill(Qt::transparent);
+
+            QPainter painter(&img);
+            painter.setRenderHint(QPainter::TextAntialiasing, true);
+            painter.scale(dpr, dpr);
+            painter.setPen(QPen(textColor));
+            QPointF pos(0, line.ascent());
+            line.draw(&painter, pos);
+
+            entry.imagePhysW = phys_w;
+            entry.imagePhysH = phys_h;
+            g_canonical_line_images.push_back(img);
+        } else {
+            entry.imagePhysW = 0;
+            entry.imagePhysH = 0;
+            g_canonical_line_images.push_back(QImage());
+        }
+
+        int clusterStartIdx = (int)g_canonical_cluster_buf.size();
+
+        // 2. 提取 glyphRuns 和 clusters
+        const auto glyphRuns = line.glyphRuns();
+        for (const auto& run : glyphRuns) {
+            const auto& positions = run.positions();
+            const auto& glyphIndexes = run.glyphIndexes();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+            const auto& stringIndexes = run.stringIndexes();
+#endif
+            int count = positions.size();
+            if (count == 0) continue;
+
+            QRawFont rawFont = run.rawFont();
+            QString rawFontFamily = rawFont.familyName();
+            QByteArray rawFontKeyBytes = rawFontFamily.toUtf8();
+
+            int glyphBufStart = (int)g_canonical_cluster_glyph_buf.size();
+
+            for (int gi = 0; gi < count; gi++) {
+                unsigned int gIdx = (gi < glyphIndexes.size()) ? glyphIndexes[gi] : 0;
+                double gx = positions[gi].x();
+                double gy = positions[gi].y();
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+                int si = (gi < stringIndexes.size()) ? stringIndexes[gi] : -1;
+#else
+                int si = -1;
+#endif
+
+                CanonicalClusterGlyphEntry ge;
+                ge.glyphIndex = gIdx;
+                ge.positionX = gx;
+                ge.positionY = gy;
+                ge.stringIndex = si;
+                g_canonical_cluster_glyph_buf.push_back(ge);
+            }
+
+            // Cluster 提取逻辑（与 editor_prepare_paragraph_visual_snapshot 中相同）
+            struct TempCluster {
+                int qcharVal;
+                int glyphStart;
+                int glyphEnd;
+                double visMinX, visMinY, visMaxX, visMaxY;
+            };
+            std::vector<TempCluster> tempClusters;
+
+            if (count > 0) {
+                int curQchar = g_canonical_cluster_glyph_buf[glyphBufStart].stringIndex;
+                int clStart = 0;
+                double clMinX = 1e9, clMinY = 1e9, clMaxX = -1e9, clMaxY = -1e9;
+
+                for (int gi = 0; gi <= count; gi++) {
+                    int si = (gi < count)
+                        ? g_canonical_cluster_glyph_buf[glyphBufStart + gi].stringIndex
+                        : INT_MAX;
+
+                    if (gi == count || si != curQchar) {
+                        if (curQchar >= 0) {
+                            TempCluster tc;
+                            tc.qcharVal = curQchar;
+                            tc.glyphStart = clStart;
+                            tc.glyphEnd = gi;
+                            tc.visMinX = clMinX;
+                            tc.visMinY = clMinY;
+                            tc.visMaxX = clMaxX;
+                            tc.visMaxY = clMaxY;
+                            tempClusters.push_back(tc);
+                        }
+                        if (gi < count) {
+                            curQchar = si;
+                            clStart = gi;
+                            clMinX = 1e9; clMinY = 1e9;
+                            clMaxX = -1e9; clMaxY = -1e9;
+                        }
+                    }
+
+                    if (gi < count && si == curQchar) {
+                        unsigned int gIdx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].glyphIndex;
+                        double gx2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionX;
+                        double gy2 = g_canonical_cluster_glyph_buf[glyphBufStart + gi].positionY;
+                        QRectF gb = rawFont.boundingRect(gIdx2);
+                        double gl = gx2 + gb.left();
+                        double gr = gx2 + gb.right();
+                        double gt = gy2 + gb.top();
+                        double gbo = gy2 + gb.bottom();
+                        if (gl < clMinX) clMinX = gl;
+                        if (gr > clMaxX) clMaxX = gr;
+                        if (gt < clMinY) clMinY = gt;
+                        if (gbo > clMaxY) clMaxY = gbo;
+                    }
+                }
+            }
+
+            double aaMargin = 1.0;
+            for (int ci = 0; ci < (int)tempClusters.size(); ci++) {
+                const TempCluster& tc = tempClusters[ci];
+                if (tc.qcharVal < 0) continue;
+
+                int qcharStart = tc.qcharVal;
+                int qcharEnd;
+                if (ci + 1 < (int)tempClusters.size()) {
+                    qcharEnd = tempClusters[ci + 1].qcharVal;
+                } else {
+                    qcharEnd = entry.qcharEnd;
+                }
+                if (qcharEnd <= qcharStart) qcharEnd = qcharStart + 1;
+
+                double srcX = (tc.visMinX - aaMargin) - line.x();
+                double srcY = (tc.visMinY - aaMargin) - line.y();
+                double srcW = (tc.visMaxX - tc.visMinX) + aaMargin * 2.0;
+                double srcH = (tc.visMaxY - tc.visMinY) + aaMargin * 2.0;
+
+                if (srcW < 0.01) srcW = 10.0;
+                if (srcH < 0.01) srcH = line.height();
+
+                if (srcX < 0) { srcW += srcX; srcX = 0; }
+                if (srcY < 0) { srcH += srcY; srcY = 0; }
+                if (srcX + srcW > logical_w) srcW = logical_w - srcX;
+                if (srcY + srcH > logical_h) srcH = logical_h - srcY;
+
+                CanonicalClusterEntry ce;
+                ce.qcharStart = qcharStart;
+                ce.qcharEnd = qcharEnd;
+                ce.sourceRectX = srcX * dpr;
+                ce.sourceRectY = srcY * dpr;
+                ce.sourceRectW = srcW * dpr;
+                ce.sourceRectH = srcH * dpr;
+                ce.glyphCount = tc.glyphEnd - tc.glyphStart;
+                ce.glyphStartIndex = glyphBufStart + tc.glyphStart;
+                memset(ce.rawFontFingerprint, 0, sizeof(ce.rawFontFingerprint));
+                if (rawFontKeyBytes.size() > 0) {
+                    int copyLen = rawFontKeyBytes.size();
+                    if (copyLen > (int)sizeof(ce.rawFontFingerprint) - 1)
+                        copyLen = (int)sizeof(ce.rawFontFingerprint) - 1;
+                    memcpy(ce.rawFontFingerprint, rawFontKeyBytes.constData(), copyLen);
+                }
+                ce.isRTL = run.isRightToLeft();
+                ce.firstGlyphIndex = (tc.glyphStart < count)
+                    ? g_canonical_cluster_glyph_buf[glyphBufStart + tc.glyphStart].glyphIndex
+                    : 0;
+
+                g_canonical_cluster_buf.push_back(ce);
+            }
+        }
+
+        entry.clusterStartIndex = clusterStartIdx;
+        entry.clusterCount = (int)g_canonical_cluster_buf.size() - clusterStartIdx;
+
+        entry.cursorXMapStart = (int)g_cursor_x_map_buf.size();
+        entry.cursorXMapCount = 0;
+        for (int qpos = entry.qcharStart; qpos <= entry.qcharEnd; qpos++) {
+            CursorXMapEntry me;
+            me.qcharPos = qpos;
+            me.xLeading = line.cursorToX(qpos, QTextLine::Leading);
+            me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing);
+            g_cursor_x_map_buf.push_back(me);
+            entry.cursorXMapCount++;
+        }
+
+        g_canonical_line_buf.push_back(entry);
+    }
+
     void editor_prepare_paragraph_visual_snapshot(
         const QString& paraText,
         double fs, const QString& ff,
@@ -1268,6 +1491,19 @@ pub struct PromotedLayout {
     pub line_spacing: f32,
     pub text_indent: f32,
     pub padding: f32,
+    /// Issue #658 评论 5624570557 问题 1: 旧的 generation，在 promote 完成后释放。
+    /// old 动画纹理提取完成后，等 new prepared layout 真正成为 current，再释放旧 generation。
+    pub old_generation: u64,
+}
+
+/// Issue #658 评论 5624570557 问题 1: 已准备布局的只读句柄。
+///
+/// 暴露当前有效 `layout_generation + LayoutSnapshot` 的只读句柄，
+/// 用于动画 old 帧从已有 QTextLine 提取视觉资源，不再重新排版。
+/// 句柄持有者必须保证 generation 在句柄使用期间有效（不被 clear_layout_generation 释放）。
+pub struct PreparedLayoutHandle<'a> {
+    pub generation: u64,
+    pub lines: &'a [VisualLine],
 }
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
@@ -1296,6 +1532,18 @@ impl EditorLayout {
         self.cache.as_ref()
     }
 
+    /// Issue #658 评论 5624570557 问题 1: 获取当前有效的 prepared layout 句柄（如果存在）。
+    ///
+    /// 用于动画 old 帧从已有 QTextLine 提取视觉资源，不再重新排版。
+    /// 返回的句柄包含 generation 和 VisualLine 数组引用，
+    /// 调用方可用 `prepare_animation_visuals_from_layout` 按需提取动画资源。
+    pub fn current_prepared_layout(&self) -> Option<PreparedLayoutHandle<'_>> {
+        self.cache.as_ref().map(|c| PreparedLayoutHandle {
+            generation: c.layout_generation,
+            lines: &c.lines,
+        })
+    }
+
     /// Issue #658 评论 5622829886 问题 1: 把外部已排好的 prepared layout 提升为 current。
     ///
     /// 由 record_visual_transaction 全篇排版 new text 后调用，
@@ -1305,6 +1553,7 @@ impl EditorLayout {
     /// 旧 current_generation（若存在且不同于 promoted.generation）会被 clear。
     /// text_revision / text_ptr / text_len 从当前 buffer.text 和 pipeline.text_revision()
     /// 获取，确保与 snapshot() 的 cache 有效性检查一致。
+    /// Issue #658 评论 5624570557 问题 1: 同时释放 old_generation（如果非 0）。
     pub fn promote_prepared_layout(
         &mut self,
         promoted: PromotedLayout,
@@ -1316,6 +1565,10 @@ impl EditorLayout {
         // 释放旧 generation（若存在且不同于新 generation）
         if self.current_generation != 0 && self.current_generation != promoted.generation {
             clear_layout_generation(self.current_generation);
+        }
+        // Issue #658 评论 5624570557 问题 1: 释放 old_generation（old 动画使用的 generation）
+        if promoted.old_generation != 0 && promoted.old_generation != promoted.generation {
+            clear_layout_generation(promoted.old_generation);
         }
         self.current_generation = promoted.generation;
         self.cache = Some(LayoutSnapshot {
@@ -1524,6 +1777,371 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
         x as "double"
     ] -> i32 as "int" {
         return get_paragraph_layout_x_to_cursor_on_line(gen, slot, qline, x);
+    })
+}
+
+/// Issue #658 评论 5624570557 问题 1+2: 从已有 generation 的 QTextLine 提取动画视觉资源（含 clusters）。
+/// 按 (generation, cache_slot, qtextline_idx) 读取现成 QTextLine，
+/// 不重新排版，直接 line.draw() 到 QImage 并提取 glyphRuns/clusters。
+/// 返回完整的 CanonicalLineSnapshot 列表。
+/// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
+pub fn prepare_animation_visuals_from_layout(
+    handle: &PreparedLayoutHandle<'_>,
+    line_ids: &[usize],
+    dpr: f64,
+    text_color: &str,
+    paragraph_text: &str,
+    paragraph_document_byte_start: usize,
+) -> Vec<CanonicalLineSnapshot> {
+    let color = qmetaobject::QColor::from_name(text_color);
+    let mut snapshots = Vec::new();
+
+    for &line_id in line_ids {
+        if line_id >= handle.lines.len() {
+            continue;
+        }
+        let line = &handle.lines[line_id];
+        let slot = line.cache_slot;
+        let qtextline_idx = line.qtextline_idx;
+        let gen = handle.generation;
+
+        // SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
+        let success = cpp!(unsafe [
+            gen as "uint64_t",
+            slot as "int",
+            qtextline_idx as "int",
+            dpr as "double",
+            color as "QColor"
+        ] -> bool as "bool" {
+            extract_animation_visuals_from_existing_line(gen, slot, qtextline_idx, dpr, color);
+            return !g_canonical_line_buf.empty();
+        });
+
+        if !success {
+            continue;
+        }
+
+        // 从 C++ buffers 中读取提取的数据
+        let qchar_start = get_canonical_line_qchar_start(0);
+        let qchar_end = get_canonical_line_qchar_end(0);
+        let x_pos = get_canonical_line_x_pos(0);
+        let width = get_canonical_line_width(0);
+        let ascent = get_canonical_line_ascent(0);
+        let descent = get_canonical_line_descent(0);
+        let x_end_trailing = get_canonical_line_x_end_trailing(0);
+        let image_phys_w = get_canonical_line_image_phys_w(0);
+        let image_phys_h = get_canonical_line_image_phys_h(0);
+        let cluster_start = get_canonical_line_cluster_start(0);
+        let cluster_count = get_canonical_line_cluster_count(0);
+        let cursor_x_map_start = get_canonical_line_cursor_x_map_start(0);
+        let cursor_x_map_count = get_canonical_line_cursor_x_map_count(0);
+
+        // 提取 image
+        let image = if image_phys_w > 0 && image_phys_h > 0 {
+            let mut img = qmetaobject::QImage::new(
+                qmetaobject::QSize {
+                    width: 1,
+                    height: 1,
+                },
+                qmetaobject::ImageFormat::ARGB32_Premultiplied,
+            );
+            let img_ptr = &mut img as *mut qmetaobject::QImage;
+            cpp!(unsafe [img_ptr as "QImage*"] {
+                if (!g_canonical_line_images.empty()) {
+                    *img_ptr = g_canonical_line_images[0];
+                }
+            });
+            Some(img)
+        } else {
+            None
+        };
+
+        // 提取 clusters
+        let mut clusters = Vec::with_capacity(cluster_count as usize);
+        for ci in 0..cluster_count {
+            let cidx: i32 = (cluster_start as i32) + ci as i32;
+            let c_qchar_start = get_canonical_cluster_qchar_start(cidx);
+            let c_qchar_end = get_canonical_cluster_qchar_end(cidx);
+            let c_src_x = get_canonical_cluster_src_x(cidx);
+            let c_src_y = get_canonical_cluster_src_y(cidx);
+            let c_src_w = get_canonical_cluster_src_w(cidx);
+            let c_src_h = get_canonical_cluster_src_h(cidx);
+            let c_glyph_count = get_canonical_cluster_glyph_count(cidx);
+            let c_raw_font = get_canonical_cluster_raw_font(cidx);
+            let c_is_rtl = get_canonical_cluster_is_rtl(cidx);
+            let c_first_glyph = get_canonical_cluster_first_glyph(cidx);
+
+            let doc_byte_start = qchar_offset_to_byte_offset(paragraph_text, c_qchar_start)
+                + paragraph_document_byte_start;
+            let doc_byte_end = qchar_offset_to_byte_offset(paragraph_text, c_qchar_end)
+                + paragraph_document_byte_start;
+
+            let (c_byte_start, c_byte_end) = (
+                qchar_offset_to_byte_offset(paragraph_text, c_qchar_start),
+                qchar_offset_to_byte_offset(paragraph_text, c_qchar_end),
+            );
+            let c_cluster_text = if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() {
+                paragraph_text[c_byte_start..c_byte_end].to_string()
+            } else {
+                String::new()
+            };
+
+            clusters.push(CanonicalClusterSnapshot {
+                document_byte_start: doc_byte_start,
+                document_byte_end: doc_byte_end,
+                source_rect_x: c_src_x,
+                source_rect_y: c_src_y,
+                source_rect_w: c_src_w,
+                source_rect_h: c_src_h,
+                glyph_count: c_glyph_count as usize,
+                raw_font_fingerprint: c_raw_font.to_string(),
+                is_rtl: c_is_rtl,
+                first_glyph_index: c_first_glyph,
+                cluster_text: c_cluster_text,
+            });
+        }
+
+        // 提取 cursor_x_map
+        let mut cursor_x_map = Vec::with_capacity(cursor_x_map_count as usize);
+        for mi in 0..cursor_x_map_count {
+            let midx: i32 = (cursor_x_map_start as i32) + mi as i32;
+            let m_qchar = get_cursor_x_map_qchar(midx);
+            let m_x_leading = get_cursor_x_map_x_leading(midx);
+            let m_x_trailing = get_cursor_x_map_x_trailing(midx);
+            cursor_x_map.push(CursorXMapEntry {
+                qchar_pos: m_qchar,
+                x_leading: m_x_leading,
+                x_trailing: m_x_trailing,
+            });
+        }
+
+        snapshots.push(CanonicalLineSnapshot {
+            qchar_start,
+            qchar_end,
+            document_byte_start: qchar_offset_to_byte_offset(paragraph_text, qchar_start)
+                + paragraph_document_byte_start,
+            document_byte_end: qchar_offset_to_byte_offset(paragraph_text, qchar_end)
+                + paragraph_document_byte_start,
+            x_pos,
+            width,
+            ascent,
+            descent,
+            x_end_trailing,
+            image,
+            clusters,
+            cursor_x_map,
+        });
+    }
+
+    snapshots
+}
+
+// Helper functions to read from C++ buffers
+fn get_canonical_line_qchar_start(idx: i32) -> usize {
+    cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharStart);
+        return 0;
+    })
+}
+
+fn get_canonical_line_qchar_end(idx: i32) -> usize {
+    cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return static_cast<qulonglong>(g_canonical_line_buf[idx].qcharEnd);
+        return 0;
+    })
+}
+
+fn get_canonical_line_x_pos(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].xPos;
+        return 0.0;
+    })
+}
+
+fn get_canonical_line_width(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].width;
+        return 0.0;
+    })
+}
+
+fn get_canonical_line_ascent(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].ascent;
+        return 0.0;
+    })
+}
+
+fn get_canonical_line_descent(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].descent;
+        return 0.0;
+    })
+}
+
+fn get_canonical_line_x_end_trailing(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].xEndTrailing;
+        return 0.0;
+    })
+}
+
+fn get_canonical_line_image_phys_w(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].imagePhysW;
+        return 0;
+    })
+}
+
+fn get_canonical_line_image_phys_h(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].imagePhysH;
+        return 0;
+    })
+}
+
+fn get_canonical_line_cluster_start(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].clusterStartIndex;
+        return 0;
+    })
+}
+
+fn get_canonical_line_cluster_count(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].clusterCount;
+        return 0;
+    })
+}
+
+fn get_canonical_line_cursor_x_map_start(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].cursorXMapStart;
+        return 0;
+    })
+}
+
+fn get_canonical_line_cursor_x_map_count(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_line_buf.size())
+            return g_canonical_line_buf[idx].cursorXMapCount;
+        return 0;
+    })
+}
+
+fn get_canonical_cluster_qchar_start(idx: i32) -> usize {
+    cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return static_cast<qulonglong>(g_canonical_cluster_buf[idx].qcharStart);
+        return 0;
+    })
+}
+
+fn get_canonical_cluster_qchar_end(idx: i32) -> usize {
+    cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return static_cast<qulonglong>(g_canonical_cluster_buf[idx].qcharEnd);
+        return 0;
+    })
+}
+
+fn get_canonical_cluster_src_x(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].sourceRectX;
+        return 0.0;
+    })
+}
+
+fn get_canonical_cluster_src_y(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].sourceRectY;
+        return 0.0;
+    })
+}
+
+fn get_canonical_cluster_src_w(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].sourceRectW;
+        return 0.0;
+    })
+}
+
+fn get_canonical_cluster_src_h(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].sourceRectH;
+        return 0.0;
+    })
+}
+
+fn get_canonical_cluster_glyph_count(idx: i32) -> i32 {
+    cpp!(unsafe [idx as "int"] -> i32 as "int" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].glyphCount;
+        return 0;
+    })
+}
+
+fn get_canonical_cluster_raw_font(idx: i32) -> QString {
+    cpp!(unsafe [idx as "int"] -> QString as "QString" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return QString::fromUtf8(g_canonical_cluster_buf[idx].rawFontFingerprint);
+        return QString();
+    })
+}
+
+fn get_canonical_cluster_is_rtl(idx: i32) -> bool {
+    cpp!(unsafe [idx as "int"] -> bool as "bool" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].isRTL;
+        return false;
+    })
+}
+
+fn get_canonical_cluster_first_glyph(idx: i32) -> u32 {
+    cpp!(unsafe [idx as "int"] -> u32 as "quint32" {
+        if (idx >= 0 && idx < (int)g_canonical_cluster_buf.size())
+            return g_canonical_cluster_buf[idx].firstGlyphIndex;
+        return 0;
+    })
+}
+
+fn get_cursor_x_map_qchar(idx: i32) -> usize {
+    cpp!(unsafe [idx as "int"] -> usize as "qulonglong" {
+        if (idx >= 0 && idx < (int)g_cursor_x_map_buf.size())
+            return static_cast<qulonglong>(g_cursor_x_map_buf[idx].qcharPos);
+        return 0;
+    })
+}
+
+fn get_cursor_x_map_x_leading(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_cursor_x_map_buf.size())
+            return g_cursor_x_map_buf[idx].xLeading;
+        return 0.0;
+    })
+}
+
+fn get_cursor_x_map_x_trailing(idx: i32) -> f64 {
+    cpp!(unsafe [idx as "int"] -> f64 as "double" {
+        if (idx >= 0 && idx < (int)g_cursor_x_map_buf.size())
+            return g_cursor_x_map_buf[idx].xTrailing;
+        return 0.0;
     })
 }
 
@@ -2515,6 +3133,10 @@ pub fn prepare_document_visual_snapshot(
 /// （生成 QImage/glyphRuns/cluster）；其他段落只做基础排版
 /// （`generate_animation_visuals=false`），保留 QTextLayout/VisualLine 供静态
 /// QSGTextNode 消费。基础 canonical 排版仍一次生成完整 new text 的所有段落。
+///
+/// Issue #658 评论 5624570557 问题 2: 分离基础排版与动画视觉生成。
+/// 本函数只做基础排版（QTextLayout + VisualLine + cursor map），不生成 QImage。
+/// 调用方需随后调用 `prepare_animation_visuals_from_layout` 对受影响行提取动画资源。
 pub fn prepare_document_visual_snapshot_scoped(
     text: &str,
     text_revision: u64,
@@ -2530,6 +3152,9 @@ pub fn prepare_document_visual_snapshot_scoped(
     affected_byte_start: usize,
     affected_byte_end: usize,
 ) -> CanonicalDocumentVisualSnapshot {
+    // Issue #658 评论 5624570557 问题 2: 基础排版不生成动画视觉，
+    // 只得到 QTextLayout/VisualLine/cursor 几何。
+    // 动画视觉由 prepare_animation_visuals_from_layout 单独提取。
     prepare_document_visual_snapshot_impl(
         text,
         text_revision,
@@ -2542,7 +3167,7 @@ pub fn prepare_document_visual_snapshot_scoped(
         dpr,
         text_color,
         generation,
-        true,
+        false,
         affected_byte_start,
         affected_byte_end,
     )
@@ -3403,6 +4028,179 @@ pub fn line_contains_cursor_with_affinity(
         return true;
     }
     false
+}
+
+/// Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉注入到 doc snapshot。
+///
+/// `prepare_animation_visuals_from_layout` 从已有 QTextLine 提取的 `CanonicalLineSnapshot`
+/// 包含 QImage/clusters，但 `old_doc_snapshot` 用 `generate_animation_visuals=false` 排版时
+/// 其 `paragraphs[].lines[].image` 为 None。本函数按 `document_byte_start` 匹配，
+/// 把提取的 QImage/clusters 注入到 doc snapshot 的对应行，使动画纹理可用。
+pub fn inject_animation_visuals_into_snapshot(
+    doc_snapshot: &mut CanonicalDocumentVisualSnapshot,
+    animation_visuals: Vec<CanonicalLineSnapshot>,
+) {
+    for mut anim_line in animation_visuals {
+        // 在 paragraphs 中找到包含该行的段落
+        for para in &mut doc_snapshot.paragraphs {
+            let para_start = para.paragraph_document_byte_start;
+            let para_end = para_start + para.paragraph_text.len();
+            // 检查 anim_line 是否属于该段落
+            if anim_line.document_byte_start >= para_start
+                && anim_line.document_byte_start < para_end
+            {
+                // 在该段落的 lines 中找到匹配的行（按 document_byte_start）
+                for line in &mut para.lines {
+                    if line.document_byte_start == anim_line.document_byte_start {
+                        line.image = anim_line.image.take();
+                        if !anim_line.clusters.is_empty() {
+                            line.clusters = std::mem::take(&mut anim_line.clusters);
+                        }
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// Issue #658 评论 5624570557 问题 2: 比较 old/new VisualLine，计算真正需要动画的 line ids。
+///
+/// 考虑换行/删换行时的受影响后续 reflow 行和相邻新旧段落。
+/// 返回 `(old_line_ids, new_line_ids)`，分别是 old_lines 和 new_lines 中需要动画的行索引。
+///
+/// 算法：
+/// 1. 找出字节范围相交的行
+/// 2. 考虑 reflow：换行/删换行影响后续所有行
+/// 3. 考虑相邻段落：新段落首行缩进变化
+pub fn compare_old_new_visual_lines(
+    old_lines: &[VisualLine],
+    new_lines: &[VisualLine],
+    inserted_range: Option<(usize, usize)>,
+    deleted_range: Option<(usize, usize)>,
+) -> (Vec<usize>, Vec<usize>) {
+    if old_lines.is_empty() || new_lines.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // 确定受影响的字节范围
+    let affected_byte_start = inserted_range
+        .map(|(s, _)| s)
+        .or(deleted_range.map(|(s, _)| s))
+        .unwrap_or(0);
+    let affected_byte_end = inserted_range
+        .map(|(_, e)| e)
+        .or(deleted_range.map(|(_, e)| e))
+        .unwrap_or(usize::MAX);
+
+    // 检查是否有换行变化（通过比较受影响行数）
+    let has_line_count_change = if let Some((ins_start, ins_end)) = inserted_range {
+        if let Some((del_start, del_end)) = deleted_range {
+            // 替换操作：检查插入和删除的长度差异
+            (ins_end - ins_start) != (del_end - del_start)
+        } else {
+            // 纯插入：可能导致换行增加
+            true
+        }
+    } else if deleted_range.is_some() {
+        // 纯删除：可能导致换行减少
+        true
+    } else {
+        false
+    };
+
+    // 计算 old 侧受影响的行
+    let mut old_affected = Vec::new();
+    for (idx, old_line) in old_lines.iter().enumerate() {
+        let intersects =
+            old_line.byte_start < affected_byte_end && old_line.byte_end > affected_byte_start;
+        if intersects {
+            old_affected.push(idx);
+        }
+    }
+    let old_first = old_affected.iter().copied().min().unwrap_or(0);
+    if has_line_count_change {
+        for idx in (old_first + 1)..old_lines.len() {
+            if !old_affected.contains(&idx) {
+                old_affected.push(idx);
+            }
+        }
+    }
+    // 考虑相邻段落首行缩进变化
+    for idx in 0..old_lines.len() {
+        let old_line = &old_lines[idx];
+        if old_line.qtextline_idx == 0 && old_affected.contains(&idx) {
+            if let Some(new_line) = new_lines
+                .iter()
+                .find(|l| l.para_start == old_line.para_start && l.qtextline_idx == 0)
+            {
+                if (new_line.x - old_line.x).abs() > 0.1 && !old_affected.contains(&idx) {
+                    old_affected.push(idx);
+                }
+            }
+        }
+    }
+    // 考虑新段落首行（old 中不存在的段落）
+    for new_line in new_lines.iter() {
+        if new_line.qtextline_idx == 0 {
+            let is_new_para = !old_lines.iter().any(|l| l.para_start == new_line.para_start);
+            if is_new_para {
+                if let Some(old_idx) = old_lines.iter().position(|l| l.para_start == new_line.para_start) {
+                    if !old_affected.contains(&old_idx) {
+                        old_affected.push(old_idx);
+                    }
+                }
+            }
+        }
+    }
+    old_affected.sort_unstable();
+    old_affected.dedup();
+
+    // 计算 new 侧受影响的行（对称逻辑）
+    let mut new_affected = Vec::new();
+    for (idx, new_line) in new_lines.iter().enumerate() {
+        let intersects =
+            new_line.byte_start < affected_byte_end && new_line.byte_end > affected_byte_start;
+        if intersects {
+            new_affected.push(idx);
+        }
+    }
+    let new_first = new_affected.iter().copied().min().unwrap_or(0);
+    if has_line_count_change {
+        for idx in (new_first + 1)..new_lines.len() {
+            if !new_affected.contains(&idx) {
+                new_affected.push(idx);
+            }
+        }
+    }
+    // 考虑相邻段落首行缩进变化（new 侧）
+    for idx in 0..new_lines.len() {
+        let new_line = &new_lines[idx];
+        if new_line.qtextline_idx == 0 && new_affected.contains(&idx) {
+            if let Some(old_line) = old_lines
+                .iter()
+                .find(|l| l.para_start == new_line.para_start && l.qtextline_idx == 0)
+            {
+                if (new_line.x - old_line.x).abs() > 0.1 && !new_affected.contains(&idx) {
+                    new_affected.push(idx);
+                }
+            }
+        }
+    }
+    // 考虑新段落首行（new 侧：new 中存在但 old 中不存在的段落）
+    for (idx, new_line) in new_lines.iter().enumerate() {
+        if new_line.qtextline_idx == 0 {
+            let is_new_para = !old_lines.iter().any(|l| l.para_start == new_line.para_start);
+            if is_new_para && !new_affected.contains(&idx) {
+                new_affected.push(idx);
+            }
+        }
+    }
+    new_affected.sort_unstable();
+    new_affected.dedup();
+
+    (old_affected, new_affected)
 }
 
 #[cfg(test)]

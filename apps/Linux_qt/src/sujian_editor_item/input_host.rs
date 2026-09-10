@@ -198,9 +198,19 @@ impl EditorInputHost for SujianEditorItem {
                         self.pipeline
                             .current_layout_snapshot()
                             .clone()
-                            .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                            .unwrap_or_else(|| {
+                                self.build_editor_layout_snapshot(
+                                    width,
+                                    false,
+                                    Some((composition_byte_start, composition_byte_end)),
+                                )
+                            })
                     });
-                let new_snapshot = self.build_editor_layout_snapshot(width, false);
+                let new_snapshot = self.build_editor_layout_snapshot(
+                    width,
+                    false,
+                    Some((composition_byte_start, composition_byte_end)),
+                );
 
                 self.pipeline
                     .animation_coordinator_mut()
@@ -239,12 +249,13 @@ impl EditorInputHost for SujianEditorItem {
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
+                let composition_range = Some((data.composition_byte_start, data.composition_byte_end));
 
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                 } else {
                     self.pipeline
                         .animation_coordinator()
@@ -254,11 +265,15 @@ impl EditorInputHost for SujianEditorItem {
                             self.pipeline
                                 .current_layout_snapshot()
                                 .clone()
-                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                         })
                 };
 
-                let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
+                let new_snapshot = self.build_virtual_layout_snapshot(
+                    &data.virtual_text,
+                    width,
+                    composition_range,
+                );
 
                 let old_cursor_rect = self
                     .pipeline
@@ -327,12 +342,13 @@ impl EditorInputHost for SujianEditorItem {
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
+                let composition_range = Some((data.composition_byte_start, data.composition_byte_end));
 
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                 } else {
                     self.pipeline
                         .animation_coordinator()
@@ -342,11 +358,15 @@ impl EditorInputHost for SujianEditorItem {
                             self.pipeline
                                 .current_layout_snapshot()
                                 .clone()
-                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                         })
                 };
 
-                let new_snapshot = self.build_virtual_layout_snapshot(&data.virtual_text, width);
+                let new_snapshot = self.build_virtual_layout_snapshot(
+                    &data.virtual_text,
+                    width,
+                    composition_range,
+                );
 
                 let old_cursor_rect = self
                     .pipeline

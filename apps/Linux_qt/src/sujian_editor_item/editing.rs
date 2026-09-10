@@ -142,6 +142,7 @@ impl SujianEditorItem {
                     baseline_y: c.baseline_y,
                 });
 
+            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
             let old_snapshot = self
                 .pipeline
                 .animation_coordinator()
@@ -151,7 +152,7 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
@@ -173,7 +174,7 @@ impl SujianEditorItem {
 
             // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
             // 走 promote=true，generation 直接成为 current，不再用完即删。
-            let new_snapshot = self.build_editor_layout_snapshot(width, true);
+            let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                 x: c.x,
                 top: c.y,
@@ -387,6 +388,7 @@ impl SujianEditorItem {
                     baseline_y: c.baseline_y,
                 });
 
+            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
             let old_snapshot = self
                 .pipeline
                 .animation_coordinator()
@@ -396,7 +398,7 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
@@ -418,7 +420,8 @@ impl SujianEditorItem {
 
             // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
             // 走 promote=true，generation 直接成为 current，不再用完即删。
-            let new_snapshot = self.build_editor_layout_snapshot(width, true);
+            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
+            let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                 x: c.x,
                 top: c.y,

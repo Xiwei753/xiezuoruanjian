@@ -58,10 +58,15 @@ impl SujianEditorItem {
     /// `emit_content_changed -> ensure_layout_cached` 对同一已提交正文再次排版。
     /// `promote=false` 时保持原逻辑（临时 generation 用完即 clear），供 preedit
     /// virtual_text / old_snapshot fallback 等非 committed current 路径使用。
+    ///
+    /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
+    /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
+    /// 与该 byte range 相交的行。
     pub(crate) fn build_editor_layout_snapshot(
         &mut self,
         width: f64,
         promote: bool,
+        composition_range: Option<(usize, usize)>,
     ) -> EditorLayoutSnapshot {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
@@ -85,7 +90,10 @@ impl SujianEditorItem {
         // 而是分配独立 generation，与静态正文路径互不干扰。
         let generation = crate::editor::layout::begin_layout_generation();
 
-        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
+        // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
+        // 改为按 composition_range 提取相关行的动画视觉。
+        let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
+        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             &self.buffer.text,
             self.pipeline.text_revision(),
             font_size,
@@ -97,7 +105,8 @@ impl SujianEditorItem {
             dpr,
             text_color,
             generation,
-            true,
+            affected_start,
+            affected_end,
         );
 
         let caret = doc_snapshot.cursor_rect(
@@ -123,6 +132,8 @@ impl SujianEditorItem {
             // generation 直接成为 current。构造 PromotedLayout 存入 pending，
             // emit_content_changed 取出提升为 EditorLayout current，后续
             // ensure_layout_cached cache hit 不再重新排版同一已提交正文。
+            // Issue #658 评论 5624570557 问题 1: composition commit 路径没有 old prepared layout，
+            // old_generation 设为 0。
             let promoted_visual_lines = doc_snapshot.visual_lines.clone();
             self.pipeline.set_pending_promoted_layout(Some(
                 crate::editor::layout::PromotedLayout {
@@ -134,6 +145,7 @@ impl SujianEditorItem {
                     line_spacing: line_spacing as f32,
                     text_indent: text_indent as f32,
                     padding: padding as f32,
+                    old_generation: 0,
                 },
             ));
         } else {
@@ -148,10 +160,14 @@ impl SujianEditorItem {
         snapshot
     }
 
+    /// Issue #658 评论 5624570557 问题 3: 增加 `composition_range` 参数，只对受影响范围
+    /// 提取动画视觉。`None` 表示全篇（fallback 语义），`Some((start, end))` 表示只提取
+    /// 与该 byte range 相交的行。virtual text 路径用临时 generation，用完即 clear。
     pub(crate) fn build_virtual_layout_snapshot(
         &mut self,
         virtual_text: &str,
         width: f64,
+        composition_range: Option<(usize, usize)>,
     ) -> EditorLayoutSnapshot {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
@@ -175,7 +191,10 @@ impl SujianEditorItem {
         // 而是分配独立 generation，与静态正文路径互不干扰。
         let generation = crate::editor::layout::begin_layout_generation();
 
-        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
+        // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
+        // 改为按 composition_range 提取相关行的动画视觉。
+        let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
+        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             virtual_text,
             self.pipeline.text_revision(),
             font_size,
@@ -187,7 +206,8 @@ impl SujianEditorItem {
             dpr,
             text_color,
             generation,
-            true,
+            affected_start,
+            affected_end,
         );
 
         let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session

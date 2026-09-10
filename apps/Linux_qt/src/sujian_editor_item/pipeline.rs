@@ -853,6 +853,7 @@ impl LinuxEditorPipeline {
         old: &EditorSnapshot,
         new: &EditorSnapshot,
         cause: EditorTransactionCause,
+        editor_layout: &crate::editor::layout::EditorLayout,
     ) -> Option<EditorVisualTransaction> {
         let transaction = self.engine.create_transaction(
             &old.text,
@@ -896,41 +897,20 @@ impl LinuxEditorPipeline {
                         (min_b.min(max_b), max_b)
                     });
 
-                let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+                // Issue #658 评论 5624570557 问题 1: 从 pipeline 获取 old current prepared layout 句柄，
+                // 不再重新排版 old text。
+                let old_prepared_handle = editor_layout.current_prepared_layout();
+                let old_generation = old_prepared_handle
+                    .as_ref()
+                    .map(|h| h.generation)
+                    .unwrap_or(0);
 
                 // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
                 // 而是分配独立 generation，与静态正文路径互不干扰。
-                let old_generation = layout::begin_layout_generation();
                 let new_generation = layout::begin_layout_generation();
 
-                // Issue #658 评论 5622829886 问题 1: old 用受影响段落排版（临时 generation，
-                // 用完 clear）；new 用全篇排版（generate_animation_visuals=true），
-                // 不 clear new_generation，构造 PromotedLayout 交给 EditorLayout 提升为 current，
-                // 后续 EditorLayout::snapshot 不再重新排版同一 new text。
-                let old_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
-                    &vt.old_text,
-                    0,
-                    ctx.font_pixel_size,
-                    &ctx.font_family,
-                    ctx.line_spacing,
-                    ctx.padding,
-                    ctx.text_indent,
-                    ctx.bounding_width,
-                    ctx.dpr,
-                    &ctx.text_color,
-                    affected_byte_start,
-                    affected_byte_end,
-                    prev_new_snapshot,
-                    old_generation,
-                    true,
-                );
-                // Issue #658 评论 5623746506 问题 2a: 不再对整篇 new text 用全局
-                // generate_animation_visuals=true 排版。改用 scoped 入口，只有与
-                // [affected_byte_start, affected_byte_end) 有交集的段落才生成
-                // QImage/glyph/cluster；其他段落只做基础排版（QTextLayout/VisualLine），
-                // 供静态 QSGTextNode 直接消费。基础 canonical 排版仍一次生成完整
-                // new text 的所有段落，new_generation 成为 current。
-                let new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
+                // Issue #658 评论 5624570557 问题 2: 先做 new 基础排版，得到 new_lines 用于比较
+                let mut new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
                     &new.text,
                     0,
                     ctx.font_pixel_size,
@@ -945,6 +925,87 @@ impl LinuxEditorPipeline {
                     affected_byte_start,
                     affected_byte_end,
                 );
+
+                // Issue #658 评论 5624570557 问题 1+2: 比较 old/new VisualLine，计算受影响 line_ids
+                let old_doc_snapshot = if let Some(ref handle) = old_prepared_handle {
+                    // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
+                    let (old_line_ids, new_line_ids) = layout::compare_old_new_visual_lines(
+                        handle.lines,
+                        &new_doc_snapshot.visual_lines,
+                        vt.inserted_range.map(|r| (r.start().value(), r.end().value())),
+                        vt.deleted_range.map(|r| (r.start().value(), r.end().value())),
+                    );
+                    
+                    // 从已有 old layout 提取 old 动画视觉（只提取受影响的行）
+                    let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
+                        handle,
+                        &old_line_ids,
+                        ctx.dpr,
+                        &ctx.text_color,
+                        &vt.old_text,
+                        0,
+                    );
+                    
+                    // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
+                    // 使用 prepare_document_visual_snapshot 生成完整快照
+                    let mut doc_snap = layout::prepare_document_visual_snapshot(
+                        &vt.old_text,
+                        0,
+                        ctx.font_pixel_size,
+                        &ctx.font_family,
+                        ctx.line_spacing,
+                        ctx.padding,
+                        ctx.text_indent,
+                        ctx.bounding_width,
+                        ctx.dpr,
+                        &ctx.text_color,
+                        old_generation,
+                        false,
+                    );
+
+                    // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
+                    // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
+                    layout::inject_animation_visuals_into_snapshot(&mut doc_snap, old_line_snapshots);
+
+                    // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
+                    // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
+                    // 从已有 QTextLine 只提取受影响行的 QImage/glyph/cluster。
+                    let new_handle = layout::PreparedLayoutHandle {
+                        generation: new_generation,
+                        lines: &new_doc_snapshot.visual_lines,
+                    };
+                    let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
+                        &new_handle,
+                        &new_line_ids,
+                        ctx.dpr,
+                        &ctx.text_color,
+                        &new.text,
+                        0,
+                    );
+                    layout::inject_animation_visuals_into_snapshot(&mut new_doc_snapshot, new_line_snapshots);
+
+                    doc_snap
+                } else {
+                    // fallback: 没有 prepared layout，用受影响段落排版
+                    let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
+                    layout::prepare_affected_paragraphs_visual_snapshot(
+                        &vt.old_text,
+                        0,
+                        ctx.font_pixel_size,
+                        &ctx.font_family,
+                        ctx.line_spacing,
+                        ctx.padding,
+                        ctx.text_indent,
+                        ctx.bounding_width,
+                        ctx.dpr,
+                        &ctx.text_color,
+                        affected_byte_start,
+                        affected_byte_end,
+                        prev_new_snapshot,
+                        old_generation,
+                        true,
+                    )
+                };
 
                 let old_caret = old_doc_snapshot.cursor_rect(
                     vt.old_selection.head.index.value(),
@@ -1023,16 +1084,9 @@ impl LinuxEditorPipeline {
                     }));
                 self.current_layout_snapshot = Some(new_snap);
 
-                // Issue #658 评论 5622829886 问题 1: old generation 是临时排版，
-                // 提取完 canonical line/image/cursor 数据后立即释放。
-                // new generation 不 clear——构造 PromotedLayout 存到 pending_promoted_layout，
-                // 由 record_transaction → emit_content_changed 提升为 EditorLayout current，
-                // 后续 EditorLayout::snapshot 不再重新排版同一 new text。
-                // new_doc_snapshot 的 visual_lines/paragraphs 是纯 Rust 数据，不持有 C++ layout 指针；
-                // to_layout_snapshot() 把 layout_generation 填 0，不被
-                // rebuild_text_node_from_paragraphs 消费。previous_canonical_snapshot
-                // 后续只用于复用未受影响段落的 VisualLine，同样不依赖 layout 指针。
-                layout::clear_layout_generation(old_generation);
+                // Issue #658 评论 5624570557 问题 1: old generation 不在此处释放，
+                // 而是存入 PromotedLayout.old_generation，在 promote 时随 new generation 一起释放。
+                // 这样保证 old 动画纹理在 new prepared layout 成为 current 之前一直有效。
 
                 // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 previous_canonical_snapshot。
                 let promoted_visual_lines = new_doc_snapshot.visual_lines.clone();
@@ -1047,6 +1101,7 @@ impl LinuxEditorPipeline {
                     line_spacing: ctx.line_spacing as f32,
                     text_indent: ctx.text_indent as f32,
                     padding: ctx.padding as f32,
+                    old_generation,
                 });
 
                 super::editor_animation_debug_log(&format!(
