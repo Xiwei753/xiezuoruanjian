@@ -113,24 +113,43 @@ impl SujianEditorItem {
         // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
         // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
         // 已对全篇 generate_animation_visuals=false，无动画视觉需提取）。
+        // Issue #658 评论 5626002895 问题 2: 不再只按 composition range filter 行，
+        // 改用 compare_old_new_visual_lines 比较 old/new lines 得到 affected line ids，
+        // 再并入 composition range 直接覆盖的行，确保 IME commit 后 downstream reflow 行
+        // 也提取动画视觉（handle_composition_commit_or_cancel 会遍历 candidate_byte_end
+        // 之后的行做 reflow，这些行没有动画视觉会导致 source_rect 缺失甚至 texture_failed）。
         if affected_start < affected_end {
-            let line_ids: Vec<usize> = doc_snapshot
-                .visual_lines
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
-                .map(|(i, _)| i)
-                .collect();
+            let line_ids: Vec<usize> = {
+                let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
+                let mut ids = if let Some(old_lines) = old_lines_opt {
+                    let (_, new_ids) = crate::editor::layout::compare_old_new_visual_lines(
+                        old_lines,
+                        &doc_snapshot.visual_lines,
+                        Some((affected_start, affected_end)),
+                        None,
+                    );
+                    new_ids
+                } else {
+                    Vec::new()
+                };
+                // 并入 composition range 直接覆盖的行
+                for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
+                    if l.byte_start < affected_end
+                        && l.byte_end > affected_start
+                        && !ids.contains(&i)
+                    {
+                        ids.push(i);
+                    }
+                }
+                ids
+            };
             if !line_ids.is_empty() {
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
-                    &handle,
-                    &line_ids,
-                    dpr,
-                    text_color,
+                    &handle, &line_ids, dpr, text_color,
                 );
                 crate::editor::layout::inject_animation_visuals_into_snapshot(
                     &mut doc_snapshot,
@@ -243,24 +262,43 @@ impl SujianEditorItem {
         // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
         // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
         // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义）。
+        // Issue #658 评论 5626002895 问题 2: 不再只按 composition range filter 行，
+        // 改用 compare_old_new_visual_lines 比较 old/new lines 得到 affected line ids，
+        // 再并入 composition range 直接覆盖的行，确保 IME preedit 后 downstream reflow 行
+        // 也提取动画视觉（handle_composition_update 会遍历 composition_byte_end 之后的行
+        // 做 reflow，这些行没有动画视觉会导致 source_rect 缺失甚至 texture_failed）。
         if affected_start < affected_end {
-            let line_ids: Vec<usize> = doc_snapshot
-                .visual_lines
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
-                .map(|(i, _)| i)
-                .collect();
+            let line_ids: Vec<usize> = {
+                let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
+                let mut ids = if let Some(old_lines) = old_lines_opt {
+                    let (_, new_ids) = crate::editor::layout::compare_old_new_visual_lines(
+                        old_lines,
+                        &doc_snapshot.visual_lines,
+                        Some((affected_start, affected_end)),
+                        None,
+                    );
+                    new_ids
+                } else {
+                    Vec::new()
+                };
+                // 并入 composition range 直接覆盖的行
+                for (i, l) in doc_snapshot.visual_lines.iter().enumerate() {
+                    if l.byte_start < affected_end
+                        && l.byte_end > affected_start
+                        && !ids.contains(&i)
+                    {
+                        ids.push(i);
+                    }
+                }
+                ids
+            };
             if !line_ids.is_empty() {
                 let handle = crate::editor::layout::PreparedLayoutHandle {
                     generation,
                     lines: &doc_snapshot.visual_lines,
                 };
                 let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
-                    &handle,
-                    &line_ids,
-                    dpr,
-                    text_color,
+                    &handle, &line_ids, dpr, text_color,
                 );
                 crate::editor::layout::inject_animation_visuals_into_snapshot(
                     &mut doc_snapshot,

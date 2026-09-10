@@ -1879,10 +1879,8 @@ pub fn prepare_animation_visuals_from_layout(
             let c_is_rtl = get_canonical_cluster_is_rtl(cidx);
             let c_first_glyph = get_canonical_cluster_first_glyph(cidx);
 
-            let doc_byte_start = qchar_offset_to_byte_offset(para_text, c_qchar_start)
-                + para_start;
-            let doc_byte_end = qchar_offset_to_byte_offset(para_text, c_qchar_end)
-                + para_start;
+            let doc_byte_start = qchar_offset_to_byte_offset(para_text, c_qchar_start) + para_start;
+            let doc_byte_end = qchar_offset_to_byte_offset(para_text, c_qchar_end) + para_start;
 
             let (c_byte_start, c_byte_end) = (
                 qchar_offset_to_byte_offset(para_text, c_qchar_start),
@@ -1926,10 +1924,8 @@ pub fn prepare_animation_visuals_from_layout(
         snapshots.push(CanonicalLineSnapshot {
             qchar_start,
             qchar_end,
-            document_byte_start: qchar_offset_to_byte_offset(para_text, qchar_start)
-                + para_start,
-            document_byte_end: qchar_offset_to_byte_offset(para_text, qchar_end)
-                + para_start,
+            document_byte_start: qchar_offset_to_byte_offset(para_text, qchar_start) + para_start,
+            document_byte_end: qchar_offset_to_byte_offset(para_text, qchar_end) + para_start,
             x_pos,
             width,
             ascent,
@@ -4257,9 +4253,14 @@ pub fn compare_old_new_visual_lines(
     // 考虑新段落首行（old 中不存在的段落）
     for new_line in new_lines.iter() {
         if new_line.qtextline_idx == 0 {
-            let is_new_para = !old_lines.iter().any(|l| l.para_start == new_line.para_start);
+            let is_new_para = !old_lines
+                .iter()
+                .any(|l| l.para_start == new_line.para_start);
             if is_new_para {
-                if let Some(old_idx) = old_lines.iter().position(|l| l.para_start == new_line.para_start) {
+                if let Some(old_idx) = old_lines
+                    .iter()
+                    .position(|l| l.para_start == new_line.para_start)
+                {
                     if !old_affected.contains(&old_idx) {
                         old_affected.push(old_idx);
                     }
@@ -4304,7 +4305,9 @@ pub fn compare_old_new_visual_lines(
     // 考虑新段落首行（new 侧：new 中存在但 old 中不存在的段落）
     for (idx, new_line) in new_lines.iter().enumerate() {
         if new_line.qtextline_idx == 0 {
-            let is_new_para = !old_lines.iter().any(|l| l.para_start == new_line.para_start);
+            let is_new_para = !old_lines
+                .iter()
+                .any(|l| l.para_start == new_line.para_start);
             if is_new_para && !new_affected.contains(&idx) {
                 new_affected.push(idx);
             }
@@ -5066,5 +5069,4 @@ mod tests {
         assert!(rect_small.x > 0.0, "small font end cursor x must be > 0");
         assert!(rect_large.x > 0.0, "large font end cursor x must be > 0");
     }
-
 }

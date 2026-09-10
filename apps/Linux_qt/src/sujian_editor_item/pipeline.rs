@@ -905,6 +905,29 @@ impl LinuxEditorPipeline {
                     .map(|h| h.generation)
                     .unwrap_or(0);
 
+                // Issue #658 评论 5626002895 问题 1: old caret 从当前 cache 的真实 QTextLine 取 x，
+                // 不用 assemble_document_visual_snapshot_from_lines 产生的空 cursor_x_map
+                // （cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x 行首，
+                // 导致正文光标在行中间时打一字后协同光标动画起点从行首开始）。
+                // 只有有 old_prepared_handle 的路径才从 cache 算；fallback 路径仍用
+                // old_doc_snapshot.cursor_rect()（fallback 的 prepare_affected_paragraphs_visual_snapshot
+                // 会真正排版并生成 cursor_x_map）。
+                let old_cursor_byte = vt.old_selection.head.index.value();
+                let old_caret_from_cache: Option<layout::CaretRect> =
+                    if old_prepared_handle.is_some() {
+                        editor_layout.cache().map(|snap| {
+                            editor_layout.caret_rect(
+                                snap,
+                                old_cursor_byte,
+                                layout::CaretAffinity::Downstream,
+                                ctx.scroll_y,
+                                ctx.viewport_height,
+                            )
+                        })
+                    } else {
+                        None
+                    };
+
                 // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
                 // 而是分配独立 generation，与静态正文路径互不干扰。
                 let new_generation = layout::begin_layout_generation();
@@ -927,15 +950,21 @@ impl LinuxEditorPipeline {
                 );
 
                 // Issue #658 评论 5624570557 问题 1+2: 比较 old/new VisualLine，计算受影响 line_ids
+                // Issue #658 评论 5626002895 问题 3: fallback 路径分配真实 generation 构造 old snapshot，
+                // 用完 clear_layout_generation 释放。generation 0 只作为"无 generation"哨兵值，
+                // 不能拿去实际存 QTextLayout（promote_prepared_layout 跳过 old_generation==0 不释放）。
+                let mut fallback_old_generation_opt: Option<u64> = None;
                 let old_doc_snapshot = if let Some(ref handle) = old_prepared_handle {
                     // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
                     let (old_line_ids, new_line_ids) = layout::compare_old_new_visual_lines(
                         handle.lines,
                         &new_doc_snapshot.visual_lines,
-                        vt.inserted_range.map(|r| (r.start().value(), r.end().value())),
-                        vt.deleted_range.map(|r| (r.start().value(), r.end().value())),
+                        vt.inserted_range
+                            .map(|r| (r.start().value(), r.end().value())),
+                        vt.deleted_range
+                            .map(|r| (r.start().value(), r.end().value())),
                     );
-                    
+
                     // 从已有 old layout 提取 old 动画视觉（只提取受影响的行）
                     // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
                     // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
@@ -945,7 +974,7 @@ impl LinuxEditorPipeline {
                         ctx.dpr,
                         &ctx.text_color,
                     );
-                    
+
                     // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
                     // Issue #658 评论 5625515748 问题 2: 不再调 prepare_document_visual_snapshot
                     // 重新排版整篇 old text（false 只跳过 QImage/glyph 生成，不跳过
@@ -966,7 +995,10 @@ impl LinuxEditorPipeline {
 
                     // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
                     // （QImage/clusters）注入到 old_doc_snapshot，使动画纹理可用。
-                    layout::inject_animation_visuals_into_snapshot(&mut doc_snap, old_line_snapshots);
+                    layout::inject_animation_visuals_into_snapshot(
+                        &mut doc_snap,
+                        old_line_snapshots,
+                    );
 
                     // Issue #658 评论 5624570557 问题 1+2: 从已有 new layout 提取 new 动画视觉。
                     // new_doc_snapshot 已完成基础排版（QTextLayout 存入 new_generation），
@@ -981,11 +1013,18 @@ impl LinuxEditorPipeline {
                         ctx.dpr,
                         &ctx.text_color,
                     );
-                    layout::inject_animation_visuals_into_snapshot(&mut new_doc_snapshot, new_line_snapshots);
+                    layout::inject_animation_visuals_into_snapshot(
+                        &mut new_doc_snapshot,
+                        new_line_snapshots,
+                    );
 
                     doc_snap
                 } else {
                     // fallback: 没有 prepared layout，用受影响段落排版
+                    // Issue #658 评论 5626002895 问题 3: 分配真实 generation 构造 fallback old snapshot，
+                    // 不再用 0（generation 0 是哨兵值，promote_prepared_layout 跳过 0 不释放会导致泄漏）。
+                    let fallback_old_generation = layout::begin_layout_generation();
+                    fallback_old_generation_opt = Some(fallback_old_generation);
                     let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
                     layout::prepare_affected_paragraphs_visual_snapshot(
                         &vt.old_text,
@@ -1001,17 +1040,19 @@ impl LinuxEditorPipeline {
                         affected_byte_start,
                         affected_byte_end,
                         prev_new_snapshot,
-                        old_generation,
+                        fallback_old_generation,
                         true,
                     )
                 };
 
-                let old_caret = old_doc_snapshot.cursor_rect(
-                    vt.old_selection.head.index.value(),
-                    layout::CaretAffinity::Downstream,
-                    ctx.scroll_y,
-                    ctx.viewport_height,
-                );
+                let old_caret = old_caret_from_cache.unwrap_or_else(|| {
+                    old_doc_snapshot.cursor_rect(
+                        vt.old_selection.head.index.value(),
+                        layout::CaretAffinity::Downstream,
+                        ctx.scroll_y,
+                        ctx.viewport_height,
+                    )
+                });
                 let new_caret = new_doc_snapshot.cursor_rect(
                     vt.new_selection.head.index.value(),
                     layout::CaretAffinity::Downstream,
@@ -1031,6 +1072,14 @@ impl LinuxEditorPipeline {
                     &ctx.font_family,
                     ctx.scroll_y,
                 ));
+
+                // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
+                // 已复制进 Rust snapshot（old_doc_snapshot），fallback_old_generation 的 QTextLayout
+                // 不再需要，立即释放避免生命周期泄漏。old_doc_snapshot 后续 build_old_new_from_canonical
+                // 和 previous_layout_snapshot 只消费 Rust 数据，不依赖 QTextLayout。
+                if let Some(gen) = fallback_old_generation_opt {
+                    layout::clear_layout_generation(gen);
+                }
 
                 match vt.kind {
                     EditorAnimationKind::Insert => {

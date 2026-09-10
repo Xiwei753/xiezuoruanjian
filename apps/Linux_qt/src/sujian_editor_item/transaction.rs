@@ -49,9 +49,13 @@ impl SujianEditorItem {
         let mut vt = self.pipeline.engine_mut().visual_transaction(&transaction);
 
         if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
-            vt = self
-                .pipeline
-                .record_visual_transaction(&ctx, &old, &new, cause, &self.editor_layout);
+            vt = self.pipeline.record_visual_transaction(
+                &ctx,
+                &old,
+                &new,
+                cause,
+                &self.editor_layout,
+            );
         }
         // Issue #658 评论 5622188166 问题 1: 动画关闭/滚动抑制时不再走
         // fill_visual_transaction_coords_legacy 生成 old/new 动画坐标。

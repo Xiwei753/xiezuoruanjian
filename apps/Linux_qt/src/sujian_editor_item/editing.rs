@@ -152,7 +152,9 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
+                        .unwrap_or_else(|| {
+                            self.build_editor_layout_snapshot(width, false, composition_range)
+                        })
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
@@ -398,7 +400,9 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false, composition_range))
+                        .unwrap_or_else(|| {
+                            self.build_editor_layout_snapshot(width, false, composition_range)
+                        })
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
