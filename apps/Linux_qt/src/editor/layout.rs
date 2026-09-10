@@ -254,8 +254,6 @@ cpp! {{
             }
 
             QString para_text = text_qstr.mid(pos, para_end - pos);
-            int para_byte_start = QString::fromUtf8(text_bytes.constData(), pos).toUtf8().size();
-            int para_byte_len = para_text.toUtf8().size();
 
             // 与 Rust 侧 layout_lines() 的空段落处理一致：跳过。
             if (para_text.isEmpty()) {
