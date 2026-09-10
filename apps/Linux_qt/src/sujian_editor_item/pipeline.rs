@@ -310,6 +310,11 @@ pub(crate) struct LinuxEditorPipeline {
     previous_canonical_snapshot: Option<crate::editor::layout::CanonicalDocumentVisualSnapshot>,
     /// 布局修订——宽度/字号/字体/行距等变化时递增
     layout_revision: LayoutRevision,
+    /// Issue #658 评论 5622829886 问题 1: record_visual_transaction 全篇排版 new text
+    /// 后把 new prepared layout 存在此处，由 record_transaction 取出交给
+    /// EditorLayout::promote_prepared_layout 提升为 current，
+    /// 后续 EditorLayout::snapshot 不再重新排版同一 new text。
+    pending_promoted_layout: Option<crate::editor::layout::PromotedLayout>,
 }
 
 impl LinuxEditorPipeline {
@@ -330,6 +335,7 @@ impl LinuxEditorPipeline {
             previous_layout_snapshot: None,
             previous_canonical_snapshot: None,
             layout_revision: LayoutRevision::initial(),
+            pending_promoted_layout: None,
         }
     }
 
@@ -751,6 +757,14 @@ impl LinuxEditorPipeline {
         self.previous_canonical_snapshot = snapshot;
     }
 
+    /// Issue #658 评论 5622829886 问题 1: 取出 record_visual_transaction 产生的
+    /// pending promoted layout，由 record_transaction 交给 EditorLayout::promote_prepared_layout。
+    pub fn take_pending_promoted_layout(
+        &mut self,
+    ) -> Option<crate::editor::layout::PromotedLayout> {
+        self.pending_promoted_layout.take()
+    }
+
     pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
         let tx = self
             .animation_coordinator
@@ -878,6 +892,10 @@ impl LinuxEditorPipeline {
                 let old_generation = layout::begin_layout_generation();
                 let new_generation = layout::begin_layout_generation();
 
+                // Issue #658 评论 5622829886 问题 1: old 用受影响段落排版（临时 generation，
+                // 用完 clear）；new 用全篇排版（generate_animation_visuals=true），
+                // 不 clear new_generation，构造 PromotedLayout 交给 EditorLayout 提升为 current，
+                // 后续 EditorLayout::snapshot 不再重新排版同一 new text。
                 let old_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &vt.old_text,
                     0,
@@ -893,8 +911,9 @@ impl LinuxEditorPipeline {
                     affected_byte_end,
                     prev_new_snapshot,
                     old_generation,
+                    true,
                 );
-                let new_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
+                let new_doc_snapshot = layout::prepare_document_visual_snapshot(
                     &new.text,
                     0,
                     ctx.font_pixel_size,
@@ -905,10 +924,8 @@ impl LinuxEditorPipeline {
                     ctx.bounding_width,
                     ctx.dpr,
                     &ctx.text_color,
-                    affected_byte_start,
-                    affected_byte_end,
-                    prev_new_snapshot,
                     new_generation,
+                    true,
                 );
 
                 let old_caret = old_doc_snapshot.cursor_rect(
@@ -987,18 +1004,32 @@ impl LinuxEditorPipeline {
                         )
                     }));
                 self.current_layout_snapshot = Some(new_snap);
-                self.previous_canonical_snapshot = Some(new_doc_snapshot);
 
-                // Issue #658 评论 5621512329 问题 1: 临时 old/new generation 的
-                // QTextLayout 已在 prepare_affected_paragraphs_visual_snapshot 内部
-                // 提取完 canonical line/image/cursor 数据。old/new_doc_snapshot 的
-                // visual_lines/paragraphs 是纯 Rust 数据，不持有 C++ layout 指针；
+                // Issue #658 评论 5622829886 问题 1: old generation 是临时排版，
+                // 提取完 canonical line/image/cursor 数据后立即释放。
+                // new generation 不 clear——构造 PromotedLayout 存到 pending_promoted_layout，
+                // 由 record_transaction → emit_content_changed 提升为 EditorLayout current，
+                // 后续 EditorLayout::snapshot 不再重新排版同一 new text。
+                // new_doc_snapshot 的 visual_lines/paragraphs 是纯 Rust 数据，不持有 C++ layout 指针；
                 // to_layout_snapshot() 把 layout_generation 填 0，不被
                 // rebuild_text_node_from_paragraphs 消费。previous_canonical_snapshot
                 // 后续只用于复用未受影响段落的 VisualLine，同样不依赖 layout 指针。
-                // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
                 layout::clear_layout_generation(old_generation);
-                layout::clear_layout_generation(new_generation);
+
+                // 先 clone visual_lines 用于 PromotedLayout，再 move new_doc_snapshot 到 previous_canonical_snapshot。
+                let promoted_visual_lines = new_doc_snapshot.visual_lines.clone();
+                self.previous_canonical_snapshot = Some(new_doc_snapshot);
+
+                self.pending_promoted_layout = Some(layout::PromotedLayout {
+                    generation: new_generation,
+                    visual_lines: promoted_visual_lines,
+                    width: ctx.bounding_width,
+                    font_size: ctx.font_pixel_size as f32,
+                    font_family: ctx.font_family.clone(),
+                    line_spacing: ctx.line_spacing as f32,
+                    text_indent: ctx.text_indent as f32,
+                    padding: ctx.padding as f32,
+                });
 
                 super::editor_animation_debug_log(&format!(
                     "record_visual_transaction: processed via canonical document snapshot pipeline, kind={:?}, has_active_insert={}",

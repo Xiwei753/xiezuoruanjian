@@ -87,6 +87,7 @@ impl SujianEditorItem {
             dpr,
             text_color,
             generation,
+            true,
         );
 
         let caret = doc_snapshot.cursor_rect(
@@ -156,6 +157,7 @@ impl SujianEditorItem {
             dpr,
             text_color,
             generation,
+            true,
         );
 
         let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session

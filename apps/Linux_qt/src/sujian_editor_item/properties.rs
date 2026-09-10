@@ -588,6 +588,19 @@ impl SujianEditorItem {
             self.cursor_ctrl.animation = None;
         }
         self.pipeline.bump_text_revision();
+        // Issue #658 评论 5622829886 问题 1: 把 record_visual_transaction 产生的
+        // pending promoted layout 提升为 EditorLayout current，避免后续
+        // recalculate_content_height_and_emit / request_static_repaint 中的
+        // EditorLayout::snapshot 对同一 new text 重新排版。
+        // text_revision / text_ptr / text_len 从当前 buffer.text 和
+        // pipeline.text_revision() 获取，确保与 snapshot() 的 cache 有效性检查一致。
+        if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
+            self.editor_layout.promote_prepared_layout(
+                promoted,
+                &self.buffer.text,
+                self.pipeline.text_revision(),
+            );
+        }
         self.recalculate_content_height_and_emit();
         self.plain_text_changed();
         self.text_changed();
