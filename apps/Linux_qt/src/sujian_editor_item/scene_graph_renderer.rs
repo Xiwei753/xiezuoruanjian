@@ -32,9 +32,9 @@ pub(crate) fn render_frame(
         // 正文/字体/宽度变更：重建静态节点
         if let Some(snapshot) = static_text.layout_snapshot {
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。
-            // cache_idx 按段落在文档中出现的顺序分配，与 g_paragraph_layout_cache 对齐。
+            // cache_idx 直接从 VisualLine.cache_slot 读取（由 layout 阶段按段落出现顺序
+            // 分配的稳定 slot），不再自行计数。
             let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
-            let mut cache_idx: usize = 0;
             let mut last_para_start: Option<usize> = None;
 
             for line in &snapshot.lines {
@@ -44,15 +44,39 @@ pub(crate) fn render_frame(
                     paragraphs.push(qt_text_node::ParagraphLineInfo {
                         paragraph_text: line.para_text.clone(),
                         para_start: line.para_start,
-                        cache_idx,
+                        cache_idx: line.cache_slot,
                         y: line.y,
                         indent_w: line.para_indent,
                         font_size: snapshot.font_size,
                         font_family: snapshot.font_family.clone(),
                         doc_width: snapshot.width,
                     });
-                    cache_idx += 1;
                 }
+            }
+
+            // Issue #658: 构建 per-visual-line 裁剪数据，用于按视觉行裁剪动画接管区域。
+            // 每个视觉行携带自己的 cache_slot、qtextline_idx、y、height、x、width，
+            // 以及所属段落的 para_y（addTextLayout 偏移）。
+            let mut visual_line_clips: Vec<qt_text_node::VisualLineClipInfo> = Vec::new();
+            // 段落第一行 y 的映射：para_start -> para_y
+            let mut para_y_map: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+            for line in &snapshot.lines {
+                if !para_y_map.contains_key(&line.para_start) {
+                    para_y_map.insert(line.para_start, line.y);
+                }
+            }
+            for line in &snapshot.lines {
+                let para_y = *para_y_map.get(&line.para_start).unwrap_or(&line.y);
+                visual_line_clips.push(qt_text_node::VisualLineClipInfo {
+                    cache_idx: line.cache_slot,
+                    qtextline_idx: line.qtextline_idx,
+                    y: line.y,
+                    height: line.height,
+                    x: line.x,
+                    width: line.width,
+                    para_y,
+                    doc_width: snapshot.width,
+                });
             }
 
             // Issue #658: 从 static_patches 的 hidden_source_rects 计算精确裁剪区域，
@@ -63,6 +87,7 @@ pub(crate) fn render_frame(
                 root_raw,
                 item_ptr,
                 &paragraphs,
+                &visual_line_clips,
                 static_text.scroll_y,
                 static_text.color,
                 &clip_rects,

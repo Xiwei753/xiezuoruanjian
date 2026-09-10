@@ -84,6 +84,10 @@ cpp! {{
         double naturalTextWidth;
         double ascent;
         double descent;
+        // Issue #658: canonical 行高 — 与 Rust 侧 actual_line_h 完全一致的行高，
+        // 由 C++ 排版时计算并 setPosition，Rust 侧直接读取使用，
+        // 确保 QTextLayout 内部行位置和 VisualLine.y 共享同一份几何。
+        double lineHeight;
     };
     thread_local std::vector<EditorLayoutEntry> g_editor_layout_buf;
 
@@ -218,7 +222,7 @@ cpp! {{
 
     void editor_layout_lines(
         const QString& text_qstr, double fs, const QString& ff,
-        double wrap_w, double indent_w
+        double wrap_w, double indent_w, double line_spacing
     ) {
         // Issue #658: 按段落拆分文本，为每段创建 QTextLayout 并存入
         // g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs 消费。
@@ -226,6 +230,8 @@ cpp! {{
         // g_paragraph_layout_cache 的 clear 由调用方（Rust layout_lines）在批次开始前统一调用。
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
+        QFontMetricsF fm(font);
+        double metrics_h = fm.ascent() + fm.descent();
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
 
@@ -260,21 +266,34 @@ cpp! {{
                 layout->beginLayout();
 
                 bool first = true;
+                // Issue #658: local_y 按 canonical 行高累加，与 Rust 侧 VisualLine.y 一致。
+                // 给每个 QTextLine 写入最终 setPosition，使 layout 完整排版，
+                // QSGTextNode::addTextLayout 才能正确绘制每行。
+                double local_y = 0.0;
                 while (true) {
                     QTextLine line = layout->createLine();
                     if (!line.isValid()) break;
                     double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
                     line.setLineWidth(lineWrap);
+                    // Issue #658: canonical 行高公式与 Rust 侧 actual_line_h 完全一致：
+                    // max(font_size * line_spacing, font_size + 4.0, metrics_h, line.ascent()+line.descent())
+                    double qt_metrics_h = line.ascent() + line.descent();
+                    double canonical_line_h = std::max(fs * line_spacing,
+                        std::max(fs + 4.0, std::max(metrics_h, qt_metrics_h)));
+                    double line_x = first ? indent_w : 0.0;
+                    line.setPosition(QPointF(line_x, local_y));
+                    local_y += canonical_line_h;
                     EditorLayoutEntry e;
                     e.qcharStart = line.textStart();
                     e.qcharEnd = line.textStart() + line.textLength();
                     e.width = line.naturalTextWidth();
-                    e.xPos = first ? indent_w : 0.0;
+                    e.xPos = line_x;
                     e.xEndLeading = line.cursorToX(e.qcharEnd, QTextLine::Leading);
                     e.xEndTrailing = line.cursorToX(e.qcharEnd, QTextLine::Trailing);
                     e.naturalTextWidth = line.naturalTextWidth();
                     e.ascent = line.ascent();
                     e.descent = line.descent();
+                    e.lineHeight = canonical_line_h;
                     g_editor_layout_buf.push_back(e);
                     first = false;
                 }
@@ -803,7 +822,8 @@ cpp! {{
         double fs, const QString& ff,
         double wrap_w, double indent_w,
         double dpr, const QColor& textColor,
-        int cache_slot
+        int cache_slot,
+        double line_spacing
     ) {
         g_canonical_line_buf.clear();
         g_canonical_cluster_buf.clear();
@@ -811,57 +831,58 @@ cpp! {{
         g_canonical_line_images.clear();
         g_cursor_x_map_buf.clear();
 
-        if (paraText.isEmpty()) return;
+        // Issue #658: 空段落也占一个明确的 null slot，保持与 editor_layout_lines()
+        // 对空段落 push_back(nullptr) 的处理一致。这样 cache_slot 与文档段落一一对应，
+        // scene_graph_renderer 直接消费 snapshot 中稳定的 slot 不再自行计数。
+        if (paraText.isEmpty()) {
+            if (cache_slot >= 0) {
+                while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
+                    g_paragraph_layout_cache.push_back(nullptr);
+                }
+                if (g_paragraph_layout_cache[cache_slot]) {
+                    delete g_paragraph_layout_cache[cache_slot];
+                }
+                g_paragraph_layout_cache[cache_slot] = nullptr;
+            }
+            return;
+        }
 
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
+        QFontMetricsF fm(font);
+        double metrics_h = fm.ascent() + fm.descent();
+
+        // Issue #658: 只创建一次 QTextLayout（heap allocated），从这个实例同时提取
+        // line/cluster/cursor 数据并 setPosition，直接存入 g_paragraph_layout_cache，
+        // 不再为了 cache 排第二遍。消除第二次 QTextLayout 重复排版。
+        auto* layout = new QTextLayout(paraText, font);
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.setCacheEnabled(true);
-        layout.beginLayout();
+        layout->setTextOption(option);
+        layout->setCacheEnabled(true);
+        layout->beginLayout();
 
         QVector<QTextLine> textLines;
         bool first = true;
+        // Issue #658: local_y 按 canonical 行高累加，与 Rust 侧 VisualLine.y 一致。
+        // 给每个 QTextLine 写入最终 setPosition，使 layout 完整排版。
+        double local_y = 0.0;
         while (true) {
-            QTextLine line = layout.createLine();
+            QTextLine line = layout->createLine();
             if (!line.isValid()) break;
             double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
             line.setLineWidth(lineWrap);
+            // Issue #658: canonical 行高公式与 Rust 侧 actual_line_h 完全一致。
+            double qt_metrics_h = line.ascent() + line.descent();
+            double canonical_line_h = std::max(fs * line_spacing,
+                std::max(fs + 4.0, std::max(metrics_h, qt_metrics_h)));
+            double line_x = first ? indent_w : 0.0;
+            line.setPosition(QPointF(line_x, local_y));
+            local_y += canonical_line_h;
             textLines.push_back(line);
             first = false;
         }
-        layout.endLayout();
-
-        // Issue #658: 将 QTextLayout 存入 g_paragraph_layout_cache，供
-        // rebuild_text_node_from_paragraphs() 消费。不再由两套路径各自维护。
-        if (cache_slot >= 0) {
-            // 确保 cache 足够大
-            while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
-                g_paragraph_layout_cache.push_back(nullptr);
-            }
-            // 释放旧 layout（如果有）
-            if (g_paragraph_layout_cache[cache_slot]) {
-                delete g_paragraph_layout_cache[cache_slot];
-            }
-            // 复制一份新的 layout 存入 cache（因为原始 layout 在函数结束时会被销毁）
-            auto* cachedLayout = new QTextLayout(paraText, font);
-            QTextOption cacheOption;
-            cacheOption.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-            cachedLayout->setTextOption(cacheOption);
-            cachedLayout->beginLayout();
-            bool firstCache = true;
-            while (true) {
-                QTextLine cacheLine = cachedLayout->createLine();
-                if (!cacheLine.isValid()) break;
-                double lineWrap = firstCache ? (wrap_w - indent_w) : wrap_w;
-                cacheLine.setLineWidth(lineWrap);
-                firstCache = false;
-            }
-            cachedLayout->endLayout();
-            g_paragraph_layout_cache[cache_slot] = cachedLayout;
-        }
+        layout->endLayout();
 
         for (int i = 0; i < textLines.size(); i++) {
             const QTextLine& line = textLines[i];
@@ -1065,6 +1086,21 @@ cpp! {{
 
             g_canonical_line_buf.push_back(entry);
         }
+
+        // Issue #658: 数据提取完成后，将这一个已排好版（含 setPosition）的 layout
+        // 直接存入 g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs() 消费。
+        // 不再排第二遍。如果 cache_slot < 0（不缓存），则销毁 layout 避免泄漏。
+        if (cache_slot >= 0) {
+            while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
+                g_paragraph_layout_cache.push_back(nullptr);
+            }
+            if (g_paragraph_layout_cache[cache_slot]) {
+                delete g_paragraph_layout_cache[cache_slot];
+            }
+            g_paragraph_layout_cache[cache_slot] = layout;
+        } else {
+            delete layout;
+        }
     }
 
     int editor_canonical_line_count() {
@@ -1128,6 +1164,10 @@ pub struct VisualLine {
     pub x_end_trailing: f64,
     pub qt_ascent: f64,
     pub qt_descent: f64,
+    /// Issue #658: 该视觉行所属段落在 g_paragraph_layout_cache 中的稳定 slot 索引。
+    /// 按段落在文档中出现的顺序（含空段落）从 0 递增分配，与 cache slot 一一对应。
+    /// scene_graph_renderer 直接消费此字段，不再自行计数 cache_idx。
+    pub cache_slot: i32,
 }
 
 /// 光标矩形 — 文档坐标系（不含 scroll offset）。
@@ -1313,6 +1353,9 @@ pub fn layout_lines(
     let mut paragraph_start = 0;
     let mut paragraph_qchar_start = 0;
     let mut line_id: usize = 0;
+    // Issue #658: paragraph_idx 对所有段落（含空段落）递增，作为稳定的 cache_slot，
+    // 与 C++ editor_layout_lines 的 cache push 顺序一一对应。
+    let mut paragraph_idx: i32 = 0;
 
     // Issue #658: 一个"整篇文档排版批次"只清一次 g_paragraph_layout_cache。
     // editor_layout_lines() 不再每段落清，由 Rust 调用方在批次开始时统一清。
@@ -1350,11 +1393,13 @@ pub fn layout_lines(
                 x_end_trailing: 0.0,
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
+                cache_slot: paragraph_idx,
             });
             line_id += 1;
             y += line_height;
             paragraph_start += paragraph.len();
             paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_idx += 1;
             continue;
         }
 
@@ -1364,6 +1409,7 @@ pub fn layout_lines(
         let wrap_w = available;
         let indent_w = indent;
         let text_qstr: QString = paragraph_text.to_string().into();
+        let ls = line_spacing;
 
         // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let line_count = cpp!(unsafe [
@@ -1371,9 +1417,10 @@ pub fn layout_lines(
             fs as "float",
             ff as "QString",
             wrap_w as "double",
-            indent_w as "double"
+            indent_w as "double",
+            ls as "double"
         ] -> i32 as "int" {
-            editor_layout_lines(text_qstr, fs, ff, wrap_w, indent_w);
+            editor_layout_lines(text_qstr, fs, ff, wrap_w, indent_w, ls);
             return static_cast<int>(g_editor_layout_buf.size());
         });
 
@@ -1428,9 +1475,20 @@ pub fn layout_lines(
                 }
                 return 0.0;
             });
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+            // Issue #658: 直接从 C++ 读取 canonical 行高，与 QTextLayout 内部 setPosition
+            // 使用的 local_y 推进完全一致，不再 Rust 侧另算一套。
+            let canonical_line_h = cpp!(unsafe [idx as "int"] -> f64 as "double" {
+                if (idx >= 0 && idx < static_cast<int>(g_editor_layout_buf.size())) {
+                    return g_editor_layout_buf[idx].lineHeight;
+                }
+                return 0.0;
+            });
 
             let qt_metrics_h = qt_ascent + qt_descent;
-            let actual_line_h = if qt_metrics_h > 0.0 {
+            let actual_line_h = if canonical_line_h > 0.0 {
+                canonical_line_h
+            } else if qt_metrics_h > 0.0 {
                 line_height.max(qt_metrics_h)
             } else {
                 line_height
@@ -1467,6 +1525,7 @@ pub fn layout_lines(
                 x_end_trailing,
                 qt_ascent,
                 qt_descent,
+                cache_slot: paragraph_idx,
             });
             line_id += 1;
             y += actual_line_h;
@@ -1474,6 +1533,7 @@ pub fn layout_lines(
 
         paragraph_start += paragraph.len();
         paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+        paragraph_idx += 1;
     }
 
     if text.ends_with('\n') {
@@ -1500,8 +1560,10 @@ pub fn layout_lines(
             x_end_trailing: 0.0,
             qt_ascent: 0.0,
             qt_descent: 0.0,
+            cache_slot: paragraph_idx,
         });
         line_id += 1;
+        // paragraph_idx 递增省略：尾部换行分支后不再使用。
     }
 
     if text.is_empty() {
@@ -1527,6 +1589,7 @@ pub fn layout_lines(
             x_end_trailing: 0.0,
             qt_ascent: 0.0,
             qt_descent: 0.0,
+            cache_slot: 0,
         });
     }
 
@@ -1655,6 +1718,7 @@ pub fn caret_rect(
                 x_end_trailing: 0.0,
                 qt_ascent: 0.0,
                 qt_descent: 0.0,
+                cache_slot: 0,
             };
             &fallback
         }
@@ -2005,6 +2069,7 @@ pub fn prepare_paragraph_visual_snapshot(
     dpr: f64,
     text_color: &str,
     cache_slot: i32,
+    line_spacing: f64,
 ) -> CanonicalParagraphSnapshot {
     let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
         paragraph_text,
@@ -2012,6 +2077,26 @@ pub fn prepare_paragraph_visual_snapshot(
     );
 
     if paragraph_text.is_empty() {
+        // Issue #658: 空段落也调用 C++ 占 null slot，保持 cache_slot 与文档段落一一对应。
+        let para: QString = paragraph_text.to_string().into();
+        let fs = font_size as f32;
+        let ff: QString = font_family.to_string().into();
+        let color = qmetaobject::QColor::from_name(text_color);
+        let ls = line_spacing;
+        // SAFETY: GUI thread only; cache_slot 是文档段落索引，由调用方保证有效。
+        cpp!(unsafe [
+            para as "QString",
+            fs as "float",
+            ff as "QString",
+            wrap_w as "double",
+            indent_w as "double",
+            dpr as "double",
+            color as "QColor",
+            cache_slot as "int",
+            ls as "double"
+        ] {
+            editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls);
+        });
         return CanonicalParagraphSnapshot {
             paragraph_text: paragraph_text.to_string(),
             paragraph_document_byte_start,
@@ -2024,6 +2109,7 @@ pub fn prepare_paragraph_visual_snapshot(
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
     let color = qmetaobject::QColor::from_name(text_color);
+    let ls = line_spacing;
 
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     let line_count = cpp!(unsafe [
@@ -2034,9 +2120,10 @@ pub fn prepare_paragraph_visual_snapshot(
         indent_w as "double",
         dpr as "double",
         color as "QColor",
-        cache_slot as "int"
+        cache_slot as "int",
+        ls as "double"
     ] -> i32 as "int" {
-        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot);
+        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls);
         return static_cast<int>(g_canonical_line_buf.size());
     });
 
@@ -2373,6 +2460,7 @@ impl CanonicalDocumentVisualSnapshot {
                     x_end_trailing: 0.0,
                     qt_ascent: 0.0,
                     qt_descent: 0.0,
+                    cache_slot: 0,
                 };
                 &fallback
             }
@@ -2518,6 +2606,20 @@ pub fn prepare_document_visual_snapshot(
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
+            // Issue #658: 空段落也调用 prepare_paragraph_visual_snapshot 占 null slot，
+            // 保持 cache_slot 与文档段落一一对应。
+            let _empty_canonical = prepare_paragraph_visual_snapshot(
+                paragraph_text,
+                paragraph_start,
+                font_size,
+                font_family,
+                available,
+                indent,
+                dpr,
+                text_color,
+                paragraph_idx,
+                line_spacing,
+            );
             visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: paragraph_start,
@@ -2540,6 +2642,7 @@ pub fn prepare_document_visual_snapshot(
                 x_end_trailing: 0.0,
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
+                cache_slot: paragraph_idx,
             });
             line_id += 1;
             y += line_height;
@@ -2556,6 +2659,7 @@ pub fn prepare_document_visual_snapshot(
 
             paragraph_start += paragraph.len();
             paragraph_qchar_start += paragraph.chars().map(|c| c.len_utf16()).sum::<usize>();
+            paragraph_idx += 1;
             continue;
         }
 
@@ -2569,6 +2673,7 @@ pub fn prepare_document_visual_snapshot(
             dpr,
             text_color,
             paragraph_idx,
+            line_spacing,
         );
         paragraph_idx += 1;
 
@@ -2608,6 +2713,7 @@ pub fn prepare_document_visual_snapshot(
                 x_end_trailing: canonical_line.x_end_trailing,
                 qt_ascent: canonical_line.ascent,
                 qt_descent: canonical_line.descent,
+                cache_slot: paragraph_idx - 1,
             });
             line_id += 1;
             y += actual_line_h;
@@ -2621,6 +2727,19 @@ pub fn prepare_document_visual_snapshot(
 
     if text.ends_with('\n') {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
+        // Issue #658: 尾部换行产生的空段也占 null slot。
+        let _empty_canonical = prepare_paragraph_visual_snapshot(
+            "",
+            text.len(),
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            paragraph_idx,
+            line_spacing,
+        );
         visual_lines.push(VisualLine {
             id: line_id,
             byte_start: text.len(),
@@ -2643,7 +2762,9 @@ pub fn prepare_document_visual_snapshot(
             x_end_trailing: 0.0,
             qt_ascent: 0.0,
             qt_descent: 0.0,
+            cache_slot: paragraph_idx,
         });
+        // paragraph_idx 递增省略：尾部换行分支后不再使用。
     }
 
     CanonicalDocumentVisualSnapshot {
@@ -2814,6 +2935,19 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
             if !reused_from_prev {
                 if paragraph_text.is_empty() {
+                    // Issue #658: 空段落也占 null slot。
+                    let _empty_canonical = prepare_paragraph_visual_snapshot(
+                        paragraph_text,
+                        paragraph_start,
+                        font_size,
+                        font_family,
+                        available,
+                        indent,
+                        dpr,
+                        text_color,
+                        current_para_idx as i32,
+                        line_spacing,
+                    );
                     visual_lines.push(VisualLine {
                         id: line_id,
                         byte_start: paragraph_start,
@@ -2836,6 +2970,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         x_end_trailing: 0.0,
                         qt_ascent: get_font_ascent(font_family, font_size as f32),
                         qt_descent: get_font_descent(font_family, font_size as f32),
+                        cache_slot: current_para_idx as i32,
                     });
                     line_id += 1;
                     y += line_height;
@@ -2850,6 +2985,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         dpr,
                         text_color,
                         current_para_idx as i32,
+                        line_spacing,
                     );
                     for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
                         let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
@@ -2885,6 +3021,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                             x_end_trailing: canonical_line.x_end_trailing,
                             qt_ascent: canonical_line.ascent,
                             qt_descent: canonical_line.descent,
+                            cache_slot: current_para_idx as i32,
                         });
                         line_id += 1;
                         y += actual_line_h;
@@ -2902,6 +3039,19 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         if paragraph_text.is_empty() {
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
+            // Issue #658: 空段落也占 null slot。
+            let _empty_canonical = prepare_paragraph_visual_snapshot(
+                paragraph_text,
+                paragraph_start,
+                font_size,
+                font_family,
+                available,
+                indent,
+                dpr,
+                text_color,
+                current_para_idx as i32,
+                line_spacing,
+            );
             visual_lines.push(VisualLine {
                 id: line_id,
                 byte_start: paragraph_start,
@@ -2924,6 +3074,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 x_end_trailing: 0.0,
                 qt_ascent: empty_ascent,
                 qt_descent: empty_descent,
+                cache_slot: current_para_idx as i32,
             });
             line_id += 1;
             y += line_height;
@@ -2954,6 +3105,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             dpr,
             text_color,
             current_para_idx as i32,
+            line_spacing,
         );
 
         for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
@@ -2992,6 +3144,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 x_end_trailing: canonical_line.x_end_trailing,
                 qt_ascent: canonical_line.ascent,
                 qt_descent: canonical_line.descent,
+                cache_slot: current_para_idx as i32,
             });
             line_id += 1;
             y += actual_line_h;
@@ -3006,6 +3159,19 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
 
     if text.ends_with('\n') {
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
+        // Issue #658: 尾部换行产生的空段也占 null slot。
+        let _empty_canonical = prepare_paragraph_visual_snapshot(
+            "",
+            text.len(),
+            font_size,
+            font_family,
+            available,
+            indent,
+            dpr,
+            text_color,
+            current_para_idx as i32,
+            line_spacing,
+        );
         visual_lines.push(VisualLine {
             id: line_id,
             byte_start: text.len(),
@@ -3028,6 +3194,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             x_end_trailing: 0.0,
             qt_ascent: 0.0,
             qt_descent: 0.0,
+            cache_slot: current_para_idx as i32,
         });
     }
 

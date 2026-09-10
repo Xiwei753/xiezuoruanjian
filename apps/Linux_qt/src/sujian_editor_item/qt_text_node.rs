@@ -53,7 +53,12 @@ cpp! {{
     /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
     ///
     /// 通过 cache_idx 在 g_paragraph_layout_cache 中查找已排好的 QTextLayout。
-    /// 每个段落的 QTextLayout 在 editor_layout_lines() 阶段创建并缓存。
+    /// 每个段落的 QTextLayout 在 editor_layout_lines() 阶段创建并缓存，
+    /// 且每个 QTextLine 已 setPosition，layout 完整排版。
+    ///
+    /// 主 textNode 按段落整段 addTextLayout（高效）。
+    /// 动画裁剪按视觉行（VisualLineClipInfo），用 QSGTextNode::addTextLayout 的
+    /// lineStart/lineCount 参数按单独视觉行绘制，setClipRect 用视觉行 y/h。
     void rebuild_text_node_from_paragraphs(
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
@@ -61,6 +66,15 @@ cpp! {{
         const double* para_y_arr, const double* indent_w_arr,
         const double* doc_width_arr,
         int para_count,
+        const int* vl_cache_idx_arr,
+        const int* vl_qtextline_idx_arr,
+        const double* vl_y_arr,
+        const double* vl_height_arr,
+        const double* vl_x_arr,
+        const double* vl_width_arr,
+        const double* vl_para_y_arr,
+        const double* vl_doc_width_arr,
+        int vl_count,
         float font_size, const QString& font_family,
         double scroll_y, const QString& color_q,
         const double* clip_x_arr, const double* clip_y_arr,
@@ -98,12 +112,12 @@ cpp! {{
         QColor textColor(color_q);
 
         // Issue #658: setColor() 必须在第一次 addTextLayout() 之前设置。
-        // Qt 的 QSGTextNode 要求影响文本节点的属性在 addTextLayout() 前设置，
-        // 否则加入的文字不保证使用后设的颜色。
         textNode->setColor(textColor);
 
-        // Issue #658: 按段落遍历，通过 cache_idx 在 g_paragraph_layout_cache 中
-        // 查找已排好的 QTextLayout，不再按视觉行索引查找。
+        // Issue #658: 主 textNode — 按段落整段 addTextLayout。
+        // cachedLayout 内部每个 QTextLine 已 setPosition（由 editor_layout_lines 或
+        // editor_prepare_paragraph_visual_snapshot 设置），addTextLayout 的 QPointF(0, y)
+        // 偏移段落第一行到文档 y，后续行位置由 layout 内部 position 决定。
         for (int i = 0; i < para_count; i++) {
             int cacheIdx = cache_idx_arr[i];
             double y = para_y_arr[i];
@@ -111,8 +125,6 @@ cpp! {{
             if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
                 QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
                 if (cachedLayout) {
-                    // QSGTextNode::addTextLayout() 读取 QTextLayout 并不修改它，
-                    // 可安全传递同一指针。
                     textNode->addTextLayout(QPointF(0, y), cachedLayout);
                 }
             }
@@ -121,8 +133,11 @@ cpp! {{
         textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
         // Issue #658: 动画裁剪 — 按视觉行使用精确文档 x/y/w/h 裁剪。
-        // 不再按 Y 整条裁剪（会丢掉 x/w 信息，导致同行其他文字消失）。
-        if (clip_count > 0) {
+        // 不再按段落整段裁（会误裁同行其他文字），不再猜最后段高度（py+30.0）。
+        // 对每一视觉行，只处理与该行 y 范围相交的 AnimationClipRect，
+        // 计算这一行自己的 x complement，用 QSGTextNode::addTextLayout 的
+        // lineStart/lineCount 参数按单独视觉行绘制。
+        if (clip_count > 0 && vl_count > 0) {
             struct ClipRect { double x, y, w, h; };
             std::vector<ClipRect> clipRects;
             for (int c = 0; c < clip_count; c++) {
@@ -135,15 +150,26 @@ cpp! {{
                 }
             }
             if (!clipRects.empty()) {
+                // Issue #658: 从父节点摘掉后立即 delete，不遗留悬空节点。
                 staticLayer->removeChildNode(textNode);
+                delete textNode;
 
-                for (int i = 0; i < para_count; i++) {
-                    int cacheIdx = cache_idx_arr[i];
-                    double py = para_y_arr[i];
-                    double dw = doc_width_arr[i];
-                    double nextY = (i + 1 < para_count) ? para_y_arr[i + 1] : py + 30.0;
-                    double ph = nextY - py;
-                    if (ph < 1.0) ph = 30.0;
+                for (int i = 0; i < vl_count; i++) {
+                    int cacheIdx = vl_cache_idx_arr[i];
+                    int qline = vl_qtextline_idx_arr[i];
+                    double ly = vl_y_arr[i];
+                    double lh = vl_height_arr[i];
+                    if (lh < 1.0) lh = 1.0;
+                    double dw = vl_doc_width_arr[i];
+                    double paraY = vl_para_y_arr[i];
+
+                    if (cacheIdx < 0 || cacheIdx >= (int)g_paragraph_layout_cache.size()) {
+                        continue;
+                    }
+                    QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
+                    if (!cachedLayout) {
+                        continue;
+                    }
 
                     struct XRange { double left, right; };
                     std::vector<XRange> mergedClips;
@@ -151,7 +177,8 @@ cpp! {{
                     struct TempXClip { double x, x2; };
                     std::vector<TempXClip> xClips;
                     for (const auto& cr : clipRects) {
-                        if (cr.y < py + ph && cr.y + cr.h > py) {
+                        // Issue #658: 只处理与该视觉行 y 范围相交的动画矩形。
+                        if (cr.y < ly + lh && cr.y + cr.h > ly) {
                             double crLeft = cr.x;
                             double crRight = cr.x + cr.w;
                             if (crLeft < 0) crLeft = 0;
@@ -190,7 +217,8 @@ cpp! {{
 
                         auto *clipNode = new QSGClipNode;
                         clipNode->setIsRectangular(true);
-                        clipNode->setClipRect(QRectF(comp.left, py, clipW, ph));
+                        // Issue #658: setClipRect 用视觉行 y/h，不再用整段 py/ph。
+                        clipNode->setClipRect(QRectF(comp.left, ly, clipW, lh));
                         staticLayer->appendChildNode(clipNode);
 
                         QSGTextNode* clipTextNode = window->createTextNode();
@@ -199,12 +227,10 @@ cpp! {{
                             clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                             clipNode->appendChildNode(clipTextNode);
 
-                            if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
-                                QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
-                                if (cachedLayout) {
-                                    clipTextNode->addTextLayout(QPointF(0, py), cachedLayout);
-                                }
-                            }
+                            // Issue #658: 用 lineStart/lineCount 按单独视觉行绘制。
+                            // QPointF(0, paraY) 偏移段落第一行到文档 y，
+                            // layout 内部 qline 行的 position 决定该行相对位置。
+                            clipTextNode->addTextLayout(QPointF(0, paraY), cachedLayout, qline, 1);
                             clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         }
                     }
@@ -240,13 +266,14 @@ cpp! {{
 ///
 /// Issue #658: 改为按段落传入数据（不再按视觉行）。cache_idx 是
 /// g_paragraph_layout_cache 中的索引，用于查找已排好的 QTextLayout。
+/// 主 textNode 按段落整段 addTextLayout。
 pub(crate) struct ParagraphLineInfo {
     /// 段落文本（不含尾部 \n）
     pub paragraph_text: String,
     /// 段落在文档中的字节偏移（段落身份标识）
     pub para_start: usize,
     /// 该段落在 g_paragraph_layout_cache 中的索引
-    pub cache_idx: usize,
+    pub cache_idx: i32,
     /// 段落第一行在文档中的 y 坐标（文档坐标，即 VisualLine.y）
     pub y: f64,
     /// 段落第一行的缩进宽度
@@ -256,6 +283,30 @@ pub(crate) struct ParagraphLineInfo {
     /// 字体族
     pub font_family: String,
     /// 段落换行宽度（用于 C++ complement 区间判断）
+    pub doc_width: f64,
+}
+
+/// Issue #658: per-visual-line 裁剪数据 — 用于按视觉行裁剪动画接管区域。
+///
+/// 每个视觉行携带自己的 cache_slot、qtextline_idx、y、height、x、width，
+/// 以及所属段落的 para_y（addTextLayout 偏移）。裁剪时用 QSGTextNode::addTextLayout
+/// 的 lineStart/lineCount 参数按单独视觉行绘制，setClipRect 用视觉行 y/h。
+pub(crate) struct VisualLineClipInfo {
+    /// 该视觉行所属段落在 g_paragraph_layout_cache 中的索引
+    pub cache_idx: i32,
+    /// 该视觉行在 QTextLayout 中的行索引（lineStart 参数）
+    pub qtextline_idx: i32,
+    /// 该视觉行在文档中的 y 坐标
+    pub y: f64,
+    /// 该视觉行的行高
+    pub height: f64,
+    /// 该视觉行的 x 坐标（含缩进）
+    pub x: f64,
+    /// 该视觉行的宽度
+    pub width: f64,
+    /// 该视觉行所属段落第一行的 y 坐标（addTextLayout 偏移）
+    pub para_y: f64,
+    /// 文档宽度（complement 区间右边界）
     pub doc_width: f64,
 }
 
@@ -278,6 +329,7 @@ pub(crate) struct AnimationClipRect {
 ///
 /// 通过 cache_idx 在 g_paragraph_layout_cache 中查找已排好的 QTextLayout。
 /// animation_clip_rects 使用 x/y/w/h 文档坐标。
+/// visual_line_clips 提供 per-visual-line 裁剪数据，用于按视觉行裁剪。
 ///
 /// # Safety
 /// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
@@ -285,6 +337,7 @@ pub fn rebuild_text_node_from_paragraphs(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     paragraphs: &[ParagraphLineInfo],
+    visual_line_clips: &[VisualLineClipInfo],
     scroll_y: f64,
     color: &str,
     animation_clip_rects: &[AnimationClipRect],
@@ -302,10 +355,19 @@ pub fn rebuild_text_node_from_paragraphs(
     let text_ptrs: Vec<*const u8> = paragraphs.iter().map(|p| p.paragraph_text.as_ptr()).collect();
     let text_lens: Vec<i32> = paragraphs.iter().map(|p| p.paragraph_text.len() as i32).collect();
     let para_starts: Vec<i32> = paragraphs.iter().map(|p| p.para_start as i32).collect();
-    let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx as i32).collect();
+    let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
     let indent_ws: Vec<f64> = paragraphs.iter().map(|p| p.indent_w).collect();
     let doc_widths: Vec<f64> = paragraphs.iter().map(|p| p.doc_width).collect();
+
+    let vl_cache_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.cache_idx).collect();
+    let vl_qtextline_idxs: Vec<i32> = visual_line_clips.iter().map(|v| v.qtextline_idx).collect();
+    let vl_y: Vec<f64> = visual_line_clips.iter().map(|v| v.y).collect();
+    let vl_height: Vec<f64> = visual_line_clips.iter().map(|v| v.height).collect();
+    let vl_x: Vec<f64> = visual_line_clips.iter().map(|v| v.x).collect();
+    let vl_width: Vec<f64> = visual_line_clips.iter().map(|v| v.width).collect();
+    let vl_para_y: Vec<f64> = visual_line_clips.iter().map(|v| v.para_y).collect();
+    let vl_doc_width: Vec<f64> = visual_line_clips.iter().map(|v| v.doc_width).collect();
 
     let clip_x: Vec<f64> = animation_clip_rects.iter().map(|c| c.x).collect();
     let clip_y: Vec<f64> = animation_clip_rects.iter().map(|c| c.y).collect();
@@ -313,6 +375,7 @@ pub fn rebuild_text_node_from_paragraphs(
     let clip_h: Vec<f64> = animation_clip_rects.iter().map(|c| c.h).collect();
 
     let para_count = paragraphs.len() as i32;
+    let vl_count = visual_line_clips.len() as i32;
     let clip_count = animation_clip_rects.len() as i32;
 
     let text_ptrs_ptr = text_ptrs.as_ptr();
@@ -322,6 +385,14 @@ pub fn rebuild_text_node_from_paragraphs(
     let para_y_ptr = para_y.as_ptr();
     let indent_ws_ptr = indent_ws.as_ptr();
     let doc_widths_ptr = doc_widths.as_ptr();
+    let vl_cache_idxs_ptr = vl_cache_idxs.as_ptr();
+    let vl_qtextline_idxs_ptr = vl_qtextline_idxs.as_ptr();
+    let vl_y_ptr = vl_y.as_ptr();
+    let vl_height_ptr = vl_height.as_ptr();
+    let vl_x_ptr = vl_x.as_ptr();
+    let vl_width_ptr = vl_width.as_ptr();
+    let vl_para_y_ptr = vl_para_y.as_ptr();
+    let vl_doc_width_ptr = vl_doc_width.as_ptr();
     let clip_x_ptr = clip_x.as_ptr();
     let clip_y_ptr = clip_y.as_ptr();
     let clip_w_ptr = clip_w.as_ptr();
@@ -338,6 +409,15 @@ pub fn rebuild_text_node_from_paragraphs(
         indent_ws_ptr as "const double*",
         doc_widths_ptr as "const double*",
         para_count as "int",
+        vl_cache_idxs_ptr as "const int*",
+        vl_qtextline_idxs_ptr as "const int*",
+        vl_y_ptr as "const double*",
+        vl_height_ptr as "const double*",
+        vl_x_ptr as "const double*",
+        vl_width_ptr as "const double*",
+        vl_para_y_ptr as "const double*",
+        vl_doc_width_ptr as "const double*",
+        vl_count as "int",
         font_size as "float",
         font_family_q as "QString",
         scroll_y as "double",
@@ -355,6 +435,15 @@ pub fn rebuild_text_node_from_paragraphs(
             para_y_ptr, indent_ws_ptr,
             doc_widths_ptr,
             para_count,
+            vl_cache_idxs_ptr,
+            vl_qtextline_idxs_ptr,
+            vl_y_ptr,
+            vl_height_ptr,
+            vl_x_ptr,
+            vl_width_ptr,
+            vl_para_y_ptr,
+            vl_doc_width_ptr,
+            vl_count,
             font_size, font_family_q,
             scroll_y, color_q,
             clip_x_ptr, clip_y_ptr,

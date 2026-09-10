@@ -2291,6 +2291,7 @@ mod tests {
                 x_end_trailing: 800.0,
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
+                cache_slot: 0,
             }],
         };
         EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, CaretAffinity::Downstream)
