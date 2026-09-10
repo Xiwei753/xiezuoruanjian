@@ -29,12 +29,14 @@ pub(crate) fn render_frame(
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
     if static_text.needs_relayout {
+        // 正文/字体/宽度变更：重建静态节点
         if let Some(snapshot) = static_text.layout_snapshot {
             let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
 
             for line in &snapshot.lines {
                 paragraphs.push(qt_text_node::ParagraphLineInfo {
                     paragraph_text: line.para_text.clone(),
+                    para_start: line.para_start,
                     y: line.y,
                     indent_w: line.para_indent,
                     line_wrap_w: line.line_wrap_width + line.line_indent_x,
@@ -47,7 +49,7 @@ pub(crate) fn render_frame(
             // 从动画 glyph 计算裁剪区域（文档坐标 y 范围）
             let clip_rects = compute_animation_clip_rects(plan);
 
-            qt_text_node::update_text_node_from_paragraphs(
+            qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
                 &paragraphs,
@@ -57,31 +59,9 @@ pub(crate) fn render_frame(
             );
         }
     } else {
-        // 非重排帧：只更新滚动位移（QSGTransformNode 矩阵）
-        // 需要传递至少一个虚拟段落以触发滚动矩阵更新
-        if let Some(snapshot) = static_text.layout_snapshot {
-            let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
-            for line in &snapshot.lines {
-                paragraphs.push(qt_text_node::ParagraphLineInfo {
-                    paragraph_text: line.para_text.clone(),
-                    y: line.y,
-                    indent_w: line.para_indent,
-                    line_wrap_w: line.line_wrap_width + line.line_indent_x,
-                    font_size: snapshot.font_size,
-                    font_family: snapshot.font_family.clone(),
-                    doc_width: snapshot.width,
-                });
-            }
-            let clip_rects = compute_animation_clip_rects(plan);
-            qt_text_node::update_text_node_from_paragraphs(
-                root_raw,
-                item_ptr,
-                &paragraphs,
-                static_text.scroll_y,
-                static_text.color,
-                &clip_rects,
-            );
-        }
+        // 滚动帧：只更新 QSGTransformNode 位移矩阵，不重建静态节点。
+        // 不出现 clear()、QTextLayout、createLine()、addTextLayout()。
+        qt_text_node::update_scroll_transform(root_raw, static_text.scroll_y);
     }
 
     // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）

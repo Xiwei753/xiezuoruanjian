@@ -52,7 +52,7 @@ fi
 # ---------------------------------------------------------------------------
 # 2. 准备 RPM 构建目录树
 # ---------------------------------------------------------------------------
-RPM_TOPDIR="${REPO_ROOT}/rpm-build"
+RPM_TOPDIR="${REPO_ROOT}/target/rpm-build"
 echo "==> 准备 RPM 构建目录: ${RPM_TOPDIR}"
 mkdir -p "${RPM_TOPDIR}/BUILD" \
          "${RPM_TOPDIR}/RPMS" \
@@ -115,7 +115,11 @@ rpmbuild -bb \
     "${RPM_TOPDIR}/SPECS/${NAME}.spec"
 
 # ---------------------------------------------------------------------------
-# 7. 输出产物路径
+# 7. 输出产物路径并复制到 dist/rpm/
 # ---------------------------------------------------------------------------
+DIST_DIR="${REPO_ROOT}/dist/rpm"
+mkdir -p "${DIST_DIR}"
 echo "==> 完成。RPM 产物位于: ${RPM_TOPDIR}/RPMS"
 find "${RPM_TOPDIR}/RPMS" -name "*.rpm" -print
+find "${RPM_TOPDIR}/RPMS" -name "*.rpm" -exec cp {} "${DIST_DIR}/" \;
+echo "==> RPM 已复制到: ${DIST_DIR}"

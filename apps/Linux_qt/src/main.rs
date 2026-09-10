@@ -139,7 +139,6 @@ cpp! {{
 }}
 
 qmetaobject::qrc!(qml_resources, "/" {
-    "qtquickcontrols2.conf" as "qtquickcontrols2.conf",
     // Pages
     "qml/main.qml" as "main.qml",
     "qml/DesignTokens.qml" as "DesignTokens.qml",
