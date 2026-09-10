@@ -20,6 +20,7 @@ cpp! {{
     #include <QtGui/QTextLayout>
     #include <QtGui/QTextOption>
     #include <QGuiApplication>
+    #include <QStringList>
     #include <vector>
 
     // ── Issue #658: 段落布局缓存 ──
@@ -219,35 +220,74 @@ cpp! {{
         const QString& text_qstr, double fs, const QString& ff,
         double wrap_w, double indent_w
     ) {
+        // Issue #658: 按段落拆分文本，为每段创建 QTextLayout 并存入
+        // g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs 消费。
+        // 同时将每行排版结果写入 g_editor_layout_buf（供 Rust 侧构建 VisualLine）。
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(text_qstr, font);
         QTextOption option;
         option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
 
         g_editor_layout_buf.clear();
-        bool first = true;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
-            line.setLineWidth(lineWrap);
-            EditorLayoutEntry e;
-            e.qcharStart = line.textStart();
-            e.qcharEnd = line.textStart() + line.textLength();
-            e.width = line.naturalTextWidth();
-            e.xPos = first ? indent_w : 0.0;
-            e.xEndLeading = line.cursorToX(e.qcharEnd, QTextLine::Leading);
-            e.xEndTrailing = line.cursorToX(e.qcharEnd, QTextLine::Trailing);
-            e.naturalTextWidth = line.naturalTextWidth();
-            e.ascent = line.ascent();
-            e.descent = line.descent();
-            g_editor_layout_buf.push_back(e);
-            first = false;
+        clear_paragraph_layout_cache();
+
+        QByteArray text_bytes = text_qstr.toUtf8();
+        int total_len = text_bytes.size();
+        int pos = 0;
+
+        while (pos <= total_len) {
+            int nl_pos = text_qstr.indexOf('\n', pos);
+            int para_end;
+            bool has_newline;
+            if (nl_pos < 0) {
+                para_end = total_len;
+                has_newline = false;
+            } else {
+                para_end = nl_pos;
+                has_newline = true;
+            }
+
+            QString para_text = text_qstr.mid(pos, para_end - pos);
+            int para_byte_start = QString::fromUtf8(text_bytes.constData(), pos).toUtf8().size();
+            int para_byte_len = para_text.toUtf8().size();
+
+            // 与 Rust 侧 layout_lines() 的空段落处理一致：跳过。
+            if (para_text.isEmpty()) {
+                g_paragraph_layout_cache.push_back(nullptr);
+            } else {
+                auto* layout = new QTextLayout(para_text, font);
+                layout->setTextOption(option);
+                layout->beginLayout();
+
+                bool first = true;
+                while (true) {
+                    QTextLine line = layout->createLine();
+                    if (!line.isValid()) break;
+                    double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
+                    line.setLineWidth(lineWrap);
+                    EditorLayoutEntry e;
+                    e.qcharStart = line.textStart();
+                    e.qcharEnd = line.textStart() + line.textLength();
+                    e.width = line.naturalTextWidth();
+                    e.xPos = first ? indent_w : 0.0;
+                    e.xEndLeading = line.cursorToX(e.qcharEnd, QTextLine::Leading);
+                    e.xEndTrailing = line.cursorToX(e.qcharEnd, QTextLine::Trailing);
+                    e.naturalTextWidth = line.naturalTextWidth();
+                    e.ascent = line.ascent();
+                    e.descent = line.descent();
+                    g_editor_layout_buf.push_back(e);
+                    first = false;
+                }
+                layout->endLayout();
+                g_paragraph_layout_cache.push_back(layout);
+            }
+
+            if (has_newline) {
+                pos = nl_pos + 1;
+            } else {
+                break;
+            }
         }
-        layout.endLayout();
     }
 
     int editor_layout_entry_count() {
@@ -793,9 +833,9 @@ cpp! {{
         }
         layout.endLayout();
 
-        // Issue #658: 缓存已排好的 QTextLayout，供 rebuild_text_node_from_paragraphs 消费。
-        // rebuild 阶段不再重新 beginLayout/createLine/endLayout，只从缓存读取。
-        store_paragraph_layout(paraText, font, wrap_w, indent_w);
+        // Issue #658: 不再从 editor_prepare_paragraph_visual_snapshot 调用 store_paragraph_layout。
+        // g_paragraph_layout_cache 由 editor_layout_lines() 统一填充，
+        // 供 rebuild_text_node_from_paragraphs 消费，避免两套 QTextLayout 实例。
 
         for (int i = 0; i < textLines.size(); i++) {
             const QTextLine& line = textLines[i];

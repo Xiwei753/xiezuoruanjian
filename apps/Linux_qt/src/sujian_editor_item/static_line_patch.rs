@@ -5,6 +5,8 @@ use super::layout_snapshot::{LineSnapshotId, SourceRect};
 ///
 /// 坐标空间：
 /// - `hidden_source_rects`：行视觉资源局部坐标（已乘 DPR），标识被动画切片接管的区域。
+/// - `doc_hidden_rects`：通过 `PreparedLineSnapshot::source_rect_to_document_rect()` 转换后的
+///   文档逻辑坐标矩形，供 QSGClipNode 直接使用。
 /// - `byte_start`/`byte_end`：UTF-8 文档范围，用于静态层判断哪些行需要裁剪。
 /// - `snapshot_id`：对应的行快照 ID，用于查找视觉资源。
 #[derive(Clone, Debug)]
@@ -13,6 +15,9 @@ pub(crate) struct StaticLinePatch {
     /// 被动画切片接管的区域（行视觉资源局部坐标，已乘 DPR）。
     /// 静态层据此裁剪以避免与动画层双绘。
     pub hidden_source_rects: Vec<SourceRect>,
+    /// Issue #658: 通过 source_rect_to_document_rect() 转换后的文档逻辑坐标矩形。
+    /// 供 QSGClipNode / complement geometry 直接使用，不再在 Scene Graph 层猜测坐标。
+    pub doc_hidden_rects: Vec<SourceRect>,
     pub byte_start: usize,
     pub byte_end: usize,
 }
@@ -21,12 +26,14 @@ impl StaticLinePatch {
     pub fn insert_patch(
         snapshot_id: LineSnapshotId,
         hidden_source_rects: Vec<SourceRect>,
+        doc_hidden_rects: Vec<SourceRect>,
         byte_start: usize,
         byte_end: usize,
     ) -> Self {
         Self {
             snapshot_id,
             hidden_source_rects,
+            doc_hidden_rects,
             byte_start,
             byte_end,
         }
@@ -35,12 +42,14 @@ impl StaticLinePatch {
     pub fn reflow_patch(
         snapshot_id: LineSnapshotId,
         hidden_source_rects: Vec<SourceRect>,
+        doc_hidden_rects: Vec<SourceRect>,
         byte_start: usize,
         byte_end: usize,
     ) -> Self {
         Self {
             snapshot_id,
             hidden_source_rects,
+            doc_hidden_rects,
             byte_start,
             byte_end,
         }

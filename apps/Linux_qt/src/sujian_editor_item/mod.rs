@@ -392,9 +392,12 @@ pub struct SujianEditorItem {
     last_summary: QString,
     last_event_count: u32,
     editor_layout: EditorLayout,
-    render_dirty: bool,
+    /// 正文/字体/宽度变化时为 true，GUI 线程预计算 snapshot 并置为 false。
+    layout_dirty: bool,
+    /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
+    scene_dirty: bool,
     /// 预计算的静态正文排版快照，在 GUI 线程上准备好，由 update_paint_node() 消费。
-    /// 不变性：render_dirty=true 后 ensure_static_snapshot() 会刷新此字段；
+    /// 不变性：layout_dirty=true 后 request_static_repaint() 会刷新此字段；
     /// update_paint_node() 不再调用 layout_snapshot()，只读取此缓存。
     cached_static_snapshot: Option<LayoutSnapshot>,
     cursor_ctrl: cursor_controller::CursorController,
@@ -527,7 +530,8 @@ impl Default for SujianEditorItem {
             last_summary: Default::default(),
             last_event_count: 0,
             editor_layout: EditorLayout::default(),
-            render_dirty: true,
+            layout_dirty: true,
+            scene_dirty: true,
             cached_static_snapshot: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
         }
@@ -692,18 +696,32 @@ impl SujianEditorItem {
         self.buffer.selection_anchor = mirror.selection_anchor();
     }
 
+    /// GUI 线程上准备不可变静态正文快照，然后请求 Scene Graph 更新。
+    ///
+    /// Issue #658: 在 GUI/input/layout 阶段先准备好 snapshot，
+    /// 再请求 QSG 更新，确保 update_paint_node()（render thread）只消费缓存。
     pub(crate) fn request_static_repaint(&mut self) {
-        self.render_dirty = true;
-        self.cached_static_snapshot = None;
+        self.layout_dirty = true;
+        self.scene_dirty = true;
+        self.prepare_static_snapshot_on_gui_thread();
         let item = self as &dyn QQuickItem;
         item.update();
     }
 
-    /// 在正常编辑/布局阶段准备好静态正文排版快照。
+    /// GUI 线程上仅请求 Scene Graph 重建（动画裁剪变化等）。
     ///
-    /// 正文、宽度、字体、行距、缩进变化时调用，预计算不可变快照。
-    /// update_paint_node() 只读取此快照，不再自行排版。
-    pub(crate) fn ensure_static_snapshot(&mut self) {
+    /// 不重新排版，只通知 update_paint_node() 重建 QSGNode。
+    pub(crate) fn request_scene_rebuild(&mut self) {
+        self.scene_dirty = true;
+        let item = self as &dyn QQuickItem;
+        item.update();
+    }
+
+    /// 在 GUI 线程上预计算静态正文排版快照。
+    ///
+    /// 调用时机：request_static_repaint()、geometry_changed() 等 GUI 线程路径。
+    /// update_paint_node()（render thread）只读取此快照，不再自行排版。
+    fn prepare_static_snapshot_on_gui_thread(&mut self) {
         if self.cached_static_snapshot.is_some() {
             return;
         }
@@ -731,7 +749,7 @@ impl SujianEditorItem {
             self.pipeline.set_current_layout_snapshot(None);
             self.pipeline.set_previous_layout_snapshot(None);
             self.pipeline.set_previous_canonical_snapshot(None);
-            self.request_static_repaint();
+            self.request_scene_rebuild();
             self.cursor_rect_changed();
         }
     }

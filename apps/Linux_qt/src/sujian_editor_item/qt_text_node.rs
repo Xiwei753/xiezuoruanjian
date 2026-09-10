@@ -48,28 +48,24 @@ cpp! {{
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
     extern void clear_paragraph_layout_cache();
-    extern void store_paragraph_layout(
-        const QString& text, const QFont& font,
-        double wrap_w, double indent_w
-    );
     extern std::vector<QTextLayout*> g_paragraph_layout_cache;
 
-    /// 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
+    /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
     ///
-    /// 读取 layout 阶段缓存的 QTextLayout（通过 g_paragraph_layout_cache），
-    /// 不再在 Scene Graph 阶段重新 beginLayout/createLine/endLayout。
-    /// Issue #658: setColor() 放到第一次 addTextLayout() 之前，
-    /// 确保 QSGTextNode 使用正确的文本颜色。
+    /// 通过 cache_idx 在 g_paragraph_layout_cache 中查找已排好的 QTextLayout。
+    /// 每个段落的 QTextLayout 在 editor_layout_lines() 阶段创建并缓存。
     void rebuild_text_node_from_paragraphs(
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
-        const int* para_start_arr,
+        const int* para_start_arr, const int* cache_idx_arr,
         const double* para_y_arr, const double* indent_w_arr,
-        const double* line_wrap_w_arr, const double* doc_width_arr,
+        const double* doc_width_arr,
         int para_count,
         float font_size, const QString& font_family,
         double scroll_y, const QString& color_q,
-        const double* clip_y_arr, const double* clip_h_arr, int clip_count
+        const double* clip_x_arr, const double* clip_y_arr,
+        const double* clip_w_arr, const double* clip_h_arr,
+        int clip_count
     ) {
         if (!root_raw || !item_ptr) return;
         QQuickWindow *window = item_ptr->window();
@@ -106,41 +102,18 @@ cpp! {{
         // 否则加入的文字不保证使用后设的颜色。
         textNode->setColor(textColor);
 
-        // 段落身份用 para_start（字节偏移），不用文本内容比较。
-        // 段落合并：连续 VisualLine 的 para_start 相同则属同一段落。
-        int lastParaStart = -1;
-        double currentLayoutY = 0.0;
-
+        // Issue #658: 按段落遍历，通过 cache_idx 在 g_paragraph_layout_cache 中
+        // 查找已排好的 QTextLayout，不再按视觉行索引查找。
         for (int i = 0; i < para_count; i++) {
-            int paraStart = para_start_arr[i];
+            int cacheIdx = cache_idx_arr[i];
             double y = para_y_arr[i];
-            double iw = indent_w_arr[i];
-            double dw = doc_width_arr[i];
 
-            if (paraStart != lastParaStart) {
-                // 提交上一个段落的 layout（从缓存读取，已是排好的结果）
-                if (lastParaStart >= 0 && i > 0) {
-                    int prevIdx = i - 1;
-                    if (prevIdx >= 0 && prevIdx < (int)g_paragraph_layout_cache.size()) {
-                        QTextLayout* cachedLayout = g_paragraph_layout_cache[prevIdx];
-                        if (cachedLayout) {
-                            textNode->addTextLayout(QPointF(0, currentLayoutY), cachedLayout);
-                        }
-                    }
-                }
-
-                lastParaStart = paraStart;
-                currentLayoutY = y;
-            }
-        }
-
-        // 提交最后一个段落（从缓存读取）
-        if (lastParaStart >= 0) {
-            int lastIdx = para_count - 1;
-            if (lastIdx >= 0 && lastIdx < (int)g_paragraph_layout_cache.size()) {
-                QTextLayout* cachedLayout = g_paragraph_layout_cache[lastIdx];
+            if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
+                QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
                 if (cachedLayout) {
-                    textNode->addTextLayout(QPointF(0, currentLayoutY), cachedLayout);
+                    // QSGTextNode::addTextLayout() 读取 QTextLayout 并不修改它，
+                    // 可安全传递同一指针。
+                    textNode->addTextLayout(QPointF(0, y), cachedLayout);
                 }
             }
         }
@@ -149,38 +122,40 @@ cpp! {{
 
         // ── 动画裁剪：complement geometry ──
         if (clip_count > 0) {
-            // 先按 y 排序裁剪区间
-            struct ClipRange { double y, b; };
+            // Issue #658: 按 y 排序裁剪区间（x/y/w/h 文档坐标）。
+            struct ClipRange { double x, y, w, h; };
             std::vector<ClipRange> ranges;
             for (int c = 0; c < clip_count; c++) {
+                double cx = clip_x_arr[c];
                 double cy = clip_y_arr[c];
+                double cw = clip_w_arr[c];
                 double ch = clip_h_arr[c];
-                if (ch > 0.0) {
-                    ranges.push_back({cy, cy + ch});
+                if (ch > 0.0 && cw > 0.0) {
+                    ranges.push_back({cx, cy, cw, ch});
                 }
             }
             std::sort(ranges.begin(), ranges.end(),
                 [](const ClipRange& a, const ClipRange& b) { return a.y < b.y; });
 
-            // 合并重叠区间
-            std::vector<ClipRange> merged;
+            // 按 y 合并重叠区间
+            struct MergedY { double y, b; };
+            std::vector<MergedY> merged;
             for (const auto& r : ranges) {
                 if (!merged.empty() && r.y <= merged.back().b) {
-                    merged.back().b = std::max(merged.back().b, r.b);
+                    merged.back().b = std::max(merged.back().b, r.y + r.h);
                 } else {
-                    merged.push_back(r);
+                    merged.push_back({r.y, r.y + r.h});
                 }
             }
 
             if (!merged.empty()) {
-                // 移除现有 textNode，按 complement 区间重新组织
                 staticLayer->removeChildNode(textNode);
 
                 double docTop = 0.0;
                 double docBottom = 1e9;
 
                 // 收集 complement 区间
-                std::vector<ClipRange> complements;
+                std::vector<MergedY> complements;
                 if (merged[0].y > docTop) {
                     complements.push_back({docTop, merged[0].y});
                 }
@@ -207,19 +182,17 @@ cpp! {{
                         clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         clipNode->appendChildNode(clipTextNode);
 
-                        // Issue #658: 为每个 complement 区间的 textNode 添加已排好的 QTextLayout，
-                        // 不再创建空的 copyNode。从缓存读取已排好的 layout。
+                        // Issue #658: 为 complement 区间内的段落添加已排好的 QTextLayout。
                         for (int i = 0; i < para_count; i++) {
-                            int paraStart = para_start_arr[i];
+                            int cacheIdx = cache_idx_arr[i];
                             double y = para_y_arr[i];
                             double dw = doc_width_arr[i];
 
-                            if (i == 0 || paraStart != para_start_arr[i - 1]) {
-                                double paraLayoutY = y;
-                                if (i < (int)g_paragraph_layout_cache.size()) {
-                                    QTextLayout* cachedLayout = g_paragraph_layout_cache[i];
+                            if (y + dw > comp.y && y < comp.b) {
+                                if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
+                                    QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
                                     if (cachedLayout) {
-                                        clipTextNode->addTextLayout(QPointF(0, paraLayoutY), cachedLayout);
+                                        clipTextNode->addTextLayout(QPointF(0, y), cachedLayout);
                                     }
                                 }
                             }
@@ -256,42 +229,46 @@ cpp! {{
 
 /// 由 `EditorLayout::snapshot()` 提供的 per-paragraph 排版数据。
 ///
-/// 每个 VisualLine 对应一个条目，相同 para_start 的连续 VisualLine
-/// 在 C++ 侧合并为一个 QTextLayout，首行缩进仅作用于段落首行。
+/// Issue #658: 改为按段落传入数据（不再按视觉行）。cache_idx 是
+/// g_paragraph_layout_cache 中的索引，用于查找已排好的 QTextLayout。
 pub(crate) struct ParagraphLineInfo {
     /// 段落文本（不含尾部 \n）
     pub paragraph_text: String,
     /// 段落在文档中的字节偏移（段落身份标识）
     pub para_start: usize,
-    /// 该行在段落中的 y 坐标（文档坐标，即 VisualLine.y）
+    /// 该段落在 g_paragraph_layout_cache 中的索引
+    pub cache_idx: usize,
+    /// 段落第一行在文档中的 y 坐标（文档坐标，即 VisualLine.y）
     pub y: f64,
-    /// 段落第一行的缩进宽度（仅首行有值，续行为 0）
+    /// 段落第一行的缩进宽度
     pub indent_w: f64,
-    /// 该行的换行宽度（首行为 wrap_w - indent，续行为 wrap_w）
-    pub line_wrap_w: f64,
     /// 字号
     pub font_size: f32,
     /// 字体族
     pub font_family: String,
-    /// 文档宽度（用于首行换行宽度的基准）
+    /// 段落换行宽度（用于 C++ complement 区间判断）
     pub doc_width: f64,
 }
 
-/// 动画接管区域的裁剪矩形（文档坐标 y）。
+/// 动画接管区域的裁剪矩形（文档坐标 x/y/w/h）。
 ///
-/// 当动画层接管某些区域时，静态正文需要裁掉这些区域以避免双绘。
+/// Issue #658: 改为完整的 x/y/w/h 文档坐标矩形，
+/// 由 build_render_plan_full() 通过 PreparedLineSnapshot::source_rect_to_document_rect() 转换。
 pub(crate) struct AnimationClipRect {
-    /// 文档 y 坐标（与 VisualLine.y 一致）
+    /// 文档 x 坐标
+    pub x: f64,
+    /// 文档 y 坐标
     pub y: f64,
+    /// 宽度
+    pub w: f64,
     /// 高度
     pub h: f64,
 }
 
-/// 从已排好的 VisualLine 数据重建静态正文 QSGTextNode。
+/// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
 ///
-/// 消费 `EditorLayout::snapshot()` 的结果，不再自行创建第二套全文 QTextLayout。
-/// 若有动画裁剪区域，用 complement geometry 裁掉动画区域内的静态正文，
-/// 保留动画区域外的静态正文。
+/// 通过 cache_idx 在 g_paragraph_layout_cache 中查找已排好的 QTextLayout。
+/// animation_clip_rects 使用 x/y/w/h 文档坐标。
 ///
 /// # Safety
 /// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
@@ -316,12 +293,14 @@ pub fn rebuild_text_node_from_paragraphs(
     let text_ptrs: Vec<*const u8> = paragraphs.iter().map(|p| p.paragraph_text.as_ptr()).collect();
     let text_lens: Vec<i32> = paragraphs.iter().map(|p| p.paragraph_text.len() as i32).collect();
     let para_starts: Vec<i32> = paragraphs.iter().map(|p| p.para_start as i32).collect();
+    let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx as i32).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
     let indent_ws: Vec<f64> = paragraphs.iter().map(|p| p.indent_w).collect();
-    let line_wrap_ws: Vec<f64> = paragraphs.iter().map(|p| p.line_wrap_w).collect();
     let doc_widths: Vec<f64> = paragraphs.iter().map(|p| p.doc_width).collect();
 
+    let clip_x: Vec<f64> = animation_clip_rects.iter().map(|c| c.x).collect();
     let clip_y: Vec<f64> = animation_clip_rects.iter().map(|c| c.y).collect();
+    let clip_w: Vec<f64> = animation_clip_rects.iter().map(|c| c.w).collect();
     let clip_h: Vec<f64> = animation_clip_rects.iter().map(|c| c.h).collect();
 
     let para_count = paragraphs.len() as i32;
@@ -330,11 +309,13 @@ pub fn rebuild_text_node_from_paragraphs(
     let text_ptrs_ptr = text_ptrs.as_ptr();
     let text_lens_ptr = text_lens.as_ptr();
     let para_starts_ptr = para_starts.as_ptr();
+    let cache_idxs_ptr = cache_idxs.as_ptr();
     let para_y_ptr = para_y.as_ptr();
     let indent_ws_ptr = indent_ws.as_ptr();
-    let line_wrap_ws_ptr = line_wrap_ws.as_ptr();
     let doc_widths_ptr = doc_widths.as_ptr();
+    let clip_x_ptr = clip_x.as_ptr();
     let clip_y_ptr = clip_y.as_ptr();
+    let clip_w_ptr = clip_w.as_ptr();
     let clip_h_ptr = clip_h.as_ptr();
 
     cpp!(unsafe [
@@ -343,36 +324,39 @@ pub fn rebuild_text_node_from_paragraphs(
         text_ptrs_ptr as "const char**",
         text_lens_ptr as "const int*",
         para_starts_ptr as "const int*",
+        cache_idxs_ptr as "const int*",
         para_y_ptr as "const double*",
         indent_ws_ptr as "const double*",
-        line_wrap_ws_ptr as "const double*",
         doc_widths_ptr as "const double*",
         para_count as "int",
         font_size as "float",
         font_family_q as "QString",
         scroll_y as "double",
         color_q as "QString",
+        clip_x_ptr as "const double*",
         clip_y_ptr as "const double*",
+        clip_w_ptr as "const double*",
         clip_h_ptr as "const double*",
         clip_count as "int"
     ] {
         rebuild_text_node_from_paragraphs(
             root_raw, item_ptr,
             text_ptrs_ptr, text_lens_ptr,
-            para_starts_ptr,
+            para_starts_ptr, cache_idxs_ptr,
             para_y_ptr, indent_ws_ptr,
-            line_wrap_ws_ptr, doc_widths_ptr,
+            doc_widths_ptr,
             para_count,
             font_size, font_family_q,
             scroll_y, color_q,
-            clip_y_ptr, clip_h_ptr, clip_count
+            clip_x_ptr, clip_y_ptr,
+            clip_w_ptr, clip_h_ptr,
+            clip_count
         );
     });
 
-    // rebuild 完成后清除布局缓存，释放所有 QTextLayout 内存
-    cpp!(unsafe [] {
-        clear_paragraph_layout_cache();
-    });
+    // Issue #658: 不在 rebuild 末尾清除 g_paragraph_layout_cache。
+    // 布局缓存由 editor_layout_lines() 填充，持久存在供后续帧读取；
+    // 仅在 prepare_document_visual_snapshot() 开头和 editor_layout_lines() 开头清除。
 }
 
 /// 滚动帧：只更新静态正文层的 QSGTransformNode 位移矩阵。

@@ -329,7 +329,7 @@ impl SujianEditorItem {
         self.cursor_ctrl.force_snap_next = true;
         self.update_cursor_visual_position();
         // Issue #658: 滚动不重新排版 QSGTextNode，只请求帧更新（位移由 QSGTransformNode 矩阵处理）。
-        // clear_active_text_animations 内部在有活跃动画时才设 render_dirty。
+        // clear_active_text_animations 内部在有活跃动画时才设 scene_dirty。
         self.request_frame_update();
     }
 

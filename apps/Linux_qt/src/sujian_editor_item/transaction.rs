@@ -173,8 +173,9 @@ impl SujianEditorItem {
 
     pub(crate) fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
         self.pipeline.prepare_transaction_textures(key);
-        self.render_dirty = true;
-        self.cached_static_snapshot = None;
+        // 纹理准备完成后，静态层裁剪区域变化，需要重建 Scene Graph。
+        // 布局未变，不需要重新排版，只需要 scene rebuild。
+        self.request_scene_rebuild();
     }
 }
 

@@ -64,6 +64,7 @@ mod tests {
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
                     Vec::new(),
+                    Vec::new(),
                     5,
                     10,
                 ),
@@ -548,6 +549,7 @@ mod tests {
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
                     Vec::new(),
+                    Vec::new(),
                     10,
                     22,
                 ),
@@ -578,6 +580,7 @@ mod tests {
             static_patches: vec![
                 crate::sujian_editor_item::static_line_patch::StaticLinePatch::insert_patch(
                     crate::sujian_editor_item::layout_snapshot::LineSnapshotId::new(0, 0, 0),
+                    Vec::new(),
                     Vec::new(),
                     30,
                     42,

@@ -22,8 +22,8 @@ impl QQuickItem for SujianEditorItem {
         self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
         let _ = self.update_cursor_visual_position();
+        // request_static_repaint 会在 GUI 线程预计算 snapshot
         self.request_static_repaint();
-        self.ensure_static_snapshot();
     }
 
     fn mouse_event(&mut self, event: QMouseEvent) -> bool {
@@ -68,11 +68,15 @@ impl QQuickItem for SujianEditorItem {
         let _content_h = f64::from(self.current_content_height);
 
         // Issue #658: 静态正文用 QSGTextNode（Qt 6.7+ 公开 API）。
-        // needs_relayout 由 render_dirty 判断：正文/字体/宽度变更时为 true，
+        // needs_relayout 由 layout_dirty 控制：正文/字体/宽度变更时为 true，
         // 滚动时为 false（只更新位移矩阵，不重新排版）。
-        let needs_relayout = self.render_dirty;
-        if needs_relayout {
-            self.render_dirty = false;
+        // scene_dirty 为 true 时强制重建 Scene Graph 节点（如动画裁剪变化）。
+        let needs_relayout = self.layout_dirty || self.scene_dirty;
+        if self.layout_dirty {
+            self.layout_dirty = false;
+        }
+        if self.scene_dirty {
+            self.scene_dirty = false;
         }
 
         let final_root = root_raw;
@@ -153,9 +157,9 @@ impl QQuickItem for SujianEditorItem {
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
-            // update_paint_node() 不再自行排版，只消费 ensure_static_snapshot()
-            // 在正常编辑阶段准备好的不可变快照。
-            self.ensure_static_snapshot();
+            // update_paint_node() 不再自行排版，只消费 request_static_repaint()
+            // 在正常编辑阶段准备好的不可变快照。没有缓存时不排版，请求下一次 GUI 侧准备。
+            let has_snapshot = self.cached_static_snapshot.is_some();
             let static_text = StaticTextParams {
                 layout_snapshot: self.cached_static_snapshot.as_ref(),
                 scroll_y,
@@ -170,6 +174,12 @@ impl QQuickItem for SujianEditorItem {
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+
+            // 没有缓存快照时，跳过静态正文渲染并请求下一次 GUI 帧准备 snapshot。
+            // 放在 render_frame 之后，避免与 static_text 的不可变借用冲突。
+            if !has_snapshot && needs_relayout {
+                self.request_frame_update();
+            }
 
             for key in &render_plan.frame_context.keys_to_complete {
                 if let Some(ids) = self
@@ -194,7 +204,7 @@ impl QQuickItem for SujianEditorItem {
             }
 
             if !render_plan.frame_context.keys_to_complete.is_empty() {
-                self.render_dirty = true;
+                self.scene_dirty = true;
             }
 
             if self

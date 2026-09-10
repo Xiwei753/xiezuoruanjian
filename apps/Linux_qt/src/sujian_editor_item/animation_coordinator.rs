@@ -250,6 +250,7 @@ impl LinuxEditorAnimationCoordinator {
                             static_patches.push(StaticLinePatch::insert_patch(
                                 new_line.id,
                                 vec![source_rect],
+                                Vec::new(),
                                 range_start,
                                 range_end,
                             ));
@@ -335,6 +336,7 @@ impl LinuxEditorAnimationCoordinator {
                                 static_patches.push(StaticLinePatch::reflow_patch(
                                     new_line.id,
                                     vec![new_src],
+                                    Vec::new(),
                                     new_line.byte_start,
                                     new_line.byte_end,
                                 ));
@@ -519,6 +521,7 @@ impl LinuxEditorAnimationCoordinator {
                             static_patches.push(StaticLinePatch::reflow_patch(
                                 new_line.id,
                                 vec![new_src],
+                                Vec::new(),
                                 new_line.byte_start,
                                 new_line.byte_end,
                             ));
@@ -653,6 +656,7 @@ impl LinuxEditorAnimationCoordinator {
                 static_patches.push(StaticLinePatch::insert_patch(
                     new_line.id,
                     vec![source_rect],
+                    Vec::new(),
                     composition_byte_start,
                     composition_byte_end,
                 ));
@@ -737,6 +741,7 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches.push(StaticLinePatch::reflow_patch(
                         new_line.id,
                         vec![new_src],
+                        Vec::new(),
                         new_line.byte_start,
                         new_line.byte_end,
                     ));
@@ -976,6 +981,7 @@ impl LinuxEditorAnimationCoordinator {
                                 static_patches.push(StaticLinePatch::insert_patch(
                                     new_line.id,
                                     vec![new_sr],
+                                    Vec::new(),
                                     new_cluster.byte_start,
                                     new_cluster.byte_end,
                                 ));
@@ -1022,6 +1028,7 @@ impl LinuxEditorAnimationCoordinator {
                                         static_patches.push(StaticLinePatch::insert_patch(
                                             new_line.id,
                                             vec![new_sr],
+                                            Vec::new(),
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
                                         ));
@@ -1061,6 +1068,7 @@ impl LinuxEditorAnimationCoordinator {
                                             static_patches.push(StaticLinePatch::insert_patch(
                                                 new_line.id,
                                                 vec![new_sr],
+                                                Vec::new(),
                                                 new_cluster.byte_start,
                                                 new_cluster.byte_end,
                                             ));
@@ -1148,6 +1156,7 @@ impl LinuxEditorAnimationCoordinator {
                             static_patches.push(StaticLinePatch::reflow_patch(
                                 new_line.id,
                                 vec![new_src],
+                                Vec::new(),
                                 new_line.byte_start,
                                 new_line.byte_end,
                             ));
@@ -1173,9 +1182,14 @@ impl LinuxEditorAnimationCoordinator {
                     .collect();
 
                 if !hidden_source_rects.is_empty() {
+                    let doc_hidden_rects: Vec<SourceRect> = hidden_source_rects
+                        .iter()
+                        .map(|sr| new_line.source_rect_to_document_rect(sr))
+                        .collect();
                     static_patches.push(StaticLinePatch::reflow_patch(
                         new_line.id,
                         hidden_source_rects,
+                        doc_hidden_rects,
                         new_line.byte_start,
                         new_line.byte_end,
                     ));
@@ -1480,10 +1494,30 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #658: 收集已准备好的 static_patches 供静态正文裁剪。
         // 只有 texture_prepared == true 的事务才允许静态层隐藏，
         // 避免纹理准备完成前出现空白帧。
+        // 同时将 hidden_source_rects 通过 source_rect_to_document_rect()
+        // 转换为 doc_hidden_rects，供 QSGClipNode 直接使用文档逻辑坐标。
         let mut static_patches = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
             if tx.texture_prepared {
-                static_patches.extend(tx.static_patches.iter().cloned());
+                for mut patch in tx.static_patches.iter().cloned() {
+                    // 查找对应行快照，将 hidden_source_rects 转换为文档坐标
+                    if !patch.hidden_source_rects.is_empty() && patch.doc_hidden_rects.is_empty() {
+                        if let Some(ref new_snapshot) = tx.new_snapshot {
+                            if let Some(line_snap) = new_snapshot
+                                .line_snapshots
+                                .iter()
+                                .find(|ls| ls.id == patch.snapshot_id)
+                            {
+                                patch.doc_hidden_rects = patch
+                                    .hidden_source_rects
+                                    .iter()
+                                    .map(|sr| line_snap.source_rect_to_document_rect(sr))
+                                    .collect();
+                            }
+                        }
+                    }
+                    static_patches.push(patch);
+                }
             }
         }
 
