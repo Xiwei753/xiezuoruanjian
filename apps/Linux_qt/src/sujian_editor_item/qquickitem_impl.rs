@@ -152,15 +152,12 @@ impl QQuickItem for SujianEditorItem {
                 );
 
             // 静态正文层参数 — 交给 QSGTextNode
+            // 注意 borrow 顺序：layout_snapshot() 需要 &mut self（计算后即释放），
+            // 之后再取 &self 的不可变引用给 render_frame。
             let width = self.bounding_width();
+            let snapshot = self.layout_snapshot(width);
             let static_text = StaticTextParams {
-                text: &self.buffer.text,
-                font_size: self.current_font_pixel_size,
-                font_family: &self.current_font_family.to_string(),
-                width,
-                padding: f64::from(self.current_padding),
-                line_spacing: f64::from(self.current_line_spacing),
-                text_indent: f64::from(self.current_text_indent),
+                layout_snapshot: Some(&snapshot),
                 scroll_y,
                 color: &self.current_text_color.to_string(),
                 needs_relayout,

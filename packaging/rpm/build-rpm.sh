@@ -2,8 +2,9 @@
 #
 # build-rpm.sh — 素笺写作 RPM 打包脚本
 #
-# 在顶层工作目录创建 RPM 构建环境，构建 release 二进制并打包为 RPM。
-# 不捆绑 Qt / fcitx5-qt / QML runtime，运行时依赖由 spec 的 Requires 解决。
+# 在顶层工作目录创建 RPM 构建环境，staging 源码并打包为 RPM。
+# 不捆绑 Qt / QML runtime，运行时依赖由 spec 的 Requires 解决。
+# 实际编译发生在 spec 的 %build，使用 --locked --offline -p sujian-linux-qt。
 #
 # 用法:
 #   ./packaging/rpm/build-rpm.sh
@@ -49,20 +50,7 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# 2. 构建 release 二进制
-# ---------------------------------------------------------------------------
-echo "==> cargo build --release"
-cargo build --release --manifest-path "${REPO_ROOT}/Cargo.toml"
-
-BINARY="${REPO_ROOT}/target/release/sujian-linux-qt"
-if [[ ! -x "${BINARY}" ]]; then
-    echo "错误: 构建产物不存在: ${BINARY}" >&2
-    exit 1
-fi
-echo "==> 构建产物: ${BINARY}"
-
-# ---------------------------------------------------------------------------
-# 3. 准备 RPM 构建目录树（在仓库根目录下）
+# 2. 准备 RPM 构建目录树
 # ---------------------------------------------------------------------------
 RPM_TOPDIR="${REPO_ROOT}/rpm-build"
 echo "==> 准备 RPM 构建目录: ${RPM_TOPDIR}"
@@ -70,20 +58,48 @@ mkdir -p "${RPM_TOPDIR}/BUILD" \
          "${RPM_TOPDIR}/RPMS" \
          "${RPM_TOPDIR}/SOURCES" \
          "${RPM_TOPDIR}/SPECS" \
-         "${RPM_TOPDIR}/SRPMS}"
+         "${RPM_TOPDIR}/SRPMS"
 
 # ---------------------------------------------------------------------------
-# 4. 打包源码 tarball（排除构建产物与 VCS 目录）
+# 3. 源码 staging：复制到临时目录，执行 cargo vendor
 # ---------------------------------------------------------------------------
-TARBALL="${RPM_TOPDIR}/SOURCES/${NAME}-${VERSION}.tar.gz"
-echo "==> 生成源码 tarball: ${TARBALL}"
-tar -czf "${TARBALL}" \
-    --transform "s,^\./,${NAME}-${VERSION}/," \
+STAGING_DIR="${RPM_TOPDIR}/staging/${NAME}-${VERSION}"
+echo "==> Staging 源码到: ${STAGING_DIR}"
+rm -rf "${STAGING_DIR}"
+mkdir -p "${STAGING_DIR}"
+
+# 复制源码（排除构建产物和 VCS 目录）
+tar -cf - \
     --exclude="./rpm-build" \
     --exclude="./target" \
     --exclude="./.git" \
     --exclude="./.cargo" \
-    -C "${REPO_ROOT}" .
+    -C "${REPO_ROOT}" . | tar -xf - -C "${STAGING_DIR}"
+
+# 在 staging 目录内执行 cargo vendor
+echo "==> cargo vendor --locked vendor"
+mkdir -p "${STAGING_DIR}/vendor"
+cargo vendor --locked "${STAGING_DIR}/vendor" \
+    --manifest-path "${STAGING_DIR}/Cargo.toml" > /dev/null
+
+# 写临时 .cargo/config.toml，将 crates.io 指向本地 vendor
+mkdir -p "${STAGING_DIR}/.cargo"
+cat > "${STAGING_DIR}/.cargo/config.toml" <<'VENDOR_TOML'
+[source.crates-io]
+replace-with = "vendored-sources"
+
+[source.vendored-sources]
+directory = "vendor"
+VENDOR_TOML
+
+# ---------------------------------------------------------------------------
+# 4. 从 staging 目录生成 Source0 tarball
+# ---------------------------------------------------------------------------
+TARBALL="${RPM_TOPDIR}/SOURCES/${NAME}-${VERSION}.tar.gz"
+echo "==> 生成源码 tarball: ${TARBALL}"
+tar -czf "${TARBALL}" \
+    --transform "s,^\.,${NAME}-${VERSION}," \
+    -C "${STAGING_DIR}" .
 
 # ---------------------------------------------------------------------------
 # 5. 复制 spec 文件到 SPECS 目录

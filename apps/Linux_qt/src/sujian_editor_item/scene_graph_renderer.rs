@@ -1,20 +1,15 @@
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
+use crate::editor::layout::LayoutSnapshot;
 use crate::editor::scene_graph;
 use super::qt_text_node;
 
 /// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
 ///
-/// `needs_relayout` 为 true 时重新创建 QTextLayout 排版并调用 addTextLayout；
-/// 为 false 时只更新滚动位移（QSGTransformNode 矩阵），不重新排版。
+/// `layout_snapshot` 提供已排好的 VisualLine 数据（唯一 canonical 排版源）；
+/// `needs_relayout` 控制是否重新排版（正文/字体/宽度变更时为 true，滚动时为 false）。
 pub(crate) struct StaticTextParams<'a> {
-    pub text: &'a str,
-    pub font_size: f32,
-    pub font_family: &'a str,
-    pub width: f64,
-    pub padding: f64,
-    pub line_spacing: f64,
-    pub text_indent: f64,
+    pub layout_snapshot: Option<&'a LayoutSnapshot>,
     pub scroll_y: f64,
     pub color: &'a str,
     pub needs_relayout: bool,
@@ -25,34 +20,108 @@ pub(crate) fn render_frame(
     item_ptr: *mut std::ffi::c_void,
     static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
-    texture_cache: &TextureCache,
+    _texture_cache: &TextureCache,
 ) {
     if root_raw.is_null() || item_ptr.is_null() {
         return;
     }
 
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
-    qt_text_node::update_static_text_node(
-        root_raw,
-        item_ptr,
-        static_text.text,
-        static_text.font_size,
-        static_text.font_family,
-        static_text.width,
-        static_text.padding,
-        static_text.line_spacing,
-        static_text.text_indent,
-        static_text.scroll_y,
-        static_text.color,
-        static_text.needs_relayout,
-    );
+    // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
+    if static_text.needs_relayout {
+        if let Some(snapshot) = static_text.layout_snapshot {
+            let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
+
+            for line in &snapshot.lines {
+                paragraphs.push(qt_text_node::ParagraphLineInfo {
+                    paragraph_text: line.para_text.clone(),
+                    y: line.y,
+                    indent_w: line.para_indent,
+                    line_wrap_w: line.line_wrap_width + line.line_indent_x,
+                    font_size: snapshot.font_size,
+                    font_family: snapshot.font_family.clone(),
+                    doc_width: snapshot.width,
+                });
+            }
+
+            // 从动画 glyph 计算裁剪区域（文档坐标 y 范围）
+            let clip_rects = compute_animation_clip_rects(plan);
+
+            qt_text_node::update_text_node_from_paragraphs(
+                root_raw,
+                item_ptr,
+                &paragraphs,
+                static_text.scroll_y,
+                static_text.color,
+                &clip_rects,
+            );
+        }
+    } else {
+        // 非重排帧：只更新滚动位移（QSGTransformNode 矩阵）
+        // 需要传递至少一个虚拟段落以触发滚动矩阵更新
+        if let Some(snapshot) = static_text.layout_snapshot {
+            let mut paragraphs: Vec<qt_text_node::ParagraphLineInfo> = Vec::new();
+            for line in &snapshot.lines {
+                paragraphs.push(qt_text_node::ParagraphLineInfo {
+                    paragraph_text: line.para_text.clone(),
+                    y: line.y,
+                    indent_w: line.para_indent,
+                    line_wrap_w: line.line_wrap_width + line.line_indent_x,
+                    font_size: snapshot.font_size,
+                    font_family: snapshot.font_family.clone(),
+                    doc_width: snapshot.width,
+                });
+            }
+            let clip_rects = compute_animation_clip_rects(plan);
+            qt_text_node::update_text_node_from_paragraphs(
+                root_raw,
+                item_ptr,
+                &paragraphs,
+                static_text.scroll_y,
+                static_text.color,
+                &clip_rects,
+            );
+        }
+    }
 
     // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）
-    render_text_animation_layer(root_raw, item_ptr, plan, texture_cache);
+    render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache);
     // Layer 2: 选区/预输入背景
     render_selection_preedit_layer(root_raw, item_ptr, plan);
     // Layer 3: 光标
     render_cursor_layer(root_raw, item_ptr, plan);
+}
+
+/// 从动画 glyph 数据计算裁剪区域（文档坐标 y 范围）。
+///
+/// 合并所有活跃动画 glyph 的垂直范围为单个裁剪矩形，
+/// 防止静态正文与动画层在同一区域双绘。
+fn compute_animation_clip_rects(plan: &RenderPlan) -> Vec<qt_text_node::AnimationClipRect> {
+    if plan.text_animation.glyphs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut min_y = f64::MAX;
+    let mut max_bottom = f64::MIN;
+
+    for glyph in &plan.text_animation.glyphs {
+        if glyph.y < min_y {
+            min_y = glyph.y;
+        }
+        let bottom = glyph.y + glyph.h;
+        if bottom > max_bottom {
+            max_bottom = bottom;
+        }
+    }
+
+    if min_y >= max_bottom {
+        return Vec::new();
+    }
+
+    vec![qt_text_node::AnimationClipRect {
+        y: min_y,
+        h: max_bottom - min_y,
+    }]
 }
 
 fn render_text_animation_layer(
