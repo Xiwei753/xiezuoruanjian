@@ -93,7 +93,7 @@ impl SujianEditorItem {
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
-        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
+        let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             &self.buffer.text,
             self.pipeline.text_revision(),
             font_size,
@@ -108,6 +108,36 @@ impl SujianEditorItem {
             affected_start,
             affected_end,
         );
+
+        // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
+        // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
+        // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义，scoped 排版
+        // 已对全篇 generate_animation_visuals=false，无动画视觉需提取）。
+        if affected_start < affected_end {
+            let line_ids: Vec<usize> = doc_snapshot
+                .visual_lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
+                .map(|(i, _)| i)
+                .collect();
+            if !line_ids.is_empty() {
+                let handle = crate::editor::layout::PreparedLayoutHandle {
+                    generation,
+                    lines: &doc_snapshot.visual_lines,
+                };
+                let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
+                    &handle,
+                    &line_ids,
+                    dpr,
+                    text_color,
+                );
+                crate::editor::layout::inject_animation_visuals_into_snapshot(
+                    &mut doc_snapshot,
+                    line_snapshots,
+                );
+            }
+        }
 
         let caret = doc_snapshot.cursor_rect(
             self.buffer.cursor,
@@ -194,7 +224,7 @@ impl SujianEditorItem {
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
-        let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
+        let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             virtual_text,
             self.pipeline.text_revision(),
             font_size,
@@ -209,6 +239,35 @@ impl SujianEditorItem {
             affected_start,
             affected_end,
         );
+
+        // Issue #658 评论 5625515748 问题 3: 从已有 prepared layout 提取受影响行的动画视觉
+        // （QImage/glyph/cluster）并注入到 doc_snapshot，使 LineSnapshotBuilder 能消费。
+        // 只有 composition_range 非空时才提取（None 表示全篇 fallback 语义）。
+        if affected_start < affected_end {
+            let line_ids: Vec<usize> = doc_snapshot
+                .visual_lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.byte_start < affected_end && l.byte_end > affected_start)
+                .map(|(i, _)| i)
+                .collect();
+            if !line_ids.is_empty() {
+                let handle = crate::editor::layout::PreparedLayoutHandle {
+                    generation,
+                    lines: &doc_snapshot.visual_lines,
+                };
+                let line_snapshots = crate::editor::layout::prepare_animation_visuals_from_layout(
+                    &handle,
+                    &line_ids,
+                    dpr,
+                    text_color,
+                );
+                crate::editor::layout::inject_animation_visuals_into_snapshot(
+                    &mut doc_snapshot,
+                    line_snapshots,
+                );
+            }
+        }
 
         let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session
         {

@@ -937,30 +937,31 @@ impl LinuxEditorPipeline {
                     );
                     
                     // 从已有 old layout 提取 old 动画视觉（只提取受影响的行）
+                    // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
+                    // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
                     let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
                         handle,
                         &old_line_ids,
                         ctx.dpr,
                         &ctx.text_color,
-                        &vt.old_text,
-                        0,
                     );
                     
                     // 构建最小化的 old_doc_snapshot，仅用于 cursor_rect 计算
-                    // 使用 prepare_document_visual_snapshot 生成完整快照
-                    let mut doc_snap = layout::prepare_document_visual_snapshot(
-                        &vt.old_text,
+                    // Issue #658 评论 5625515748 问题 2: 不再调 prepare_document_visual_snapshot
+                    // 重新排版整篇 old text（false 只跳过 QImage/glyph 生成，不跳过
+                    // QTextLayout beginLayout/createLine）。改为从已有 VisualLine 组装
+                    // CanonicalDocumentVisualSnapshot（只填 Rust 几何数据，不调 QTextLayout），
+                    // 再由 inject_animation_visuals_into_snapshot 注入动画视觉。
+                    let mut doc_snap = layout::assemble_document_visual_snapshot_from_lines(
+                        handle.lines,
                         0,
                         ctx.font_pixel_size,
                         &ctx.font_family,
                         ctx.line_spacing,
-                        ctx.padding,
                         ctx.text_indent,
+                        ctx.padding,
                         ctx.bounding_width,
                         ctx.dpr,
-                        &ctx.text_color,
-                        old_generation,
-                        false,
                     );
 
                     // Issue #658 评论 5624570557 问题 1: 把从已有 layout 提取的动画视觉
@@ -979,8 +980,6 @@ impl LinuxEditorPipeline {
                         &new_line_ids,
                         ctx.dpr,
                         &ctx.text_color,
-                        &new.text,
-                        0,
                     );
                     layout::inject_animation_visuals_into_snapshot(&mut new_doc_snapshot, new_line_snapshots);
 

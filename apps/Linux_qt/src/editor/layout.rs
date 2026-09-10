@@ -1784,14 +1784,17 @@ pub fn get_paragraph_layout_x_to_cursor_on_line(gen: u64, slot: i32, qline: i32,
 /// 按 (generation, cache_slot, qtextline_idx) 读取现成 QTextLine，
 /// 不重新排版，直接 line.draw() 到 QImage 并提取 glyphRuns/clusters。
 /// 返回完整的 CanonicalLineSnapshot 列表。
+///
+/// Issue #658 评论 5625515748 问题 1: 移除统一的 `paragraph_text` / `paragraph_document_byte_start`
+/// 参数，改为从每个 VisualLine 自身的 `para_text` / `para_start` 取段落级文本与文档起点。
+/// qchar_start/qchar_end 来自各段落自己的 QTextLayout，是段落内 QChar offset，
+/// 必须用对应段落的 para_text 做 QChar→byte 转换，再加该段落的 para_start 得到文档级 byte range。
 /// SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
 pub fn prepare_animation_visuals_from_layout(
     handle: &PreparedLayoutHandle<'_>,
     line_ids: &[usize],
     dpr: f64,
     text_color: &str,
-    paragraph_text: &str,
-    paragraph_document_byte_start: usize,
 ) -> Vec<CanonicalLineSnapshot> {
     let color = qmetaobject::QColor::from_name(text_color);
     let mut snapshots = Vec::new();
@@ -1804,6 +1807,11 @@ pub fn prepare_animation_visuals_from_layout(
         let slot = line.cache_slot;
         let qtextline_idx = line.qtextline_idx;
         let gen = handle.generation;
+        // Issue #658 评论 5625515748 问题 1: 每行用自己的 para_text/para_start 做
+        // QChar→byte 转换。qchar_start/qchar_end 是段落内 QChar offset，
+        // 必须对应该段落的 para_text，再加 para_start 得到文档级 byte offset。
+        let para_text: &str = &line.para_text;
+        let para_start = line.para_start;
 
         // SAFETY: GUI thread only; gen/slot 对应的 layout 由 EditorLayout 生命周期管理。
         let success = cpp!(unsafe [
@@ -1871,17 +1879,17 @@ pub fn prepare_animation_visuals_from_layout(
             let c_is_rtl = get_canonical_cluster_is_rtl(cidx);
             let c_first_glyph = get_canonical_cluster_first_glyph(cidx);
 
-            let doc_byte_start = qchar_offset_to_byte_offset(paragraph_text, c_qchar_start)
-                + paragraph_document_byte_start;
-            let doc_byte_end = qchar_offset_to_byte_offset(paragraph_text, c_qchar_end)
-                + paragraph_document_byte_start;
+            let doc_byte_start = qchar_offset_to_byte_offset(para_text, c_qchar_start)
+                + para_start;
+            let doc_byte_end = qchar_offset_to_byte_offset(para_text, c_qchar_end)
+                + para_start;
 
             let (c_byte_start, c_byte_end) = (
-                qchar_offset_to_byte_offset(paragraph_text, c_qchar_start),
-                qchar_offset_to_byte_offset(paragraph_text, c_qchar_end),
+                qchar_offset_to_byte_offset(para_text, c_qchar_start),
+                qchar_offset_to_byte_offset(para_text, c_qchar_end),
             );
-            let c_cluster_text = if c_byte_start <= c_byte_end && c_byte_end <= paragraph_text.len() {
-                paragraph_text[c_byte_start..c_byte_end].to_string()
+            let c_cluster_text = if c_byte_start <= c_byte_end && c_byte_end <= para_text.len() {
+                para_text[c_byte_start..c_byte_end].to_string()
             } else {
                 String::new()
             };
@@ -1918,10 +1926,10 @@ pub fn prepare_animation_visuals_from_layout(
         snapshots.push(CanonicalLineSnapshot {
             qchar_start,
             qchar_end,
-            document_byte_start: qchar_offset_to_byte_offset(paragraph_text, qchar_start)
-                + paragraph_document_byte_start,
-            document_byte_end: qchar_offset_to_byte_offset(paragraph_text, qchar_end)
-                + paragraph_document_byte_start,
+            document_byte_start: qchar_offset_to_byte_offset(para_text, qchar_start)
+                + para_start,
+            document_byte_end: qchar_offset_to_byte_offset(para_text, qchar_end)
+                + para_start,
             x_pos,
             width,
             ascent,
@@ -3455,6 +3463,111 @@ fn prepare_document_visual_snapshot_impl(
         dpr,
         paragraphs,
         visual_lines,
+    }
+}
+
+/// Issue #658 评论 5625515748 问题 2: 只从已有 VisualLine 组装 Rust 数据构造
+/// `CanonicalDocumentVisualSnapshot`，不调用任何 QTextLayout/beginLayout/createLine。
+///
+/// 与 `prepare_document_visual_snapshot` 的区别：本函数不重新排版，直接把 `lines` 中
+/// 每个 `VisualLine` 携带的 Rust 几何数据（byte_start/byte_end/qchar/x/y/width/height
+/// /ascent/descent 等）填入 `visual_lines` 和对应段落的 `CanonicalLineSnapshot`。
+/// `image` / `clusters` / `cursor_x_map` 初始为空，随后由
+/// `inject_animation_visuals_into_snapshot` 填充 image/clusters。
+///
+/// 用途：动画 old 帧从已有 prepared layout 的 VisualLine 组装 old_doc_snapshot，
+/// 避免对 old text 重新排版。`cursor_rect` 依赖 `visual_lines` 的 Rust 几何数据
+/// （y/height/font_size/font_family）计算 cursor_y/h 和 baseline；`cursor_x`
+/// 在 `cursor_x_map` 为空时退化为 `line.x`（行首），对 old 动画起点可接受。
+///
+/// `padding` 用于从 `VisualLine.x`（含 padding）还原 `CanonicalLineSnapshot.x_pos`
+/// （不含 padding）：`x_pos = line.x - padding`（与 `prepare_document_visual_snapshot_impl`
+/// line 3320 `x = padding + canonical_line.x_pos` 对应）。
+pub fn assemble_document_visual_snapshot_from_lines(
+    lines: &[VisualLine],
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    text_indent: f64,
+    padding: f64,
+    width: f64,
+    dpr: f64,
+) -> CanonicalDocumentVisualSnapshot {
+    let mut paragraphs: Vec<CanonicalParagraphSnapshot> = Vec::new();
+
+    for line in lines {
+        // 空段落（para_text 为空）不构造 CanonicalLineSnapshot：
+        // build_from_canonical_document 对空段落直接跳过（line_snapshot_builder.rs:42-69），
+        // 且 prepare_animation_visuals_from_layout 对空段落不会产生 anim_line。
+        if line.para_text.is_empty() {
+            continue;
+        }
+
+        // 按 para_start 找到或创建对应 CanonicalParagraphSnapshot。
+        // paragraphs 顺序按首次出现的 para_start，与 prepare_document_visual_snapshot_impl
+        // 按文档顺序遍历段落一致。
+        let para_idx = if let Some(idx) = paragraphs
+            .iter()
+            .position(|p| p.paragraph_document_byte_start == line.para_start)
+        {
+            idx
+        } else {
+            paragraphs.push(CanonicalParagraphSnapshot {
+                paragraph_text: line.para_text.clone(),
+                paragraph_document_byte_start: line.para_start,
+                lines: Vec::new(),
+                index_map: crate::editor::paragraph_index_map::ParagraphIndexMap::build(
+                    &line.para_text,
+                    line.para_start,
+                ),
+            });
+            // 刚 push 成功，新索引 = len - 1，逻辑上一定 < len。
+            paragraphs.len() - 1
+        };
+
+        let para = &mut paragraphs[para_idx];
+        // x_pos = line.x - padding（与 prepare_document_visual_snapshot_impl
+        // `x: padding + canonical_line.x_pos` 对应）。
+        let x_pos = line.x - padding;
+        para.lines.push(CanonicalLineSnapshot {
+            // para_qchar_start/para_qchar_end 是段落内 QChar offset，
+            // 与 prepare_paragraph_visual_snapshot 产生的 canonical_line.qchar_start/end 一致。
+            qchar_start: line.para_qchar_start,
+            qchar_end: line.para_qchar_end,
+            // document_byte_start/end 直接用 VisualLine 的文档级 byte offset，
+            // 与 prepare_animation_visuals_from_layout 产生的 anim_line.document_byte_start
+            // （= qchar_offset_to_byte_offset(para_text, qchar_start) + para_start）一致，
+            // 保证 inject_animation_visuals_into_snapshot 能按 document_byte_start 匹配注入。
+            document_byte_start: line.byte_start,
+            document_byte_end: line.byte_end,
+            x_pos,
+            width: line.width,
+            ascent: line.qt_ascent,
+            descent: line.qt_descent,
+            x_end_trailing: line.x_end_trailing,
+            // image/clusters 初始为空，由 inject_animation_visuals_into_snapshot 填充。
+            image: None,
+            clusters: Vec::new(),
+            // cursor_x_map 为空：VisualLine 不携带 cursor_x_map（需 C++ QTextLayout 提取）。
+            // cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x（行首），
+            // 对 old 动画起点可接受（动画主要看 new cursor 和 glyph rects）。
+            cursor_x_map: Vec::new(),
+        });
+    }
+
+    CanonicalDocumentVisualSnapshot {
+        text_revision,
+        font_size,
+        font_family: font_family.to_string(),
+        line_spacing,
+        text_indent,
+        padding,
+        width,
+        dpr,
+        paragraphs,
+        // visual_lines 直接 clone，保持与原 layout 一致的 Rust 几何数据。
+        visual_lines: lines.to_vec(),
     }
 }
 
