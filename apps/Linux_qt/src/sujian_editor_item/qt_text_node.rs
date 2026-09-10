@@ -47,8 +47,8 @@ cpp! {{
 
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
-    extern void clear_paragraph_layout_cache();
-    extern std::vector<QTextLayout*> g_paragraph_layout_cache;
+    // Issue #658 评论 5620035970 问题 2: 用 generation 隔离，通过 get_paragraph_layout(gen, slot) 查找。
+    extern QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
 
     /// Issue #658: 从已排好的 per-paragraph 数据重建静态正文 QSGTextNode。
     ///
@@ -79,7 +79,9 @@ cpp! {{
         double scroll_y, const QString& color_q,
         const double* clip_x_arr, const double* clip_y_arr,
         const double* clip_w_arr, const double* clip_h_arr,
-        int clip_count
+        int clip_count,
+        double origin_x,
+        uint64_t generation
     ) {
         if (!root_raw || !item_ptr) return;
         QQuickWindow *window = item_ptr->window();
@@ -116,17 +118,20 @@ cpp! {{
 
         // Issue #658: 主 textNode — 按段落整段 addTextLayout。
         // cachedLayout 内部每个 QTextLine 已 setPosition（由 editor_layout_lines 或
-        // editor_prepare_paragraph_visual_snapshot 设置），addTextLayout 的 QPointF(0, y)
-        // 偏移段落第一行到文档 y，后续行位置由 layout 内部 position 决定。
+        // editor_prepare_paragraph_visual_snapshot 设置），addTextLayout 的
+        // QPointF(origin_x, y) 偏移段落第一行到文档 (origin_x=padding, y)，
+        // 后续行位置由 layout 内部 position 决定。
+        // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
+        // 与光标/选区/动画的 VisualLine.x = padding + x_off 一致。
         for (int i = 0; i < para_count; i++) {
             int cacheIdx = cache_idx_arr[i];
             double y = para_y_arr[i];
 
-            if (cacheIdx >= 0 && cacheIdx < (int)g_paragraph_layout_cache.size()) {
-                QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
-                if (cachedLayout) {
-                    textNode->addTextLayout(QPointF(0, y), cachedLayout);
-                }
+            // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout，
+            // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
+            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            if (cachedLayout) {
+                textNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
             }
         }
 
@@ -163,16 +168,21 @@ cpp! {{
                     double dw = vl_doc_width_arr[i];
                     double paraY = vl_para_y_arr[i];
 
-                    if (cacheIdx < 0 || cacheIdx >= (int)g_paragraph_layout_cache.size()) {
-                        continue;
-                    }
-                    QTextLayout* cachedLayout = g_paragraph_layout_cache[cacheIdx];
+                    // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout。
+                    QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
                     if (!cachedLayout) {
                         continue;
                     }
 
                     struct XRange { double left, right; };
                     std::vector<XRange> mergedClips;
+
+                    // Issue #658 评论 5620035970 问题 4: complement 横向范围
+                    // 按 [origin_x, dw - origin_x] 计算（即 [padding, width - padding]），
+                    // 不再默认 [0, dw]，与正文实际绘制范围一致。
+                    double contentLeft = origin_x;
+                    double contentRight = dw - origin_x;
+                    if (contentRight < contentLeft) contentRight = contentLeft;
 
                     struct TempXClip { double x, x2; };
                     std::vector<TempXClip> xClips;
@@ -181,8 +191,8 @@ cpp! {{
                         if (cr.y < ly + lh && cr.y + cr.h > ly) {
                             double crLeft = cr.x;
                             double crRight = cr.x + cr.w;
-                            if (crLeft < 0) crLeft = 0;
-                            if (crRight > dw) crRight = dw;
+                            if (crLeft < contentLeft) crLeft = contentLeft;
+                            if (crRight > contentRight) crRight = contentRight;
                             if (crLeft < crRight) {
                                 xClips.push_back({crLeft, crRight});
                             }
@@ -200,15 +210,17 @@ cpp! {{
                     }
 
                     std::vector<XRange> complements;
-                    double curX = 0.0;
+                    // Issue #658 评论 5620035970 问题 4: complement 从 origin_x 开始，
+                    // 到 contentRight = dw - origin_x 结束，与正文绘制范围一致。
+                    double curX = contentLeft;
                     for (const auto& mc : mergedClips) {
                         if (mc.left > curX) {
                             complements.push_back({curX, mc.left});
                         }
                         curX = mc.right;
                     }
-                    if (curX < dw) {
-                        complements.push_back({curX, dw});
+                    if (curX < contentRight) {
+                        complements.push_back({curX, contentRight});
                     }
 
                     for (const auto& comp : complements) {
@@ -227,10 +239,14 @@ cpp! {{
                             clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                             clipNode->appendChildNode(clipTextNode);
 
-                            // Issue #658: 用 lineStart/lineCount 按单独视觉行绘制。
-                            // QPointF(0, paraY) 偏移段落第一行到文档 y，
-                            // layout 内部 qline 行的 position 决定该行相对位置。
-                            clipTextNode->addTextLayout(QPointF(0, paraY), cachedLayout, qline, 1);
+                            // Issue #658 评论 5620035970 问题 3: addTextLayout 真实签名
+                            // (position, layout, selectionStart, selectionCount, lineStart, lineCount)。
+                            // 之前误把 qline, 1 传给 selectionStart/selectionCount，
+                            // 导致只画选中态而非整行。改为 (-1, -1, qline, 1) 表示
+                            // 无选区、按 lineStart=qline/lineCount=1 绘制单视觉行。
+                            // 问题 4: QPointF(origin_x, paraY) 偏移段落第一行到
+                            // (padding, paraY)，与主 textNode 一致。
+                            clipTextNode->addTextLayout(QPointF(origin_x, paraY), cachedLayout, -1, -1, qline, 1);
                             clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
                         }
                     }
@@ -330,6 +346,10 @@ pub(crate) struct AnimationClipRect {
 /// 通过 cache_idx 在 g_paragraph_layout_cache 中查找已排好的 QTextLayout。
 /// animation_clip_rects 使用 x/y/w/h 文档坐标。
 /// visual_line_clips 提供 per-visual-line 裁剪数据，用于按视觉行裁剪。
+/// `origin_x` 是正文左侧 padding，正文从 (origin_x, y) 开始绘制，
+/// complement 裁剪横向范围按 [origin_x, doc_width - origin_x] 计算。
+/// `generation` 标识本 snapshot 对应的 g_layout_generations 中的代，
+/// 渲染时用 (generation, cache_slot) 查找 layout。
 ///
 /// # Safety
 /// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
@@ -341,6 +361,8 @@ pub fn rebuild_text_node_from_paragraphs(
     scroll_y: f64,
     color: &str,
     animation_clip_rects: &[AnimationClipRect],
+    origin_x: f64,
+    generation: u64,
 ) {
     if paragraphs.is_empty() {
         return;
@@ -352,8 +374,14 @@ pub fn rebuild_text_node_from_paragraphs(
     let font_family_q: qmetaobject::QString = font_family.clone().into();
     let color_q: qmetaobject::QString = color.to_string().into();
 
-    let text_ptrs: Vec<*const u8> = paragraphs.iter().map(|p| p.paragraph_text.as_ptr()).collect();
-    let text_lens: Vec<i32> = paragraphs.iter().map(|p| p.paragraph_text.len() as i32).collect();
+    let text_ptrs: Vec<*const u8> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.as_ptr())
+        .collect();
+    let text_lens: Vec<i32> = paragraphs
+        .iter()
+        .map(|p| p.paragraph_text.len() as i32)
+        .collect();
     let para_starts: Vec<i32> = paragraphs.iter().map(|p| p.para_start as i32).collect();
     let cache_idxs: Vec<i32> = paragraphs.iter().map(|p| p.cache_idx).collect();
     let para_y: Vec<f64> = paragraphs.iter().map(|p| p.y).collect();
@@ -426,7 +454,9 @@ pub fn rebuild_text_node_from_paragraphs(
         clip_y_ptr as "const double*",
         clip_w_ptr as "const double*",
         clip_h_ptr as "const double*",
-        clip_count as "int"
+        clip_count as "int",
+        origin_x as "double",
+        generation as "uint64_t"
     ] {
         rebuild_text_node_from_paragraphs(
             root_raw, item_ptr,
@@ -448,7 +478,9 @@ pub fn rebuild_text_node_from_paragraphs(
             scroll_y, color_q,
             clip_x_ptr, clip_y_ptr,
             clip_w_ptr, clip_h_ptr,
-            clip_count
+            clip_count,
+            origin_x,
+            generation
         );
     });
 
@@ -473,29 +505,5 @@ pub fn update_scroll_transform(root_raw: *mut std::ffi::c_void, scroll_y: f64) {
         scroll_y as "double"
     ] {
         update_scroll_transform(root_raw, scroll_y);
-    });
-}
-
-/// 清除静态正文 QSGTextNode 的内容。
-///
-/// 在文本清空或项目销毁时调用，移除 QSGTextNode 内所有 glyph 几何。
-///
-/// # Safety
-/// `root_raw` 必须是有效的 Qt 场景图指针。
-#[allow(dead_code)]
-pub fn clear_static_text_node(root_raw: *mut std::ffi::c_void) {
-    // SAFETY: root_raw 来自 Qt 场景图，在 updatePaintNode（render thread）调用。
-    cpp!(unsafe [root_raw as "QSGNode*"] {
-        auto *root = static_cast<QSGTransformNode*>(root_raw);
-        if (!root || root->childCount() == 0) return;
-
-        auto *staticLayer = static_cast<QSGTransformNode*>(root->childAtIndex(0));
-        if (!staticLayer || staticLayer->childCount() == 0) return;
-
-        auto *textNode = dynamic_cast<QSGTextNode*>(staticLayer->childAtIndex(0));
-        if (textNode) {
-            textNode->clear();
-            textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-        }
     });
 }

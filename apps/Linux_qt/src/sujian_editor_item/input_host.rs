@@ -313,6 +313,17 @@ impl EditorInputHost for SujianEditorItem {
         self.pipeline.composition_mut().preedit_cursor = cursor;
         self.pipeline.composition_mut().preedit_attributes = attributes;
 
+        // Issue #658: 读取 preedit_attributes 字段用于 debug 日志，
+        // 确保 IME 属性（start/length/kind）被实际消费而非 dead code。
+        if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
+            for attr in &self.pipeline.composition().preedit_attributes {
+                eprintln!(
+                    "[preedit_attr] start={}, length={}, kind={:?}",
+                    attr.start, attr.length, attr.kind
+                );
+            }
+        }
+
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();

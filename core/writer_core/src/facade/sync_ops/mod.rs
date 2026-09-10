@@ -32,6 +32,7 @@ mod dry_run;
 mod prepare;
 
 use crate::sync::full_sync::transport_init_failure_error;
+#[cfg(test)]
 use crate::sync::full_sync_utils::*;
 
 impl super::WriterCore {

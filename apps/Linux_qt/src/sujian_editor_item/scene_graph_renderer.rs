@@ -1,8 +1,8 @@
+use super::qt_text_node;
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 use crate::editor::scene_graph;
-use super::qt_text_node;
 
 /// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
 ///
@@ -59,11 +59,10 @@ pub(crate) fn render_frame(
             // 以及所属段落的 para_y（addTextLayout 偏移）。
             let mut visual_line_clips: Vec<qt_text_node::VisualLineClipInfo> = Vec::new();
             // 段落第一行 y 的映射：para_start -> para_y
-            let mut para_y_map: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+            let mut para_y_map: std::collections::HashMap<usize, f64> =
+                std::collections::HashMap::new();
             for line in &snapshot.lines {
-                if !para_y_map.contains_key(&line.para_start) {
-                    para_y_map.insert(line.para_start, line.y);
-                }
+                para_y_map.entry(line.para_start).or_insert(line.y);
             }
             for line in &snapshot.lines {
                 let para_y = *para_y_map.get(&line.para_start).unwrap_or(&line.y);
@@ -83,6 +82,10 @@ pub(crate) fn render_frame(
             // 替代旧的 compute_animation_clip_rects() 整宽 Y 条带方式。
             let clip_rects = compute_clip_rects_from_patches(plan);
 
+            // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
+            // origin_x = snapshot.padding，与 VisualLine.x = padding + x_off 一致。
+            // Issue #658 评论 5620035970 问题 2: 传 snapshot.layout_generation，
+            // 用 (generation, cache_slot) 查找 layout，与动画/IME 路径互不干扰。
             qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
@@ -91,6 +94,8 @@ pub(crate) fn render_frame(
                 static_text.scroll_y,
                 static_text.color,
                 &clip_rects,
+                f64::from(snapshot.padding),
+                snapshot.layout_generation,
             );
         }
     } else {

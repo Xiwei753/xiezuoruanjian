@@ -208,6 +208,7 @@ _CPP_UNSAFE_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/sujian_editor_item/ime_visual.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/input_host.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/properties.rs"),
+    Path("apps/Linux_qt/src/sujian_editor_item/qt_text_node.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/rendering.rs"),
 }
 

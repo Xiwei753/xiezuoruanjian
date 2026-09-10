@@ -71,11 +71,9 @@ impl SujianEditorItem {
         let text_color = &self.current_text_color.to_string();
         let revision = LayoutRevision::next();
 
-        // Issue #658: 在新批次段落排版前清除布局缓存，释放旧 QTextLayout 内存。
-        // clear_paragraph_layout_cache 由 editor/layout.rs 的 cpp! 块定义。
-        cpp!(unsafe [] {
-            clear_paragraph_layout_cache();
-        });
+        // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+        // 而是分配独立 generation，与静态正文路径互不干扰。
+        let generation = crate::editor::layout::begin_layout_generation();
 
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             &self.buffer.text,
@@ -88,6 +86,7 @@ impl SujianEditorItem {
             width,
             dpr,
             text_color,
+            generation,
         );
 
         let caret = doc_snapshot.cursor_rect(
@@ -133,10 +132,9 @@ impl SujianEditorItem {
         let text_color = &self.current_text_color.to_string();
         let revision = LayoutRevision::next();
 
-        // Issue #658: 在新批次段落排版前清除布局缓存，释放旧 QTextLayout 内存。
-        cpp!(unsafe [] {
-            clear_paragraph_layout_cache();
-        });
+        // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+        // 而是分配独立 generation，与静态正文路径互不干扰。
+        let generation = crate::editor::layout::begin_layout_generation();
 
         let doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot(
             virtual_text,
@@ -149,6 +147,7 @@ impl SujianEditorItem {
             width,
             dpr,
             text_color,
+            generation,
         );
 
         let cursor_byte = if let Some(ref session) = self.pipeline.composition().composition_session

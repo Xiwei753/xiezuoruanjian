@@ -8,7 +8,6 @@ use super::transaction_key::VisualTransactionKey;
 use super::PreeditAttribute;
 use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
-use cpp::cpp;
 use writer_core::editor::CompositionSession;
 use writer_core::editor::{
     CursorRect, EditorAnimationKind, EditorCommand, EditorCursor, EditorEditOutcome,
@@ -874,11 +873,10 @@ impl LinuxEditorPipeline {
 
                 let prev_new_snapshot = self.previous_canonical_snapshot.as_ref();
 
-                // Issue #658: 在动画快照排版前清除段落布局缓存，
-                // 确保 prepare_paragraph_visual_snapshot 存入的 cache 与文档段落一一对应。
-                cpp!(unsafe [] {
-                    clear_paragraph_layout_cache();
-                });
+                // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+                // 而是分配独立 generation，与静态正文路径互不干扰。
+                let old_generation = layout::begin_layout_generation();
+                let new_generation = layout::begin_layout_generation();
 
                 let old_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &vt.old_text,
@@ -894,6 +892,7 @@ impl LinuxEditorPipeline {
                     affected_byte_start,
                     affected_byte_end,
                     prev_new_snapshot,
+                    old_generation,
                 );
                 let new_doc_snapshot = layout::prepare_affected_paragraphs_visual_snapshot(
                     &new.text,
@@ -909,6 +908,7 @@ impl LinuxEditorPipeline {
                     affected_byte_start,
                     affected_byte_end,
                     prev_new_snapshot,
+                    new_generation,
                 );
 
                 let old_caret = old_doc_snapshot.cursor_rect(

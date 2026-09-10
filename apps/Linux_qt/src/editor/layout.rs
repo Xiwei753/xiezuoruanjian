@@ -29,38 +29,103 @@ cpp! {{
     // layout，不在 Scene Graph 阶段重新 beginLayout/createLine/endLayout。
     // 该变量在 editor_prepare_paragraph_visual_snapshot 中使用后由
     // rebuild_text_node_from_paragraphs 读取，两者在 GUI 线程上严格串行。
-    static std::vector<QTextLayout*> g_paragraph_layout_cache;
+    //
+    // Issue #658 评论 5620035970 问题 2: 用 generation 隔离静态正文和动画/IME 布局，
+    // 两条路径各自分配独立 generation，写到独立 generation 的 cache，互不清空。
+    // 渲染时用 (generation, slot) 查找 layout。
+    struct LayoutGeneration {
+        uint64_t generation;
+        std::vector<QTextLayout*> layouts;
+    };
+    static std::vector<LayoutGeneration> g_layout_generations;
+    static uint64_t g_next_generation = 1;
+    // 保留最近 N 代 generation，超过的自动释放最老的，避免内存泄漏。
+    static const size_t MAX_LAYOUT_GENERATIONS = 8;
 
-    void clear_paragraph_layout_cache() {
-        for (auto* l : g_paragraph_layout_cache) {
-            delete l;
+    static std::vector<QTextLayout*>* find_layout_generation(uint64_t gen) {
+        for (auto& lg : g_layout_generations) {
+            if (lg.generation == gen) {
+                return &lg.layouts;
+            }
         }
-        g_paragraph_layout_cache.clear();
+        return nullptr;
     }
 
-    void store_paragraph_layout(
-        const QString& text, const QFont& font,
-        double wrap_w, double indent_w
-    ) {
-        if (text.isEmpty()) {
-            g_paragraph_layout_cache.push_back(nullptr);
-            return;
+    static std::vector<QTextLayout*>* ensure_layout_generation(uint64_t gen) {
+        auto* existing = find_layout_generation(gen);
+        if (existing) return existing;
+        // 超过阈值时释放最老的 generation。
+        while (g_layout_generations.size() >= MAX_LAYOUT_GENERATIONS) {
+            auto& oldest = g_layout_generations.front();
+            for (auto* l : oldest.layouts) {
+                delete l;
+            }
+            g_layout_generations.erase(g_layout_generations.begin());
         }
-        auto* layout = new QTextLayout(text, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout->setTextOption(option);
-        layout->beginLayout();
-        bool first = true;
-        while (true) {
-            QTextLine line = layout->createLine();
-            if (!line.isValid()) break;
-            double lineWrap = first ? (wrap_w - indent_w) : wrap_w;
-            line.setLineWidth(lineWrap);
-            first = false;
+        g_layout_generations.push_back(LayoutGeneration{gen, {}});
+        return &g_layout_generations.back().layouts;
+    }
+
+    uint64_t begin_layout_generation() {
+        return g_next_generation++;
+    }
+
+    void clear_layout_generation(uint64_t gen) {
+        for (auto it = g_layout_generations.begin(); it != g_layout_generations.end(); ++it) {
+            if (it->generation == gen) {
+                for (auto* l : it->layouts) {
+                    delete l;
+                }
+                g_layout_generations.erase(it);
+                return;
+            }
         }
-        layout->endLayout();
-        g_paragraph_layout_cache.push_back(layout);
+    }
+
+    void clear_all_layout_generations() {
+        for (auto& lg : g_layout_generations) {
+            for (auto* l : lg.layouts) {
+                delete l;
+            }
+        }
+        g_layout_generations.clear();
+    }
+
+    QTextLayout* get_paragraph_layout(uint64_t gen, int slot) {
+        auto* layouts = find_layout_generation(gen);
+        if (!layouts) return nullptr;
+        if (slot < 0 || slot >= (int)layouts->size()) return nullptr;
+        return (*layouts)[slot];
+    }
+
+    // Issue #658 评论 5620035970 问题 1+2: 按 generation + cache_slot 写指定位置，
+    // 不再 push_back。空段落也占一个明确的 null slot，
+    // 保持 cache_slot 与文档段落一一对应，避免越界访问。
+    void set_paragraph_layout_slot_gen(uint64_t gen, int cache_slot, QTextLayout* layout) {
+        auto* layouts = ensure_layout_generation(gen);
+        while ((int)layouts->size() <= cache_slot) {
+            layouts->push_back(nullptr);
+        }
+        if ((*layouts)[cache_slot]) {
+            delete (*layouts)[cache_slot];
+        }
+        (*layouts)[cache_slot] = layout;
+    }
+
+    void set_null_paragraph_layout_slot_gen(uint64_t gen, int cache_slot) {
+        auto* layouts = ensure_layout_generation(gen);
+        while ((int)layouts->size() <= cache_slot) {
+            layouts->push_back(nullptr);
+        }
+        if ((*layouts)[cache_slot]) {
+            delete (*layouts)[cache_slot];
+        }
+        (*layouts)[cache_slot] = nullptr;
+    }
+
+    // 兼容旧调用：clear_paragraph_layout_cache 清全部 generation。
+    void clear_paragraph_layout_cache() {
+        clear_all_layout_generations();
     }
 
     /// 单行排版结果 — 跨 C++/Rust 边界的数据结构。
@@ -222,12 +287,18 @@ cpp! {{
 
     void editor_layout_lines(
         const QString& text_qstr, double fs, const QString& ff,
-        double wrap_w, double indent_w, double line_spacing
+        double wrap_w, double indent_w, double line_spacing,
+        int cache_slot,
+        uint64_t generation
     ) {
         // Issue #658: 按段落拆分文本，为每段创建 QTextLayout 并存入
-        // g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs 消费。
+        // g_layout_generations[generation]，供 rebuild_text_node_from_paragraphs 消费。
         // 同时将每行排版结果写入 g_editor_layout_buf（供 Rust 侧构建 VisualLine）。
-        // g_paragraph_layout_cache 的 clear 由调用方（Rust layout_lines）在批次开始前统一调用。
+        // Issue #658 评论 5620035970 问题 1: 用 set_*_paragraph_layout_slot_gen(generation, cache_slot)
+        // 按 Rust 侧传入的 paragraph_idx 写指定位置，不再 push_back。
+        // Issue #658 评论 5620035970 问题 2: 用 generation 隔离静态正文和动画/IME 布局。
+        // Rust 侧传入的是单个段落文本（已 trim '\n'），while 循环实际只处理一段，
+        // 但保留多段结构，cur_slot 从 cache_slot 起递增以应对边界情况。
         QFont font(ff);
         font.setPixelSize(static_cast<int>(fs));
         QFontMetricsF fm(font);
@@ -240,6 +311,7 @@ cpp! {{
         QByteArray text_bytes = text_qstr.toUtf8();
         int total_len = text_bytes.size();
         int pos = 0;
+        int cur_slot = cache_slot;
 
         while (pos <= total_len) {
             int nl_pos = text_qstr.indexOf('\n', pos);
@@ -257,7 +329,7 @@ cpp! {{
 
             // 与 Rust 侧 layout_lines() 的空段落处理一致：跳过。
             if (para_text.isEmpty()) {
-                g_paragraph_layout_cache.push_back(nullptr);
+                set_null_paragraph_layout_slot_gen(generation, cur_slot);
             } else {
                 auto* layout = new QTextLayout(para_text, font);
                 layout->setTextOption(option);
@@ -296,8 +368,10 @@ cpp! {{
                     first = false;
                 }
                 layout->endLayout();
-                g_paragraph_layout_cache.push_back(layout);
+                set_paragraph_layout_slot_gen(generation, cur_slot, layout);
             }
+
+            cur_slot++;
 
             if (has_newline) {
                 pos = nl_pos + 1;
@@ -821,7 +895,8 @@ cpp! {{
         double wrap_w, double indent_w,
         double dpr, const QColor& textColor,
         int cache_slot,
-        double line_spacing
+        double line_spacing,
+        uint64_t generation
     ) {
         g_canonical_line_buf.clear();
         g_canonical_cluster_buf.clear();
@@ -832,15 +907,10 @@ cpp! {{
         // Issue #658: 空段落也占一个明确的 null slot，保持与 editor_layout_lines()
         // 对空段落 push_back(nullptr) 的处理一致。这样 cache_slot 与文档段落一一对应，
         // scene_graph_renderer 直接消费 snapshot 中稳定的 slot 不再自行计数。
+        // Issue #658 评论 5620035970 问题 2: 用 generation 隔离。
         if (paraText.isEmpty()) {
             if (cache_slot >= 0) {
-                while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
-                    g_paragraph_layout_cache.push_back(nullptr);
-                }
-                if (g_paragraph_layout_cache[cache_slot]) {
-                    delete g_paragraph_layout_cache[cache_slot];
-                }
-                g_paragraph_layout_cache[cache_slot] = nullptr;
+                set_null_paragraph_layout_slot_gen(generation, cache_slot);
             }
             return;
         }
@@ -1086,16 +1156,11 @@ cpp! {{
         }
 
         // Issue #658: 数据提取完成后，将这一个已排好版（含 setPosition）的 layout
-        // 直接存入 g_paragraph_layout_cache，供 rebuild_text_node_from_paragraphs() 消费。
+        // 直接存入 g_layout_generations[generation]，供 rebuild_text_node_from_paragraphs() 消费。
         // 不再排第二遍。如果 cache_slot < 0（不缓存），则销毁 layout 避免泄漏。
+        // Issue #658 评论 5620035970 问题 2: 用 generation 隔离。
         if (cache_slot >= 0) {
-            while ((int)g_paragraph_layout_cache.size() <= cache_slot) {
-                g_paragraph_layout_cache.push_back(nullptr);
-            }
-            if (g_paragraph_layout_cache[cache_slot]) {
-                delete g_paragraph_layout_cache[cache_slot];
-            }
-            g_paragraph_layout_cache[cache_slot] = layout;
+            set_paragraph_layout_slot_gen(generation, cache_slot, layout);
         } else {
             delete layout;
         }
@@ -1206,19 +1271,30 @@ pub struct LayoutSnapshot {
     pub text_indent: f32,
     pub padding: f32,
     pub lines: Vec<VisualLine>,
+    /// Issue #658 评论 5620035970 问题 2: 布局 generation — 标识本 snapshot
+    /// 对应的 g_layout_generations 中的代。渲染时用 (generation, cache_slot) 查找 layout。
+    pub layout_generation: u64,
 }
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
 ///
 /// 线程约束：QTextLayout 只能在 GUI 线程使用，EditorLayout 不可跨线程。
 /// 缓存策略：snapshot() 在参数/revision 不变时复用缓存，避免重复排版。
+/// Issue #658 评论 5620035970 问题 2: 持有 current_generation，
+/// invalidate 时 clear 旧 generation，重新排版时分配新 generation。
 #[derive(Default)]
 pub struct EditorLayout {
     cache: Option<LayoutSnapshot>,
+    current_generation: u64,
 }
 
 impl EditorLayout {
     pub fn invalidate(&mut self) {
+        // Issue #658 评论 5620035970 问题 2: 失效时释放旧 generation 的 layout cache。
+        if self.current_generation != 0 {
+            clear_layout_generation(self.current_generation);
+            self.current_generation = 0;
+        }
         self.cache = None;
     }
 
@@ -1250,6 +1326,12 @@ impl EditorLayout {
         };
 
         if needs_refresh {
+            // Issue #658 评论 5620035970 问题 2: 重新排版前释放旧 generation，
+            // 分配新 generation，避免静态正文和动画/IME 互相清空 layout cache。
+            if self.current_generation != 0 {
+                clear_layout_generation(self.current_generation);
+            }
+            self.current_generation = begin_layout_generation();
             self.cache = None;
         }
 
@@ -1262,6 +1344,7 @@ impl EditorLayout {
                 f64::from(params.padding),
                 f64::from(params.text_indent),
                 &params.font_family,
+                self.current_generation,
             );
             LayoutSnapshot {
                 text_revision,
@@ -1274,6 +1357,7 @@ impl EditorLayout {
                 text_indent: params.text_indent,
                 padding: params.padding,
                 lines,
+                layout_generation: self.current_generation,
             }
         })
     }
@@ -1331,6 +1415,27 @@ impl EditorLayout {
     }
 }
 
+/// Issue #658 评论 5620035970 问题 2: 分配新的布局 generation。
+///
+/// 封装 C++ `begin_layout_generation()`，供 layout_ops.rs / pipeline.rs 调用，
+/// 避免在非平台封装目录直接调 cpp!(unsafe)。
+/// SAFETY: GUI thread only; begin_layout_generation 在 GUI 线程分配新 generation。
+pub fn begin_layout_generation() -> u64 {
+    cpp!(unsafe [] -> u64 as "uint64_t" {
+        return begin_layout_generation();
+    })
+}
+
+/// Issue #658 评论 5620035970 问题 2: 释放指定 generation 的布局缓存。
+///
+/// 封装 C++ `clear_layout_generation(gen)`，供外部调用方在 snapshot 失效时释放旧 generation。
+/// SAFETY: GUI thread only; gen 是之前 begin_layout_generation 分配的。
+pub fn clear_layout_generation(gen: u64) {
+    cpp!(unsafe [gen as "uint64_t"] {
+        clear_layout_generation(gen);
+    });
+}
+
 pub fn layout_lines(
     text: &str,
     width: f64,
@@ -1339,6 +1444,7 @@ pub fn layout_lines(
     padding: f64,
     indent: f64,
     font_family: &str,
+    generation: u64,
 ) -> Vec<VisualLine> {
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
@@ -1355,11 +1461,9 @@ pub fn layout_lines(
     // 与 C++ editor_layout_lines 的 cache push 顺序一一对应。
     let mut paragraph_idx: i32 = 0;
 
-    // Issue #658: 一个"整篇文档排版批次"只清一次 g_paragraph_layout_cache。
-    // editor_layout_lines() 不再每段落清，由 Rust 调用方在批次开始时统一清。
-    cpp!(unsafe [] {
-        clear_paragraph_layout_cache();
-    });
+    // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+    // 由调用方（EditorLayout::snapshot）在批次开始前分配新 generation 并 clear 旧的。
+    // 本函数用 generation 写对应代的 cache，与动画/IME 路径互不干扰。
 
     for paragraph in text.split_inclusive('\n') {
         let hard_break = paragraph.ends_with('\n');
@@ -1367,6 +1471,14 @@ pub fn layout_lines(
         let paragraph_text_end = paragraph_start + paragraph_text.len();
 
         if paragraph_text.is_empty() {
+            // Issue #658 评论 5620035970 问题 1+2: 空段落也调 set_null_paragraph_layout_slot_gen
+            // 在 generation 的 paragraph_idx 位置写 nullptr，
+            // 保证 cache slot 与文档段落一一对应，避免后续段落越界。
+            let slot = paragraph_idx;
+            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+            cpp!(unsafe [slot as "int", generation as "uint64_t"] {
+                set_null_paragraph_layout_slot_gen(generation, slot);
+            });
             let empty_ascent = get_font_ascent(font_family, font_size as f32);
             let empty_descent = get_font_descent(font_family, font_size as f32);
             result.push(VisualLine {
@@ -1408,6 +1520,9 @@ pub fn layout_lines(
         let indent_w = indent;
         let text_qstr: QString = paragraph_text.to_string().into();
         let ls = line_spacing;
+        // Issue #658 评论 5620035970 问题 1: 传入 paragraph_idx 作为 cache_slot，
+        // editor_layout_lines 内部用 set_*_paragraph_layout_slot(cache_slot) 写指定位置。
+        let cache_slot = paragraph_idx;
 
         // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
         let line_count = cpp!(unsafe [
@@ -1416,9 +1531,11 @@ pub fn layout_lines(
             ff as "QString",
             wrap_w as "double",
             indent_w as "double",
-            ls as "double"
+            ls as "double",
+            cache_slot as "int",
+            generation as "uint64_t"
         ] -> i32 as "int" {
-            editor_layout_lines(text_qstr, fs, ff, wrap_w, indent_w, ls);
+            editor_layout_lines(text_qstr, fs, ff, wrap_w, indent_w, ls, cache_slot, generation);
             return static_cast<int>(g_editor_layout_buf.size());
         });
 
@@ -1535,6 +1652,13 @@ pub fn layout_lines(
     }
 
     if text.ends_with('\n') {
+        // Issue #658 评论 5620035970 问题 1+2: 尾部换行空段也调 set_null_paragraph_layout_slot_gen，
+        // 保证 cache slot 与文档段落一一对应。
+        let slot = paragraph_idx;
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+        cpp!(unsafe [slot as "int", generation as "uint64_t"] {
+            set_null_paragraph_layout_slot_gen(generation, slot);
+        });
         let text_qchar_len: usize = text.chars().map(|c| c.len_utf16()).sum();
         result.push(VisualLine {
             id: line_id,
@@ -1565,6 +1689,12 @@ pub fn layout_lines(
     }
 
     if text.is_empty() {
+        // Issue #658 评论 5620035970 问题 1+2: 全文为空也调 set_null_paragraph_layout_slot_gen(0)，
+        // 保证 cache slot 0 有明确的 nullptr。
+        // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+        cpp!(unsafe [generation as "uint64_t"] {
+            set_null_paragraph_layout_slot_gen(generation, 0);
+        });
         result.push(VisualLine {
             id: line_id,
             byte_start: 0,
@@ -2068,6 +2198,7 @@ pub fn prepare_paragraph_visual_snapshot(
     text_color: &str,
     cache_slot: i32,
     line_spacing: f64,
+    generation: u64,
 ) -> CanonicalParagraphSnapshot {
     let index_map = crate::editor::paragraph_index_map::ParagraphIndexMap::build(
         paragraph_text,
@@ -2091,9 +2222,10 @@ pub fn prepare_paragraph_visual_snapshot(
             dpr as "double",
             color as "QColor",
             cache_slot as "int",
-            ls as "double"
+            ls as "double",
+            generation as "uint64_t"
         ] {
-            editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls);
+            editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls, generation);
         });
         return CanonicalParagraphSnapshot {
             paragraph_text: paragraph_text.to_string(),
@@ -2119,9 +2251,10 @@ pub fn prepare_paragraph_visual_snapshot(
         dpr as "double",
         color as "QColor",
         cache_slot as "int",
-        ls as "double"
+        ls as "double",
+        generation as "uint64_t"
     ] -> i32 as "int" {
-        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls);
+        editor_prepare_paragraph_visual_snapshot(para, fs, ff, wrap_w, indent_w, dpr, color, cache_slot, ls, generation);
         return static_cast<int>(g_canonical_line_buf.size());
     });
 
@@ -2562,6 +2695,9 @@ impl CanonicalDocumentVisualSnapshot {
             text_indent: self.text_indent as f32,
             padding: self.padding as f32,
             lines: self.visual_lines.clone(),
+            // Issue #658 评论 5620035970 问题 2: 动画路径不直接渲染此 snapshot，
+            // generation 填 0 表示不用于 rebuild_text_node_from_paragraphs。
+            layout_generation: 0,
         }
     }
 }
@@ -2577,10 +2713,11 @@ pub fn prepare_document_visual_snapshot(
     width: f64,
     dpr: f64,
     text_color: &str,
+    generation: u64,
 ) -> CanonicalDocumentVisualSnapshot {
-    // Issue #658: g_paragraph_layout_cache 由调用方在批次开始前统一清一次，
-    // 不再在此函数内清除。本函数对每个段落传入 cache_slot，
-    // 由 editor_prepare_paragraph_visual_snapshot 存入 cache。
+    // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
+    // 由调用方在批次开始前分配独立 generation，本函数用 generation 写对应代的 cache，
+    // 与静态正文路径互不干扰。
 
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
@@ -2617,6 +2754,7 @@ pub fn prepare_document_visual_snapshot(
                 text_color,
                 paragraph_idx,
                 line_spacing,
+                generation,
             );
             visual_lines.push(VisualLine {
                 id: line_id,
@@ -2672,6 +2810,7 @@ pub fn prepare_document_visual_snapshot(
             text_color,
             paragraph_idx,
             line_spacing,
+            generation,
         );
         paragraph_idx += 1;
 
@@ -2737,6 +2876,7 @@ pub fn prepare_document_visual_snapshot(
             text_color,
             paragraph_idx,
             line_spacing,
+            generation,
         );
         visual_lines.push(VisualLine {
             id: line_id,
@@ -2793,6 +2933,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     affected_byte_start: usize,
     affected_byte_end: usize,
     previous_snapshot: Option<&CanonicalDocumentVisualSnapshot>,
+    generation: u64,
 ) -> CanonicalDocumentVisualSnapshot {
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
@@ -2945,6 +3086,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         text_color,
                         current_para_idx as i32,
                         line_spacing,
+                        generation,
                     );
                     visual_lines.push(VisualLine {
                         id: line_id,
@@ -2984,6 +3126,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         text_color,
                         current_para_idx as i32,
                         line_spacing,
+                        generation,
                     );
                     for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
                         let qt_metrics_h = canonical_line.ascent + canonical_line.descent;
@@ -3049,6 +3192,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 text_color,
                 current_para_idx as i32,
                 line_spacing,
+                generation,
             );
             visual_lines.push(VisualLine {
                 id: line_id,
@@ -3104,6 +3248,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             text_color,
             current_para_idx as i32,
             line_spacing,
+            generation,
         );
 
         for (line_idx, canonical_line) in canonical.lines.iter().enumerate() {
@@ -3169,6 +3314,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             text_color,
             current_para_idx as i32,
             line_spacing,
+            generation,
         );
         visual_lines.push(VisualLine {
             id: line_id,

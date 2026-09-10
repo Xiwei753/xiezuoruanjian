@@ -45,9 +45,6 @@ pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
 pub(crate) mod static_line_patch;
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests;
 pub(crate) mod text_visual_transaction;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
@@ -82,7 +79,6 @@ use writer_core::editor::AnimationMode as CoreAnimationMode;
 use animation_coordinator::AnimationMode;
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
 pub(crate) struct PreeditAttribute {
     pub start: usize,
     pub length: usize,
