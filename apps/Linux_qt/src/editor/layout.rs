@@ -2488,9 +2488,88 @@ pub fn prepare_document_visual_snapshot(
     generation: u64,
     generate_animation_visuals: bool,
 ) -> CanonicalDocumentVisualSnapshot {
+    // Issue #658 评论 5623746506 问题 2a: 收口到受影响范围生成动画视觉。
+    // affected_byte_start >= affected_byte_end 表示全篇生成（保持原语义）。
+    prepare_document_visual_snapshot_impl(
+        text,
+        text_revision,
+        font_size,
+        font_family,
+        line_spacing,
+        padding,
+        indent,
+        width,
+        dpr,
+        text_color,
+        generation,
+        generate_animation_visuals,
+        0,
+        0,
+    )
+}
+
+/// Issue #658 评论 5623746506 问题 2a: 按受影响字节范围生成动画视觉的排版入口。
+///
+/// 与 `prepare_document_visual_snapshot` 相同，但只有与 `[affected_byte_start,
+/// affected_byte_end)` 有交集的段落才以 `generate_animation_visuals=true` 排版
+/// （生成 QImage/glyphRuns/cluster）；其他段落只做基础排版
+/// （`generate_animation_visuals=false`），保留 QTextLayout/VisualLine 供静态
+/// QSGTextNode 消费。基础 canonical 排版仍一次生成完整 new text 的所有段落。
+pub fn prepare_document_visual_snapshot_scoped(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: &str,
+    generation: u64,
+    affected_byte_start: usize,
+    affected_byte_end: usize,
+) -> CanonicalDocumentVisualSnapshot {
+    prepare_document_visual_snapshot_impl(
+        text,
+        text_revision,
+        font_size,
+        font_family,
+        line_spacing,
+        padding,
+        indent,
+        width,
+        dpr,
+        text_color,
+        generation,
+        true,
+        affected_byte_start,
+        affected_byte_end,
+    )
+}
+
+fn prepare_document_visual_snapshot_impl(
+    text: &str,
+    text_revision: u64,
+    font_size: f64,
+    font_family: &str,
+    line_spacing: f64,
+    padding: f64,
+    indent: f64,
+    width: f64,
+    dpr: f64,
+    text_color: &str,
+    generation: u64,
+    generate_animation_visuals: bool,
+    affected_byte_start: usize,
+    affected_byte_end: usize,
+) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
     // 由调用方在批次开始前分配独立 generation，本函数用 generation 写对应代的 cache，
     // 与静态正文路径互不干扰。
+    // Issue #658 评论 5623746506 问题 2a: affected_byte_start < affected_byte_end
+    // 时只对受影响段落生成 QImage/glyph/cluster；>= 时全篇生成（原语义）。
+    let scoped_animation = generate_animation_visuals && affected_byte_start < affected_byte_end;
 
     let metrics_h = get_font_ascent(font_family, font_size as f32)
         + get_font_descent(font_family, font_size as f32);
@@ -2585,7 +2664,14 @@ pub fn prepare_document_visual_snapshot(
             paragraph_idx,
             line_spacing,
             generation,
-            generate_animation_visuals,
+            // Issue #658 评论 5623746506 问题 2a: scoped_animation 时只对受影响段落
+            // 生成 QImage/glyph/cluster；其他段落只做基础排版。
+            if scoped_animation {
+                let para_end = paragraph_start + paragraph.len();
+                paragraph_start < affected_byte_end && para_end > affected_byte_start
+            } else {
+                generate_animation_visuals
+            },
         );
         paragraph_idx += 1;
 

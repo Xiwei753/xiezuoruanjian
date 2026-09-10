@@ -198,9 +198,9 @@ impl EditorInputHost for SujianEditorItem {
                         self.pipeline
                             .current_layout_snapshot()
                             .clone()
-                            .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                            .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                     });
-                let new_snapshot = self.build_editor_layout_snapshot(width);
+                let new_snapshot = self.build_editor_layout_snapshot(width, false);
 
                 self.pipeline
                     .animation_coordinator_mut()
@@ -244,7 +244,7 @@ impl EditorInputHost for SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                 } else {
                     self.pipeline
                         .animation_coordinator()
@@ -254,7 +254,7 @@ impl EditorInputHost for SujianEditorItem {
                             self.pipeline
                                 .current_layout_snapshot()
                                 .clone()
-                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                         })
                 };
 
@@ -332,7 +332,7 @@ impl EditorInputHost for SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                 } else {
                     self.pipeline
                         .animation_coordinator()
@@ -342,7 +342,7 @@ impl EditorInputHost for SujianEditorItem {
                             self.pipeline
                                 .current_layout_snapshot()
                                 .clone()
-                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                                .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                         })
                 };
 

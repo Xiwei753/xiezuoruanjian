@@ -765,6 +765,17 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout.take()
     }
 
+    /// Issue #658 评论 5623746506 问题 2b: composition commit 分支需要把
+    /// build_editor_layout_snapshot 排好的 new prepared layout 存入 pending，
+    /// 由 emit_content_changed 提升为 current，避免 emit_content_changed ->
+    /// ensure_layout_cached 对同一已提交正文再次排版。
+    pub fn set_pending_promoted_layout(
+        &mut self,
+        layout: Option<crate::editor::layout::PromotedLayout>,
+    ) {
+        self.pending_promoted_layout = layout;
+    }
+
     pub fn prepare_transaction_textures(&mut self, key: VisualTransactionKey) {
         let tx = self
             .animation_coordinator
@@ -913,7 +924,13 @@ impl LinuxEditorPipeline {
                     old_generation,
                     true,
                 );
-                let new_doc_snapshot = layout::prepare_document_visual_snapshot(
+                // Issue #658 评论 5623746506 问题 2a: 不再对整篇 new text 用全局
+                // generate_animation_visuals=true 排版。改用 scoped 入口，只有与
+                // [affected_byte_start, affected_byte_end) 有交集的段落才生成
+                // QImage/glyph/cluster；其他段落只做基础排版（QTextLayout/VisualLine），
+                // 供静态 QSGTextNode 直接消费。基础 canonical 排版仍一次生成完整
+                // new text 的所有段落，new_generation 成为 current。
+                let new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
                     &new.text,
                     0,
                     ctx.font_pixel_size,
@@ -925,7 +942,8 @@ impl LinuxEditorPipeline {
                     ctx.dpr,
                     &ctx.text_color,
                     new_generation,
-                    true,
+                    affected_byte_start,
+                    affected_byte_end,
                 );
 
                 let old_caret = old_doc_snapshot.cursor_rect(

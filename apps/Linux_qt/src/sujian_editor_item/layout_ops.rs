@@ -52,7 +52,17 @@ impl SujianEditorItem {
     // 对任意 text 做 snapshot，连续调用会互相清 generation，导致光标 x 塌缩到行首。
     // legacy 路径已删除，正文/动画/IME 各自走独立 generation 的 canonical 排版入口。
 
-    pub(crate) fn build_editor_layout_snapshot(&mut self, width: f64) -> EditorLayoutSnapshot {
+    /// Issue #658 评论 5623746506 问题 2b: `promote=true` 时不再 clear 临时
+    /// generation，而是构造 `PromotedLayout` 存入 `pipeline.pending_promoted_layout`，
+    /// 由 `emit_content_changed` 提升为 `EditorLayout` current，避免
+    /// `emit_content_changed -> ensure_layout_cached` 对同一已提交正文再次排版。
+    /// `promote=false` 时保持原逻辑（临时 generation 用完即 clear），供 preedit
+    /// virtual_text / old_snapshot fallback 等非 committed current 路径使用。
+    pub(crate) fn build_editor_layout_snapshot(
+        &mut self,
+        width: f64,
+        promote: bool,
+    ) -> EditorLayoutSnapshot {
         let scroll_y = f64::from(self.current_scroll_y);
         let viewport_h = f64::from(self.current_viewport_height.max(1.0));
         let font_size = f64::from(self.current_font_pixel_size);
@@ -108,12 +118,32 @@ impl SujianEditorItem {
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = self.buffer.text.clone();
 
-        // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
-        // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor
-        // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
-        // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
-        // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
-        crate::editor::layout::clear_layout_generation(generation);
+        if promote {
+            // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
+            // generation 直接成为 current。构造 PromotedLayout 存入 pending，
+            // emit_content_changed 取出提升为 EditorLayout current，后续
+            // ensure_layout_cached cache hit 不再重新排版同一已提交正文。
+            let promoted_visual_lines = doc_snapshot.visual_lines.clone();
+            self.pipeline.set_pending_promoted_layout(Some(
+                crate::editor::layout::PromotedLayout {
+                    generation,
+                    visual_lines: promoted_visual_lines,
+                    width,
+                    font_size: font_size as f32,
+                    font_family: font_family.clone(),
+                    line_spacing: line_spacing as f32,
+                    text_indent: text_indent as f32,
+                    padding: padding as f32,
+                },
+            ));
+        } else {
+            // Issue #658 评论 5621512329 问题 1: 临时 generation 的 QTextLayout 已在
+            // prepare_document_visual_snapshot 内部提取完 canonical line/image/cursor
+            // 数据并存入 QImage（独立图像数据）。EditorLayoutSnapshot 不携带
+            // layout_generation，不被 rebuild_text_node_from_paragraphs 消费，
+            // 因此立即释放临时 generation，避免 layout 泄漏或被固定阈值误删。
+            crate::editor::layout::clear_layout_generation(generation);
+        }
 
         snapshot
     }

@@ -28,7 +28,7 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
         self.buffer.undo_stack.clear();
         self.buffer.redo_stack.clear();
-        self.adjust_affinity_at_wrap_boundary();
+        // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
         self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
@@ -57,7 +57,7 @@ impl SujianEditorItem {
             );
         }
         self.sync_buffer_from_pipeline();
-        self.adjust_affinity_at_wrap_boundary();
+        // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
         self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
@@ -601,6 +601,14 @@ impl SujianEditorItem {
                 self.pipeline.text_revision(),
             );
         }
+        // Issue #658 评论 5623746506 问题 1: promote 之后 EditorLayout cache 已是
+        // new text 的有效 cache，此时调 adjust_affinity_at_wrap_boundary ->
+        // ensure_layout_cached -> editor_layout.snapshot cache hit，不再触发排版 A。
+        // 把 affinity 调整移到 promote 之后、update_cursor_visual_position 之前，
+        // 保证 update_cursor_visual_position 用正确的 affinity 计算 caret_rect。
+        // editing.rs 所有编辑路径不再在 record_transaction 之前调
+        // adjust_affinity_at_wrap_boundary，消除 new text 排两遍（A + B）。
+        self.adjust_affinity_at_wrap_boundary();
         self.recalculate_content_height_and_emit();
         self.plain_text_changed();
         self.text_changed();

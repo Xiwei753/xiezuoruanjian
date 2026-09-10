@@ -117,7 +117,10 @@ impl SujianEditorItem {
                 self.sync_buffer_from_pipeline();
             }
         }
-        self.adjust_affinity_at_wrap_boundary();
+        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
+        // adjust_affinity_at_wrap_boundary（会触发 ensure_layout_cached 排版 A，
+        // 与 record_visual_transaction 排版 B 重复）。affinity 调整移到
+        // emit_content_changed 内部 promote 之后（cache hit 不排版）。
         let cause = explicit_cause.unwrap_or_else(|| {
             if inserted.chars().count() == 1 {
                 EditorTransactionCause::Typing
@@ -148,7 +151,7 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
@@ -168,7 +171,9 @@ impl SujianEditorItem {
                 .animation_coordinator_mut()
                 .cancel_active_composition("commit_insert");
 
-            let new_snapshot = self.build_editor_layout_snapshot(width);
+            // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
+            // 走 promote=true，generation 直接成为 current，不再用完即删。
+            let new_snapshot = self.build_editor_layout_snapshot(width, true);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                 x: c.x,
                 top: c.y,
@@ -366,7 +371,8 @@ impl SujianEditorItem {
         }
         self.sync_buffer_from_pipeline();
 
-        self.adjust_affinity_at_wrap_boundary();
+        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
+        // adjust_affinity_at_wrap_boundary。affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
 
         if commit.was_composing && self.current_typing_animation_enabled {
@@ -390,7 +396,7 @@ impl SujianEditorItem {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
-                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width))
+                        .unwrap_or_else(|| self.build_editor_layout_snapshot(width, false))
                 });
 
             let transaction = self.pipeline.engine().create_transaction(
@@ -410,7 +416,9 @@ impl SujianEditorItem {
                 .animation_coordinator_mut()
                 .cancel_active_composition("commit_replace");
 
-            let new_snapshot = self.build_editor_layout_snapshot(width);
+            // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
+            // 走 promote=true，generation 直接成为 current，不再用完即删。
+            let new_snapshot = self.build_editor_layout_snapshot(width, true);
             let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                 x: c.x,
                 top: c.y,
@@ -482,7 +490,7 @@ impl SujianEditorItem {
                 .is_some()
             {
                 self.sync_buffer_from_pipeline();
-                self.adjust_affinity_at_wrap_boundary();
+                // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
                 let new = self.buffer.snapshot();
                 let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
                 self.emit_content_changed();
@@ -499,7 +507,7 @@ impl SujianEditorItem {
             .is_some()
         {
             self.sync_buffer_from_pipeline();
-            self.adjust_affinity_at_wrap_boundary();
+            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
             let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
             self.emit_content_changed();
@@ -520,7 +528,7 @@ impl SujianEditorItem {
                 .is_some()
             {
                 self.sync_buffer_from_pipeline();
-                self.adjust_affinity_at_wrap_boundary();
+                // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
                 let new = self.buffer.snapshot();
                 let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
                 self.emit_content_changed();
@@ -537,7 +545,7 @@ impl SujianEditorItem {
             .is_some()
         {
             self.sync_buffer_from_pipeline();
-            self.adjust_affinity_at_wrap_boundary();
+            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
             let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
             self.emit_content_changed();
@@ -556,7 +564,7 @@ impl SujianEditorItem {
             .is_some()
         {
             self.sync_buffer_from_pipeline();
-            self.adjust_affinity_at_wrap_boundary();
+            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
             let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
             self.emit_content_changed();
@@ -582,7 +590,7 @@ impl SujianEditorItem {
         let old = self.buffer.snapshot();
         if self.pipeline.perform_undo().is_some() {
             self.sync_buffer_from_pipeline();
-            self.adjust_affinity_at_wrap_boundary();
+            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
             self.record_transaction(old, new, EditorTransactionCause::Undo, true);
             self.emit_content_changed();
@@ -593,7 +601,7 @@ impl SujianEditorItem {
         let old = self.buffer.snapshot();
         if self.pipeline.perform_redo().is_some() {
             self.sync_buffer_from_pipeline();
-            self.adjust_affinity_at_wrap_boundary();
+            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
             let new = self.buffer.snapshot();
             self.record_transaction(old, new, EditorTransactionCause::Redo, true);
             self.emit_content_changed();
