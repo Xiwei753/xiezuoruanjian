@@ -10,8 +10,7 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
         ;;
 esac
 
-# Style settings
-export QT_QUICK_CONTROLS_STYLE=Basic
+# Issue #658: 不强制 QT_QUICK_CONTROLS_STYLE=Basic，界面控件走 Qt/KDE 系统环境
 
 show_usage() {
     echo "Usage:"

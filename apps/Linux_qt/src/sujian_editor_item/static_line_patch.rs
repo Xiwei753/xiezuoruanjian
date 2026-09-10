@@ -10,6 +10,7 @@ use super::layout_snapshot::{LineSnapshotId, SourceRect};
 #[derive(Clone, Debug)]
 pub(crate) struct StaticLinePatch {
     pub snapshot_id: LineSnapshotId,
+    #[allow(dead_code)]
     pub hidden_source_rects: Vec<SourceRect>,
     pub byte_start: usize,
     pub byte_end: usize,

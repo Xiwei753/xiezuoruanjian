@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  AppStream metadata for 素笺写作 (Sujian)
+  规范: https://www.freedesktop.org/software/appstream/docs/
+  许可证: 仓库根目录 LICENSE 为 GNU GPL v3 (GPL-3.0-only)
+-->
+<component type="desktop-application">
+  <id>io.github.Xiwei753.Sujian</id>
+
+  <name>素笺写作</name>
+  <summary>跨平台写作软件</summary>
+
+  <description>
+    <p>
+      素笺写作是一款跨平台写作软件，Linux 端基于 Qt 6.7+ Quick 和自研文本渲染。
+      核心业务逻辑使用 Rust 实现，通过 UniFFI 暴露稳定接口，保证多平台行为一致。
+    </p>
+  </description>
+
+  <!-- 关联的 .desktop 文件 -->
+  <launchable type="desktop-id">io.github.Xiwei753.Sujian.desktop</launchable>
+
+  <!-- metadata_license: 本元数据文件的许可证；project_license: 项目代码许可证 -->
+  <metadata_license>GPL-3.0-only</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+
+  <url type="homepage">https://github.com/Xiwei753/sujian</url>
+
+  <!-- 提供的二进制 -->
+  <provides>
+    <binary>sujian</binary>
+  </provides>
+
+  <releases>
+    <release version="0.1.0" date="2026-09-10">
+      <description>
+        <p>初始发布版本。</p>
+      </description>
+    </release>
+  </releases>
+
+  <!-- OARS 内容分级：全年龄适用 -->
+  <content_rating type="oars-1.1" />
+</component>

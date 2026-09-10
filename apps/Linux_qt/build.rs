@@ -86,10 +86,26 @@ fn qmake_query(qmake: &Path, key: &str) -> Option<String> {
     }
 }
 
+/// Check whether a Qt version string meets the minimum required version (6.7.0).
+///
+/// Qt 6.7 is required because `QSGTextNode` became public API only in Qt 6.7.
+/// The version string may be a short form (`"6.7"`) or carry a pre-release/build
+/// suffix (e.g. `"6.11.2-fedora"`); only the leading numeric dotted prefix is
+/// parsed, and missing components are padded with `0`.
+fn qt_version_meets_minimum(version: &str) -> bool {
+    // Strip any pre-release / build metadata suffix (e.g. "6.11.2-fedora" -> "6.11.2").
+    let numeric = version.split(['-', '+']).next().unwrap_or(version);
+    let mut parts = numeric.split('.');
+    let major: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    Version::new(major, minor, patch) >= Version::new(6, 7, 0)
+}
+
 fn find_qt6_qmake() -> Option<PathBuf> {
     if let Ok(qmake) = std::env::var("QMAKE") {
         let path = PathBuf::from(qmake);
-        if qmake_query(&path, "QT_VERSION").is_some_and(|v| v.starts_with('6')) {
+        if qmake_query(&path, "QT_VERSION").is_some_and(|v| qt_version_meets_minimum(&v)) {
             return Some(path);
         }
     }
@@ -109,7 +125,7 @@ fn find_qt6_qmake() -> Option<PathBuf> {
     candidates
         .iter()
         .map(PathBuf::from)
-        .find(|path| qmake_query(path, "QT_VERSION").is_some_and(|v| v.starts_with('6')))
+        .find(|path| qmake_query(path, "QT_VERSION").is_some_and(|v| qt_version_meets_minimum(&v)))
 }
 
 fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {
@@ -119,7 +135,7 @@ fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {
     let mut library_paths = Vec::new();
     for module in QT6_MODULES {
         let lib = format!("Qt6{}", module);
-        match pkg_config::Config::new().atleast_version("6").probe(&lib) {
+        match pkg_config::Config::new().atleast_version("6.7").probe(&lib) {
             Ok(library) => {
                 version.get_or_insert(library.version);
                 for path in library.include_paths {
@@ -141,7 +157,7 @@ fn detect_qt6_from_pkg_config() -> Option<Qt6BuildInfo> {
     }
     found_all.then_some(Qt6BuildInfo {
         source: "pkg-config",
-        version: version.unwrap_or_else(|| "6".to_string()),
+        version: version.unwrap_or_else(|| "6.7".to_string()),
         include_paths,
         library_paths,
     })
@@ -197,8 +213,11 @@ fn detect_qt6_from_env() -> Option<Qt6BuildInfo> {
     let parsed = version
         .parse::<Version>()
         .unwrap_or_else(|_| panic!("Unable to parse Qt version from QT_INCLUDE_PATH: {version}"));
-    if parsed.major != 6 {
-        panic!("Linux Qt binary requires Qt6; Qt5 is no longer supported. QT_INCLUDE_PATH points to Qt {version}.");
+    if parsed < Version::new(6, 7, 0) {
+        panic!(
+            "Linux Qt binary requires Qt 6.7 or later; QSGTextNode public API needs Qt 6.7+. \
+             QT_INCLUDE_PATH points to Qt {version}."
+        );
     }
     let header_root = PathBuf::from(include_path);
     let mut include_paths = vec![header_root.clone()];
@@ -258,7 +277,9 @@ fn select_qt6_build_info() -> Qt6BuildInfo {
     }
 
     panic!(
-        "Qt6 development files were not found. Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel and gcc-c++ on Fedora."
+        "Qt 6.7+ development files were not found. QSGTextNode public API requires Qt 6.7+. \
+         Install qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtquickcontrols2-devel qt6-qttools-devel \
+         and gcc-c++ on Fedora (Fedora 40+ provides Qt 6.7+)."
     );
 }
 
@@ -447,7 +468,6 @@ fn main() {
     println!("cargo:rerun-if-changed=qml/AppButton.qml");
     println!("cargo:rerun-if-changed=qml/AppCard.qml");
     println!("cargo:rerun-if-changed=qml/AppTextField.qml");
-    println!("cargo:rerun-if-changed=qml/CoordinatorTextField.qml");
     println!("cargo:rerun-if-changed=qml/AppSwitch.qml");
     println!("cargo:rerun-if-changed=qml/AppSlider.qml");
     println!("cargo:rerun-if-changed=qml/AppComboBox.qml");

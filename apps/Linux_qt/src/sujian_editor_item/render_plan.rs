@@ -3,42 +3,6 @@ use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Debug)]
-pub(crate) struct HiddenClipRect {
-    pub x: f64,
-    pub y: f64,
-    pub w: f64,
-    pub h: f64,
-}
-
-#[derive(Clone, Debug, Default)]
-pub(crate) struct StaticTextPlan {
-    pub hidden_clip_rects: Vec<HiddenClipRect>,
-}
-
-impl StaticTextPlan {
-    pub fn merged_clip_rects(&self) -> Vec<(f64, f64, f64, f64)> {
-        let mut all: Vec<(f64, f64, f64, f64)> = self
-            .hidden_clip_rects
-            .iter()
-            .map(|r| (r.x, r.y, r.x + r.w, r.y + r.h))
-            .collect();
-        all.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut merged: Vec<(f64, f64, f64, f64)> = Vec::new();
-        for (left, top, right, bottom) in all {
-            if let Some(last) = merged.last_mut() {
-                if left <= last.2 + 0.01 && top <= last.3 + 0.01 {
-                    last.2 = last.2.max(right);
-                    last.3 = last.3.max(bottom);
-                    continue;
-                }
-            }
-            merged.push((left, top, right, bottom));
-        }
-        merged
-    }
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
     pub x: f64,
     pub y: f64,

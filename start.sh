@@ -28,7 +28,7 @@ if [ $# -gt 0 ]; then
     fi
 fi
 
-export QT_QUICK_CONTROLS_STYLE=Basic
+# Issue #658: 不强制 QT_QUICK_CONTROLS_STYLE=Basic，界面控件走 Qt/KDE 系统环境
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"

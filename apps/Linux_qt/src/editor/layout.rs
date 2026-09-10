@@ -1058,7 +1058,6 @@ pub struct LayoutSnapshot {
     pub text_indent: f32,
     pub padding: f32,
     pub lines: Vec<VisualLine>,
-    pub content_height: f32,
 }
 
 /// 编辑器布局引擎 — 管理 QTextLayout 排版缓存。
@@ -1116,11 +1115,6 @@ impl EditorLayout {
                 f64::from(params.text_indent),
                 &params.font_family,
             );
-            let content_height = lines
-                .last()
-                .map(|l| (l.y + l.height + f64::from(params.padding)) as f32)
-                .unwrap_or(params.font_size * params.line_spacing + params.padding * 2.0)
-                .max(1.0);
             LayoutSnapshot {
                 text_revision,
                 text_ptr,
@@ -1132,7 +1126,6 @@ impl EditorLayout {
                 text_indent: params.text_indent,
                 padding: params.padding,
                 lines,
-                content_height,
             }
         })
     }
@@ -1185,22 +1178,8 @@ impl EditorLayout {
         qtextlayout_cursor_to_x(text, text, font_size, font_family)
     }
 
-    pub fn text_baseline_y(&self, line: &VisualLine, font_size: f64, font_family: &str) -> f64 {
-        text_baseline_y(line, font_size, font_family)
-    }
-
     pub fn affinity_for_index_on_line(&self, line: &VisualLine, index: usize) -> CaretAffinity {
         affinity_for_index_on_line(line, index)
-    }
-
-    pub fn line_contains_cursor_with_affinity(
-        &self,
-        lines: &[VisualLine],
-        idx: usize,
-        cursor: usize,
-        affinity: CaretAffinity,
-    ) -> bool {
-        line_contains_cursor_with_affinity(lines, idx, cursor, affinity)
     }
 }
 
@@ -1834,44 +1813,6 @@ pub fn qtextlayout_x_to_cursor_on_line(
     para_start + para_byte
 }
 
-/// This ensures the text rendering uses the same shaping data as
-/// cursorToX() / xToCursor(), fixing mixed-script cursor issues.
-pub fn draw_line_text(
-    painter: &mut qmetaobject::QPainter,
-    para_text: &str,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-    x: f64,
-    baseline_y: f64,
-    text_color: &str,
-) {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    let color = qmetaobject::QColor::from_name(text_color);
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [
-        painter as "QPainter*",
-        para as "QString",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int",
-        x as "double",
-        baseline_y as "double",
-        color as "QColor"
-    ] {
-        editor_draw_line_text(
-            painter, para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx,
-            x, baseline_y, color
-        );
-    });
-}
-
 pub fn byte_offset_to_qchar_offset(text: &str, byte_offset: usize) -> usize {
     text[..byte_offset.min(text.len())]
         .chars()
@@ -2268,7 +2209,6 @@ pub struct CanonicalDocumentVisualSnapshot {
     pub dpr: f64,
     pub paragraphs: Vec<CanonicalParagraphSnapshot>,
     pub visual_lines: Vec<VisualLine>,
-    pub content_height: f64,
 }
 
 impl CanonicalDocumentVisualSnapshot {
@@ -2418,7 +2358,6 @@ impl CanonicalDocumentVisualSnapshot {
             text_indent: self.text_indent as f32,
             padding: self.padding as f32,
             lines: self.visual_lines.clone(),
-            content_height: self.content_height as f32,
         }
     }
 }
@@ -2580,10 +2519,7 @@ pub fn prepare_document_visual_snapshot(
             qt_ascent: 0.0,
             qt_descent: 0.0,
         });
-        y += line_height;
     }
-
-    let content_height = y.max(1.0);
 
     CanonicalDocumentVisualSnapshot {
         text_revision,
@@ -2596,7 +2532,6 @@ pub fn prepare_document_visual_snapshot(
         dpr,
         paragraphs,
         visual_lines,
-        content_height,
     }
 }
 
@@ -2967,10 +2902,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             qt_ascent: 0.0,
             qt_descent: 0.0,
         });
-        y += line_height;
     }
-
-    let content_height = y.max(1.0);
 
     CanonicalDocumentVisualSnapshot {
         text_revision,
@@ -2983,7 +2915,6 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
         dpr,
         paragraphs,
         visual_lines,
-        content_height,
     }
 }
 

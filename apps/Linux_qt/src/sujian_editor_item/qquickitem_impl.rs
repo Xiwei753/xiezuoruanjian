@@ -2,6 +2,7 @@ use super::input_host::is_left_button_pressed;
 use super::*;
 
 use super::render_plan::{CursorStyle, FrameContext};
+use super::scene_graph_renderer::StaticTextParams;
 use std::time::Instant;
 
 impl QQuickItem for SujianEditorItem {
@@ -16,7 +17,8 @@ impl QQuickItem for SujianEditorItem {
     }
 
     fn geometry_changed(&mut self, _new_geometry: QRectF, _old_geometry: QRectF) {
-        self.scroll_buffer = None;
+        // 宽度变化需要重新排版 QSGTextNode
+        self.invalidate_layout_cache();
         self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
         let _ = self.update_cursor_visual_position();
@@ -60,107 +62,23 @@ impl QQuickItem for SujianEditorItem {
         };
         let root_raw = node.into_raw();
 
-        let vp_h = f64::from(self.current_viewport_height.max(1.0));
+        let _vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
-        let content_h = f64::from(self.current_content_height);
+        let _content_h = f64::from(self.current_content_height);
 
-        let mut force_rebuild = false;
-        if let Some(ref buf) = self.scroll_buffer {
-            let revision_changed = buf.text_revision != self.pipeline.text_revision();
-            if revision_changed {
-                force_rebuild = true;
-            } else {
-                let relative_src_y = scroll_y - buf.buffer_scroll_y;
-                if relative_src_y < -0.1 || relative_src_y + vp_h > buf.buffer_logical_h + 0.1 {
-                    force_rebuild = true;
-                } else {
-                    let content_changed = (content_h - buf.buffer_content_h).abs() > 1.0;
-                    let dpr_changed = (dpr - buf.dpr).abs() > 0.01;
-                    if content_changed || dpr_changed || !buf.contains_viewport(scroll_y, vp_h) {
-                        force_rebuild = true;
-                    }
-                }
-            }
-        } else {
-            force_rebuild = true;
+        // Issue #658: 静态正文用 QSGTextNode（Qt 6.7+ 公开 API）。
+        // needs_relayout 由 render_dirty 判断：正文/字体/宽度变更时为 true，
+        // 滚动时为 false（只更新位移矩阵，不重新排版）。
+        let needs_relayout = self.render_dirty;
+        if needs_relayout {
+            self.render_dirty = false;
         }
 
-        if force_rebuild {
-            self.render_dirty = true;
-        }
-
-        let final_root;
-
-        if !root_raw.is_null() && !item_ptr.is_null() {
-            scene_graph::ensure_four_layer_nodes(root_raw, item_ptr);
-        }
-
-        if self.render_dirty {
-            match self.render_to_image() {
-                Some((image, buf_scroll_y, _buf_h)) => {
-                    let (src_y, src_h) = if let Some(ref buf) = self.scroll_buffer {
-                        buf.clamp_source_rect(scroll_y, vp_h)
-                    } else {
-                        (scroll_y - buf_scroll_y, vp_h)
-                    };
-                    let logical_img_w = f64::from(image.size().width) / dpr;
-                    final_root = scene_graph::update_texture_node(
-                        root_raw,
-                        item_ptr,
-                        &image,
-                        0.0,
-                        src_y,
-                        logical_img_w,
-                        src_h,
-                        0.0,
-                        vp_h,
-                        dpr,
-                    );
-                    self.render_dirty = false;
-                }
-                None => {
-                    if !root_raw.is_null() {
-                        if let Some(ref buf) = self.scroll_buffer {
-                            let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                            let logical_img_w = f64::from(buf.image.size().width) / dpr;
-                            scene_graph::update_source_rect(
-                                root_raw,
-                                item_ptr,
-                                0.0,
-                                src_y,
-                                logical_img_w,
-                                src_h,
-                                0.0,
-                                vp_h,
-                                dpr,
-                            );
-                        }
-                    }
-                    final_root = root_raw;
-                }
-            }
-        } else {
-            if !root_raw.is_null() {
-                if let Some(ref buf) = self.scroll_buffer {
-                    let (src_y, src_h) = buf.clamp_source_rect(scroll_y, vp_h);
-                    let logical_img_w = f64::from(buf.image.size().width) / dpr;
-                    scene_graph::update_source_rect(
-                        root_raw,
-                        item_ptr,
-                        0.0,
-                        src_y,
-                        logical_img_w,
-                        src_h,
-                        0.0,
-                        vp_h,
-                        dpr,
-                    );
-                }
-            }
-            final_root = root_raw;
-        }
+        let final_root = root_raw;
 
         if !final_root.is_null() && !item_ptr.is_null() {
+            scene_graph::ensure_four_layer_nodes(final_root, item_ptr);
+
             let has_active_txs = !self
                 .pipeline
                 .animation_coordinator_mut()
@@ -233,9 +151,25 @@ impl QQuickItem for SujianEditorItem {
                     cursor_style,
                 );
 
+            // 静态正文层参数 — 交给 QSGTextNode
+            let width = self.bounding_width();
+            let static_text = StaticTextParams {
+                text: &self.buffer.text,
+                font_size: self.current_font_pixel_size,
+                font_family: &self.current_font_family.to_string(),
+                width,
+                padding: f64::from(self.current_padding),
+                line_spacing: f64::from(self.current_line_spacing),
+                text_indent: f64::from(self.current_text_indent),
+                scroll_y,
+                color: &self.current_text_color.to_string(),
+                needs_relayout,
+            };
+
             scene_graph_renderer::render_frame(
                 final_root,
                 item_ptr,
+                &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
@@ -279,8 +213,10 @@ impl QQuickItem for SujianEditorItem {
         let total_elapsed = frame_start.elapsed();
         if total_elapsed.as_millis() > 4 {
             editor_debug_log(&format!(
-                "sujian_update_paint_node: total_ms={}",
+                "sujian_update_paint_node: total_ms={}, needs_relayout={}, dpr={:.2}",
                 total_elapsed.as_millis(),
+                needs_relayout,
+                dpr,
             ));
         }
 

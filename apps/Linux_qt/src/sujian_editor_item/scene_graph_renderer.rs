@@ -1,10 +1,29 @@
 use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
 use crate::editor::scene_graph;
+use super::qt_text_node;
+
+/// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
+///
+/// `needs_relayout` 为 true 时重新创建 QTextLayout 排版并调用 addTextLayout；
+/// 为 false 时只更新滚动位移（QSGTransformNode 矩阵），不重新排版。
+pub(crate) struct StaticTextParams<'a> {
+    pub text: &'a str,
+    pub font_size: f32,
+    pub font_family: &'a str,
+    pub width: f64,
+    pub padding: f64,
+    pub line_spacing: f64,
+    pub text_indent: f64,
+    pub scroll_y: f64,
+    pub color: &'a str,
+    pub needs_relayout: bool,
+}
 
 pub(crate) fn render_frame(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
+    static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
 ) {
@@ -12,8 +31,27 @@ pub(crate) fn render_frame(
         return;
     }
 
+    // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
+    qt_text_node::update_static_text_node(
+        root_raw,
+        item_ptr,
+        static_text.text,
+        static_text.font_size,
+        static_text.font_family,
+        static_text.width,
+        static_text.padding,
+        static_text.line_spacing,
+        static_text.text_indent,
+        static_text.scroll_y,
+        static_text.color,
+        static_text.needs_relayout,
+    );
+
+    // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）
     render_text_animation_layer(root_raw, item_ptr, plan, texture_cache);
+    // Layer 2: 选区/预输入背景
     render_selection_preedit_layer(root_raw, item_ptr, plan);
+    // Layer 3: 光标
     render_cursor_layer(root_raw, item_ptr, plan);
 }
 

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=素笺写作
+Name[zh_CN]=素笺写作
+Comment=跨平台写作软件
+Comment[zh_CN]=跨平台写作软件
+Exec=sujian
+Icon=io.github.Xiwei753.Sujian
+Terminal=false
+Categories=Office;WordProcessor;TextEditor;
+Keywords=writing;editor;novel;写作;编辑;

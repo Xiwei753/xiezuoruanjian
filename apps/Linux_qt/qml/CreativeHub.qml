@@ -21,7 +21,6 @@ Rectangle {
     property var projectBackendRef: null
     property var editorBackendRef: backendRef
     property var starmapBackendRef: backendRef
-    property var textCoordinator: null
     property var starMapController: null
     property var appState: ({})
     property var tree: []
@@ -254,7 +253,6 @@ Rectangle {
                     dt: root.dt
                     backendRef: root.editorBackendRef
                     projectBackendRef: root.projectBackendRef
-                    textCoordinator: root.textCoordinator
                     appState: root.appState
                     tree: root.tree
                     onOpenProject: function(projectId) {

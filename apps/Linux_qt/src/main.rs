@@ -186,7 +186,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppButton.qml" as "AppButton.qml",
     "qml/AppCard.qml" as "AppCard.qml",
     "qml/AppTextField.qml" as "AppTextField.qml",
-    "qml/CoordinatorTextField.qml" as "CoordinatorTextField.qml",
     "qml/AppSwitch.qml" as "AppSwitch.qml",
     "qml/AppSlider.qml" as "AppSlider.qml",
     "qml/AppComboBox.qml" as "AppComboBox.qml",
@@ -520,7 +519,6 @@ fn main() {
     );
 
     fail_if_not_qt6();
-    std::env::set_var("QT_QUICK_CONTROLS_STYLE", "Basic");
     qml_resources();
     probe_hub_header_resource();
     qmetaobject::qml_register_type::<AppBackend>(c"SujianApp", 1, 0, c"AppBackend");
@@ -529,12 +527,6 @@ fn main() {
         1,
         0,
         c"SujianEditorItem",
-    );
-    qmetaobject::qml_register_type::<sujian_editor_item::coordinator_item::TextEditorCoordinatorItem>(
-        c"Sujian",
-        1,
-        0,
-        c"TextEditorCoordinatorItem",
     );
 
     let qml_path = "qrc:/main.qml";

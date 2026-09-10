@@ -34,8 +34,8 @@ pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, C
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
 pub(crate) use super::render_plan::{
-    HiddenClipRect, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange, StaticTextPlan,
-    TextAnimationGlyphInfo, TextAnimationPlan,
+    PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange, TextAnimationGlyphInfo,
+    TextAnimationPlan,
 };
 use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::{
@@ -1205,14 +1205,6 @@ impl LinuxEditorAnimationCoordinator {
         Some(key)
     }
 
-    pub fn has_active_composition(&self) -> bool {
-        self.prepared_queue.active_transactions().iter().any(|t| {
-            t.is_composition()
-                && t.state != TextVisualTransactionState::Cancelled
-                && t.state != TextVisualTransactionState::Completed
-        })
-    }
-
     pub fn active_composition_new_snapshot(&self) -> Option<&EditorLayoutSnapshot> {
         self.prepared_queue
             .active_transactions()
@@ -1322,57 +1314,6 @@ impl LinuxEditorAnimationCoordinator {
             t.state == TextVisualTransactionState::Prepared
                 || t.state == TextVisualTransactionState::Rendering
         })
-    }
-
-    pub fn current_static_render_plan(&self) -> StaticTextPlan {
-        self.build_static_render_plan()
-    }
-
-    fn build_static_render_plan(&self) -> StaticTextPlan {
-        let mut hidden_clip_rects = Vec::new();
-
-        for tx in self.prepared_queue.active_transactions() {
-            if tx.state == TextVisualTransactionState::Cancelled
-                || tx.state == TextVisualTransactionState::Completed
-            {
-                continue;
-            }
-            if !tx.texture_prepared {
-                continue;
-            }
-            for patch in &tx.static_patches {
-                let snapshot = if let Some(ref snap) = tx.new_snapshot {
-                    snap.line_snapshots
-                        .iter()
-                        .find(|l| l.id == patch.snapshot_id)
-                } else {
-                    None
-                };
-                if let Some(line_snap) = snapshot {
-                    for sr in &patch.hidden_source_rects {
-                        let doc_x = sr.x / line_snap.dpr + line_snap.visual_x;
-                        let doc_y = line_snap.document_origin_y + sr.y / line_snap.dpr;
-                        let doc_w = sr.w / line_snap.dpr;
-                        let doc_h = sr.h / line_snap.dpr;
-                        hidden_clip_rects.push(HiddenClipRect {
-                            x: doc_x,
-                            y: doc_y,
-                            w: doc_w,
-                            h: doc_h,
-                        });
-                    }
-                } else {
-                    hidden_clip_rects.push(HiddenClipRect {
-                        x: 0.0,
-                        y: 0.0,
-                        w: 0.0,
-                        h: 0.0,
-                    });
-                }
-            }
-        }
-
-        StaticTextPlan { hidden_clip_rects }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2305,7 +2246,6 @@ mod tests {
                 qt_ascent: 16.0,
                 qt_descent: 4.0,
             }],
-            content_height: 20.0,
         };
         EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, CaretAffinity::Downstream)
             .with_virtual_text(virtual_text.to_string())

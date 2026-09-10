@@ -1,19 +1,20 @@
 //! Linux_qt 自研写作区 — 唯一主路径
 //!
-//! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QImage static texture
-//!       + QSGImageNode + Rust Coordinator → immutable RenderPlan → Scene Graph renderer
+//! 路线：SujianEditorItem(QQuickItem) + QTextLayout/QTextLine + QSGTextNode (Qt 6.7+ public API)
+//!       + Rust Coordinator → immutable RenderPlan → Scene Graph renderer
 //!
-//! Qt 成熟路线原则（Issue #501）：
+//! Qt 成熟路线原则（Issue #501 / #658）：
 //!   排版一次，视觉快照一次，动画阶段不再理解文字。
 //!
 //!   - updatePaintNode() 只消费已准备好的视觉数据，不做排版/业务 diff/磁盘操作
-//!   - QTextLayout/QTextLine 一次排版，QTextLine::draw() 立即生成行快照 (QImage)
+//!   - QTextLayout/QTextLine 一次排版，QSGTextNode::addTextLayout() 把已排好的 layout 交给 Qt 文本节点
 //!   - 动画纹理从行快照 UV 裁剪提取，不再为每个 QGlyphRun 重新排版
 //!   - TextAnimationGlyphInfo 只携带位置/尺寸/透明度/纹理引用，不携带 byte_range/para_text/font_id
 //!   - QSGTransformNode 负责位移，QSGOpacityNode 负责淡入淡出，UV/sourceRect 负责裁剪
 //!
 //! 禁止旧路线：DocumentHandler / TextArea / QTextDocument / QQuickPaintedItem / QSG 三层 overlay
 //!             EditorAnimationOverlay / EditorGlyphGhost / visual_transaction_json QML overlay
+//!             整块 QImage -> QSGImageNode 栅格化（Issue #658 已删除）
 
 // =============================================================================
 // sujian_editor_item - Linux_qt self-rendered editor item
@@ -23,7 +24,6 @@ pub(crate) mod animated_slice;
 pub(crate) mod animation_coordinator;
 pub(crate) mod animation_mode;
 pub(crate) mod buffer;
-pub(crate) mod coordinator_item;
 pub(crate) mod cursor_animation;
 pub(crate) mod cursor_controller;
 pub(crate) mod editing;
@@ -39,6 +39,7 @@ pub(crate) mod pipeline;
 #[allow(clippy::misnamed_getters)]
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
+pub(crate) mod qt_text_node;
 pub(crate) mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
@@ -66,9 +67,7 @@ use buffer::{
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::{QMouseEvent, QQuickItem, QRectF, QString};
-use rendering::ScrollBuffer;
 use std::cell::Cell;
-use std::time::Instant;
 use transaction_key::VisualTransactionKey;
 
 use writer_core::editor::{
@@ -83,6 +82,7 @@ use writer_core::editor::AnimationMode as CoreAnimationMode;
 use animation_coordinator::AnimationMode;
 
 #[derive(Clone, Debug)]
+#[allow(dead_code)]
 pub(crate) struct PreeditAttribute {
     pub start: usize,
     pub length: usize,
@@ -393,8 +393,6 @@ pub struct SujianEditorItem {
     last_event_count: u32,
     editor_layout: EditorLayout,
     render_dirty: bool,
-    scroll_buffer: Option<ScrollBuffer>,
-    last_slow_paint_log: Option<Instant>,
     cursor_ctrl: cursor_controller::CursorController,
 }
 
@@ -526,8 +524,6 @@ impl Default for SujianEditorItem {
             last_event_count: 0,
             editor_layout: EditorLayout::default(),
             render_dirty: true,
-            scroll_buffer: None,
-            last_slow_paint_log: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
         }
     }
@@ -728,10 +724,6 @@ impl SujianEditorItem {
                 AnimationMode::SystemSuppressed
             }
         }
-    }
-
-    pub(crate) fn has_active_insert_animation(&self) -> bool {
-        self.pipeline.animation_coordinator().has_active_insert()
     }
 
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {

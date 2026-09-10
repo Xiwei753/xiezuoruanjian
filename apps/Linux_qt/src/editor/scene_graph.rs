@@ -16,8 +16,8 @@ cpp! {{
             : nullptr;
     }
 
-    // Four-layer scene graph layout:
-    //   child[0] = QSGImageNode       — static text texture
+    // Four-layer scene graph layout (Issue #658):
+    //   child[0] = QSGTransformNode   — static text layer (wraps QSGTextNode, Qt 6.7+ public API)
     //   child[1] = QSGTransformNode   — text animation layer
     //   child[2] = QSGTransformNode   — selection / preedit layer
     //   child[3] = QSGTransformNode   — cursor layer (QSGOpacityNode > QSGImageNode)
@@ -38,25 +38,9 @@ cpp! {{
             delete extra;
         }
 
-        // Ensure child[0] is QSGImageNode (static text)
-        QSGImageNode *staticNode = nullptr;
-        if (root->childCount() > 0) {
-            staticNode = dynamic_cast<QSGImageNode*>(child_at(root, 0));
-        }
-        if (!staticNode) {
-            if (root->childCount() > 0) {
-                QSGNode *old = child_at(root, 0);
-                root->removeChildNode(old);
-                delete old;
-            }
-            staticNode = item->window()->createImageNode();
-            staticNode->setFiltering(QSGTexture::Nearest);
-            staticNode->setOwnsTexture(true);
-            root->prependChildNode(staticNode);
-        }
-
-        // Ensure child[1..3] are QSGTransformNode layers
-        for (int i = 1; i < LAYER_COUNT; i++) {
+        // Ensure child[0..3] are all QSGTransformNode layers.
+        // child[0] wraps a QSGTextNode (created lazily by qt_text_node module).
+        for (int i = 0; i < LAYER_COUNT; i++) {
             QSGTransformNode *layer = nullptr;
             if (root->childCount() > i) {
                 layer = dynamic_cast<QSGTransformNode*>(child_at(root, i));
@@ -69,7 +53,7 @@ cpp! {{
                     delete old;
                 }
                 layer = new QSGTransformNode;
-                // Append at the right position
+                // Insert at the right position
                 if (root->childCount() <= i) {
                     root->appendChildNode(layer);
                 } else {
@@ -102,145 +86,7 @@ pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut s
     })
 }
 
-/// 更新纹理节点——将 QImage 的指定源区域渲染到场景图目标位置。
-/// `src_*` 为源图像物理像素坐标，`dest_*` 为逻辑像素坐标，`dpr` 用于缩放转换。
-/// 返回更新后的根节点指针。必须在 GUI 线程调用。
-pub fn update_texture_node(
-    old_raw: *mut std::ffi::c_void,
-    item_ptr: *mut std::ffi::c_void,
-    image: &qmetaobject::QImage,
-    src_x: f64,
-    src_y: f64,
-    src_w: f64,
-    src_h: f64,
-    dest_y: f64,
-    dest_h: f64,
-    dpr: f64,
-) -> *mut std::ffi::c_void {
-    let img_ptr = image as *const qmetaobject::QImage;
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [
-        old_raw as "QSGNode*",
-        item_ptr as "QQuickItem*",
-        img_ptr as "QImage*",
-        src_x as "double", src_y as "double",
-        src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double",
-        dpr as "double"
-    ] -> *mut std::ffi::c_void as "QSGNode*" {
-        auto *root = static_cast<QSGTransformNode*>(old_raw);
-        if (!root) {
-            root = new QSGTransformNode;
-        }
-
-        // Ensure the four-layer structure
-        ensure_four_layer_nodes(root, item_ptr);
-
-        // Update child[0] = static text QSGImageNode
-        QSGImageNode *imgNode = static_cast<QSGImageNode*>(child_at(root, 0));
-        if (!imgNode) {
-            imgNode = item_ptr->window()->createImageNode();
-            imgNode->setFiltering(QSGTexture::Nearest);
-            imgNode->setOwnsTexture(true);
-            root->prependChildNode(imgNode);
-        }
-
-        imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-
-        double phys_src_x = src_x * dpr;
-        double phys_src_y = src_y * dpr;
-        double phys_src_w = src_w * dpr;
-        double phys_src_h = src_h * dpr;
-
-        double phys_img_w = static_cast<double>(img_ptr->width());
-        double phys_img_h = static_cast<double>(img_ptr->height());
-
-        if (phys_src_y < 0.0) phys_src_y = 0.0;
-        if (phys_src_y + phys_src_h > phys_img_h) {
-            if (phys_src_h > phys_img_h) phys_src_h = phys_img_h;
-            if (phys_src_y + phys_src_h > phys_img_h) phys_src_y = phys_img_h - phys_src_h;
-        }
-        if (phys_src_x < 0.0) phys_src_x = 0.0;
-        if (phys_src_x + phys_src_w > phys_img_w) {
-            if (phys_src_w > phys_img_w) phys_src_w = phys_img_w;
-            if (phys_src_x + phys_src_w > phys_img_w) phys_src_x = phys_img_w - phys_src_w;
-        }
-
-        imgNode->setSourceRect(phys_src_x, phys_src_y, phys_src_w, phys_src_h);
-        QSGTexture *tex = item_ptr->window()->createTextureFromImage(*img_ptr);
-        tex->setFiltering(QSGTexture::Nearest);
-        imgNode->setTexture(tex);
-        imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-
-        static bool logged_once = false;
-        if (!logged_once && qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
-            logged_once = true;
-            qDebug("update_texture_node: dpr=%.2f img=%dx%d texSize=%dx%d srcRect=(%.1f,%.1f %.1fx%.1f) destRect=(0,%.1f %.1fx%.1f)",
-                dpr, img_ptr->width(), img_ptr->height(),
-                tex->textureSize().width(), tex->textureSize().height(),
-                phys_src_x, phys_src_y, phys_src_w, phys_src_h,
-                dest_y, item_ptr->width(), dest_h);
-        }
-
-        return root;
-    })
-}
-
-pub fn update_source_rect(
-    old_raw: *mut std::ffi::c_void,
-    item_ptr: *mut std::ffi::c_void,
-    src_x: f64,
-    src_y: f64,
-    src_w: f64,
-    src_h: f64,
-    dest_y: f64,
-    dest_h: f64,
-    dpr: f64,
-) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [
-        old_raw as "QSGNode*",
-        item_ptr as "QQuickItem*",
-        src_x as "double", src_y as "double",
-        src_w as "double", src_h as "double",
-        dest_y as "double", dest_h as "double",
-        dpr as "double"
-    ] {
-        auto *root = static_cast<QSGTransformNode*>(old_raw);
-        if (!root || root->childCount() == 0) return;
-        auto *imgNode = static_cast<QSGImageNode*>(child_at(root, 0));
-        if (!imgNode) return;
-
-        imgNode->setRect(0, dest_y, item_ptr->width(), dest_h);
-
-        double phys_src_x = src_x * dpr;
-        double phys_src_y = src_y * dpr;
-        double phys_src_w = src_w * dpr;
-        double phys_src_h = src_h * dpr;
-
-        if (imgNode->texture()) {
-            QSize texSize = imgNode->texture()->textureSize();
-            double phys_img_w = static_cast<double>(texSize.width());
-            double phys_img_h = static_cast<double>(texSize.height());
-
-            if (phys_src_y < 0.0) phys_src_y = 0.0;
-            if (phys_src_y + phys_src_h > phys_img_h) {
-                if (phys_src_h > phys_img_h) phys_src_h = phys_img_h;
-                if (phys_src_y + phys_src_h > phys_img_h) phys_src_y = phys_img_h - phys_src_h;
-            }
-            if (phys_src_x < 0.0) phys_src_x = 0.0;
-            if (phys_src_x + phys_src_w > phys_img_w) {
-                if (phys_src_w > phys_img_w) phys_src_w = phys_img_w;
-                if (phys_src_x + phys_src_w > phys_img_w) phys_src_x = phys_img_w - phys_src_w;
-            }
-        }
-
-        imgNode->setSourceRect(phys_src_x, phys_src_y, phys_src_w, phys_src_h);
-        imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-    })
-}
-
-/// Update the cursor node in the cursor layer (child[3]).
+/// 更新光标节点（child[3] 层内）。
 /// Creates/updates a solid-color rectangle at (x, y) with given width/height and opacity.
 pub fn update_cursor_node(
     root_raw: *mut std::ffi::c_void,

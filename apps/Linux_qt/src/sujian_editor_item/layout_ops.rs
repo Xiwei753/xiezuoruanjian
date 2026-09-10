@@ -27,7 +27,6 @@ impl SujianEditorItem {
 
     pub(crate) fn invalidate_layout_cache(&mut self) {
         self.editor_layout.invalidate();
-        self.scroll_buffer = None;
     }
 
     pub(crate) fn layout_params(&self, width: f64) -> LayoutParams {

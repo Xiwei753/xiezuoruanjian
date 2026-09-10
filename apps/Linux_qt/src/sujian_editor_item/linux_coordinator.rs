@@ -22,10 +22,6 @@ impl Default for TextEditorProfile {
 }
 
 impl TextEditorProfile {
-    pub fn short_title() -> Self {
-        Self::default()
-    }
-
     pub fn search_query() -> Self {
         Self::default()
     }

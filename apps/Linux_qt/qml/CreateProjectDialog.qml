@@ -22,7 +22,6 @@ Dialog {
     standardButtons: Dialog.NoButton
 
     property var theme: null
-    property var textCoordinator: null
     signal submitProject(string title)
 
     width: 400
@@ -58,13 +57,11 @@ Dialog {
             font.family: theme.fontFamily
         }
 
-        CoordinatorTextField {
+        AppTextField {
             id: titleField
             Layout.fillWidth: true
             dt: root.theme
             placeholderText: qsTr("作品名称")
-            coordinator: root.textCoordinator
-            targetId: "create-project-title"
             onAccepted: {
                 if (text.trim() !== "") {
                     root.accept();
