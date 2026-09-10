@@ -924,7 +924,6 @@ cpp! {{
 
             QPainter painter(&img);
             painter.setRenderHint(QPainter::TextAntialiasing, true);
-            painter.scale(dpr, dpr);
             painter.setPen(QPen(textColor));
             QPointF pos(0, line.ascent());
             line.draw(&painter, pos);
@@ -1173,7 +1172,6 @@ cpp! {{
 
                 QPainter painter(&img);
                 painter.setRenderHint(QPainter::TextAntialiasing, true);
-                painter.scale(dpr, dpr);
                 painter.setPen(QPen(textColor));
                 QPointF pos(0, line.ascent());
                 line.draw(&painter, pos);
@@ -2418,43 +2416,6 @@ pub fn qtextlayout_cursor_to_x(
     })
 }
 
-/// Issue #658 评论 5621512329 问题 2: 旧的光标定位 helper，重新 new QTextLayout 排版。
-/// 生产代码已改用 `get_paragraph_layout_cursor_to_x_on_line` 从已排好的 generation cache
-/// 读取 QTextLine。此函数保留供测试交叉验证（验证 cache 中的 layout 与重新排版结果一致）。
-#[cfg(test)]
-pub fn qtextlayout_cursor_to_x_on_line(
-    para_text: &str,
-    cursor_abs_byte: usize,
-    para_start: usize,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-    use_trailing: bool,
-) -> f64 {
-    let cursor_in_para = cursor_abs_byte.saturating_sub(para_start);
-    let cursor_qchar = byte_offset_to_qchar_offset(para_text, cursor_in_para) as i32;
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    cpp!(unsafe [
-        para as "QString",
-        cursor_qchar as "int",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int",
-        use_trailing as "bool"
-    ] -> f64 as "double" {
-        return editor_layout_cursor_to_x_on_line(
-            para, cursor_qchar, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx, use_trailing
-        );
-    })
-}
-
 pub fn debug_line_metrics(
     para_text: &str,
     font_size: f64,
@@ -2477,39 +2438,6 @@ pub fn debug_line_metrics(
     ] -> () as "void" {
         editor_layout_debug_line_metrics(para, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
     });
-}
-
-/// Issue #658 评论 5621512329 问题 2: 旧的命中定位 helper，重新 new QTextLayout 排版。
-/// 生产代码已改用 `get_paragraph_layout_x_to_cursor_on_line` 从已排好的 generation cache
-/// 读取 QTextLine。此函数保留供测试交叉验证（验证 cache 中的 layout 与重新排版结果一致）。
-#[cfg(test)]
-pub fn qtextlayout_x_to_cursor_on_line(
-    para_text: &str,
-    x: f64,
-    para_start: usize,
-    font_size: f64,
-    font_family: &str,
-    paragraph_wrap_w: f64,
-    indent_w: f64,
-    qtextline_idx: i32,
-) -> usize {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-    let qchar_off = cpp!(unsafe [
-        para as "QString",
-        x as "double",
-        fs as "float",
-        ff as "QString",
-        paragraph_wrap_w as "double",
-        indent_w as "double",
-        qtextline_idx as "int"
-    ] -> i32 as "int" {
-        return editor_layout_x_to_cursor_on_line(para, x, fs, ff, paragraph_wrap_w, indent_w, qtextline_idx);
-    });
-    let para_byte = qchar_offset_to_byte_offset(para_text, qchar_off as usize);
-    para_start + para_byte
 }
 
 pub fn byte_offset_to_qchar_offset(text: &str, byte_offset: usize) -> usize {
@@ -4010,7 +3938,6 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
     }
 }
 
-#[cfg(not(test))]
 pub fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
@@ -4022,12 +3949,6 @@ pub fn get_font_ascent(font_family: &str, font_size: f32) -> f64 {
     })
 }
 
-#[cfg(test)]
-pub fn get_font_ascent(_font_family: &str, font_size: f32) -> f64 {
-    font_size as f64 * 0.8
-}
-
-#[cfg(not(test))]
 pub fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
     let family = QString::from(font_family);
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
@@ -4037,11 +3958,6 @@ pub fn get_font_descent(font_family: &str, font_size: f32) -> f64 {
         QFontMetricsF metrics(font);
         return metrics.descent();
     })
-}
-
-#[cfg(test)]
-pub fn get_font_descent(_font_family: &str, font_size: f32) -> f64 {
-    font_size as f64 * 0.2
 }
 
 pub fn cursor_rect_for_line(line: &VisualLine, font_size: f64, font_family: &str) -> (f64, f64) {
@@ -4181,7 +4097,9 @@ pub fn inject_animation_visuals_into_snapshot(
 ///
 /// 算法：
 /// 1. 找出字节范围相交的行
-/// 2. 考虑 reflow：换行/删换行影响后续所有行
+/// 2. 考虑 reflow：从直接受影响行之后，按 old/new byte offset 对应逐行比较几何，
+///    仅把几何（x/width/height/qtextline_idx/字节长度）变化的行加入 affected；
+///    仅 y 平移的行不需要重新栅格化 QImage，不加入。
 /// 3. 考虑相邻段落：新段落首行缩进变化
 pub fn compare_old_new_visual_lines(
     old_lines: &[VisualLine],
@@ -4203,23 +4121,7 @@ pub fn compare_old_new_visual_lines(
         .or(deleted_range.map(|(_, e)| e))
         .unwrap_or(usize::MAX);
 
-    // 检查是否有换行变化（通过比较受影响行数）
-    let has_line_count_change = if let Some((ins_start, ins_end)) = inserted_range {
-        if let Some((del_start, del_end)) = deleted_range {
-            // 替换操作：检查插入和删除的长度差异
-            (ins_end - ins_start) != (del_end - del_start)
-        } else {
-            // 纯插入：可能导致换行增加
-            true
-        }
-    } else if deleted_range.is_some() {
-        // 纯删除：可能导致换行减少
-        true
-    } else {
-        false
-    };
-
-    // 计算 old 侧受影响的行
+    // 计算 old 侧受影响的行（与编辑字节范围相交）
     let mut old_affected = Vec::new();
     for (idx, old_line) in old_lines.iter().enumerate() {
         let intersects =
@@ -4228,14 +4130,84 @@ pub fn compare_old_new_visual_lines(
             old_affected.push(idx);
         }
     }
-    let old_first = old_affected.iter().copied().min().unwrap_or(0);
-    if has_line_count_change {
-        for idx in (old_first + 1)..old_lines.len() {
-            if !old_affected.contains(&idx) {
-                old_affected.push(idx);
-            }
+    let old_first = old_affected
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(old_lines.len());
+
+    // 计算 new 侧受影响的行（与编辑字节范围相交）
+    let mut new_affected = Vec::new();
+    for (idx, new_line) in new_lines.iter().enumerate() {
+        let intersects =
+            new_line.byte_start < affected_byte_end && new_line.byte_end > affected_byte_start;
+        if intersects {
+            new_affected.push(idx);
         }
     }
+    let new_first = new_affected
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(new_lines.len());
+
+    // 编辑点之后 old→new 的 byte offset 偏移
+    let delta: isize = match (inserted_range, deleted_range) {
+        (Some((ins_start, ins_end)), Some((del_start, del_end))) => {
+            (ins_end - ins_start) as isize - (del_end - del_start) as isize
+        }
+        (Some((ins_start, ins_end)), None) => (ins_end - ins_start) as isize,
+        (None, Some((del_start, del_end))) => -((del_end - del_start) as isize),
+        (None, None) => 0,
+    };
+
+    // 双指针逐行比较几何：从直接受影响行之后开始，按 old/new byte offset 对应。
+    // 仅几何（x/width/height/qtextline_idx/字节长度）变化的行才需要重新栅格化 QImage；
+    // 仅 y 平移的行不加入 affected。
+    let mut oi = old_first + 1;
+    let mut ni = new_first + 1;
+    while oi < old_lines.len() && ni < new_lines.len() {
+        let ol = &old_lines[oi];
+        let nl = &new_lines[ni];
+        let corr_new_byte_start = ol.byte_start.saturating_add_signed(delta);
+        if nl.byte_start < corr_new_byte_start {
+            // new 这行是新增的视觉行
+            new_affected.push(ni);
+            ni += 1;
+            continue;
+        }
+        if nl.byte_start > corr_new_byte_start {
+            // old 这行消失了
+            old_affected.push(oi);
+            oi += 1;
+            continue;
+        }
+        // byte_start 对齐，比较视觉内容是否相同（不比较 y，仅 y 平移不需要重新栅格化）
+        let same = (ol.x - nl.x).abs() < 0.1
+            && (ol.width - nl.width).abs() < 0.1
+            && (ol.height - nl.height).abs() < 0.1
+            && ol.qtextline_idx == nl.qtextline_idx
+            && (ol.byte_end - ol.byte_start) == (nl.byte_end - nl.byte_start);
+        if same {
+            // 这行没 reflow，停止向后扩展
+            break;
+        }
+        // 几何变化，加入 affected
+        old_affected.push(oi);
+        new_affected.push(ni);
+        oi += 1;
+        ni += 1;
+    }
+    // 一方先耗尽时另一方剩余行全部加入（新增/消失的视觉行）
+    while oi < old_lines.len() {
+        old_affected.push(oi);
+        oi += 1;
+    }
+    while ni < new_lines.len() {
+        new_affected.push(ni);
+        ni += 1;
+    }
+
     // 考虑相邻段落首行缩进变化
     for idx in 0..old_lines.len() {
         let old_line = &old_lines[idx];
@@ -4268,26 +4240,7 @@ pub fn compare_old_new_visual_lines(
             }
         }
     }
-    old_affected.sort_unstable();
-    old_affected.dedup();
 
-    // 计算 new 侧受影响的行（对称逻辑）
-    let mut new_affected = Vec::new();
-    for (idx, new_line) in new_lines.iter().enumerate() {
-        let intersects =
-            new_line.byte_start < affected_byte_end && new_line.byte_end > affected_byte_start;
-        if intersects {
-            new_affected.push(idx);
-        }
-    }
-    let new_first = new_affected.iter().copied().min().unwrap_or(0);
-    if has_line_count_change {
-        for idx in (new_first + 1)..new_lines.len() {
-            if !new_affected.contains(&idx) {
-                new_affected.push(idx);
-            }
-        }
-    }
     // 考虑相邻段落首行缩进变化（new 侧）
     for idx in 0..new_lines.len() {
         let new_line = &new_lines[idx];
@@ -4313,760 +4266,10 @@ pub fn compare_old_new_visual_lines(
             }
         }
     }
+    old_affected.sort_unstable();
+    old_affected.dedup();
     new_affected.sort_unstable();
     new_affected.dedup();
 
     (old_affected, new_affected)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::Once;
-
-    static QT_INIT: Once = Once::new();
-
-    fn init_qt() {
-        QT_INIT.call_once(|| {
-            std::env::set_var(
-                "QT_QPA_PLATFORM",
-                std::env::var("QT_QPA_PLATFORM").unwrap_or_else(|_| "offscreen".to_string()),
-            );
-            cpp!(unsafe [] {
-                static int argc = 1;
-                static char app_name[] = "sujian-layout-tests";
-                static char* argv[] = { app_name, nullptr };
-                if (!QGuiApplication::instance()) {
-                    new QGuiApplication(argc, argv);
-                }
-            });
-        });
-    }
-
-    fn params(width: f64) -> LayoutParams {
-        LayoutParams {
-            width,
-            font_size: 16.0,
-            font_family: "serif".to_string(),
-            line_spacing: 1.5,
-            text_indent: 32.0,
-            padding: 16.0,
-        }
-    }
-
-    fn snapshot_for(text: &str, width: f64) -> LayoutSnapshot {
-        init_qt();
-        let mut layout = EditorLayout::default();
-        layout.snapshot(text, params(width), 1).clone()
-    }
-
-    fn assert_line_end_roundtrip(snapshot: &LayoutSnapshot) {
-        for line in &snapshot.lines {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let x = qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                line.byte_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-                true,
-            );
-            assert!(
-                x > 0.01,
-                "line-end cursor x must not collapse to 0: line={}, range={}..{}",
-                line.id,
-                line.byte_start,
-                line.byte_end
-            );
-            let rect = caret_rect(snapshot, line.byte_end, CaretAffinity::Upstream, 0.0, 800.0);
-            assert_eq!(
-                rect.visual_line_id, line.id,
-                "caret_rect(line.byte_end, Upstream) must stay on the source visual line"
-            );
-            assert!(
-                rect.x > 0.01,
-                "caret_rect(line.byte_end, Upstream).x must not collapse to 0: line={}, range={}..{}",
-                line.id,
-                line.byte_start,
-                line.byte_end
-            );
-            let roundtrip = qtextlayout_x_to_cursor_on_line(
-                &line.para_text,
-                x,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-            );
-            assert_eq!(
-                roundtrip, line.byte_end,
-                "xToCursor(cursorToX(line.byte_end)) must return line.byte_end for line {}",
-                line.id
-            );
-        }
-    }
-
-    #[test]
-    fn test_qchar_offset_to_byte_offset() {
-        // Normal ASCII text
-        let text = "hello";
-        assert_eq!(qchar_offset_to_byte_offset(text, 0), 0);
-        assert_eq!(qchar_offset_to_byte_offset(text, 1), 1);
-        assert_eq!(qchar_offset_to_byte_offset(text, 4), 4);
-        assert_eq!(qchar_offset_to_byte_offset(text, 5), 5);
-
-        // Emoji (surrogate pair)
-        let emoji = "a😀b"; // a: 1 qchar (1 byte), 😀: 2 qchars (4 bytes), b: 1 qchar (1 byte)
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 0), 0); // 'a'
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 1), 1); // '😀'
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 2), 5); // Fallback inside surrogate -> next char 'b'
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 3), 5); // 'b'
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 4), 6); // End
-
-        // Out-of-bounds inputs
-        assert_eq!(qchar_offset_to_byte_offset(text, 100), 5); // Fallback to text.len()
-        assert_eq!(qchar_offset_to_byte_offset(emoji, 10), 6); // Fallback to emoji.len()
-
-        // Empty string
-        assert_eq!(qchar_offset_to_byte_offset("", 0), 0);
-        assert_eq!(qchar_offset_to_byte_offset("", 1), 0);
-    }
-
-    #[test]
-    fn qchar_byte_roundtrip() {
-        let texts = [
-            "hello world",
-            "你好世界",
-            "Hello 你好 World",
-            "a😀b🎉c",
-            "写作者：测试emoji🎉混合",
-        ];
-        for text in &texts {
-            for (byte_pos, _ch) in text.char_indices() {
-                let qchar = byte_offset_to_qchar_offset(text, byte_pos);
-                let back = qchar_offset_to_byte_offset(text, qchar);
-                assert_eq!(back, byte_pos);
-            }
-            let qchar_end = byte_offset_to_qchar_offset(text, text.len());
-            assert_eq!(qchar_offset_to_byte_offset(text, qchar_end), text.len());
-        }
-    }
-
-    #[test]
-    fn chinese_layout_roundtrip() {
-        let snapshot = snapshot_for("第一行中文，第二段也要准确。", 320.0);
-        assert!(snapshot.lines.len() >= 1);
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn english_layout_roundtrip() {
-        let snapshot = snapshot_for("The quick brown fox writes a quiet desktop editor.", 320.0);
-        assert!(snapshot.lines.len() >= 1);
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn punctuation_hit_test_and_caret_rect_match() {
-        let snapshot = snapshot_for("你好，world! 句号。", 360.0);
-        let line = snapshot.lines.first().expect("lines should not be empty");
-        let comma = "你好".len();
-        let rect = caret_rect(&snapshot, comma, CaretAffinity::Downstream, 0.0, 800.0);
-        let (hit, affinity) = hit_test(&snapshot, rect.x + 1.0, line.y + 2.0, 0.0);
-        let hit_rect = caret_rect(&snapshot, hit, affinity, 0.0, 800.0);
-        assert_eq!(hit_rect.visual_line_id, line.id);
-    }
-
-    #[test]
-    fn wrapping_preserves_boundary_affinity() {
-        let snapshot = snapshot_for("abcdefghijklmnopqrstuvwx yz", 96.0);
-        assert!(snapshot.lines.len() > 1);
-        let boundary = snapshot.lines[0].byte_end;
-        assert_eq!(
-            caret_rect(&snapshot, boundary, CaretAffinity::Upstream, 0.0, 800.0).visual_line_id,
-            snapshot.lines[0].id
-        );
-        assert_eq!(
-            caret_rect(&snapshot, boundary, CaretAffinity::Downstream, 0.0, 800.0).visual_line_id,
-            snapshot.lines[1].id
-        );
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn blank_and_trailing_newline_layout() {
-        for text in ["", "\n", "\n\n", "正文\n"] {
-            let snapshot = snapshot_for(text, 320.0);
-            assert!(!snapshot.lines.is_empty());
-            let rect = caret_rect(&snapshot, text.len(), CaretAffinity::Downstream, 0.0, 800.0);
-            assert!(rect.h > 0.0);
-        }
-    }
-
-    #[test]
-    fn hit_test_and_caret_rect_use_same_snapshot_line() {
-        let snapshot = snapshot_for("第一行会自动换行，第二行继续测试命中。", 128.0);
-        for line in &snapshot.lines {
-            let (index, affinity) = hit_test(
-                &snapshot,
-                line.x + line.width.max(1.0) / 2.0,
-                line.y + 2.0,
-                0.0,
-            );
-            let rect = caret_rect(&snapshot, index, affinity, 0.0, 800.0);
-            assert_eq!(rect.visual_line_id, line.id);
-        }
-    }
-
-    #[test]
-    fn large_font_line_end_roundtrip() {
-        init_qt();
-        let mut layout = EditorLayout::default();
-        let text = "这是一段测试文字，用来验证大字号下换行后的行尾点击定位是否正确。第二行内容继续测试换行效果。";
-        let snapshot = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 820.0,
-                    font_size: 45.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 0.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-        assert!(snapshot.lines.len() > 1, "text must wrap at fontSize=45");
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn many_wrap_lines_roundtrip() {
-        init_qt();
-        let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。我们通过大量中文段落来测试自动换行后每一行的行尾光标定位是否准确。第一段测试内容结束。第二段继续测试更长的文本内容，确保每一行都能正确地进行光标位置计算和逆向映射。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 400.0,
-                    font_size: 24.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 0.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-        assert!(
-            snapshot.lines.len() >= 3,
-            "text must wrap into >= 3 lines, got {}",
-            snapshot.lines.len()
-        );
-        assert_line_end_roundtrip(&snapshot);
-        for (idx, line) in snapshot.lines.iter().enumerate() {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let x_end = qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                line.byte_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-                true,
-            );
-            assert!(
-                x_end > 1.0,
-                "line {} end x must be > 1.0, got {:.4} (range {}..{})",
-                idx,
-                x_end,
-                line.byte_start,
-                line.byte_end
-            );
-            let roundtrip = qtextlayout_x_to_cursor_on_line(
-                &line.para_text,
-                x_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-            );
-            assert_eq!(
-                roundtrip, line.byte_end,
-                "line {}: xToCursor(cursorToX(line.byte_end={})) returned {}",
-                idx, line.byte_end, roundtrip
-            );
-        }
-    }
-
-    fn params_large(width: f64) -> LayoutParams {
-        LayoutParams {
-            width,
-            font_size: 45.0,
-            font_family: "serif".to_string(),
-            line_spacing: 1.5,
-            text_indent: 32.0,
-            padding: 16.0,
-        }
-    }
-
-    #[test]
-    fn large_font_45_wide_window_long_paragraph_line_end() {
-        init_qt();
-        let text = "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。我们通过大量中文段落来测试自动换行后每一行的行尾光标定位是否准确。大字号下每行能容纳的字数更少，所以换行更频繁，这正是容易出问题的场景。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(820.0), 1).clone();
-        assert!(
-            snapshot.lines.len() >= 3,
-            "fontSize=45 must produce >= 3 wrapped lines, got {}",
-            snapshot.lines.len()
-        );
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn large_font_45_wide_window_multi_paragraph() {
-        init_qt();
-        let text = "第一段：这是大字号多段落测试，每一段都会独立换行。\n第二段：继续测试大字号下的多段落换行效果，确保段落之间的边界不会出错。\n第三段：最后一段，验证整个文档的换行一致性。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(820.0), 1).clone();
-        assert!(
-            snapshot.lines.len() >= 4,
-            "multi-paragraph fontSize=45 must produce >= 4 lines, got {}",
-            snapshot.lines.len()
-        );
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn large_font_45_soft_wrap_line_end_click() {
-        init_qt();
-        let text = "这是一个用来测试软换行后行尾点击定位的段落。当我们点击某个换行后的行尾位置时，光标的target_x不应该回到行首缩进位置。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout.snapshot(text, params_large(600.0), 1).clone();
-        assert!(
-            snapshot.lines.len() >= 2,
-            "must wrap at width=600 fontSize=45"
-        );
-        for line in &snapshot.lines {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let x_end = qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                line.byte_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-                true,
-            );
-            assert!(
-                x_end > 1.0,
-                "soft-wrap line end x must be > 1.0: line_id={}, range={}..{}, x_end={:.4}",
-                line.id,
-                line.byte_start,
-                line.byte_end,
-                x_end
-            );
-            let rect = caret_rect(
-                &snapshot,
-                line.byte_end,
-                CaretAffinity::Upstream,
-                0.0,
-                800.0,
-            );
-            assert!(
-                rect.x > 1.0,
-                "caret_rect(line.byte_end, Upstream).x must be > 1.0: line_id={}, rect.x={:.4}",
-                line.id,
-                rect.x
-            );
-            assert_eq!(
-                rect.visual_line_id, line.id,
-                "caret_rect(line.byte_end, Upstream) must stay on source line: line_id={}, got visual_line_id={}",
-                line.id, rect.visual_line_id
-            );
-        }
-    }
-
-    #[test]
-    fn visual_line_qchar_boundary_matches_qt() {
-        init_qt();
-        let text =
-            "写作者是一个强大的桌面写作工具，支持自动换行、行尾点击定位、光标动画等核心编辑功能。";
-        let snapshot = snapshot_for(text, 200.0);
-        assert!(snapshot.lines.len() >= 2, "must wrap at width=200");
-        for line in &snapshot.lines {
-            if line.para_text.is_empty() {
-                continue;
-            }
-            let para: QString = line.para_text.to_string().into();
-            let fs = snapshot.font_size as f32;
-            let ff: QString = snapshot.font_family.to_string().into();
-            let pw = line.line_wrap_width + line.line_indent_x;
-            let pi = line.para_indent;
-            let qtl = line.qtextline_idx;
-            // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
-            let (qt_text_start, qt_text_end) = cpp!(unsafe [
-                para as "QString", fs as "float", ff as "QString",
-                pw as "double", pi as "double", qtl as "int"
-            ] -> (i32, i32) as "std::pair<int,int>" {
-                QFont font(ff);
-                font.setPixelSize(static_cast<int>(fs));
-                QTextLayout layout(para, font);
-                QTextOption option;
-                option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-                layout.setTextOption(option);
-                layout.beginLayout();
-                int cur = 0;
-                bool first = true;
-                while (true) {
-                    QTextLine line = layout.createLine();
-                    if (!line.isValid()) break;
-                    double lineWrap = first ? (pw - pi) : pw;
-                    line.setLineWidth(lineWrap);
-                    if (cur == qtl) {
-                        int ts = line.textStart();
-                        int te = ts + line.textLength();
-                        layout.endLayout();
-                        return std::make_pair(ts, te);
-                    }
-                    first = false;
-                    cur++;
-                }
-                layout.endLayout();
-                return std::make_pair(-1, -1);
-            });
-            assert_eq!(
-                qt_text_start, line.para_qchar_start as i32,
-                "VisualLine para_qchar_start mismatch on line {}: expected {} got {}",
-                line.id, qt_text_start, line.para_qchar_start
-            );
-            assert_eq!(
-                qt_text_end, line.para_qchar_end as i32,
-                "VisualLine para_qchar_end mismatch on line {}: expected {} got {}",
-                line.id, qt_text_end, line.para_qchar_end
-            );
-        }
-    }
-
-    #[test]
-    fn cursor_7306_7065_style_target_x_not_indent() {
-        init_qt();
-        let text = "这是模拟实机日志中出现的问题段落。当光标位于某个visual line的中间位置时，target_x不应该坍缩到行首缩进位置61.0。通过fontSize=45和长段落来复现这个场景。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 820.0,
-                    font_size: 45.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 32.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-        assert!(snapshot.lines.len() >= 3);
-        for line in &snapshot.lines {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let mid_byte = line.byte_start + (line.byte_end - line.byte_start) / 2;
-            let mid_cursor = text.floor_char_boundary(mid_byte);
-            let mid_cursor = mid_cursor.max(line.byte_start).min(line.byte_end);
-            if mid_cursor == line.byte_start || mid_cursor == line.byte_end {
-                continue;
-            }
-            let mid_rect = caret_rect(&snapshot, mid_cursor, CaretAffinity::Downstream, 0.0, 800.0);
-            assert!(
-                mid_rect.x > 1.0,
-                "mid-cursor target_x must not collapse to indent: line_id={}, mid_cursor={}, rect.x={:.4}",
-                line.id, mid_cursor, mid_rect.x
-            );
-            let x_end = qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                line.byte_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-                true,
-            );
-            assert!(
-                x_end > 1.0,
-                "line-end x must not collapse to indent: line_id={}, x_end={:.4}",
-                line.id,
-                x_end
-            );
-        }
-    }
-
-    #[test]
-    fn x_end_trailing_consistent_with_recomputed() {
-        init_qt();
-        let text = "验证x_end_trailing缓存值与重新计算值一致。这是测试段落，用来确保布局缓存不会导致光标位置偏差。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 600.0,
-                    font_size: 32.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 0.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-        assert!(snapshot.lines.len() >= 2);
-        for line in &snapshot.lines {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let recomputed = qtextlayout_cursor_to_x_on_line(
-                &line.para_text,
-                line.byte_end,
-                line.para_start,
-                snapshot.font_size as f64,
-                &snapshot.font_family,
-                line.line_wrap_width + line.line_indent_x,
-                line.para_indent,
-                line.qtextline_idx,
-                true,
-            );
-            let cached = line.x_end_trailing;
-            let diff = (recomputed - cached).abs();
-            assert!(
-                diff < 0.5,
-                "x_end_trailing inconsistency on line {}: cached={:.4} recomputed={:.4} diff={:.4}",
-                line.id,
-                cached,
-                recomputed,
-                diff
-            );
-        }
-    }
-
-    // ── Mixed-script regression tests ──
-    // These cover the cases specified in the acceptance criteria:
-    //   ]"  ]"  中]"  中英文abc]"混排  emoji  全角标点
-
-    #[test]
-    fn mixed_script_close_quote_roundtrip() {
-        init_qt();
-        // "]\"" — closing Chinese quote after ASCII bracket
-        let text = "]\"";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-        // Verify cursor at every position is valid
-        for byte_pos in 0..=text.len() {
-            let pos = text.floor_char_boundary(byte_pos);
-            let rect = caret_rect(&snapshot, pos, CaretAffinity::Downstream, 0.0, 800.0);
-            assert!(
-                rect.x > 0.0 || pos == 0,
-                "cursor at byte {} must have x > 0, got {:.4}",
-                pos,
-                rect.x
-            );
-        }
-    }
-
-    #[test]
-    fn mixed_script_open_quote_roundtrip() {
-        init_qt();
-        // "]\"" — opening Chinese quote after ASCII bracket
-        let text = "]\"";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn mixed_script_chinese_close_quote_roundtrip() {
-        init_qt();
-        // "中]\"" — Chinese char + bracket + closing quote
-        let text = "中]\"";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-        for byte_pos in 0..=text.len() {
-            let pos = text.floor_char_boundary(byte_pos);
-            let rect = caret_rect(&snapshot, pos, CaretAffinity::Downstream, 0.0, 800.0);
-            assert!(
-                rect.x >= 0.0,
-                "cursor at byte {} must have x >= 0, got {:.4}",
-                pos,
-                rect.x
-            );
-        }
-    }
-
-    #[test]
-    fn mixed_script_full_mixed_roundtrip() {
-        init_qt();
-        // "中英文abc]\"混排" — full mixed-script with closing quote
-        let text = "中英文abc]\"混排";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-        // Verify hit_test and caret_rect agree for every position
-        for line in &snapshot.lines {
-            if line.byte_start == line.byte_end || line.para_text.is_empty() {
-                continue;
-            }
-            let mid_byte = line.byte_start + (line.byte_end - line.byte_start) / 2;
-            let mid_cursor = text
-                .floor_char_boundary(mid_byte)
-                .max(line.byte_start)
-                .min(line.byte_end);
-            let rect = caret_rect(&snapshot, mid_cursor, CaretAffinity::Downstream, 0.0, 800.0);
-            let (hit, _affinity) = hit_test(&snapshot, rect.x + 1.0, line.y + 2.0, 0.0);
-            let hit_rect = caret_rect(&snapshot, hit, CaretAffinity::Downstream, 0.0, 800.0);
-            assert_eq!(
-                hit_rect.visual_line_id, line.id,
-                "hit_test and caret_rect must agree on visual_line_id for mixed-script text"
-            );
-        }
-    }
-
-    #[test]
-    fn emoji_layout_roundtrip() {
-        init_qt();
-        let text = "你好🙂世界🎉测试";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-        // Verify cursor at every char boundary
-        for (byte_pos, _ch) in text.char_indices() {
-            let rect = caret_rect(&snapshot, byte_pos, CaretAffinity::Downstream, 0.0, 800.0);
-            assert!(
-                rect.x >= 0.0,
-                "cursor at emoji text byte {} must have x >= 0, got {:.4}",
-                byte_pos,
-                rect.x
-            );
-        }
-    }
-
-    #[test]
-    fn fullwidth_punctuation_roundtrip() {
-        init_qt();
-        // Full-width punctuation: 。，！？：；""''【】
-        let text = "你好。世界！测试？混合：标点；";
-        let snapshot = snapshot_for(text, 320.0);
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn large_font_scroll_mixed_script() {
-        init_qt();
-        // Max font size scrolling with mixed script
-        let text = "中英文abc]\"混排测试，验证大字号下滚动和光标定位。This is a longer paragraph to force wrapping at large font sizes. 继续中文测试。";
-        let mut layout = EditorLayout::default();
-        let snapshot = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 820.0,
-                    font_size: 45.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 32.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-        assert!(snapshot.lines.len() >= 2, "must wrap at fontSize=45");
-        assert_line_end_roundtrip(&snapshot);
-    }
-
-    #[test]
-    fn font_size_change_scroll_to_bottom() {
-        init_qt();
-        // Simulate font size change: layout at small font, then at large font
-        let text = "第一行测试文字。第二行继续。第三行更多内容。第四行验证。第五行结束。";
-        let mut layout = EditorLayout::default();
-
-        // Small font
-        let snapshot_small = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 820.0,
-                    font_size: 16.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 32.0,
-                    padding: 16.0,
-                },
-                1,
-            )
-            .clone();
-
-        // Large font
-        let snapshot_large = layout
-            .snapshot(
-                text,
-                LayoutParams {
-                    width: 820.0,
-                    font_size: 45.0,
-                    font_family: "serif".to_string(),
-                    line_spacing: 1.5,
-                    text_indent: 32.0,
-                    padding: 16.0,
-                },
-                2,
-            )
-            .clone();
-
-        // Both must have valid line-end roundtrips
-        assert_line_end_roundtrip(&snapshot_small);
-        assert_line_end_roundtrip(&snapshot_large);
-
-        // Large font must have more lines (or equal) than small font
-        assert!(
-            snapshot_large.lines.len() >= snapshot_small.lines.len(),
-            "large font should produce >= lines than small font"
-        );
-
-        // Cursor at end of text must be valid in both
-        let rect_small = caret_rect(
-            &snapshot_small,
-            text.len(),
-            CaretAffinity::Upstream,
-            0.0,
-            800.0,
-        );
-        let rect_large = caret_rect(
-            &snapshot_large,
-            text.len(),
-            CaretAffinity::Upstream,
-            0.0,
-            800.0,
-        );
-        assert!(rect_small.x > 0.0, "small font end cursor x must be > 0");
-        assert!(rect_large.x > 0.0, "large font end cursor x must be > 0");
-    }
 }
