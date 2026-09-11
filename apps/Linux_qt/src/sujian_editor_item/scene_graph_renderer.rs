@@ -3,6 +3,13 @@ use super::render_plan::RenderPlan;
 use super::texture_cache::TextureCache;
 use crate::editor::layout::LayoutSnapshot;
 use crate::editor::scene_graph;
+use std::sync::{Mutex, OnceLock};
+
+// 修复点 3 (Issue #658 评论 5627327573): 跟踪上一帧动画层各 node 位置绑定的 snapshot_id
+// （u64 cache key）。当前帧与上一帧不同才 texture_changed=true，使 C++ 侧 GPU texture cache
+// 命中时不重新 createTextureFromImage。render thread 单线程，OnceLock<Mutex> 仅用于满足
+// Rust static 初始化语义，无实际锁竞争。
+static LAST_ANIM_SNAPSHOT_IDS: OnceLock<Mutex<Vec<u64>>> = OnceLock::new();
 
 /// 静态正文层的渲染参数 — 交给 QSGTextNode（Qt 6.7+ 公开 API）。
 ///
@@ -156,6 +163,8 @@ fn render_text_animation_layer(
     let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
     let mut glyph_texture_changed: Vec<bool> = Vec::new();
     let mut source_rects: Vec<f64> = Vec::new();
+    // 修复点 3: 传 snapshot_id 的 u64 cache key 给 C++ GPU texture cache。
+    let mut snapshot_ids: Vec<u64> = Vec::new();
 
     for glyph in &plan.text_animation.glyphs {
         glyph_data.extend_from_slice(&[glyph.x, glyph.y, glyph.w, glyph.h, glyph.opacity]);
@@ -167,10 +176,15 @@ fn render_text_animation_layer(
             glyph.source_rect.h,
         ]);
 
+        let cache_key = glyph.snapshot_id.to_cache_key();
+        snapshot_ids.push(cache_key);
+
         match texture_cache.get_line(&glyph.snapshot_id) {
             Some(texture) => {
                 glyph_images.push(texture.clone());
-                glyph_texture_changed.push(true);
+                // 修复点 3: texture_changed 语义改为"该 node 绑定的 snapshot id 变了"。
+                // 占位 false，下面用 prev_snapshot_ids 统一比较。
+                glyph_texture_changed.push(false);
             }
             None => {
                 glyph_images.push(qmetaobject::QImage::new(
@@ -185,6 +199,27 @@ fn render_text_animation_layer(
         }
     }
 
+    // 修复点 3 (Issue #658 评论 5627327573): 比较当前帧与上一帧各 node 位置的 snapshot_id，
+    // 变了才 texture_changed=true。动画 60 帧同一 snapshot_id：changed=false，GPU texture
+    // cache 命中，只更新 rect/opacity/sourceRect，不重新 createTextureFromImage。
+    let lock = LAST_ANIM_SNAPSHOT_IDS.get_or_init(|| Mutex::new(Vec::new()));
+    let mut prev_ids = match lock.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    for (i, &cur_id) in snapshot_ids.iter().enumerate() {
+        let changed = prev_ids.get(i).copied() != Some(cur_id);
+        // 只有 texture_cache 命中（有真实纹理）的 glyph 才需要 texture_changed=true；
+        // 没有纹理的 glyph 走 C++ 侧 cache miss 也不会 createTextureFromImage（images[i] 是 1x1 占位）。
+        if changed && texture_cache.contains_line(&plan.text_animation.glyphs[i].snapshot_id) {
+            glyph_texture_changed[i] = true;
+        }
+    }
+    // 更新 prev_ids 为当前帧，供下一帧比较
+    prev_ids.clear();
+    prev_ids.extend_from_slice(&snapshot_ids);
+    drop(prev_ids);
+
     let glyph_count = glyph_data.len() / 5;
     if glyph_count > 0 && glyph_count == glyph_images.len() {
         let glyph_data_ptr = glyph_data.as_ptr();
@@ -195,6 +230,7 @@ fn render_text_animation_layer(
         let image_ptrs_ptr = image_ptrs.as_ptr();
         let texture_changed_ptr = glyph_texture_changed.as_ptr();
         let source_rects_ptr = source_rects.as_ptr();
+        let snapshot_ids_ptr = snapshot_ids.as_ptr();
 
         scene_graph::update_animation_layer(
             root_raw,
@@ -204,6 +240,7 @@ fn render_text_animation_layer(
             image_ptrs_ptr,
             texture_changed_ptr,
             source_rects_ptr,
+            snapshot_ids_ptr,
         );
     } else {
         scene_graph::clear_animation_layer(root_raw, item_ptr);

@@ -8,6 +8,7 @@ cpp! {{
     #include <QtQuick/QSGImageNode>
     #include <QtQuick/QSGFlatColorMaterial>
     #include <QtGui/QColor>
+    #include <QtCore/QHash>
     #include <QDebug>
 
     static QSGNode *child_at(QSGNode *root, int index) {
@@ -27,6 +28,13 @@ cpp! {{
     static const int LAYER_SELECTION    = 2;
     static const int LAYER_CURSOR       = 3;
     static const int LAYER_COUNT        = 4;
+
+    // 修复点 3 (Issue #658 评论 5627327573): render-thread GPU texture cache。
+    // 动画期间同一张行纹理只 createTextureFromImage 一次，后续帧只移动/改透明度。
+    // key 用 glyph 的 snapshot_id（u64，由 Rust 侧 LineSnapshotId::to_cache_key() 生成）。
+    // render thread 单线程，无需锁。QSGTexture 由 cache 统一管理生命周期，node 不 owns texture。
+    // clear_animation_layer 不清 cache（texture 可能下帧还用）；release_textures 清指定 id。
+    static QHash<quint64, QSGTexture*> g_gpu_texture_cache;
 
     void ensure_four_layer_nodes(QSGTransformNode *root, QQuickItem *item) {
         if (!root || !item) return;
@@ -165,6 +173,11 @@ pub fn update_cursor_node(
 /// Incremental update: reuses existing nodes, only updates rect/opacity/texture/sourceRect.
 /// If glyph_count > existing child count, new nodes are appended.
 /// If glyph_count < existing child count, excess nodes are removed.
+///
+/// 修复点 3 (Issue #658 评论 5627327573): `snapshot_ids` 传入每个 glyph 的 snapshot_id
+/// u64 cache key，用作 C++ 侧 GPU texture cache (QHash<quint64, QSGTexture*>) 的 key。
+/// `texture_changed[i]=true` 表示该 node 绑定的 snapshot id 变了（image 内容可能变了），
+/// C++ 侧据此决定是否重新 createTextureFromImage；为 false 时直接复用 cache 里的 QSGTexture。
 pub fn update_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -173,6 +186,7 @@ pub fn update_animation_layer(
     images: *const *const qmetaobject::QImage,
     texture_changed: *const bool,
     source_rects: *const f64,
+    snapshot_ids: *const u64,
 ) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -182,7 +196,8 @@ pub fn update_animation_layer(
         glyph_data as "const double*",
         images as "QImage**",
         texture_changed as "const bool*",
-        source_rects as "const double*"
+        source_rects as "const double*",
+        snapshot_ids as "const quint64*"
     ] {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
@@ -208,6 +223,8 @@ pub fn update_animation_layer(
             const double *sr = source_rects + i * 4;
             double sx = sr[0], sy = sr[1], sw = sr[2], sh = sr[3];
 
+            quint64 snapId = (snapshot_ids) ? snapshot_ids[i] : 0;
+
             QSGOpacityNode *opNode = nullptr;
             QSGImageNode *imgNode = nullptr;
 
@@ -222,7 +239,8 @@ pub fn update_animation_layer(
 
                 imgNode = item_ptr->window()->createImageNode();
                 imgNode->setFiltering(QSGTexture::Linear);
-                imgNode->setOwnsTexture(true);
+                // 修复点 3: texture 由 g_gpu_texture_cache 统一管理生命周期，node 不 owns。
+                imgNode->setOwnsTexture(false);
                 opNode->appendChildNode(imgNode);
             }
 
@@ -242,10 +260,34 @@ pub fn update_animation_layer(
                                        static_cast<qreal>(0), static_cast<qreal>(0));
             }
 
-            bool needTextureUpdate = (texture_changed && texture_changed[i]);
-            if (needTextureUpdate && images && images[i]) {
-                QSGTexture *tex = item_ptr->window()->createTextureFromImage(*images[i]);
-                tex->setFiltering(QSGTexture::Linear);
+            // 修复点 3 (Issue #658 评论 5627327573): GPU texture cache。
+            // texture_changed[i]=true 表示该 node 绑定的 snapshot id 变了（image 内容可能变了）。
+            // - changed: 若 cache 有该 snapId 的旧 texture，delete 旧的；createTextureFromImage 存入 cache。
+            // - !changed: 若 cache 有该 snapId 的 texture，直接 setTexture（不重新上传）；
+            //   若 cache 没有（首次或被 release 清了），createTextureFromImage 存入。
+            // 动画 60 帧同一 snapshot_id：changed=false，cache 命中，只更新 rect/opacity/sourceRect。
+            bool changed = (texture_changed && texture_changed[i]);
+            QSGTexture *tex = g_gpu_texture_cache.value(snapId, nullptr);
+            if (changed) {
+                if (tex) {
+                    delete tex;
+                    g_gpu_texture_cache.remove(snapId);
+                    tex = nullptr;
+                }
+                if (images && images[i]) {
+                    tex = item_ptr->window()->createTextureFromImage(*images[i]);
+                    tex->setFiltering(QSGTexture::Linear);
+                    g_gpu_texture_cache.insert(snapId, tex);
+                }
+            } else if (!tex) {
+                // cache 没有（首次或被 release 清了），创建并存入
+                if (images && images[i]) {
+                    tex = item_ptr->window()->createTextureFromImage(*images[i]);
+                    tex->setFiltering(QSGTexture::Linear);
+                    g_gpu_texture_cache.insert(snapId, tex);
+                }
+            }
+            if (tex) {
                 imgNode->setTexture(tex);
             }
 
@@ -275,6 +317,28 @@ pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std
             QSGNode *child = animLayer->firstChild();
             animLayer->removeChildNode(child);
             delete child;
+        }
+    })
+}
+
+/// 修复点 3 (Issue #658 评论 5627327573): 释放 GPU texture cache 中指定 snapshot id 的纹理。
+///
+/// 在 snapshot/transaction 完成或取消时调用，避免 cache 无限增长。
+/// `clear_animation_layer` 不清 cache（texture 可能下帧还用），由本函数按需清理。
+/// QSGTexture 只能在 render thread 销毁；本函数在 render thread（updatePaintNode）中调用。
+pub fn release_textures(snapshot_ids: *const u64, count: i32) {
+    // SAFETY: snapshot_ids 指向 Rust 侧 Vec<u64>，count 为元素数；render thread 单线程访问 file-static cache。
+    cpp!(unsafe [
+        snapshot_ids as "const quint64*",
+        count as "int"
+    ] {
+        if (!snapshot_ids || count <= 0) return;
+        for (int i = 0; i < count; i++) {
+            auto it = g_gpu_texture_cache.find(snapshot_ids[i]);
+            if (it != g_gpu_texture_cache.end()) {
+                delete it.value();
+                g_gpu_texture_cache.erase(it);
+            }
         }
     })
 }

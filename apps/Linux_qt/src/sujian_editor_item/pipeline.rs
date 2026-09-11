@@ -1023,11 +1023,22 @@ impl LinuxEditorPipeline {
                     // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
                     // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
                     // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
-                    // 从 old prepared layout 提取 reusable_move_pairs 对应 old 行的动画视觉，
-                    // 把 document_byte_start/end 映射到 new 行的 byte 范围（cluster 也按 delta 偏移），
-                    // 注入到 new_doc_snapshot，使 animation_coordinator 的 source_rect_for_byte_range
-                    // 能找到 clusters 并创建 reflow_move 动画。
+                    //
+                    // 修复点 1 (Issue #658 评论 5627327573): 之前只把旧纹理改 byte range 后
+                    // 注入 new_doc_snapshot，old snapshot 这一侧没有 image/clusters，导致
+                    // animation_coordinator 生成 reflow_move 时 old 侧
+                    // source_rect_for_byte_range 返回 None，reflow_move 建不出来。
+                    //
+                    // 改法：对每个 reusable_move_pair(old_idx, new_idx) 只从 old prepared layout
+                    // 提取一次视觉资源（prepare_animation_visuals_from_layout），然后分成两份：
+                    // - 第一份：保持原始 byte range / old VisualLine 几何（不改 document_byte_start/end、
+                    //   不改 cluster byte range），注入 doc_snap（old snapshot）。
+                    // - 第二份：复用同一张 QImage 和同一套 cluster source rect，只把 document byte range
+                    //   映射到 new（document_byte_start=new_line.byte_start, document_byte_end=new_line.byte_end，
+                    //   cluster 按 byte_delta 偏移），注入 new_doc_snapshot。
+                    // QImage clone 是浅拷贝（引用计数），不会重画。完成后 old/new 两边都有 source rect。
                     if !diff.reusable_move_pairs.is_empty() {
+                        let mut old_move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
                         let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
                         for &(old_idx, new_idx) in &diff.reusable_move_pairs {
                             if old_idx >= handle.lines.len()
@@ -1041,13 +1052,19 @@ impl LinuxEditorPipeline {
                                 ctx.dpr,
                                 &ctx.text_color,
                             );
-                            if let Some(mut snap) = old_snaps.into_iter().next() {
+                            if let Some(snap) = old_snaps.into_iter().next() {
+                                // 第一份：保持原始 old byte range，注入 old snapshot (doc_snap)
+                                old_move_visuals.push(snap.clone());
+
+                                // 第二份：复用同一张 QImage 和 cluster source rect，
+                                // 只把 document byte range 映射到 new 行
                                 let new_line = &new_doc_snapshot.visual_lines[new_idx];
                                 let byte_delta: isize =
                                     new_line.byte_start as isize - snap.document_byte_start as isize;
-                                snap.document_byte_start = new_line.byte_start;
-                                snap.document_byte_end = new_line.byte_end;
-                                for cluster in &mut snap.clusters {
+                                let mut new_snap = snap.clone();
+                                new_snap.document_byte_start = new_line.byte_start;
+                                new_snap.document_byte_end = new_line.byte_end;
+                                for cluster in &mut new_snap.clusters {
                                     cluster.document_byte_start = cluster
                                         .document_byte_start
                                         .saturating_add_signed(byte_delta);
@@ -1055,8 +1072,14 @@ impl LinuxEditorPipeline {
                                         .document_byte_end
                                         .saturating_add_signed(byte_delta);
                                 }
-                                move_visuals.push(snap);
+                                move_visuals.push(new_snap);
                             }
+                        }
+                        if !old_move_visuals.is_empty() {
+                            layout::inject_animation_visuals_into_snapshot(
+                                &mut doc_snap,
+                                old_move_visuals,
+                            );
                         }
                         if !move_visuals.is_empty() {
                             layout::inject_animation_visuals_into_snapshot(

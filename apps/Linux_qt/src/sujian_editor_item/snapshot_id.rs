@@ -15,6 +15,23 @@ impl LineSnapshotId {
             visual_line_ordinal,
         }
     }
+
+    /// 修复点 3 (Issue #658 评论 5627327573): 把 LineSnapshotId 映射为稳定的 u64，
+    /// 用作 C++ 侧 GPU texture cache (QHash<quint64, QSGTexture*>) 的 key。
+    ///
+    /// 用确定性 mixing function 组合三个字段（不依赖随机 seed 的 DefaultHasher），
+    /// 保证同一进程内同一 LineSnapshotId 永远映射到同一 u64，且不同字段组合尽量分散。
+    /// 常数取自 splitmix64 的黄金比例常量，降低碰撞概率。
+    pub fn to_cache_key(&self) -> u64 {
+        let mut h = self.layout_revision;
+        h = h.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        h = h.wrapping_add(self.paragraph_id.wrapping_mul(0xC2B2_AE3D_27D4_EB4F));
+        h = h.wrapping_add(u64::from(self.visual_line_ordinal).wrapping_mul(0x1656_67B1_9E37_79F9));
+        h ^= h >> 31;
+        h = h.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        h ^= h >> 29;
+        h
+    }
 }
 
 impl fmt::Display for LineSnapshotId {

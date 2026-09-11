@@ -190,6 +190,13 @@ impl QQuickItem for SujianEditorItem {
                     self.pipeline
                         .texture_cache_mut()
                         .remove_for_transaction(&ids);
+                    // 修复点 3 (Issue #658 评论 5627327573): 同时释放 GPU 侧
+                    // g_gpu_texture_cache 中对应 snapshot id 的 QSGTexture，
+                    // 避免 render-thread GPU texture cache 无限增长。
+                    let gpu_keys: Vec<u64> = ids.iter().map(|id| id.to_cache_key()).collect();
+                    if !gpu_keys.is_empty() {
+                        scene_graph::release_textures(gpu_keys.as_ptr(), gpu_keys.len() as i32);
+                    }
                 }
                 editor_animation_debug_log(&format!(
                     "update_paint_node: tid={}, gen={} completed (progress >= 1.0)",
