@@ -300,7 +300,7 @@ pub fn update_animation_layer(
     })
 }
 
-/// Clear the animation layer (child[1]) — remove all animated glyph nodes.
+/// Clear the animation layer (child[1]) — remove all animated glyph nodes and clear GPU texture cache.
 pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -313,11 +313,19 @@ pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std
         QSGTransformNode *animLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 1));
         if (!animLayer) return;
 
+        // Issue #658: 先删除全部 child node，再清除 GPU texture cache。
+        // 不能只删 node 不删 texture，否则 QSGTexture 会泄漏。
         while (animLayer->childCount() > 0) {
             QSGNode *child = animLayer->firstChild();
             animLayer->removeChildNode(child);
             delete child;
         }
+        // 清空 g_gpu_texture_cache 中所有 texture，确保"最后一个动画完成/全部取消"
+        // 时 GPU cache 不会持续增长。
+        for (auto it = g_gpu_texture_cache.begin(); it != g_gpu_texture_cache.end(); ++it) {
+            delete it.value();
+        }
+        g_gpu_texture_cache.clear();
     })
 }
 

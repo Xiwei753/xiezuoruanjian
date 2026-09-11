@@ -154,11 +154,10 @@ fn render_text_animation_layer(
     plan: &RenderPlan,
     texture_cache: &TextureCache,
 ) {
-    if plan.text_animation.glyphs.is_empty() {
-        scene_graph::clear_animation_layer(root_raw, item_ptr);
-        return;
-    }
-
+    // Issue #658: 空动画帧也进入 update_animation_layer，让 AnimationLayerNode
+    // 自己把 node 和 texture 一次清干净。不要在这里提前 return，否则
+    // update_animation_layer() 根本不调用，activeSet sweep 根本没运行，
+    // AnimationLayerNode::m_texture_cache 里的 QSGTexture 继续留着。
     let mut glyph_data: Vec<f64> = Vec::new();
     let mut glyph_images: Vec<qmetaobject::QImage> = Vec::new();
     let mut glyph_texture_changed: Vec<bool> = Vec::new();
