@@ -109,6 +109,230 @@ fn match_rebase_frames(
     }
 }
 
+/// 构建 cluster/run 级 reflow 切片和静态行补丁。
+///
+/// 与旧的整行映射逻辑不同，此函数在 **所有视觉行** 中搜索匹配的 old cluster，
+/// 支持 cluster 跨视觉行边界重新分组（如硬换行时文字从一行移到另一行）。
+///
+/// # 参数
+/// - `excluded_old_ranges`：已被 insert/delete 动画接管的 old byte range，跳过不处理。
+/// - `excluded_new_ranges`：已被 insert/delete 动画接管的 new byte range，跳过不处理。
+/// - `old_cursor_rect`：用于 reflow 中检测到的 insert_fade_in 的起始位置。
+/// - `new_cursor_rect`：用于 reflow 中检测到的 delete_fade_out 的收缩目标。
+///
+/// # 返回
+/// `(slices, static_patches)`：动画切片和 cluster 级静态行补丁。
+fn build_cluster_reflow_slices(
+    key: VisualTransactionKey,
+    old_snapshot: &EditorLayoutSnapshot,
+    new_snapshot: &EditorLayoutSnapshot,
+    offset_map: &OffsetMap,
+    excluded_old_ranges: &[(usize, usize)],
+    excluded_new_ranges: &[(usize, usize)],
+    old_cursor_rect: Option<&CursorRect>,
+    new_cursor_rect: Option<&CursorRect>,
+) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
+    let mut slices = Vec::new();
+    let mut static_patches = Vec::new();
+
+    let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+    // 记录已在步骤 A 中匹配的 old cluster (byte_start, byte_end)，避免步骤 B 重复处理
+    let mut matched_old_clusters: Vec<(usize, usize)> = Vec::new();
+
+    // 步骤 A：遍历 new_snapshot 的所有 cluster，在所有 old 行中搜索匹配（跨行搜索）
+    for new_line in &new_snapshot.line_snapshots {
+        let mut hidden_rects_for_line: Vec<SourceRect> = Vec::new();
+
+        for new_cluster in &new_line.clusters {
+            // 跳过已被 insert/delete 动画接管的 new cluster
+            if excluded_new_ranges.iter().any(|(s, e)| {
+                new_cluster.byte_start >= *s && new_cluster.byte_end <= *e
+            }) {
+                continue;
+            }
+
+            // 用 OffsetMap 映射 new cluster 的 byte range 到 old
+            let mapped_old_start = offset_map.map_new_to_old(new_cluster.byte_start);
+            let mapped_old_end = offset_map.map_new_to_old(new_cluster.byte_end);
+
+            let mut found_match = false;
+
+            if let (Some(mos), Some(moe)) = (mapped_old_start, mapped_old_end) {
+                // 跨行搜索：遍历所有 old 行的所有 cluster
+                'outer: for old_line in &old_snapshot.line_snapshots {
+                    for old_cluster in &old_line.clusters {
+                        // 跳过已匹配的 old cluster
+                        if matched_old_clusters
+                            .iter()
+                            .any(|(bs, be)| *bs == old_cluster.byte_start && *be == old_cluster.byte_end)
+                        {
+                            continue;
+                        }
+
+                        // 匹配条件：精确匹配或 range 包含匹配
+                        if (old_cluster.byte_start == mos && old_cluster.byte_end == moe)
+                            || (old_cluster.byte_start <= mos && old_cluster.byte_end >= moe)
+                        {
+                            // 跳过已被 insert/delete 动画接管的 old cluster
+                            if excluded_old_ranges.iter().any(|(s, e)| {
+                                old_cluster.byte_start >= *s && old_cluster.byte_end <= *e
+                            }) {
+                                continue;
+                            }
+
+                            found_match = true;
+                            matched_old_clusters
+                                .push((old_cluster.byte_start, old_cluster.byte_end));
+
+                            let same_shaping = old_cluster
+                                .shaping_identity
+                                .is_same_shaping(&new_cluster.shaping_identity);
+
+                            let old_sr = old_cluster.source_rect.clone();
+                            let new_sr = new_cluster.source_rect.clone();
+                            let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+
+                            if same_shaping {
+                                // shaping 相同：比较文档坐标，位置变了才生成 reflow_move
+                                let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
+                                    && (old_doc.y - new_doc.y).abs() < 0.5
+                                    && (old_doc.w - new_doc.w).abs() < 0.5
+                                    && (old_doc.h - new_doc.h).abs() < 0.5;
+                                if !geometry_same {
+                                    slices.push(AnimatedSlice::reflow_move(
+                                        key,
+                                        old_line.id,
+                                        old_sr,
+                                        old_doc,
+                                        new_line.id,
+                                        new_sr.clone(),
+                                        new_doc,
+                                        new_cluster.byte_start,
+                                        new_cluster.byte_end,
+                                        Some(old_cluster.shaping_identity.clone()),
+                                    ));
+                                    hidden_rects_for_line.push(new_sr);
+                                }
+                            } else {
+                                // shaping 改变：old 淡出 + new 淡入
+                                slices.push(AnimatedSlice::reflow_crossfade_old(
+                                    key,
+                                    old_line.id,
+                                    old_sr,
+                                    old_doc.clone(),
+                                    new_doc.clone(),
+                                    new_cluster.byte_start,
+                                    new_cluster.byte_end,
+                                ));
+                                slices.push(AnimatedSlice::reflow_crossfade_new(
+                                    key,
+                                    new_line.id,
+                                    new_sr.clone(),
+                                    old_doc,
+                                    new_doc,
+                                    new_cluster.byte_start,
+                                    new_cluster.byte_end,
+                                ));
+                                hidden_rects_for_line.push(new_sr);
+                            }
+
+                            break 'outer;
+                        }
+                    }
+                }
+            }
+
+            if !found_match {
+                // 没有匹配的 old cluster → 新出现的文字，从旧光标位置淡入
+                let new_sr = new_cluster.source_rect.clone();
+                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                slices.push(AnimatedSlice::insert_fade_in(
+                    key,
+                    new_line.id,
+                    new_sr.clone(),
+                    new_doc,
+                    old_cx,
+                    old_cy,
+                    new_cluster.byte_start,
+                    new_cluster.byte_end,
+                    Some(new_cluster.shaping_identity.clone()),
+                ));
+                hidden_rects_for_line.push(new_sr);
+            }
+        }
+
+        // 生成 cluster 级静态补丁：只隐藏被动画接管的 cluster 的 source_rect
+        if !hidden_rects_for_line.is_empty() {
+            static_patches.push(StaticLinePatch::reflow_patch(
+                new_line.id,
+                hidden_rects_for_line,
+                Vec::new(),
+                new_line.byte_start,
+                new_line.byte_end,
+            ));
+        }
+    }
+
+    // 步骤 B：遍历 old_snapshot 的所有 cluster，找在 new 中没有匹配的（被删除的文字）
+    for old_line in &old_snapshot.line_snapshots {
+        for old_cluster in &old_line.clusters {
+            // 跳过已被 insert/delete 动画接管的 old cluster
+            if excluded_old_ranges.iter().any(|(s, e)| {
+                old_cluster.byte_start >= *s && old_cluster.byte_end <= *e
+            }) {
+                continue;
+            }
+
+            // 跳过已在步骤 A 中匹配的 old cluster
+            if matched_old_clusters
+                .iter()
+                .any(|(bs, be)| *bs == old_cluster.byte_start && *be == old_cluster.byte_end)
+            {
+                continue;
+            }
+
+            // 用 OffsetMap 映射 old cluster 的 byte range 到 new
+            let mapped_new_start = offset_map.map_old_to_new(old_cluster.byte_start);
+            let mapped_new_end = offset_map.map_old_to_new(old_cluster.byte_end);
+
+            let found_in_new = if let (Some(mns), Some(mne)) = (mapped_new_start, mapped_new_end) {
+                new_snapshot.line_snapshots.iter().any(|nl| {
+                    nl.clusters.iter().any(|nc| {
+                        (nc.byte_start == mns && nc.byte_end == mne)
+                            || (nc.byte_start <= mns && nc.byte_end >= mne)
+                    })
+                })
+            } else {
+                false
+            };
+
+            if !found_in_new {
+                // 映射失败或找不到匹配 → 被删除的文字，向新光标位置收缩淡出
+                let old_sr = old_cluster.source_rect.clone();
+                let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                slices.push(AnimatedSlice::delete_fade_out(
+                    key,
+                    old_line.id,
+                    old_sr,
+                    old_doc,
+                    new_cx,
+                    new_cy,
+                    old_cluster.byte_start,
+                    old_cluster.byte_end,
+                    Some(old_cluster.shaping_identity.clone()),
+                ));
+            }
+        }
+    }
+
+    (slices, static_patches)
+}
+
 /// Linux Qt 文字动画协调器 — 管理动画事务的生命周期和 rebase。
 ///
 /// - `next_key_id`：事务键 ID 分配器（单调递增），每个事务有唯一键用于取消和 rebase。
@@ -257,136 +481,20 @@ impl LinuxEditorAnimationCoordinator {
                         }
                     }
 
-                    let _reflow_start = range_end;
-                    let insert_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                    // Issue #658: 改用 cluster/run 映射而非整行过滤。
-                    // 硬换行时，同一批未修改文字会跨视觉行边界重新分组。
-                    // 对每个 cluster 判断是否需要动画，而不是对整行判断。
-                    for new_line in &new_snapshot.line_snapshots {
-                        // 用 OffsetMap 找到对应的 old 行
-                        let old_line = {
-                            let mapped_old_byte_start =
-                                insert_reflow_offset_map.map_new_to_old(new_line.byte_start);
-                            let mapped_old_byte_end =
-                                insert_reflow_offset_map.map_new_to_old(new_line.byte_end);
-                            if let (Some(mobs), Some(mobe)) =
-                                (mapped_old_byte_start, mapped_old_byte_end)
-                            {
-                                old_snapshot.line_for_byte_range(mobs, mobe).cloned()
-                            } else if let Some(mobs) = mapped_old_byte_start {
-                                old_snapshot.line_for_byte(mobs).cloned()
-                            } else {
-                                None
-                            }
-                        };
-
-                        if let Some(ol) = old_line {
-                            // 对每行中的 clusters，做 old↔new byte range 映射
-                            // 根据 shaping identity 决定是 move 还是 crossfade
-                            let old_clusters = &ol.clusters;
-                            let new_clusters = &new_line.clusters;
-
-                            // 找出所有需要处理的 cluster 对
-                            // 策略：按 byte range 映射匹配 old/new clusters
-                            let mut processed_old_indices = Vec::new();
-                            let mut processed_new_indices = Vec::new();
-
-                            for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                                // 跳过已经在编辑范围内的 cluster（这些应该由 insert 动画处理）
-                                if new_cluster.byte_start < range_end {
-                                    continue;
-                                }
-
-                                // 尝试找到对应的 old cluster
-                                let mapped_old_start = insert_reflow_offset_map
-                                    .map_new_to_old(new_cluster.byte_start);
-                                let mapped_old_end = insert_reflow_offset_map
-                                    .map_new_to_old(new_cluster.byte_end);
-
-                                if let (Some(mos), Some(moe)) = (mapped_old_start, mapped_old_end) {
-                                    // 在 old clusters 中找匹配的
-                                    for (old_idx, old_cluster) in old_clusters.iter().enumerate() {
-                                        if processed_old_indices.contains(&old_idx) {
-                                            continue;
-                                        }
-                                        // 精确匹配或 range 包含匹配
-                                        if (old_cluster.byte_start == mos && old_cluster.byte_end == moe)
-                                            || (old_cluster.byte_start <= mos && old_cluster.byte_end >= moe)
-                                        {
-                                            // 检查 shaping identity
-                                            let same_shaping = old_cluster.shaping_identity
-                                                .is_same_shaping(&new_cluster.shaping_identity);
-
-                                            let old_sr = old_cluster.source_rect.clone();
-                                            let new_sr = new_cluster.source_rect.clone();
-                                            let old_doc = ol.source_rect_to_document_rect(&old_sr);
-                                            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-
-                                            if same_shaping {
-                                                // shaping 相同但文档坐标变化 → reflow_move
-                                                slices.push(AnimatedSlice::reflow_move(
-                                                    key,
-                                                    ol.id,
-                                                    old_sr,
-                                                    old_doc,
-                                                    new_line.id,
-                                                    new_sr,
-                                                    new_doc,
-                                                    new_cluster.byte_start,
-                                                    new_cluster.byte_end,
-                                                    Some(old_cluster.shaping_identity.clone()),
-                                                ));
-                                            } else {
-                                                // shaping 改变 → old/new crossfade
-                                                slices.push(AnimatedSlice::reflow_crossfade_old(
-                                                    key,
-                                                    ol.id,
-                                                    old_sr.clone(),
-                                                    old_doc.clone(),
-                                                    new_doc.clone(),
-                                                    new_cluster.byte_start,
-                                                    new_cluster.byte_end,
-                                                ));
-                                                slices.push(AnimatedSlice::reflow_crossfade_new(
-                                                    key,
-                                                    new_line.id,
-                                                    new_sr.clone(),
-                                                    old_doc,
-                                                    new_doc,
-                                                    new_cluster.byte_start,
-                                                    new_cluster.byte_end,
-                                                ));
-                                            }
-
-                                            processed_old_indices.push(old_idx);
-                                            processed_new_indices.push(new_idx);
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-
-                            // 生成静态 patch：隐藏 new 里真正移动/淡入的 cluster source rect
-                            // 不要隐藏整条合并后的视觉行
-                            let mut hidden_rects = Vec::new();
-                            for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                                if processed_new_indices.contains(&new_idx) {
-                                    hidden_rects.push(new_cluster.source_rect.clone());
-                                }
-                            }
-                            if !hidden_rects.is_empty() {
-                                static_patches.push(StaticLinePatch::reflow_patch(
-                                    new_line.id,
-                                    hidden_rects,
-                                    Vec::new(),
-                                    new_line.byte_start,
-                                    new_line.byte_end,
-                                ));
-                            }
-                        }
-                    }
-
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                    let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                        key,
+                        old_snapshot,
+                        new_snapshot,
+                        &insert_offset_map,
+                        &[],
+                        &[(range_start, range_end)],
+                        old_cursor_rect.as_ref(),
+                        new_cursor_rect.as_ref(),
+                    );
+                    slices.extend(reflow_slices);
+                    static_patches.extend(reflow_patches);
+
                     match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
 
                     let prepared = PreparedTextVisualTransaction {
@@ -493,128 +601,20 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                let delete_reflow_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                // Issue #658: 改用 cluster/run 映射而非整行过滤。
-                // 删除段落换行时，同一批未修改文字会跨视觉行边界重新分组。
-                // 对每个 cluster 判断是否需要动画，而不是对整行判断。
-                for new_line in &new_snapshot.line_snapshots {
-                    // 用 OffsetMap 找到对应的 old 行
-                    let old_line = {
-                        let mapped_old_byte_start =
-                            delete_reflow_offset_map.map_new_to_old(new_line.byte_start);
-                        let mapped_old_byte_end =
-                            delete_reflow_offset_map.map_new_to_old(new_line.byte_end);
-                        if let (Some(mobs), Some(mobe)) =
-                            (mapped_old_byte_start, mapped_old_byte_end)
-                        {
-                            old_snapshot.line_for_byte_range(mobs, mobe).cloned()
-                        } else if let Some(mobs) = mapped_old_byte_start {
-                            old_snapshot.line_for_byte(mobs).cloned()
-                        } else {
-                            None
-                        }
-                    };
-
-                    if let Some(ol) = old_line {
-                        // 对每行中的 clusters，做 old↔new byte range 映射
-                        // 根据 shaping identity 决定是 move 还是 crossfade
-                        let old_clusters = &ol.clusters;
-                        let new_clusters = &new_line.clusters;
-
-                        // 找出所有需要处理的 cluster 对
-                        let mut processed_old_indices = Vec::new();
-                        let mut processed_new_indices = Vec::new();
-
-                        for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                            // 尝试找到对应的 old cluster
-                            let mapped_old_start = delete_reflow_offset_map
-                                .map_new_to_old(new_cluster.byte_start);
-                            let mapped_old_end = delete_reflow_offset_map
-                                .map_new_to_old(new_cluster.byte_end);
-
-                            if let (Some(mos), Some(moe)) = (mapped_old_start, mapped_old_end) {
-                                // 在 old clusters 中找匹配的
-                                for (old_idx, old_cluster) in old_clusters.iter().enumerate() {
-                                    if processed_old_indices.contains(&old_idx) {
-                                        continue;
-                                    }
-                                    // 精确匹配或 range 包含匹配
-                                    if (old_cluster.byte_start == mos && old_cluster.byte_end == moe)
-                                        || (old_cluster.byte_start <= mos && old_cluster.byte_end >= moe)
-                                    {
-                                        // 检查 shaping identity
-                                        let same_shaping = old_cluster.shaping_identity
-                                            .is_same_shaping(&new_cluster.shaping_identity);
-
-                                        let old_sr = old_cluster.source_rect.clone();
-                                        let new_sr = new_cluster.source_rect.clone();
-                                        let old_doc = ol.source_rect_to_document_rect(&old_sr);
-                                        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-
-                                        if same_shaping {
-                                            // shaping 相同但文档坐标变化 → reflow_move
-                                            slices.push(AnimatedSlice::reflow_move(
-                                                key,
-                                                ol.id,
-                                                old_sr,
-                                                old_doc,
-                                                new_line.id,
-                                                new_sr,
-                                                new_doc,
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                                Some(old_cluster.shaping_identity.clone()),
-                                            ));
-                                        } else {
-                                            // shaping 改变 → old/new crossfade
-                                            slices.push(AnimatedSlice::reflow_crossfade_old(
-                                                key,
-                                                ol.id,
-                                                old_sr.clone(),
-                                                old_doc.clone(),
-                                                new_doc.clone(),
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                            ));
-                                            slices.push(AnimatedSlice::reflow_crossfade_new(
-                                                key,
-                                                new_line.id,
-                                                new_sr.clone(),
-                                                old_doc,
-                                                new_doc,
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                            ));
-                                        }
-
-                                        processed_old_indices.push(old_idx);
-                                        processed_new_indices.push(new_idx);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // 生成静态 patch：隐藏 new 里真正移动/淡入的 cluster source rect
-                        let mut hidden_rects = Vec::new();
-                        for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                            if processed_new_indices.contains(&new_idx) {
-                                hidden_rects.push(new_cluster.source_rect.clone());
-                            }
-                        }
-                        if !hidden_rects.is_empty() {
-                            static_patches.push(StaticLinePatch::reflow_patch(
-                                new_line.id,
-                                hidden_rects,
-                                Vec::new(),
-                                new_line.byte_start,
-                                new_line.byte_end,
-                            ));
-                        }
-                    }
-                }
-
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+                let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &delete_offset_map,
+                    &deleted_ranges,
+                    &[],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+                static_patches.extend(reflow_patches);
+
                 match_rebase_frames(&rebase_frames, &mut slices, &delete_offset_map);
 
                 let prepared = PreparedTextVisualTransaction {
@@ -748,118 +748,18 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        // Issue #658: 改用 cluster/run 映射而非整行过滤。
-        // 硬换行时，同一批未修改文字会跨视觉行边界重新分组。
-        // 对每个 cluster 判断是否需要动画，而不是对整行判断。
-        for new_line in &new_snapshot.line_snapshots {
-            let old_line = {
-                let mapped_old_byte_start = offset_map.map_new_to_old(new_line.byte_start);
-                let mapped_old_byte_end = offset_map.map_new_to_old(new_line.byte_end);
-                if let (Some(mobs), Some(mobe)) = (mapped_old_byte_start, mapped_old_byte_end) {
-                    old_snapshot.line_for_byte_range(mobs, mobe).cloned()
-                } else if let Some(mobs) = mapped_old_byte_start {
-                    old_snapshot.line_for_byte(mobs).cloned()
-                } else {
-                    None
-                }
-            };
-
-            if let Some(ol) = old_line {
-                let old_clusters = &ol.clusters;
-                let new_clusters = &new_line.clusters;
-
-                let mut processed_old_indices = Vec::new();
-                let mut processed_new_indices = Vec::new();
-
-                for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                    // composition 范围内的 cluster 由 insert 路径处理
-                    if new_cluster.byte_start >= composition_byte_start
-                        && new_cluster.byte_end <= composition_byte_end
-                    {
-                        continue;
-                    }
-
-                    let mapped_old_start =
-                        offset_map.map_new_to_old(new_cluster.byte_start);
-                    let mapped_old_end =
-                        offset_map.map_new_to_old(new_cluster.byte_end);
-
-                    if let (Some(mos), Some(moe)) = (mapped_old_start, mapped_old_end) {
-                        for (old_idx, old_cluster) in old_clusters.iter().enumerate() {
-                            if processed_old_indices.contains(&old_idx) {
-                                continue;
-                            }
-                            if (old_cluster.byte_start == mos && old_cluster.byte_end == moe)
-                                || (old_cluster.byte_start <= mos && old_cluster.byte_end >= moe)
-                            {
-                                let same_shaping = old_cluster.shaping_identity
-                                    .is_same_shaping(&new_cluster.shaping_identity);
-
-                                let old_sr = old_cluster.source_rect.clone();
-                                let new_sr = new_cluster.source_rect.clone();
-                                let old_doc = ol.source_rect_to_document_rect(&old_sr);
-                                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-
-                                if same_shaping {
-                                    slices.push(AnimatedSlice::reflow_move(
-                                        key,
-                                        ol.id,
-                                        old_sr,
-                                        old_doc,
-                                        new_line.id,
-                                        new_sr,
-                                        new_doc,
-                                        new_cluster.byte_start,
-                                        new_cluster.byte_end,
-                                        Some(old_cluster.shaping_identity.clone()),
-                                    ));
-                                } else {
-                                    slices.push(AnimatedSlice::reflow_crossfade_old(
-                                        key,
-                                        ol.id,
-                                        old_sr.clone(),
-                                        old_doc.clone(),
-                                        new_doc.clone(),
-                                        new_cluster.byte_start,
-                                        new_cluster.byte_end,
-                                    ));
-                                    slices.push(AnimatedSlice::reflow_crossfade_new(
-                                        key,
-                                        new_line.id,
-                                        new_sr.clone(),
-                                        old_doc,
-                                        new_doc,
-                                        new_cluster.byte_start,
-                                        new_cluster.byte_end,
-                                    ));
-                                }
-
-                                processed_old_indices.push(old_idx);
-                                processed_new_indices.push(new_idx);
-                                break;
-                            }
-                        }
-                    }
-                }
-
-                // 生成静态 patch：隐藏 new 里真正移动/淡入的 cluster source rect
-                let mut hidden_rects = Vec::new();
-                for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                    if processed_new_indices.contains(&new_idx) {
-                        hidden_rects.push(new_cluster.source_rect.clone());
-                    }
-                }
-                if !hidden_rects.is_empty() {
-                    static_patches.push(StaticLinePatch::reflow_patch(
-                        new_line.id,
-                        hidden_rects,
-                        Vec::new(),
-                        new_line.byte_start,
-                        new_line.byte_end,
-                    ));
-                }
-            }
-        }
+        let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+            key,
+            old_snapshot,
+            new_snapshot,
+            &offset_map,
+            &[],
+            &[(composition_byte_start, composition_byte_end)],
+            old_cursor_rect.as_ref(),
+            new_cursor_rect.as_ref(),
+        );
+        slices.extend(reflow_slices);
+        static_patches.extend(reflow_patches);
 
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
@@ -966,6 +866,19 @@ impl LinuxEditorAnimationCoordinator {
                     ));
                 }
             }
+
+            let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                key,
+                old_snapshot,
+                new_snapshot,
+                &offset_map,
+                &[(preedit_byte_start, preedit_byte_end)],
+                &[],
+                old_cursor_rect.as_ref(),
+                new_cursor_rect.as_ref(),
+            );
+            slices.extend(reflow_slices);
+            static_patches.extend(reflow_patches);
         } else {
             if visual_text_unchanged {
             } else {
@@ -1192,157 +1105,18 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                // Issue #658: 改用 cluster/run 映射而非整行过滤。
-                // 删除段落换行时，同一批未修改文字会跨视觉行边界重新分组。
-                // 对每个 cluster 判断是否需要动画，而不是对整行判断。
-                for new_line in &new_snapshot.line_snapshots {
-                    let old_line = {
-                        let mapped_old_byte_start =
-                            offset_map.map_new_to_old(new_line.byte_start);
-                        let mapped_old_byte_end =
-                            offset_map.map_new_to_old(new_line.byte_end);
-                        if let (Some(mobs), Some(mobe)) =
-                            (mapped_old_byte_start, mapped_old_byte_end)
-                        {
-                            old_snapshot.line_for_byte_range(mobs, mobe).cloned()
-                        } else if let Some(mobs) = mapped_old_byte_start {
-                            old_snapshot.line_for_byte(mobs).cloned()
-                        } else {
-                            None
-                        }
-                    };
-
-                    if let Some(ol) = old_line {
-                        let old_clusters = &ol.clusters;
-                        let new_clusters = &new_line.clusters;
-
-                        let mut processed_old_indices = Vec::new();
-                        let mut processed_new_indices = Vec::new();
-
-                        for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                            // candidate 范围内的 cluster 由上面的 candidate 匹配处理
-                            if new_cluster.byte_start >= candidate_byte_start
-                                && new_cluster.byte_end <= candidate_byte_end
-                            {
-                                continue;
-                            }
-
-                            let mapped_old_start =
-                                offset_map.map_new_to_old(new_cluster.byte_start);
-                            let mapped_old_end =
-                                offset_map.map_new_to_old(new_cluster.byte_end);
-
-                            if let (Some(mos), Some(moe)) = (mapped_old_start, mapped_old_end) {
-                                for (old_idx, old_cluster) in old_clusters.iter().enumerate() {
-                                    if processed_old_indices.contains(&old_idx) {
-                                        continue;
-                                    }
-                                    if (old_cluster.byte_start == mos && old_cluster.byte_end == moe)
-                                        || (old_cluster.byte_start <= mos
-                                            && old_cluster.byte_end >= moe)
-                                    {
-                                        let same_shaping = old_cluster
-                                            .shaping_identity
-                                            .is_same_shaping(&new_cluster.shaping_identity);
-
-                                        let old_sr = old_cluster.source_rect.clone();
-                                        let new_sr = new_cluster.source_rect.clone();
-                                        let old_doc =
-                                            ol.source_rect_to_document_rect(&old_sr);
-                                        let new_doc =
-                                            new_line.source_rect_to_document_rect(&new_sr);
-
-                                        if same_shaping {
-                                            slices.push(AnimatedSlice::reflow_move(
-                                                key,
-                                                ol.id,
-                                                old_sr,
-                                                old_doc,
-                                                new_line.id,
-                                                new_sr,
-                                                new_doc,
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                                Some(old_cluster.shaping_identity.clone()),
-                                            ));
-                                        } else {
-                                            slices.push(AnimatedSlice::reflow_crossfade_old(
-                                                key,
-                                                ol.id,
-                                                old_sr.clone(),
-                                                old_doc.clone(),
-                                                new_doc.clone(),
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                            ));
-                                            slices.push(AnimatedSlice::reflow_crossfade_new(
-                                                key,
-                                                new_line.id,
-                                                new_sr.clone(),
-                                                old_doc,
-                                                new_doc,
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                            ));
-                                        }
-
-                                        processed_old_indices.push(old_idx);
-                                        processed_new_indices.push(new_idx);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // 生成静态 patch：隐藏 new 里真正移动/淡入的 cluster source rect
-                        let mut hidden_rects = Vec::new();
-                        for (new_idx, new_cluster) in new_clusters.iter().enumerate() {
-                            if processed_new_indices.contains(&new_idx) {
-                                hidden_rects.push(new_cluster.source_rect.clone());
-                            }
-                        }
-                        if !hidden_rects.is_empty() {
-                            static_patches.push(StaticLinePatch::reflow_patch(
-                                new_line.id,
-                                hidden_rects,
-                                Vec::new(),
-                                new_line.byte_start,
-                                new_line.byte_end,
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-
-        if !is_commit {
-            for new_line in &new_snapshot.line_snapshots {
-                let animated_byte_ranges: Vec<(usize, usize)> =
-                    slices.iter().map(|s| (s.byte_start, s.byte_end)).collect();
-                let hidden_source_rects: Vec<SourceRect> = new_line
-                    .clusters
-                    .iter()
-                    .filter(|c| {
-                        animated_byte_ranges
-                            .iter()
-                            .any(|(s, e)| !(c.byte_end <= *s || c.byte_start >= *e))
-                    })
-                    .map(|c| c.source_rect.clone())
-                    .collect();
-
-                if !hidden_source_rects.is_empty() {
-                    let doc_hidden_rects: Vec<SourceRect> = hidden_source_rects
-                        .iter()
-                        .map(|sr| new_line.source_rect_to_document_rect(sr))
-                        .collect();
-                    static_patches.push(StaticLinePatch::reflow_patch(
-                        new_line.id,
-                        hidden_source_rects,
-                        doc_hidden_rects,
-                        new_line.byte_start,
-                        new_line.byte_end,
-                    ));
-                }
+                let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                    key,
+                    old_snapshot,
+                    new_snapshot,
+                    &offset_map,
+                    &[(preedit_byte_start, preedit_byte_end)],
+                    &[(candidate_byte_start, candidate_byte_end)],
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                );
+                slices.extend(reflow_slices);
+                static_patches.extend(reflow_patches);
             }
         }
 
