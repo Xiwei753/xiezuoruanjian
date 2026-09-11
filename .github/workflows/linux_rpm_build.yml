@@ -17,6 +17,9 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TARGET_DIR: ${{ github.workspace }}/target/rpm-cargo
+
 jobs:
   rpm:
     name: Build Fedora RPM
@@ -27,6 +30,9 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
       - name: Install Fedora build dependencies
         run: |
           dnf install -y \
@@ -38,8 +44,13 @@ jobs:
             qt6-qtquickcontrols2-devel \
             qt6-qttools-devel
 
-      - name: Checkout repository
-        uses: actions/checkout@v7
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: linux-rpm-fedora43
+          workspaces: ". -> target/rpm-cargo"
+          cache-workspace-crates: true
+          cache-on-failure: true
 
       - name: Build RPM
         run: bash packaging/rpm/build-rpm.sh

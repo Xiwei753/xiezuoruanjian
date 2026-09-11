@@ -21,6 +21,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
+# 固定并导出 Cargo 输出目录，使昂贵的 Rust Release 编译产物进入可复用的
+# target/rpm-cargo，而非 rpmbuild 每次新建即删的 BUILD 目录。
+# 这样本机连续打 RPM 与远端 CI 都能复用同一份编译结果。
+CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-${REPO_ROOT}/target/rpm-cargo}"
+export CARGO_TARGET_DIR
+mkdir -p "${CARGO_TARGET_DIR}"
+
 NAME="sujian"
 VERSION="0.1.0"
 RELEASE="1"

@@ -43,11 +43,16 @@ Requires:       qt6-qtquickcontrols2 >= 6.7
 
 %build
 # 构建 Linux Qt 前端二进制（产物名 sujian-linux-qt）
+# 支持外部 CARGO_TARGET_DIR：构建脚本传持久目录时走可复用缓存，
+# 普通 rpmbuild 未传时回退到源码目录自身的 target。
+: "${CARGO_TARGET_DIR:=target}"
+export CARGO_TARGET_DIR
 cargo build --release --locked --offline -p sujian-linux-qt
 
 %install
 # 主二进制：安装为 /usr/bin/sujian
-install -Dpm 0755 target/release/sujian-linux-qt \
+: "${CARGO_TARGET_DIR:=target}"
+install -Dpm 0755 "${CARGO_TARGET_DIR}/release/sujian-linux-qt" \
     %{buildroot}%{_bindir}/sujian
 
 # Desktop entry
