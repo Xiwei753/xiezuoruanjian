@@ -196,23 +196,6 @@ impl EditorLayoutSnapshot {
         self
     }
 
-    pub fn line_for_byte(&self, byte_offset: usize) -> Option<&PreparedLineSnapshot> {
-        self.line_snapshots
-            .iter()
-            .find(|l| l.byte_end >= byte_offset && l.byte_start <= byte_offset)
-    }
-
-    pub fn line_for_byte_range(
-        &self,
-        byte_start: usize,
-        byte_end: usize,
-    ) -> Option<&PreparedLineSnapshot> {
-        self.line_snapshots
-            .iter()
-            .find(|l| l.byte_start <= byte_start && l.byte_end >= byte_end)
-            .or_else(|| self.line_for_byte(byte_start))
-    }
-
     pub fn lines_in_byte_range(
         &self,
         byte_start: usize,

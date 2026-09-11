@@ -9,6 +9,7 @@ cpp! {{
     #include <QtQuick/QSGFlatColorMaterial>
     #include <QtGui/QColor>
     #include <QtCore/QHash>
+    #include <QtCore/QVector>
     #include <QDebug>
 
     static QSGNode *child_at(QSGNode *root, int index) {
@@ -19,7 +20,7 @@ cpp! {{
 
     // Four-layer scene graph layout (Issue #658):
     //   child[0] = QSGTransformNode   — static text layer (wraps QSGTextNode, Qt 6.7+ public API)
-    //   child[1] = QSGTransformNode   — text animation layer
+    //   child[1] = AnimationLayerNode — text animation layer (owns GPU texture cache)
     //   child[2] = QSGTransformNode   — selection / preedit layer
     //   child[3] = QSGTransformNode   — cursor layer (QSGOpacityNode > QSGImageNode)
 
@@ -29,12 +30,127 @@ cpp! {{
     static const int LAYER_CURSOR       = 3;
     static const int LAYER_COUNT        = 4;
 
-    // 修复点 3 (Issue #658 评论 5627327573): render-thread GPU texture cache。
-    // 动画期间同一张行纹理只 createTextureFromImage 一次，后续帧只移动/改透明度。
-    // key 用 glyph 的 snapshot_id（u64，由 Rust 侧 LineSnapshotId::to_cache_key() 生成）。
-    // render thread 单线程，无需锁。QSGTexture 由 cache 统一管理生命周期，node 不 owns texture。
-    // clear_animation_layer 不清 cache（texture 可能下帧还用）；release_textures 清指定 id。
-    static QHash<quint64, QSGTexture*> g_gpu_texture_cache;
+    // Issue #658 评论 5630650436: GPU texture 生命周期从全局 static cache 改为
+    // AnimationLayerNode 自身持有 m_texture_cache。
+    // 同一 LineSnapshotId 拆成多个 slice 时，后一个 node 不会删前一个 node 正在引用的 texture；
+    // 因为 texture 由各自所在的 AnimationLayerNode 独立管理。
+    // 每帧传 active snapshot ids；所有 node rebind 后统一 sweep 未使用的 texture。
+    class AnimationLayerNode : public QSGTransformNode {
+    public:
+        QHash<quint64, QSGTexture*> m_texture_cache;
+        QVector<quint64> m_active_snapshot_ids;
+
+        // 增量更新：标记本帧活跃的 snapshot id，sweep 不再活跃的 texture。
+        // cache miss 时 createTextureFromImage 并存入 cache。
+        void updateTextures(
+            QQuickItem *item,
+            int glyph_count,
+            const double *glyph_data,
+            QImage **images,
+            const double *source_rects,
+            const quint64 *snapshot_ids
+        ) {
+            // 标记本帧活跃的 snapshot ids
+            m_active_snapshot_ids.clear();
+            if (snapshot_ids) {
+                for (int i = 0; i < glyph_count; i++) {
+                    m_active_snapshot_ids.append(snapshot_ids[i]);
+                }
+            }
+
+            // Sweep: 删除不在本帧活跃集合中的 texture
+            QSet<quint64> active_set(m_active_snapshot_ids.begin(), m_active_snapshot_ids.end());
+            auto it = m_texture_cache.begin();
+            while (it != m_texture_cache.end()) {
+                if (!active_set.contains(it.key())) {
+                    delete it.value();
+                    it = m_texture_cache.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+
+            // Remove excess child nodes
+            while (childCount() > glyph_count) {
+                QSGNode *child = child_at(this, childCount() - 1);
+                removeChildNode(child);
+                delete child;
+            }
+
+            // Update or create glyph nodes
+            for (int i = 0; i < glyph_count; i++) {
+                const double *d = glyph_data + i * 5;
+                double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
+
+                const double *sr = source_rects + i * 4;
+                double sx = sr[0], sy = sr[1], sw = sr[2], sh = sr[3];
+
+                quint64 snapId = snapshot_ids ? snapshot_ids[i] : 0;
+
+                QSGOpacityNode *opNode = nullptr;
+                QSGImageNode *imgNode = nullptr;
+
+                if (i < childCount()) {
+                    opNode = dynamic_cast<QSGOpacityNode*>(child_at(this, i));
+                    if (opNode && opNode->childCount() > 0) {
+                        imgNode = static_cast<QSGImageNode*>(opNode->firstChild());
+                    }
+                } else {
+                    opNode = new QSGOpacityNode;
+                    appendChildNode(opNode);
+
+                    imgNode = item->window()->createImageNode();
+                    imgNode->setFiltering(QSGTexture::Linear);
+                    imgNode->setOwnsTexture(false);
+                    opNode->appendChildNode(imgNode);
+                }
+
+                if (!opNode || !imgNode) continue;
+
+                opNode->setOpacity(static_cast<float>(gopacity));
+
+                imgNode->setRect(static_cast<qreal>(gx), static_cast<qreal>(gy),
+                                static_cast<qreal>(gw), static_cast<qreal>(gh));
+
+                if (sw > 0.0 && sh > 0.0) {
+                    imgNode->setSourceRect(static_cast<qreal>(sx), static_cast<qreal>(sy),
+                                           static_cast<qreal>(sw), static_cast<qreal>(sh));
+                } else {
+                    imgNode->setSourceRect(0, 0, 0, 0);
+                }
+
+                // GPU texture cache: cache miss → createTextureFromImage
+                QSGTexture *tex = m_texture_cache.value(snapId, nullptr);
+                if (!tex && images && images[i]) {
+                    tex = item->window()->createTextureFromImage(*images[i]);
+                    tex->setFiltering(QSGTexture::Linear);
+                    m_texture_cache.insert(snapId, tex);
+                }
+                if (tex) {
+                    imgNode->setTexture(tex);
+                }
+
+                imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            }
+
+            if (glyph_count > 0) {
+                markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            }
+        }
+
+        // 清空所有子节点和 texture cache
+        void clearAll() {
+            while (childCount() > 0) {
+                QSGNode *child = firstChild();
+                removeChildNode(child);
+                delete child;
+            }
+            for (auto it = m_texture_cache.begin(); it != m_texture_cache.end(); ++it) {
+                delete it.value();
+            }
+            m_texture_cache.clear();
+        }
+    };
 
     void ensure_four_layer_nodes(QSGTransformNode *root, QQuickItem *item) {
         if (!root || !item) return;
@@ -46,22 +162,32 @@ cpp! {{
             delete extra;
         }
 
-        // Ensure child[0..3] are all QSGTransformNode layers.
-        // child[0] wraps a QSGTextNode (created lazily by qt_text_node module).
+        // Ensure child[0..3] are all correct layer types.
+        // child[0] = QSGTransformNode (static text, wraps QSGTextNode)
+        // child[1] = AnimationLayerNode (animation, owns GPU texture cache)
+        // child[2] = QSGTransformNode (selection/preedit)
+        // child[3] = QSGTransformNode (cursor)
         for (int i = 0; i < LAYER_COUNT; i++) {
-            QSGTransformNode *layer = nullptr;
-            if (root->childCount() > i) {
-                layer = dynamic_cast<QSGTransformNode*>(child_at(root, i));
-            }
-            if (!layer) {
-                // Remove wrong-typed node at this slot if present
-                if (root->childCount() > i) {
-                    QSGNode *old = child_at(root, i);
-                    root->removeChildNode(old);
-                    delete old;
+            QSGNode *existing = child_at(root, i);
+            bool correct_type = false;
+            if (existing) {
+                if (i == LAYER_ANIMATION) {
+                    correct_type = (dynamic_cast<AnimationLayerNode*>(existing) != nullptr);
+                } else {
+                    correct_type = (dynamic_cast<QSGTransformNode*>(existing) != nullptr);
                 }
-                layer = new QSGTransformNode;
-                // Insert at the right position
+            }
+            if (!correct_type) {
+                if (existing) {
+                    root->removeChildNode(existing);
+                    delete existing;
+                }
+                QSGNode *layer;
+                if (i == LAYER_ANIMATION) {
+                    layer = new AnimationLayerNode;
+                } else {
+                    layer = new QSGTransformNode;
+                }
                 if (root->childCount() <= i) {
                     root->appendChildNode(layer);
                 } else {
@@ -174,28 +300,25 @@ pub fn update_cursor_node(
 /// If glyph_count > existing child count, new nodes are appended.
 /// If glyph_count < existing child count, excess nodes are removed.
 ///
-/// 修复点 3 (Issue #658 评论 5627327573): `snapshot_ids` 传入每个 glyph 的 snapshot_id
-/// u64 cache key，用作 C++ 侧 GPU texture cache (QHash<quint64, QSGTexture*>) 的 key。
-/// `texture_changed[i]=true` 表示该 node 绑定的 snapshot id 变了（image 内容可能变了），
-/// C++ 侧据此决定是否重新 createTextureFromImage；为 false 时直接复用 cache 里的 QSGTexture。
+/// Issue #658 评论 5630650436: GPU texture cache 由 AnimationLayerNode 自身持有，
+/// 不再使用全局 static cache。同一 LineSnapshotId 拆成多个 slice 时，
+/// 后一个 node 不会删前一个 node 正在引用的 texture。
+/// 每帧传 active snapshot ids；所有 node rebind 后统一 sweep 未使用的 texture。
 pub fn update_animation_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     glyph_count: i32,
     glyph_data: *const f64,
     images: *const *const qmetaobject::QImage,
-    texture_changed: *const bool,
     source_rects: *const f64,
     snapshot_ids: *const u64,
 ) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         glyph_count as "int",
         glyph_data as "const double*",
         images as "QImage**",
-        texture_changed as "const bool*",
         source_rects as "const double*",
         snapshot_ids as "const quint64*"
     ] {
@@ -204,105 +327,20 @@ pub fn update_animation_layer(
 
         ensure_four_layer_nodes(root, item_ptr);
 
-        QSGTransformNode *animLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 1));
+        QSGNode *animNode = child_at(root, LAYER_ANIMATION);
+        if (!animNode) return;
+
+        auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
         if (!animLayer) return;
 
-        // Remove excess children if glyph count decreased
-        while (animLayer->childCount() > glyph_count) {
-            QSGNode *child = child_at(animLayer, animLayer->childCount() - 1);
-            animLayer->removeChildNode(child);
-            delete child;
-        }
-
-        // Each glyph: 5 doubles = x, y, w, h, opacity
-        // Each sourceRect: 4 doubles = sx, sy, sw, sh
-        for (int i = 0; i < glyph_count; i++) {
-            const double *d = glyph_data + i * 5;
-            double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
-
-            const double *sr = source_rects + i * 4;
-            double sx = sr[0], sy = sr[1], sw = sr[2], sh = sr[3];
-
-            quint64 snapId = (snapshot_ids) ? snapshot_ids[i] : 0;
-
-            QSGOpacityNode *opNode = nullptr;
-            QSGImageNode *imgNode = nullptr;
-
-            if (i < animLayer->childCount()) {
-                opNode = dynamic_cast<QSGOpacityNode*>(child_at(animLayer, i));
-                if (opNode && opNode->childCount() > 0) {
-                    imgNode = static_cast<QSGImageNode*>(opNode->firstChild());
-                }
-            } else {
-                opNode = new QSGOpacityNode;
-                animLayer->appendChildNode(opNode);
-
-                imgNode = item_ptr->window()->createImageNode();
-                imgNode->setFiltering(QSGTexture::Linear);
-                // 修复点 3: texture 由 g_gpu_texture_cache 统一管理生命周期，node 不 owns。
-                imgNode->setOwnsTexture(false);
-                opNode->appendChildNode(imgNode);
-            }
-
-            if (!opNode || !imgNode) continue;
-
-            opNode->setOpacity(static_cast<float>(gopacity));
-
-            imgNode->setRect(static_cast<qreal>(gx), static_cast<qreal>(gy),
-                            static_cast<qreal>(gw), static_cast<qreal>(gh));
-
-            // Set sourceRect for UV clipping from shared line texture
-            if (sw > 0.0 && sh > 0.0) {
-                imgNode->setSourceRect(static_cast<qreal>(sx), static_cast<qreal>(sy),
-                                       static_cast<qreal>(sw), static_cast<qreal>(sh));
-            } else {
-                imgNode->setSourceRect(static_cast<qreal>(0), static_cast<qreal>(0),
-                                       static_cast<qreal>(0), static_cast<qreal>(0));
-            }
-
-            // 修复点 3 (Issue #658 评论 5627327573): GPU texture cache。
-            // texture_changed[i]=true 表示该 node 绑定的 snapshot id 变了（image 内容可能变了）。
-            // - changed: 若 cache 有该 snapId 的旧 texture，delete 旧的；createTextureFromImage 存入 cache。
-            // - !changed: 若 cache 有该 snapId 的 texture，直接 setTexture（不重新上传）；
-            //   若 cache 没有（首次或被 release 清了），createTextureFromImage 存入。
-            // 动画 60 帧同一 snapshot_id：changed=false，cache 命中，只更新 rect/opacity/sourceRect。
-            bool changed = (texture_changed && texture_changed[i]);
-            QSGTexture *tex = g_gpu_texture_cache.value(snapId, nullptr);
-            if (changed) {
-                if (tex) {
-                    delete tex;
-                    g_gpu_texture_cache.remove(snapId);
-                    tex = nullptr;
-                }
-                if (images && images[i]) {
-                    tex = item_ptr->window()->createTextureFromImage(*images[i]);
-                    tex->setFiltering(QSGTexture::Linear);
-                    g_gpu_texture_cache.insert(snapId, tex);
-                }
-            } else if (!tex) {
-                // cache 没有（首次或被 release 清了），创建并存入
-                if (images && images[i]) {
-                    tex = item_ptr->window()->createTextureFromImage(*images[i]);
-                    tex->setFiltering(QSGTexture::Linear);
-                    g_gpu_texture_cache.insert(snapId, tex);
-                }
-            }
-            if (tex) {
-                imgNode->setTexture(tex);
-            }
-
-            imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-        }
-
-        if (glyph_count > 0) {
-            animLayer->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
-        }
+        animLayer->updateTextures(
+            item_ptr, glyph_count, glyph_data, images, source_rects, snapshot_ids
+        );
     })
 }
 
 /// Clear the animation layer (child[1]) — remove all animated glyph nodes and clear GPU texture cache.
 pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*"
@@ -310,44 +348,13 @@ pub fn clear_animation_layer(root_raw: *mut std::ffi::c_void, item_ptr: *mut std
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
 
-        QSGTransformNode *animLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 1));
+        QSGNode *animNode = child_at(root, LAYER_ANIMATION);
+        if (!animNode) return;
+
+        auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
         if (!animLayer) return;
 
-        // Issue #658: 先删除全部 child node，再清除 GPU texture cache。
-        // 不能只删 node 不删 texture，否则 QSGTexture 会泄漏。
-        while (animLayer->childCount() > 0) {
-            QSGNode *child = animLayer->firstChild();
-            animLayer->removeChildNode(child);
-            delete child;
-        }
-        // 清空 g_gpu_texture_cache 中所有 texture，确保"最后一个动画完成/全部取消"
-        // 时 GPU cache 不会持续增长。
-        for (auto it = g_gpu_texture_cache.begin(); it != g_gpu_texture_cache.end(); ++it) {
-            delete it.value();
-        }
-        g_gpu_texture_cache.clear();
-    })
-}
-
-/// 修复点 3 (Issue #658 评论 5627327573): 释放 GPU texture cache 中指定 snapshot id 的纹理。
-///
-/// 在 snapshot/transaction 完成或取消时调用，避免 cache 无限增长。
-/// `clear_animation_layer` 不清 cache（texture 可能下帧还用），由本函数按需清理。
-/// QSGTexture 只能在 render thread 销毁；本函数在 render thread（updatePaintNode）中调用。
-pub fn release_textures(snapshot_ids: *const u64, count: i32) {
-    // SAFETY: snapshot_ids 指向 Rust 侧 Vec<u64>，count 为元素数；render thread 单线程访问 file-static cache。
-    cpp!(unsafe [
-        snapshot_ids as "const quint64*",
-        count as "int"
-    ] {
-        if (!snapshot_ids || count <= 0) return;
-        for (int i = 0; i < count; i++) {
-            auto it = g_gpu_texture_cache.find(snapshot_ids[i]);
-            if (it != g_gpu_texture_cache.end()) {
-                delete it.value();
-                g_gpu_texture_cache.erase(it);
-            }
-        }
+        animLayer->clearAll();
     })
 }
 

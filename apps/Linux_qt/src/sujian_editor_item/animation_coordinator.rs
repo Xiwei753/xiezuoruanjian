@@ -176,9 +176,9 @@ fn build_cluster_reflow_slices(
     let mut old_excluded_flags: Vec<bool> = Vec::new();
     for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, old_cluster) in old_line.clusters.iter().enumerate() {
-            let is_excluded = excluded_old_ranges.iter().any(|(s, e)| {
-                old_cluster.byte_start >= *s && old_cluster.byte_end <= *e
-            });
+            let is_excluded = excluded_old_ranges
+                .iter()
+                .any(|(s, e)| old_cluster.byte_start >= *s && old_cluster.byte_end <= *e);
             old_refs.push(ReflowClusterRef {
                 line_idx,
                 cluster_idx,
@@ -192,9 +192,10 @@ fn build_cluster_reflow_slices(
     let mut new_refs: Vec<ReflowClusterRef> = Vec::new();
     for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
-            if excluded_new_ranges.iter().any(|(s, e)| {
-                new_cluster.byte_start >= *s && new_cluster.byte_end <= *e
-            }) {
+            if excluded_new_ranges
+                .iter()
+                .any(|(s, e)| new_cluster.byte_start >= *s && new_cluster.byte_end <= *e)
+            {
                 continue;
             }
             new_refs.push(ReflowClusterRef {
@@ -236,8 +237,7 @@ fn build_cluster_reflow_slices(
         }
         for (ni, nref) in new_refs.iter().enumerate() {
             // 将 new cluster 的 byte range 映射到 old 坐标系
-            let mapped_old_range =
-                offset_map.map_new_range_to_old(nref.byte_start, nref.byte_end);
+            let mapped_old_range = offset_map.map_new_range_to_old(nref.byte_start, nref.byte_end);
 
             let overlaps = if let Some((mos, moe)) = mapped_old_range {
                 // 精确匹配、范围包含匹配、部分重叠或相邻边界（共享端点视为连通）
@@ -247,7 +247,11 @@ fn build_cluster_reflow_slices(
             } else {
                 // new cluster 跨越映射边界 — 逐端点回退检查
                 let start_mapped = offset_map.map_new_to_old(nref.byte_start);
-                let last_byte = if nref.byte_end > 0 { nref.byte_end - 1 } else { 0 };
+                let last_byte = if nref.byte_end > 0 {
+                    nref.byte_end - 1
+                } else {
+                    0
+                };
                 let end_mapped = offset_map.map_new_to_old(last_byte);
                 if let (Some(ms), Some(me)) = (start_mapped, end_mapped) {
                     (ms >= oref.byte_start && ms < oref.byte_end)
@@ -265,7 +269,8 @@ fn build_cluster_reflow_slices(
     }
 
     // ── 阶段 3：提取 connected components → ReflowRuns ──
-    let mut component_map: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut component_map: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     let mut runs: Vec<ReflowRun> = Vec::new();
 
     for oi in 0..n_old {
@@ -323,8 +328,7 @@ fn build_cluster_reflow_slices(
                     new_cluster.byte_end,
                     Some(new_cluster.shaping_identity.clone()),
                 ));
-                run_managed_new_clusters
-                    .push((nref.line_idx, nref.cluster_idx, new_sr));
+                run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
             }
             continue;
         }
@@ -387,8 +391,7 @@ fn build_cluster_reflow_slices(
                         new_cluster.byte_end,
                         Some(old_cluster.shaping_identity.clone()),
                     ));
-                    run_managed_new_clusters
-                        .push((nref.line_idx, nref.cluster_idx, new_sr));
+                    run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
                 }
             } else {
                 // shaping 改变：old 淡出 + new 淡入
@@ -410,8 +413,7 @@ fn build_cluster_reflow_slices(
                     new_cluster.byte_start,
                     new_cluster.byte_end,
                 ));
-                run_managed_new_clusters
-                    .push((nref.line_idx, nref.cluster_idx, new_sr));
+                run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
             }
             continue;
         }
@@ -464,8 +466,7 @@ fn build_cluster_reflow_slices(
                 new_cluster.byte_start,
                 new_cluster.byte_end,
             ));
-            run_managed_new_clusters
-                .push((nref.line_idx, nref.cluster_idx, new_sr));
+            run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
         }
     }
 
@@ -474,7 +475,10 @@ fn build_cluster_reflow_slices(
     let mut patches_by_line: std::collections::HashMap<usize, Vec<SourceRect>> =
         std::collections::HashMap::new();
     for (line_idx, _cluster_idx, sr) in &run_managed_new_clusters {
-        patches_by_line.entry(*line_idx).or_default().push(sr.clone());
+        patches_by_line
+            .entry(*line_idx)
+            .or_default()
+            .push(sr.clone());
     }
     for (line_idx, hidden_rects) in patches_by_line {
         let new_line = &new_snapshot.line_snapshots[line_idx];
@@ -1011,8 +1015,7 @@ impl LinuxEditorAnimationCoordinator {
         if !is_commit {
             // Issue #658 评论 5630181473: cancel 时 preedit 范围的 old cluster
             // 应该被排除在 reflow 匹配之外，生成 delete_fade_out 而非 crossfade。
-            let cancel_excluded_old: [(usize, usize); 1] =
-                [(preedit_byte_start, preedit_byte_end)];
+            let cancel_excluded_old: [(usize, usize); 1] = [(preedit_byte_start, preedit_byte_end)];
             let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                 key,
                 old_snapshot,
@@ -2813,10 +2816,7 @@ mod tests {
             format_fingerprint: 0,
         };
         // old: "abc" → one cluster covering [0,3)
-        let old_snapshot = make_test_snapshot(
-            "abc",
-            vec![(0, 3, 10.0, 0.0, sid_preedit.clone())],
-        );
+        let old_snapshot = make_test_snapshot("abc", vec![(0, 3, 10.0, 0.0, sid_preedit.clone())]);
         // new: "aXYZbc" → three clusters: [0,1) "a", [1,4) "XYZ", [4,6) "bc"
         let new_snapshot = make_test_snapshot(
             "aXYZbc",
@@ -2827,14 +2827,7 @@ mod tests {
             ],
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key = coord.handle_composition_update(
-            &old_snapshot,
-            &new_snapshot,
-            0,
-            3,
-            None,
-            None,
-        );
+        let key = coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None);
         assert!(key.is_some());
         let tx = coord
             .prepared_queue
@@ -2850,7 +2843,11 @@ mod tests {
             .filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade)
             .count();
         // 1 crossfade_old (old [0,3)) + 2 crossfade_new (new [0,1) + new [4,6)) = 3
-        assert_eq!(crossfade_count, 3, "expected 3 crossfade slices (1 old + 2 new), got {}", crossfade_count);
+        assert_eq!(
+            crossfade_count, 3,
+            "expected 3 crossfade slices (1 old + 2 new), got {}",
+            crossfade_count
+        );
         // new cluster [1,4) is inserted text (no old counterpart) → InsertFadeIn
         let insert_count = tx
             .slices

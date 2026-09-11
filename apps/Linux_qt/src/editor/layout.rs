@@ -4165,10 +4165,7 @@ pub fn compare_old_new_visual_lines(
                 ((ins_end - ins_start) as isize - (del_end - del_start) as isize) as isize;
             let ins_start_old = ins_start.saturating_add_signed(-replace_delta);
             let ins_end_old = ins_end.saturating_add_signed(-replace_delta);
-            (
-                del_start.min(ins_start_old),
-                del_end.max(ins_end_old),
-            )
+            (del_start.min(ins_start_old), del_end.max(ins_end_old))
         }
         (Some((_ins_start, _ins_end)), None) => {
             // pure insert: old 无字节变化，用插入点作为 hard-break/相邻行 anchor
@@ -4193,16 +4190,16 @@ pub fn compare_old_new_visual_lines(
 
     // 计算 old 侧受影响的行（与 old_affected 范围相交）→ 必须重新栅格化
     for (idx, old_line) in old_lines.iter().enumerate() {
-        let intersects = old_line.byte_start < old_affected_end
-            && old_line.byte_end > old_affected_start;
+        let intersects =
+            old_line.byte_start < old_affected_end && old_line.byte_end > old_affected_start;
         if intersects {
             old_raster_line_ids.push(idx);
         }
     }
     // 计算 new 侧受影响的行（与 new_affected 范围相交）→ 必须重新栅格化
     for (idx, new_line) in new_lines.iter().enumerate() {
-        let intersects = new_line.byte_start < new_affected_end
-            && new_line.byte_end > new_affected_start;
+        let intersects =
+            new_line.byte_start < new_affected_end && new_line.byte_end > new_affected_start;
         if intersects {
             new_raster_line_ids.push(idx);
         }
@@ -4367,9 +4364,8 @@ pub fn compare_old_new_visual_lines(
     // 从 reusable_move_pairs 移除任何 old_idx ∈ old_raster_line_ids
     // 或 new_idx ∈ new_raster_line_ids 的对，避免同一行同时进入 raster 和 reusable_move。
     // 同时由 sort+dedup 去重。不在返回前把互斥留给 pipeline 猜。
-    reusable_move_pairs.retain(|&(o, n)| {
-        !old_raster_line_ids.contains(&o) && !new_raster_line_ids.contains(&n)
-    });
+    reusable_move_pairs
+        .retain(|&(o, n)| !old_raster_line_ids.contains(&o) && !new_raster_line_ids.contains(&n));
     old_raster_line_ids.sort_unstable();
     old_raster_line_ids.dedup();
     new_raster_line_ids.sort_unstable();
@@ -4383,4 +4379,3 @@ pub fn compare_old_new_visual_lines(
         reusable_move_pairs,
     }
 }
-

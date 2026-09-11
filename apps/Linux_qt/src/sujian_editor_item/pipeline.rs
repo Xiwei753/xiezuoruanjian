@@ -1059,8 +1059,8 @@ impl LinuxEditorPipeline {
                                 // 第二份：复用同一张 QImage 和 cluster source rect，
                                 // 只把 document byte range 映射到 new 行
                                 let new_line = &new_doc_snapshot.visual_lines[new_idx];
-                                let byte_delta: isize =
-                                    new_line.byte_start as isize - snap.document_byte_start as isize;
+                                let byte_delta: isize = new_line.byte_start as isize
+                                    - snap.document_byte_start as isize;
                                 let mut new_snap = snap.clone();
                                 new_snap.document_byte_start = new_line.byte_start;
                                 new_snap.document_byte_end = new_line.byte_end;
@@ -1068,9 +1068,8 @@ impl LinuxEditorPipeline {
                                     cluster.document_byte_start = cluster
                                         .document_byte_start
                                         .saturating_add_signed(byte_delta);
-                                    cluster.document_byte_end = cluster
-                                        .document_byte_end
-                                        .saturating_add_signed(byte_delta);
+                                    cluster.document_byte_end =
+                                        cluster.document_byte_end.saturating_add_signed(byte_delta);
                                 }
                                 move_visuals.push(new_snap);
                             }
