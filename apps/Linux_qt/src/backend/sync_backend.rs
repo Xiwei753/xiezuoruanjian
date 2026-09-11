@@ -25,6 +25,57 @@ use crate::sync_bridge::{
     determine_diagnostics_status, mask_sync_error, sync_error_category_from_code, SyncTaskOutcome,
 };
 
+/// Linux 同步操作共用的 profile 准备失败。
+///
+/// 三步任一步失败都携带原始错误字符串。`summary_key` 给 QML i18n，
+/// `raw_error` 给 raw_error 字段（调用方负责 mask_sync_error）。
+pub(crate) enum SyncProfileError {
+    LoadConfig(String),
+    LoadSecrets(String),
+    SetOverride(String),
+}
+
+impl SyncProfileError {
+    pub(crate) fn summary_key(&self) -> &'static str {
+        match self {
+            Self::LoadConfig(_) => "error.load_sync_config_failed",
+            Self::LoadSecrets(_) => "error.load_sync_secrets_failed",
+            Self::SetOverride(_) => "error.set_sync_secrets_override_failed",
+        }
+    }
+    pub(crate) fn raw_error(&self) -> &str {
+        match self {
+            Self::LoadConfig(s) | Self::LoadSecrets(s) | Self::SetOverride(s) => s,
+        }
+    }
+}
+
+/// Linux 同步操作共用的 profile 准备。
+///
+/// 职责（严格只做这三步，不要复制到三个入口）：
+/// 1. 用本次新建的 WriterCoreApi 调 load_sync_config()；
+/// 2. 调 load_sync_secrets()（从 Linux SecureStorage / 本地兼容存储拿已提交凭据）；
+/// 3. 立刻 set_sync_secrets_override(secrets)（本次操作级快照）；
+/// 4. 返回 config。
+///
+/// `api` 是每次后台操作临时新建、操作结束即 drop 的 WriterCoreApi，
+/// 所以 override 生命周期天然就是单次操作，不需要做成全局状态。
+///
+/// 协议级单测见 tests/sync_profile_override.rs。
+pub(crate) fn prepare_sync_profile(
+    api: &writer_core::api::WriterCoreApi,
+) -> Result<writer_core::api::types::SyncConfigDto, SyncProfileError> {
+    let config = api
+        .load_sync_config()
+        .map_err(|e| SyncProfileError::LoadConfig(e.to_string()))?;
+    let secrets = api
+        .load_sync_secrets()
+        .map_err(|e| SyncProfileError::LoadSecrets(e.to_string()))?;
+    api.set_sync_secrets_override(secrets)
+        .map_err(|e| SyncProfileError::SetOverride(e.to_string()))?;
+    Ok(config)
+}
+
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
 pub struct SyncBackend {
@@ -467,16 +518,17 @@ impl AppBackend {
             // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
                 let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
-                let mut config = match api.load_sync_config() {
+                let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {
-                        let err_str = e.to_string();
+                        let err_str = e.raw_error().to_string();
+                        let summary_key = e.summary_key().to_string();
                         let state = writer_core::api::SyncOperationStateDto {
                             operation_id: op_id_capture.clone(),
                             operation_kind: "diagnose".to_string(),
                             status_code: "error".to_string(),
                             phase_key: None,
-                            summary_key: Some("error.load_sync_config_failed".to_string()),
+                            summary_key: Some(summary_key),
                             summary_args: std::collections::HashMap::new(),
                             counts: writer_core::api::SyncOperationCountsDto::default(),
                             raw_error: Some(mask_sync_error(&err_str)),

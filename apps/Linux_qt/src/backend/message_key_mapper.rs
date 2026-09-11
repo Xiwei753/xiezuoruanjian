@@ -61,6 +61,8 @@ pub fn resolve_message_key(message_key: &str) -> &'static str {
         "error.sync_dry_run_panic" => "error.sync_dry_run_panic",
         "error.sync_panic" => "error.sync_panic",
         "error.load_sync_config_failed" => "error.load_sync_config_failed",
+        "error.load_sync_secrets_failed" => "error.load_sync_secrets_failed",
+        "error.set_sync_secrets_override_failed" => "error.set_sync_secrets_override_failed",
         "error.core_not_initialized" => "error.core_not_initialized",
         "error.parse_json_failed" => "error.parse_json_failed",
         "error.save_sync_config_failed" => "error.save_sync_config_failed",
