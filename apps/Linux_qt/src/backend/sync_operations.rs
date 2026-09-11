@@ -140,26 +140,6 @@ impl AppBackend {
             return op_id.into();
         }
 
-        // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            self.current_sync_status = "error".to_string();
-            let state = writer_core::api::SyncOperationStateDto {
-                operation_id: op_id.clone(),
-                operation_kind: "dry_run".to_string(),
-                status_code: "error".to_string(),
-                phase_key: None,
-                summary_key: Some("sync.block.no_project_selected".to_string()),
-                summary_args: std::collections::HashMap::new(),
-                counts: writer_core::api::SyncOperationCountsDto::default(),
-                raw_error: None,
-            };
-            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
-            self.debug_error("sync", "perform_sync_dry_run_failed", "no_project_selected");
-            return op_id.into();
-        }
-
         if self.current_sync_remote_url.is_empty() {
             self.current_sync_status = "error".to_string();
             let state = writer_core::api::SyncOperationStateDto {
@@ -430,26 +410,6 @@ impl AppBackend {
             self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
             self.sync_action_completed();
             self.debug_error("sync", "perform_sync_failed", "workspace_empty");
-            return op_id.into();
-        }
-
-        // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            self.current_sync_status = "error".to_string();
-            let state = writer_core::api::SyncOperationStateDto {
-                operation_id: op_id.clone(),
-                operation_kind: "sync".to_string(),
-                status_code: "error".to_string(),
-                phase_key: None,
-                summary_key: Some("sync.block.no_project_selected".to_string()),
-                summary_args: std::collections::HashMap::new(),
-                counts: writer_core::api::SyncOperationCountsDto::default(),
-                raw_error: None,
-            };
-            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_status_changed();
-            self.sync_action_completed();
-            self.debug_error("sync", "perform_sync_failed", "no_project_selected");
             return op_id.into();
         }
 

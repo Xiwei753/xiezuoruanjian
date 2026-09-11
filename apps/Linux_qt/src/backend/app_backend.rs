@@ -810,8 +810,9 @@ mod tests {
 
         // After sync success with pending path, internal_open_data_root is called.
         // The data root is opened successfully; pending path is cleared.
-        // load_sync_config sets status to "no_workspace" (per-project sync: no selected project).
-        assert_eq!(backend.current_sync_status, "no_workspace");
+        // 工作区成功打开后，load_sync_config 走全局配置路径，没有同步配置时
+        // refresh_sync_status_from_config 得到 "not_configured"。
+        assert_eq!(backend.current_sync_status, "not_configured");
         assert_eq!(backend.current_pending_github_init_path, "");
         assert!(backend.current_has_data_root);
     }
@@ -854,8 +855,6 @@ mod tests {
         backend.current_sync_token = "".to_string();
         backend.current_data_root = "some_path".to_string();
         backend.current_projects_root = "some_path".to_string();
-        // per-project sync：需选中作品才会进入 config 校验分支
-        backend.selected_project_id = Some("test_project".to_string());
 
         backend.perform_sync_dry_run();
 
@@ -866,17 +865,61 @@ mod tests {
     }
 
     #[test]
-    fn test_sync_dry_run_no_project_selected_returns_error() {
+    fn test_sync_dry_run_no_project_selected_still_validates_config() {
         let mut backend = AppBackend::default();
         backend.current_data_root = "some_path".to_string();
         backend.current_projects_root = "some_path".to_string();
-        // selected_project_id 为 None，per-project sync 应拒绝
+        // 没有选作品时仍进入全局同步配置校验
         backend.perform_sync_dry_run();
 
         assert_eq!(backend.current_sync_status, "error");
         assert!(backend
             .current_sync_operation_state
-            .contains("sync.block.no_project_selected"));
+            .contains("sync.block.remote_url_missing"));
+    }
+
+    #[test]
+    fn test_load_sync_config_reads_global_config_without_selected_project() {
+        use tempfile::tempdir;
+        let dir = tempdir().expect("tempdir creation failed");
+        let path_str = dir.path().to_string_lossy().to_string();
+
+        let mut backend = AppBackend::default();
+        backend.current_data_root = path_str.clone();
+        backend.current_projects_root = path_str.clone();
+        backend.current_has_data_root = true;
+        // 不设置 selected_project_id，模拟首次安装/新设备恢复
+        backend.selected_project_id = None;
+
+        backend.load_sync_config();
+
+        // 全局配置不存在时应得到 not_configured，而非 no_workspace
+        assert_eq!(backend.current_sync_status, "not_configured");
+        // 分支默认值应为 main
+        assert_eq!(backend.current_sync_branch, "main");
+    }
+
+    #[test]
+    fn test_save_sync_config_writes_global_config_without_selected_project() {
+        use tempfile::tempdir;
+        let dir = tempdir().expect("tempdir creation failed");
+        let path_str = dir.path().to_string_lossy().to_string();
+
+        let mut backend = AppBackend::default();
+        backend.current_data_root = path_str.clone();
+        backend.current_projects_root = path_str.clone();
+        backend.current_has_data_root = true;
+        // 不设置 selected_project_id，模拟首次安装/新设备恢复
+        backend.selected_project_id = None;
+        backend.current_sync_enabled = true;
+        backend.current_sync_remote_url = "https://github.com/test/repo.git".to_string();
+        backend.current_sync_branch = "main".to_string();
+        backend.current_sync_token = "test_token".to_string();
+        backend.current_sync_backend_type = "github_api".to_string();
+
+        let result = backend.save_sync_config();
+        // 没有选中作品也应能保存全局配置
+        assert!(result);
     }
 }
 

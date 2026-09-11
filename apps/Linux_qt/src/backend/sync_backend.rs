@@ -384,11 +384,6 @@ impl AppBackend {
             return "sync.block.no_workspace".into();
         }
 
-        // per-project sync：需要选中作品才能判断同步能力。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            return "sync.block.no_project_selected".into();
-        }
-
         if let Some(api) = self.core_api() {
             if let Ok(cap) = api.get_sync_capability() {
                 if !cap.can_run {
@@ -423,28 +418,6 @@ impl AppBackend {
         let op_id = uuid::Uuid::new_v4().to_string();
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "diagnose".to_string();
-
-        // per-project sync：每个作品目录是独立 Git 仓库，必须指定作品。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            let state = writer_core::api::SyncOperationStateDto {
-                operation_id: op_id.clone(),
-                operation_kind: "diagnose".to_string(),
-                status_code: "error".to_string(),
-                phase_key: None,
-                summary_key: Some("sync.block.no_project_selected".to_string()),
-                summary_args: std::collections::HashMap::new(),
-                counts: writer_core::api::SyncOperationCountsDto::default(),
-                raw_error: None,
-            };
-            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
-            self.sync_action_completed();
-            self.debug_error(
-                "sync",
-                "perform_sync_diagnostics_failed",
-                "no_project_selected",
-            );
-            return op_id.into();
-        }
 
         if data_root.is_empty() {
             let state = writer_core::api::SyncOperationStateDto {
@@ -602,18 +575,6 @@ impl AppBackend {
     // AppBackend::load_sync_config
     pub(crate) fn load_sync_config(&mut self) {
         self.debug_log("sync", "load_sync_config_start", "");
-        // per-project sync：需要选中作品才能加载该作品的同步配置。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            self.current_sync_enabled = false;
-            self.current_sync_remote_url = "".to_string();
-            self.current_sync_branch = "main".to_string();
-            self.current_sync_token = "".to_string();
-            self.current_sync_status = "no_workspace".to_string();
-            self.sync_status_changed();
-            self.sync_config_changed();
-            self.debug_warn("sync", "load_sync_config_skipped", "no_project_selected");
-            return;
-        }
         if let Some(api) = self.core_api() {
             let config_opt = api.load_sync_config().ok();
             // Issue #645：token 从 provider_secrets → ProviderSecretsDto::GitHub 提取。
@@ -682,32 +643,6 @@ impl AppBackend {
     pub(crate) fn save_sync_config(&mut self) -> bool {
         self.debug_log("sync", "save_sync_config_start", "");
         let mut error_state: Option<writer_core::api::SyncOperationStateDto> = None;
-        // per-project sync：需要选中作品才能保存该作品的同步配置。
-        if !matches!(self.selected_project_id.as_deref(), Some(id) if !id.is_empty()) {
-            error_state = Some(writer_core::api::SyncOperationStateDto {
-                operation_id: String::new(),
-                operation_kind: "save_config".to_string(),
-                status_code: "error".to_string(),
-                phase_key: None,
-                summary_key: Some("sync.block.no_project_selected".to_string()),
-                summary_args: std::collections::HashMap::new(),
-                counts: writer_core::api::SyncOperationCountsDto::default(),
-                raw_error: None,
-            });
-            if let Some(state) = error_state {
-                let msg = format!(
-                    "{}: {}",
-                    state.summary_key.as_deref().unwrap_or("error.other"),
-                    state.raw_error.as_deref().unwrap_or("")
-                );
-                self.set_error(&msg);
-                self.current_sync_operation_state =
-                    serde_json::to_string(&state).unwrap_or_default();
-                self.sync_action_completed();
-                self.debug_error("sync", "save_sync_config_failed", "no_project_selected");
-            }
-            return false;
-        }
         if let Some(api) = self.core_api() {
             let net = crate::backend::app_backend::current_network_state();
             // Issue #645：SyncConfigDto 改为 provider-neutral 结构，
