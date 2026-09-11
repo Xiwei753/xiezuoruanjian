@@ -4143,28 +4143,66 @@ pub fn compare_old_new_visual_lines(
         };
     }
 
-    // 确定受影响的字节范围
-    let affected_byte_start = inserted_range
-        .map(|(s, _)| s)
-        .or(deleted_range.map(|(s, _)| s))
-        .unwrap_or(0);
-    let affected_byte_end = inserted_range
-        .map(|(_, e)| e)
-        .or(deleted_range.map(|(_, e)| e))
-        .unwrap_or(usize::MAX);
+    // Issue #658 评论 5630181473 问题 2: old/new 两侧分别用各自的坐标系计算
+    // affected range 和 downstream anchor，不再共享同一份 inserted_range。
+    // replace / IME commit 同时有 inserted + deleted 时，old 侧按 deleted range
+    // 找直接受影响行，new 侧按 inserted range 找直接受影响行。
+    //
+    // old_affected_*: old 坐标系中被修改的字节范围
+    //   - 纯 insert: (ins_start, ins_start) — old 无字节变化，用插入点作 anchor
+    //   - 纯 delete: deleted_range
+    //   - replace: union(del_range, ins_range_in_old) — 包含被删字节和插入点
+    //
+    // new_affected_*: new 坐标系中被修改的字节范围
+    //   - 纯 insert: inserted_range
+    //   - 纯 delete: (del_start, del_start) — new 无字节变化，用删除点作 anchor
+    //   - replace: inserted_range
+    let (old_affected_start, old_affected_end) = match (inserted_range, deleted_range) {
+        (Some((ins_start, ins_end)), Some((del_start, del_end))) => {
+            // replace: old 坐标系 union(del_range, ins_range mapped to old)
+            // delta = ins_size - del_size; ins in old = ins - delta
+            let replace_delta =
+                ((ins_end - ins_start) as isize - (del_end - del_start) as isize) as isize;
+            let ins_start_old = ins_start.saturating_add_signed(-replace_delta);
+            let ins_end_old = ins_end.saturating_add_signed(-replace_delta);
+            (
+                del_start.min(ins_start_old),
+                del_end.max(ins_end_old),
+            )
+        }
+        (Some((_ins_start, _ins_end)), None) => {
+            // pure insert: old 无字节变化，用插入点作为 hard-break/相邻行 anchor
+            (_ins_start, _ins_start)
+        }
+        (None, Some((del_start, del_end))) => (del_start, del_end),
+        (None, None) => (0, usize::MAX),
+    };
 
-    // 计算 old 侧受影响的行（与编辑字节范围相交）→ 必须重新栅格化
+    let (new_affected_start, new_affected_end) = match (inserted_range, deleted_range) {
+        (Some((ins_start, ins_end)), Some((_del_start, _del_end))) => {
+            // replace: new 坐标系用 inserted_range
+            (ins_start, ins_end)
+        }
+        (Some((ins_start, ins_end)), None) => (ins_start, ins_end),
+        (None, Some((del_start, _del_end))) => {
+            // pure delete: new 无字节变化，用删除点作为 anchor
+            (del_start, del_start)
+        }
+        (None, None) => (0, usize::MAX),
+    };
+
+    // 计算 old 侧受影响的行（与 old_affected 范围相交）→ 必须重新栅格化
     for (idx, old_line) in old_lines.iter().enumerate() {
-        let intersects =
-            old_line.byte_start < affected_byte_end && old_line.byte_end > affected_byte_start;
+        let intersects = old_line.byte_start < old_affected_end
+            && old_line.byte_end > old_affected_start;
         if intersects {
             old_raster_line_ids.push(idx);
         }
     }
-    // 计算 new 侧受影响的行（与编辑字节范围相交）→ 必须重新栅格化
+    // 计算 new 侧受影响的行（与 new_affected 范围相交）→ 必须重新栅格化
     for (idx, new_line) in new_lines.iter().enumerate() {
-        let intersects =
-            new_line.byte_start < affected_byte_end && new_line.byte_end > affected_byte_start;
+        let intersects = new_line.byte_start < new_affected_end
+            && new_line.byte_end > new_affected_start;
         if intersects {
             new_raster_line_ids.push(idx);
         }
@@ -4181,19 +4219,18 @@ pub fn compare_old_new_visual_lines(
     };
 
     // Downstream anchor: 完全在编辑区域之后的第一行索引。
-    // old 侧：byte_start >= affected_byte_end（old 坐标系）
-    // new 侧：byte_start >= affected_byte_end + delta（new 坐标系，delta 为字节偏移变化）
+    // old 侧用 old_affected_end（old 坐标系），new 侧用 new_affected_end（new 坐标系）。
     // 替代旧的 last_direct_affected_idx + 1 方案：当 raster 集合为空时（如段尾 \n，
     // 没有任何 VisualLine 与编辑字节严格相交），旧方案 fallback 到 len()，+1 后超出
     // 边界，扫描循环 while oi < old_lines.len() 永不执行，导致 reusable_move_pairs
     // 得不到任何下游 reflow 行。
     let old_downstream_anchor = old_lines
         .iter()
-        .position(|l| l.byte_start >= affected_byte_end)
+        .position(|l| l.byte_start >= old_affected_end)
         .unwrap_or(old_lines.len());
     let new_downstream_anchor = new_lines
         .iter()
-        .position(|l| l.byte_start >= affected_byte_end.saturating_add_signed(delta))
+        .position(|l| l.byte_start >= new_affected_end)
         .unwrap_or(new_lines.len());
 
     // 双指针逐行比较：从 downstream anchor 开始，按 old/new byte offset 对应。
