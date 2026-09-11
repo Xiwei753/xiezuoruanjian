@@ -43,6 +43,8 @@ cpp! {{
 
         // 增量更新：标记本帧活跃的 snapshot id，sweep 不再活跃的 texture。
         // cache miss 时 createTextureFromImage 并存入 cache。
+        // 顺序：先删多余 child → 重绑/新增 node → 最后 sweep 旧 texture，
+        // 保证没有 QSGImageNode 仍引用待删除的 texture。
         void updateTextures(
             QQuickItem *item,
             int glyph_count,
@@ -58,27 +60,16 @@ cpp! {{
                     m_active_snapshot_ids.append(snapshot_ids[i]);
                 }
             }
-
-            // Sweep: 删除不在本帧活跃集合中的 texture
             QSet<quint64> active_set(m_active_snapshot_ids.begin(), m_active_snapshot_ids.end());
-            auto it = m_texture_cache.begin();
-            while (it != m_texture_cache.end()) {
-                if (!active_set.contains(it.key())) {
-                    delete it.value();
-                    it = m_texture_cache.erase(it);
-                } else {
-                    ++it;
-                }
-            }
 
-            // Remove excess child nodes
+            // Step 1: Remove excess child nodes (delete nodes referencing old textures)
             while (childCount() > glyph_count) {
                 QSGNode *child = child_at(this, childCount() - 1);
                 removeChildNode(child);
                 delete child;
             }
 
-            // Update or create glyph nodes
+            // Step 2: Update or create glyph nodes — rebind textures before sweep
             for (int i = 0; i < glyph_count; i++) {
                 const double *d = glyph_data + i * 5;
                 double gx = d[0], gy = d[1], gw = d[2], gh = d[3], gopacity = d[4];
@@ -132,6 +123,17 @@ cpp! {{
                 }
 
                 imgNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+            }
+
+            // Step 3: Sweep textures not in active_set — safe now, all nodes re/deleted
+            auto it = m_texture_cache.begin();
+            while (it != m_texture_cache.end()) {
+                if (!active_set.contains(it.key())) {
+                    delete it.value();
+                    it = m_texture_cache.erase(it);
+                } else {
+                    ++it;
+                }
             }
 
             if (glyph_count > 0) {
