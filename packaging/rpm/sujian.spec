@@ -25,6 +25,8 @@ BuildRequires:  cargo
 BuildRequires:  gcc-c++
 BuildRequires:  cmake
 BuildRequires:  make
+BuildRequires:  openssl-devel
+BuildRequires:  pkgconf-pkg-config
 
 # 运行时依赖：系统 Qt 6.7+ 运行库
 Requires:       qt6-qtbase >= 6.7
