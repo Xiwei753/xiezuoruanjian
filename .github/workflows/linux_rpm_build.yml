@@ -32,7 +32,7 @@ jobs:
           dnf install -y \
             git tar gzip findutils which \
             rpm-build rpmdevtools \
-            rust cargo gcc-c++ cmake make pkgconf-pkg-config \
+            rust cargo gcc-c++ cmake make pkgconf-pkg-config openssl-devel \
             qt6-qtbase-devel \
             qt6-qtdeclarative-devel \
             qt6-qtquickcontrols2-devel \
