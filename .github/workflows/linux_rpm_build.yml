@@ -1,0 +1,60 @@
+name: Sujian Linux RPM Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/Linux_qt/**'
+      - 'core/**'
+      - 'platform/rust/linux/**'
+      - 'packaging/rpm/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/linux_rpm_build.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  rpm:
+    name: Build Fedora RPM
+    runs-on: ubuntu-24.04
+    container:
+      image: fedora:43
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install Fedora build dependencies
+        run: |
+          dnf install -y \
+            git tar gzip findutils which \
+            rpm-build rpmdevtools \
+            rust cargo gcc-c++ cmake make pkgconf-pkg-config \
+            qt6-qtbase-devel \
+            qt6-qtdeclarative-devel \
+            qt6-qtquickcontrols2-devel \
+            qt6-qttools-devel
+
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Build RPM
+        run: bash packaging/rpm/build-rpm.sh
+
+      - name: Verify RPM artifact
+        run: |
+          compgen -G 'dist/rpm/*.rpm' > /dev/null || {
+            echo 'RPM artifact was not produced' >&2
+            exit 1
+          }
+          ls -lh dist/rpm/*.rpm
+
+      - name: Upload RPM
+        uses: actions/upload-artifact@v7
+        with:
+          name: sujian-linux-rpm
+          path: dist/rpm/*.rpm
+          if-no-files-found: error
