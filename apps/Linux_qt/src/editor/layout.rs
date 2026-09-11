@@ -4188,22 +4188,41 @@ pub fn compare_old_new_visual_lines(
         (None, None) => (0, usize::MAX),
     };
 
-    // 计算 old 侧受影响的行（与 old_affected 范围相交）→ 必须重新栅格化。
-    // 使用 >= 和 < 组合：byte_end >= affected_start 确保零长度 point 范围
-    // （pure insert: (ins_start, ins_start)）也能匹配到编辑点所在视觉行。
-    for (idx, old_line) in old_lines.iter().enumerate() {
-        let intersects =
-            old_line.byte_end >= old_affected_start && old_line.byte_start < old_affected_end;
-        if intersects {
-            old_raster_line_ids.push(idx);
+    // 计算 old 侧受影响的行 → 必须重新栅格化。
+    // Issue #658 评论 5632506204 问题 1: pure insert/delete 的 old range 是零长度 point (p,p)，
+    // 半开区间交集公式 byte_end >= p && byte_start < p 在文首(p=0)和软换行边界会漏行。
+    // 改为显式 point 收集：byte_start <= point && byte_end >= point，覆盖两侧。
+    if old_affected_start == old_affected_end {
+        let point = old_affected_start;
+        for (idx, old_line) in old_lines.iter().enumerate() {
+            if old_line.byte_start <= point && old_line.byte_end >= point {
+                old_raster_line_ids.push(idx);
+            }
+        }
+    } else {
+        for (idx, old_line) in old_lines.iter().enumerate() {
+            let intersects =
+                old_line.byte_end >= old_affected_start && old_line.byte_start < old_affected_end;
+            if intersects {
+                old_raster_line_ids.push(idx);
+            }
         }
     }
-    // 计算 new 侧受影响的行（与 new_affected 范围相交）→ 必须重新栅格化。
-    for (idx, new_line) in new_lines.iter().enumerate() {
-        let intersects =
-            new_line.byte_end >= new_affected_start && new_line.byte_start < new_affected_end;
-        if intersects {
-            new_raster_line_ids.push(idx);
+    // 计算 new 侧受影响的行 → 必须重新栅格化。
+    if new_affected_start == new_affected_end {
+        let point = new_affected_start;
+        for (idx, new_line) in new_lines.iter().enumerate() {
+            if new_line.byte_start <= point && new_line.byte_end >= point {
+                new_raster_line_ids.push(idx);
+            }
+        }
+    } else {
+        for (idx, new_line) in new_lines.iter().enumerate() {
+            let intersects =
+                new_line.byte_end >= new_affected_start && new_line.byte_start < new_affected_end;
+            if intersects {
+                new_raster_line_ids.push(idx);
+            }
         }
     }
 
