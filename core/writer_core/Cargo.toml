@@ -14,7 +14,7 @@ default = []
 ai = []
 harmony-ffi = ["once_cell"]
 
-git-https = ["git2/https", "git2/vendored-openssl"]
+git-https = ["git2/https"]
 github-api = []
 
 [dependencies]
