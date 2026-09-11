@@ -956,7 +956,9 @@ impl LinuxEditorPipeline {
                 let mut fallback_old_generation_opt: Option<u64> = None;
                 let old_doc_snapshot = if let Some(ref handle) = old_prepared_handle {
                     // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
-                    let (old_line_ids, new_line_ids) = layout::compare_old_new_visual_lines(
+                    // Issue #658 评论 5626628570: compare_old_new_visual_lines 返回 VisualLineDiff，
+                    // 把行分成需要重新栅格化的 raster 行和可复用纹理的 reusable_move_pairs。
+                    let diff = layout::compare_old_new_visual_lines(
                         handle.lines,
                         &new_doc_snapshot.visual_lines,
                         vt.inserted_range
@@ -965,12 +967,12 @@ impl LinuxEditorPipeline {
                             .map(|r| (r.start().value(), r.end().value())),
                     );
 
-                    // 从已有 old layout 提取 old 动画视觉（只提取受影响的行）
+                    // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
                     // Issue #658 评论 5625515748 问题 1: 不再传整篇正文 + 起点 0，
                     // prepare_animation_visuals_from_layout 内部从每行 para_text/para_start 取段落级文本。
                     let old_line_snapshots = layout::prepare_animation_visuals_from_layout(
                         handle,
-                        &old_line_ids,
+                        &diff.old_raster_line_ids,
                         ctx.dpr,
                         &ctx.text_color,
                     );
@@ -1009,7 +1011,7 @@ impl LinuxEditorPipeline {
                     };
                     let new_line_snapshots = layout::prepare_animation_visuals_from_layout(
                         &new_handle,
-                        &new_line_ids,
+                        &diff.new_raster_line_ids,
                         ctx.dpr,
                         &ctx.text_color,
                     );
@@ -1017,6 +1019,52 @@ impl LinuxEditorPipeline {
                         &mut new_doc_snapshot,
                         new_line_snapshots,
                     );
+
+                    // Issue #658 评论 5626628570: reusable_move_pairs —— 内容/shaping 完全相同、
+                    // 只是 x/y 文档位置变化的行。复用 old 行已有 image/clusters/source rect，
+                    // 用 new VisualLine 的 x/y 生成 reflow_move 终点。
+                    // 从 old prepared layout 提取 reusable_move_pairs 对应 old 行的动画视觉，
+                    // 把 document_byte_start/end 映射到 new 行的 byte 范围（cluster 也按 delta 偏移），
+                    // 注入到 new_doc_snapshot，使 animation_coordinator 的 source_rect_for_byte_range
+                    // 能找到 clusters 并创建 reflow_move 动画。
+                    if !diff.reusable_move_pairs.is_empty() {
+                        let mut move_visuals: Vec<layout::CanonicalLineSnapshot> = Vec::new();
+                        for &(old_idx, new_idx) in &diff.reusable_move_pairs {
+                            if old_idx >= handle.lines.len()
+                                || new_idx >= new_doc_snapshot.visual_lines.len()
+                            {
+                                continue;
+                            }
+                            let old_snaps = layout::prepare_animation_visuals_from_layout(
+                                handle,
+                                std::slice::from_ref(&old_idx),
+                                ctx.dpr,
+                                &ctx.text_color,
+                            );
+                            if let Some(mut snap) = old_snaps.into_iter().next() {
+                                let new_line = &new_doc_snapshot.visual_lines[new_idx];
+                                let byte_delta: isize =
+                                    new_line.byte_start as isize - snap.document_byte_start as isize;
+                                snap.document_byte_start = new_line.byte_start;
+                                snap.document_byte_end = new_line.byte_end;
+                                for cluster in &mut snap.clusters {
+                                    cluster.document_byte_start = cluster
+                                        .document_byte_start
+                                        .saturating_add_signed(byte_delta);
+                                    cluster.document_byte_end = cluster
+                                        .document_byte_end
+                                        .saturating_add_signed(byte_delta);
+                                }
+                                move_visuals.push(snap);
+                            }
+                        }
+                        if !move_visuals.is_empty() {
+                            layout::inject_animation_visuals_into_snapshot(
+                                &mut new_doc_snapshot,
+                                move_visuals,
+                            );
+                        }
+                    }
 
                     doc_snap
                 } else {

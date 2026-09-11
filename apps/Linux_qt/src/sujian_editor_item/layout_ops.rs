@@ -122,12 +122,20 @@ impl SujianEditorItem {
             let line_ids: Vec<usize> = {
                 let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
                 let mut ids = if let Some(old_lines) = old_lines_opt {
-                    let (_, new_ids) = crate::editor::layout::compare_old_new_visual_lines(
+                    let diff = crate::editor::layout::compare_old_new_visual_lines(
                         old_lines,
                         &doc_snapshot.visual_lines,
                         Some((affected_start, affected_end)),
                         None,
                     );
+                    let mut new_ids = diff.new_raster_line_ids;
+                    // Issue #658 评论 5626628570: 合并 reusable_move_pairs 的 new 索引，
+                    // 这些行也需要动画视觉（image/clusters）以走 reflow_move 协同动画。
+                    for &(_, new_idx) in &diff.reusable_move_pairs {
+                        if !new_ids.contains(&new_idx) {
+                            new_ids.push(new_idx);
+                        }
+                    }
                     new_ids
                 } else {
                     Vec::new()
@@ -271,12 +279,20 @@ impl SujianEditorItem {
             let line_ids: Vec<usize> = {
                 let old_lines_opt = self.editor_layout.cache().map(|c| &c.lines);
                 let mut ids = if let Some(old_lines) = old_lines_opt {
-                    let (_, new_ids) = crate::editor::layout::compare_old_new_visual_lines(
+                    let diff = crate::editor::layout::compare_old_new_visual_lines(
                         old_lines,
                         &doc_snapshot.visual_lines,
                         Some((affected_start, affected_end)),
                         None,
                     );
+                    let mut new_ids = diff.new_raster_line_ids;
+                    // Issue #658 评论 5626628570: 合并 reusable_move_pairs 的 new 索引，
+                    // 这些行也需要动画视觉（image/clusters）以走 reflow_move 协同动画。
+                    for &(_, new_idx) in &diff.reusable_move_pairs {
+                        if !new_ids.contains(&new_idx) {
+                            new_ids.push(new_idx);
+                        }
+                    }
                     new_ids
                 } else {
                     Vec::new()

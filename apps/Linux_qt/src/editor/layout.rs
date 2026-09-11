@@ -4090,25 +4090,57 @@ pub fn inject_animation_visuals_into_snapshot(
     }
 }
 
-/// Issue #658 评论 5624570557 问题 2: 比较 old/new VisualLine，计算真正需要动画的 line ids。
+/// Issue #658 评论 5626628570: old/new VisualLine 差异分类结果。
+///
+/// 把受影响的视觉行分成三类，避免 break 后尾部 while 把剩余全文加回 affected（Bug 1），
+/// 并区分"需要重新栅格化"和"只是位置变化可复用纹理"两类行，使 y 变化的行能走
+/// reflow_move 协同动画（Bug 2）。
+#[derive(Clone, Debug)]
+pub struct VisualLineDiff {
+    /// 需要重新栅格化 QImage 的 old 行索引（内容/shaping/行内几何变化）。
+    pub old_raster_line_ids: Vec<usize>,
+    /// 需要重新栅格化 QImage 的 new 行索引（内容/shaping/行内几何变化）。
+    pub new_raster_line_ids: Vec<usize>,
+    /// 内容和 shaping 完全相同、只是 x/y 文档位置变化的 (old_idx, new_idx) 对。
+    /// 不重新栅格化，复用 old 行已有 image/clusters/source rect，用 new VisualLine 的 x/y 生成终点。
+    pub reusable_move_pairs: Vec<(usize, usize)>,
+}
+
+/// Issue #658 评论 5624570557 问题 2 / 评论 5626628570: 比较 old/new VisualLine，
+/// 计算真正需要动画的行，并按"重新栅格化"与"复用纹理位移"分类。
 ///
 /// 考虑换行/删换行时的受影响后续 reflow 行和相邻新旧段落。
-/// 返回 `(old_line_ids, new_line_ids)`，分别是 old_lines 和 new_lines 中需要动画的行索引。
+/// 返回 [`VisualLineDiff`]，其中：
+/// - `old_raster_line_ids` / `new_raster_line_ids`：内容/shaping/行内几何变化的行，需重新栅格化 QImage。
+/// - `reusable_move_pairs`：内容和 shaping 完全相同、只是 x/y 文档位置变化的 (old, new) 对，
+///   复用 old 行已有纹理，用 new VisualLine 的 x/y 生成 reflow_move 终点。
 ///
 /// 算法：
-/// 1. 找出字节范围相交的行
-/// 2. 考虑 reflow：从直接受影响行之后，按 old/new byte offset 对应逐行比较几何，
-///    仅把几何（x/width/height/qtextline_idx/字节长度）变化的行加入 affected；
-///    仅 y 平移的行不需要重新栅格化 QImage，不加入。
-/// 3. 考虑相邻段落：新段落首行缩进变化
+/// 1. 找出字节范围相交的行（编辑点行）→ raster。
+/// 2. 从编辑点行之后按 old/new byte offset 对应逐行比较：
+///    - 内容/shaping 变化（width/height/qtextline_idx/字节长度）→ raster。
+///    - 内容/shaping 相同、只是 x/y 位置变化 → reusable_move_pair。
+///    - 完全相同（含 x/y）→ 稳定，立即停止扫描（修复 Bug 1：稳定后不再 append 剩余行）。
+///    - 新增/消失的视觉行 → raster。
+/// 3. 只有扫描走到某一侧末尾（未提前稳定停止）、另一侧确实还有未配对的新增/消失视觉行时，
+///    才把那一侧真正未配对的尾巴加入。
+/// 4. 考虑相邻段落首行缩进变化。
 pub fn compare_old_new_visual_lines(
     old_lines: &[VisualLine],
     new_lines: &[VisualLine],
     inserted_range: Option<(usize, usize)>,
     deleted_range: Option<(usize, usize)>,
-) -> (Vec<usize>, Vec<usize>) {
+) -> VisualLineDiff {
+    let mut old_raster_line_ids: Vec<usize> = Vec::new();
+    let mut new_raster_line_ids: Vec<usize> = Vec::new();
+    let mut reusable_move_pairs: Vec<(usize, usize)> = Vec::new();
+
     if old_lines.is_empty() || new_lines.is_empty() {
-        return (Vec::new(), Vec::new());
+        return VisualLineDiff {
+            old_raster_line_ids,
+            new_raster_line_ids,
+            reusable_move_pairs,
+        };
     }
 
     // 确定受影响的字节范围
@@ -4121,31 +4153,29 @@ pub fn compare_old_new_visual_lines(
         .or(deleted_range.map(|(_, e)| e))
         .unwrap_or(usize::MAX);
 
-    // 计算 old 侧受影响的行（与编辑字节范围相交）
-    let mut old_affected = Vec::new();
+    // 计算 old 侧受影响的行（与编辑字节范围相交）→ 必须重新栅格化
     for (idx, old_line) in old_lines.iter().enumerate() {
         let intersects =
             old_line.byte_start < affected_byte_end && old_line.byte_end > affected_byte_start;
         if intersects {
-            old_affected.push(idx);
+            old_raster_line_ids.push(idx);
         }
     }
-    let old_first = old_affected
+    let old_first = old_raster_line_ids
         .iter()
         .copied()
         .min()
         .unwrap_or(old_lines.len());
 
-    // 计算 new 侧受影响的行（与编辑字节范围相交）
-    let mut new_affected = Vec::new();
+    // 计算 new 侧受影响的行（与编辑字节范围相交）→ 必须重新栅格化
     for (idx, new_line) in new_lines.iter().enumerate() {
         let intersects =
             new_line.byte_start < affected_byte_end && new_line.byte_end > affected_byte_start;
         if intersects {
-            new_affected.push(idx);
+            new_raster_line_ids.push(idx);
         }
     }
-    let new_first = new_affected
+    let new_first = new_raster_line_ids
         .iter()
         .copied()
         .min()
@@ -4161,63 +4191,84 @@ pub fn compare_old_new_visual_lines(
         (None, None) => 0,
     };
 
-    // 双指针逐行比较几何：从直接受影响行之后开始，按 old/new byte offset 对应。
-    // 仅几何（x/width/height/qtextline_idx/字节长度）变化的行才需要重新栅格化 QImage；
-    // 仅 y 平移的行不加入 affected。
+    // 双指针逐行比较：从直接受影响行之后开始，按 old/new byte offset 对应。
+    // 对齐的行分三种：
+    //   - 内容/shaping 变化（width/height/qtextline_idx/字节长度）→ raster（重新栅格化）
+    //   - 内容/shaping 完全相同、只是 x/y 文档位置变化 → reusable_move_pair（复用纹理）
+    //   - 完全相同（含 x/y）→ 稳定，立即停止扫描
+    // 未对齐的行（新增/消失的视觉行）→ raster。
+    // 一旦稳定停止，绝对不再 append 剩余行（修复 Bug 1）。
+    // 只有扫描走到某一侧末尾、且另一侧确实还有未配对的新增/消失视觉行时，才把那一侧
+    // 真正未配对的尾巴加入。
     let mut oi = old_first + 1;
     let mut ni = new_first + 1;
+    let mut stable = false;
     while oi < old_lines.len() && ni < new_lines.len() {
         let ol = &old_lines[oi];
         let nl = &new_lines[ni];
         let corr_new_byte_start = ol.byte_start.saturating_add_signed(delta);
         if nl.byte_start < corr_new_byte_start {
             // new 这行是新增的视觉行
-            new_affected.push(ni);
+            new_raster_line_ids.push(ni);
             ni += 1;
             continue;
         }
         if nl.byte_start > corr_new_byte_start {
             // old 这行消失了
-            old_affected.push(oi);
+            old_raster_line_ids.push(oi);
             oi += 1;
             continue;
         }
-        // byte_start 对齐，比较视觉内容是否相同（不比较 y，仅 y 平移不需要重新栅格化）
-        let same = (ol.x - nl.x).abs() < 0.1
-            && (ol.width - nl.width).abs() < 0.1
+        // byte_start 对齐，比较视觉内容
+        // same_shape: 内容/shaping 相同（不含 x/y 文档位置）
+        let same_shape = (ol.width - nl.width).abs() < 0.1
             && (ol.height - nl.height).abs() < 0.1
             && ol.qtextline_idx == nl.qtextline_idx
             && (ol.byte_end - ol.byte_start) == (nl.byte_end - nl.byte_start);
-        if same {
-            // 这行没 reflow，停止向后扩展
+        // same_pos: x/y 文档位置相同（修复 Bug 2：原 same 不比较 y）
+        let same_pos = (ol.x - nl.x).abs() < 0.1 && (ol.y - nl.y).abs() < 0.1;
+        if same_shape && same_pos {
+            // 完全相同，稳定，停止向后扩展
+            stable = true;
             break;
         }
-        // 几何变化，加入 affected
-        old_affected.push(oi);
-        new_affected.push(ni);
+        if same_shape {
+            // 内容/shaping 完全相同，只是 x/y 文档位置变化 → 复用纹理走 reflow_move
+            reusable_move_pairs.push((oi, ni));
+            oi += 1;
+            ni += 1;
+            continue;
+        }
+        // 内容/shaping/行内几何变化 → 重新栅格化
+        old_raster_line_ids.push(oi);
+        new_raster_line_ids.push(ni);
         oi += 1;
         ni += 1;
     }
-    // 一方先耗尽时另一方剩余行全部加入（新增/消失的视觉行）
-    while oi < old_lines.len() {
-        old_affected.push(oi);
-        oi += 1;
-    }
-    while ni < new_lines.len() {
-        new_affected.push(ni);
-        ni += 1;
+    // 只有未提前稳定停止（扫描走到一侧末尾）时，才把另一侧剩余行加入。
+    // 这些是真正新增/消失的视觉行（换行/删换行导致的尾部 reflow）。
+    // 修复 Bug 1：稳定停止后绝对不再 append 剩余行。
+    if !stable {
+        while oi < old_lines.len() {
+            old_raster_line_ids.push(oi);
+            oi += 1;
+        }
+        while ni < new_lines.len() {
+            new_raster_line_ids.push(ni);
+            ni += 1;
+        }
     }
 
-    // 考虑相邻段落首行缩进变化
+    // 考虑相邻段落首行缩进变化（old 侧）
     for idx in 0..old_lines.len() {
         let old_line = &old_lines[idx];
-        if old_line.qtextline_idx == 0 && old_affected.contains(&idx) {
+        if old_line.qtextline_idx == 0 && old_raster_line_ids.contains(&idx) {
             if let Some(new_line) = new_lines
                 .iter()
                 .find(|l| l.para_start == old_line.para_start && l.qtextline_idx == 0)
             {
-                if (new_line.x - old_line.x).abs() > 0.1 && !old_affected.contains(&idx) {
-                    old_affected.push(idx);
+                if (new_line.x - old_line.x).abs() > 0.1 && !old_raster_line_ids.contains(&idx) {
+                    old_raster_line_ids.push(idx);
                 }
             }
         }
@@ -4233,8 +4284,8 @@ pub fn compare_old_new_visual_lines(
                     .iter()
                     .position(|l| l.para_start == new_line.para_start)
                 {
-                    if !old_affected.contains(&old_idx) {
-                        old_affected.push(old_idx);
+                    if !old_raster_line_ids.contains(&old_idx) {
+                        old_raster_line_ids.push(old_idx);
                     }
                 }
             }
@@ -4244,13 +4295,13 @@ pub fn compare_old_new_visual_lines(
     // 考虑相邻段落首行缩进变化（new 侧）
     for idx in 0..new_lines.len() {
         let new_line = &new_lines[idx];
-        if new_line.qtextline_idx == 0 && new_affected.contains(&idx) {
+        if new_line.qtextline_idx == 0 && new_raster_line_ids.contains(&idx) {
             if let Some(old_line) = old_lines
                 .iter()
                 .find(|l| l.para_start == new_line.para_start && l.qtextline_idx == 0)
             {
-                if (new_line.x - old_line.x).abs() > 0.1 && !new_affected.contains(&idx) {
-                    new_affected.push(idx);
+                if (new_line.x - old_line.x).abs() > 0.1 && !new_raster_line_ids.contains(&idx) {
+                    new_raster_line_ids.push(idx);
                 }
             }
         }
@@ -4261,15 +4312,275 @@ pub fn compare_old_new_visual_lines(
             let is_new_para = !old_lines
                 .iter()
                 .any(|l| l.para_start == new_line.para_start);
-            if is_new_para && !new_affected.contains(&idx) {
-                new_affected.push(idx);
+            if is_new_para && !new_raster_line_ids.contains(&idx) {
+                new_raster_line_ids.push(idx);
             }
         }
     }
-    old_affected.sort_unstable();
-    old_affected.dedup();
-    new_affected.sort_unstable();
-    new_affected.dedup();
+    old_raster_line_ids.sort_unstable();
+    old_raster_line_ids.dedup();
+    new_raster_line_ids.sort_unstable();
+    new_raster_line_ids.dedup();
+    reusable_move_pairs.sort_unstable();
+    reusable_move_pairs.dedup();
 
-    (old_affected, new_affected)
+    VisualLineDiff {
+        old_raster_line_ids,
+        new_raster_line_ids,
+        reusable_move_pairs,
+    }
+}
+
+/// Issue #658 评论 5626628570 复现测试模块。
+///
+/// 这两个测试专门用于暴露 compare_old_new_visual_lines() 中的两个逻辑错误：
+/// 1. Bug 1: break 后尾部 while 循环把剩余全文加回 affected
+/// 2. Bug 2: same 判断不比较 y，导致只有 y 变化的行被判成 same
+///
+/// 修复后 compare_old_new_visual_lines 返回 [`VisualLineDiff`]，把行分成
+/// `old_raster_line_ids` / `new_raster_line_ids`（重新栅格化）和
+/// `reusable_move_pairs`（复用纹理走 reflow_move）。测试断言适配新分类，
+/// 语义意图保持一致：编辑点之后几何相同的行不应进入任何集合；y 变化的行
+/// 应被识别为 reusable_move_pair 以便走 reflow_move 协同动画。
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
+mod issue_658_comment_5626628570_reproduction {
+    use super::{compare_old_new_visual_lines, VisualLine, VisualLineDiff};
+
+    /// 构造一个最小化的 VisualLine，只设置 compare_old_new_visual_lines 关心的字段。
+    ///
+    /// 所有行属于同一段落（para_start = 0），qtextline_idx 由调用方指定，
+    /// 以避免"相邻段落首行缩进"逻辑干扰核心断言。
+    fn make_line(
+        id: usize,
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        qtextline_idx: i32,
+    ) -> VisualLine {
+        VisualLine {
+            id,
+            byte_start,
+            byte_end,
+            qchar_start: byte_start,
+            qchar_end: byte_end,
+            hard_break: false,
+            x,
+            y,
+            width,
+            height,
+            para_text: String::new(),
+            para_start: 0,
+            qtextline_idx,
+            para_qchar_start: byte_start,
+            para_qchar_end: byte_end,
+            line_wrap_width: 500.0,
+            line_indent_x: 0.0,
+            para_indent: 0.0,
+            x_end_trailing: x + width,
+            qt_ascent: 20.0,
+            qt_descent: 10.0,
+            cache_slot: 0,
+        }
+    }
+
+    /// Bug 1 复现：break 后尾部 while 把剩余全文加回 affected。
+    ///
+    /// 场景：普通打一字 —— 在 line1 中间插入 1 字节，line2~line4 几何完全相同
+    /// （包括 y）。正确行为下只有编辑点行（line1）需要重新栅格化，
+    /// line2~line4 不应进入 affected。
+    ///
+    /// 当前错误行为：break 在 line2（same），但尾部 while 把 line2~line4
+    /// 全部加入 affected，导致普通打一字把后半篇全部 QImage/glyphRuns/cluster 一遍。
+    #[test]
+    fn break_tail_while_adds_all_remaining_lines_bug1() {
+        // old: 5 行，每行 10 字节，y 等差递增
+        let old_lines = vec![
+            make_line(0, 0, 10, 0.0, 0.0, 100.0, 30.0, 0),
+            make_line(1, 10, 20, 0.0, 30.0, 100.0, 30.0, 1),
+            make_line(2, 20, 30, 0.0, 60.0, 100.0, 30.0, 2),
+            make_line(3, 30, 40, 0.0, 90.0, 100.0, 30.0, 3),
+            make_line(4, 40, 50, 0.0, 120.0, 100.0, 30.0, 4),
+        ];
+
+        // new: 在 line1 中间插入 1 字节（byte_end 10→21），后续行 byte 偏移 +1
+        // line1 宽度变化（105），line2~line4 几何完全相同（含 y）
+        let new_lines = vec![
+            make_line(0, 0, 10, 0.0, 0.0, 100.0, 30.0, 0),
+            make_line(1, 10, 21, 0.0, 30.0, 105.0, 30.0, 1), // 编辑后宽度变化
+            make_line(2, 21, 31, 0.0, 60.0, 100.0, 30.0, 2), // 几何完全相同
+            make_line(3, 31, 41, 0.0, 90.0, 100.0, 30.0, 3), // 几何完全相同
+            make_line(4, 41, 51, 0.0, 120.0, 100.0, 30.0, 4), // 几何完全相同
+        ];
+
+        // 在 line1 中间插入 1 字节
+        let inserted_range = Some((15_usize, 16_usize));
+        let deleted_range: Option<(usize, usize)> = None;
+
+        let diff: VisualLineDiff =
+            compare_old_new_visual_lines(&old_lines, &new_lines, inserted_range, deleted_range);
+
+        // 正确行为：只有编辑点行 line1 进入 raster（内容/宽度变化）
+        // old_raster_line_ids 应为 [1]，new_raster_line_ids 应为 [1]
+        // line2/3/4 几何完全相同（含 y），应 stable break，不进入任何集合
+        // （不进 raster，也不进 reusable_move_pairs）。
+        let should_not_be_affected_old: &[usize] = &[2, 3, 4];
+        let should_not_be_affected_new: &[usize] = &[2, 3, 4];
+
+        let mut erroneously_affected_old = Vec::new();
+        for &idx in should_not_be_affected_old {
+            if diff.old_raster_line_ids.contains(&idx) {
+                erroneously_affected_old.push(idx);
+            }
+        }
+        let mut erroneously_affected_new = Vec::new();
+        for &idx in should_not_be_affected_new {
+            if diff.new_raster_line_ids.contains(&idx) {
+                erroneously_affected_new.push(idx);
+            }
+        }
+        // reusable_move_pairs 也不应包含 line2/3/4（它们完全相同，应 stable break）
+        let erroneously_move: Vec<(usize, usize)> = diff
+            .reusable_move_pairs
+            .iter()
+            .filter(|&(o, n)| *o >= 2 || *n >= 2)
+            .copied()
+            .collect();
+
+        assert!(
+            erroneously_affected_old.is_empty(),
+            "Bug 1 复现：break 后尾部 while 把编辑点之后几何相同的行加入 old_raster_line_ids。\
+             不应进入 raster 的行索引 {:?} 被错误加入。\
+             完整 diff = {:?}",
+            erroneously_affected_old,
+            diff
+        );
+
+        assert!(
+            erroneously_affected_new.is_empty(),
+            "Bug 1 复现：break 后尾部 while 把编辑点之后几何相同的行加入 new_raster_line_ids。\
+             不应进入 raster 的行索引 {:?} 被错误加入。\
+             完整 diff = {:?}",
+            erroneously_affected_new,
+            diff
+        );
+
+        assert!(
+            erroneously_move.is_empty(),
+            "Bug 1：line2~line4 几何完全相同（含 y），应 stable break，不应进入 reusable_move_pairs。\
+             被错误加入的 pairs = {:?}。完整 diff = {:?}",
+            erroneously_move,
+            diff
+        );
+    }
+
+    /// Bug 2 复现：same 判断不比较 y，导致只有 y 变化的行被判成 same。
+    ///
+    /// 场景：在 line0 编辑（插入 1 字节），line1 y 变化（30→50），
+    /// line2~line4 完全相同（包括 y）。
+    ///
+    /// 正确行为：same 判断应比较 y，line1 因 y 变化被判 not same，通过 while 循环
+    /// 进入 affected；line2~line4 完全相同，应被判 same，break，不进入 affected。
+    ///
+    /// 当前错误行为：same 不比较 y，line1 被判 same，break 过早发生，
+    /// line1~line4 全部通过尾部 while 加入 affected。其中 line2~line4 完全相同
+    /// 却被错误加入 affected，这同时暴露了 Bug 2（same 不比较 y 导致 break 过早）
+    /// 和 Bug 1（尾部 while 把剩余行加入）。
+    ///
+    /// 关键点：如果 same 正确比较 y，break 会在 line2（完全相同）发生，
+    /// line2~line4 不会进入 affected。当前因 same 不比较 y，break 在 line1 发生，
+    /// line2~line4 通过尾部 while 被错误加入。
+    #[test]
+    fn same_ignores_y_losses_reflow_move_bug2() {
+        // old: 5 行
+        let old_lines = vec![
+            make_line(0, 0, 10, 0.0, 0.0, 100.0, 30.0, 0),
+            make_line(1, 10, 20, 0.0, 30.0, 100.0, 30.0, 1),
+            make_line(2, 20, 30, 0.0, 60.0, 100.0, 30.0, 2),
+            make_line(3, 30, 40, 0.0, 90.0, 100.0, 30.0, 3),
+            make_line(4, 40, 50, 0.0, 120.0, 100.0, 30.0, 4),
+        ];
+
+        // new: line0 编辑后（宽度变化），line1 y 变化（30→50），
+        // line2~line4 完全相同（含 y）
+        let new_lines = vec![
+            make_line(0, 0, 11, 0.0, 0.0, 105.0, 30.0, 0), // 编辑后宽度变化
+            make_line(1, 11, 21, 0.0, 50.0, 100.0, 30.0, 1), // y 变化 30→50
+            make_line(2, 21, 31, 0.0, 60.0, 100.0, 30.0, 2),  // 完全相同
+            make_line(3, 31, 41, 0.0, 90.0, 100.0, 30.0, 3),  // 完全相同
+            make_line(4, 41, 51, 0.0, 120.0, 100.0, 30.0, 4), // 完全相同
+        ];
+
+        // 在 line0 中间插入 1 字节
+        let inserted_range = Some((5_usize, 6_usize));
+        let deleted_range: Option<(usize, usize)> = None;
+
+        let diff: VisualLineDiff =
+            compare_old_new_visual_lines(&old_lines, &new_lines, inserted_range, deleted_range);
+
+        // line1 y 变化（30→50），内容/shaping 完全相同，应进入 reusable_move_pairs
+        // （走 reflow_move 协同动画，复用 old 行纹理，用 new 的 x/y 生成终点）。
+        let line1_in_move = diff.reusable_move_pairs.iter().any(|&(o, n)| o == 1 && n == 1);
+        assert!(
+            line1_in_move,
+            "Bug 2：line1 y 变化（30→50），内容/shaping 相同，应进入 reusable_move_pairs\
+             以便走 reflow_move 协同动画。reusable_move_pairs 包含 (1,1): {}。\
+             完整 diff = {:?}",
+            line1_in_move,
+            diff
+        );
+
+        // line2~line4 完全相同（含 y），不应进入任何集合
+        // 修复后：same 比较 y → line1 被判 same_shape && !same_pos → reusable_move_pair，
+        // line2~line4 完全相同 → stable break，不进入 raster 也不进入 reusable_move_pairs。
+        let should_not_be_affected_old: &[usize] = &[2, 3, 4];
+        let should_not_be_affected_new: &[usize] = &[2, 3, 4];
+
+        let mut erroneously_affected_old = Vec::new();
+        for &idx in should_not_be_affected_old {
+            if diff.old_raster_line_ids.contains(&idx) {
+                erroneously_affected_old.push(idx);
+            }
+        }
+        let mut erroneously_affected_new = Vec::new();
+        for &idx in should_not_be_affected_new {
+            if diff.new_raster_line_ids.contains(&idx) {
+                erroneously_affected_new.push(idx);
+            }
+        }
+        // reusable_move_pairs 也不应包含 line2/3/4（它们完全相同，应 stable break）
+        let erroneously_move: Vec<(usize, usize)> = diff
+            .reusable_move_pairs
+            .iter()
+            .filter(|&(o, n)| *o >= 2 || *n >= 2)
+            .copied()
+            .collect();
+
+        assert!(
+            erroneously_affected_old.is_empty(),
+            "Bug 2 复现：same 不比较 y 导致 break 过早，line2~line4 完全相同却进入 old_raster_line_ids。\
+             被错误加入的行索引 {:?}。完整 diff = {:?}",
+            erroneously_affected_old,
+            diff
+        );
+
+        assert!(
+            erroneously_affected_new.is_empty(),
+            "Bug 2 复现：same 不比较 y 导致 break 过早，line2~line4 完全相同却进入 new_raster_line_ids。\
+             被错误加入的行索引 {:?}。完整 diff = {:?}",
+            erroneously_affected_new,
+            diff
+        );
+
+        assert!(
+            erroneously_move.is_empty(),
+            "Bug 2：line2~line4 完全相同（含 y），应 stable break，不应进入 reusable_move_pairs。\
+             被错误加入的 pairs = {:?}。完整 diff = {:?}",
+            erroneously_move,
+            diff
+        );
+    }
 }
