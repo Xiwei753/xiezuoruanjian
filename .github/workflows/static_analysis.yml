@@ -181,7 +181,7 @@ jobs:
           dnf install -y \
             git \
             rust cargo clippy \
-            gcc-c++ pkgconf-pkg-config \
+            gcc-c++ pkgconf-pkg-config openssl-devel \
             qt6-qtbase-devel \
             qt6-qtdeclarative-devel \
             qt6-qtquickcontrols2-devel \
