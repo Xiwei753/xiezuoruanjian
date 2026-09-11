@@ -139,6 +139,20 @@ cpp! {{
             }
         }
 
+        // 清空 texture cache 中所有 GPU texture。
+        void clearTextureCache() {
+            for (auto it = m_texture_cache.begin(); it != m_texture_cache.end(); ++it) {
+                delete it.value();
+            }
+            m_texture_cache.clear();
+        }
+
+        // 析构时清理 GPU texture cache，防止窗口关闭/scene graph 失效时泄漏。
+        // 子节点由 QSGNode 基类析构负责。
+        ~AnimationLayerNode() override {
+            clearTextureCache();
+        }
+
         // 清空所有子节点和 texture cache
         void clearAll() {
             while (childCount() > 0) {
@@ -146,10 +160,7 @@ cpp! {{
                 removeChildNode(child);
                 delete child;
             }
-            for (auto it = m_texture_cache.begin(); it != m_texture_cache.end(); ++it) {
-                delete it.value();
-            }
-            m_texture_cache.clear();
+            clearTextureCache();
         }
     };
 

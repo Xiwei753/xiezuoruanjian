@@ -232,10 +232,24 @@ impl OffsetMap {
     /// 从 old/new virtualText 构建偏移映射。
     ///
     /// 使用最长公共前缀/后缀算法确定映射区域。
+    /// old == new 时返回 identity 映射 [0, len)，保证后续 reflow 算法
+    /// 能通过 `map_new_range_to_old` 找到对应关系（如 IME 预输入文本不变、
+    /// 只有光标/属性变化的场景）。
     pub fn build(old_text: &str, new_text: &str) -> Self {
-        if old_text.is_empty() || new_text.is_empty() || old_text == new_text {
+        if old_text.is_empty() || new_text.is_empty() {
             return OffsetMap {
                 entries: Vec::new(),
+            };
+        }
+
+        if old_text == new_text {
+            return OffsetMap {
+                entries: vec![OffsetMapEntry {
+                    old_byte_offset: Utf8ByteOffset::unchecked(0),
+                    new_byte_offset: Utf8ByteOffset::unchecked(0),
+                    length: old_text.len(),
+                    kind: OffsetMapKind::Identity,
+                }],
             };
         }
 

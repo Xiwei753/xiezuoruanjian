@@ -240,10 +240,10 @@ fn build_cluster_reflow_slices(
             let mapped_old_range = offset_map.map_new_range_to_old(nref.byte_start, nref.byte_end);
 
             let overlaps = if let Some((mos, moe)) = mapped_old_range {
-                // 精确匹配、范围包含匹配、部分重叠或相邻边界（共享端点视为连通）
-                (oref.byte_start == mos && oref.byte_end == moe)
-                    || (oref.byte_start <= mos && oref.byte_end >= moe)
-                    || (oref.byte_start <= moe && oref.byte_end >= mos)
+                // 严格半开区间重叠：[a_start, a_end) ∩ [b_start, b_end) ≠ ∅
+                // 即 a_start < b_end && b_start < a_end。
+                // 共享端点不算重叠（[0,1) 和 [1,2) 只是相邻，不连边）。
+                oref.byte_start < moe && mos < oref.byte_end
             } else {
                 // new cluster 跨越映射边界 — 逐端点回退检查
                 let start_mapped = offset_map.map_new_to_old(nref.byte_start);
@@ -418,29 +418,24 @@ fn build_cluster_reflow_slices(
             continue;
         }
 
-        // N→M（多 old ↔ 多 new）：old 每个淡出一次，new 每个淡入一次
-        // 全部属于同一个 run，不允许任何成员再退化成 Insert/Delete
+        // N→M（多 old ↔ 多 new）：无法可靠一一对应时，每个成员独立动画。
+        // old 每个在自己的 old_doc 原位 fade-out（from == to == old_doc，不移动只淡出）。
+        // new 每个在自己的 new_doc 原位 fade-in（from == to == new_doc，不移动只淡入）。
+        // 不再拿第一个 cluster 当 run 锚点——避免整组文字往一个 cluster 上聚拢。
         for oref in run_old {
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
             let old_cluster = &old_line.clusters[oref.cluster_idx];
             let old_sr = old_cluster.source_rect.clone();
             let old_doc = old_line.source_rect_to_document_rect(&old_sr);
 
-            // 找任意一个 new cluster 的目标位置（取第一个 new 的文档坐标）
-            let first_new = &run_new[0];
-            let first_new_line = &new_snapshot.line_snapshots[first_new.line_idx];
-            let first_new_cluster = &first_new_line.clusters[first_new.cluster_idx];
-            let first_new_sr = first_new_cluster.source_rect.clone();
-            let first_new_doc = first_new_line.source_rect_to_document_rect(&first_new_sr);
-
             slices.push(AnimatedSlice::reflow_crossfade_old(
                 key,
                 old_line.id,
                 old_sr,
+                old_doc.clone(),
                 old_doc,
-                first_new_doc.clone(),
-                first_new_cluster.byte_start,
-                first_new_cluster.byte_end,
+                old_cluster.byte_start,
+                old_cluster.byte_end,
             ));
         }
 
@@ -450,18 +445,11 @@ fn build_cluster_reflow_slices(
             let new_sr = new_cluster.source_rect.clone();
             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
 
-            // 找任意一个 old cluster 的源位置（取第一个 old 的文档坐标）
-            let first_old = &run_old[0];
-            let first_old_line = &old_snapshot.line_snapshots[first_old.line_idx];
-            let first_old_cluster = &first_old_line.clusters[first_old.cluster_idx];
-            let first_old_sr = first_old_cluster.source_rect.clone();
-            let first_old_doc = first_old_line.source_rect_to_document_rect(&first_old_sr);
-
             slices.push(AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
                 new_sr.clone(),
-                first_old_doc.clone(),
+                new_doc.clone(),
                 new_doc,
                 new_cluster.byte_start,
                 new_cluster.byte_end,

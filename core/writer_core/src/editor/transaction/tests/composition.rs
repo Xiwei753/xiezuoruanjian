@@ -481,7 +481,12 @@ fn offset_map_empty_texts() {
 #[test]
 fn offset_map_same_text() {
     let map = OffsetMap::build("abc", "abc");
-    assert!(map.entries.is_empty(), "Same text has no offset map");
+    assert_eq!(map.entries.len(), 1, "Same text returns identity mapping");
+    let entry = &map.entries[0];
+    assert_eq!(entry.old_byte_offset.value(), 0);
+    assert_eq!(entry.new_byte_offset.value(), 0);
+    assert_eq!(entry.length, 3);
+    assert_eq!(entry.kind, OffsetMapKind::Identity);
 }
 
 #[test]
