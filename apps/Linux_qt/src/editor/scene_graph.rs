@@ -9,6 +9,7 @@ cpp! {{
     #include <QtQuick/QSGFlatColorMaterial>
     #include <QtGui/QColor>
     #include <QtCore/QHash>
+    #include <QtCore/QSet>
     #include <QtCore/QVector>
     #include <QDebug>
 
