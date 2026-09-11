@@ -28,7 +28,7 @@ use std::time::Instant;
 
 use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap};
 
-use super::animated_slice::AnimatedSlice;
+use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
@@ -330,7 +330,111 @@ fn build_cluster_reflow_slices(
         }
     }
 
+    let slices = merge_adjacent_slices(slices);
     (slices, static_patches)
+}
+
+/// 合并相邻同类型、同方向、同快照的动画切片为 run，避免一个字一个 slice。
+///
+/// 合并条件（全部满足才合并）：
+/// 1. 相同 `kind`（AnimatedSliceKind）
+/// 2. 相同 `snapshot_id`（来自同一行快照）
+/// 3. 相邻 byte range：`slice[i].byte_end == slice[i+1].byte_start`
+/// 4. 同方向：
+///    - InsertFadeIn：`from_document_rect` 的 x/y 相同（从同一光标位置淡入）
+///    - DeleteFadeOut：`to_document_rect` 的 x/y 相同（向同一光标位置收缩）
+///    - ReflowMove：移动向量相同（dx/dy 差值在 0.5 像素以内）
+///    - ReflowCrossFade：移动向量相同
+///
+/// 合并操作：byte range 取 min/max，矩形取 bounding box，标量取第一个 slice 的值。
+/// 合并是贪心的：一旦合并就继续尝试与下一个合并。不改变 slices 的顺序。
+fn merge_adjacent_slices(slices: Vec<AnimatedSlice>) -> Vec<AnimatedSlice> {
+    if slices.len() <= 1 {
+        return slices;
+    }
+
+    let mut result: Vec<AnimatedSlice> = Vec::with_capacity(slices.len());
+    let mut current = slices[0].clone();
+
+    for next in &slices[1..] {
+        if can_merge(&current, next) {
+            current = merge_two(&current, next);
+        } else {
+            result.push(current);
+            current = next.clone();
+        }
+    }
+    result.push(current);
+    result
+}
+
+/// 判断两个相邻 slice 是否可以合并。
+fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
+    // 条件 1：相同 kind
+    if a.kind != b.kind {
+        return false;
+    }
+    // 条件 2：相同 snapshot_id
+    if a.snapshot_id != b.snapshot_id {
+        return false;
+    }
+    // 条件 3：相邻 byte range
+    if a.byte_end != b.byte_start {
+        return false;
+    }
+    // 条件 4：同方向
+    match a.kind {
+        AnimatedSliceKind::InsertFadeIn => {
+            // 从同一光标位置淡入：from_document_rect 的 x/y 相同
+            (a.from_document_rect.x - b.from_document_rect.x).abs() < 0.5
+                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
+        }
+        AnimatedSliceKind::DeleteFadeOut => {
+            // 向同一光标位置收缩：to_document_rect 的 x/y 相同
+            (a.to_document_rect.x - b.to_document_rect.x).abs() < 0.5
+                && (a.to_document_rect.y - b.to_document_rect.y).abs() < 0.5
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            // 移动向量相同：dx = to.x - from.x, dy = to.y - from.y
+            let a_dx = a.to_document_rect.x - a.from_document_rect.x;
+            let a_dy = a.to_document_rect.y - a.from_document_rect.y;
+            let b_dx = b.to_document_rect.x - b.from_document_rect.x;
+            let b_dy = b.to_document_rect.y - b.from_document_rect.y;
+            (a_dx - b_dx).abs() < 0.5 && (a_dy - b_dy).abs() < 0.5
+        }
+    }
+}
+
+/// 合并两个 slice 为一个 run。
+fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
+    AnimatedSlice {
+        kind: a.kind,
+        snapshot_id: a.snapshot_id,
+        source_rect: bounding_box(&a.source_rect, &b.source_rect),
+        from_document_rect: bounding_box(&a.from_document_rect, &b.from_document_rect),
+        to_document_rect: bounding_box(&a.to_document_rect, &b.to_document_rect),
+        opacity_from: a.opacity_from,
+        opacity_to: a.opacity_to,
+        scale_from: a.scale_from,
+        scale_to: a.scale_to,
+        byte_start: a.byte_start.min(b.byte_start),
+        byte_end: a.byte_end.max(b.byte_end),
+        shaping_identity: a.shaping_identity.clone(),
+    }
+}
+
+/// 计算两个 SourceRect 的 bounding box（取最小 x/y 和最大 right/bottom）。
+fn bounding_box(a: &SourceRect, b: &SourceRect) -> SourceRect {
+    let min_x = a.x.min(b.x);
+    let min_y = a.y.min(b.y);
+    let max_right = (a.x + a.w).max(b.x + b.w);
+    let max_bottom = (a.y + a.h).max(b.y + b.h);
+    SourceRect {
+        x: min_x,
+        y: min_y,
+        w: max_right - min_x,
+        h: max_bottom - min_y,
+    }
 }
 
 /// Linux Qt 文字动画协调器 — 管理动画事务的生命周期和 rebase。
@@ -448,39 +552,6 @@ impl LinuxEditorAnimationCoordinator {
                     let mut slices = Vec::new();
                     let mut static_patches = Vec::new();
 
-                    let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-                    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-
-                    for new_line in new_snapshot.lines_in_byte_range(range_start, range_end) {
-                        if let Some(source_rect) =
-                            new_line.source_rect_for_byte_range(range_start, range_end)
-                        {
-                            let to_doc = new_line.source_rect_to_document_rect(&source_rect);
-                            slices.push(AnimatedSlice::insert_fade_in(
-                                key,
-                                new_line.id,
-                                source_rect.clone(),
-                                to_doc,
-                                old_cx,
-                                old_cy,
-                                range_start,
-                                range_end,
-                                new_line
-                                    .clusters
-                                    .first()
-                                    .map(|c| c.shaping_identity.clone()),
-                            ));
-
-                            static_patches.push(StaticLinePatch::insert_patch(
-                                new_line.id,
-                                vec![source_rect],
-                                Vec::new(),
-                                range_start,
-                                range_end,
-                            ));
-                        }
-                    }
-
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                         key,
@@ -488,7 +559,7 @@ impl LinuxEditorAnimationCoordinator {
                         new_snapshot,
                         &insert_offset_map,
                         &[],
-                        &[(range_start, range_end)],
+                        &[],
                         old_cursor_rect.as_ref(),
                         new_cursor_rect.as_ref(),
                     );
@@ -574,32 +645,6 @@ impl LinuxEditorAnimationCoordinator {
 
                 let mut slices = Vec::new();
                 let mut static_patches = Vec::new();
-                let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-                let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-
-                for (del_start, del_end) in &deleted_ranges {
-                    for old_line in old_snapshot.lines_in_byte_range(*del_start, *del_end) {
-                        if let Some(source_rect) =
-                            old_line.source_rect_for_byte_range(*del_start, *del_end)
-                        {
-                            let from_doc = old_line.source_rect_to_document_rect(&source_rect);
-                            slices.push(AnimatedSlice::delete_fade_out(
-                                key,
-                                old_line.id,
-                                source_rect,
-                                from_doc,
-                                new_cx,
-                                new_cy,
-                                *del_start,
-                                *del_end,
-                                old_line
-                                    .clusters
-                                    .first()
-                                    .map(|c| c.shaping_identity.clone()),
-                            ));
-                        }
-                    }
-                }
 
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                 let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
@@ -607,7 +652,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_snapshot,
                     new_snapshot,
                     &delete_offset_map,
-                    &deleted_ranges,
+                    &[],
                     &[],
                     old_cursor_rect.as_ref(),
                     new_cursor_rect.as_ref(),
@@ -713,48 +758,13 @@ impl LinuxEditorAnimationCoordinator {
         let mut slices = Vec::new();
         let mut static_patches = Vec::new();
 
-        let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-        let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-
-        for new_line in
-            new_snapshot.lines_in_byte_range(composition_byte_start, composition_byte_end)
-        {
-            if let Some(source_rect) =
-                new_line.source_rect_for_byte_range(composition_byte_start, composition_byte_end)
-            {
-                let to_doc = new_line.source_rect_to_document_rect(&source_rect);
-                slices.push(AnimatedSlice::insert_fade_in(
-                    key,
-                    new_line.id,
-                    source_rect.clone(),
-                    to_doc,
-                    old_cx,
-                    old_cy,
-                    composition_byte_start,
-                    composition_byte_end,
-                    new_line
-                        .clusters
-                        .first()
-                        .map(|c| c.shaping_identity.clone()),
-                ));
-
-                static_patches.push(StaticLinePatch::insert_patch(
-                    new_line.id,
-                    vec![source_rect],
-                    Vec::new(),
-                    composition_byte_start,
-                    composition_byte_end,
-                ));
-            }
-        }
-
         let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
             key,
             old_snapshot,
             new_snapshot,
             &offset_map,
             &[],
-            &[(composition_byte_start, composition_byte_end)],
+            &[],
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
         );
@@ -842,37 +852,12 @@ impl LinuxEditorAnimationCoordinator {
         let mut static_patches = Vec::new();
 
         if !is_commit {
-            let shrink_x = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-            let shrink_y = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-
-            for old_line in old_snapshot.lines_in_byte_range(preedit_byte_start, preedit_byte_end) {
-                if let Some(source_rect) =
-                    old_line.source_rect_for_byte_range(preedit_byte_start, preedit_byte_end)
-                {
-                    let from_doc = old_line.source_rect_to_document_rect(&source_rect);
-                    slices.push(AnimatedSlice::delete_fade_out(
-                        key,
-                        old_line.id,
-                        source_rect,
-                        from_doc,
-                        shrink_x,
-                        shrink_y,
-                        preedit_byte_start,
-                        preedit_byte_end,
-                        old_line
-                            .clusters
-                            .first()
-                            .map(|c| c.shaping_identity.clone()),
-                    ));
-                }
-            }
-
             let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                 key,
                 old_snapshot,
                 new_snapshot,
                 &offset_map,
-                &[(preedit_byte_start, preedit_byte_end)],
+                &[],
                 &[],
                 old_cursor_rect.as_ref(),
                 new_cursor_rect.as_ref(),

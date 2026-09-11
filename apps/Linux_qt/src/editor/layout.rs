@@ -4161,15 +4161,6 @@ pub fn compare_old_new_visual_lines(
             old_raster_line_ids.push(idx);
         }
     }
-    // 修复点 2 (Issue #658 评论 5627327573): 用 max 而非 min 计算直接受影响区域的
-    // last index。编辑可能跨多条视觉行，下游 reflow 扫描应从最后一条直接受影响行之后
-    // 开始，避免把已加入 raster 的多行重复比较又加入 reusable_move_pairs。
-    let old_last_direct_affected_idx = old_raster_line_ids
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(old_lines.len());
-
     // 计算 new 侧受影响的行（与编辑字节范围相交）→ 必须重新栅格化
     for (idx, new_line) in new_lines.iter().enumerate() {
         let intersects =
@@ -4178,11 +4169,6 @@ pub fn compare_old_new_visual_lines(
             new_raster_line_ids.push(idx);
         }
     }
-    let new_last_direct_affected_idx = new_raster_line_ids
-        .iter()
-        .copied()
-        .max()
-        .unwrap_or(new_lines.len());
 
     // 编辑点之后 old→new 的 byte offset 偏移
     let delta: isize = match (inserted_range, deleted_range) {
@@ -4194,19 +4180,33 @@ pub fn compare_old_new_visual_lines(
         (None, None) => 0,
     };
 
-    // 双指针逐行比较：从直接受影响区域最后一条行之后开始，按 old/new byte offset 对应。
+    // Downstream anchor: 完全在编辑区域之后的第一行索引。
+    // old 侧：byte_start >= affected_byte_end（old 坐标系）
+    // new 侧：byte_start >= affected_byte_end + delta（new 坐标系，delta 为字节偏移变化）
+    // 替代旧的 last_direct_affected_idx + 1 方案：当 raster 集合为空时（如段尾 \n，
+    // 没有任何 VisualLine 与编辑字节严格相交），旧方案 fallback 到 len()，+1 后超出
+    // 边界，扫描循环 while oi < old_lines.len() 永不执行，导致 reusable_move_pairs
+    // 得不到任何下游 reflow 行。
+    let old_downstream_anchor = old_lines
+        .iter()
+        .position(|l| l.byte_start >= affected_byte_end)
+        .unwrap_or(old_lines.len());
+    let new_downstream_anchor = new_lines
+        .iter()
+        .position(|l| l.byte_start >= affected_byte_end.saturating_add_signed(delta))
+        .unwrap_or(new_lines.len());
+
+    // 双指针逐行比较：从 downstream anchor 开始，按 old/new byte offset 对应。
     // 对齐的行分三种：
     //   - 内容/shaping 变化（width/height/qtextline_idx/字节长度）→ raster（重新栅格化）
     //   - 内容/shaping 完全相同、只是 x/y 文档位置变化 → reusable_move_pair（复用纹理）
     //   - 完全相同（含 x/y）→ 稳定，立即停止扫描
     // 未对齐的行（新增/消失的视觉行）→ raster。
     // 一旦稳定停止，绝对不再 append 剩余行（修复 Bug 1）。
-    // 只有扫描走到某一侧末尾、且另一侧确实还有未配对的新增/消失视觉行时，才把那一侧
+    // 只有扫描走到一侧末尾、且另一侧确实还有未配对的新增/消失视觉行时，才把那一侧
     // 真正未配对的尾巴加入。
-    // 修复点 2: 从 old_last_direct_affected_idx + 1 / new_last_direct_affected_idx + 1
-    // 开始，避免跨多视觉行编辑时已加入 raster 的行被下游扫描重复比较。
-    let mut oi = old_last_direct_affected_idx + 1;
-    let mut ni = new_last_direct_affected_idx + 1;
+    let mut oi = old_downstream_anchor;
+    let mut ni = new_downstream_anchor;
     let mut stable = false;
     while oi < old_lines.len() && ni < new_lines.len() {
         let ol = &old_lines[oi];
