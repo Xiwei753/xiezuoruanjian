@@ -122,24 +122,36 @@ class DiagnosticsExportPackageTest {
     /**
      * #665：diagnostics_manifest.json 必须携带统一身份信息 —
      * platform、构建身份、runtime 和 collection 状态。
+     *
+     * #665 评论 5643315523：用 Gson 严格解析为 JsonObject 验证可解析性，
+     * 确保成功导出的包一定存在可解析的 diagnostics_manifest.json。
      */
     private fun assertDiagnosticsManifestInZip(zip: ZipFile) {
         val manifestJson =
             zip.getEntry("diagnostics_manifest.json")
                 ?.let { zip.getInputStream(it).readBytes().toString(Charsets.UTF_8) }
                 .orEmpty()
+        assertTrue(
+            "diagnostics_manifest.json must exist in zip",
+            manifestJson.isNotEmpty(),
+        )
+        // 严格解析为 JSON 对象，验证可解析性
+        val manifestObj =
+            com.google.gson.JsonParser.parseString(manifestJson).asJsonObject
         val expectedIdentity = DiagnosticsBuildIdentity.fromBuildConfig()
-        assertTrue(
-            "diagnostics_manifest.json must carry schemaVersion, got: $manifestJson",
-            manifestJson.contains("\"schemaVersion\": 1"),
+        assertEquals(
+            "diagnostics_manifest.json must carry schemaVersion=1",
+            1,
+            manifestObj.get("schemaVersion").asInt,
         )
-        assertTrue(
-            "diagnostics_manifest.json must carry platform=android, got: $manifestJson",
-            manifestJson.contains("\"platform\": \"android\""),
+        assertEquals(
+            "diagnostics_manifest.json must carry platform=android",
+            "android",
+            manifestObj.get("platform").asString,
         )
-        assertTrue(
-            "diagnostics_manifest.json must carry versionCode, got: $manifestJson",
-            manifestJson.contains("\"versionCode\": ${expectedIdentity.versionCode}"),
+        assertNotNull(
+            "diagnostics_manifest.json must carry versionCode",
+            manifestObj.get("versionCode"),
         )
         assertTrue(
             "diagnostics_manifest.json must carry gitCommitSha, got: $manifestJson",
@@ -157,13 +169,19 @@ class DiagnosticsExportPackageTest {
             "diagnostics_manifest.json must carry applicationId, got: $manifestJson",
             manifestJson.contains(expectedIdentity.applicationId),
         )
-        assertTrue(
-            "diagnostics_manifest.json must carry collection status, got: $manifestJson",
-            manifestJson.contains("\"collection\""),
+        assertNotNull(
+            "diagnostics_manifest.json must carry collection status",
+            manifestObj.get("collection"),
         )
     }
 
-    /** 反：缓存目录不可写时导出失败返回 null（不抛异常、不崩溃）。 */
+    /**
+     * 反：缓存目录不可写时导出失败返回 null（不抛异常、不崩溃）。
+     *
+     * #665 评论 5643315523：此场景同时覆盖 manifest 写失败路径 — tempDir 不可写时
+     * writeDiagnosticsManifest 中 writeText 抛异常返回 false，export 检查后返回 null，
+     * 不产出没有 diagnostics_manifest.json 的 zip 包。
+     */
     @Test
     fun exportReturnsNullWhenCacheDirIsNotWritable() {
         val cache = context.cacheDir

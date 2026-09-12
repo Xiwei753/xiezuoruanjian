@@ -53,21 +53,27 @@ object DiagnosticsExporter {
 
             writeDeviceInfo(context, tempDir)
             writeBuildIdentity(tempDir)
-            writeDiagnosticsManifest(
-                context,
-                tempDir,
-                mapOf(
-                    "logs" to logsStatus,
-                    "crash" to crashStatus,
-                    "logcat" to logcatStatus,
-                    "processExits" to processExitsStatus,
-                    "threadDump" to threadDumpStatus,
-                    "settings" to settingsStatus,
-                    "sync" to syncStatus,
-                    "editor" to editorStatus,
-                    "jank" to jankStatus,
-                ),
-            )
+            // #665 评论 5643315523：manifest 是诊断包的身份证，写失败必须导致导出失败，
+            // 不能继续打一个没有 diagnostics_manifest.json 的 zip。
+            if (!writeDiagnosticsManifest(
+                    context,
+                    tempDir,
+                    mapOf(
+                        "logs" to logsStatus,
+                        "crash" to crashStatus,
+                        "logcat" to logcatStatus,
+                        "processExits" to processExitsStatus,
+                        "threadDump" to threadDumpStatus,
+                        "settings" to settingsStatus,
+                        "sync" to syncStatus,
+                        "editor" to editorStatus,
+                        "jank" to jankStatus,
+                    ),
+                )
+            ) {
+                DiagnosticsLogger.e("DiagnosticsExporter", "diagnostics_manifest.json write failed; aborting export")
+                return null
+            }
 
             zipDirectory(tempDir, zipFile)
             tempDir.deleteRecursively()
@@ -243,13 +249,17 @@ object DiagnosticsExporter {
     /**
      * #665：生成统一 diagnostics_manifest.json — 组合构建身份、设备信息和收集状态，
      * 让接收者一看就知道"这是什么端、什么构建、什么环境"。
+     *
+     * #665 评论 5643315523：manifest 是诊断包的身份证，写失败必须导致导出失败。
+     * 返回 Boolean：true=成功，false=失败。调用方（[export]）应检查返回值，
+     * false 时返回 null 不继续 zipDirectory，不产出没有身份证的 zip 包。
      */
     private fun writeDiagnosticsManifest(
         context: Context,
         destDir: File,
         collectionStatus: Map<String, String>,
-    ) {
-        try {
+    ): Boolean {
+        return try {
             val identity = DiagnosticsBuildIdentity.fromBuildConfig()
             val deviceInfo = collectDeviceInfo(context)
             val supportedAbis = Build.SUPPORTED_ABIS.toList()
@@ -291,8 +301,10 @@ object DiagnosticsExporter {
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(manifest))
             File(destDir, "diagnostics_manifest.json").writeText(json)
+            true
         } catch (e: Exception) {
             DiagnosticsLogger.e("DiagnosticsExporter", "Failed to write diagnostics manifest", e)
+            false
         }
     }
 

@@ -454,7 +454,10 @@ fn collect_runtime_info(profile: &DesktopRuntimeProfile) -> diagnostics::Runtime
         qpa_platform: profile.platform_name.clone(),
         input_method_module: profile.input_method_module.clone(),
         bundled_qt: profile.bundled_qt,
-        package_type: env!("PACKAGE_TYPE").to_string(),
+        // #665 评论 5643315523：使用运行时有效 packageType，与 bundled_qt（运行时
+        // APPIMAGE 检测）语义一致，消除编译期 env!("PACKAGE_TYPE") 与运行时
+        // APPIMAGE 的语义冲突。
+        package_type: diagnostics::effective_package_type().to_string(),
         rustc_version: env!("RUSTC_VERSION").to_string(),
     }
 }
@@ -563,6 +566,9 @@ fn main() {
 
     // ===== 最早期初始化：确保崩溃/错误能写入日志文件 =====
     // 这两行必须在所有其他代码之前执行
+    // #665 评论 5643315523：先初始化运行时有效 build identity（根据 APPIMAGE 环境变量
+    // 收口 packageType/buildKey），确保后续所有日志写入和 manifest 字段使用同一份有效值。
+    diagnostics::init_build_identity();
     diagnostics::ensure_early_log_dir();
     diagnostics::install_panic_hook();
 

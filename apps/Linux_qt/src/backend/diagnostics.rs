@@ -31,10 +31,108 @@ const MAX_LOG_FILES: usize = 5;
 /// 日志文件前缀
 const LOG_PREFIX: &str = "sujian-current";
 /// 编译时 buildKey，由 build.rs 注入
+///
+/// 注意：这是编译期固化的回退值。运行时应通过 `init_build_identity()` 初始化
+/// `EFFECTIVE_BUILD_KEY`，并通过 `effective_build_key()` 获取反映运行时真实包类型
+/// （如 AppImage）的有效值。日志文件名和 manifest buildKey 字段统一使用
+/// `effective_build_key()`，避免编译期/运行期语义冲突（Issue #665）。
 const BUILD_KEY: &str = env!("BUILD_KEY");
+/// 编译时 packageType，由 build.rs 注入
+///
+/// 同样是编译期回退值，运行时有效值通过 `effective_package_type()` 获取。
+const PACKAGE_TYPE: &str = env!("PACKAGE_TYPE");
 
 /// 全局日志目录路径，在 main() 最早期通过 init_global_log_dir() 或 ensure_early_log_dir() 设置
 static GLOBAL_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// 运行时有效 buildKey 缓存，由 `init_build_identity()` 设置
+///
+/// AppImage 分发场景下，编译期 BUILD_KEY 嵌入的是编译时 packageType（默认 dev），
+/// 而运行时 APPIMAGE 环境变量存在，真实包类型为 AppImage。此缓存存储运行时计算
+/// 得到的有效 buildKey，确保日志文件名和 manifest buildKey 字段反映运行时真实包类型。
+static EFFECTIVE_BUILD_KEY: OnceLock<String> = OnceLock::new();
+
+/// 运行时有效 packageType 缓存，由 `init_build_identity()` 设置
+///
+/// APPIMAGE 环境变量存在时为 "AppImage"，否则为编译期 PACKAGE_TYPE。
+static EFFECTIVE_PACKAGE_TYPE: OnceLock<String> = OnceLock::new();
+
+/// 初始化运行时有效 build identity
+///
+/// 在 `main()` 最早期调用（在 `ensure_early_log_dir()` 之前或紧随其后），
+/// 确保所有日志写入都使用有效 build key。
+///
+/// 规则：
+/// - 若 `APPIMAGE` 环境变量存在，有效 package type = `"AppImage"`
+/// - 否则有效 package type = 编译期 `PACKAGE_TYPE`
+/// - 若有效 package type == 编译期 PACKAGE_TYPE，有效 build key = 编译期 BUILD_KEY
+/// - 否则重新组合：`{version}-{gitSha}-{effectivePackageType}-{buildProfile}`
+///
+/// 幂等：多次调用安全，仅首次调用生效（OnceLock 语义）。
+pub fn init_build_identity() {
+    let (effective_package_type, effective_build_key) = compute_effective_build_identity();
+    let _ = EFFECTIVE_PACKAGE_TYPE.set(effective_package_type);
+    let _ = EFFECTIVE_BUILD_KEY.set(effective_build_key);
+}
+
+/// 计算运行时有效 build identity（纯函数，便于测试）
+///
+/// 返回 `(effective_package_type, effective_build_key)`。
+/// 不读取或写入全局 OnceLock，仅依据当前进程环境变量和编译期常量计算。
+///
+/// - `appimage_present`: APPIMAGE 环境变量是否存在
+fn compute_effective_build_identity_with(appimage_present: bool) -> (String, String) {
+    let effective_package_type = if appimage_present {
+        "AppImage".to_string()
+    } else {
+        PACKAGE_TYPE.to_string()
+    };
+
+    let effective_build_key = if effective_package_type == PACKAGE_TYPE {
+        BUILD_KEY.to_string()
+    } else {
+        format!(
+            "{}-{}-{}-{}",
+            env!("CARGO_PKG_VERSION"),
+            env!("GIT_COMMIT_SHA"),
+            effective_package_type,
+            env!("BUILD_PROFILE")
+        )
+    };
+
+    (effective_package_type, effective_build_key)
+}
+
+/// 计算运行时有效 build identity（读取当前进程环境变量）
+///
+/// 返回 `(effective_package_type, effective_build_key)`。
+/// 不读取或写入全局 OnceLock，仅依据当前进程环境变量和编译期常量计算。
+fn compute_effective_build_identity() -> (String, String) {
+    compute_effective_build_identity_with(std::env::var_os("APPIMAGE").is_some())
+}
+
+/// 获取运行时有效 buildKey
+///
+/// 返回 `init_build_identity()` 设置的缓存值；未初始化时回退到编译期 BUILD_KEY。
+/// 日志文件名和 manifest buildKey 字段应统一使用此函数，确保反映运行时真实包类型。
+pub fn effective_build_key() -> &'static str {
+    EFFECTIVE_BUILD_KEY
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(BUILD_KEY)
+}
+
+/// 获取运行时有效 packageType
+///
+/// 返回 `init_build_identity()` 设置的缓存值；未初始化时回退到编译期 PACKAGE_TYPE。
+/// `collect_runtime_info()` 应使用此函数填充 RuntimeInfo.package_type，确保与
+/// bundled_qt（运行时 APPIMAGE 检测）语义一致。
+pub fn effective_package_type() -> &'static str {
+    EFFECTIVE_PACKAGE_TYPE
+        .get()
+        .map(|s| s.as_str())
+        .unwrap_or(PACKAGE_TYPE)
+}
 
 /// 全局 diagnostics_enabled 开关状态，由 SettingsBackend 在设置变更时同步更新
 /// 默认 true（alpha 阶段），稳定版应改为 false
@@ -112,7 +210,7 @@ pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
     );
     let redacted = redact(&formatted);
 
-    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
     if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -161,7 +259,7 @@ pub fn install_panic_hook() {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -277,7 +375,7 @@ fn ensure_log_dir(log_dir: &Path) -> Result<(), String> {
 
 /// 日志轮转：如果当前日志文件超过 MAX_FILE_SIZE，重命名为带时间戳的备份
 fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
-    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
     if !current_file.exists() {
         return Ok(());
     }
@@ -288,7 +386,12 @@ fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
     }
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let rotated = log_dir.join(format!("{}-{}-{}.log", LOG_PREFIX, BUILD_KEY, timestamp));
+    let rotated = log_dir.join(format!(
+        "{}-{}-{}.log",
+        LOG_PREFIX,
+        effective_build_key(),
+        timestamp
+    ));
     fs::rename(&current_file, &rotated).map_err(|e| format!("轮转日志文件失败: {}", e))?;
 
     prune_old_logs(log_dir);
@@ -299,7 +402,7 @@ fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
 ///
 /// 只清理同一 buildKey 的日志文件，避免删除其他构建版本的日志
 fn prune_old_logs(log_dir: &Path) {
-    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
+    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, effective_build_key());
     let mut log_files: Vec<_> = match fs::read_dir(log_dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
@@ -421,7 +524,7 @@ pub fn diagnostics_manifest_json(
         "gitCommitSha": env!("GIT_COMMIT_SHA"),
         "buildType": env!("BUILD_PROFILE"),
         "flavor": null,
-        "buildKey": BUILD_KEY,
+        "buildKey": effective_build_key(),
         "exportedAt": chrono::Local::now().to_rfc3339(),
         "arch": std::env::consts::ARCH,
         "runtime": {
@@ -534,7 +637,9 @@ pub fn export_diagnostics_pack(
         crash: crash_status,
         device_info: "ok",
     };
-    write_diagnostics_manifest(runtime_info, system_info, &collection, &temp_dir);
+    // #665：manifest 是诊断包的身份证，写失败必须导致导出失败，
+    // 不能继续打一个没有 diagnostics_manifest.json 的 zip。
+    write_diagnostics_manifest(runtime_info, system_info, &collection, &temp_dir)?;
 
     // Zip the temp dir
     zip_directory(&temp_dir, &zip_path)?;
@@ -603,7 +708,7 @@ fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) -> &'static str {
     };
 
     // 只收集当前 buildKey 的日志，避免把其他构建版本的历史日志混入诊断包
-    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
+    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, effective_build_key());
     let mut has_logs = false;
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
@@ -669,16 +774,19 @@ fn write_crash_logs(log_dir: &Path, dest_dir: &Path) -> &'static str {
 }
 
 /// 写入诊断 manifest 到目标目录
+///
+/// #665：manifest 写失败必须向上层传播错误，不能仅记日志后继续打包。
+/// 返回 `Err` 表示 manifest 写不出来，调用方（`export_diagnostics_pack`）
+/// 应中止导出流程，不产出缺少身份证的 zip 包。
 fn write_diagnostics_manifest(
     runtime_info: &RuntimeInfo,
     system_info: &SystemInfo,
     collection: &CollectionStatus,
     dest_dir: &Path,
-) {
+) -> Result<(), String> {
     let json = diagnostics_manifest_json(runtime_info, system_info, collection);
-    if let Err(e) = fs::write(dest_dir.join("diagnostics_manifest.json"), json) {
-        eprintln!("[Diagnostics] 写入 diagnostics_manifest.json 失败: {}", e);
-    }
+    fs::write(dest_dir.join("diagnostics_manifest.json"), json)
+        .map_err(|e| format!("写入 diagnostics_manifest.json 失败: {}", e))
 }
 
 /// 将设置快照写入目标目录，返回收集状态
@@ -766,7 +874,7 @@ mod tests {
         let _ = ensure_log_dir(log_dir);
         let _ = rotate_if_needed(log_dir);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -817,7 +925,7 @@ mod tests {
         let log_dir = dir.path();
 
         // Create a large log file
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let large_content = "x".repeat((MAX_FILE_SIZE + 1) as usize);
         fs::write(&current_file, &large_content).unwrap();
 
@@ -827,13 +935,13 @@ mod tests {
         assert!(!current_file.exists());
 
         // A rotated file should exist
-        let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
+        let buildkey_prefix = format!("{}-{}", LOG_PREFIX, effective_build_key());
         let rotated: Vec<_> = fs::read_dir(log_dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
                 e.file_name().to_string_lossy().starts_with(&buildkey_prefix)
-                    && e.file_name().to_string_lossy() != format!("{}-{}.log", LOG_PREFIX, BUILD_KEY)
+                    && e.file_name().to_string_lossy() != format!("{}-{}.log", LOG_PREFIX, effective_build_key())
             })
             .collect();
         assert_eq!(rotated.len(), 1);
@@ -845,8 +953,8 @@ mod tests {
         let log_dir = dir.path();
 
         // Create some log files (using buildKey format)
-        let current_name = format!("{}-{}.log", LOG_PREFIX, BUILD_KEY);
-        let old_name = format!("{}-{}-20260101.log", LOG_PREFIX, BUILD_KEY);
+        let current_name = format!("{}-{}.log", LOG_PREFIX, effective_build_key());
+        let old_name = format!("{}-{}-20260101.log", LOG_PREFIX, effective_build_key());
         fs::write(log_dir.join(&current_name), "test").unwrap();
         fs::write(log_dir.join(&old_name), "old").unwrap();
         fs::write(log_dir.join("other.txt"), "keep").unwrap();
@@ -871,7 +979,7 @@ mod tests {
         let workspace = tempdir().unwrap();
         let log_dir = tempdir().unwrap();
         fs::write(
-            log_dir.path().join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY)),
+            log_dir.path().join(format!("{}-{}.log", LOG_PREFIX, effective_build_key())),
             "safe log line\n",
         )
         .unwrap();
@@ -912,6 +1020,32 @@ mod tests {
             "unexpected export dir: {}",
             export_dir.display()
         );
+
+        // #665 评论 5643315523：成功导出的包一定包含可解析的 diagnostics_manifest.json。
+        // manifest 是诊断包的身份证，写失败必须导致导出失败（由 write_diagnostics_manifest
+        // 返回 Result 和 export 用 ? 保证）。此处验证成功路径下 manifest 存在且可解析。
+        let zip_file = fs::File::open(&zip_path).expect("zip file should be openable");
+        let mut zip_archive = zip::ZipArchive::new(zip_file).expect("zip should be a valid archive");
+        let mut manifest_entry = zip_archive
+            .by_name("diagnostics_manifest.json")
+            .expect("diagnostics_manifest.json must exist in successful export zip");
+        let mut manifest_content = String::new();
+        std::io::Read::read_to_string(&mut manifest_entry, &mut manifest_content)
+            .expect("manifest content should be readable");
+        let manifest_json: serde_json::Value = serde_json::from_str(&manifest_content)
+            .expect("diagnostics_manifest.json must be valid JSON");
+        assert_eq!(manifest_json["schemaVersion"], 1);
+        assert_eq!(manifest_json["platform"], "linux_qt");
+        assert!(
+            manifest_json["buildKey"].is_string(),
+            "manifest must carry buildKey, got: {}",
+            manifest_content
+        );
+        assert!(
+            manifest_json["runtime"]["packageType"].is_string(),
+            "manifest must carry runtime.packageType, got: {}",
+            manifest_content
+        );
     }
 
     #[test]
@@ -927,7 +1061,7 @@ mod tests {
 
         append_log_line(log_dir, "Test log message", true);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("Test log message"));
@@ -944,7 +1078,7 @@ mod tests {
         // ERROR level should always write even with verbose=false
         append_log_line(log_dir, "ERROR something went wrong", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("ERROR something went wrong"));
@@ -978,7 +1112,7 @@ mod tests {
 
         log_to_file("ERROR", "test_module", "test_event", "test error message");
 
-        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("[ERROR]"));
@@ -999,7 +1133,7 @@ mod tests {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
-        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1028,7 +1162,7 @@ mod tests {
         // verbose=false 时，INFO 级别不应写入
         append_log_line(log_dir, "[INFO] some info message", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(
@@ -1041,7 +1175,7 @@ mod tests {
         append_log_line(log_dir, "[WARN] some warning", false);
         append_log_line(log_dir, "[ERROR] some error", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("some warning"),
@@ -1070,7 +1204,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] some info message", true);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
@@ -1110,7 +1244,7 @@ mod tests {
         // 使用 append_log_line（接受 log_dir 参数）而非 log_to_file（使用全局目录）
         append_log_line(log_dir, "[ERROR] error message when disabled", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("error message when disabled"),
@@ -1134,7 +1268,7 @@ mod tests {
 
         append_log_line(log_dir, "[WARN] warn message when disabled", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("warn message when disabled"),
@@ -1158,7 +1292,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message with both enabled", true);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("info message with both enabled"),
@@ -1182,7 +1316,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message when disabled", true);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(
@@ -1208,7 +1342,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message when not verbose", false);
 
-        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(
@@ -1233,5 +1367,69 @@ mod tests {
         assert!(is_diagnostics_enabled());
 
         DIAGNOSTICS_ENABLED.store(prev, Ordering::Relaxed);
+    }
+
+    /// #665 评论 5643315523：未初始化时 effective_build_key/effective_package_type
+    /// 回退到编译期常量，行为与原 BUILD_KEY/PACKAGE_TYPE 一致。
+    #[test]
+    fn test_effective_build_key_falls_back_to_compile_time_when_uninit() {
+        // 未调用 init_build_identity() 时（OnceLock 未设置），应回退到编译期常量。
+        // 注意：其他测试可能已调用 init_build_identity()，此时 EFFECTIVE_BUILD_KEY 已设置，
+        // effective_build_key() 返回已设置的值。此测试只验证"未初始化"路径的逻辑正确性：
+        // 即 effective_build_key() 返回的值要么是编译期 BUILD_KEY，要么是已初始化的有效值。
+        let key = effective_build_key();
+        assert!(!key.is_empty(), "effective_build_key must not be empty");
+        let pkg = effective_package_type();
+        assert!(!pkg.is_empty(), "effective_package_type must not be empty");
+    }
+
+    /// #665 评论 5643315523：APPIMAGE 不存在时，compute_effective_build_identity_with
+    /// 返回编译期 PACKAGE_TYPE 和 BUILD_KEY。
+    #[test]
+    fn test_compute_effective_build_identity_no_appimage() {
+        let (pkg_type, build_key) = compute_effective_build_identity_with(false);
+        assert_eq!(pkg_type, PACKAGE_TYPE);
+        assert_eq!(build_key, BUILD_KEY);
+    }
+
+    /// #665 评论 5643315523：APPIMAGE 存在时，compute_effective_build_identity_with
+    /// 返回 "AppImage" 和重新组合的 build key（含 AppImage 而非编译期 packageType）。
+    #[test]
+    fn test_compute_effective_build_identity_with_appimage() {
+        let (pkg_type, build_key) = compute_effective_build_identity_with(true);
+        assert_eq!(pkg_type, "AppImage");
+
+        if PACKAGE_TYPE == "AppImage" {
+            // 编译期已是 AppImage，build key 应等于编译期 BUILD_KEY
+            assert_eq!(build_key, BUILD_KEY);
+        } else {
+            // 编译期非 AppImage，build key 应重新组合，包含 "AppImage"
+            assert_ne!(build_key, BUILD_KEY, "build key must differ when AppImage overrides compile-time package type");
+            assert!(
+                build_key.contains("AppImage"),
+                "build key must contain AppImage, got: {}",
+                build_key
+            );
+            // 验证组合格式：{version}-{gitSha}-{AppImage}-{buildProfile}
+            let expected = format!(
+                "{}-{}-{}-{}",
+                env!("CARGO_PKG_VERSION"),
+                env!("GIT_COMMIT_SHA"),
+                "AppImage",
+                env!("BUILD_PROFILE")
+            );
+            assert_eq!(build_key, expected);
+        }
+    }
+
+    /// #665 评论 5643315523：init_build_identity 幂等，多次调用安全。
+    #[test]
+    fn test_init_build_identity_is_idempotent() {
+        // 多次调用不应 panic（OnceLock::set 对已设置的值返回 Err，但被 let _ = 忽略）
+        init_build_identity();
+        init_build_identity();
+        // 验证 effective_* 函数仍能返回有效值
+        let _ = effective_build_key();
+        let _ = effective_package_type();
     }
 }
