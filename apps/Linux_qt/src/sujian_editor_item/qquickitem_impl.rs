@@ -53,7 +53,10 @@ impl QQuickItem for SujianEditorItem {
 
         let frame_start = Instant::now();
 
-        self.tick_text_animations();
+        let animation_set_changed = self.tick_text_animations();
+        if animation_set_changed {
+            self.scene_dirty = true;
+        }
 
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
@@ -199,13 +202,18 @@ impl QQuickItem for SujianEditorItem {
                 ));
             }
 
+            let mut transaction_set_changed = false;
             for key in &render_plan.frame_context.keys_to_cancel {
-                self.pipeline
+                if self
+                    .pipeline
                     .animation_coordinator_mut()
-                    .cancel_by_key(*key, "texture_failed");
+                    .cancel_by_key(*key, "texture_failed")
+                {
+                    transaction_set_changed = true;
+                }
             }
 
-            if !render_plan.frame_context.keys_to_complete.is_empty() {
+            if !render_plan.frame_context.keys_to_complete.is_empty() || transaction_set_changed {
                 self.scene_dirty = true;
             }
 
@@ -214,6 +222,7 @@ impl QQuickItem for SujianEditorItem {
                 .animation_coordinator_mut()
                 .has_prepared_or_rendering()
                 || !render_plan.frame_context.keys_to_complete.is_empty()
+                || transaction_set_changed
             {
                 self.request_frame_update();
             }
@@ -235,8 +244,8 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    pub(crate) fn tick_text_animations(&mut self) {
+    pub(crate) fn tick_text_animations(&mut self) -> bool {
         let now = Instant::now();
-        self.pipeline.animation_coordinator_mut().tick(now);
+        self.pipeline.animation_coordinator_mut().tick(now)
     }
 }
