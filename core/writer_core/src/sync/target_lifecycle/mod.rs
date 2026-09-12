@@ -26,13 +26,16 @@ use crate::sync::types::{
 /// 这个位置不会随 `projects/<id>/` 一起被删除，保证 delete tombstone 持久存在。
 pub const TARGET_CATALOG_REMOTE_PATH: &str = "app/app-meta/sync/targets.sync.json";
 
-/// workspace 总 manifest 在远端的固定路径（app target 的 remote_prefix 下）。
+/// workspace 总 manifest 在远端的固定路径。
 ///
-/// 旧的 workspace 概念删除前，全局 manifest 记录所有文件（含 `projects/<id>/...`）。
-/// 当某个 project 没有自己的 `projects/<id>/app-meta/sync/manifest.sync.json` 时，
+/// 真实远端仓库（Xiwei753/xiaoshuo）里旧 workspace 概念的全量 records 保存在
+/// `app-meta/sync/manifest.sync.json`（不带 `app/` 前缀，与 project 级 manifest
+/// 同处 `app-meta/sync/` 命名空间下）。旧的 workspace 概念删除前，全局 manifest
+/// 记录所有文件（含 `projects/<id>/...`）。当某个 project 没有自己的
+/// `projects/<id>/app-meta/sync/manifest.sync.json` 时，
 /// `discover_legacy_remote_catalog` 会从 workspace 总 manifest 中筛
 /// `projects/<id>/...` 的 records 推断该 project 的 LWW，避免旧远端作品首次同步直接失败。
-pub const WORKSPACE_MANIFEST_REMOTE_PATH: &str = "app/app-meta/sync/manifest.sync.json";
+pub const WORKSPACE_MANIFEST_REMOTE_PATH: &str = "app-meta/sync/manifest.sync.json";
 
 ///   解析当前可见远端 project prefix。
 ///
@@ -236,24 +239,30 @@ pub fn load_remote_catalog(
 ///
 /// 真做只读 legacy 枚举：
 /// 1. 先读 `targets.sync.json`（[`load_remote_catalog`]）。存在 → 直接返回。
-/// 2. 不存在 → `provider.list("projects")` 枚举所有 project 前缀，
-///    并只读一次 workspace 总 manifest（[`load_legacy_workspace_manifest`]）。
-/// 3. 对每个 project 读 `projects/<id>/app-meta/sync/manifest.sync.json`
-///    （[`read_legacy_project_lww`]），取 manifest 中所有 record 的最大
+/// 2. 不存在 → `provider.list("projects")` 枚举所有 project 前缀。
+/// 3. 对每个 project 先读 `projects/<id>/app-meta/sync/manifest.sync.json`
+///    （[`read_project_manifest_lww`]），取 manifest 中所有 record 的最大
 ///    `updated_at_ms` 和对应 `device_id`，合成一条 Upsert `TargetLifecycleRecord`。
-///    若 project 级 manifest 不存在，则 fallback 到 workspace 总 manifest 中
-///    `projects/<id>/...` 的 records（[`read_project_lww_from_workspace_manifest`]）。
+///    若 project 级 manifest 不存在（`Ok(None)`），则**按需**加载 workspace 总 manifest
+///    （[`load_legacy_workspace_manifest`]，整轮最多一次），并 fallback 到 workspace
+///    总 manifest 中 `projects/<id>/...` 的 records
+///    （[`read_project_lww_from_workspace_manifest`]）。
 /// 4. 返回合成 catalog + `__nonexistent__` version（catalog 文件仍不存在于远端）。
 ///
 /// **绝不**写远端。dry-run 安全调用。正式 sync 在确认 `version == __nonexistent__`
 /// 后调 [`persist_bootstrap_catalog`] 把合成 catalog 落盘。
 ///
-/// 远端 manifest 损坏 / 非法 project id 不再 fallback 或 warn+skip。
-/// 直接返回 `Err`（`RecoverableError`），不写 `targets.sync.json`，
-/// 不把这个 Project 写成合法 Upsert。让真实远端 target 不会静默消失，
-/// 也不会被伪造的 `(0, "legacy")` LWW 错误地建成合法 record。
-/// 只有 project 级 manifest 和 workspace 总 manifest 两边都找不到可靠 records
-/// 时才返回 Err（即保留现有 Err，但只在两边都失败时返回）。
+/// ## 错误边界（#659）
+///
+/// - project manifest 存在但损坏 → `Err`（不 fallback 到 workspace manifest）。
+/// - project manifest 不存在 + workspace manifest 损坏 → `Err`（仅在真正需要 fallback
+///   时才报错；所有 project 都有自己的 project manifest 时不会加载 workspace manifest，
+///   workspace manifest 损坏不影响结果）。
+/// - project manifest 不存在 + workspace manifest 不存在或无匹配 records → `Err`
+///   （两边都失败才报错）。
+/// - 非法 project id → `Err`（不 skip，不 fallback）。
+///
+/// 让真实远端 target 不会静默消失，也不会被伪造的 `(0, "legacy")` LWW 错误地建成合法 record。
 pub fn discover_legacy_remote_catalog(
     provider: &dyn SyncProvider,
 ) -> crate::error::Result<RemoteTargetCatalogSnapshot> {
@@ -282,20 +291,42 @@ pub fn discover_legacy_remote_catalog(
     }
     project_ids.sort();
 
-    // 3. 只读一次 workspace 总 manifest，用于 project 级 manifest 缺失时 fallback。
-    // workspace manifest 不存在是正常的（Ok(None)），损坏才返回 Err。
-    let workspace_manifest = load_legacy_workspace_manifest(provider)?;
-
-    // 4. 对每个 project 读 manifest，合成 Upsert record。
+    // 3. 对每个 project 读 manifest，合成 Upsert record。
     // 非法 project id 不 skip，直接返回 Err。
-    // read_legacy_project_lww 返回 Err 时整个 bootstrap 返回 Err。
+    // project manifest 损坏（read_project_manifest_lww 返回 Err）直接传播。
+    // workspace 总 manifest **按需**加载：只有某个 project 缺 project manifest 时才加载，
+    // 整轮最多一次（workspace_manifest_loaded 标志 + workspace_manifest 缓存）。
+    // workspace manifest 损坏只在真正需要 fallback 时才导致 Err；所有 project 都有自己的
+    // project manifest 时永远不会加载 workspace manifest，workspace manifest 损坏不影响结果。
     let mut records = Vec::with_capacity(project_ids.len());
+    let mut workspace_manifest_loaded = false;
+    let mut workspace_manifest: Option<SyncManifest> = None;
     for project_id in &project_ids {
         let target_id = format!("projects/{project_id}");
         // 校验 project id segment（防路径穿越）。非法 → Err（不 skip）。
         parse_project_target_id(&target_id)?;
-        let (updated_at_ms, device_id) =
-            read_legacy_project_lww(provider, project_id, workspace_manifest.as_ref())?;
+        let (updated_at_ms, device_id) = match read_project_manifest_lww(provider, project_id)? {
+            Some(lww) => lww,
+            None => {
+                // project manifest 不存在 → 按需加载 workspace 总 manifest（整轮最多一次）。
+                if !workspace_manifest_loaded {
+                    workspace_manifest = load_legacy_workspace_manifest(provider)?;
+                    workspace_manifest_loaded = true;
+                }
+                let lww_opt = match workspace_manifest.as_ref() {
+                    Some(manifest) => {
+                        read_project_lww_from_workspace_manifest(manifest, project_id)?
+                    }
+                    None => None,
+                };
+                lww_opt.ok_or_else(|| {
+                    crate::Error::Io(std::io::Error::other(format!(
+                        "read_legacy_project_lww: manifest not found for project {project_id} \
+                         — cannot fabricate LWW"
+                    )))
+                })?
+            }
+        };
         records.push(TargetLifecycleRecord::upsert(
             &target_id,
             &target_id,
@@ -312,7 +343,7 @@ pub fn discover_legacy_remote_catalog(
     })
 }
 
-///   只读加载 workspace 总 manifest（`app/app-meta/sync/manifest.sync.json`）。
+///   只读加载 workspace 总 manifest（`app-meta/sync/manifest.sync.json`）。
 ///
 /// 用于 [`discover_legacy_remote_catalog`] 在 project 级 manifest 缺失时 fallback。
 ///
@@ -343,14 +374,14 @@ fn load_legacy_workspace_manifest(
 
 ///   从 workspace 总 manifest 中筛 `projects/<id>/...` 的 records，取 LWW。
 ///
-/// 用于 [`read_legacy_project_lww`] 在 project 级 manifest 缺失时 fallback。
+/// 用于 [`discover_legacy_remote_catalog`] 在 project 级 manifest 缺失时 fallback。
 ///
 /// - 无匹配 records（`path` 不以 `projects/<id>/` 开头）→ `Ok(None)`；
 /// - 有匹配 records → 按现有 LWW 规则（`deleted_at_ms` 优先 for delete op，
 ///   否则 `updated_at_ms`；时间相同 `device_id` 字典序大者胜出）取最大
 ///   `(timestamp, device_id)`，返回 `Ok(Some((timestamp, device_id)))`。
 ///
-/// LWW 规则与 [`read_legacy_project_lww`] 中 project 级 manifest 的 max_by 逻辑一致，
+/// LWW 规则与 [`read_project_manifest_lww`] 中 project 级 manifest 的 max_by 逻辑一致，
 /// 保证 fallback 与 project 级 manifest 行为一致。
 fn read_project_lww_from_workspace_manifest(
     manifest: &SyncManifest,
@@ -386,47 +417,36 @@ fn read_project_lww_from_workspace_manifest(
     Ok(Some((winner_time, winner.device_id.clone())))
 }
 
-/// 读 legacy project 的 manifest，提取 LWW 时间和 device_id。
+/// 读 project 级 manifest，提取 LWW 时间和 device_id。
 ///
 /// 远端 manifest 路径：`projects/<id>/app-meta/sync/manifest.sync.json`。
 ///
-///   当 project 级 manifest 不存在时，fallback 到 workspace 总 manifest
-/// （`app/app-meta/sync/manifest.sync.json`）中 `projects/<id>/...` 的 records
-/// （[`read_project_lww_from_workspace_manifest`]）。workspace manifest 由调用方
-/// （[`discover_legacy_remote_catalog`]）通过 [`load_legacy_workspace_manifest`]
-/// 只读一次后传入，避免每个 project 重复读远端。
+/// 与 [`read_project_lww_from_workspace_manifest`] 的区别：本函数只读 project 级 manifest，
+/// 不 fallback 到 workspace 总 manifest。workspace manifest 的按需加载由调用方
+/// （[`discover_legacy_remote_catalog`]）负责。
 ///
-/// 不再伪造 `(0, "legacy")` fallback。
-/// - project 级 manifest 存在且合法 → 取所有 file record 的最大 `(updated_at_ms, device_id)`；
-/// - project 级 manifest 存在但解析失败 → `Err`（损坏的 project manifest 不应被静默隐藏，
+/// # 返回
+///
+/// - project manifest 存在且合法 → `Ok(Some((lww_time, device_id)))`（取所有 file record
+///   的最大 `(lww_time, device_id)`，LWW 规则：`deleted_at_ms` 优先 for delete op，
+///   否则 `updated_at_ms`；时间相同 `device_id` 字典序大者胜出）；
+/// - project manifest 不存在 → `Ok(None)`（调用方决定是否 fallback 到 workspace manifest）；
+/// - project manifest 存在但解析失败 → `Err`（损坏的 project manifest 不应被静默隐藏，
 ///   不 fallback 到 workspace manifest）；
-/// - project 级 manifest 不存在 + workspace manifest 有匹配 records → 用 workspace manifest 的 LWW；
-/// - project 级 manifest 不存在 + workspace manifest 无匹配 records（或 workspace manifest 为 None）
-///   → `Err`，调用方（`discover_legacy_remote_catalog`）应让整个 bootstrap 返回
-///   `RecoverableError`，不写 `targets.sync.json`，不把这个 Project 写成合法 Upsert。
-fn read_legacy_project_lww(
+/// - project manifest 存在但 files 为空 → `Err`（空 manifest 无法可靠判断该 project 的真实 LWW）。
+fn read_project_manifest_lww(
     provider: &dyn SyncProvider,
     project_id: &str,
-    workspace_manifest: Option<&SyncManifest>,
-) -> crate::error::Result<(i64, String)> {
+) -> crate::error::Result<Option<(i64, String)>> {
     let manifest_path = format!("projects/{project_id}/app-meta/sync/manifest.sync.json");
     let obj = provider.read(&manifest_path).map_err(crate::Error::from)?;
     let Some(obj) = obj else {
-        // project 级 manifest 不存在 → fallback 到 workspace 总 manifest。
-        // workspace manifest 为 None 或无匹配 records → 返回 Err（不伪造 (0, "legacy")）。
-        if let Some(ws_manifest) = workspace_manifest {
-            if let Some(lww) = read_project_lww_from_workspace_manifest(ws_manifest, project_id)? {
-                return Ok(lww);
-            }
-        }
-        return Err(crate::Error::Io(std::io::Error::other(format!(
-            "read_legacy_project_lww: manifest not found for project {project_id} \
-             — cannot fabricate LWW"
-        ))));
+        // project 级 manifest 不存在 → Ok(None)，调用方按需 fallback 到 workspace 总 manifest。
+        return Ok(None);
     };
     let manifest: SyncManifest = serde_json::from_slice(&obj.content).map_err(|e| {
         crate::Error::Io(std::io::Error::other(format!(
-            "read_legacy_project_lww: parse manifest for {project_id} failed: {e} \
+            "read_project_manifest_lww: parse manifest for {project_id} failed: {e} \
              — cannot fabricate LWW"
         )))
     })?;
@@ -453,7 +473,7 @@ fn read_legacy_project_lww(
         })
         .ok_or_else(|| {
             crate::Error::Io(std::io::Error::other(format!(
-            "read_legacy_project_lww: legacy manifest for project {project_id} has no LWW records \
+            "read_project_manifest_lww: legacy manifest for project {project_id} has no LWW records \
              — cannot fabricate LWW"
         )))
         })?;
@@ -461,7 +481,7 @@ fn read_legacy_project_lww(
         Some(t) if winner.op == "delete" => t,
         _ => winner.updated_at_ms,
     };
-    Ok((winner_time, winner.device_id.clone()))
+    Ok(Some((winner_time, winner.device_id.clone())))
 }
 
 ///   持久化 bootstrap catalog（正式 sync 才调用）。

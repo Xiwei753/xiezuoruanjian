@@ -161,10 +161,15 @@ fn load_parse_failure_returns_err() {
 // =========================================================================
 // Issue #659: workspace 总 manifest fallback 测试
 //
-// 旧远端作品可能只有 workspace 总 manifest (app/app-meta/sync/manifest.sync.json)
+// 旧远端作品可能只有 workspace 总 manifest (app-meta/sync/manifest.sync.json)
 // 而无 project 级 manifest (projects/<id>/app-meta/sync/manifest.sync.json)。
 // discover_legacy_remote_catalog 在 project 级 manifest 缺失时应 fallback 到
 // workspace 总 manifest 中 projects/<id>/... 的 records 推断 LWW。
+//
+// 注意：真实远端仓库 Xiwei753/xiaoshuo 的 workspace manifest 路径是
+// `app-meta/sync/manifest.sync.json`（不带 `app/` 前缀）。下面的关键测试用真实
+// 路径字面量写 fixture，并额外在 `app/app-meta/sync/manifest.sync.json` 放一个
+// 合法但无 project records 的干扰 manifest，确保代码不会误读错误路径。
 // =========================================================================
 
 /// 构造 workspace 总 manifest JSON（records 的 path 为 `projects/<id>/...` 绝对路径）。
@@ -193,6 +198,23 @@ fn make_project_manifest_json(files: &[(&str, i64, &str, &str)]) -> Vec<u8> {
     make_workspace_manifest_json(files)
 }
 
+/// 构造一个合法的 app target manifest JSON，不含任何 `projects/<id>/...` records。
+///
+/// 用作干扰文件，放在 `app/app-meta/sync/manifest.sync.json`，确保代码不误读这个
+/// 错误路径（真实 workspace manifest 在 `app-meta/sync/manifest.sync.json`，不带
+/// `app/` 前缀）。
+fn make_app_target_manifest_without_project_records() -> Vec<u8> {
+    make_workspace_manifest_json(&[
+        ("settings.sync.json", 1700000000000_i64, "app-dev", "upsert"),
+        (
+            "themes/theme-default.json",
+            1700000000000_i64,
+            "app-dev",
+            "upsert",
+        ),
+    ])
+}
+
 /// 测试 1: workspace fallback 成功。
 ///
 /// 远端有 `projects/<id>/project.json` + workspace manifest（含 `projects/<id>/...` records），
@@ -214,8 +236,12 @@ fn issue_659_workspace_fallback_succeeds() {
     let provider = MemoryProvider::with_entries([
         (project_json_path, br#"{"title":"legacy"}"#.to_vec()),
         (
-            WORKSPACE_MANIFEST_REMOTE_PATH.to_string(),
+            "app-meta/sync/manifest.sync.json".to_string(),
             workspace_manifest,
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            make_app_target_manifest_without_project_records(),
         ),
     ]);
 
@@ -262,8 +288,12 @@ fn issue_659_project_manifest_takes_priority() {
         (project_json_path, br#"{"title":"legacy"}"#.to_vec()),
         (project_manifest_path, project_manifest),
         (
-            WORKSPACE_MANIFEST_REMOTE_PATH.to_string(),
+            "app-meta/sync/manifest.sync.json".to_string(),
             workspace_manifest,
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            make_app_target_manifest_without_project_records(),
         ),
     ]);
 
@@ -323,8 +353,12 @@ fn issue_659_workspace_manifest_no_matching_records_returns_err() {
     let provider = MemoryProvider::with_entries([
         (project_json_path, br#"{"title":"legacy"}"#.to_vec()),
         (
-            WORKSPACE_MANIFEST_REMOTE_PATH.to_string(),
+            "app-meta/sync/manifest.sync.json".to_string(),
             workspace_manifest,
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            make_app_target_manifest_without_project_records(),
         ),
     ]);
 
@@ -335,9 +369,11 @@ fn issue_659_workspace_manifest_no_matching_records_returns_err() {
     );
 }
 
-/// 测试 4: workspace manifest 损坏 → Err。
+/// 测试 4: workspace manifest 损坏 + project manifest 不存在 → Err。
 ///
-/// workspace manifest 存在但 JSON 非法 → 返回 Err（不静默隐藏）。
+/// workspace manifest 存在但 JSON 非法，且 project 无自己的 project manifest →
+/// 返回 Err（不静默隐藏）。按需加载：project manifest 不存在触发 fallback 加载
+/// workspace manifest，加载时损坏返回 Err。
 #[test]
 fn issue_659_corrupted_workspace_manifest_returns_err() {
     let project_id = "02d3aa5e-576e-490f-9840-3dbccaab3b3a";
@@ -346,8 +382,12 @@ fn issue_659_corrupted_workspace_manifest_returns_err() {
     let provider = MemoryProvider::with_entries([
         (project_json_path, br#"{"title":"legacy"}"#.to_vec()),
         (
-            WORKSPACE_MANIFEST_REMOTE_PATH.to_string(),
+            "app-meta/sync/manifest.sync.json".to_string(),
             b"not valid json".to_vec(),
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            make_app_target_manifest_without_project_records(),
         ),
     ]);
 
@@ -428,8 +468,12 @@ fn issue_659_mixed_projects_both_succeed() {
         (project_b_json_path, br#"{"title":"b"}"#.to_vec()),
         (project_a_manifest_path, project_a_manifest),
         (
-            WORKSPACE_MANIFEST_REMOTE_PATH.to_string(),
+            "app-meta/sync/manifest.sync.json".to_string(),
             workspace_manifest,
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            make_app_target_manifest_without_project_records(),
         ),
     ]);
 
@@ -451,4 +495,48 @@ fn issue_659_mixed_projects_both_succeed() {
     // project B 用 workspace manifest 的 LWW（ts=4000, dev=dev-b2）。
     assert_eq!(record_b.updated_at_ms, 4000);
     assert_eq!(record_b.device_id, "dev-b2");
+}
+
+/// 测试 7: project manifest 完整可用 + workspace manifest 损坏 => 仍然成功，使用 project manifest。
+///
+/// 所有 project 都有自己的 project manifest 时，workspace manifest 损坏不应导致 bootstrap 失败。
+/// workspace manifest 只作为 fallback，按需加载——没有 project 需要 fallback 时不应加载。
+#[test]
+fn issue_659_project_manifest_present_workspace_corrupted_still_succeeds() {
+    let project_id = "02d3aa5e-576e-490f-9840-3dbccaab3b3a";
+    let project_json_path = format!("projects/{project_id}/project.json");
+    let project_manifest_path = format!("projects/{project_id}/app-meta/sync/manifest.sync.json");
+
+    // project 有自己的 project manifest（合法），LWW: ts=1800000000000, device=project-dev。
+    let project_manifest =
+        make_project_manifest_json(&[("project.json", 1800000000000_i64, "project-dev", "upsert")]);
+
+    // workspace manifest（真实路径 app-meta/sync/manifest.sync.json）损坏。
+    let corrupted_workspace_manifest = b"not valid json".to_vec();
+
+    // 干扰项：app/app-meta/sync/manifest.sync.json 放一个合法但无 project records 的 manifest。
+    let app_manifest = make_app_target_manifest_without_project_records();
+
+    let provider = MemoryProvider::with_entries([
+        (project_json_path, br#"{"title":"legacy"}"#.to_vec()),
+        (project_manifest_path, project_manifest),
+        (
+            "app-meta/sync/manifest.sync.json".to_string(),
+            corrupted_workspace_manifest,
+        ),
+        (
+            "app/app-meta/sync/manifest.sync.json".to_string(),
+            app_manifest,
+        ),
+    ]);
+
+    let result = discover_legacy_remote_catalog(&provider);
+    let snapshot = result.expect(
+        "project manifest 存在时 workspace manifest 损坏不应导致失败（按需加载，不应加载 workspace manifest）"
+    );
+
+    assert_eq!(snapshot.catalog.records.len(), 1);
+    let record = &snapshot.catalog.records[0];
+    assert_eq!(record.updated_at_ms, 1800000000000);
+    assert_eq!(record.device_id, "project-dev");
 }
