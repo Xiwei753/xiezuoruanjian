@@ -396,6 +396,11 @@ pub struct SujianEditorItem {
     /// 不变性：layout_dirty=true 后 request_static_repaint() 会刷新此字段；
     /// update_paint_node() 不再调用 layout_snapshot()，只读取此缓存。
     cached_static_snapshot: Option<LayoutSnapshot>,
+    /// Issue #668 评论 5646842592 问题 3: render thread layout lookup 失败后置此标记，
+    /// 并通过 QMetaObject::invokeMethod + Qt::QueuedConnection 排 GUI 线程回调
+    /// `reprepare_static_snapshot_gui` 清掉失效 snapshot 并重新 prepare。
+    /// 不在 render thread 排版，不把 item.update() 当成会重新 prepare layout。
+    static_snapshot_reprepare_pending: bool,
     cursor_ctrl: cursor_controller::CursorController,
 }
 
@@ -529,6 +534,7 @@ impl Default for SujianEditorItem {
             layout_dirty: true,
             scene_dirty: true,
             cached_static_snapshot: None,
+            static_snapshot_reprepare_pending: false,
             cursor_ctrl: cursor_controller::CursorController::new(),
         }
     }
@@ -732,6 +738,30 @@ impl SujianEditorItem {
             .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
             .clone();
         self.cached_static_snapshot = Some(snapshot);
+    }
+
+    /// Issue #668 评论 5646842592 问题 3: GUI 线程回调——清掉失效 snapshot 并重新 prepare。
+    ///
+    /// 由 render thread 的 `update_paint_node` 在 static rebuild 失败时通过
+    /// `QMetaObject::invokeMethod` + `Qt::QueuedConnection` 排到 GUI 线程事件
+    /// 队列调用（经 `sujian_reprepare_static_snapshot` FFI 入口）。
+    ///
+    /// 语义：render thread 发现当前 cached_static_snapshot 的 generation 已失效
+    /// （某个必需 layout 缺失），不能在 render thread 重新排版（排版依赖 GUI 线程
+    /// 的 buffer/layout 状态，且 QTextLayout 创建必须在 GUI 线程）。此处清掉失效
+    /// snapshot，调用 `prepare_static_snapshot_on_gui_thread` 重新排版生成新
+    /// snapshot/generation，再 `update()` 触发下一帧 `updatePaintNode` 消费新 snapshot。
+    pub(crate) fn reprepare_static_snapshot_gui(&mut self) {
+        if !self.static_snapshot_reprepare_pending {
+            return;
+        }
+        self.static_snapshot_reprepare_pending = false;
+        // 清掉失效 cached_static_snapshot，确保 prepare 一定重新排版
+        // （prepare_static_snapshot_on_gui_thread 在 cached 存在时直接 return）。
+        self.cached_static_snapshot = None;
+        self.prepare_static_snapshot_on_gui_thread();
+        let item = self as &dyn QQuickItem;
+        item.update();
     }
 
     pub(crate) fn request_frame_update(&mut self) {

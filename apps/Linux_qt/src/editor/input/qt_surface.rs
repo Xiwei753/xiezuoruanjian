@@ -285,24 +285,34 @@ cpp! {{
                     qe->setValue(Qt::ImAnchorRectangle, QRectF(data.cursor_rect_x, data.cursor_rect_y, data.cursor_rect_w, data.cursor_rect_h));
                 }
             }
-            if (qe->queries() & Qt::ImSurroundingText) {
+            // Issue #668 评论 5646842592 问题 4: 把 beforeLen 计算提到 query 分支外。
+            // 只要请求了 ImSurroundingText / ImCursorPosition / ImAnchorPosition 任意一个，
+            // 就调用一次 sujian_ime_query_text_before_cursor() 得到真实 UTF-16 beforeLen。
+            // 只有请求 ImSurroundingText 时才 set surrounding text，但 position 一律复用
+            // 同一个真实 beforeLen。不再保留 qMin(data.cursor_char_pos, 100) fallback——
+            // 估计值在正文前面出现 emoji / 非 BMP 字符（多 code unit）时会与
+            // sujian_ime_query_text_before_cursor() 真正返回的 UTF-16 长度不一致，
+            // 导致 surrounding window 起点错位、absolute position / cursor position /
+            // anchor position 彼此错位。
+            const bool need_surrounding = (qe->queries() & Qt::ImSurroundingText) != 0;
+            const bool need_cursor_pos = (qe->queries() & Qt::ImCursorPosition) != 0;
+            const bool need_anchor_pos = (qe->queries() & Qt::ImAnchorPosition) != 0;
+            if (need_surrounding || need_cursor_pos || need_anchor_pos) {
                 ushort beforeBuf[256];
                 int beforeLen = sujian_ime_query_text_before_cursor(rust_item, beforeBuf, 256);
-                ushort afterBuf[256];
-                int afterLen = sujian_ime_query_text_after_cursor(rust_item, afterBuf, 256);
-                QString surrounding = QString::fromUtf16(beforeBuf, beforeLen) + QString::fromUtf16(afterBuf, afterLen);
-                qe->setValue(Qt::ImSurroundingText, surrounding);
-                // Issue #668: ImCursorPosition / ImAnchorPosition 相对于
-                // ImSurroundingText 的 surrounding window。beforeLen 是本次
-                // surrounding window 实际复制的 UTF-16 长度（QChar 数），
-                // 直接复用，不要再用 qMin(data.cursor_char_pos, 100) 估计——
-                // 估计值在正文前面出现 emoji / 非 BMP 字符时会与实际 beforeLen
-                // 不一致，导致 absolute position、surrounding cursor position
-                // 和 anchor position 彼此错位。
-                if (qe->queries() & Qt::ImCursorPosition) {
+                if (need_surrounding) {
+                    ushort afterBuf[256];
+                    int afterLen = sujian_ime_query_text_after_cursor(rust_item, afterBuf, 256);
+                    QString surrounding = QString::fromUtf16(beforeBuf, beforeLen) + QString::fromUtf16(afterBuf, afterLen);
+                    qe->setValue(Qt::ImSurroundingText, surrounding);
+                }
+                // ImCursorPosition / ImAnchorPosition 相对于 ImSurroundingText 的
+                // surrounding window。beforeLen 是本次 surrounding window 实际复制的
+                // UTF-16 长度（QChar 数），直接复用。
+                if (need_cursor_pos) {
                     qe->setValue(Qt::ImCursorPosition, beforeLen);
                 }
-                if (qe->queries() & Qt::ImAnchorPosition) {
+                if (need_anchor_pos) {
                     if (data.has_selection) {
                         // surrounding window 的绝对起点 = cursor_char_pos - beforeLen
                         //（cursor_char_pos 是文档绝对 UTF-16 位置）。
@@ -310,23 +320,6 @@ cpp! {{
                         //   anchor_char_pos - surrounding_start
                         int surroundingStart = data.cursor_char_pos - beforeLen;
                         int anchorOffset = data.anchor_char_pos - surroundingStart;
-                        qe->setValue(Qt::ImAnchorPosition, anchorOffset);
-                    } else {
-                        qe->setValue(Qt::ImAnchorPosition, beforeLen);
-                    }
-                }
-            } else {
-                // 没有 query ImSurroundingText 时仍需单独处理 position queries。
-                // 此时没有实际 beforeLen 可用，回退到 qMin 估计（与旧行为一致，
-                // 仅在 fcitx/ibus 不请求 surrounding 时命中，正常 IME 都会请求）。
-                if (qe->queries() & Qt::ImCursorPosition) {
-                    int beforeLen = qMin(data.cursor_char_pos, 100);
-                    qe->setValue(Qt::ImCursorPosition, beforeLen);
-                }
-                if (qe->queries() & Qt::ImAnchorPosition) {
-                    int beforeLen = qMin(data.cursor_char_pos, 100);
-                    if (data.has_selection) {
-                        int anchorOffset = data.anchor_char_pos - (data.cursor_char_pos - beforeLen);
                         qe->setValue(Qt::ImAnchorPosition, anchorOffset);
                     } else {
                         qe->setValue(Qt::ImAnchorPosition, beforeLen);

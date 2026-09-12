@@ -186,7 +186,23 @@ impl QQuickItem for SujianEditorItem {
             if !static_rebuild_ok && needs_relayout {
                 self.layout_dirty = true;
                 self.scene_dirty = true;
-                self.request_frame_update();
+                // Issue #668 评论 5646842592 问题 3: 不在 render thread 排版。
+                // request_frame_update() 只是 QQuickItem::update()，只会再安排一次
+                // updatePaintNode()，不会调用 GUI 线程上的
+                // prepare_static_snapshot_on_gui_thread()；且 prepare 在
+                // cached_static_snapshot.is_some() 时直接 return，下一帧仍拿同一份
+                // 失效 snapshot 重试。这里置标记并通过
+                // schedule_static_snapshot_reprepare_on_gui_thread 把 reprepare 排到
+                // GUI 线程事件队列（QMetaObject::invokeMethod + Qt::QueuedConnection），
+                // GUI 线程回调（reprepare_static_snapshot_gui）里清掉失效
+                // cached_static_snapshot 并重新 prepare，再 update() 触发下一帧
+                // updatePaintNode 消费新 snapshot。
+                self.static_snapshot_reprepare_pending = true;
+                let rust_item_ptr = self as *mut Self as *mut std::ffi::c_void;
+                qt_text_node::schedule_static_snapshot_reprepare_on_gui_thread(
+                    item_ptr,
+                    rust_item_ptr,
+                );
             }
 
             // 没有缓存快照时，跳过静态正文渲染并请求下一次 GUI 帧准备 snapshot。

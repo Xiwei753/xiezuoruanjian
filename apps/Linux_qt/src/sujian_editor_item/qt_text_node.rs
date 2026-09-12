@@ -35,15 +35,22 @@ cpp! {{
     #include <QtQuick/QSGTextNode>
     #include <QtQuick/QSGClipNode>
     #include <QtQuick/QQuickWindow>
+    #include <QtQuick/QQuickItem>
     #include <QtGui/QTextLayout>
     #include <QtGui/QTextOption>
     #include <QtGui/QFont>
     #include <QtGui/QColor>
     #include <QtGui/QMatrix4x4>
     #include <QtCore/QPointF>
+    #include <QtCore/QMetaObject>
     #include <QDebug>
     #include <vector>
     #include <algorithm>
+
+    // Issue #668 评论 5646842592 问题 3: GUI 线程 reprepare snapshot 回调入口。
+    // 由 render thread 通过 QMetaObject::invokeMethod + Qt::QueuedConnection 排到
+    // GUI 线程事件队列调用。定义在 editor/input/platform_ime.rs。
+    extern "C" void sujian_reprepare_static_snapshot(void* rust_item);
 
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
@@ -283,16 +290,19 @@ cpp! {{
             }
         }
 
-        // Issue #668 评论 5646458592 问题 1: 新子树已完整构建（newTextNode +
-        // 所有 pendingClipNodes）。现在才执行原子替换：摘掉并删除旧节点，
-        // 把新节点挂进 staticLayer。此前的任何失败都已 return false 且不破坏旧节点。
-        // 先摘掉并删除旧的 textNode（如果存在）。
-        if (staticLayer->childCount() > 0) {
-            QSGNode *oldTextNode = staticLayer->childAtIndex(0);
-            if (oldTextNode) {
-                staticLayer->removeChildNode(oldTextNode);
-                delete oldTextNode;
-            }
+        // Issue #668 评论 5646842592 问题 1: 新子树已完整构建（newTextNode +
+        // 所有 pendingClipNodes）。现在执行整棵子树原子替换：移除并删除
+        // staticLayer 上的所有旧子节点（旧主 textNode + 所有旧 clipNode），
+        // 再统一挂入新子树。此前的任何失败都已 return false 且不破坏旧节点。
+        // 旧实现只删 childAtIndex(0) + append 到末尾，当 staticLayer 上一帧
+        // 存在动画裁剪（主 QSGTextNode + 多个 QSGClipNode）时，旧 clip 节点
+        // 会残留；删 child[0] 后原 child[1] 顶到 child[0]，新 text node append
+        // 到末尾，下一次重建 child[0] 甚至可能不是主 text node，出现重复字、
+        // 幽灵字和节点顺序错乱。整棵子树原子替换消除这一类问题。
+        while (staticLayer->childCount() > 0) {
+            QSGNode *oldChild = staticLayer->childAtIndex(staticLayer->childCount() - 1);
+            staticLayer->removeChildNode(oldChild);
+            delete oldChild;
         }
         // 挂入新的主 textNode。
         staticLayer->appendChildNode(newTextNode);
@@ -418,12 +428,20 @@ pub fn rebuild_text_node_from_paragraphs(
     origin_x: f64,
     generation: u64,
 ) -> bool {
-    if paragraphs.is_empty() {
-        return true;
-    }
-
-    let font_size = paragraphs[0].font_size;
-    let font_family = &paragraphs[0].font_family;
+    // Issue #668 评论 5646842592 问题 2: 空正文也必须走一次合法的静态层替换，
+    // 把上一帧的旧正文节点从 staticLayer 上清掉。不能把 paragraphs.is_empty()
+    // 当成"不需要更新"提前返回——那样 staticLayer 完全没动，上一帧旧正文继续
+    // 留在屏幕上。C++ 侧 para_count=0 时不创建任何新 text/clip 节点（循环不
+    // 执行），但仍执行"删除 staticLayer 全部旧 children"的原子替换（与问题 1
+    // 修复一致），这样空正文会清掉旧正文。
+    // 空 paragraphs 时 paragraphs[0] 会越界，此处提供合理默认 font_size/font_family
+    // 传给 C++（与 SujianEditorItem::default 的默认值一致）。
+    let font_size = paragraphs.first().map(|p| p.font_size).unwrap_or(16.0);
+    let font_family_owned: String = paragraphs
+        .first()
+        .map(|p| p.font_family.clone())
+        .unwrap_or_else(|| "Noto Sans CJK SC".to_string());
+    let font_family = &font_family_owned;
 
     let font_family_q: qmetaobject::QString = font_family.clone().into();
     let color_q: qmetaobject::QString = color.to_string().into();
@@ -563,5 +581,41 @@ pub fn update_scroll_transform(root_raw: *mut std::ffi::c_void, scroll_y: f64) {
         scroll_y as "double"
     ] {
         update_scroll_transform(root_raw, scroll_y);
+    });
+}
+
+/// Issue #668 评论 5646842592 问题 3: 从 render thread 排 GUI 线程 reprepare snapshot 回调。
+///
+/// 用 `QMetaObject::invokeMethod` + `Qt::QueuedConnection` 把
+/// `sujian_reprepare_static_snapshot` 排到 `item_ptr` 所属线程（GUI 线程）
+/// 的事件队列。不在 render thread 排版，不把 `item.update()` 当成会重新
+/// prepare layout。
+///
+/// 调用时机：`update_paint_node`（render thread）中 static rebuild 失败
+/// （某个必需 layout 缺失，当前 cached_static_snapshot 的 generation 已失效）。
+/// GUI 线程回调里清掉失效 `cached_static_snapshot` 并重新 prepare，再 `update()`
+/// 触发下一帧 `updatePaintNode` 消费新 snapshot。
+///
+/// # Safety
+/// `item_ptr` 必须是有效的 QQuickItem*（由 `get_cpp_object()` 获得）；
+/// `rust_item_ptr` 必须是有效的 SujianEditorItem 裸指针（由
+/// `self as *mut Self as *mut c_void` 获得，由 `item_from_ptr` 解引用）。
+pub fn schedule_static_snapshot_reprepare_on_gui_thread(
+    item_ptr: *mut std::ffi::c_void,
+    rust_item_ptr: *mut std::ffi::c_void,
+) {
+    if item_ptr.is_null() || rust_item_ptr.is_null() {
+        return;
+    }
+    // SAFETY: item_ptr 是有效的 QQuickItem*（由 get_cpp_object() 获得），
+    // rust_item_ptr 是有效的 SujianEditorItem 裸指针（由 self as *mut Self 获得）。
+    // QMetaObject::invokeMethod with Qt::QueuedConnection 把 lambda 排到
+    // item_ptr 所属线程（GUI 线程）事件队列，lambda 在 GUI 线程执行时通过
+    // sujian_reprepare_static_snapshot FFI 入口解引用 rust_item_ptr。
+    // 裸指针跨线程传递本身安全（仅传地址），解引用在 GUI 线程单线程执行。
+    cpp!(unsafe [item_ptr as "QQuickItem*", rust_item_ptr as "void*"] {
+        QMetaObject::invokeMethod(item_ptr, [rust_item_ptr]() {
+            sujian_reprepare_static_snapshot(rust_item_ptr);
+        }, Qt::QueuedConnection);
     });
 }

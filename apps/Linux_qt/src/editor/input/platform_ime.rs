@@ -233,6 +233,25 @@ extern "C" fn sujian_request_repaint(rust_item: *mut c_void) {
     }));
 }
 
+/// Issue #668 评论 5646842592 问题 3: GUI 线程回调入口——清掉失效 snapshot 并重新 prepare。
+///
+/// 由 render thread 的 `update_paint_node` 在 static rebuild 失败时通过
+/// `QMetaObject::invokeMethod(item_ptr, lambda, Qt::QueuedConnection)` 排到
+/// GUI 线程事件队列调用。lambda 捕获 rust_item 裸指针，在 GUI 线程执行时
+/// 通过 `item_from_ptr` 解引用拿 `&mut SujianEditorItem`，调用
+/// `reprepare_static_snapshot_gui`。
+#[no_mangle]
+extern "C" fn sujian_reprepare_static_snapshot(rust_item: *mut c_void) {
+    // SAFETY: item_from_ptr checks for null; the C++ caller guarantees the pointer is valid for the FFI call.
+    let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
+        return;
+    };
+    // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
+    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        item.reprepare_static_snapshot_gui();
+    }));
+}
+
 #[no_mangle]
 extern "C" fn sujian_get_ime_query_data(
     rust_item: *mut c_void,
