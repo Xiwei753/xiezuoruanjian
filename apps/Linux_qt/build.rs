@@ -596,7 +596,10 @@ fn inject_build_env_vars() {
 
     let app_version = env!("CARGO_PKG_VERSION");
 
-    let build_key = format!("{}-{}-{}-{}", app_version, git_sha, package_type, build_profile);
+    let build_key = format!(
+        "{}-{}-{}-{}",
+        app_version, git_sha, package_type, build_profile
+    );
 
     println!("cargo:rustc-env=GIT_COMMIT_SHA={}", git_sha);
     println!("cargo:rustc-env=BUILD_PROFILE={}", build_profile);

@@ -502,9 +502,9 @@ pub struct SystemInfo {
 
 /// 收集项状态，记录每个收集步骤的结果
 pub struct CollectionStatus {
-    pub logs: &'static str,       // "ok", "missing", "error"
-    pub settings: &'static str,   // "ok", "missing", "error"
-    pub crash: &'static str,      // "ok", "not_found", "error"
+    pub logs: &'static str,        // "ok", "missing", "error"
+    pub settings: &'static str,    // "ok", "missing", "error"
+    pub crash: &'static str,       // "ok", "not_found", "error"
     pub device_info: &'static str, // "ok", "error"
 }
 
@@ -940,8 +940,11 @@ mod tests {
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name().to_string_lossy().starts_with(&buildkey_prefix)
-                    && e.file_name().to_string_lossy() != format!("{}-{}.log", LOG_PREFIX, effective_build_key())
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with(&buildkey_prefix)
+                    && e.file_name().to_string_lossy()
+                        != format!("{}-{}.log", LOG_PREFIX, effective_build_key())
             })
             .collect();
         assert_eq!(rotated.len(), 1);
@@ -979,7 +982,9 @@ mod tests {
         let workspace = tempdir().unwrap();
         let log_dir = tempdir().unwrap();
         fs::write(
-            log_dir.path().join(format!("{}-{}.log", LOG_PREFIX, effective_build_key())),
+            log_dir
+                .path()
+                .join(format!("{}-{}.log", LOG_PREFIX, effective_build_key())),
             "safe log line\n",
         )
         .unwrap();
@@ -1005,9 +1010,13 @@ mod tests {
             xdg_session_type: "wayland".to_string(),
         };
 
-        let zip_path =
-            export_diagnostics_pack(workspace.path(), log_dir.path(), &runtime_info, &system_info)
-                .unwrap();
+        let zip_path = export_diagnostics_pack(
+            workspace.path(),
+            log_dir.path(),
+            &runtime_info,
+            &system_info,
+        )
+        .unwrap();
         assert!(
             zip_path.exists(),
             "zip should exist: {}",
@@ -1025,7 +1034,8 @@ mod tests {
         // manifest 是诊断包的身份证，写失败必须导致导出失败（由 write_diagnostics_manifest
         // 返回 Result 和 export 用 ? 保证）。此处验证成功路径下 manifest 存在且可解析。
         let zip_file = fs::File::open(&zip_path).expect("zip file should be openable");
-        let mut zip_archive = zip::ZipArchive::new(zip_file).expect("zip should be a valid archive");
+        let mut zip_archive =
+            zip::ZipArchive::new(zip_file).expect("zip should be a valid archive");
         let mut manifest_entry = zip_archive
             .by_name("diagnostics_manifest.json")
             .expect("diagnostics_manifest.json must exist in successful export zip");
@@ -1112,7 +1122,8 @@ mod tests {
 
         log_to_file("ERROR", "test_module", "test_event", "test error message");
 
-        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
+        let current_file =
+            test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("[ERROR]"));
@@ -1133,7 +1144,8 @@ mod tests {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
-        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
+        let current_file =
+            test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, effective_build_key()));
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1404,7 +1416,10 @@ mod tests {
             assert_eq!(build_key, BUILD_KEY);
         } else {
             // 编译期非 AppImage，build key 应重新组合，包含 "AppImage"
-            assert_ne!(build_key, BUILD_KEY, "build key must differ when AppImage overrides compile-time package type");
+            assert_ne!(
+                build_key, BUILD_KEY,
+                "build key must differ when AppImage overrides compile-time package type"
+            );
             assert!(
                 build_key.contains("AppImage"),
                 "build key must contain AppImage, got: {}",
