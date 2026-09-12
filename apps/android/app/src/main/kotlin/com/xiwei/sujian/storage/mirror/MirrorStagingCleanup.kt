@@ -106,7 +106,11 @@ class MirrorStagingCleanup(
      *
      * 使用 `LIKE '<prefix>%'` 查询，匹配所有子路径下的文件。
      *
-     * @return true 表示查询和删除都成功；false 表示查询抛异常（清理失败，需重试）
+     * Issue #667 评论 5645967475：任一 delete 抛异常或返回 0 都视为本前缀清理失败，
+     * 让外层不写 done 标志、下次重试。空结果（无数据）视为成功。
+     *
+     * @return true 表示查询和所有删除都成功（无数据时也返回 true）；
+     *   false 表示查询抛异常，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
      */
     private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String): Boolean {
         val cursor =
@@ -126,6 +130,7 @@ class MirrorStagingCleanup(
                 return false
             }
 
+        var allDeleted = true
         cursor?.use { c ->
             val urisToDelete = mutableListOf<Uri>()
             while (c.moveToNext()) {
@@ -133,22 +138,41 @@ class MirrorStagingCleanup(
                 urisToDelete.add(Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString()))
             }
             for (uri in urisToDelete) {
-                try {
-                    contentResolver.delete(uri, null, null)
-                } catch (e: SecurityException) {
-                    DiagnosticsLogger.w(TAG, "MediaStore delete failed (SecurityException): $uri", e)
-                } catch (e: Exception) {
-                    DiagnosticsLogger.w(TAG, "MediaStore delete failed: $uri", e)
+                if (!deleteSingleMediaStoreUri(uri)) {
+                    allDeleted = false
                 }
             }
-            if (urisToDelete.isNotEmpty()) {
+            if (urisToDelete.isNotEmpty() && allDeleted) {
                 DiagnosticsLogger.i(TAG, "Deleted ${urisToDelete.size} legacy files under $pathPrefix")
             }
         }
-        // 查询成功（cursor 已拿到）即视为本前缀清理成功；
-        // 单条 delete 失败只记日志（best-effort），不阻塞整体重试。
-        return true
+        // 查询成功且所有 delete 都成功（返回非 0 且未抛异常）才视为本前缀清理成功；
+        // 任一 delete 失败（抛异常或返回 0）都返回 false，让外层不写 done 标志、下次重试。
+        return allDeleted
     }
+
+    /**
+     * 删除单个 MediaStore URI，返回是否成功（返回非 0 且未抛异常）。
+     *
+     * Issue #667 评论 5645967475：把单条删除逻辑提取到辅助函数，降低 [deleteMediaStoreFilesByPathPrefix]
+     * 的认知复杂度与嵌套深度。
+     */
+    private fun deleteSingleMediaStoreUri(uri: Uri): Boolean =
+        try {
+            val rows = contentResolver.delete(uri, null, null)
+            if (rows == 0) {
+                DiagnosticsLogger.w(TAG, "MediaStore delete returned 0 rows: $uri")
+                false
+            } else {
+                true
+            }
+        } catch (e: SecurityException) {
+            DiagnosticsLogger.w(TAG, "MediaStore delete failed (SecurityException): $uri", e)
+            false
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "MediaStore delete failed: $uri", e)
+            false
+        }
 
     /**
      * 通过 SAF DocumentsContract 删除旧版事务目录。
@@ -156,7 +180,11 @@ class MirrorStagingCleanup(
      * 从 [ReadableMirrorStateStore] 读取 tree URI，如果存在则尝试在 tree 下
      * 查找并删除 `.staging/`、`.backup/`、`_meta/` 子目录。
      *
-     * @return true 表示无需清理（无 tree URI）或清理成功；false 表示 listChildren 抛异常（需重试）
+     * Issue #667 评论 5645967475：任一 deleteDocument 抛异常或返回 false 都视为 SAF 清理失败，
+     * 让外层不写 done 标志、下次重试。无 tree URI 或无旧版事务目录视为成功。
+     *
+     * @return true 表示无需清理（无 tree URI、无旧版事务目录）或所有删除都成功；
+     *   false 表示 listChildren 抛异常，或任一 deleteDocument 抛异常或返回 false（需重试）
      */
     private fun cleanupViaSaf(): Boolean {
         val stateStore = ReadableMirrorStateStore(context)
@@ -177,23 +205,44 @@ class MirrorStagingCleanup(
                 return false
             }
 
+        var allDeleted = true
         for (dirName in LEGACY_DIR_NAMES) {
             val targetDir = children.find { it.isDirectory && it.name == dirName }
-            if (targetDir != null) {
-                try {
-                    DocumentsContract.deleteDocument(contentResolver, targetDir.uri)
-                    DiagnosticsLogger.i(TAG, "Deleted SAF legacy directory: $dirName")
-                } catch (e: SecurityException) {
-                    DiagnosticsLogger.w(TAG, "SAF delete failed (SecurityException) for $dirName", e)
-                } catch (e: Exception) {
-                    DiagnosticsLogger.w(TAG, "SAF delete failed for $dirName", e)
-                }
+            if (targetDir != null && !deleteSingleSafDir(dirName, targetDir.uri)) {
+                allDeleted = false
             }
         }
-        // listChildren 成功即视为 SAF 清理成功；
-        // 单条 deleteDocument 失败只记日志（best-effort），不阻塞整体重试。
-        return true
+        // listChildren 成功且所有 deleteDocument 都成功（返回 true 且未抛异常）才视为 SAF 清理成功；
+        // 任一 deleteDocument 失败（抛异常或返回 false）都返回 false，让外层不写 done 标志、下次重试。
+        return allDeleted
     }
+
+    /**
+     * 删除单个 SAF 旧版事务目录，返回是否成功（deleteDocument 返回 true 且未抛异常）。
+     *
+     * Issue #667 评论 5645967475：把单条删除逻辑提取到辅助函数，降低 [cleanupViaSaf]
+     * 的认知复杂度与嵌套深度。
+     */
+    private fun deleteSingleSafDir(
+        dirName: String,
+        uri: Uri,
+    ): Boolean =
+        try {
+            val deleted = DocumentsContract.deleteDocument(contentResolver, uri)
+            if (deleted) {
+                DiagnosticsLogger.i(TAG, "Deleted SAF legacy directory: $dirName")
+                true
+            } else {
+                DiagnosticsLogger.w(TAG, "SAF delete returned false for $dirName")
+                false
+            }
+        } catch (e: SecurityException) {
+            DiagnosticsLogger.w(TAG, "SAF delete failed (SecurityException) for $dirName", e)
+            false
+        } catch (e: Exception) {
+            DiagnosticsLogger.w(TAG, "SAF delete failed for $dirName", e)
+            false
+        }
 
     private fun tryParseUri(uriString: String): Uri? =
         try {
