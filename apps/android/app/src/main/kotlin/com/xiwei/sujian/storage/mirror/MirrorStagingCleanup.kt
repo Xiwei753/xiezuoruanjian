@@ -51,26 +51,34 @@ class MirrorStagingCleanup(
     /**
      * 如果尚未执行过清理，则执行一次。
      *
-     * 清理完成后在私有目录写入标志文件，后续调用直接跳过。
-     * 清理过程中任何步骤失败都不会阻止后续步骤（best-effort 清理）。
+     * Issue #667 评论 5645597368 问题 2：清理函数返回 Boolean，只有需要清理的后端
+     * 都成功处理后才能写 done 标志。失败不写标志，下次初始化继续重试，避免第一次
+     * 启动时查询/删除临时失败后旧 .staging/.backup/_meta 永远残留 Download 目录。
      */
     fun cleanupIfNeeded() {
         if (cleanupFlagFile.exists()) return
 
         DiagnosticsLogger.i(TAG, "Starting legacy staging cleanup (Issue #667)")
 
-        cleanupViaMediaStore()
-        cleanupViaSaf()
+        val mediaStoreOk = cleanupViaMediaStore()
+        val safOk = cleanupViaSaf()
 
-        // 写入标志文件，标记清理已完成
-        try {
-            cleanupFlagFile.parentFile?.mkdirs()
-            cleanupFlagFile.writeText("done", Charsets.UTF_8)
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Failed to write cleanup flag file", e)
+        // 只有需要清理的后端都成功处理后才能写 done 标志
+        // 失败就不写标志，下次初始化继续重试
+        if (mediaStoreOk && safOk) {
+            try {
+                cleanupFlagFile.parentFile?.mkdirs()
+                cleanupFlagFile.writeText("done", Charsets.UTF_8)
+                DiagnosticsLogger.i(TAG, "Legacy staging cleanup completed successfully")
+            } catch (e: Exception) {
+                DiagnosticsLogger.w(TAG, "Failed to write cleanup flag file", e)
+            }
+        } else {
+            DiagnosticsLogger.w(
+                TAG,
+                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, safOk=$safOk), will retry next time",
+            )
         }
-
-        DiagnosticsLogger.i(TAG, "Legacy staging cleanup completed")
     }
 
     /**
@@ -79,12 +87,15 @@ class MirrorStagingCleanup(
      * 查询 RELATIVE_PATH 以 `Download/Sujian/.staging/`、`Download/Sujian/.backup/`、
      * `Download/Sujian/_meta/` 开头的文件，逐个删除。
      *
-     * MediaStore.Downloads 需要 API 29+，低版本跳过（旧版也不会用 MediaStore）。
+     * MediaStore.Downloads 需要 API 29+，低版本直接返回 true（旧版也不会用 MediaStore，视为成功）。
+     *
+     * @return true 表示所有前缀清理都成功；false 表示任一前缀查询或删除失败
      */
-    private fun cleanupViaMediaStore() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+    private fun cleanupViaMediaStore(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
 
-        for (prefix in LEGACY_DIR_PREFIXES) {
+        // 全部前缀清理的合取：任一失败即整体失败
+        return LEGACY_DIR_PREFIXES.all { prefix ->
             val relativePathPrefix = "${DOWNLOADS_BASE}/$prefix"
             deleteMediaStoreFilesByPathPrefix(relativePathPrefix)
         }
@@ -94,8 +105,10 @@ class MirrorStagingCleanup(
      * 查询 MediaStore 中 RELATIVE_PATH 以指定前缀开头的文件，逐个删除。
      *
      * 使用 `LIKE '<prefix>%'` 查询，匹配所有子路径下的文件。
+     *
+     * @return true 表示查询和删除都成功；false 表示查询抛异常（清理失败，需重试）
      */
-    private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String) {
+    private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String): Boolean {
         val cursor =
             try {
                 contentResolver.query(
@@ -107,10 +120,10 @@ class MirrorStagingCleanup(
                 )
             } catch (e: SecurityException) {
                 DiagnosticsLogger.w(TAG, "MediaStore query failed (SecurityException) for prefix $pathPrefix", e)
-                return
+                return false
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "MediaStore query failed for prefix $pathPrefix", e)
-                return
+                return false
             }
 
         cursor?.use { c ->
@@ -132,6 +145,9 @@ class MirrorStagingCleanup(
                 DiagnosticsLogger.i(TAG, "Deleted ${urisToDelete.size} legacy files under $pathPrefix")
             }
         }
+        // 查询成功（cursor 已拿到）即视为本前缀清理成功；
+        // 单条 delete 失败只记日志（best-effort），不阻塞整体重试。
+        return true
     }
 
     /**
@@ -140,12 +156,12 @@ class MirrorStagingCleanup(
      * 从 [ReadableMirrorStateStore] 读取 tree URI，如果存在则尝试在 tree 下
      * 查找并删除 `.staging/`、`.backup/`、`_meta/` 子目录。
      *
-     * SAF 清理失败不影响整体清理结果（best-effort）。
+     * @return true 表示无需清理（无 tree URI）或清理成功；false 表示 listChildren 抛异常（需重试）
      */
-    private fun cleanupViaSaf() {
+    private fun cleanupViaSaf(): Boolean {
         val stateStore = ReadableMirrorStateStore(context)
-        val treeUriStr = stateStore.getTreeUri() ?: return
-        val treeUri = tryParseUri(treeUriStr) ?: return
+        val treeUriStr = stateStore.getTreeUri() ?: return true
+        val treeUri = tryParseUri(treeUriStr) ?: return true
 
         val documentTreeReader = DocumentTreeReader(contentResolver)
 
@@ -155,10 +171,10 @@ class MirrorStagingCleanup(
                 documentTreeReader.listChildren(treeUri)
             } catch (e: SecurityException) {
                 DiagnosticsLogger.w(TAG, "SAF listChildren failed (SecurityException)", e)
-                return
+                return false
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "SAF listChildren failed", e)
-                return
+                return false
             }
 
         for (dirName in LEGACY_DIR_NAMES) {
@@ -174,6 +190,9 @@ class MirrorStagingCleanup(
                 }
             }
         }
+        // listChildren 成功即视为 SAF 清理成功；
+        // 单条 deleteDocument 失败只记日志（best-effort），不阻塞整体重试。
+        return true
     }
 
     private fun tryParseUri(uriString: String): Uri? =

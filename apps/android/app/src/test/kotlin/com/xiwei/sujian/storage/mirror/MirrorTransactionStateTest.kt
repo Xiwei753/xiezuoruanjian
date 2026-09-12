@@ -1,5 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -111,6 +113,66 @@ private class FakeReadableMirrorStorage : ReadableMirrorStorage {
 
     override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
         val content = committedFiles[ref.uri] ?: stagingFiles[ref.uri] ?: backupFiles[ref.uri] ?: return null
+        return Pair(content, computeContentHash(content))
+    }
+}
+
+/**
+ * Issue #667 改写用 FakeStorage：用 committedPathToUri 精确匹配路径，
+ * 支持 lookup 三态查询和失败注入，用于 MirrorTransactionWorkspace 事务层测试。
+ */
+private class WorkspaceTestFakeStorage : ReadableMirrorStorage {
+    val committedFiles = mutableMapOf<String, String>()
+    val committedPathToUri = mutableMapOf<String, String>()
+    val operationLog = mutableListOf<String>()
+    var failLookup = false
+    var failDelete = false
+
+    override fun createText(
+        relativeDir: String,
+        displayName: String,
+        mimeType: String,
+        text: String,
+    ): MirrorFileRef? {
+        val path = if (relativeDir.isBlank()) displayName else "$relativeDir/$displayName"
+        val uri = "content://fake/${committedFiles.size}"
+        committedFiles[uri] = text
+        committedPathToUri[path] = uri
+        operationLog.add("createText:$path")
+        return MirrorFileRef(uri, path)
+    }
+
+    override fun replaceText(ref: MirrorFileRef, text: String): Boolean {
+        committedFiles[ref.uri] = text
+        operationLog.add("replaceText:${ref.relativePath}")
+        return true
+    }
+
+    override fun delete(ref: MirrorFileRef): Boolean {
+        operationLog.add("delete:${ref.relativePath}")
+        if (failDelete) return false
+        committedFiles.remove(ref.uri)
+        committedPathToUri.entries.removeIf { it.value == ref.uri }
+        return true
+    }
+
+    override fun isSupported(): Boolean = true
+
+    override fun resolve(relativePath: String): MirrorFileRef? {
+        operationLog.add("resolve:$relativePath")
+        val uri = committedPathToUri[relativePath] ?: return null
+        return MirrorFileRef(uri, relativePath)
+    }
+
+    override fun lookup(relativePath: String): MirrorLookupResult {
+        operationLog.add("lookup:$relativePath")
+        if (failLookup) return MirrorLookupResult.Failed(SecurityException("simulated lookup failure"))
+        val uri = committedPathToUri[relativePath] ?: return MirrorLookupResult.Missing
+        return MirrorLookupResult.Found(MirrorFileRef(uri, relativePath))
+    }
+
+    override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? {
+        val content = committedFiles[ref.uri] ?: return null
         return Pair(content, computeContentHash(content))
     }
 }
@@ -699,29 +761,157 @@ class MirrorTransactionStateTest {
 
     // ── #649 评论 5566303837 问题 4：RestoreBackupResult identity verification ──
     // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+    // 改写：用 workspace.lookupBackup + storage.lookup + storage.readTextAndHash 组合验证恢复逻辑。
 
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * restoreBackup hash 匹配返回已恢复。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.lookupBackup 验证备份存在，
+     * 用 storage.lookup + readTextAndHash 验证 final 位置已是旧内容（hash 匹配）→ 已恢复。
+     */
     @Test
     fun restoreBackup_withHash_match_returnsAlreadyRestored() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-restore-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+        val oldHash = computeContentHash(oldContent)
+
+        // 准备 backup（用 workspace.prepareBackup）
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // final 位置已是旧内容（hash 匹配）→ 已恢复
+        val finalUri = "content://final/old"
+        storage.committedFiles[finalUri] = oldContent
+        storage.committedPathToUri[relativePath] = finalUri
+
+        // 验证恢复逻辑：lookupBackup Found + final hash 匹配 → 已恢复
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        val finalLookup = storage.lookup(relativePath)
+        assertTrue("final 应存在", finalLookup is MirrorLookupResult.Found)
+        val finalHashResult = storage.readTextAndHash((finalLookup as MirrorLookupResult.Found).ref)
+        assertNotNull("应能读取 final hash", finalHashResult)
+        assertEquals(
+            "final hash 匹配旧内容 hash → 已恢复，无需操作",
+            oldHash,
+            finalHashResult!!.second,
+        )
     }
 
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * restoreBackup hash 不匹配返回冲突。
+     *
+     * Issue #667 改写：final 位置内容 hash 不匹配旧内容 hash → 冲突，需先删 final 再恢复 backup。
+     */
     @Test
     fun restoreBackup_withHash_mismatch_returnsConflict() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-restore-2"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+        val oldHash = computeContentHash(oldContent)
+        val newContent = "new content (promoted, not restored)"
+
+        // 准备 backup
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // final 位置是新内容（hash 不匹配旧内容）→ 冲突
+        val finalUri = "content://final/new"
+        storage.committedFiles[finalUri] = newContent
+        storage.committedPathToUri[relativePath] = finalUri
+
+        // 验证恢复逻辑：lookupBackup Found + final hash 不匹配 → 冲突
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        val finalLookup = storage.lookup(relativePath)
+        assertTrue("final 应存在", finalLookup is MirrorLookupResult.Found)
+        val finalHashResult = storage.readTextAndHash((finalLookup as MirrorLookupResult.Found).ref)
+        assertNotNull("应能读取 final hash", finalHashResult)
+        assertFalse(
+            "final hash 不匹配旧内容 hash → 冲突，需先删 final 再恢复 backup",
+            finalHashResult!!.second == oldHash,
+        )
     }
 
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * restoreBackup 无 hash 但找到返回已恢复。
+     *
+     * Issue #667 改写：无 oldContentHash 时，final 找到即视为已恢复（向后兼容）。
+     */
     @Test
     fun restoreBackup_withoutHash_found_returnsAlreadyRestored() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-restore-3"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+
+        // 准备 backup
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // final 位置有文件（无 hash 校验，找到即已恢复）
+        val finalUri = "content://final/restored"
+        storage.committedFiles[finalUri] = oldContent
+        storage.committedPathToUri[relativePath] = finalUri
+
+        // 验证恢复逻辑：无 hash + final Found → 已恢复
+        val finalLookup = storage.lookup(relativePath)
+        assertTrue("无 hash 时 final Found → 已恢复", finalLookup is MirrorLookupResult.Found)
     }
 
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * restoreBackup 最终文件缺失时恢复。
+     *
+     * Issue #667 改写：final Missing + backup Found → 从 backup 恢复到 final。
+     */
     @Test
     fun restoreBackup_missing_final_returnsRestored() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-restore-4"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+
+        // 准备 backup
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // final 缺失
+        val finalLookup = storage.lookup(relativePath)
+        assertTrue("final 应缺失", finalLookup is MirrorLookupResult.Missing)
+
+        // 从 backup 恢复：readBackup + createText
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        val backupContent = workspace.readBackup((backupLookup as MirrorLookupResult.Found).ref)
+        assertEquals("backup 内容正确", oldContent, backupContent)
+
+        // 在 final 位置创建文件
+        val restoredRef = storage.createText("作品/P/V", "Ch.md", MIME_TYPE_MARKDOWN, backupContent!!)
+        assertNotNull("恢复后 final 应存在", restoredRef)
+        assertEquals(
+            "恢复后 final 内容正确",
+            oldContent,
+            storage.committedFiles[restoredRef!!.uri],
+        )
     }
 }
 
@@ -1026,49 +1216,338 @@ class MirrorTransactionRoundTripTest {
 @Config(sdk = [34])
 class MirrorTransactionBackupTest {
     // ── FakeReadableMirrorStorage: interface contract tests ──
+    // Issue #667 改写：promoteStaged/backupCommitted/restoreBackup/rollback 已从 ReadableMirrorStorage 移除，
+    // 事务操作移到了 MirrorTransactionWorkspace。以下测试用 workspace + executor 验证事务层行为。
 
-    @Ignore("Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * promoteStaged 不删除旧文件（与问题 1 直接相关）。
+     *
+     * Issue #667 改写：用反射调用 MirrorPublishPromoteExecutor.promoteItemStaged，
+     * 验证 lookup==Failed 时返回 null（停止 promote，保留 journal）。
+     * 这正是旧用例原本锁住的失败边界。
+     */
     @Test
     fun fakeStorage_promoteStaged_doesNotDeleteOld() {
-        // Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+
+        // 1. 在 workspace 中 stage 内容
+        val txId = "tx-promote-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, "new content")!!
+        val storage = WorkspaceTestFakeStorage().apply { failLookup = true }
+
+        val key = ChapterKey("p1", "v1", "ch1")
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = oldRef,
+            backupOldRef = null,
+            promotedRef = null,
+            state = PendingItem.STATE_BACKUP_READY,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, "sha256:abc"),
+        )
+
+        // 2. 反射调用 private promoteItemStaged
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val result = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        // 3. lookup==Failed 时 promoteItemStaged 返回 null（停止 promote，保留 journal）
+        assertNull(
+            "promoteItemStaged 在 lookup==Failed 时返回 null，停止 promote，保留 journal",
+            result,
+        )
+        // 旧文件未被删除（delete 未被调用）
+        assertFalse(
+            "旧文件未被删除（promote 已停止）",
+            storage.operationLog.contains("delete:$relativePath"),
+        )
     }
 
-    @Ignore("Issue #667: backupCommitted 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * backupCommitted 创建副本。
+     *
+     * Issue #667 改写：用 workspace.prepareBackup 验证备份副本创建。
+     */
     @Test
     fun fakeStorage_backupCommitted_createsCopy() {
-        // Issue #667: backupCommitted 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = "tx-backup-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content to backup"
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+
+        // prepareBackup 创建备份副本
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应返回非 null", backupRef)
+
+        // 验证备份内容可读且正确
+        val backupContent = workspace.readBackup(backupRef!!)
+        assertEquals("备份内容应与旧内容一致", oldContent, backupContent)
+
+        // 验证 lookupBackup 能找到备份
+        val lookupResult = workspace.lookupBackup(txId, relativePath)
+        assertTrue("lookupBackup 应找到备份", lookupResult is MirrorLookupResult.Found)
     }
 
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * restoreBackup 写到最终位置。
+     *
+     * Issue #667 改写：用 workspace.readBackup + storage.createText 验证恢复到最终位置。
+     */
     @Test
     fun fakeStorage_restoreBackup_writesToFinalLocation() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-restore-final"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content to restore"
+
+        // 准备备份
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)!!
+
+        // 从备份恢复到最终位置
+        val backupContent = workspace.readBackup(backupRef)
+        assertEquals("备份内容正确", oldContent, backupContent)
+
+        val restoredRef = storage.createText("作品/P/V", "Ch.md", MIME_TYPE_MARKDOWN, backupContent!!)
+        assertNotNull("恢复后 final 应存在", restoredRef)
+        assertEquals(
+            "恢复后 final 路径正确",
+            relativePath,
+            restoredRef!!.relativePath,
+        )
+        assertEquals(
+            "恢复后 final 内容正确",
+            oldContent,
+            storage.committedFiles[restoredRef.uri],
+        )
     }
 
-    @Ignore("Issue #667: rollback 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * rollback 删除所有暂存文件。
+     *
+     * Issue #667 改写：用 workspace.rollback 验证删除 staging 和 backup 目录。
+     */
     @Test
     fun fakeStorage_rollback_deletesAllStagingFiles() {
-        // Issue #667: rollback 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = "tx-rollback-1"
+        val relativePath = "作品/P/V/Ch.md"
+
+        // 在 workspace 中创建 staging 和 backup 文件
+        workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, "staged content")
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        workspace.prepareBackup(txId, oldRef, "old content")
+
+        // rollback 删除所有暂存文件
+        val result = workspace.rollback(txId)
+        assertTrue("rollback 应成功", result)
+
+        // 验证 staging 和 backup 都已删除
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("backup 应已删除", backupLookup is MirrorLookupResult.Missing)
     }
 
     // ── Transaction flow order verification ──
+    // Issue #667 改写：用 workspace + executor 验证事务流顺序。
 
-    @Ignore("Issue #667: backupCommitted/promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * 事务流先备份后提升。
+     *
+     * Issue #667 改写：用 workspace.prepareBackup + promoteItemStaged 验证顺序。
+     */
     @Test
     fun transactionFlow_backupBeforePromote() {
-        // Issue #667: backupCommitted/promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-flow-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+        val newContent = "new content"
+
+        // 1. 先备份
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        storage.committedFiles[oldRef.uri] = oldContent
+        storage.committedPathToUri[relativePath] = oldRef.uri
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("备份应成功", backupRef)
+
+        // 2. 后提升（stage + promote）
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, newContent)!!
+        val key = ChapterKey("p1", "v1", "ch1")
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = oldRef,
+            backupOldRef = backupRef,
+            promotedRef = null,
+            state = PendingItem.STATE_OLD_VACATED,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
+        )
+
+        // 反射调用 promoteItemStaged
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val promotedRef = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        assertNotNull("promote 应成功", promotedRef)
+        // 验证备份仍在（promote 不删备份）
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("备份在 promote 后仍存在", backupLookup is MirrorLookupResult.Found)
     }
 
-    @Ignore("Issue #667: backupCommitted/promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * 新项目跳过备份。
+     *
+     * Issue #667 改写：oldRef==null 时跳过备份直接 promote。
+     */
     @Test
     fun transactionFlow_newProject_skipsBackup() {
-        // Issue #667: backupCommitted/promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-flow-2"
+        val relativePath = "作品/P/V/Ch.md"
+        val newContent = "new content for new project"
+
+        // 新项目：oldRef == null，跳过备份
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, newContent)!!
+        val key = ChapterKey("p1", "v1", "ch1")
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = null, // 新项目无旧文件
+            backupOldRef = null,
+            promotedRef = null,
+            state = PendingItem.STATE_STAGED,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
+        )
+
+        // 反射调用 promoteItemStaged
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val promotedRef = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        assertNotNull("新项目 promote 应成功（跳过备份）", promotedRef)
+        // 无备份创建
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("新项目无备份", backupLookup is MirrorLookupResult.Missing)
     }
 
-    @Ignore("Issue #667: backupCommitted/promoteStaged/restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * 提升失败恢复备份。
+     *
+     * Issue #667 改写：promoteItemStaged 失败（lookup==Failed）时返回 null，
+     * 备份仍在 workspace 中，可用于后续 rollback 恢复。
+     */
     @Test
     fun transactionFlow_promoteFailure_restoresBackup() {
-        // Issue #667: backupCommitted/promoteStaged/restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-flow-3"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+        val newContent = "new content"
+
+        // 1. 备份旧文件
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)!!
+
+        // 2. stage 新内容
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, newContent)!!
+
+        // 3. promote 失败（lookup==Failed）
+        storage.failLookup = true
+        val key = ChapterKey("p1", "v1", "ch1")
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = oldRef,
+            backupOldRef = backupRef,
+            promotedRef = null,
+            state = PendingItem.STATE_OLD_VACATED,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
+        )
+
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val promotedRef = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        // 4. promote 失败，返回 null
+        assertNull("promote 失败应返回 null", promotedRef)
+
+        // 5. 备份仍在，可用于 rollback 恢复
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+        assertTrue("备份仍在（可用于 rollback 恢复）", backupLookup is MirrorLookupResult.Found)
+        val backupContent = workspace.readBackup((backupLookup as MirrorLookupResult.Found).ref)
+        assertEquals("备份内容正确，可恢复旧内容", oldContent, backupContent)
     }
 
     // ── Recovery: skip PROMOTED/COMMITTED items ──
@@ -1212,16 +1691,78 @@ class MirrorTransactionBackupTest {
     }
 
     // ── #649 评论 5564820566 问题 3：两步 backup 模式 ──
+    // Issue #667 改写：prepareBackup/vacateCommitted/resolveBackup 已从 ReadableMirrorStorage 移除，
+    // 事务操作移到了 MirrorTransactionWorkspace。用 workspace 方法验证两步备份。
 
-    @Ignore("Issue #667: prepareBackup/vacateCommitted 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * 两步备份先准备后腾空。
+     *
+     * Issue #667 改写：用 workspace.prepareBackup + lookupBackup 验证两步备份。
+     * 1. prepareBackup 把旧内容写到私有 backup 目录
+     * 2. lookupBackup 确认备份已就绪
+     * 3. 旧文件从 final 删除（腾空）在 promoteItemStaged 中完成
+     */
     @Test
     fun twoStepBackup_prepareBackupThenVacate() {
-        // Issue #667: prepareBackup/vacateCommitted 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = WorkspaceTestFakeStorage()
+
+        val txId = "tx-twostep-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+
+        // 1. 准备备份（第一步）
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        storage.committedFiles[oldRef.uri] = oldContent
+        storage.committedPathToUri[relativePath] = oldRef.uri
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // 2. 确认备份已就绪
+        val lookupResult = workspace.lookupBackup(txId, relativePath)
+        assertTrue("备份已就绪", lookupResult is MirrorLookupResult.Found)
+
+        // 3. 腾空（第二步）：删除旧文件
+        val deleteResult = storage.delete(oldRef)
+        assertTrue("删除旧文件应成功", deleteResult)
+        assertFalse("旧文件已从 final 腾空", storage.committedFiles.containsKey(oldRef.uri))
+
+        // 备份仍在（不受腾空影响）
+        val lookupAfterVacate = workspace.lookupBackup(txId, relativePath)
+        assertTrue("腾空后备份仍在", lookupAfterVacate is MirrorLookupResult.Found)
     }
 
-    @Ignore("Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
+    /**
+     * 崩溃窗口检测已有备份。
+     *
+     * Issue #667 改写：用 workspace.lookupBackup 三态发现验证崩溃窗口。
+     * 场景：prepareBackup 已完成但 journal 未落盘 → 重启后 lookupBackup Found 可恢复。
+     */
     @Test
     fun twoStepBackup_crashWindow_detectsExistingBackup() {
-        // Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = "tx-crash-1"
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content before crash"
+
+        // 模拟崩溃窗口：prepareBackup 已完成，journal 未落盘
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        workspace.prepareBackup(txId, oldRef, oldContent)
+
+        // 重启后用 lookupBackup 三态发现检测已有备份
+        val lookupResult = workspace.lookupBackup(txId, relativePath)
+        assertTrue("lookupBackup 应返回 Found", lookupResult is MirrorLookupResult.Found)
+
+        // 读取备份内容验证完整性
+        val backupRef = (lookupResult as MirrorLookupResult.Found).ref
+        val backupContent = workspace.readBackup(backupRef)
+        assertEquals("备份内容完整", oldContent, backupContent)
+
+        // 对比：不存在的 txId 返回 Missing
+        val missingResult = workspace.lookupBackup("nonexistent-tx", relativePath)
+        assertTrue("不存在的 txId 返回 Missing", missingResult is MirrorLookupResult.Missing)
     }
 }

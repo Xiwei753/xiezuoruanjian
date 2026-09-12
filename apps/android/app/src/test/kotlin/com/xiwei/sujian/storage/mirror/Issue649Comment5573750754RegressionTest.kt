@@ -1,5 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -296,11 +298,40 @@ class Issue649Comment5573750754RegressionTest {
      * 场景2：backup Missing 且 final Missing → return false 保留 journal，不猜 old 还在。
      *
      * 修复后行为：不直接 setManifestUri(manifestOldRef.uri) 猜 old 还在 final。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.lookupBackup 验证三态发现。
      */
-    @Ignore("Issue #667: lookupBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix4_rollbackManifest_usesLookupBackupThreeStateDiscovery() {
-        // Issue #667: lookupBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = TX_1
+        val manifestPath = META_MANIFEST_JSON
+        val oldManifestContent = "{\"version\":\"old\"}"
+
+        // ── 场景1：物理 backup 存在 → lookupBackup 返回 Found ──
+        val oldManifestRef = MirrorFileRef("content://manifest/old", manifestPath)
+        workspace.prepareBackup(txId, oldManifestRef, oldManifestContent)
+
+        val lookupResult1 = workspace.lookupBackup(txId, manifestPath)
+        assertTrue(
+            "场景1：物理 backup 存在 → lookupBackup 返回 Found",
+            lookupResult1 is MirrorLookupResult.Found,
+        )
+
+        // 修复后：backup = r.ref，后续走 restoreBackup 路径
+        val backupRef = (lookupResult1 as MirrorLookupResult.Found).ref
+        val backupContent = workspace.readBackup(backupRef)
+        assertEquals("备份内容正确", oldManifestContent, backupContent)
+
+        // ── 场景2：backup Missing → 不猜 old 还在 final ──
+        val lookupResult2 = workspace.lookupBackup(txId, "nonexistent/manifest.json")
+        assertTrue(
+            "场景2：backup Missing → lookupBackup 返回 Missing",
+            lookupResult2 is MirrorLookupResult.Missing,
+        )
+        // 修复后：backup Missing 且 final Missing → return false 保留 journal，不猜 old 还在
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -518,11 +549,60 @@ class Issue649Comment5573750754RecoveryTest {
      *
      * 修复后行为：下次恢复走 recoverPendingPublishIfNeeded 的 PHASE_STAGE 分支，
      * storage.rollback(txId) + clearPendingPublish，清掉整棵 staging，不残留垃圾。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.stageText + MirrorJournalWriter 验证顺序。
      */
-    @Ignore("Issue #667: stageText/rollback 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix6_publishProject_writesPhaseStageJournalBeforeFirstStageText() {
-        // Issue #667: stageText/rollback 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+
+        val txId = TX_1
+        val relativePath = P_V_CH_MD
+        val content = "chapter content"
+
+        val operationOrder = mutableListOf<String>()
+
+        // 1. 修复后：先落 PHASE_STAGE journal（在第一笔 stageText 之前）
+        val phaseStageJournalParams = PendingJournalParams(
+            projectId = PROJ_1,
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_STAGE,
+            txId = txId,
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+        )
+        val journalWriteResult = journalWriter.writePendingPublishJournal(phaseStageJournalParams)
+        assertTrue("PHASE_STAGE journal 写入应成功", journalWriteResult)
+        operationOrder.add("writePHASE_STAGE_Journal")
+
+        // 2. 然后才 stageText
+        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", content)
+        assertNotNull("stageText 应成功", stagedRef)
+        operationOrder.add("stageText")
+
+        // 3. 验证顺序：PHASE_STAGE journal 在第一笔 stageText 之前
+        assertEquals(
+            "修复6：PHASE_STAGE journal 在第一笔 stageText 之前写入",
+            listOf("writePHASE_STAGE_Journal", "stageText"),
+            operationOrder,
+        )
+
+        // 4. 断电窗口：死在 staging 中间，磁盘上有 PHASE_STAGE journal（包含 txId）
+        //    修复后恢复走 PHASE_STAGE 分支：workspace.rollback(txId) 清掉整棵 staging
+        val rollbackResult = workspace.rollback(txId)
+        assertTrue("rollback(txId) 清理 staging 成功", rollbackResult)
+
+        // 5. 验证 staging 已清理
+        val stagedContentAfterRollback = workspace.readStaged(stagedRef!!)
+        assertNull("staging 文件已清理，不残留垃圾", stagedContentAfterRollback)
     }
 
     // ══════════════════════════════════════════════════════════════════════

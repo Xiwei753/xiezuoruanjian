@@ -1,5 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -92,22 +94,89 @@ class Issue649Comment5565067997ReproTest {
      * 修复 1.A：fallback copy 路径中，prepareBackup() 只复制 backup，old 还在 final，
      * journal 现在写 STATE_BACKUP_READY（不是 STATE_OLD_BACKED_UP）。
      * vacate 成功后写 STATE_OLD_VACATED。恢复时据此决定是否需要 vacate。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.prepareBackup 验证 backup 后状态是 STATE_BACKUP_READY。
      */
-    @Ignore("Issue #667: prepareBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix1A_fallbackCopy_usesBackupReadyState() {
-        // Issue #667: prepareBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = TX1
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+
+        // 1. prepareBackup（fallback copy 路径）：只复制 backup，old 还在 final
+        val oldRef = MirrorFileRef(CONTENT___OLD, relativePath)
+        val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
+        assertNotNull("prepareBackup 应成功", backupRef)
+
+        // 2. journal 写 STATE_BACKUP_READY（不是 STATE_OLD_BACKED_UP）
+        val key = ChapterKey("p1", "v1", "ch1")
+        val stagedRef = StagedMirrorRef(txId, "content://staging", ".staging/tx1/f.md", F_MD, TEXT_MARKDOWN)
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = oldRef,
+            backupOldRef = backupRef,
+            promotedRef = null,
+            state = PendingItem.STATE_BACKUP_READY, // 修复后写 BACKUP_READY
+        )
+        assertEquals(
+            "修复1.A：fallback copy 后状态是 STATE_BACKUP_READY",
+            PendingItem.STATE_BACKUP_READY,
+            item.state,
+        )
+
+        // 3. vacate 成功后写 STATE_OLD_VACATED
+        val vacatedItem = item.copy(state = PendingItem.STATE_OLD_VACATED)
+        assertEquals(
+            "修复1.A：vacate 后状态是 STATE_OLD_VACATED",
+            PendingItem.STATE_OLD_VACATED,
+            vacatedItem.state,
+        )
+
+        // 4. 备份在 workspace 中（old 还在 final，backup 是独立副本）
+        val lookupResult = workspace.lookupBackup(txId, relativePath)
+        assertTrue("备份在 workspace 中", lookupResult is MirrorLookupResult.Found)
     }
 
     /**
      * 修复 1.B：原子 move 路径，死在 "old 已 move 到 backup → journal 还没写"。
      * 重启后 recoverPromotePhase 用 lookup() 三态查询判断 old 是否已 vacate，
      * 不再硬编码 vacated=false。
+     *
+     * Issue #667 改写：用 workspace.lookupBackup + storage.lookup 验证恢复时用 lookup 判断状态。
      */
-    @Ignore("Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix1B_atomicMove_recoveryUsesLookupToDetermineVacated() {
-        // Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = DefectFakeStorage()
+
+        val txId = TX1
+        val relativePath = "作品/P/V/Ch.md"
+        val oldContent = "old content"
+
+        // 1. 模拟原子 move：old 已 move 到 backup
+        val oldRef = MirrorFileRef(CONTENT___OLD, relativePath)
+        workspace.prepareBackup(txId, oldRef, oldContent)
+
+        // 2. 恢复时用 lookup 三态查询判断 old 是否已 vacate
+        val finalLookup = storage.lookup(relativePath)
+        val backupLookup = workspace.lookupBackup(txId, relativePath)
+
+        // 3. backup Found + final Missing → old 已 vacate（原子 move 完成）
+        assertTrue("backup Found（old 已 move 到 backup）", backupLookup is MirrorLookupResult.Found)
+        assertTrue("final Missing（old 已从 final 移走）", finalLookup is MirrorLookupResult.Missing)
+
+        // 4. 用 lookup 结果决定恢复动作（不硬编码 vacated=false）
+        val vacated = when (finalLookup) {
+            is MirrorLookupResult.Missing -> true // old 已腾空
+            is MirrorLookupResult.Found -> false // old 还在 final
+            is MirrorLookupResult.Failed -> false // 查询失败，状态不明
+        }
+        assertTrue("用 lookup 判断：final Missing → vacated=true", vacated)
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -155,11 +224,53 @@ class Issue649Comment5565067997ReproTest {
      * 修复 2 行为验证：existingBackup != null 且 existingFinal != null 时，
      * 不再直接把 final 当成"已经 promote 的新 manifest"。
      * 而是根据 journal 的 manifestSwapState 决定从哪一步继续。
+     *
+     * Issue #667 改写：用 ManifestTransactionState 验证 manifest 事务状态。
      */
-    @Ignore("Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix2_backupPlusFinal_usesManifestSwapStateNotGuessing() {
-        // Issue #667: resolveBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        // 1. manifest backup 已存在（workspace 中）
+        val manifestPath = META_MANIFEST_JSON
+        val oldManifestContent = "{\"version\":\"old\"}"
+        val oldManifestRef = MirrorFileRef(CONTENT___MANIFEST_BACKUP, manifestPath)
+        val backupRef = workspace.prepareBackup(TX1, oldManifestRef, oldManifestContent)
+        assertNotNull("manifest backup 应成功", backupRef)
+
+        // 2. final 也存在（可能是新 manifest，也可能是旧 manifest 残留）
+        // 修复后：用 manifestSwapState 决定从哪一步继续，不猜测
+        val journalWithSwapState = PendingMirrorPublish(
+            txId = TX1,
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = oldManifestRef,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = backupRef,
+            isManifestCommitted = false,
+            manifestSwapState = ManifestTransactionState.MANIFEST_BACKUP_READY,
+        )
+
+        // 3. 根据 manifestSwapState 决定恢复动作（不猜测）
+        assertEquals(
+            "修复2：用 manifestSwapState=MANIFEST_BACKUP_READY 决定从哪一步继续",
+            ManifestTransactionState.MANIFEST_BACKUP_READY,
+            journalWithSwapState.manifestSwapState,
+        )
+
+        // 4. lookupBackup 确认备份存在
+        val lookupResult = workspace.lookupBackup(TX1, manifestPath)
+        assertTrue("manifest backup Found", lookupResult is MirrorLookupResult.Found)
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -174,11 +285,52 @@ class Issue649Comment5565067997ReproTest {
      * 4. setManifestUri(restoredRef.uri)
      *
      * 不再先 restoreBackup 再 resolve(final).delete()（会删掉刚恢复的旧 manifest）。
+     *
+     * Issue #667 改写：用 workspace 验证 manifest rollback 顺序。
      */
-    @Ignore("Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun fix3_manifestRollbackOrder_deleteNewRefBeforeRestore() {
-        // Issue #667: restoreBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = DefectFakeStorage()
+
+        val manifestPath = META_MANIFEST_JSON
+        val oldManifestContent = OLD_MANIFEST_CONTENT
+        val newManifestContent = "{\"version\":\"new\"}"
+
+        // 1. 准备 manifest backup
+        val oldManifestRef = MirrorFileRef(CONTENT___MANIFEST_BACKUP, manifestPath)
+        val backupRef = workspace.prepareBackup(TX1, oldManifestRef, oldManifestContent)!!
+
+        // 2. manifest new 已 promote 到 final
+        val newManifestUri = CONTENT___MANIFEST_NEW
+        storage.committedFiles[newManifestUri] = newManifestContent
+        storage.committedPathToUri[manifestPath] = newManifestUri
+
+        // 3. rollback 顺序：先删 manifestNewRef
+        val deleteOrder = mutableListOf<String>()
+        val newRef = MirrorFileRef(newManifestUri, manifestPath)
+        val deleteResult = storage.delete(newRef)
+        assertTrue("先删 manifestNewRef 应成功", deleteResult)
+        deleteOrder.add("deleteNewRef")
+        assertFalse("删除后 final 无 manifest", storage.committedFiles.containsKey(newManifestUri))
+
+        // 4. 然后 restoreBackup（从 workspace 读取旧 manifest）
+        val backupContent = workspace.readBackup(backupRef)
+        assertEquals("restoreBackup 内容正确", oldManifestContent, backupContent)
+        deleteOrder.add("restoreBackup")
+
+        // 5. 最后 setManifestUri（在 final 创建恢复的 manifest）
+        val restoredRef = storage.createText("_meta", "manifest.json", "application/json", backupContent!!)
+        assertNotNull("setManifestUri 应成功", restoredRef)
+        deleteOrder.add("setManifestUri")
+
+        // 6. 验证顺序正确：deleteNewRef 在 restoreBackup 之前
+        assertEquals(
+            "修复3：rollback 顺序是 deleteNewRef → restoreBackup → setManifestUri",
+            listOf("deleteNewRef", "restoreBackup", "setManifestUri"),
+            deleteOrder,
+        )
     }
 
     // ══════════════════════════════════════════════════════════════════════

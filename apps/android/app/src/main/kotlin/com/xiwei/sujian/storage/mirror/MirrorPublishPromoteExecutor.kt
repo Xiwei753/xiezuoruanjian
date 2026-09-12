@@ -236,27 +236,33 @@ internal class MirrorPublishPromoteExecutor(
         val content = workspace.readStaged(staged) ?: return null
 
         // 删除 Download 中的旧文件（如果存在），以便创建新文件
+        // Issue #667 评论 5645597368 问题 1：查旧文件失败或删除失败时必须停止 promote，
+        // 不能在状态不确定时继续 createText 留下重复正文 / journal 与真实状态脱节。
         val oldRef = item.oldRef
         if (oldRef != null) {
             when (val oldLookup = storage.lookup(oldRef.relativePath)) {
                 is MirrorLookupResult.Found -> {
                     if (!storage.delete(oldLookup.ref)) {
                         DiagnosticsLogger.w(TAG, "promote: delete old file failed for ${key.chapterId}")
+                        // 旧文件删除失败，停止 promote，保留 journal 让下次重试
+                        return null
                     }
                 }
                 is MirrorLookupResult.Missing -> {
-                    // 旧文件已不存在，无需删除
+                    // 旧文件明确不存在，无需删除，可以继续创建新文件
                 }
                 is MirrorLookupResult.Failed -> {
                     DiagnosticsLogger.w(
                         TAG,
                         "promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
                     )
+                    // 查询失败，旧文件状态不确定，停止 promote，保留 journal 让下次重试
+                    return null
                 }
             }
         }
 
-        // 在 Download 中创建新文件
+        // 只有明确 Missing 或删除成功才到达这里：在 Download 中创建新文件
         val relativeDir = staged.finalRelativePath.substringBeforeLast('/', "")
         val displayName = staged.finalRelativePath.substringAfterLast('/')
         return storage.createText(relativeDir, displayName, staged.mimeType, content)

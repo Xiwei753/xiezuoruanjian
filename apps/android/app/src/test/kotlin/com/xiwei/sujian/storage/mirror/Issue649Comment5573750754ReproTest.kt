@@ -1,5 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -329,11 +331,59 @@ class Issue649Comment5573750754ReproTest {
      *
      * 后果：MediaStore 原子 move 时 old URI 可能已指向 backup 路径；SAF 甚至可能已换 URI。
      * 随后 storage.rollback(txId) 会把真实 backup 删除，stateStore 留下失效引用。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.lookupBackup 验证 manifestBackupRef==null
+     * 但物理备份存在时能通过 lookupBackup 三态发现。
      */
-    @Ignore("Issue #667: lookupBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun problem4_rollbackManifest_manifestBackupRefNullButPhysicalBackupExists() {
-        // Issue #667: lookupBackup 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+
+        val txId = "tx-problem4"
+        val manifestPath = MANIFEST_PATH
+        val oldManifestContent = "{\"version\":\"old\"}"
+
+        // 1. 模拟崩溃窗口：prepareBackup 已完成，但 journal 还没写（manifestBackupRef==null）
+        val oldManifestRef = MirrorFileRef("content://manifest/old", manifestPath)
+        workspace.prepareBackup(txId, oldManifestRef, oldManifestContent)
+
+        // 2. journal 中 manifestBackupRef==null（journal 未落盘）
+        val journal = PendingMirrorPublish(
+            txId = txId,
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_PROMOTE,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+            manifestOldRef = oldManifestRef,
+            manifestStagedRef = null,
+            manifestNewRef = null,
+            manifestBackupRef = null, // journal 未落盘，backup ref 为 null
+            isManifestCommitted = false,
+        )
+        assertNull("journal 中 manifestBackupRef==null", journal.manifestBackupRef)
+
+        // 3. 修复后：用 workspace.lookupBackup 三态发现物理备份
+        val lookupResult = workspace.lookupBackup(txId, manifestPath)
+        assertTrue("lookupBackup 发现物理备份存在", lookupResult is MirrorLookupResult.Found)
+
+        // 4. 读取备份内容验证完整性
+        val backupRef = (lookupResult as MirrorLookupResult.Found).ref
+        val backupContent = workspace.readBackup(backupRef)
+        assertEquals("备份内容完整", oldManifestContent, backupContent)
+
+        // 5. 修复后行为：不直接 setManifestUri(manifestOldRef.uri) 猜 old 还在 final，
+        //    而是用 lookupBackup 发现物理备份，走 restoreBackup 路径
+        assertTrue(
+            "修复后：manifestBackupRef==null 但物理备份存在 → 用 lookupBackup 发现，走 restoreBackup 路径",
+            lookupResult is MirrorLookupResult.Found,
+        )
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -478,11 +528,71 @@ class Issue649Comment5573750754ReproTest {
      *
      * 正确做法：应先落 PHASE_STAGE journal（在第一笔 stageText() 之前），
      * 全部 staging 成功后再写 PHASE_PROMOTE。
+     *
+     * Issue #667 改写：用 MirrorTransactionWorkspace.stageText 验证 staging 操作，
+     * 并验证 PHASE_STAGE journal 应在第一笔 stageText 之前写入。
      */
-    @Ignore("Issue #667: stageText 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun problem6_publishProject_stagingHappensBeforeFirstJournal() {
-        // Issue #667: stageText 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+
+        val txId = "tx-problem6"
+        val relativePath1 = "作品/P/V/Ch1.md"
+        val relativePath2 = "作品/P/V/Ch2.md"
+        val content1 = "content 1"
+        val content2 = "content 2"
+
+        val operationOrder = mutableListOf<String>()
+
+        // 1. 修复后：先落 PHASE_STAGE journal（在第一笔 stageText 之前）
+        val phaseStageJournalParams = PendingJournalParams(
+            projectId = "p1",
+            transactionType = MirrorTransactionType.UPSERT_PROJECT,
+            phase = PendingMirrorPublish.PHASE_STAGE,
+            txId = txId,
+            backend = MirrorBackend.MEDIA_STORE,
+            treeUri = null,
+            oldEntries = emptyMap(),
+            newEntries = emptyMap(),
+            stagedRefs = emptyMap(),
+            items = emptyMap(),
+            removedProjectIds = emptySet(),
+        )
+        val journalWriteResult = journalWriter.writePendingPublishJournal(phaseStageJournalParams)
+        assertTrue("PHASE_STAGE journal 写入应成功", journalWriteResult)
+        operationOrder.add("writePHASE_STAGE_Journal")
+
+        // 2. 然后才 stageText
+        val stagedRef1 = workspace.stageText(txId, relativePath1, "text/markdown", content1)
+        assertNotNull("stageText 1 应成功", stagedRef1)
+        operationOrder.add("stageText:Ch1")
+
+        val stagedRef2 = workspace.stageText(txId, relativePath2, "text/markdown", content2)
+        assertNotNull("stageText 2 应成功", stagedRef2)
+        operationOrder.add("stageText:Ch2")
+
+        // 3. 验证顺序：PHASE_STAGE journal 在第一笔 stageText 之前
+        assertEquals(
+            "修复后：PHASE_STAGE journal 在第一笔 stageText 之前写入",
+            listOf("writePHASE_STAGE_Journal", "stageText:Ch1", "stageText:Ch2"),
+            operationOrder,
+        )
+
+        // 4. 断电窗口：死在 staging 中间，磁盘上有 PHASE_STAGE journal（包含 txId）
+        //    修复后恢复走 recoverPendingPublishIfNeeded 的 PHASE_STAGE 分支：
+        //    workspace.rollback(txId) + clearPendingPublish，清掉整棵 staging
+        val rollbackResult = workspace.rollback(txId)
+        assertTrue("rollback(txId) 清理 staging 成功", rollbackResult)
+
+        // 5. 验证 staging 已清理
+        // （stageText 写到私有目录，rollback 后应不存在）
+        val stagedContent1AfterRollback = workspace.readStaged(stagedRef1!!)
+        assertNull("staging 文件 1 已清理", stagedContent1AfterRollback)
+        val stagedContent2AfterRollback = workspace.readStaged(stagedRef2!!)
+        assertNull("staging 文件 2 已清理", stagedContent2AfterRollback)
     }
 
     // ══════════════════════════════════════════════════════════════════════

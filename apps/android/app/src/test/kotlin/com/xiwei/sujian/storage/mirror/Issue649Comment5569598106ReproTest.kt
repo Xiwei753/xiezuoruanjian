@@ -1,7 +1,10 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.Context
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Ignore
@@ -179,20 +182,140 @@ class Issue649Comment5569598106ReproTest {
     /**
      * 问题2修复后：`recoverPromotePhase` 中 lookup 返回 Failed 时，
      * 必须 return/rollback 停止，保留 journal，不继续 promoteStaged。
+     *
+     * Issue #667 改写：用反射调用 MirrorPublishPromoteExecutor.promoteItemStaged，
+     * 验证 lookup==Failed 时返回 null（停止 promote，保留 journal）。
+     * 这正是旧用例原本锁住的失败边界，也是 Issue #667 评论 5645597368 问题 1 的核心。
      */
-    @Ignore("Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun problem2_forwardRecovery_stopsAndKeepsJournal_whenLookupFailed() {
-        // Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+
+        val txId = TX1
+        val relativePath = P_V_CH_MD
+        val newContent = "new content"
+
+        // 1. 在 workspace 中 stage 内容
+        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", newContent)!!
+
+        // 2. 构造 storage，lookup 返回 Failed
+        val storage = ReproFakeStorage().apply { failLookup = true }
+
+        // 3. 构造 PendingItem，oldRef 非 null，state = STATE_BACKUP_READY
+        val key = ChapterKey("p1", "v1", "ch1")
+        val oldRef = MirrorFileRef("content://old/1", relativePath)
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = oldRef,
+            backupOldRef = null,
+            promotedRef = null,
+            state = PendingItem.STATE_BACKUP_READY,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
+        )
+
+        // 4. 反射调用 private promoteItemStaged
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val result = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        // 5. lookup==Failed 时 promoteItemStaged 返回 null（停止 promote，保留 journal）
+        assertNull(
+            "问题2 回归：lookup==Failed 时 promoteItemStaged 返回 null，停止 promote，保留 journal",
+            result,
+        )
+        // 6. 未创建新文件（promote 已停止）
+        assertFalse(
+            "未调用 createText（promote 已停止）",
+            storage.operationLog.any { it.startsWith("createText:") },
+        )
     }
 
     /**
      * 问题2.B 修复后：hash 校验失败（不匹配）时，停止保留 journal，不继续 promote。
+     *
+     * Issue #667 改写：用 findExistingPromotedRef 的 hash 校验逻辑验证。
+     * 当 final 存在但 hash 不匹配期望 hash 时，不复用，继续 promote 流程。
      */
-    @Ignore("Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace，此测试需要重写")
     @Test
     fun problem2B_forwardRecovery_stopsAndKeepsJournal_whenHashMismatch() {
-        // Issue #667: promoteStaged 已从 ReadableMirrorStorage 移除，事务操作移到了 MirrorTransactionWorkspace
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val workspace = MirrorTransactionWorkspace(context)
+        val storage = ReproFakeStorage()
+
+        val txId = TX1
+        val relativePath = P_V_CH_MD
+        val newContent = "new content"
+        val expectedHash = computeContentHash(newContent)
+
+        // 1. 在 workspace 中 stage 内容
+        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", newContent)!!
+
+        // 2. final 位置有文件但内容被篡改（hash 不匹配）
+        val tamperedContent = "tampered content"
+        val tamperedUri = "content://tampered/final"
+        storage.committedFiles[tamperedUri] = tamperedContent
+        storage.committedPathToUri[relativePath] = tamperedUri
+
+        // 3. 验证 hash 不匹配
+        val finalLookup = storage.lookup(relativePath)
+        assertTrue("final 存在", finalLookup is MirrorLookupResult.Found)
+        val finalHashResult = storage.readTextAndHash((finalLookup as MirrorLookupResult.Found).ref)
+        assertNotNull("能读取 final hash", finalHashResult)
+        assertFalse(
+            "final hash 不匹配期望 hash → 不复用，继续 promote",
+            finalHashResult!!.second == expectedHash,
+        )
+
+        // 4. hash 不匹配时不应跳过 promote，应继续执行 promote 流程
+        // （promoteItemStaged 中 findExistingPromotedRef 返回 null，继续到 lookup oldRef 分支）
+        val key = ChapterKey("p1", "v1", "ch1")
+        val item = PendingItem(
+            key = key,
+            stagedRef = stagedRef,
+            oldRef = null, // 新项目，无 oldRef
+            backupOldRef = null,
+            promotedRef = null,
+            state = PendingItem.STATE_STAGED,
+        )
+        val desiredEntries = mapOf(
+            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, expectedHash),
+        )
+
+        val stateStore = ReadableMirrorStateStore(context)
+        val journalWriter = MirrorJournalWriter(stateStore)
+        val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
+        val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
+        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+            "promoteItemStaged",
+            ChapterKey::class.java,
+            PendingItem::class.java,
+            StagedMirrorRef::class.java,
+            Map::class.java,
+            ReadableMirrorStorage::class.java,
+        )
+        method.isAccessible = true
+        val result = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
+
+        // 5. hash 不匹配 → 不复用 final，继续 promote 创建新文件
+        assertNotNull(
+            "问题2.B 回归：final hash 不匹配 → 不复用，继续 promote 创建新文件",
+            result,
+        )
     }
 
     /**
