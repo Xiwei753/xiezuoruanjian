@@ -292,10 +292,46 @@ cpp! {{
                 int afterLen = sujian_ime_query_text_after_cursor(rust_item, afterBuf, 256);
                 QString surrounding = QString::fromUtf16(beforeBuf, beforeLen) + QString::fromUtf16(afterBuf, afterLen);
                 qe->setValue(Qt::ImSurroundingText, surrounding);
-            }
-            if (qe->queries() & Qt::ImCursorPosition) {
-                int beforeLen = qMin(data.cursor_char_pos, 100);
-                qe->setValue(Qt::ImCursorPosition, beforeLen);
+                // Issue #668: ImCursorPosition / ImAnchorPosition 相对于
+                // ImSurroundingText 的 surrounding window。beforeLen 是本次
+                // surrounding window 实际复制的 UTF-16 长度（QChar 数），
+                // 直接复用，不要再用 qMin(data.cursor_char_pos, 100) 估计——
+                // 估计值在正文前面出现 emoji / 非 BMP 字符时会与实际 beforeLen
+                // 不一致，导致 absolute position、surrounding cursor position
+                // 和 anchor position 彼此错位。
+                if (qe->queries() & Qt::ImCursorPosition) {
+                    qe->setValue(Qt::ImCursorPosition, beforeLen);
+                }
+                if (qe->queries() & Qt::ImAnchorPosition) {
+                    if (data.has_selection) {
+                        // surrounding window 的绝对起点 = cursor_char_pos - beforeLen
+                        //（cursor_char_pos 是文档绝对 UTF-16 位置）。
+                        // anchor 在 surrounding window 内的相对位置 =
+                        //   anchor_char_pos - surrounding_start
+                        int surroundingStart = data.cursor_char_pos - beforeLen;
+                        int anchorOffset = data.anchor_char_pos - surroundingStart;
+                        qe->setValue(Qt::ImAnchorPosition, anchorOffset);
+                    } else {
+                        qe->setValue(Qt::ImAnchorPosition, beforeLen);
+                    }
+                }
+            } else {
+                // 没有 query ImSurroundingText 时仍需单独处理 position queries。
+                // 此时没有实际 beforeLen 可用，回退到 qMin 估计（与旧行为一致，
+                // 仅在 fcitx/ibus 不请求 surrounding 时命中，正常 IME 都会请求）。
+                if (qe->queries() & Qt::ImCursorPosition) {
+                    int beforeLen = qMin(data.cursor_char_pos, 100);
+                    qe->setValue(Qt::ImCursorPosition, beforeLen);
+                }
+                if (qe->queries() & Qt::ImAnchorPosition) {
+                    int beforeLen = qMin(data.cursor_char_pos, 100);
+                    if (data.has_selection) {
+                        int anchorOffset = data.anchor_char_pos - (data.cursor_char_pos - beforeLen);
+                        qe->setValue(Qt::ImAnchorPosition, anchorOffset);
+                    } else {
+                        qe->setValue(Qt::ImAnchorPosition, beforeLen);
+                    }
+                }
             }
             if (qe->queries() & Qt::ImCurrentSelection) {
                 ushort selBuf[256];
@@ -309,15 +345,6 @@ cpp! {{
             // ImAbsolutePosition 才是整个文档的绝对逻辑位置，两者不要混。
             if (qe->queries() & Qt::ImAbsolutePosition) {
                 qe->setValue(Qt::ImAbsolutePosition, data.cursor_char_pos);
-            }
-            if (qe->queries() & Qt::ImAnchorPosition) {
-                int beforeLen = qMin(data.cursor_char_pos, 100);
-                if (data.has_selection) {
-                    int anchorOffset = data.anchor_char_pos - (data.cursor_char_pos - beforeLen);
-                    qe->setValue(Qt::ImAnchorPosition, anchorOffset);
-                } else {
-                    qe->setValue(Qt::ImAnchorPosition, beforeLen);
-                }
             }
             if (qe->queries() & Qt::ImTextBeforeCursor) {
                 ushort beforeBuf[256];

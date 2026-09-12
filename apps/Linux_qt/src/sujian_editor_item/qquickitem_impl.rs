@@ -170,13 +170,24 @@ impl QQuickItem for SujianEditorItem {
                 needs_relayout,
             };
 
-            scene_graph_renderer::render_frame(
+            // Issue #668 评论 5646458592 问题 1: 接住静态正文 rebuild 的成功/失败结果。
+            // rebuild 失败（某个必需 layout 缺失）时不能把本次静态正文更新当成已经完成；
+            // 保留 layout_dirty / scene_dirty，下一次 update_paint_node 仍需要继续
+            // 处理正确的 snapshot/generation。同时请求下一帧更新，让 GUI 线程
+            // prepare_static_snapshot_on_gui_thread 重新排版（snapshot() 会发现
+            // cache 无效而分配新 generation 重新排版）。
+            let static_rebuild_ok = scene_graph_renderer::render_frame(
                 final_root,
                 item_ptr,
                 &static_text,
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+            if !static_rebuild_ok && needs_relayout {
+                self.layout_dirty = true;
+                self.scene_dirty = true;
+                self.request_frame_update();
+            }
 
             // 没有缓存快照时，跳过静态正文渲染并请求下一次 GUI 帧准备 snapshot。
             // 放在 render_frame 之后，避免与 static_text 的不可变借用冲突。

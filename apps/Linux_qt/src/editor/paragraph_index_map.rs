@@ -103,6 +103,37 @@ pub fn utf16_code_unit_range_to_utf8_byte_range(
     (byte_start, byte_end)
 }
 
+/// Issue #668: 全文级 UTF-8 byte offset → UTF-16 code unit offset 反向转换。
+///
+/// Qt IME 协议（ImCursorPosition/ImAnchorPosition/ImAbsolutePosition）期望
+/// UTF-16 code unit（QChar 位置）。Rust 内部用 UTF-8 byte offset 表示光标/
+/// 选区位置，传给 Qt 前必须转成 UTF-16 code unit。
+///
+/// 先把 byte offset 对齐到 UTF-8 char boundary（防止落在多字节字符中间），
+/// 再对前缀 `[0..aligned_byte)` 用 `encode_utf16().count()` 得到 Qt QChar 位置。
+/// 超出文本末尾的 byte offset 返回全文 UTF-16 code unit 长度。
+///
+/// 与 `utf16_code_unit_to_utf8_byte` 互为反向：对任意 char boundary byte
+/// offset `b`，有 `utf8_byte_to_utf16_code_unit(text, b)` 等于该位置对应的
+/// QChar 位置；对任意 QChar 位置 `q`，有
+/// `utf8_byte_to_utf16_code_unit(text, utf16_code_unit_to_utf8_byte(text, q)) == q`
+/// 当 `q` 落在字符起始时成立。
+pub fn utf8_byte_to_utf16_code_unit(text: &str, byte_offset: usize) -> usize {
+    let aligned = if byte_offset >= text.len() {
+        text.len()
+    } else if text.is_char_boundary(byte_offset) {
+        byte_offset
+    } else {
+        // 向左回退到最近的 char boundary，与 clamp_to_char_boundary 行为一致。
+        let mut clamped = byte_offset;
+        while clamped > 0 && !text.is_char_boundary(clamped) {
+            clamped -= 1;
+        }
+        clamped
+    };
+    text[..aligned].encode_utf16().count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,5 +251,72 @@ mod tests {
         assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 2), 4);
         assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 3), 4);
         assert_eq!(utf16_code_unit_to_utf8_byte("😀😁", 4), 8);
+    }
+
+    // ── Issue #668: UTF-8 byte offset → UTF-16 code unit 反向转换测试 ──
+
+    #[test]
+    fn test_utf8_to_utf16_ascii() {
+        assert_eq!(utf8_byte_to_utf16_code_unit("hello", 0), 0);
+        assert_eq!(utf8_byte_to_utf16_code_unit("hello", 3), 3);
+        assert_eq!(utf8_byte_to_utf16_code_unit("hello", 5), 5);
+        // 超出末尾返回全文 UTF-16 长度
+        assert_eq!(utf8_byte_to_utf16_code_unit("hello", 10), 5);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_cjk() {
+        // 你好世界：每个 CJK 字符 UTF-8 占 3 byte、UTF-16 占 1 code unit
+        assert_eq!(utf8_byte_to_utf16_code_unit("你好世界", 0), 0);
+        assert_eq!(utf8_byte_to_utf16_code_unit("你好世界", 3), 1);
+        assert_eq!(utf8_byte_to_utf16_code_unit("你好世界", 6), 2);
+        assert_eq!(utf8_byte_to_utf16_code_unit("你好世界", 12), 4);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_emoji() {
+        // a😀b：a=1byte/1unit，😀=4byte/2unit，b=1byte/1unit
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 0), 0);
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 1), 1);
+        // 😀 起始 byte=1，对应 UTF-16 code unit=1
+        // 😀 结束 byte=5，对应 UTF-16 code unit=3（1+2）
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 5), 3);
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 6), 4);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_mid_byte_clamps_to_boundary() {
+        // 落在多字节字符中间时向左回退到 char boundary
+        // a😀b：byte=2/3/4 都在 😀 中间，应回退到 byte=1（UTF-16 unit=1）
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 2), 1);
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 3), 1);
+        assert_eq!(utf8_byte_to_utf16_code_unit("a😀b", 4), 1);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_empty() {
+        assert_eq!(utf8_byte_to_utf16_code_unit("", 0), 0);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_multiple_emoji() {
+        // 😀😁：每个 emoji 4 byte / 2 unit
+        assert_eq!(utf8_byte_to_utf16_code_unit("😀😁", 0), 0);
+        assert_eq!(utf8_byte_to_utf16_code_unit("😀😁", 4), 2);
+        assert_eq!(utf8_byte_to_utf16_code_unit("😀😁", 8), 4);
+    }
+
+    #[test]
+    fn test_utf8_to_utf16_round_trip_with_utf16_to_utf8() {
+        // 对字符起始的 QChar 位置，反向转换应保持一致。
+        // "a😀b你好" 的 UTF-16 长度是 6（a=1, 😀=2, b=1, 你=1, 好=1），
+        // 只测试字符起始位置 0,1,3,4,5,6（不含代理对中间的 2 和超出末尾的 7+）。
+        let text = "a😀b你好";
+        // QChar 位置 0,1,3,4,5,6 对应 byte 0,1,5,6,9,12
+        for qchar_pos in [0usize, 1, 3, 4, 5, 6] {
+            let byte = utf16_code_unit_to_utf8_byte(text, qchar_pos);
+            let back = utf8_byte_to_utf16_code_unit(text, byte);
+            assert_eq!(back, qchar_pos, "qchar_pos={} byte={}", qchar_pos, byte);
+        }
     }
 }

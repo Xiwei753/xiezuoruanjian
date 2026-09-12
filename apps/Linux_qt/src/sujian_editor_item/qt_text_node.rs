@@ -59,7 +59,16 @@ cpp! {{
     /// 主 textNode 按段落整段 addTextLayout（高效）。
     /// 动画裁剪按视觉行（VisualLineClipInfo），用 QSGTextNode::addTextLayout 的
     /// lineStart/lineCount 参数按单独视觉行绘制，setClipRect 用视觉行 y/h。
-    void rebuild_text_node_from_paragraphs(
+    ///
+    /// Issue #668 评论 5646458592 问题 1: 改成一次完整的原子替换。
+    /// 先创建新的 QSGTextNode，不动当前正在显示的旧节点；先检查所有非空段落的
+    /// (generation, cache_slot) 都能取到 QTextLayout*，再向新节点 addTextLayout()。
+    /// 任意必需 layout 缺失时，销毁这次新建的节点，旧静态正文节点保持原样，
+    /// 返回 false。所有段落都构建成功以后，才把新节点替换进 staticLayer，
+    /// 随后删除旧节点。动画裁剪分支同样按"先构建完整新子树，再替换"的顺序。
+    /// 返回 true 表示重建成功，false 表示因 layout 缺失而放弃（调用方应保留
+    /// dirty 标志，下一帧继续处理正确的 snapshot/generation）。
+    bool rebuild_text_node_from_paragraphs(
         QSGNode* root_raw, QQuickItem* item_ptr,
         const char** text_ptrs, const int* text_lens,
         const int* para_start_arr, const int* cache_idx_arr,
@@ -83,38 +92,45 @@ cpp! {{
         double origin_x,
         uint64_t generation
     ) {
-        if (!root_raw || !item_ptr) return;
+        if (!root_raw || !item_ptr) return false;
         QQuickWindow *window = item_ptr->window();
-        if (!window) return;
+        if (!window) return false;
 
-        if (root_raw->childCount() == 0) return;
+        if (root_raw->childCount() == 0) return false;
         auto *staticLayer = static_cast<QSGTransformNode*>(root_raw->childAtIndex(0));
-        if (!staticLayer) return;
+        if (!staticLayer) return false;
 
-        // 获取或创建 QSGTextNode
-        QSGTextNode *textNode = nullptr;
-        if (staticLayer->childCount() > 0) {
-            textNode = dynamic_cast<QSGTextNode*>(staticLayer->childAtIndex(0));
-        }
-        if (!textNode) {
-            while (staticLayer->childCount() > 0) {
-                QSGNode *old = staticLayer->childAtIndex(0);
-                staticLayer->removeChildNode(old);
-                delete old;
-            }
-            textNode = window->createTextNode();
-            if (textNode) {
-                staticLayer->appendChildNode(textNode);
+        // Issue #668 评论 5646458592 问题 1: 先检查所有非空段落的
+        // (generation, cache_slot) 都能取到 QTextLayout*。任意缺失立即返回 false，
+        // 不动当前正在显示的旧节点，不留下一个已经 clear() 过的空节点。
+        for (int i = 0; i < para_count; i++) {
+            int cacheIdx = cache_idx_arr[i];
+            // 空段落（text_lens[i] == 0）不需要 layout，跳过。
+            if (text_lens[i] == 0) continue;
+            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+            if (!cachedLayout) {
+                return false;
             }
         }
-        if (!textNode) return;
+        // 动画裁剪分支也需要检查所有视觉行的 layout 可用性。
+        if (clip_count > 0 && vl_count > 0) {
+            for (int i = 0; i < vl_count; i++) {
+                int cacheIdx = vl_cache_idx_arr[i];
+                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                if (!cachedLayout) {
+                    return false;
+                }
+            }
+        }
 
-        textNode->clear();
+        // Issue #668 评论 5646458592 问题 1: 创建新的 QSGTextNode，不动旧节点。
+        // 先把新节点构建完整，最后再替换进 staticLayer 并删除旧节点。
+        QSGTextNode *newTextNode = window->createTextNode();
+        if (!newTextNode) return false;
 
         QColor textColor(color_q);
-
         // Issue #658: setColor() 必须在第一次 addTextLayout() 之前设置。
-        textNode->setColor(textColor);
+        newTextNode->setColor(textColor);
 
         // Issue #658: 主 textNode — 按段落整段 addTextLayout。
         // cachedLayout 内部每个 QTextLine 已 setPosition（由 editor_layout_lines 或
@@ -129,13 +145,25 @@ cpp! {{
 
             // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout，
             // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
+            // Issue #668: 前面已检查所有非空段落 layout 可用，此处 cachedLayout 必非 null。
             QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
             if (cachedLayout) {
-                textNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
+                newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
             }
         }
 
-        textNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+        newTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+
+        // Issue #668 评论 5646458592 问题 1: 动画裁剪分支同样按"先构建完整新子树，
+        // 再替换"的顺序。先在 newTextNode 之外构建所有 clipNode + clipTextNode，
+        // 全部成功后再替换进 staticLayer。构建过程中任何失败（layout 缺失已在前面
+        // 检查过，此处不会发生）都不破坏现有正文。
+        // 用临时 vector 收集所有新建的 clipNode，最后统一挂到 staticLayer。
+        struct PendingClipNode {
+            QSGClipNode* clipNode;
+            QSGTextNode* clipTextNode;
+        };
+        std::vector<PendingClipNode> pendingClipNodes;
 
         // Issue #658: 动画裁剪 — 按视觉行使用精确文档 x/y/w/h 裁剪。
         // 不再按段落整段裁（会误裁同行其他文字），不再猜最后段高度（py+30.0）。
@@ -155,10 +183,6 @@ cpp! {{
                 }
             }
             if (!clipRects.empty()) {
-                // Issue #658: 从父节点摘掉后立即 delete，不遗留悬空节点。
-                staticLayer->removeChildNode(textNode);
-                delete textNode;
-
                 for (int i = 0; i < vl_count; i++) {
                     int cacheIdx = vl_cache_idx_arr[i];
                     int qline = vl_qtextline_idx_arr[i];
@@ -169,6 +193,7 @@ cpp! {{
                     double paraY = vl_para_y_arr[i];
 
                     // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout。
+                    // Issue #668: 前面已检查所有视觉行 layout 可用，此处必非 null。
                     QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
                     if (!cachedLayout) {
                         continue;
@@ -231,7 +256,6 @@ cpp! {{
                         clipNode->setIsRectangular(true);
                         // Issue #658: setClipRect 用视觉行 y/h，不再用整段 py/ph。
                         clipNode->setClipRect(QRectF(comp.left, ly, clipW, lh));
-                        staticLayer->appendChildNode(clipNode);
 
                         QSGTextNode* clipTextNode = window->createTextNode();
                         if (clipTextNode) {
@@ -248,10 +272,33 @@ cpp! {{
                             // (padding, paraY)，与主 textNode 一致。
                             clipTextNode->addTextLayout(QPointF(origin_x, paraY), cachedLayout, -1, -1, qline, 1);
                             clipTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+
+                            pendingClipNodes.push_back({clipNode, clipTextNode});
+                        } else {
+                            // clipTextNode 创建失败，销毁 clipNode，继续处理其他行。
+                            delete clipNode;
                         }
                     }
                 }
             }
+        }
+
+        // Issue #668 评论 5646458592 问题 1: 新子树已完整构建（newTextNode +
+        // 所有 pendingClipNodes）。现在才执行原子替换：摘掉并删除旧节点，
+        // 把新节点挂进 staticLayer。此前的任何失败都已 return false 且不破坏旧节点。
+        // 先摘掉并删除旧的 textNode（如果存在）。
+        if (staticLayer->childCount() > 0) {
+            QSGNode *oldTextNode = staticLayer->childAtIndex(0);
+            if (oldTextNode) {
+                staticLayer->removeChildNode(oldTextNode);
+                delete oldTextNode;
+            }
+        }
+        // 挂入新的主 textNode。
+        staticLayer->appendChildNode(newTextNode);
+        // 挂入所有动画裁剪 clipNode（clipTextNode 已作为 clipNode 子节点挂好）。
+        for (const auto& pcn : pendingClipNodes) {
+            staticLayer->appendChildNode(pcn.clipNode);
         }
 
         // 滚动位移：通过 QSGTransformNode 矩阵平移
@@ -259,6 +306,8 @@ cpp! {{
         mat.translate(0.0f, static_cast<float>(-scroll_y), 0.0f);
         staticLayer->setMatrix(mat);
         staticLayer->markDirty(QSGNode::DirtyMatrix);
+
+        return true;
     }
 
     /// 滚动帧：只更新 QSGTransformNode 的位移矩阵，不重建静态正文节点。
@@ -351,6 +400,11 @@ pub(crate) struct AnimationClipRect {
 /// `generation` 标识本 snapshot 对应的 g_layout_generations 中的代，
 /// 渲染时用 (generation, cache_slot) 查找 layout。
 ///
+/// Issue #668 评论 5646458592 问题 1: 返回 bool 表示重建是否成功。
+/// - true: 所有非空段落的 layout 都取到了，新 QSGTextNode 已替换进 staticLayer。
+/// - false: 某个必需 layout 缺失，旧静态正文节点保持原样，调用方应保留
+///   dirty 标志，下一帧继续处理正确的 snapshot/generation。
+///
 /// # Safety
 /// `root_raw` 和 `item_ptr` 必须是有效的 Qt 场景图指针。
 pub fn rebuild_text_node_from_paragraphs(
@@ -363,9 +417,9 @@ pub fn rebuild_text_node_from_paragraphs(
     animation_clip_rects: &[AnimationClipRect],
     origin_x: f64,
     generation: u64,
-) {
+) -> bool {
     if paragraphs.is_empty() {
-        return;
+        return true;
     }
 
     let font_size = paragraphs[0].font_size;
@@ -426,7 +480,7 @@ pub fn rebuild_text_node_from_paragraphs(
     let clip_w_ptr = clip_w.as_ptr();
     let clip_h_ptr = clip_h.as_ptr();
 
-    cpp!(unsafe [
+    let success = cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
         text_ptrs_ptr as "const char**",
@@ -457,8 +511,8 @@ pub fn rebuild_text_node_from_paragraphs(
         clip_count as "int",
         origin_x as "double",
         generation as "uint64_t"
-    ] {
-        rebuild_text_node_from_paragraphs(
+    ] -> bool as "bool" {
+        return rebuild_text_node_from_paragraphs(
             root_raw, item_ptr,
             text_ptrs_ptr, text_lens_ptr,
             para_starts_ptr, cache_idxs_ptr,
@@ -487,6 +541,10 @@ pub fn rebuild_text_node_from_paragraphs(
     // Issue #658: 不在 rebuild 末尾清除 g_paragraph_layout_cache。
     // 布局缓存由 editor_layout_lines() 填充，持久存在供后续帧读取；
     // 仅在 prepare_document_visual_snapshot() 开头和 editor_layout_lines() 开头清除。
+    // Issue #668: 即使 rebuild 返回 false（layout 缺失），也不在此清除缓存——
+    // 缺失说明 generation 已被提前 clear_layout_generation 释放，下一帧
+    // snapshot() 会分配新 generation 重新排版。
+    success
 }
 
 /// 滚动帧：只更新静态正文层的 QSGTransformNode 位移矩阵。

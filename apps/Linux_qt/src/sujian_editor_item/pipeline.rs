@@ -765,6 +765,12 @@ impl LinuxEditorPipeline {
         self.pending_promoted_layout.take()
     }
 
+    /// Issue #668 评论 5646458592 问题 1: 检查是否有 pending promoted layout，
+    /// 供 emit_content_changed 在 promote 之前清除 cached_static_snapshot。
+    pub fn has_pending_promoted_layout(&self) -> bool {
+        self.pending_promoted_layout.is_some()
+    }
+
     /// Issue #658 评论 5623746506 问题 2b: composition commit 分支需要把
     /// build_editor_layout_snapshot 排好的 new prepared layout 存入 pending，
     /// 由 emit_content_changed 提升为 current，避免 emit_content_changed ->

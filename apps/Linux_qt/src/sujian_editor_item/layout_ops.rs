@@ -26,6 +26,15 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn invalidate_layout_cache(&mut self) {
+        // Issue #668 评论 5646458592 问题 1: generation 生命周期对齐。
+        // editor_layout.invalidate() 会 clear_layout_generation(current_generation)，
+        // 释放该 generation 对应的 QTextLayout。如果 cached_static_snapshot 仍然
+        // 引用这个 generation，render thread 下一次 update_paint_node 用失效
+        // generation 查找 layout 会全部缺失，rebuild 返回 false（虽然不会显示空
+        // 节点，但会浪费一帧）。在 invalidate 时同时清除 cached_static_snapshot，
+        // 确保 render thread 不会消费已被释放的 generation。调用方随后会调
+        // request_static_repaint() 重新 prepare 新 snapshot。
+        self.cached_static_snapshot = None;
         self.editor_layout.invalidate();
     }
 

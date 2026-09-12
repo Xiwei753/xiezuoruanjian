@@ -255,8 +255,12 @@ extern "C" fn sujian_get_ime_query_data(
         anchor_rect_y: f64::from(item.anchor_rect_y()),
         anchor_rect_w: f64::from(item.anchor_rect_width()),
         anchor_rect_h: f64::from(item.anchor_rect_height()),
-        cursor_char_pos: item.cursor_position() as i32,
-        anchor_char_pos: item.anchor_position() as i32,
+        // Issue #668: cursor_char_pos / anchor_char_pos 是 UTF-16 code unit
+        //（Qt QChar 位置），不是 Rust Unicode scalar 数。用专门的
+        // cursor_position_utf16 / anchor_position_utf16 转换，遇到 emoji /
+        // 非 BMP 字符（UTF-16 代理对）才不会错位。
+        cursor_char_pos: item.cursor_position_utf16() as i32,
+        anchor_char_pos: item.anchor_position_utf16() as i32,
         has_selection: item.has_selection(),
     };
     // SAFETY: out is null-checked above; the C++ caller guarantees the pointer is valid.

@@ -21,10 +21,15 @@ pub(crate) fn render_frame(
     static_text: &StaticTextParams<'_>,
     plan: &RenderPlan,
     _texture_cache: &TextureCache,
-) {
+) -> bool {
     if root_raw.is_null() || item_ptr.is_null() {
-        return;
+        return false;
     }
+
+    // Issue #668 评论 5646458592 问题 1: 静态正文 rebuild 的成功/失败结果。
+    // 默认 true 表示无需 rebuild（如滚动帧）或 rebuild 成功；
+    // false 表示 rebuild 因 layout 缺失而放弃，调用方应保留 dirty 标志。
+    let mut static_rebuild_ok = true;
 
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
@@ -86,7 +91,8 @@ pub(crate) fn render_frame(
             // origin_x = snapshot.padding，与 VisualLine.x = padding + x_off 一致。
             // Issue #658 评论 5620035970 问题 2: 传 snapshot.layout_generation，
             // 用 (generation, cache_slot) 查找 layout，与动画/IME 路径互不干扰。
-            qt_text_node::rebuild_text_node_from_paragraphs(
+            // Issue #668: 接住 rebuild 的成功/失败结果，透传给 qquickitem_impl。
+            static_rebuild_ok = qt_text_node::rebuild_text_node_from_paragraphs(
                 root_raw,
                 item_ptr,
                 &paragraphs,
@@ -110,6 +116,8 @@ pub(crate) fn render_frame(
     render_selection_preedit_layer(root_raw, item_ptr, plan);
     // Layer 3: 光标
     render_cursor_layer(root_raw, item_ptr, plan);
+
+    static_rebuild_ok
 }
 
 /// Issue #658: 从 static_patches 的 doc_hidden_rects 计算精确裁剪区域。

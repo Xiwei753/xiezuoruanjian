@@ -80,6 +80,21 @@ impl SujianEditorItem {
         byte_to_char_index(&self.buffer.text, self.buffer.cursor) as u32
     }
 
+    /// Issue #668: 光标的 UTF-16 code unit 绝对位置（Qt QChar 位置）。
+    ///
+    /// Qt IME 协议（ImCursorPosition/ImAnchorPosition/ImAbsolutePosition）期望
+    /// UTF-16 code unit，不是 Rust Unicode scalar 数。普通中文两者一致，
+    /// 但 emoji/非 BMP 字符（UTF-16 代理对）会差 1。
+    ///
+    /// 此方法不改现有 `cursor_position()` 的语义（仍返回 Rust char count，
+    /// 供 QML `cursor_position` property 使用），只给 IME query 路径单独调用。
+    pub(crate) fn cursor_position_utf16(&self) -> u32 {
+        crate::editor::paragraph_index_map::utf8_byte_to_utf16_code_unit(
+            &self.buffer.text,
+            self.buffer.cursor,
+        ) as u32
+    }
+
     pub(crate) fn has_selection(&self) -> bool {
         self.buffer.has_selection()
     }
@@ -520,6 +535,18 @@ impl SujianEditorItem {
         byte_to_char_index(&self.buffer.text, self.buffer.selection_anchor) as u32
     }
 
+    /// Issue #668: 选区 anchor 的 UTF-16 code unit 绝对位置（Qt QChar 位置）。
+    ///
+    /// 与 `cursor_position_utf16()` 对应，供 IME query 路径填
+    /// `SujianImeQueryData.anchor_char_pos`。不改现有 `anchor_position()`
+    /// 的语义（仍返回 Rust char count，供 QML property 使用）。
+    pub(crate) fn anchor_position_utf16(&self) -> u32 {
+        crate::editor::paragraph_index_map::utf8_byte_to_utf16_code_unit(
+            &self.buffer.text,
+            self.buffer.selection_anchor,
+        ) as u32
+    }
+
     pub(crate) fn cursor_visible(&self) -> bool {
         self.cursor_ctrl.visible
     }
@@ -595,6 +622,13 @@ impl SujianEditorItem {
         // EditorLayout::snapshot 对同一 new text 重新排版。
         // text_revision / text_ptr / text_len 从当前 buffer.text 和
         // pipeline.text_revision() 获取，确保与 snapshot() 的 cache 有效性检查一致。
+        // Issue #668 评论 5646458592 问题 1: promote_prepared_layout 会
+        // clear_layout_generation 释放旧 generation。在 promote 之前清除
+        // cached_static_snapshot，避免 snapshot 持有已被释放的 generation
+        // 被 render thread 消费。后续 request_static_repaint 会重新 prepare。
+        if self.pipeline.has_pending_promoted_layout() {
+            self.cached_static_snapshot = None;
+        }
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(
                 promoted,

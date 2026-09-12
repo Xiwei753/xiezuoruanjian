@@ -191,12 +191,11 @@ ApplicationWindow {
     // Design tokens
     DesignTokens {
         id: designTokens
-        isDark: {
-            var mode = settingsBackend !== null ? settingsBackend.resolved_appearance_mode : "system"
-            if (mode === "dark") return true;
-            if (mode === "light") return false;
-            return window.systemThemeIsDark();
-        }
+        // Issue #668 评论 5646458592 问题 2: isDark 直接读 themeController.is_dark，
+        // 不再由 main.qml 用 settingsBackend.resolved_appearance_mode 自算。
+        // themeController 作为主题状态链单一事实来源，appearance_mode + system_is_dark
+        // 都在 themeController 内部解析，QML 只消费结果。
+        isDark: themeController !== null ? themeController.is_dark : false
         themePaletteJson: settingsBackend !== null ? settingsBackend.resolved_theme_palette_json : ""
         colorSource: settingsBackend !== null ? settingsBackend.resolved_color_source : "built_in"
         selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
@@ -208,11 +207,13 @@ ApplicationWindow {
         target: designTokens
         function onIsDarkChanged() {
             window.logThemeDiagnostics("is_dark_changed");
+            // Issue #668 评论 5646458592 问题 2: 删除 effective isDark 反写
+            // themeController.set_system_is_dark 的逻辑。isDark 现在直接读
+            // themeController.is_dark，反写会形成循环依赖。system_is_dark
+            // 只由真实系统 colorScheme 变化（onColorSchemeChanged）和启动时
+            // （Component.onCompleted）写入。
             if (appBackend) {
                 appBackend.apply_window_dark_mode(designTokens.isDark);
-            }
-            if (themeController) {
-                themeController.set_system_is_dark(designTokens.isDark);
             }
         }
         function onEditorTextChanged() {
@@ -225,6 +226,20 @@ ApplicationWindow {
         function onSync_action_completed() {
             if (settingsBackend) settingsBackend.refresh_theme_data()
             if (themeController) themeController.reload()
+        }
+    }
+
+    // Issue #668 评论 5646458592 问题 2: 真实系统 colorScheme 变化时把
+    // window.systemThemeIsDark() 写给 ThemeController。这是 system_is_dark
+    // 的两个唯一写入点之一（另一个是 Component.onCompleted 启动时）。
+    // 不再由 designTokens.onIsDarkChanged 反写 system_is_dark，避免循环依赖。
+    Connections {
+        target: Qt.styleHints
+        function onColorSchemeChanged() {
+            if (themeController) {
+                themeController.set_system_is_dark(window.systemThemeIsDark());
+            }
+            window.logThemeDiagnostics("system_color_scheme_changed");
         }
     }
 
@@ -261,6 +276,13 @@ ApplicationWindow {
         }
         window.verifyBackendRuntime();
         window.debugLog("app", "qml_completed", "QML components fully loaded");
+        // Issue #668 评论 5646458592 问题 2: 启动时把真实系统 colorScheme
+        // 写给 ThemeController，作为 system_is_dark 的唯一写入点之一。
+        // themeController 内部根据 appearance_mode（dark/light/system）决定
+        // 是否使用 system_is_dark，QML 不再自算 isDark。
+        if (themeController) {
+            themeController.set_system_is_dark(window.systemThemeIsDark());
+        }
         window.logThemeDiagnostics("startup");
         if (appBackend) {
             appBackend.apply_window_dark_mode(designTokens.isDark);
@@ -385,6 +407,15 @@ ApplicationWindow {
         target: settingsBackend
         function onSettings_changed() {
             appController.refreshState(qsTr("刷新设置失败"));
+            // Issue #668 评论 5646458592 问题 2: 设置变更（如切换主题/配色/
+            // appearance_mode）后调用 themeController.reload()，让
+            // themeController 重新解析主题并发出 scheme_changed，使
+            // DesignTokens.isDark / resolvedSchemeJson 等跟随更新。
+            // 不再只 refreshState 而漏掉主题重载，导致 light/dark、isDark、
+            // editorText 不同步。
+            if (themeController) {
+                themeController.reload();
+            }
         }
     }
 
