@@ -759,6 +759,21 @@ impl SujianEditorItem {
         // 清掉失效 cached_static_snapshot，确保 prepare 一定重新排版
         // （prepare_static_snapshot_on_gui_thread 在 cached 存在时直接 return）。
         self.cached_static_snapshot = None;
+        // Issue #668 评论 5647251808: 仅清外层 cached_static_snapshot 不够。
+        // rebuild 失败的根因可能是当前 layout_generation 已被释放，但
+        // EditorLayout.cache 仍保存同一份 LayoutSnapshot（text_revision /
+        // text_ptr / text_len / width / 字体参数均未变）。此时
+        // prepare_static_snapshot_on_gui_thread 调用 editor_layout.snapshot()
+        // 会 cache hit，把同一已失效 generation 再 clone 回
+        // cached_static_snapshot，下一帧 update_paint_node 继续 miss，形成
+        // "miss -> 排 GUI 回调 -> 只清外层 -> cache hit -> 同一失效 generation
+        // -> 下一帧继续 miss" 的死循环。这里同时让 EditorLayout 自身失效：
+        // clear_layout_generation(current_generation)、current_generation=0、
+        // cache=None，强制下一次 snapshot() 必然分配新 generation 并重新建立
+        // paragraph layouts。static_snapshot_reprepare_pending 的语义保持不变：
+        // render thread 只置标记并排队，真正的 invalidate + prepare + update()
+        // 全部在 GUI 线程完成。
+        self.editor_layout.invalidate();
         self.prepare_static_snapshot_on_gui_thread();
         let item = self as &dyn QQuickItem;
         item.update();
