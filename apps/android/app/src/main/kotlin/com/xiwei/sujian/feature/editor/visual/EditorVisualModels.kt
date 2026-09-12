@@ -36,6 +36,11 @@ import androidx.compose.ui.text.TextRange
  * @param textKind 文字动画类型。
  * @param cursor 光标视觉意图 — null 表示不画视觉光标。
  * @param newTextLength 新正文 UTF-16 长度 — 保留向后兼容，由 [expectedNewText].length 推导。
+ * @param expectedOldText #666 新增：完整旧正文（UTF-16 String）—
+ *   和 [expectedNewText] 成对保存，[ComposeVisualRebase.buildCursorSnapshot] 用它验证
+ *   previous layout 是否匹配本事务的 old text。不匹配说明对应的新布局还没到，
+ *   返回 null 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
+ *   默认空字符串保持现有测试构造兼容。
  * @param expectedNewText #641 评论 5459531909 第1项：完整新正文（UTF-16 String）—
  *   layout 关联判断改用 `result.layoutInput.text.text == expectedNewText`，
  *   不再只比较长度。默认空字符串保持现有测试构造兼容。
@@ -50,6 +55,7 @@ data class EditorVisualIntent(
     val textKind: TextVisualKind,
     val cursor: CursorVisualIntent?,
     val newTextLength: Int = 0,
+    val expectedOldText: String = "",
     val expectedNewText: String = "",
     val replaceBounds: VisualReplaceBounds? = null,
 )

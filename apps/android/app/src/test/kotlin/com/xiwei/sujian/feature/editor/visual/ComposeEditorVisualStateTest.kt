@@ -11,6 +11,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -85,13 +86,20 @@ class ComposeEditorVisualStateTest {
 
     @Test
     fun onVisualIntent_cursorAnimate_setsDrawsVisualCursor() {
+        // #666：需要 previous/current layout 与 expectedOldText/expectedNewText 匹配
+        // 才会创建 VisualCursorSnapshot 并启用视觉光标。
+        val layouts = captureLayouts("", "a")
         val state = ComposeEditorVisualState()
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
             EditorVisualIntent(
                 oldRanges = emptyList(),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.None,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                expectedOldText = "",
+                expectedNewText = "a",
             ),
             motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
         )
@@ -101,13 +109,19 @@ class ComposeEditorVisualStateTest {
     @Test
     fun onVisualIntent_insertWithCursorAnimate_setsDrawsVisualCursor() {
         // #641 评论 问题2：Insert + cursor animate=true 也应画视觉光标。
+        // #666：需要 previous/current layout 与 expectedOldText/expectedNewText 匹配。
+        val layouts = captureLayouts("", "a")
         val state = ComposeEditorVisualState()
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
             EditorVisualIntent(
                 oldRanges = emptyList(),
                 newRanges = listOf(TextRange(0, 1)),
                 textKind = TextVisualKind.Insert,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                expectedOldText = "",
+                expectedNewText = "a",
             ),
             motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
@@ -180,13 +194,20 @@ class ComposeEditorVisualStateTest {
 
     @Test
     fun clearAnimation_afterCursorIntent_resetsDrawsVisualCursor() {
+        // #666：需要 previous/current layout 与 expectedOldText/expectedNewText 匹配
+        // 才会启用视觉光标，clearAnimation 后恢复 false。
+        val layouts = captureLayouts("", "a")
         val state = ComposeEditorVisualState()
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
             EditorVisualIntent(
                 oldRanges = emptyList(),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.None,
                 cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                expectedOldText = "",
+                expectedNewText = "a",
             ),
             motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
         )
@@ -704,6 +725,235 @@ class ComposeEditorVisualStateTest {
         assertTrue(
             "C.oldRanges 应为空（C 是 Insert，oldRanges 本来就是空，未被减）",
             cOldRanges.isEmpty(),
+        )
+    }
+
+    /**
+     * #666 回归：空章节首次输入时 [ComposeVisualRebase.buildCursorSnapshot] 必须等待
+     * previous/current layout 与 expectedOldText/expectedNewText 严格配对后才创建
+     * [VisualCursorSnapshot] 并启用视觉光标。
+     *
+     * 时序：
+     * 1. 空文本 layout 到达 → `currentSnapshot = layout("")`
+     * 2. 再次空文本 layout 到达 → `previousSnapshot = layout("")`, `currentSnapshot = layout("")`
+     * 3. Core 给出 `"" -> "a"` 的视觉事务，cursor `oldEndUtf16=0`, `newEndUtf16=1`,
+     *    `animate=true`, `expectedOldText=""`, `expectedNewText="a"`
+     *
+     * 修复后正确行为：
+     * - `onVisualIntent()` 不立即设 `_drawsVisualCursor = true`；
+     *   `buildCursorSnapshot()` 检查 `currentSnapshot.text == "a"` 失败 → 返回 null。
+     * - `drawsVisualCursor` 应为 false（布局还没到，保持系统光标）。
+     * - `visualCursorSnapshot` 应为 null（不基于错误布局）。
+     * - 当正确的 layout("a") 到达后，`drawsVisualCursor` 变为 true，
+     *   `visualCursorSnapshot` 非 null。
+     */
+    @Test
+    fun repro_emptyChapterFirstInput_cursorOffsetOutOfBounds() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState()
+
+        // 第一次空文本 layout 到达 → previousSnapshot = null, currentSnapshot = layout("")
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        // 再次空文本 layout 到达 → previousSnapshot = layout(""), currentSnapshot = layout("")
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // Core 给出 "" -> "a" 的视觉事务，cursor 0→1, animate=true,
+        // expectedOldText="", expectedNewText="a"。
+        // currentSnapshot 是 layout("")（长度 0），不匹配 expectedNewText "a"。
+        // 修复后：buildCursorSnapshot 返回 null，drawsVisualCursor 保持 false。
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 1)),
+                textKind = TextVisualKind.Insert,
+                cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                newTextLength = 1,
+                expectedOldText = "",
+                expectedNewText = "a",
+            ),
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
+        )
+
+        // 回归核心 1：drawsVisualCursor 应为 false（布局还没到，保持系统光标）。
+        assertFalse(
+            "drawsVisualCursor 应为 false（currentSnapshot 是 layout(\"\") 不匹配 expectedNewText \"a\"）",
+            state.drawsVisualCursor.value,
+        )
+        // 回归核心 2：visualCursorSnapshot 应为 null（不基于错误布局）。
+        assertNull(
+            "visualCursorSnapshot 应为 null（布局还没到，不创建基于错误布局的 snapshot）",
+            state.visualCursorSnapshot.value,
+        )
+
+        // 当正确的 layout("a") 到达后，drawsVisualCursor 变为 true，visualCursorSnapshot 非 null。
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        assertTrue(
+            "layout(\"a\") 到达后 drawsVisualCursor 应为 true（previous=layout(\"\"), current=layout(\"a\") 都匹配）",
+            state.drawsVisualCursor.value,
+        )
+        assertNotNull(
+            "layout(\"a\") 到达后 visualCursorSnapshot 应非 null",
+            state.visualCursorSnapshot.value,
+        )
+    }
+
+    /**
+     * #666 时序测试 1：空章节第一次输入完整时序 — 验证 [ComposeEditorVisualState]
+     * 等待匹配布局到达后才启用视觉光标。
+     *
+     * 时序：
+     * 1. 空文本 layout 到达 → currentSnapshot = layout("")
+     * 2. 再次空文本 layout 到达 → previousSnapshot = layout(""), currentSnapshot = layout("")
+     * 3. onVisualIntent("" -> "a", cursor 0→1, animate=true, expectedOldText="", expectedNewText="a")
+     * 4. 断言：drawsVisualCursor 为 false（currentSnapshot 是 layout("") 不匹配 expectedNewText "a"）
+     * 5. 断言：visualCursorSnapshot 为 null
+     * 6. layout("a") 到达 → previousSnapshot = layout(""), currentSnapshot = layout("a")
+     * 7. 断言：drawsVisualCursor 为 true（现在 previous/current 都匹配）
+     * 8. 断言：visualCursorSnapshot 非 null
+     */
+    @Test
+    fun emptyChapterFirstInput_waitsForMatchingLayoutBeforeVisualCursor() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState()
+
+        // 1. 空文本 layout 到达
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        // 2. 再次空文本 layout 到达（让 previousSnapshot 非 null）
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 3. onVisualIntent("" -> "a", cursor 0→1, animate=true)
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 1)),
+                textKind = TextVisualKind.Insert,
+                cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                newTextLength = 1,
+                expectedOldText = "",
+                expectedNewText = "a",
+            ),
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
+        )
+
+        // 4. drawsVisualCursor 应为 false（currentSnapshot 是 layout("") 不匹配 expectedNewText "a"）
+        assertFalse(
+            "drawsVisualCursor 应为 false（currentSnapshot 是 layout(\"\") 不匹配 expectedNewText \"a\"）",
+            state.drawsVisualCursor.value,
+        )
+        // 5. visualCursorSnapshot 应为 null
+        assertNull(
+            "visualCursorSnapshot 应为 null（布局还没到，不创建基于错误布局的 snapshot）",
+            state.visualCursorSnapshot.value,
+        )
+
+        // 6. layout("a") 到达
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+
+        // 7. drawsVisualCursor 应为 true（现在 previous=layout("")、current=layout("a") 都匹配）
+        assertTrue(
+            "layout(\"a\") 到达后 drawsVisualCursor 应为 true（previous=layout(\"\"), current=layout(\"a\") 都匹配）",
+            state.drawsVisualCursor.value,
+        )
+        // 8. visualCursorSnapshot 非 null
+        assertNotNull(
+            "layout(\"a\") 到达后 visualCursorSnapshot 应非 null",
+            state.visualCursorSnapshot.value,
+        )
+    }
+
+    /**
+     * #666 时序测试 2：连续输入两次，第二笔 intent 先于第二份 layout 到达 —
+     * 验证 [ComposeEditorVisualState] 在第二笔 intent 到达时若 layout 还没到，
+     * 不复用第一笔的 cursor snapshot，等第二份匹配 layout 到达后才启用。
+     *
+     * 时序：
+     * 1. 空文本 layout 到达
+     * 2. 再次空文本 layout 到达
+     * 3. onVisualIntent("" -> "a", cursor 0→1, animate=true, expectedOldText="", expectedNewText="a")
+     * 4. layout("a") 到达 → 第一笔匹配，drawsVisualCursor=true
+     * 5. onVisualIntent("a" -> "ab", cursor 1→2, animate=true, expectedOldText="a", expectedNewText="ab")
+     *    — 第二笔 intent，但 layout("ab") 还没到
+     * 6. 断言：drawsVisualCursor 为 false（currentSnapshot 是 layout("a") 不匹配 expectedNewText "ab"）
+     * 7. 断言：visualCursorSnapshot 为 null（不复用第一笔的 snapshot）
+     * 8. layout("ab") 到达 → previous=layout("a"), current=layout("ab") 都匹配
+     * 9. 断言：drawsVisualCursor 为 true
+     * 10. 断言：visualCursorSnapshot 非 null
+     */
+    @Test
+    fun consecutiveInput_secondIntentBeforeSecondLayout_waitsForMatchingLayout() {
+        val layouts = captureLayouts("", "a", "ab")
+        val state = ComposeEditorVisualState()
+
+        // 1. 空文本 layout 到达
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        // 2. 再次空文本 layout 到达
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 3. 第一笔 intent: "" -> "a"
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 1)),
+                textKind = TextVisualKind.Insert,
+                cursor = CursorVisualIntent(oldEndUtf16 = 0, newEndUtf16 = 1, animate = true),
+                newTextLength = 1,
+                expectedOldText = "",
+                expectedNewText = "a",
+            ),
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
+        )
+
+        // 4. layout("a") 到达 → 第一笔匹配
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        assertTrue(
+            "第一笔匹配后 drawsVisualCursor 应为 true",
+            state.drawsVisualCursor.value,
+        )
+        assertNotNull(
+            "第一笔匹配后 visualCursorSnapshot 应非 null",
+            state.visualCursorSnapshot.value,
+        )
+
+        // 5. 第二笔 intent: "a" -> "ab"，但 layout("ab") 还没到
+        state.onVisualIntent(
+            EditorVisualIntent(
+                oldRanges = listOf(TextRange(1, 1)),
+                newRanges = listOf(TextRange(1, 2)),
+                textKind = TextVisualKind.Insert,
+                cursor = CursorVisualIntent(oldEndUtf16 = 1, newEndUtf16 = 2, animate = true),
+                newTextLength = 2,
+                expectedOldText = "a",
+                expectedNewText = "ab",
+            ),
+            motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
+        )
+
+        // 6. drawsVisualCursor 应为 false（currentSnapshot 是 layout("a") 不匹配 expectedNewText "ab"）
+        assertFalse(
+            "第二笔 intent 到达但 layout(\"ab\") 还没到时 drawsVisualCursor 应为 false" +
+                "（currentSnapshot 是 layout(\"a\") 不匹配 expectedNewText \"ab\"）",
+            state.drawsVisualCursor.value,
+        )
+        // 7. visualCursorSnapshot 应为 null（不复用第一笔的 snapshot）
+        assertNull(
+            "第二笔 intent 到达但 layout(\"ab\") 还没到时 visualCursorSnapshot 应为 null" +
+                "（不复用第一笔的 snapshot）",
+            state.visualCursorSnapshot.value,
+        )
+
+        // 8. layout("ab") 到达 → previous=layout("a"), current=layout("ab") 都匹配
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+
+        // 9. drawsVisualCursor 应为 true
+        assertTrue(
+            "layout(\"ab\") 到达后 drawsVisualCursor 应为 true" +
+                "（previous=layout(\"a\"), current=layout(\"ab\") 都匹配）",
+            state.drawsVisualCursor.value,
+        )
+        // 10. visualCursorSnapshot 非 null
+        assertNotNull(
+            "layout(\"ab\") 到达后 visualCursorSnapshot 应非 null",
+            state.visualCursorSnapshot.value,
         )
     }
 

@@ -125,10 +125,9 @@ class ComposeEditorVisualState(
     ) {
         previousSnapshot = currentSnapshot
         currentSnapshot = ComposeLayoutSnapshot(result, selection, scrollY)
-        // 新 layout 到达后，若当前活跃 intent 的 cursor 要动画，重新构建 cursor snapshot。
-        if (_activeIntent.value?.cursor?.animate == true) {
-            buildCursorSnapshot()?.let { _visualCursorSnapshot.update { it } }
-        }
+        // #666：新 layout 到达后，尝试为当前事务创建 cursor snapshot。
+        // 只有 old/new layout 都匹配 expectedOldText/expectedNewText 时才启用视觉光标。
+        tryActivateVisualCursor()
         // #641 评论 5458283021 问题2a + 评论 5458880786 问题2e：pending visual intent 补算 retainedMoves
         // + 同步 hiddenRanges。抽成 [applyPendingRetainedMoves] 降低 onAuthoritativeLayout 嵌套深度。
         applyPendingRetainedMoves(result)
@@ -280,11 +279,20 @@ class ComposeEditorVisualState(
             currentOwnedNewRanges + currentRetainedNewRanges + suppressedNotOverlapping
         }
 
-        // #641 评论 问题2 + 评论 5458283021 问题3c：只要 cursor?.animate == true 且
-        // hasCursorAnimation，就画视觉光标。reduceMotion/cursorEnabled=false 时不画。
+        // #666：布局和事务正文严格配对。收到 cursor 动画后不立即设 _drawsVisualCursor = true。
+        // 只有当前 previous/current layout 已经与 expectedOldText/expectedNewText 配对成功时，
+        // 才创建 VisualCursorSnapshot 并打开 _drawsVisualCursor。
+        // 布局还没到时保持系统光标正常显示，不沿用上一笔 _visualCursorSnapshot。
         if (hasCursorAnimation) {
-            _drawsVisualCursor.update { true }
-            buildCursorSnapshot()?.let { _visualCursorSnapshot.update { it } }
+            val cursorSnapshot = buildCursorSnapshot()
+            if (cursorSnapshot != null) {
+                _drawsVisualCursor.update { true }
+                _visualCursorSnapshot.update { cursorSnapshot }
+            } else {
+                // 布局还没到：保持系统光标正常显示，不沿用上一笔 cursor snapshot。
+                _drawsVisualCursor.update { false }
+                _visualCursorSnapshot.update { null }
+            }
         } else {
             _drawsVisualCursor.update { false }
             _visualCursorSnapshot.update { null }
@@ -352,6 +360,25 @@ class ComposeEditorVisualState(
             currentSnapshot = currentSnapshot,
             intent = _activeIntent.value,
         )
+
+    /**
+     * #666：尝试为当前活跃 intent 创建 cursor snapshot 并启用视觉光标。
+     * 只有当前 intent 的 cursor 要动画，且 old/new layout 都匹配
+     * expectedOldText/expectedNewText 时才启用视觉光标。
+     * 布局还没到时不启用，保持系统光标正常显示。
+     */
+    private fun tryActivateVisualCursor() {
+        val activeIntent = _activeIntent.value ?: return
+        if (activeIntent.cursor?.animate != true) return
+        val cursorSnapshot = buildCursorSnapshot()
+        if (cursorSnapshot != null) {
+            _drawsVisualCursor.update { true }
+            _visualCursorSnapshot.update { cursorSnapshot }
+        }
+        // cursorSnapshot 为 null 时保持当前状态：
+        // - 若之前已启用视觉光标（布局已匹配过），保持不变
+        // - 若之前未启用（布局还没到），不强行启用
+    }
 
     /**
      * #641 评论 5457777142 问题2 + 评论 5458283021 问题1c：overlay 报告当前动画 progress —

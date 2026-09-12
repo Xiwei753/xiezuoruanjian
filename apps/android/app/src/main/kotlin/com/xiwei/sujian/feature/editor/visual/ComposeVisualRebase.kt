@@ -473,6 +473,14 @@ internal object ComposeVisualRebase {
      * 任一 layout 缺失时不构建快照。
      *
      * #641 评论 问题2：old/new selection end 从 [CursorVisualIntent] 读取。
+     *
+     * #666：布局和事务正文严格配对。调用 `getCursorRect` 之前先检查：
+     * - `previousSnapshot.result.layoutInput.text.text == intent.expectedOldText`
+     * - `currentSnapshot.result.layoutInput.text.text == intent.expectedNewText`
+     * - old/new cursor offset 属于各自 layout 的合法 UTF-16 范围
+     * 任一不匹配返回 null，表示"对应的新布局还没到"，
+     * 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
+     * `intent` 为 null 时（向后兼容）跳过 expectedOldText/expectedNewText 检查，但仍检查 offset 范围。
      */
     fun buildCursorSnapshot(
         previousSnapshot: ComposeLayoutSnapshot?,
@@ -484,6 +492,17 @@ internal object ComposeVisualRebase {
         val cursor = intent?.cursor
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
+        // #666：布局和事务正文严格配对。不匹配说明对应的新布局还没到，返回 null
+        // 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
+        val oldText = prev.result.layoutInput.text.text
+        val newText = curr.result.layoutInput.text.text
+        if (intent != null) {
+            if (oldText != intent.expectedOldText) return null
+            if (newText != intent.expectedNewText) return null
+        }
+        // old/new cursor offset 必须属于各自 layout 的合法 UTF-16 范围。
+        if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
+        if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
         val oldCursorRect = prev.result.getCursorRect(oldSelectionEnd)
         val newCursorRect = curr.result.getCursorRect(newSelectionEnd)
         return VisualCursorSnapshot(
