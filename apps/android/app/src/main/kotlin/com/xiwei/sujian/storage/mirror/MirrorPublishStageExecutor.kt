@@ -16,6 +16,7 @@ internal class MirrorPublishStageExecutor(
     private val journalWriter: MirrorJournalWriter,
     private val source: MirrorSnapshotSource,
     private val router: MirrorStorageRouter,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
     internal data class PublishContext(
         val txContext: MirrorStorageTransactionContext,
@@ -121,7 +122,7 @@ internal class MirrorPublishStageExecutor(
         for (planEntry in context.writePlan) {
             val contentHash = computeContentHash(planEntry.content)
             val staged =
-                context.storage.stageText(
+                workspace.stageText(
                     txId = context.txId,
                     relativePath = planEntry.relativePath,
                     mimeType = MIME_MARKDOWN,
@@ -129,7 +130,7 @@ internal class MirrorPublishStageExecutor(
                 )
             if (staged == null) {
                 logPublishAborted(projectId, "stage failed for ${planEntry.key.chapterId}")
-                context.storage.rollback(context.txId)
+                workspace.rollback(context.txId)
                 return null
             }
             stagedRefs[planEntry.key] = staged
@@ -182,7 +183,7 @@ internal class MirrorPublishStageExecutor(
             )
         if (frozenPlan == null) {
             logPublishAborted(projectId, "failed to build frozen manifest plan")
-            context.storage.rollback(context.txId)
+            workspace.rollback(context.txId)
             return null
         }
         val frozenPlanJson = frozenManifestPlanToJson(frozenPlan)
@@ -209,7 +210,7 @@ internal class MirrorPublishStageExecutor(
             )
         if (!journalWriter.persistPendingJournal(currentJournal)) {
             logPublishAborted(projectId, "journal write failed after stage")
-            context.storage.rollback(context.txId)
+            workspace.rollback(context.txId)
             return null
         }
         return FrozenPlanContext(frozenPlan, currentJournal)

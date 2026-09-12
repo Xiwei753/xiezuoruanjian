@@ -5,15 +5,19 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 /**
  * MirrorRollbackExecutor — 发布事务回滚编排器。
  *
+ * Issue #667：事务中间文件（staging、backup）在 [MirrorTransactionWorkspace]（私有目录）中，
+ * 回滚时用 workspace 方法清理；Download 中的最终文件仍用 [ReadableMirrorStorage] 操作。
+ *
  * 从 ReadableMirrorPublisher 提取，只负责整事务回滚编排、journal 推进和 manifest rollback。
  * 单章节回滚逻辑在 [MirrorChapterRollbackExecutor] 中。
  */
 internal class MirrorRollbackExecutor(
     private val stateStore: ReadableMirrorStateStore,
     private val journalWriter: MirrorJournalWriter,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
-    private val manifestHelper = MirrorManifestRollbackHelper(stateStore, journalWriter)
-    internal val chapterRollbackExecutor = MirrorChapterRollbackExecutor()
+    private val manifestHelper = MirrorManifestRollbackHelper(stateStore, journalWriter, workspace)
+    internal val chapterRollbackExecutor = MirrorChapterRollbackExecutor(workspace)
 
     internal fun rollbackChapterToOldState(
         journal: PendingMirrorPublish,
@@ -40,6 +44,8 @@ internal class MirrorRollbackExecutor(
 
     /**
      * 回滚整个发布事务：恢复所有 item 的 old backup，再删除 tx staging。
+     *
+     * Issue #667：workspace.rollback(txId) 清理私有目录中的 staging/backup。
      *
      * #649 评论 5564379115 问题 1/2：统一事务回滚，替代逐 item 回滚。
      *
@@ -73,7 +79,7 @@ internal class MirrorRollbackExecutor(
             return false
         }
 
-        if (!storage.rollback(txId)) {
+        if (!workspace.rollback(txId)) {
             DiagnosticsLogger.w(TAG, "rollback: staging cleanup failed for tx $txId, keeping journal")
             return false
         }

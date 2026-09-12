@@ -30,7 +30,7 @@ data class MirrorFileRef(
  * #649 评论 5561974464 问题 2：事务性发布需要 stage → promote 两阶段。
  * 正文先写到 staging 暂存（不覆盖 committed ref），promote 成功后才提交。
  *
- * @property txId 事务 ID，用于 [ReadableMirrorStorage.rollback]。
+ * @property txId 事务 ID，用于 [MirrorTransactionWorkspace.rollback]。
  * @property stagingUri 暂存文件的 URI。
  * @property stagingRelativePath 暂存文件的相对路径。
  * @property finalRelativePath 最终目标路径（promote 后重命名/移动到这个位置）。
@@ -42,43 +42,6 @@ data class StagedMirrorRef(
     val stagingRelativePath: String,
     val finalRelativePath: String,
     val mimeType: String,
-)
-
-/**
- * promote 流程拆分后的结果，记录新引用、旧正文备份引用与被替换的旧引用。
- *
- * #649 评论 5562715833 问题 2：promote 拆成 [ReadableMirrorStorage.backupCommitted] +
- * [ReadableMirrorStorage.promoteStaged]，旧正文先备份再提升，
- * manifest 提交成功后才删旧正文和 backup。
- *
- * @property newRef 新创建/移动后的文件引用。
- * @property backupOldRef 旧正文备份引用（old != null 时非空，事务提交后由调用方删）；
- *   `null` 表示本次是新建（无旧文件被备份）。
- * @property displacedOldRef 被替换掉的旧引用（promote 前 `old` 参数原样回传）；
- *   调用方据此在 journal/stateStore 提交后再决定何时删旧。
- *   `null` 表示本次是新建（无旧文件被替换）。
- */
-data class PromoteResult(
-    val newRef: MirrorFileRef,
-    val backupOldRef: MirrorFileRef?,
-    val displacedOldRef: MirrorFileRef?,
-)
-
-/**
- * 两步 backup 的第一步结果（#649 评论 5564820566 问题 3）。
- *
- * 非原子 provider（copy → delete）在 process crash 时可能出现
- * "backup 已创建但 old 还没删" 的歧义窗口。用两步 journalable 状态消除歧义：
- * 1. [prepareBackup]：只复制/准备 backup，不删 old → [BackupReadyRef]
- * 2. [vacateCommitted]：删 old → 最终路径腾空
- *
- * @property backupRef backup 文件引用（已存在于 backup 目录）
- * @property vacated true 表示 old 已被移走/删除（原子 move 的 provider 在第一步就完成）；
- *   false 表示 old 仍在原位，调用方需要后续调用 [vacateCommitted]
- */
-data class BackupReadyRef(
-    val backupRef: MirrorFileRef,
-    val vacated: Boolean,
 )
 
 /**
@@ -122,30 +85,10 @@ sealed interface LatestPending {
 }
 
 /**
- * restoreBackup 带身份校验的结果（#649 评论 5566303837 问题 4）。
- *
- * 旧 `MirrorFileRef?` 无法区分"final 有文件但不是旧正文"和"确实是旧正文"。
- * promote 崩溃窗口会让 final 上出现新文件，直接 return Found 会误判。
- */
-sealed interface RestoreBackupResult {
-    /** backup 成功恢复到 final 位置。 */
-    data class Restored(val ref: MirrorFileRef) : RestoreBackupResult
-
-    /** final 已存在且 hash 与旧正文匹配（真正已恢复）。 */
-    data class AlreadyRestored(val ref: MirrorFileRef) : RestoreBackupResult
-
-    /** final 已存在但 hash 不匹配（新文件残留），冲突。 */
-    data object Conflict : RestoreBackupResult
-
-    /** 读取/创建失败，无法确认状态。 */
-    data class Failed(val cause: Throwable? = null) : RestoreBackupResult
-}
-
-/**
  * SAF 目录遍历三态（#649 评论 5566303837 问题 5）。
  *
  * 旧 `findDirectory()` 返回 null 无法区分"目录不存在"和"查询异常"。
- * lookup/lookupBackup 需要明确区分这两种情况。
+ * lookup 需要明确区分这两种情况。
  */
 sealed interface DirectoryLookupResult {
     /** 找到目录。 */
@@ -238,48 +181,9 @@ interface MirrorStorageLookup {
     fun lookup(relativePath: String): MirrorLookupResult
 
     /**
-     * 只查不创建：返回已存在于备份路径 [relativePath] 的文件 ref。
-     *
-     * #649 评论 5563798095：恢复时判断 backup 是否已被移动到备份目录。
-     * 崩溃窗口：`backupCommitted()` 已把 old 移到 `.staging/<txId>/backup/`，
-     * 但 `backupOldRef` 还没写入 journal 时进程退出。重启后 journal 仍是 STAGED，
-     * 恢复会拿已失效的 old URI 再跑一次 `backupCommitted()`，
-     * 失败后又 `rollback(txId)` 会把唯一 backup 删掉。
-     * 用 `resolveBackup()` 检测 backup 已存在则跳过重复 backup。
-     *
-     * @param txId 事务 ID
-     * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
-     * @return 已存在文件的 ref；不存在或查询失败返回 null
-     */
-    fun resolveBackup(
-        txId: String,
-        relativePath: String,
-    ): MirrorFileRef?
-
-    /**
-     * 三态查询：返回备份路径 [relativePath] 的 [MirrorLookupResult]。
-     *
-     * 与 [resolveBackup] 区别：[resolveBackup] 在"不存在"和"查询失败"时都返回 null，
-     * 无法区分；[lookupBackup] 明确区分 [MirrorLookupResult.Missing] 和 [MirrorLookupResult.Failed]。
-     *
-     * 用于 [MirrorStorageTransaction.restoreBackup] 的 crash-idempotent 检查：
-     * - [MirrorLookupResult.Found] → backup 已存在，可直接返回这个 ref（已恢复）
-     * - [MirrorLookupResult.Missing] → backup 不存在，继续 restore
-     * - [MirrorLookupResult.Failed] → 查询失败，返回 null
-     *
-     * @param txId 事务 ID
-     * @param relativePath 相对 `Download/Sujian/` 的路径（与 backup 中的相对路径一致）
-     * @return [MirrorLookupResult.Found] / [MirrorLookupResult.Missing] / [MirrorLookupResult.Failed]
-     */
-    fun lookupBackup(
-        txId: String,
-        relativePath: String,
-    ): MirrorLookupResult
-
-    /**
      * 读取文件内容并计算 hash（#649 评论 5566303837 问题 2/4）。
      *
-     * 用于 [MirrorStorageTransaction.restoreBackup] 校验 final 是否真的是旧正文：
+     * 用于校验 final 位置文件的内容身份：
      * - promote 崩溃后 final 可能是新文件，不能只看"文件在不在"
      * - 用 oldEntries[key].contentHash 校验 final 内容
      *
@@ -289,141 +193,15 @@ interface MirrorStorageLookup {
 }
 
 /**
- * 镜像存储事务能力（#651 评论 5592465805：按职责拆 [ReadableMirrorStorage]）。
- */
-interface MirrorStorageTransaction {
-    // ── 事务能力（#649 评论 5561974464 问题 2）──
-
-    /**
-     * 暂存正文到事务 staging（不覆盖 committed ref）。
-     *
-     * 事务性发布的两阶段写：
-     * 1. 所有新正文先写到 staging（不能覆盖 committed ref）
-     * 2. promotion 成功后写正式 manifest
-     * 3. manifest 成功后一次性写 desiredEntries 到 stateStore
-     *
-     * @param txId 事务 ID（同一事务内所有 stage 调用用相同 txId）
-     * @param relativePath 相对 `Download/Sujian/` 的目标路径
-     * @param mimeType MIME 类型
-     * @param text 正文内容
-     * @return 暂存引用；失败返回 null
-     */
-    fun stageText(
-        txId: String,
-        relativePath: String,
-        mimeType: String,
-        text: String,
-    ): StagedMirrorRef?
-
-    /**
-     * 把旧正文从最终路径**移动**到事务 backup 目录，最终路径真正腾空。
-     *
-     * #649 评论 5563333323 缺口 1：真正占位切换 swap。
-     * 旧实现只复制 old 到 backup，old 仍占着最终路径，promoteStaged 在 old 仍占着的
-     * 位置创建/移动同名新文件，provider 可能拒绝、改名或返回另一条记录，
-     * manifest 可能记录错误路径。
-     *
-     * 新语义：**移动**（不是复制）old 到 tx backup 区，最终文件名真正腾空。
-     * promoteStaged 之后最终路径才被 staged 占据，不会冲突。
-     * 事务回滚时用 [restoreBackup] 把 backup 积回最终路径。
-     *
-     * @param txId 事务 ID
-     * @param old 旧引用（非空）
-     * @param mimeType MIME 类型（正文使用 `text/markdown`，manifest 使用 `application/json`）
-     * @return backup 引用（old 已被移走，最终路径腾空）；失败返回 null（old 仍在原位）
-     */
-    fun backupCommitted(
-        txId: String,
-        old: MirrorFileRef,
-        mimeType: String,
-    ): MirrorFileRef?
-
-    // #649 评论 5564820566 问题 3：两步 journalable backup，消除 "backup 已创建、old 还没删" 的歧义窗口。
-
-    /**
-     * 第一步：只复制/准备 backup，不删 old。
-     *
-     * 非原子 provider（MediaStore fallback）：copy old → backup，返回 [BackupReadyRef]（vacated=false），
-     * 调用方需后续调用 [vacateCommitted] 删 old。
-     * 原子 provider（SAF moveDocument）：move old → backup，返回 [BackupReadyRef]（vacated=true），
-     * 调用方跳过 [vacateCommitted]。
-     *
-     * @param txId 事务 ID
-     * @param old 旧引用（非空）
-     * @param mimeType MIME 类型
-     * @return [BackupReadyRef]；失败返回 null
-     */
-    fun prepareBackup(
-        txId: String,
-        old: MirrorFileRef,
-        mimeType: String,
-    ): BackupReadyRef?
-
-    /**
-     * 第二步：删除 old，腾空最终路径。
-     *
-     * 幂等：如果 old 已经不存在（被移动或已删除），返回 true。
-     * 如果 backup 已存在但 old 还在（崩溃窗口），也返回 true。
-     *
-     * @param old 旧引用
-     * @return true 表示最终路径已腾空；false 表示删除失败（无法确认状态）
-     */
-    fun vacateCommitted(old: MirrorFileRef): Boolean
-
-    /**
-     * 提升暂存文件到最终位置（不删 old，old 由调用方在事务提交后删）。
-     *
-     * #649 评论 5562715833 问题 2：promoteStaged 不再删 old。
-     * - MediaStore：读 staging 内容 → createText 到 final → 删 staging。
-     * - SAF：用 moveDocument 跨目录移动 staging 到 final（#649 评论 5562715833 问题 3）。
-     *
-     * @param staged 暂存引用
-     * @param finalRelativePath 最终目标路径
-     * @return 新文件引用；失败返回 null（staging 保留，调用方可 rollback）
-     */
-    fun promoteStaged(
-        staged: StagedMirrorRef,
-        finalRelativePath: String,
-    ): MirrorFileRef?
-
-    /**
-     * 把 backup 恢复到 final 位置（回滚用）。
-     *
-     * #649 评论 5566303837 问题 4：返回 [RestoreBackupResult]，带旧内容身份校验。
-     * 不能用 final 是否存在判断"已恢复"——promote 崩溃窗口可能在 final 上留下新文件。
-     *
-     * @param backup backup 引用
-     * @param finalRelativePath 最终目标路径
-     * @param mimeType MIME 类型（正文使用 `text/markdown`，manifest 使用 `application/json`）
-     * @param expectedOldContentHash 旧正文的期望 hash（用于校验 final 上是否真的是旧正文）
-     *   null 表示不校验（如新建章节，没有旧正文）
-     * @return [RestoreBackupResult]
-     */
-    fun restoreBackup(
-        backup: MirrorFileRef,
-        finalRelativePath: String,
-        mimeType: String,
-        expectedOldContentHash: String? = null,
-    ): RestoreBackupResult
-
-    /**
-     * 回滚事务：删除该 txId 对应的所有暂存文件。
-     *
-     * #649 评论 5566303837 问题 6：返回 Boolean，
-     * 让 cleanupCommittedTransaction 区分"残留已清理"和"清理失败"。
-     *
-     * @param txId 事务 ID
-     * @return true 表示清理成功（或目录本就不存在）；false 表示清理失败
-     */
-    fun rollback(txId: String): Boolean
-}
-
-/**
  * 统一镜像存储接口，隔离 MediaStore 与 SAF DocumentsProvider 两套 URI 体系。
  *
  * #649 评论 5561465552 第 3 点。#651 评论 5592465805：按职责拆成
- * [MirrorStorageCore] + [MirrorStorageLookup] + [MirrorStorageTransaction]，
- * 本接口仅组合三者，调用方仍用 [ReadableMirrorStorage] 类型访问全部能力。
+ * [MirrorStorageCore] + [MirrorStorageLookup]，
+ * 本接口仅组合两者，调用方用 [ReadableMirrorStorage] 类型访问全部能力。
+ *
+ * Issue #667：事务能力（stage/backup/promote/rollback）已移至
+ * [MirrorTransactionWorkspace]（私有目录），[ReadableMirrorStorage] 只保留
+ * 最终用户可见文件的读写和查询能力。
  *
  * ## 两套实现
  * - [MediaStoreMirrorStorage]：包装 [com.xiwei.sujian.core.platform.storage.downloads.MediaStoreDownloads]，
@@ -441,5 +219,4 @@ interface MirrorStorageTransaction {
  */
 interface ReadableMirrorStorage :
     MirrorStorageCore,
-    MirrorStorageLookup,
-    MirrorStorageTransaction
+    MirrorStorageLookup

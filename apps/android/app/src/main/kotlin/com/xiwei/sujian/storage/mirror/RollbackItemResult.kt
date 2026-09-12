@@ -1,6 +1,26 @@
 package com.xiwei.sujian.storage.mirror
 
 /**
+ * 从 workspace backup 恢复旧正文到 Download 最终位置的结果。
+ *
+ * Issue #667：旧实现中 `ReadableMirrorStorage.restoreBackup()` 返回此类型，
+ * 事务方法移到 [MirrorTransactionWorkspace] 后，由执行器内联组装此结果。
+ */
+internal sealed interface RestoreBackupResult {
+    /** 旧正文已恢复到 final 位置。[ref] 是新创建文件的引用。 */
+    data class Restored(val ref: MirrorFileRef) : RestoreBackupResult
+
+    /** final 位置已存在且内容 hash 匹配预期，无需重复恢复。 */
+    data class AlreadyRestored(val ref: MirrorFileRef) : RestoreBackupResult
+
+    /** final 位置已存在但内容 hash 不匹配，状态冲突。 */
+    data class Conflict(val ref: MirrorFileRef) : RestoreBackupResult
+
+    /** 恢复失败（读取 backup 失败、创建文件失败等）。 */
+    data class Failed(val cause: Throwable? = null) : RestoreBackupResult
+}
+
+/**
  * 章节回滚操作的结果。
  *
  * 由 [MirrorChapterRollbackExecutor.rollbackChapterToOldState] 返回，

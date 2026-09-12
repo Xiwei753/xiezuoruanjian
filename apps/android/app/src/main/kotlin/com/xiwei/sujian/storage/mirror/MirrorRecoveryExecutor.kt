@@ -17,6 +17,7 @@ internal class MirrorRecoveryExecutor(
     private val journalWriter: MirrorJournalWriter,
     private val rollbackExecutor: MirrorRollbackExecutor,
     private val publishExecutor: MirrorPublishExecutor,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
     private val promoteExecutor =
         MirrorPromoteRecoveryExecutor(
@@ -24,6 +25,7 @@ internal class MirrorRecoveryExecutor(
             journalWriter = journalWriter,
             rollbackExecutor = rollbackExecutor,
             publishExecutor = publishExecutor,
+            workspace = workspace,
         )
 
     private val cleanupExecutor =
@@ -72,7 +74,7 @@ internal class MirrorRecoveryExecutor(
             DiagnosticsLogger.w(TAG, "Recover rollback: manifest rollback failed, keeping journal")
             return
         }
-        if (storage.rollback(journal.txId)) {
+        if (workspace.rollback(journal.txId)) {
             stateStore.clearPendingPublish()
         } else {
             DiagnosticsLogger.w(TAG, "Recover rollback: staging cleanup failed, keeping journal for retry")

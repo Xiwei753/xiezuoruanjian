@@ -13,7 +13,10 @@ import java.io.IOException
  * 解决 LargeClass / TooManyFunctions）。
  *
  * 持有 [treeUri] / [contentResolver] / [documentTreeReader]，提供目录查找/创建、
- * 文件读写、跨目录移动等底层文档操作。不含事务语义，不实现 [ReadableMirrorStorage]。
+ * 文件读写等底层文档操作。不含事务语义，不实现 [ReadableMirrorStorage]。
+ *
+ * Issue #667：事务专用方法（tryMoveDocument、backupBasePath、resolveOldParent、
+ * backupCommittedViaCopy）已随事务能力移至 [MirrorTransactionWorkspace] 一并移除。
  */
 internal class DocumentTreeMirrorOps(
     internal val treeUri: Uri,
@@ -87,46 +90,6 @@ internal class DocumentTreeMirrorOps(
             null
         }
 
-    fun tryMoveDocument(
-        stagingUri: Uri,
-        stagingParentUri: Uri,
-        targetParentUri: Uri,
-        displayName: String,
-    ): Uri? {
-        val movedUri =
-            try {
-                DocumentsContract.moveDocument(contentResolver, stagingUri, stagingParentUri, targetParentUri)
-            } catch (_: UnsupportedOperationException) {
-                null
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "moveDocument failed: ${e.message}")
-                null
-            } ?: return null
-        val currentName = getDisplayName(movedUri)
-        return if (currentName == displayName) {
-            movedUri
-        } else {
-            try {
-                DocumentsContract.renameDocument(contentResolver, movedUri, displayName)
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "renameDocument failed after move: ${e.message}")
-                null
-            }
-        }
-    }
-
-    private fun getDisplayName(uri: Uri): String? =
-        try {
-            contentResolver
-                .query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
-                ?.use { cursor ->
-                    if (cursor.moveToFirst()) cursor.getString(0) else null
-                }
-        } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "getDisplayName failed: ${e.message}")
-            null
-        }
-
     fun findDirectory(relativeDir: String): DirectoryLookupResult {
         val parts = relativeDir.split("/").filter { it.isNotEmpty() }
         var current: Uri = treeUri
@@ -187,58 +150,7 @@ internal class DocumentTreeMirrorOps(
         }
     }
 
-    /** 事务 backup 基路径：`.staging/<txId>/backup`。 */
-    fun backupBasePath(txId: String): String = "$STAGING_DIR/$txId/$BACKUP_DIR"
-
-    /** 解析 old 的父目录 URI（空路径表示根 tree）。 */
-    fun resolveOldParent(oldParentPath: String): DirectoryLookupResult =
-        if (oldParentPath.isBlank()) {
-            DirectoryLookupResult.Found(treeUri)
-        } else {
-            findDirectory(oldParentPath)
-        }
-
-    /** 回退路径：read old → create backup → write → delete old 腾空最终路径。 */
-    fun backupCommittedViaCopy(
-        oldUri: Uri,
-        backupParentUri: Uri,
-        backupRelativePath: String,
-        mimeType: String,
-        displayName: String,
-    ): MirrorFileRef? {
-        val content = readTextFromUri(oldUri) ?: return null
-        val fileUri =
-            try {
-                DocumentsContract.createDocument(contentResolver, backupParentUri, mimeType, displayName)
-            } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "createDocument failed for backup $displayName: ${e.message}")
-                return null
-            } ?: return null
-        if (!writeToUri(fileUri, content)) {
-            try {
-                DocumentsContract.deleteDocument(contentResolver, fileUri)
-            } catch (_: Exception) {
-            }
-            return null
-        }
-        if (!try {
-                DocumentsContract.deleteDocument(contentResolver, oldUri)
-            } catch (_: Exception) {
-                false
-            }
-        ) {
-            try {
-                DocumentsContract.deleteDocument(contentResolver, fileUri)
-            } catch (_: Exception) {
-            }
-            return null
-        }
-        return MirrorFileRef(uri = fileUri.toString(), relativePath = backupRelativePath)
-    }
-
     companion object {
         private const val TAG = "DocumentTreeMirrorOps"
-        internal const val STAGING_DIR = ".staging"
-        internal const val BACKUP_DIR = "backup"
     }
 }
