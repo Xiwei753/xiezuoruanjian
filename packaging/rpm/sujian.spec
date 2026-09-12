@@ -42,6 +42,9 @@ Requires:       qt6-qtquickcontrols2 >= 6.7
 %setup -q
 
 %build
+# 接收外部传入的构建身份环境变量（由 build-rpm.sh 在仓库根目录计算）
+export SUJIAN_GIT_COMMIT_SHA="${SUJIAN_GIT_COMMIT_SHA:-unknown}"
+export SUJIAN_PACKAGE_TYPE="${SUJIAN_PACKAGE_TYPE:-rpm}"
 # 构建 Linux Qt 前端二进制（产物名 sujian-linux-qt）
 # 支持外部 CARGO_TARGET_DIR：构建脚本传持久目录时走可复用缓存，
 # 普通 rpmbuild 未传时回退到源码目录自身的 target。

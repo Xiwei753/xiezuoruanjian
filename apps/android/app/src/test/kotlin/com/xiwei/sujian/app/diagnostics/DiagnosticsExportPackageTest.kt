@@ -93,6 +93,9 @@ class DiagnosticsExportPackageTest {
                     "last_crash.txt",
                     // #665：导出包必须带统一 diagnostics_manifest.json
                     "diagnostics_manifest.json",
+                    // #623：保留旧的身份和设备信息文件
+                    "current_device.json",
+                    "build_identity.json",
                 )
             for (name in expected) {
                 assertTrue("package must contain $name, got $entries", name in entries)

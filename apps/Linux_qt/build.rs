@@ -547,21 +547,31 @@ fn main() {
 /// 注入编译时环境变量，供源码中 `env!("KEY")` 读取。
 ///
 /// 这些变量构成诊断包的 buildKey 和 manifest 身份信息：
-/// - GIT_COMMIT_SHA：git short sha，失败时 "unknown"
+/// - GIT_COMMIT_SHA：优先读 SUJIAN_GIT_COMMIT_SHA 环境变量，dev 构建回退 git rev-parse，失败时 "unknown"
 /// - BUILD_PROFILE：debug 或 release，debug 为默认
 /// - RUSTC_VERSION：rustc 版本字符串，失败时 "unknown"
 /// - PACKAGE_TYPE：rpm/deb/AppImage/dev，默认 "dev"
-/// - BUILD_KEY：组合 `${gitSha}-${buildProfile}` 格式
+/// - BUILD_KEY：组合 `${appVersion}-${gitSha}-${packageType}-${buildProfile}` 格式
 fn inject_build_env_vars() {
-    let git_sha = Command::new("git")
-        .args(["rev-parse", "--short", "HEAD"])
-        .output()
+    println!("cargo:rerun-if-env-changed=SUJIAN_GIT_COMMIT_SHA");
+    println!("cargo:rerun-if-env-changed=SUJIAN_PACKAGE_TYPE");
+
+    // 优先读取显式传入的 git SHA（RPM 打包时由 build-rpm.sh 在仓库根目录计算）
+    let git_sha = std::env::var("SUJIAN_GIT_COMMIT_SHA")
         .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| {
+            // dev 本地构建才允许回退到 git rev-parse
+            Command::new("git")
+                .args(["rev-parse", "--short", "HEAD"])
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "unknown".to_string())
+        });
 
     let build_profile = if std::env::var("PROFILE").as_deref() == Ok("release") {
         "release"
@@ -584,7 +594,9 @@ fn inject_build_env_vars() {
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "dev".to_string());
 
-    let build_key = format!("{}-{}", git_sha, build_profile);
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    let build_key = format!("{}-{}-{}-{}", app_version, git_sha, package_type, build_profile);
 
     println!("cargo:rustc-env=GIT_COMMIT_SHA={}", git_sha);
     println!("cargo:rustc-env=BUILD_PROFILE={}", build_profile);

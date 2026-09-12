@@ -581,6 +581,7 @@ fn determine_export_dir(app_data_root: &Path) -> PathBuf {
 
 /// 将日志文件写入目标目录，返回收集状态
 ///
+/// 只收集当前 buildKey 的日志文件，避免把其他构建版本的历史日志混入诊断包。
 /// 返回值："ok" 表示成功收集日志，"missing" 表示日志目录不存在，"error" 表示读取失败
 fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) -> &'static str {
     let logs_dest = dest_dir.join("logs");
@@ -601,10 +602,13 @@ fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) -> &'static str {
         }
     };
 
+    // 只收集当前 buildKey 的日志，避免把其他构建版本的历史日志混入诊断包
+    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
     let mut has_logs = false;
     for entry in entries.filter_map(|e| e.ok()) {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "log") {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with(&buildkey_prefix) && name.ends_with(".log") {
             if let Ok(content) = fs::read_to_string(&path) {
                 let redacted = redact(&content);
                 let dest = logs_dest.join(path.file_name().unwrap_or_default());

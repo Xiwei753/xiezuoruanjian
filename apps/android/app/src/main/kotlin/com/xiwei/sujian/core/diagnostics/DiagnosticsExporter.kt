@@ -13,6 +13,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
@@ -50,6 +51,8 @@ object DiagnosticsExporter {
             val editorStatus = writeEditorSnapshot(tempDir)
             val jankStatus = writeJankSummary(tempDir)
 
+            writeDeviceInfo(context, tempDir)
+            writeBuildIdentity(tempDir)
             writeDiagnosticsManifest(
                 context,
                 tempDir,
@@ -210,6 +213,33 @@ object DiagnosticsExporter {
             "error"
         }
 
+    private fun writeDeviceInfo(
+        context: Context,
+        destDir: File,
+    ) {
+        val info = collectDeviceInfo(context)
+        val gson = GsonBuilder().setPrettyPrinting().create()
+        val json = DiagnosticsLogger.redact(gson.toJson(info))
+        File(destDir, "current_device.json").writeText(json)
+    }
+
+    /**
+     * #623 评论7：导出包根目录的 build_identity.json — 序列化当前 APK 的
+     * [DiagnosticsBuildIdentity]，表示"这次导出动作来自哪个 APK"。
+     */
+    private fun writeBuildIdentity(destDir: File) {
+        try {
+            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = DiagnosticsLogger.redact(gson.toJson(identity))
+            File(destDir, "build_identity.json").writeText(json)
+        } catch (e: Exception) {
+            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            File(destDir, "build_identity.json").writeText(errorJson)
+        }
+    }
+
     /**
      * #665：生成统一 diagnostics_manifest.json — 组合构建身份、设备信息和收集状态，
      * 让接收者一看就知道"这是什么端、什么构建、什么环境"。
@@ -224,8 +254,7 @@ object DiagnosticsExporter {
             val deviceInfo = collectDeviceInfo(context)
             val supportedAbis = Build.SUPPORTED_ABIS.toList()
             val arch = supportedAbis.firstOrNull() ?: "unknown"
-            val exportedAt =
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(Date())
+            val exportedAt = Instant.now().toString()
 
             val manifest =
                 mapOf(

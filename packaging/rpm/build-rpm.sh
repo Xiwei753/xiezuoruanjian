@@ -114,6 +114,18 @@ tar -czf "${TARBALL}" \
 cp "${SCRIPT_DIR}/sujian.spec" "${RPM_TOPDIR}/SPECS/${NAME}.spec"
 
 # ---------------------------------------------------------------------------
+# 5.5. 计算并导出构建身份环境变量
+# ---------------------------------------------------------------------------
+# RPM staging 排除了 .git，build.rs 无法在 rpmbuild 内获取 git SHA。
+# 在仓库根目录先取 SHA，通过环境变量传给 rpmbuild/Cargo。
+SUJIAN_GIT_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+export SUJIAN_GIT_COMMIT_SHA
+SUJIAN_PACKAGE_TYPE="rpm"
+export SUJIAN_PACKAGE_TYPE
+echo "==> SUJIAN_GIT_COMMIT_SHA=${SUJIAN_GIT_COMMIT_SHA}"
+echo "==> SUJIAN_PACKAGE_TYPE=${SUJIAN_PACKAGE_TYPE}"
+
+# ---------------------------------------------------------------------------
 # 6. 执行 rpmbuild -bb（仅构建二进制 RPM）
 # ---------------------------------------------------------------------------
 echo "==> rpmbuild -bb"
