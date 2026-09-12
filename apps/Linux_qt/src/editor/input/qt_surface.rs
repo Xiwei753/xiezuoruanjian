@@ -302,12 +302,13 @@ cpp! {{
                 int selLen = sujian_ime_query_selection_text(rust_item, selBuf, 256);
                 qe->setValue(Qt::ImCurrentSelection, QString::fromUtf16(selBuf, selLen));
             }
+            // Issue #668: Qt::ImAbsolutePosition 是"光标在整个文档里的逻辑位置"，
+            // 应返回整数 UTF-16/QChar 位置，不是屏幕/场景坐标。之前返回 QPointF
+            // 是协议错误，fcitx/Qt 平台输入上下文查询它会拿到完全错误的值。
+            // ImCursorPosition / ImAnchorPosition 相对于 ImSurroundingText；
+            // ImAbsolutePosition 才是整个文档的绝对逻辑位置，两者不要混。
             if (qe->queries() & Qt::ImAbsolutePosition) {
-                QQuickItem* quickItem = qobject_cast<QQuickItem*>(obj);
-                if (quickItem) {
-                    QPointF scenePos = quickItem->mapToScene(QPointF(data.cursor_rect_x, data.cursor_rect_y));
-                    qe->setValue(Qt::ImAbsolutePosition, scenePos);
-                }
+                qe->setValue(Qt::ImAbsolutePosition, data.cursor_char_pos);
             }
             if (qe->queries() & Qt::ImAnchorPosition) {
                 int beforeLen = qMin(data.cursor_char_pos, 100);

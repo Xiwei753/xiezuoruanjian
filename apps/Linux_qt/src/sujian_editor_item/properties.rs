@@ -455,30 +455,31 @@ impl SujianEditorItem {
         })
     }
 
+    /// IME 光标矩形 X 坐标。
+    ///
+    /// Issue #668: IME 查询永远读目标输入位置 `target_x`，不读动画中间态
+    /// `visual_x`。`visual_x / visual_y` 只给 Scene Graph 画平滑光标，不再
+    /// 暴露给 IME。预编辑期间仍优先读 preedit 自己的光标矩形。
     pub(crate) fn cursor_rect_x(&self) -> f32 {
         if !self.pipeline.composition().preedit_text.is_empty() {
             if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {
                 return r.x as f32;
             }
         }
-        if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
-            self.cursor_ctrl.visual_x as f32
-        } else {
-            self.cursor_ctrl.target_x as f32
-        }
+        self.cursor_ctrl.target_x as f32
     }
 
+    /// IME 光标矩形 Y 坐标。
+    ///
+    /// Issue #668: IME 查询永远读目标输入位置 `target_y`，不读动画中间态
+    /// `visual_y`。预编辑期间仍优先读 preedit 自己的光标矩形。
     pub(crate) fn cursor_rect_y(&self) -> f32 {
         if !self.pipeline.composition().preedit_text.is_empty() {
             if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {
                 return r.top as f32;
             }
         }
-        if self.current_smooth_cursor_enabled && self.cursor_ctrl.animation.is_some() {
-            self.cursor_ctrl.visual_y as f32
-        } else {
-            self.cursor_ctrl.target_y as f32
-        }
+        self.cursor_ctrl.target_y as f32
     }
 
     pub(crate) fn cursor_rect_width(&self) -> f32 {
