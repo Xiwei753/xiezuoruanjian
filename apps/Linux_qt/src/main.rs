@@ -134,6 +134,7 @@ cpp! {{
     #include <QIcon>
     #include <QStyleHints>
     #include <QStringList>
+    #include <QSysInfo>
     #include <QTranslator>
     #include <QtGlobal>
 }}
@@ -437,6 +438,71 @@ fn log_desktop_runtime_profile(qt_version: &str, qml_entry: &str) {
     let summary = profile.summary();
     debug_log_static("app", "desktop_runtime_profile", &summary);
     diagnostics::log_to_file("INFO", "app", "desktop_runtime_profile", &summary);
+
+    // 收集 RuntimeInfo 和 SystemInfo 并注入 diagnostics 模块
+    let runtime_info = collect_runtime_info(&profile);
+    let system_info = collect_system_info();
+    diagnostics::set_runtime_info(runtime_info);
+    diagnostics::set_system_info(system_info);
+}
+
+/// 从 DesktopRuntimeProfile 转换为 diagnostics::RuntimeInfo
+fn collect_runtime_info(profile: &DesktopRuntimeProfile) -> diagnostics::RuntimeInfo {
+    diagnostics::RuntimeInfo {
+        qt_runtime_version: profile.qt_runtime_version.clone(),
+        qt_build_version: profile.qt_build_version.clone(),
+        qpa_platform: profile.platform_name.clone(),
+        input_method_module: profile.input_method_module.clone(),
+        bundled_qt: profile.bundled_qt,
+        package_type: env!("PACKAGE_TYPE").to_string(),
+        rustc_version: env!("RUSTC_VERSION").to_string(),
+    }
+}
+
+/// 通过 QSysInfo 和环境变量收集系统信息
+fn collect_system_info() -> diagnostics::SystemInfo {
+    let product_type = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::productType();
+    })
+    .to_string();
+    let product_version = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::productVersion();
+    })
+    .to_string();
+    let pretty_product_name = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::prettyProductName();
+    })
+    .to_string();
+    let kernel_type = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::kernelType();
+    })
+    .to_string();
+    let kernel_version = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::kernelVersion();
+    })
+    .to_string();
+    let current_cpu_arch = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::currentCpuArchitecture();
+    })
+    .to_string();
+    let build_abi = cpp!(unsafe [] -> QString as "QString" {
+        return QSysInfo::buildAbi();
+    })
+    .to_string();
+    let xdg_current_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    let xdg_session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+
+    diagnostics::SystemInfo {
+        product_type,
+        product_version,
+        pretty_product_name,
+        kernel_type,
+        kernel_version,
+        current_cpu_arch,
+        build_abi,
+        xdg_current_desktop,
+        xdg_session_type,
+    }
 }
 fn install_translator() {
     // Install QTranslator for i18n support.

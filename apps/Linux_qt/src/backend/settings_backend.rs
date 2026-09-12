@@ -505,7 +505,27 @@ impl SettingsBackend {
         self.with_app(|app| {
             let app_data_root = std::path::PathBuf::from(&app.current_data_root);
             let log_dir = crate::backend::diagnostics::get_log_dir(&app_data_root);
-            match crate::backend::diagnostics::export_diagnostics_pack(&app_data_root, &log_dir) {
+
+            // 从全局缓存获取 RuntimeInfo 和 SystemInfo
+            let (runtime_info, system_info) =
+                match (crate::backend::diagnostics::get_runtime_info(), crate::backend::diagnostics::get_system_info()) {
+                    (Some(rt), Some(sys)) => (rt, sys),
+                    _ => {
+                        eprintln!("[SettingsBackend] export_diagnostics_pack: runtime/system info not yet initialized");
+                        let envelope = serde_json::json!({
+                            "success": false,
+                            "error": "runtime/system info not yet initialized"
+                        });
+                        return envelope.to_string().into();
+                    }
+                };
+
+            match crate::backend::diagnostics::export_diagnostics_pack(
+                &app_data_root,
+                &log_dir,
+                runtime_info,
+                system_info,
+            ) {
                 Ok(path) => {
                     let path_str = path.to_string_lossy().to_string();
                     let export_dir = path

@@ -538,5 +538,57 @@ fn main() {
         );
     }
 
+    // ===== 注入编译时环境变量（诊断 manifest 身份信息） =====
+    inject_build_env_vars();
+
     config.build("src/main.rs");
+}
+
+/// 注入编译时环境变量，供源码中 `env!("KEY")` 读取。
+///
+/// 这些变量构成诊断包的 buildKey 和 manifest 身份信息：
+/// - GIT_COMMIT_SHA：git short sha，失败时 "unknown"
+/// - BUILD_PROFILE：debug 或 release，debug 为默认
+/// - RUSTC_VERSION：rustc 版本字符串，失败时 "unknown"
+/// - PACKAGE_TYPE：rpm/deb/AppImage/dev，默认 "dev"
+/// - BUILD_KEY：组合 `${gitSha}-${buildProfile}` 格式
+fn inject_build_env_vars() {
+    let git_sha = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let build_profile = if std::env::var("PROFILE").as_deref() == Ok("release") {
+        "release"
+    } else {
+        "debug"
+    };
+
+    let rustc_version = Command::new("rustc")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let package_type = std::env::var("SUJIAN_PACKAGE_TYPE")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "dev".to_string());
+
+    let build_key = format!("{}-{}", git_sha, build_profile);
+
+    println!("cargo:rustc-env=GIT_COMMIT_SHA={}", git_sha);
+    println!("cargo:rustc-env=BUILD_PROFILE={}", build_profile);
+    println!("cargo:rustc-env=RUSTC_VERSION={}", rustc_version);
+    println!("cargo:rustc-env=PACKAGE_TYPE={}", package_type);
+    println!("cargo:rustc-env=BUILD_KEY={}", build_key);
 }

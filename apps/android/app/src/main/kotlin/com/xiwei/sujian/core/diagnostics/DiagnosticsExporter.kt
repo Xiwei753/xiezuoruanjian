@@ -39,17 +39,32 @@ object DiagnosticsExporter {
             val tempDir = File(cacheDir, "temp_$timestamp")
             tempDir.mkdirs()
 
-            writeLogs(tempDir)
-            writeCrashFile(context, tempDir)
-            writeLogcat(tempDir)
-            writeProcessExits(context, tempDir)
-            writeThreadDump(tempDir)
-            writeDeviceInfo(context, tempDir)
-            writeBuildIdentity(tempDir)
-            writeAppSettingsSanitized(context, tempDir)
-            writeSyncStateSanitized(context, tempDir)
-            writeEditorSnapshot(tempDir)
-            writeJankSummary(tempDir)
+            // #665：各收集步骤跟踪成功/失败状态，最终写入统一 manifest。
+            val logsStatus = writeLogs(tempDir)
+            val crashStatus = writeCrashFile(context, tempDir)
+            val logcatStatus = writeLogcat(tempDir)
+            val processExitsStatus = writeProcessExits(context, tempDir)
+            val threadDumpStatus = writeThreadDump(tempDir)
+            val settingsStatus = writeAppSettingsSanitized(context, tempDir)
+            val syncStatus = writeSyncStateSanitized(context, tempDir)
+            val editorStatus = writeEditorSnapshot(tempDir)
+            val jankStatus = writeJankSummary(tempDir)
+
+            writeDiagnosticsManifest(
+                context,
+                tempDir,
+                mapOf(
+                    "logs" to logsStatus,
+                    "crash" to crashStatus,
+                    "logcat" to logcatStatus,
+                    "processExits" to processExitsStatus,
+                    "threadDump" to threadDumpStatus,
+                    "settings" to settingsStatus,
+                    "sync" to syncStatus,
+                    "editor" to editorStatus,
+                    "jank" to jankStatus,
+                ),
+            )
 
             zipDirectory(tempDir, zipFile)
             tempDir.deleteRecursively()
@@ -92,35 +107,45 @@ object DiagnosticsExporter {
         return DiagnosticsLogger.redact(gson.toJson(info))
     }
 
-    private fun writeLogs(destDir: File) {
+    private fun writeLogs(destDir: File): String {
         val logsDir = File(destDir, "logs")
         logsDir.mkdirs()
         // 落盘保证由 export() 入口的 flushBlocking() 统一完成（导出顺序第一步）；
         // 此处只复制 writer 已落盘的滚动日志文件。
-        DiagnosticsLogger.getLogFiles().forEach { logFile ->
+        val logFiles = DiagnosticsLogger.getLogFiles()
+        if (logFiles.isEmpty()) return "missing"
+        var allOk = true
+        logFiles.forEach { logFile ->
             try {
                 val content = logFile.readText()
                 val redacted = DiagnosticsLogger.redact(content)
                 File(logsDir, logFile.name).writeText(redacted)
             } catch (_: Exception) {
+                allOk = false
             }
         }
+        return if (allOk) "ok" else "error"
     }
 
     private fun writeCrashFile(
         context: Context,
         destDir: File,
-    ) {
-        val primary = DiagnosticsLogger.getCrashFile() ?: return
+    ): String {
+        val primary = DiagnosticsLogger.getCrashFile() ?: return "not_found"
         val fallback = DiagnosticsLogger.getFallbackCrashFile() ?: primary
-        for ((name, file) in planCrashFileCopies(primary, fallback)) {
+        val copies = planCrashFileCopies(primary, fallback)
+        if (copies.isEmpty()) return "not_found"
+        var allOk = true
+        for ((name, file) in copies) {
             try {
                 val content = file.readText()
                 val redacted = DiagnosticsLogger.redact(content)
                 File(destDir, name).writeText(redacted)
             } catch (_: Exception) {
+                allOk = false
             }
         }
+        return if (allOk) "ok" else "error"
     }
 
     /**
@@ -141,80 +166,111 @@ object DiagnosticsExporter {
         return copies
     }
 
-    private fun writeLogcat(destDir: File) {
+    private fun writeLogcat(destDir: File): String =
         try {
             LogcatSnapshotCollector.collect(destDir)
+            "ok"
         } catch (e: Exception) {
             DiagnosticsLogger.w("DiagnosticsExporter", "Logcat capture failed", e)
+            "error"
         }
-    }
 
     private fun writeProcessExits(
         context: Context,
         destDir: File,
-    ) {
+    ): String =
         try {
             ProcessExitCollector.collect(context, destDir)
+            "ok"
         } catch (e: Exception) {
             DiagnosticsLogger.w("DiagnosticsExporter", "Process exit capture failed", e)
+            "error"
         }
-    }
 
-    private fun writeThreadDump(destDir: File) {
+    private fun writeThreadDump(destDir: File): String =
         try {
             ThreadDumpCollector.collect(destDir)
+            "ok"
         } catch (e: Exception) {
             DiagnosticsLogger.w("DiagnosticsExporter", "Thread dump failed", e)
+            "error"
         }
-    }
 
-    private fun writeJankSummary(destDir: File) {
+    private fun writeJankSummary(destDir: File): String =
         try {
             val summary = JankStatsController.getSummary()
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(summary))
             File(destDir, "jank_summary.json").writeText(json)
+            "ok"
         } catch (e: Exception) {
             val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "jank_summary.json").writeText(errorJson)
+            "error"
         }
-    }
 
     /**
-     * #623 评论7：导出包根目录的 build_identity.json — 序列化当前 APK 的
-     * [DiagnosticsBuildIdentity]，表示"这次导出动作来自哪个 APK"。
-     * logs/ 里允许同时带旧 build 的分文件日志，last_crash.txt 也允许来自旧 build，
-     * 但它们各自有明确 build identity（文件名 build key / crash header），
-     * 不再和当前 APK 混淆。
+     * #665：生成统一 diagnostics_manifest.json — 组合构建身份、设备信息和收集状态，
+     * 让接收者一看就知道"这是什么端、什么构建、什么环境"。
      */
-    private fun writeBuildIdentity(destDir: File) {
-        try {
-            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
-            val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(identity))
-            File(destDir, "build_identity.json").writeText(json)
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "build_identity.json").writeText(errorJson)
-        }
-    }
-
-    private fun writeDeviceInfo(
+    private fun writeDiagnosticsManifest(
         context: Context,
         destDir: File,
+        collectionStatus: Map<String, String>,
     ) {
-        val info = collectDeviceInfo(context)
-        val gson = GsonBuilder().setPrettyPrinting().create()
-        val json = DiagnosticsLogger.redact(gson.toJson(info))
-        File(destDir, "current_device.json").writeText(json)
+        try {
+            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+            val deviceInfo = collectDeviceInfo(context)
+            val supportedAbis = Build.SUPPORTED_ABIS.toList()
+            val arch = supportedAbis.firstOrNull() ?: "unknown"
+            val exportedAt =
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(Date())
+
+            val manifest =
+                mapOf(
+                    "schemaVersion" to 1,
+                    "platform" to "android",
+                    *identity.toManifestFields().toList().toTypedArray(),
+                    "exportedAt" to exportedAt,
+                    "arch" to arch,
+                    "runtime" to
+                        mapOf(
+                            "sdkVersion" to deviceInfo["sdkVersion"],
+                            "release" to deviceInfo["release"],
+                            "securityPatch" to deviceInfo["securityPatch"],
+                            "supportedAbis" to supportedAbis,
+                            "applicationId" to identity.applicationId,
+                        ),
+                    "system" to
+                        mapOf(
+                            "brand" to deviceInfo["brand"],
+                            "manufacturer" to deviceInfo["manufacturer"],
+                            "model" to deviceInfo["model"],
+                            "device" to deviceInfo["device"],
+                            "product" to deviceInfo["product"],
+                            "screenWidthPx" to deviceInfo["screenWidthPx"],
+                            "screenHeightPx" to deviceInfo["screenHeightPx"],
+                            "densityDpi" to deviceInfo["densityDpi"],
+                            "density" to deviceInfo["density"],
+                            "scaledDensity" to deviceInfo["scaledDensity"],
+                            "supportedAbis" to deviceInfo["supportedAbis"],
+                        ),
+                    "collection" to collectionStatus,
+                )
+
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = DiagnosticsLogger.redact(gson.toJson(manifest))
+            File(destDir, "diagnostics_manifest.json").writeText(json)
+        } catch (e: Exception) {
+            DiagnosticsLogger.e("DiagnosticsExporter", "Failed to write diagnostics manifest", e)
+        }
     }
 
     private fun writeAppSettingsSanitized(
         context: Context,
         destDir: File,
-    ) {
+    ): String =
         try {
             val repo =
                 SettingsRepository(
@@ -242,17 +298,18 @@ object DiagnosticsExporter {
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "app_settings_sanitized.json").writeText(json)
+            "ok"
         } catch (e: Exception) {
             val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "app_settings_sanitized.json").writeText(errorJson)
+            "error"
         }
-    }
 
     private fun writeSyncStateSanitized(
         context: Context,
         destDir: File,
-    ) {
+    ): String =
         try {
             val repo =
                 SyncRepository(
@@ -280,29 +337,32 @@ object DiagnosticsExporter {
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
             File(destDir, "sync_state_sanitized.json").writeText(json)
+            "ok"
         } catch (e: Exception) {
             val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "sync_state_sanitized.json").writeText(errorJson)
+            "error"
         }
-    }
 
-    private fun writeEditorSnapshot(destDir: File) {
+    private fun writeEditorSnapshot(destDir: File): String =
         try {
             val snapshot = EditorEventRingBuffer.getSnapshot()
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = DiagnosticsLogger.redact(gson.toJson(snapshot))
             File(destDir, "editor_snapshot.json").writeText(json)
+            "ok"
         } catch (e: Exception) {
             val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "editor_snapshot.json").writeText(errorJson)
+            "error"
         }
-    }
 
     private fun collectDeviceInfo(context: Context): Map<String, Any?> {
         val displayMetrics = context.resources.displayMetrics
         return mapOf(
+            "platform" to "android",
             "brand" to Build.BRAND,
             "manufacturer" to Build.MANUFACTURER,
             "model" to Build.MODEL,
@@ -311,6 +371,7 @@ object DiagnosticsExporter {
             "sdkVersion" to Build.VERSION.SDK_INT,
             "release" to Build.VERSION.RELEASE,
             "securityPatch" to Build.VERSION.SECURITY_PATCH,
+            "supportedAbis" to Build.SUPPORTED_ABIS.toList(),
             "screenWidthPx" to displayMetrics.widthPixels,
             "screenHeightPx" to displayMetrics.heightPixels,
             "densityDpi" to displayMetrics.densityDpi,

@@ -24,6 +24,19 @@ data class DiagnosticsBuildIdentity(
     val buildKey: String
         get() = "v$versionCode-$gitCommitSha-$flavor-$buildType"
 
+    /**
+     * #665：将构建身份映射到统一 diagnostics_manifest.json 的顶层字段。
+     */
+    fun toManifestFields(): Map<String, Any?> =
+        mapOf(
+            "appVersion" to versionName,
+            "versionCode" to versionCode,
+            "gitCommitSha" to gitCommitSha,
+            "buildType" to buildType,
+            "flavor" to flavor,
+            "buildKey" to buildKey,
+        )
+
     companion object {
         /**
          * 从当前 BuildConfig 生成 identity 的唯一入口。

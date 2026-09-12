@@ -30,6 +30,8 @@ const MAX_FILE_SIZE: u64 = 1024 * 1024;
 const MAX_LOG_FILES: usize = 5;
 /// 日志文件前缀
 const LOG_PREFIX: &str = "sujian-current";
+/// 编译时 buildKey，由 build.rs 注入
+const BUILD_KEY: &str = env!("BUILD_KEY");
 
 /// 全局日志目录路径，在 main() 最早期通过 init_global_log_dir() 或 ensure_early_log_dir() 设置
 static GLOBAL_LOG_DIR: OnceLock<PathBuf> = OnceLock::new();
@@ -110,7 +112,7 @@ pub fn log_to_file(level: &str, module: &str, event: &str, message: &str) {
     );
     let redacted = redact(&formatted);
 
-    let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
     if let Ok(mut file) = fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -159,7 +161,7 @@ pub fn install_panic_hook() {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -275,7 +277,7 @@ fn ensure_log_dir(log_dir: &Path) -> Result<(), String> {
 
 /// 日志轮转：如果当前日志文件超过 MAX_FILE_SIZE，重命名为带时间戳的备份
 fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
-    let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+    let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
     if !current_file.exists() {
         return Ok(());
     }
@@ -286,7 +288,7 @@ fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
     }
 
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let rotated = log_dir.join(format!("{}-{}.log", LOG_PREFIX, timestamp));
+    let rotated = log_dir.join(format!("{}-{}-{}.log", LOG_PREFIX, BUILD_KEY, timestamp));
     fs::rename(&current_file, &rotated).map_err(|e| format!("轮转日志文件失败: {}", e))?;
 
     prune_old_logs(log_dir);
@@ -294,13 +296,16 @@ fn rotate_if_needed(log_dir: &Path) -> Result<(), String> {
 }
 
 /// 清理超出 MAX_LOG_FILES 的旧日志文件
+///
+/// 只清理同一 buildKey 的日志文件，避免删除其他构建版本的日志
 fn prune_old_logs(log_dir: &Path) {
+    let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
     let mut log_files: Vec<_> = match fs::read_dir(log_dir) {
         Ok(entries) => entries
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name().to_string_lossy().starts_with(LOG_PREFIX)
-                    && e.file_name().to_string_lossy().ends_with(".log")
+                let name = e.file_name().to_string_lossy().to_string();
+                name.starts_with(&buildkey_prefix) && name.ends_with(".log")
             })
             .collect(),
         Err(_) => return,
@@ -337,9 +342,117 @@ pub fn clear_logs(log_dir: &Path) -> Result<(), String> {
 /// 全局 Qt 版本缓存，由 main.rs 通过 set_qt_version() 注入
 static QT_VERSION: OnceLock<String> = OnceLock::new();
 
+/// 全局 RuntimeInfo 缓存，由 main.rs 通过 set_runtime_info() 注入
+static RUNTIME_INFO: OnceLock<RuntimeInfo> = OnceLock::new();
+
+/// 全局 SystemInfo 缓存，由 main.rs 通过 set_system_info() 注入
+static SYSTEM_INFO: OnceLock<SystemInfo> = OnceLock::new();
+
 /// 设置 Qt 版本（由 main.rs 在启动时调用，使用 cpp! 宏获取运行时版本）
 pub fn set_qt_version(version: &str) {
     let _ = QT_VERSION.set(version.to_string());
+}
+
+/// 设置 RuntimeInfo（由 main.rs 在启动时调用）
+pub fn set_runtime_info(info: RuntimeInfo) {
+    let _ = RUNTIME_INFO.set(info);
+}
+
+/// 设置 SystemInfo（由 main.rs 在启动时调用）
+pub fn set_system_info(info: SystemInfo) {
+    let _ = SYSTEM_INFO.set(info);
+}
+
+/// 获取 RuntimeInfo（由 settings_backend.rs 调用 export_diagnostics_pack 时使用）
+pub fn get_runtime_info() -> Option<&'static RuntimeInfo> {
+    RUNTIME_INFO.get()
+}
+
+/// 获取 SystemInfo（由 settings_backend.rs 调用 export_diagnostics_pack 时使用）
+pub fn get_system_info() -> Option<&'static SystemInfo> {
+    SYSTEM_INFO.get()
+}
+
+/// Qt 运行时信息，由 main.rs 从 DesktopRuntimeProfile 转换而来
+pub struct RuntimeInfo {
+    pub qt_runtime_version: String,
+    pub qt_build_version: String,
+    pub qpa_platform: String,
+    pub input_method_module: String,
+    pub bundled_qt: bool,
+    pub package_type: String,
+    pub rustc_version: String,
+}
+
+/// 系统信息，由 main.rs 通过 QSysInfo 收集
+pub struct SystemInfo {
+    pub product_type: String,
+    pub product_version: String,
+    pub pretty_product_name: String,
+    pub kernel_type: String,
+    pub kernel_version: String,
+    pub current_cpu_arch: String,
+    pub build_abi: String,
+    pub xdg_current_desktop: String,
+    pub xdg_session_type: String,
+}
+
+/// 收集项状态，记录每个收集步骤的结果
+pub struct CollectionStatus {
+    pub logs: &'static str,       // "ok", "missing", "error"
+    pub settings: &'static str,   // "ok", "missing", "error"
+    pub crash: &'static str,      // "ok", "not_found", "error"
+    pub device_info: &'static str, // "ok", "error"
+}
+
+/// 生成统一诊断 manifest JSON
+///
+/// 与 Android 端格式对齐，包含 schemaVersion、platform、buildKey、runtime、system、collection 等字段
+pub fn diagnostics_manifest_json(
+    runtime_info: &RuntimeInfo,
+    system_info: &SystemInfo,
+    collection: &CollectionStatus,
+) -> String {
+    let manifest = serde_json::json!({
+        "schemaVersion": 1,
+        "platform": "linux_qt",
+        "appVersion": env!("CARGO_PKG_VERSION"),
+        "versionCode": null,
+        "gitCommitSha": env!("GIT_COMMIT_SHA"),
+        "buildType": env!("BUILD_PROFILE"),
+        "flavor": null,
+        "buildKey": BUILD_KEY,
+        "exportedAt": chrono::Local::now().to_rfc3339(),
+        "arch": std::env::consts::ARCH,
+        "runtime": {
+            "qtRuntimeVersion": runtime_info.qt_runtime_version,
+            "qtBuildVersion": runtime_info.qt_build_version,
+            "qpaPlatform": runtime_info.qpa_platform,
+            "inputMethodModule": runtime_info.input_method_module,
+            "bundledQt": runtime_info.bundled_qt,
+            "packageType": runtime_info.package_type,
+            "rustcVersion": runtime_info.rustc_version,
+        },
+        "system": {
+            "productType": system_info.product_type,
+            "productVersion": system_info.product_version,
+            "prettyProductName": system_info.pretty_product_name,
+            "kernelType": system_info.kernel_type,
+            "kernelVersion": system_info.kernel_version,
+            "currentCpuArchitecture": system_info.current_cpu_arch,
+            "buildAbi": system_info.build_abi,
+            "xdgCurrentDesktop": system_info.xdg_current_desktop,
+            "xdgSessionType": system_info.xdg_session_type,
+        },
+        "collection": {
+            "logs": collection.logs,
+            "settings": collection.settings,
+            "crash": collection.crash,
+            "deviceInfo": collection.device_info,
+        }
+    });
+
+    redact(&serde_json::to_string_pretty(&manifest).unwrap_or_else(|_| "{}".to_string()))
 }
 
 /// 收集设备信息并返回 JSON 字符串
@@ -372,13 +485,18 @@ pub fn device_info_json() -> String {
 
 /// 导出诊断包
 ///
-/// 收集日志文件、设备信息、设置快照，打包为 zip，返回 zip 文件路径
+/// 收集日志文件、诊断 manifest、设置快照，打包为 zip，返回 zip 文件路径
 ///
 /// - 有 workspace 且路径可写：导出到 workspace/app-meta/diagnostics
 /// - 没 workspace 或路径不可写：导出到平台标准 AppData 目录
 ///   - Linux: ~/.local/share/sujian/diagnostics
 ///   - Fallback: /tmp/sujian/diagnostics
-pub fn export_diagnostics_pack(app_data_root: &Path, log_dir: &Path) -> Result<PathBuf, String> {
+pub fn export_diagnostics_pack(
+    app_data_root: &Path,
+    log_dir: &Path,
+    runtime_info: &RuntimeInfo,
+    system_info: &SystemInfo,
+) -> Result<PathBuf, String> {
     let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
 
     // 确定导出目录：优先 workspace，不可写则用平台标准目录
@@ -396,16 +514,27 @@ pub fn export_diagnostics_pack(app_data_root: &Path, log_dir: &Path) -> Result<P
     let temp_dir = export_dir.join(format!("temp_{}", timestamp));
     fs::create_dir_all(&temp_dir).map_err(|e| format!("创建临时目录失败: {}", e))?;
 
-    // Write logs
-    write_logs_to_dir(log_dir, &temp_dir);
+    // Write logs and track status
+    let logs_status = write_logs_to_dir(log_dir, &temp_dir);
 
-    // Write device info
-    write_device_info(&temp_dir);
+    // Write settings snapshot and track status
+    let settings_status = if !app_data_root.as_os_str().is_empty() && app_data_root.exists() {
+        write_settings_snapshot(app_data_root, &temp_dir)
+    } else {
+        "missing"
+    };
 
-    // Write settings snapshot (sanitized) — only if workspace exists
-    if !app_data_root.as_os_str().is_empty() && app_data_root.exists() {
-        write_settings_snapshot(app_data_root, &temp_dir);
-    }
+    // Crash logs: check for crash files in log_dir
+    let crash_status = write_crash_logs(log_dir, &temp_dir);
+
+    // Write diagnostics manifest
+    let collection = CollectionStatus {
+        logs: logs_status,
+        settings: settings_status,
+        crash: crash_status,
+        device_info: "ok",
+    };
+    write_diagnostics_manifest(runtime_info, system_info, &collection, &temp_dir);
 
     // Zip the temp dir
     zip_directory(&temp_dir, &zip_path)?;
@@ -450,41 +579,121 @@ fn determine_export_dir(app_data_root: &Path) -> PathBuf {
     PathBuf::from("/tmp/sujian/diagnostics")
 }
 
-fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) {
+/// 将日志文件写入目标目录，返回收集状态
+///
+/// 返回值："ok" 表示成功收集日志，"missing" 表示日志目录不存在，"error" 表示读取失败
+fn write_logs_to_dir(log_dir: &Path, dest_dir: &Path) -> &'static str {
     let logs_dest = dest_dir.join("logs");
     if let Err(e) = fs::create_dir_all(&logs_dest) {
         eprintln!("[Diagnostics] 创建日志目标目录失败: {}", e);
-        return;
+        return "error";
     }
 
     if !log_dir.exists() {
-        return;
+        return "missing";
     }
 
-    if let Ok(entries) = fs::read_dir(log_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "log") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    let redacted = redact(&content);
-                    let dest = logs_dest.join(path.file_name().unwrap_or_default());
-                    let _ = fs::write(&dest, redacted);
+    let entries = match fs::read_dir(log_dir) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("[Diagnostics] 读取日志目录失败: {}", e);
+            return "error";
+        }
+    };
+
+    let mut has_logs = false;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if path.extension().is_some_and(|ext| ext == "log") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let redacted = redact(&content);
+                let dest = logs_dest.join(path.file_name().unwrap_or_default());
+                if fs::write(&dest, redacted).is_ok() {
+                    has_logs = true;
                 }
             }
         }
     }
+
+    if has_logs {
+        "ok"
+    } else {
+        "missing"
+    }
 }
 
-fn write_device_info(dest_dir: &Path) {
-    let json = device_info_json();
-    let _ = fs::write(dest_dir.join("current_device.json"), json);
+/// 将崩溃日志写入目标目录，返回收集状态
+///
+/// 返回值："ok" 表示找到并写入崩溃日志，"not_found" 表示没有崩溃日志，"error" 表示读取失败
+fn write_crash_logs(log_dir: &Path, dest_dir: &Path) -> &'static str {
+    let crash_dest = dest_dir.join("crash");
+    if let Err(e) = fs::create_dir_all(&crash_dest) {
+        eprintln!("[Diagnostics] 创建崩溃日志目标目录失败: {}", e);
+        return "error";
+    }
+
+    if !log_dir.exists() {
+        return "not_found";
+    }
+
+    let entries = match fs::read_dir(log_dir) {
+        Ok(e) => e,
+        Err(_) => return "error",
+    };
+
+    let mut has_crash = false;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        // 崩溃日志通常以 "crash" 或 "panic" 开头
+        if name.contains("crash") || name.contains("panic") {
+            if let Ok(content) = fs::read_to_string(&path) {
+                let redacted = redact(&content);
+                let dest = crash_dest.join(path.file_name().unwrap_or_default());
+                if fs::write(&dest, redacted).is_ok() {
+                    has_crash = true;
+                }
+            }
+        }
+    }
+
+    if has_crash {
+        "ok"
+    } else {
+        "not_found"
+    }
 }
 
-fn write_settings_snapshot(app_data_root: &Path, dest_dir: &Path) {
+/// 写入诊断 manifest 到目标目录
+fn write_diagnostics_manifest(
+    runtime_info: &RuntimeInfo,
+    system_info: &SystemInfo,
+    collection: &CollectionStatus,
+    dest_dir: &Path,
+) {
+    let json = diagnostics_manifest_json(runtime_info, system_info, collection);
+    if let Err(e) = fs::write(dest_dir.join("diagnostics_manifest.json"), json) {
+        eprintln!("[Diagnostics] 写入 diagnostics_manifest.json 失败: {}", e);
+    }
+}
+
+/// 将设置快照写入目标目录，返回收集状态
+///
+/// 返回值："ok" 表示成功写入，"missing" 表示设置文件不存在，"error" 表示读取失败
+fn write_settings_snapshot(app_data_root: &Path, dest_dir: &Path) -> &'static str {
     let settings_path = app_data_root.join("app-meta/settings/settings.local.json");
-    if let Ok(content) = fs::read_to_string(&settings_path) {
-        let redacted = redact(&content);
-        let _ = fs::write(dest_dir.join("app_settings_sanitized.json"), redacted);
+    match fs::read_to_string(&settings_path) {
+        Ok(content) => {
+            let redacted = redact(&content);
+            match fs::write(dest_dir.join("app_settings_sanitized.json"), redacted) {
+                Ok(()) => "ok",
+                Err(e) => {
+                    eprintln!("[Diagnostics] 写入设置快照失败: {}", e);
+                    "error"
+                }
+            }
+        }
+        Err(_) => "missing",
     }
 }
 
@@ -553,7 +762,7 @@ mod tests {
         let _ = ensure_log_dir(log_dir);
         let _ = rotate_if_needed(log_dir);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         if let Ok(mut file) = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -604,7 +813,7 @@ mod tests {
         let log_dir = dir.path();
 
         // Create a large log file
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let large_content = "x".repeat((MAX_FILE_SIZE + 1) as usize);
         fs::write(&current_file, &large_content).unwrap();
 
@@ -614,12 +823,13 @@ mod tests {
         assert!(!current_file.exists());
 
         // A rotated file should exist
+        let buildkey_prefix = format!("{}-{}", LOG_PREFIX, BUILD_KEY);
         let rotated: Vec<_> = fs::read_dir(log_dir)
             .unwrap()
             .filter_map(|e| e.ok())
             .filter(|e| {
-                e.file_name().to_string_lossy().starts_with(LOG_PREFIX)
-                    && e.file_name().to_string_lossy() != format!("{}.log", LOG_PREFIX)
+                e.file_name().to_string_lossy().starts_with(&buildkey_prefix)
+                    && e.file_name().to_string_lossy() != format!("{}-{}.log", LOG_PREFIX, BUILD_KEY)
             })
             .collect();
         assert_eq!(rotated.len(), 1);
@@ -630,15 +840,17 @@ mod tests {
         let dir = tempdir().unwrap();
         let log_dir = dir.path();
 
-        // Create some log files
-        fs::write(log_dir.join("sujian-current.log"), "test").unwrap();
-        fs::write(log_dir.join("sujian-current-20260101.log"), "old").unwrap();
+        // Create some log files (using buildKey format)
+        let current_name = format!("{}-{}.log", LOG_PREFIX, BUILD_KEY);
+        let old_name = format!("{}-{}-20260101.log", LOG_PREFIX, BUILD_KEY);
+        fs::write(log_dir.join(&current_name), "test").unwrap();
+        fs::write(log_dir.join(&old_name), "old").unwrap();
         fs::write(log_dir.join("other.txt"), "keep").unwrap();
 
         clear_logs(log_dir).unwrap();
 
-        assert!(!log_dir.join("sujian-current.log").exists());
-        assert!(!log_dir.join("sujian-current-20260101.log").exists());
+        assert!(!log_dir.join(&current_name).exists());
+        assert!(!log_dir.join(&old_name).exists());
         assert!(log_dir.join("other.txt").exists());
     }
 
@@ -654,9 +866,36 @@ mod tests {
     fn test_export_diagnostics_pack_returns_zip_path_and_export_dir() {
         let workspace = tempdir().unwrap();
         let log_dir = tempdir().unwrap();
-        fs::write(log_dir.path().join("sujian-current.log"), "safe log line\n").unwrap();
+        fs::write(
+            log_dir.path().join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY)),
+            "safe log line\n",
+        )
+        .unwrap();
 
-        let zip_path = export_diagnostics_pack(workspace.path(), log_dir.path()).unwrap();
+        let runtime_info = RuntimeInfo {
+            qt_runtime_version: "6.6.0".to_string(),
+            qt_build_version: "6.6.0".to_string(),
+            qpa_platform: "xcb".to_string(),
+            input_method_module: "fcitx5".to_string(),
+            bundled_qt: false,
+            package_type: "dev".to_string(),
+            rustc_version: "rustc 1.75.0".to_string(),
+        };
+        let system_info = SystemInfo {
+            product_type: "fedora".to_string(),
+            product_version: "39".to_string(),
+            pretty_product_name: "Fedora Linux 39".to_string(),
+            kernel_type: "linux".to_string(),
+            kernel_version: "6.5.0".to_string(),
+            current_cpu_arch: "x86_64".to_string(),
+            build_abi: "x86_64-little_endian-lp64".to_string(),
+            xdg_current_desktop: "GNOME".to_string(),
+            xdg_session_type: "wayland".to_string(),
+        };
+
+        let zip_path =
+            export_diagnostics_pack(workspace.path(), log_dir.path(), &runtime_info, &system_info)
+                .unwrap();
         assert!(
             zip_path.exists(),
             "zip should exist: {}",
@@ -684,7 +923,7 @@ mod tests {
 
         append_log_line(log_dir, "Test log message", true);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("Test log message"));
@@ -701,7 +940,7 @@ mod tests {
         // ERROR level should always write even with verbose=false
         append_log_line(log_dir, "ERROR something went wrong", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("ERROR something went wrong"));
@@ -735,7 +974,7 @@ mod tests {
 
         log_to_file("ERROR", "test_module", "test_event", "test error message");
 
-        let current_file = test_log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(content.contains("[ERROR]"));
@@ -756,7 +995,7 @@ mod tests {
         let timestamp = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
         let formatted = format!("[{}] [ERROR] [panic::hook] {}", timestamp, panic_msg);
         let redacted_msg = redact(&formatted);
-        let current_file = test_log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = test_log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -785,7 +1024,7 @@ mod tests {
         // verbose=false 时，INFO 级别不应写入
         append_log_line(log_dir, "[INFO] some info message", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(
@@ -798,7 +1037,7 @@ mod tests {
         append_log_line(log_dir, "[WARN] some warning", false);
         append_log_line(log_dir, "[ERROR] some error", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("some warning"),
@@ -827,7 +1066,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] some info message", true);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         assert!(current_file.exists());
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
@@ -867,7 +1106,7 @@ mod tests {
         // 使用 append_log_line（接受 log_dir 参数）而非 log_to_file（使用全局目录）
         append_log_line(log_dir, "[ERROR] error message when disabled", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("error message when disabled"),
@@ -891,7 +1130,7 @@ mod tests {
 
         append_log_line(log_dir, "[WARN] warn message when disabled", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("warn message when disabled"),
@@ -915,7 +1154,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message with both enabled", true);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         let content = fs::read_to_string(&current_file).unwrap();
         assert!(
             content.contains("info message with both enabled"),
@@ -939,7 +1178,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message when disabled", true);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(
@@ -965,7 +1204,7 @@ mod tests {
 
         append_log_line(log_dir, "[INFO] info message when not verbose", false);
 
-        let current_file = log_dir.join(format!("{}.log", LOG_PREFIX));
+        let current_file = log_dir.join(format!("{}-{}.log", LOG_PREFIX, BUILD_KEY));
         if current_file.exists() {
             let content = fs::read_to_string(&current_file).unwrap();
             assert!(

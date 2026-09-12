@@ -87,18 +87,17 @@ class DiagnosticsExportPackageTest {
                     "process_exits.json",
                     "threads.txt",
                     "jank_summary.json",
-                    "current_device.json",
                     "app_settings_sanitized.json",
                     "sync_state_sanitized.json",
                     "editor_snapshot.json",
                     "last_crash.txt",
-                    // #623 评论7：导出包必须带当前 APK 的构建身份
-                    "build_identity.json",
+                    // #665：导出包必须带统一 diagnostics_manifest.json
+                    "diagnostics_manifest.json",
                 )
             for (name in expected) {
                 assertTrue("package must contain $name, got $entries", name in entries)
             }
-            assertBuildIdentityInZip(zip)
+            assertDiagnosticsManifestInZip(zip)
             val logText =
                 zip.getEntry(CURRENT_LOG_ENTRY)
                     ?.let { zip.getInputStream(it).readBytes().toString(Charsets.UTF_8) }
@@ -118,34 +117,46 @@ class DiagnosticsExportPackageTest {
     }
 
     /**
-     * #623 评论7：build_identity.json 必须携带当前 APK 的完整构建身份 —
-     * 表示"这次导出动作来自哪个 APK"。
+     * #665：diagnostics_manifest.json 必须携带统一身份信息 —
+     * platform、构建身份、runtime 和 collection 状态。
      */
-    private fun assertBuildIdentityInZip(zip: ZipFile) {
-        val identityJson =
-            zip.getEntry("build_identity.json")
+    private fun assertDiagnosticsManifestInZip(zip: ZipFile) {
+        val manifestJson =
+            zip.getEntry("diagnostics_manifest.json")
                 ?.let { zip.getInputStream(it).readBytes().toString(Charsets.UTF_8) }
                 .orEmpty()
         val expectedIdentity = DiagnosticsBuildIdentity.fromBuildConfig()
         assertTrue(
-            "build_identity.json must carry versionCode, got: $identityJson",
-            identityJson.contains("\"versionCode\": ${expectedIdentity.versionCode}"),
+            "diagnostics_manifest.json must carry schemaVersion, got: $manifestJson",
+            manifestJson.contains("\"schemaVersion\": 1"),
         )
         assertTrue(
-            "build_identity.json must carry gitCommitSha, got: $identityJson",
-            identityJson.contains(expectedIdentity.gitCommitSha),
+            "diagnostics_manifest.json must carry platform=android, got: $manifestJson",
+            manifestJson.contains("\"platform\": \"android\""),
         )
         assertTrue(
-            "build_identity.json must carry flavor, got: $identityJson",
-            identityJson.contains(expectedIdentity.flavor),
+            "diagnostics_manifest.json must carry versionCode, got: $manifestJson",
+            manifestJson.contains("\"versionCode\": ${expectedIdentity.versionCode}"),
         )
         assertTrue(
-            "build_identity.json must carry buildType, got: $identityJson",
-            identityJson.contains(expectedIdentity.buildType),
+            "diagnostics_manifest.json must carry gitCommitSha, got: $manifestJson",
+            manifestJson.contains(expectedIdentity.gitCommitSha),
         )
         assertTrue(
-            "build_identity.json must carry applicationId, got: $identityJson",
-            identityJson.contains(expectedIdentity.applicationId),
+            "diagnostics_manifest.json must carry flavor, got: $manifestJson",
+            manifestJson.contains(expectedIdentity.flavor),
+        )
+        assertTrue(
+            "diagnostics_manifest.json must carry buildType, got: $manifestJson",
+            manifestJson.contains(expectedIdentity.buildType),
+        )
+        assertTrue(
+            "diagnostics_manifest.json must carry applicationId, got: $manifestJson",
+            manifestJson.contains(expectedIdentity.applicationId),
+        )
+        assertTrue(
+            "diagnostics_manifest.json must carry collection status, got: $manifestJson",
+            manifestJson.contains("\"collection\""),
         )
     }
 
