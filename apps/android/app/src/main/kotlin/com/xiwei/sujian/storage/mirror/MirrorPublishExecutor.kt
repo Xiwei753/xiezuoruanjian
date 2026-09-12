@@ -33,9 +33,10 @@ internal class MirrorPublishExecutor(
     private val source: MirrorSnapshotSource,
     private val router: MirrorStorageRouter,
     private val callbacks: MirrorPublishExecutorCallbacks,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
-    private val manifestExecutor = MirrorManifestTransactionExecutor(stateStore, journalWriter, planner)
-    private val cleanupTransactionExecutor = MirrorCleanupTransactionExecutor(stateStore)
+    private val manifestExecutor = MirrorManifestTransactionExecutor(stateStore, journalWriter, planner, workspace)
+    private val cleanupTransactionExecutor = MirrorCleanupTransactionExecutor(stateStore, workspace)
     private val publishProjectExecutor =
         MirrorPublishProjectExecutor(
             stateStore = stateStore,
@@ -46,6 +47,7 @@ internal class MirrorPublishExecutor(
             source = source,
             router = router,
             callbacks = callbacks,
+            workspace = workspace,
         )
     private val ensurePendingRecovered get() = callbacks.ensurePendingRecovered
     private val logNotLoaded get() = callbacks.logNotLoaded
@@ -442,9 +444,6 @@ internal class MirrorPublishExecutor(
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"
-        private const val META_DIR = "_meta"
-        private const val MANIFEST_FILE_NAME = "manifest.json"
-        private const val MIME_MARKDOWN = "text/markdown"
         private const val SKIP_NOT_SUPPORTED = "Mirror publish skipped: storage not supported"
     }
 }

@@ -34,11 +34,12 @@ class ReadableMirrorPublisher(
     private val source: MirrorSnapshotSource,
     private val router: MirrorStorageRouter,
     private val stateStore: ReadableMirrorStateStore,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
     private val codec = MirrorManifestCodec()
     private val journalWriter = MirrorJournalWriter(stateStore)
     private val planner = MirrorPublishPlanner(source, stateStore, codec)
-    private val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter)
+    private val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
     private val publishExecutor =
         MirrorPublishExecutor(
             stateStore = stateStore,
@@ -54,6 +55,7 @@ class ReadableMirrorPublisher(
                     logNotLoaded = ::logNotLoaded,
                     logPublishAborted = ::logPublishAborted,
                 ),
+            workspace = workspace,
         )
     private val recoveryExecutor =
         MirrorRecoveryExecutor(
@@ -61,6 +63,7 @@ class ReadableMirrorPublisher(
             journalWriter = journalWriter,
             rollbackExecutor = rollbackExecutor,
             publishExecutor = publishExecutor,
+            workspace = workspace,
         )
 
     private suspend fun ensurePendingRecovered(): Boolean {
@@ -115,7 +118,7 @@ class ReadableMirrorPublisher(
 
                 when (journal.phase) {
                     PendingMirrorPublish.PHASE_STAGE -> {
-                        if (storage.rollback(journal.txId)) {
+                        if (workspace.rollback(journal.txId)) {
                             stateStore.clearPendingPublish()
                         } else {
                             DiagnosticsLogger.w(TAG, "Recover stage: rollback failed, keeping journal for retry")

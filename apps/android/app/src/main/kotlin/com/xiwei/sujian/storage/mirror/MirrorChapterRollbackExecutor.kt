@@ -5,10 +5,15 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 /**
  * 单章节回滚执行器。
  *
+ * Issue #667：backup 文件在 [MirrorTransactionWorkspace]（私有目录）中，
+ * 回滚时用 workspace 读取 backup 内容，用 [ReadableMirrorStorage] 在 Download 中恢复最终文件。
+ *
  * 从 [MirrorRollbackExecutor] 提取，只负责把单个章节从新状态回滚到旧状态。
  * [MirrorRollbackExecutor] 和 [MirrorRecoveryExecutor.recoverRollbackPhase] 共用此类。
  */
-internal class MirrorChapterRollbackExecutor {
+internal class MirrorChapterRollbackExecutor(
+    private val workspace: MirrorTransactionWorkspace,
+) {
     /**
      * 回滚单个章节到旧状态。
      *
@@ -212,12 +217,16 @@ internal class MirrorChapterRollbackExecutor {
         )
 
     /**
-     * 从 backup 恢复旧正文到 final 位置。
+     * 从 workspace backup 恢复旧正文到 Download final 位置。
+     *
+     * Issue #667：新流程：
+     * 1. `workspace.lookupBackup()` 查找私有备份
+     * 2. `workspace.readBackup()` 读取备份内容
+     * 3. `storage.createText()` 在 Download 创建最终文件
+     * 4. 用 hash 校验确认恢复成功
      *
      * #649 评论 5570613481 问题 1：restoreBackup 只在 final 状态明确后才调用。
-     *
      * #649 评论 5572554935 问题 1：新增 [oldFinalPath] 参数，区分新文件位置和旧文件恢复位置。
-     *
      * #649 评论 5572554935 问题 2：直接返回 [RestoreBackupResult]，不折叠成 Boolean。
      */
     private fun restoreBackupToFinal(
@@ -229,7 +238,7 @@ internal class MirrorChapterRollbackExecutor {
         storage: ReadableMirrorStorage,
     ): RestoreBackupResult {
         val backupLookupPath = oldFinalPath ?: newFinalPath
-        val backupResult = storage.lookupBackup(journal.txId, backupLookupPath)
+        val backupResult = workspace.lookupBackup(journal.txId, backupLookupPath)
         val backup =
             when (backupResult) {
                 is MirrorLookupResult.Found -> backupResult.ref
@@ -245,7 +254,21 @@ internal class MirrorChapterRollbackExecutor {
                     return RestoreBackupResult.Failed(backupResult.cause)
                 }
             }
-        return storage.restoreBackup(backup, backupLookupPath, MIME_MARKDOWN, expectedOldHash)
+        // Issue #667：从 workspace 读取 backup 内容，然后在 Download 中创建最终文件
+        val backupContent = workspace.readBackup(backup)
+        if (backupContent == null) {
+            DiagnosticsLogger.w(TAG, "rollback: read backup content failed for ${key.chapterId}")
+            return RestoreBackupResult.Failed(IllegalStateException("read backup content failed"))
+        }
+        // 在 Download 中创建最终文件（恢复旧正文）
+        val relativeDir = backupLookupPath.substringBeforeLast('/', "")
+        val displayName = backupLookupPath.substringAfterLast('/')
+        val restoredRef = storage.createText(relativeDir, displayName, MIME_MARKDOWN, backupContent)
+        if (restoredRef == null) {
+            DiagnosticsLogger.w(TAG, "rollback: createText failed for ${key.chapterId} at $backupLookupPath")
+            return RestoreBackupResult.Failed(IllegalStateException("createText failed"))
+        }
+        return RestoreBackupResult.Restored(restoredRef)
     }
 
     private fun mapRestoreResultToRollbackItem(

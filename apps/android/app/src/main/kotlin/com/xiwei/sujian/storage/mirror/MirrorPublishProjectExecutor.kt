@@ -17,10 +17,11 @@ internal class MirrorPublishProjectExecutor(
     private val source: MirrorSnapshotSource,
     private val router: MirrorStorageRouter,
     private val callbacks: MirrorPublishExecutorCallbacks,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
-    private val cleanupTransactionExecutor = MirrorCleanupTransactionExecutor(stateStore)
-    private val stageExecutor = MirrorPublishStageExecutor(stateStore, planner, journalWriter, source, router)
-    private val promoteExecutor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor)
+    private val cleanupTransactionExecutor = MirrorCleanupTransactionExecutor(stateStore, workspace)
+    private val stageExecutor = MirrorPublishStageExecutor(stateStore, planner, journalWriter, source, router, workspace)
+    private val promoteExecutor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
     private val ensurePendingRecovered get() = callbacks.ensurePendingRecovered
     private val logNotLoaded get() = callbacks.logNotLoaded
     private val logPublishAborted get() = callbacks.logPublishAborted

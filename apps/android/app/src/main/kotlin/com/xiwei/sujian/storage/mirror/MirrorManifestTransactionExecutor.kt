@@ -6,6 +6,9 @@ import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 /**
  * 从 MirrorPublishExecutor 提取，只负责 manifest 事务性写入逻辑。
  *
+ * Issue #667：manifest 最终位置改为私有目录（通过 [MirrorTransactionWorkspace.writeManifest]），
+ * 不再出现在 Download/Sujian/_meta/ 中。stateStore 中的 manifestUri 指向私有文件路径。
+ *
  * 包括：manifest 目标构建、stage、backup、promote、setManifestUri 和 commit。
  * 准备与备份阶段委托给 [MirrorManifestPrepareExecutor]。
  */
@@ -13,8 +16,9 @@ internal class MirrorManifestTransactionExecutor(
     private val stateStore: ReadableMirrorStateStore,
     private val journalWriter: MirrorJournalWriter,
     private val planner: MirrorPublishPlanner,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
-    private val prepareExecutor = MirrorManifestPrepareExecutor(stateStore, journalWriter, planner)
+    private val prepareExecutor = MirrorManifestPrepareExecutor(stateStore, journalWriter, planner, workspace)
 
     internal data class ManifestTransactionParams(
         val projectId: String,
@@ -75,94 +79,126 @@ internal class MirrorManifestTransactionExecutor(
         }
     }
 
+    /**
+     * Issue #667：manifest promote 到私有目录。
+     *
+     * 从 workspace staging 读取 manifest 内容，用 [MirrorTransactionWorkspace.writeManifest] 原子写入。
+     */
     private fun promoteManifestStaged(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
         stageContext: MirrorManifestPrepareExecutor.ManifestStageContext,
         backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
     ): ManifestPromoteOutcome {
-        val finalLookup = ctx.storage.lookup(ctx.manifestRelativePath)
-        if (finalLookup is MirrorLookupResult.Found) {
-            return handlePromoteFinalFound(ctx, backupOutcome, finalLookup.ref)
+        // Issue #667：检查私有目录中是否已有 manifest（恢复场景）
+        val currentContent = workspace.readManifest()
+        if (currentContent != null) {
+            return handlePromoteManifestFound(ctx, backupOutcome, currentContent)
         }
-        if (finalLookup is MirrorLookupResult.Failed) {
-            DiagnosticsLogger.w(
-                TAG,
-                "Manifest transaction: lookup final failed: ${finalLookup.cause?.message}, keeping journal",
-            )
-            return ManifestPromoteOutcome.Aborted
-        }
-        return handlePromoteFinalMissing(ctx, stageContext.staged, backupOutcome)
+        return handlePromoteManifestMissing(ctx, stageContext.staged, backupOutcome)
     }
 
-    private fun handlePromoteFinalFound(
+    /**
+     * 私有目录中已有 manifest — 校验是否是目标新 manifest。
+     */
+    private fun handlePromoteManifestFound(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
         backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
-        finalRef: MirrorFileRef,
+        currentContent: String,
     ): ManifestPromoteOutcome {
         var currentJournal = backupOutcome.currentJournal
         val desiredNewHash = currentJournal.manifestNewContentHash
         if (desiredNewHash == null) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: final exists but no expected hash, keeping journal")
+            DiagnosticsLogger.w(TAG, "Manifest transaction: manifest exists but no expected hash, keeping journal")
             return ManifestPromoteOutcome.Aborted
         }
-        val hashResult = ctx.storage.readTextAndHash(finalRef)
-        if (hashResult == null) {
-            DiagnosticsLogger.w(
-                TAG,
-                "Manifest transaction: readTextAndHash failed, cannot verify final identity, keeping journal",
-            )
+        val currentHash = computeContentHash(currentContent)
+        if (currentHash != desiredNewHash) {
+            DiagnosticsLogger.w(TAG, "Manifest transaction: manifest hash mismatch, state unknown, keeping journal")
             return ManifestPromoteOutcome.Aborted
         }
-        if (hashResult.second != desiredNewHash) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: final hash mismatch, state unknown, keeping journal")
+        // 私有目录中已是新 manifest → setManifestUri 指向私有文件路径
+        val manifestPath = workspace.manifestFile().absolutePath
+        if (!stateStore.setManifestUri(manifestPath)) {
+            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (manifest already new)")
             return ManifestPromoteOutcome.Aborted
         }
-        if (!stateStore.setManifestUri(finalRef.uri)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (final already new manifest)")
-            return ManifestPromoteOutcome.Aborted
-        }
+        val newRef = MirrorFileRef(uri = manifestPath, relativePath = ctx.manifestRelativePath)
         currentJournal =
             currentJournal.copy(
-                manifestNewRef = finalRef,
+                manifestNewRef = newRef,
                 isManifestCommitted = true,
                 manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
             )
         if (!journalWriter.persistPendingJournal(currentJournal)) {
             return ManifestPromoteOutcome.Aborted
         }
-        return ManifestPromoteOutcome.Completed(ManifestTransactionResult(currentJournal, finalRef))
+        return ManifestPromoteOutcome.Completed(ManifestTransactionResult(currentJournal, newRef))
     }
 
-    private fun handlePromoteFinalMissing(
+    /**
+     * 私有目录中没有 manifest — 从 workspace staging 读取内容并写入。
+     */
+    private fun handlePromoteManifestMissing(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
         staged: StagedMirrorRef?,
         backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
     ): ManifestPromoteOutcome {
-        val storage = ctx.storage
         var currentJournal = backupOutcome.currentJournal
-        val newRef = if (staged != null) storage.promoteStaged(staged, ctx.manifestRelativePath) else null
-        if (newRef == null) {
-            backupOutcome.backupRef?.let {
-                storage.restoreBackup(it, ctx.manifestRelativePath, MIME_JSON, currentJournal.manifestOldContentHash)
+        // Issue #667：从 workspace staging 读取 manifest 内容
+        val manifestContent =
+            if (staged != null) {
+                workspace.readStaged(staged)
+            } else {
+                // 没有 staged ref，尝试从 journal 的 manifestTargetJson 获取
+                currentJournal.manifestTargetJson
             }
-            prepareExecutor.deleteStagedIfExists(storage, staged)
+        if (manifestContent == null) {
+            // 无法获取 manifest 内容，尝试从 backup 恢复
+            backupOutcome.backupRef?.let { backupRef ->
+                val backupContent = workspace.readBackup(backupRef)
+                if (backupContent != null) {
+                    workspace.writeManifest(backupContent)
+                }
+            }
+            prepareExecutor.deleteStagedIfExists(staged)
             return ManifestPromoteOutcome.Aborted
         }
+        // Issue #667：原子写入 manifest 到私有目录
+        if (!workspace.writeManifest(manifestContent)) {
+            // 写入失败，尝试从 backup 恢复
+            backupOutcome.backupRef?.let { backupRef ->
+                val backupContent = workspace.readBackup(backupRef)
+                if (backupContent != null) {
+                    workspace.writeManifest(backupContent)
+                }
+            }
+            prepareExecutor.deleteStagedIfExists(staged)
+            return ManifestPromoteOutcome.Aborted
+        }
+        val manifestPath = workspace.manifestFile().absolutePath
+        val newRef = MirrorFileRef(uri = manifestPath, relativePath = ctx.manifestRelativePath)
         currentJournal =
             currentJournal.copy(
                 manifestNewRef = newRef,
                 manifestSwapState = ManifestTransactionState.MANIFEST_PROMOTED,
             )
         if (!journalWriter.persistPendingJournal(currentJournal)) {
-            storage.delete(newRef)
-            backupOutcome.backupRef?.let {
-                storage.restoreBackup(it, ctx.manifestRelativePath, MIME_JSON, currentJournal.manifestOldContentHash)
+            // journal 写入失败，回滚 manifest
+            workspace.deleteManifest()
+            backupOutcome.backupRef?.let { backupRef ->
+                val backupContent = workspace.readBackup(backupRef)
+                if (backupContent != null) {
+                    workspace.writeManifest(backupContent)
+                }
             }
             return ManifestPromoteOutcome.Aborted
         }
         return ManifestPromoteOutcome.Proceed(newRef, currentJournal)
     }
 
+    /**
+     * Issue #667：manifest commit — setManifestUri 指向私有文件路径。
+     */
     private fun commitManifestTransaction(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
         promoteOutcome: ManifestPromoteOutcome.Proceed,
@@ -170,16 +206,16 @@ internal class MirrorManifestTransactionExecutor(
     ): ManifestTransactionResult? {
         val newRef = promoteOutcome.newRef
         var currentJournal = promoteOutcome.currentJournal
+        // Issue #667：setManifestUri 指向私有文件路径
         if (!stateStore.setManifestUri(newRef.uri)) {
             DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed")
-            ctx.storage.delete(newRef)
-            manifestBackupRef?.let {
-                ctx.storage.restoreBackup(
-                    it,
-                    ctx.manifestRelativePath,
-                    MIME_JSON,
-                    currentJournal.manifestOldContentHash,
-                )
+            // 回滚：删除新 manifest，从 backup 恢复旧 manifest
+            workspace.deleteManifest()
+            manifestBackupRef?.let { backupRef ->
+                val backupContent = workspace.readBackup(backupRef)
+                if (backupContent != null) {
+                    workspace.writeManifest(backupContent)
+                }
             }
             return null
         }
@@ -198,6 +234,5 @@ internal class MirrorManifestTransactionExecutor(
         private const val TAG = "ReadableMirrorPublisher"
         private const val META_DIR = "_meta"
         private const val MANIFEST_FILE_NAME = "manifest.json"
-        private const val MIME_JSON = "application/json"
     }
 }

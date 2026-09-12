@@ -4,12 +4,16 @@ import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 
 /**
  * 从 MirrorRecoveryExecutor 提取，只负责 promote 阶段恢复逻辑。
+ *
+ * Issue #667：事务中间文件（staging、backup）在 [MirrorTransactionWorkspace]（私有目录）中，
+ * 恢复时用 workspace 方法操作事务文件，用 [ReadableMirrorStorage] 只做最终文件操作。
  */
 internal class MirrorPromoteRecoveryExecutor(
     private val stateStore: ReadableMirrorStateStore,
     private val journalWriter: MirrorJournalWriter,
     private val rollbackExecutor: MirrorRollbackExecutor,
     private val publishExecutor: MirrorPublishExecutor,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
     internal sealed interface PromoteItemResult {
         data class Promoted(val entry: ChapterMirrorEntry) : PromoteItemResult
@@ -127,21 +131,30 @@ internal class MirrorPromoteRecoveryExecutor(
         }
     }
 
+    /**
+     * Issue #667：使用 [MirrorTransactionWorkspace] 进行 backup 操作。
+     * 不再需要 vacateCommitted。
+     */
     private suspend fun prepareBackupForRecoverItem(
         ctx: RecoverPromoteItemContext,
         oldRef: MirrorFileRef,
     ): Boolean {
         val journal = ctx.journal
         val key = ctx.key
-        val backupResult = ctx.storage.lookupBackup(journal.txId, oldRef.relativePath)
-        val backupReady =
+        val backupResult = workspace.lookupBackup(journal.txId, oldRef.relativePath)
+        val backupRef: MirrorFileRef? =
             when (backupResult) {
-                is MirrorLookupResult.Found -> {
-                    val vacated = checkOldVacatedForRecover(ctx, oldRef) ?: return false
-                    BackupReadyRef(backupRef = backupResult.ref, vacated = vacated)
-                }
+                is MirrorLookupResult.Found -> backupResult.ref
                 is MirrorLookupResult.Missing -> {
-                    val prepared = ctx.storage.prepareBackup(journal.txId, oldRef, MIME_MARKDOWN)
+                    // Issue #667：读取旧内容并写入 workspace backup
+                    val oldContentResult = ctx.storage.readTextAndHash(oldRef)
+                    if (oldContentResult == null) {
+                        DiagnosticsLogger.w(TAG, "Recover backup: read old content failed for ${key.chapterId}")
+                        rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
+                        return false
+                    }
+                    val (oldContent, _) = oldContentResult
+                    val prepared = workspace.prepareBackup(journal.txId, oldRef, oldContent)
                     if (prepared == null) {
                         DiagnosticsLogger.w(TAG, "Recover backup prepare failed for ${key.chapterId}")
                         rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
@@ -160,7 +173,7 @@ internal class MirrorPromoteRecoveryExecutor(
             }
         ctx.currentItems[key] =
             ctx.item.copy(
-                backupOldRef = backupReady.backupRef,
+                backupOldRef = backupRef,
                 state = PendingItem.STATE_BACKUP_READY,
             )
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
@@ -171,11 +184,7 @@ internal class MirrorPromoteRecoveryExecutor(
             rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
             return false
         }
-        if (!backupReady.vacated && !ctx.storage.vacateCommitted(oldRef)) {
-            DiagnosticsLogger.w(TAG, "Recover vacate failed for ${key.chapterId}")
-            rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
-            return false
-        }
+        // Issue #667：不再需要 vacateCommitted，直接推进到 STATE_OLD_VACATED
         ctx.currentItems[key] = ctx.currentItems[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
             DiagnosticsLogger.w(
@@ -188,25 +197,9 @@ internal class MirrorPromoteRecoveryExecutor(
         return true
     }
 
-    private suspend fun checkOldVacatedForRecover(
-        ctx: RecoverPromoteItemContext,
-        oldRef: MirrorFileRef,
-    ): Boolean? {
-        val oldLookup = ctx.storage.lookup(oldRef.relativePath)
-        return when (oldLookup) {
-            is MirrorLookupResult.Missing -> true
-            is MirrorLookupResult.Found -> false
-            is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(
-                    TAG,
-                    "Recover backup: lookup old failed for ${ctx.key.chapterId}: ${oldLookup.cause?.message}",
-                )
-                rollbackRecoveryWithCleanup(ctx.journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
-                null
-            }
-        }
-    }
-
+    /**
+     * Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件。
+     */
     private suspend fun promoteStagedForRecoverItem(
         ctx: RecoverPromoteItemContext,
         staged: StagedMirrorRef,
@@ -223,7 +216,35 @@ internal class MirrorPromoteRecoveryExecutor(
             }
         }
         if (newRef == null) {
-            newRef = ctx.storage.promoteStaged(staged, staged.finalRelativePath)
+            // Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件
+            val content = workspace.readStaged(staged)
+            if (content == null) {
+                DiagnosticsLogger.w(TAG, "Recover promote: read staged content failed for ${key.chapterId}")
+                rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
+                return PromoteItemResult.RollbackDone
+            }
+            // 删除旧文件（如果存在）
+            val oldRef = ctx.item.oldRef
+            if (oldRef != null) {
+                when (val oldLookup = ctx.storage.lookup(oldRef.relativePath)) {
+                    is MirrorLookupResult.Found -> {
+                        if (!ctx.storage.delete(oldLookup.ref)) {
+                            DiagnosticsLogger.w(TAG, "Recover promote: delete old file failed for ${key.chapterId}")
+                        }
+                    }
+                    is MirrorLookupResult.Missing -> Unit
+                    is MirrorLookupResult.Failed -> {
+                        DiagnosticsLogger.w(
+                            TAG,
+                            "Recover promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
+                        )
+                    }
+                }
+            }
+            // 在 Download 中创建新文件
+            val relativeDir = staged.finalRelativePath.substringBeforeLast('/', "")
+            val displayName = staged.finalRelativePath.substringAfterLast('/')
+            newRef = ctx.storage.createText(relativeDir, displayName, staged.mimeType, content)
         }
         if (newRef == null) {
             DiagnosticsLogger.w(TAG, "Recover promote failed for ${key.chapterId}")
@@ -479,7 +500,6 @@ internal class MirrorPromoteRecoveryExecutor(
 
     companion object {
         private const val TAG = "ReadableMirrorPublisher"
-        private const val MIME_MARKDOWN = "text/markdown"
         private const val KEEPING_JOURNAL_NOT_PROMOTING = "keeping journal, not promoting"
     }
 }

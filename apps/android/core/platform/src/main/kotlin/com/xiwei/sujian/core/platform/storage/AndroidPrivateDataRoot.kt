@@ -16,6 +16,7 @@ import java.io.File
  * - `sujian/projects/` — 项目（作品）数据
  * - `sujian/logs/`     — 诊断日志与 crash 记录
  * - `sujian/exports/`  — 导出产物
+ * - `sujian/mirror/`   — 镜像事务内部状态（journal、manifest、backup、临时正文）
  *
  * ## 应用私有存储（#649 评论 5559763924）
  *
@@ -39,6 +40,7 @@ object AndroidPrivateDataRoot {
     private const val PROJECTS_DIR_NAME = "projects"
     private const val LOGS_DIR_NAME = "logs"
     private const val EXPORTS_DIR_NAME = "exports"
+    private const val MIRROR_DIR_NAME = "mirror"
 
     /**
      * 应用私有根目录 `context.filesDir/sujian`。
@@ -57,6 +59,15 @@ object AndroidPrivateDataRoot {
     fun exports(context: Context): File = File(root(context), EXPORTS_DIR_NAME)
 
     /**
+     * `sujian/mirror/` — 镜像事务内部状态目录。
+     *
+     * 用于存放镜像发布系统的事务中间状态：journal、manifest、backup、临时正文。
+     * 这些文件不应出现在用户可见的 `Download/Sujian/` 目录中（Issue #667）。
+     * 调用方通过 [com.xiwei.sujian.storage.mirror.MirrorTransactionWorkspace] 使用此目录。
+     */
+    fun mirror(context: Context): File = File(root(context), MIRROR_DIR_NAME)
+
+    /**
      * 创建所有业务子目录（幂等）。应用私有存储不需要额外权限。
      *
      * 注意：迁移流程中**不能**在迁移前调用本方法，否则
@@ -70,5 +81,6 @@ object AndroidPrivateDataRoot {
         projects(context).mkdirs()
         logs(context).mkdirs()
         exports(context).mkdirs()
+        mirror(context).mkdirs()
     }
 }

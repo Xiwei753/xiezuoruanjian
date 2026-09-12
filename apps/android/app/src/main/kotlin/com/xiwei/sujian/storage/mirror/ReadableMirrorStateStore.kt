@@ -2,6 +2,7 @@ package com.xiwei.sujian.storage.mirror
 
 import android.content.Context
 import androidx.core.util.AtomicFile
+import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import org.json.JSONException
 import org.json.JSONObject
 import java.io.File
@@ -181,10 +182,11 @@ sealed interface CommittedManifestReadResult {
  * 相对路径、revision 和 contentHash，让 Publisher 能做集合差删除。
  *
  * ## 存储位置
- * `context.noBackupFilesDir/sujian-mirror/state.json`
+ * `context.filesDir/sujian/mirror/state.json`（通过 [AndroidPrivateDataRoot.mirror]）
  *
- * `noBackupFilesDir` 是应用私有目录，卸载后清除，不被自动备份（避免恢复时残留
- * 指向已不存在 URI 的旧状态）。
+ * Issue #667：从旧位置 `noBackupFilesDir/sujian-mirror/` 迁移到应用私有目录
+ * `filesDir/sujian/mirror/`，与 [MirrorTransactionWorkspace] 共用同一目录。
+ * 升级后首次访问时自动从旧位置迁移 state.json 和 pending-publish.json。
  *
  * ## 线程安全
  * 所有公开方法用 [lock] 保护，保证多线程读写原子。文件 I/O 在锁内同步执行
@@ -220,9 +222,16 @@ class ReadableMirrorStateStore(
     private val lock = Any()
 
     private val stateFile: File by lazy {
-        File(File(context.noBackupFilesDir, STATE_DIR_NAME), STATE_FILE_NAME).also { file ->
-            file.parentFile?.mkdirs()
+        val newFile = File(AndroidPrivateDataRoot.mirror(context), STATE_FILE_NAME)
+        // Issue #667：从旧位置 noBackupFilesDir/sujian-mirror/ 迁移到新位置
+        if (!newFile.exists()) {
+            val legacyFile = File(File(context.noBackupFilesDir, LEGACY_STATE_DIR_NAME), STATE_FILE_NAME)
+            if (legacyFile.exists()) {
+                legacyFile.copyTo(newFile, overwrite = false)
+            }
         }
+        newFile.parentFile?.mkdirs()
+        newFile
     }
 
     /** #649 评论 5563333323 缺口 2：用 AtomicFile 做原子写入。 */
@@ -230,9 +239,16 @@ class ReadableMirrorStateStore(
 
     /** pendingPublish journal 文件（#649 评论 5561465552 第 4 点）。 */
     private val pendingPublishFile: File by lazy {
-        File(File(context.noBackupFilesDir, STATE_DIR_NAME), PENDING_PUBLISH_FILE_NAME).also { file ->
-            file.parentFile?.mkdirs()
+        val newFile = File(AndroidPrivateDataRoot.mirror(context), PENDING_PUBLISH_FILE_NAME)
+        // Issue #667：从旧位置迁移
+        if (!newFile.exists()) {
+            val legacyFile = File(File(context.noBackupFilesDir, LEGACY_STATE_DIR_NAME), PENDING_PUBLISH_FILE_NAME)
+            if (legacyFile.exists()) {
+                legacyFile.copyTo(newFile, overwrite = false)
+            }
         }
+        newFile.parentFile?.mkdirs()
+        newFile
     }
 
     /** #649 评论 5563333323 缺口 2：journal 也用 AtomicFile 做原子写入。 */
@@ -986,7 +1002,7 @@ class ReadableMirrorStateStore(
      * 下次启动/下一次 worker 如果发现 pendingPublish journal，继续完成这次发布
      * （重新写未完成的文件、删旧文件），不猜旧状态。
      *
-     * journal 文件路径：`noBackupFilesDir/sujian-mirror/pending-publish.json`。
+     * journal 文件路径：`filesDir/sujian/mirror/pending-publish.json`（[AndroidPrivateDataRoot.mirror]）。
      *
      * #649 评论 5563333323 缺口 2：返回 [PendingPublishResult] 区分"不存在"和"损坏"。
      * 损坏的 pending journal 必须阻止启动新事务。
@@ -1195,7 +1211,8 @@ class ReadableMirrorStateStore(
     }
 
     companion object {
-        private const val STATE_DIR_NAME = "sujian-mirror"
+        /** Issue #667：旧存储目录名，仅用于迁移。 */
+        private const val LEGACY_STATE_DIR_NAME = "sujian-mirror"
         private const val STATE_FILE_NAME = "state.json"
         private const val PENDING_PUBLISH_FILE_NAME = "pending-publish.json"
         private const val PROJECTS_KEY = "projects"

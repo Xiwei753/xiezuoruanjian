@@ -15,7 +15,9 @@ import com.xiwei.sujian.storage.mirror.DefaultMirrorChangeSink
 import com.xiwei.sujian.storage.mirror.DocumentTreeMirrorStorage
 import com.xiwei.sujian.storage.mirror.MediaStoreMirrorStorage
 import com.xiwei.sujian.storage.mirror.MirrorOutboxStore
+import com.xiwei.sujian.storage.mirror.MirrorStagingCleanup
 import com.xiwei.sujian.storage.mirror.MirrorStorageRouter
+import com.xiwei.sujian.storage.mirror.MirrorTransactionWorkspace
 import com.xiwei.sujian.storage.mirror.ReadableMirrorPublisher
 import com.xiwei.sujian.storage.mirror.ReadableMirrorStateStore
 import java.util.Locale
@@ -88,7 +90,10 @@ object AppServiceProvider {
             DocumentTreeMirrorStorage(treeUri, appContext.contentResolver, documentTreeReader)
         }
         val router = MirrorStorageRouter(stateStore, mediaStoreStorage, documentTreeFactory)
-        val publisher = ReadableMirrorPublisher(snapshotSource, router, stateStore)
+        val workspace = MirrorTransactionWorkspace(appContext)
+        // Issue #667：升级后首次启动时清理旧版事务产物（Download/Sujian/.staging/ 等）
+        MirrorStagingCleanup(appContext, appContext.contentResolver).cleanupIfNeeded()
+        val publisher = ReadableMirrorPublisher(snapshotSource, router, stateStore, workspace)
         val outboxStore = MirrorOutboxStore(appContext)
         val mirrorChangeSink = DefaultMirrorChangeSink(publisher, outboxStore)
         val bridge = AppServiceBridge(holder, mirrorChangeSink)
