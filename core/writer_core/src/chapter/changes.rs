@@ -288,9 +288,9 @@ pub fn plan_delete_chapter(
     let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
     let chapter_dir = project_root
         .join("volumes")
-        .join(&volume_id)
+        .join(volume_id)
         .join("chapters")
-        .join(&chapter_id);
+        .join(chapter_id);
     crate::delete_guard::validate_delete_target(project_root, &chapter_dir, "chapter.meta.json")?;
 
     let meta_path = chapter_dir.join("chapter.meta.json");
@@ -372,9 +372,9 @@ pub fn apply_planned_delete_chapter(
     let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
     let chapter_dir = project_root
         .join("volumes")
-        .join(&volume_id)
+        .join(volume_id)
         .join("chapters")
-        .join(&chapter_id);
+        .join(chapter_id);
     let target_canon = crate::delete_guard::validate_delete_target(
         project_root,
         &chapter_dir,
@@ -387,7 +387,7 @@ pub fn apply_planned_delete_chapter(
             volume_id: planned_vid,
             chapter_id: planned_cid,
             ..
-        } if planned_vid == &volume_id && planned_cid == &chapter_id => {}
+        } if planned_vid == volume_id && planned_cid == chapter_id => {}
         other => {
             return Err(crate::error::Error::Other(format!(
                 "apply_planned_delete_chapter: delete_target mismatch — expected Chapter({volume_id},{chapter_id}), got {other:?}"
@@ -396,9 +396,9 @@ pub fn apply_planned_delete_chapter(
     }
 
     let trash_dir = app_data_root.join("sync/trash");
-    let _ = fs::create_dir_all(&trash_dir);
+    fs::create_dir_all(&trash_dir)?;
     let trash_path = app_data_root.join(&planned.trash_rel_path);
-    fs::rename(&target_canon, &trash_path)?;
+    crate::storage::durable_rename(&target_canon, &trash_path)?;
 
     // 按 journal facts 幂等写入 project_root SyncState tombstone。
     crate::volume::ensure_tombstones_from_facts(project_root, &planned.sync_delete_facts)?;

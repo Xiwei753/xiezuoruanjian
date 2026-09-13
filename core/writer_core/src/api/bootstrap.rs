@@ -339,21 +339,174 @@ fn recover_pending_local_delete(
         Some(DeleteTarget::Project { project_id }) => {
             // 作品删除有独立的多阶段事务（project_delete.rs），不在此处理。
             // Pending 阶段的 DeleteProject 不应出现在 workspace_change journal 里。
-            log::warn!(
-                "recover_pending_local_delete: DeleteProject target {} should use project_delete journal — skipping",
-                project_id
-            );
-            Ok(())
+            // fail-closed：返回错误，保留 journal，不能继续写 history。
+            Err(WriterError::Other(format!(
+                "recover_pending_local_delete: DeleteProject target {} in generic workspace_change \
+                 journal {} — should use project_delete journal; journal retained",
+                project_id, rec.journal_token
+            )))
         }
         None => {
-            // 旧 journal 无 delete_target，跳过本地删除（向后兼容）。
-            log::debug!(
-                "recover_pending_local_delete: no delete_target in journal {} — skipping local delete",
-                rec.journal_token
-            );
-            Ok(())
+            // 旧 journal 无 delete_target，尝试从 change_set 无歧义迁移。
+            // 如果无法无歧义地确定 delete_target，返回错误保留 journal。
+            recover_pending_local_delete_no_target(app_data_root, rec)
         }
     }
+}
+
+/// 处理旧格式 journal（无 delete_target）的 Pending 阶段恢复。
+///
+/// 尝试从 change_set 无歧义地迁移 delete_target：
+/// - `DeleteVolume`：从 `DeleteTree(projects/{pid}/volumes/{vid})` 提取。
+/// - `DeleteChapter`：从 `Delete(projects/{pid}/volumes/{vid}/chapters/{cid}/chapter.*)` 提取。
+/// - `DeleteProject`：不应出现在 generic journal 中，返回错误。
+///
+/// 迁移成功后，源目录仍存在时调旧 `delete_volume`/`delete_chapter` 重放删除；
+/// 源目录已消失时返回错误（旧格式没有 `sync_delete_facts`，无法补齐 tombstone）。
+fn recover_pending_local_delete_no_target(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> std::result::Result<(), WriterError> {
+    use crate::storage::journal::workspace_change::WorkspaceChangeOpType;
+    let projects_root = app_data_root.join("projects");
+    match &rec.op_type {
+        WorkspaceChangeOpType::DeleteVolume => {
+            let (project_id, volume_id) = migrate_volume_target_from_change_set(&rec.changes)
+                .ok_or_else(|| {
+                    WriterError::Other(format!(
+                        "recover_pending_local_delete: cannot unambiguously migrate \
+                         delete_target from change_set for journal {} — journal retained",
+                        rec.journal_token
+                    ))
+                })?;
+            let project_root = projects_root.join(&project_id);
+            let volume_dir = project_root.join("volumes").join(&volume_id);
+            if !volume_dir.exists() {
+                return Err(WriterError::Other(format!(
+                    "recover_pending_local_delete: old-format journal {} — volume {} \
+                     already absent but no sync_delete_facts to ensure tombstones; \
+                     journal retained",
+                    rec.journal_token,
+                    volume_dir.display()
+                )));
+            }
+            log::debug!(
+                "recover_pending_local_delete: migrated delete_target from change_set, \
+                 replaying delete_volume for {}",
+                volume_dir.display()
+            );
+            crate::volume::delete_volume(&project_root, &volume_id, app_data_root)
+                .map_err(WriterError::from)
+        }
+        WorkspaceChangeOpType::DeleteChapter => {
+            let (project_id, volume_id, chapter_id) =
+                migrate_chapter_target_from_change_set(&rec.changes).ok_or_else(|| {
+                    WriterError::Other(format!(
+                        "recover_pending_local_delete: cannot unambiguously migrate \
+                         delete_target from change_set for journal {} — journal retained",
+                        rec.journal_token
+                    ))
+                })?;
+            let project_root = projects_root.join(&project_id);
+            let chapter_dir = project_root
+                .join("volumes")
+                .join(&volume_id)
+                .join("chapters")
+                .join(&chapter_id);
+            if !chapter_dir.exists() {
+                return Err(WriterError::Other(format!(
+                    "recover_pending_local_delete: old-format journal {} — chapter {} \
+                     already absent but no sync_delete_facts to ensure tombstones; \
+                     journal retained",
+                    rec.journal_token,
+                    chapter_dir.display()
+                )));
+            }
+            log::debug!(
+                "recover_pending_local_delete: migrated delete_target from change_set, \
+                 replaying delete_chapter for {}",
+                chapter_dir.display()
+            );
+            crate::chapter::delete_chapter(&project_root, &volume_id, &chapter_id, app_data_root)
+                .map_err(WriterError::from)
+        }
+        WorkspaceChangeOpType::DeleteProject => Err(WriterError::Other(format!(
+            "recover_pending_local_delete: DeleteProject op_type in generic journal {} \
+                 — should use project_delete journal; journal retained",
+            rec.journal_token
+        ))),
+    }
+}
+
+/// 从旧格式 change_set 中无歧义地提取 Volume delete target。
+///
+/// 要求 change_set 中所有变更都是 `DeleteTree` 类型，且路径格式为
+/// `projects/{pid}/volumes/{vid}`，所有 DeleteTree 指向同一个 `(pid, vid)`。
+/// 否则返回 `None`（无法无歧义迁移）。
+fn migrate_volume_target_from_change_set(
+    change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+) -> Option<(String, String)> {
+    use crate::storage::workspace_git::WorkspaceHistoryChange;
+
+    let mut result: Option<(String, String)> = None;
+    for change in &change_set.changes {
+        let WorkspaceHistoryChange::DeleteTree(path) = change else {
+            return None;
+        };
+        let path_str = path.to_string_lossy();
+        let parts: Vec<&str> = path_str.split('/').collect();
+        // 路径格式：projects/{pid}/volumes/{vid}
+        if parts.len() != 4 || parts[0] != "projects" || parts[2] != "volumes" {
+            return None;
+        }
+        let pid = parts[1].to_string();
+        let vid = parts[3].to_string();
+        match &result {
+            Some((existing_pid, existing_vid)) if existing_pid == &pid && existing_vid == &vid => {}
+            Some(_) => return None,
+            None => result = Some((pid, vid)),
+        }
+    }
+    result
+}
+
+/// 从旧格式 change_set 中无歧义地提取 Chapter delete target。
+///
+/// 要求 change_set 中所有变更都是 `Delete` 类型，且路径格式为
+/// `projects/{pid}/volumes/{vid}/chapters/{cid}/chapter.{meta.json|md}`，
+/// 所有 Delete 指向同一个 `(pid, vid, cid)`。
+/// 否则返回 `None`（无法无歧义迁移）。
+fn migrate_chapter_target_from_change_set(
+    change_set: &crate::storage::workspace_git::WorkspaceChangeSet,
+) -> Option<(String, String, String)> {
+    use crate::storage::workspace_git::WorkspaceHistoryChange;
+
+    let mut result: Option<(String, String, String)> = None;
+    for change in &change_set.changes {
+        let WorkspaceHistoryChange::Delete(path) = change else {
+            return None;
+        };
+        let path_str = path.to_string_lossy();
+        let parts: Vec<&str> = path_str.split('/').collect();
+        // 路径格式：projects/{pid}/volumes/{vid}/chapters/{cid}/chapter.{meta.json|md}
+        if parts.len() != 7
+            || parts[0] != "projects"
+            || parts[2] != "volumes"
+            || parts[4] != "chapters"
+        {
+            return None;
+        }
+        let pid = parts[1].to_string();
+        let vid = parts[3].to_string();
+        let cid = parts[5].to_string();
+        match &result {
+            Some((existing_pid, existing_vid, existing_cid))
+                if existing_pid == &pid && existing_vid == &vid && existing_cid == &cid => {}
+            Some(_) => return None,
+            None => result = Some((pid, vid, cid)),
+        }
+    }
+    result
 }
 
 /// 根据 sync_delete_facts 幂等补齐 project_root 的 tombstone。

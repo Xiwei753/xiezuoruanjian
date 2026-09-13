@@ -139,11 +139,16 @@ impl PlannedWorkspaceDelete {
             .replace('\\', "/");
 
         let mut facts = Vec::new();
-        for entry in walkdir::WalkDir::new(source_dir)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
+        for item in walkdir::WalkDir::new(source_dir).into_iter() {
+            let entry = item.map_err(|e| {
+                crate::error::Error::Io(std::io::Error::other(format!(
+                    "build_facts: walkdir error under {}: {e}",
+                    source_dir.display()
+                )))
+            })?;
+            if !entry.file_type().is_file() {
+                continue;
+            }
             let rel_file_path = entry
                 .path()
                 .strip_prefix(source_dir)
@@ -292,10 +297,7 @@ impl WorkspaceChangeJournal {
                 }
                 plan.sync_delete_facts.clone()
             }
-            (
-                WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter,
-                None,
-            ) => {
+            (WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter, None) => {
                 return Err(crate::error::Error::Other(format!(
                     "save_pending: {op_type:?} requires planned_delete — \
                      refusing to write an unrecoverable Pending journal"
@@ -336,7 +338,7 @@ impl WorkspaceChangeJournal {
                 "save_pending: serialize journal: {e}"
             )))
         })?;
-        atomic_write(&journal_path, &content)?;
+        crate::storage::atomic_write_bytes(&journal_path, &content)?;
         Ok(journal)
     }
 
@@ -491,13 +493,5 @@ fn write_journal(app_data_root: &Path, journal: &WorkspaceChangeJournal) -> Resu
             "write_journal: serialize: {e}"
         )))
     })?;
-    atomic_write(&path, &content)
-}
-
-/// 原子写入：先写临时文件再 rename，确保崩溃安全。
-fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
-    let tmp_path = path.with_extension("tmp");
-    fs::write(&tmp_path, content)?;
-    fs::rename(&tmp_path, path)?;
-    Ok(())
+    crate::storage::atomic_write_bytes(&path, &content)
 }

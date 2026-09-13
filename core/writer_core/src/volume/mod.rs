@@ -355,7 +355,7 @@ pub fn plan_delete_volume(
     use crate::storage::journal::workspace_change::{DeleteTarget, PlannedWorkspaceDelete};
 
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
-    let volume_dir = project_root.join("volumes").join(&volume_id);
+    let volume_dir = project_root.join("volumes").join(volume_id);
     crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
 
     let rel = workspace_rel(&volume_dir, app_data_root);
@@ -382,12 +382,8 @@ pub fn plan_delete_volume(
     );
     let trash_rel_path = format!("sync/trash/{trash_token}");
 
-    let facts = PlannedWorkspaceDelete::build_facts(
-        project_root,
-        &volume_dir,
-        &trash_rel_path,
-        device_id,
-    )?;
+    let facts =
+        PlannedWorkspaceDelete::build_facts(project_root, &volume_dir, &trash_rel_path, device_id)?;
     if facts.is_empty() {
         return Err(crate::error::Error::Other(format!(
             "plan_delete_volume: no sync_delete_facts generated for volume {volume_id} \
@@ -420,7 +416,7 @@ pub fn apply_planned_delete_volume(
     use crate::storage::journal::workspace_change::DeleteTarget;
 
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
-    let volume_dir = project_root.join("volumes").join(&volume_id);
+    let volume_dir = project_root.join("volumes").join(volume_id);
     let target_canon =
         crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
 
@@ -429,7 +425,7 @@ pub fn apply_planned_delete_volume(
         DeleteTarget::Volume {
             volume_id: planned_vid,
             ..
-        } if planned_vid == &volume_id => {}
+        } if planned_vid == volume_id => {}
         other => {
             return Err(crate::error::Error::Other(format!(
                 "apply_planned_delete_volume: delete_target mismatch — expected Volume({volume_id}), got {other:?}"
@@ -438,9 +434,9 @@ pub fn apply_planned_delete_volume(
     }
 
     let trash_dir = app_data_root.join("sync/trash");
-    let _ = fs::create_dir_all(&trash_dir);
+    fs::create_dir_all(&trash_dir)?;
     let trash_path = app_data_root.join(&planned.trash_rel_path);
-    fs::rename(&target_canon, &trash_path)?;
+    crate::storage::durable_rename(&target_canon, &trash_path)?;
 
     // 按 journal facts 幂等写入 project_root SyncState tombstone。
     ensure_tombstones_from_facts(project_root, &planned.sync_delete_facts)?;
