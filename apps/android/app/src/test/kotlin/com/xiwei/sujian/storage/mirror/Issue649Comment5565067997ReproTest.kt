@@ -120,7 +120,8 @@ class Issue649Comment5565067997ReproTest {
                 oldRef = oldRef,
                 backupOldRef = backupRef,
                 promotedRef = null,
-                state = PendingItem.STATE_BACKUP_READY, // 修复后写 BACKUP_READY
+                // 修复后写 BACKUP_READY
+                state = PendingItem.STATE_BACKUP_READY,
             )
         assertEquals(
             "修复1.A：fallback copy 后状态是 STATE_BACKUP_READY",

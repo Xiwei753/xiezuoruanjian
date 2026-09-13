@@ -290,7 +290,8 @@ class Issue649Comment5569598106ReproTest {
             PendingItem(
                 key = key,
                 stagedRef = stagedRef,
-                oldRef = null, // 新项目，无 oldRef
+                // 新项目，无 oldRef
+                oldRef = null,
                 backupOldRef = null,
                 promotedRef = null,
                 state = PendingItem.STATE_STAGED,

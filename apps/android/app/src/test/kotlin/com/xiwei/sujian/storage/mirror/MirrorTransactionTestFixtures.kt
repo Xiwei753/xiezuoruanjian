@@ -23,6 +23,9 @@ internal const val OLD_CONTENT = "old content"
 internal const val NEW_CONTENT = "new content"
 internal const val IMPORTANT_CONTENT = "important content"
 internal const val CONTENT_FAKE_WORK_CH_MD = "content://fake/作品_P_V_Ch.md"
+internal const val CONTENT_OLD_1 = "content://old/1"
+internal const val CONTENT_NEW_1 = "content://new/1"
+internal const val PROMOTE_ITEM_STAGED = "promoteItemStaged"
 
 /** 构造 backup 路径的 MirrorFileRef，避免 "backup/$path" 字面量重复。 */
 internal fun backupMirrorRef(path: String) = MirrorFileRef(CONTENT_BACKUP, "backup/$path")

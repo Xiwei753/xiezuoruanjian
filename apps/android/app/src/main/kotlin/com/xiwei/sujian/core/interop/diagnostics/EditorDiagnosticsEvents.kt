@@ -83,7 +83,7 @@ object EditorDiagnosticsEvents {
 
     // ── 编辑事务（User：用户输入）────────────────────────────────
 
-    fun editTransaction(diag: EditTransactionDiagnostic) =
+    internal fun editTransaction(diag: EditTransactionDiagnostic) =
         DiagnosticsEventsInterop.record(
             DiagnosticOriginDto.USER,
             "editor.transaction",

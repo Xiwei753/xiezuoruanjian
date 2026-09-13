@@ -381,7 +381,8 @@ class Issue649Comment5573750754ReproTest {
                 manifestOldRef = oldManifestRef,
                 manifestStagedRef = null,
                 manifestNewRef = null,
-                manifestBackupRef = null, // journal 未落盘，backup ref 为 null
+                // journal 未落盘，backup ref 为 null
+                manifestBackupRef = null,
                 isManifestCommitted = false,
             )
         assertNull("journal 中 manifestBackupRef==null", journal.manifestBackupRef)

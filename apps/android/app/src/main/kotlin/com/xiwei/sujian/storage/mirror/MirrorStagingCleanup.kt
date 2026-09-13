@@ -77,7 +77,8 @@ class MirrorStagingCleanup(
         } else {
             DiagnosticsInterop.w(
                 TAG,
-                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, emptyDirsOk=$emptyDirsOk, safOk=$safOk), will retry next time",
+                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, " +
+                    "emptyDirsOk=$emptyDirsOk, safOk=$safOk), will retry next time",
             )
         }
     }

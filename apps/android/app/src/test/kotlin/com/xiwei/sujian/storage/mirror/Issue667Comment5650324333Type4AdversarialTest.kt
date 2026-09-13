@@ -146,16 +146,6 @@ class Issue667Comment5650324333Type4AdversarialTest {
             ".staging 目录因子目录未删空应仍存在",
             File(sujianDir, STAGING_DIR).exists(),
         )
-        // .staging/tx-1/a/b/ 因含文件不能删空，仍存在
-        assertTrue(
-            ".staging/tx-1/a/b 目录因含残留文件应仍存在",
-            nestedDir.exists(),
-        )
-        // .staging 因子目录未删空，仍存在
-        assertTrue(
-            ".staging 目录因子目录未删空应仍存在",
-            File(sujianDir, ".staging").exists(),
-        )
         // done 标志不应写入（emptyDirsOk = false）
         assertFalse(
             "含残留文件时不应写 done 标志",
@@ -177,13 +167,13 @@ class Issue667Comment5650324333Type4AdversarialTest {
             android.os.Environment.getExternalStoragePublicDirectory(
                 android.os.Environment.DIRECTORY_DOWNLOADS,
             )
-        val sujianDir = File(downloadsDir, "Sujian")
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
         // .staging 含残留文件（清理失败）
-        val stagingDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
-        val leftoverFile = File(stagingDir, "leftover.tmp").apply { writeText("residual") }
+        val stagingDir = File(sujianDir, STAGING_TX1).apply { mkdirs() }
+        val leftoverFile = File(stagingDir, LEFTOVER_FILE).apply { writeText(RESIDUAL_CONTENT) }
         // .backup 和 _meta 为空目录（清理成功）
-        val backupDir = File(sujianDir, ".backup/tx-1").apply { mkdirs() }
-        val metaDir = File(sujianDir, "_meta").apply { mkdirs() }
+        val backupDir = File(sujianDir, BACKUP_TX1).apply { mkdirs() }
+        val metaDir = File(sujianDir, META_DIR).apply { mkdirs() }
 
         assertTrue("测试前置：残留文件应已创建", leftoverFile.exists())
         assertTrue("测试前置：.backup/tx-1 应已创建", backupDir.exists())
@@ -197,7 +187,7 @@ class Issue667Comment5650324333Type4AdversarialTest {
         // .staging 因含残留文件保留
         assertTrue(
             ".staging 目录因含残留文件应仍存在",
-            File(sujianDir, ".staging").exists(),
+            File(sujianDir, STAGING_DIR).exists(),
         )
         assertTrue(
             "残留文件不应被删除",
@@ -206,11 +196,11 @@ class Issue667Comment5650324333Type4AdversarialTest {
         // .backup 和 _meta 被清理（不短路）
         assertFalse(
             ".backup 目录应已被清理（不短路，即使 .staging 失败）",
-            File(sujianDir, ".backup").exists(),
+            File(sujianDir, BACKUP_DIR).exists(),
         )
         assertFalse(
             "_meta 目录应已被清理（不短路，即使 .staging 失败）",
-            File(sujianDir, "_meta").exists(),
+            File(sujianDir, META_DIR).exists(),
         )
         // done 不写入（因 .staging 失败，emptyDirsOk = false）
         assertFalse(

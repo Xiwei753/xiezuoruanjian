@@ -29,6 +29,8 @@ class MirrorRecoveryIdentityTest {
         const val WORK_PATH = "作品/P/V/Ch.md"
         const val OLD_CONTENT = "old content"
         const val URI_OLD_1 = "content://old/1"
+        const val MSG_PREPARE_BACKUP_SUCCESS = "prepareBackup 应成功"
+        const val MSG_BACKUP_EXISTS = "backup 应存在"
     }
 
     /**
@@ -51,7 +53,7 @@ class MirrorRecoveryIdentityTest {
         // 准备 backup（用 workspace.prepareBackup）
         val oldRef = MirrorFileRef(URI_OLD_1, relativePath)
         val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
-        assertNotNull("prepareBackup 应成功", backupRef)
+        assertNotNull(MSG_PREPARE_BACKUP_SUCCESS, backupRef)
 
         // final 位置已是旧内容（hash 匹配）→ 已恢复
         val finalUri = "content://final/old"
@@ -60,7 +62,7 @@ class MirrorRecoveryIdentityTest {
 
         // 验证恢复逻辑：lookupBackup Found + final hash 匹配 → 已恢复
         val backupLookup = workspace.lookupBackup(txId, relativePath)
-        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        assertTrue(MSG_BACKUP_EXISTS, backupLookup is MirrorLookupResult.Found)
         val finalLookup = storage.lookup(relativePath)
         assertTrue("final 应存在", finalLookup is MirrorLookupResult.Found)
         val finalHashResult = storage.readTextAndHash((finalLookup as MirrorLookupResult.Found).ref)
@@ -92,7 +94,7 @@ class MirrorRecoveryIdentityTest {
         // 准备 backup
         val oldRef = MirrorFileRef(URI_OLD_1, relativePath)
         val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
-        assertNotNull("prepareBackup 应成功", backupRef)
+        assertNotNull(MSG_PREPARE_BACKUP_SUCCESS, backupRef)
 
         // final 位置是新内容（hash 不匹配旧内容）→ 冲突
         val finalUri = "content://final/new"
@@ -101,7 +103,7 @@ class MirrorRecoveryIdentityTest {
 
         // 验证恢复逻辑：lookupBackup Found + final hash 不匹配 → 冲突
         val backupLookup = workspace.lookupBackup(txId, relativePath)
-        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        assertTrue(MSG_BACKUP_EXISTS, backupLookup is MirrorLookupResult.Found)
         val finalLookup = storage.lookup(relativePath)
         assertTrue("final 应存在", finalLookup is MirrorLookupResult.Found)
         val finalHashResult = storage.readTextAndHash((finalLookup as MirrorLookupResult.Found).ref)
@@ -130,7 +132,7 @@ class MirrorRecoveryIdentityTest {
         // 准备 backup
         val oldRef = MirrorFileRef(URI_OLD_1, relativePath)
         val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
-        assertNotNull("prepareBackup 应成功", backupRef)
+        assertNotNull(MSG_PREPARE_BACKUP_SUCCESS, backupRef)
 
         // final 位置有文件（无 hash 校验，找到即已恢复）
         val finalUri = "content://final/restored"
@@ -160,7 +162,7 @@ class MirrorRecoveryIdentityTest {
         // 准备 backup
         val oldRef = MirrorFileRef(URI_OLD_1, relativePath)
         val backupRef = workspace.prepareBackup(txId, oldRef, oldContent)
-        assertNotNull("prepareBackup 应成功", backupRef)
+        assertNotNull(MSG_PREPARE_BACKUP_SUCCESS, backupRef)
 
         // final 缺失
         val finalLookup = storage.lookup(relativePath)
@@ -168,7 +170,7 @@ class MirrorRecoveryIdentityTest {
 
         // 从 backup 恢复：readBackup + createText
         val backupLookup = workspace.lookupBackup(txId, relativePath)
-        assertTrue("backup 应存在", backupLookup is MirrorLookupResult.Found)
+        assertTrue(MSG_BACKUP_EXISTS, backupLookup is MirrorLookupResult.Found)
         val backupContent = workspace.readBackup((backupLookup as MirrorLookupResult.Found).ref)
         assertEquals("backup 内容正确", oldContent, backupContent)
 

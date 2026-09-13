@@ -32,6 +32,19 @@ class Issue667Comment5645597368PromoteReproTest {
         const val OLD_URI = "content://old/1"
         const val NEW_URI = "content://new/1"
         const val CONTENT_HASH = "sha256:abc"
+        const val FAKE_NEW_URI_PREFIX = "content://fake/new/"
+        const val PROJECT_ID = "p1"
+        const val VOLUME_ID = "v1"
+        const val CHAPTER_ID = "ch1"
+
+        /** 三个 fake storage 共用的 createText 实现，消除字符串模板重复。 */
+        fun fakeCreateTextRef(
+            relativeDir: String,
+            displayName: String,
+        ): MirrorFileRef {
+            val path = if (relativeDir.isBlank()) displayName else "$relativeDir/$displayName"
+            return MirrorFileRef("$FAKE_NEW_URI_PREFIX${path.hashCode()}", path)
+        }
     }
 
     private lateinit var context: Context
@@ -68,7 +81,7 @@ class Issue667Comment5645597368PromoteReproTest {
 
         // 3. 构造 PendingItem，设置 oldRef（非 null），state = STATE_BACKUP_READY
         //    （非 STATE_OLD_VACATED，让 findExistingPromotedRef 返回 null）
-        val key = ChapterKey("p1", "v1", "ch1")
+        val key = ChapterKey(PROJECT_ID, VOLUME_ID, CHAPTER_ID)
         val oldRef = MirrorFileRef(OLD_URI, relativePath)
         val item =
             PendingItem(
@@ -121,7 +134,7 @@ class Issue667Comment5645597368PromoteReproTest {
         val storage = DeleteFailedStorage()
 
         // 3. 构造 PendingItem，设置 oldRef（非 null），state = STATE_BACKUP_READY
-        val key = ChapterKey("p1", "v1", "ch1")
+        val key = ChapterKey(PROJECT_ID, VOLUME_ID, CHAPTER_ID)
         val oldRef = MirrorFileRef(OLD_URI, relativePath)
         val item =
             PendingItem(
@@ -168,7 +181,7 @@ class Issue667Comment5645597368PromoteReproTest {
 
         val storage = LookupMissingStorage()
 
-        val key = ChapterKey("p1", "v1", "ch1")
+        val key = ChapterKey(PROJECT_ID, VOLUME_ID, CHAPTER_ID)
         val oldRef = MirrorFileRef(OLD_URI, relativePath)
         val item =
             PendingItem(
@@ -226,10 +239,7 @@ class Issue667Comment5645597368PromoteReproTest {
             displayName: String,
             mimeType: String,
             text: String,
-        ): MirrorFileRef {
-            val path = if (relativeDir.isBlank()) displayName else "$relativeDir/$displayName"
-            return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
-        }
+        ): MirrorFileRef = fakeCreateTextRef(relativeDir, displayName)
 
         override fun replaceText(
             ref: MirrorFileRef,
@@ -255,10 +265,7 @@ class Issue667Comment5645597368PromoteReproTest {
             displayName: String,
             mimeType: String,
             text: String,
-        ): MirrorFileRef {
-            val path = if (relativeDir.isBlank()) displayName else "$relativeDir/$displayName"
-            return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
-        }
+        ): MirrorFileRef = fakeCreateTextRef(relativeDir, displayName)
 
         override fun replaceText(
             ref: MirrorFileRef,
@@ -284,10 +291,7 @@ class Issue667Comment5645597368PromoteReproTest {
             displayName: String,
             mimeType: String,
             text: String,
-        ): MirrorFileRef {
-            val path = if (relativeDir.isBlank()) displayName else "$relativeDir/$displayName"
-            return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
-        }
+        ): MirrorFileRef = fakeCreateTextRef(relativeDir, displayName)
 
         override fun replaceText(
             ref: MirrorFileRef,
