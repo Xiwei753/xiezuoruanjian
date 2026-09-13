@@ -155,7 +155,7 @@ private fun SujianNavDisplayContent(
         entries = topLevelBackStack.decoratedEntries(entryProvider),
         onBack = {
             val handled = topLevelBackStack.removeLastOrNull()
-            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navBack(handled)
+            com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.navBack(handled)
             handled
         },
         transitionSpec = navForwardTransition,
@@ -388,7 +388,7 @@ private fun SujianRouteEffects(
     currentTopDestination: SujianDestination,
 ) {
     LaunchedEffect(currentRoute) {
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navigation(currentTopDestination.name)
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.navigation(currentTopDestination.name)
     }
     // nav.top_level_switch 改由目的地变化的 LaunchedEffect 异步记录，
     // 不在 onTopLevelSelected 交互回调里同步做诊断格式化/落队列。
@@ -400,7 +400,7 @@ private fun SujianRouteEffects(
         previousTopDestination = currentTopDestination
         if (previous == null || previous == currentTopDestination) return@LaunchedEffect
         withContext(Dispatchers.IO) {
-            com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.navTopLevelSwitch(
+            com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.navTopLevelSwitch(
                 previous.name,
                 currentTopDestination.name,
             )

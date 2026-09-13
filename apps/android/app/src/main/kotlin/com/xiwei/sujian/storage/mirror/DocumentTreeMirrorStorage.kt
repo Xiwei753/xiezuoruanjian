@@ -3,7 +3,7 @@ package com.xiwei.sujian.storage.mirror
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -200,7 +200,7 @@ class DocumentTreeMirrorStorage(
         displayName: String,
         e: Exception,
     ) {
-        DiagnosticsLogger.w(TAG, "createDocument failed for $displayName: ${e.message}")
+        DiagnosticsInterop.w(TAG, "createDocument failed for $displayName: ${e.message}")
     }
 
     companion object {

@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -100,7 +100,7 @@ class DefaultMirrorChangeSink(
                 drainOutboxToMemory()
                 workerLoop()
             } catch (e: Exception) {
-                DiagnosticsLogger.e(TAG, "Failed to initialize MirrorChangeSink", e)
+                DiagnosticsInterop.e(TAG, "Failed to initialize MirrorChangeSink", e)
             }
         }
     }
@@ -113,7 +113,7 @@ class DefaultMirrorChangeSink(
         val key = MirrorKey(projectId, volumeId, chapterId)
         val intent =
             outboxStore.markDirty(projectId) ?: run {
-                DiagnosticsLogger.e(TAG, "Failed to write outbox for chapterChanged: $projectId")
+                DiagnosticsInterop.e(TAG, "Failed to write outbox for chapterChanged: $projectId")
                 return
             }
         // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
@@ -138,7 +138,7 @@ class DefaultMirrorChangeSink(
     override fun projectStructureChanged(projectId: String) {
         val intent =
             outboxStore.markDirty(projectId) ?: run {
-                DiagnosticsLogger.e(TAG, "Failed to write outbox for projectStructureChanged: $projectId")
+                DiagnosticsInterop.e(TAG, "Failed to write outbox for projectStructureChanged: $projectId")
                 return
             }
         // #649 评论 5576464076 问题 4.1：DELETE tombstone 不进 dirtyMap。
@@ -162,7 +162,7 @@ class DefaultMirrorChangeSink(
         // 旧实现"先 add 占位再 poll"会 poll 掉队头其他删除事件（ConcurrentLinkedQueue FIFO）。
         val intent =
             outboxStore.markDeleted(projectId) ?: run {
-                DiagnosticsLogger.e(TAG, "Failed to write outbox for projectDeleted: $projectId")
+                DiagnosticsInterop.e(TAG, "Failed to write outbox for projectDeleted: $projectId")
                 return
             }
 
@@ -186,7 +186,7 @@ class DefaultMirrorChangeSink(
             outboxStore.recordSignalTime()
             signal.trySend(Unit)
         } else {
-            DiagnosticsLogger.e(TAG, "Failed to write outbox for everythingChanged")
+            DiagnosticsInterop.e(TAG, "Failed to write outbox for everythingChanged")
         }
     }
 
@@ -273,7 +273,7 @@ class DefaultMirrorChangeSink(
                 is MirrorPublishResult.PendingRecovery,
                 is MirrorPublishResult.RetryableFailure,
                 -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "deleteProject pending/failed for ${del.projectId}, keeping event for retry",
                     )
@@ -324,7 +324,7 @@ class DefaultMirrorChangeSink(
             is MirrorPublishResult.PendingRecovery,
             is MirrorPublishResult.RetryableFailure,
             -> {
-                DiagnosticsLogger.w(TAG, "publishAll pending/failed, keeping event for retry")
+                DiagnosticsInterop.w(TAG, "publishAll pending/failed, keeping event for retry")
                 signal.trySend(Unit)
             }
         }
@@ -341,7 +341,7 @@ class DefaultMirrorChangeSink(
                 is MirrorPublishResult.PendingRecovery,
                 is MirrorPublishResult.RetryableFailure,
                 -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "publishProject pending/failed for $pid, keeping event for retry",
                     )

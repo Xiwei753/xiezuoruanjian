@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 从 MirrorPublishExecutor 提取，只负责 committed 事务的清理逻辑。
@@ -46,7 +46,7 @@ internal class MirrorCleanupTransactionExecutor(
         return try {
             workspace.deleteBackup(ref)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "cleanup: failed to delete backupOldRef ${item.backupOldRef?.uri}", e)
+            DiagnosticsInterop.w(TAG, "cleanup: failed to delete backupOldRef ${item.backupOldRef?.uri}", e)
             false
         }
     }
@@ -81,7 +81,7 @@ internal class MirrorCleanupTransactionExecutor(
                 "cleanup: lookup old entry failed ${entry.uri}: ${cause?.message}"
             }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "cleanup: failed to delete old entry ${entry.uri}", e)
+            DiagnosticsInterop.w(TAG, "cleanup: failed to delete old entry ${entry.uri}", e)
             false
         }
     }
@@ -90,7 +90,7 @@ internal class MirrorCleanupTransactionExecutor(
         return try {
             stateStore.removeChapterEntry(key.projectId, key.volumeId, key.chapterId)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "cleanup: failed to removeChapterEntry for ${key.chapterId}", e)
+            DiagnosticsInterop.w(TAG, "cleanup: failed to removeChapterEntry for ${key.chapterId}", e)
             false
         }
     }
@@ -107,7 +107,7 @@ internal class MirrorCleanupTransactionExecutor(
         return try {
             workspace.deleteBackup(ref)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "cleanup: failed to delete manifestBackupRef ${journal.manifestBackupRef?.uri}", e)
+            DiagnosticsInterop.w(TAG, "cleanup: failed to delete manifestBackupRef ${journal.manifestBackupRef?.uri}", e)
             false
         }
     }
@@ -123,11 +123,11 @@ internal class MirrorCleanupTransactionExecutor(
         var allSuccess = true
         try {
             if (!workspace.rollback(journal.txId)) {
-                DiagnosticsLogger.w(TAG, "cleanup: tx staging cleanup failed for ${journal.txId}")
+                DiagnosticsInterop.w(TAG, "cleanup: tx staging cleanup failed for ${journal.txId}")
                 allSuccess = false
             }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "cleanup: failed to rollback tx ${journal.txId}", e)
+            DiagnosticsInterop.w(TAG, "cleanup: failed to rollback tx ${journal.txId}", e)
             allSuccess = false
         }
         return allSuccess
@@ -142,7 +142,7 @@ internal class MirrorCleanupTransactionExecutor(
             is MirrorLookupResult.Found -> storage.delete(lookupResult.ref)
             is MirrorLookupResult.Missing -> true
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(TAG, failMessage(lookupResult.cause))
+                DiagnosticsInterop.w(TAG, failMessage(lookupResult.cause))
                 false
             }
         }

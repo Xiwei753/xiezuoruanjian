@@ -1,5 +1,5 @@
 package com.xiwei.sujian.feature.sync.data
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.starmap.data.interop.StarMapBridge
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
@@ -36,7 +36,7 @@ open class AppSyncDataBarrier(
         return when (val result = starmapBridge.flushAllStarmapStores()) {
             is BridgeResult.Success -> true
             is BridgeResult.Error -> {
-                DiagnosticsLogger.w(TAG, "flushAllStarmapStores failed: ${result.fullEnvelope}")
+                DiagnosticsInterop.w(TAG, "flushAllStarmapStores failed: ${result.fullEnvelope}")
                 false
             }
             BridgeResult.NotLoaded -> true
@@ -59,21 +59,21 @@ open class AppSyncDataBarrier(
             try {
                 invalidateStarmapCache()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "invalidate starmap cache failed", e)
+                DiagnosticsInterop.w(TAG, "invalidate starmap cache failed", e)
             }
         }
         if (allChanged.any { it == "settings.sync.json" }) {
             try {
                 reloadSettings()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "reload settings failed", e)
+                DiagnosticsInterop.w(TAG, "reload settings failed", e)
             }
         }
         if (allChanged.any { it.startsWith("themes/palettes/") }) {
             try {
                 reloadThemes()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "reload themes failed", e)
+                DiagnosticsInterop.w(TAG, "reload themes failed", e)
             }
         }
     }
@@ -95,21 +95,21 @@ open class AppSyncDataBarrier(
             try {
                 invalidateStarmapCache()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "invalidate starmap cache failed", e)
+                DiagnosticsInterop.w(TAG, "invalidate starmap cache failed", e)
             }
         }
         if (allChanged.any { it == "settings.sync.json" }) {
             try {
                 reloadSettings()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "reload settings failed", e)
+                DiagnosticsInterop.w(TAG, "reload settings failed", e)
             }
         }
         if (allChanged.any { it.startsWith("themes/palettes/") }) {
             try {
                 reloadThemes()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "reload themes failed", e)
+                DiagnosticsInterop.w(TAG, "reload themes failed", e)
             }
         }
     }

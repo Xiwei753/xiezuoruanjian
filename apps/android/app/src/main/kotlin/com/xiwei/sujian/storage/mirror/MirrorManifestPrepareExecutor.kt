@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 
 /**
@@ -88,7 +88,7 @@ internal class MirrorManifestPrepareExecutor(
                 }
             }
         if (frozenOldRef != null && manifestOldContentHash == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Manifest transaction: old manifest exists but content hash is null, stopping before vacate",
             )
@@ -232,7 +232,7 @@ internal class MirrorManifestPrepareExecutor(
                 return handleBackupMissing(ctx, oldIdentity, stageContext)
             }
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(TAG, "manifest backup lookup failed: ${backupResult.cause?.message}")
+                DiagnosticsInterop.w(TAG, "manifest backup lookup failed: ${backupResult.cause?.message}")
                 deleteStagedIfExists(stageContext.staged)
                 return ManifestBackupOutcome.Aborted
             }
@@ -251,13 +251,13 @@ internal class MirrorManifestPrepareExecutor(
         // Issue #667：manifest 在私有目录中，用 workspace.readManifest() 读取
         val currentContent = workspace.readManifest()
         if (currentContent == null) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: COMMITTED but manifest missing in workspace, rolling back")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: COMMITTED but manifest missing in workspace, rolling back")
             deleteStagedIfExists(stageContext.staged)
             return ManifestBackupOutcome.Aborted
         }
         val currentHash = computeContentHash(currentContent)
         if (currentHash != stageContext.newContentHash) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: COMMITTED but manifest hash mismatch, keeping journal")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: COMMITTED but manifest hash mismatch, keeping journal")
             return ManifestBackupOutcome.Aborted
         }
         // manifest 已提交，构造 committed journal
@@ -288,19 +288,19 @@ internal class MirrorManifestPrepareExecutor(
         // Issue #667：manifest 在私有目录中，用 workspace.readManifest() 读取
         val currentContent = workspace.readManifest()
         if (currentContent == null) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: PROMOTED but manifest missing in workspace")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: PROMOTED but manifest missing in workspace")
             deleteStagedIfExists(stageContext.staged)
             return ManifestBackupOutcome.Aborted
         }
         val currentHash = computeContentHash(currentContent)
         if (currentHash != stageContext.newContentHash) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: PROMOTED but manifest hash mismatch, keeping journal")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: PROMOTED but manifest hash mismatch, keeping journal")
             return ManifestBackupOutcome.Aborted
         }
         // manifest 已 promote，setManifestUri 指向私有文件路径
         val manifestPath = workspace.manifestFile().absolutePath
         if (!stateStore.setManifestUri(manifestPath)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (resume PROMOTED)")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: setManifestUri failed (resume PROMOTED)")
             return ManifestBackupOutcome.Aborted
         }
         val committedRef = MirrorFileRef(uri = manifestPath, relativePath = ctx.manifestRelativePath)
@@ -379,7 +379,7 @@ internal class MirrorManifestPrepareExecutor(
             // 尝试用 storage 读取（向后兼容旧版 manifest 在 Download 中的情况）
             val storageContent = ctx.storage.readTextAndHash(oldRef)
             if (storageContent == null) {
-                DiagnosticsLogger.w(TAG, "Manifest transaction: cannot read old manifest for backup")
+                DiagnosticsInterop.w(TAG, "Manifest transaction: cannot read old manifest for backup")
                 deleteStagedIfExists(stageContext.staged)
                 return ManifestBackupOutcome.Aborted
             }

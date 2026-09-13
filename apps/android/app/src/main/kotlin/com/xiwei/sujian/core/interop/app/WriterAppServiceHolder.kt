@@ -1,6 +1,6 @@
 package com.xiwei.sujian.core.interop.app
 import android.content.Context
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
 import com.xiwei.sujian.core.interop.common.toSyncFailureKind
@@ -43,11 +43,11 @@ class WriterAppServiceHolder(
                 try {
                     svc.recoverInterruptedFullSyncState()
                 } catch (e: WriterException) {
-                    DiagnosticsLogger.w(TAG, "Failed to recover interrupted full sync state: ${e.message}")
+                    DiagnosticsInterop.w(TAG, "Failed to recover interrupted full sync state: ${e.message}")
                 }
                 svc
             } catch (e: WriterException) {
-                DiagnosticsLogger.e(TAG, "Failed to open app service: ${e.message}", e)
+                DiagnosticsInterop.e(TAG, "Failed to open app service: ${e.message}", e)
                 _initError = e
                 throw e
             }
@@ -114,7 +114,7 @@ class WriterAppServiceHolder(
                 try {
                     AndroidKeystoreSecureStorage(context)
                 } catch (e: Exception) {
-                    DiagnosticsLogger.e(TAG, "Failed to initialize Android Keystore secure storage", e)
+                    DiagnosticsInterop.e(TAG, "Failed to initialize Android Keystore secure storage", e)
                     return WriterAppServiceHolder(
                         appDataRoot,
                         projectsRoot,
@@ -147,17 +147,17 @@ class WriterAppServiceHolder(
         return try {
             BridgeResult.Success(block())
         } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
+            DiagnosticsInterop.e(TAG, "Native library is not loaded", e)
             BridgeResult.NotLoaded
         } catch (e: WriterException) {
-            DiagnosticsLogger.e(TAG, "Native exception: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "Native exception: ${e.message}", e)
             // #592 七：类型化失败在 Bridge 边界由 WriterException 变体直接推导。
             BridgeResult.Error(
                 ResultEnvelope.errorOf(e.toWireErrorCode(), e.message ?: "Unknown native exception"),
                 syncFailureKind = e.toSyncFailureKind(),
             )
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Exception: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "Exception: ${e.message}", e)
             BridgeResult.Error(ResultEnvelope.errorOf("UNKNOWN", e.message ?: "Unknown error"))
         }
     }

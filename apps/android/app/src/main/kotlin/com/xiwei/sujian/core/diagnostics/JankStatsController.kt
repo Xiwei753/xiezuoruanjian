@@ -2,13 +2,14 @@ package com.xiwei.sujian.core.diagnostics
 
 import android.view.Window
 import androidx.metrics.performance.JankStats
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 卡顿统计控制器（Issue #612 四）。
  *
  * 用 Android 官方 [JankStats] 跟踪窗口帧，聚合 jank 统计 + 环形缓冲最近慢帧样本；
- * listener 里不做文件 I/O，不调 [DiagnosticsLogger.i]（Issue #612 评论 3.3）。
+ * listener 里不做文件 I/O，不调 [DiagnosticsInterop.i]（Issue #612 评论 3.3）。
  *
  * 设计：
  * - 单例 [JankStatsController] 管理聚合统计（totalFrames / jankFrames /
@@ -23,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * callback 最小复制（Issue #612 评论 3.3）：FrameData listener 只做最小字段复制
  * （screen/interaction），不每帧 states.map 创建 List/Pair，不在 callback 里调
- * DiagnosticsLogger.i（避免 Regex 脱敏 + Log.i 增加帧线程负担）。jank 帧放入
+ * DiagnosticsInterop.i（避免 Regex 脱敏 + Log.i 增加帧线程负担）。jank 帧放入
  * [recentJankSamples] 环形缓冲（128 容量）保留最近慢帧证据，getSummary 一次性导出。
  *
  * JankStats 1.0.0 API 要点：
@@ -69,7 +70,7 @@ internal object JankStatsController {
             jankStats =
                 JankStats.createAndTrack(window) { frame ->
                     // callback 只做最小复制（Issue #612 评论 3.3）：不每帧 map 创建
-                    // List/Pair，不在 callback 里调 DiagnosticsLogger.i（避免 Regex 脱敏
+                    // List/Pair，不在 callback 里调 DiagnosticsInterop.i（避免 Regex 脱敏
                     // + Log.i 增加帧线程负担）。
                     var screen = "unknown"
                     var interaction: String? = null
@@ -88,7 +89,7 @@ internal object JankStatsController {
                     )
                 }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "JankStats track failed", e)
+            DiagnosticsInterop.w(TAG, "JankStats track failed", e)
         }
     }
 
@@ -148,7 +149,7 @@ internal object JankStatsController {
 
     /**
      * Frame listener 回调（主线程）。只更新聚合统计 + jank 帧放入环形缓冲，
-     * 不做文件 I/O，不调 [DiagnosticsLogger.i]（Issue #612 评论 3.3）。
+     * 不做文件 I/O，不调 [DiagnosticsInterop.i]（Issue #612 评论 3.3）。
      *
      * [screen] / [interaction] 由 track() 的 callback 从 FrameData.states 做最小复制
      * 传入（不在此处做 states.map），避免每帧创建 List/Pair 增加帧线程负担。

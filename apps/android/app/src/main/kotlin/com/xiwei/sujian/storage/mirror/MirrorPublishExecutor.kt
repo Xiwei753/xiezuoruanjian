@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 
 /**
@@ -91,7 +91,7 @@ internal class MirrorPublishExecutor(
             is CommittedManifestReadResult.NotExists -> CommittedManifestResolution.FirstPublish
             is CommittedManifestReadResult.Found -> CommittedManifestResolution.Baseline(result.manifest)
             is CommittedManifestReadResult.Corrupted -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Committed manifest corrupted, stopping publish: ${result.cause.message}",
                 )
@@ -109,14 +109,14 @@ internal class MirrorPublishExecutor(
                             is CommittedManifestReadResult.NotExists ->
                                 CommittedManifestResolution.FirstPublish
                             is CommittedManifestReadResult.Corrupted -> {
-                                DiagnosticsLogger.w(
+                                DiagnosticsInterop.w(
                                     TAG,
                                     "Committed manifest still corrupted after migration: ${reread.cause.message}",
                                 )
                                 CommittedManifestResolution.Stop
                             }
                             is CommittedManifestReadResult.NeedsMigration -> {
-                                DiagnosticsLogger.w(
+                                DiagnosticsInterop.w(
                                     TAG,
                                     "State still needs migration after migration attempt, stopping",
                                 )
@@ -125,7 +125,7 @@ internal class MirrorPublishExecutor(
                         }
                     }
                     ReadableMirrorStateMigration.Result.FAILURE -> {
-                        DiagnosticsLogger.w(TAG, "State migration failed, stopping publish")
+                        DiagnosticsInterop.w(TAG, "State migration failed, stopping publish")
                         CommittedManifestResolution.Stop
                     }
                 }
@@ -171,7 +171,7 @@ internal class MirrorPublishExecutor(
         try {
             return executeDeleteProject(projectId)
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to delete project: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "Failed to delete project: ${e.message}", e)
             return MirrorPublishResult.RetryableFailure
         }
     }
@@ -185,13 +185,13 @@ internal class MirrorPublishExecutor(
         val txContextResult = router.currentTransactionResult()
         if (txContextResult.isFailure) {
             val error = txContextResult.exceptionOrNull()
-            DiagnosticsLogger.e(TAG, "Failed to get transaction context for delete: ${error?.message}")
+            DiagnosticsInterop.e(TAG, "Failed to get transaction context for delete: ${error?.message}")
             return MirrorPublishResult.RetryableFailure
         }
         val txContext = txContextResult.getOrThrow()
         val storage = txContext.storage
         if (!storage.isSupported()) {
-            DiagnosticsLogger.i(TAG, "Mirror delete skipped: storage not supported")
+            DiagnosticsInterop.i(TAG, "Mirror delete skipped: storage not supported")
             return MirrorPublishResult.RetryableFailure
         }
         // 1. 获取旧条目 + 2. 读取 committed manifest 并生成 frozen plan（#649 评论 5576464076 问题 3）
@@ -230,7 +230,7 @@ internal class MirrorPublishExecutor(
                 ),
             )
         if (manifestResult == null) {
-            DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: manifest write failed")
+            DiagnosticsInterop.w(TAG, "Delete project $projectId aborted: manifest write failed")
             // manifest 失败不清除 journal，下次恢复会重试
             return MirrorPublishResult.RetryableFailure
         }
@@ -266,7 +266,7 @@ internal class MirrorPublishExecutor(
         val removed = stateStore.getProjectEntries(projectId)
         val committedManifestResolution = resolveCommittedManifestForPublish(storage)
         if (committedManifestResolution is CommittedManifestResolution.Stop) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId aborted: committed manifest corrupted or migration failed",
             )
@@ -320,7 +320,7 @@ internal class MirrorPublishExecutor(
                 ),
             )
         ) {
-            DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: journal write failed")
+            DiagnosticsInterop.w(TAG, "Delete project $projectId aborted: journal write failed")
             return false
         }
         return true
@@ -337,7 +337,7 @@ internal class MirrorPublishExecutor(
                 null
             }
         if (frozenPlan != null && manifestTargetJson == null) {
-            DiagnosticsLogger.w(TAG, "Delete project $projectId aborted: frozenPlanToManifestJson failed")
+            DiagnosticsInterop.w(TAG, "Delete project $projectId aborted: frozenPlanToManifestJson failed")
             return null
         }
         return manifestTargetJson
@@ -375,7 +375,7 @@ internal class MirrorPublishExecutor(
         manifestResult: ManifestTransactionResult,
     ): Boolean {
         if (!journalWriter.persistPendingJournal(manifestResult.committedJournal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId: cleanup journal write failed, keeping journal for retry",
             )
@@ -385,7 +385,7 @@ internal class MirrorPublishExecutor(
         // 确保下一笔 frozen plan 基线正确（不会因 manifest 未持久化而误判为首次发布）。
         // #649 评论 5576949398 问题 2：用 persistCommittedBaselineFromJournal 统一写入。
         if (!journalWriter.persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId: persistCommittedBaseline failed, keeping journal for retry",
             )
@@ -397,7 +397,7 @@ internal class MirrorPublishExecutor(
     private fun removeDeleteProjectState(projectId: String): Boolean {
         val removeResult = stateStore.removeAllProjectEntries(projectId)
         if (removeResult.isFailure) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId: removeAllProjectEntries failed, keeping journal for retry",
             )
@@ -419,7 +419,7 @@ internal class MirrorPublishExecutor(
             // #649 评论 5564820566 问题 5：delete 成功后移除 publishedProjectId
             // #649 评论 5565067997 修复 6：检查 removePublishedProjectId 返回值
             if (!stateStore.removePublishedProjectId(projectId)) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Delete project $projectId: removePublishedProjectId failed, keeping journal for retry",
                 )
@@ -428,7 +428,7 @@ internal class MirrorPublishExecutor(
             stateStore.clearPendingPublish()
             return MirrorPublishResult.Committed
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId: cleanup partial failure, keeping journal for retry",
             )

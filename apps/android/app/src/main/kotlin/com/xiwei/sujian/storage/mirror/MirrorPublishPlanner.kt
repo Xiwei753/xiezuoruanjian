@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
@@ -45,7 +45,7 @@ internal class MirrorPublishPlanner(
             for (chapter in volumeWithChapters.chapters) {
                 val openResult = source.openChapter(projectId, volumeWithChapters.volume.id, chapter.id)
                 if (openResult !is BridgeResult.Success) {
-                    DiagnosticsLogger.w(TAG, "Failed to open chapter ${chapter.id} for plan")
+                    DiagnosticsInterop.w(TAG, "Failed to open chapter ${chapter.id} for plan")
                     return null
                 }
                 val content = openResult.data.content

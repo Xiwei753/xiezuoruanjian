@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 
 /**
@@ -85,7 +85,7 @@ class ReadableMirrorPublisher(
         when (pendingResult) {
             is PendingPublishResult.NotExists -> return
             is PendingPublishResult.Corrupted -> {
-                DiagnosticsLogger.e(
+                DiagnosticsInterop.e(
                     TAG,
                     "Pending publish journal is corrupted, cannot start new transaction",
                     pendingResult.error,
@@ -95,7 +95,7 @@ class ReadableMirrorPublisher(
             is PendingPublishResult.Success -> {
                 val journalJson = pendingResult.json
                 val journal = PendingMirrorPublish.fromJson(journalJson) ?: return
-                DiagnosticsLogger.i(
+                DiagnosticsInterop.i(
                     TAG,
                     "Recovering pending publish: phase=${journal.phase}, " +
                         "projectId=${journal.projectId}, txType=${journal.transactionType}",
@@ -103,7 +103,7 @@ class ReadableMirrorPublisher(
 
                 val storageResult = router.forBackendResult(journal.backend, journal.treeUri)
                 if (storageResult.isFailure) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "Storage not available during recovery: ${storageResult.exceptionOrNull()?.message}, " +
                             "keeping journal",
@@ -112,7 +112,7 @@ class ReadableMirrorPublisher(
                 }
                 val storage = storageResult.getOrThrow()
                 if (!storage.isSupported()) {
-                    DiagnosticsLogger.w(TAG, "Storage not supported during recovery, keeping journal")
+                    DiagnosticsInterop.w(TAG, "Storage not supported during recovery, keeping journal")
                     return
                 }
 
@@ -121,7 +121,7 @@ class ReadableMirrorPublisher(
                         if (workspace.rollback(journal.txId)) {
                             stateStore.clearPendingPublish()
                         } else {
-                            DiagnosticsLogger.w(TAG, "Recover stage: rollback failed, keeping journal for retry")
+                            DiagnosticsInterop.w(TAG, "Recover stage: rollback failed, keeping journal for retry")
                         }
                     }
                     PendingMirrorPublish.PHASE_PROMOTE -> {
@@ -134,7 +134,7 @@ class ReadableMirrorPublisher(
                         recoveryExecutor.recoverRollbackPhase(journal, storage)
                     }
                     else -> {
-                        DiagnosticsLogger.w(TAG, "Unknown phase in pending publish: ${journal.phase}")
+                        DiagnosticsInterop.w(TAG, "Unknown phase in pending publish: ${journal.phase}")
                         stateStore.clearPendingPublish()
                     }
                 }
@@ -160,12 +160,12 @@ class ReadableMirrorPublisher(
             val storageResult = router.currentResult()
             if (storageResult.isFailure) {
                 val error = storageResult.exceptionOrNull()
-                DiagnosticsLogger.e(TAG, "Failed to get storage for publishAll: ${error?.message}")
+                DiagnosticsInterop.e(TAG, "Failed to get storage for publishAll: ${error?.message}")
                 return MirrorPublishResult.RetryableFailure
             }
             val storage = storageResult.getOrThrow()
             if (!storage.isSupported()) {
-                DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
+                DiagnosticsInterop.i(TAG, SKIP_NOT_SUPPORTED)
                 return MirrorPublishResult.RetryableFailure
             }
             val projectsResult = source.listProjects()
@@ -184,7 +184,7 @@ class ReadableMirrorPublisher(
             }
             return MirrorPublishResult.Committed
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to publish all: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "Failed to publish all: ${e.message}", e)
             return MirrorPublishResult.RetryableFailure
         }
     }
@@ -204,8 +204,8 @@ class ReadableMirrorPublisher(
         op: String,
     ) {
         when (result) {
-            is BridgeResult.Error -> DiagnosticsLogger.w(TAG, "$op failed: ${result.fullEnvelope}")
-            BridgeResult.NotLoaded -> DiagnosticsLogger.w(TAG, "Native library not loaded, skip $op")
+            is BridgeResult.Error -> DiagnosticsInterop.w(TAG, "$op failed: ${result.fullEnvelope}")
+            BridgeResult.NotLoaded -> DiagnosticsInterop.w(TAG, "Native library not loaded, skip $op")
             else -> {}
         }
     }
@@ -214,7 +214,7 @@ class ReadableMirrorPublisher(
         projectId: String,
         detail: String,
     ) {
-        DiagnosticsLogger.w(TAG, "Publish project $projectId aborted: $detail")
+        DiagnosticsInterop.w(TAG, "Publish project $projectId aborted: $detail")
     }
 
     companion object {

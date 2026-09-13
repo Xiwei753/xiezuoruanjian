@@ -167,14 +167,14 @@ class SujianAppViewModel(
         savedStateHandle["currentProjectId"] = projectId
         savedStateHandle["currentProjectTitle"] = projectTitle
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(projectId)
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceSelection("project", projectId)
     }
 
     fun selectProject(projectId: String) {
         currentProjectId = projectId
         savedStateHandle["currentProjectId"] = projectId
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(projectId)
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("project", projectId)
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceSelection("project", projectId)
         // #625 项6：列表 UI 唯一数据源是 ProjectSummary，selectProject(id) 取标题也从 projectSummaries 缓存查，
         // 避免远端查询；缓存未命中时回退到 getProjectTitle。
         val cachedSummary = projectSummaries.find { it.id == projectId }
@@ -208,7 +208,7 @@ class SujianAppViewModel(
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
         savedStateHandle["currentChapterTitle"] = chapterTitle
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceSelection("chapter", chapterId)
     }
 
     fun selectChapter(
@@ -219,7 +219,7 @@ class SujianAppViewModel(
         currentChapterId = chapterId
         savedStateHandle["currentVolumeId"] = volumeId
         savedStateHandle["currentChapterId"] = chapterId
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceSelection("chapter", chapterId)
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceSelection("chapter", chapterId)
         viewModelScope.launch {
             val title =
                 withContext(Dispatchers.IO) {
@@ -241,7 +241,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentVolumeId")
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("chapter")
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceClear("chapter")
     }
 
     fun clearProjectSelection() {
@@ -256,7 +256,7 @@ class SujianAppViewModel(
         savedStateHandle.remove<String>("currentChapterId")
         savedStateHandle["currentChapterTitle"] = ""
         com.xiwei.sujian.app.state.ActiveProjectGate.setCurrentProjectId(null)
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.workspaceClear("project")
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.workspaceClear("project")
     }
 
     /**

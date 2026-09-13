@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.diagnostics
 
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -25,7 +26,7 @@ import java.util.concurrent.TimeoutException
  *   IOException 解除阻塞，shutdownNow 中断 reader 线程，二者配合保证 reader task
  *   与 logcat 子进程不泄漏。
  * - 截断按 UTF-8 字符边界进行，不会产生半个字符。
- * - 通过 [DiagnosticsLogger.redact] 脱敏后再落盘。
+ * - 通过 [DiagnosticsInterop.redact] 脱敏后再落盘。
  * - 失败时写一个包含错误信息的占位文件，不抛异常。
  */
 internal object LogcatSnapshotCollector {
@@ -99,10 +100,10 @@ internal object LogcatSnapshotCollector {
 
             val trimmed = truncateBytes(bytes, MAX_SNAPSHOT_BYTES)
             File(destDir, OUTPUT_NAME).writeText(
-                DiagnosticsLogger.redact(String(trimmed, Charsets.UTF_8)),
+                DiagnosticsInterop.redact(String(trimmed, Charsets.UTF_8)),
             )
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             File(destDir, OUTPUT_NAME).writeText("logcat capture failed: $safeMsg")
         } finally {
             process?.let { if (it.isAlive) it.destroyForcibly() }

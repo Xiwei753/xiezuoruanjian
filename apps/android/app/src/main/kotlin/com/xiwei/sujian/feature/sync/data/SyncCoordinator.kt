@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.app.state.ActiveDocumentGate
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
@@ -16,7 +16,20 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.withContext
+import uniffi.writer_core.DiagnosticOriginDto
 import java.io.IOException
+
+/**
+ * 把 [SyncTrigger] 映射到诊断 origin — Issue #670 评论 5651060802 第 7 节。
+ *
+ * 用户主动触发的同步（Manual / SettingsPage / Import）→ User；
+ * 应用自动触发的同步（Auto / ForegroundService）→ App。
+ */
+private fun SyncTrigger.toDiagnosticOrigin(): DiagnosticOriginDto =
+    when (this) {
+        SyncTrigger.Manual, SyncTrigger.SettingsPage, SyncTrigger.Import -> DiagnosticOriginDto.USER
+        SyncTrigger.Auto, SyncTrigger.ForegroundService -> DiagnosticOriginDto.APP
+    }
 
 sealed class SyncOutcome {
     data class Completed(val result: FullSyncResult) : SyncOutcome()
@@ -115,7 +128,7 @@ class SyncCoordinator internal constructor(
         snapshot: SyncProfileSnapshot? = null,
         forceSync: Boolean = false,
     ): SyncOutcome {
-        DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "start")
+        DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "start")
         try {
             val profile: SyncProfileSnapshot =
                 snapshot ?: run {
@@ -130,7 +143,7 @@ class SyncCoordinator internal constructor(
                         is SyncProfileReadResult.Found -> result.snapshot
                         is SyncProfileReadResult.NotConfigured -> result.snapshot
                         is SyncProfileReadResult.Failed -> {
-                            DiagnosticsLogger.w("SyncCoordinator", "Sync profile snapshot failed: ${result.message}")
+                            DiagnosticsInterop.w("SyncCoordinator", "Sync profile snapshot failed: ${result.message}")
                             syncStatusRepository.notifySyncFailed()
                             return result.kind.toOutcome()
                         }
@@ -158,7 +171,7 @@ class SyncCoordinator internal constructor(
                     if (appSyncDataBarrier != null) {
                         val barrierFlushOk = appSyncDataBarrier.flushBeforeSync()
                         if (!barrierFlushOk) {
-                            DiagnosticsLogger.w(
+                            DiagnosticsInterop.w(
                                 "SyncCoordinator",
                                 "App sync data barrier flush failed — aborting (typed Fatal)",
                             )
@@ -181,7 +194,7 @@ class SyncCoordinator internal constructor(
                     }
                     val flushOk = ActiveDocumentGate.flushActiveDocument()
                     if (!flushOk) {
-                        DiagnosticsLogger.w(
+                        DiagnosticsInterop.w(
                             "SyncCoordinator",
                             "Active document flush failed before sync — aborting (typed DocumentSaveFailed)",
                         )
@@ -228,7 +241,7 @@ class SyncCoordinator internal constructor(
                         if (identityBeforeSync != null && identityAfterSync != null &&
                             identityBeforeSync != identityAfterSync
                         ) {
-                            DiagnosticsLogger.w(
+                            DiagnosticsInterop.w(
                                 "SyncCoordinator",
                                 "Document identity changed during sync — result not applied: " +
                                     "$identityBeforeSync -> $identityAfterSync",
@@ -265,7 +278,7 @@ class SyncCoordinator internal constructor(
                             is BridgeResult.Success -> mapToOutcome(br.data)
                             is BridgeResult.Error -> classifyFailure(br).toOutcome()
                             BridgeResult.NotLoaded -> {
-                                DiagnosticsLogger.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
+                                DiagnosticsInterop.w("SyncCoordinator", "Native library not loaded — NativeUnavailable")
                                 SyncFailureKind.NativeUnavailable.toOutcome()
                             }
                         }
@@ -283,15 +296,15 @@ class SyncCoordinator internal constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: IOException) {
-            DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "io_exception: " + e.message)
+            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "io_exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
             return SyncFailureKind.RetryableIo.toOutcome()
         } catch (e: RepositoryException) {
-            DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "repository_exception: " + e.message)
+            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "repository_exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
             return e.kind.toOutcome()
         } catch (e: Exception) {
-            DiagnosticsEvents.syncEvent(trigger.name.lowercase(), "exception: " + e.message)
+            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "exception: " + e.message)
             syncStatusRepository.notifySyncFailed()
             return SyncFailureKind.Fatal.toOutcome()
         }
@@ -329,7 +342,7 @@ class SyncCoordinator internal constructor(
                 )
 
             SyncStatus.Syncing -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     "SyncCoordinator",
                     "performFullSync returned Syncing — protocol error, mapping to terminal failure",
                 )
@@ -367,7 +380,7 @@ class SyncCoordinator internal constructor(
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Syncing -> {
-                DiagnosticsLogger.w("SyncCoordinator", "performFullSync returned Syncing — forcing to Failed")
+                DiagnosticsInterop.w("SyncCoordinator", "performFullSync returned Syncing — forcing to Failed")
                 syncStatusRepository.notifySyncFailed()
             }
             SyncStatus.Idle,

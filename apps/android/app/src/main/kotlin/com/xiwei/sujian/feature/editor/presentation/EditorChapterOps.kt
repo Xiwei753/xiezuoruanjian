@@ -551,7 +551,7 @@ private suspend fun EditorViewModel.loadChapterForSwitch(session: EditorSession)
                     session.chapterId,
                 )
             }
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.chapterLoad(
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.chapterLoad(
             session.projectId,
             session.chapterId,
             content.toByteArray(Charsets.UTF_8).size,
@@ -571,7 +571,7 @@ private suspend fun EditorViewModel.loadChapterForSwitch(session: EditorSession)
     } catch (e: kotlinx.coroutines.CancellationException) {
         throw e
     } catch (e: Throwable) {
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.chapterLoad(
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.chapterLoad(
             session.projectId,
             session.chapterId,
             0,

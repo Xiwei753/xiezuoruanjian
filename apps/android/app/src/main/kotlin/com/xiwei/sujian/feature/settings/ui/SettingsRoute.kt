@@ -250,7 +250,7 @@ private fun SettingsGroupList(
                     ),
                 expanded = expanded,
                 onExpandedChange = { next ->
-                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSection(
+                    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.settingsSection(
                         categoryTitle,
                         next,
                     )

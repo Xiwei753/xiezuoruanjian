@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 
@@ -47,13 +47,13 @@ internal class MirrorPublishStageExecutor(
         val txContextResult = router.currentTransactionResult()
         if (txContextResult.isFailure) {
             val error = txContextResult.exceptionOrNull()
-            DiagnosticsLogger.e(TAG, "Failed to get transaction context: ${error?.message}")
+            DiagnosticsInterop.e(TAG, "Failed to get transaction context: ${error?.message}")
             return null
         }
         val txContext = txContextResult.getOrThrow()
         val storage = txContext.storage
         if (!storage.isSupported()) {
-            DiagnosticsLogger.i(TAG, SKIP_NOT_SUPPORTED)
+            DiagnosticsInterop.i(TAG, SKIP_NOT_SUPPORTED)
             return null
         }
         val snapshotResult = source.getProjectWorkspaceSnapshot(projectId)
@@ -225,7 +225,7 @@ internal class MirrorPublishStageExecutor(
             is CommittedManifestReadResult.Found ->
                 MirrorPublishExecutor.CommittedManifestResolution.Baseline(result.manifest)
             is CommittedManifestReadResult.Corrupted -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Committed manifest corrupted, stopping publish: ${result.cause.message}",
                 )
@@ -241,14 +241,14 @@ internal class MirrorPublishStageExecutor(
                             is CommittedManifestReadResult.NotExists ->
                                 MirrorPublishExecutor.CommittedManifestResolution.FirstPublish
                             is CommittedManifestReadResult.Corrupted -> {
-                                DiagnosticsLogger.w(
+                                DiagnosticsInterop.w(
                                     TAG,
                                     "Committed manifest still corrupted after migration: ${reread.cause.message}",
                                 )
                                 MirrorPublishExecutor.CommittedManifestResolution.Stop
                             }
                             is CommittedManifestReadResult.NeedsMigration -> {
-                                DiagnosticsLogger.w(
+                                DiagnosticsInterop.w(
                                     TAG,
                                     "State still needs migration after migration attempt, stopping",
                                 )
@@ -257,7 +257,7 @@ internal class MirrorPublishStageExecutor(
                         }
                     }
                     ReadableMirrorStateMigration.Result.FAILURE -> {
-                        DiagnosticsLogger.w(TAG, "State migration failed, stopping publish")
+                        DiagnosticsInterop.w(TAG, "State migration failed, stopping publish")
                         MirrorPublishExecutor.CommittedManifestResolution.Stop
                     }
                 }

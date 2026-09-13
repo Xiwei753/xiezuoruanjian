@@ -1,20 +1,32 @@
-package com.xiwei.sujian.core.diagnostics
+package com.xiwei.sujian.core.interop.diagnostics
 
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import uniffi.writer_core.DiagnosticOriginDto
 
 /**
- * 统一脱敏诊断事件来源（生产路径持续写入）。
+ * 统一脱敏诊断事件来源 — Issue #670 评论 5651060802。
+ *
+ * 替代旧的 `core.diagnostics.DiagnosticsEvents`，底层通过
+ * [DiagnosticsInterop.recordEvent] 转发到 Rust `recordDiagnosticEvent`，
+ * 不再自己定义日志后端或调用 `DiagnosticsLogger.i`。
  *
  * 每个事件只记录事件类型、长度、字节范围、标识、状态码与耗时；
- * 严禁记录正文、preedit 内容、token 和密钥（[EditorEventRingBuffer] 与
- * [DiagnosticsLogger] 双重脱敏兜底）。
+ * 严禁记录正文、preedit 内容、token 和密钥（RingBuffer 与 Rust redact 双重脱敏兜底）。
  *
  * RingBuffer 由生产代码持续写入，导出时同时包含内存事件快照与滚动日志文件。
+ *
+ * ## 事件来源（origin）— Issue #670 评论 5651060802 第 7 节
+ *
+ * `origin` 由真正知道触发源的调用点传入，后端不猜：
+ * - **User**：用户主动操作（点击、选择、输入、手动触发同步）
+ * - **System**：系统回调/环境变化（生命周期、网络变化、系统主题变化、崩溃）
+ * - **App**：应用自身生命周期/内部状态（设置保存、主题解析、自动同步）
  */
-object DiagnosticsEvents {
+object DiagnosticsEventsInterop {
     private const val TAG = "SujianDiag"
 
     fun record(
+        origin: DiagnosticOriginDto,
         eventType: String,
         vararg fields: Pair<String, Any?>,
     ) {
@@ -26,16 +38,27 @@ object DiagnosticsEvents {
                 put("ts", System.currentTimeMillis())
             }
         EditorEventRingBuffer.record(event)
-        DiagnosticsLogger.i(TAG, "$eventType ${fields.joinToString(" ") { "${it.first}=${it.second}" }}")
+        // 转发到 Rust 统一诊断后端（脱敏 + JSONL 持久化）。
+        val dtos =
+            fields.mapNotNull { (k, v) ->
+                if (v == null) null else uniffi.writer_core.DiagnosticFieldDto(k, v.toString())
+            }
+        DiagnosticsInterop.recordEvent(
+            origin,
+            eventType,
+            TAG,
+            null,
+            dtos,
+        )
     }
 
-    // ── 应用生命周期 ──────────────────────────────────────────────
+    // ── 应用生命周期（System：系统回调）──────────────────────────
 
-    fun appLifecycle(state: String) = record("app.lifecycle", "state" to state)
+    fun appLifecycle(state: String) = record(DiagnosticOriginDto.SYSTEM, "app.lifecycle", "state" to state)
 
-    fun activityLifecycle(state: String) = record("app.activity", "state" to state)
+    fun activityLifecycle(state: String) = record(DiagnosticOriginDto.SYSTEM, "app.activity", "state" to state)
 
-    // ── 构建身份 / 进程启动（#623 评论 3）─────────────────────────
+    // ── 构建身份 / 进程启动（App：应用自身）──────────────────────
 
     fun appBuild(
         versionName: String,
@@ -45,6 +68,7 @@ object DiagnosticsEvents {
         buildType: String,
         applicationId: String,
     ) = record(
+        DiagnosticOriginDto.APP,
         "app.build",
         "versionName" to versionName,
         "versionCode" to versionCode,
@@ -61,6 +85,7 @@ object DiagnosticsEvents {
         buildType: String,
         processStartMs: Long,
     ) = record(
+        DiagnosticOriginDto.APP,
         "app.process_start",
         "versionCode" to versionCode,
         "gitCommitSha" to gitCommitSha,
@@ -69,31 +94,27 @@ object DiagnosticsEvents {
         "processStartMs" to processStartMs,
     )
 
-    // ── 一级导航 ─────────────────────────────────────────────────
+    // ── 一级导航（User：用户点击导航）────────────────────────────
 
-    fun navigation(destination: String) = record("nav.destination", "destination" to destination)
+    fun navigation(destination: String) = record(DiagnosticOriginDto.USER, "nav.destination", "destination" to destination)
 
-    fun navBack(handled: Boolean) = record("nav.back", "handled" to handled)
+    fun navBack(handled: Boolean) = record(DiagnosticOriginDto.USER, "nav.back", "handled" to handled)
 
-    fun workspaceBack(target: String) = record("nav.workspace_back", "target" to target)
+    fun workspaceBack(target: String) = record(DiagnosticOriginDto.USER, "nav.workspace_back", "target" to target)
 
-    /**
-     * 工作区内部可预见返回手势：start / progress / cancel / complete。
-     * 只记录阶段与目标窗格，不记录手势进度数值（避免拖动期间刷屏淹没 RingBuffer）。
-     */
     fun predictiveBack(
         target: String,
         phase: String,
-    ) = record("nav.predictive_back", "target" to target, "phase" to phase)
+    ) = record(DiagnosticOriginDto.USER, "nav.predictive_back", "target" to target, "phase" to phase)
 
-    // ── 作品/卷/章节 ─────────────────────────────────────────────
+    // ── 作品/卷/章节（User：用户选择工作区）──────────────────────
 
     fun workspaceSelection(
         kind: String,
         id: String,
-    ) = record("workspace.select", "kind" to kind, "id" to id)
+    ) = record(DiagnosticOriginDto.USER, "workspace.select", "kind" to kind, "id" to id)
 
-    fun workspaceClear(kind: String) = record("workspace.clear", "kind" to kind)
+    fun workspaceClear(kind: String) = record(DiagnosticOriginDto.USER, "workspace.clear", "kind" to kind)
 
     fun chapterLoad(
         projectId: String,
@@ -101,6 +122,7 @@ object DiagnosticsEvents {
         byteLength: Int,
         result: String,
     ) = record(
+        DiagnosticOriginDto.APP,
         "chapter.load",
         "projectId" to projectId,
         "chapterId" to chapterId,
@@ -115,6 +137,7 @@ object DiagnosticsEvents {
         result: String,
         elapsedMs: Long,
     ) = record(
+        DiagnosticOriginDto.APP,
         "chapter.save",
         "projectId" to projectId,
         "chapterId" to chapterId,
@@ -123,32 +146,33 @@ object DiagnosticsEvents {
         "elapsedMs" to elapsedMs,
     )
 
-    // ── 焦点 / InputConnection ───────────────────────────────────
+    // ── 焦点 / InputConnection（User：用户输入）──────────────────
 
-    fun editorFocus(focused: Boolean) = record("editor.focus", "focused" to focused)
+    fun editorFocus(focused: Boolean) = record(DiagnosticOriginDto.USER, "editor.focus", "focused" to focused)
 
     fun inputConnection(
         created: Boolean,
         sessionBound: Boolean,
-    ) = record("editor.input_connection", "created" to created, "sessionBound" to sessionBound)
+    ) = record(DiagnosticOriginDto.USER, "editor.input_connection", "created" to created, "sessionBound" to sessionBound)
 
-    // ── IME composition 生命周期 ─────────────────────────────────
+    // ── IME composition 生命周期（User：用户输入）────────────────
 
     fun compositionBegin(
         byteStart: Int,
         byteEndExclusive: Int,
-    ) = record("editor.composition.begin", "start" to byteStart, "end" to byteEndExclusive)
+    ) = record(DiagnosticOriginDto.USER, "editor.composition.begin", "start" to byteStart, "end" to byteEndExclusive)
 
     fun compositionUpdate(
         preeditBytes: Int,
         cursorOffset: Int,
-    ) = record("editor.composition.update", "preeditBytes" to preeditBytes, "cursorOffset" to cursorOffset)
+    ) = record(DiagnosticOriginDto.USER, "editor.composition.update", "preeditBytes" to preeditBytes, "cursorOffset" to cursorOffset)
 
     fun compositionCommit(
         byteStart: Int,
         byteEndExclusive: Int,
         committedBytes: Int,
     ) = record(
+        DiagnosticOriginDto.USER,
         "editor.composition.commit",
         "start" to byteStart,
         "end" to byteEndExclusive,
@@ -160,13 +184,14 @@ object DiagnosticsEvents {
         byteEndExclusive: Int,
         preeditBytes: Int,
     ) = record(
+        DiagnosticOriginDto.USER,
         "editor.composition.cancel",
         "start" to byteStart,
         "end" to byteEndExclusive,
         "preeditBytes" to preeditBytes,
     )
 
-    // ── 编辑事务（范围 / revision / session / 结果）──────────────
+    // ── 编辑事务（User：用户输入）────────────────────────────────
 
     fun editTransaction(
         operationKind: String,
@@ -178,6 +203,7 @@ object DiagnosticsEvents {
         sessionId: String,
         result: String,
     ) = record(
+        DiagnosticOriginDto.USER,
         "editor.transaction",
         "kind" to operationKind,
         "oldStart" to oldStart,
@@ -192,37 +218,32 @@ object DiagnosticsEvents {
     fun sessionLifecycle(
         sessionId: String,
         action: String,
-    ) = record("editor.session", "session" to sessionId, "action" to action)
+    ) = record(DiagnosticOriginDto.APP, "editor.session", "session" to sessionId, "action" to action)
 
-    // ── 动画事务 ─────────────────────────────────────────────────
+    // ── 动画事务（App：应用内部）────────────────────────────────
 
     fun animationStart(
         transactionId: Long,
         kind: String,
         durationMs: Long,
-    ) = record("editor.animation.start", "transaction" to transactionId, "kind" to kind, "durationMs" to durationMs)
+    ) = record(DiagnosticOriginDto.APP, "editor.animation.start", "transaction" to transactionId, "kind" to kind, "durationMs" to durationMs)
 
     fun animationRebase(
         transactionId: Long,
         newTransactionId: Long,
-    ) = record("editor.animation.rebase", "transaction" to transactionId, "newTransaction" to newTransactionId)
+    ) = record(DiagnosticOriginDto.APP, "editor.animation.rebase", "transaction" to transactionId, "newTransaction" to newTransactionId)
 
-    fun animationCancel(transactionId: Long) = record("editor.animation.cancel", "transaction" to transactionId)
+    fun animationCancel(transactionId: Long) = record(DiagnosticOriginDto.APP, "editor.animation.cancel", "transaction" to transactionId)
 
     fun animationComplete(
         transactionId: Long,
         elapsedMs: Long,
-    ) = record("editor.animation.complete", "transaction" to transactionId, "elapsedMs" to elapsedMs)
+    ) = record(DiagnosticOriginDto.APP, "editor.animation.complete", "transaction" to transactionId, "elapsedMs" to elapsedMs)
 
-    fun animationPolicy(policy: String) = record("editor.animation.policy", "policy" to policy)
+    fun animationPolicy(policy: String) = record(DiagnosticOriginDto.APP, "editor.animation.policy", "policy" to policy)
 
-    // ── 编辑器运动/排版策略（#637 评论 5386066978 项5）──────────
+    // ── 编辑器运动/排版策略（App：应用内部）──────────────────────
 
-    /**
-     * 编辑器运动策略 — 记录 text/cursor/协同/降级与各自时长，不记录正文或 glyph。
-     * 只在 effective policy 变化时记录一次，不要每帧刷。
-     * 注意：字段名 textEnabled/cursorEnabled 避免与 SENSITIVE_KEYS 中 "text" 冲突。
-     */
     fun editorMotionPolicy(
         textEnabled: Boolean,
         textMs: Long,
@@ -231,6 +252,7 @@ object DiagnosticsEvents {
         coordinated: Boolean,
         reduceMotion: Boolean,
     ) = record(
+        DiagnosticOriginDto.APP,
         "editor.motion_policy",
         "textEnabled" to textEnabled,
         "textMs" to textMs,
@@ -240,16 +262,13 @@ object DiagnosticsEvents {
         "reduceMotion" to reduceMotion,
     )
 
-    /**
-     * 编辑器排版设置 — 记录字号/行距/首行缩进开关与字符宽度，不记录正文内容。
-     * 只在值变化时记录一次。
-     */
     fun editorTypography(
         fontSizeSp: Float,
         lineSpacing: Float,
         firstLineIndent: Boolean,
         indentChars: Float,
     ) = record(
+        DiagnosticOriginDto.APP,
         "editor.typography",
         "fontSizeSp" to fontSizeSp,
         "lineSpacing" to lineSpacing,
@@ -257,15 +276,8 @@ object DiagnosticsEvents {
         "indentChars" to indentChars,
     )
 
-    // ── 视口/重基接线（#638 结构化持久诊断）─────────────────────
+    // ── 视口/重基接线（App：应用内部）────────────────────────────
 
-    /**
-     * 视口重定向 — 记录 transaction/起止 Y/最大 Y/原因，不记录正文或 glyph。
-     * 供 viewport/rebase 接线调用方使用。
-     *
-     * [transactionId] 为 nullable：无活跃视觉事务（静态光标触发的视口调整）时
-     * 传 null，事件中不写入 transaction 字段；有活跃事务时传事务 ID 用于按事务去重。
-     */
     fun viewportRetarget(
         transactionId: Long?,
         fromY: Float,
@@ -273,6 +285,7 @@ object DiagnosticsEvents {
         maxY: Float,
         reason: String,
     ) = record(
+        DiagnosticOriginDto.APP,
         "editor.viewport_retarget",
         "transaction" to transactionId,
         "fromY" to fromY,
@@ -281,13 +294,6 @@ object DiagnosticsEvents {
         "reason" to reason,
     )
 
-    /**
-     * 动画重基状态 — 记录新旧 transaction/删除 slice 数/光标剩余与 slice 范围。
-     * 不记录正文、glyph 或 preedit 内容。
-     *
-     * cursorRemaining/minSliceRemaining/maxSliceRemaining 记录 remainingFraction
-     * 的 Float（0.0–1.0），不是 Int 或百分比猜测。
-     */
     fun animationRebaseState(
         oldTransactionId: Long,
         newTransactionId: Long,
@@ -296,6 +302,7 @@ object DiagnosticsEvents {
         minSliceRemaining: Float,
         maxSliceRemaining: Float,
     ) = record(
+        DiagnosticOriginDto.APP,
         "editor.animation_rebase_state",
         "oldTransaction" to oldTransactionId,
         "newTransaction" to newTransactionId,
@@ -305,19 +312,6 @@ object DiagnosticsEvents {
         "maxSliceRemaining" to maxSliceRemaining,
     )
 
-    /**
-     * #639 评论 5419182722：reflow 规划诊断 — 一次事务一条，记录真实 visual line
-     * 变化与 slice 角色分布，不再只记 rebase age。从 AndroidVisualPlanner.prepare()
-     * 规划完成后写入。不记录正文。
-     *
-     * - [oldAffectedLines]/[newAffectedLines]：受影响视觉行数（old/new 侧）。
-     * - [sameLineMoves]：同视觉行位置插值 slice 数（SliceRole.Move），只有
-     *   sameShape && 同行 && 位置变化才计入。
-     * - [crossLineCrossfadePairs]：真正跨视觉行的 Crossfade pair 数（一对
-     *   CrossfadeOld + CrossfadeNew 计为 1），只有 oldLineIndex != newLineIndex
-     *   才计入。同行 shaping 变化、fallback Crossfade、rebase continuation 不计入。
-     * - [suffixBlockShift]：是否生成了稳定后缀 block shift。
-     */
     fun editorReflowPlan(
         transactionId: Long,
         oldAffectedLines: Int,
@@ -326,6 +320,7 @@ object DiagnosticsEvents {
         crossLineCrossfadePairs: Int,
         suffixBlockShift: Boolean,
     ) = record(
+        DiagnosticOriginDto.APP,
         "editor.reflow_plan",
         "transaction" to transactionId,
         "oldAffectedLines" to oldAffectedLines,
@@ -335,28 +330,33 @@ object DiagnosticsEvents {
         "suffixBlockShift" to suffixBlockShift,
     )
 
-    // ── 设置 ─────────────────────────────────────────────────────
+    // ── 设置（App：设置保存；User：用户展开/折叠分区）────────────
 
     fun settingsSaved(
         field: String,
         result: String,
-    ) = record("settings.save", "field" to field, "result" to result)
+    ) = record(DiagnosticOriginDto.APP, "settings.save", "field" to field, "result" to result)
 
-    /**
-     * 设置页分组展开/收起（Issue #612 五）。只记录分类标识与展开状态，
-     * 不记录分类下的具体设置值。
-     */
     fun settingsSection(
         section: String,
         expanded: Boolean,
-    ) = record("settings.section", "section" to section, "expanded" to expanded)
+    ) = record(DiagnosticOriginDto.USER, "settings.section", "section" to section, "expanded" to expanded)
 
-    // ── 主题解析（Issue #612 五）─────────────────────────────────
+    // ── 主题链（Issue #670 评论 5651060802 第 7 节）──────────────
+    //
+    // 用户选择外观模式 → origin=User, event=theme.appearance_select
+    // 设置保存           → origin=App,  event=settings.save（见 settingsSaved）
+    // 主题解析           → origin=App,  event=theme.resolve
+    // 系统主题变化       → origin=System, event=theme.system_color_scheme
 
-    /**
-     * 主题解析结果。只记录模式、来源、是否暗色、选中的内置主题/调色板标识与 SDK，
-     * 不记录颜色具体数值。
-     */
+    /** 用户选择外观模式（点击 dark/light/system）。origin=User。 */
+    fun themeAppearanceSelect(requested: String) =
+        record(DiagnosticOriginDto.USER, "theme.appearance_select", "requested" to requested)
+
+    /** 系统主题变化回调。origin=System。 */
+    fun themeSystemColorScheme(isDark: Boolean) =
+        record(DiagnosticOriginDto.SYSTEM, "theme.system_color_scheme", "isDark" to isDark)
+
     fun themeResolve(
         appearanceMode: String,
         colorSource: String,
@@ -365,6 +365,7 @@ object DiagnosticsEvents {
         selectedPalette: String?,
         sdk: Int,
     ) = record(
+        DiagnosticOriginDto.APP,
         "theme.resolve",
         "appearanceMode" to appearanceMode,
         "colorSource" to colorSource,
@@ -374,40 +375,35 @@ object DiagnosticsEvents {
         "sdk" to sdk,
     )
 
-    // ── 字段焦点 / 提交（Issue #612 五）──────────────────────────
+    // ── 字段焦点 / 提交（User：用户输入）─────────────────────────
 
-    /**
-     * 字段获得/失去焦点。只记录字段类型与焦点状态，不记录字段值。
-     */
     fun fieldFocus(
         fieldType: String,
         focused: Boolean,
-    ) = record("field.focus", "fieldType" to fieldType, "focused" to focused)
+    ) = record(DiagnosticOriginDto.USER, "field.focus", "fieldType" to fieldType, "focused" to focused)
 
-    /**
-     * 字段提交结果。只记录字段类型、字符数与结果状态，不记录字段实际内容。
-     */
     fun fieldCommit(
         fieldType: String,
         charCount: Int,
         result: String,
-    ) = record("field.commit", "fieldType" to fieldType, "charCount" to charCount, "result" to result)
+    ) = record(DiagnosticOriginDto.USER, "field.commit", "fieldType" to fieldType, "charCount" to charCount, "result" to result)
 
-    // ── 一级导航切换（Issue #612 五）─────────────────────────────
+    // ── 一级导航切换（User：用户点击一级导航）────────────────────
 
-    /**
-     * 一级导航切换。记录 from/to 标识，不记录导航参数或作品标题。
-     */
     fun navTopLevelSwitch(
         from: String,
         to: String,
-    ) = record("nav.top_level_switch", "from" to from, "to" to to)
+    ) = record(DiagnosticOriginDto.USER, "nav.top_level_switch", "from" to from, "to" to to)
 
     // ── 同步 ─────────────────────────────────────────────────────
-
+    //
+    // origin 由调用点传入：
+    // - 用户触发同步（Manual / SettingsPage / Import）→ User
+    // - 定时自动同步（Auto / ForegroundService / scheduler）→ App
     fun syncEvent(
+        origin: DiagnosticOriginDto,
         action: String,
         status: String,
         detail: String? = null,
-    ) = record("sync.event", "action" to action, "status" to status, "detail" to detail)
+    ) = record(origin, "sync.event", "action" to action, "status" to status, "detail" to detail)
 }

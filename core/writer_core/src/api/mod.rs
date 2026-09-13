@@ -6,6 +6,7 @@
 
 pub mod bootstrap;
 pub mod chapter_api;
+pub mod diagnostics_api;
 pub mod envelope;
 pub mod error;
 pub mod secure_storage_bridge;
@@ -15,6 +16,7 @@ pub mod sync_api;
 pub mod types;
 
 pub use bootstrap::*;
+pub use diagnostics_api::*;
 pub use envelope::{ChangedEntityDto, ResultEnvelope};
 pub use error::WriterError;
 pub use secure_storage_bridge::*;

@@ -6,7 +6,7 @@ import android.net.Uri
 import android.os.Build
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import java.io.File
@@ -58,7 +58,7 @@ class MirrorStagingCleanup(
     fun cleanupIfNeeded() {
         if (cleanupFlagFile.exists()) return
 
-        DiagnosticsLogger.i(TAG, "Starting legacy staging cleanup (Issue #667)")
+        DiagnosticsInterop.i(TAG, "Starting legacy staging cleanup (Issue #667)")
 
         val mediaStoreOk = cleanupViaMediaStore()
         val emptyDirsOk = cleanupEmptyLegacyDirs()
@@ -70,12 +70,12 @@ class MirrorStagingCleanup(
             try {
                 cleanupFlagFile.parentFile?.mkdirs()
                 cleanupFlagFile.writeText("done", Charsets.UTF_8)
-                DiagnosticsLogger.i(TAG, "Legacy staging cleanup completed successfully")
+                DiagnosticsInterop.i(TAG, "Legacy staging cleanup completed successfully")
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Failed to write cleanup flag file", e)
+                DiagnosticsInterop.w(TAG, "Failed to write cleanup flag file", e)
             }
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, emptyDirsOk=$emptyDirsOk, safOk=$safOk), will retry next time",
             )
@@ -142,13 +142,13 @@ class MirrorStagingCleanup(
                     null,
                 )
             } catch (e: SecurityException) {
-                DiagnosticsLogger.w(TAG, "MediaStore query failed (SecurityException) for prefix $pathPrefix", e)
+                DiagnosticsInterop.w(TAG, "MediaStore query failed (SecurityException) for prefix $pathPrefix", e)
                 return false
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "MediaStore query failed for prefix $pathPrefix", e)
+                DiagnosticsInterop.w(TAG, "MediaStore query failed for prefix $pathPrefix", e)
                 return false
             } ?: run {
-                DiagnosticsLogger.w(TAG, "MediaStore query returned null for prefix $pathPrefix")
+                DiagnosticsInterop.w(TAG, "MediaStore query returned null for prefix $pathPrefix")
                 return false
             }
 
@@ -165,7 +165,7 @@ class MirrorStagingCleanup(
                 }
             }
             if (urisToDelete.isNotEmpty() && allDeleted) {
-                DiagnosticsLogger.i(TAG, "Deleted ${urisToDelete.size} legacy files under $pathPrefix")
+                DiagnosticsInterop.i(TAG, "Deleted ${urisToDelete.size} legacy files under $pathPrefix")
             }
         }
         // 查询成功且所有 delete 都成功（返回非 0 且未抛异常）才视为本前缀清理成功；
@@ -199,16 +199,16 @@ class MirrorStagingCleanup(
         try {
             val rows = contentResolver.delete(uri, null, null)
             if (rows == 0) {
-                DiagnosticsLogger.w(TAG, "MediaStore delete returned 0 rows: $uri")
+                DiagnosticsInterop.w(TAG, "MediaStore delete returned 0 rows: $uri")
                 false
             } else {
                 true
             }
         } catch (e: SecurityException) {
-            DiagnosticsLogger.w(TAG, "MediaStore delete failed (SecurityException): $uri", e)
+            DiagnosticsInterop.w(TAG, "MediaStore delete failed (SecurityException): $uri", e)
             false
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "MediaStore delete failed: $uri", e)
+            DiagnosticsInterop.w(TAG, "MediaStore delete failed: $uri", e)
             false
         }
 
@@ -236,10 +236,10 @@ class MirrorStagingCleanup(
             try {
                 documentTreeReader.listChildren(treeUri)
             } catch (e: SecurityException) {
-                DiagnosticsLogger.w(TAG, "SAF listChildren failed (SecurityException)", e)
+                DiagnosticsInterop.w(TAG, "SAF listChildren failed (SecurityException)", e)
                 return false
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "SAF listChildren failed", e)
+                DiagnosticsInterop.w(TAG, "SAF listChildren failed", e)
                 return false
             }
 
@@ -268,17 +268,17 @@ class MirrorStagingCleanup(
         try {
             val deleted = DocumentsContract.deleteDocument(contentResolver, uri)
             if (deleted) {
-                DiagnosticsLogger.i(TAG, "Deleted SAF legacy directory: $dirName")
+                DiagnosticsInterop.i(TAG, "Deleted SAF legacy directory: $dirName")
                 true
             } else {
-                DiagnosticsLogger.w(TAG, "SAF delete returned false for $dirName")
+                DiagnosticsInterop.w(TAG, "SAF delete returned false for $dirName")
                 false
             }
         } catch (e: SecurityException) {
-            DiagnosticsLogger.w(TAG, "SAF delete failed (SecurityException) for $dirName", e)
+            DiagnosticsInterop.w(TAG, "SAF delete failed (SecurityException) for $dirName", e)
             false
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "SAF delete failed for $dirName", e)
+            DiagnosticsInterop.w(TAG, "SAF delete failed for $dirName", e)
             false
         }
 

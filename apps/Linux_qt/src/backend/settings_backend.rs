@@ -130,6 +130,135 @@ pub struct SettingsBackend {
     app: AppRef,
 }
 
+/// 确定诊断包导出目录
+///
+/// 优先使用 workspace/app-meta/diagnostics，不可写则回退到平台标准目录。
+/// 日志目录由 PlatformInit.log_dir 决定，但导出目录可以放到 workspace 下
+/// 方便用户查找。
+fn determine_export_dir(app_data_root: &std::path::Path) -> std::path::PathBuf {
+    // 1. 尝试 workspace 路径
+    if !app_data_root.as_os_str().is_empty() {
+        let ws_export = app_data_root.join("app-meta/diagnostics");
+        // 尝试创建目录，成功则可用
+        if std::fs::create_dir_all(&ws_export).is_ok() {
+            // 验证可写：尝试创建并删除一个临时文件
+            let test_file = ws_export.join(".write_test");
+            if let Ok(mut f) = std::fs::File::create(&test_file) {
+                use std::io::Write;
+                let _ = f.write_all(b"test");
+                drop(f);
+                let _ = std::fs::remove_file(&test_file);
+                return ws_export;
+            }
+        }
+    }
+
+    // 2. 回退到平台标准目录
+    if cfg!(target_os = "linux") {
+        if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+            return std::path::PathBuf::from(xdg_data).join("sujian/diagnostics");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return std::path::PathBuf::from(home).join(".local/share/sujian/diagnostics");
+        }
+    }
+
+    // 3. 最终回退
+    std::path::PathBuf::from("/tmp/sujian/diagnostics")
+}
+
+/// 构造导出附件列表 — 平台采集器提供原始数据，脱敏和打包由 writer_diagnostics::export 接管。
+///
+/// 附件包含：
+/// - `runtime_info.json`：Qt 运行时信息
+/// - `system_info.json`：系统信息（QSysInfo）
+/// - `device_info.json`：设备摘要
+/// - `app_settings_sanitized.json`：设置快照（存在时）
+fn build_export_attachments(app_data_root: &std::path::Path) -> Vec<writer_diagnostics::PlatformAttachment> {
+    let mut attachments = Vec::new();
+
+    // runtime_info.json
+    if let Some(rt) = crate::backend::diagnostics::get_runtime_info() {
+        let json = serde_json::json!({
+            "qtRuntimeVersion": rt.qt_runtime_version,
+            "qtBuildVersion": rt.qt_build_version,
+            "qpaPlatform": rt.qpa_platform,
+            "inputMethodModule": rt.input_method_module,
+            "bundledQt": rt.bundled_qt,
+            "packageType": rt.package_type,
+            "rustcVersion": rt.rustc_version,
+        });
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "runtime_info.json".to_string(),
+            content: serde_json::to_string_pretty(&json)
+                .unwrap_or_else(|_| "{}".to_string())
+                .into_bytes(),
+        });
+    }
+
+    // system_info.json
+    if let Some(sys) = crate::backend::diagnostics::get_system_info() {
+        let json = serde_json::json!({
+            "productType": sys.product_type,
+            "productVersion": sys.product_version,
+            "prettyProductName": sys.pretty_product_name,
+            "kernelType": sys.kernel_type,
+            "kernelVersion": sys.kernel_version,
+            "currentCpuArchitecture": sys.current_cpu_arch,
+            "buildAbi": sys.build_abi,
+            "xdgCurrentDesktop": sys.xdg_current_desktop,
+            "xdgSessionType": sys.xdg_session_type,
+        });
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "system_info.json".to_string(),
+            content: serde_json::to_string_pretty(&json)
+                .unwrap_or_else(|_| "{}".to_string())
+                .into_bytes(),
+        });
+    }
+
+    // device_info.json
+    let device_json = device_info_json();
+    attachments.push(writer_diagnostics::PlatformAttachment {
+        relative_path: "device_info.json".to_string(),
+        content: device_json.into_bytes(),
+    });
+
+    // app_settings_sanitized.json（设置快照，存在时才加入）
+    let settings_path = app_data_root.join("app-meta/settings/settings.local.json");
+    if let Ok(content) = std::fs::read_to_string(&settings_path) {
+        attachments.push(writer_diagnostics::PlatformAttachment {
+            relative_path: "app_settings_sanitized.json".to_string(),
+            content: content.into_bytes(),
+        });
+    }
+
+    attachments
+}
+
+/// 构造设备信息 JSON（平台采集器，不脱敏；脱敏由 Rust 后端在导出时接管）。
+fn device_info_json() -> String {
+    let os_type = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    let os_name = "linux";
+
+    let qt_version = crate::backend::diagnostics::get_qt_version()
+        .unwrap_or("unknown")
+        .to_string();
+    let app_version = env!("CARGO_PKG_VERSION");
+
+    let info = serde_json::json!({
+        "platform": os_name,
+        "osType": os_type,
+        "arch": arch,
+        "appVersion": app_version,
+        "qtVersion": qt_version,
+        "rustcVersion": "unknown",
+    });
+
+    serde_json::to_string_pretty(&info).unwrap_or_else(|_| "{}".to_string())
+}
+
 impl SettingsBackend {
     pub fn new(app: AppRef) -> Self {
         Self {
@@ -431,7 +560,9 @@ impl SettingsBackend {
             .with_app_mut(|app| app.set_setting_diagnostics_enabled(val))
             .is_ok()
         {
-            crate::backend::diagnostics::set_diagnostics_enabled(val);
+            // 配置事实来源是 Core LocalSettings；此处只同步到共享 Rust 诊断后端。
+            let verbose = self.setting_diagnostics_verbose();
+            writer_diagnostics::set_config(val, verbose);
             self.settings_changed();
         }
     }
@@ -443,7 +574,9 @@ impl SettingsBackend {
             .with_app_mut(|app| app.set_setting_diagnostics_verbose(val))
             .is_ok()
         {
-            crate::backend::diagnostics::set_verbose_enabled(val);
+            // 配置事实来源是 Core LocalSettings；此处只同步到共享 Rust 诊断后端。
+            let enabled = self.setting_diagnostics_enabled();
+            writer_diagnostics::set_config(enabled, val);
             self.settings_changed();
         }
     }
@@ -455,10 +588,10 @@ impl SettingsBackend {
                 "load_local_settings skipped due to borrow conflict",
             );
         }
+        // 配置事实来源是 Core LocalSettings；同步到共享 Rust 诊断后端。
         let enabled = self.setting_diagnostics_enabled();
         let verbose = self.setting_diagnostics_verbose();
-        crate::backend::diagnostics::set_diagnostics_enabled(enabled);
-        crate::backend::diagnostics::set_verbose_enabled(verbose);
+        writer_diagnostics::set_config(enabled, verbose);
         self.settings_changed();
         self.theme_data_changed();
     }
@@ -504,34 +637,42 @@ impl SettingsBackend {
     fn export_diagnostics_pack(&self) -> QString {
         self.with_app(|app| {
             let app_data_root = std::path::PathBuf::from(&app.current_data_root);
-            let log_dir = crate::backend::diagnostics::get_log_dir(&app_data_root);
 
-            // 从全局缓存获取 RuntimeInfo 和 SystemInfo
-            let (runtime_info, system_info) =
-                match (crate::backend::diagnostics::get_runtime_info(), crate::backend::diagnostics::get_system_info()) {
-                    (Some(rt), Some(sys)) => (rt, sys),
-                    _ => {
-                        eprintln!("[SettingsBackend] export_diagnostics_pack: runtime/system info not yet initialized");
-                        let envelope = serde_json::json!({
-                            "success": false,
-                            "error": "runtime/system info not yet initialized"
-                        });
-                        return envelope.to_string().into();
+            // 确定导出目录：优先 workspace/app-meta/diagnostics，不可写则回退到平台标准目录。
+            let export_dir = determine_export_dir(&app_data_root);
+            if let Err(e) = std::fs::create_dir_all(&export_dir) {
+                eprintln!("[SettingsBackend] export_diagnostics_pack: create export dir failed: {}", e);
+                let envelope = serde_json::json!({
+                    "success": false,
+                    "error": format!("create export dir failed: {e}")
+                });
+                return envelope.to_string().into();
+            }
+
+            // 清理上一次导出的 zip 包（保留目录）。
+            if let Ok(entries) = std::fs::read_dir(&export_dir) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|ext| ext == "zip") {
+                        let _ = std::fs::remove_file(&path);
                     }
-                };
+                }
+            }
 
-            match crate::backend::diagnostics::export_diagnostics_pack(
-                &app_data_root,
-                &log_dir,
-                runtime_info,
-                system_info,
+            // 构造平台附件：runtime_info.json、system_info.json、device_info.json、
+            // app_settings_sanitized.json。附件内容由平台采集器提供，脱敏和打包由
+            // writer_diagnostics::export 接管。
+            let attachments = build_export_attachments(&app_data_root);
+
+            // 调用共享 Rust exporter 生成 zip 包。
+            match writer_diagnostics::export(
+                &export_dir,
+                "linux_qt",
+                crate::backend::diagnostics::effective_build_key(),
+                &attachments,
             ) {
                 Ok(path) => {
                     let path_str = path.to_string_lossy().to_string();
-                    let export_dir = path
-                        .parent()
-                        .map(|p| p.to_path_buf())
-                        .unwrap_or_else(|| std::path::PathBuf::from(""));
                     let export_dir_str = export_dir.to_string_lossy().to_string();
                     // Construct file:// URL for QML consumption.
                     // Normalize path separators for QML file:// URL consumption.
@@ -574,39 +715,33 @@ impl SettingsBackend {
     }
 
     fn clear_logs(&self) -> QString {
-        self.with_app(|app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
-                &app.current_data_root,
-            ));
-            match crate::backend::diagnostics::clear_logs(&log_dir) {
-                Ok(()) => "ok".into(),
-                Err(e) => {
-                    eprintln!("[SettingsBackend] clear_logs failed: {}", e);
-                    e.into()
-                }
-            }
-        })
-        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        // 调用共享 Rust 诊断后端清空日志文件。
+        if writer_diagnostics::clear() {
+            "ok".into()
+        } else {
+            eprintln!("[SettingsBackend] clear_logs failed: writer_diagnostics::clear returned false");
+            QString::from("clear failed: writer timeout or error")
+        }
     }
 
     fn copy_device_info(&self) -> QString {
-        crate::backend::diagnostics::device_info_json().into()
+        // 构造设备信息 JSON（平台采集器，不脱敏；脱敏由 Rust 后端在导出时接管）。
+        device_info_json().into()
     }
 
     fn open_log_directory(&self) -> QString {
-        self.with_app(|app| {
-            let log_dir = crate::backend::diagnostics::get_log_dir(&std::path::PathBuf::from(
-                &app.current_data_root,
-            ));
-            match crate::backend::diagnostics::open_log_directory(&log_dir) {
-                Ok(()) => "ok".into(),
-                Err(e) => {
-                    eprintln!("[SettingsBackend] open_log_directory failed: {}", e);
-                    e.into()
-                }
+        // 日志目录由 PlatformInit.log_dir 决定。
+        let log_dir = writer_platform_linux::resolve_platform_init().log_dir;
+        if let Err(e) = std::fs::create_dir_all(&log_dir) {
+            eprintln!("[SettingsBackend] open_log_directory: create log dir failed: {}", e);
+        }
+        match crate::platform_utils::open_directory(&log_dir.to_string_lossy()) {
+            Ok(()) => "ok".into(),
+            Err(e) => {
+                eprintln!("[SettingsBackend] open_log_directory failed: {}", e);
+                e.into()
             }
-        })
-        .unwrap_or_else(|_| QString::from(crate::backend::json_utils::borrow_conflict_error_json()))
+        }
     }
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {

@@ -28,7 +28,7 @@ mod services;
 mod transport;
 
 pub use dirs::{xdg_cache_dir, xdg_config_dir};
-pub use init::{init_default_config_store, resolve_platform_init};
+pub use init::{init_default_config_store, init_diagnostics, resolve_platform_init};
 pub use network::{get_cached_network_state, refresh_network_state};
 pub use services::create_platform_services;
 #[cfg(feature = "github-api")]

@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 从 MirrorRecoveryExecutor 提取，只负责 promote 阶段恢复逻辑。
@@ -67,7 +67,7 @@ internal class MirrorPromoteRecoveryExecutor(
         }
         val staged = item.stagedRef ?: journal.stagedRefs[key]
         if (staged == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover promote: missing stagedRef for ${key.chapterId}, " +
                     "transaction state incomplete, keeping journal and stopping",
@@ -104,7 +104,7 @@ internal class MirrorPromoteRecoveryExecutor(
                         )
                     }
                 }
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: promotedRef hash mismatch for ${key.chapterId}, keeping journal",
                 )
@@ -112,7 +112,7 @@ internal class MirrorPromoteRecoveryExecutor(
                 PromoteItemResult.RollbackDone
             }
             is MirrorLookupResult.Missing -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: promotedRef missing for ${key.chapterId}, keeping journal",
                 )
@@ -120,7 +120,7 @@ internal class MirrorPromoteRecoveryExecutor(
                 PromoteItemResult.RollbackDone
             }
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: lookup promotedRef failed for ${key.chapterId}: " +
                         "${promotedLookup.cause?.message}, keeping journal",
@@ -149,21 +149,21 @@ internal class MirrorPromoteRecoveryExecutor(
                     // Issue #667：读取旧内容并写入 workspace backup
                     val oldContentResult = ctx.storage.readTextAndHash(oldRef)
                     if (oldContentResult == null) {
-                        DiagnosticsLogger.w(TAG, "Recover backup: read old content failed for ${key.chapterId}")
+                        DiagnosticsInterop.w(TAG, "Recover backup: read old content failed for ${key.chapterId}")
                         rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
                         return false
                     }
                     val (oldContent, _) = oldContentResult
                     val prepared = workspace.prepareBackup(journal.txId, oldRef, oldContent)
                     if (prepared == null) {
-                        DiagnosticsLogger.w(TAG, "Recover backup prepare failed for ${key.chapterId}")
+                        DiagnosticsInterop.w(TAG, "Recover backup prepare failed for ${key.chapterId}")
                         rollbackRecoveryWithCleanup(journal, ctx.currentItems, ctx.promotedEntries, ctx.storage)
                         return false
                     }
                     prepared
                 }
                 is MirrorLookupResult.Failed -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "Recover backup: lookupBackup failed for ${key.chapterId}: ${backupResult.cause?.message}",
                     )
@@ -177,7 +177,7 @@ internal class MirrorPromoteRecoveryExecutor(
                 state = PendingItem.STATE_BACKUP_READY,
             )
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover backup: journal write failed (BACKUP_READY) for ${key.chapterId}, keeping journal",
             )
@@ -187,7 +187,7 @@ internal class MirrorPromoteRecoveryExecutor(
         // Issue #667：不再需要 vacateCommitted，直接推进到 STATE_OLD_VACATED
         ctx.currentItems[key] = ctx.currentItems[key]!!.copy(state = PendingItem.STATE_OLD_VACATED)
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover backup: journal write failed (OLD_VACATED) for ${key.chapterId}, keeping journal",
             )
@@ -219,7 +219,7 @@ internal class MirrorPromoteRecoveryExecutor(
             // Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件
             val content = workspace.readStaged(staged)
             if (content == null) {
-                DiagnosticsLogger.w(TAG, "Recover promote: read staged content failed for ${key.chapterId}")
+                DiagnosticsInterop.w(TAG, "Recover promote: read staged content failed for ${key.chapterId}")
                 rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
                 return PromoteItemResult.RollbackDone
             }
@@ -229,12 +229,12 @@ internal class MirrorPromoteRecoveryExecutor(
                 when (val oldLookup = ctx.storage.lookup(oldRef.relativePath)) {
                     is MirrorLookupResult.Found -> {
                         if (!ctx.storage.delete(oldLookup.ref)) {
-                            DiagnosticsLogger.w(TAG, "Recover promote: delete old file failed for ${key.chapterId}")
+                            DiagnosticsInterop.w(TAG, "Recover promote: delete old file failed for ${key.chapterId}")
                         }
                     }
                     is MirrorLookupResult.Missing -> Unit
                     is MirrorLookupResult.Failed -> {
-                        DiagnosticsLogger.w(
+                        DiagnosticsInterop.w(
                             TAG,
                             "Recover promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
                         )
@@ -247,7 +247,7 @@ internal class MirrorPromoteRecoveryExecutor(
             newRef = ctx.storage.createText(relativeDir, displayName, staged.mimeType, content)
         }
         if (newRef == null) {
-            DiagnosticsLogger.w(TAG, "Recover promote failed for ${key.chapterId}")
+            DiagnosticsInterop.w(TAG, "Recover promote failed for ${key.chapterId}")
             rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
             return PromoteItemResult.RollbackDone
         }
@@ -260,7 +260,7 @@ internal class MirrorPromoteRecoveryExecutor(
             )
         ctx.currentItems[key] = ctx.currentItems[key]!!.copy(promotedRef = newRef, state = PendingItem.STATE_PROMOTED)
         if (!writeRecoveryPromoteJournal(journal, ctx.currentItems)) {
-            DiagnosticsLogger.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
+            DiagnosticsInterop.w(TAG, "Recover promote: journal write failed for ${key.chapterId}")
             rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
             return PromoteItemResult.RollbackDone
         }
@@ -286,7 +286,7 @@ internal class MirrorPromoteRecoveryExecutor(
             is MirrorLookupResult.Found -> checkFinalFoundForPromoteStaged(ctx, key, journal, finalLookup)
             is MirrorLookupResult.Missing -> FinalCheckOutcome.Proceed
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: lookup final failed for ${key.chapterId}: " +
                         "${finalLookup.cause?.message}, $KEEPING_JOURNAL_NOT_PROMOTING",
@@ -311,20 +311,20 @@ internal class MirrorPromoteRecoveryExecutor(
                 if (hash == expectedHash) {
                     return FinalCheckOutcome.Reuse(finalLookup.ref)
                 }
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: final hash mismatch for ${key.chapterId}, " +
                         KEEPING_JOURNAL_NOT_PROMOTING,
                 )
             } else {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover promote: readTextAndHash failed for ${key.chapterId}, " +
                         KEEPING_JOURNAL_NOT_PROMOTING,
                 )
             }
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover promote: no expectedHash in journal.newEntries for ${key.chapterId}, " +
                     KEEPING_JOURNAL_NOT_PROMOTING,
@@ -357,7 +357,7 @@ internal class MirrorPromoteRecoveryExecutor(
             )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {
-            DiagnosticsLogger.w(TAG, "Failed to write manifest during recovery")
+            DiagnosticsInterop.w(TAG, "Failed to write manifest during recovery")
             rollbackRecoveryOnly(journal, currentItems, storage)
             return
         }
@@ -383,7 +383,7 @@ internal class MirrorPromoteRecoveryExecutor(
         if (journal.frozenManifestPlan != null && journal.frozenManifestPlanHash != null) {
             return resolveManifestJsonFromFrozenPlan(journal, storage, currentItems, promotedEntries)
         }
-        DiagnosticsLogger.w(TAG, "Recover promote: old journal without frozen plan, rolling back")
+        DiagnosticsInterop.w(TAG, "Recover promote: old journal without frozen plan, rolling back")
         rollbackRecoveryOnly(journal, currentItems, storage)
         return null
     }
@@ -397,18 +397,18 @@ internal class MirrorPromoteRecoveryExecutor(
         val frozenPlanJson = journal.frozenManifestPlan ?: return null
         val frozenPlanHash = journal.frozenManifestPlanHash ?: return null
         if (computeContentHash(frozenPlanJson) != frozenPlanHash) {
-            DiagnosticsLogger.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
+            DiagnosticsInterop.w(TAG, "Recover promote: frozenManifestPlan hash mismatch, rolling back")
             rollbackRecoveryOnly(journal, currentItems, storage)
             return null
         }
         val plan =
             frozenManifestPlanFromJson(frozenPlanJson) ?: run {
-                DiagnosticsLogger.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
+                DiagnosticsInterop.w(TAG, "Recover promote: failed to parse frozenManifestPlan, rolling back")
                 rollbackRecoveryOnly(journal, currentItems, storage)
                 return null
             }
         return frozenPlanToManifestJson(plan, promotedEntries) ?: run {
-            DiagnosticsLogger.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
+            DiagnosticsInterop.w(TAG, "Recover promote: frozenPlanToManifestJson failed, rolling back")
             rollbackRecoveryOnly(journal, currentItems, storage)
             return null
         }
@@ -434,7 +434,7 @@ internal class MirrorPromoteRecoveryExecutor(
                 items = committedItems,
             )
         if (!journalWriter.persistPendingJournal(cleanupJournal)) {
-            DiagnosticsLogger.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
+            DiagnosticsInterop.w(TAG, "Recover promote: cleanup journal write failed, keeping journal for retry")
             return
         }
         onCleanupReady(cleanupJournal, storage)

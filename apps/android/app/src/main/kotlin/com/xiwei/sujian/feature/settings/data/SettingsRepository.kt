@@ -1,9 +1,10 @@
 package com.xiwei.sujian.feature.settings.data
 import android.content.Context
 import androidx.core.content.edit
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
@@ -36,9 +37,15 @@ class SettingsRepository(
     private val appContext = context.applicationContext
     private val settingsBridge = appBridge.settingsBridge
     private val statsBridge = appBridge.statsBridge
-    private val diagPrefs =
+
+    /**
+     * Issue #670 评论 5651060802：不再向 `sujian_diagnostics` SharedPreferences 镜像
+     * diagnostics_enabled / diagnostics_verbose，这两个位只认 Core `LocalSettings`。
+     * 保留 prefs 仅用于非日志的本地实验开关（self_render_editor / fullscreen）。
+     */
+    private val localPrefs =
         appContext.getSharedPreferences(
-            if (preferencesSuffix.isNotEmpty()) "sujian_diagnostics_$preferencesSuffix" else "sujian_diagnostics",
+            if (preferencesSuffix.isNotEmpty()) "sujian_local_$preferencesSuffix" else "sujian_local",
             android.content.Context.MODE_PRIVATE,
         )
 
@@ -47,7 +54,7 @@ class SettingsRepository(
     // 不会先 show(systemBars()) 再 hide 造成系统栏闪现；只在保存成功后同步，
     // 其它本地设置字段的保存/读取不会触碰应用根。
     private val _immersiveFullscreenEnabled =
-        MutableStateFlow(diagPrefs.getBoolean("experimental_fullscreen_mode", false))
+        MutableStateFlow(localPrefs.getBoolean("experimental_fullscreen_mode", false))
     val immersiveFullscreenEnabled: StateFlow<Boolean> =
         _immersiveFullscreenEnabled.asStateFlow()
 
@@ -69,7 +76,7 @@ class SettingsRepository(
 
     private fun warn(msg: String) {
         lastWarning = msg
-        DiagnosticsLogger.w("SettingsRepository", msg)
+        DiagnosticsInterop.w("SettingsRepository", msg)
     }
 
     fun getLocalSettings(): LocalSettings {
@@ -84,10 +91,8 @@ class SettingsRepository(
             }
         val resolved =
             fromCore.copy(
-                diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true),
-                diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true),
-                useSelfRenderEditorOnAndroid = diagPrefs.getBoolean("use_self_render_editor_on_android", true),
-                experimentalFullscreenMode = diagPrefs.getBoolean("experimental_fullscreen_mode", false),
+                useSelfRenderEditorOnAndroid = localPrefs.getBoolean("use_self_render_editor_on_android", true),
+                experimentalFullscreenMode = localPrefs.getBoolean("experimental_fullscreen_mode", false),
             )
         // 注意：不发布到 immersiveFullscreenEnabled — 该位只在构造时从 prefs 初始化、
         // 保存成功后同步，getLocalSettings 只负责返回完整设置，不扰动窗口状态。
@@ -97,18 +102,17 @@ class SettingsRepository(
     fun saveLocalSettings(settings: LocalSettings): SettingsSaveResult {
         val coreSettings =
             settings.copy(
-                diagnosticsEnabled = false,
-                diagnosticsVerbose = false,
                 useSelfRenderEditorOnAndroid = false,
                 experimentalFullscreenMode = false,
             )
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "ok")
+                DiagnosticsEventsInterop.settingsSaved("local_settings", "ok")
+                // Issue #670 评论 5651060802：设置保存后直接更新共享 Rust diagnostics config。
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
-                diagPrefs.edit {
-                    putBoolean("diagnostics_enabled", settings.diagnosticsEnabled)
-                    putBoolean("diagnostics_verbose", effectiveVerbose)
+                DiagnosticsInterop.setEnabled(settings.diagnosticsEnabled)
+                DiagnosticsInterop.setVerbose(effectiveVerbose)
+                localPrefs.edit {
                     putBoolean("use_self_render_editor_on_android", settings.useSelfRenderEditorOnAndroid)
                     putBoolean("experimental_fullscreen_mode", settings.experimentalFullscreenMode)
                 }
@@ -121,11 +125,11 @@ class SettingsRepository(
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.fullEnvelope}")
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "error")
+                DiagnosticsEventsInterop.settingsSaved("local_settings", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("local_settings", "not_loaded")
+                DiagnosticsEventsInterop.settingsSaved("local_settings", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
         }
@@ -148,16 +152,16 @@ class SettingsRepository(
             is BridgeResult.Success -> {
                 // #618 三：本机保存只通知编辑器需要的更新（字体大小），不触发外部重读/主题重载。
                 CoreSettingsEvents.notifyLocalEditorSettingsChanged()
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "ok")
+                DiagnosticsEventsInterop.settingsSaved("font_size", "ok")
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.fullEnvelope}")
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "error")
+                DiagnosticsEventsInterop.settingsSaved("font_size", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.settingsSaved("font_size", "not_loaded")
+                DiagnosticsEventsInterop.settingsSaved("font_size", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
         }

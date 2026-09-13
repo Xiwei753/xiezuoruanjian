@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 从 MirrorRecoveryExecutor 提取，只负责 cleanup 阶段恢复逻辑。
@@ -26,14 +26,14 @@ internal class MirrorCleanupRecoveryExecutor(
     ) {
         if (!recoverCleanupBaseline(journal, "UPSERT_PROJECT")) return
         if (!stateStore.putChapterEntries(journal.newEntries)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: putChapterEntries failed for UPSERT_PROJECT ${journal.projectId}, keeping journal",
             )
             return
         }
         if (!stateStore.addPublishedProjectId(journal.projectId)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: addPublishedProjectId failed for UPSERT_PROJECT" +
                     " ${journal.projectId}, keeping journal",
@@ -43,7 +43,7 @@ internal class MirrorCleanupRecoveryExecutor(
         if (publishExecutor.cleanupCommittedTransaction(journal, storage, allLiveKeys = journal.newEntries.keys)) {
             stateStore.clearPendingPublish()
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: partial failure for UPSERT_PROJECT ${journal.projectId}, keeping journal",
             )
@@ -58,7 +58,7 @@ internal class MirrorCleanupRecoveryExecutor(
         if (!journal.isManifestCommitted && !recoverCleanupDeleteManifest(journal, storage)) return
         val removeResult = stateStore.removeAllProjectEntries(journal.projectId)
         if (removeResult.isFailure) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: removeAllProjectEntries failed for ${journal.projectId}, keeping journal",
             )
@@ -66,7 +66,7 @@ internal class MirrorCleanupRecoveryExecutor(
         }
         if (publishExecutor.cleanupCommittedTransaction(journal, storage, allLiveKeys = null)) {
             if (!stateStore.removePublishedProjectId(journal.projectId)) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover cleanup: removePublishedProjectId failed for ${journal.projectId}, keeping journal",
                 )
@@ -74,7 +74,7 @@ internal class MirrorCleanupRecoveryExecutor(
             }
             stateStore.clearPendingPublish()
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: partial failure for DELETE_PROJECT ${journal.projectId}, keeping journal",
             )
@@ -86,7 +86,7 @@ internal class MirrorCleanupRecoveryExecutor(
         type: String,
     ): Boolean {
         if (journal.isManifestCommitted && !journalWriter.persistCommittedBaselineFromJournal(journal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 RECOVER_CLEANUP_BASELINE_FAILED + "$type " + projectIdKeepingJournal(journal.projectId),
             )
@@ -121,14 +121,14 @@ internal class MirrorCleanupRecoveryExecutor(
             )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Recover cleanup: manifest rewrite failed for DELETE_PROJECT ${journal.projectId}",
             )
             return false
         }
         if (!journalWriter.persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 RECOVER_CLEANUP_BASELINE_FAILED + "DELETE_PROJECT " + projectIdKeepingJournal(journal.projectId),
             )
@@ -151,7 +151,7 @@ internal class MirrorCleanupRecoveryExecutor(
         }
         if (journal.frozenManifestPlan != null && journal.frozenManifestPlanHash != null) {
             if (computeContentHash(journal.frozenManifestPlan) != journal.frozenManifestPlanHash) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover cleanup: frozenManifestPlan hash mismatch for DELETE, keeping journal",
                 )
@@ -159,7 +159,7 @@ internal class MirrorCleanupRecoveryExecutor(
             }
             val plan =
                 frozenManifestPlanFromJson(journal.frozenManifestPlan) ?: run {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "Recover cleanup: failed to parse frozenManifestPlan for DELETE, keeping journal",
                     )

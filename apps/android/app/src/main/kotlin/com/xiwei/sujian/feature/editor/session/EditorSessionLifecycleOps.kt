@@ -176,7 +176,7 @@ fun EditorSessionCoordinator.commitPreparedSession(handle: PreparedSessionHandle
     if (committedProfile != null) {
         _lastCommittedTextFlow.value = null
     }
-    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
         handle.sessionId.toString(),
         "commit_prepared",
     )
@@ -187,7 +187,7 @@ private fun EditorSessionCoordinator.closeReplacedSessionAfterCommit(handle: Pre
     val replaced = (handle.mode as? PreparedSessionMode.Replacement)?.oldSessionId
     if (replaced != null && replaced != 0UL && replaced != handle.sessionId) {
         closeSession(replaced)
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
             replaced.toString(),
             "commit_prepared_replaced",
         )
@@ -202,7 +202,7 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
         PreparedSessionMode.Created -> {
             closeSession(handle.sessionId)
             if (handle.sessionId != 0UL) {
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+                com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
                     handle.sessionId.toString(),
                     "release_prepared_new",
                 )
@@ -217,7 +217,7 @@ fun EditorSessionCoordinator.releasePreparedTarget(handle: PreparedSessionHandle
         is PreparedSessionMode.Replacement -> {
             closeSession(handle.sessionId)
             if (handle.sessionId != 0UL) {
-                com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+                com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
                     handle.sessionId.toString(),
                     "release_prepared_candidate",
                 )
@@ -323,7 +323,7 @@ fun EditorSessionCoordinator.detachWindowBinding(
                 )
         }
     }
-    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
         token.sessionId.toString(),
         "window_detached",
     )
@@ -421,7 +421,7 @@ fun EditorSessionCoordinator.closeTarget(
     // 解锁后关闭本次独占的 Core session — 认领失败时 claim 为 null，不调 closeSession。
     if (claim != null && claim.sessionId != 0UL) {
         closeSession(claim.sessionId)
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(
+        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(
             claim.sessionId.toString(),
             "close_target:${reason.name.lowercase()}",
         )

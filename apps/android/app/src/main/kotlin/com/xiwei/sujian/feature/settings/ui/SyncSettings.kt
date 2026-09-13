@@ -25,7 +25,7 @@ import com.xiwei.sujian.core.designsystem.component.SujianSecretTextField
 import com.xiwei.sujian.core.designsystem.component.SujianSlider
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
 import com.xiwei.sujian.core.designsystem.component.SujianTextField
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 
 /**
  * #633 评论 5379618506：同步设置 — 一个逻辑字段组 = 一张 High 内卡。
@@ -300,9 +300,9 @@ private fun rememberFieldFocusModifier(
         val isFocused = state.isFocused
         if (isFocused == wasFocused) return@onFocusChanged
         wasFocused = isFocused
-        DiagnosticsEvents.fieldFocus(fieldType, isFocused)
+        DiagnosticsEventsInterop.fieldFocus(fieldType, isFocused)
         if (!isFocused) {
-            DiagnosticsEvents.fieldCommit(fieldType, value().length, "blur")
+            DiagnosticsEventsInterop.fieldCommit(fieldType, value().length, "blur")
         }
     }
 }

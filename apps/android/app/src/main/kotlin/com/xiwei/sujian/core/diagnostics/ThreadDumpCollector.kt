@@ -1,5 +1,6 @@
 package com.xiwei.sujian.core.diagnostics
 
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import java.io.File
 
 /**
@@ -9,7 +10,7 @@ import java.io.File
  * [destDir]/threads.txt。只在导出时抓一次，不常驻后台。
  *
  * - 每个线程输出：线程名、状态、栈帧。
- * - 所有文本经 [DiagnosticsLogger.redact] 脱敏后再落盘。
+ * - 所有文本经 [DiagnosticsInterop.redact] 脱敏后再落盘。
  * - 失败时写占位文件，不抛异常。
  */
 internal object ThreadDumpCollector {
@@ -38,10 +39,10 @@ internal object ThreadDumpCollector {
                 val stack = allTraces[thread] ?: emptyArray()
                 appendThread(sb, thread, stack)
             }
-            val redacted = DiagnosticsLogger.redact(sb.toString())
+            val redacted = DiagnosticsInterop.redact(sb.toString())
             File(destDir, OUTPUT_NAME).writeText(redacted)
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             File(destDir, OUTPUT_NAME).writeText("thread dump failed: $safeMsg\n")
         }
     }

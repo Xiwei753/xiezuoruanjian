@@ -1,4 +1,4 @@
-package com.xiwei.sujian.core.diagnostics
+package com.xiwei.sujian.core.interop.diagnostics
 
 import android.content.Context
 import android.content.Intent
@@ -6,6 +6,10 @@ import android.os.Build
 import androidx.core.content.FileProvider
 import com.google.gson.GsonBuilder
 import com.xiwei.sujian.R
+import com.xiwei.sujian.core.diagnostics.JankStatsController
+import com.xiwei.sujian.core.diagnostics.LogcatSnapshotCollector
+import com.xiwei.sujian.core.diagnostics.ProcessExitCollector
+import com.xiwei.sujian.core.diagnostics.ThreadDumpCollector
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
@@ -19,15 +23,27 @@ import java.util.Locale
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
-object DiagnosticsExporter {
+/**
+ * 诊断导出 interop — Issue #670 评论 5651060802。
+ *
+ * 替代旧的 `core.diagnostics.DiagnosticsExporter`。底层日志 flush/clear/export
+ * 通过 [DiagnosticsInterop] 转发到 Rust `writer_diagnostics`，不再自己定义
+ * 日志格式/轮转/落盘。
+ *
+ * 平台附件（logcat / processExit / threadDump / jank / settings / sync state /
+ * editor snapshot / device info / build identity）仍由本对象在 Kotlin 端收集，
+ * 因为这些是 Android 平台特有数据，需要访问 Android API（ActivityManager、
+ * DisplayMetrics、JankStats 等）。附件内容经 [DiagnosticsInterop.redact] 脱敏后
+ * 落盘，最终与 Rust 导出的日志 zip 合并。
+ */
+object DiagnosticsExporterInterop {
     private const val DIAGNOSTICS_DIR = "diagnostics"
+    private const val TAG = "DiagnosticsExporter"
 
     fun export(context: Context): File? {
         return try {
-            // Issue #612 评论 3.4：flush 失败（writer 死亡超时/调用线程中断）直接返回
-            // 导出失败，不要继续打一个可能缺日志的 zip。
-            if (!DiagnosticsLogger.flushBlocking()) {
-                DiagnosticsLogger.e("DiagnosticsExporter", "flushBlocking failed; aborting export")
+            if (!DiagnosticsInterop.flushBlocking()) {
+                DiagnosticsInterop.e(TAG, "flushBlocking failed; aborting export")
                 return null
             }
             val cacheDir = File(context.cacheDir, DIAGNOSTICS_DIR)
@@ -40,9 +56,8 @@ object DiagnosticsExporter {
             val tempDir = File(cacheDir, "temp_$timestamp")
             tempDir.mkdirs()
 
-            // #665：各收集步骤跟踪成功/失败状态，最终写入统一 manifest。
-            val logsStatus = writeLogs(tempDir)
-            val crashStatus = writeCrashFile(context, tempDir)
+            val logsStatus = writeLogs(context, tempDir)
+            val crashStatus = writeCrashFile(tempDir)
             val logcatStatus = writeLogcat(tempDir)
             val processExitsStatus = writeProcessExits(context, tempDir)
             val threadDumpStatus = writeThreadDump(tempDir)
@@ -53,8 +68,6 @@ object DiagnosticsExporter {
 
             writeDeviceInfo(context, tempDir)
             writeBuildIdentity(tempDir)
-            // #665 评论 5643315523：manifest 是诊断包的身份证，写失败必须导致导出失败，
-            // 不能继续打一个没有 diagnostics_manifest.json 的 zip。
             if (!writeDiagnosticsManifest(
                     context,
                     tempDir,
@@ -71,7 +84,7 @@ object DiagnosticsExporter {
                     ),
                 )
             ) {
-                DiagnosticsLogger.e("DiagnosticsExporter", "diagnostics_manifest.json write failed; aborting export")
+                DiagnosticsInterop.e(TAG, "diagnostics_manifest.json write failed; aborting export")
                 return null
             }
 
@@ -80,7 +93,7 @@ object DiagnosticsExporter {
 
             zipFile
         } catch (e: Exception) {
-            DiagnosticsLogger.e("DiagnosticsExporter", "Export failed", e)
+            DiagnosticsInterop.e(TAG, "Export failed", e)
             null
         }
     }
@@ -106,62 +119,18 @@ object DiagnosticsExporter {
                 Intent.createChooser(shareIntent, context.getString(R.string.share_diagnostics_title)),
             )
         } catch (e: Exception) {
-            DiagnosticsLogger.e("DiagnosticsExporter", "Share failed", e)
+            DiagnosticsInterop.e(TAG, "Share failed", e)
         }
     }
 
     fun getDeviceInfoJson(context: Context): String {
         val info = collectDeviceInfo(context)
         val gson = GsonBuilder().setPrettyPrinting().create()
-        return DiagnosticsLogger.redact(gson.toJson(info))
-    }
-
-    private fun writeLogs(destDir: File): String {
-        val logsDir = File(destDir, "logs")
-        logsDir.mkdirs()
-        // 落盘保证由 export() 入口的 flushBlocking() 统一完成（导出顺序第一步）；
-        // 此处只复制 writer 已落盘的滚动日志文件。
-        val logFiles = DiagnosticsLogger.getLogFiles()
-        if (logFiles.isEmpty()) return "missing"
-        var allOk = true
-        logFiles.forEach { logFile ->
-            try {
-                val content = logFile.readText()
-                val redacted = DiagnosticsLogger.redact(content)
-                File(logsDir, logFile.name).writeText(redacted)
-            } catch (_: Exception) {
-                allOk = false
-            }
-        }
-        return if (allOk) "ok" else "error"
-    }
-
-    private fun writeCrashFile(
-        context: Context,
-        destDir: File,
-    ): String {
-        val primary = DiagnosticsLogger.getCrashFile() ?: return "not_found"
-        val fallback = DiagnosticsLogger.getFallbackCrashFile() ?: primary
-        val copies = planCrashFileCopies(primary, fallback)
-        if (copies.isEmpty()) return "not_found"
-        var allOk = true
-        for ((name, file) in copies) {
-            try {
-                val content = file.readText()
-                val redacted = DiagnosticsLogger.redact(content)
-                File(destDir, name).writeText(redacted)
-            } catch (_: Exception) {
-                allOk = false
-            }
-        }
-        return if (allOk) "ok" else "error"
+        return DiagnosticsInterop.redact(gson.toJson(info))
     }
 
     /**
-     * 决定 crash 文件导出副本：主位置（外部 logsDir，或仅有的回退位置）始终
-     * 以 last_crash.txt 导出；当两处都有文件时，回退位置额外以
-     * last_crash_fallback.txt 导出（Issue #612 评论二.4 “导出时两处都收集”）。
-     * 提取为 internal 纯函数便于单测正反验证。
+     * 决定 crash 文件导出副本。提取为 internal 供单测。
      */
     internal fun planCrashFileCopies(
         primary: File,
@@ -175,12 +144,73 @@ object DiagnosticsExporter {
         return copies
     }
 
+    /**
+     * 复制 Rust writer 已落盘的日志文件到 destDir/logs/。
+     * Rust exportDiagnostics 生成日志 zip，这里解包复制到导出目录。
+     * 返回 "ok" / "missing" / "error"。
+     */
+    private fun writeLogs(
+        context: Context,
+        destDir: File,
+    ): String {
+        val logsDir = File(destDir, "logs")
+        logsDir.mkdirs()
+        // 通过 Rust exportDiagnostics 导出日志到临时目录，再解包复制。
+        val rustOutputDir = File(context.cacheDir, "rust_diagnostics_export")
+        rustOutputDir.mkdirs()
+        rustOutputDir.listFiles()?.forEach { it.delete() }
+        val rustZipPath = DiagnosticsInterop.exportDiagnostics(rustOutputDir.absolutePath)
+        if (rustZipPath == null) {
+            // Rust 导出失败，回退为空日志目录标记。
+            return "missing"
+        }
+        val rustZipFile = File(rustZipPath)
+        return try {
+            // 解压 Rust 生成的 zip 到 logsDir。
+            java.util.zip.ZipInputStream(FileInputStream(rustZipFile)).use { zis ->
+                var entry = zis.nextEntry
+                while (entry != null) {
+                    val outFile = File(logsDir, entry.name)
+                    outFile.parentFile?.mkdirs()
+                    FileOutputStream(outFile).use { fos ->
+                        zis.copyTo(fos)
+                    }
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                }
+            }
+            rustZipFile.delete()
+            "ok"
+        } catch (_: Exception) {
+            rustZipFile.delete()
+            "error"
+        }
+    }
+
+    private fun writeCrashFile(destDir: File): String {
+        val primary = DiagnosticsInterop.getCrashFile() ?: return "not_found"
+        val fallback = DiagnosticsInterop.getFallbackCrashFile() ?: primary
+        val copies = planCrashFileCopies(primary, fallback)
+        if (copies.isEmpty()) return "not_found"
+        var allOk = true
+        for ((name, file) in copies) {
+            try {
+                val content = file.readText()
+                val redacted = DiagnosticsInterop.redact(content)
+                File(destDir, name).writeText(redacted)
+            } catch (_: Exception) {
+                allOk = false
+            }
+        }
+        return if (allOk) "ok" else "error"
+    }
+
     private fun writeLogcat(destDir: File): String =
         try {
             LogcatSnapshotCollector.collect(destDir)
             "ok"
         } catch (e: Exception) {
-            DiagnosticsLogger.w("DiagnosticsExporter", "Logcat capture failed", e)
+            DiagnosticsInterop.w(TAG, "Logcat capture failed", e)
             "error"
         }
 
@@ -192,7 +222,7 @@ object DiagnosticsExporter {
             ProcessExitCollector.collect(context, destDir)
             "ok"
         } catch (e: Exception) {
-            DiagnosticsLogger.w("DiagnosticsExporter", "Process exit capture failed", e)
+            DiagnosticsInterop.w(TAG, "Process exit capture failed", e)
             "error"
         }
 
@@ -201,7 +231,7 @@ object DiagnosticsExporter {
             ThreadDumpCollector.collect(destDir)
             "ok"
         } catch (e: Exception) {
-            DiagnosticsLogger.w("DiagnosticsExporter", "Thread dump failed", e)
+            DiagnosticsInterop.w(TAG, "Thread dump failed", e)
             "error"
         }
 
@@ -209,11 +239,11 @@ object DiagnosticsExporter {
         try {
             val summary = JankStatsController.getSummary()
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(summary))
+            val json = DiagnosticsInterop.redact(gson.toJson(summary))
             File(destDir, "jank_summary.json").writeText(json)
             "ok"
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "jank_summary.json").writeText(errorJson)
             "error"
@@ -225,42 +255,30 @@ object DiagnosticsExporter {
     ) {
         val info = collectDeviceInfo(context)
         val gson = GsonBuilder().setPrettyPrinting().create()
-        val json = DiagnosticsLogger.redact(gson.toJson(info))
+        val json = DiagnosticsInterop.redact(gson.toJson(info))
         File(destDir, "current_device.json").writeText(json)
     }
 
-    /**
-     * #623 评论7：导出包根目录的 build_identity.json — 序列化当前 APK 的
-     * [DiagnosticsBuildIdentity]，表示"这次导出动作来自哪个 APK"。
-     */
     private fun writeBuildIdentity(destDir: File) {
         try {
-            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+            val identity = DiagnosticsInterop.buildIdentity()
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(identity))
+            val json = DiagnosticsInterop.redact(gson.toJson(identity))
             File(destDir, "build_identity.json").writeText(json)
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "build_identity.json").writeText(errorJson)
         }
     }
 
-    /**
-     * #665：生成统一 diagnostics_manifest.json — 组合构建身份、设备信息和收集状态，
-     * 让接收者一看就知道"这是什么端、什么构建、什么环境"。
-     *
-     * #665 评论 5643315523：manifest 是诊断包的身份证，写失败必须导致导出失败。
-     * 返回 Boolean：true=成功，false=失败。调用方（[export]）应检查返回值，
-     * false 时返回 null 不继续 zipDirectory，不产出没有身份证的 zip 包。
-     */
     private fun writeDiagnosticsManifest(
         context: Context,
         destDir: File,
         collectionStatus: Map<String, String>,
     ): Boolean {
         return try {
-            val identity = DiagnosticsBuildIdentity.fromBuildConfig()
+            val identity = DiagnosticsInterop.buildIdentity()
             val deviceInfo = collectDeviceInfo(context)
             val supportedAbis = Build.SUPPORTED_ABIS.toList()
             val arch = supportedAbis.firstOrNull() ?: "unknown"
@@ -299,11 +317,11 @@ object DiagnosticsExporter {
                 )
 
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(manifest))
+            val json = DiagnosticsInterop.redact(gson.toJson(manifest))
             File(destDir, "diagnostics_manifest.json").writeText(json)
             true
         } catch (e: Exception) {
-            DiagnosticsLogger.e("DiagnosticsExporter", "Failed to write diagnostics manifest", e)
+            DiagnosticsInterop.e(TAG, "Failed to write diagnostics manifest", e)
             false
         }
     }
@@ -337,11 +355,11 @@ object DiagnosticsExporter {
                     "diagnosticsVerbose" to settings.diagnosticsVerbose,
                 )
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
+            val json = DiagnosticsInterop.redact(gson.toJson(sanitized))
             File(destDir, "app_settings_sanitized.json").writeText(json)
             "ok"
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "app_settings_sanitized.json").writeText(errorJson)
             "error"
@@ -357,7 +375,6 @@ object DiagnosticsExporter {
                     context,
                     com.xiwei.sujian.app.di.AppServiceProvider.getAppServiceBridge(context),
                 )
-            // #600：sync 已改为 per-project — 诊断导出当前活动作品的同步状态。
             val projectId = com.xiwei.sujian.app.state.ActiveProjectGate.currentProjectId()
             val sanitized =
                 if (projectId != null) {
@@ -366,7 +383,7 @@ object DiagnosticsExporter {
                         "projectId" to projectId,
                         "status" to syncState.status.name,
                         "lastSyncTime" to syncState.lastSyncTime,
-                        "lastError" to syncState.lastError?.let { DiagnosticsLogger.redact(it) },
+                        "lastError" to syncState.lastError?.let { DiagnosticsInterop.redact(it) },
                         "conflictCount" to (syncState.conflicts?.size ?: 0),
                     )
                 } else {
@@ -376,11 +393,11 @@ object DiagnosticsExporter {
                     )
                 }
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(sanitized))
+            val json = DiagnosticsInterop.redact(gson.toJson(sanitized))
             File(destDir, "sync_state_sanitized.json").writeText(json)
             "ok"
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "sync_state_sanitized.json").writeText(errorJson)
             "error"
@@ -390,11 +407,11 @@ object DiagnosticsExporter {
         try {
             val snapshot = EditorEventRingBuffer.getSnapshot()
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(snapshot))
+            val json = DiagnosticsInterop.redact(gson.toJson(snapshot))
             File(destDir, "editor_snapshot.json").writeText(json)
             "ok"
         } catch (e: Exception) {
-            val safeMsg = DiagnosticsLogger.redact(e.message ?: "unknown")
+            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
             File(destDir, "editor_snapshot.json").writeText(errorJson)
             "error"

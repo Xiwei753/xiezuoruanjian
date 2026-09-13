@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * MirrorRecoveryExecutor — pending publish 恢复路由器。
@@ -66,18 +66,18 @@ internal class MirrorRecoveryExecutor(
 
         val allSuccess = rollbackRestoreOldItems(journal, currentItems, storage)
         if (!allSuccess) {
-            DiagnosticsLogger.w(TAG, "Recover rollback: partial failure, keeping journal for retry")
+            DiagnosticsInterop.w(TAG, "Recover rollback: partial failure, keeping journal for retry")
             return
         }
 
         if (!rollbackExecutor.rollbackManifest(journal, storage, currentItems)) {
-            DiagnosticsLogger.w(TAG, "Recover rollback: manifest rollback failed, keeping journal")
+            DiagnosticsInterop.w(TAG, "Recover rollback: manifest rollback failed, keeping journal")
             return
         }
         if (workspace.rollback(journal.txId)) {
             stateStore.clearPendingPublish()
         } else {
-            DiagnosticsLogger.w(TAG, "Recover rollback: staging cleanup failed, keeping journal for retry")
+            DiagnosticsInterop.w(TAG, "Recover rollback: staging cleanup failed, keeping journal for retry")
         }
     }
 
@@ -92,7 +92,7 @@ internal class MirrorRecoveryExecutor(
             if (item.state != PendingItem.STATE_ROLLBACK_NEW_REMOVED) {
                 val removed = item.promotedRef?.let { storage.delete(it) } ?: true
                 if (!removed) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "Recover rollback: delete promotedRef failed for ${key.chapterId}, keeping journal",
                     )
@@ -101,7 +101,7 @@ internal class MirrorRecoveryExecutor(
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_NEW_REMOVED)
             }
             if (!writeRollbackJournal(journal, currentItems)) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover rollback: journal write failed after NEW_REMOVED for ${key.chapterId}",
                 )
@@ -124,7 +124,7 @@ internal class MirrorRecoveryExecutor(
                 is RollbackItemResult.Restored -> {
                     val oldEntry =
                         journal.oldEntries[key] ?: run {
-                            DiagnosticsLogger.w(
+                            DiagnosticsInterop.w(
                                 TAG,
                                 "Recover rollback: missing oldEntry for ${key.chapterId}, keeping journal",
                             )
@@ -137,7 +137,7 @@ internal class MirrorRecoveryExecutor(
                             oldEntry.copy(uri = result.ref.uri, relativePath = result.ref.relativePath),
                         )
                     ) {
-                        DiagnosticsLogger.w(
+                        DiagnosticsInterop.w(
                             TAG,
                             "Recover rollback: putChapterEntry failed for ${key.chapterId}, keeping journal",
                         )
@@ -149,17 +149,17 @@ internal class MirrorRecoveryExecutor(
                     currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
                 }
                 RollbackItemResult.StateUnknown -> {
-                    DiagnosticsLogger.w(TAG, "Recover rollback: state unknown for ${key.chapterId}, keeping journal")
+                    DiagnosticsInterop.w(TAG, "Recover rollback: state unknown for ${key.chapterId}, keeping journal")
                     return false
                 }
                 RollbackItemResult.Failed -> {
-                    DiagnosticsLogger.w(TAG, "Recover rollback: failed for ${key.chapterId}, keeping journal")
+                    DiagnosticsInterop.w(TAG, "Recover rollback: failed for ${key.chapterId}, keeping journal")
                     allSuccess = false
                     continue
                 }
             }
             if (!writeRollbackJournal(journal, currentItems)) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "Recover rollback: journal write failed after OLD_RESTORED for ${key.chapterId}",
                 )

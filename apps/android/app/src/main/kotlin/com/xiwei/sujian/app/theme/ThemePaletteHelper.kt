@@ -3,7 +3,7 @@ package com.xiwei.sujian.app.theme
 import android.content.Context
 import android.os.Build
 import com.xiwei.sujian.app.theme.model.ThemeColorScheme
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 object ThemePaletteHelper {
     private const val TAG = "ThemePaletteHelper"
@@ -17,7 +17,7 @@ object ThemePaletteHelper {
             val darkDto = colorSchemeToAppDto(darkScheme)
             DynamicColorResult(lightScheme = lightDto, darkScheme = darkDto)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "Failed to extract dynamic color schemes", e)
+            DiagnosticsInterop.w(TAG, "Failed to extract dynamic color schemes", e)
             null
         }
     }

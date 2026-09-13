@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.sync.data
 import android.content.Context
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.settings.data.SaveFailure
@@ -36,7 +36,7 @@ open class SyncRepository(
     private val configJson = com.google.gson.Gson()
 
     private fun warn(msg: String) {
-        DiagnosticsLogger.w("SyncRepository", msg)
+        DiagnosticsInterop.w("SyncRepository", msg)
     }
 
     // ── per-target 同步状态查询（保留 projectId） ──

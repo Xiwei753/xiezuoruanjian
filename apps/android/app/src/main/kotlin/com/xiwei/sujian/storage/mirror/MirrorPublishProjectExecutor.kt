@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 从 MirrorPublishExecutor 提取，只负责单项目发布流程。
@@ -30,7 +30,7 @@ internal class MirrorPublishProjectExecutor(
         try {
             return executePublishProject(projectId)
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to publish project: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "Failed to publish project: ${e.message}", e)
             return MirrorPublishResult.RetryableFailure
         }
     }
@@ -128,28 +128,28 @@ internal class MirrorPublishProjectExecutor(
                 items = committedItems,
             )
         if (!journalWriter.persistPendingJournal(currentJournal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Publish project $projectId: cleanup journal write failed, keeping journal for retry",
             )
             return null
         }
         if (!stateStore.putChapterEntries(promoteResult.promotedEntries)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Publish project $projectId: putChapterEntries failed, keeping journal for retry",
             )
             return null
         }
         if (!journalWriter.persistCommittedBaselineFromJournal(manifestResult.committedJournal)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Publish project $projectId: persistCommittedBaseline failed, keeping journal for retry",
             )
             return null
         }
         if (!stateStore.addPublishedProjectId(projectId)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Publish project $projectId: addPublishedProjectId failed, keeping journal for retry",
             )
@@ -172,7 +172,7 @@ internal class MirrorPublishProjectExecutor(
             stateStore.clearPendingPublish()
             return MirrorPublishResult.Committed
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "Publish project $projectId: cleanup partial failure, keeping journal for retry",
             )

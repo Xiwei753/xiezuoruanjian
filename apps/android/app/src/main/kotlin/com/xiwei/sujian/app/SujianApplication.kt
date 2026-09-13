@@ -6,15 +6,16 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import com.xiwei.sujian.storage.recovery.LegacyStorageMigrationGate
 import java.io.File
-import java.io.FileWriter
-import java.io.PrintWriter
+import uniffi.writer_core.DiagnosticFieldDto
+import uniffi.writer_core.DiagnosticOriginDto
 
 class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDependenciesProvider {
     private var autoSyncScheduler: AutoSyncScheduler? = null
@@ -40,24 +41,33 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
+    /**
+     * 初始化诊断后端。
+     *
+     * Issue #670 评论 5651060802：不再使用独立的 `sujian_diagnostics` SharedPreferences，
+     * diagnostics_enabled / diagnostics_verbose 只认 Core `LocalSettings`。
+     * Core 在 WriterAppService 构造时从 PlatformInit 初始化 Rust diagnostics 后端；
+     * 本方法只同步 Kotlin 侧默认状态（enabled=true, verbose=true），等 Core 初始化后
+     * SettingsRepository 会调用 [DiagnosticsInterop.setConfig] 更新实际值。
+     */
     private fun initDiagnostics() {
-        val diagPrefs = getSharedPreferences("sujian_diagnostics", MODE_PRIVATE)
-        val diagnosticsEnabled = diagPrefs.getBoolean("diagnostics_enabled", true)
-        val diagnosticsVerbose = diagPrefs.getBoolean("diagnostics_verbose", true)
-        DiagnosticsLogger.init(this, diagnosticsEnabled, diagnosticsVerbose)
-        EditorEventRingBuffer.setEnabled(diagnosticsEnabled)
+        DiagnosticsInterop.init(this, isEnabled = true, isVerbose = true)
+        EditorEventRingBuffer.setEnabled(true)
     }
 
+    /**
+     * JVM uncaught exception handler — Android 平台采集器。
+     *
+     * Issue #670 评论 5651060802：不再自己定义 last_crash.txt 格式和 writer，
+     * 把 crash 元数据 / 脱敏栈交给 Rust 统一诊断后端并 flush。
+     * 仍保留 last_crash.txt 单文件语义供导出和"上次崩溃"提示。
+     */
     private fun installCrashHandler() {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
             try {
-                val redactedTrace = DiagnosticsLogger.redactStackTrace(throwable)
-                // crash 头部必须带构建身份 — crash handler 安装在
-                // initDiagnostics 之前，不能依赖 DiagnosticsLogger.init 完成，
-                // 直接从 BuildConfig 取身份。last_crash.txt 保持"最近一次崩溃"
-                // 单文件语义，但文件内可见它属于哪个 APK/commit/flavor。
-                val identity = com.xiwei.sujian.core.diagnostics.DiagnosticsBuildIdentity.fromBuildConfig()
+                val redactedTrace = DiagnosticsInterop.redactStackTrace(throwable)
+                val identity = DiagnosticsInterop.buildIdentity()
                 val timestamp =
                     java.text.SimpleDateFormat(
                         "yyyy-MM-dd HH:mm:ss",
@@ -75,14 +85,35 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                         append("Crash at $timestamp\nThread: ${thread.name}\n\n")
                     }
                 val externalWritten =
-                    writeCrashFile(File(AndroidPrivateDataRoot.logs(this), "last_crash.txt"), header, redactedTrace)
+                    DiagnosticsInterop.writeCrashFile(
+                        File(AndroidPrivateDataRoot.logs(this), "last_crash.txt"),
+                        header,
+                        redactedTrace,
+                    )
                 if (!externalWritten) {
                     val fallbackDir = File(filesDir, "diagnostics")
                     fallbackDir.mkdirs()
-                    writeCrashFile(File(fallbackDir, "last_crash.txt"), header, redactedTrace)
+                    DiagnosticsInterop.writeCrashFile(
+                        File(fallbackDir, "last_crash.txt"),
+                        header,
+                        redactedTrace,
+                    )
                 }
-                DiagnosticsLogger.e("SujianApp", "Uncaught exception", throwable)
-                DiagnosticsLogger.flushBlocking()
+                // 把 crash 元数据交给 Rust 统一诊断后端。
+                DiagnosticsInterop.recordEvent(
+                    DiagnosticOriginDto.SYSTEM,
+                    "app.crash",
+                    "SujianApp",
+                    "Uncaught exception in thread ${thread.name}",
+                    listOf(
+                        DiagnosticFieldDto("thread", thread.name),
+                        DiagnosticFieldDto("buildKey", identity.buildKey),
+                        DiagnosticFieldDto("versionCode", identity.versionCode.toString()),
+                        DiagnosticFieldDto("flavor", identity.flavor),
+                        DiagnosticFieldDto("buildType", identity.buildType),
+                    ),
+                )
+                DiagnosticsInterop.flushBlocking()
             } catch (_: Exception) {
             }
             if (defaultHandler != null) {
@@ -94,32 +125,13 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         }
     }
 
-    /** 把 crash 头部 + 脱敏栈写入 [file]，返回是否成功。 */
-    private fun writeCrashFile(
-        file: File,
-        header: String,
-        redactedTrace: String,
-    ): Boolean {
-        return try {
-            file.parentFile?.mkdirs()
-            PrintWriter(FileWriter(file, false)).use { writer ->
-                writer.print(header)
-                writer.println(redactedTrace)
-                writer.flush()
-            }
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     override fun onStart(owner: LifecycleOwner) {
         // 数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("start")
+        DiagnosticsEventsInterop.appLifecycle("start")
         // 旧工作区仍待迁移时 Core 尚未打开；此时不能初始化依赖容器或自动同步，
         // 否则会提前打开新数据根目录。
         if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
-            DiagnosticsLogger.w("SujianApp", "Legacy storage pending migration; skip appContainer init on start")
+            DiagnosticsInterop.w("SujianApp", "Legacy storage pending migration; skip appContainer init on start")
             return
         }
         if (autoSyncScheduler == null) {
@@ -130,24 +142,24 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
 
     override fun onStop(owner: LifecycleOwner) {
         // 同 onStart：私有存储无需权限检查。
-        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.appLifecycle("stop")
+        DiagnosticsEventsInterop.appLifecycle("stop")
         // 旧结构仍待迁移时跳过 syncRepository/starMapBridge 调用，
         // 它们会触发 Core 初始化。autoSyncScheduler 此时也必为 null，无需 stop。
         if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
-            DiagnosticsLogger.w("SujianApp", "Legacy storage pending migration; skip appContainer touch on stop")
-            DiagnosticsLogger.flushBlocking()
+            DiagnosticsInterop.w("SujianApp", "Legacy storage pending migration; skip appContainer touch on stop")
+            DiagnosticsInterop.flushBlocking()
             return
         }
         autoSyncScheduler?.stop()
         val result = AppServiceProvider.getAppServiceBridge(this).starMapBridge.flushAllStarmapStores()
         when (result) {
             is BridgeResult.Error ->
-                DiagnosticsLogger.e(
+                DiagnosticsInterop.e(
                     "SujianApp",
                     "flushAllStarmapStores failed: ${result.fullEnvelope}",
                 )
             BridgeResult.NotLoaded ->
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     "SujianApp",
                     "flushAllStarmapStores skipped: native library not loaded",
                 )
@@ -155,6 +167,6 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         }
         // 生命周期收尾：把已入队的应用日志落盘。正常日志本来就应该由 writer 持续写，
         // 这里只是收尾，不依赖它解决日志缺失。
-        DiagnosticsLogger.flushBlocking()
+        DiagnosticsInterop.flushBlocking()
     }
 }

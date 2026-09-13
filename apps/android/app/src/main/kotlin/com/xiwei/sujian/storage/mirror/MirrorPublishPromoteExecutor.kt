@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 从 [MirrorPublishProjectExecutor] 提取，只负责发布流程的 promote 阶段。
@@ -243,7 +243,7 @@ internal class MirrorPublishPromoteExecutor(
             when (val oldLookup = storage.lookup(oldRef.relativePath)) {
                 is MirrorLookupResult.Found -> {
                     if (!storage.delete(oldLookup.ref)) {
-                        DiagnosticsLogger.w(TAG, "promote: delete old file failed for ${key.chapterId}")
+                        DiagnosticsInterop.w(TAG, "promote: delete old file failed for ${key.chapterId}")
                         // 旧文件删除失败，停止 promote，保留 journal 让下次重试
                         return null
                     }
@@ -252,7 +252,7 @@ internal class MirrorPublishPromoteExecutor(
                     // 旧文件明确不存在，无需删除，可以继续创建新文件
                 }
                 is MirrorLookupResult.Failed -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
                     )
@@ -287,7 +287,7 @@ internal class MirrorPublishPromoteExecutor(
         projectId: String,
         message: String,
     ) {
-        DiagnosticsLogger.w(TAG, "Publish project $projectId: $message")
+        DiagnosticsInterop.w(TAG, "Publish project $projectId: $message")
     }
 
     private companion object {

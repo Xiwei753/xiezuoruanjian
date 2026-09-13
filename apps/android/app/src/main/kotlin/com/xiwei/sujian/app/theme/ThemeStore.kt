@@ -3,7 +3,7 @@ package com.xiwei.sujian.app.theme
 import android.content.Context
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -68,7 +68,7 @@ object ThemeStore {
                 systemIsDark = sysDark,
             )
         refreshPaletteRecords()
-        DiagnosticsEvents.themeResolve(
+        DiagnosticsEventsInterop.themeResolve(
             appearanceMode = settings.appearanceMode,
             colorSource = settings.colorSource,
             isDark = _uiState.value.isDark,
@@ -129,6 +129,8 @@ object ThemeStore {
     }
 
     fun updateAppearanceMode(mode: String) {
+        // 用户选择外观模式（点击 dark/light/system）→ origin=User。
+        DiagnosticsEventsInterop.themeAppearanceSelect(mode)
         val repo = _settingsRepository ?: return
         val settings = repo.getLocalSettings()
         val newSettings = settings.copy(appearanceMode = mode)
@@ -182,6 +184,8 @@ object ThemeStore {
     }
 
     fun onSystemDarkModeChanged(isDark: Boolean) {
+        // 系统主题变化回调 → origin=System。
+        DiagnosticsEventsInterop.themeSystemColorScheme(isDark)
         _systemIsDark = isDark
         val current = _uiState.value
         if (current.isSystem) {

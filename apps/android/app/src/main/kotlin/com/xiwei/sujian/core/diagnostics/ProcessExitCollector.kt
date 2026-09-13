@@ -4,6 +4,7 @@ import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
 import com.google.gson.GsonBuilder
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -20,7 +21,7 @@ import java.util.Locale
  *
  * - 只在导出时按需调用，不常驻后台抓取。
  * - 限制最多 8 条退出记录（与 Issue 正文一致）。
- * - 文本字段经 [DiagnosticsLogger.redact] 脱敏后再落盘；trace 原样保存供 native 解析。
+ * - 文本字段经 [DiagnosticsInterop.redact] 脱敏后再落盘；trace 原样保存供 native 解析。
  * - 任何失败都写占位文件，不抛异常（导出不能因采集失败而中断）。
  */
 internal object ProcessExitCollector {
@@ -67,10 +68,10 @@ internal object ProcessExitCollector {
                 saveTraceIfPresent(reason, traceDir, ts, reasonStr, traceMetadata)
             }
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsLogger.redact(gson.toJson(mapOf("entries" to entries)))
+            val json = DiagnosticsInterop.redact(gson.toJson(mapOf("entries" to entries)))
             File(destDir, OUTPUT_NAME).writeText(json)
             if (traceMetadata.isNotEmpty()) {
-                val metaJson = DiagnosticsLogger.redact(gson.toJson(mapOf("traces" to traceMetadata)))
+                val metaJson = DiagnosticsInterop.redact(gson.toJson(mapOf("traces" to traceMetadata)))
                 File(destDir, METADATA_NAME).writeText(metaJson)
             }
         } catch (e: Exception) {
@@ -94,8 +95,8 @@ internal object ProcessExitCollector {
             "importance" to reason.importance,
             "pss" to reason.pss,
             "rss" to reason.rss,
-            "description" to DiagnosticsLogger.redact(reason.description ?: ""),
-            "processName" to DiagnosticsLogger.redact(reason.processName ?: ""),
+            "description" to DiagnosticsInterop.redact(reason.description ?: ""),
+            "processName" to DiagnosticsInterop.redact(reason.processName ?: ""),
             "processStateSummary" to encodeProcessStateSummary(reason),
         )
     }
@@ -116,12 +117,12 @@ internal object ProcessExitCollector {
     /**
      * 把 processStateSummary 的 byte[] 按 UTF-8 解码为字符串并脱敏。
      * 提取为 internal 纯函数便于单测验证解码与脱敏逻辑，不需要 ApplicationExitInfo。
-     * 空数组返回 null；非空则 UTF-8 解码后经 [DiagnosticsLogger.redact] 脱敏。
+     * 空数组返回 null；非空则 UTF-8 解码后经 [DiagnosticsInterop.redact] 脱敏。
      */
     internal fun decodeProcessStateSummary(bytes: ByteArray): String? {
         if (bytes.isEmpty()) return null
         val text = String(bytes, Charsets.UTF_8)
-        return DiagnosticsLogger.redact(text)
+        return DiagnosticsInterop.redact(text)
     }
 
     private fun saveTraceIfPresent(
@@ -217,7 +218,7 @@ internal object ProcessExitCollector {
         destDir: File,
         message: String,
     ) {
-        val safeMsg = DiagnosticsLogger.redact(message)
+        val safeMsg = DiagnosticsInterop.redact(message)
         val gson = GsonBuilder().create()
         File(destDir, OUTPUT_NAME).writeText(gson.toJson(mapOf("error" to safeMsg)))
     }

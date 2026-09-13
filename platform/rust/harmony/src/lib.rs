@@ -25,3 +25,7 @@ pub use writer_core::ffi::{
     writer_core_free_string, writer_core_get_last_error, writer_core_get_load_status,
     writer_core_init,
 };
+
+mod init;
+
+pub use init::*;

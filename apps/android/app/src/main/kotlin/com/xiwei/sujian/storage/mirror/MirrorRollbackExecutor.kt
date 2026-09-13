@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * MirrorRollbackExecutor — 发布事务回滚编排器。
@@ -67,7 +67,7 @@ internal class MirrorRollbackExecutor(
 
         val mergedItems = mergeRollbackItems(latestJournal, items)
         if (!writeRollbackJournalForItems(latestJournal, mergedItems)) {
-            DiagnosticsLogger.w(TAG, "rollback: journal write failed at start")
+            DiagnosticsInterop.w(TAG, "rollback: journal write failed at start")
             return false
         }
 
@@ -80,7 +80,7 @@ internal class MirrorRollbackExecutor(
         }
 
         if (!workspace.rollback(txId)) {
-            DiagnosticsLogger.w(TAG, "rollback: staging cleanup failed for tx $txId, keeping journal")
+            DiagnosticsInterop.w(TAG, "rollback: staging cleanup failed for tx $txId, keeping journal")
             return false
         }
         stateStore.clearPendingPublish()
@@ -97,7 +97,7 @@ internal class MirrorRollbackExecutor(
                 journalContext
             }
             is LatestPending.CorruptedOrMismatch -> {
-                DiagnosticsLogger.w(TAG, "rollback: cannot read latest journal for tx $txId (corrupted/mismatch)")
+                DiagnosticsInterop.w(TAG, "rollback: cannot read latest journal for tx $txId (corrupted/mismatch)")
                 null
             }
         }
@@ -157,7 +157,7 @@ internal class MirrorRollbackExecutor(
                 // #649 评论 5565067997 修复 4：检查 delete() 返回值
                 val removed = item.promotedRef?.let { storage.delete(it) } ?: true
                 if (!removed) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback: delete promotedRef failed for ${key.chapterId}, keeping journal",
                     )
@@ -167,7 +167,7 @@ internal class MirrorRollbackExecutor(
             }
             // 更新 journal（记录 NEW_REMOVED）
             if (!writeRollbackJournalForItems(latestJournal, currentItems)) {
-                DiagnosticsLogger.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
+                DiagnosticsInterop.w(TAG, "rollback: journal write failed after NEW_REMOVED for ${key.chapterId}")
                 return false
             }
         }
@@ -194,7 +194,7 @@ internal class MirrorRollbackExecutor(
 
             // 更新 journal（记录 OLD_RESTORED）
             if (!writeRollbackJournalForItems(latestJournal, currentItems)) {
-                DiagnosticsLogger.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
+                DiagnosticsInterop.w(TAG, "rollback: journal write failed after OLD_RESTORED for ${key.chapterId}")
                 return false
             }
         }
@@ -213,7 +213,7 @@ internal class MirrorRollbackExecutor(
                 // #649 评论 5573310799 问题 1：先把真实 URI 写进 stateStore，再标记 journal
                 val oldEntry =
                     latestJournal.oldEntries[key] ?: run {
-                        DiagnosticsLogger.w(TAG, "rollback: missing oldEntry for ${key.chapterId}, keeping journal")
+                        DiagnosticsInterop.w(TAG, "rollback: missing oldEntry for ${key.chapterId}, keeping journal")
                         return false
                     }
                 if (!stateStore.putChapterEntry(
@@ -226,7 +226,7 @@ internal class MirrorRollbackExecutor(
                         ),
                     )
                 ) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback: putChapterEntry failed for ${key.chapterId}, keeping journal",
                     )
@@ -238,11 +238,11 @@ internal class MirrorRollbackExecutor(
                 currentItems[key] = item.copy(state = PendingItem.STATE_ROLLBACK_OLD_RESTORED)
             }
             RollbackItemResult.StateUnknown -> {
-                DiagnosticsLogger.w(TAG, "rollback: state unknown for ${key.chapterId}, keeping journal")
+                DiagnosticsInterop.w(TAG, "rollback: state unknown for ${key.chapterId}, keeping journal")
                 return false
             }
             RollbackItemResult.Failed -> {
-                DiagnosticsLogger.w(TAG, "rollback: failed for ${key.chapterId}, keeping journal")
+                DiagnosticsInterop.w(TAG, "rollback: failed for ${key.chapterId}, keeping journal")
                 return false
             }
         }

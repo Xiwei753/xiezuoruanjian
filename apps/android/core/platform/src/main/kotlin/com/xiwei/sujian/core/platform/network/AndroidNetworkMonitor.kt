@@ -11,7 +11,7 @@ import android.util.Log
  *
  * 只依赖 Android 平台 API，不引用 app 模块或 interop 层的任何类型，
  * 避免向 :core:platform 引入反向依赖。日志使用 android.util.Log，
- * 因为 :core:platform 不持有 app 模块的 DiagnosticsLogger。
+ * 因为 :core:platform 不持有 app 模块的 DiagnosticsInterop。
  */
 object AndroidNetworkMonitor {
     private const val TAG = "AndroidNetworkMonitor"

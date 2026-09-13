@@ -7,10 +7,11 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
 import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 import java.util.concurrent.TimeUnit
+import uniffi.writer_core.DiagnosticOriginDto
 
 /**
  * 全量自动同步调度器。
@@ -22,13 +23,14 @@ class AutoSyncScheduler(context: Context) {
     private val appContext = context.applicationContext
 
     fun start() {
-        DiagnosticsEvents.syncEvent("scheduler", "start")
+        // 自动同步调度器由应用自身周期驱动，origin=App。
+        DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "scheduler", "start")
         scheduleFromSettings(appContext)
         enqueueForegroundCheck(appContext)
     }
 
     fun stop() {
-        DiagnosticsEvents.syncEvent("scheduler", "stop")
+        DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "scheduler", "stop")
         val workManager = WorkManager.getInstance(appContext)
         workManager.cancelUniqueWork(UNIQUE_FOREGROUND_WORK)
     }

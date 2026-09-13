@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * Pending journal 写入参数。
@@ -98,22 +98,22 @@ internal class MirrorJournalWriter(
     fun persistCommittedBaselineFromJournal(journal: PendingMirrorPublish): Boolean {
         val json =
             journal.manifestTargetJson ?: run {
-                DiagnosticsLogger.w(TAG, "persistCommittedBaseline: manifestTargetJson is null")
+                DiagnosticsInterop.w(TAG, "persistCommittedBaseline: manifestTargetJson is null")
                 return false
             }
         val hash =
             journal.manifestNewContentHash ?: run {
-                DiagnosticsLogger.w(TAG, "persistCommittedBaseline: manifestNewContentHash is null")
+                DiagnosticsInterop.w(TAG, "persistCommittedBaseline: manifestNewContentHash is null")
                 return false
             }
         if (computeContentHash(json) != hash) {
-            DiagnosticsLogger.w(TAG, "persistCommittedBaseline: hash mismatch")
+            DiagnosticsInterop.w(TAG, "persistCommittedBaseline: hash mismatch")
             return false
         }
         try {
             mirrorManifestFromJsonStrict(json)
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "persistCommittedBaseline: strict parse failed: ${e.message}")
+            DiagnosticsInterop.w(TAG, "persistCommittedBaseline: strict parse failed: ${e.message}")
             return false
         }
         return stateStore.setCommittedManifest(json, hash)

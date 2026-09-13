@@ -188,8 +188,8 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
             module, event, message
         );
     }
-    // 文件日志始终写入（受 diagnostics_verbose 控制）
-    crate::backend::diagnostics::log_to_file("INFO", module, event, message);
+    // 文件日志由 writer_diagnostics 接管（log::* 已被 writer_diagnostics logger 接管）。
+    log::info!(target: module, "{}: {}", event, message);
 }
 
 pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
@@ -199,8 +199,8 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
             module, event, message
         );
     }
-    // WARN 级别文件日志永远写入
-    crate::backend::diagnostics::log_to_file("WARN", module, event, message);
+    // WARN 级别文件日志由 writer_diagnostics 接管。
+    log::warn!(target: module, "{}: {}", event, message);
 }
 
 pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
@@ -210,8 +210,39 @@ pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
             module, event, message
         );
     }
-    // ERROR 级别文件日志永远写入
-    crate::backend::diagnostics::log_to_file("ERROR", module, event, message);
+    // ERROR 级别文件日志由 writer_diagnostics 接管。
+    log::error!(target: module, "{}: {}", event, message);
+}
+
+/// 记录带 origin 的结构化诊断事件 — Issue #670 评论 5651060802 第 7 节。
+///
+/// 与 `debug_log_static` 不同，本函数允许调用点显式传入 `origin`
+/// （User / System / App），用于主题链、导航、同步等需要区分触发源的事件。
+/// 普通 `log::*` 默认 `origin=App`，不需要区分触发源的事件继续走 `debug_log_static`。
+///
+/// `fields` 是 `(key, value)` 对，value 会转成 JSON 字符串。
+pub(crate) fn record_struct_event(
+    origin: writer_diagnostics::DiagnosticOrigin,
+    event: &str,
+    target: &str,
+    fields: &[(&str, &str)],
+) {
+    use std::collections::BTreeMap;
+    let mut field_map = BTreeMap::new();
+    for (k, v) in fields {
+        field_map.insert(k.to_string(), serde_json::Value::String(v.to_string()));
+    }
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin,
+        event: event.to_string(),
+        target: target.to_string(),
+        message: None,
+        fields: field_map,
+    });
 }
 
 use sync_bridge::SyncTaskOutcome;
@@ -519,15 +550,14 @@ impl AppBackend {
                 println!("{}{} {}", prefix, state, msg);
             }
         }
-        // 文件日志：ERROR/WARN 永远写入，其他受 verbose 控制
-        let level_str = match lvl_enum {
-            DebugLevel::Error => "ERROR",
-            DebugLevel::Warn => "WARN",
-            DebugLevel::Info => "INFO",
-            DebugLevel::Debug => "DEBUG",
-            DebugLevel::Trace => "TRACE",
-        };
-        crate::backend::diagnostics::log_to_file(level_str, &m, &ev, &msg);
+        // 文件日志：由 writer_diagnostics 接管（log::* 已被 writer_diagnostics logger 接管）。
+        match lvl_enum {
+            DebugLevel::Error => log::error!(target: &m, "{}: {}", ev, msg),
+            DebugLevel::Warn => log::warn!(target: &m, "{}: {}", ev, msg),
+            DebugLevel::Info => log::info!(target: &m, "{}: {}", ev, msg),
+            DebugLevel::Debug => log::debug!(target: &m, "{}: {}", ev, msg),
+            DebugLevel::Trace => log::trace!(target: &m, "{}: {}", ev, msg),
+        }
     }
 
     fn debug_log(&self, module: &str, event: &str, message: &str) {
@@ -541,8 +571,8 @@ impl AppBackend {
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
-        // 文件日志：INFO 级别受 verbose 控制
-        crate::backend::diagnostics::log_to_file("INFO", module, event, message);
+        // 文件日志由 writer_diagnostics 接管。
+        log::info!(target: module, "{}: {}", event, message);
     }
 
     fn debug_warn(&self, module: &str, event: &str, message: &str) {
@@ -556,8 +586,8 @@ impl AppBackend {
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
-        // WARN 级别文件日志永远写入
-        crate::backend::diagnostics::log_to_file("WARN", module, event, message);
+        // WARN 级别文件日志由 writer_diagnostics 接管。
+        log::warn!(target: module, "{}: {}", event, message);
     }
 
     fn debug_error(&self, module: &str, event: &str, message: &str) {
@@ -571,8 +601,8 @@ impl AppBackend {
                 module, event, ws_exists, proj, vol, chap, message
             );
         }
-        // ERROR 级别文件日志永远写入
-        crate::backend::diagnostics::log_to_file("ERROR", module, event, message);
+        // ERROR 级别文件日志由 writer_diagnostics 接管。
+        log::error!(target: module, "{}: {}", event, message);
     }
 
     fn now_epoch_seconds() -> i64 {

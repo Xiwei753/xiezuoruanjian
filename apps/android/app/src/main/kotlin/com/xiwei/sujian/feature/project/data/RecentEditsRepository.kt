@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
@@ -24,7 +24,7 @@ class RecentEditsRepository(private val context: Context, private val appBridge:
         return when (val result = recentEditsBridge.getRecentEdits()) {
             is BridgeResult.Success -> result.data
             is BridgeResult.Error -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     "RecentEditsRepository",
                     context.getString(R.string.repo_get_recent_edits_failed, result.localizedMessage()),
                 )

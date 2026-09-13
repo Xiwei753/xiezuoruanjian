@@ -166,6 +166,19 @@ impl LinuxThemeController {
     }
 
     fn reload(&mut self) {
+        // 主题解析（应用内部逻辑）→ origin=App。
+        let appearance_mode = self.snap().appearance_mode.clone();
+        let is_dark = self.is_dark();
+        let is_dark_str = if is_dark { "true" } else { "false" };
+        crate::backend::app_backend::record_struct_event(
+            writer_diagnostics::DiagnosticOrigin::App,
+            "theme.resolve",
+            "theme",
+            &[
+                ("appearanceMode", &appearance_mode),
+                ("isDark", is_dark_str),
+            ],
+        );
         self.scheme_changed();
     }
 
@@ -186,6 +199,14 @@ impl LinuxThemeController {
     }
 
     fn set_appearance_mode(&mut self, val: QString) {
+        // 用户选择外观模式（点击 dark/light/system）→ origin=User。
+        let mode_str = val.to_string();
+        crate::backend::app_backend::record_struct_event(
+            writer_diagnostics::DiagnosticOrigin::User,
+            "theme.appearance_select",
+            "theme",
+            &[("requested", &mode_str)],
+        );
         if self
             .with_app_mut(|app| app.set_setting_appearance_mode(val))
             .is_ok()
@@ -241,6 +262,14 @@ impl LinuxThemeController {
     }
 
     fn set_system_is_dark(&mut self, val: bool) {
+        // 系统主题变化回调 → origin=System。
+        let is_dark_str = if val { "true" } else { "false" };
+        crate::backend::app_backend::record_struct_event(
+            writer_diagnostics::DiagnosticOrigin::System,
+            "theme.system_color_scheme",
+            "theme",
+            &[("isDark", is_dark_str)],
+        );
         if self
             .with_app_mut(|app| {
                 app.current_system_is_dark = val;

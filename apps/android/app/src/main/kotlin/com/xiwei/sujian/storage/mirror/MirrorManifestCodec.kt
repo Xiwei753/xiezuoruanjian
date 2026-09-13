@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * Mirror manifest JSON 编解码器。
@@ -37,7 +37,7 @@ internal class MirrorManifestCodec {
         return try {
             mirrorManifestFromJsonStrict(json)
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to parse manifest JSON strictly", e)
+            DiagnosticsInterop.e(TAG, "Failed to parse manifest JSON strictly", e)
             null
         }
     }

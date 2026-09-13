@@ -99,9 +99,9 @@ private fun SujianAppActivityLifecycleEvents(activityRef: androidx.activity.Comp
             androidx.lifecycle.LifecycleEventObserver { _, event ->
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE ->
-                        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.activityLifecycle("pause")
+                        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.activityLifecycle("pause")
                     androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> {
-                        com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.activityLifecycle("destroy")
+                        com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.activityLifecycle("destroy")
                     }
                     else -> {}
                 }

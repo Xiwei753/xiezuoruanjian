@@ -272,6 +272,7 @@ extern "C" fn qml_load_error_handler(
     msg: &QString,
 ) {
     let s = format!("{}", msg);
+    // Qt 消息是平台来源，origin = System。
     if matches!(msg_type, QtMsgType::QtWarningMsg | QtMsgType::QtCriticalMsg) {
         eprintln!(
             "[Qt {}] {}",
@@ -283,8 +284,8 @@ extern "C" fn qml_load_error_handler(
             s
         );
         debug_warn_static("app", "qml_warning_critical", &s);
-        // 同时写入文件日志，便于排查 QML 加载问题
-        diagnostics::log_to_file("WARN", "app", "qml_warning_critical", &s);
+        // Qt 消息转成共享 Rust 诊断事件（origin=System），由 writer_diagnostics 接管落盘。
+        record_qt_event(writer_diagnostics::DiagnosticLevel::Warn, "qml_warning_critical", &s);
         if s.contains("qrc:/main.qml")
             || s.contains("QQmlApplicationEngine failed")
             || s.contains("failed to load component")
@@ -300,9 +301,26 @@ extern "C" fn qml_load_error_handler(
     } else {
         eprintln!("[Qt DEBUG] {}", s);
         debug_log_static("app", "qml_debug", &s);
-        // 同时写入文件日志
-        diagnostics::log_to_file("DEBUG", "app", "qml_debug", &s);
+        record_qt_event(writer_diagnostics::DiagnosticLevel::Debug, "qml_debug", &s);
     }
+}
+
+/// 把 Qt 消息转成共享 Rust 诊断事件（origin=System，平台来源）。
+///
+/// Qt 消息是平台来源，不自己写文件，只入队 writer_diagnostics 统一后端。
+fn record_qt_event(level: writer_diagnostics::DiagnosticLevel, event: &str, message: &str) {
+    use std::collections::BTreeMap;
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        sequence: 0,
+        session_id: String::new(),
+        level,
+        origin: writer_diagnostics::DiagnosticOrigin::System,
+        event: event.to_string(),
+        target: "qt".to_string(),
+        message: Some(message.to_string()),
+        fields: BTreeMap::new(),
+    });
 }
 
 fn probe_hub_header_resource() {
@@ -437,7 +455,8 @@ fn log_desktop_runtime_profile(qt_version: &str, qml_entry: &str) {
     let profile = DesktopRuntimeProfile::collect(qt_version, qml_entry);
     let summary = profile.summary();
     debug_log_static("app", "desktop_runtime_profile", &summary);
-    diagnostics::log_to_file("INFO", "app", "desktop_runtime_profile", &summary);
+    // 应用内部事件，由 writer_diagnostics 接管落盘。
+    log::info!(target: "app", "desktop_runtime_profile: {}", summary);
 
     // 收集 RuntimeInfo 和 SystemInfo 并注入 diagnostics 模块
     let runtime_info = collect_runtime_info(&profile);
@@ -564,21 +583,26 @@ fn main() {
         })
         .ok();
 
-    // ===== 最早期初始化：确保崩溃/错误能写入日志文件 =====
-    // 这两行必须在所有其他代码之前执行
+    // ===== 最早期初始化：初始化统一诊断后端 =====
     // #665 评论 5643315523：先初始化运行时有效 build identity（根据 APPIMAGE 环境变量
     // 收口 packageType/buildKey），确保后续所有日志写入和 manifest 字段使用同一份有效值。
     diagnostics::init_build_identity();
-    diagnostics::ensure_early_log_dir();
-    diagnostics::install_panic_hook();
+    // 初始化共享 Rust 诊断后端（接管 log::* 和 panic 落盘）。
+    // 日志目录、平台名、设备 ID 等由 PlatformInit 决定，build_key 用运行时有效值。
+    let platform_init = writer_platform_linux::resolve_platform_init();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    writer_platform_linux::init_diagnostics(
+        &platform_init,
+        diagnostics::effective_build_key().to_string(),
+        session_id,
+        // alpha 阶段默认开启；后续由 SettingsBackend.load_local_settings 调用
+        // writer_diagnostics::set_config 覆盖为用户设置值。
+        true,
+        true,
+    );
 
     debug_log_static("app", "app_startup", "Sujian application starting...");
-    diagnostics::log_to_file(
-        "INFO",
-        "app",
-        "app_startup",
-        "Sujian application starting...",
-    );
+    log::info!(target: "app", "app_startup: Sujian application starting...");
 
     // 注入 Qt 运行时版本到 diagnostics 模块（避免运行时调用 qmake 命令）
     let qt_ver = qt_runtime_version();

@@ -2,7 +2,7 @@ package com.xiwei.sujian.app.di
 
 import android.content.Context
 import android.net.Uri
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
@@ -110,11 +110,11 @@ object AppServiceProvider {
         val (isConnected, isMetered) = AndroidNetworkMonitor.detectNetworkState(context)
         try {
             bridge.holder.service.updateNetworkState(isConnected, isMetered, null, null)
-            DiagnosticsLogger.d(TAG, "Network state updated: connected=$isConnected, metered=$isMetered")
+            DiagnosticsInterop.d(TAG, "Network state updated: connected=$isConnected, metered=$isMetered")
         } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.e(TAG, "Native library not loaded, skipping network state update", e)
+            DiagnosticsInterop.e(TAG, "Native library not loaded, skipping network state update", e)
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "Failed to update network state", e)
+            DiagnosticsInterop.e(TAG, "Failed to update network state", e)
         }
     }
 }

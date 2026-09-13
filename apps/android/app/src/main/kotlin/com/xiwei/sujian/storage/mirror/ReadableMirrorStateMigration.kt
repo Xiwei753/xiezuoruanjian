@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * ReadableMirrorStateMigration — 旧 mirror runtime state 的一次性版本迁移。
@@ -57,7 +57,7 @@ class ReadableMirrorStateMigration(
             is CommittedManifestReadResult.Found -> Result.SUCCESS
             is CommittedManifestReadResult.NotExists -> Result.SUCCESS
             is CommittedManifestReadResult.Corrupted -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "State migration: state corrupted, cannot migrate: ${readResult.cause.message}",
                 )
@@ -81,7 +81,7 @@ class ReadableMirrorStateMigration(
     private fun migrateFromOldState(): Result {
         val manifestUri = stateStore.getManifestUri()
         if (manifestUri == null) {
-            DiagnosticsLogger.w(TAG, "State migration: NeedsMigration but manifestUri is null")
+            DiagnosticsInterop.w(TAG, "State migration: NeedsMigration but manifestUri is null")
             return Result.FAILURE
         }
         // #649 评论 5577831998 问题 2：迁移器现在用 stateStore.getManifestUri() 返回的精确旧 URI，
@@ -94,7 +94,7 @@ class ReadableMirrorStateMigration(
             )
         val (manifestJson, computedHash) =
             storage.readTextAndHash(oldManifestRef) ?: run {
-                DiagnosticsLogger.w(TAG, "State migration: readTextAndHash failed for manifest at uri=$manifestUri")
+                DiagnosticsInterop.w(TAG, "State migration: readTextAndHash failed for manifest at uri=$manifestUri")
                 return Result.FAILURE
             }
         // 严格解析 manifest
@@ -102,20 +102,20 @@ class ReadableMirrorStateMigration(
             try {
                 mirrorManifestFromJsonStrict(manifestJson)
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "State migration: manifest strict parse failed: ${e.message}")
+                DiagnosticsInterop.w(TAG, "State migration: manifest strict parse failed: ${e.message}")
                 return Result.FAILURE
             }
         // 校验 manifest chapters 与 stateStore private entries 对上
         if (!verifyManifestAgainstState(manifest)) {
-            DiagnosticsLogger.w(TAG, "State migration: manifest vs state entries mismatch")
+            DiagnosticsInterop.w(TAG, "State migration: manifest vs state entries mismatch")
             return Result.FAILURE
         }
         // 一次性写入 committed baseline
         if (!stateStore.setCommittedManifest(manifestJson, computedHash)) {
-            DiagnosticsLogger.w(TAG, "State migration: setCommittedManifest failed")
+            DiagnosticsInterop.w(TAG, "State migration: setCommittedManifest failed")
             return Result.FAILURE
         }
-        DiagnosticsLogger.i(TAG, "State migration: successfully migrated committed baseline")
+        DiagnosticsInterop.i(TAG, "State migration: successfully migrated committed baseline")
         return Result.SUCCESS
     }
 
@@ -141,7 +141,7 @@ class ReadableMirrorStateMigration(
         // 与 manifestEntries.keys（不含零章节作品）对比必定失败）。
         val stateResult = stateStore.getAllChapterEntriesStrict()
         if (stateResult.isFailure) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "State migration: failed to read state entries: ${stateResult.exceptionOrNull()?.message}",
             )
@@ -151,7 +151,7 @@ class ReadableMirrorStateMigration(
         // 检查 project IDs 完全相等（stateProjectIds 含 publishedProjectIds，能覆盖零章节作品）
         val manifestProjectIds = manifest.projects.map { it.id }.toSet()
         if (manifestProjectIds != stateProjectIds) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "State migration: project IDs mismatch: manifest=$manifestProjectIds, state=$stateProjectIds",
             )
@@ -164,7 +164,7 @@ class ReadableMirrorStateMigration(
             val stateKeys = stateEntries.keys
             val onlyInManifest = manifestKeys - stateKeys
             val onlyInState = stateKeys - manifestKeys
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "State migration: chapter keys mismatch: onlyInManifest=$onlyInManifest, onlyInState=$onlyInState",
             )
@@ -174,7 +174,7 @@ class ReadableMirrorStateMigration(
             val manifestEntry = manifestEntries.getValue(key)
             val stateEntry = stateEntries.getValue(key)
             if (manifestEntry.relativePath != stateEntry.relativePath) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "State migration: relativePath mismatch for $key: " +
                         "manifest=${manifestEntry.relativePath}, state=${stateEntry.relativePath}",
@@ -182,14 +182,14 @@ class ReadableMirrorStateMigration(
                 return false
             }
             if (manifestEntry.contentHash != stateEntry.contentHash) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "State migration: contentHash mismatch for $key",
                 )
                 return false
             }
             if (manifestEntry.revision != stateEntry.revision) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "State migration: revision mismatch for $key: " +
                         "manifest=${manifestEntry.revision}, state=${stateEntry.revision}",

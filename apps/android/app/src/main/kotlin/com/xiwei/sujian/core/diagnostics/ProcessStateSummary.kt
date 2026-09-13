@@ -62,7 +62,7 @@ internal object ProcessStateSummary {
     /**
      * 轻量摘要值脱敏 — 只保留安全摘要字符（字母、数字、下划线、连字符），
      * 其余替换为 `_`。用于进程状态摘要的 screen/editor/sync 枚举映射值，
-     * 不走 [DiagnosticsLogger.redact] 的完整 Regex（这些值是应用内部枚举，不含 token/正文）。
+     * 不走 Rust `writer_diagnostics::redact` 的完整 Regex（这些值是应用内部枚举，不含 token/正文）。
      */
     internal fun sanitizeSummaryValue(value: String): String =
         value.map { ch ->

@@ -30,3 +30,30 @@ pub fn create_platform_init(
         timezone,
     }
 }
+
+/// 把完整 `PlatformInit` 交给 `writer_diagnostics::init`，启动统一日志后端。
+///
+/// 日志目录、平台名、设备 ID、应用版本、locale/timezone 都从这一个入口进来。
+/// `build_key` 由调用方传入（来自 BuildConfig），`session_id` 每次启动唯一。
+/// 幂等：重复调用无副作用。
+pub fn init_diagnostics(
+    init: &PlatformInit,
+    build_key: String,
+    session_id: String,
+    enabled: bool,
+    verbose: bool,
+) {
+    let config = writer_diagnostics::DiagnosticsConfig {
+        log_dir: init.log_dir.clone(),
+        platform_name: init.platform.to_string(),
+        device_id: init.device_id.clone(),
+        app_version: init.app_version.clone(),
+        build_key,
+        locale: init.locale.clone(),
+        timezone: init.timezone.clone(),
+        session_id,
+        enabled,
+        verbose,
+    };
+    writer_diagnostics::init(config);
+}

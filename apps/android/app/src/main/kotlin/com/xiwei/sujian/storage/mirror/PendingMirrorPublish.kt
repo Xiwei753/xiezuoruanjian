@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -410,7 +410,7 @@ data class PendingMirrorPublish(
                 val phase = validatePhase(root.getString(KEY_PHASE))
                 // 校验必填字段解析成功（#649 评论 5565862745 问题 5）
                 if (backend == null || transactionType == null || phase == null) {
-                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invalid backend/transactionType/phase")
+                    DiagnosticsInterop.e(TAG, "PendingMirrorPublish.fromJson: invalid backend/transactionType/phase")
                     return null
                 }
                 val oldEntries = decodeEntries(root.optJSONObject(KEY_OLD_ENTRIES))
@@ -419,12 +419,12 @@ data class PendingMirrorPublish(
                 // 整个 pending journal 判 Corrupted，不让损坏数据进入恢复流程。
                 val stagedRefs = decodeStagedRefs(root.optJSONObject(KEY_STAGED_REFS))
                 if (stagedRefs == null) {
-                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: corrupted stagedRefs")
+                    DiagnosticsInterop.e(TAG, "PendingMirrorPublish.fromJson: corrupted stagedRefs")
                     return null
                 }
                 val items = decodeItems(root.optJSONObject(KEY_ITEMS))
                 if (items == null) {
-                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: corrupted items")
+                    DiagnosticsInterop.e(TAG, "PendingMirrorPublish.fromJson: corrupted items")
                     return null
                 }
                 val removedProjectIds = decodeStringSet(root.optJSONArray(KEY_REMOVED_PROJECT_IDS))
@@ -480,7 +480,7 @@ data class PendingMirrorPublish(
                         frozenManifestPlanHash = frozenManifestPlanHash,
                     )
                 if (!publish.validateInvariants()) {
-                    DiagnosticsLogger.e(TAG, "PendingMirrorPublish.fromJson: invariant validation failed")
+                    DiagnosticsInterop.e(TAG, "PendingMirrorPublish.fromJson: invariant validation failed")
                     return null
                 }
                 publish
@@ -643,7 +643,7 @@ data class PendingMirrorPublish(
             val stateValue = obj.optString(KEY_STATE)
             val state = PendingItem.parseStateStrict(stateValue)
             if (state == null) {
-                DiagnosticsLogger.e(TAG, "decodeItem: invalid/missing state '$stateValue' for ${key.chapterId}")
+                DiagnosticsInterop.e(TAG, "decodeItem: invalid/missing state '$stateValue' for ${key.chapterId}")
                 return null
             }
             return PendingItem(

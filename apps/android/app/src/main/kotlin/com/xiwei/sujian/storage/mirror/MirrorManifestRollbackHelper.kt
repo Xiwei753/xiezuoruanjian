@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * MirrorManifestRollbackHelper — manifest rollback 的 phase 方法集合。
@@ -35,7 +35,7 @@ internal class MirrorManifestRollbackHelper(
         if (journalContext == null) return true
         if (journalContext.manifestTargetJson == null) return true
         if (journalContext.manifestOldRef != null && journalContext.manifestOldContentHash == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "rollbackManifest: manifestOldRef exists but manifestOldContentHash is null, " +
                     "unknown state, keeping journal",
@@ -48,7 +48,7 @@ internal class MirrorManifestRollbackHelper(
                 is MirrorLookupResult.Found -> r.ref
                 is MirrorLookupResult.Missing -> null
                 is MirrorLookupResult.Failed -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback manifest: lookupBackup failed: ${r.cause?.message}, keeping journal",
                     )
@@ -108,7 +108,7 @@ internal class MirrorManifestRollbackHelper(
             currentHash == ctx.journalContext.manifestOldContentHash ->
                 handleManifestMatchesOld(ctx, currentJournal)
             else -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "rollback manifest: current manifest hash matches neither old nor new, state unknown",
                 )
@@ -125,7 +125,7 @@ internal class MirrorManifestRollbackHelper(
         currentJournal: PendingMirrorPublish,
     ): RollbackManifestStep {
         if (!workspace.deleteManifest()) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: delete new manifest failed")
+            DiagnosticsInterop.w(TAG, "rollback manifest: delete new manifest failed")
             return RollbackManifestStep.Failed
         }
         // 写 MANIFEST_ROLLBACK_NEW_REMOVED
@@ -141,7 +141,7 @@ internal class MirrorManifestRollbackHelper(
                 manifestNewRef = null,
             )
         ) {
-            DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "NEW_REMOVED")
+            DiagnosticsInterop.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "NEW_REMOVED")
             return RollbackManifestStep.Failed
         }
         return RollbackManifestStep.Continue(nextJournal)
@@ -157,7 +157,7 @@ internal class MirrorManifestRollbackHelper(
         // manifest 已在私有目录中且是旧 manifest，setManifestUri 指向私有文件路径
         val manifestPath = workspace.manifestFile().absolutePath
         if (!stateStore.setManifestUri(manifestPath)) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed (manifest already old)")
+            DiagnosticsInterop.w(TAG, "rollback manifest: setManifestUri failed (manifest already old)")
             return RollbackManifestStep.Failed
         }
         val nextJournal =
@@ -165,7 +165,7 @@ internal class MirrorManifestRollbackHelper(
                 manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
             )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (manifest already old)",
             )
@@ -195,7 +195,7 @@ internal class MirrorManifestRollbackHelper(
                     manifestNewRef = null,
                 )
             ) {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     ROLLBACK_MANIFEST_JOURNAL_FAILED + "NEW_REMOVED (manifest missing)",
                 )
@@ -230,7 +230,7 @@ internal class MirrorManifestRollbackHelper(
     ): Boolean {
         // #649 评论 5572554935 问题 4：首次发布 manifest（无旧 manifest）的回滚。
         if (!stateStore.clearManifestUri()) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: clearManifestUri failed (no-old manifest rollback)")
+            DiagnosticsInterop.w(TAG, "rollback manifest: clearManifestUri failed (no-old manifest rollback)")
             return false
         }
         // 删除私有目录中可能残留的新 manifest
@@ -240,7 +240,7 @@ internal class MirrorManifestRollbackHelper(
                 manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
             )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
-            DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (no-old)")
+            DiagnosticsInterop.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (no-old)")
             return false
         }
         return true
@@ -254,7 +254,7 @@ internal class MirrorManifestRollbackHelper(
         val currentContent = workspace.readManifest()
         if (currentContent == null) {
             // 私有目录中没有 manifest，backup 也缺失：old manifest 丢失，无法恢复
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "rollback manifest: backup missing and manifest missing, old manifest lost, keeping journal",
             )
@@ -268,7 +268,7 @@ internal class MirrorManifestRollbackHelper(
                 // 私有目录中确实是 old manifest → setManifestUri 并推进状态
                 val manifestPath = workspace.manifestFile().absolutePath
                 if (!stateStore.setManifestUri(manifestPath)) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback manifest: setManifestUri failed (backup null, old verified in workspace)",
                     )
@@ -284,7 +284,7 @@ internal class MirrorManifestRollbackHelper(
                         ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
                     )
                 ) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (backup null, old verified)",
                     )
@@ -294,7 +294,7 @@ internal class MirrorManifestRollbackHelper(
             }
         }
         // hash 不匹配/读取失败/无 hash：私有目录中的不是 old manifest，无法恢复
-        DiagnosticsLogger.w(
+        DiagnosticsInterop.w(
             TAG,
             "rollback manifest: backup missing, workspace manifest exists but not old manifest" +
                 " (hash mismatch), keeping journal",
@@ -324,7 +324,7 @@ internal class MirrorManifestRollbackHelper(
                 // 私有目录中已是旧 manifest → setManifestUri 并推进状态
                 val manifestPath = workspace.manifestFile().absolutePath
                 if (!stateStore.setManifestUri(manifestPath)) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback manifest: setManifestUri failed (already restored)",
                     )
@@ -340,7 +340,7 @@ internal class MirrorManifestRollbackHelper(
                         ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
                     )
                 ) {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         ROLLBACK_MANIFEST_JOURNAL_FAILED + "OLD_RESTORED (already restored)",
                     )
@@ -354,20 +354,20 @@ internal class MirrorManifestRollbackHelper(
         // 从 workspace backup 读取旧 manifest 内容
         val backupContent = workspace.readBackup(backup)
         if (backupContent == null) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: read backup content failed")
+            DiagnosticsInterop.w(TAG, "rollback manifest: read backup content failed")
             return false
         }
 
         // 原子写入旧 manifest 到私有目录
         if (!workspace.writeManifest(backupContent)) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: writeManifest failed (restoring old manifest)")
+            DiagnosticsInterop.w(TAG, "rollback manifest: writeManifest failed (restoring old manifest)")
             return false
         }
 
         // setManifestUri 指向私有文件路径
         val manifestPath = workspace.manifestFile().absolutePath
         if (!stateStore.setManifestUri(manifestPath)) {
-            DiagnosticsLogger.w(TAG, "rollback manifest: setManifestUri failed (after restoring manifest backup)")
+            DiagnosticsInterop.w(TAG, "rollback manifest: setManifestUri failed (after restoring manifest backup)")
             return false
         }
         val nextJournal =
@@ -375,7 +375,7 @@ internal class MirrorManifestRollbackHelper(
                 manifestSwapState = ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED,
             )
         if (!writeRollbackJournal(nextJournal, ctx.items, ManifestTransactionState.MANIFEST_ROLLBACK_OLD_RESTORED)) {
-            DiagnosticsLogger.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + OLD_RESTORED)
+            DiagnosticsInterop.w(TAG, ROLLBACK_MANIFEST_JOURNAL_FAILED + OLD_RESTORED)
             return false
         }
         return true

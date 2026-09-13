@@ -15,8 +15,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.designsystem.component.SujianSwitchRow
-import com.xiwei.sujian.core.diagnostics.DiagnosticsExporter
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsExporterInterop
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -39,9 +39,9 @@ fun DiagnosticsSettingsContent(vm: SettingsViewModel) {
             title = stringResource(id = R.string.pref_diagnostics_enabled),
             checked = enabled,
             onCheckedChange = { checked ->
-                DiagnosticsLogger.setEnabled(checked)
+                DiagnosticsInterop.setEnabled(checked)
                 EditorEventRingBuffer.setEnabled(checked)
-                if (!checked) DiagnosticsLogger.setVerbose(false)
+                if (!checked) DiagnosticsInterop.setVerbose(false)
                 vm.handleIntent(
                     SettingsIntent.UpdateLocal { current ->
                         current.copy(
@@ -57,7 +57,7 @@ fun DiagnosticsSettingsContent(vm: SettingsViewModel) {
             checked = verbose,
             enabled = enabled,
             onCheckedChange = { checked ->
-                DiagnosticsLogger.setVerbose(checked)
+                DiagnosticsInterop.setVerbose(checked)
                 vm.handleIntent(
                     SettingsIntent.UpdateLocal { current ->
                         current.copy(diagnosticsVerbose = checked)
@@ -102,7 +102,7 @@ private fun CopyDeviceInfoButton(
     SujianOutlinedButton(
         text = stringResource(id = R.string.btn_copy_device_info),
         onClick = {
-            val json = DiagnosticsExporter.getDeviceInfoJson(context)
+            val json = DiagnosticsExporterInterop.getDeviceInfoJson(context)
             val clipboard =
                 context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
                     as android.content.ClipboardManager
@@ -136,7 +136,7 @@ private fun ClearLogsButton(
             clearScope.launch {
                 val cleared =
                     withContext(Dispatchers.IO) {
-                        DiagnosticsLogger.clearLogs()
+                        DiagnosticsInterop.clearLogs()
                     }
                 if (cleared) {
                     EditorEventRingBuffer.clear()
@@ -172,10 +172,10 @@ private fun ExportDiagnosticsButton(
             exportScope.launch {
                 val zipFile =
                     withContext(Dispatchers.IO) {
-                        DiagnosticsExporter.export(context.applicationContext)
+                        DiagnosticsExporterInterop.export(context.applicationContext)
                     }
                 if (zipFile != null) {
-                    DiagnosticsExporter.shareZip(context, zipFile)
+                    DiagnosticsExporterInterop.shareZip(context, zipFile)
                 } else {
                     Toast.makeText(context, exportFailedText, Toast.LENGTH_SHORT).show()
                 }

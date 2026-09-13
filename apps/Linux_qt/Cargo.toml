@@ -19,6 +19,7 @@ ai = ["writer_core/ai"]
 [dependencies]
 writer_core = { path = "../../core/writer_core", features = ["git-https", "github-api"] }
 writer_platform_api = { path = "../../core/writer_platform_api" }
+writer_diagnostics = { path = "../../core/writer_diagnostics" }
 writer-platform-linux = { path = "../../platform/rust/linux" }
 arboard = "3.4.1"
 rfd = "0.14.1"
@@ -28,8 +29,7 @@ serde = { version = "1.0", features = ["derive"] }
 uuid = "1.8"
 chrono = "0.4"
 cpp = "0.5.11"
-zip = "2.2"
-regex = "1"
+log = "0.4"
 bitflags = "2"
 
 [build-dependencies]

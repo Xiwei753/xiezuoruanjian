@@ -20,6 +20,7 @@ github-api = []
 
 [dependencies]
 writer_platform_api = { path = "../writer_platform_api" }
+writer_diagnostics = { path = "../writer_diagnostics" }
 walkdir = "2.3"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

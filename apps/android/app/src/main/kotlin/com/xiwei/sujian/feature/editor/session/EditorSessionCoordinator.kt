@@ -706,7 +706,7 @@ open class EditorSessionCoordinator(
                     Log.e(TAG, "createSession($targetId): Core returned null/0 session id")
                     null
                 } else {
-                    com.xiwei.sujian.core.diagnostics.DiagnosticsEvents.sessionLifecycle(id.toString(), "create")
+                    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.sessionLifecycle(id.toString(), "create")
                     id
                 }
             }

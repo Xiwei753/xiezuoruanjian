@@ -2,12 +2,13 @@ package com.xiwei.sujian.feature.sync.work
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.sync.data.SyncOutcome
 import com.xiwei.sujian.feature.sync.data.SyncProfileReadResult
 import com.xiwei.sujian.feature.sync.data.SyncProfileSnapshot
 import com.xiwei.sujian.feature.sync.data.model.SyncTrigger
+import uniffi.writer_core.DiagnosticOriginDto
 
 /**
  * 全量自动同步 Worker。
@@ -36,7 +37,7 @@ class AutoSyncWorker(
             try {
                 settingsRepository.loadCommittedSyncProfile()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load sync profile snapshot", e)
+                DiagnosticsInterop.w(TAG, "Unable to load sync profile snapshot", e)
                 return Result.retry()
             }
         val snapshot =
@@ -44,7 +45,7 @@ class AutoSyncWorker(
                 is SyncProfileReadResult.Found -> snapshotResult.snapshot
                 is SyncProfileReadResult.NotConfigured -> snapshotResult.snapshot
                 is SyncProfileReadResult.Failed -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "Sync profile snapshot failed: ${snapshotResult.message}",
                     )
@@ -78,7 +79,7 @@ class AutoSyncWorker(
             try {
                 settingsRepository.loadFullSyncState()
             } catch (e: Exception) {
-                DiagnosticsLogger.w(TAG, "Unable to load full sync state", e)
+                DiagnosticsInterop.w(TAG, "Unable to load full sync state", e)
                 return false
             }
         return AutoSyncScheduler.shouldSyncByInterval(
@@ -101,25 +102,26 @@ class AutoSyncWorker(
         internal fun mapOutcomeToWorkerResult(outcome: SyncOutcome): Result =
             when (outcome) {
                 is SyncOutcome.Completed -> {
-                    DiagnosticsEvents.syncEvent("autosync", "completed")
+                    // 自动同步 Worker 由周期任务驱动，origin=App。
+                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "completed")
                     Result.success()
                 }
                 is SyncOutcome.Unconfigured,
                 is SyncOutcome.Disabled,
                 -> {
-                    DiagnosticsEvents.syncEvent("autosync", "unconfigured")
+                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "unconfigured")
                     Result.success()
                 }
                 is SyncOutcome.Busy -> {
-                    DiagnosticsEvents.syncEvent("autosync", "busy")
+                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "busy")
                     Result.retry()
                 }
                 is SyncOutcome.RetryableFailure -> {
-                    DiagnosticsEvents.syncEvent("autosync", "retryable_failure")
+                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "retryable_failure")
                     Result.retry()
                 }
                 is SyncOutcome.TerminalFailure -> {
-                    DiagnosticsEvents.syncEvent("autosync", "terminal_failure")
+                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "terminal_failure")
                     Result.failure()
                 }
             }

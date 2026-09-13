@@ -1,5 +1,5 @@
 package com.xiwei.sujian.core.interop.project
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.feature.project.data.model.ChapterMeta
@@ -134,7 +134,7 @@ class ChapterBridge internal constructor(
         return try {
             holder.service.calculateWordCount(text).toInt()
         } catch (e: UnsatisfiedLinkError) {
-            DiagnosticsLogger.e(TAG, "Native library is not loaded", e)
+            DiagnosticsInterop.e(TAG, "Native library is not loaded", e)
             text.length
         }
     }

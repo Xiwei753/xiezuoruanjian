@@ -1,6 +1,6 @@
 package com.xiwei.sujian.app.presentation.contract
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import uniffi.writer_core.ActionRegionDto
@@ -52,7 +52,7 @@ internal object PresentationContractBridge {
                 else -> null
             }
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "resolveLayoutContract failed: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "resolveLayoutContract failed: ${e.message}", e)
             null
         }
 
@@ -83,7 +83,7 @@ internal object PresentationContractBridge {
                 else -> null
             }
         } catch (e: Exception) {
-            DiagnosticsLogger.e(TAG, "resolveWorkbenchLayout failed: ${e.message}", e)
+            DiagnosticsInterop.e(TAG, "resolveWorkbenchLayout failed: ${e.message}", e)
             null
         }
 

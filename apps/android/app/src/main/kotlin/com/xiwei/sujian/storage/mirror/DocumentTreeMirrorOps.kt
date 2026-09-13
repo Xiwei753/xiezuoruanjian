@@ -3,7 +3,7 @@ package com.xiwei.sujian.storage.mirror
 import android.content.ContentResolver
 import android.net.Uri
 import android.provider.DocumentsContract
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.storage.documents.DocumentTreeReader
 import java.io.FileNotFoundException
 import java.io.IOException
@@ -42,7 +42,7 @@ internal class DocumentTreeMirrorOps(
             val existing = children.find { it.isDirectory && it.name == dirName }
             if (existing != null) return existing.uri
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "listChildren failed for $dirName: ${e.message}")
+            DiagnosticsInterop.w(TAG, "listChildren failed for $dirName: ${e.message}")
             return null
         }
         return try {
@@ -53,7 +53,7 @@ internal class DocumentTreeMirrorOps(
                 dirName,
             )
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "createDocument dir failed for $dirName: ${e.message}")
+            DiagnosticsInterop.w(TAG, "createDocument dir failed for $dirName: ${e.message}")
             null
         }
     }
@@ -68,7 +68,7 @@ internal class DocumentTreeMirrorOps(
                 true
             } ?: false
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "writeToUri failed: ${e.message}")
+            DiagnosticsInterop.w(TAG, "writeToUri failed: ${e.message}")
             false
         }
 
@@ -145,7 +145,7 @@ internal class DocumentTreeMirrorOps(
             val match = children.find { !it.isDirectory && it.name == displayName }
             match?.let { MirrorFileRef(uri = it.uri.toString(), relativePath = relativePath) }
         } catch (e: Exception) {
-            DiagnosticsLogger.w(TAG, "resolveInTree listChildren failed for $displayName: ${e.message}")
+            DiagnosticsInterop.w(TAG, "resolveInTree listChildren failed for $displayName: ${e.message}")
             null
         }
     }

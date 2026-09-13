@@ -18,6 +18,7 @@ git-https = ["writer_core/git-https"]
 [dependencies]
 writer_core = { path = "../writer_core" }
 writer_platform_api = { path = "../writer_platform_api" }
+writer_diagnostics = { path = "../writer_diagnostics" }
 
 [dependencies.uniffi]
 version = "0.28.0"

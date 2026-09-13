@@ -31,5 +31,16 @@ pub use writer_core::open_app_service_with_init;
 pub use writer_core::open_app_service_with_secure_storage;
 pub use writer_core::SecureStorageError;
 pub use writer_core::SecureStorageProvider;
+// ── 统一诊断接口（Issue #670 评论 5651060802） ──
+pub use writer_core::clear_diagnostics;
+pub use writer_core::export_diagnostics;
+pub use writer_core::flush_diagnostics;
+pub use writer_core::record_diagnostic_event;
+pub use writer_core::set_diagnostics_config;
+pub use writer_diagnostics::{
+    export_diagnostics as export_diagnostics_raw, init as init_diagnostics, clear as clear_diagnostics_raw,
+    flush as flush_diagnostics_raw, record_event, set_config as set_diagnostics_config_raw,
+    DiagnosticEvent, DiagnosticsConfig, DiagnosticLevel, DiagnosticOrigin, PlatformAttachment,
+};
 pub use writer_platform_api::PlatformServices;
 pub use writer_platform_api::SyncTransportFactory;

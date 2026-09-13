@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * 单章节回滚执行器。
@@ -48,7 +48,7 @@ internal class MirrorChapterRollbackExecutor(
             is MirrorLookupResult.Found -> handleRollbackFinalFound(ctx, storage, finalLookup)
             is MirrorLookupResult.Missing -> handleRollbackFinalMissing(ctx, storage)
             is MirrorLookupResult.Failed -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "rollback: lookup final failed for ${ctx.key.chapterId}: ${finalLookup.cause?.message}",
                 )
@@ -77,7 +77,7 @@ internal class MirrorChapterRollbackExecutor(
     ): RollbackChapterContext? {
         val staged = item.stagedRef ?: journal.stagedRefs[key]
         if (staged == null) {
-            DiagnosticsLogger.w(TAG, "rollback: missing stagedRef for ${key.chapterId}")
+            DiagnosticsInterop.w(TAG, "rollback: missing stagedRef for ${key.chapterId}")
             return null
         }
         // #649 评论 5572554935 问题 1：rename/move rollback 路径错配。
@@ -109,7 +109,7 @@ internal class MirrorChapterRollbackExecutor(
     ): RollbackItemResult {
         val hashResult = storage.readTextAndHash(finalLookup.ref)
         if (hashResult == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "rollback: readTextAndHash failed for ${ctx.key.chapterId}, cannot verify final identity",
             )
@@ -131,23 +131,23 @@ internal class MirrorChapterRollbackExecutor(
         // 有旧正文：final Found 时，hash 是 old/new 中任意一个都删除并 restore backup
         if (finalHash == ctx.expectedOldHash || finalHash == ctx.expectedNewHash) {
             if (finalHash == ctx.expectedOldHash) {
-                DiagnosticsLogger.i(
+                DiagnosticsInterop.i(
                     TAG,
                     "rollback: final matches old hash for ${ctx.key.chapterId}, will delete and restore",
                 )
             } else {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "rollback: final matches new hash for ${ctx.key.chapterId}, will delete and restore",
                 )
             }
             val removed = storage.delete(finalLookup.ref)
             if (!removed) {
-                DiagnosticsLogger.w(TAG, "rollback: delete final failed for ${ctx.key.chapterId}")
+                DiagnosticsInterop.w(TAG, "rollback: delete final failed for ${ctx.key.chapterId}")
                 return RollbackItemResult.Failed
             }
         } else {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "rollback: final hash mismatch (neither old nor new) for ${ctx.key.chapterId}, state unknown",
             )
@@ -169,22 +169,22 @@ internal class MirrorChapterRollbackExecutor(
     ): RollbackItemResult {
         // 没有旧正文（新建章节）
         if (ctx.expectedNewHash == null) {
-            DiagnosticsLogger.w(
+            DiagnosticsInterop.w(
                 TAG,
                 "rollback: no expectedNewHash for new chapter ${ctx.key.chapterId}, state unknown",
             )
             return RollbackItemResult.StateUnknown
         }
         if (finalHash == ctx.expectedNewHash) {
-            DiagnosticsLogger.w(TAG, "rollback: new chapter final exists for ${ctx.key.chapterId}, will delete")
+            DiagnosticsInterop.w(TAG, "rollback: new chapter final exists for ${ctx.key.chapterId}, will delete")
             val removed = storage.delete(finalLookup.ref)
             if (!removed) {
-                DiagnosticsLogger.w(TAG, "rollback: delete new chapter final failed for ${ctx.key.chapterId}")
+                DiagnosticsInterop.w(TAG, "rollback: delete new chapter final failed for ${ctx.key.chapterId}")
                 return RollbackItemResult.Failed
             }
             return RollbackItemResult.NewFileRemoved
         }
-        DiagnosticsLogger.w(
+        DiagnosticsInterop.w(
             TAG,
             "rollback: final exists for new chapter with unexpected hash for ${ctx.key.chapterId}, state unknown",
         )
@@ -199,7 +199,7 @@ internal class MirrorChapterRollbackExecutor(
             val restoreResult = restoreBackupToFinal(ctx, storage)
             return mapRestoreResultToRollbackItem(restoreResult, ctx.key)
         }
-        DiagnosticsLogger.i(TAG, "rollback: final missing for new chapter ${ctx.key.chapterId}, target reached")
+        DiagnosticsInterop.i(TAG, "rollback: final missing for new chapter ${ctx.key.chapterId}, target reached")
         return RollbackItemResult.NewFileRemoved
     }
 
@@ -243,11 +243,11 @@ internal class MirrorChapterRollbackExecutor(
             when (backupResult) {
                 is MirrorLookupResult.Found -> backupResult.ref
                 is MirrorLookupResult.Missing -> {
-                    DiagnosticsLogger.w(TAG, "rollback: backup missing for ${key.chapterId} at $backupLookupPath")
+                    DiagnosticsInterop.w(TAG, "rollback: backup missing for ${key.chapterId} at $backupLookupPath")
                     return RestoreBackupResult.Failed(IllegalStateException("backup missing"))
                 }
                 is MirrorLookupResult.Failed -> {
-                    DiagnosticsLogger.w(
+                    DiagnosticsInterop.w(
                         TAG,
                         "rollback: lookup backup failed for ${key.chapterId}: ${backupResult.cause?.message}",
                     )
@@ -257,7 +257,7 @@ internal class MirrorChapterRollbackExecutor(
         // Issue #667：从 workspace 读取 backup 内容，然后在 Download 中创建最终文件
         val backupContent = workspace.readBackup(backup)
         if (backupContent == null) {
-            DiagnosticsLogger.w(TAG, "rollback: read backup content failed for ${key.chapterId}")
+            DiagnosticsInterop.w(TAG, "rollback: read backup content failed for ${key.chapterId}")
             return RestoreBackupResult.Failed(IllegalStateException("read backup content failed"))
         }
         // 在 Download 中创建最终文件（恢复旧正文）
@@ -265,7 +265,7 @@ internal class MirrorChapterRollbackExecutor(
         val displayName = backupLookupPath.substringAfterLast('/')
         val restoredRef = storage.createText(relativeDir, displayName, MIME_MARKDOWN, backupContent)
         if (restoredRef == null) {
-            DiagnosticsLogger.w(TAG, "rollback: createText failed for ${key.chapterId} at $backupLookupPath")
+            DiagnosticsInterop.w(TAG, "rollback: createText failed for ${key.chapterId} at $backupLookupPath")
             return RestoreBackupResult.Failed(IllegalStateException("createText failed"))
         }
         return RestoreBackupResult.Restored(restoredRef)
@@ -279,14 +279,14 @@ internal class MirrorChapterRollbackExecutor(
             is RestoreBackupResult.Restored -> RollbackItemResult.Restored(restoreResult.ref)
             is RestoreBackupResult.AlreadyRestored -> RollbackItemResult.Restored(restoreResult.ref)
             is RestoreBackupResult.Conflict -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "rollback: conflict restoring backup for ${key.chapterId} - final has wrong content",
                 )
                 RollbackItemResult.Failed
             }
             is RestoreBackupResult.Failed -> {
-                DiagnosticsLogger.w(
+                DiagnosticsInterop.w(
                     TAG,
                     "rollback: failed to restore backup for ${key.chapterId}: ${restoreResult.cause?.message}",
                 )

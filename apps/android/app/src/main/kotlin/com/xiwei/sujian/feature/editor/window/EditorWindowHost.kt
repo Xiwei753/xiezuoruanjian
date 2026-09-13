@@ -1,6 +1,6 @@
 package com.xiwei.sujian.feature.editor.window
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsEvents
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import com.xiwei.sujian.feature.editor.motion.TargetMotionConstraint
@@ -105,7 +105,7 @@ class EditorWindowHost(
         autoIndentEnabled: Boolean,
         autoIndentWidth: Float,
     ) {
-        DiagnosticsEvents.editorTypography(
+        DiagnosticsEventsInterop.editorTypography(
             fontSizeSp = fontSizeSp,
             lineSpacing = lineSpacingMultiplier,
             firstLineIndent = autoIndentEnabled,

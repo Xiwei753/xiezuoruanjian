@@ -1,6 +1,6 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.diagnostics.DiagnosticsLogger
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.project.data.model.ProjectWorkspaceSnapshot
 
 /**
@@ -108,18 +108,18 @@ internal class MirrorManifestTransactionExecutor(
         var currentJournal = backupOutcome.currentJournal
         val desiredNewHash = currentJournal.manifestNewContentHash
         if (desiredNewHash == null) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: manifest exists but no expected hash, keeping journal")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: manifest exists but no expected hash, keeping journal")
             return ManifestPromoteOutcome.Aborted
         }
         val currentHash = computeContentHash(currentContent)
         if (currentHash != desiredNewHash) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: manifest hash mismatch, state unknown, keeping journal")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: manifest hash mismatch, state unknown, keeping journal")
             return ManifestPromoteOutcome.Aborted
         }
         // 私有目录中已是新 manifest → setManifestUri 指向私有文件路径
         val manifestPath = workspace.manifestFile().absolutePath
         if (!stateStore.setManifestUri(manifestPath)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed (manifest already new)")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: setManifestUri failed (manifest already new)")
             return ManifestPromoteOutcome.Aborted
         }
         val newRef = MirrorFileRef(uri = manifestPath, relativePath = ctx.manifestRelativePath)
@@ -208,7 +208,7 @@ internal class MirrorManifestTransactionExecutor(
         var currentJournal = promoteOutcome.currentJournal
         // Issue #667：setManifestUri 指向私有文件路径
         if (!stateStore.setManifestUri(newRef.uri)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: setManifestUri failed")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: setManifestUri failed")
             // 回滚：删除新 manifest，从 backup 恢复旧 manifest
             workspace.deleteManifest()
             manifestBackupRef?.let { backupRef ->
@@ -225,7 +225,7 @@ internal class MirrorManifestTransactionExecutor(
                 manifestSwapState = ManifestTransactionState.MANIFEST_COMMITTED,
             )
         if (!journalWriter.persistPendingJournal(currentJournal)) {
-            DiagnosticsLogger.w(TAG, "Manifest transaction: MANIFEST_COMMITTED journal write failed")
+            DiagnosticsInterop.w(TAG, "Manifest transaction: MANIFEST_COMMITTED journal write failed")
         }
         return ManifestTransactionResult(currentJournal, newRef)
     }
