@@ -107,6 +107,7 @@ pub struct SyncBackend {
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
     #[allow(dead_code)]
     sync_can_run: qt_property!(bool; READ sync_can_run NOTIFY sync_status_changed),
+    manual_sync_pending: qt_property!(bool; READ manual_sync_pending NOTIFY sync_status_changed),
     #[allow(dead_code)]
     sync_block_reason: qt_property!(QString; READ sync_block_reason NOTIFY sync_status_changed),
     #[allow(dead_code)]
@@ -252,6 +253,9 @@ impl SyncBackend {
     }
     fn sync_can_run(&self) -> bool {
         self.snap().sync_can_run
+    }
+    fn manual_sync_pending(&self) -> bool {
+        self.snap().manual_sync_pending
     }
     fn sync_block_reason(&self) -> QString {
         self.with_app(|app| app.sync_block_reason())
@@ -517,7 +521,29 @@ impl AppBackend {
             // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
             // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
+                let api = match crate::backend::app_backend::create_core_api(
+                    &data_root,
+                    &projects_root,
+                ) {
+                    Ok(api) => api,
+                    Err(e) => {
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "diagnose".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.block.bootstrap_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&e.to_string())),
+                        };
+                        return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            sync_status: "error".to_string(),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        };
+                    }
+                };
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {

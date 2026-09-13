@@ -189,7 +189,55 @@ impl WriterCoreApi {
         let change_set = self
             .core_write()
             .delete_chapter_with_changes(project_id, volume_id, chapter_id)?;
-        let _ = self.record_workspace_change_set_history(&change_set, "delete_chapter");
+        // 走统一 workspace change journal：先持久化 journal（phase=LocalApplied，
+        // 本地删除已完成），再写 history，成功后清 journal。
+        // history 失败时本地删除可以已经完成，但 journal 必须留下供下次 bootstrap 补记。
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|i| i.device_id)
+            .unwrap_or_default();
+        let journal =
+            crate::storage::journal::workspace_change::WorkspaceChangeJournal::save_pending(
+                &self.app_data_root,
+                &change_set,
+                &device_id,
+                crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteChapter,
+            )
+            .map_err(|e| {
+                log::warn!(
+                    "delete_chapter: save_pending journal failed: {} — history still attempted",
+                    e
+                );
+                crate::api::error::WriterError::Other(format!(
+                    "delete_chapter: save_pending journal failed: {e}"
+                ))
+            })?;
+        // 本地删除已完成，推进到 LocalApplied。
+        if let Err(e) = journal.mark_local_applied(&self.app_data_root) {
+            log::warn!(
+                "delete_chapter: mark_local_applied failed: {} — journal retained for recovery",
+                e
+            );
+        }
+        // 写 workspace history，成功后清 journal；失败时 journal 保留供下次 bootstrap 补记。
+        match self.record_workspace_change_set_history(&change_set, "delete_chapter") {
+            Ok(()) => {
+                if let Err(e) = journal.mark_history_recorded(&self.app_data_root) {
+                    log::warn!(
+                        "delete_chapter: mark_history_recorded failed: {} — journal retained",
+                        e
+                    );
+                } else if let Err(e) = journal.clear_journal(&self.app_data_root) {
+                    log::warn!("delete_chapter: clear_journal failed: {}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "delete_chapter: record_workspace_change_set_history failed: {} — \
+                     journal retained for recovery, history will be补 on next startup",
+                    e
+                );
+            }
+        }
         Ok(true)
     }
 

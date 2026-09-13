@@ -78,6 +78,18 @@ impl AppBackend {
             self.reload_tree();
             self.trigger_projects_reloaded();
         }
+
+        // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
+        // 为 true 时先清 flag，再启动一次 manual sync。
+        if self.manual_sync_pending {
+            self.manual_sync_pending = false;
+            self.debug_log(
+                "sync",
+                "manual_sync_pending_triggered",
+                "starting queued manual sync after previous sync completed",
+            );
+            self.perform_sync_internal("manual", false);
+        }
     }
 
     pub(crate) fn handle_successful_sync_refresh(&mut self) {
@@ -211,7 +223,29 @@ impl AppBackend {
             // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
             // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
+                let api = match crate::backend::app_backend::create_core_api(
+                    &data_root,
+                    &projects_root,
+                ) {
+                    Ok(api) => api,
+                    Err(e) => {
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "dry_run".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.block.bootstrap_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&e.to_string())),
+                        };
+                        return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            sync_status: "error".to_string(),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        };
+                    }
+                };
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {
@@ -367,8 +401,23 @@ impl AppBackend {
     pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
         let op_id = uuid::Uuid::new_v4().to_string();
         if self.current_sync_in_progress {
-            self.debug_log("sync", "perform_sync_skipped", "sync already running");
+            // 手动同步请求到来时正在运行同步：排队等待，不丢点击，不并行启动第二个同步。
+            // 连续点击只保留一次 pending（已经是 true 就不再重复设），不堆无限队列。
             if trigger == "manual" {
+                if !self.manual_sync_pending {
+                    self.manual_sync_pending = true;
+                    self.debug_log(
+                        "sync",
+                        "manual_sync_pending_set",
+                        "sync already running, manual sync queued",
+                    );
+                } else {
+                    self.debug_log(
+                        "sync",
+                        "manual_sync_pending_already_set",
+                        "sync already running and pending already queued",
+                    );
+                }
                 let state = writer_core::api::SyncOperationStateDto {
                     operation_id: op_id.clone(),
                     operation_kind: "sync".to_string(),
@@ -382,6 +431,12 @@ impl AppBackend {
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
                 self.sync_action_completed();
+            } else {
+                self.debug_log(
+                    "sync",
+                    "perform_sync_skipped",
+                    &format!("sync already running (trigger={})", trigger),
+                );
             }
             return self.current_sync_operation_id.clone().into();
         }
@@ -498,7 +553,29 @@ impl AppBackend {
             // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
             // UnwindSafe by auto-impl without needing AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
+                let api = match crate::backend::app_backend::create_core_api(
+                    &data_root,
+                    &projects_root,
+                ) {
+                    Ok(api) => api,
+                    Err(e) => {
+                        let state = writer_core::api::SyncOperationStateDto {
+                            operation_id: op_id_capture.clone(),
+                            operation_kind: "sync".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.block.bootstrap_failed".to_string()),
+                            summary_args: std::collections::HashMap::new(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&e.to_string())),
+                        };
+                        return SyncTaskOutcome {
+                            operation_id: op_id_capture.clone(),
+                            sync_status: "error".to_string(),
+                            action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        };
+                    }
+                };
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {

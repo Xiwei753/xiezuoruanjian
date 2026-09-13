@@ -447,7 +447,7 @@ Item {
                 text: qsTr("执行同步")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: !root.currentSyncInProgress && root.backendRef && root.backendRef.sync_can_run
+                enabled: root.backendRef && root.backendRef.sync_can_run
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_sync_clicked", "")
                     // 先保存当前 UI 配置
@@ -486,7 +486,7 @@ Item {
                 text: qsTr("运行诊断")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: !root.currentSyncInProgress && root.backendRef && root.backendRef.has_workspace
+                enabled: root.backendRef && root.backendRef.has_workspace
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")
@@ -524,6 +524,18 @@ Item {
             dt: root.resolvedDt
             visible: root.backendRef && !root.backendRef.sync_can_run && root.backendRef.sync_block_reason.length > 0
             text: root.backendRef ? root.backendRef.sync_block_reason : ""
+            color: resolvedDt.onSurfaceVariant
+            font.pixelSize: resolvedDt.caption
+            font.family: resolvedDt.fontFamily
+            Layout.fillWidth: true
+        }
+
+        // pending manual 状态展示：当前自动同步运行时点击，显示"当前同步完成后将再次同步"
+        AppText {
+            id: manualSyncPendingHint
+            dt: root.resolvedDt
+            visible: root.backendRef && root.backendRef.manual_sync_pending
+            text: qsTr("当前同步完成后将再次同步")
             color: resolvedDt.onSurfaceVariant
             font.pixelSize: resolvedDt.caption
             font.family: resolvedDt.fontFamily

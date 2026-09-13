@@ -94,19 +94,20 @@ pub(crate) fn current_network_state() -> writer_platform_api::NetworkState {
     writer_platform_linux::get_cached_network_state()
 }
 
-pub(crate) fn create_core_api(app_data_root: &str, projects_root: &str) -> WriterCoreApi {
+pub(crate) fn create_core_api(
+    app_data_root: &str,
+    projects_root: &str,
+) -> std::result::Result<WriterCoreApi, writer_core::api::WriterError> {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
-    if sync_transport.is_some() || secure_storage.is_some() {
-        WriterCoreApi::with_platform_services(
-            app_data_root,
-            projects_root,
-            sync_transport,
-            secure_storage,
-        )
-    } else {
-        WriterCoreApi::new(app_data_root, projects_root)
-    }
+    // 统一走 Core workspace bootstrap：确保 .git 存在、恢复未完成删除事务、
+    // 注入正确的 GitRepoLayout。不再裸构造未 bootstrap 的 WriterCoreApi。
+    writer_core::api::bootstrap::bootstrap_core_api(
+        app_data_root,
+        projects_root,
+        sync_transport,
+        secure_storage,
+    )
 }
 
 fn get_debug_config() -> &'static DebugConfig {
@@ -352,6 +353,10 @@ pub struct AppBackend {
     current_sync_operation_kind: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
+    /// 手动同步 pending 标志。当手动同步请求到来时正在运行自动同步，
+    /// 设为 true 排队等待当前同步完成后再执行一次 manual sync。
+    /// 连续点击只保留一次 pending，不堆无限队列。
+    manual_sync_pending: bool,
     current_last_sync_time: i64,
     current_last_auto_sync_reason: String,
     current_last_auto_sync_started_at: i64,
@@ -469,7 +474,9 @@ impl AppBackend {
         s.sync_in_progress = self.current_sync_in_progress;
         s.sync_can_run = self.current_has_data_root
             && self.current_sync_enabled
-            && !self.current_sync_in_progress;
+            && !self.current_sync_remote_url.is_empty()
+            && !self.current_sync_token.is_empty();
+        s.manual_sync_pending = self.manual_sync_pending;
         s.ai_available = cfg!(feature = "ai");
         s.ai_enabled = self.current_ai_enabled;
         s.setting_desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
@@ -501,10 +508,17 @@ impl AppBackend {
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_data_root && !self.current_data_root.is_empty() {
-            Some(create_core_api(
-                &self.current_data_root,
-                &self.current_projects_root,
-            ))
+            match create_core_api(&self.current_data_root, &self.current_projects_root) {
+                Ok(api) => Some(api),
+                Err(e) => {
+                    log::error!(
+                        "core_api: bootstrap_core_api failed for {}: {}",
+                        self.current_data_root,
+                        e
+                    );
+                    None
+                }
+            }
         } else {
             None
         }

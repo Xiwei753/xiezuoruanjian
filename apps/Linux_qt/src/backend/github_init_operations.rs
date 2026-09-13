@@ -165,7 +165,30 @@ impl AppBackend {
             .parent()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| ".".to_string());
-        let api = crate::backend::app_backend::create_core_api(path, &projects_root);
+        let api = match crate::backend::app_backend::create_core_api(path, &projects_root) {
+            Ok(api) => api,
+            Err(e) => {
+                return SyncTaskOutcome {
+                    operation_id: operation_id.to_string(),
+                    sync_status: "error".to_string(),
+                    action_result: serde_json::to_string(
+                        &writer_core::api::SyncOperationStateDto {
+                            operation_id: operation_id.to_string(),
+                            operation_kind: "github_init".to_string(),
+                            status_code: "error".to_string(),
+                            phase_key: None,
+                            summary_key: Some("sync.block.bootstrap_failed".to_string()),
+                            summary_args: [("error".to_string(), mask_sync_error(&e.to_string()))]
+                                .into_iter()
+                                .collect(),
+                            counts: writer_core::api::SyncOperationCountsDto::default(),
+                            raw_error: Some(mask_sync_error(&e.to_string())),
+                        },
+                    )
+                    .unwrap_or_default(),
+                };
+            }
+        };
         let config_dto: writer_core::api::types::SyncConfigDto = config.clone().into();
 
         if !has_content() {
