@@ -47,11 +47,6 @@ cpp! {{
     #include <vector>
     #include <algorithm>
 
-    // Issue #668 评论 5646842592 问题 3: GUI 线程 reprepare snapshot 回调入口。
-    // 由 render thread 通过 QMetaObject::invokeMethod + Qt::QueuedConnection 排到
-    // GUI 线程事件队列调用。定义在 editor/input/platform_ime.rs。
-    extern "C" void sujian_reprepare_static_snapshot(void* rust_item);
-
     // Issue #658: 段落布局缓存 — 由 layout.rs 的 cpp! 块定义，
     // 此处通过 extern 引用同一链接单元中的定义。
     // Issue #658 评论 5620035970 问题 2: 用 generation 隔离，通过 get_paragraph_layout(gen, slot) 查找。
@@ -581,41 +576,5 @@ pub fn update_scroll_transform(root_raw: *mut std::ffi::c_void, scroll_y: f64) {
         scroll_y as "double"
     ] {
         update_scroll_transform(root_raw, scroll_y);
-    });
-}
-
-/// Issue #668 评论 5646842592 问题 3: 从 render thread 排 GUI 线程 reprepare snapshot 回调。
-///
-/// 用 `QMetaObject::invokeMethod` + `Qt::QueuedConnection` 把
-/// `sujian_reprepare_static_snapshot` 排到 `item_ptr` 所属线程（GUI 线程）
-/// 的事件队列。不在 render thread 排版，不把 `item.update()` 当成会重新
-/// prepare layout。
-///
-/// 调用时机：`update_paint_node`（render thread）中 static rebuild 失败
-/// （某个必需 layout 缺失，当前 cached_static_snapshot 的 generation 已失效）。
-/// GUI 线程回调里清掉失效 `cached_static_snapshot` 并重新 prepare，再 `update()`
-/// 触发下一帧 `updatePaintNode` 消费新 snapshot。
-///
-/// # Safety
-/// `item_ptr` 必须是有效的 QQuickItem*（由 `get_cpp_object()` 获得）；
-/// `rust_item_ptr` 必须是有效的 SujianEditorItem 裸指针（由
-/// `self as *mut Self as *mut c_void` 获得，由 `item_from_ptr` 解引用）。
-pub fn schedule_static_snapshot_reprepare_on_gui_thread(
-    item_ptr: *mut std::ffi::c_void,
-    rust_item_ptr: *mut std::ffi::c_void,
-) {
-    if item_ptr.is_null() || rust_item_ptr.is_null() {
-        return;
-    }
-    // SAFETY: item_ptr 是有效的 QQuickItem*（由 get_cpp_object() 获得），
-    // rust_item_ptr 是有效的 SujianEditorItem 裸指针（由 self as *mut Self 获得）。
-    // QMetaObject::invokeMethod with Qt::QueuedConnection 把 lambda 排到
-    // item_ptr 所属线程（GUI 线程）事件队列，lambda 在 GUI 线程执行时通过
-    // sujian_reprepare_static_snapshot FFI 入口解引用 rust_item_ptr。
-    // 裸指针跨线程传递本身安全（仅传地址），解引用在 GUI 线程单线程执行。
-    cpp!(unsafe [item_ptr as "QQuickItem*", rust_item_ptr as "void*"] {
-        QMetaObject::invokeMethod(item_ptr, [rust_item_ptr]() {
-            sujian_reprepare_static_snapshot(rust_item_ptr);
-        }, Qt::QueuedConnection);
     });
 }

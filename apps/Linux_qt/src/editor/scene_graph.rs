@@ -250,7 +250,7 @@ pub fn ensure_editor_root(root_raw: *mut std::ffi::c_void) -> *mut std::ffi::c_v
 /// 防御性编程，以保护 update_cursor_node / update_animation_layer /
 /// update_selection_preedit_layer 等内部调用者传入可能为 null 的 root。
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*"
@@ -274,7 +274,7 @@ pub fn update_cursor_node(
     color_str: *const u8,
     color_len: usize,
 ) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",
@@ -408,7 +408,7 @@ pub fn update_selection_preedit_layer(
     rect_count: i32,
     rect_data: *const f64,
 ) {
-    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
+    // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
         root_raw as "QSGNode*",
         item_ptr as "QQuickItem*",

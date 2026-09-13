@@ -276,10 +276,10 @@ Dialog {
                             if (!backendRef) return []
                             try { return JSON.parse(backendRef.list_builtin_themes_json()) } catch(e) { return [] }
                         }
-                        model: _themes.map(function(t) { return t.name || t.themeId })
+                        model: _themes.map(function(t) { return t.name || t.theme_id })
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
-                            var themeId = _themes[index] ? _themes[index].themeId : ""
+                            var themeId = _themes[index] ? _themes[index].theme_id : ""
                             if (themeId.length > 0) {
                                 backendRef.setting_selected_builtin_theme_id = themeId
                                 root.settingsDirty = true
@@ -289,7 +289,7 @@ Dialog {
                         Component.onCompleted: {
                             var selId = backendRef ? backendRef.setting_selected_builtin_theme_id : ""
                             for (var i = 0; i < _themes.length; i++) {
-                                if (_themes[i].themeId === selId) { currentIndex = i; break }
+                                if (_themes[i].theme_id === selId) { currentIndex = i; break }
                             }
                         }
                     }
@@ -307,12 +307,12 @@ Dialog {
                             try { return JSON.parse(backendRef.list_palette_records_json()) } catch(e) { return [] }
                         }
                         model: _records.map(function(r) {
-                            var d = new Date(r.capturedAtMs)
-                            return (r.sourcePlatform || "") + " · " + (r.sourceDeviceClass || "") + " · " + (r.sourceDeviceId || "") + " · " + d.toLocaleDateString()
+                            var d = new Date(r.captured_at_ms)
+                            return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
                         })
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
-                            var paletteId = _records[index] ? _records[index].paletteId : ""
+                            var paletteId = _records[index] ? _records[index].palette_id : ""
                             if (paletteId.length > 0) {
                                 backendRef.setting_selected_palette_id = paletteId
                                 root.settingsDirty = true
@@ -322,7 +322,7 @@ Dialog {
                         Component.onCompleted: {
                             var selId = backendRef ? backendRef.setting_selected_palette_id : ""
                             for (var i = 0; i < _records.length; i++) {
-                                if (_records[i].paletteId === selId) { currentIndex = i; break }
+                                if (_records[i].palette_id === selId) { currentIndex = i; break }
                             }
                         }
                     }

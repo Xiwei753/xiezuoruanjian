@@ -47,10 +47,8 @@ impl QQuickItem for SujianEditorItem {
 
     fn update_paint_node(
         &mut self,
-        node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
+        mut node: qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode>,
     ) -> qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode> {
-        use qmetaobject::scenegraph::SGNode;
-
         let frame_start = Instant::now();
 
         let animation_set_changed = self.tick_text_animations();
@@ -64,7 +62,6 @@ impl QQuickItem for SujianEditorItem {
         } else {
             1.0
         };
-        let root_raw = node.into_raw();
 
         let _vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
@@ -86,7 +83,11 @@ impl QQuickItem for SujianEditorItem {
         // 第一帧旧节点为 null 时，ensure_editor_root 创建新的 QSGTransformNode 根节点，
         // 不再因为 root 为空就整帧跳过渲染。这把"根节点是否为空"的判断从
         // ensure_four_layer_nodes 收口到 ensure_editor_root。
-        let editor_root = scene_graph::ensure_editor_root(root_raw);
+        // Issue #677 评论 5653790560: 不再通过 into_raw / from_raw 做所有权往返，
+        // 直接读写 node.raw（SGNode.raw 是 pub 字段）。第一帧 node.raw 为 null 时
+        // ensure_editor_root 创建根节点并写回 node.raw；后续渲染统一用 node.raw。
+        node.raw = scene_graph::ensure_editor_root(node.raw);
+        let editor_root = node.raw;
 
         if !editor_root.is_null() && !item_ptr.is_null() {
             scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
@@ -190,23 +191,14 @@ impl QQuickItem for SujianEditorItem {
             if !static_rebuild_ok && needs_relayout {
                 self.layout_dirty = true;
                 self.scene_dirty = true;
-                // Issue #668 评论 5646842592 问题 3: 不在 render thread 排版。
-                // request_frame_update() 只是 QQuickItem::update()，只会再安排一次
-                // updatePaintNode()，不会调用 GUI 线程上的
-                // prepare_static_snapshot_on_gui_thread()；且 prepare 在
-                // cached_static_snapshot.is_some() 时直接 return，下一帧仍拿同一份
-                // 失效 snapshot 重试。这里置标记并通过
-                // schedule_static_snapshot_reprepare_on_gui_thread 把 reprepare 排到
-                // GUI 线程事件队列（QMetaObject::invokeMethod + Qt::QueuedConnection），
-                // GUI 线程回调（reprepare_static_snapshot_gui）里清掉失效
-                // cached_static_snapshot 并重新 prepare，再 update() 触发下一帧
-                // updatePaintNode 消费新 snapshot。
-                self.static_snapshot_reprepare_pending = true;
-                let rust_item_ptr = self as *mut Self as *mut std::ffi::c_void;
-                qt_text_node::schedule_static_snapshot_reprepare_on_gui_thread(
-                    item_ptr,
-                    rust_item_ptr,
-                );
+                // Issue #677 评论 5653790560: render thread 不再反向排 GUI 线程补建。
+                // snapshot/generation 生命周期在 GUI 侧一次收口：这里只保留当前静态
+                // 正文节点并记录失败（layout_dirty / scene_dirty 置位），下一帧的
+                // snapshot 准备由 GUI 侧的 invalidate_layout_cache() /
+                // request_static_repaint() 在正常编辑路径中完成。删除
+                // static_snapshot_reprepare_pending 标记和
+                // schedule_static_snapshot_reprepare_on_gui_thread 调用，避免
+                // render thread -> GUI thread queued 跨线程重排旧链。
             }
 
             // 没有缓存快照时，跳过静态正文渲染并请求下一次 GUI 帧准备 snapshot。
@@ -269,9 +261,9 @@ impl QQuickItem for SujianEditorItem {
             ));
         }
 
-        // SAFETY: editor_root 来自 ensure_editor_root，要么是原 node.into_raw() 的非 null 指针，
-        // 要么是新创建的 QSGTransformNode。QQuickItem::updatePaintNode 契约保证返回的节点有效。
-        unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(editor_root) }
+        // Issue #677 评论 5653790560: node.raw 已在函数开头被 ensure_editor_root 写回，
+        // 直接返回 node，不再通过 from_raw(editor_root) 重建 wrapper。
+        node
     }
 }
 
