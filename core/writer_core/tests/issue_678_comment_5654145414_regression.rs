@@ -16,8 +16,8 @@ use tempfile::tempdir;
 use writer_core::facade::WriterCore;
 use writer_core::storage::git_repo_layout::GitRepoLayout;
 use writer_core::storage::journal::workspace_change::{
-    recover_unfinished, DeleteTarget, WorkspaceChangeJournal, WorkspaceChangeOpType,
-    WorkspaceChangePhase,
+    recover_unfinished, DeleteTarget, PlannedWorkspaceDelete, SyncDeleteFact,
+    WorkspaceChangeJournal, WorkspaceChangeOpType, WorkspaceChangePhase,
 };
 use writer_core::storage::workspace_git::WorkspaceChangeSet;
 
@@ -48,6 +48,21 @@ fn make_api() -> (tempfile::TempDir, writer_core::api::service::WriterCoreApi) {
     )
     .expect("bootstrap_core_api 应成功");
     (temp_dir, api)
+}
+
+/// 构造测试用 PlannedWorkspaceDelete（含一条 dummy fact），供 save_pending 使用。
+fn make_test_planned_delete(target: DeleteTarget) -> PlannedWorkspaceDelete {
+    PlannedWorkspaceDelete {
+        delete_target: target,
+        trash_rel_path: "sync/trash/test_token".to_string(),
+        sync_delete_facts: vec![SyncDeleteFact {
+            original_path: "test/path".to_string(),
+            original_hash: String::new(),
+            deleted_at: 0,
+            deleted_by: "test-device".to_string(),
+            trash_path: "sync/trash/test_token/path".to_string(),
+        }],
+    }
 }
 
 /// workspace-change-journals 目录路径。
@@ -225,31 +240,33 @@ fn test_type3_recover_unfinished_distinguishes_pending_and_local_applied() {
 
     // 构造一个 Pending journal。
     let change_set = WorkspaceChangeSet::new();
+    let pending_target = DeleteTarget::Volume {
+        project_id: "p1".to_string(),
+        volume_id: "v1".to_string(),
+    };
     let pending_journal = WorkspaceChangeJournal::save_pending(
         app_data_root,
         &change_set,
         "device-1",
         WorkspaceChangeOpType::DeleteVolume,
-        Some(DeleteTarget::Volume {
-            project_id: "p1".to_string(),
-            volume_id: "v1".to_string(),
-        }),
-        Vec::new(),
+        Some(pending_target.clone()),
+        Some(make_test_planned_delete(pending_target)),
     )
     .expect("save_pending 应成功");
 
     // 推进到 LocalApplied 构造第二个 journal。
+    let local_applied_target = DeleteTarget::Chapter {
+        project_id: "p2".to_string(),
+        volume_id: "v2".to_string(),
+        chapter_id: "c2".to_string(),
+    };
     let local_applied_journal = WorkspaceChangeJournal::save_pending(
         app_data_root,
         &change_set,
         "device-2",
         WorkspaceChangeOpType::DeleteChapter,
-        Some(DeleteTarget::Chapter {
-            project_id: "p2".to_string(),
-            volume_id: "v2".to_string(),
-            chapter_id: "c2".to_string(),
-        }),
-        Vec::new(),
+        Some(local_applied_target.clone()),
+        Some(make_test_planned_delete(local_applied_target)),
     )
     .expect("save_pending 应成功");
     local_applied_journal
@@ -295,17 +312,20 @@ fn test_type3_recover_pending_local_delete_idempotent() {
     std::fs::create_dir_all(app_data_root.join("projects")).unwrap();
 
     // 构造一个 Pending journal，指向一个不存在的 volume。
+    //   新格式 journal 必须携带非空 planned_delete（含 sync_delete_facts）。
+    // 恢复时目录不存在 -> ensure_tombstones_persisted 用 facts 补齐 tombstone。
     let change_set = WorkspaceChangeSet::new();
+    let delete_target = DeleteTarget::Volume {
+        project_id: "nonexistent-project".to_string(),
+        volume_id: "nonexistent-volume".to_string(),
+    };
     let journal = WorkspaceChangeJournal::save_pending(
         app_data_root,
         &change_set,
         "device-1",
         WorkspaceChangeOpType::DeleteVolume,
-        Some(DeleteTarget::Volume {
-            project_id: "nonexistent-project".to_string(),
-            volume_id: "nonexistent-volume".to_string(),
-        }),
-        Vec::new(),
+        Some(delete_target.clone()),
+        Some(make_test_planned_delete(delete_target)),
     )
     .expect("save_pending 应成功");
 
@@ -382,7 +402,7 @@ fn test_type4_recover_pending_local_delete_project_skip() {
         Some(DeleteTarget::Project {
             project_id: "test-project".to_string(),
         }),
-        Vec::new(),
+        None,
     )
     .expect("save_pending 应成功");
 
@@ -471,7 +491,7 @@ fn test_type4_save_pending_records_delete_target() {
         "device-test",
         WorkspaceChangeOpType::DeleteVolume,
         Some(delete_target.clone()),
-        Vec::new(),
+        Some(make_test_planned_delete(delete_target.clone())),
     )
     .expect("save_pending 应成功");
 

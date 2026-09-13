@@ -10,7 +10,7 @@
 // - 实现 EditorBackend 结构体，作为 QML 中 "editorBackend" 对象的桥梁。
 // - 负责编辑器核心章节读取（open_chapter & get_chapter_content）、防误删安全保存（save_chapter）、正文清空（clear_chapter_content）以及字数重新计算（calculate_word_count）。
 // - 记录并上报界面层触发的高频字符录入事件流，并按时间、项目、章节、设备等维度提供图表所需的统计快照 JSON 对象（get_writing_stats_summary_object 等）。
-// - 接收来自界面的自动同步请求（request_auto_sync）与客户端日志上报（log_qml）。
+// - 客户端日志上报（log_qml）。
 // - 提供动作命令注册与调度执行机制（list_registered_actions & execute_action），作为 Action-Driven UI 智能体的重要旁路底座。
 //
 // 被什么引用：
@@ -185,8 +185,6 @@ pub struct EditorBackend {
     selected_chapter_exists: qt_method!(fn(&self) -> bool),
     #[allow(dead_code)]
     clear_editor_state: qt_method!(fn(&mut self)),
-    #[allow(dead_code)]
-    request_auto_sync: qt_method!(fn(&mut self, reason: QString)),
     #[allow(dead_code)]
     log_qml:
         qt_method!(fn(&self, level: QString, module: QString, event: QString, message: QString)),
@@ -567,18 +565,6 @@ impl EditorBackend {
     fn clear_editor_state(&mut self) {
         if self.with_app_mut(|app| app.clear_editor_state()).is_ok() {
             self.clear_editor();
-        }
-    }
-    fn request_auto_sync(&mut self, reason: QString) {
-        if self
-            .with_app_mut(|app| app.request_auto_sync(reason, None))
-            .is_err()
-        {
-            crate::backend::app_backend::debug_error_static(
-                "editor_backend",
-                "BORROW_CONFLICT",
-                "request_auto_sync skipped due to borrow conflict",
-            );
         }
     }
     fn log_qml(&self, level: QString, module: QString, event: QString, message: QString) {

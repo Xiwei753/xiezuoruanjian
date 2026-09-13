@@ -94,6 +94,93 @@ pub struct SyncDeleteFact {
     pub trash_path: String,
 }
 
+/// 真正的删除计划，在任何 `rename()` 之前构造并持久化到 journal。
+///
+/// 包含固定的 trash 路径和完整的 `sync_delete_facts`，供 apply 阶段和
+/// 恢复阶段幂等执行本地删除 + 补齐 tombstone。
+///
+/// 关键不变量：
+/// - `trash_rel_path` 在 plan 阶段生成，apply/recover 阶段不得重新生成。
+/// - `sync_delete_facts` 在 plan 阶段（源目录还存在时）遍历构造，
+///   apply/recover 阶段直接消费，不重新扫描磁盘。
+/// - 对 `DeleteVolume/DeleteChapter`，`sync_delete_facts` 不允许为空。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedWorkspaceDelete {
+    /// 删除目标。
+    pub delete_target: DeleteTarget,
+    /// 固定的 trash 目录路径（相对于 app_data_root，正斜杠）。
+    /// 例如 `sync/trash/1234567890_uuid_volume_id`。
+    pub trash_rel_path: String,
+    /// 完整的同步删除事实（每个待删文件一条），不允许为空。
+    pub sync_delete_facts: Vec<SyncDeleteFact>,
+}
+
+impl PlannedWorkspaceDelete {
+    /// 在源目录还存在时遍历所有待删文件，提前构造 `SyncDeleteFact` 列表。
+    ///
+    /// - `original_path`：文件在 project_root 下的原始相对路径（正斜杠）。
+    /// - `original_hash`：从 project_root 的 SyncState `known_files` 读取，缺失则为空。
+    /// - `trash_path`：按固定 `trash_rel_path` 推导的 trash 内相对路径。
+    /// - `deleted_by`：使用传入的 `device_id`，不写固定 `"local"`。
+    ///
+    /// 跳过 `app-meta/` 前缀的 sync 引擎内部状态文件。
+    pub fn build_facts(
+        project_root: &Path,
+        source_dir: &Path,
+        trash_rel_path: &str,
+        device_id: &str,
+    ) -> crate::error::Result<Vec<SyncDeleteFact>> {
+        let state = crate::sync::SyncService::load_sync_state(project_root)?;
+        let now = chrono::Utc::now().timestamp();
+        let rel_source_dir = source_dir
+            .strip_prefix(project_root)
+            .unwrap_or(source_dir)
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let mut facts = Vec::new();
+        for entry in walkdir::WalkDir::new(source_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let rel_file_path = entry
+                .path()
+                .strip_prefix(source_dir)
+                .unwrap_or(entry.path())
+                .to_string_lossy()
+                .replace('\\', "/");
+            // 跳过 sync 引擎内部状态文件。
+            if rel_file_path.starts_with("app-meta/") {
+                continue;
+            }
+            let original_file_path = if rel_source_dir.ends_with('/') {
+                format!("{}{}", rel_source_dir, rel_file_path)
+            } else {
+                format!("{}/{}", rel_source_dir, rel_file_path)
+            };
+            let trash_path = if trash_rel_path.ends_with('/') {
+                format!("{}{}", trash_rel_path, rel_file_path)
+            } else {
+                format!("{}/{}", trash_rel_path, rel_file_path)
+            };
+            let original_hash = state
+                .known_files
+                .get(&original_file_path)
+                .cloned()
+                .unwrap_or_default();
+            facts.push(SyncDeleteFact {
+                original_path: original_file_path,
+                original_hash,
+                deleted_at: now,
+                deleted_by: device_id.to_string(),
+                trash_path,
+            });
+        }
+        Ok(facts)
+    }
+}
+
 /// workspace 变更 journal。
 ///
 /// 统一保存作品、卷、章节删除产生的 `WorkspaceChangeSet`。
@@ -124,6 +211,13 @@ pub struct WorkspaceChangeJournal {
     /// 旧 journal（无此字段）反序列化为空 Vec，恢复时按现有逻辑处理（向后兼容）。
     #[serde(default)]
     pub sync_delete_facts: Vec<SyncDeleteFact>,
+    /// 完整的删除计划（固定 trash 路径 + 完整 facts），供 apply/recover 阶段
+    /// 幂等执行本地删除。
+    ///
+    /// 新格式 journal（DeleteVolume/DeleteChapter）必须携带此字段；
+    /// 旧 journal（无此字段）反序列化为 None，恢复时按向后兼容逻辑处理。
+    #[serde(default)]
+    pub planned_delete: Option<PlannedWorkspaceDelete>,
 }
 
 /// recover 返回的待处理记录。
@@ -150,6 +244,8 @@ pub struct RecoveredWorkspaceChange {
     pub created_at: i64,
     /// 原始 journal 的 sync_delete_facts，供恢复阶段幂等补齐 tombstone。
     pub sync_delete_facts: Vec<SyncDeleteFact>,
+    /// 原始 journal 的 planned_delete，供恢复阶段幂等重放本地删除。
+    pub planned_delete: Option<PlannedWorkspaceDelete>,
 }
 
 impl WorkspaceChangeJournal {
@@ -157,15 +253,64 @@ impl WorkspaceChangeJournal {
     ///
     /// 在执行本地物理删除前调用，确保崩溃后能恢复。
     /// `delete_target` 明确记录删除目标，供恢复阶段幂等执行本地删除。
-    /// `sync_delete_facts` 记录本次删除对应的同步删除事实，供恢复阶段幂等补齐 tombstone。
+    /// `planned_delete` 携带固定的 trash 路径和完整 `sync_delete_facts`，
+    /// 供 apply/recover 阶段消费。
+    ///
+    /// 对 `DeleteVolume/DeleteChapter`：
+    /// - 必须提供 `planned_delete`（`None` 视为编程错误）。
+    /// - `planned_delete.sync_delete_facts` 不允许为空——空 facts 会落一个
+    ///   无法恢复的 Pending journal（恢复时无法补齐 tombstone），直接返回错误。
+    /// - `planned_delete.delete_target` 必须与 `delete_target` 一致。
+    ///
+    /// 对 `DeleteProject`：`planned_delete` 应为 `None`（项目删除有独立事务）。
     pub fn save_pending(
         app_data_root: &Path,
         change_set: &WorkspaceChangeSet,
         device_id: &str,
         op_type: WorkspaceChangeOpType,
         delete_target: Option<DeleteTarget>,
-        sync_delete_facts: Vec<SyncDeleteFact>,
+        planned_delete: Option<PlannedWorkspaceDelete>,
     ) -> Result<Self> {
+        // 校验：DeleteVolume/DeleteChapter 必须携带非空 planned_delete + 非空 facts。
+        let sync_delete_facts: Vec<SyncDeleteFact> = match (&op_type, &planned_delete) {
+            (
+                WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter,
+                Some(plan),
+            ) => {
+                if plan.sync_delete_facts.is_empty() {
+                    return Err(crate::error::Error::Other(format!(
+                        "save_pending: {op_type:?} requires non-empty sync_delete_facts — \
+                         refusing to write an unrecoverable Pending journal"
+                    )));
+                }
+                // 校验 delete_target 一致性。
+                if Some(&plan.delete_target) != delete_target.as_ref() {
+                    return Err(crate::error::Error::Other(format!(
+                        "save_pending: planned_delete.delete_target ({:?}) != delete_target ({:?})",
+                        plan.delete_target, delete_target
+                    )));
+                }
+                plan.sync_delete_facts.clone()
+            }
+            (
+                WorkspaceChangeOpType::DeleteVolume | WorkspaceChangeOpType::DeleteChapter,
+                None,
+            ) => {
+                return Err(crate::error::Error::Other(format!(
+                    "save_pending: {op_type:?} requires planned_delete — \
+                     refusing to write an unrecoverable Pending journal"
+                )));
+            }
+            (WorkspaceChangeOpType::DeleteProject, Some(_)) => {
+                return Err(crate::error::Error::Other(
+                    "save_pending: DeleteProject must not carry planned_delete \
+                     (project delete uses its own multi-phase transaction)"
+                        .to_string(),
+                ));
+            }
+            (WorkspaceChangeOpType::DeleteProject, None) => Vec::new(),
+        };
+
         let token = Uuid::new_v4().to_string();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -180,6 +325,7 @@ impl WorkspaceChangeJournal {
             phase: WorkspaceChangePhase::Pending,
             delete_target,
             sync_delete_facts,
+            planned_delete,
         };
         let journal_path = journal_file_path(app_data_root, &token);
         if let Some(parent) = journal_path.parent() {
@@ -309,6 +455,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 device_id: journal.device_id.clone(),
                 created_at: journal.created_at,
                 sync_delete_facts: journal.sync_delete_facts.clone(),
+                planned_delete: journal.planned_delete.clone(),
             }))
         }
         WorkspaceChangePhase::Pending => {
@@ -323,6 +470,7 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 device_id: journal.device_id.clone(),
                 created_at: journal.created_at,
                 sync_delete_facts: journal.sync_delete_facts.clone(),
+                planned_delete: journal.planned_delete.clone(),
             }))
         }
     }

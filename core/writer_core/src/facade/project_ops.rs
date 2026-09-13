@@ -373,6 +373,49 @@ impl super::WriterCore {
         )
     }
 
+    /// 构造完整的章节删除计划（不修改磁盘），供 durable 删除事务 `save_pending` 使用。
+    ///
+    /// 返回 `(WorkspaceChangeSet, PlannedWorkspaceDelete)`。
+    /// `device_id` 用真实设备 ID。
+    pub fn plan_delete_chapter(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        device_id: &str,
+    ) -> Result<(
+        WorkspaceChangeSet,
+        crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+    )> {
+        let project_root = self.project_root(project_id);
+        chapter::plan_delete_chapter(
+            &project_root,
+            volume_id,
+            chapter_id,
+            &self.app_data_root,
+            &self.app_data_root,
+            device_id,
+        )
+    }
+
+    /// 消费 `PlannedWorkspaceDelete` 执行章节删除。
+    pub fn apply_planned_delete_chapter(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+        planned: &crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+    ) -> Result<()> {
+        let project_root = self.project_root(project_id);
+        chapter::apply_planned_delete_chapter(
+            &project_root,
+            volume_id,
+            chapter_id,
+            &self.app_data_root,
+            planned,
+        )
+    }
+
     /// 重排章节并返回变更集。
     pub fn reorder_chapters_with_changes(
         &self,
@@ -481,6 +524,39 @@ impl super::WriterCore {
     ) -> Result<WorkspaceChangeSet> {
         let project_root = self.project_root(project_id);
         crate::volume::plan_delete_volume_changes(&project_root, volume_id, &self.app_data_root)
+    }
+
+    /// 构造完整的卷删除计划（不修改磁盘），供 durable 删除事务 `save_pending` 使用。
+    ///
+    /// 返回 `(WorkspaceChangeSet, PlannedWorkspaceDelete)`。
+    /// `device_id` 用真实设备 ID。
+    pub fn plan_delete_volume(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        device_id: &str,
+    ) -> Result<(
+        WorkspaceChangeSet,
+        crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+    )> {
+        let project_root = self.project_root(project_id);
+        crate::volume::plan_delete_volume(&project_root, volume_id, &self.app_data_root, device_id)
+    }
+
+    /// 消费 `PlannedWorkspaceDelete` 执行卷删除。
+    pub fn apply_planned_delete_volume(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        planned: &crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+    ) -> Result<()> {
+        let project_root = self.project_root(project_id);
+        crate::volume::apply_planned_delete_volume(
+            &project_root,
+            volume_id,
+            &self.app_data_root,
+            planned,
+        )
     }
 
     /// 重排卷并返回变更集。
