@@ -16,3 +16,4 @@ default = []
 writer_core = { path = "../../../core/writer_core", features = ["harmony-ffi"] }
 writer_platform_api = { path = "../../../core/writer_platform_api" }
 writer_diagnostics = { path = "../../../core/writer_diagnostics" }
+uuid = { version = "1.8", features = ["v4"] }

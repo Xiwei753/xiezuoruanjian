@@ -3900,6 +3900,7 @@ dependencies = [
 name = "writer-platform-harmony"
 version = "0.1.0"
 dependencies = [
+ "uuid",
  "writer_core",
  "writer_diagnostics",
  "writer_platform_api",

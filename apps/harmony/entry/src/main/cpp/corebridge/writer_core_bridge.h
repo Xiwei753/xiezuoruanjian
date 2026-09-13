@@ -19,6 +19,13 @@ int32_t writer_core_calculate_word_count(const char* text);
 //   Passing null is safe (no-op). Must not be called twice on the same pointer.
 void    writer_core_free_string(char* ptr);
 
+// ── Diagnostics Init ──
+// writer_core_init_diagnostics: Initialize diagnostics backend. Returns 0 on success,
+//   -1 if any argument is null, -2 if any argument contains invalid UTF-8.
+//   session_id is generated inside Rust (uuid v4); enabled/verbose default to true.
+//   Idempotent: repeated calls have no side effect.
+int32_t writer_core_init_diagnostics(const char* log_dir, const char* device_id, const char* app_version, const char* build_key, const char* locale, const char* timezone);
+
 // ── Layout Contract（#610） ──
 // writer_core_resolve_layout: Input/output are JSON strings (ResultEnvelope<LayoutContract>).
 // Input is WindowCapabilities: { availablePaneCount, hasSeparatingFold, pointerClass, keyboardVisible }.

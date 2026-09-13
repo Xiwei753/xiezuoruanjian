@@ -7,6 +7,10 @@ import { getAdaptiveContext } from '../ui/adaptive/AdaptiveContext'
 import { AppContinuationService } from '../platform/continuity/AppContinuationService'
 import { ContinuationPayload } from '../platform/continuity/ContinuationPayload'
 import { AppNavigationHost } from '../app/navigation/AppNavigation'
+import { NativeWriterCoreBridge } from '../corebridge/NativeWriterCoreBridge'
+import { HarmonyDeviceIdentity } from '../platform/identity/HarmonyDeviceIdentity'
+import i18n from '@ohos.i18n'
+import bundleManager from '@ohos.bundle.bundleManager'
 
 export default class EntryAbility extends UIAbility {
   private lifecycle: HarmonyLifecycle = HarmonyLifecycle.getInstance()
@@ -17,9 +21,49 @@ export default class EntryAbility extends UIAbility {
     getAppContext().setAbilityContext(this.context)
     this.lifecycle.notifyCreate()
 
+    // Issue #670 评论 5652119660 修复 2e：在第一批诊断事件之前初始化 Rust 诊断后端。
+    // Harmony 走 ArkTS → NAPI → C ABI → Rust，必须在这里把 diagnostics 接上，
+    // 否则后续 Rust 端的日志事件都会被丢弃。
+    this.initDiagnostics()
+
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
       this.restoreContinuationFromWant(want)
+    }
+  }
+
+  // 初始化 Rust 诊断后端 — Issue #670 评论 5652119660 修复 2e。
+  // 在 EntryAbility.onCreate() 中调用，把目录/设备/版本/locale/timezone 传进 Rust。
+  // 失败只记 hilog，不阻塞应用启动。
+  private initDiagnostics(): void {
+    try {
+      const cacheDir = this.context.cacheDir
+      const logDir = `${cacheDir}/log`
+      const deviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(this.context)
+      const appVersion = this.getAppVersion()
+      const buildKey = '' // Harmony 端暂无构建 key，传空字符串。
+      const locale = i18n.getSystemLanguage()
+      const timezone = i18n.getSystemTimezone()
+      const result = NativeWriterCoreBridge.getInstance().initDiagnostics(
+        logDir, deviceId, appVersion, buildKey, locale, timezone
+      )
+      if (result !== 0) {
+        hilog.error(0x0000, 'EntryAbility', 'initDiagnostics failed with code %{public}d', result)
+      }
+    } catch (e) {
+      hilog.error(0x0000, 'EntryAbility', 'initDiagnostics exception: %{public}s', String(e))
+    }
+  }
+
+  // 获取应用版本名 — 从 bundleManager 读取，失败返回 'unknown'。
+  private getAppVersion(): string {
+    try {
+      const info = bundleManager.getBundleInfoForSelfSync(
+        bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT
+      )
+      return info.versionName
+    } catch (_) {
+      return 'unknown'
     }
   }
 

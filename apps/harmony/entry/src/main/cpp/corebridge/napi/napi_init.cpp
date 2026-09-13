@@ -112,6 +112,50 @@ static napi_value NativeGetLoadStatus(napi_env env, napi_callback_info info) {
     return result;
 }
 
+// NativeInitDiagnostics: Initialize diagnostics backend. Returns int32 status code:
+//   0 = success
+//   -1 = any argument is null
+//   -2 = any argument contains invalid UTF-8
+// Arguments: logDir, deviceId, appVersion, buildKey, locale, timezone (all strings).
+// session_id is generated inside Rust; enabled/verbose default to true.
+static napi_value NativeInitDiagnostics(napi_env env, napi_callback_info info) {
+    size_t argc = 6;
+    napi_value args[6];
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+
+    if (argc < 6) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: expected 6 arguments, got %{public}zu", argc);
+        napi_throw_error(env, nullptr, "Expected 6 arguments: logDir, deviceId, appVersion, buildKey, locale, timezone");
+        return nullptr;
+    }
+
+    char log_dir[2048] = {0};
+    char device_id[256] = {0};
+    char app_version[128] = {0};
+    char build_key[256] = {0};
+    char locale[64] = {0};
+    char timezone[64] = {0};
+    size_t len = 0;
+    napi_get_value_string_utf8(env, args[0], log_dir, sizeof(log_dir), &len);
+    napi_get_value_string_utf8(env, args[1], device_id, sizeof(device_id), &len);
+    napi_get_value_string_utf8(env, args[2], app_version, sizeof(app_version), &len);
+    napi_get_value_string_utf8(env, args[3], build_key, sizeof(build_key), &len);
+    napi_get_value_string_utf8(env, args[4], locale, sizeof(locale), &len);
+    napi_get_value_string_utf8(env, args[5], timezone, sizeof(timezone), &len);
+
+    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: calling writer_core_init_diagnostics with logDir='%{public}s'", log_dir);
+    int32_t result = writer_core_init_diagnostics(log_dir, device_id, app_version, build_key, locale, timezone);
+    OH_LOG_INFO(LOG_APP, "NativeInitDiagnostics: writer_core_init_diagnostics returned %{public}d", result);
+
+    if (result != 0) {
+        OH_LOG_ERROR(LOG_APP, "NativeInitDiagnostics: FAILED with code %{public}d", result);
+    }
+
+    napi_value ret;
+    napi_create_int32(env, result, &ret);
+    return ret;
+}
+
 // NativeGetLastError: Returns last error message, or empty string if none.
 static napi_value NativeGetLastError(napi_env env, napi_callback_info info) {
     char* err = writer_core_get_last_error();
@@ -228,6 +272,7 @@ static napi_value Init(napi_env env, napi_value exports) {
     // Core lifecycle + layout + misc descriptors
     napi_property_descriptor core_desc[] = {
         {"nativeInit", nullptr, NativeInit, nullptr, nullptr, nullptr, napi_default, nullptr},
+        {"nativeInitDiagnostics", nullptr, NativeInitDiagnostics, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLoadStatus", nullptr, NativeGetLoadStatus, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeGetLastError", nullptr, NativeGetLastError, nullptr, nullptr, nullptr, napi_default, nullptr},
         {"nativeCalculateWordCount", nullptr, NativeCalculateWordCount, nullptr, nullptr, nullptr, napi_default, nullptr},

@@ -64,9 +64,6 @@ object DiagnosticsExporterInterop {
 
             val attachments = mutableListOf<DiagnosticAttachmentDto>()
 
-            // crash 文件
-            addCrashAttachments(attachments)
-
             // logcat — LogcatSnapshotCollector.collect(destDir) 写文件到 destDir
             runCatching { LogcatSnapshotCollector.collect(tempDir) }
                 .onFailure { DiagnosticsInterop.w(TAG, "Logcat capture failed", it) }
@@ -143,36 +140,12 @@ object DiagnosticsExporterInterop {
         return DiagnosticsInterop.redact(gson.toJson(info))
     }
 
-    /**
-     * 决定 crash 文件导出副本。提取为 internal 供单测。
-     */
-    internal fun planCrashFileCopies(
-        primary: File,
-        fallback: File,
-    ): List<Pair<String, File>> {
-        val copies = mutableListOf<Pair<String, File>>()
-        if (primary.exists()) copies.add("last_crash.txt" to primary)
-        if (fallback.exists() && fallback != primary) {
-            copies.add("last_crash_fallback.txt" to fallback)
-        }
-        return copies
-    }
-
     // ── 附件收集 ──────────────────────────────────────────────────
     //
     // 每个附件收集器把内容读回字节交给 Rust。附件脱敏由 Rust export.rs 统一处理
     // （Issue #670 评论 5651816143 修改 4），Kotlin 端不再复制一套脱敏规则。
-
-    private fun addCrashAttachments(attachments: MutableList<DiagnosticAttachmentDto>) {
-        val primary = DiagnosticsInterop.getCrashFile() ?: return
-        val fallback = DiagnosticsInterop.getFallbackCrashFile() ?: primary
-        val copies = planCrashFileCopies(primary, fallback)
-        for ((name, file) in copies) {
-            runCatching {
-                attachments.add(DiagnosticAttachmentDto(name, file.readBytes()))
-            }
-        }
-    }
+    // crash 信息直接来自 Rust JSONL 中的 app.crash 事件，不再需要 Kotlin 格式的
+    // last_crash.txt 文件作为附件（Issue #670 评论 5652119660 修复 3c）。
 
     private fun addJankSummaryAttachment(attachments: MutableList<DiagnosticAttachmentDto>) {
         runCatching {

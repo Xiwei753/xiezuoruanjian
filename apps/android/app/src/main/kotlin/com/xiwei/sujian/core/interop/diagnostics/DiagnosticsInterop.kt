@@ -3,8 +3,6 @@ package com.xiwei.sujian.core.interop.diagnostics
 import android.content.Context
 import android.util.Log
 import com.xiwei.sujian.BuildConfig
-import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
-import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import uniffi.writer_core.DiagnosticFieldDto
@@ -302,60 +300,9 @@ object DiagnosticsInterop {
     // 已用 alias `nativeExportDiagnostics` 避免同名自调用
     // （Issue #670 评论 5651816143 修改 7）。
 
-    // ── crash 文件操作 ────────────────────────────────────────────
-    //
-    // crash handler 把 crash 元数据通过 recordEvent 交给 Rust 后端，
-    // 但也保留 last_crash.txt 单文件语义供导出和"上次崩溃"提示。
-    // Rust 后端从 PlatformInit 获取构建身份用于日志文件名，crash 文件头
-    // 仍从 BuildConfig 取（crash handler 安装在 Core init 之前）。
-
-    /**
-     * 返回 last_crash.txt。优先返回应用私有 logsDir 下的，回退到 filesDir/diagnostics/。
-     * 未初始化（contextRef 为 null）时返回 null。
-     */
-    fun getCrashFile(): File? {
-        val ctx = contextRef.get() ?: return null
-        val primary = File(AndroidPrivateDataRoot.logs(ctx), "last_crash.txt")
-        if (primary.exists()) return primary
-        val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
-        return if (fallback.exists()) fallback else null
-    }
-
-    /**
-     * 仅在应用私有 logsDir 与 filesDir/diagnostics/ 两处都存在 last_crash.txt 时返回
-     * 回退位置的那份；只有回退位置有文件时返回 null。
-     */
-    fun getFallbackCrashFile(): File? {
-        val ctx = contextRef.get() ?: return null
-        val primary = File(AndroidPrivateDataRoot.logs(ctx), "last_crash.txt")
-        if (!primary.exists()) return null
-        val fallback = File(File(ctx.filesDir, "diagnostics"), "last_crash.txt")
-        return if (fallback.exists()) fallback else null
-    }
-
-    /**
-     * 把 crash 头部 + 脱敏栈写入 [file]，返回是否成功。
-     */
-    fun writeCrashFile(
-        file: File,
-        header: String,
-        redactedTrace: String,
-    ): Boolean =
-        try {
-            file.parentFile?.mkdirs()
-            java.io.PrintWriter(java.io.FileWriter(file, false)).use { writer ->
-                writer.print(header)
-                writer.println(redactedTrace)
-                writer.flush()
-            }
-            true
-        } catch (_: Exception) {
-            false
-        }
-
     // ── 构建身份 ──────────────────────────────────────────────────
     //
-    // 保留 Kotlin 端构建身份供 crash handler 写 crash 文件头和导出 manifest。
+    // 保留 Kotlin 端构建身份供 crash handler 写 crash 事件字段和导出 manifest。
     // Rust 后端从 PlatformInit 获取构建身份用于日志文件名，不再需要 Kotlin 传入。
 
     /**

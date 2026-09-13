@@ -1,7 +1,6 @@
 package com.xiwei.sujian.app
 
 import android.app.Application
-import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -10,11 +9,11 @@ import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
+import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import com.xiwei.sujian.storage.recovery.LegacyStorageMigrationGate
-import java.io.File
 import java.util.Locale
 import uniffi.writer_core.DiagnosticFieldDto
 import uniffi.writer_core.DiagnosticLevelDto
@@ -55,7 +54,8 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
      *
      * - log_dir 从 AndroidPrivateDataRoot.logs(context) 获取
      * - platform = "android"
-     * - device_id 从 Build 获取
+     * - device_id 从 AndroidDeviceIdentity.getOrCreateDeviceId 获取（应用级 UUID，
+     *   不依赖 READ_PRIVILEGED_PHONE_STATE，Android 10+ 不会抛 SecurityException）
      * - app_version 从 BuildConfig 获取
      * - build_key 从 DiagnosticsInterop.buildIdentity() 获取
      * - locale / timezone 从系统获取
@@ -70,13 +70,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
         try {
             val identity = DiagnosticsInterop.buildIdentity()
             val logDir = AndroidPrivateDataRoot.logs(this).absolutePath
-            val deviceId =
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    Build.getSerial()
-                } else {
-                    @Suppress("DEPRECATION")
-                    Build.SERIAL
-                }
+            val deviceId = AndroidDeviceIdentity.getOrCreateDeviceId(this)
             val appVersion = BuildConfig.VERSION_NAME
             val locale = Locale.getDefault().toLanguageTag()
             val timezone = java.util.TimeZone.getDefault().id
@@ -84,7 +78,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                 DiagnosticsInitDto(
                     logDir = logDir,
                     platform = "android",
-                    deviceId = deviceId ?: "unknown",
+                    deviceId = deviceId,
                     appVersion = appVersion,
                     buildKey = identity.buildKey,
                     locale = locale,
@@ -92,7 +86,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                 ),
             )
         } catch (e: UnsatisfiedLinkError) {
-            // 原生库未加载时静默跳过 — 后续 Core 初始化时会再次尝试。
+            // 原生库未加载时静默跳过。
         } catch (e: Exception) {
             android.util.Log.w("SujianApp", "initDiagnostics failed: ${e.message}")
         }
@@ -104,9 +98,9 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     /**
      * JVM uncaught exception handler — Android 平台采集器。
      *
-     * Issue #670 评论 5651060802：不再自己定义 last_crash.txt 格式和 writer，
-     * 把 crash 元数据 / 脱敏栈交给 Rust 统一诊断后端并 flush。
-     * 仍保留 last_crash.txt 单文件语义供导出和"上次崩溃"提示。
+     * Issue #670 评论 5651060802 / 5652119660：不再自己定义 last_crash.txt 格式和 writer，
+     * 把 crash 元数据 + 脱敏栈交给 Rust 统一诊断后端并 flush。stack 由 Rust 的统一脱敏
+     * 规则处理（redactStackTrace 已脱敏，Rust 后端再过一次 redact 仍安全）。
      */
     private fun installCrashHandler() {
         val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -114,47 +108,17 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
             try {
                 val redactedTrace = DiagnosticsInterop.redactStackTrace(throwable)
                 val identity = DiagnosticsInterop.buildIdentity()
-                val timestamp =
-                    java.text.SimpleDateFormat(
-                        "yyyy-MM-dd HH:mm:ss",
-                        java.util.Locale.US,
-                    ).format(java.util.Date())
-                val header =
-                    buildString {
-                        appendLine("buildKey: ${identity.buildKey}")
-                        appendLine("versionName: ${identity.versionName}")
-                        appendLine("versionCode: ${identity.versionCode}")
-                        appendLine("gitCommitSha: ${identity.gitCommitSha}")
-                        appendLine("flavor: ${identity.flavor}")
-                        appendLine("buildType: ${identity.buildType}")
-                        appendLine("applicationId: ${identity.applicationId}")
-                        append("Crash at $timestamp\nThread: ${thread.name}\n\n")
-                    }
-                val externalWritten =
-                    DiagnosticsInterop.writeCrashFile(
-                        File(AndroidPrivateDataRoot.logs(this), "last_crash.txt"),
-                        header,
-                        redactedTrace,
-                    )
-                if (!externalWritten) {
-                    val fallbackDir = File(filesDir, "diagnostics")
-                    fallbackDir.mkdirs()
-                    DiagnosticsInterop.writeCrashFile(
-                        File(fallbackDir, "last_crash.txt"),
-                        header,
-                        redactedTrace,
-                    )
-                }
-                // 把 crash 元数据交给 Rust 统一诊断后端。
-                // 修改 5：crash 事件传 ERROR level。
+                // 把 crash 元数据 + 脱敏栈交给 Rust 统一诊断后端。
                 DiagnosticsInterop.recordEvent(
                     DiagnosticLevelDto.ERROR,
                     DiagnosticOriginDto.SYSTEM,
                     "app.crash",
                     "SujianApp",
-                    "Uncaught exception in thread ${thread.name}",
+                    "Uncaught exception in thread ${thread.name}: ${throwable.javaClass.name}\n$redactedTrace",
                     listOf(
                         DiagnosticFieldDto("thread", thread.name),
+                        DiagnosticFieldDto("exceptionClass", throwable.javaClass.name),
+                        DiagnosticFieldDto("stack", redactedTrace),
                         DiagnosticFieldDto("buildKey", identity.buildKey),
                         DiagnosticFieldDto("versionCode", identity.versionCode.toString()),
                         DiagnosticFieldDto("flavor", identity.flavor),
