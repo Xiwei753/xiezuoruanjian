@@ -1,10 +1,11 @@
 package com.xiwei.sujian.core.interop.diagnostics
 
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
+import uniffi.writer_core.DiagnosticLevelDto
 import uniffi.writer_core.DiagnosticOriginDto
 
 /**
- * 统一脱敏诊断事件来源 — Issue #670 评论 5651060802。
+ * 统一脱敏诊断事件来源 — Issue #670 评论 5651060802 / 5651816143。
  *
  * 替代旧的 `core.diagnostics.DiagnosticsEvents`，底层通过
  * [DiagnosticsInterop.recordEvent] 转发到 Rust `recordDiagnosticEvent`，
@@ -21,6 +22,8 @@ import uniffi.writer_core.DiagnosticOriginDto
  * - **User**：用户主动操作（点击、选择、输入、手动触发同步）
  * - **System**：系统回调/环境变化（生命周期、网络变化、系统主题变化、崩溃）
  * - **App**：应用自身生命周期/内部状态（设置保存、主题解析、自动同步）
+ *
+ * Issue #670 评论 5651816143 修改 5：普通结构化业务事件默认传 INFO level。
  */
 object DiagnosticsEventsInterop {
     private const val TAG = "SujianDiag"
@@ -39,11 +42,13 @@ object DiagnosticsEventsInterop {
             }
         EditorEventRingBuffer.record(event)
         // 转发到 Rust 统一诊断后端（脱敏 + JSONL 持久化）。
+        // 修改 5：普通结构化业务事件默认传 INFO level。
         val dtos =
             fields.mapNotNull { (k, v) ->
                 if (v == null) null else uniffi.writer_core.DiagnosticFieldDto(k, v.toString())
             }
         DiagnosticsInterop.recordEvent(
+            DiagnosticLevelDto.INFO,
             origin,
             eventType,
             TAG,

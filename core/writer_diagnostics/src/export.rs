@@ -65,6 +65,8 @@ pub fn export_diagnostics(
     let logs_status = write_logs(&temp_dir);
 
     // 4. 写平台附件。
+    // Issue #670 评论 5651816143 修改 4：文本附件写入前统一调用 Rust `redact()` 脱敏。
+    // 对 content 做 UTF-8 解码 → redact → 再编码；非 UTF-8 内容（二进制附件）原样写入。
     let mut attachment_names = Vec::new();
     for att in attachments {
         let dest = temp_dir.join(&att.relative_path);
@@ -72,7 +74,8 @@ pub fn export_diagnostics(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("create attachment parent failed: {e}"))?;
         }
-        fs::write(&dest, &att.content)
+        let redacted_content = redact_attachment_content(&att.content);
+        fs::write(&dest, &redacted_content)
             .map_err(|e| format!("write attachment {} failed: {e}", att.relative_path))?;
         attachment_names.push(att.relative_path.clone());
     }
@@ -138,6 +141,18 @@ fn write_logs(dest_dir: &Path) -> String {
         "ok".to_string()
     } else {
         "error".to_string()
+    }
+}
+
+/// 对附件内容做脱敏 — Issue #670 评论 5651816143 修改 4。
+///
+/// 文本附件（UTF-8 可解码）走 Rust `redact::redact()` 统一脱敏；
+/// 非 UTF-8 内容（二进制附件，如截图、protobuf）原样返回，不做处理。
+/// 这保证附件脱敏只有一份事实来源（Rust `redact`），不再在 Kotlin 端复制一套规则。
+fn redact_attachment_content(content: &[u8]) -> Vec<u8> {
+    match std::str::from_utf8(content) {
+        Ok(text) => super::redact::redact(text).into_bytes(),
+        Err(_) => content.to_vec(),
     }
 }
 
@@ -391,5 +406,52 @@ mod tests {
     #[test]
     fn crc32_empty() {
         assert_eq!(crc32(b""), 0);
+    }
+
+    /// Issue #670 评论 5651816143 修改 4：文本附件写入前应被 Rust `redact()` 脱敏。
+    #[test]
+    fn redact_attachment_content_redacts_text() {
+        let content = b"token=my-secret-token\nother=safe";
+        let redacted = redact_attachment_content(content);
+        let text = std::str::from_utf8(&redacted).unwrap();
+        assert!(text.contains("[REDACTED]"), "redacted: {text}");
+        assert!(!text.contains("my-secret-token"));
+    }
+
+    /// 非 UTF-8 内容（二进制附件）应原样返回，不做处理。
+    #[test]
+    fn redact_attachment_content_passes_through_non_utf8() {
+        let binary = vec![0u8, 159, 146, 150, 255];
+        let redacted = redact_attachment_content(&binary);
+        assert_eq!(redacted, binary);
+    }
+
+    /// Issue #670 评论 5651816143 修改 4：导出时附件应被脱敏。
+    #[test]
+    fn export_redacts_attachment_content() {
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        super::super::writer::init(
+            tmp.path().join("log"),
+            "export-redact-test".to_string(),
+            true,
+        );
+        super::super::writer::set_enabled(true);
+        super::super::writer::enqueue(
+            r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
+                .to_string(),
+        );
+        assert!(super::super::writer::flush());
+
+        let out_dir = tmp.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let attachments = vec![PlatformAttachment {
+            relative_path: "logcat.txt".to_string(),
+            content: b"Authorization: Bearer secret123".to_vec(),
+        }];
+        let zip_path = export_diagnostics(&out_dir, "test", "export-redact-test", &attachments)
+            .expect("export should succeed");
+        assert!(zip_path.exists());
+        super::super::writer::reset_for_test();
     }
 }

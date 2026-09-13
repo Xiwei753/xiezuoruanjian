@@ -28,11 +28,8 @@ impl log::Log for SharedLogger {
         if !LOGGER_INSTALLED.load(Ordering::SeqCst) {
             return;
         }
-        let mut event = DiagnosticEvent::from_log_record(record, DiagnosticOrigin::App);
-        event.sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
-        if let Some(sid) = SESSION_ID.get() {
-            event.session_id = sid.clone();
-        }
+        let event = DiagnosticEvent::from_log_record(record, DiagnosticOrigin::App);
+        // sequence / session_id 由 record_event 统一补全，避免多处补全逻辑分叉。
         record_event(event);
     }
 
@@ -47,10 +44,20 @@ impl log::Log for SharedLogger {
 
 static SHARED_LOGGER: SharedLogger = SharedLogger;
 
-/// 记录结构化事件 — 脱敏后序列化为 JSONL 并入队 writer。
+/// 记录结构化事件 — 统一补全 sequence / session_id，脱敏后序列化为 JSONL 并入队 writer。
 ///
 /// 调用点负责传 `origin`：用户操作 → `User`，系统回调 → `System`，应用自身 → `App`。
-pub fn record_event(event: DiagnosticEvent) {
+/// `sequence` 和 `session_id` 在此处统一补全，调用方无需也不应预先填充——这保证
+/// 全链路（log::*、record_event、平台 record_diagnostic_event）走同一份计数器
+/// 和 session_id，不会出现 sequence=0 / session_id="" 的事件。
+pub fn record_event(mut event: DiagnosticEvent) {
+    // 统一补全 sequence / session_id — Issue #670 评论 5651816143 修改 2。
+    // 此处是唯一补全点：SharedLogger::log、lib::init、diagnostics_api、Linux_qt
+    // 都把 sequence=0 / session_id="" 的事件交进来，由本函数统一填充。
+    event.sequence = SEQUENCE.fetch_add(1, Ordering::SeqCst) + 1;
+    if let Some(sid) = SESSION_ID.get() {
+        event.session_id = sid.clone();
+    }
     // 脱敏 message 和 fields 中的字符串值。
     let event = redact_event(event);
     let json = event.to_jsonl();

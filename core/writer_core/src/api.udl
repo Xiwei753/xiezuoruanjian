@@ -5,11 +5,21 @@ namespace writer_core {
     [Throws=WriterError]
     WriterAppService open_app_service_with_init(string app_data_root, string projects_root, PlatformInitDto init);
 
-    // ── 统一诊断接口（Issue #670 评论 5651060802） ──
+    // ── 统一诊断接口（Issue #670 评论 5651060802 / 5651816143） ──
     // 平台端通过这些函数记录结构化事件、切换配置、flush/clear、导出诊断包。
+    // Issue #670 评论 5651816143：
+    // - 修改 1：新增 init_diagnostics，进程级基础设施，在任何日志产生之前初始化。
+    // - 修改 3：export_diagnostics 接收附件列表，附件打包只由 Rust 生成一次。
+    // - 修改 4：暴露 redact_diagnostic_text，平台采集阶段先处理文本。
+    // - 修改 5：record_diagnostic_event 增加 level 参数。
 
+    // 修改 1：初始化诊断后端 — 进程级基础设施，在任何日志产生之前调用。
     [Throws=WriterError]
-    void record_diagnostic_event(DiagnosticOriginDto origin, string event, string target, string? message, sequence<DiagnosticFieldDto> fields);
+    void init_diagnostics(DiagnosticsInitDto init);
+
+    // 修改 5：record_diagnostic_event 增加 level 参数。
+    [Throws=WriterError]
+    void record_diagnostic_event(DiagnosticLevelDto level, DiagnosticOriginDto origin, string event, string target, string? message, sequence<DiagnosticFieldDto> fields);
 
     [Throws=WriterError]
     void set_diagnostics_config(boolean enabled, boolean verbose);
@@ -20,8 +30,13 @@ namespace writer_core {
     [Throws=WriterError]
     boolean clear_diagnostics();
 
+    // 修改 3：export_diagnostics 接收附件列表，附件打包只由 Rust 生成一次。
     [Throws=WriterError]
-    string export_diagnostics(string output_dir);
+    string export_diagnostics(string output_dir, sequence<DiagnosticAttachmentDto> attachments);
+
+    // 修改 4：暴露 Rust redact 给平台采集阶段先处理文本。
+    [Throws=WriterError]
+    string redact_diagnostic_text(string text);
 };
 
 dictionary AiActionResponse {
@@ -1870,7 +1885,7 @@ dictionary EditorSessionSnapshotDto {
     EditorCompositionStateDto? composition;
 };
 
-// ── 统一诊断接口（Issue #670 评论 5651060802） ──
+// ── 统一诊断接口（Issue #670 评论 5651060802 / 5651816143） ──
 // 一套 Rust 日志后端，多端只采集事件。DiagnosticOrigin 由 Rust/UniFFI 定义并生成
 // Kotlin 绑定，不再在 Kotlin 自己定义一份 enum。
 
@@ -1883,4 +1898,33 @@ enum DiagnosticOriginDto {
 dictionary DiagnosticFieldDto {
     string key;
     string value;
+};
+
+// 修改 1：诊断初始化 DTO — 进程级基础设施初始化参数。
+// platform / device_id / app_version / build_key / locale / timezone 从平台采集，
+// session_id 由 Rust 内部用 uuid::Uuid::new_v4() 生成。
+dictionary DiagnosticsInitDto {
+    string log_dir;
+    string platform;
+    string device_id;
+    string app_version;
+    string build_key;
+    string locale;
+    string timezone;
+};
+
+// 修改 3：诊断附件 DTO — 平台采集器交进来的附件（logcat、processExits、threadDump 等）。
+// relative_path 是相对输出目录的路径（如 "logcat.txt"），content 是附件内容字节。
+dictionary DiagnosticAttachmentDto {
+    string relative_path;
+    sequence<u8> content;
+};
+
+// 修改 5：诊断日志级别 DTO — 与 writer_diagnostics::DiagnosticLevel 一一对应。
+enum DiagnosticLevelDto {
+    "Error",
+    "Warn",
+    "Info",
+    "Debug",
+    "Trace"
 };

@@ -14,17 +14,15 @@ import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
 import java.io.File
-import java.io.FileInputStream
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.util.Date
 import java.util.Locale
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
+import uniffi.writer_core.DiagnosticAttachmentDto
+import uniffi.writer_core.exportDiagnostics as nativeExportDiagnostics
 
 /**
- * 诊断导出 interop — Issue #670 评论 5651060802。
+ * 诊断导出 interop — Issue #670 评论 5651060802 / 5651816143 修改 3。
  *
  * 替代旧的 `core.diagnostics.DiagnosticsExporter`。底层日志 flush/clear/export
  * 通过 [DiagnosticsInterop] 转发到 Rust `writer_diagnostics`，不再自己定义
@@ -33,8 +31,15 @@ import java.util.zip.ZipOutputStream
  * 平台附件（logcat / processExit / threadDump / jank / settings / sync state /
  * editor snapshot / device info / build identity）仍由本对象在 Kotlin 端收集，
  * 因为这些是 Android 平台特有数据，需要访问 Android API（ActivityManager、
- * DisplayMetrics、JankStats 等）。附件内容经 [DiagnosticsInterop.redact] 脱敏后
- * 落盘，最终与 Rust 导出的日志 zip 合并。
+ * DisplayMetrics、JankStats 等）。
+ *
+ * Issue #670 评论 5651816143 修改 3：附件打包只由 Rust `core/writer_diagnostics/src/export.rs`
+ * 生成一次。本对象只负责：
+ * 1. 收集所有附件为 `List<DiagnosticAttachmentDto>`（content 为字节）
+ * 2. 调用 UniFFI `exportDiagnostics(outputDir, attachments)` 生成最终 zip
+ * 3. shareZip 分享最终 zip
+ *
+ * 不再自己 `writeDiagnosticsManifest()` / `zipDirectory()` / Rust zip 解压再重打包。
  */
 object DiagnosticsExporterInterop {
     private const val DIAGNOSTICS_DIR = "diagnostics"
@@ -50,45 +55,54 @@ object DiagnosticsExporterInterop {
             if (!cacheDir.exists()) cacheDir.mkdirs()
             cacheDir.listFiles()?.forEach { it.delete() }
 
-            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-            val zipFile = File(cacheDir, "sujian-diagnostics-$timestamp.zip")
-
-            val tempDir = File(cacheDir, "temp_$timestamp")
+            // 收集所有平台附件为 DiagnosticAttachmentDto 列表。
+            // 附件内容仍由平台采集器写入临时目录，再读回字节交给 Rust。
+            // Rust exportDiagnostics 负责写附件、生成 manifest、打 zip（只生成一次）。
+            val tempDir = File(cacheDir, "temp_attachments")
             tempDir.mkdirs()
+            tempDir.listFiles()?.forEach { it.delete() }
 
-            val logsStatus = writeLogs(context, tempDir)
-            val crashStatus = writeCrashFile(tempDir)
-            val logcatStatus = writeLogcat(tempDir)
-            val processExitsStatus = writeProcessExits(context, tempDir)
-            val threadDumpStatus = writeThreadDump(tempDir)
-            val settingsStatus = writeAppSettingsSanitized(context, tempDir)
-            val syncStatus = writeSyncStateSanitized(context, tempDir)
-            val editorStatus = writeEditorSnapshot(tempDir)
-            val jankStatus = writeJankSummary(tempDir)
+            val attachments = mutableListOf<DiagnosticAttachmentDto>()
 
-            writeDeviceInfo(context, tempDir)
-            writeBuildIdentity(tempDir)
-            if (!writeDiagnosticsManifest(
-                    context,
-                    tempDir,
-                    mapOf(
-                        "logs" to logsStatus,
-                        "crash" to crashStatus,
-                        "logcat" to logcatStatus,
-                        "processExits" to processExitsStatus,
-                        "threadDump" to threadDumpStatus,
-                        "settings" to settingsStatus,
-                        "sync" to syncStatus,
-                        "editor" to editorStatus,
-                        "jank" to jankStatus,
-                    ),
-                )
-            ) {
-                DiagnosticsInterop.e(TAG, "diagnostics_manifest.json write failed; aborting export")
-                return null
+            // crash 文件
+            addCrashAttachments(attachments)
+
+            // logcat — LogcatSnapshotCollector.collect(destDir) 写文件到 destDir
+            runCatching { LogcatSnapshotCollector.collect(tempDir) }
+                .onFailure { DiagnosticsInterop.w(TAG, "Logcat capture failed", it) }
+            // processExits
+            runCatching { ProcessExitCollector.collect(context, tempDir) }
+                .onFailure { DiagnosticsInterop.w(TAG, "Process exit capture failed", it) }
+            // threadDump
+            runCatching { ThreadDumpCollector.collect(tempDir) }
+                .onFailure { DiagnosticsInterop.w(TAG, "Thread dump failed", it) }
+            // jank summary
+            addJankSummaryAttachment(attachments)
+            // app settings
+            addAppSettingsAttachment(context, attachments)
+            // sync state
+            addSyncStateAttachment(context, attachments)
+            // editor snapshot
+            addEditorSnapshotAttachment(attachments)
+            // device info
+            addDeviceInfoAttachment(context, attachments)
+            // build identity
+            addBuildIdentityAttachment(attachments)
+
+            // 把 tempDir 中由 collector 写入的文件也读回作为附件。
+            tempDir.walkTopDown().forEach { file ->
+                if (file.isFile) {
+                    val relPath = file.relativeTo(tempDir).path.replace('\\', '/')
+                    val content = file.readBytes()
+                    attachments.add(DiagnosticAttachmentDto(relPath, content))
+                }
             }
 
-            zipDirectory(tempDir, zipFile)
+            // 调用 UniFFI exportDiagnostics 生成最终 zip（附件打包只由 Rust 生成一次）。
+            val zipPath = nativeExportDiagnostics(cacheDir.absolutePath, attachments)
+            val zipFile = File(zipPath)
+
+            // 清理临时附件目录。
             tempDir.deleteRecursively()
 
             zipFile
@@ -144,193 +158,47 @@ object DiagnosticsExporterInterop {
         return copies
     }
 
-    /**
-     * 复制 Rust writer 已落盘的日志文件到 destDir/logs/。
-     * Rust exportDiagnostics 生成日志 zip，这里解包复制到导出目录。
-     * 返回 "ok" / "missing" / "error"。
-     */
-    private fun writeLogs(
-        context: Context,
-        destDir: File,
-    ): String {
-        val logsDir = File(destDir, "logs")
-        logsDir.mkdirs()
-        // 通过 Rust exportDiagnostics 导出日志到临时目录，再解包复制。
-        val rustOutputDir = File(context.cacheDir, "rust_diagnostics_export")
-        rustOutputDir.mkdirs()
-        rustOutputDir.listFiles()?.forEach { it.delete() }
-        val rustZipPath = DiagnosticsInterop.exportDiagnostics(rustOutputDir.absolutePath)
-        if (rustZipPath == null) {
-            // Rust 导出失败，回退为空日志目录标记。
-            return "missing"
-        }
-        val rustZipFile = File(rustZipPath)
-        return try {
-            // 解压 Rust 生成的 zip 到 logsDir。
-            java.util.zip.ZipInputStream(FileInputStream(rustZipFile)).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val outFile = File(logsDir, entry.name)
-                    outFile.parentFile?.mkdirs()
-                    FileOutputStream(outFile).use { fos ->
-                        zis.copyTo(fos)
-                    }
-                    zis.closeEntry()
-                    entry = zis.nextEntry
-                }
-            }
-            rustZipFile.delete()
-            "ok"
-        } catch (_: Exception) {
-            rustZipFile.delete()
-            "error"
-        }
-    }
+    // ── 附件收集 ──────────────────────────────────────────────────
+    //
+    // 每个附件收集器把内容读回字节交给 Rust。附件脱敏由 Rust export.rs 统一处理
+    // （Issue #670 评论 5651816143 修改 4），Kotlin 端不再复制一套脱敏规则。
 
-    private fun writeCrashFile(destDir: File): String {
-        val primary = DiagnosticsInterop.getCrashFile() ?: return "not_found"
+    private fun addCrashAttachments(attachments: MutableList<DiagnosticAttachmentDto>) {
+        val primary = DiagnosticsInterop.getCrashFile() ?: return
         val fallback = DiagnosticsInterop.getFallbackCrashFile() ?: primary
         val copies = planCrashFileCopies(primary, fallback)
-        if (copies.isEmpty()) return "not_found"
-        var allOk = true
         for ((name, file) in copies) {
-            try {
-                val content = file.readText()
-                val redacted = DiagnosticsInterop.redact(content)
-                File(destDir, name).writeText(redacted)
-            } catch (_: Exception) {
-                allOk = false
+            runCatching {
+                attachments.add(DiagnosticAttachmentDto(name, file.readBytes()))
             }
         }
-        return if (allOk) "ok" else "error"
     }
 
-    private fun writeLogcat(destDir: File): String =
-        try {
-            LogcatSnapshotCollector.collect(destDir)
-            "ok"
-        } catch (e: Exception) {
-            DiagnosticsInterop.w(TAG, "Logcat capture failed", e)
-            "error"
-        }
-
-    private fun writeProcessExits(
-        context: Context,
-        destDir: File,
-    ): String =
-        try {
-            ProcessExitCollector.collect(context, destDir)
-            "ok"
-        } catch (e: Exception) {
-            DiagnosticsInterop.w(TAG, "Process exit capture failed", e)
-            "error"
-        }
-
-    private fun writeThreadDump(destDir: File): String =
-        try {
-            ThreadDumpCollector.collect(destDir)
-            "ok"
-        } catch (e: Exception) {
-            DiagnosticsInterop.w(TAG, "Thread dump failed", e)
-            "error"
-        }
-
-    private fun writeJankSummary(destDir: File): String =
-        try {
+    private fun addJankSummaryAttachment(attachments: MutableList<DiagnosticAttachmentDto>) {
+        runCatching {
             val summary = JankStatsController.getSummary()
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(summary))
-            File(destDir, "jank_summary.json").writeText(json)
-            "ok"
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
+            val json = gson.toJson(summary)
+            attachments.add(
+                DiagnosticAttachmentDto("jank_summary.json", json.toByteArray(Charsets.UTF_8)),
+            )
+        }.onFailure { e ->
+            val safeMsg = e.message ?: "unknown"
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "jank_summary.json").writeText(errorJson)
-            "error"
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "jank_summary.json",
+                    errorJson.toByteArray(Charsets.UTF_8),
+                ),
+            )
         }
+    }
 
-    private fun writeDeviceInfo(
+    private fun addAppSettingsAttachment(
         context: Context,
-        destDir: File,
+        attachments: MutableList<DiagnosticAttachmentDto>,
     ) {
-        val info = collectDeviceInfo(context)
-        val gson = GsonBuilder().setPrettyPrinting().create()
-        val json = DiagnosticsInterop.redact(gson.toJson(info))
-        File(destDir, "current_device.json").writeText(json)
-    }
-
-    private fun writeBuildIdentity(destDir: File) {
-        try {
-            val identity = DiagnosticsInterop.buildIdentity()
-            val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(identity))
-            File(destDir, "build_identity.json").writeText(json)
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "build_identity.json").writeText(errorJson)
-        }
-    }
-
-    private fun writeDiagnosticsManifest(
-        context: Context,
-        destDir: File,
-        collectionStatus: Map<String, String>,
-    ): Boolean {
-        return try {
-            val identity = DiagnosticsInterop.buildIdentity()
-            val deviceInfo = collectDeviceInfo(context)
-            val supportedAbis = Build.SUPPORTED_ABIS.toList()
-            val arch = supportedAbis.firstOrNull() ?: "unknown"
-            val exportedAt = Instant.now().toString()
-
-            val manifest =
-                mapOf(
-                    "schemaVersion" to 1,
-                    "platform" to "android",
-                    *identity.toManifestFields().toList().toTypedArray(),
-                    "exportedAt" to exportedAt,
-                    "arch" to arch,
-                    "runtime" to
-                        mapOf(
-                            "sdkVersion" to deviceInfo["sdkVersion"],
-                            "release" to deviceInfo["release"],
-                            "securityPatch" to deviceInfo["securityPatch"],
-                            "supportedAbis" to supportedAbis,
-                            "applicationId" to identity.applicationId,
-                        ),
-                    "system" to
-                        mapOf(
-                            "brand" to deviceInfo["brand"],
-                            "manufacturer" to deviceInfo["manufacturer"],
-                            "model" to deviceInfo["model"],
-                            "device" to deviceInfo["device"],
-                            "product" to deviceInfo["product"],
-                            "screenWidthPx" to deviceInfo["screenWidthPx"],
-                            "screenHeightPx" to deviceInfo["screenHeightPx"],
-                            "densityDpi" to deviceInfo["densityDpi"],
-                            "density" to deviceInfo["density"],
-                            "scaledDensity" to deviceInfo["scaledDensity"],
-                            "supportedAbis" to deviceInfo["supportedAbis"],
-                        ),
-                    "collection" to collectionStatus,
-                )
-
-            val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(manifest))
-            File(destDir, "diagnostics_manifest.json").writeText(json)
-            true
-        } catch (e: Exception) {
-            DiagnosticsInterop.e(TAG, "Failed to write diagnostics manifest", e)
-            false
-        }
-    }
-
-    private fun writeAppSettingsSanitized(
-        context: Context,
-        destDir: File,
-    ): String =
-        try {
+        runCatching {
             val repo =
                 SettingsRepository(
                     context,
@@ -355,21 +223,30 @@ object DiagnosticsExporterInterop {
                     "diagnosticsVerbose" to settings.diagnosticsVerbose,
                 )
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(sanitized))
-            File(destDir, "app_settings_sanitized.json").writeText(json)
-            "ok"
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
+            val json = gson.toJson(sanitized)
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "app_settings_sanitized.json",
+                    json.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }.onFailure { e ->
+            val safeMsg = e.message ?: "unknown"
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "app_settings_sanitized.json").writeText(errorJson)
-            "error"
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "app_settings_sanitized.json",
+                    errorJson.toByteArray(Charsets.UTF_8),
+                ),
+            )
         }
+    }
 
-    private fun writeSyncStateSanitized(
+    private fun addSyncStateAttachment(
         context: Context,
-        destDir: File,
-    ): String =
-        try {
+        attachments: MutableList<DiagnosticAttachmentDto>,
+    ) {
+        runCatching {
             val repo =
                 SyncRepository(
                     context,
@@ -383,7 +260,7 @@ object DiagnosticsExporterInterop {
                         "projectId" to projectId,
                         "status" to syncState.status.name,
                         "lastSyncTime" to syncState.lastSyncTime,
-                        "lastError" to syncState.lastError?.let { DiagnosticsInterop.redact(it) },
+                        "lastError" to syncState.lastError,
                         "conflictCount" to (syncState.conflicts?.size ?: 0),
                     )
                 } else {
@@ -393,29 +270,87 @@ object DiagnosticsExporterInterop {
                     )
                 }
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(sanitized))
-            File(destDir, "sync_state_sanitized.json").writeText(json)
-            "ok"
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
+            val json = gson.toJson(sanitized)
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "sync_state_sanitized.json",
+                    json.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }.onFailure { e ->
+            val safeMsg = e.message ?: "unknown"
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "sync_state_sanitized.json").writeText(errorJson)
-            "error"
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "sync_state_sanitized.json",
+                    errorJson.toByteArray(Charsets.UTF_8),
+                ),
+            )
         }
+    }
 
-    private fun writeEditorSnapshot(destDir: File): String =
-        try {
+    private fun addEditorSnapshotAttachment(attachments: MutableList<DiagnosticAttachmentDto>) {
+        runCatching {
             val snapshot = EditorEventRingBuffer.getSnapshot()
             val gson = GsonBuilder().setPrettyPrinting().create()
-            val json = DiagnosticsInterop.redact(gson.toJson(snapshot))
-            File(destDir, "editor_snapshot.json").writeText(json)
-            "ok"
-        } catch (e: Exception) {
-            val safeMsg = DiagnosticsInterop.redact(e.message ?: "unknown")
+            val json = gson.toJson(snapshot)
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "editor_snapshot.json",
+                    json.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }.onFailure { e ->
+            val safeMsg = e.message ?: "unknown"
             val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
-            File(destDir, "editor_snapshot.json").writeText(errorJson)
-            "error"
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "editor_snapshot.json",
+                    errorJson.toByteArray(Charsets.UTF_8),
+                ),
+            )
         }
+    }
+
+    private fun addDeviceInfoAttachment(
+        context: Context,
+        attachments: MutableList<DiagnosticAttachmentDto>,
+    ) {
+        runCatching {
+            val info = collectDeviceInfo(context)
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = gson.toJson(info)
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "current_device.json",
+                    json.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }
+    }
+
+    private fun addBuildIdentityAttachment(attachments: MutableList<DiagnosticAttachmentDto>) {
+        runCatching {
+            val identity = DiagnosticsInterop.buildIdentity()
+            val gson = GsonBuilder().setPrettyPrinting().create()
+            val json = gson.toJson(identity)
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "build_identity.json",
+                    json.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }.onFailure { e ->
+            val safeMsg = e.message ?: "unknown"
+            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            attachments.add(
+                DiagnosticAttachmentDto(
+                    "build_identity.json",
+                    errorJson.toByteArray(Charsets.UTF_8),
+                ),
+            )
+        }
+    }
 
     private fun collectDeviceInfo(context: Context): Map<String, Any?> {
         val displayMetrics = context.resources.displayMetrics
@@ -436,22 +371,5 @@ object DiagnosticsExporterInterop {
             "density" to displayMetrics.density,
             "scaledDensity" to displayMetrics.scaledDensity,
         )
-    }
-
-    private fun zipDirectory(
-        sourceDir: File,
-        zipFile: File,
-    ) {
-        ZipOutputStream(FileOutputStream(zipFile)).use { zos ->
-            sourceDir.walkTopDown().forEach { file ->
-                if (file.isDirectory) return@forEach
-                val entryName = file.relativeTo(sourceDir).path.replace('\\', '/')
-                zos.putNextEntry(ZipEntry(entryName))
-                FileInputStream(file).use { fis ->
-                    fis.copyTo(zos)
-                }
-                zos.closeEntry()
-            }
-        }
     }
 }

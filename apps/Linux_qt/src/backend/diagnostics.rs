@@ -14,7 +14,8 @@
 // - 不负责日志写入、轮转、脱敏、落盘（由 writer_diagnostics 接管）
 // - 不负责诊断配置（由 writer_diagnostics::set_config 接管）
 // - 不负责诊断包导出/打包（由 writer_diagnostics::export 接管）
-// - 不负责 panic hook（由 writer_diagnostics logger 接管）
+// - 不负责 panic hook（由 writer_diagnostics::init 中的 install_panic_hook 接管，
+//   Issue #670 评论 5651816143 修改 6）
 //
 // 被什么引用：
 // - main.rs：init_build_identity / set_qt_version / set_runtime_info / set_system_info

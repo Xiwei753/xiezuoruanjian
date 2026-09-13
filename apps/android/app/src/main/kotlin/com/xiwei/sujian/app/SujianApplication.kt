@@ -1,6 +1,7 @@
 package com.xiwei.sujian.app
 
 import android.app.Application
+import android.os.Build
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
@@ -14,8 +15,12 @@ import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import com.xiwei.sujian.storage.recovery.LegacyStorageMigrationGate
 import java.io.File
+import java.util.Locale
 import uniffi.writer_core.DiagnosticFieldDto
+import uniffi.writer_core.DiagnosticLevelDto
 import uniffi.writer_core.DiagnosticOriginDto
+import uniffi.writer_core.DiagnosticsInitDto
+import uniffi.writer_core.initDiagnostics as nativeInitDiagnostics
 
 class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDependenciesProvider {
     private var autoSyncScheduler: AutoSyncScheduler? = null
@@ -36,21 +41,62 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
     override fun onCreate() {
         super<Application>.onCreate()
         // 崩溃处理器放在第一项：crash 都要落到日志目录（应用私有 filesDir，无需权限）。
-        installCrashHandler()
+        // 但诊断后端必须先初始化，否则 crash handler 记录的事件会被丢弃。
         initDiagnostics()
+        installCrashHandler()
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
     /**
-     * 初始化诊断后端。
+     * 初始化诊断后端 — Issue #670 评论 5651816143 修改 1。
      *
-     * Issue #670 评论 5651060802：不再使用独立的 `sujian_diagnostics` SharedPreferences，
-     * diagnostics_enabled / diagnostics_verbose 只认 Core `LocalSettings`。
-     * Core 在 WriterAppService 构造时从 PlatformInit 初始化 Rust diagnostics 后端；
-     * 本方法只同步 Kotlin 侧默认状态（enabled=true, verbose=true），等 Core 初始化后
+     * 在任何日志产生之前调用 UniFFI `initDiagnostics`，把诊断后端真正接上。
+     * 这是进程级基础设施，不要把 diagnostics 生命周期绑在 WriterAppService 上。
+     *
+     * - log_dir 从 AndroidPrivateDataRoot.logs(context) 获取
+     * - platform = "android"
+     * - device_id 从 Build 获取
+     * - app_version 从 BuildConfig 获取
+     * - build_key 从 DiagnosticsInterop.buildIdentity() 获取
+     * - locale / timezone 从系统获取
+     *
+     * `LocalSettings` 仍是 enabled/verbose 唯一持久事实来源，设置加载后
+     * 只调用 `setDiagnosticsConfig()` 更新运行时状态。本方法只同步 Kotlin 侧
+     * 默认状态（enabled=true, verbose=true），等 Core 初始化后
      * SettingsRepository 会调用 [DiagnosticsInterop.setConfig] 更新实际值。
      */
     private fun initDiagnostics() {
+        // 1. 调用 UniFFI initDiagnostics 把 Rust 诊断后端真正接上。
+        try {
+            val identity = DiagnosticsInterop.buildIdentity()
+            val logDir = AndroidPrivateDataRoot.logs(this).absolutePath
+            val deviceId =
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    Build.getSerial()
+                } else {
+                    @Suppress("DEPRECATION")
+                    Build.SERIAL
+                }
+            val appVersion = BuildConfig.VERSION_NAME
+            val locale = Locale.getDefault().toLanguageTag()
+            val timezone = java.util.TimeZone.getDefault().id
+            nativeInitDiagnostics(
+                DiagnosticsInitDto(
+                    logDir = logDir,
+                    platform = "android",
+                    deviceId = deviceId ?: "unknown",
+                    appVersion = appVersion,
+                    buildKey = identity.buildKey,
+                    locale = locale,
+                    timezone = timezone,
+                ),
+            )
+        } catch (e: UnsatisfiedLinkError) {
+            // 原生库未加载时静默跳过 — 后续 Core 初始化时会再次尝试。
+        } catch (e: Exception) {
+            android.util.Log.w("SujianApp", "initDiagnostics failed: ${e.message}")
+        }
+        // 2. 同步 Kotlin 侧状态。
         DiagnosticsInterop.init(this, isEnabled = true, isVerbose = true)
         EditorEventRingBuffer.setEnabled(true)
     }
@@ -100,7 +146,9 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
                     )
                 }
                 // 把 crash 元数据交给 Rust 统一诊断后端。
+                // 修改 5：crash 事件传 ERROR level。
                 DiagnosticsInterop.recordEvent(
+                    DiagnosticLevelDto.ERROR,
                     DiagnosticOriginDto.SYSTEM,
                     "app.crash",
                     "SujianApp",

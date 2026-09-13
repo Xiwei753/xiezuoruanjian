@@ -52,7 +52,11 @@ pub use event::{DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin};
 pub use export::{export_diagnostics, PlatformAttachment};
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+
+/// panic hook 是否已安装 — 保证只在首次 init 时安装一次（Issue #670 评论 5651816143 修改 6）。
+static PANIC_HOOK_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// 诊断配置 — 由平台 init 传入，初始化日志后端。
 #[derive(Debug, Clone)]
@@ -103,6 +107,11 @@ pub fn init(config: DiagnosticsConfig) {
         config.enabled,
         config.verbose,
     );
+    // 安装 panic hook — Issue #670 评论 5651816143 修改 6。
+    // 把 Rust panic 转成结构化诊断事件（origin=app, event=app.panic, level=error），
+    // 带 thread/location/脱敏后的 panic message，然后 flush 落盘，再链回原 hook。
+    // 幂等：只在首次安装时设置，避免多次 init 重复链式安装。
+    install_panic_hook();
     // 记录启动事件。
     let mut fields = std::collections::BTreeMap::new();
     fields.insert(
@@ -127,6 +136,7 @@ pub fn init(config: DiagnosticsConfig) {
     );
     let event = DiagnosticEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        // sequence / session_id 由 record_event 统一补全（Issue #670 评论 5651816143 修改 2）。
         sequence: 0,
         session_id: String::new(),
         level: DiagnosticLevel::Info,
@@ -137,6 +147,55 @@ pub fn init(config: DiagnosticsConfig) {
         fields,
     };
     record_event(event);
+}
+
+/// 安装共享 panic hook — 把 Rust panic 转成结构化诊断事件并落盘。
+///
+/// Issue #670 评论 5651816143 修改 6：`diagnostics.rs` 注释说 "panic hook 由
+/// writer_diagnostics logger 接管"，但本 crate 之前没有 `std::panic::set_hook()`。
+/// 此处补上：记录 `origin=app, event=app.panic, level=error` 事件，带 thread/location/
+/// 脱敏后的 panic message，然后 flush 落盘，再链回原 hook。
+///
+/// 幂等：用 `PANIC_HOOK_INSTALLED` AtomicBool 保护，只在首次调用时安装。
+/// 多次 init 不会重复链式安装，避免 hook 链无限增长。
+fn install_panic_hook() {
+    if PANIC_HOOK_INSTALLED.swap(true, Ordering::SeqCst) {
+        // 已安装：不重复安装，避免 hook 链无限增长。
+        return;
+    }
+    let prev_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // 把 panic 信息转成结构化诊断事件。
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_default();
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("<unnamed>")
+            .to_string();
+        let msg = format!("{}", info);
+        let mut fields = std::collections::BTreeMap::new();
+        fields.insert("thread".to_string(), serde_json::Value::String(thread));
+        fields.insert("location".to_string(), serde_json::Value::String(location));
+        let event = DiagnosticEvent {
+            timestamp_ms: chrono::Utc::now().timestamp_millis(),
+            // sequence / session_id 由 record_event 统一补全。
+            sequence: 0,
+            session_id: String::new(),
+            level: DiagnosticLevel::Error,
+            origin: DiagnosticOrigin::App,
+            event: "app.panic".to_string(),
+            target: "writer_diagnostics".to_string(),
+            message: Some(msg),
+            fields,
+        };
+        // 记录事件并立即 flush 落盘，确保 panic 日志不丢。
+        record_event(event);
+        flush();
+        // 链回原 hook（默认打印到 stderr），保持原有行为。
+        prev_hook(info);
+    }));
 }
 
 /// 记录结构化事件 — 脱敏后序列化为 JSONL 并入队 writer。

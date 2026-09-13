@@ -312,10 +312,14 @@ extern "C" fn qml_load_error_handler(
 /// 把 Qt 消息转成共享 Rust 诊断事件（origin=System，平台来源）。
 ///
 /// Qt 消息是平台来源，不自己写文件，只入队 writer_diagnostics 统一后端。
+/// Issue #670 评论 5651816143 修改 2：sequence / session_id 由
+/// `writer_diagnostics::record_event` 统一补全，此处不再写死 0 / ""。
 fn record_qt_event(level: writer_diagnostics::DiagnosticLevel, event: &str, message: &str) {
     use std::collections::BTreeMap;
     writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
         timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        // sequence / session_id 由 writer_diagnostics::record_event 统一补全
+        // （Issue #670 评论 5651816143 修改 2）。
         sequence: 0,
         session_id: String::new(),
         level,
