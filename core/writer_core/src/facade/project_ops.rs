@@ -353,6 +353,26 @@ impl super::WriterCore {
         )
     }
 
+    /// 删除章节的"先计划"版本（不修改磁盘），供 durable 删除事务使用。
+    ///
+    /// 只校验目标并构造 `WorkspaceChangeSet`，不执行本地删除。
+    /// 调用方在 `save_pending` 落盘 journal 后再调 [`Self::delete_chapter`] 执行本地删除。
+    pub fn plan_delete_chapter_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+        chapter_id: &str,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        chapter::plan_delete_chapter_changes(
+            &project_root,
+            volume_id,
+            chapter_id,
+            &self.app_data_root,
+            &self.app_data_root,
+        )
+    }
+
     /// 重排章节并返回变更集。
     pub fn reorder_chapters_with_changes(
         &self,
@@ -448,6 +468,19 @@ impl super::WriterCore {
     ) -> Result<WorkspaceChangeSet> {
         let project_root = self.project_root(project_id);
         crate::volume::delete_volume_with_changes(&project_root, volume_id, &self.app_data_root)
+    }
+
+    /// 删除卷的"先计划"版本（不修改磁盘），供 durable 删除事务使用。
+    ///
+    /// 只校验目标并构造 `WorkspaceChangeSet`，不执行物理删除。
+    /// 调用方在 `save_pending` 落盘 journal 后再调 [`Self::delete_volume`] 执行物理删除。
+    pub fn plan_delete_volume_changes(
+        &self,
+        project_id: &str,
+        volume_id: &str,
+    ) -> Result<WorkspaceChangeSet> {
+        let project_root = self.project_root(project_id);
+        crate::volume::plan_delete_volume_changes(&project_root, volume_id, &self.app_data_root)
     }
 
     /// 重排卷并返回变更集。

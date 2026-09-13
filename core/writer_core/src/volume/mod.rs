@@ -294,6 +294,11 @@ pub fn rename_volume_with_changes(
 /// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
 /// 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
 /// 不再只传 volume.json 导致卷下章节残留。
+///
+/// 注意：本函数会先执行物理删除再返回 change_set。新的 durable 删除事务
+/// （先 save_pending 落盘 journal 再物理删除）应改用
+/// [`plan_delete_volume_changes`] + [`delete_volume`] 两步，不要再用本函数
+/// 作为 durable 删除事务起点。本函数保留供非事务场景使用。
 pub fn delete_volume_with_changes(
     project_root: &Path,
     volume_id: &str,
@@ -301,6 +306,31 @@ pub fn delete_volume_with_changes(
 ) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
     delete_volume(project_root, volume_id, app_data_root)?;
     let volume_dir = project_root.join("volumes").join(volume_id);
+    let rel = workspace_rel(&volume_dir, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete_tree(std::path::PathBuf::from(rel));
+    Ok(change_set)
+}
+
+///   delete_volume 的"先计划"版本（不修改磁盘）。
+///
+/// 只校验目标存在并构造 `WorkspaceChangeSet`，包含
+/// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
+/// 不执行物理删除，供 durable 删除事务在 `save_pending` 落盘 journal 前调用。
+/// 真正的物理删除继续由 [`delete_volume`] 完成。
+///
+/// 这样保证顺序为：plan change_set -> save_pending -> 本地删除 ->
+/// mark_local_applied -> record history -> mark_history_recorded -> clear_journal。
+pub fn plan_delete_volume_changes(
+    project_root: &Path,
+    volume_id: &str,
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 校验目标存在（与 delete_volume 相同的校验，但不执行移动）。
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let volume_dir = project_root.join("volumes").join(volume_id);
+    // 校验目标是合法删除目标（存在 + 在 project_root 下）。
+    crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
     let rel = workspace_rel(&volume_dir, app_data_root);
     let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
         .add_delete_tree(std::path::PathBuf::from(rel));

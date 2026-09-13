@@ -170,8 +170,9 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<bool> {
-        //   用 _with_changes 版本拿变更集。
-        // 不再先调 delete_chapter，由 delete_chapter_with_changes 统一处理删除和变更集。
+        //   durable 删除事务：先 plan change_set（不碰磁盘），
+        // 再 save_pending 落盘 journal，再本地删除，再推进 journal 阶段。
+        // 只有 save_pending 成功后才允许动本地文件，保证删除事实在物理删除前已持久化。
         for prefix in &[
             format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
             format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -188,29 +189,44 @@ impl WriterCoreApi {
         }
         let change_set = self
             .core_write()
-            .delete_chapter_with_changes(project_id, volume_id, chapter_id)?;
-        // 走统一 workspace change journal：先持久化 journal（phase=LocalApplied，
-        // 本地删除已完成），再写 history，成功后清 journal。
-        // history 失败时本地删除可以已经完成，但 journal 必须留下供下次 bootstrap 补记。
+            .plan_delete_chapter_changes(project_id, volume_id, chapter_id)?;
         let device_id = crate::settings::load_device_info(&self.app_data_root)
             .map(|i| i.device_id)
             .unwrap_or_default();
+        // 先落盘 journal（phase=Pending），确保崩溃后能恢复。
         let journal =
             crate::storage::journal::workspace_change::WorkspaceChangeJournal::save_pending(
                 &self.app_data_root,
                 &change_set,
                 &device_id,
                 crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteChapter,
+                Some(crate::storage::journal::workspace_change::DeleteTarget::Chapter {
+                    project_id: project_id.to_string(),
+                    volume_id: volume_id.to_string(),
+                    chapter_id: chapter_id.to_string(),
+                }),
             )
             .map_err(|e| {
                 log::warn!(
-                    "delete_chapter: save_pending journal failed: {} — history still attempted",
+                    "delete_chapter: save_pending journal failed: {} — aborting before local delete",
                     e
                 );
                 crate::api::error::WriterError::Other(format!(
                     "delete_chapter: save_pending journal failed: {e}"
                 ))
             })?;
+        // journal 落盘成功，执行本地删除。
+        if let Err(e) = self
+            .core_write()
+            .delete_chapter(project_id, volume_id, chapter_id)
+            .map_err(WriterError::from)
+        {
+            log::warn!(
+                "delete_chapter: local delete failed: {} — journal retained for recovery",
+                e
+            );
+            return Err(e);
+        }
         // 本地删除已完成，推进到 LocalApplied。
         if let Err(e) = journal.mark_local_applied(&self.app_data_root) {
             log::warn!(

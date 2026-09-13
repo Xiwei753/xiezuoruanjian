@@ -176,6 +176,11 @@ pub fn rename_chapter_with_changes(
 ///
 /// 返回 `WorkspaceChangeSet`，变更集包含
 /// `Delete(chapter.meta.json) + Delete(chapter.md)`。
+///
+/// 注意：本函数会先执行本地删除再返回 change_set。新的 durable 删除事务
+/// （先 save_pending 落盘 journal 再本地删除）应改用
+/// [`plan_delete_chapter_changes`] + [`delete_chapter`] 两步，不要再用本函数
+/// 作为 durable 删除事务起点。本函数保留供非事务场景使用。
 pub fn delete_chapter_with_changes(
     project_root: &Path,
     volume_id: &str,
@@ -204,6 +209,53 @@ pub fn delete_chapter_with_changes(
         .replace('\\', "/");
 
     delete_chapter(project_root, volume_id, chapter_id, app_data_root)?;
+
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete(std::path::PathBuf::from(meta_rel_path))
+        .add_delete(std::path::PathBuf::from(md_rel_path));
+
+    Ok(change_set)
+}
+
+/// 删除章节的"先计划"版本（不修改磁盘）。
+///
+/// 只校验目标存在并构造 `WorkspaceChangeSet`，包含
+/// `Delete(chapter.meta.json) + Delete(chapter.md)`。
+/// 不执行本地删除，供 durable 删除事务在 `save_pending` 落盘 journal 前调用。
+/// 真正的本地删除继续由 [`delete_chapter`] 完成。
+///
+/// 这样保证顺序为：plan change_set -> save_pending -> 本地删除 ->
+/// mark_local_applied -> record history -> mark_history_recorded -> clear_journal。
+pub fn plan_delete_chapter_changes(
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    _app_data_root: &Path,
+    workspace_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 校验目标存在（与 delete_chapter 相同的校验，但不执行移动）。
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let chapter_id = crate::delete_guard::validate_id_segment(chapter_id)?;
+    let chapter_dir = project_root
+        .join("volumes")
+        .join(volume_id)
+        .join("chapters")
+        .join(chapter_id);
+    crate::delete_guard::validate_delete_target(project_root, &chapter_dir, "chapter.meta.json")?;
+
+    let meta_path = chapter_dir.join("chapter.meta.json");
+    let md_path = chapter_dir.join("chapter.md");
+
+    let meta_rel_path = meta_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(&meta_path)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let md_rel_path = md_path
+        .strip_prefix(workspace_root)
+        .unwrap_or(&md_path)
+        .to_string_lossy()
+        .replace('\\', "/");
 
     let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
         .add_delete(std::path::PathBuf::from(meta_rel_path))

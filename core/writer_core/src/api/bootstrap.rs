@@ -85,8 +85,13 @@ fn recover_storage_transactions(
 
 /// 恢复统一 workspace 变更事务（workspace_change journal）。
 ///
-/// 扫描未完成 journal，如果本地删除已完成但 history 没写进去就补 history，
-/// 只有 history 成功后才清 journal。
+/// 按阶段区分处理：
+/// - `Pending`: journal 落盘但本地删除未完成。先幂等完成本地删除（目标已不存在视为已完成），
+///   推进到 LocalApplied，再补 history。
+/// - `LocalApplied`: 本地删除已完成，补 history，推进到 HistoryRecorded，清 journal。
+/// - `HistoryRecorded`: 已在 recover_unfinished 内部清理。
+///
+/// 不再让 Pending 直接进入 history——必须先完成本地删除。
 fn recover_workspace_change_transactions(
     app_data_root: &Path,
     layout: &crate::storage::git_repo_layout::GitRepoLayout,
@@ -94,67 +99,203 @@ fn recover_workspace_change_transactions(
     let recovered_changes =
         crate::storage::journal::workspace_change::recover_unfinished(app_data_root)?;
     for rec in &recovered_changes {
-        let message = match rec.op_type {
-            crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteProject => {
-                "recover_delete_project"
-            }
-            crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteVolume => {
-                "recover_delete_volume"
-            }
-            crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteChapter => {
-                "recover_delete_chapter"
-            }
-        };
-        match crate::storage::workspace_git::record_workspace_change_set(
-            layout,
-            &rec.changes,
-            message,
-        ) {
-            Ok(result) => {
-                if result.oid.is_some() {
-                    log::debug!(
-                        "recover_workspace_change_transactions: history committed for {} \
-                         ({} staged)",
-                        rec.journal_token,
-                        result.staged_count
-                    );
-                }
-                // history 成功，推进 journal 到 HistoryRecorded 并清理。
-                let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
-                    token: rec.journal_token.clone(),
-                    change_set: rec.changes.clone(),
-                    device_id: String::new(),
-                    op_type: rec.op_type.clone(),
-                    created_at: 0,
-                    phase:
-                        crate::storage::journal::workspace_change::WorkspaceChangePhase::LocalApplied,
-                };
-                if let Err(e) = journal.mark_history_recorded(app_data_root) {
-                    log::warn!(
-                        "recover_workspace_change_transactions: mark_history_recorded failed \
-                         for {}: {} — journal retained",
-                        rec.journal_token,
-                        e
-                    );
-                } else if let Err(e) = journal.clear_journal(app_data_root) {
-                    log::warn!(
-                        "recover_workspace_change_transactions: clear_journal failed for {}: {}",
-                        rec.journal_token,
-                        e
-                    );
-                }
-            }
-            Err(e) => {
+        let message = recover_message_for_op_type(&rec.op_type);
+
+        // 阶段 1：如果是 Pending，先幂等完成本地删除。
+        let should_continue = recover_pending_phase(app_data_root, rec);
+        if !should_continue {
+            continue;
+        }
+
+        // 阶段 2：LocalApplied，补 history。
+        recover_local_applied_phase(app_data_root, layout, rec, message);
+    }
+    Ok(())
+}
+
+/// 根据 op_type 返回 recover 用的 commit message。
+fn recover_message_for_op_type(
+    op_type: &crate::storage::journal::workspace_change::WorkspaceChangeOpType,
+) -> &'static str {
+    use crate::storage::journal::workspace_change::WorkspaceChangeOpType;
+    match op_type {
+        WorkspaceChangeOpType::DeleteProject => "recover_delete_project",
+        WorkspaceChangeOpType::DeleteVolume => "recover_delete_volume",
+        WorkspaceChangeOpType::DeleteChapter => "recover_delete_chapter",
+    }
+}
+
+/// 处理 Pending 阶段：幂等完成本地删除并推进 journal 到 LocalApplied。
+///
+/// 返回 `true` 表示可以继续补 history（已推进到 LocalApplied 或本来就是 LocalApplied）。
+/// 返回 `false` 表示应跳过本次循环（本地删除失败或阶段非 LocalApplied）。
+fn recover_pending_phase(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> bool {
+    use crate::storage::journal::workspace_change::WorkspaceChangePhase;
+
+    if rec.phase != WorkspaceChangePhase::Pending {
+        // 非 Pending 阶段，直接检查是否 LocalApplied。
+        return rec.phase == WorkspaceChangePhase::LocalApplied;
+    }
+
+    // Pending 阶段：先幂等完成本地删除。
+    match recover_pending_local_delete(app_data_root, rec) {
+        Ok(()) => {
+            // 本地删除完成，推进 journal 到 LocalApplied。
+            let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
+                token: rec.journal_token.clone(),
+                change_set: rec.changes.clone(),
+                device_id: String::new(),
+                op_type: rec.op_type.clone(),
+                created_at: 0,
+                phase: WorkspaceChangePhase::Pending,
+                delete_target: rec.delete_target.clone(),
+            };
+            if let Err(e) = journal.mark_local_applied(app_data_root) {
                 log::warn!(
-                    "recover_workspace_change_transactions: history failed for {}: {} \
-                     — journal retained, history will be补 on next startup",
+                    "recover_workspace_change_transactions: mark_local_applied failed \
+                     for {}: {} — journal retained",
+                    rec.journal_token,
+                    e
+                );
+            }
+            true
+        }
+        Err(e) => {
+            log::warn!(
+                "recover_workspace_change_transactions: pending local delete failed for \
+                 {}: {} — journal retained, will retry on next startup",
+                rec.journal_token,
+                e
+            );
+            false
+        }
+    }
+}
+
+/// 处理 LocalApplied 阶段：补 history，推进到 HistoryRecorded，清 journal。
+fn recover_local_applied_phase(
+    app_data_root: &Path,
+    layout: &crate::storage::git_repo_layout::GitRepoLayout,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+    message: &str,
+) {
+    match crate::storage::workspace_git::record_workspace_change_set(layout, &rec.changes, message)
+    {
+        Ok(result) => {
+            if result.oid.is_some() {
+                log::debug!(
+                    "recover_workspace_change_transactions: history committed for {} \
+                     ({} staged)",
+                    rec.journal_token,
+                    result.staged_count
+                );
+            }
+            // history 成功，推进 journal 到 HistoryRecorded 并清理。
+            let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
+                token: rec.journal_token.clone(),
+                change_set: rec.changes.clone(),
+                device_id: String::new(),
+                op_type: rec.op_type.clone(),
+                created_at: 0,
+                phase:
+                    crate::storage::journal::workspace_change::WorkspaceChangePhase::LocalApplied,
+                delete_target: rec.delete_target.clone(),
+            };
+            if let Err(e) = journal.mark_history_recorded(app_data_root) {
+                log::warn!(
+                    "recover_workspace_change_transactions: mark_history_recorded failed \
+                     for {}: {} — journal retained",
+                    rec.journal_token,
+                    e
+                );
+            } else if let Err(e) = journal.clear_journal(app_data_root) {
+                log::warn!(
+                    "recover_workspace_change_transactions: clear_journal failed for {}: {}",
                     rec.journal_token,
                     e
                 );
             }
         }
+        Err(e) => {
+            log::warn!(
+                "recover_workspace_change_transactions: history failed for {}: {} \
+                 — journal retained, history will be补 on next startup",
+                rec.journal_token,
+                e
+            );
+        }
     }
-    Ok(())
+}
+
+/// 幂等完成 Pending 阶段的本地删除。
+///
+/// 根据 `delete_target` 执行对应的本地删除。如果目标已经不存在，视为本地删除已完成（幂等）。
+/// 没有 `delete_target` 的旧 journal 跳过本地删除（向后兼容，按 LocalApplied 处理）。
+fn recover_pending_local_delete(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+) -> std::result::Result<(), WriterError> {
+    use crate::storage::journal::workspace_change::DeleteTarget;
+    let projects_root = app_data_root.join("projects");
+    match &rec.delete_target {
+        Some(DeleteTarget::Volume {
+            project_id,
+            volume_id,
+        }) => {
+            let project_root = projects_root.join(project_id);
+            let volume_dir = project_root.join("volumes").join(volume_id);
+            if !volume_dir.exists() {
+                log::debug!(
+                    "recover_pending_local_delete: volume {} already absent — treating as deleted",
+                    volume_dir.display()
+                );
+                return Ok(());
+            }
+            crate::volume::delete_volume(&project_root, volume_id, app_data_root)
+                .map_err(WriterError::from)
+        }
+        Some(DeleteTarget::Chapter {
+            project_id,
+            volume_id,
+            chapter_id,
+        }) => {
+            let project_root = projects_root.join(project_id);
+            let chapter_dir = project_root
+                .join("volumes")
+                .join(volume_id)
+                .join("chapters")
+                .join(chapter_id);
+            if !chapter_dir.exists() {
+                log::debug!(
+                    "recover_pending_local_delete: chapter {} already absent — treating as deleted",
+                    chapter_dir.display()
+                );
+                return Ok(());
+            }
+            crate::chapter::delete_chapter(&project_root, volume_id, chapter_id, app_data_root)
+                .map_err(WriterError::from)
+        }
+        Some(DeleteTarget::Project { project_id }) => {
+            // 作品删除有独立的多阶段事务（project_delete.rs），不在此处理。
+            // Pending 阶段的 DeleteProject 不应出现在 workspace_change journal 里。
+            log::warn!(
+                "recover_pending_local_delete: DeleteProject target {} should use project_delete journal — skipping",
+                project_id
+            );
+            Ok(())
+        }
+        None => {
+            // 旧 journal 无 delete_target，跳过本地删除（向后兼容）。
+            log::debug!(
+                "recover_pending_local_delete: no delete_target in journal {} — skipping local delete",
+                rec.journal_token
+            );
+            Ok(())
+        }
+    }
 }
 
 /// 应用打开 workspace 时初始化唯一 Git repo。
@@ -230,6 +371,29 @@ pub fn bootstrap_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
     );
     api.set_workspace_git_layout(layout);
     Ok(api)
+}
+
+/// 用已 bootstrap 的 layout 构造 `WriterCoreApi`，不执行 bootstrap。
+///
+/// 供平台端普通 getter 使用：用打开 workspace 时保存的 layout 快照构造 API，
+/// 不再每次调用都 ensure .git + recover_storage_transactions。
+/// 与 [`bootstrap_core_api`] 的区别：本函数不调用 [`bootstrap_workspace`]，
+/// 调用方必须传入已 bootstrap 的 layout。
+pub fn with_layout_core_api<P1: AsRef<Path>, P2: AsRef<Path>>(
+    app_data_root: P1,
+    projects_root: P2,
+    layout: &crate::storage::git_repo_layout::GitRepoLayout,
+    sync_transport_factory: Option<writer_platform_api::SyncTransportFactory>,
+    secure_storage: Option<std::sync::Arc<dyn writer_platform_api::SecureStorage>>,
+) -> WriterCoreApi {
+    let api = WriterCoreApi::with_platform_services(
+        app_data_root,
+        projects_root,
+        sync_transport_factory,
+        secure_storage,
+    );
+    api.set_workspace_git_layout(layout.clone());
+    api
 }
 
 /// 仅凭根目录打开服务，不注入平台能力。

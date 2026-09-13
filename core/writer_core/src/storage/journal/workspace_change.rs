@@ -54,6 +54,27 @@ pub enum WorkspaceChangeOpType {
     DeleteChapter,
 }
 
+/// 明确的删除目标，供恢复阶段幂等执行本地删除。
+///
+/// 不再从 change_set 反推 ID，避免 change_set 路径格式变化时恢复出错。
+/// `Option` + `#[serde(default)]` 保证旧 journal（无此字段）能反序列化。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeleteTarget {
+    Project {
+        project_id: String,
+    },
+    Volume {
+        project_id: String,
+        volume_id: String,
+    },
+    Chapter {
+        project_id: String,
+        volume_id: String,
+        chapter_id: String,
+    },
+}
+
 /// workspace 变更 journal。
 ///
 /// 统一保存作品、卷、章节删除产生的 `WorkspaceChangeSet`。
@@ -73,13 +94,20 @@ pub struct WorkspaceChangeJournal {
     pub created_at: i64,
     /// 当前事务阶段。
     pub phase: WorkspaceChangePhase,
+    /// 明确的删除目标，供恢复阶段幂等执行本地删除。
+    ///
+    /// 旧 journal（无此字段）反序列化为 `None`，恢复时按 change_set 路径
+    /// 尽力推断（向后兼容）。
+    #[serde(default)]
+    pub delete_target: Option<DeleteTarget>,
 }
 
-/// recover 返回的待补 history 记录。
+/// recover 返回的待处理记录。
 ///
-/// 启动时扫描未完成 journal，如果本地删除已完成（`LocalApplied`）但 history
-/// 没写进去，返回此记录供 bootstrap 调 `record_workspace_change_set` 补 history。
-/// history 成功后调 `mark_history_recorded` + `clear_journal`。
+/// 启动时扫描未完成 journal，根据阶段返回不同处理指令：
+/// - `Pending`: journal 落盘但本地删除未完成，需先幂等完成本地删除再推进到 LocalApplied。
+/// - `LocalApplied`: 本地删除已完成但 history 没写，需补 history。
+/// - `HistoryRecorded`: 已在 recover 内部清理（history 已记）。
 #[derive(Debug, Clone)]
 pub struct RecoveredWorkspaceChange {
     /// journal token，用于后续 mark/clear。
@@ -88,17 +116,23 @@ pub struct RecoveredWorkspaceChange {
     pub changes: WorkspaceChangeSet,
     /// 操作类型（用于 commit message）。
     pub op_type: WorkspaceChangeOpType,
+    /// 当前阶段，决定 bootstrap 如何处理。
+    pub phase: WorkspaceChangePhase,
+    /// 明确的删除目标（Pending 阶段幂等删除用）。
+    pub delete_target: Option<DeleteTarget>,
 }
 
 impl WorkspaceChangeJournal {
     /// 创建新的 pending journal 并落盘。
     ///
     /// 在执行本地物理删除前调用，确保崩溃后能恢复。
+    /// `delete_target` 明确记录删除目标，供恢复阶段幂等执行本地删除。
     pub fn save_pending(
         app_data_root: &Path,
         change_set: &WorkspaceChangeSet,
         device_id: &str,
         op_type: WorkspaceChangeOpType,
+        delete_target: Option<DeleteTarget>,
     ) -> Result<Self> {
         let token = Uuid::new_v4().to_string();
         let now = std::time::SystemTime::now()
@@ -112,6 +146,7 @@ impl WorkspaceChangeJournal {
             op_type,
             created_at: now,
             phase: WorkspaceChangePhase::Pending,
+            delete_target,
         };
         let journal_path = journal_file_path(app_data_root, &token);
         if let Some(parent) = journal_path.parent() {
@@ -163,13 +198,13 @@ impl WorkspaceChangeJournal {
 
 /// 启动时恢复未完成的 workspace 变更事务。
 ///
-/// 遍历 `app-meta/workspace-change-journals/` 下所有 journal：
-/// - `HistoryRecorded` phase 的 journal 直接清理（history 已记）。
-/// - `LocalApplied` phase 的 journal 返回供 bootstrap 补 history。
-/// - `Pending` phase 的 journal 返回供 bootstrap 补 history（本地删除可能已完成，
-///   也可能未完成——由调用方根据 change_set 判断）。
+/// 遍历 `app-meta/workspace-change-journals/` 下所有 journal，按阶段返回处理指令：
+/// - `HistoryRecorded`: history 已记，直接清理 journal（返回 None）。
+/// - `LocalApplied`: 本地删除已完成但 history 没写，返回供 bootstrap 补 history。
+/// - `Pending`: journal 落盘但本地删除未完成，返回供 bootstrap 先幂等完成本地删除
+///   再推进到 LocalApplied。
 ///
-/// history 补记成功后调用方应调 `mark_history_recorded` + `clear_journal`。
+/// 不再让 Pending 直接进入 history——bootstrap 必须先完成本地删除。
 pub fn recover_unfinished(app_data_root: &Path) -> Result<Vec<RecoveredWorkspaceChange>> {
     let journals_dir = app_data_root.join(WORKSPACE_CHANGE_JOURNALS_DIR);
     if !journals_dir.exists() {
@@ -213,7 +248,7 @@ pub fn recover_unfinished(app_data_root: &Path) -> Result<Vec<RecoveredWorkspace
 
 /// 恢复单个 journal。
 ///
-/// 返回 `Ok(Some(recovered))` 表示需要补 history；
+/// 返回 `Ok(Some(recovered))` 表示需要 bootstrap 按阶段处理；
 /// 返回 `Ok(None)` 表示已 HistoryRecorded，已清理。
 fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspaceChange>> {
     let content = fs::read(journal_path)?;
@@ -230,12 +265,25 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
             fs::remove_file(journal_path)?;
             Ok(None)
         }
-        WorkspaceChangePhase::LocalApplied | WorkspaceChangePhase::Pending => {
-            // 本地删除可能已完成但 history 没写，返回供 bootstrap 补 history。
+        WorkspaceChangePhase::LocalApplied => {
+            // 本地删除已完成但 history 没写，返回供 bootstrap 补 history。
             Ok(Some(RecoveredWorkspaceChange {
                 journal_token: journal.token.clone(),
                 changes: journal.change_set.clone(),
                 op_type: journal.op_type.clone(),
+                phase: WorkspaceChangePhase::LocalApplied,
+                delete_target: journal.delete_target.clone(),
+            }))
+        }
+        WorkspaceChangePhase::Pending => {
+            // journal 落盘但本地删除未完成，返回供 bootstrap 先幂等完成本地删除。
+            // 不再直接进入 history——bootstrap 必须先完成本地删除再推进到 LocalApplied。
+            Ok(Some(RecoveredWorkspaceChange {
+                journal_token: journal.token.clone(),
+                changes: journal.change_set.clone(),
+                op_type: journal.op_type.clone(),
+                phase: WorkspaceChangePhase::Pending,
+                delete_target: journal.delete_target.clone(),
             }))
         }
     }

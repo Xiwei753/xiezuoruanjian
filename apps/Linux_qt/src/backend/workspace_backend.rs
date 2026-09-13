@@ -329,8 +329,12 @@ impl AppBackend {
 
         // 调用 Core 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务、
         // 构造已 bootstrap 的 WriterCoreApi。不再裸构造未 bootstrap 的 API。
-        let api = match crate::backend::app_backend::create_core_api(path, &projects_root_str) {
-            Ok(api) => api,
+        // bootstrap 只在打开/切换 workspace 时调用一次，成功后保存 layout 快照。
+        let (api, layout) = match crate::backend::app_backend::create_core_api_with_layout(
+            path,
+            &projects_root_str,
+        ) {
+            Ok((api, layout)) => (api, layout),
             Err(e) => {
                 let err_msg = format!("workspace bootstrap 失败: {}", e);
                 self.set_error(&err_msg);
@@ -350,6 +354,8 @@ impl AppBackend {
         self.current_data_root = path.to_string();
         self.current_projects_root = projects_root_str.clone();
         self.current_has_data_root = true;
+        // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
+        self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
         self.save_status_changed();
         self.reload_tree();

@@ -486,7 +486,7 @@ Item {
                 text: qsTr("运行诊断")
                 dt: root.resolvedDt
                 variant: "secondary"
-                enabled: root.backendRef && root.backendRef.has_workspace
+                enabled: root.backendRef && root.backendRef.has_workspace && !(root.backendRef.sync_in_progress || false)
                 onClicked: {
                     if (typeof window !== "undefined" && typeof window.debugLog === "function") window.debugLog("sync", "perform_diagnostics_clicked", "")
                     syncResultArea.text = qsTr("正在诊断...")

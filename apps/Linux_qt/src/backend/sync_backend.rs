@@ -148,6 +148,24 @@ impl SyncBackend {
             ..Default::default()
         }
     }
+
+    /// 异步同步结果的统一处理入口。
+    ///
+    /// 后台线程的 queued callback 通过 QPointer<SyncBackend> 进入此方法，
+    /// 而不是直接 QPointer<AppBackend> borrow_mut。这样：
+    /// 1. with_app_mut 在 mutation 完成后自动刷新 DomainSnapshot；
+    /// 2. SyncBackend 自己发 sync_status_changed / sync_action_completed，
+    ///    QML 监听的 SyncBackend signal 能正确触发。
+    pub(crate) fn handle_outcome(&mut self, outcome: SyncTaskOutcome) {
+        if self
+            .with_app_mut(|app| app.handle_sync_outcome(outcome))
+            .is_ok()
+        {
+            self.sync_status_changed();
+            self.sync_action_completed();
+        }
+    }
+
     fn with_app<R>(
         &self,
         f: impl FnOnce(&AppBackend) -> R,
@@ -290,7 +308,8 @@ impl SyncBackend {
         }
     }
     fn perform_sync_dry_run(&mut self) -> QString {
-        let result = self.with_app_mut(|app| app.perform_sync_dry_run());
+        let qptr = QPointer::from(&*self);
+        let result = self.with_app_mut(|app| app.perform_sync_dry_run(Some(qptr)));
         if result.is_ok() {
             self.sync_status_changed();
             self.sync_action_completed();
@@ -298,14 +317,16 @@ impl SyncBackend {
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync(&mut self) -> QString {
-        let result = self.with_app_mut(|app| app.perform_sync());
+        let qptr = QPointer::from(&*self);
+        let result = self.with_app_mut(|app| app.perform_sync(Some(qptr)));
         if result.is_ok() {
             self.sync_status_changed();
         }
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn perform_sync_diagnostics(&mut self) -> QString {
-        let result = self.with_app_mut(|app| app.perform_sync_diagnostics());
+        let qptr = QPointer::from(&*self);
+        let result = self.with_app_mut(|app| app.perform_sync_diagnostics(Some(qptr)));
         if result.is_ok() {
             self.sync_status_changed();
             self.sync_action_completed();
@@ -465,12 +486,31 @@ impl AppBackend {
     }
 
     // AppBackend::perform_sync_diagnostics
-    pub(crate) fn perform_sync_diagnostics(&mut self) -> QString {
+    pub(crate) fn perform_sync_diagnostics(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> QString {
         self.debug_log("sync", "perform_sync_diagnostics_start", "");
         let data_root = self.current_data_root.clone();
         let projects_root = self.current_projects_root.clone();
 
         let op_id = uuid::Uuid::new_v4().to_string();
+        // single-flight 拦截：busy 时拒绝诊断，不覆盖正在运行的操作的 operation_id。
+        if self.current_sync_in_progress {
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "diagnose".to_string(),
+                status_code: "syncing".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.status.already_running".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_action_completed();
+            return op_id.into();
+        }
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "diagnose".to_string();
 
@@ -506,13 +546,8 @@ impl AppBackend {
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
-        let qptr = QPointer::from(&*self);
-        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
-            qptr.as_pinned().map(|this| {
-                let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
-            });
-        });
+        let app_qptr = QPointer::from(&*self);
+        let callback = sync_operations::make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {

@@ -17,8 +17,39 @@
 // - 被 apps/Linux_qt/src/backend/app_backend/sync_backend.rs 中的 SyncBackend QObject 间接调用。
 // =============================================================================
 
+use super::SyncBackend;
 use super::*;
 use crate::sync_bridge::{mask_sync_error, sync_error_category_from_code, SyncTaskOutcome};
+
+/// 构造异步同步结果的 callback。
+///
+/// 如果提供 `sync_qptr`（来自 SyncBackend），callback 通过 SyncBackend::handle_outcome
+/// 进入，走 with_app_mut 刷新 DomainSnapshot 并发 SyncBackend signal。
+/// 否则（测试场景）回退到 QPointer<AppBackend> 直接 handle_sync_outcome。
+pub(super) fn make_outcome_callback(
+    app_qptr: QPointer<AppBackend>,
+    sync_qptr: Option<QPointer<SyncBackend>>,
+) -> Box<dyn FnOnce(SyncTaskOutcome) + Send> {
+    if let Some(sq) = sync_qptr {
+        Box::new(qmetaobject::queued_callback(
+            move |outcome: SyncTaskOutcome| {
+                sq.as_pinned().map(|this| {
+                    let mut this = this.borrow_mut();
+                    this.handle_outcome(outcome);
+                });
+            },
+        ))
+    } else {
+        Box::new(qmetaobject::queued_callback(
+            move |outcome: SyncTaskOutcome| {
+                app_qptr.as_pinned().map(|this| {
+                    let mut this = this.borrow_mut();
+                    this.handle_sync_outcome(outcome);
+                });
+            },
+        ))
+    }
+}
 
 impl AppBackend {
     pub(crate) fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
@@ -88,7 +119,7 @@ impl AppBackend {
                 "manual_sync_pending_triggered",
                 "starting queued manual sync after previous sync completed",
             );
-            self.perform_sync_internal("manual", false);
+            self.perform_sync_internal("manual", false, None);
         }
     }
 
@@ -128,11 +159,30 @@ impl AppBackend {
         true
     }
 
-    pub(crate) fn perform_sync_dry_run(&mut self) -> QString {
+    pub(crate) fn perform_sync_dry_run(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> QString {
         let data_root = self.current_data_root.clone();
         let projects_root = self.current_projects_root.clone();
 
         let op_id = uuid::Uuid::new_v4().to_string();
+        // single-flight 拦截：busy 时拒绝 dry-run，不覆盖正在运行的操作的 operation_id。
+        if self.current_sync_in_progress {
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "syncing".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.status.already_running".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_action_completed();
+            return op_id.into();
+        }
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "dry_run".to_string();
 
@@ -208,13 +258,8 @@ impl AppBackend {
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
-        let qptr = QPointer::from(&*self);
-        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
-            qptr.as_pinned().map(|this| {
-                let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
-            });
-        });
+        let app_qptr = QPointer::from(&*self);
+        let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
@@ -357,8 +402,8 @@ impl AppBackend {
         op_id.into()
     }
 
-    pub(crate) fn perform_sync(&mut self) -> QString {
-        self.perform_sync_internal("manual", false)
+    pub(crate) fn perform_sync(&mut self, sync_qptr: Option<QPointer<SyncBackend>>) -> QString {
+        self.perform_sync_internal("manual", false, sync_qptr)
     }
 
     pub(crate) fn request_auto_sync(&mut self, reason: QString) {
@@ -395,10 +440,15 @@ impl AppBackend {
         self.current_last_auto_sync_reason = reason.to_string();
         self.current_last_auto_sync_started_at = Self::now_epoch_seconds();
         self.debug_log("sync", reason, "triggered");
-        self.perform_sync_internal(reason, true);
+        self.perform_sync_internal(reason, true, None);
     }
 
-    pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
+    pub(crate) fn perform_sync_internal(
+        &mut self,
+        trigger: &str,
+        silent_success: bool,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> QString {
         let op_id = uuid::Uuid::new_v4().to_string();
         if self.current_sync_in_progress {
             // 手动同步请求到来时正在运行同步：排队等待，不丢点击，不并行启动第二个同步。
@@ -537,13 +587,8 @@ impl AppBackend {
         self.current_sync_in_progress = true;
         self.sync_status_changed();
 
-        let qptr = QPointer::from(&*self);
-        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
-            qptr.as_pinned().map(|this| {
-                let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
-            });
-        });
+        let app_qptr = QPointer::from(&*self);
+        let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         let trigger = trigger.to_string();
