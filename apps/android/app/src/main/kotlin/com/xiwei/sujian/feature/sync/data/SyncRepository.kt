@@ -1,8 +1,8 @@
 package com.xiwei.sujian.feature.sync.data
 import android.content.Context
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.settings.data.SaveFailure
 import com.xiwei.sujian.feature.settings.data.SaveField
 import com.xiwei.sujian.feature.settings.data.SettingsSaveResult

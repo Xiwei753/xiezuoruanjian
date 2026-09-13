@@ -298,7 +298,10 @@ class MirrorStagingCleanup(
      *   false 表示任一目录存在但清理失败（含残留文件、listFiles 失败、delete 失败）
      */
     private fun cleanupEmptyLegacyDirs(): Boolean {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
         val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
 
         // 不短路：三个目录各自尝试，最后合并结果

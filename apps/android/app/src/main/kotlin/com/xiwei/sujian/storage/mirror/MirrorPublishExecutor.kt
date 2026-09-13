@@ -1,7 +1,7 @@
 package com.xiwei.sujian.storage.mirror
 
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * MirrorPublishExecutor — 项目发布、删除和清理执行器。

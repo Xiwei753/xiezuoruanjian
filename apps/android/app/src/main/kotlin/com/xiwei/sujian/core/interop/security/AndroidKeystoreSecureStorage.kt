@@ -290,7 +290,10 @@ class AndroidKeystoreSecureStorage(
                 val existing = existingValues[secretName]
                 if (existing != null) {
                     skippedExisting.add(secretName)
-                    DiagnosticsInterop.i(TAG, "Skipping migration of secret $secretName: already exists in new Keystore")
+                    DiagnosticsInterop.i(
+                        TAG,
+                        "Skipping migration of secret $secretName: already exists in new Keystore",
+                    )
                     continue
                 }
 
@@ -299,7 +302,10 @@ class AndroidKeystoreSecureStorage(
 
                 val readBack = getSecret(secretName)
                 if (readBack == null || !readBack.contentEquals(plaintext)) {
-                    DiagnosticsInterop.e(TAG, "Migration verification failed for secret $secretName: read-back mismatch")
+                    DiagnosticsInterop.e(
+                        TAG,
+                        "Migration verification failed for secret $secretName: read-back mismatch",
+                    )
                     commitFailedCount++
                     continue
                 }

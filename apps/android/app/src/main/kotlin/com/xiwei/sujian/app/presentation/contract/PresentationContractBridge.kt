@@ -1,8 +1,8 @@
 package com.xiwei.sujian.app.presentation.contract
 
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import uniffi.writer_core.ActionRegionDto
 import uniffi.writer_core.ActionRoleDto
 import uniffi.writer_core.ActionSlotDto

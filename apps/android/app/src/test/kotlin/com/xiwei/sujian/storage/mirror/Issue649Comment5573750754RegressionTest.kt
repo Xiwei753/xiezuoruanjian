@@ -7,7 +7,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -566,19 +565,20 @@ class Issue649Comment5573750754RecoveryTest {
         val operationOrder = mutableListOf<String>()
 
         // 1. 修复后：先落 PHASE_STAGE journal（在第一笔 stageText 之前）
-        val phaseStageJournalParams = PendingJournalParams(
-            projectId = PROJ_1,
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_STAGE,
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-        )
+        val phaseStageJournalParams =
+            PendingJournalParams(
+                projectId = PROJ_1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_STAGE,
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+            )
         val journalWriteResult = journalWriter.writePendingPublishJournal(phaseStageJournalParams)
         assertTrue("PHASE_STAGE journal 写入应成功", journalWriteResult)
         operationOrder.add("writePHASE_STAGE_Journal")

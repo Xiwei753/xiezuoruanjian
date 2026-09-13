@@ -3,8 +3,8 @@ import android.content.Context
 import androidx.core.content.edit
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
+import com.xiwei.sujian.core.interop.diagnostics.SettingsDiagnosticsEvents
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.settings.data.model.LocalSettings
 import com.xiwei.sujian.feature.settings.data.model.SyncableSettings
@@ -107,7 +107,7 @@ class SettingsRepository(
             )
         return when (val result = settingsBridge.saveLocalSettings(coreSettings)) {
             is BridgeResult.Success -> {
-                DiagnosticsEventsInterop.settingsSaved("local_settings", "ok")
+                SettingsDiagnosticsEvents.settingsSaved("local_settings", "ok")
                 // Issue #670 评论 5651060802：设置保存后直接更新共享 Rust diagnostics config。
                 val effectiveVerbose = if (settings.diagnosticsEnabled) settings.diagnosticsVerbose else false
                 DiagnosticsInterop.setEnabled(settings.diagnosticsEnabled)
@@ -125,11 +125,11 @@ class SettingsRepository(
             }
             is BridgeResult.Error -> {
                 warn("Failed to save local settings: ${result.fullEnvelope}")
-                DiagnosticsEventsInterop.settingsSaved("local_settings", "error")
+                SettingsDiagnosticsEvents.settingsSaved("local_settings", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                DiagnosticsEventsInterop.settingsSaved("local_settings", "not_loaded")
+                SettingsDiagnosticsEvents.settingsSaved("local_settings", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.LOCAL_SETTINGS, 0L)))
             }
         }
@@ -152,16 +152,16 @@ class SettingsRepository(
             is BridgeResult.Success -> {
                 // #618 三：本机保存只通知编辑器需要的更新（字体大小），不触发外部重读/主题重载。
                 CoreSettingsEvents.notifyLocalEditorSettingsChanged()
-                DiagnosticsEventsInterop.settingsSaved("font_size", "ok")
+                SettingsDiagnosticsEvents.settingsSaved("font_size", "ok")
                 SettingsSaveResult.Success
             }
             is BridgeResult.Error -> {
                 warn("Failed to save syncable settings: ${result.fullEnvelope}")
-                DiagnosticsEventsInterop.settingsSaved("font_size", "error")
+                SettingsDiagnosticsEvents.settingsSaved("font_size", "error")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
             BridgeResult.NotLoaded -> {
-                DiagnosticsEventsInterop.settingsSaved("font_size", "not_loaded")
+                SettingsDiagnosticsEvents.settingsSaved("font_size", "not_loaded")
                 SettingsSaveResult.Failed(listOf(SaveFailure(SaveField.FONT_SIZE, 0L)))
             }
         }

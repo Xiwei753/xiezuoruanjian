@@ -4,21 +4,22 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import com.xiwei.sujian.BuildConfig
 import com.xiwei.sujian.app.di.AppServiceProvider
 import com.xiwei.sujian.app.di.SujianAppDependenciesProvider
 import com.xiwei.sujian.core.interop.common.BridgeResult
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
+import com.xiwei.sujian.core.interop.diagnostics.SystemDiagnosticsEvents
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.sync.work.AutoSyncScheduler
 import com.xiwei.sujian.storage.recovery.LegacyStorageMigrationGate
-import java.util.Locale
 import uniffi.writer_core.DiagnosticFieldDto
 import uniffi.writer_core.DiagnosticLevelDto
 import uniffi.writer_core.DiagnosticOriginDto
 import uniffi.writer_core.DiagnosticsInitDto
+import java.util.Locale
 import uniffi.writer_core.initDiagnostics as nativeInitDiagnostics
 
 class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDependenciesProvider {
@@ -139,7 +140,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
 
     override fun onStart(owner: LifecycleOwner) {
         // 数据根目录已改为应用私有 filesDir，不再需要共享存储权限检查。
-        DiagnosticsEventsInterop.appLifecycle("start")
+        SystemDiagnosticsEvents.appLifecycle("start")
         // 旧工作区仍待迁移时 Core 尚未打开；此时不能初始化依赖容器或自动同步，
         // 否则会提前打开新数据根目录。
         if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
@@ -154,7 +155,7 @@ class SujianApplication : Application(), DefaultLifecycleObserver, SujianAppDepe
 
     override fun onStop(owner: LifecycleOwner) {
         // 同 onStart：私有存储无需权限检查。
-        DiagnosticsEventsInterop.appLifecycle("stop")
+        SystemDiagnosticsEvents.appLifecycle("stop")
         // 旧结构仍待迁移时跳过 syncRepository/starMapBridge 调用，
         // 它们会触发 Core 初始化。autoSyncScheduler 此时也必为 null，无需 stop。
         if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {

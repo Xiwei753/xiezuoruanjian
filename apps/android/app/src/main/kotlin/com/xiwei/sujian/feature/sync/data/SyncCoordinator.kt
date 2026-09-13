@@ -1,10 +1,10 @@
 package com.xiwei.sujian.feature.sync.data
 import com.xiwei.sujian.app.state.ActiveDocumentGate
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.RepositoryException
 import com.xiwei.sujian.core.interop.common.ResultEnvelope
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
+import com.xiwei.sujian.core.interop.diagnostics.SyncDiagnosticsEvents
 import com.xiwei.sujian.feature.sync.data.model.FullSyncResult
 import com.xiwei.sujian.feature.sync.data.model.SyncCapabilityData
 import com.xiwei.sujian.feature.sync.data.model.SyncConfig
@@ -128,7 +128,7 @@ class SyncCoordinator internal constructor(
         snapshot: SyncProfileSnapshot? = null,
         forceSync: Boolean = false,
     ): SyncOutcome {
-        DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "start")
+        SyncDiagnosticsEvents.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "start")
         try {
             val profile: SyncProfileSnapshot =
                 snapshot ?: run {
@@ -296,15 +296,27 @@ class SyncCoordinator internal constructor(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: IOException) {
-            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "io_exception: " + e.message)
+            SyncDiagnosticsEvents.syncEvent(
+                trigger.toDiagnosticOrigin(),
+                trigger.name.lowercase(),
+                "io_exception: " + e.message,
+            )
             syncStatusRepository.notifySyncFailed()
             return SyncFailureKind.RetryableIo.toOutcome()
         } catch (e: RepositoryException) {
-            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "repository_exception: " + e.message)
+            SyncDiagnosticsEvents.syncEvent(
+                trigger.toDiagnosticOrigin(),
+                trigger.name.lowercase(),
+                "repository_exception: " + e.message,
+            )
             syncStatusRepository.notifySyncFailed()
             return e.kind.toOutcome()
         } catch (e: Exception) {
-            DiagnosticsEventsInterop.syncEvent(trigger.toDiagnosticOrigin(), trigger.name.lowercase(), "exception: " + e.message)
+            SyncDiagnosticsEvents.syncEvent(
+                trigger.toDiagnosticOrigin(),
+                trigger.name.lowercase(),
+                "exception: " + e.message,
+            )
             syncStatusRepository.notifySyncFailed()
             return SyncFailureKind.Fatal.toOutcome()
         }

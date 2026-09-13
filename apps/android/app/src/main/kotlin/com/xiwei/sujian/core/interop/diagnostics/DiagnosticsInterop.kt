@@ -3,8 +3,6 @@ package com.xiwei.sujian.core.interop.diagnostics
 import android.content.Context
 import android.util.Log
 import com.xiwei.sujian.BuildConfig
-import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
 import uniffi.writer_core.DiagnosticFieldDto
 import uniffi.writer_core.DiagnosticLevelDto
 import uniffi.writer_core.DiagnosticOriginDto
@@ -13,6 +11,8 @@ import uniffi.writer_core.flushDiagnostics
 import uniffi.writer_core.recordDiagnosticEvent
 import uniffi.writer_core.redactDiagnosticText
 import uniffi.writer_core.setDiagnosticsConfig
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * 统一诊断 interop — Issue #670 评论 5651060802 / 5651816143。
@@ -33,6 +33,18 @@ import uniffi.writer_core.setDiagnosticsConfig
  */
 object DiagnosticsInterop {
     private const val TAG = "SujianDiag"
+
+    // ── 日志事件名常量 — Issue #671 第 4 部分 ──────────────────────
+    private const val EVENT_LOG_DEBUG = "log.debug"
+    private const val EVENT_LOG_INFO = "log.info"
+    private const val EVENT_LOG_WARN = "log.warn"
+    private const val EVENT_LOG_ERROR = "log.error"
+
+    /** 格式化带堆栈跟踪的日志消息 — Issue #671 第 4 部分：消除字符串模板重复。 */
+    private fun formatWithTrace(
+        message: String,
+        trace: String,
+    ) = "$message\n$trace"
 
     private val enabled = AtomicBoolean(false)
     private val verbose = AtomicBoolean(false)
@@ -132,7 +144,7 @@ object DiagnosticsInterop {
         recordEvent(
             DiagnosticLevelDto.DEBUG,
             DiagnosticOriginDto.APP,
-            "log.debug",
+            EVENT_LOG_DEBUG,
             tag,
             message,
             emptyList(),
@@ -148,7 +160,7 @@ object DiagnosticsInterop {
             recordEvent(
                 DiagnosticLevelDto.INFO,
                 DiagnosticOriginDto.APP,
-                "log.info",
+                EVENT_LOG_INFO,
                 tag,
                 message,
                 emptyList(),
@@ -163,14 +175,14 @@ object DiagnosticsInterop {
     ) {
         if (throwable != null) {
             val trace = Log.getStackTraceString(throwable)
-            Log.w(tag, "$message\n$trace")
+            Log.w(tag, formatWithTrace(message, trace))
             if (enabled.get()) {
                 recordEvent(
                     DiagnosticLevelDto.WARN,
                     DiagnosticOriginDto.APP,
-                    "log.warn",
+                    EVENT_LOG_WARN,
                     tag,
-                    "$message\n$trace",
+                    formatWithTrace(message, trace),
                     emptyList(),
                 )
             }
@@ -180,7 +192,7 @@ object DiagnosticsInterop {
                 recordEvent(
                     DiagnosticLevelDto.WARN,
                     DiagnosticOriginDto.APP,
-                    "log.warn",
+                    EVENT_LOG_WARN,
                     tag,
                     message,
                     emptyList(),
@@ -196,14 +208,14 @@ object DiagnosticsInterop {
     ) {
         if (throwable != null) {
             val trace = Log.getStackTraceString(throwable)
-            Log.e(tag, "$message\n$trace")
+            Log.e(tag, formatWithTrace(message, trace))
             if (enabled.get()) {
                 recordEvent(
                     DiagnosticLevelDto.ERROR,
                     DiagnosticOriginDto.APP,
-                    "log.error",
+                    EVENT_LOG_ERROR,
                     tag,
-                    "$message\n$trace",
+                    formatWithTrace(message, trace),
                     emptyList(),
                 )
             }
@@ -213,7 +225,7 @@ object DiagnosticsInterop {
                 recordEvent(
                     DiagnosticLevelDto.ERROR,
                     DiagnosticOriginDto.APP,
-                    "log.error",
+                    EVENT_LOG_ERROR,
                     tag,
                     message,
                     emptyList(),

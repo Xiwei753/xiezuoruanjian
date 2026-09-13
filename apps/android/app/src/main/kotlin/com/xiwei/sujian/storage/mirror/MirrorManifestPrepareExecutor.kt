@@ -198,9 +198,7 @@ internal class MirrorManifestPrepareExecutor(
     /**
      * Issue #667：删除 workspace 中的 staged manifest 文件。
      */
-    internal fun deleteStagedIfExists(
-        staged: StagedMirrorRef?,
-    ) {
+    internal fun deleteStagedIfExists(staged: StagedMirrorRef?) {
         if (staged != null) {
             workspace.deleteStaged(staged)
         }

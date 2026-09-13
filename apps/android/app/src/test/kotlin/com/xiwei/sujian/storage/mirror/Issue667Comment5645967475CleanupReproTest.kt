@@ -332,12 +332,15 @@ class Issue667Comment5645967475CleanupReproTest {
      */
     @Test
     fun emptyDirsCleaned_upAfterMediaStoreCleanup() {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-        val sujianDir = File(downloadsDir, "Sujian")
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
         // 创建空事务目录结构（含子目录 tx-1）
-        val stagingTxDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
-        val backupTxDir = File(sujianDir, ".backup/tx-1").apply { mkdirs() }
-        val metaDir = File(sujianDir, "_meta").apply { mkdirs() }
+        val stagingTxDir = File(sujianDir, STAGING_TX1).apply { mkdirs() }
+        val backupTxDir = File(sujianDir, BACKUP_TX1).apply { mkdirs() }
+        val metaDir = File(sujianDir, META_DIR).apply { mkdirs() }
 
         assertTrue("测试前置：.staging/tx-1 应已创建", stagingTxDir.exists())
         assertTrue("测试前置：.backup/tx-1 应已创建", backupTxDir.exists())
@@ -353,16 +356,16 @@ class Issue667Comment5645967475CleanupReproTest {
 
         // 三个旧事务目录都应被清理（不存在）
         assertFalse(
-            ".staging 目录应已被清理",
-            File(sujianDir, ".staging").exists(),
+            "$STAGING_DIR 目录应已被清理",
+            File(sujianDir, STAGING_DIR).exists(),
         )
         assertFalse(
-            ".backup 目录应已被清理",
-            File(sujianDir, ".backup").exists(),
+            "$BACKUP_DIR 目录应已被清理",
+            File(sujianDir, BACKUP_DIR).exists(),
         )
         assertFalse(
-            "_meta 目录应已被清理",
-            File(sujianDir, "_meta").exists(),
+            "$META_DIR 目录应已被清理",
+            File(sujianDir, META_DIR).exists(),
         )
         // done 标志应写入（三步骤都成功）
         assertTrue(
@@ -380,11 +383,14 @@ class Issue667Comment5645967475CleanupReproTest {
      */
     @Test
     fun residualFilePreventsDirDelete_noDoneFlag() {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-        val sujianDir = File(downloadsDir, "Sujian")
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
         // 创建 .staging/tx-1/ 目录并放入残留文件
-        val stagingTxDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
-        val leftoverFile = File(stagingTxDir, "leftover.tmp").apply { writeText("residual") }
+        val stagingTxDir = File(sujianDir, STAGING_TX1).apply { mkdirs() }
+        val leftoverFile = File(stagingTxDir, LEFTOVER_FILE).apply { writeText(RESIDUAL_CONTENT) }
 
         assertTrue("测试前置：残留文件应已创建", leftoverFile.exists())
 
@@ -408,8 +414,8 @@ class Issue667Comment5645967475CleanupReproTest {
         )
         // .staging/ 因子目录未删空，仍存在
         assertTrue(
-            ".staging 目录因子目录未删空应仍存在",
-            File(sujianDir, ".staging").exists(),
+            "$STAGING_DIR 目录因子目录未删空应仍存在",
+            File(sujianDir, STAGING_DIR).exists(),
         )
         // done 标志不应写入（emptyDirsOk = false）
         assertFalse(
@@ -483,6 +489,16 @@ class Issue667Comment5645967475CleanupReproTest {
         private const val SAF_HOST = "com.android.externalstorage.documents"
         private const val SAF_TREE_URI_STRING =
             "content://com.android.externalstorage.documents/tree/primary%3ADownload%2FSujian"
+
+        // Issue #671 第 5 部分：重复路径/目录名常量
+        private const val SUJIAN_DIR_NAME = "Sujian"
+        private const val STAGING_DIR = ".staging"
+        private const val BACKUP_DIR = ".backup"
+        private const val META_DIR = "_meta"
+        private const val STAGING_TX1 = ".staging/tx-1"
+        private const val BACKUP_TX1 = ".backup/tx-1"
+        private const val LEFTOVER_FILE = "leftover.tmp"
+        private const val RESIDUAL_CONTENT = "residual"
     }
 
     /**

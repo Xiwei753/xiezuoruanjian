@@ -29,9 +29,7 @@ internal class MirrorCleanupTransactionExecutor(
      *
      * Issue #667：backup 文件在私有目录，用 [MirrorTransactionWorkspace.deleteBackup] 删除。
      */
-    private fun cleanupBackupOldRefs(
-        journal: PendingMirrorPublish,
-    ): Boolean {
+    private fun cleanupBackupOldRefs(journal: PendingMirrorPublish): Boolean {
         var allSuccess = true
         for ((_, item) in journal.items) {
             if (!deleteBackupOldRef(item)) allSuccess = false
@@ -39,9 +37,7 @@ internal class MirrorCleanupTransactionExecutor(
         return allSuccess
     }
 
-    private fun deleteBackupOldRef(
-        item: PendingItem,
-    ): Boolean {
+    private fun deleteBackupOldRef(item: PendingItem): Boolean {
         val ref = item.backupOldRef ?: return true
         return try {
             workspace.deleteBackup(ref)
@@ -100,14 +96,16 @@ internal class MirrorCleanupTransactionExecutor(
      *
      * Issue #667：manifest backup 在私有目录，用 [MirrorTransactionWorkspace.deleteBackup] 删除。
      */
-    private fun cleanupManifestBackupRef(
-        journal: PendingMirrorPublish,
-    ): Boolean {
+    private fun cleanupManifestBackupRef(journal: PendingMirrorPublish): Boolean {
         val ref = journal.manifestBackupRef ?: return true
         return try {
             workspace.deleteBackup(ref)
         } catch (e: Exception) {
-            DiagnosticsInterop.w(TAG, "cleanup: failed to delete manifestBackupRef ${journal.manifestBackupRef?.uri}", e)
+            DiagnosticsInterop.w(
+                TAG,
+                "cleanup: failed to delete manifestBackupRef ${journal.manifestBackupRef?.uri}",
+                e,
+            )
             false
         }
     }
@@ -117,9 +115,7 @@ internal class MirrorCleanupTransactionExecutor(
      *
      * Issue #667：用 [MirrorTransactionWorkspace.rollback] 清理私有目录中的事务中间文件。
      */
-    private fun rollbackTxStaging(
-        journal: PendingMirrorPublish,
-    ): Boolean {
+    private fun rollbackTxStaging(journal: PendingMirrorPublish): Boolean {
         var allSuccess = true
         try {
             if (!workspace.rollback(journal.txId)) {

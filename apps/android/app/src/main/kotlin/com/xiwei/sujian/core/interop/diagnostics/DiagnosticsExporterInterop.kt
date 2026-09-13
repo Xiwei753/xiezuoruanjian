@@ -13,12 +13,8 @@ import com.xiwei.sujian.core.diagnostics.ThreadDumpCollector
 import com.xiwei.sujian.feature.editor.diagnostics.EditorEventRingBuffer
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import com.xiwei.sujian.feature.sync.data.SyncRepository
-import java.io.File
-import java.text.SimpleDateFormat
-import java.time.Instant
-import java.util.Date
-import java.util.Locale
 import uniffi.writer_core.DiagnosticAttachmentDto
+import java.io.File
 import uniffi.writer_core.exportDiagnostics as nativeExportDiagnostics
 
 /**
@@ -44,6 +40,18 @@ import uniffi.writer_core.exportDiagnostics as nativeExportDiagnostics
 object DiagnosticsExporterInterop {
     private const val DIAGNOSTICS_DIR = "diagnostics"
     private const val TAG = "DiagnosticsExporter"
+
+    // ── 附件名常量 — Issue #671 第 4 部分 ──────────────────────────
+    private const val ATTACHMENT_JANK_SUMMARY = "jank_summary.json"
+    private const val ATTACHMENT_APP_SETTINGS = "app_settings_sanitized.json"
+    private const val ATTACHMENT_SYNC_STATE = "sync_state_sanitized.json"
+    private const val ATTACHMENT_EDITOR_SNAPSHOT = "editor_snapshot.json"
+    private const val ATTACHMENT_BUILD_IDENTITY = "build_identity.json"
+    private const val ATTACHMENT_CURRENT_DEVICE = "current_device.json"
+
+    // ── 错误处理常量 — Issue #671 第 4 部分 ──────────────────────
+    private const val ERROR_FIELD = "error"
+    private const val ERROR_UNKNOWN = "unknown"
 
     fun export(context: Context): File? {
         return try {
@@ -153,14 +161,14 @@ object DiagnosticsExporterInterop {
             val gson = GsonBuilder().setPrettyPrinting().create()
             val json = gson.toJson(summary)
             attachments.add(
-                DiagnosticAttachmentDto("jank_summary.json", json.toByteArray(Charsets.UTF_8)),
+                DiagnosticAttachmentDto(ATTACHMENT_JANK_SUMMARY, json.toByteArray(Charsets.UTF_8)),
             )
         }.onFailure { e ->
-            val safeMsg = e.message ?: "unknown"
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            val safeMsg = e.message ?: ERROR_UNKNOWN
+            val errorJson = GsonBuilder().create().toJson(mapOf(ERROR_FIELD to safeMsg))
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "jank_summary.json",
+                    ATTACHMENT_JANK_SUMMARY,
                     errorJson.toByteArray(Charsets.UTF_8),
                 ),
             )
@@ -199,16 +207,16 @@ object DiagnosticsExporterInterop {
             val json = gson.toJson(sanitized)
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "app_settings_sanitized.json",
+                    ATTACHMENT_APP_SETTINGS,
                     json.toByteArray(Charsets.UTF_8),
                 ),
             )
         }.onFailure { e ->
-            val safeMsg = e.message ?: "unknown"
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            val safeMsg = e.message ?: ERROR_UNKNOWN
+            val errorJson = GsonBuilder().create().toJson(mapOf(ERROR_FIELD to safeMsg))
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "app_settings_sanitized.json",
+                    ATTACHMENT_APP_SETTINGS,
                     errorJson.toByteArray(Charsets.UTF_8),
                 ),
             )
@@ -246,16 +254,16 @@ object DiagnosticsExporterInterop {
             val json = gson.toJson(sanitized)
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "sync_state_sanitized.json",
+                    ATTACHMENT_SYNC_STATE,
                     json.toByteArray(Charsets.UTF_8),
                 ),
             )
         }.onFailure { e ->
-            val safeMsg = e.message ?: "unknown"
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            val safeMsg = e.message ?: ERROR_UNKNOWN
+            val errorJson = GsonBuilder().create().toJson(mapOf(ERROR_FIELD to safeMsg))
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "sync_state_sanitized.json",
+                    ATTACHMENT_SYNC_STATE,
                     errorJson.toByteArray(Charsets.UTF_8),
                 ),
             )
@@ -269,16 +277,16 @@ object DiagnosticsExporterInterop {
             val json = gson.toJson(snapshot)
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "editor_snapshot.json",
+                    ATTACHMENT_EDITOR_SNAPSHOT,
                     json.toByteArray(Charsets.UTF_8),
                 ),
             )
         }.onFailure { e ->
-            val safeMsg = e.message ?: "unknown"
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            val safeMsg = e.message ?: ERROR_UNKNOWN
+            val errorJson = GsonBuilder().create().toJson(mapOf(ERROR_FIELD to safeMsg))
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "editor_snapshot.json",
+                    ATTACHMENT_EDITOR_SNAPSHOT,
                     errorJson.toByteArray(Charsets.UTF_8),
                 ),
             )
@@ -295,7 +303,7 @@ object DiagnosticsExporterInterop {
             val json = gson.toJson(info)
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "current_device.json",
+                    ATTACHMENT_CURRENT_DEVICE,
                     json.toByteArray(Charsets.UTF_8),
                 ),
             )
@@ -309,16 +317,16 @@ object DiagnosticsExporterInterop {
             val json = gson.toJson(identity)
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "build_identity.json",
+                    ATTACHMENT_BUILD_IDENTITY,
                     json.toByteArray(Charsets.UTF_8),
                 ),
             )
         }.onFailure { e ->
-            val safeMsg = e.message ?: "unknown"
-            val errorJson = GsonBuilder().create().toJson(mapOf("error" to safeMsg))
+            val safeMsg = e.message ?: ERROR_UNKNOWN
+            val errorJson = GsonBuilder().create().toJson(mapOf(ERROR_FIELD to safeMsg))
             attachments.add(
                 DiagnosticAttachmentDto(
-                    "build_identity.json",
+                    ATTACHMENT_BUILD_IDENTITY,
                     errorJson.toByteArray(Charsets.UTF_8),
                 ),
             )

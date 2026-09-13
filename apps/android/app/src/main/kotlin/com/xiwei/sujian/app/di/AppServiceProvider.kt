@@ -2,9 +2,9 @@ package com.xiwei.sujian.app.di
 
 import android.content.Context
 import android.net.Uri
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.platform.app.AndroidAppVersionProvider
 import com.xiwei.sujian.core.platform.device.AndroidDeviceIdentity
 import com.xiwei.sujian.core.platform.network.AndroidNetworkMonitor

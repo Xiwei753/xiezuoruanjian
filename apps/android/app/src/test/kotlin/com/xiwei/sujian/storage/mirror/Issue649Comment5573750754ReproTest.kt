@@ -7,7 +7,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -37,6 +36,23 @@ class Issue649Comment5573750754ReproTest {
         const val PROJECT_ID = "proj-1"
         const val CHAPTER_PATH = "作品/P/V/Ch.md"
         const val MANIFEST_PATH = "_meta/manifest.json"
+
+        // Issue #671 第 5 部分：重复 URI/路径/tx id/固定正文常量
+        const val TX_ID = "tx-1"
+        const val URI_OLD_1 = "content://old/1"
+        const val URI_STAGING_1 = "content://staging/1"
+        const val URI_PROMOTED_NEW = "content://promoted/new"
+        const val URI_MANIFEST_OLD = "content://manifest/old"
+        const val URI_EXISTING_MANIFEST = "content://existing/manifest"
+        const val URI_TAMPERED_MANIFEST = "content://tampered/manifest"
+        const val URI_TAMPERED_CHAPTER = "content://tampered/chapter"
+        const val MIME_MARKDOWN = "text/markdown"
+        const val PROJECT_P1 = "p1"
+        const val CHAPTER_PATH_1 = "作品/P/V/Ch1.md"
+        const val CHAPTER_PATH_2 = "作品/P/V/Ch2.md"
+        const val CONTENT_1 = "content 1"
+        const val CONTENT_2 = "content 2"
+        const val STAGING_PATH_CH = ".staging/tx-1/Ch.md"
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -129,7 +145,7 @@ class Issue649Comment5573750754ReproTest {
     @Test
     fun problem2_manifestSubTransaction_usesStaleJournalItems() {
         val key = ChapterKey(PROJECT_ID, "v1", "c1")
-        val txId = "tx-1"
+        val txId = TX_ID
 
         // 旧 journal 的 items（recovery 进入时的状态，正文已 stage 但未 promote）
         val oldItem =
@@ -138,19 +154,19 @@ class Issue649Comment5573750754ReproTest {
                 stagedRef =
                     StagedMirrorRef(
                         txId,
-                        "content://staging/1",
-                        ".staging/tx-1/Ch.md",
+                        URI_STAGING_1,
+                        STAGING_PATH_CH,
                         CHAPTER_PATH,
-                        "text/markdown",
+                        MIME_MARKDOWN,
                     ),
-                oldRef = MirrorFileRef("content://old/1", CHAPTER_PATH),
+                oldRef = MirrorFileRef(URI_OLD_1, CHAPTER_PATH),
                 backupOldRef = null,
                 promotedRef = null,
                 state = PendingItem.STATE_STAGED,
             )
 
         // recoverPromotePhase() 推进正文后，currentItems 已更新为 PROMOTED
-        val promotedRef = MirrorFileRef("content://promoted/new", CHAPTER_PATH)
+        val promotedRef = MirrorFileRef(URI_PROMOTED_NEW, CHAPTER_PATH)
         val currentItem =
             oldItem.copy(
                 promotedRef = promotedRef,
@@ -239,7 +255,7 @@ class Issue649Comment5573750754ReproTest {
         val manifestPath = MANIFEST_PATH
 
         // 设备上有上一版 manifest（manifest 子事务未开始，但设备已有旧 manifest）
-        val existingManifestUri = "content://existing/manifest"
+        val existingManifestUri = URI_EXISTING_MANIFEST
         storage.committedFiles[existingManifestUri] = "{\"version\":\"previous\"}"
         storage.committedPathToUri[manifestPath] = existingManifestUri
 
@@ -248,7 +264,7 @@ class Issue649Comment5573750754ReproTest {
         // manifestNewContentHash==null, manifestOldContentHash==null
         val journalContext =
             PendingMirrorPublish(
-                txId = "tx-1",
+                txId = TX_ID,
                 backend = MirrorBackend.MEDIA_STORE,
                 treeUri = null,
                 projectId = PROJECT_ID,
@@ -345,28 +361,29 @@ class Issue649Comment5573750754ReproTest {
         val oldManifestContent = "{\"version\":\"old\"}"
 
         // 1. 模拟崩溃窗口：prepareBackup 已完成，但 journal 还没写（manifestBackupRef==null）
-        val oldManifestRef = MirrorFileRef("content://manifest/old", manifestPath)
+        val oldManifestRef = MirrorFileRef(URI_MANIFEST_OLD, manifestPath)
         workspace.prepareBackup(txId, oldManifestRef, oldManifestContent)
 
         // 2. journal 中 manifestBackupRef==null（journal 未落盘）
-        val journal = PendingMirrorPublish(
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = oldManifestRef,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = null, // journal 未落盘，backup ref 为 null
-            isManifestCommitted = false,
-        )
+        val journal =
+            PendingMirrorPublish(
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = PROJECT_P1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = oldManifestRef,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = null, // journal 未落盘，backup ref 为 null
+                isManifestCommitted = false,
+            )
         assertNull("journal 中 manifestBackupRef==null", journal.manifestBackupRef)
 
         // 3. 修复后：用 workspace.lookupBackup 三态发现物理备份
@@ -411,7 +428,7 @@ class Issue649Comment5573750754ReproTest {
 
         // 公共镜像上的 manifest 内容被用户/Provider 修改（路径相同，内容不同）
         val tamperedContent = "{\"version\":\"tampered-by-user\"}"
-        val tamperedUri = "content://tampered/manifest"
+        val tamperedUri = URI_TAMPERED_MANIFEST
         storage.committedFiles[tamperedUri] = tamperedContent
         storage.committedPathToUri[manifestPath] = tamperedUri
 
@@ -462,7 +479,7 @@ class Issue649Comment5573750754ReproTest {
 
         // 公共镜像上的正文内容被修改（路径相同，内容不同）
         val tamperedContent = "tampered content by user"
-        val tamperedUri = "content://tampered/chapter"
+        val tamperedUri = URI_TAMPERED_CHAPTER
         storage.committedFiles[tamperedUri] = tamperedContent
         storage.committedPathToUri[finalPath] = tamperedUri
 
@@ -540,37 +557,38 @@ class Issue649Comment5573750754ReproTest {
         val journalWriter = MirrorJournalWriter(stateStore)
 
         val txId = "tx-problem6"
-        val relativePath1 = "作品/P/V/Ch1.md"
-        val relativePath2 = "作品/P/V/Ch2.md"
-        val content1 = "content 1"
-        val content2 = "content 2"
+        val relativePath1 = CHAPTER_PATH_1
+        val relativePath2 = CHAPTER_PATH_2
+        val content1 = CONTENT_1
+        val content2 = CONTENT_2
 
         val operationOrder = mutableListOf<String>()
 
         // 1. 修复后：先落 PHASE_STAGE journal（在第一笔 stageText 之前）
-        val phaseStageJournalParams = PendingJournalParams(
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_STAGE,
-            txId = txId,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-        )
+        val phaseStageJournalParams =
+            PendingJournalParams(
+                projectId = PROJECT_P1,
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_STAGE,
+                txId = txId,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+            )
         val journalWriteResult = journalWriter.writePendingPublishJournal(phaseStageJournalParams)
         assertTrue("PHASE_STAGE journal 写入应成功", journalWriteResult)
         operationOrder.add("writePHASE_STAGE_Journal")
 
         // 2. 然后才 stageText
-        val stagedRef1 = workspace.stageText(txId, relativePath1, "text/markdown", content1)
+        val stagedRef1 = workspace.stageText(txId, relativePath1, MIME_MARKDOWN, content1)
         assertNotNull("stageText 1 应成功", stagedRef1)
         operationOrder.add("stageText:Ch1")
 
-        val stagedRef2 = workspace.stageText(txId, relativePath2, "text/markdown", content2)
+        val stagedRef2 = workspace.stageText(txId, relativePath2, MIME_MARKDOWN, content2)
         assertNotNull("stageText 2 应成功", stagedRef2)
         operationOrder.add("stageText:Ch2")
 

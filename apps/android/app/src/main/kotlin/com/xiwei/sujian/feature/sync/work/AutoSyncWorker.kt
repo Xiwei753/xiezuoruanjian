@@ -2,8 +2,8 @@ package com.xiwei.sujian.feature.sync.work
 import android.content.Context
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop
 import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
+import com.xiwei.sujian.core.interop.diagnostics.SyncDiagnosticsEvents
 import com.xiwei.sujian.feature.sync.data.SyncOutcome
 import com.xiwei.sujian.feature.sync.data.SyncProfileReadResult
 import com.xiwei.sujian.feature.sync.data.SyncProfileSnapshot
@@ -103,25 +103,25 @@ class AutoSyncWorker(
             when (outcome) {
                 is SyncOutcome.Completed -> {
                     // 自动同步 Worker 由周期任务驱动，origin=App。
-                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "completed")
+                    SyncDiagnosticsEvents.syncEvent(DiagnosticOriginDto.APP, "autosync", "completed")
                     Result.success()
                 }
                 is SyncOutcome.Unconfigured,
                 is SyncOutcome.Disabled,
                 -> {
-                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "unconfigured")
+                    SyncDiagnosticsEvents.syncEvent(DiagnosticOriginDto.APP, "autosync", "unconfigured")
                     Result.success()
                 }
                 is SyncOutcome.Busy -> {
-                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "busy")
+                    SyncDiagnosticsEvents.syncEvent(DiagnosticOriginDto.APP, "autosync", "busy")
                     Result.retry()
                 }
                 is SyncOutcome.RetryableFailure -> {
-                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "retryable_failure")
+                    SyncDiagnosticsEvents.syncEvent(DiagnosticOriginDto.APP, "autosync", "retryable_failure")
                     Result.retry()
                 }
                 is SyncOutcome.TerminalFailure -> {
-                    DiagnosticsEventsInterop.syncEvent(DiagnosticOriginDto.APP, "autosync", "terminal_failure")
+                    SyncDiagnosticsEvents.syncEvent(DiagnosticOriginDto.APP, "autosync", "terminal_failure")
                     Result.failure()
                 }
             }

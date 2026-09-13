@@ -1915,9 +1915,11 @@ dictionary DiagnosticsInitDto {
 
 // 修改 3：诊断附件 DTO — 平台采集器交进来的附件（logcat、processExits、threadDump 等）。
 // relative_path 是相对输出目录的路径（如 "logcat.txt"），content 是附件内容字节。
+// Issue #671：content 用 `bytes` 而非 `sequence<u8>`，UniFFI 生成 Kotlin ByteArray，
+// 与 Android 采集器天然拿到的 ByteArray 对齐，无需手工 .map { it.toUByte() }。
 dictionary DiagnosticAttachmentDto {
     string relative_path;
-    sequence<u8> content;
+    bytes content;
 };
 
 // 修改 5：诊断日志级别 DTO — 与 writer_diagnostics::DiagnosticLevel 一一对应。

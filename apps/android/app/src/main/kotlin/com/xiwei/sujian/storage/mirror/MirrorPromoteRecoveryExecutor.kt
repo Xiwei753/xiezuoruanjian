@@ -199,58 +199,124 @@ internal class MirrorPromoteRecoveryExecutor(
 
     /**
      * Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件。
+     *
+     * 拆分为 [resolveRecoverPromotedRef] / [createFinalFromStaged] / [commitRecoveredPromote] /
+     * [removeOldFinalIfPresent] 四个步骤，避免单方法同时承担检查/读取/删除/创建/写日志/回滚职责。
      */
     private suspend fun promoteStagedForRecoverItem(
         ctx: RecoverPromoteItemContext,
         staged: StagedMirrorRef,
     ): PromoteItemResult {
+        val refOutcome = resolveRecoverPromotedRef(ctx, staged)
+        val newRef: MirrorFileRef? =
+            when (refOutcome) {
+                is RecoverPromotedRefOutcome.Reuse -> refOutcome.ref
+                RecoverPromotedRefOutcome.Proceed -> createFinalFromStaged(ctx, staged)
+                RecoverPromotedRefOutcome.RollbackDone -> return PromoteItemResult.RollbackDone
+            }
+        if (newRef == null) {
+            // createFinalFromStaged 失败已回滚
+            return PromoteItemResult.RollbackDone
+        }
+        return commitRecoveredPromote(ctx, newRef)
+    }
+
+    private sealed interface RecoverPromotedRefOutcome {
+        data class Reuse(val ref: MirrorFileRef) : RecoverPromotedRefOutcome
+
+        data object Proceed : RecoverPromotedRefOutcome
+
+        data object RollbackDone : RecoverPromotedRefOutcome
+    }
+
+    /**
+     * 检查最终文件是否已存在并可复用。只有当 [PendingItem.state] 为
+     * [PendingItem.STATE_OLD_VACATED] 时才需要检查 final，否则直接 [RecoverPromotedRefOutcome.Proceed]。
+     */
+    private suspend fun resolveRecoverPromotedRef(
+        ctx: RecoverPromoteItemContext,
+        staged: StagedMirrorRef,
+    ): RecoverPromotedRefOutcome {
+        if (ctx.item.state != PendingItem.STATE_OLD_VACATED) {
+            return RecoverPromotedRefOutcome.Proceed
+        }
+        return when (val finalOutcome = checkFinalForPromoteStaged(ctx, staged)) {
+            is FinalCheckOutcome.Reuse -> RecoverPromotedRefOutcome.Reuse(finalOutcome.ref)
+            FinalCheckOutcome.Proceed -> RecoverPromotedRefOutcome.Proceed
+            FinalCheckOutcome.RollbackDone -> RecoverPromotedRefOutcome.RollbackDone
+        }
+    }
+
+    /**
+     * 从 workspace 读取暂存内容、删除旧文件、在 Download 中创建新文件。
+     * 返回 null 表示失败已回滚。
+     */
+    private suspend fun createFinalFromStaged(
+        ctx: RecoverPromoteItemContext,
+        staged: StagedMirrorRef,
+    ): MirrorFileRef? {
         val journal = ctx.journal
         val key = ctx.key
-        var newRef: MirrorFileRef? = null
-        if (ctx.item.state == PendingItem.STATE_OLD_VACATED) {
-            val finalOutcome = checkFinalForPromoteStaged(ctx, staged)
-            when (finalOutcome) {
-                is FinalCheckOutcome.Reuse -> newRef = finalOutcome.ref
-                FinalCheckOutcome.Proceed -> Unit
-                FinalCheckOutcome.RollbackDone -> return PromoteItemResult.RollbackDone
-            }
+        // Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件
+        val content = workspace.readStaged(staged)
+        if (content == null) {
+            DiagnosticsInterop.w(TAG, "Recover promote: read staged content failed for ${key.chapterId}")
+            rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
+            return null
         }
-        if (newRef == null) {
-            // Issue #667：从 workspace 读取暂存内容，在 Download 中创建最终文件
-            val content = workspace.readStaged(staged)
-            if (content == null) {
-                DiagnosticsInterop.w(TAG, "Recover promote: read staged content failed for ${key.chapterId}")
-                rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
-                return PromoteItemResult.RollbackDone
-            }
-            // 删除旧文件（如果存在）
-            val oldRef = ctx.item.oldRef
-            if (oldRef != null) {
-                when (val oldLookup = ctx.storage.lookup(oldRef.relativePath)) {
-                    is MirrorLookupResult.Found -> {
-                        if (!ctx.storage.delete(oldLookup.ref)) {
-                            DiagnosticsInterop.w(TAG, "Recover promote: delete old file failed for ${key.chapterId}")
-                        }
-                    }
-                    is MirrorLookupResult.Missing -> Unit
-                    is MirrorLookupResult.Failed -> {
-                        DiagnosticsInterop.w(
-                            TAG,
-                            "Recover promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
-                        )
-                    }
-                }
-            }
-            // 在 Download 中创建新文件
-            val relativeDir = staged.finalRelativePath.substringBeforeLast('/', "")
-            val displayName = staged.finalRelativePath.substringAfterLast('/')
-            newRef = ctx.storage.createText(relativeDir, displayName, staged.mimeType, content)
+        // 删除旧文件（如果存在）
+        val oldRef = ctx.item.oldRef
+        if (oldRef != null) {
+            removeOldFinalIfPresent(ctx, oldRef)
         }
+        // 在 Download 中创建新文件
+        val relativeDir = staged.finalRelativePath.substringBeforeLast('/', "")
+        val displayName = staged.finalRelativePath.substringAfterLast('/')
+        val newRef = ctx.storage.createText(relativeDir, displayName, staged.mimeType, content)
         if (newRef == null) {
             DiagnosticsInterop.w(TAG, "Recover promote failed for ${key.chapterId}")
             rollbackRecoveryOnly(journal, ctx.currentItems, ctx.storage)
-            return PromoteItemResult.RollbackDone
+            return null
         }
+        return newRef
+    }
+
+    /**
+     * 删除旧文件（如果存在）。lookup 的三种结果分别处理，
+     * 删除失败只记日志不阻断后续创建。
+     */
+    private suspend fun removeOldFinalIfPresent(
+        ctx: RecoverPromoteItemContext,
+        oldRef: MirrorFileRef,
+    ) {
+        val key = ctx.key
+        when (val oldLookup = ctx.storage.lookup(oldRef.relativePath)) {
+            is MirrorLookupResult.Found -> {
+                if (!ctx.storage.delete(oldLookup.ref)) {
+                    DiagnosticsInterop.w(TAG, "Recover promote: delete old file failed for ${key.chapterId}")
+                }
+            }
+            is MirrorLookupResult.Missing -> Unit
+            is MirrorLookupResult.Failed -> {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "Recover promote: lookup old failed for ${key.chapterId}: ${oldLookup.cause?.message}",
+                )
+            }
+        }
+    }
+
+    /**
+     * 生成 [ChapterMirrorEntry]、更新 [RecoverPromoteItemContext.currentItems] 状态为
+     * [PendingItem.STATE_PROMOTED]、写 journal。返回 [PromoteItemResult.Promoted] 或
+     * [PromoteItemResult.RollbackDone]。
+     */
+    private suspend fun commitRecoveredPromote(
+        ctx: RecoverPromoteItemContext,
+        newRef: MirrorFileRef,
+    ): PromoteItemResult {
+        val journal = ctx.journal
+        val key = ctx.key
         val entry =
             ChapterMirrorEntry(
                 uri = newRef.uri,

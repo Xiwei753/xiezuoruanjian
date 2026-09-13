@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,6 +28,11 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue667Comment5645597368PromoteReproTest {
+    private companion object {
+        const val OLD_URI = "content://old/1"
+        const val NEW_URI = "content://new/1"
+        const val CONTENT_HASH = "sha256:abc"
+    }
 
     private lateinit var context: Context
     private lateinit var workspace: MirrorTransactionWorkspace
@@ -55,8 +59,8 @@ class Issue667Comment5645597368PromoteReproTest {
     fun problem1A_promoteItemStaged_stopsWhenLookupFailed() {
         // 1. 在 workspace 中 stage 内容，让 readStaged 能返回非 null
         val txId = "tx-test-1a"
-        val relativePath = "作品/P/V/Ch.md"
-        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", "new content")
+        val relativePath = WORK_PATH_CH_MD
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, NEW_CONTENT)
         assertNotNull("stageText 应成功", stagedRef)
 
         // 2. 构造自定义 storage，lookup 返回 Failed
@@ -65,25 +69,28 @@ class Issue667Comment5645597368PromoteReproTest {
         // 3. 构造 PendingItem，设置 oldRef（非 null），state = STATE_BACKUP_READY
         //    （非 STATE_OLD_VACATED，让 findExistingPromotedRef 返回 null）
         val key = ChapterKey("p1", "v1", "ch1")
-        val oldRef = MirrorFileRef("content://old/1", relativePath)
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = oldRef,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
+        val oldRef = MirrorFileRef(OLD_URI, relativePath)
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = oldRef,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
 
         // 4. 构造 desiredEntries
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry(
-                uri = "content://new/1",
-                relativePath = relativePath,
-                revision = 1L,
-                contentHash = "sha256:abc",
-            ),
-        )
+        val desiredEntries =
+            mapOf(
+                key to
+                    ChapterMirrorEntry(
+                        uri = NEW_URI,
+                        relativePath = relativePath,
+                        revision = 1L,
+                        contentHash = CONTENT_HASH,
+                    ),
+            )
 
         // 5. 用反射调用 private promoteItemStaged
         val result = invokePromoteItemStaged(key, item, stagedRef!!, desiredEntries, storage)
@@ -106,8 +113,8 @@ class Issue667Comment5645597368PromoteReproTest {
     fun problem1B_promoteItemStaged_stopsWhenDeleteOldFailed() {
         // 1. 在 workspace 中 stage 内容
         val txId = "tx-test-1b"
-        val relativePath = "作品/P/V/Ch.md"
-        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", "new content")
+        val relativePath = WORK_PATH_CH_MD
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, NEW_CONTENT)
         assertNotNull("stageText 应成功", stagedRef)
 
         // 2. 构造自定义 storage，lookup 返回 Found 但 delete 返回 false
@@ -115,25 +122,28 @@ class Issue667Comment5645597368PromoteReproTest {
 
         // 3. 构造 PendingItem，设置 oldRef（非 null），state = STATE_BACKUP_READY
         val key = ChapterKey("p1", "v1", "ch1")
-        val oldRef = MirrorFileRef("content://old/1", relativePath)
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = oldRef,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
+        val oldRef = MirrorFileRef(OLD_URI, relativePath)
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = oldRef,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
 
         // 4. 构造 desiredEntries
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry(
-                uri = "content://new/1",
-                relativePath = relativePath,
-                revision = 1L,
-                contentHash = "sha256:abc",
-            ),
-        )
+        val desiredEntries =
+            mapOf(
+                key to
+                    ChapterMirrorEntry(
+                        uri = NEW_URI,
+                        relativePath = relativePath,
+                        revision = 1L,
+                        contentHash = CONTENT_HASH,
+                    ),
+            )
 
         // 5. 用反射调用 private promoteItemStaged
         val result = invokePromoteItemStaged(key, item, stagedRef!!, desiredEntries, storage)
@@ -153,25 +163,27 @@ class Issue667Comment5645597368PromoteReproTest {
     @Test
     fun problem1C_promoteItemStaged_continuesWhenLookupMissing_correctBehavior() {
         val txId = "tx-test-1c"
-        val relativePath = "作品/P/V/Ch.md"
-        val stagedRef = workspace.stageText(txId, relativePath, "text/markdown", "new content")!!
+        val relativePath = WORK_PATH_CH_MD
+        val stagedRef = workspace.stageText(txId, relativePath, MIME_TYPE_MARKDOWN, NEW_CONTENT)!!
 
         val storage = LookupMissingStorage()
 
         val key = ChapterKey("p1", "v1", "ch1")
-        val oldRef = MirrorFileRef("content://old/1", relativePath)
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = oldRef,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
+        val oldRef = MirrorFileRef(OLD_URI, relativePath)
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = oldRef,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
 
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, "sha256:abc"),
-        )
+        val desiredEntries =
+            mapOf(
+                key to ChapterMirrorEntry(NEW_URI, relativePath, 1L, CONTENT_HASH),
+            )
 
         val result = invokePromoteItemStaged(key, item, stagedRef, desiredEntries, storage)
 
@@ -191,14 +203,15 @@ class Issue667Comment5645597368PromoteReproTest {
         desiredEntries: Map<ChapterKey, ChapterMirrorEntry>,
         storage: ReadableMirrorStorage,
     ): MirrorFileRef? {
-        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
-            "promoteItemStaged",
-            ChapterKey::class.java,
-            PendingItem::class.java,
-            StagedMirrorRef::class.java,
-            Map::class.java,
-            ReadableMirrorStorage::class.java,
-        )
+        val method =
+            MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+                "promoteItemStaged",
+                ChapterKey::class.java,
+                PendingItem::class.java,
+                StagedMirrorRef::class.java,
+                Map::class.java,
+                ReadableMirrorStorage::class.java,
+            )
         method.isAccessible = true
         @Suppress("UNCHECKED_CAST")
         return method.invoke(executor, key, item, staged, desiredEntries, storage) as MirrorFileRef?
@@ -218,12 +231,20 @@ class Issue667Comment5645597368PromoteReproTest {
             return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean = true
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean = true
+
         override fun delete(ref: MirrorFileRef): Boolean = true
+
         override fun isSupported(): Boolean = true
+
         override fun resolve(relativePath: String): MirrorFileRef? = null
+
         override fun lookup(relativePath: String): MirrorLookupResult =
             MirrorLookupResult.Failed(SecurityException("simulated lookup failure"))
+
         override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? = null
     }
 
@@ -239,13 +260,20 @@ class Issue667Comment5645597368PromoteReproTest {
             return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean = true
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean = true
+
         override fun delete(ref: MirrorFileRef): Boolean = false // 删除失败
+
         override fun isSupported(): Boolean = true
-        override fun resolve(relativePath: String): MirrorFileRef? =
-            MirrorFileRef("content://old/1", relativePath)
+
+        override fun resolve(relativePath: String): MirrorFileRef? = MirrorFileRef(OLD_URI, relativePath)
+
         override fun lookup(relativePath: String): MirrorLookupResult =
-            MirrorLookupResult.Found(MirrorFileRef("content://old/1", relativePath))
+            MirrorLookupResult.Found(MirrorFileRef(OLD_URI, relativePath))
+
         override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? = null
     }
 
@@ -261,11 +289,19 @@ class Issue667Comment5645597368PromoteReproTest {
             return MirrorFileRef("content://fake/new/${path.hashCode()}", path)
         }
 
-        override fun replaceText(ref: MirrorFileRef, text: String): Boolean = true
+        override fun replaceText(
+            ref: MirrorFileRef,
+            text: String,
+        ): Boolean = true
+
         override fun delete(ref: MirrorFileRef): Boolean = true
+
         override fun isSupported(): Boolean = true
+
         override fun resolve(relativePath: String): MirrorFileRef? = null
+
         override fun lookup(relativePath: String): MirrorLookupResult = MirrorLookupResult.Missing
+
         override fun readTextAndHash(ref: MirrorFileRef): Pair<String, String>? = null
     }
 }

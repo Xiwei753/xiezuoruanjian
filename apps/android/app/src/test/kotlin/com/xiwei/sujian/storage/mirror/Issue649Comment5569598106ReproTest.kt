@@ -7,7 +7,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -209,27 +208,30 @@ class Issue649Comment5569598106ReproTest {
         // 3. 构造 PendingItem，oldRef 非 null，state = STATE_BACKUP_READY
         val key = ChapterKey("p1", "v1", "ch1")
         val oldRef = MirrorFileRef("content://old/1", relativePath)
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = oldRef,
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY,
-        )
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = oldRef,
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY,
+            )
+        val desiredEntries =
+            mapOf(
+                key to ChapterMirrorEntry("content://new/1", relativePath, 1L, computeContentHash(newContent)),
+            )
 
         // 4. 反射调用 private promoteItemStaged
-        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
-            "promoteItemStaged",
-            ChapterKey::class.java,
-            PendingItem::class.java,
-            StagedMirrorRef::class.java,
-            Map::class.java,
-            ReadableMirrorStorage::class.java,
-        )
+        val method =
+            MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+                "promoteItemStaged",
+                ChapterKey::class.java,
+                PendingItem::class.java,
+                StagedMirrorRef::class.java,
+                Map::class.java,
+                ReadableMirrorStorage::class.java,
+            )
         method.isAccessible = true
         val result = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
 
@@ -284,30 +286,33 @@ class Issue649Comment5569598106ReproTest {
         // 4. hash 不匹配时不应跳过 promote，应继续执行 promote 流程
         // （promoteItemStaged 中 findExistingPromotedRef 返回 null，继续到 lookup oldRef 分支）
         val key = ChapterKey("p1", "v1", "ch1")
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = null, // 新项目，无 oldRef
-            backupOldRef = null,
-            promotedRef = null,
-            state = PendingItem.STATE_STAGED,
-        )
-        val desiredEntries = mapOf(
-            key to ChapterMirrorEntry("content://new/1", relativePath, 1L, expectedHash),
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = null, // 新项目，无 oldRef
+                backupOldRef = null,
+                promotedRef = null,
+                state = PendingItem.STATE_STAGED,
+            )
+        val desiredEntries =
+            mapOf(
+                key to ChapterMirrorEntry("content://new/1", relativePath, 1L, expectedHash),
+            )
 
         val stateStore = ReadableMirrorStateStore(context)
         val journalWriter = MirrorJournalWriter(stateStore)
         val rollbackExecutor = MirrorRollbackExecutor(stateStore, journalWriter, workspace)
         val executor = MirrorPublishPromoteExecutor(journalWriter, rollbackExecutor, workspace)
-        val method = MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
-            "promoteItemStaged",
-            ChapterKey::class.java,
-            PendingItem::class.java,
-            StagedMirrorRef::class.java,
-            Map::class.java,
-            ReadableMirrorStorage::class.java,
-        )
+        val method =
+            MirrorPublishPromoteExecutor::class.java.getDeclaredMethod(
+                "promoteItemStaged",
+                ChapterKey::class.java,
+                PendingItem::class.java,
+                StagedMirrorRef::class.java,
+                Map::class.java,
+                ReadableMirrorStorage::class.java,
+            )
         method.isAccessible = true
         val result = method.invoke(executor, key, item, stagedRef, desiredEntries, storage) as MirrorFileRef?
 

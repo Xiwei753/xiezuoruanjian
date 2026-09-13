@@ -353,7 +353,7 @@ private fun EditorViewModel.handleSaveSuccess(
     saveStartedAt: Long,
 ): SaveAttemptResult {
     val savedHash = result.data?.contentHash ?: ""
-    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.chapterSave(
+    com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents.chapterSave(
         session.projectId,
         session.chapterId,
         contentToSave.toByteArray(Charsets.UTF_8).size,
@@ -391,7 +391,7 @@ private suspend fun EditorViewModel.handleSaveError(
     saveStartedAt: Long,
 ): SaveAttemptResult {
     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.chapterSave(
+    com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents.chapterSave(
         session.projectId,
         session.chapterId,
         contentToSave.toByteArray(Charsets.UTF_8).size,
@@ -426,7 +426,7 @@ private suspend fun EditorViewModel.handleSaveNotLoaded(
     saveStartedAt: Long,
 ): SaveAttemptResult {
     _uiState.value = _uiState.value.copy(saveStatus = SaveStatus.SaveFailed)
-    com.xiwei.sujian.core.interop.diagnostics.DiagnosticsEventsInterop.chapterSave(
+    com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents.chapterSave(
         session.projectId,
         session.chapterId,
         contentToSave.toByteArray(Charsets.UTF_8).size,

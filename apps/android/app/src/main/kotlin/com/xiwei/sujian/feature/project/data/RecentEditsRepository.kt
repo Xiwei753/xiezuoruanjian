@@ -1,10 +1,10 @@
 package com.xiwei.sujian.feature.project.data
 import android.content.Context
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.common.BridgeResult
 import com.xiwei.sujian.core.interop.common.MessageKeyMapper
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.feature.project.data.model.RecentEdit
 
 /**

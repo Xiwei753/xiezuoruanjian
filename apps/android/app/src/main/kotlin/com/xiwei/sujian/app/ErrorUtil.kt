@@ -3,8 +3,8 @@ package com.xiwei.sujian.app
 import android.content.Context
 import android.widget.Toast
 import com.xiwei.sujian.R
-import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 import com.xiwei.sujian.core.interop.common.RepositoryException
+import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 
 /**
  * ErrorUtil — 错误处理工具类

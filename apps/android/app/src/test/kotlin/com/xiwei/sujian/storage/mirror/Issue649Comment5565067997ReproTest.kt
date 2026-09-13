@@ -6,7 +6,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -114,14 +113,15 @@ class Issue649Comment5565067997ReproTest {
         // 2. journal 写 STATE_BACKUP_READY（不是 STATE_OLD_BACKED_UP）
         val key = ChapterKey("p1", "v1", "ch1")
         val stagedRef = StagedMirrorRef(txId, "content://staging", ".staging/tx1/f.md", F_MD, TEXT_MARKDOWN)
-        val item = PendingItem(
-            key = key,
-            stagedRef = stagedRef,
-            oldRef = oldRef,
-            backupOldRef = backupRef,
-            promotedRef = null,
-            state = PendingItem.STATE_BACKUP_READY, // 修复后写 BACKUP_READY
-        )
+        val item =
+            PendingItem(
+                key = key,
+                stagedRef = stagedRef,
+                oldRef = oldRef,
+                backupOldRef = backupRef,
+                promotedRef = null,
+                state = PendingItem.STATE_BACKUP_READY, // 修复后写 BACKUP_READY
+            )
         assertEquals(
             "修复1.A：fallback copy 后状态是 STATE_BACKUP_READY",
             PendingItem.STATE_BACKUP_READY,
@@ -171,11 +171,12 @@ class Issue649Comment5565067997ReproTest {
         assertTrue("final Missing（old 已从 final 移走）", finalLookup is MirrorLookupResult.Missing)
 
         // 4. 用 lookup 结果决定恢复动作（不硬编码 vacated=false）
-        val vacated = when (finalLookup) {
-            is MirrorLookupResult.Missing -> true // old 已腾空
-            is MirrorLookupResult.Found -> false // old 还在 final
-            is MirrorLookupResult.Failed -> false // 查询失败，状态不明
-        }
+        val vacated =
+            when (finalLookup) {
+                is MirrorLookupResult.Missing -> true // old 已腾空
+                is MirrorLookupResult.Found -> false // old 还在 final
+                is MirrorLookupResult.Failed -> false // 查询失败，状态不明
+            }
         assertTrue("用 lookup 判断：final Missing → vacated=true", vacated)
     }
 
@@ -241,25 +242,26 @@ class Issue649Comment5565067997ReproTest {
 
         // 2. final 也存在（可能是新 manifest，也可能是旧 manifest 残留）
         // 修复后：用 manifestSwapState 决定从哪一步继续，不猜测
-        val journalWithSwapState = PendingMirrorPublish(
-            txId = TX1,
-            backend = MirrorBackend.MEDIA_STORE,
-            treeUri = null,
-            projectId = "p1",
-            transactionType = MirrorTransactionType.UPSERT_PROJECT,
-            phase = PendingMirrorPublish.PHASE_PROMOTE,
-            oldEntries = emptyMap(),
-            newEntries = emptyMap(),
-            stagedRefs = emptyMap(),
-            items = emptyMap(),
-            removedProjectIds = emptySet(),
-            manifestOldRef = oldManifestRef,
-            manifestStagedRef = null,
-            manifestNewRef = null,
-            manifestBackupRef = backupRef,
-            isManifestCommitted = false,
-            manifestSwapState = ManifestTransactionState.MANIFEST_BACKUP_READY,
-        )
+        val journalWithSwapState =
+            PendingMirrorPublish(
+                txId = TX1,
+                backend = MirrorBackend.MEDIA_STORE,
+                treeUri = null,
+                projectId = "p1",
+                transactionType = MirrorTransactionType.UPSERT_PROJECT,
+                phase = PendingMirrorPublish.PHASE_PROMOTE,
+                oldEntries = emptyMap(),
+                newEntries = emptyMap(),
+                stagedRefs = emptyMap(),
+                items = emptyMap(),
+                removedProjectIds = emptySet(),
+                manifestOldRef = oldManifestRef,
+                manifestStagedRef = null,
+                manifestNewRef = null,
+                manifestBackupRef = backupRef,
+                isManifestCommitted = false,
+                manifestSwapState = ManifestTransactionState.MANIFEST_BACKUP_READY,
+            )
 
         // 3. 根据 manifestSwapState 决定恢复动作（不猜测）
         assertEquals(

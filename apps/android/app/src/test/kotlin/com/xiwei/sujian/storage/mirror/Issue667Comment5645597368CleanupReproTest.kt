@@ -9,7 +9,6 @@ import android.net.Uri
 import android.provider.MediaStore
 import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
-import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -18,6 +17,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowContentResolver
+import java.io.File
 
 /**
  * Issue #667 评论 5645597368 问题 2 回归测试。
@@ -36,7 +36,6 @@ import org.robolectric.shadows.ShadowContentResolver
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue667Comment5645597368CleanupReproTest {
-
     private lateinit var context: Context
     private lateinit var cleanup: MirrorStagingCleanup
     private lateinit var cleanupFlagFile: File

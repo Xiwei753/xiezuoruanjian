@@ -37,6 +37,17 @@ import java.io.File
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue667Comment5650324333Type4AdversarialTest {
+    private companion object {
+        const val SUJIAN_DIR_NAME = "Sujian"
+        const val STAGING_DIR = ".staging"
+        const val BACKUP_DIR = ".backup"
+        const val META_DIR = "_meta"
+        const val STAGING_TX1 = ".staging/tx-1"
+        const val BACKUP_TX1 = ".backup/tx-1"
+        const val LEFTOVER_FILE = "leftover.tmp"
+        const val RESIDUAL_CONTENT = "residual"
+    }
+
     private lateinit var context: Context
     private lateinit var cleanupFlagFile: File
 
@@ -57,12 +68,15 @@ class Issue667Comment5650324333Type4AdversarialTest {
      */
     @Test
     fun deepNestedEmptyDirsCleaned() {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-        val sujianDir = File(downloadsDir, "Sujian")
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
         // 创建 6 层嵌套空目录
-        val deepDir = File(sujianDir, ".staging/tx-1/a/b/c/d/e").apply { mkdirs() }
-        val backupDir = File(sujianDir, ".backup/tx-1").apply { mkdirs() }
-        val metaDir = File(sujianDir, "_meta").apply { mkdirs() }
+        val deepDir = File(sujianDir, "$STAGING_TX1/a/b/c/d/e").apply { mkdirs() }
+        val backupDir = File(sujianDir, BACKUP_TX1).apply { mkdirs() }
+        val metaDir = File(sujianDir, META_DIR).apply { mkdirs() }
 
         assertTrue("测试前置：深层嵌套目录应已创建", deepDir.exists())
         assertTrue("测试前置：.backup/tx-1 应已创建", backupDir.exists())
@@ -76,15 +90,15 @@ class Issue667Comment5650324333Type4AdversarialTest {
         // 所有嵌套空目录都应被自底向上递归删除
         assertFalse(
             ".staging 目录应已被递归删除",
-            File(sujianDir, ".staging").exists(),
+            File(sujianDir, STAGING_DIR).exists(),
         )
         assertFalse(
             ".backup 目录应已被删除",
-            File(sujianDir, ".backup").exists(),
+            File(sujianDir, BACKUP_DIR).exists(),
         )
         assertFalse(
             "_meta 目录应已被删除",
-            File(sujianDir, "_meta").exists(),
+            File(sujianDir, META_DIR).exists(),
         )
         assertTrue(
             "深层嵌套空目录清理成功后应写 done 标志",
@@ -101,11 +115,14 @@ class Issue667Comment5650324333Type4AdversarialTest {
      */
     @Test
     fun fileInNestedDirPreventsAllDelete() {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
-        val sujianDir = File(downloadsDir, "Sujian")
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
         // 创建深层嵌套目录并放入残留文件
-        val nestedDir = File(sujianDir, ".staging/tx-1/a/b").apply { mkdirs() }
-        val leftoverFile = File(nestedDir, "leftover.tmp").apply { writeText("residual") }
+        val nestedDir = File(sujianDir, "$STAGING_TX1/a/b").apply { mkdirs() }
+        val leftoverFile = File(nestedDir, LEFTOVER_FILE).apply { writeText(RESIDUAL_CONTENT) }
 
         assertTrue("测试前置：残留文件应已创建", leftoverFile.exists())
 
@@ -114,10 +131,20 @@ class Issue667Comment5650324333Type4AdversarialTest {
 
         cleanup.cleanupIfNeeded()
 
-        // 残留文件不应被递归删除
+        // 拋留文件不应被递归删除
         assertTrue(
             "深层嵌套目录中的残留文件不应被递归删除",
             leftoverFile.exists(),
+        )
+        // .staging/tx-1/a/b/ 因含文件不能删空，仍存在
+        assertTrue(
+            ".staging/tx-1/a/b 目录因含残留文件应仍存在",
+            nestedDir.exists(),
+        )
+        // .staging 因子目录未删空，仍存在
+        assertTrue(
+            ".staging 目录因子目录未删空应仍存在",
+            File(sujianDir, STAGING_DIR).exists(),
         )
         // .staging/tx-1/a/b/ 因含文件不能删空，仍存在
         assertTrue(
@@ -146,7 +173,10 @@ class Issue667Comment5650324333Type4AdversarialTest {
      */
     @Test
     fun partialDirsCleanedOthersFail() {
-        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val downloadsDir =
+            android.os.Environment.getExternalStoragePublicDirectory(
+                android.os.Environment.DIRECTORY_DOWNLOADS,
+            )
         val sujianDir = File(downloadsDir, "Sujian")
         // .staging 含残留文件（清理失败）
         val stagingDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
