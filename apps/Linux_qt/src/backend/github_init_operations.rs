@@ -79,7 +79,7 @@ impl AppBackend {
         let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
             qptr.as_pinned().map(|this| {
                 let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
+                this.handle_sync_outcome(outcome, None);
             });
         });
 

@@ -910,7 +910,7 @@ mod tests {
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         // After sync success with pending path, internal_open_data_root is called.
         // The data root is opened successfully; pending path is cleared.
@@ -931,7 +931,7 @@ mod tests {
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         assert_eq!(backend.current_sync_status, "conflict");
     }
@@ -946,7 +946,7 @@ mod tests {
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         assert_eq!(backend.current_sync_status, "error");
         assert_eq!(backend.current_has_data_root, true);

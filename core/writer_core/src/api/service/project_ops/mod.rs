@@ -341,6 +341,7 @@ impl WriterCoreApi {
                     project_id: project_id.to_string(),
                     volume_id: volume_id.to_string(),
                 }),
+                Vec::new(),
             )
             .map_err(|e| {
                 log::warn!(

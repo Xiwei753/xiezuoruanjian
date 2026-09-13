@@ -571,7 +571,7 @@ impl EditorBackend {
     }
     fn request_auto_sync(&mut self, reason: QString) {
         if self
-            .with_app_mut(|app| app.request_auto_sync(reason))
+            .with_app_mut(|app| app.request_auto_sync(reason, None))
             .is_err()
         {
             crate::backend::app_backend::debug_error_static(

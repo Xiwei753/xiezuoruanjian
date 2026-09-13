@@ -183,6 +183,10 @@ pub fn rename_volume(project_root: &Path, volume_id: &str, new_title: &str) -> R
 /// 经过 `delete_guard` 双重验证后，将卷目录移入 `app-meta/sync/trash/`，
 /// 命名格式为 `{timestamp}_{uuid}_{volume_id}`，确保唯一且可溯源。
 /// 同时生成 tombstone 记录供同步使用。
+///
+///   ：tombstone 持久化到 `project_root` 的 SyncState（作品同步真正的
+/// sync_root 是 `projects_root/<project_id>`），不再写到 `app_data_root`。
+/// 不再吞 load/save 错误：tombstone 没真正落盘，删除事务就不能成功。
 pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path) -> Result<()> {
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
     let volume_dir = project_root.join("volumes").join(volume_id);
@@ -199,19 +203,14 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
     ));
     fs::rename(&target_canon, &trash_path)?;
 
-    // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
-        let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
-        let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
+    // 持久化 tombstone 到 project_root 的 SyncState（作品同步真正的 sync_root）。
+    // 不再吞 load/save 错误：tombstone 没真正落盘，事务就不能成功。
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
+    let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
 
-        crate::trash::generate_tombstones(
-            &mut state,
-            &trash_path,
-            &rel_volume_dir,
-            &rel_trash_path,
-        );
-        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
-    }
+    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_volume_dir, &rel_trash_path);
+    crate::sync::SyncService::save_sync_state(project_root, &state)?;
     Ok(())
 }
 

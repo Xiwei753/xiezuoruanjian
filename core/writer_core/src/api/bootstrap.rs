@@ -144,14 +144,17 @@ fn recover_pending_phase(
     match recover_pending_local_delete(app_data_root, rec) {
         Ok(()) => {
             // 本地删除完成，推进 journal 到 LocalApplied。
+            //   ：保留原 journal 的 device_id/created_at/sync_delete_facts，
+            // 不用空 device_id、created_at=0 覆盖原事务元数据。
             let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
                 token: rec.journal_token.clone(),
                 change_set: rec.changes.clone(),
-                device_id: String::new(),
+                device_id: rec.device_id.clone(),
                 op_type: rec.op_type.clone(),
-                created_at: 0,
+                created_at: rec.created_at,
                 phase: WorkspaceChangePhase::Pending,
                 delete_target: rec.delete_target.clone(),
+                sync_delete_facts: rec.sync_delete_facts.clone(),
             };
             if let Err(e) = journal.mark_local_applied(app_data_root) {
                 log::warn!(
@@ -194,15 +197,18 @@ fn recover_local_applied_phase(
                 );
             }
             // history 成功，推进 journal 到 HistoryRecorded 并清理。
+            //   ：保留原 journal 的 device_id/created_at/sync_delete_facts，
+            // 不用空 device_id、created_at=0 覆盖原事务元数据。
             let journal = crate::storage::journal::workspace_change::WorkspaceChangeJournal {
                 token: rec.journal_token.clone(),
                 change_set: rec.changes.clone(),
-                device_id: String::new(),
+                device_id: rec.device_id.clone(),
                 op_type: rec.op_type.clone(),
-                created_at: 0,
+                created_at: rec.created_at,
                 phase:
                     crate::storage::journal::workspace_change::WorkspaceChangePhase::LocalApplied,
                 delete_target: rec.delete_target.clone(),
+                sync_delete_facts: rec.sync_delete_facts.clone(),
             };
             if let Err(e) = journal.mark_history_recorded(app_data_root) {
                 log::warn!(
@@ -232,7 +238,9 @@ fn recover_local_applied_phase(
 
 /// 幂等完成 Pending 阶段的本地删除。
 ///
-/// 根据 `delete_target` 执行对应的本地删除。如果目标已经不存在，视为本地删除已完成（幂等）。
+/// 根据 `delete_target` 执行对应的本地删除。如果目标已经不存在，视为本地物理删除
+/// 已完成（幂等），但仍需根据 `sync_delete_facts` 幂等补齐 project_root 的 tombstone——
+/// 不能只看"目录已经不存在"就直接认为整个删除事务完成。
 /// 没有 `delete_target` 的旧 journal 跳过本地删除（向后兼容，按 LocalApplied 处理）。
 fn recover_pending_local_delete(
     app_data_root: &Path,
@@ -249,9 +257,11 @@ fn recover_pending_local_delete(
             let volume_dir = project_root.join("volumes").join(volume_id);
             if !volume_dir.exists() {
                 log::debug!(
-                    "recover_pending_local_delete: volume {} already absent — treating as deleted",
+                    "recover_pending_local_delete: volume {} already absent — ensuring tombstones persisted",
                     volume_dir.display()
                 );
+                // 目录已不存在，但 tombstone 可能没落盘。根据 sync_delete_facts 幂等补齐。
+                ensure_tombstones_persisted(&project_root, &rec.sync_delete_facts)?;
                 return Ok(());
             }
             crate::volume::delete_volume(&project_root, volume_id, app_data_root)
@@ -270,9 +280,11 @@ fn recover_pending_local_delete(
                 .join(chapter_id);
             if !chapter_dir.exists() {
                 log::debug!(
-                    "recover_pending_local_delete: chapter {} already absent — treating as deleted",
+                    "recover_pending_local_delete: chapter {} already absent — ensuring tombstones persisted",
                     chapter_dir.display()
                 );
+                // 目录已不存在，但 tombstone 可能没落盘。根据 sync_delete_facts 幂等补齐。
+                ensure_tombstones_persisted(&project_root, &rec.sync_delete_facts)?;
                 return Ok(());
             }
             crate::chapter::delete_chapter(&project_root, volume_id, chapter_id, app_data_root)
@@ -296,6 +308,49 @@ fn recover_pending_local_delete(
             Ok(())
         }
     }
+}
+
+/// 根据 sync_delete_facts 幂等补齐 project_root 的 tombstone。
+///
+/// 恢复 Pending 阶段时，即使源目录已在崩溃前被 move 掉，也要根据 journal 里保存的
+/// sync_delete_facts 幂等补齐项目自己的 tombstone，再允许推进到 LocalApplied。
+/// 已存在的 tombstone（按 original_path + trash_path 匹配）跳过，保证幂等。
+fn ensure_tombstones_persisted(
+    project_root: &Path,
+    facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
+) -> std::result::Result<(), WriterError> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    let mut changed = false;
+    for fact in facts {
+        let exists = state
+            .tombstones
+            .iter()
+            .any(|t| t.original_path == fact.original_path && t.trash_path == fact.trash_path);
+        if exists {
+            continue;
+        }
+        state.tombstones.push(crate::sync::Tombstone {
+            original_path: fact.original_path.clone(),
+            trash_path: fact.trash_path.clone(),
+            deleted_at: fact.deleted_at,
+            purge_after: fact.deleted_at + 30 * 24 * 3600,
+            deleted_by: if fact.deleted_by.is_empty() {
+                state.device_id.clone()
+            } else {
+                fact.deleted_by.clone()
+            },
+            original_hash: fact.original_hash.clone(),
+            kind: "local_delete".to_string(),
+        });
+        changed = true;
+    }
+    if changed {
+        crate::sync::SyncService::save_sync_state(project_root, &state)?;
+    }
+    Ok(())
 }
 
 /// 应用打开 workspace 时初始化唯一 Git repo。

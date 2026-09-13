@@ -157,8 +157,9 @@ impl SyncBackend {
     /// 2. SyncBackend 自己发 sync_status_changed / sync_action_completed，
     ///    QML 监听的 SyncBackend signal 能正确触发。
     pub(crate) fn handle_outcome(&mut self, outcome: SyncTaskOutcome) {
+        let qptr = QPointer::from(&*self);
         if self
-            .with_app_mut(|app| app.handle_sync_outcome(outcome))
+            .with_app_mut(|app| app.handle_sync_outcome(outcome, Some(qptr)))
             .is_ok()
         {
             self.sync_status_changed();
@@ -334,16 +335,18 @@ impl SyncBackend {
         result.unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn request_auto_sync(&mut self, reason: QString) {
+        let qptr = QPointer::from(&*self);
         if self
-            .with_app_mut(|app| app.request_auto_sync(reason))
+            .with_app_mut(|app| app.request_auto_sync(reason, Some(qptr)))
             .is_ok()
         {
             self.sync_status_changed();
         }
     }
     fn maybe_auto_sync_on_foreground(&mut self) {
+        let qptr = QPointer::from(&*self);
         if self
-            .with_app_mut(|app| app.maybe_auto_sync_on_foreground())
+            .with_app_mut(|app| app.maybe_auto_sync_on_foreground(Some(qptr)))
             .is_ok()
         {
             self.sync_status_changed();
@@ -532,6 +535,7 @@ impl AppBackend {
         }
 
         self.current_sync_status = "syncing".to_string();
+        self.current_sync_in_progress = true;
         self.sync_status_changed();
 
         let state = writer_core::api::SyncOperationStateDto {
@@ -546,39 +550,53 @@ impl AppBackend {
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
+        // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
+        // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
+        // 无 layout 说明 workspace 未正确打开，直接返回状态错误。
+        let layout = match self.current_workspace_git_layout.clone() {
+            Some(l) => l,
+            None => {
+                self.current_sync_in_progress = false;
+                self.current_sync_status = "error".to_string();
+                let state = writer_core::api::SyncOperationStateDto {
+                    operation_id: op_id.clone(),
+                    operation_kind: "diagnose".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.block.no_workspace_layout".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                };
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default();
+                self.sync_status_changed();
+                self.sync_action_completed();
+                self.debug_error(
+                    "sync",
+                    "perform_sync_diagnostics_failed",
+                    "no_workspace_git_layout",
+                );
+                return op_id.into();
+            }
+        };
+
         let app_qptr = QPointer::from(&*self);
         let callback = sync_operations::make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
-            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
-            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) and a GitRepoLayout
+            // snapshot which auto-implement UnwindSafe. No shared mutable state or borrows are
+            // captured, so the closure is UnwindSafe by auto-impl without needing
+            // AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = match crate::backend::app_backend::create_core_api(
+                let api = crate::backend::app_backend::with_layout_core_api(
                     &data_root,
                     &projects_root,
-                ) {
-                    Ok(api) => api,
-                    Err(e) => {
-                        let state = writer_core::api::SyncOperationStateDto {
-                            operation_id: op_id_capture.clone(),
-                            operation_kind: "diagnose".to_string(),
-                            status_code: "error".to_string(),
-                            phase_key: None,
-                            summary_key: Some("sync.block.bootstrap_failed".to_string()),
-                            summary_args: std::collections::HashMap::new(),
-                            counts: writer_core::api::SyncOperationCountsDto::default(),
-                            raw_error: Some(mask_sync_error(&e.to_string())),
-                        };
-                        return SyncTaskOutcome {
-                            operation_id: op_id_capture.clone(),
-                            sync_status: "error".to_string(),
-                            action_result: serde_json::to_string(&state).unwrap_or_default(),
-                        };
-                    }
-                };
+                    &layout,
+                );
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {

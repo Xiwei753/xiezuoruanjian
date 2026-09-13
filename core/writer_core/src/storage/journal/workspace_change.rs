@@ -75,6 +75,25 @@ pub enum DeleteTarget {
     },
 }
 
+/// 单个文件的同步删除事实，供恢复阶段幂等补齐 tombstone。
+///
+/// 物理删除前在 journal 里保存每个被删除文件的 tombstone 事实。
+/// 恢复 Pending 阶段时，即使源目录已在崩溃前被 move 掉，也能根据这些事实
+/// 幂等补齐项目自己的 tombstone，再允许推进到 LocalApplied。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SyncDeleteFact {
+    /// 文件在 project_root 下的原始相对路径（正斜杠，Git/远端约定）。
+    pub original_path: String,
+    /// 删除前的内容哈希（MD5 hex），可为空（未知时）。
+    pub original_hash: String,
+    /// 删除时间（epoch seconds）。
+    pub deleted_at: i64,
+    /// 发起删除的设备/来源标识。
+    pub deleted_by: String,
+    /// trash 目录下的相对路径。
+    pub trash_path: String,
+}
+
 /// workspace 变更 journal。
 ///
 /// 统一保存作品、卷、章节删除产生的 `WorkspaceChangeSet`。
@@ -100,6 +119,11 @@ pub struct WorkspaceChangeJournal {
     /// 尽力推断（向后兼容）。
     #[serde(default)]
     pub delete_target: Option<DeleteTarget>,
+    /// 本次删除对应的同步删除事实，供恢复阶段幂等补齐 tombstone。
+    ///
+    /// 旧 journal（无此字段）反序列化为空 Vec，恢复时按现有逻辑处理（向后兼容）。
+    #[serde(default)]
+    pub sync_delete_facts: Vec<SyncDeleteFact>,
 }
 
 /// recover 返回的待处理记录。
@@ -120,6 +144,12 @@ pub struct RecoveredWorkspaceChange {
     pub phase: WorkspaceChangePhase,
     /// 明确的删除目标（Pending 阶段幂等删除用）。
     pub delete_target: Option<DeleteTarget>,
+    /// 原始 journal 的 device_id，推进 phase 时保留原元数据。
+    pub device_id: String,
+    /// 原始 journal 的 created_at，推进 phase 时保留原元数据。
+    pub created_at: i64,
+    /// 原始 journal 的 sync_delete_facts，供恢复阶段幂等补齐 tombstone。
+    pub sync_delete_facts: Vec<SyncDeleteFact>,
 }
 
 impl WorkspaceChangeJournal {
@@ -127,12 +157,14 @@ impl WorkspaceChangeJournal {
     ///
     /// 在执行本地物理删除前调用，确保崩溃后能恢复。
     /// `delete_target` 明确记录删除目标，供恢复阶段幂等执行本地删除。
+    /// `sync_delete_facts` 记录本次删除对应的同步删除事实，供恢复阶段幂等补齐 tombstone。
     pub fn save_pending(
         app_data_root: &Path,
         change_set: &WorkspaceChangeSet,
         device_id: &str,
         op_type: WorkspaceChangeOpType,
         delete_target: Option<DeleteTarget>,
+        sync_delete_facts: Vec<SyncDeleteFact>,
     ) -> Result<Self> {
         let token = Uuid::new_v4().to_string();
         let now = std::time::SystemTime::now()
@@ -147,6 +179,7 @@ impl WorkspaceChangeJournal {
             created_at: now,
             phase: WorkspaceChangePhase::Pending,
             delete_target,
+            sync_delete_facts,
         };
         let journal_path = journal_file_path(app_data_root, &token);
         if let Some(parent) = journal_path.parent() {
@@ -273,6 +306,9 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 op_type: journal.op_type.clone(),
                 phase: WorkspaceChangePhase::LocalApplied,
                 delete_target: journal.delete_target.clone(),
+                device_id: journal.device_id.clone(),
+                created_at: journal.created_at,
+                sync_delete_facts: journal.sync_delete_facts.clone(),
             }))
         }
         WorkspaceChangePhase::Pending => {
@@ -284,6 +320,9 @@ fn recover_single_journal(journal_path: &Path) -> Result<Option<RecoveredWorkspa
                 op_type: journal.op_type.clone(),
                 phase: WorkspaceChangePhase::Pending,
                 delete_target: journal.delete_target.clone(),
+                device_id: journal.device_id.clone(),
+                created_at: journal.created_at,
+                sync_delete_facts: journal.sync_delete_facts.clone(),
             }))
         }
     }

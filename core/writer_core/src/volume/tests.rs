@@ -154,7 +154,9 @@ fn test_delete_volume() {
     let trash_dir = data_root.join("sync/trash");
     assert!(std::fs::read_dir(trash_dir).unwrap().count() > 0);
 
-    let state = crate::sync::SyncService::load_sync_state(data_root).unwrap();
+    //   ：tombstone 持久化到 project_root 的 SyncState（作品同步真正的 sync_root）。
+    let project_root = data_root.join("projects").join(&project.id);
+    let state = crate::sync::SyncService::load_sync_state(&project_root).unwrap();
     assert!(!state.tombstones.is_empty());
 }
 

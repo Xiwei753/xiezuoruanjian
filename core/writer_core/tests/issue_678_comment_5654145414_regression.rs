@@ -234,6 +234,7 @@ fn test_type3_recover_unfinished_distinguishes_pending_and_local_applied() {
             project_id: "p1".to_string(),
             volume_id: "v1".to_string(),
         }),
+        Vec::new(),
     )
     .expect("save_pending 应成功");
 
@@ -248,6 +249,7 @@ fn test_type3_recover_unfinished_distinguishes_pending_and_local_applied() {
             volume_id: "v2".to_string(),
             chapter_id: "c2".to_string(),
         }),
+        Vec::new(),
     )
     .expect("save_pending 应成功");
     local_applied_journal
@@ -303,6 +305,7 @@ fn test_type3_recover_pending_local_delete_idempotent() {
             project_id: "nonexistent-project".to_string(),
             volume_id: "nonexistent-volume".to_string(),
         }),
+        Vec::new(),
     )
     .expect("save_pending 应成功");
 
@@ -379,6 +382,7 @@ fn test_type4_recover_pending_local_delete_project_skip() {
         Some(DeleteTarget::Project {
             project_id: "test-project".to_string(),
         }),
+        Vec::new(),
     )
     .expect("save_pending 应成功");
 
@@ -467,6 +471,7 @@ fn test_type4_save_pending_records_delete_target() {
         "device-test",
         WorkspaceChangeOpType::DeleteVolume,
         Some(delete_target.clone()),
+        Vec::new(),
     )
     .expect("save_pending 应成功");
 

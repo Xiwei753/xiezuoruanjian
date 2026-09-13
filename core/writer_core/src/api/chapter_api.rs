@@ -205,6 +205,7 @@ impl WriterCoreApi {
                     volume_id: volume_id.to_string(),
                     chapter_id: chapter_id.to_string(),
                 }),
+                Vec::new(),
             )
             .map_err(|e| {
                 log::warn!(
