@@ -122,17 +122,22 @@ class MirrorStagingCleanup(
      * null 时视为本前缀清理失败（返回 false），让外层不写 done 标志、下次重试，而不是
      * 把 null cursor 当成查询成功且没有数据。
      *
+     * Issue #667 评论 5650127639：LIKE 查询中 `_` 和 `%` 是通配符，`_meta/` 的下划线
+     * 会误匹配 `ameta/`、`xmeta/` 等非事务目录。用 `escapeLikeLiteral` 转义字面量字符，
+     * 配合 `ESCAPE '!'` 使下划线按普通字符匹配，避免误删用户文件。
+     *
      * @return true 表示查询和所有删除都成功（无数据时也返回 true）；
      *   false 表示查询抛异常或返回 null，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
      */
     private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String): Boolean {
+        val escapedPrefix = escapeLikeLiteral(pathPrefix)
         val cursor =
             try {
                 contentResolver.query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} LIKE ?",
-                    arrayOf("$pathPrefix%"),
+                    "${MediaStore.Downloads.RELATIVE_PATH} LIKE ? ESCAPE '!'",
+                    arrayOf("$escapedPrefix%"),
                     null,
                 )
             } catch (e: SecurityException) {
@@ -166,6 +171,22 @@ class MirrorStagingCleanup(
         // 任一 delete 失败（抛异常或返回 0）都返回 false，让外层不写 done 标志、下次重试。
         return allDeleted
     }
+
+    /**
+     * 转义 SQL LIKE 模式中的通配符字符，使它们按字面量匹配。
+     *
+     * Issue #667 评论 5650127639：`_meta/` 中的 `_` 在 SQLite LIKE 里是"任意单个字符"
+     * 通配符，`Download/Sujian/_meta/%` 会误匹配 `ameta/`、`xmeta/` 等非事务目录，
+     * 可能删掉用户的其他文件。用 `!` 做 ESCAPE 字符，把 `!`、`%`、`_` 都转义为字面量。
+     *
+     * @param value 要转义的字符串（如路径前缀 `Download/Sujian/_meta/`）
+     * @return 转义后的字符串，配合 `LIKE ? ESCAPE '!'` 使用
+     */
+    private fun escapeLikeLiteral(value: String): String =
+        value
+            .replace("!", "!!")
+            .replace("%", "!%")
+            .replace("_", "!_")
 
     /**
      * 删除单个 MediaStore URI，返回是否成功（返回非 0 且未抛异常）。

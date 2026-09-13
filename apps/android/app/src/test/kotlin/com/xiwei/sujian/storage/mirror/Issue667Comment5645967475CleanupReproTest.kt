@@ -266,6 +266,63 @@ class Issue667Comment5645967475CleanupReproTest {
         assertTrue("_meta/ 前缀应被查询", queriedPrefixes.any { it.contains("_meta/") })
     }
 
+    /**
+     * 边界 3：_meta/ 前缀的 LIKE 查询转义下划线，不会误匹配 ameta/ 等非事务目录。
+     *
+     * Issue #667 评论 5650127639：SQLite LIKE 中 `_` 是"任意单个字符"通配符，
+     * `Download/Sujian/_meta/%` 会误匹配 `ameta/`。修复后用 `ESCAPE '!'` 转义，
+     * `_` 按字面量匹配。本测试用 RecordingFakeProvider 模拟 MediaStore 记录，
+     * 内含真正的 `_meta/manifest.json`（id=1）和非目标 `ameta/notes.md`（id=2），
+     * 验证：
+     * 1. _meta/ 那一组 query 的 selection 包含 `ESCAPE '!'`。
+     * 2. _meta/ 那一组 query 的 selectionArgs 是 `Download/Sujian/!_meta/%`。
+     * 3. ameta/ 记录（id=2）不会进入删除路径——delete 从未被以 id=2 的 URI 调用。
+     * 4. _meta/ 记录（id=1）会被删除——delete 以 id=1 的 URI 调用。
+     *
+     * 这不是只断言 helper 返回字符串，而是锁住"不会误删非事务目录"这个实际行为：
+     * RecordingFakeProvider 真正按 LIKE + ESCAPE 语义过滤记录，ameta/ 不匹配
+     * 转义后的 `!_meta/` 模式，所以不会出现在 cursor 中，不会进入删除路径。
+     */
+    @Test
+    fun metaPrefixEscaped_doesNotMatchAmetaDir() {
+        val provider = RecordingFakeProvider()
+        ShadowContentResolver.registerProviderInternal(MEDIA_HOST, provider)
+        val cleanup = MirrorStagingCleanup(context, context.contentResolver)
+
+        cleanup.cleanupIfNeeded()
+
+        // 断言 1：_meta/ 查询使用了 ESCAPE '!'
+        val metaQuery =
+            provider.queryCalls.find { (_, args) ->
+                args?.firstOrNull()?.contains("_meta/") == true
+            }
+        assertTrue(
+            "_meta/ 前缀的查询应使用 ESCAPE '!'",
+            metaQuery != null && metaQuery.first.contains("ESCAPE '!'"),
+        )
+
+        // 断言 2：_meta/ 查询的参数是转义后的 Download/Sujian/!_meta/%
+        val metaArgs = metaQuery!!.second?.firstOrNull()
+        assertTrue(
+            "_meta/ 前缀的查询参数应是 Download/Sujian/!_meta/%，实际: $metaArgs",
+            metaArgs == "Download/Sujian/!_meta/%",
+        )
+
+        // 断言 3：ameta/ 记录（id=2）不会被删除
+        val ametaUri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, "2")
+        assertFalse(
+            "ameta/ 记录（id=2）不应进入删除路径",
+            provider.deletedUris.any { it == ametaUri },
+        )
+
+        // 断言 4：_meta/ 记录（id=1）会被删除
+        val metaUri = Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, "1")
+        assertTrue(
+            "_meta/ 记录（id=1）应被删除",
+            provider.deletedUris.any { it == metaUri },
+        )
+    }
+
     // ── 辅助方法 ──
 
     /** 持久化 SAF tree URI，让 cleanupViaSaf 能读到。 */
@@ -426,5 +483,118 @@ class Issue667Comment5645967475CleanupReproTest {
         ): Int = 0
 
         override fun getType(uri: Uri): String? = null
+    }
+
+    /**
+     * RecordingFakeProvider — 记录 query/delete 调用并模拟 LIKE + ESCAPE 过滤。
+     *
+     * Issue #667 评论 5650127639：用于验证 _meta/ 前缀的 LIKE 查询转义后不会误匹配
+     * ameta/ 等非事务目录。内部维护记录列表，query 时按 LIKE + ESCAPE 语义过滤，
+     * 真正模拟 SQLite 的匹配行为。
+     */
+    private class RecordingFakeProvider : ContentProvider() {
+        /** 内部 MediaStore 记录：_ID -> RELATIVE_PATH。 */
+        private val records =
+            listOf(
+                1L to "Download/Sujian/_meta/manifest.json",
+                2L to "Download/Sujian/ameta/notes.md",
+            )
+
+        /** 记录每次 query 调用的 (selection, selectionArgs)。 */
+        val queryCalls = mutableListOf<Pair<String, Array<String?>?>>()
+
+        /** 记录每次 delete 调用的 URI。 */
+        val deletedUris = mutableListOf<Uri>()
+
+        override fun onCreate(): Boolean = true
+
+        override fun query(
+            uri: Uri,
+            projection: Array<String?>?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+            sortOrder: String?,
+        ): Cursor? {
+            queryCalls.add((selection ?: "") to selectionArgs)
+
+            // 从 selection 判断是否有 ESCAPE 子句，解析 ESCAPE 字符
+            val escapeChar = parseEscapeChar(selection)
+            // selectionArgs[0] 是 LIKE 模式（如 "Download/Sujian/!_meta/%"）
+            val pattern = selectionArgs?.firstOrNull() ?: return newEmptyCursor()
+
+            val cursor = MatrixCursor(arrayOf(MediaStore.Downloads._ID))
+            for ((id, relativePath) in records) {
+                if (likeMatches(pattern, relativePath, escapeChar)) {
+                    cursor.addRow(arrayOf<Any?>(id))
+                }
+            }
+            return cursor
+        }
+
+        override fun delete(
+            uri: Uri,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int {
+            deletedUris.add(uri)
+            return 1
+        }
+
+        override fun insert(
+            uri: Uri,
+            values: ContentValues?,
+        ): Uri? = null
+
+        override fun update(
+            uri: Uri,
+            values: ContentValues?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int = 0
+
+        override fun getType(uri: Uri): String? = null
+
+        /** 从 selection 中解析 ESCAPE 字符，如 "RELATIVE_PATH LIKE ? ESCAPE '!'" 返回 '!'。 */
+        private fun parseEscapeChar(selection: String?): Char? {
+            if (selection == null) return null
+            val regex = Regex("ESCAPE\\s+'(.)'")
+            val match = regex.find(selection)
+            return match?.groupValues?.get(1)?.firstOrNull()
+        }
+
+        /**
+         * 模拟 SQL LIKE + ESCAPE 匹配。
+         *
+         * 将 LIKE 模式转为正则：`%` -> `.*`，`_` -> `.`（任意单字符），
+         * 被 ESCAPE 字符前缀的字符按字面量匹配。无 ESCAPE 字符时 `%` 和 `_` 都是通配符。
+         */
+        private fun likeMatches(
+            pattern: String,
+            value: String,
+            escape: Char?,
+        ): Boolean {
+            val regex = StringBuilder()
+            var i = 0
+            while (i < pattern.length) {
+                val c = pattern[i]
+                if (escape != null && c == escape && i + 1 < pattern.length) {
+                    // 转义序列：下一个字符按字面量匹配
+                    regex.append(Regex.escape(pattern[i + 1].toString()))
+                    i += 2
+                } else if (c == '%') {
+                    regex.append(".*")
+                    i++
+                } else if (c == '_') {
+                    regex.append(".")
+                    i++
+                } else {
+                    regex.append(Regex.escape(c.toString()))
+                    i++
+                }
+            }
+            return Regex("^$regex$", RegexOption.DOT_MATCHES_ALL).matches(value)
+        }
+
+        private fun newEmptyCursor(): MatrixCursor = MatrixCursor(arrayOf(MediaStore.Downloads._ID))
     }
 }
