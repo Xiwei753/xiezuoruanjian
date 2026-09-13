@@ -285,7 +285,11 @@ extern "C" fn qml_load_error_handler(
         );
         debug_warn_static("app", "qml_warning_critical", &s);
         // Qt 消息转成共享 Rust 诊断事件（origin=System），由 writer_diagnostics 接管落盘。
-        record_qt_event(writer_diagnostics::DiagnosticLevel::Warn, "qml_warning_critical", &s);
+        record_qt_event(
+            writer_diagnostics::DiagnosticLevel::Warn,
+            "qml_warning_critical",
+            &s,
+        );
         if s.contains("qrc:/main.qml")
             || s.contains("QQmlApplicationEngine failed")
             || s.contains("failed to load component")

@@ -65,9 +65,7 @@ fn redact_event(mut event: DiagnosticEvent) -> DiagnosticEvent {
     let mut redacted_fields = std::collections::BTreeMap::new();
     for (k, v) in event.fields.iter() {
         let v = match v {
-            serde_json::Value::String(s) => {
-                serde_json::Value::String(super::redact::redact(s))
-            }
+            serde_json::Value::String(s) => serde_json::Value::String(super::redact::redact(s)),
             other => other.clone(),
         };
         redacted_fields.insert(k.clone(), v);

@@ -98,19 +98,13 @@ pub(crate) fn init(log_dir: PathBuf, build_key: String, enabled: bool) {
     if s.initialized.swap(true, Ordering::SeqCst) {
         // 已初始化：只更新 config 和 enabled。
         if let Ok(mut cfg) = s.config.lock() {
-            *cfg = Some(WriterConfig {
-                log_dir,
-                build_key,
-            });
+            *cfg = Some(WriterConfig { log_dir, build_key });
         }
         s.enabled.store(enabled, Ordering::SeqCst);
         return;
     }
     if let Ok(mut cfg) = s.config.lock() {
-        *cfg = Some(WriterConfig {
-            log_dir,
-            build_key,
-        });
+        *cfg = Some(WriterConfig { log_dir, build_key });
     }
     s.enabled.store(enabled, Ordering::SeqCst);
     let handle = std::thread::Builder::new()
@@ -329,8 +323,7 @@ fn prune_old_logs(log_dir: &Path, build_key: &str) -> bool {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with(&prefix) && name_str.ends_with(".log") && name_str != current_name
-        {
+        if name_str.starts_with(&prefix) && name_str.ends_with(".log") && name_str != current_name {
             rotated.push(entry.path());
         }
     }
@@ -417,7 +410,9 @@ pub(crate) fn reset_for_test() {
         .ok()
         .and_then(|g| g.as_ref().map(|c| c.log_dir.clone()));
     let Some(log_dir) = log_dir else { return };
-    let Ok(entries) = fs::read_dir(&log_dir) else { return };
+    let Ok(entries) = fs::read_dir(&log_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_file() {
@@ -469,7 +464,11 @@ mod tests {
     fn clear_removes_files() {
         let _lock = TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
-        init(tmp.path().to_path_buf(), "test-build-clear".to_string(), true);
+        init(
+            tmp.path().to_path_buf(),
+            "test-build-clear".to_string(),
+            true,
+        );
         set_enabled(true);
         enqueue(make_event_json("test.event"));
         assert!(flush());

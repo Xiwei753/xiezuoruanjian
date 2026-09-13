@@ -74,12 +74,8 @@ impl RedactRules {
         #[allow(clippy::unwrap_used)]
         let p = |pat: &str| Regex::new(pat).unwrap();
         Self {
-            ssh_key: p(
-                r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-            ),
-            pem: p(
-                r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----",
-            ),
+            ssh_key: p(r"(?i)ssh_private_key\s*[:=]\s*[\s\S]*?-----END[^\n]*PRIVATE KEY-----"),
+            pem: p(r"-----BEGIN[^\n]*PRIVATE KEY-----[\s\S]*?-----END[^\n]*PRIVATE KEY-----"),
             bearer_header: p(r"(?i)\b(authorization)\s*[:=]\s*Bearer\s+\S+"),
             sensitive_kv: p(
                 r#"(?i)\b(token|access_token|refresh_token|authorization|password|passwd|secret|private_key)\s*[:=]\s*(?:"[^"]*"|\S+)"#,
@@ -120,14 +116,23 @@ pub fn redact(message: &str) -> String {
     }
     let r = rules();
     let mut result = message.to_string();
-    result = r.ssh_key.replace_all(&result, "ssh_private_key=[REDACTED]").into_owned();
+    result = r
+        .ssh_key
+        .replace_all(&result, "ssh_private_key=[REDACTED]")
+        .into_owned();
     result = r.pem.replace_all(&result, "[REDACTED_PEM]").into_owned();
     result = r
         .bearer_header
         .replace_all(&result, "Authorization: Bearer [REDACTED]")
         .into_owned();
-    result = r.sensitive_kv.replace_all(&result, "$1=[REDACTED]").into_owned();
-    result = r.content_kv.replace_all(&result, "$1=[REDACTED]").into_owned();
+    result = r
+        .sensitive_kv
+        .replace_all(&result, "$1=[REDACTED]")
+        .into_owned();
+    result = r
+        .content_kv
+        .replace_all(&result, "$1=[REDACTED]")
+        .into_owned();
     result = r
         .bearer_json
         .replace_all(&result, "\"authorization\": \"Bearer [REDACTED]\"")
@@ -187,7 +192,8 @@ mod tests {
 
     #[test]
     fn redacts_pem_block() {
-        let msg = "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
+        let msg =
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEA\n-----END RSA PRIVATE KEY-----";
         let redacted = redact(msg);
         assert!(redacted.contains("[REDACTED_PEM]"), "redacted: {redacted}");
         assert!(!redacted.contains("MIIEpAIBAAKCAQEA"));

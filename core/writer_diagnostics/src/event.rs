@@ -88,10 +88,16 @@ impl DiagnosticEvent {
         let message = Some(record.args().to_string());
         let mut fields = BTreeMap::new();
         if let Some(module) = record.module_path() {
-            fields.insert("module".to_string(), serde_json::Value::String(module.to_string()));
+            fields.insert(
+                "module".to_string(),
+                serde_json::Value::String(module.to_string()),
+            );
         }
         if let Some(file) = record.file() {
-            fields.insert("file".to_string(), serde_json::Value::String(file.to_string()));
+            fields.insert(
+                "file".to_string(),
+                serde_json::Value::String(file.to_string()),
+            );
         }
         if let Some(line) = record.line() {
             fields.insert(
@@ -163,14 +169,23 @@ mod tests {
 
     #[test]
     fn level_from_log_level() {
-        assert_eq!(DiagnosticLevel::from(log::Level::Error), DiagnosticLevel::Error);
-        assert_eq!(DiagnosticLevel::from(log::Level::Info), DiagnosticLevel::Info);
+        assert_eq!(
+            DiagnosticLevel::from(log::Level::Error),
+            DiagnosticLevel::Error
+        );
+        assert_eq!(
+            DiagnosticLevel::from(log::Level::Info),
+            DiagnosticLevel::Info
+        );
     }
 
     #[test]
     fn jsonl_field_names_shortened() {
         let mut fields = BTreeMap::new();
-        fields.insert("requested".to_string(), serde_json::Value::String("dark".to_string()));
+        fields.insert(
+            "requested".to_string(),
+            serde_json::Value::String("dark".to_string()),
+        );
         let event = DiagnosticEvent {
             timestamp_ms: 1_700_000_000_000,
             sequence: 42,
@@ -185,13 +200,28 @@ mod tests {
         let jsonl = event.to_jsonl();
         assert!(jsonl.contains("\"ts\":1700000000000"), "ts field: {jsonl}");
         assert!(jsonl.contains("\"seq\":42"), "seq field: {jsonl}");
-        assert!(jsonl.contains("\"session\":\"sess-1\""), "session field: {jsonl}");
+        assert!(
+            jsonl.contains("\"session\":\"sess-1\""),
+            "session field: {jsonl}"
+        );
         assert!(jsonl.contains("\"level\":\"INFO\""), "level field: {jsonl}");
-        assert!(jsonl.contains("\"origin\":\"user\""), "origin field: {jsonl}");
-        assert!(jsonl.contains("\"event\":\"theme.appearance_select\""), "event field: {jsonl}");
-        assert!(jsonl.contains("\"fields\":{\"requested\":\"dark\"}"), "fields: {jsonl}");
+        assert!(
+            jsonl.contains("\"origin\":\"user\""),
+            "origin field: {jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"event\":\"theme.appearance_select\""),
+            "event field: {jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"fields\":{\"requested\":\"dark\"}"),
+            "fields: {jsonl}"
+        );
         // message 为 None 时应被 skip
-        assert!(!jsonl.contains("\"message\""), "message should be skipped: {jsonl}");
+        assert!(
+            !jsonl.contains("\"message\""),
+            "message should be skipped: {jsonl}"
+        );
     }
 
     #[test]
@@ -210,6 +240,9 @@ mod tests {
         let jsonl = event.to_jsonl();
         assert!(jsonl.contains("\"message\":\"hello\""), "message: {jsonl}");
         // fields 为空时应被 skip
-        assert!(!jsonl.contains("\"fields\""), "fields should be skipped: {jsonl}");
+        assert!(
+            !jsonl.contains("\"fields\""),
+            "fields should be skipped: {jsonl}"
+        );
     }
 }

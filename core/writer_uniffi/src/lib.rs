@@ -38,9 +38,10 @@ pub use writer_core::flush_diagnostics;
 pub use writer_core::record_diagnostic_event;
 pub use writer_core::set_diagnostics_config;
 pub use writer_diagnostics::{
-    export_diagnostics as export_diagnostics_raw, init as init_diagnostics, clear as clear_diagnostics_raw,
-    flush as flush_diagnostics_raw, record_event, set_config as set_diagnostics_config_raw,
-    DiagnosticEvent, DiagnosticsConfig, DiagnosticLevel, DiagnosticOrigin, PlatformAttachment,
+    clear as clear_diagnostics_raw, export_diagnostics as export_diagnostics_raw,
+    flush as flush_diagnostics_raw, init as init_diagnostics, record_event,
+    set_config as set_diagnostics_config_raw, DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin,
+    DiagnosticsConfig, PlatformAttachment,
 };
 pub use writer_platform_api::PlatformServices;
 pub use writer_platform_api::SyncTransportFactory;

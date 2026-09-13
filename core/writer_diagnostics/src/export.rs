@@ -69,7 +69,8 @@ pub fn export_diagnostics(
     for att in attachments {
         let dest = temp_dir.join(&att.relative_path);
         if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("create attachment parent failed: {e}"))?;
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("create attachment parent failed: {e}"))?;
         }
         fs::write(&dest, &att.content)
             .map_err(|e| format!("write attachment {} failed: {e}", att.relative_path))?;
@@ -124,7 +125,11 @@ fn write_logs(dest_dir: &Path) -> String {
             }
         };
         let redacted = super::redact::redact(&content);
-        let dest = logs_dir.join(log_file.file_name().unwrap_or_else(|| std::ffi::OsStr::new("unknown")));
+        let dest = logs_dir.join(
+            log_file
+                .file_name()
+                .unwrap_or_else(|| std::ffi::OsStr::new("unknown")),
+        );
         if fs::write(&dest, redacted).is_err() {
             all_ok = false;
         }
@@ -145,8 +150,7 @@ fn zip_directory(src_dir: &Path, zip_path: &Path) -> Result<PathBuf, String> {
     // 但 Issue 要求打 zip 包，且仓库已有 zip crate（apps/Linux_qt 用 zip = "2.2"）。
     // writer_diagnostics 不依赖平台 crate，只依赖 log/serde/serde_json/regex/chrono/uuid/std。
     // 因此这里用一个最小的 zip 写入器（store-only，无压缩）。
-    let file = fs::File::create(zip_path)
-        .map_err(|e| format!("create zip failed: {e}"))?;
+    let file = fs::File::create(zip_path).map_err(|e| format!("create zip failed: {e}"))?;
     let mut writer = ZipWriter::new(file);
     let entries = collect_entries(src_dir, src_dir)?;
     for (name, content) in entries {
@@ -260,7 +264,10 @@ impl ZipWriter {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, "file too large for zip32")
             })?;
             let offset_u32 = u32::try_from(entry.offset).map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large for zip32")
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "offset too large for zip32",
+                )
             })?;
             let mut cd = Vec::new();
             cd.extend_from_slice(&0x02014b50u32.to_le_bytes()); // signature
@@ -294,7 +301,10 @@ impl ZipWriter {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, "CD too large for zip32")
         })?;
         let cd_start_u32 = u32::try_from(cd_start).map_err(|_| {
-            std::io::Error::new(std::io::ErrorKind::InvalidInput, "CD offset too large for zip32")
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "CD offset too large for zip32",
+            )
         })?;
         // End of central directory record.
         let mut eocd = Vec::new();
@@ -342,11 +352,7 @@ mod tests {
         let _lock = TEST_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         // 先 init writer 写一条日志。
-        super::super::writer::init(
-            tmp.path().join("log"),
-            "export-test".to_string(),
-            true,
-        );
+        super::super::writer::init(tmp.path().join("log"), "export-test".to_string(), true);
         super::super::writer::set_enabled(true);
         super::super::writer::enqueue(
             r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
@@ -364,7 +370,11 @@ mod tests {
             .expect("export should succeed");
         assert!(zip_path.exists(), "zip should exist at {zip_path:?}");
         assert!(
-            zip_path.file_name().unwrap().to_string_lossy().starts_with("sujian-diagnostics-"),
+            zip_path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("sujian-diagnostics-"),
             "zip name: {zip_path:?}"
         );
         // 验证 zip 不是空文件。

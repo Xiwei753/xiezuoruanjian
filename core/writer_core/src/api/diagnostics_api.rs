@@ -9,9 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use writer_diagnostics::{
-    DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin, PlatformAttachment,
-};
+use writer_diagnostics::{DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin, PlatformAttachment};
 
 use crate::api::error::WriterError;
 use crate::api::types::{DiagnosticFieldDto, DiagnosticOriginDto};
@@ -49,7 +47,10 @@ pub fn record_diagnostic_event(
 }
 
 /// 更新诊断配置（运行时切换 enabled / verbose）。
-pub fn set_diagnostics_config(enabled: bool, verbose: bool) -> std::result::Result<(), WriterError> {
+pub fn set_diagnostics_config(
+    enabled: bool,
+    verbose: bool,
+) -> std::result::Result<(), WriterError> {
     writer_diagnostics::set_config(enabled, verbose);
     Ok(())
 }
@@ -76,7 +77,7 @@ pub fn export_diagnostics(output_dir: String) -> std::result::Result<String, Wri
     let output_path = Path::new(&output_dir);
     // 平台附件由平台端自行收集并放入 output_dir，本函数不接收附件。
     let attachments: Vec<PlatformAttachment> = Vec::new();
-    let zip_path = writer_diagnostics::export(output_path, "unknown", "unknown", &attachments)
-        .map_err(WriterError::Io)?;
+    let zip_path =
+        writer_diagnostics::export(output_path, &attachments).map_err(WriterError::Io)?;
     Ok(zip_path.to_string_lossy().to_string())
 }

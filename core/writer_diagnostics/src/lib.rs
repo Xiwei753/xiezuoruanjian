@@ -46,6 +46,7 @@ pub use event::{DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin};
 pub use export::{export_diagnostics, PlatformAttachment};
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 /// 诊断配置 — 由平台 init 传入，初始化日志后端。
 #[derive(Debug, Clone)]
@@ -72,11 +73,23 @@ pub struct DiagnosticsConfig {
     pub verbose: bool,
 }
 
+/// 全局导出元数据 — init 时保存，export 时读取，避免调用方传 "unknown"。
+struct ExportMetadata {
+    platform_name: String,
+    build_key: String,
+}
+
+static EXPORT_META: OnceLock<ExportMetadata> = OnceLock::new();
+
 /// 初始化日志后端 — 安装 `log::Log`，启动 writer 线程。幂等。
 ///
 /// 平台初始化完成后把完整 `PlatformInit` 转成 [`DiagnosticsConfig`] 交给本函数；
 /// 日志目录、平台名、设备 ID、应用版本、locale/timezone 都从这一个入口进来。
 pub fn init(config: DiagnosticsConfig) {
+    let _ = EXPORT_META.set(ExportMetadata {
+        platform_name: config.platform_name.clone(),
+        build_key: config.build_key.clone(),
+    });
     logger::install(
         config.log_dir,
         config.build_key,
@@ -149,13 +162,16 @@ pub fn clear() -> bool {
 
 /// 导出诊断包到 `output_dir`，返回生成的 zip 文件路径。
 ///
+/// `platform_name` 和 `build_key` 从 init 时保存的配置中读取；
 /// 平台特有附件由平台采集器交进来（`attachments`），本函数不自己再
 /// 定义一套诊断包格式。
 pub fn export(
     output_dir: &std::path::Path,
-    platform_name: &str,
-    build_key: &str,
     attachments: &[PlatformAttachment],
 ) -> Result<PathBuf, String> {
+    let (platform_name, build_key) = EXPORT_META
+        .get()
+        .map(|m| (m.platform_name.as_str(), m.build_key.as_str()))
+        .unwrap_or(("unknown", "unknown"));
     export_diagnostics(output_dir, platform_name, build_key, attachments)
 }

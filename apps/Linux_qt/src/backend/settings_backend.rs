@@ -174,7 +174,9 @@ fn determine_export_dir(app_data_root: &std::path::Path) -> std::path::PathBuf {
 /// - `system_info.json`：系统信息（QSysInfo）
 /// - `device_info.json`：设备摘要
 /// - `app_settings_sanitized.json`：设置快照（存在时）
-fn build_export_attachments(app_data_root: &std::path::Path) -> Vec<writer_diagnostics::PlatformAttachment> {
+fn build_export_attachments(
+    app_data_root: &std::path::Path,
+) -> Vec<writer_diagnostics::PlatformAttachment> {
     let mut attachments = Vec::new();
 
     // runtime_info.json
@@ -641,7 +643,10 @@ impl SettingsBackend {
             // 确定导出目录：优先 workspace/app-meta/diagnostics，不可写则回退到平台标准目录。
             let export_dir = determine_export_dir(&app_data_root);
             if let Err(e) = std::fs::create_dir_all(&export_dir) {
-                eprintln!("[SettingsBackend] export_diagnostics_pack: create export dir failed: {}", e);
+                eprintln!(
+                    "[SettingsBackend] export_diagnostics_pack: create export dir failed: {}",
+                    e
+                );
                 let envelope = serde_json::json!({
                     "success": false,
                     "error": format!("create export dir failed: {e}")
@@ -665,12 +670,7 @@ impl SettingsBackend {
             let attachments = build_export_attachments(&app_data_root);
 
             // 调用共享 Rust exporter 生成 zip 包。
-            match writer_diagnostics::export(
-                &export_dir,
-                "linux_qt",
-                crate::backend::diagnostics::effective_build_key(),
-                &attachments,
-            ) {
+            match writer_diagnostics::export(&export_dir, &attachments) {
                 Ok(path) => {
                     let path_str = path.to_string_lossy().to_string();
                     let export_dir_str = export_dir.to_string_lossy().to_string();
@@ -719,7 +719,9 @@ impl SettingsBackend {
         if writer_diagnostics::clear() {
             "ok".into()
         } else {
-            eprintln!("[SettingsBackend] clear_logs failed: writer_diagnostics::clear returned false");
+            eprintln!(
+                "[SettingsBackend] clear_logs failed: writer_diagnostics::clear returned false"
+            );
             QString::from("clear failed: writer timeout or error")
         }
     }
@@ -733,7 +735,10 @@ impl SettingsBackend {
         // 日志目录由 PlatformInit.log_dir 决定。
         let log_dir = writer_platform_linux::resolve_platform_init().log_dir;
         if let Err(e) = std::fs::create_dir_all(&log_dir) {
-            eprintln!("[SettingsBackend] open_log_directory: create log dir failed: {}", e);
+            eprintln!(
+                "[SettingsBackend] open_log_directory: create log dir failed: {}",
+                e
+            );
         }
         match crate::platform_utils::open_directory(&log_dir.to_string_lossy()) {
             Ok(()) => "ok".into(),
