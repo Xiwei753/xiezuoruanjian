@@ -823,6 +823,12 @@ impl SujianEditorItem {
     ///
     /// 只读方法 `self.editor_layout.cursor_x_for_line()` 和
     /// `self.editor_layout.text_width()` 不进入排版生命周期，可以保留。
+    ///
+    /// Issue #677 评论 5654686856: prepare 阶段不再做视口裁剪。selection/preedit 几何
+    /// 只按 `anchor/head` 与 `snapshot.lines` 的 byte range 相交关系生成，所有 `y`
+    /// 保持 `line.y` 文档坐标，完整文档坐标 selection geometry 都写入 frame。视口裁剪
+    /// 下沉到 renderer 每帧轻量状态（`render_selection_preedit_layer`），这样滚动后
+    /// 新进入视口的选区行依然存在于 `selection_ranges` 中，renderer 能正确画出。
     pub(crate) fn build_selection_preedit_plan_from_snapshot(
         &self,
         snapshot: &LayoutSnapshot,
@@ -833,10 +839,6 @@ impl SujianEditorItem {
 
         if self.buffer.has_selection() {
             plan.has_selection = true;
-            let _font_size = f64::from(self.current_font_pixel_size);
-            let _font_family = &self.current_font_family.to_string();
-            let scroll_y = f64::from(self.current_scroll_y);
-            let viewport_h = f64::from(self.current_viewport_height.max(1.0));
 
             let anchor = self.buffer.selection_anchor.min(self.buffer.cursor);
             let head = self.buffer.selection_anchor.max(self.buffer.cursor);
@@ -846,13 +848,6 @@ impl SujianEditorItem {
                     continue;
                 }
                 if line.byte_end <= anchor || line.byte_start >= head {
-                    continue;
-                }
-                // Issue #677 评论 5654174714: line_top 仅用于视口裁剪判断；
-                // SelectionRange.y 保存文档坐标 line.y，scroll_y 换算由 renderer 完成。
-                let line_top = line.y - scroll_y;
-                let line_bottom = line_top + line.height;
-                if line_bottom < 0.0 || line_top > viewport_h {
                     continue;
                 }
 

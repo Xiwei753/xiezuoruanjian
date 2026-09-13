@@ -63,7 +63,7 @@ impl QQuickItem for SujianEditorItem {
             1.0
         };
 
-        let _vp_h = f64::from(self.current_viewport_height.max(1.0));
+        let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let scroll_y = f64::from(self.current_scroll_y);
         let _content_h = f64::from(self.current_content_height);
 
@@ -191,6 +191,7 @@ impl QQuickItem for SujianEditorItem {
             let static_text = StaticTextParams {
                 layout_snapshot: prepared_frame.map(|f| &f.layout_snapshot),
                 scroll_y,
+                viewport_height: vp_h,
                 color: &self.current_text_color.to_string(),
                 needs_relayout,
             };

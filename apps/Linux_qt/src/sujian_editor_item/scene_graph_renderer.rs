@@ -11,6 +11,7 @@ use crate::editor::scene_graph;
 pub(crate) struct StaticTextParams<'a> {
     pub layout_snapshot: Option<&'a LayoutSnapshot>,
     pub scroll_y: f64,
+    pub viewport_height: f64,
     pub color: &'a str,
     pub needs_relayout: bool,
 }
@@ -115,7 +116,14 @@ pub(crate) fn render_frame(
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
     // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。
-    render_selection_preedit_layer(root_raw, item_ptr, plan, static_text.scroll_y);
+    // Issue #677 评论 5654686856: viewport_height 一并传入，renderer 做轻量视口裁剪。
+    render_selection_preedit_layer(
+        root_raw,
+        item_ptr,
+        plan,
+        static_text.scroll_y,
+        static_text.viewport_height,
+    );
     // Layer 3: 光标
     render_cursor_layer(root_raw, item_ptr, plan);
 
@@ -266,6 +274,7 @@ fn render_selection_preedit_layer(
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
     scroll_y: f64,
+    viewport_height: f64,
 ) {
     let sp = &plan.selection_preedit;
     let total_count = sp.selection_ranges.len() + sp.preedit_ranges.len();
@@ -293,9 +302,15 @@ fn render_selection_preedit_layer(
 
     let mut rect_data: Vec<f64> = Vec::with_capacity(total_count * 10);
 
+    // Issue #677 评论 5654686856: 每帧轻量视口裁剪，只跳过完全在屏幕外的矩形。
+    // 滚动只改变轻量显示状态，不重新排版，也不会因为旧 frame 曾经裁掉某些行而丢选区
+    // （因为 frame 现在保存完整文档坐标几何，见 build_selection_preedit_plan_from_snapshot）。
     for sel in &sp.selection_ranges {
         // Issue #677 评论 5654174714: sel.y 是文档坐标，绘制时减 scroll_y 得到视口坐标。
         let screen_y = sel.y - scroll_y;
+        if screen_y + sel.h < 0.0 || screen_y > viewport_height {
+            continue;
+        }
         rect_data.extend_from_slice(&[
             sel.x, screen_y, sel.w, sel.h, base_r, base_g, base_b, selection_alpha, 0.0, 0.0,
         ]);
@@ -303,16 +318,25 @@ fn render_selection_preedit_layer(
 
     for pre in &sp.preedit_ranges {
         let screen_y = pre.y - scroll_y;
+        if screen_y + pre.h < 0.0 || screen_y > viewport_height {
+            continue;
+        }
         let underline = if pre.underline { 1.0 } else { 0.0 };
         rect_data.extend_from_slice(&[
             pre.x, screen_y, pre.w, pre.h, base_r, base_g, base_b, preedit_alpha, underline, 0.0,
         ]);
     }
 
-    scene_graph::update_selection_preedit_layer(
-        root_raw,
-        item_ptr,
-        total_count as i32,
-        rect_data.as_ptr(),
-    );
+    // Issue #677 评论 5654686856: 用 rect_data 实际长度计算 count，因为视口裁剪可能跳过部分矩形。
+    let actual_count = rect_data.len() / 10;
+    if actual_count == 0 {
+        scene_graph::update_selection_preedit_layer(root_raw, item_ptr, 0, std::ptr::null());
+    } else {
+        scene_graph::update_selection_preedit_layer(
+            root_raw,
+            item_ptr,
+            actual_count as i32,
+            rect_data.as_ptr(),
+        );
+    }
 }
