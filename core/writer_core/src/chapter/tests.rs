@@ -492,9 +492,11 @@ fn test_delete_chapter_moves_to_trash_and_updates_tombstone() {
     assert!(trash_found, "Deleted chapter not found in trash");
 
     // 5. Verify tombstone in sync state
-    let state = crate::sync::SyncService::load_sync_state(data_root).unwrap();
+    //    ：tombstone 持久化到 project_root 的 SyncState（作品同步真正的 sync_root）。
+    let project_root = data_root.join("projects").join(&project.id);
+    let state = crate::sync::SyncService::load_sync_state(&project_root).unwrap();
     let rel_chapter_dir = chapter_dir
-        .strip_prefix(data_root)
+        .strip_prefix(&project_root)
         .unwrap()
         .to_string_lossy()
         .replace("\\", "/");

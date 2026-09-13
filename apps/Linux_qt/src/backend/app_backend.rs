@@ -94,19 +94,63 @@ pub(crate) fn current_network_state() -> writer_platform_api::NetworkState {
     writer_platform_linux::get_cached_network_state()
 }
 
-pub(crate) fn create_core_api(app_data_root: &str, projects_root: &str) -> WriterCoreApi {
+pub(crate) fn create_core_api(
+    app_data_root: &str,
+    projects_root: &str,
+) -> std::result::Result<WriterCoreApi, writer_core::api::WriterError> {
     let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
     let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
-    if sync_transport.is_some() || secure_storage.is_some() {
-        WriterCoreApi::with_platform_services(
-            app_data_root,
-            projects_root,
-            sync_transport,
-            secure_storage,
-        )
-    } else {
-        WriterCoreApi::new(app_data_root, projects_root)
-    }
+    // 统一走 Core workspace bootstrap：确保 .git 存在、恢复未完成删除事务、
+    // 注入正确的 GitRepoLayout。不再裸构造未 bootstrap 的 WriterCoreApi。
+    writer_core::api::bootstrap::bootstrap_core_api(
+        app_data_root,
+        projects_root,
+        sync_transport,
+        secure_storage,
+    )
+}
+
+/// bootstrap workspace 并返回 (WriterCoreApi, GitRepoLayout)。
+///
+/// 只在打开/切换 workspace 时调用一次。返回的 layout 供保存到
+/// AppBackend.current_workspace_git_layout，后续普通 core_api() getter
+/// 和后台同步线程用此 layout 构造 API，不再重新 bootstrap。
+pub(crate) fn create_core_api_with_layout(
+    app_data_root: &str,
+    projects_root: &str,
+) -> std::result::Result<
+    (
+        WriterCoreApi,
+        writer_core::storage::git_repo_layout::GitRepoLayout,
+    ),
+    writer_core::api::WriterError,
+> {
+    // 先 bootstrap workspace（ensure .git + recover），拿到 layout。
+    let layout =
+        writer_core::api::bootstrap::bootstrap_workspace(std::path::Path::new(app_data_root))?;
+    // 用 layout 构造 API，不再重新 bootstrap。
+    let api = with_layout_core_api(app_data_root, projects_root, &layout);
+    Ok((api, layout))
+}
+
+/// 用已保存的 GitRepoLayout 构造 WriterCoreApi，不执行 bootstrap。
+///
+/// 供普通 core_api() getter 使用：不再每次调用都 ensure .git + recover journal，
+/// 只用打开 workspace 时已经确定的 layout 快照构造 API。
+pub(crate) fn with_layout_core_api(
+    app_data_root: &str,
+    projects_root: &str,
+    layout: &writer_core::storage::git_repo_layout::GitRepoLayout,
+) -> WriterCoreApi {
+    let sync_transport = LINUX_SYNC_TRANSPORT_FACTORY.get().cloned();
+    let secure_storage = LINUX_SECURE_STORAGE.get().cloned();
+    writer_core::api::bootstrap::with_layout_core_api(
+        app_data_root,
+        projects_root,
+        layout,
+        sync_transport,
+        secure_storage,
+    )
 }
 
 fn get_debug_config() -> &'static DebugConfig {
@@ -323,6 +367,12 @@ pub struct AppBackend {
     current_data_root: String,
     current_projects_root: String,
     current_has_data_root: bool,
+    /// 打开 workspace 时 bootstrap 得到的 GitRepoLayout 快照。
+    ///
+    /// 普通 core_api() getter 用此 layout 构造 WriterCoreApi，不再每次调用
+    /// 都重新 bootstrap（ensure .git + recover_storage_transactions）。
+    /// 后台同步线程也 clone 此 layout 快照，避免每次同步都完整 bootstrap。
+    current_workspace_git_layout: Option<writer_core::storage::git_repo_layout::GitRepoLayout>,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,
@@ -352,6 +402,10 @@ pub struct AppBackend {
     current_sync_operation_kind: String,
     current_sync_status: String,
     current_sync_in_progress: bool,
+    /// 手动同步 pending 标志。当手动同步请求到来时正在运行自动同步，
+    /// 设为 true 排队等待当前同步完成后再执行一次 manual sync。
+    /// 连续点击只保留一次 pending，不堆无限队列。
+    manual_sync_pending: bool,
     current_last_sync_time: i64,
     current_last_auto_sync_reason: String,
     current_last_auto_sync_started_at: i64,
@@ -469,7 +523,9 @@ impl AppBackend {
         s.sync_in_progress = self.current_sync_in_progress;
         s.sync_can_run = self.current_has_data_root
             && self.current_sync_enabled
-            && !self.current_sync_in_progress;
+            && !self.current_sync_remote_url.is_empty()
+            && !self.current_sync_token.is_empty();
+        s.manual_sync_pending = self.manual_sync_pending;
         s.ai_available = cfg!(feature = "ai");
         s.ai_enabled = self.current_ai_enabled;
         s.setting_desktop_sidebar_width = self.current_setting_desktop_sidebar_width;
@@ -501,10 +557,28 @@ impl AppBackend {
 
     pub(crate) fn core_api(&self) -> Option<WriterCoreApi> {
         if self.current_has_data_root && !self.current_data_root.is_empty() {
-            Some(create_core_api(
-                &self.current_data_root,
-                &self.current_projects_root,
-            ))
+            // 用打开 workspace 时保存的 layout 快照构造 API，不再重新 bootstrap。
+            if let Some(ref layout) = self.current_workspace_git_layout {
+                Some(with_layout_core_api(
+                    &self.current_data_root,
+                    &self.current_projects_root,
+                    layout,
+                ))
+            } else {
+                // layout 未保存（理论上不应发生，因为 internal_open_data_root 会设置）。
+                // 回退到 bootstrap 以保证正确性。
+                match create_core_api(&self.current_data_root, &self.current_projects_root) {
+                    Ok(api) => Some(api),
+                    Err(e) => {
+                        log::error!(
+                            "core_api: bootstrap_core_api fallback failed for {}: {}",
+                            self.current_data_root,
+                            e
+                        );
+                        None
+                    }
+                }
+            }
         } else {
             None
         }
@@ -836,7 +910,7 @@ mod tests {
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         // After sync success with pending path, internal_open_data_root is called.
         // The data root is opened successfully; pending path is cleared.
@@ -857,7 +931,7 @@ mod tests {
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         assert_eq!(backend.current_sync_status, "conflict");
     }
@@ -872,7 +946,7 @@ mod tests {
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
         };
-        backend.handle_sync_outcome(outcome);
+        backend.handle_sync_outcome(outcome, None);
 
         assert_eq!(backend.current_sync_status, "error");
         assert_eq!(backend.current_has_data_root, true);
@@ -886,7 +960,7 @@ mod tests {
         backend.current_data_root = "some_path".to_string();
         backend.current_projects_root = "some_path".to_string();
 
-        backend.perform_sync_dry_run();
+        backend.perform_sync_dry_run(None);
 
         assert_eq!(backend.current_sync_status, "error");
         assert!(backend
@@ -900,7 +974,7 @@ mod tests {
         backend.current_data_root = "some_path".to_string();
         backend.current_projects_root = "some_path".to_string();
         // 没有选作品时仍进入全局同步配置校验
-        backend.perform_sync_dry_run();
+        backend.perform_sync_dry_run(None);
 
         assert_eq!(backend.current_sync_status, "error");
         assert!(backend

@@ -17,11 +17,46 @@
 // - 被 apps/Linux_qt/src/backend/app_backend/sync_backend.rs 中的 SyncBackend QObject 间接调用。
 // =============================================================================
 
+use super::SyncBackend;
 use super::*;
 use crate::sync_bridge::{mask_sync_error, sync_error_category_from_code, SyncTaskOutcome};
 
+/// 构造异步同步结果的 callback。
+///
+/// 如果提供 `sync_qptr`（来自 SyncBackend），callback 通过 SyncBackend::handle_outcome
+/// 进入，走 with_app_mut 刷新 DomainSnapshot 并发 SyncBackend signal。
+/// 否则（测试场景）回退到 QPointer<AppBackend> 直接 handle_sync_outcome。
+pub(super) fn make_outcome_callback(
+    app_qptr: QPointer<AppBackend>,
+    sync_qptr: Option<QPointer<SyncBackend>>,
+) -> Box<dyn FnOnce(SyncTaskOutcome) + Send> {
+    if let Some(sq) = sync_qptr {
+        Box::new(qmetaobject::queued_callback(
+            move |outcome: SyncTaskOutcome| {
+                sq.as_pinned().map(|this| {
+                    let mut this = this.borrow_mut();
+                    this.handle_outcome(outcome);
+                });
+            },
+        ))
+    } else {
+        Box::new(qmetaobject::queued_callback(
+            move |outcome: SyncTaskOutcome| {
+                app_qptr.as_pinned().map(|this| {
+                    let mut this = this.borrow_mut();
+                    this.handle_sync_outcome(outcome, None);
+                });
+            },
+        ))
+    }
+}
+
 impl AppBackend {
-    pub(crate) fn handle_sync_outcome(&mut self, outcome: SyncTaskOutcome) {
+    pub(crate) fn handle_sync_outcome(
+        &mut self,
+        outcome: SyncTaskOutcome,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) {
         if outcome.operation_id != self.current_sync_operation_id {
             self.debug_log(
                 "sync",
@@ -78,6 +113,18 @@ impl AppBackend {
             self.reload_tree();
             self.trigger_projects_reloaded();
         }
+
+        // 当前同步任务真正结束并把 busy 清掉后，检查 manual_sync_pending。
+        // 为 true 时先清 flag，再启动一次 manual sync。
+        if self.manual_sync_pending {
+            self.manual_sync_pending = false;
+            self.debug_log(
+                "sync",
+                "manual_sync_pending_triggered",
+                "starting queued manual sync after previous sync completed",
+            );
+            self.perform_sync_internal("manual", false, sync_qptr);
+        }
     }
 
     pub(crate) fn handle_successful_sync_refresh(&mut self) {
@@ -116,11 +163,30 @@ impl AppBackend {
         true
     }
 
-    pub(crate) fn perform_sync_dry_run(&mut self) -> QString {
+    pub(crate) fn perform_sync_dry_run(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> QString {
         let data_root = self.current_data_root.clone();
         let projects_root = self.current_projects_root.clone();
 
         let op_id = uuid::Uuid::new_v4().to_string();
+        // single-flight 拦截：busy 时拒绝 dry-run，不覆盖正在运行的操作的 operation_id。
+        if self.current_sync_in_progress {
+            let state = writer_core::api::SyncOperationStateDto {
+                operation_id: op_id.clone(),
+                operation_kind: "dry_run".to_string(),
+                status_code: "syncing".to_string(),
+                phase_key: None,
+                summary_key: Some("sync.status.already_running".to_string()),
+                summary_args: std::collections::HashMap::new(),
+                counts: writer_core::api::SyncOperationCountsDto::default(),
+                raw_error: None,
+            };
+            self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
+            self.sync_action_completed();
+            return op_id.into();
+        }
         self.current_sync_operation_id = op_id.clone();
         self.current_sync_operation_kind = "dry_run".to_string();
 
@@ -182,6 +248,7 @@ impl AppBackend {
         }
 
         self.current_sync_status = "syncing".to_string();
+        self.current_sync_in_progress = true;
         self.sync_status_changed();
 
         let state = writer_core::api::SyncOperationStateDto {
@@ -196,22 +263,53 @@ impl AppBackend {
         };
         self.current_sync_operation_state = serde_json::to_string(&state).unwrap_or_default();
 
-        let qptr = QPointer::from(&*self);
-        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
-            qptr.as_pinned().map(|this| {
-                let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
-            });
-        });
+        // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
+        // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
+        // 无 layout 说明 workspace 未正确打开，直接返回状态错误。
+        let layout = match self.current_workspace_git_layout.clone() {
+            Some(l) => l,
+            None => {
+                self.current_sync_in_progress = false;
+                self.current_sync_status = "error".to_string();
+                let state = writer_core::api::SyncOperationStateDto {
+                    operation_id: op_id.clone(),
+                    operation_kind: "dry_run".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.block.no_workspace_layout".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                };
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default();
+                self.sync_status_changed();
+                self.sync_action_completed();
+                self.debug_error(
+                    "sync",
+                    "perform_sync_dry_run_failed",
+                    "no_workspace_git_layout",
+                );
+                return op_id.into();
+            }
+        };
+
+        let app_qptr = QPointer::from(&*self);
+        let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
-            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
-            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) and a GitRepoLayout
+            // snapshot which auto-implement UnwindSafe. No shared mutable state or borrows are
+            // captured, so the closure is UnwindSafe by auto-impl without needing
+            // AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
+                let api = crate::backend::app_backend::with_layout_core_api(
+                    &data_root,
+                    &projects_root,
+                    &layout,
+                );
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {
@@ -323,16 +421,23 @@ impl AppBackend {
         op_id.into()
     }
 
-    pub(crate) fn perform_sync(&mut self) -> QString {
-        self.perform_sync_internal("manual", false)
+    pub(crate) fn perform_sync(&mut self, sync_qptr: Option<QPointer<SyncBackend>>) -> QString {
+        self.perform_sync_internal("manual", false, sync_qptr)
     }
 
-    pub(crate) fn request_auto_sync(&mut self, reason: QString) {
+    pub(crate) fn request_auto_sync(
+        &mut self,
+        reason: QString,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) {
         let reason_str = reason.to_string();
-        self.trigger_auto_sync(&reason_str);
+        self.trigger_auto_sync(&reason_str, sync_qptr);
     }
 
-    pub(crate) fn maybe_auto_sync_on_foreground(&mut self) {
+    pub(crate) fn maybe_auto_sync_on_foreground(
+        &mut self,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) {
         if !self.current_has_data_root
             || !self.current_sync_auto_sync
             || self.current_sync_in_progress
@@ -350,10 +455,14 @@ impl AppBackend {
             );
             return;
         }
-        self.trigger_auto_sync("auto_sync_on_foreground");
+        self.trigger_auto_sync("auto_sync_on_foreground", sync_qptr);
     }
 
-    pub(crate) fn trigger_auto_sync(&mut self, reason: &str) {
+    pub(crate) fn trigger_auto_sync(
+        &mut self,
+        reason: &str,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) {
         if !self.can_start_auto_sync(reason, 60) {
             self.debug_log("sync", "auto_sync_skipped", &format!("reason={}", reason));
             return;
@@ -361,14 +470,34 @@ impl AppBackend {
         self.current_last_auto_sync_reason = reason.to_string();
         self.current_last_auto_sync_started_at = Self::now_epoch_seconds();
         self.debug_log("sync", reason, "triggered");
-        self.perform_sync_internal(reason, true);
+        self.perform_sync_internal(reason, true, sync_qptr);
     }
 
-    pub(crate) fn perform_sync_internal(&mut self, trigger: &str, silent_success: bool) -> QString {
+    pub(crate) fn perform_sync_internal(
+        &mut self,
+        trigger: &str,
+        silent_success: bool,
+        sync_qptr: Option<QPointer<SyncBackend>>,
+    ) -> QString {
         let op_id = uuid::Uuid::new_v4().to_string();
         if self.current_sync_in_progress {
-            self.debug_log("sync", "perform_sync_skipped", "sync already running");
+            // 手动同步请求到来时正在运行同步：排队等待，不丢点击，不并行启动第二个同步。
+            // 连续点击只保留一次 pending（已经是 true 就不再重复设），不堆无限队列。
             if trigger == "manual" {
+                if !self.manual_sync_pending {
+                    self.manual_sync_pending = true;
+                    self.debug_log(
+                        "sync",
+                        "manual_sync_pending_set",
+                        "sync already running, manual sync queued",
+                    );
+                } else {
+                    self.debug_log(
+                        "sync",
+                        "manual_sync_pending_already_set",
+                        "sync already running and pending already queued",
+                    );
+                }
                 let state = writer_core::api::SyncOperationStateDto {
                     operation_id: op_id.clone(),
                     operation_kind: "sync".to_string(),
@@ -382,6 +511,12 @@ impl AppBackend {
                 self.current_sync_operation_state =
                     serde_json::to_string(&state).unwrap_or_default();
                 self.sync_action_completed();
+            } else {
+                self.debug_log(
+                    "sync",
+                    "perform_sync_skipped",
+                    &format!("sync already running (trigger={})", trigger),
+                );
             }
             return self.current_sync_operation_id.clone().into();
         }
@@ -482,23 +617,50 @@ impl AppBackend {
         self.current_sync_in_progress = true;
         self.sync_status_changed();
 
-        let qptr = QPointer::from(&*self);
-        let callback = qmetaobject::queued_callback(move |outcome: SyncTaskOutcome| {
-            qptr.as_pinned().map(|this| {
-                let mut this = this.borrow_mut();
-                this.handle_sync_outcome(outcome);
-            });
-        });
+        // 获取 workspace git layout 快照，供后台线程用 with_layout_core_api 构造 API。
+        // 不在线程里重新 bootstrap（ensure .git + recover_storage_transactions）。
+        // 无 layout 说明 workspace 未正确打开，直接返回状态错误。
+        let layout = match self.current_workspace_git_layout.clone() {
+            Some(l) => l,
+            None => {
+                self.current_sync_in_progress = false;
+                self.current_sync_status = "error".to_string();
+                let state = writer_core::api::SyncOperationStateDto {
+                    operation_id: op_id.clone(),
+                    operation_kind: "sync".to_string(),
+                    status_code: "error".to_string(),
+                    phase_key: None,
+                    summary_key: Some("sync.block.no_workspace_layout".to_string()),
+                    summary_args: std::collections::HashMap::new(),
+                    counts: writer_core::api::SyncOperationCountsDto::default(),
+                    raw_error: None,
+                };
+                self.current_sync_operation_state =
+                    serde_json::to_string(&state).unwrap_or_default();
+                self.sync_status_changed();
+                self.sync_action_completed();
+                self.debug_error("sync", "perform_sync_failed", "no_workspace_git_layout");
+                return op_id.into();
+            }
+        };
+
+        let app_qptr = QPointer::from(&*self);
+        let callback = make_outcome_callback(app_qptr, sync_qptr);
 
         let op_id_capture = op_id.clone();
         let trigger = trigger.to_string();
         thread::spawn(move || {
             // SAFETY: catch_unwind requires the closure to be UnwindSafe. The closure only captures
-            // owned String data (data_root, projects_root, op_id_capture) which auto-implement
-            // UnwindSafe. No shared mutable state or borrows are captured, so the closure is
-            // UnwindSafe by auto-impl without needing AssertUnwindSafe.
+            // owned String data (data_root, projects_root, op_id_capture) and a GitRepoLayout
+            // snapshot which auto-implement UnwindSafe. No shared mutable state or borrows are
+            // captured, so the closure is UnwindSafe by auto-impl without needing
+            // AssertUnwindSafe.
             let result = std::panic::catch_unwind(|| {
-                let api = crate::backend::app_backend::create_core_api(&data_root, &projects_root);
+                let api = crate::backend::app_backend::with_layout_core_api(
+                    &data_root,
+                    &projects_root,
+                    &layout,
+                );
                 let mut config = match prepare_sync_profile(&api) {
                     Ok(c) => c,
                     Err(e) => {

@@ -170,8 +170,10 @@ impl WriterCoreApi {
         volume_id: &str,
         chapter_id: &str,
     ) -> ApiResult<bool> {
-        //   用 _with_changes 版本拿变更集。
-        // 不再先调 delete_chapter，由 delete_chapter_with_changes 统一处理删除和变更集。
+        //   durable 删除事务：先 plan（不碰磁盘，构造完整 PlannedWorkspaceDelete
+        // 含固定 trash 路径和完整 sync_delete_facts），再 save_pending 落盘 journal，
+        // 再 apply planned delete（rename + 写 tombstone），再推进 journal 阶段。
+        // 只有 save_pending 成功后才允许动本地文件，保证删除事实在物理删除前已持久化。
         for prefix in &[
             format!("chapter_title:{}:{}:{}", project_id, volume_id, chapter_id),
             format!("chapter_body:{}:{}:{}", project_id, volume_id, chapter_id),
@@ -186,10 +188,70 @@ impl WriterCoreApi {
                 target: None,
             });
         }
-        let change_set = self
+        let device_id = crate::settings::load_device_info(&self.app_data_root)
+            .map(|i| i.device_id)
+            .unwrap_or_default();
+        let (change_set, planned) = self
             .core_write()
-            .delete_chapter_with_changes(project_id, volume_id, chapter_id)?;
-        let _ = self.record_workspace_change_set_history(&change_set, "delete_chapter");
+            .plan_delete_chapter(project_id, volume_id, chapter_id, &device_id)?;
+        // 先落盘 journal（phase=Pending，包含完整 facts/固定 trash path），确保崩溃后能恢复。
+        let journal =
+            crate::storage::journal::workspace_change::WorkspaceChangeJournal::save_pending(
+                &self.app_data_root,
+                &change_set,
+                &device_id,
+                crate::storage::journal::workspace_change::WorkspaceChangeOpType::DeleteChapter,
+                Some(planned.delete_target.clone()),
+                Some(planned.clone()),
+            )
+            .map_err(|e| {
+                log::warn!(
+                    "delete_chapter: save_pending journal failed: {} — aborting before local delete",
+                    e
+                );
+                crate::api::error::WriterError::Other(format!(
+                    "delete_chapter: save_pending journal failed: {e}"
+                ))
+            })?;
+        // journal 落盘成功，执行本地删除（消费 plan 中固定的 trash 路径和 facts）。
+        if let Err(e) = self
+            .core_write()
+            .apply_planned_delete_chapter(project_id, volume_id, chapter_id, &planned)
+            .map_err(WriterError::from)
+        {
+            log::warn!(
+                "delete_chapter: local delete failed: {} — journal retained for recovery",
+                e
+            );
+            return Err(e);
+        }
+        // 本地删除已完成，推进到 LocalApplied。
+        if let Err(e) = journal.mark_local_applied(&self.app_data_root) {
+            log::warn!(
+                "delete_chapter: mark_local_applied failed: {} — journal retained for recovery",
+                e
+            );
+        }
+        // 写 workspace history，成功后清 journal；失败时 journal 保留供下次 bootstrap 补记。
+        match self.record_workspace_change_set_history(&change_set, "delete_chapter") {
+            Ok(()) => {
+                if let Err(e) = journal.mark_history_recorded(&self.app_data_root) {
+                    log::warn!(
+                        "delete_chapter: mark_history_recorded failed: {} — journal retained",
+                        e
+                    );
+                } else if let Err(e) = journal.clear_journal(&self.app_data_root) {
+                    log::warn!("delete_chapter: clear_journal failed: {}", e);
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "delete_chapter: record_workspace_change_set_history failed: {} — \
+                     journal retained for recovery, history will be补 on next startup",
+                    e
+                );
+            }
+        }
         Ok(true)
     }
 

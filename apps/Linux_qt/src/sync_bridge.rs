@@ -243,7 +243,8 @@ pub fn save_sync_configs(
         .parent()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|| ".".to_string());
-    let api = crate::backend::app_backend::create_core_api(path, &projects_root);
+    let api = crate::backend::app_backend::create_core_api(path, &projects_root)
+        .map_err(|e| format!("workspace bootstrap 失败: {e}"))?;
     let config_result = api.save_sync_config(config.clone().into());
     let config_envelope = match config_result {
         Ok(data) => writer_core::api::ResultEnvelope::success_with_changes(

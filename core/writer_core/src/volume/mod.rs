@@ -183,6 +183,10 @@ pub fn rename_volume(project_root: &Path, volume_id: &str, new_title: &str) -> R
 /// 经过 `delete_guard` 双重验证后，将卷目录移入 `app-meta/sync/trash/`，
 /// 命名格式为 `{timestamp}_{uuid}_{volume_id}`，确保唯一且可溯源。
 /// 同时生成 tombstone 记录供同步使用。
+///
+///   ：tombstone 持久化到 `project_root` 的 SyncState（作品同步真正的
+/// sync_root 是 `projects_root/<project_id>`），不再写到 `app_data_root`。
+/// 不再吞 load/save 错误：tombstone 没真正落盘，删除事务就不能成功。
 pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path) -> Result<()> {
     let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
     let volume_dir = project_root.join("volumes").join(volume_id);
@@ -199,19 +203,14 @@ pub fn delete_volume(project_root: &Path, volume_id: &str, app_data_root: &Path)
     ));
     fs::rename(&target_canon, &trash_path)?;
 
-    // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
-        let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
-        let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
+    // 持久化 tombstone 到 project_root 的 SyncState（作品同步真正的 sync_root）。
+    // 不再吞 load/save 错误：tombstone 没真正落盘，事务就不能成功。
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    let rel_volume_dir = normalize_rel_path(&volume_dir, project_root);
+    let rel_trash_path = normalize_rel_path(&trash_path, app_data_root);
 
-        crate::trash::generate_tombstones(
-            &mut state,
-            &trash_path,
-            &rel_volume_dir,
-            &rel_trash_path,
-        );
-        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
-    }
+    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_volume_dir, &rel_trash_path);
+    crate::sync::SyncService::save_sync_state(project_root, &state)?;
     Ok(())
 }
 
@@ -294,6 +293,11 @@ pub fn rename_volume_with_changes(
 /// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
 /// 用 DeleteTree 在 Git index 层按 prefix 删除所有 tracked entries，
 /// 不再只传 volume.json 导致卷下章节残留。
+///
+/// 注意：本函数会先执行物理删除再返回 change_set。新的 durable 删除事务
+/// （先 save_pending 落盘 journal 再物理删除）应改用
+/// [`plan_delete_volume_changes`] + [`delete_volume`] 两步，不要再用本函数
+/// 作为 durable 删除事务起点。本函数保留供非事务场景使用。
 pub fn delete_volume_with_changes(
     project_root: &Path,
     volume_id: &str,
@@ -305,6 +309,179 @@ pub fn delete_volume_with_changes(
     let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
         .add_delete_tree(std::path::PathBuf::from(rel));
     Ok(change_set)
+}
+
+///   delete_volume 的"先计划"版本（不修改磁盘）。
+///
+/// 只校验目标存在并构造 `WorkspaceChangeSet`，包含
+/// `DeleteTree(projects/{project_id}/volumes/{volume_id})`。
+/// 不执行物理删除，供 durable 删除事务在 `save_pending` 落盘 journal 前调用。
+/// 真正的物理删除继续由 [`delete_volume`] 完成。
+///
+/// 这样保证顺序为：plan change_set -> save_pending -> 本地删除 ->
+/// mark_local_applied -> record history -> mark_history_recorded -> clear_journal。
+pub fn plan_delete_volume_changes(
+    project_root: &Path,
+    volume_id: &str,
+    app_data_root: &Path,
+) -> Result<crate::storage::workspace_git::WorkspaceChangeSet> {
+    // 校验目标存在（与 delete_volume 相同的校验，但不执行移动）。
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let volume_dir = project_root.join("volumes").join(volume_id);
+    // 校验目标是合法删除目标（存在 + 在 project_root 下）。
+    crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
+    let rel = workspace_rel(&volume_dir, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete_tree(std::path::PathBuf::from(rel));
+    Ok(change_set)
+}
+
+/// 构造完整的卷删除计划（不修改磁盘），包含固定的 trash 路径和完整 sync_delete_facts。
+///
+/// 在任何 `rename()` 之前生成固定的 trash token，并遍历源目录所有文件
+/// 提前构造每个 `SyncDeleteFact`。供 durable 删除事务 `save_pending` 使用。
+///
+/// `device_id` 用真实设备 ID，不写固定 `"local"`。
+/// `project_id` 从 `project_root.file_name()` 提取。
+pub fn plan_delete_volume(
+    project_root: &Path,
+    volume_id: &str,
+    app_data_root: &Path,
+    device_id: &str,
+) -> Result<(
+    crate::storage::workspace_git::WorkspaceChangeSet,
+    crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+)> {
+    use crate::storage::journal::workspace_change::{DeleteTarget, PlannedWorkspaceDelete};
+
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let volume_dir = project_root.join("volumes").join(volume_id);
+    crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
+
+    let rel = workspace_rel(&volume_dir, app_data_root);
+    let change_set = crate::storage::workspace_git::WorkspaceChangeSet::new()
+        .add_delete_tree(std::path::PathBuf::from(rel));
+
+    let project_id = project_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| {
+            crate::error::Error::Other(format!(
+                "plan_delete_volume: cannot extract project_id from project_root {}",
+                project_root.display()
+            ))
+        })?
+        .to_string();
+
+    // 在任何 rename 之前生成固定 trash token。
+    let trash_token = format!(
+        "{}_{}_{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4(),
+        volume_id
+    );
+    let trash_rel_path = format!("sync/trash/{trash_token}");
+
+    let facts =
+        PlannedWorkspaceDelete::build_facts(project_root, &volume_dir, &trash_rel_path, device_id)?;
+    if facts.is_empty() {
+        return Err(crate::error::Error::Other(format!(
+            "plan_delete_volume: no sync_delete_facts generated for volume {volume_id} \
+             — directory may be empty or contain only app-meta files"
+        )));
+    }
+
+    let planned = PlannedWorkspaceDelete {
+        delete_target: DeleteTarget::Volume {
+            project_id,
+            volume_id: volume_id.to_string(),
+        },
+        trash_rel_path,
+        sync_delete_facts: facts,
+    };
+    Ok((change_set, planned))
+}
+
+/// 消费 `PlannedWorkspaceDelete` 执行卷删除：rename 源目录到固定 trash 路径，
+/// 再按 journal facts 幂等写入 project_root SyncState tombstone。
+///
+/// apply 顺序固定为：rename -> 写 tombstone。两步都成功后才算本地删除完成。
+/// 不在 apply 阶段重新生成 trash 路径或重新扫描磁盘——事实来自 plan 阶段。
+pub fn apply_planned_delete_volume(
+    project_root: &Path,
+    volume_id: &str,
+    app_data_root: &Path,
+    planned: &crate::storage::journal::workspace_change::PlannedWorkspaceDelete,
+) -> Result<()> {
+    use crate::storage::journal::workspace_change::DeleteTarget;
+
+    let volume_id = crate::delete_guard::validate_id_segment(volume_id)?;
+    let volume_dir = project_root.join("volumes").join(volume_id);
+    let target_canon =
+        crate::delete_guard::validate_delete_target(project_root, &volume_dir, "volume.json")?;
+
+    // 校验 planned_delete 的 delete_target 匹配。
+    match &planned.delete_target {
+        DeleteTarget::Volume {
+            volume_id: planned_vid,
+            ..
+        } if planned_vid == volume_id => {}
+        other => {
+            return Err(crate::error::Error::Other(format!(
+                "apply_planned_delete_volume: delete_target mismatch — expected Volume({volume_id}), got {other:?}"
+            )));
+        }
+    }
+
+    let trash_dir = app_data_root.join("sync/trash");
+    fs::create_dir_all(&trash_dir)?;
+    let trash_path = app_data_root.join(&planned.trash_rel_path);
+    crate::storage::durable_rename(&target_canon, &trash_path)?;
+
+    // 按 journal facts 幂等写入 project_root SyncState tombstone。
+    ensure_tombstones_from_facts(project_root, &planned.sync_delete_facts)?;
+    Ok(())
+}
+
+/// 根据 sync_delete_facts 幂等补齐 project_root 的 SyncState tombstone。
+///
+/// 已存在的 tombstone（按 original_path + trash_path 匹配）跳过，保证幂等。
+pub(crate) fn ensure_tombstones_from_facts(
+    project_root: &Path,
+    facts: &[crate::storage::journal::workspace_change::SyncDeleteFact],
+) -> Result<()> {
+    if facts.is_empty() {
+        return Ok(());
+    }
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    let mut changed = false;
+    for fact in facts {
+        let exists = state
+            .tombstones
+            .iter()
+            .any(|t| t.original_path == fact.original_path && t.trash_path == fact.trash_path);
+        if exists {
+            continue;
+        }
+        state.tombstones.push(crate::sync::Tombstone {
+            original_path: fact.original_path.clone(),
+            trash_path: fact.trash_path.clone(),
+            deleted_at: fact.deleted_at,
+            purge_after: fact.deleted_at + 30 * 24 * 3600,
+            deleted_by: if fact.deleted_by.is_empty() {
+                state.device_id.clone()
+            } else {
+                fact.deleted_by.clone()
+            },
+            original_hash: fact.original_hash.clone(),
+            kind: "local_delete".to_string(),
+        });
+        changed = true;
+    }
+    if changed {
+        crate::sync::SyncService::save_sync_state(project_root, &state)?;
+    }
+    Ok(())
 }
 
 ///   reorder_volumes 的变更集版本。

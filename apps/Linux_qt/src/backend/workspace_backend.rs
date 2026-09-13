@@ -304,7 +304,7 @@ impl AppBackend {
     // AppBackend::internal_open_data_root
     //
     // 打开用户选择的数据根目录。设置 app_data_root = path, projects_root = path/projects。
-    // 不再调用 Core workspace API (validate_workspace / create_workspace_if_needed)。
+    // 调用 Core 统一 workspace bootstrap 确保 .git 存在、恢复未完成删除事务。
     pub(crate) fn internal_open_data_root(&mut self, path: &str) -> QString {
         let canonical_path = normalize_data_root_path(path);
         let path = canonical_path.as_str();
@@ -327,9 +327,35 @@ impl AppBackend {
             .into();
         }
 
+        // 调用 Core 统一 workspace bootstrap：确保 .git 存在、恢复未完成删除事务、
+        // 构造已 bootstrap 的 WriterCoreApi。不再裸构造未 bootstrap 的 API。
+        // bootstrap 只在打开/切换 workspace 时调用一次，成功后保存 layout 快照。
+        let (api, layout) = match crate::backend::app_backend::create_core_api_with_layout(
+            path,
+            &projects_root_str,
+        ) {
+            Ok((api, layout)) => (api, layout),
+            Err(e) => {
+                let err_msg = format!("workspace bootstrap 失败: {}", e);
+                self.set_error(&err_msg);
+                self.debug_error(
+                    "workspace",
+                    "internal_open_data_root_bootstrap_failed",
+                    &err_msg,
+                );
+                return crate::backend::json_utils::envelope_error_json(
+                    writer_core::api::WriterError::Other(err_msg),
+                )
+                .into();
+            }
+        };
+
+        // bootstrap 成功后再设置 current_data_root/current_projects_root
         self.current_data_root = path.to_string();
         self.current_projects_root = projects_root_str.clone();
         self.current_has_data_root = true;
+        // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
+        self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
         self.save_status_changed();
         self.reload_tree();
@@ -337,7 +363,6 @@ impl AppBackend {
         self.load_local_settings();
 
         // 写入 current_device.json 设备信息
-        let api = crate::backend::app_backend::create_core_api(path, &projects_root_str);
         if let Err(e) = api.ensure_device_info("desktop", "desktop") {
             self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
         }

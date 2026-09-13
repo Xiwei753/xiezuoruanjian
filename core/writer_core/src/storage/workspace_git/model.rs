@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 /// 本地 workspace Git commit 的结果。
 #[derive(Debug)]
 pub struct WorkspaceCommitResult {
@@ -13,7 +15,7 @@ pub struct WorkspaceCommitResult {
 ///
 /// 每个变体描述一种底层持久化真正执行过的文件变更，由真正执行写入/删除的
 /// 持久化函数返回，API 层只转交给 `workspace_git`，不再手工猜路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspaceHistoryChange {
     /// 新增或修改文件（stage 到 index）。路径为 workspace-relative。
     Upsert(PathBuf),
@@ -32,7 +34,7 @@ pub enum WorkspaceHistoryChange {
 /// 由底层持久化函数返回，API 层转交给 `record_workspace_change_set`。
 /// 提供 builder 方法（[`Self::add_upsert`] / [`Self::add_delete`] /
 /// [`Self::add_delete_tree`]）方便构造。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceChangeSet {
     pub changes: Vec<WorkspaceHistoryChange>,
 }

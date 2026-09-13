@@ -9,6 +9,10 @@
 //! local record 投影 helper，保留 per-file LWW（含真实 winner device_id），
 //! 无 tombstone 时用 now_ms（删除检测时间）生成 delete record。
 //! `snapshot_local_target_lifecycle` 和 LWW `execute_lww_sync_attempt` 都复用它。
+//!
+//!   ：只允许明确 tombstone / durable delete fact 产生 op="delete"。
+//! known_files 中文件缺失但没有 tombstone 时返回 Err（Retry/本地状态错误），
+//! 让同步停在非破坏性状态，不伪造 delete record 传播到远端。
 
 use crate::sync::path::ValidatedSyncPath;
 use crate::sync::types::{ManifestFileRecord, SyncManifest, SyncScope};
@@ -42,8 +46,9 @@ pub(super) fn lww_record_time(record: &ManifestFileRecord) -> i64 {
 /// - 当前 hash 改了或是新文件 → 用当前文件 mtime + 当前真实 device_id 生成新 upsert；
 /// - known file 消失且有真实 tombstone → 用 tombstone 的 `deleted_at` + `deleted_by`/device_id
 ///   生成 delete record；
-/// - known file 消失且无 tombstone → 用 `now_ms`（删除检测时间）生成 delete record，
-///   使本地删除能传播到远端（文件被用户手动删除或 tombstone 被 GC 的场景）。
+/// - known file 消失且无 tombstone → 返回 `Err`（本地状态错误），让同步停在非破坏性
+///   状态。不再用 `now_ms` 伪造 delete record——本地缺文件可能是未下载完整、工作区
+///   损坏、人工移动，不应直接变成远端删除命令。调用方据此返回 Retry。
 ///
 /// 这个 helper 是真正只读的：用 [`SyncService::load_sync_state_read_only`] 加载 state，
 /// 不写文件、不删旧文件。
@@ -146,8 +151,8 @@ pub fn snapshot_local_records_read_only(
     }
 
     // 4. known file 消失 → 有 tombstone 用真实删除时间；
-    //    无 tombstone 用 now_ms 作为删除检测时间。
-    let now_ms = chrono::Utc::now().timestamp_millis();
+    //    无 tombstone → 返回 Err（本地状态错误），不伪造 delete record。
+    //    只允许明确 tombstone / durable delete fact 产生 op="delete"。
     for path in state.known_files.keys() {
         if records.contains_key(path) {
             continue;
@@ -178,22 +183,16 @@ pub fn snapshot_local_records_read_only(
                     },
                 );
             } else {
-                // 无 tombstone → 用 now_ms 作为删除检测时间。
-                // 文件在 known_files 中但不在磁盘上，说明已被删除（可能被用户手动
-                // 删除或 tombstone 被 GC）。now_ms 是删除发生时间的上界，用于 LWW
-                // 比较：远端更新时间 < now_ms → 本地删除赢，删除传播到远端。
-                records.insert(
-                    path.clone(),
-                    ManifestFileRecord {
-                        path: path.clone(),
-                        content_hash: String::new(),
-                        updated_at_ms: now_ms,
-                        deleted_at_ms: Some(now_ms),
-                        device_id: state.device_id.clone(),
-                        op: "delete".to_string(),
-                        schema_version: 1,
-                    },
-                );
+                // 无 tombstone → 返回 Err（本地状态错误）。
+                // 本地 known_files 中记录了此文件但磁盘上不存在，且没有 tombstone
+                // 证明它被合法删除。可能是未下载完整、工作区损坏、人工移动。
+                // 伪造 delete record 会让本地删除错误地传播到远端（破坏性）。
+                // 返回 Err 让调用方走 Retry，停在非破坏性状态。
+                return Err(crate::Error::Io(std::io::Error::other(format!(
+                    "snapshot_local_records_read_only: known file {path} missing on disk \
+                     without tombstone — cannot fabricate delete record; local state may be \
+                     incomplete or corrupted, retry sync after restoring local state"
+                ))));
             }
         }
     }

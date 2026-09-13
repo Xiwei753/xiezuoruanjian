@@ -512,6 +512,10 @@ pub fn rename_chapter(
 /// 删除章节。经过 `delete_guard` 验证后，将章节目录移入 `app-meta/sync/trash/`
 /// 并记录 tombstone（30 天后可清理）。删除后同步状态中保留墓碑记录，
 /// 确保下次同步时远端能感知到本地删除。
+///
+///   ：tombstone 持久化到 `project_root` 的 SyncState（作品同步真正的
+/// sync_root 是 `projects_root/<project_id>`），不再写到 `app_data_root`。
+/// 不再吞 load/save 错误：tombstone 没真正落盘，删除事务就不能成功。
 pub fn delete_chapter(
     project_root: &Path,
     volume_id: &str,
@@ -541,29 +545,24 @@ pub fn delete_chapter(
     ));
     fs::rename(&target_canon, &trash_path)?;
 
-    // Also update tombstone
-    if let Ok(mut state) = crate::sync::SyncService::load_sync_state(app_data_root) {
-        let rel_chapter_dir = chapter_dir
-            .strip_prefix(project_root)
-            .unwrap_or(&chapter_dir)
-            .to_string_lossy()
-            .replace("\\", "/");
-        let rel_trash_path = trash_path
-            .strip_prefix(app_data_root)
-            .unwrap_or(&trash_path)
-            .to_string_lossy()
-            .replace("\\", "/");
+    // 持久化 tombstone 到 project_root 的 SyncState（作品同步真正的 sync_root）。
+    // 不再吞 load/save 错误：tombstone 没真正落盘，事务就不能成功。
+    let mut state = crate::sync::SyncService::load_sync_state(project_root)?;
+    let rel_chapter_dir = chapter_dir
+        .strip_prefix(project_root)
+        .unwrap_or(&chapter_dir)
+        .to_string_lossy()
+        .replace("\\", "/");
+    let rel_trash_path = trash_path
+        .strip_prefix(app_data_root)
+        .unwrap_or(&trash_path)
+        .to_string_lossy()
+        .replace("\\", "/");
 
-        // The hash can be the hash of the folder, but currently we track files.
-        // To be consistent, we might want to register tombstones for all files in this directory.
-        crate::trash::generate_tombstones(
-            &mut state,
-            &trash_path,
-            &rel_chapter_dir,
-            &rel_trash_path,
-        );
-        let _ = crate::sync::SyncService::save_sync_state(app_data_root, &state);
-    }
+    // The hash can be the hash of the folder, but currently we track files.
+    // To be consistent, we might want to register tombstones for all files in this directory.
+    crate::trash::generate_tombstones(&mut state, &trash_path, &rel_chapter_dir, &rel_trash_path);
+    crate::sync::SyncService::save_sync_state(project_root, &state)?;
     Ok(())
 }
 
