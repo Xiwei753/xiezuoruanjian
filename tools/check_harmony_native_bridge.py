@@ -408,19 +408,37 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
         writer_core_ffi = os.path.join(core_root, "writer_core/src/ffi")
         if os.path.isdir(writer_core_ffi):
             ffi_dir = writer_core_ffi
+
+    # Issue #670 评论 5652500781：writer_core_init_diagnostics 等 Harmony 平台专用
+    # C-ABI 入口定义在 writer-platform-harmony cdylib (platform/rust/harmony/src/)，
+    # 不在 core/writer_core/src/ffi。检查必须同时扫描平台 FFI 导出，否则会把
+    # 实际存在的符号误报为 "C header 有但 Rust 缺失"。
+    repo_root = os.path.dirname(os.path.dirname(harmony_root))
+    platform_harmony_dir = os.path.join(repo_root, "platform/rust/harmony/src")
+
     rust_funcs = set()
+    # 提取 #[no_mangle] ... pub unsafe extern "C" fn writer_core_XXX。
+    # 分步匹配以避免嵌套量词导致的指数回溯 (CodeQL py/redos)：
+    # 旧的单正则 `#[no_mangle]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+...`
+    # 中 `(?:(?:...)\s*)*` 是嵌套量词，在 `#[no_mangle]//\n` 后跟多个 ` //\n`
+    # 重复时可能触发指数回溯。
+    # 第一步定位 #[no_mangle]；第二步顺序跳过空白/属性宏 #[...]/行注释 //...\n；
+    # 第三步匹配 pub unsafe extern "C" fn writer_core_XXX。三个正则均无嵌套量词。
+    no_mangle_re = re.compile(r"#\[no_mangle\]")
+    skip_re = re.compile(r"\s+|#\[[^\]]*\]|//[^\n]*\n")
+    export_re = re.compile(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(writer_core_\w+)')
+
+    scan_dirs = []
     if os.path.isdir(ffi_dir):
-        # 提取 #[no_mangle] ... pub unsafe extern "C" fn writer_core_XXX。
-        # 分步匹配以避免嵌套量词导致的指数回溯 (CodeQL py/redos)：
-        # 旧的单正则 `#[no_mangle]\s*(?:(?:#\[[^\]]*\]|//[^\n]*\n\s*)\s*)*pub\s+...`
-        # 中 `(?:(?:...)\s*)*` 是嵌套量词，在 `#[no_mangle]//\n` 后跟多个 ` //\n`
-        # 重复时可能触发指数回溯。
-        # 第一步定位 #[no_mangle]；第二步顺序跳过空白/属性宏 #[...]/行注释 //...\n；
-        # 第三步匹配 pub unsafe extern "C" fn writer_core_XXX。三个正则均无嵌套量词。
-        no_mangle_re = re.compile(r"#\[no_mangle\]")
-        skip_re = re.compile(r"\s+|#\[[^\]]*\]|//[^\n]*\n")
-        export_re = re.compile(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+(writer_core_\w+)')
-        for rs_file in Path(ffi_dir).rglob("*.rs"):
+        scan_dirs.append(ffi_dir)
+    else:
+        results.append((False, f"Rust ffi 目录不存在: {ffi_dir}"))
+        return results
+    if os.path.isdir(platform_harmony_dir):
+        scan_dirs.append(platform_harmony_dir)
+
+    for scan_dir in scan_dirs:
+        for rs_file in Path(scan_dir).rglob("*.rs"):
             rs_content = rs_file.read_text(encoding="utf-8", errors="replace")
             for nm in no_mangle_re.finditer(rs_content):
                 pos = nm.end()
@@ -433,9 +451,6 @@ def check_c_header_vs_rust_ffi(harmony_root: str, core_root: str) -> List[Tuple[
                 em = export_re.match(rs_content, pos)
                 if em is not None:
                     rust_funcs.add(em.group(1))
-    else:
-        results.append((False, f"Rust ffi 目录不存在: {ffi_dir}"))
-        return results
 
     # 7c: 比对
     in_header_not_in_rust = header_funcs - rust_funcs

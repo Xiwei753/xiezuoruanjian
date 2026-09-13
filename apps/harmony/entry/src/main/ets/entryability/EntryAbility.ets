@@ -19,12 +19,13 @@ export default class EntryAbility extends UIAbility {
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
     hilog.info(0x0000, 'EntryAbility', 'onCreate')
     getAppContext().setAbilityContext(this.context)
-    this.lifecycle.notifyCreate()
 
-    // Issue #670 评论 5652119660 修复 2e：在第一批诊断事件之前初始化 Rust 诊断后端。
-    // Harmony 走 ArkTS → NAPI → C ABI → Rust，必须在这里把 diagnostics 接上，
-    // 否则后续 Rust 端的日志事件都会被丢弃。
+    // Issue #670 评论 5652500781：共享 Rust diagnostics 必须在应用生命周期通知之前初始化，
+    // 否则 lifecycle/observer 链产生的第一批结构化事件会天然漏掉 create。
+    // hilog 作为系统实时输出可以在前面；Harmony 起 ArkTS → NAPI → C ABI → Rust。
     this.initDiagnostics()
+
+    this.lifecycle.notifyCreate()
 
     // 接续恢复：检查 launchReason === CONTINUATION，从 want.parameters 读取 payload。
     if (launchParam.launchReason === AbilityConstant.LaunchReason.CONTINUATION) {
@@ -40,10 +41,14 @@ export default class EntryAbility extends UIAbility {
       const cacheDir = this.context.cacheDir
       const logDir = `${cacheDir}/log`
       const deviceId = HarmonyDeviceIdentity.getOrCreateDeviceId(this.context)
-      const appVersion = this.getAppVersion()
-      const buildKey = '' // Harmony 端暂无构建 key，传空字符串。
-      const locale = i18n.getSystemLanguage()
-      const timezone = i18n.getSystemTimezone()
+      const identity = this.getBuildIdentity()
+      const appVersion = identity.appVersion
+      const buildKey = identity.buildKey
+      // Issue #670 评论 5652500781：i18n.getSystemTimezone() 不存在，
+      // 官方时区接口是 i18n.getTimeZone()，默认返回当前系统时区，用 getID() 取 IANA 时区 ID。
+      // locale 用新文档推荐的 i18n.System.getSystemLanguage()。
+      const locale = i18n.System.getSystemLanguage()
+      const timezone = i18n.getTimeZone().getID()
       const result = NativeWriterCoreBridge.getInstance().initDiagnostics(
         logDir, deviceId, appVersion, buildKey, locale, timezone
       )
@@ -55,15 +60,25 @@ export default class EntryAbility extends UIAbility {
     }
   }
 
-  // 获取应用版本名 — 从 bundleManager 读取，失败返回 'unknown'。
-  private getAppVersion(): string {
+  // 获取构建身份 — Issue #670 评论 5652500781：一次读取完整 bundle info，
+  // 同时给出 appVersion（versionName）和 buildKey（harmony-v{versionCode}-{versionName}）。
+  // buildKey 用于 writer_diagnostics 日志文件名 sujian-current-{build_key}.log 和导出 manifest 的 build_identity，
+  // 不能留空，否则不同版本的日志无法按构建身份区分。失败返回 'unknown' / 'harmony-unknown'。
+  // 以后有 git SHA/正式构建号时再拼进同一个 buildKey。
+  private getBuildIdentity(): { appVersion: string, buildKey: string } {
     try {
       const info = bundleManager.getBundleInfoForSelfSync(
         bundleManager.BundleFlag.GET_BUNDLE_INFO_DEFAULT
       )
-      return info.versionName
+      return {
+        appVersion: info.versionName,
+        buildKey: `harmony-v${info.versionCode}-${info.versionName}`
+      }
     } catch (_) {
-      return 'unknown'
+      return {
+        appVersion: 'unknown',
+        buildKey: 'harmony-unknown'
+      }
     }
   }
 
