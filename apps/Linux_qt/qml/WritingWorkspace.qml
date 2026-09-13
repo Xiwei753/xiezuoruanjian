@@ -825,6 +825,18 @@ Rectangle {
                     //   - 编辑区尺寸跟随 paperBg 宽度和 QML layout 自动调整
                     //     不需要 SujianEditorItem 的 geometry_changed 依赖 LayoutPlan
                     //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
+                    // Issue #677 评论 5653315696 约束:
+                    //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、
+                    //     textPrimaryHex、primary、selectedText 等），不在写作区里
+                    //     解释主题 JSON。主题 JSON 的 snake_case key 解析只在
+                    //     DesignTokens.qml 里完成。
+                    //   - text_color 最终来自 dt.editorText → dt.textPrimary →
+                    //     on_surface（Core DTO snake_case 字段）。
+                    //   - QML 的 loading/scrolling 状态（is_loading、is_scrolling）
+                    //     只用于动画抑制等，不能决定 Scene Graph 根节点和正文层是否
+                    //     存在。visible: true 固定不受 loading/scrolling 影响；
+                    //     update_paint_node 通过 ensure_editor_root 在第一帧创建根
+                    //     节点，不再因 root 为空整帧跳过。
                     SujianEditorItem {
                         id: sujianEditor
                         x: editorScroll.x

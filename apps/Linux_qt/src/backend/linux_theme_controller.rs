@@ -61,6 +61,12 @@ impl LinuxThemeController {
         self.app.snapshot().borrow()
     }
 
+    /// Issue #677 评论 5653315696: 输出的主题 JSON 字段名与 Core DTO 一致，统一使用 snake_case。
+    ///
+    /// `serde_json::to_string(&s)` 序列化的是 Core 的 `ThemeColorScheme` DTO，其字段名
+    /// （`on_surface`、`on_surface_variant`、`surface_container_low` 等）由 serde 派生为
+    /// snake_case。本方法不做任何 camelCase 转换，QML 侧（DesignTokens.qml）必须按
+    /// snake_case key 读取。这是 Linux_Qt 与 Core 之间唯一的主题 JSON 字段名协议。
     fn resolved_scheme_json(&self) -> QString {
         self.with_app(|app| {
             let color_source = app.setting_color_source().to_string();

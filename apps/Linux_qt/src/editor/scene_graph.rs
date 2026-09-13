@@ -220,9 +220,35 @@ cpp! {{
     }
 }}
 
+/// Issue #677 评论 5653315696: 取得或创建 editor root 节点。
+/// 若 `root_raw` 为 null（第一帧或旧节点被回收），创建新的 `QSGTransformNode` 作为
+/// editor root 并返回其指针；若非 null，直接返回它。
+///
+/// 这把"根节点是否为空"的判断从 `ensure_four_layer_nodes` 收口到此函数，
+/// 使 `update_paint_node` 不再因为第一帧 root 为 null 就整帧跳过渲染。
+///
+/// 在 threaded render loop 下，此函数在 render thread 上的 updatePaintNode() 中调用。
+pub fn ensure_editor_root(root_raw: *mut std::ffi::c_void) -> *mut std::ffi::c_void {
+    // SAFETY: root_raw 来自 Qt scene graph 的 SGNode::into_raw()，可能是 null（第一帧）；
+    // 返回值要么是原非 null 指针，要么是新分配的 QSGTransformNode，由 QQuickItem::updatePaintNode
+    // 契约保证返回的节点有效并由 Qt 持有所有权。
+    cpp!(unsafe [root_raw as "QSGNode*"] -> *mut std::ffi::c_void as "QSGNode*" {
+        QSGNode *root = static_cast<QSGNode*>(root_raw);
+        if (!root) {
+            root = new QSGTransformNode;
+        }
+        return root;
+    })
+}
+
 /// 确保场景图四层结构——从上到下：staticText(0), animatedText(1), decorations(2), cursor(3)。
 /// 每层由 QSGOpacityNode 包裹，支持独立透明度控制。
 /// 在 threaded render loop 下，此函数在 render thread 上的 updatePaintNode() 中调用。
+///
+/// Issue #677 评论 5653315696: 调用方须先通过 `ensure_editor_root` 保证 `root_raw` 非 null，
+/// 本函数不再承担"根节点是否为空的判断"。C++ 内部保留 `if (!root || !item) return;` 仅作
+/// 防御性编程，以保护 update_cursor_node / update_animation_layer /
+/// update_selection_preedit_layer 等内部调用者传入可能为 null 的 root。
 pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut std::ffi::c_void) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [

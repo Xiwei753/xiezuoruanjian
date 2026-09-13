@@ -82,10 +82,14 @@ impl QQuickItem for SujianEditorItem {
             self.scene_dirty = false;
         }
 
-        let final_root = root_raw;
+        // Issue #677 评论 5653315696: 先取得或创建 editor root。
+        // 第一帧旧节点为 null 时，ensure_editor_root 创建新的 QSGTransformNode 根节点，
+        // 不再因为 root 为空就整帧跳过渲染。这把"根节点是否为空"的判断从
+        // ensure_four_layer_nodes 收口到 ensure_editor_root。
+        let editor_root = scene_graph::ensure_editor_root(root_raw);
 
-        if !final_root.is_null() && !item_ptr.is_null() {
-            scene_graph::ensure_four_layer_nodes(final_root, item_ptr);
+        if !editor_root.is_null() && !item_ptr.is_null() {
+            scene_graph::ensure_four_layer_nodes(editor_root, item_ptr);
 
             let has_active_txs = !self
                 .pipeline
@@ -95,7 +99,7 @@ impl QQuickItem for SujianEditorItem {
 
             if !has_active_txs {
                 self.pipeline.texture_cache_mut().clear();
-                scene_graph::clear_animation_layer(final_root, item_ptr);
+                scene_graph::clear_animation_layer(editor_root, item_ptr);
             }
 
             let old_cursor_rect = self
@@ -177,7 +181,7 @@ impl QQuickItem for SujianEditorItem {
             // prepare_static_snapshot_on_gui_thread 重新排版（snapshot() 会发现
             // cache 无效而分配新 generation 重新排版）。
             let static_rebuild_ok = scene_graph_renderer::render_frame(
-                final_root,
+                editor_root,
                 item_ptr,
                 &static_text,
                 &render_plan,
@@ -265,8 +269,9 @@ impl QQuickItem for SujianEditorItem {
             ));
         }
 
-        // SAFETY: final_root was obtained from QSG node allocation in the same paint call; QQuickItem::updatePaintNode contract guarantees the node is valid.
-        unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(final_root) }
+        // SAFETY: editor_root 来自 ensure_editor_root，要么是原 node.into_raw() 的非 null 指针，
+        // 要么是新创建的 QSGTransformNode。QQuickItem::updatePaintNode 契约保证返回的节点有效。
+        unsafe { SGNode::<qmetaobject::scenegraph::ContainerNode>::from_raw(editor_root) }
     }
 }
 
