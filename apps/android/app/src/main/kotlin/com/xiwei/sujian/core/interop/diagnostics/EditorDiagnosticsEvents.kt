@@ -128,7 +128,7 @@ object EditorDiagnosticsEvents {
  * @property start 起始字节偏移（含）。
  * @property endExclusive 结束字节偏移（不含）。
  */
-data class DiagnosticByteRange(
+internal data class DiagnosticByteRange(
     val start: Int,
     val endExclusive: Int,
 )
@@ -147,7 +147,7 @@ data class DiagnosticByteRange(
  * @property sessionId 编辑会话 id。
  * @property result 事务结果。
  */
-data class EditTransactionDiagnostic(
+internal data class EditTransactionDiagnostic(
     val operationKind: String,
     val oldRange: DiagnosticByteRange,
     val newRange: DiagnosticByteRange,

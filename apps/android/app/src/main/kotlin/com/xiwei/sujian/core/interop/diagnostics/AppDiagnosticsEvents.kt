@@ -6,8 +6,10 @@ import uniffi.writer_core.DiagnosticOriginDto
  * 应用自身生命周期/内部状态诊断事件 — Issue #671 第 3 部分。
  *
  * 涵盖构建身份、进程启动、作品/章节加载保存、编辑器会话生命周期、
- * 动画事务、编辑器运动/排版策略、视口/重基接线、主题解析，
- * 以及一级导航、工作区选择、主题外观选择等应用级用户操作事件。
+ * 主题解析，以及一级导航、工作区选择、主题外观选择等应用级用户操作事件。
+ *
+ * 编辑器运行时事件（动画事务、运动/排版策略、视口/重基接线）已拆到
+ * [EditorRuntimeDiagnosticsEvents]，以控制本对象函数数。
  *
  * 所有事件通过 [DiagnosticsEventsInterop.record] 转发到 Rust 统一诊断后端。
  */
@@ -19,8 +21,6 @@ object AppDiagnosticsEvents {
     private const val KEY_BYTES = "bytes"
     private const val KEY_RESULT = "result"
     private const val KEY_ELAPSED_MS = "elapsedMs"
-    private const val KEY_TRANSACTION = "transaction"
-    private const val KEY_NEW_TRANSACTION = "newTransaction"
     private const val KEY_TARGET = "target"
 
     // ── 构建身份 / 进程启动（App：应用自身）──────────────────────
@@ -101,138 +101,6 @@ object AppDiagnosticsEvents {
         "editor.session",
         "session" to sessionId,
         "action" to action,
-    )
-
-    // ── 动画事务（App：应用内部）────────────────────────────────
-
-    fun animationStart(
-        transactionId: Long,
-        kind: String,
-        durationMs: Long,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.animation.start",
-        KEY_TRANSACTION to transactionId,
-        "kind" to kind,
-        "durationMs" to durationMs,
-    )
-
-    fun animationRebase(
-        transactionId: Long,
-        newTransactionId: Long,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.animation.rebase",
-        KEY_TRANSACTION to transactionId,
-        KEY_NEW_TRANSACTION to newTransactionId,
-    )
-
-    fun animationCancel(transactionId: Long) =
-        DiagnosticsEventsInterop.record(
-            DiagnosticOriginDto.APP,
-            "editor.animation.cancel",
-            KEY_TRANSACTION to transactionId,
-        )
-
-    fun animationComplete(
-        transactionId: Long,
-        elapsedMs: Long,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.animation.complete",
-        KEY_TRANSACTION to transactionId,
-        KEY_ELAPSED_MS to elapsedMs,
-    )
-
-    fun animationPolicy(policy: String) =
-        DiagnosticsEventsInterop.record(DiagnosticOriginDto.APP, "editor.animation.policy", "policy" to policy)
-
-    // ── 编辑器运动/排版策略（App：应用内部）──────────────────────
-
-    fun editorMotionPolicy(
-        textEnabled: Boolean,
-        textMs: Long,
-        cursorEnabled: Boolean,
-        cursorMs: Long,
-        coordinated: Boolean,
-        reduceMotion: Boolean,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.motion_policy",
-        "textEnabled" to textEnabled,
-        "textMs" to textMs,
-        "cursorEnabled" to cursorEnabled,
-        "cursorMs" to cursorMs,
-        "coordinated" to coordinated,
-        "reduceMotion" to reduceMotion,
-    )
-
-    fun editorTypography(
-        fontSizeSp: Float,
-        lineSpacing: Float,
-        firstLineIndent: Boolean,
-        indentChars: Float,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.typography",
-        "fontSizeSp" to fontSizeSp,
-        "lineSpacing" to lineSpacing,
-        "firstLineIndent" to firstLineIndent,
-        "indentChars" to indentChars,
-    )
-
-    // ── 视口/重基接线（App：应用内部）────────────────────────────
-
-    fun viewportRetarget(
-        transactionId: Long?,
-        fromY: Float,
-        toY: Float,
-        maxY: Float,
-        reason: String,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.viewport_retarget",
-        KEY_TRANSACTION to transactionId,
-        "fromY" to fromY,
-        "toY" to toY,
-        "maxY" to maxY,
-        "reason" to reason,
-    )
-
-    fun animationRebaseState(
-        oldTransactionId: Long,
-        newTransactionId: Long,
-        deleteSlices: Int,
-        cursorRemaining: Float,
-        minSliceRemaining: Float,
-        maxSliceRemaining: Float,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.animation_rebase_state",
-        "oldTransaction" to oldTransactionId,
-        KEY_NEW_TRANSACTION to newTransactionId,
-        "deleteSlices" to deleteSlices,
-        "cursorRemaining" to cursorRemaining,
-        "minSliceRemaining" to minSliceRemaining,
-        "maxSliceRemaining" to maxSliceRemaining,
-    )
-
-    fun editorReflowPlan(
-        transactionId: Long,
-        oldAffectedLines: Int,
-        newAffectedLines: Int,
-        sameLineMoves: Int,
-        crossLineCrossfadePairs: Int,
-        suffixBlockShift: Boolean,
-    ) = DiagnosticsEventsInterop.record(
-        DiagnosticOriginDto.APP,
-        "editor.reflow_plan",
-        KEY_TRANSACTION to transactionId,
-        "oldAffectedLines" to oldAffectedLines,
-        "newAffectedLines" to newAffectedLines,
-        "sameLineMoves" to sameLineMoves,
-        "crossLineCrossfadePairs" to crossLineCrossfadePairs,
-        "suffixBlockShift" to suffixBlockShift,
     )
 
     // ── 主题解析（App：应用内部）──────────────────────────────────

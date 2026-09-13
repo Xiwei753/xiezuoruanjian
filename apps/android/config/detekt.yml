@@ -315,8 +315,6 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/storage/mirror/ReadableMirrorStateStore.kt"
       # --- #671：镜像事务拆分后的 round-trip 测试，多场景断言函数数超 20 ---
       - "**/kotlin/com/xiwei/sujian/storage/mirror/MirrorTransactionRoundTripTest.kt"
-      # --- #671：诊断事件按领域拆分，AppDiagnosticsEvents 函数数由业务事件决定 ---
-      - "**/kotlin/com/xiwei/sujian/core/interop/diagnostics/AppDiagnosticsEvents.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3
