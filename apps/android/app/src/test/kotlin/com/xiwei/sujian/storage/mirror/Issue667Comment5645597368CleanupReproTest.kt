@@ -1,7 +1,12 @@
 package com.xiwei.sujian.storage.mirror
 
+import android.content.ContentProvider
+import android.content.ContentValues
 import android.content.Context
+import android.database.Cursor
+import android.database.MatrixCursor
 import android.net.Uri
+import android.provider.MediaStore
 import androidx.test.core.app.ApplicationProvider
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
 import java.io.File
@@ -12,6 +17,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowContentResolver
 
 /**
  * Issue #667 评论 5645597368 问题 2 回归测试。
@@ -70,9 +76,14 @@ class Issue667Comment5645597368CleanupReproTest {
     /**
      * 问题 2.B 回归：cleanupIfNeeded 在清理成功时写 done 标志。
      *
-     * 修复后行为：cleanupIfNeeded() 调用 cleanupViaMediaStore() 和 cleanupViaSaf()，
-     * 它们都返回 Boolean。在 Robolectric 测试环境中，MediaStore 查询无异常（SDK>=Q 但无数据），
-     * SAF 无 tree URI（直接返回 true），所以两者都返回 true → 写 done 标志。
+     * 修复后行为：cleanupIfNeeded() 调用 cleanupViaMediaStore()、cleanupEmptyLegacyDirs()
+     * 和 cleanupViaSaf()，它们都返回 Boolean。在 Robolectric 测试环境中，注册空的 MediaStore
+     * provider（query 返回空 cursor，无数据），SAF 无 tree URI（直接返回 true），
+     * 空目录不存在（直接返回 true），所以三者都返回 true → 写 done 标志。
+     *
+     * Issue #667 评论 5649934255：query 返回 null 视为失败返回 false。因此本测试需要
+     * 注册空的 MediaStore provider（query 返回空 cursor 而非 null），才能让 cleanupViaMediaStore()
+     * 返回 true。
      *
      * 这是正确行为：清理成功时写 done 标志，下次跳过。
      */
@@ -80,6 +91,9 @@ class Issue667Comment5645597368CleanupReproTest {
     fun problem2B_cleanupIfNeeded_writesDoneFlag_whenCleanupSucceeds() {
         // 调用前 done 标志不存在
         assertTrue("测试前 done 标志应不存在", !cleanupFlagFile.exists())
+
+        // 注册空的 MediaStore provider（query 返回空 cursor，无数据）
+        registerEmptyMediaProvider()
 
         // 调用 cleanupIfNeeded()
         cleanup.cleanupIfNeeded()
@@ -96,9 +110,16 @@ class Issue667Comment5645597368CleanupReproTest {
      *
      * 修复后行为：done 标志存在意味着清理已成功完成，第二次调用直接跳过。
      * 这是正确行为：避免重复清理。
+     *
+     * Issue #667 评论 5649934255：query 返回 null 视为失败返回 false。因此本测试需要
+     * 注册空的 MediaStore provider（query 返回空 cursor 而非 null），才能让 cleanupViaMediaStore()
+     * 返回 true，第一次调用才能写 done 标志。
      */
     @Test
     fun problem2C_cleanupIfNeeded_skipsAfterDoneFlag() {
+        // 注册空的 MediaStore provider（query 返回空 cursor，无数据）
+        registerEmptyMediaProvider()
+
         // 第一次调用：清理成功，写 done 标志
         cleanup.cleanupIfNeeded()
         assertTrue("第一次调用后 done 标志应存在", cleanupFlagFile.exists())
@@ -119,5 +140,55 @@ class Issue667Comment5645597368CleanupReproTest {
             firstFlagContent,
             cleanupFlagFile.readText(),
         )
+    }
+
+    // ── 辅助方法 ──
+
+    /**
+     * 注册空的 MediaStore provider（query 返回空 cursor，无数据）。
+     *
+     * Issue #667 评论 5649934255：query 返回 null 视为失败返回 false。为了让
+     * cleanupViaMediaStore() 返回 true，需要注册 provider 使 query 返回空 cursor 而非 null。
+     */
+    private fun registerEmptyMediaProvider() {
+        ShadowContentResolver.registerProviderInternal(
+            "media",
+            EmptyMediaProvider(),
+        )
+    }
+
+    /**
+     * 空 MediaStore provider：query 返回空 cursor（无数据），delete 返回 0。
+     */
+    private class EmptyMediaProvider : ContentProvider() {
+        override fun onCreate(): Boolean = true
+
+        override fun query(
+            uri: Uri,
+            projection: Array<String?>?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+            sortOrder: String?,
+        ): Cursor? = MatrixCursor(arrayOf(MediaStore.Downloads._ID))
+
+        override fun delete(
+            uri: Uri,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int = 0
+
+        override fun insert(
+            uri: Uri,
+            values: ContentValues?,
+        ): Uri? = null
+
+        override fun update(
+            uri: Uri,
+            values: ContentValues?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int = 0
+
+        override fun getType(uri: Uri): String? = null
     }
 }

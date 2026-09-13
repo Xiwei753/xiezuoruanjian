@@ -61,11 +61,12 @@ class MirrorStagingCleanup(
         DiagnosticsLogger.i(TAG, "Starting legacy staging cleanup (Issue #667)")
 
         val mediaStoreOk = cleanupViaMediaStore()
+        val emptyDirsOk = cleanupEmptyLegacyDirs()
         val safOk = cleanupViaSaf()
 
-        // 只有需要清理的后端都成功处理后才能写 done 标志
+        // 只有 MediaStore 文件清理、空目录清理、SAF 清理都成功后才写 done 标志
         // 失败就不写标志，下次初始化继续重试
-        if (mediaStoreOk && safOk) {
+        if (mediaStoreOk && emptyDirsOk && safOk) {
             try {
                 cleanupFlagFile.parentFile?.mkdirs()
                 cleanupFlagFile.writeText("done", Charsets.UTF_8)
@@ -76,7 +77,7 @@ class MirrorStagingCleanup(
         } else {
             DiagnosticsLogger.w(
                 TAG,
-                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, safOk=$safOk), will retry next time",
+                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, emptyDirsOk=$emptyDirsOk, safOk=$safOk), will retry next time",
             )
         }
     }
@@ -89,16 +90,24 @@ class MirrorStagingCleanup(
      *
      * MediaStore.Downloads 需要 API 29+，低版本直接返回 true（旧版也不会用 MediaStore，视为成功）。
      *
+     * Issue #667 评论 5649934255：不再用短路的 `all {}`。三个前缀每次都各自尝试一遍，
+     * 最后再合并结果决定是否写 done。这样即使 `.staging/` 一直失败，`.backup/` 和 `_meta/`
+     * 两个本来完全可以删除的旧事务目录也能在本轮被处理，不会被失败前缀永久阻塞。
+     *
      * @return true 表示所有前缀清理都成功；false 表示任一前缀查询或删除失败
      */
     private fun cleanupViaMediaStore(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
 
-        // 全部前缀清理的合取：任一失败即整体失败
-        return LEGACY_DIR_PREFIXES.all { prefix ->
-            val relativePathPrefix = "${DOWNLOADS_BASE}/$prefix"
-            deleteMediaStoreFilesByPathPrefix(relativePathPrefix)
+        // 不短路：三个前缀每次都各自尝试一遍，最后合并结果决定是否写 done
+        var allOk = true
+        for (prefix in LEGACY_DIR_PREFIXES) {
+            val relativePathPrefix = "$DOWNLOADS_BASE/$prefix"
+            if (!deleteMediaStoreFilesByPathPrefix(relativePathPrefix)) {
+                allOk = false
+            }
         }
+        return allOk
     }
 
     /**
@@ -109,17 +118,27 @@ class MirrorStagingCleanup(
      * Issue #667 评论 5645967475：任一 delete 抛异常或返回 0 都视为本前缀清理失败，
      * 让外层不写 done 标志、下次重试。空结果（无数据）视为成功。
      *
+     * Issue #667 评论 5649934255：`ContentResolver.query()` / provider query 契约允许
+     * 返回 nullable Cursor，null 代表本次根本没有拿到可确认的查询结果。因此 query 返回
+     * null 时视为本前缀清理失败（返回 false），让外层不写 done 标志、下次重试，而不是
+     * 把 null cursor 当成查询成功且没有数据。
+     *
+     * Issue #667 评论 5650127639：LIKE 查询中 `_` 和 `%` 是通配符，`_meta/` 的下划线
+     * 会误匹配 `ameta/`、`xmeta/` 等非事务目录。用 `escapeLikeLiteral` 转义字面量字符，
+     * 配合 `ESCAPE '!'` 使下划线按普通字符匹配，避免误删用户文件。
+     *
      * @return true 表示查询和所有删除都成功（无数据时也返回 true）；
-     *   false 表示查询抛异常，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
+     *   false 表示查询抛异常或返回 null，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
      */
     private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String): Boolean {
+        val escapedPrefix = escapeLikeLiteral(pathPrefix)
         val cursor =
             try {
                 contentResolver.query(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     arrayOf(MediaStore.Downloads._ID),
-                    "${MediaStore.Downloads.RELATIVE_PATH} LIKE ?",
-                    arrayOf("$pathPrefix%"),
+                    "${MediaStore.Downloads.RELATIVE_PATH} LIKE ? ESCAPE '!'",
+                    arrayOf("$escapedPrefix%"),
                     null,
                 )
             } catch (e: SecurityException) {
@@ -128,10 +147,13 @@ class MirrorStagingCleanup(
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "MediaStore query failed for prefix $pathPrefix", e)
                 return false
+            } ?: run {
+                DiagnosticsLogger.w(TAG, "MediaStore query returned null for prefix $pathPrefix")
+                return false
             }
 
         var allDeleted = true
-        cursor?.use { c ->
+        cursor.use { c ->
             val urisToDelete = mutableListOf<Uri>()
             while (c.moveToNext()) {
                 val id = c.getLong(0)
@@ -150,6 +172,22 @@ class MirrorStagingCleanup(
         // 任一 delete 失败（抛异常或返回 0）都返回 false，让外层不写 done 标志、下次重试。
         return allDeleted
     }
+
+    /**
+     * 转义 SQL LIKE 模式中的通配符字符，使它们按字面量匹配。
+     *
+     * Issue #667 评论 5650127639：`_meta/` 中的 `_` 在 SQLite LIKE 里是"任意单个字符"
+     * 通配符，`Download/Sujian/_meta/%` 会误匹配 `ameta/`、`xmeta/` 等非事务目录，
+     * 可能删掉用户的其他文件。用 `!` 做 ESCAPE 字符，把 `!`、`%`、`_` 都转义为字面量。
+     *
+     * @param value 要转义的字符串（如路径前缀 `Download/Sujian/_meta/`）
+     * @return 转义后的字符串，配合 `LIKE ? ESCAPE '!'` 使用
+     */
+    private fun escapeLikeLiteral(value: String): String =
+        value
+            .replace("!", "!!")
+            .replace("%", "!%")
+            .replace("_", "!_")
 
     /**
      * 删除单个 MediaStore URI，返回是否成功（返回非 0 且未抛异常）。
@@ -244,6 +282,72 @@ class MirrorStagingCleanup(
             false
         }
 
+    /**
+     * 清理文件系统中残留的空旧事务目录。
+     *
+     * Issue #667 评论 5650324333：`cleanupViaMediaStore()` 只删除 MediaStore 记录对应的文件 URI，
+     * Android MediaProvider 删除文件时不自动删除空掉的父目录，导致 `Download/Sujian/.staging`、
+     * `.backup`、`_meta` 及 `.staging/<txId>/` 等空目录残留 Download 目录。本函数在 MediaStore
+     * 文件清理之后，通过文件系统路径直接清理这些空目录。
+     *
+     * 项目 `minSdk = 30`，走 Android 11+ 共享存储 FUSE 路径，不需要"所有文件访问"权限。
+     *
+     * 三个目录不短路：一个失败仍继续尝试另外两个，最后合并结果。目录不存在视为成功（无需清理）。
+     *
+     * @return true 表示所有旧事务目录都已清理（不存在或成功删除空目录）；
+     *   false 表示任一目录存在但清理失败（含残留文件、listFiles 失败、delete 失败）
+     */
+    private fun cleanupEmptyLegacyDirs(): Boolean {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
+
+        // 不短路：三个目录各自尝试，最后合并结果
+        var allOk = true
+        for (dirName in LEGACY_DIR_NAMES) {
+            val dir = File(sujianDir, dirName)
+            if (!deleteEmptyDirRecursively(dir)) {
+                allOk = false
+            }
+        }
+        return allOk
+    }
+
+    /**
+     * 自底向上递归删除空目录。
+     *
+     * 先递归处理子目录，再删除自身。**不删除文件**：只要发现普通文件仍存在、
+     * `listFiles()` 失败、某个空目录 `delete()` 失败，就返回 false。
+     * 不用 `deleteRecursively()`，避免为了清旧事务目录顺便删除未确认的文件。
+     *
+     * @param dir 要清理的目录
+     * @return true 表示目录不存在，或已成功删除自身及所有空子目录；
+     *   false 表示目录存在但含残留文件、listFiles 失败、或 delete 失败
+     */
+    private fun deleteEmptyDirRecursively(dir: File): Boolean {
+        // 目录不存在视为成功（无需清理）
+        if (!dir.exists()) return true
+        // 存在但不是目录，不应发生，防御性返回 false
+        if (!dir.isDirectory) return false
+        // listFiles 失败（返回 null）时返回 false
+        val children = dir.listFiles() ?: return false
+
+        // 先递归处理子目录（自底向上）
+        for (child in children) {
+            if (child.isDirectory) {
+                if (!deleteEmptyDirRecursively(child)) {
+                    return false
+                }
+            } else {
+                // 子项是普通文件，不能删除文件，返回 false
+                return false
+            }
+        }
+
+        // 所有子目录都成功删除后，目录已空（无子文件），删除自身
+        // delete 失败返回 false
+        return dir.delete()
+    }
+
     private fun tryParseUri(uriString: String): Uri? =
         try {
             Uri.parse(uriString)
@@ -261,6 +365,9 @@ class MirrorStagingCleanup(
 
         /** MediaStore 查询的基础路径前缀：`Download/Sujian`。 */
         private const val DOWNLOADS_BASE = "Download/Sujian"
+
+        /** Download 目录下的应用子目录名。 */
+        private const val SUJIAN_DIR_NAME = "Sujian"
 
         /** 旧版事务目录的路径前缀（相对 `Download/Sujian/`）。 */
         private val LEGACY_DIR_PREFIXES = listOf(".staging/", ".backup/", "_meta/")
