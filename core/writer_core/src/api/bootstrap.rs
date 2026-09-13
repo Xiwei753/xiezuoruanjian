@@ -238,6 +238,95 @@ fn recover_local_applied_phase(
     }
 }
 
+/// 源目录还在时重放 Volume 删除：有 `planned_delete` 直接 apply，无则先升级 journal 再 apply。
+///
+/// 旧格式 journal（无 `planned_delete`）走"重新 plan + 回写 durable Pending + 统一 apply"，
+/// 不再调旧 `delete_volume`，确保 trash path / tombstone 落盘顺序符合 durable 协议。
+fn apply_volume_delete_or_upgrade(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+    project_root: &Path,
+    volume_id: &str,
+    volume_dir: &Path,
+) -> std::result::Result<(), WriterError> {
+    if let Some(planned) = &rec.planned_delete {
+        crate::volume::apply_planned_delete_volume(project_root, volume_id, app_data_root, planned)
+            .map_err(WriterError::from)
+    } else {
+        log::debug!(
+            "recover_pending_local_delete: old-format journal, upgrading plan for {}",
+            volume_dir.display()
+        );
+        let (_new_change_set, planned) = crate::volume::plan_delete_volume(
+            project_root,
+            volume_id,
+            app_data_root,
+            &rec.device_id,
+        )
+        .map_err(WriterError::from)?;
+        crate::storage::journal::workspace_change::upgrade_pending_plan(
+            app_data_root,
+            rec,
+            planned.clone(),
+        )
+        .map_err(WriterError::from)?;
+        crate::volume::apply_planned_delete_volume(project_root, volume_id, app_data_root, &planned)
+            .map_err(WriterError::from)
+    }
+}
+
+/// 源目录还在时重放 Chapter 删除：有 `planned_delete` 直接 apply，无则先升级 journal 再 apply。
+///
+/// 旧格式 journal（无 `planned_delete`）走"重新 plan + 回写 durable Pending + 统一 apply"，
+/// 不再调旧 `delete_chapter`，确保 trash path / tombstone 落盘顺序符合 durable 协议。
+fn apply_chapter_delete_or_upgrade(
+    app_data_root: &Path,
+    rec: &crate::storage::journal::workspace_change::RecoveredWorkspaceChange,
+    project_root: &Path,
+    volume_id: &str,
+    chapter_id: &str,
+    chapter_dir: &Path,
+) -> std::result::Result<(), WriterError> {
+    if let Some(planned) = &rec.planned_delete {
+        crate::chapter::apply_planned_delete_chapter(
+            project_root,
+            volume_id,
+            chapter_id,
+            app_data_root,
+            planned,
+        )
+        .map_err(WriterError::from)
+    } else {
+        log::debug!(
+            "recover_pending_local_delete: old-format journal, upgrading plan for {}",
+            chapter_dir.display()
+        );
+        let (_new_change_set, planned) = crate::chapter::plan_delete_chapter(
+            project_root,
+            volume_id,
+            chapter_id,
+            app_data_root,
+            app_data_root, // workspace_root == app_data_root
+            &rec.device_id,
+        )
+        .map_err(WriterError::from)?;
+        crate::storage::journal::workspace_change::upgrade_pending_plan(
+            app_data_root,
+            rec,
+            planned.clone(),
+        )
+        .map_err(WriterError::from)?;
+        crate::chapter::apply_planned_delete_chapter(
+            project_root,
+            volume_id,
+            chapter_id,
+            app_data_root,
+            &planned,
+        )
+        .map_err(WriterError::from)
+    }
+}
+
 /// 幂等完成 Pending 阶段的本地删除。
 ///
 /// 重放同一个 planned delete：
@@ -250,7 +339,8 @@ fn recover_local_applied_phase(
 ///   绝不能继续写 history/清 journal。
 ///
 /// 对旧格式 journal（`planned_delete` 为空，向后兼容）：
-/// - 如果源目录仍存在，可以重新构造事实后继续（调旧 `delete_volume`/`delete_chapter`）。
+/// - 如果源目录仍存在，先原地升级 journal（重新 plan + 回写 durable Pending），
+///   再走统一 `apply_planned_delete_*`，不再调旧 `delete_volume`/`delete_chapter`。
 /// - 如果源目录已经消失又没有任何 durable facts，就不要凭空伪造远端 delete——
 ///   返回恢复错误，保留 journal。
 fn recover_pending_local_delete(
@@ -275,25 +365,14 @@ fn recover_pending_local_delete(
                 ensure_tombstones_persisted(&project_root, &rec.sync_delete_facts)?;
                 return Ok(());
             }
-            // 源目录还在：重放 planned delete。
-            if let Some(planned) = &rec.planned_delete {
-                crate::volume::apply_planned_delete_volume(
-                    &project_root,
-                    volume_id,
-                    app_data_root,
-                    planned,
-                )
-                .map_err(WriterError::from)
-            } else {
-                // 旧格式 journal（无 planned_delete），源目录仍存在——
-                // 重新构造事实后继续（调旧 delete_volume）。
-                log::debug!(
-                    "recover_pending_local_delete: old-format journal, replaying delete_volume for {}",
-                    volume_dir.display()
-                );
-                crate::volume::delete_volume(&project_root, volume_id, app_data_root)
-                    .map_err(WriterError::from)
-            }
+            // 源目录还在：重放 planned delete（或旧格式升级后 apply）。
+            apply_volume_delete_or_upgrade(
+                app_data_root,
+                rec,
+                &project_root,
+                volume_id,
+                &volume_dir,
+            )
         }
         Some(DeleteTarget::Chapter {
             project_id,
@@ -315,26 +394,15 @@ fn recover_pending_local_delete(
                 ensure_tombstones_persisted(&project_root, &rec.sync_delete_facts)?;
                 return Ok(());
             }
-            // 源目录还在：重放 planned delete。
-            if let Some(planned) = &rec.planned_delete {
-                crate::chapter::apply_planned_delete_chapter(
-                    &project_root,
-                    volume_id,
-                    chapter_id,
-                    app_data_root,
-                    planned,
-                )
-                .map_err(WriterError::from)
-            } else {
-                // 旧格式 journal（无 planned_delete），源目录仍存在——
-                // 重新构造事实后继续（调旧 delete_chapter）。
-                log::debug!(
-                    "recover_pending_local_delete: old-format journal, replaying delete_chapter for {}",
-                    chapter_dir.display()
-                );
-                crate::chapter::delete_chapter(&project_root, volume_id, chapter_id, app_data_root)
-                    .map_err(WriterError::from)
-            }
+            // 源目录还在：重放 planned delete（或旧格式升级后 apply）。
+            apply_chapter_delete_or_upgrade(
+                app_data_root,
+                rec,
+                &project_root,
+                volume_id,
+                chapter_id,
+                &chapter_dir,
+            )
         }
         Some(DeleteTarget::Project { project_id }) => {
             // 作品删除有独立的多阶段事务（project_delete.rs），不在此处理。
@@ -361,7 +429,8 @@ fn recover_pending_local_delete(
 /// - `DeleteChapter`：从 `Delete(projects/{pid}/volumes/{vid}/chapters/{cid}/chapter.*)` 提取。
 /// - `DeleteProject`：不应出现在 generic journal 中，返回错误。
 ///
-/// 迁移成功后，源目录仍存在时调旧 `delete_volume`/`delete_chapter` 重放删除；
+/// 迁移成功后，源目录仍存在时先原地升级 journal（重新 plan + 回写 durable Pending），
+/// 再走统一 `apply_planned_delete_*`，不再调旧 `delete_volume`/`delete_chapter`；
 /// 源目录已消失时返回错误（旧格式没有 `sync_delete_facts`，无法补齐 tombstone）。
 fn recover_pending_local_delete_no_target(
     app_data_root: &Path,
@@ -391,12 +460,16 @@ fn recover_pending_local_delete_no_target(
                 )));
             }
             log::debug!(
-                "recover_pending_local_delete: migrated delete_target from change_set, \
-                 replaying delete_volume for {}",
+                "recover_pending_local_delete: migrated delete_target from change_set for {}",
                 volume_dir.display()
             );
-            crate::volume::delete_volume(&project_root, &volume_id, app_data_root)
-                .map_err(WriterError::from)
+            apply_volume_delete_or_upgrade(
+                app_data_root,
+                rec,
+                &project_root,
+                &volume_id,
+                &volume_dir,
+            )
         }
         WorkspaceChangeOpType::DeleteChapter => {
             let (project_id, volume_id, chapter_id) =
@@ -423,16 +496,21 @@ fn recover_pending_local_delete_no_target(
                 )));
             }
             log::debug!(
-                "recover_pending_local_delete: migrated delete_target from change_set, \
-                 replaying delete_chapter for {}",
+                "recover_pending_local_delete: migrated delete_target from change_set for {}",
                 chapter_dir.display()
             );
-            crate::chapter::delete_chapter(&project_root, &volume_id, &chapter_id, app_data_root)
-                .map_err(WriterError::from)
+            apply_chapter_delete_or_upgrade(
+                app_data_root,
+                rec,
+                &project_root,
+                &volume_id,
+                &chapter_id,
+                &chapter_dir,
+            )
         }
         WorkspaceChangeOpType::DeleteProject => Err(WriterError::Other(format!(
             "recover_pending_local_delete: DeleteProject op_type in generic journal {} \
-                 — should use project_delete journal; journal retained",
+             — should use project_delete journal; journal retained",
             rec.journal_token
         ))),
     }

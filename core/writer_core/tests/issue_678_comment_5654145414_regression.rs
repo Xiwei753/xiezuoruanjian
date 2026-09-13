@@ -383,7 +383,7 @@ fn test_type3_delete_target_serde_backward_compat() {
 }
 
 // ---------------------------------------------------------------------------
-// Type 4: 补丁对抗 — recover_pending_local_delete 对 DeleteTarget::Project 跳过
+// Type 4: 补丁对抗 — save_pending 拒绝 DeleteProject，项目删除必须走 project_delete journal
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -392,9 +392,10 @@ fn test_type4_recover_pending_local_delete_project_skip() {
     let app_data_root = dir.path();
     std::fs::create_dir_all(app_data_root.join("projects")).unwrap();
 
-    // 构造一个 Pending journal，delete_target = Project。
+    // 修改后：save_pending 拒绝通过 generic workspace_change journal 创建 DeleteProject。
+    // 项目删除必须走独立的 project_delete journal（多阶段事务）。
     let change_set = WorkspaceChangeSet::new();
-    let journal = WorkspaceChangeJournal::save_pending(
+    let result = WorkspaceChangeJournal::save_pending(
         app_data_root,
         &change_set,
         "device-1",
@@ -403,35 +404,24 @@ fn test_type4_recover_pending_local_delete_project_skip() {
             project_id: "test-project".to_string(),
         }),
         None,
-    )
-    .expect("save_pending 应成功");
-
-    // recover_unfinished 应返回 Pending 记录。
-    let recovered = recover_unfinished(app_data_root).expect("recover_unfinished 应成功");
-    assert_eq!(recovered.len(), 1, "应恢复 1 条 journal");
-    assert_eq!(
-        recovered[0].phase,
-        WorkspaceChangePhase::Pending,
-        "phase 应为 Pending"
     );
+
     assert!(
-        matches!(
-            recovered[0].delete_target,
-            Some(DeleteTarget::Project { .. })
-        ),
-        "delete_target 应为 Project"
+        result.is_err(),
+        "save_pending 应拒绝 DeleteProject — 项目删除必须走 project_delete journal"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("DeleteProject must not be created via generic workspace_change journal"),
+        "错误信息应说明 DeleteProject 必须用 project_delete journal，got: {err_msg}"
     );
 
-    // 补丁行为：recover_pending_local_delete 对 DeleteTarget::Project 返回 Ok(()) 跳过。
-    // 验证 project 目录不会被此恢复路径删除（project 删除有独立事务）。
-    // 由于 recover_pending_local_delete 是私有，我们验证 recover_unfinished
-    // 返回的记录携带正确的 delete_target，bootstrap 会据此跳过本地删除。
-    let project_dir = app_data_root.join("projects").join("test-project");
-    // project 目录不存在（未创建），恢复不应报错。
-    assert!(!project_dir.exists());
-
-    // 清理
-    let _ = journal.clear_journal(app_data_root);
+    // 不应有任何 journal 文件被写入。
+    let recovered = recover_unfinished(app_data_root).expect("recover_unfinished 应成功");
+    assert!(
+        recovered.is_empty(),
+        "save_pending 拒绝后不应有 journal 落盘"
+    );
 }
 
 // ---------------------------------------------------------------------------

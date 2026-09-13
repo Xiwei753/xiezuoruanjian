@@ -267,7 +267,9 @@ impl WorkspaceChangeJournal {
     ///   无法恢复的 Pending journal（恢复时无法补齐 tombstone），直接返回错误。
     /// - `planned_delete.delete_target` 必须与 `delete_target` 一致。
     ///
-    /// 对 `DeleteProject`：`planned_delete` 应为 `None`（项目删除有独立事务）。
+    /// 对 `DeleteProject`：直接返回错误。项目删除有独立的多阶段事务
+    /// （`project_delete.rs`），不允许通过 generic workspace_change journal 创建。
+    /// 已经存在的旧 Project journal 继续 fail-closed（恢复时返回错误保留 journal）。
     pub fn save_pending(
         app_data_root: &Path,
         change_set: &WorkspaceChangeSet,
@@ -310,7 +312,13 @@ impl WorkspaceChangeJournal {
                         .to_string(),
                 ));
             }
-            (WorkspaceChangeOpType::DeleteProject, None) => Vec::new(),
+            (WorkspaceChangeOpType::DeleteProject, None) => {
+                return Err(crate::error::Error::Other(
+                    "save_pending: DeleteProject must not be created via generic workspace_change \
+                     journal — use project_delete journal instead"
+                        .to_string(),
+                ));
+            }
         };
 
         let token = Uuid::new_v4().to_string();
@@ -494,4 +502,40 @@ fn write_journal(app_data_root: &Path, journal: &WorkspaceChangeJournal) -> Resu
         )))
     })?;
     crate::storage::atomic_write_bytes(&path, &content)
+}
+
+/// 就地升级旧 Pending journal，补齐 `planned_delete` + `sync_delete_facts`。
+///
+/// 仅允许 `phase == Pending`。保留旧 journal 的 token / change_set / device_id /
+/// created_at / op_type，只补齐 `delete_target + sync_delete_facts + planned_delete`，
+/// 用 durable journal 写入（`atomic_write_bytes`）覆盖原文件。
+///
+/// 供 bootstrap 恢复旧格式 journal（有 `delete_target` 但无 `planned_delete`）时调用：
+/// 先根据仍存在的源目录重新 plan，再回写 journal，然后才执行 apply。
+pub fn upgrade_pending_plan(
+    app_data_root: &Path,
+    rec: &RecoveredWorkspaceChange,
+    planned_delete: PlannedWorkspaceDelete,
+) -> Result<()> {
+    use WorkspaceChangePhase;
+    if rec.phase != WorkspaceChangePhase::Pending {
+        return Err(crate::error::Error::Other(format!(
+            "upgrade_pending_plan: only Pending journals can be upgraded, got phase {:?} for {}",
+            rec.phase, rec.journal_token
+        )));
+    }
+    let sync_delete_facts = planned_delete.sync_delete_facts.clone();
+    let delete_target = planned_delete.delete_target.clone();
+    let journal = WorkspaceChangeJournal {
+        token: rec.journal_token.clone(),
+        change_set: rec.changes.clone(),
+        device_id: rec.device_id.clone(),
+        op_type: rec.op_type.clone(),
+        created_at: rec.created_at,
+        phase: WorkspaceChangePhase::Pending,
+        delete_target: Some(delete_target),
+        sync_delete_facts,
+        planned_delete: Some(planned_delete),
+    };
+    write_journal(app_data_root, &journal)
 }
