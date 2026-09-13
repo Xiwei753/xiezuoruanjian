@@ -831,8 +831,6 @@ impl SujianEditorItem {
 
         let mut plan = animation_coordinator::SelectionPreeditPlan::default();
 
-        let selection_color = self.current_selection_color.to_string();
-
         if self.buffer.has_selection() {
             plan.has_selection = true;
             let _font_size = f64::from(self.current_font_pixel_size);
@@ -850,6 +848,8 @@ impl SujianEditorItem {
                 if line.byte_end <= anchor || line.byte_start >= head {
                     continue;
                 }
+                // Issue #677 评论 5654174714: line_top 仅用于视口裁剪判断；
+                // SelectionRange.y 保存文档坐标 line.y，scroll_y 换算由 renderer 完成。
                 let line_top = line.y - scroll_y;
                 let line_bottom = line_top + line.height;
                 if line_bottom < 0.0 || line_top > viewport_h {
@@ -877,21 +877,11 @@ impl SujianEditorItem {
                 let left_x = start_x.min(end_x);
                 let sel_w = (end_x - start_x).abs();
 
-                let sel_color = if selection_color.starts_with('#') && selection_color.len() >= 7 {
-                    let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
-                    let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
-                    let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
-                    format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x33)
-                } else {
-                    "#3381D1D1".to_string()
-                };
-
                 plan.selection_ranges.push(SelectionRange {
                     x: left_x,
-                    y: line_top,
+                    y: line.y,
                     w: sel_w,
                     h: line.height,
-                    color: sel_color,
                 });
             }
         }
@@ -901,7 +891,6 @@ impl SujianEditorItem {
             if let Some(ref _preedit_rect) = self.pipeline.composition().preedit_cursor_rect {
                 let font_size = f64::from(self.current_font_pixel_size);
                 let font_family = &self.current_font_family.to_string();
-                let scroll_y = f64::from(self.current_scroll_y);
                 let cursor_byte = self.buffer.cursor;
 
                 if let Some(line) = snapshot
@@ -921,22 +910,13 @@ impl SujianEditorItem {
                         font_family,
                     );
 
-                    let preedit_color =
-                        if selection_color.starts_with('#') && selection_color.len() >= 7 {
-                            let r = u8::from_str_radix(&selection_color[1..3], 16).unwrap_or(0);
-                            let g = u8::from_str_radix(&selection_color[3..5], 16).unwrap_or(0);
-                            let b = u8::from_str_radix(&selection_color[5..7], 16).unwrap_or(0);
-                            format!("#{:02X}{:02X}{:02X}{:02X}", r, g, b, 0x1A)
-                        } else {
-                            "#1A81D1D1".to_string()
-                        };
-
+                    // Issue #677 评论 5654174714: PreeditRange.y 保存文档坐标 line.y，
+                    // scroll_y 换算和带透明度颜色都由 renderer 在绘制时计算。
                     plan.preedit_ranges.push(PreeditRange {
                         x: start_x,
-                        y: line.y - scroll_y,
+                        y: line.y,
                         w: preedit_w,
                         h: line.height,
-                        color: preedit_color,
                         underline: true,
                     });
                 }

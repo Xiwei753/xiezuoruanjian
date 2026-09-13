@@ -1,7 +1,7 @@
 use super::input_host::is_left_button_pressed;
 use super::*;
 
-use super::render_plan::{CursorStyle, FrameContext};
+use super::render_plan::{CursorStyle, FrameContext, SelectionPreeditStyle};
 use super::scene_graph_renderer::StaticTextParams;
 use std::time::Instant;
 
@@ -164,6 +164,13 @@ impl QQuickItem for SujianEditorItem {
                 color: self.current_cursor_color.to_string(),
                 width: 2.0,
             };
+            // Issue #677 评论 5654174714: selection/preedit 颜色是每帧轻量状态，
+            // 不进入 PreparedEditorFrame；由 update_paint_node() 读取当前
+            // current_selection_color 后构造 SelectionPreeditStyle 传给 RenderPlan。
+            // preedit 的透明度（0x1A）由 renderer 在绘制时计算。
+            let selection_preedit_style = SelectionPreeditStyle {
+                selection_color: self.current_selection_color.to_string(),
+            };
 
             let render_plan = self
                 .pipeline
@@ -173,6 +180,7 @@ impl QQuickItem for SujianEditorItem {
                     selection_preedit,
                     frame_context,
                     cursor_style,
+                    selection_preedit_style,
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。

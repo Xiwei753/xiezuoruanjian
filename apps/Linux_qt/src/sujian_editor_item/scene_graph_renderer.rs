@@ -113,7 +113,9 @@ pub(crate) fn render_frame(
     // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）
     render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache);
     // Layer 2: 选区/预输入背景
-    render_selection_preedit_layer(root_raw, item_ptr, plan);
+    // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
+    // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。
+    render_selection_preedit_layer(root_raw, item_ptr, plan, static_text.scroll_y);
     // Layer 3: 光标
     render_cursor_layer(root_raw, item_ptr, plan);
 
@@ -263,6 +265,7 @@ fn render_selection_preedit_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
+    scroll_y: f64,
 ) {
     let sp = &plan.selection_preedit;
     let total_count = sp.selection_ranges.len() + sp.preedit_ranges.len();
@@ -271,33 +274,39 @@ fn render_selection_preedit_layer(
         return;
     }
 
+    // Issue #677 评论 5654174714: 颜色是每帧轻量状态，从 RenderPlan.selection_preedit_style
+    // 读取；带透明度的最终颜色在 renderer 内部计算（selection 0x33, preedit 0x1A），
+    // 与原 build_selection_preedit_plan_from_snapshot 中的逻辑保持一致。
+    let base_color = &plan.selection_preedit_style.selection_color;
+    let (base_r, base_g, base_b) = if base_color.starts_with('#') && base_color.len() >= 7 {
+        (
+            f64::from(u8::from_str_radix(&base_color[1..3], 16).unwrap_or(0)) / 255.0,
+            f64::from(u8::from_str_radix(&base_color[3..5], 16).unwrap_or(0)) / 255.0,
+            f64::from(u8::from_str_radix(&base_color[5..7], 16).unwrap_or(0)) / 255.0,
+        )
+    } else {
+        // 与原 fallback "#3381D1D1" / "#1A81D1D1" 的 RGB 部分一致。
+        (0x81 as f64 / 255.0, 0xD1 as f64 / 255.0, 0xD1 as f64 / 255.0)
+    };
+    let selection_alpha = 0x33 as f64 / 255.0;
+    let preedit_alpha = 0x1A as f64 / 255.0;
+
     let mut rect_data: Vec<f64> = Vec::with_capacity(total_count * 10);
 
-    fn parse_hex_color(hex: &str) -> (f64, f64, f64, f64) {
-        if hex.starts_with('#') && hex.len() >= 7 {
-            let r = f64::from(u8::from_str_radix(&hex[1..3], 16).unwrap_or(0)) / 255.0;
-            let g = f64::from(u8::from_str_radix(&hex[3..5], 16).unwrap_or(0)) / 255.0;
-            let b = f64::from(u8::from_str_radix(&hex[5..7], 16).unwrap_or(0)) / 255.0;
-            let a = if hex.len() >= 9 {
-                f64::from(u8::from_str_radix(&hex[7..9], 16).unwrap_or(255)) / 255.0
-            } else {
-                1.0
-            };
-            (r, g, b, a)
-        } else {
-            (0.5, 0.82, 0.82, 0.2)
-        }
-    }
-
     for sel in &sp.selection_ranges {
-        let (r, g, b, a) = parse_hex_color(&sel.color);
-        rect_data.extend_from_slice(&[sel.x, sel.y, sel.w, sel.h, r, g, b, a, 0.0, 0.0]);
+        // Issue #677 评论 5654174714: sel.y 是文档坐标，绘制时减 scroll_y 得到视口坐标。
+        let screen_y = sel.y - scroll_y;
+        rect_data.extend_from_slice(&[
+            sel.x, screen_y, sel.w, sel.h, base_r, base_g, base_b, selection_alpha, 0.0, 0.0,
+        ]);
     }
 
     for pre in &sp.preedit_ranges {
-        let (r, g, b, a) = parse_hex_color(&pre.color);
+        let screen_y = pre.y - scroll_y;
         let underline = if pre.underline { 1.0 } else { 0.0 };
-        rect_data.extend_from_slice(&[pre.x, pre.y, pre.w, pre.h, r, g, b, a, underline, 0.0]);
+        rect_data.extend_from_slice(&[
+            pre.x, screen_y, pre.w, pre.h, base_r, base_g, base_b, preedit_alpha, underline, 0.0,
+        ]);
     }
 
     scene_graph::update_selection_preedit_layer(

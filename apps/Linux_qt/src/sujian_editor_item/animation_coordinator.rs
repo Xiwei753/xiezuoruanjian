@@ -1540,6 +1540,7 @@ impl LinuxEditorAnimationCoordinator {
         selection_preedit: SelectionPreeditPlan,
         mut frame_context: super::render_plan::FrameContext,
         cursor_style: super::render_plan::CursorStyle,
+        selection_preedit_style: super::render_plan::SelectionPreeditStyle,
     ) -> RenderPlan {
         let (text_animation, keys_to_complete) = self.build_text_animation_plan();
         frame_context.keys_to_complete = keys_to_complete;
@@ -1587,6 +1588,7 @@ impl LinuxEditorAnimationCoordinator {
             cursor: cursor_plan,
             frame_context,
             cursor_style,
+            selection_preedit_style,
             static_patches,
         }
     }
