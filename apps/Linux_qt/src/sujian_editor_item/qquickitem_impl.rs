@@ -142,7 +142,18 @@ impl QQuickItem for SujianEditorItem {
                 self.cursor_ctrl.force_snap_next,
                 self.cursor_ctrl.animation.as_ref(),
             );
-            let selection_preedit = self.build_selection_preedit_plan();
+
+            // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
+            // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
+            // `layout_snapshot()`，避免进入排版生命周期
+            // （`EditorLayout::snapshot()` / `begin_layout_generation()` /
+            // `clear_layout_generation()`）。
+            // `prepared_frame = None` 时跳过静态正文渲染并请求下一次 GUI 帧准备。
+            let prepared_frame = self.prepared_frame.as_ref();
+            let selection_preedit = match prepared_frame {
+                Some(frame) => frame.selection_preedit.clone(),
+                None => animation_coordinator::SelectionPreeditPlan::default(),
+            };
 
             let frame_context = FrameContext {
                 active_transaction_keys: Vec::new(),
@@ -165,11 +176,12 @@ impl QQuickItem for SujianEditorItem {
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
-            // update_paint_node() 不再自行排版，只消费 request_static_repaint()
-            // 在正常编辑阶段准备好的不可变快照。没有缓存时不排版，请求下一次 GUI 侧准备。
-            let has_snapshot = self.cached_static_snapshot.is_some();
+            // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
+            // `PreparedEditorFrame`，render thread 不再自行排版。
+            // `prepared_frame = None` 时不排版，请求下一次 GUI 侧准备。
+            let has_snapshot = prepared_frame.is_some();
             let static_text = StaticTextParams {
-                layout_snapshot: self.cached_static_snapshot.as_ref(),
+                layout_snapshot: prepared_frame.map(|f| &f.layout_snapshot),
                 scroll_y,
                 color: &self.current_text_color.to_string(),
                 needs_relayout,
@@ -179,7 +191,7 @@ impl QQuickItem for SujianEditorItem {
             // rebuild 失败（某个必需 layout 缺失）时不能把本次静态正文更新当成已经完成；
             // 保留 layout_dirty / scene_dirty，下一次 update_paint_node 仍需要继续
             // 处理正确的 snapshot/generation。同时请求下一帧更新，让 GUI 线程
-            // prepare_static_snapshot_on_gui_thread 重新排版（snapshot() 会发现
+            // prepare_editor_frame 重新排版（snapshot() 会发现
             // cache 无效而分配新 generation 重新排版）。
             let static_rebuild_ok = scene_graph_renderer::render_frame(
                 editor_root,
@@ -201,7 +213,7 @@ impl QQuickItem for SujianEditorItem {
                 // render thread -> GUI thread queued 跨线程重排旧链。
             }
 
-            // 没有缓存快照时，跳过静态正文渲染并请求下一次 GUI 帧准备 snapshot。
+            // 没有准备好的 frame 时，跳过静态正文渲染并请求下一次 GUI 帧准备。
             // 放在 render_frame 之后，避免与 static_text 的不可变借用冲突。
             if !has_snapshot && needs_relayout {
                 self.request_frame_update();

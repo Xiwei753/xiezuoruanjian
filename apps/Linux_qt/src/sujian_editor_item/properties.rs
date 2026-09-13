@@ -624,10 +624,11 @@ impl SujianEditorItem {
         // pipeline.text_revision() 获取，确保与 snapshot() 的 cache 有效性检查一致。
         // Issue #668 评论 5646458592 问题 1: promote_prepared_layout 会
         // clear_layout_generation 释放旧 generation。在 promote 之前清除
-        // cached_static_snapshot，避免 snapshot 持有已被释放的 generation
+        // prepared_frame，避免 snapshot 持有已被释放的 generation
         // 被 render thread 消费。后续 request_static_repaint 会重新 prepare。
+        // Issue #677 评论 5653944889: 字段从 cached_static_snapshot 改为 prepared_frame。
         if self.pipeline.has_pending_promoted_layout() {
-            self.cached_static_snapshot = None;
+            self.prepared_frame = None;
         }
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(

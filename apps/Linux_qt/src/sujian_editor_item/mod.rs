@@ -392,10 +392,13 @@ pub struct SujianEditorItem {
     layout_dirty: bool,
     /// 动画裁剪开始/结束时为 true，仅重建 Scene Graph，不重新排版。
     scene_dirty: bool,
-    /// 预计算的静态正文排版快照，在 GUI 线程上准备好，由 update_paint_node() 消费。
-    /// 不变性：layout_dirty=true 后 request_static_repaint() 会刷新此字段；
-    /// update_paint_node() 不再调用 layout_snapshot()，只读取此缓存。
-    cached_static_snapshot: Option<LayoutSnapshot>,
+    /// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
+    /// 包含同一次排版得到的 `LayoutSnapshot` 和从该 snapshot 派生的选区/preedit 几何。
+    /// 不变性：
+    /// - 只在 GUI 线程上由 `prepare_editor_frame()` 构造并一次性替换。
+    /// - render thread（`update_paint_node()`）只读，不调用任何排版方法。
+    /// - `None` 表示需要 GUI 侧重新准备，render thread 跳过静态正文渲染。
+    prepared_frame: Option<render_plan::PreparedEditorFrame>,
     cursor_ctrl: cursor_controller::CursorController,
 }
 
@@ -528,7 +531,7 @@ impl Default for SujianEditorItem {
             editor_layout: EditorLayout::default(),
             layout_dirty: true,
             scene_dirty: true,
-            cached_static_snapshot: None,
+            prepared_frame: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
         }
     }
@@ -696,14 +699,19 @@ impl SujianEditorItem {
     ///
     /// Issue #658: 在 GUI/input/layout 阶段先准备好 snapshot，
     /// 再请求 QSG 更新，确保 update_paint_node()（render thread）只消费缓存。
+    ///
+    /// Issue #677 评论 5653944889: 改为一次性准备 `PreparedEditorFrame`，
+    /// 包含同一次排版得到的 `LayoutSnapshot` 和从该 snapshot 派生的选区/preedit 几何。
+    /// render thread 不再调用 `build_selection_preedit_plan()` /
+    /// `layout_snapshot()`，避免进入排版生命周期。
     pub(crate) fn request_static_repaint(&mut self) {
         self.layout_dirty = true;
         self.scene_dirty = true;
-        // Issue #658: 先清除旧缓存，确保后续 prepare 一定重新排版。
-        // 不清缓存时 prepare_static_snapshot_on_gui_thread 会跳过重建，
+        // Issue #658: 先清除旧 frame，确保后续 prepare 一定重新排版。
+        // 不清 frame 时 prepare_editor_frame 会跳过重建，
         // 导致 emit_content_changed / visual_changed 后仍显示旧正文。
-        self.cached_static_snapshot = None;
-        self.prepare_static_snapshot_on_gui_thread();
+        self.prepared_frame = None;
+        self.prepare_editor_frame();
         let item = self as &dyn QQuickItem;
         item.update();
     }
@@ -717,12 +725,22 @@ impl SujianEditorItem {
         item.update();
     }
 
-    /// 在 GUI 线程上预计算静态正文排版快照。
+    /// 在 GUI 线程上一次性准备不可变帧数据 `PreparedEditorFrame`。
     ///
-    /// 调用时机：request_static_repaint()、geometry_changed() 等 GUI 线程路径。
-    /// update_paint_node()（render thread）只读取此快照，不再自行排版。
-    fn prepare_static_snapshot_on_gui_thread(&mut self) {
-        if self.cached_static_snapshot.is_some() {
+    /// Issue #677 评论 5653944889: 这是 render thread 与排版生命周期的唯一边界。
+    /// 调用时机：`request_static_repaint()`、`geometry_changed()` 等 GUI 线程路径。
+    ///
+    /// 流程：
+    /// 1. 只排版一次：调用 `self.editor_layout.snapshot(...)` 得到 `LayoutSnapshot`。
+    /// 2. 从同一个 snapshot 派生 selection/preedit 几何（不再次排版）。
+    /// 3. 构造 `PreparedEditorFrame { layout_snapshot, selection_preedit }`。
+    /// 4. 一次性替换 `self.prepared_frame = Some(frame)`。
+    /// 5. 不调用 `update()`（由调用方决定）。
+    ///
+    /// 不变性：此方法只在 GUI 线程调用；render thread（`update_paint_node()`）
+    /// 只读 `self.prepared_frame`，不再进入排版生命周期。
+    fn prepare_editor_frame(&mut self) {
+        if self.prepared_frame.is_some() {
             return;
         }
         let width = self.bounding_width();
@@ -731,7 +749,11 @@ impl SujianEditorItem {
             .editor_layout
             .snapshot(&self.buffer.text, params, self.pipeline.text_revision())
             .clone();
-        self.cached_static_snapshot = Some(snapshot);
+        let selection_preedit = self.build_selection_preedit_plan_from_snapshot(&snapshot);
+        self.prepared_frame = Some(render_plan::PreparedEditorFrame {
+            layout_snapshot: snapshot,
+            selection_preedit,
+        });
     }
 
     pub(crate) fn request_frame_update(&mut self) {
@@ -792,8 +814,18 @@ impl SujianEditorItem {
         self.buffer.selected_text()
     }
 
-    pub(crate) fn build_selection_preedit_plan(
-        &mut self,
+    /// Issue #677 评论 5653944889: 从已有的 `LayoutSnapshot` 派生选区/preedit 几何。
+    ///
+    /// **关键约束**：此方法不再调用 `self.layout_snapshot(width)`，避免进入排版生命周期
+    /// （`EditorLayout::snapshot()` / `begin_layout_generation()` /
+    /// `clear_layout_generation()`）。snapshot 由调用方（`prepare_editor_frame()`）
+    /// 在 GUI 线程上一次性准备好后传入。
+    ///
+    /// 只读方法 `self.editor_layout.cursor_x_for_line()` 和
+    /// `self.editor_layout.text_width()` 不进入排版生命周期，可以保留。
+    pub(crate) fn build_selection_preedit_plan_from_snapshot(
+        &self,
+        snapshot: &LayoutSnapshot,
     ) -> animation_coordinator::SelectionPreeditPlan {
         use animation_coordinator::{PreeditRange, SelectionRange};
 
@@ -803,12 +835,10 @@ impl SujianEditorItem {
 
         if self.buffer.has_selection() {
             plan.has_selection = true;
-            let width = self.bounding_width();
             let _font_size = f64::from(self.current_font_pixel_size);
             let _font_family = &self.current_font_family.to_string();
             let scroll_y = f64::from(self.current_scroll_y);
             let viewport_h = f64::from(self.current_viewport_height.max(1.0));
-            let snapshot = self.layout_snapshot(width);
 
             let anchor = self.buffer.selection_anchor.min(self.buffer.cursor);
             let head = self.buffer.selection_anchor.max(self.buffer.cursor);
@@ -833,13 +863,13 @@ impl SujianEditorItem {
                 }
 
                 let start_x = self.editor_layout.cursor_x_for_line(
-                    &snapshot,
+                    snapshot,
                     line,
                     seg_start,
                     crate::editor::layout::CaretAffinity::Downstream,
                 );
                 let end_x = self.editor_layout.cursor_x_for_line(
-                    &snapshot,
+                    snapshot,
                     line,
                     seg_end,
                     crate::editor::layout::CaretAffinity::Downstream,
@@ -869,11 +899,9 @@ impl SujianEditorItem {
         if !self.pipeline.composition().preedit_text.is_empty() {
             plan.has_preedit = true;
             if let Some(ref _preedit_rect) = self.pipeline.composition().preedit_cursor_rect {
-                let width = self.bounding_width();
                 let font_size = f64::from(self.current_font_pixel_size);
                 let font_family = &self.current_font_family.to_string();
                 let scroll_y = f64::from(self.current_scroll_y);
-                let snapshot = self.layout_snapshot(width);
                 let cursor_byte = self.buffer.cursor;
 
                 if let Some(line) = snapshot
@@ -882,7 +910,7 @@ impl SujianEditorItem {
                     .find(|l| l.byte_end >= cursor_byte && l.byte_start <= cursor_byte)
                 {
                     let start_x = self.editor_layout.cursor_x_for_line(
-                        &snapshot,
+                        snapshot,
                         line,
                         cursor_byte,
                         crate::editor::layout::CaretAffinity::Downstream,

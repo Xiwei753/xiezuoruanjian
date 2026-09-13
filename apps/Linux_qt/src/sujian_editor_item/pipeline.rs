@@ -766,7 +766,8 @@ impl LinuxEditorPipeline {
     }
 
     /// Issue #668 评论 5646458592 问题 1: 检查是否有 pending promoted layout，
-    /// 供 emit_content_changed 在 promote 之前清除 cached_static_snapshot。
+    /// 供 emit_content_changed 在 promote 之前清除 prepared_frame。
+    /// Issue #677 评论 5653944889: 字段从 cached_static_snapshot 改为 prepared_frame。
     pub fn has_pending_promoted_layout(&self) -> bool {
         self.pending_promoted_layout.is_some()
     }

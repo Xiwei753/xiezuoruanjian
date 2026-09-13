@@ -2,6 +2,7 @@ use super::cursor_animation::CursorAnimationPlan;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
+use crate::editor::layout::LayoutSnapshot;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TextAnimationGlyphInfo {
@@ -25,6 +26,25 @@ pub(crate) struct SelectionPreeditPlan {
     pub selection_ranges: Vec<SelectionRange>,
     pub has_preedit: bool,
     pub preedit_ranges: Vec<PreeditRange>,
+}
+
+/// Issue #677 评论 5653944889: GUI 线程一次性准备好的不可变帧数据。
+///
+/// `layout_snapshot` 和 `selection_preedit` 来自同一次 `EditorLayout::snapshot()` 调用，
+/// 确保 render thread（`update_paint_node()`）只读取已经准备好的数据，
+/// 不再进入排版生命周期（`EditorLayout::snapshot()` /
+/// `begin_layout_generation()` / `clear_layout_generation()`）。
+///
+/// 不变性：
+/// - 只在 GUI 线程上由 `prepare_editor_frame()` 构造并一次性替换 `prepared_frame`。
+/// - render thread 只读 `layout_snapshot` 和 `selection_preedit`，不调用任何排版方法。
+/// - `prepared_frame = None` 表示需要 GUI 侧重新准备，render thread 跳过静态正文渲染。
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedEditorFrame {
+    /// 当前已准备好的 canonical 排版快照。
+    pub layout_snapshot: LayoutSnapshot,
+    /// 从同一个 snapshot 算好的选区/preedit 几何。
+    pub selection_preedit: SelectionPreeditPlan,
 }
 
 #[derive(Clone, Debug)]
