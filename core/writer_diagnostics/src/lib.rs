@@ -42,6 +42,12 @@ pub mod logger;
 pub mod redact;
 pub mod writer;
 
+/// 测试共享锁 — 所有触碰全局 writer 单例（`writer::init`/`enqueue`/`flush`/…）的
+/// 测试都必须串行，否则并发改写全局 config 会让事件写到错误目录，进而污染断言。
+/// 统一用这一把锁，并在上锁后容忍已被其他测试 panic 毒化的锁。
+#[cfg(test)]
+pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 pub use event::{DiagnosticEvent, DiagnosticLevel, DiagnosticOrigin};
 pub use export::{export_diagnostics, PlatformAttachment};
 

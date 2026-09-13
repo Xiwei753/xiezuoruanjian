@@ -343,13 +343,12 @@ fn crc32(data: &[u8]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
 
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    // 与 writer/logger 测试共用 crate 级 TEST_LOCK：本测试也直接触碰全局 writer 单例
+    // （init/enqueue/flush/reset_for_test），必须串行，否则会改写全局 config 污染断言。
     #[test]
     fn export_creates_zip_with_manifest() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         // 先 init writer 写一条日志。
         super::super::writer::init(tmp.path().join("log"), "export-test".to_string(), true);

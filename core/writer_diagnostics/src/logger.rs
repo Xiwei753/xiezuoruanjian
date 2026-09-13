@@ -131,10 +131,8 @@ pub(crate) fn clear() -> bool {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
-    use std::sync::Mutex;
 
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
-
+    // 本测试也通过 install() 触碰全局 writer 单例，必须和 writer/export 测试串行。
     static TEST_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn make_test_event(event: &str, origin: DiagnosticOrigin) -> DiagnosticEvent {
@@ -153,7 +151,7 @@ mod tests {
 
     #[test]
     fn record_event_redacts_sensitive_message() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         install(
             tmp.path().to_path_buf(),

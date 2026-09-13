@@ -425,10 +425,12 @@ pub(crate) fn reset_for_test() {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicU64;
-    use std::sync::Mutex;
 
-    // writer 测试共享全局单例，必须串行执行。用 mutex 保证同一时刻只有一个测试在跑。
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    // writer 测试共享全局单例，必须串行执行；与 export/logger 测试共用 crate 级 TEST_LOCK，
+    // 任一测试 panic 毒化锁后用 into_inner 恢复，避免级联 PoisonError。
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
 
     fn next_seq() -> u64 {
         static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -445,7 +447,7 @@ mod tests {
 
     #[test]
     fn enqueue_and_flush_writes_file() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = lock();
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path().to_path_buf(), "test-build".to_string(), true);
         set_enabled(true);
@@ -462,7 +464,7 @@ mod tests {
 
     #[test]
     fn clear_removes_files() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = lock();
         let tmp = tempfile::tempdir().unwrap();
         init(
             tmp.path().to_path_buf(),
@@ -480,7 +482,7 @@ mod tests {
 
     #[test]
     fn disabled_drops_events() {
-        let _lock = TEST_LOCK.lock().unwrap();
+        let _lock = lock();
         let tmp = tempfile::tempdir().unwrap();
         init(tmp.path().to_path_buf(), "test-disabled".to_string(), false);
         set_enabled(false);
