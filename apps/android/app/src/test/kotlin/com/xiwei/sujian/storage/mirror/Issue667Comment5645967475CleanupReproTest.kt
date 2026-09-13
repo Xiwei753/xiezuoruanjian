@@ -323,6 +323,101 @@ class Issue667Comment5645967475CleanupReproTest {
         )
     }
 
+    /**
+     * Issue #667 评论 5650324333：MediaStore 文件清理后，残留的空事务目录应被清理，done 标志写入。
+     *
+     * 在 Download/Sujian/ 下创建 .staging/tx-1/、.backup/tx-1/、_meta/ 空目录（模拟 MediaProvider
+     * 删除文件后残留的空父目录）。注册 MediaStore provider（query 返回空 cursor，delete 返回 1），
+     * 不设 tree URI（SAF 直接返回 true）。期望：cleanupIfNeeded() 执行后三个目录都不存在，done 写入。
+     */
+    @Test
+    fun emptyDirsCleaned_upAfterMediaStoreCleanup() {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val sujianDir = File(downloadsDir, "Sujian")
+        // 创建空事务目录结构（含子目录 tx-1）
+        val stagingTxDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
+        val backupTxDir = File(sujianDir, ".backup/tx-1").apply { mkdirs() }
+        val metaDir = File(sujianDir, "_meta").apply { mkdirs() }
+
+        assertTrue("测试前置：.staging/tx-1 应已创建", stagingTxDir.exists())
+        assertTrue("测试前置：.backup/tx-1 应已创建", backupTxDir.exists())
+        assertTrue("测试前置：_meta 应已创建", metaDir.exists())
+
+        registerMediaProvider(
+            queryHandler = { _, _ -> newEmptyMediaStoreCursor() },
+            deleteHandler = { 1 },
+        )
+        val cleanup = MirrorStagingCleanup(context, context.contentResolver)
+
+        cleanup.cleanupIfNeeded()
+
+        // 三个旧事务目录都应被清理（不存在）
+        assertFalse(
+            ".staging 目录应已被清理",
+            File(sujianDir, ".staging").exists(),
+        )
+        assertFalse(
+            ".backup 目录应已被清理",
+            File(sujianDir, ".backup").exists(),
+        )
+        assertFalse(
+            "_meta 目录应已被清理",
+            File(sujianDir, "_meta").exists(),
+        )
+        // done 标志应写入（三步骤都成功）
+        assertTrue(
+            "空目录清理成功后应写 done 标志",
+            cleanupFlagFile.exists(),
+        )
+    }
+
+    /**
+     * Issue #667 评论 5650324333：残留普通文件阻止空目录删除，done 标志不写入。
+     *
+     * 在 .staging/tx-1/ 下放一个残留普通文件 leftover.tmp。注册 MediaStore provider（query 返回空
+     * cursor，delete 返回 1），不设 tree URI。期望：cleanupIfNeeded() 执行后残留文件不被递归删除，
+     * .staging/tx-1/ 和 .staging/ 仍存在，done 不写入（因 emptyDirsOk = false）。
+     */
+    @Test
+    fun residualFilePreventsDirDelete_noDoneFlag() {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val sujianDir = File(downloadsDir, "Sujian")
+        // 创建 .staging/tx-1/ 目录并放入残留文件
+        val stagingTxDir = File(sujianDir, ".staging/tx-1").apply { mkdirs() }
+        val leftoverFile = File(stagingTxDir, "leftover.tmp").apply { writeText("residual") }
+
+        assertTrue("测试前置：残留文件应已创建", leftoverFile.exists())
+
+        registerMediaProvider(
+            queryHandler = { _, _ -> newEmptyMediaStoreCursor() },
+            deleteHandler = { 1 },
+        )
+        val cleanup = MirrorStagingCleanup(context, context.contentResolver)
+
+        cleanup.cleanupIfNeeded()
+
+        // 残留文件不应被递归删除
+        assertTrue(
+            "残留普通文件不应被递归删除",
+            leftoverFile.exists(),
+        )
+        // .staging/tx-1/ 因含文件不能删空，仍存在
+        assertTrue(
+            ".staging/tx-1 目录因含残留文件应仍存在",
+            stagingTxDir.exists(),
+        )
+        // .staging/ 因子目录未删空，仍存在
+        assertTrue(
+            ".staging 目录因子目录未删空应仍存在",
+            File(sujianDir, ".staging").exists(),
+        )
+        // done 标志不应写入（emptyDirsOk = false）
+        assertFalse(
+            "空目录清理失败时不应写 done 标志",
+            cleanupFlagFile.exists(),
+        )
+    }
+
     // ── 辅助方法 ──
 
     /** 持久化 SAF tree URI，让 cleanupViaSaf 能读到。 */

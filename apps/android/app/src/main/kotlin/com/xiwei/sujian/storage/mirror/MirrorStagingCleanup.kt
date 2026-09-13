@@ -61,11 +61,12 @@ class MirrorStagingCleanup(
         DiagnosticsLogger.i(TAG, "Starting legacy staging cleanup (Issue #667)")
 
         val mediaStoreOk = cleanupViaMediaStore()
+        val emptyDirsOk = cleanupEmptyLegacyDirs()
         val safOk = cleanupViaSaf()
 
-        // 只有需要清理的后端都成功处理后才能写 done 标志
+        // 只有 MediaStore 文件清理、空目录清理、SAF 清理都成功后才写 done 标志
         // 失败就不写标志，下次初始化继续重试
-        if (mediaStoreOk && safOk) {
+        if (mediaStoreOk && emptyDirsOk && safOk) {
             try {
                 cleanupFlagFile.parentFile?.mkdirs()
                 cleanupFlagFile.writeText("done", Charsets.UTF_8)
@@ -76,7 +77,7 @@ class MirrorStagingCleanup(
         } else {
             DiagnosticsLogger.w(
                 TAG,
-                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, safOk=$safOk), will retry next time",
+                "Legacy staging cleanup failed (mediaStoreOk=$mediaStoreOk, emptyDirsOk=$emptyDirsOk, safOk=$safOk), will retry next time",
             )
         }
     }
@@ -281,6 +282,72 @@ class MirrorStagingCleanup(
             false
         }
 
+    /**
+     * 清理文件系统中残留的空旧事务目录。
+     *
+     * Issue #667 评论 5650324333：`cleanupViaMediaStore()` 只删除 MediaStore 记录对应的文件 URI，
+     * Android MediaProvider 删除文件时不自动删除空掉的父目录，导致 `Download/Sujian/.staging`、
+     * `.backup`、`_meta` 及 `.staging/<txId>/` 等空目录残留 Download 目录。本函数在 MediaStore
+     * 文件清理之后，通过文件系统路径直接清理这些空目录。
+     *
+     * 项目 `minSdk = 30`，走 Android 11+ 共享存储 FUSE 路径，不需要"所有文件访问"权限。
+     *
+     * 三个目录不短路：一个失败仍继续尝试另外两个，最后合并结果。目录不存在视为成功（无需清理）。
+     *
+     * @return true 表示所有旧事务目录都已清理（不存在或成功删除空目录）；
+     *   false 表示任一目录存在但清理失败（含残留文件、listFiles 失败、delete 失败）
+     */
+    private fun cleanupEmptyLegacyDirs(): Boolean {
+        val downloadsDir = android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+        val sujianDir = File(downloadsDir, SUJIAN_DIR_NAME)
+
+        // 不短路：三个目录各自尝试，最后合并结果
+        var allOk = true
+        for (dirName in LEGACY_DIR_NAMES) {
+            val dir = File(sujianDir, dirName)
+            if (!deleteEmptyDirRecursively(dir)) {
+                allOk = false
+            }
+        }
+        return allOk
+    }
+
+    /**
+     * 自底向上递归删除空目录。
+     *
+     * 先递归处理子目录，再删除自身。**不删除文件**：只要发现普通文件仍存在、
+     * `listFiles()` 失败、某个空目录 `delete()` 失败，就返回 false。
+     * 不用 `deleteRecursively()`，避免为了清旧事务目录顺便删除未确认的文件。
+     *
+     * @param dir 要清理的目录
+     * @return true 表示目录不存在，或已成功删除自身及所有空子目录；
+     *   false 表示目录存在但含残留文件、listFiles 失败、或 delete 失败
+     */
+    private fun deleteEmptyDirRecursively(dir: File): Boolean {
+        // 目录不存在视为成功（无需清理）
+        if (!dir.exists()) return true
+        // 存在但不是目录，不应发生，防御性返回 false
+        if (!dir.isDirectory) return false
+        // listFiles 失败（返回 null）时返回 false
+        val children = dir.listFiles() ?: return false
+
+        // 先递归处理子目录（自底向上）
+        for (child in children) {
+            if (child.isDirectory) {
+                if (!deleteEmptyDirRecursively(child)) {
+                    return false
+                }
+            } else {
+                // 子项是普通文件，不能删除文件，返回 false
+                return false
+            }
+        }
+
+        // 所有子目录都成功删除后，目录已空（无子文件），删除自身
+        // delete 失败返回 false
+        return dir.delete()
+    }
+
     private fun tryParseUri(uriString: String): Uri? =
         try {
             Uri.parse(uriString)
@@ -298,6 +365,9 @@ class MirrorStagingCleanup(
 
         /** MediaStore 查询的基础路径前缀：`Download/Sujian`。 */
         private const val DOWNLOADS_BASE = "Download/Sujian"
+
+        /** Download 目录下的应用子目录名。 */
+        private const val SUJIAN_DIR_NAME = "Sujian"
 
         /** 旧版事务目录的路径前缀（相对 `Download/Sujian/`）。 */
         private val LEGACY_DIR_PREFIXES = listOf(".staging/", ".backup/", "_meta/")
