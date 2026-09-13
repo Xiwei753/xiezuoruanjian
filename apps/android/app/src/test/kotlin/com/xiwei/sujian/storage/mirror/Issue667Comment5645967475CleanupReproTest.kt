@@ -76,7 +76,7 @@ class Issue667Comment5645967475CleanupReproTest {
     @Test
     fun mediaStoreDeleteThrows_noDoneFlag_retriesNextTime() {
         registerMediaProvider(
-            queryHandler = { newMediaStoreCursorWithRow() },
+            queryHandler = { _, _ -> newMediaStoreCursorWithRow() },
             deleteHandler = { throw SecurityException("FakeProvider: MediaStore delete denied") },
         )
         val cleanup = MirrorStagingCleanup(context, context.contentResolver)
@@ -106,7 +106,7 @@ class Issue667Comment5645967475CleanupReproTest {
     @Test
     fun mediaStoreDeleteReturnsZero_noDoneFlag() {
         registerMediaProvider(
-            queryHandler = { newMediaStoreCursorWithRow() },
+            queryHandler = { _, _ -> newMediaStoreCursorWithRow() },
             deleteHandler = { 0 },
         )
         val cleanup = MirrorStagingCleanup(context, context.contentResolver)
@@ -129,11 +129,11 @@ class Issue667Comment5645967475CleanupReproTest {
     fun safDeleteReturnsFalse_noDoneFlag() {
         setTreeUri()
         registerMediaProvider(
-            queryHandler = { newEmptyMediaStoreCursor() },
+            queryHandler = { _, _ -> newEmptyMediaStoreCursor() },
             deleteHandler = { 1 },
         )
         registerSafProvider(
-            queryHandler = { newSafChildrenCursor() },
+            queryHandler = { _, _ -> newSafChildrenCursor() },
             deleteHandler = { 0 },
         )
         val cleanup = MirrorStagingCleanup(context, context.contentResolver)
@@ -156,11 +156,11 @@ class Issue667Comment5645967475CleanupReproTest {
     fun safDeleteThrows_noDoneFlag() {
         setTreeUri()
         registerMediaProvider(
-            queryHandler = { newEmptyMediaStoreCursor() },
+            queryHandler = { _, _ -> newEmptyMediaStoreCursor() },
             deleteHandler = { 1 },
         )
         registerSafProvider(
-            queryHandler = { newSafChildrenCursor() },
+            queryHandler = { _, _ -> newSafChildrenCursor() },
             deleteHandler = { throw SecurityException("FakeProvider: SAF delete denied") },
         )
         val cleanup = MirrorStagingCleanup(context, context.contentResolver)
@@ -182,7 +182,7 @@ class Issue667Comment5645967475CleanupReproTest {
     @Test
     fun allSucceed_writesDoneFlag() {
         registerMediaProvider(
-            queryHandler = { newMediaStoreCursorWithRow() },
+            queryHandler = { _, _ -> newMediaStoreCursorWithRow() },
             deleteHandler = { 1 },
         )
         val cleanup = MirrorStagingCleanup(context, context.contentResolver)
@@ -194,6 +194,78 @@ class Issue667Comment5645967475CleanupReproTest {
         )
     }
 
+    /**
+     * 边界 1：MediaStore query 返回 null 时不写 done 标志，且第二次调用真的再次查询（重试）。
+     *
+     * Issue #667 评论 5649934255：`ContentResolver.query()` 契约允许返回 nullable Cursor，
+     * null 代表本次根本没有拿到可确认的查询结果。修复前 `cursor?.use { ... }` 在 null 时跳过
+     * use 块，allDeleted 保持 true，函数返回 true，外层会写 done 标志。修复后 null 应返回 false。
+     *
+     * 注册 media provider：query 返回 null，delete 不会被调用。
+     * 不设 tree URI（SAF 直接返回 true）。
+     * 期望：cleanupViaMediaStore 返回 false → done 不写；第二次调用 done 仍不写，
+     * 且 provider 的 query 调用次数继续增加（证明真的重试，不只是检查 flag）。
+     */
+    @Test
+    fun mediaStoreQueryReturnsNull_noDoneFlag_retriesNextTime() {
+        val provider =
+            CountingFakeProvider(
+                queryHandler = { _, _ -> null },
+                deleteHandler = { 1 },
+            )
+        ShadowContentResolver.registerProviderInternal(MEDIA_HOST, provider)
+        val cleanup = MirrorStagingCleanup(context, context.contentResolver)
+
+        val queryCountBefore = provider.queryCount
+        cleanup.cleanupIfNeeded()
+        assertFalse("query 返回 null 时不应写 done 标志", cleanupFlagFile.exists())
+        val queryCountAfterFirst = provider.queryCount
+        assertTrue("第一次调用应触发 query", queryCountAfterFirst > queryCountBefore)
+
+        cleanup.cleanupIfNeeded()
+        assertFalse("第二次调用后 done 标志仍不应存在", cleanupFlagFile.exists())
+        val queryCountAfterSecond = provider.queryCount
+        assertTrue("第二次调用应再次触发 query（真重试，非仅检查 flag）", queryCountAfterSecond > queryCountAfterFirst)
+    }
+
+    /**
+     * 边界 2：.staging/ 删除失败但 .backup/、_meta/ 成功时，三组 prefix 都实际执行，最终不写 done。
+     *
+     * Issue #667 评论 5649934255：修复前 `LEGACY_DIR_PREFIXES.all { ... }` 在第一个失败前缀
+     * （.staging/）处短路，.backup/ 和 _meta/ 本轮根本不会被调用。修复后三前缀各自尝试，
+     * 不短路。本测试验证三个前缀都被查询了，且最终不写 done（因 .staging/ 失败）。
+     *
+     * 注册 media provider：对 .staging/ 前缀的 query 返回 1 行 cursor 且 delete 返回 0（失败），
+     * 对 .backup/ 和 _meta/ 前缀的 query 返回空 cursor（成功，无数据）。
+     * 不设 tree URI（SAF 直接返回 true）。
+     * 期望：三组 prefix 都实际执行了 query（不短路）；cleanupViaMediaStore 返回 false → done 不写。
+     */
+    @Test
+    fun stagingFailsButBackupAndMetaAttempted_noShortCircuit() {
+        val queriedPrefixes = mutableListOf<String>()
+        val provider =
+            CountingFakeProvider(
+                queryHandler = { _, selectionArgs ->
+                    val prefix = selectionArgs?.firstOrNull() ?: ""
+                    queriedPrefixes.add(prefix)
+                    if (prefix.contains(".staging/")) {
+                        newMediaStoreCursorWithRow()
+                    } else {
+                        newEmptyMediaStoreCursor()
+                    }
+                },
+                deleteHandler = { 0 },
+            )
+        ShadowContentResolver.registerProviderInternal(MEDIA_HOST, provider)
+        val cleanup = MirrorStagingCleanup(context, context.contentResolver)
+
+        cleanup.cleanupIfNeeded()
+        assertFalse(".staging/ 删除失败时不应写 done 标志", cleanupFlagFile.exists())
+        assertTrue("三个前缀都应被查询（不短路）", queriedPrefixes.any { it.contains(".staging/") })
+        assertTrue(".backup/ 前缀应被查询", queriedPrefixes.any { it.contains(".backup/") })
+        assertTrue("_meta/ 前缀应被查询", queriedPrefixes.any { it.contains("_meta/") })
+    }
+
     // ── 辅助方法 ──
 
     /** 持久化 SAF tree URI，让 cleanupViaSaf 能读到。 */
@@ -203,7 +275,7 @@ class Issue667Comment5645967475CleanupReproTest {
 
     /** 注册 media authority 的 FakeProvider。 */
     private fun registerMediaProvider(
-        queryHandler: (Uri) -> Cursor?,
+        queryHandler: (Uri, Array<String?>?) -> Cursor?,
         deleteHandler: (Uri) -> Int,
     ) {
         ShadowContentResolver.registerProviderInternal(
@@ -214,7 +286,7 @@ class Issue667Comment5645967475CleanupReproTest {
 
     /** 注册 SAF authority 的 FakeProvider。 */
     private fun registerSafProvider(
-        queryHandler: (Uri) -> Cursor?,
+        queryHandler: (Uri, Array<String?>?) -> Cursor?,
         deleteHandler: (Uri) -> Int,
     ) {
         ShadowContentResolver.registerProviderInternal(
@@ -269,9 +341,13 @@ class Issue667Comment5645967475CleanupReproTest {
      * [ContentProvider]，而 [ContentProvider] 的 query/delete 不是 final 可自由实现。
      *
      * [queryHandler] 和 [deleteHandler] 是 lambda，内部可抛异常模拟失败分支。
+     *
+     * Issue #667 评论 5649934255：[queryHandler] 签名改为 `(Uri, Array<String?>?) -> Cursor?`，
+     * 第二个参数是 query 的 `selectionArgs`，用于按前缀区分行为（三个前缀的 query URI 都是同一个
+     * `MediaStore.Downloads.EXTERNAL_CONTENT_URI`，无法按 URI 区分）。
      */
     private class FakeProvider(
-        private val queryHandler: (Uri) -> Cursor?,
+        private val queryHandler: (Uri, Array<String?>?) -> Cursor?,
         private val deleteHandler: (Uri) -> Int,
     ) : ContentProvider() {
         override fun onCreate(): Boolean = true
@@ -282,7 +358,54 @@ class Issue667Comment5645967475CleanupReproTest {
             selection: String?,
             selectionArgs: Array<String?>?,
             sortOrder: String?,
-        ): Cursor? = queryHandler(uri)
+        ): Cursor? = queryHandler(uri, selectionArgs)
+
+        override fun delete(
+            uri: Uri,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int = deleteHandler(uri)
+
+        override fun insert(
+            uri: Uri,
+            values: ContentValues?,
+        ): Uri? = null
+
+        override fun update(
+            uri: Uri,
+            values: ContentValues?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+        ): Int = 0
+
+        override fun getType(uri: Uri): String? = null
+    }
+
+    /**
+     * 带计数器的 FakeProvider，用于验证 query 是否真的被调用（重试验证）。
+     *
+     * Issue #667 评论 5649934255：用于边界 1（query 返回 null 重试）和边界 2（不短路）测试，
+     * 通过 [queryCount] 计数器确认 query 真的被调用，而非仅检查 done flag。
+     */
+    private class CountingFakeProvider(
+        private val queryHandler: (Uri, Array<String?>?) -> Cursor?,
+        private val deleteHandler: (Uri) -> Int,
+    ) : ContentProvider() {
+        var queryCount: Int = 0
+            private set
+
+        override fun onCreate(): Boolean = true
+
+        override fun query(
+            uri: Uri,
+            projection: Array<String?>?,
+            selection: String?,
+            selectionArgs: Array<String?>?,
+            sortOrder: String?,
+        ): Cursor? {
+            queryCount++
+            return queryHandler(uri, selectionArgs)
+        }
 
         override fun delete(
             uri: Uri,

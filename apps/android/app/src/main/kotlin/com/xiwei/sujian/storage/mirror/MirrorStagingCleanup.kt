@@ -89,16 +89,24 @@ class MirrorStagingCleanup(
      *
      * MediaStore.Downloads 需要 API 29+，低版本直接返回 true（旧版也不会用 MediaStore，视为成功）。
      *
+     * Issue #667 评论 5649934255：不再用短路的 `all {}`。三个前缀每次都各自尝试一遍，
+     * 最后再合并结果决定是否写 done。这样即使 `.staging/` 一直失败，`.backup/` 和 `_meta/`
+     * 两个本来完全可以删除的旧事务目录也能在本轮被处理，不会被失败前缀永久阻塞。
+     *
      * @return true 表示所有前缀清理都成功；false 表示任一前缀查询或删除失败
      */
     private fun cleanupViaMediaStore(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
 
-        // 全部前缀清理的合取：任一失败即整体失败
-        return LEGACY_DIR_PREFIXES.all { prefix ->
-            val relativePathPrefix = "${DOWNLOADS_BASE}/$prefix"
-            deleteMediaStoreFilesByPathPrefix(relativePathPrefix)
+        // 不短路：三个前缀每次都各自尝试一遍，最后合并结果决定是否写 done
+        var allOk = true
+        for (prefix in LEGACY_DIR_PREFIXES) {
+            val relativePathPrefix = "$DOWNLOADS_BASE/$prefix"
+            if (!deleteMediaStoreFilesByPathPrefix(relativePathPrefix)) {
+                allOk = false
+            }
         }
+        return allOk
     }
 
     /**
@@ -109,8 +117,13 @@ class MirrorStagingCleanup(
      * Issue #667 评论 5645967475：任一 delete 抛异常或返回 0 都视为本前缀清理失败，
      * 让外层不写 done 标志、下次重试。空结果（无数据）视为成功。
      *
+     * Issue #667 评论 5649934255：`ContentResolver.query()` / provider query 契约允许
+     * 返回 nullable Cursor，null 代表本次根本没有拿到可确认的查询结果。因此 query 返回
+     * null 时视为本前缀清理失败（返回 false），让外层不写 done 标志、下次重试，而不是
+     * 把 null cursor 当成查询成功且没有数据。
+     *
      * @return true 表示查询和所有删除都成功（无数据时也返回 true）；
-     *   false 表示查询抛异常，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
+     *   false 表示查询抛异常或返回 null，或任一 delete 抛异常，或任一 delete 返回 0（需重试）
      */
     private fun deleteMediaStoreFilesByPathPrefix(pathPrefix: String): Boolean {
         val cursor =
@@ -128,10 +141,13 @@ class MirrorStagingCleanup(
             } catch (e: Exception) {
                 DiagnosticsLogger.w(TAG, "MediaStore query failed for prefix $pathPrefix", e)
                 return false
+            } ?: run {
+                DiagnosticsLogger.w(TAG, "MediaStore query returned null for prefix $pathPrefix")
+                return false
             }
 
         var allDeleted = true
-        cursor?.use { c ->
+        cursor.use { c ->
             val urisToDelete = mutableListOf<Uri>()
             while (c.moveToNext()) {
                 val id = c.getLong(0)
