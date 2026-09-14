@@ -1065,6 +1065,142 @@ internal object ComposeVisualRebase {
     }
 
     /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 newAnimationUnits
+     * 合成到最终 Tn 坐标。
+     *
+     * 第 i 笔的 newAnimationUnits 在 T(i+1) 坐标。顺着后续 intent 的 offsetMap
+     * 一路映射到最终 Tn：每一步用该笔 offsetMap.entries 的 old→new 映射，unit range
+     * 与 entry 的 old range 求交，交集映射到 new range；不在任何 entry 里的部分
+     * 丢弃（被删除/改掉）。如果某笔没有 offsetMap（null），无法跨笔映射，保留原坐标。
+     *
+     * 保留 chain 的先后顺序和 Core 原来的 unit 边界；只去掉完全重复的 range，
+     * 不把相邻 unit 再 merge 成一块。单笔 chain 时等价于直接返回该笔的 newAnimationUnits。
+     */
+    fun composeNewAnimationUnitsToFinal(
+        chain: List<EditorVisualIntent>,
+    ): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val result = mutableListOf<TextRange>()
+        for (i in chain.indices) {
+            var units: List<TextRange> = chain[i].newAnimationUnits
+            // 从第 i+1 笔开始，用每笔的 offsetMap 把 unit 从 T(i+1) 映射到 Tn
+            mapForwardLoop@ for (j in (i + 1) until chain.size) {
+                val entries = chain[j].offsetMap?.entries ?: return@mapForwardLoop
+                if (entries.isEmpty()) {
+                    // 空 entries 表示整段删除/替换，无存活映射，所有 unit 丢失
+                    units = emptyList()
+                    break
+                }
+                units = mapRangesForwardThroughOffsetMap(units, entries)
+            }
+            result.addAll(units)
+        }
+        return deduplicateRanges(result)
+    }
+
+    /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 oldAnimationUnits
+     * 合成回最初 T0 坐标。
+     *
+     * 第 i 笔的 oldAnimationUnits 在 Ti 坐标。把前面 intent 的 offsetMap 的
+     * entry 反向使用（new→old），从 Ti 一路映射回 T0：每一步用该笔 offsetMap.entries
+     * 的 new→old 逆映射，unit range 与 entry 的 new range 求交，交集映射到 old range；
+     * 不在任何 entry 里的部分丢弃（在 T0 中没有前身）。如果某笔没有 offsetMap（null），
+     * 无法跨笔映射，保留原坐标。
+     *
+     * 保留 chain 的先后顺序和 Core 原来的 unit 边界；只去掉完全重复的 range，
+     * 不把相邻 unit 再 merge 成一块。单笔 chain 时等价于直接返回该笔的 oldAnimationUnits。
+     */
+    fun composeOldAnimationUnitsToBase(
+        chain: List<EditorVisualIntent>,
+    ): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val result = mutableListOf<TextRange>()
+        for (i in chain.indices) {
+            var units: List<TextRange> = chain[i].oldAnimationUnits
+            // 从第 i-1 笔开始反向，用每笔的 offsetMap 的逆映射把 unit 从 Ti 映射回 T0
+            mapBackwardLoop@ for (j in (i - 1) downTo 0) {
+                val entries = chain[j].offsetMap?.entries ?: return@mapBackwardLoop
+                if (entries.isEmpty()) {
+                    units = emptyList()
+                    break
+                }
+                units = mapRangesBackwardThroughOffsetMap(units, entries)
+            }
+            result.addAll(units)
+        }
+        return deduplicateRanges(result)
+    }
+
+    /**
+     * 把 ranges 沿 offsetMap entries 的 old→new 方向映射。
+     * 每个 range 与每个 entry 的 old range [oldStart, oldStart+length) 求交，
+     * 交集映射到 new range。不在任何 entry 里的部分丢弃。
+     */
+    private fun mapRangesForwardThroughOffsetMap(
+        ranges: List<TextRange>,
+        entries: List<VisualOffsetMapEntry>,
+    ): List<TextRange> {
+        val result = mutableListOf<TextRange>()
+        for (unit in ranges) {
+            if (unit.start >= unit.end) continue
+            for (entry in entries) {
+                val oldStart = entry.oldStart
+                val oldEnd = entry.oldStart + entry.length
+                val overlapStart = maxOf(unit.start, oldStart)
+                val overlapEnd = minOf(unit.end, oldEnd)
+                if (overlapStart >= overlapEnd) continue
+                val newStart = entry.newStart + (overlapStart - oldStart)
+                val newEnd = entry.newStart + (overlapEnd - oldStart)
+                result.add(TextRange(newStart, newEnd))
+            }
+        }
+        return result
+    }
+
+    /**
+     * 把 ranges 沿 offsetMap entries 的 new→old 方向（逆映射）映射。
+     * 每个 range 与每个 entry 的 new range [newStart, newStart+length) 求交，
+     * 交集映射到 old range。不在任何 entry 里的部分丢弃。
+     */
+    private fun mapRangesBackwardThroughOffsetMap(
+        ranges: List<TextRange>,
+        entries: List<VisualOffsetMapEntry>,
+    ): List<TextRange> {
+        val result = mutableListOf<TextRange>()
+        for (unit in ranges) {
+            if (unit.start >= unit.end) continue
+            for (entry in entries) {
+                val newStart = entry.newStart
+                val newEnd = entry.newStart + entry.length
+                val overlapStart = maxOf(unit.start, newStart)
+                val overlapEnd = minOf(unit.end, newEnd)
+                if (overlapStart >= overlapEnd) continue
+                val oldStart = entry.oldStart + (overlapStart - newStart)
+                val oldEnd = entry.oldStart + (overlapEnd - newStart)
+                result.add(TextRange(oldStart, oldEnd))
+            }
+        }
+        return result
+    }
+
+    /**
+     * 去掉完全重复的 range（start 和 end 都相同），不合并相邻 range。
+     * 保留首次出现的顺序。
+     */
+    private fun deduplicateRanges(ranges: List<TextRange>): List<TextRange> {
+        val seen = LinkedHashSet<Pair<Int, Int>>()
+        val result = mutableListOf<TextRange>()
+        for (range in ranges) {
+            val key = range.start to range.end
+            if (seen.add(key)) {
+                result.add(range)
+            }
+        }
+        return result
+    }
+
+    /**
      * #644 评论 #684：合成整条 offset map chain —
      * 把每笔 intent 的 [VisualOffsetMap] 顺序合成，得到最初屏幕 old UTF-16 range
      * → 最终屏幕 new UTF-16 range 的 map。

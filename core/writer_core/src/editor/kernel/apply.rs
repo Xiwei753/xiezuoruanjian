@@ -5,8 +5,9 @@ use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
-    choose_animation_mode, compute_animation_units, count_grapheme_clusters,
-    text_contains_complex_grapheme, AnimationMode, EditorTransactionCause, OffsetMap,
+    choose_animation_mode, compute_animation_units_from_slices, count_grapheme_clusters,
+    text_contains_complex_grapheme, AnimationMode, AnimationTextSlice, EditorTransactionCause,
+    OffsetMap,
 };
 
 impl EditorKernel {
@@ -313,7 +314,7 @@ impl EditorKernel {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn apply_insert(
         &mut self,
         byte_offset: usize,
@@ -396,8 +397,16 @@ impl EditorKernel {
             )
         };
 
-        let (old_animation_units, new_animation_units) =
-            compute_animation_units(animation_mode, "", text, &[], &new_affected);
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
+            animation_mode,
+            &[],
+            &[AnimationTextSlice {
+                absolute_start: byte_offset,
+                text,
+            }],
+            &[],
+            &new_affected,
+        );
 
         let visual_intent = EditorVisualIntent {
             cause,
@@ -536,8 +545,16 @@ impl EditorKernel {
             )
         };
 
-        let (old_animation_units, new_animation_units) =
-            compute_animation_units(animation_mode, &deleted_text, "", &old_affected, &[]);
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
+            animation_mode,
+            &[AnimationTextSlice {
+                absolute_start: byte_start,
+                text: &deleted_text,
+            }],
+            &[],
+            &old_affected,
+            &[],
+        );
 
         let visual_intent = EditorVisualIntent {
             cause,
@@ -694,10 +711,16 @@ impl EditorKernel {
             EditorOperationKind::Replace
         };
 
-        let (old_animation_units, new_animation_units) = compute_animation_units(
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
             animation_mode,
-            &deleted_text,
-            replacement_text,
+            &[AnimationTextSlice {
+                absolute_start: byte_start,
+                text: &deleted_text,
+            }],
+            &[AnimationTextSlice {
+                absolute_start: byte_start,
+                text: replacement_text,
+            }],
             &old_affected,
             &new_affected,
         );
@@ -739,7 +762,7 @@ impl EditorKernel {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn apply_insert_line_break(
         &mut self,
         byte_offset: usize,
@@ -830,8 +853,16 @@ impl EditorKernel {
             )
         };
 
-        let (old_animation_units, new_animation_units) =
-            compute_animation_units(animation_mode, "", &text, &[], &new_affected);
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
+            animation_mode,
+            &[],
+            &[AnimationTextSlice {
+                absolute_start: byte_offset,
+                text: &text,
+            }],
+            &[],
+            &new_affected,
+        );
 
         let visual_intent = EditorVisualIntent {
             cause,
@@ -1069,10 +1100,16 @@ impl EditorKernel {
         } else {
             &deleted_text
         };
-        let (old_animation_units, new_animation_units) = compute_animation_units(
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
             animation_mode,
-            old_text_for_units,
-            replacement_text,
+            &[AnimationTextSlice {
+                absolute_start: byte_start,
+                text: old_text_for_units,
+            }],
+            &[AnimationTextSlice {
+                absolute_start: byte_start,
+                text: replacement_text,
+            }],
             &old_affected,
             &new_affected,
         );

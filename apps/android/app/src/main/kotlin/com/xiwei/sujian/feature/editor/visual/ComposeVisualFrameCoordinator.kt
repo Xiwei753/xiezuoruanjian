@@ -417,17 +417,11 @@ class ComposeVisualFrameCoordinator(
             } else {
                 lastIntent.durationMs
             }
-        // #684 评论 5668108597 问题2：多 Core intent 合成一帧时，animation units 映射到最终 T0→Tn 坐标。
-        // 简单处理：chain 只有一笔直接用它的 animation units；chain 有多笔用 merged ranges 作为整块单元（保守）。
-        val oldAnimationUnits: List<androidx.compose.ui.text.TextRange>
-        val newAnimationUnits: List<androidx.compose.ui.text.TextRange>
-        if (chain.size == 1) {
-            oldAnimationUnits = chain[0].oldAnimationUnits
-            newAnimationUnits = chain[0].newAnimationUnits
-        } else {
-            oldAnimationUnits = mergedOldRanges
-            newAnimationUnits = mergedNewRanges
-        }
+        // #684 评论 5669048233 Bug2 修复：多 Core intent 合成一帧时，animation units
+        // 映射到最终 T0→Tn 坐标。不再退化成整块 mergedRanges — 用 compose 函数把每笔
+        // intent 的 units 沿 offsetMap chain 映射到统一坐标系，保留 Core 原来的 unit 边界。
+        val oldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
+        val newAnimationUnits = ComposeVisualRebase.composeNewAnimationUnitsToFinal(chain)
         val transaction =
             ComposeVisualTransaction(
                 id = nextTransactionId,

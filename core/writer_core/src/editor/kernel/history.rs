@@ -4,7 +4,7 @@ use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
-    compute_animation_units, AnimationMode, EditorTransactionCause, OffsetMap,
+    compute_animation_units_from_slices, AnimationMode, EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -124,9 +124,14 @@ impl EditorKernel {
         };
 
         // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
-        // 两者都不访问 text 参数，传空字符串即可。
-        let (old_animation_units, new_animation_units) =
-            compute_animation_units(animation_mode, "", "", &old_affected, &new_affected);
+        // 两者都不访问 slice 参数，传空 slice 即可。
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
+            animation_mode,
+            &[],
+            &[],
+            &old_affected,
+            &new_affected,
+        );
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Undo,
@@ -259,9 +264,14 @@ impl EditorKernel {
         };
 
         // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
-        // 两者都不访问 text 参数，传空字符串即可。
-        let (old_animation_units, new_animation_units) =
-            compute_animation_units(animation_mode, "", "", &old_affected, &new_affected);
+        // 两者都不访问 slice 参数，传空 slice 即可。
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
+            animation_mode,
+            &[],
+            &[],
+            &old_affected,
+            &new_affected,
+        );
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Redo,

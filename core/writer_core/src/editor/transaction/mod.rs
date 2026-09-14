@@ -41,8 +41,8 @@ pub use rebase_mapping::{compute_rebase_slice_mappings, SliceMatchInput};
 
 pub use visual_classification::{
     choose_animation_mode, classify_composition_visual, classify_visual_diff,
-    compute_animation_units, count_grapheme_clusters, diff_plain_text, is_cjk_code_point,
-    is_combining_code_point, is_complex_grapheme_code_point, split_text_into_clusters,
-    split_text_into_runs, text_contains_complex_grapheme, CompositionOperationKind,
-    CompositionVisualClassification,
+    compute_animation_units, compute_animation_units_from_slices, count_grapheme_clusters,
+    diff_plain_text, is_cjk_code_point, is_combining_code_point, is_complex_grapheme_code_point,
+    split_text_into_clusters, split_text_into_runs, text_contains_complex_grapheme,
+    AnimationTextSlice, CompositionOperationKind, CompositionVisualClassification,
 };

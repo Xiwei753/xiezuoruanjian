@@ -7,8 +7,8 @@ use crate::editor::strong_types::{
     Utf8ByteRange,
 };
 use crate::editor::transaction::{
-    classify_composition_visual, compute_animation_units, AnimationMode, CompositionOperationKind,
-    EditorTransactionCause, OffsetMap,
+    classify_composition_visual, compute_animation_units_from_slices, AnimationMode,
+    AnimationTextSlice, CompositionOperationKind, EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -136,10 +136,16 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
-        let (old_animation_units, new_animation_units) = compute_animation_units(
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
             classification.animation_mode,
-            &old_preedit_text,
-            new_preedit_text,
+            &[AnimationTextSlice {
+                absolute_start: replace_start,
+                text: &old_preedit_text,
+            }],
+            &[AnimationTextSlice {
+                absolute_start: replace_start,
+                text: new_preedit_text,
+            }],
             &classification.old_affected_byte_ranges,
             &classification.new_affected_byte_ranges,
         );
@@ -309,10 +315,16 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
-        let (old_animation_units, new_animation_units) = compute_animation_units(
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
             classification.animation_mode,
-            &committed_text,
-            &committed_text,
+            &[AnimationTextSlice {
+                absolute_start: replace_start,
+                text: &committed_text,
+            }],
+            &[AnimationTextSlice {
+                absolute_start: replace_start,
+                text: &committed_text,
+            }],
             &classification.old_affected_byte_ranges,
             &classification.new_affected_byte_ranges,
         );
@@ -402,10 +414,13 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
-        let (old_animation_units, new_animation_units) = compute_animation_units(
+        let (old_animation_units, new_animation_units) = compute_animation_units_from_slices(
             classification.animation_mode,
-            &session.preedit_text,
-            "",
+            &[AnimationTextSlice {
+                absolute_start: replace_start,
+                text: &session.preedit_text,
+            }],
+            &[],
             &classification.old_affected_byte_ranges,
             &classification.new_affected_byte_ranges,
         );

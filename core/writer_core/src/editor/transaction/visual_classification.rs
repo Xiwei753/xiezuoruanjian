@@ -400,27 +400,40 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     clusters
 }
 
-/// #684 评论 5668108597：根据 animation_mode 生成动画单元 ranges。
+/// #684 评论 5669048233：显式的动画文本切片 — 局部文本 + 它在正文中的绝对起点。
+///
+/// 调用方明确知道传进来的是"哪一段文本"以及"这段文本在正文里的绝对 byte 起点"，
+/// 不再靠 `range.start` 与 `text.len()` 的关系猜全文/局部文本。
+/// `text` 本身就是 affected range 内的内容，`absolute_start` 是它在正文里的
+/// UTF-8 byte 起始偏移。`split_text_into_clusters` / `split_text_into_runs`
+/// 用 `absolute_start` 作为 base_offset 生成正文绝对坐标的 unit ranges。
+#[derive(Debug, Clone, Copy)]
+pub struct AnimationTextSlice<'a> {
+    /// 该段文本在正文中的绝对 UTF-8 byte 起始偏移。
+    pub absolute_start: usize,
+    /// affected range 内的局部文本。
+    pub text: &'a str,
+}
+
+/// #684 评论 5669048233：根据 animation_mode 生成动画单元 ranges。
 ///
 /// 平台端据此做吐字/吞字动画，不再整段淡入淡出。
 ///
-/// - `GlyphAnimation` / `ClusterAnimation`: 对每个 affected range 内的文本按
+/// - `GlyphAnimation` / `ClusterAnimation`: 对每个 slice 内的文本按
 ///   grapheme cluster 单元（`split_text_into_clusters`）生成 cluster ranges。
-/// - `RunAnimation`: 对每个 affected range 内的文本按 run 单元
+/// - `RunAnimation`: 对每个 slice 内的文本按 run 单元
 ///   （`split_text_into_runs`）生成 run ranges。
 /// - `LineReflowAnimation` / `SnapshotAnimation`: 直接返回 `old_affected` /
 ///   `new_affected`（整块 affected range 作为一个单元）。
 /// - `SystemSuppressed`: 返回空 vec。
 ///
-/// `old_animation_units` 从 `old_text` + `old_affected` 生成，
-/// `new_animation_units` 从 `new_text` + `new_affected` 生成。
-/// affected range 可能是多个，对每个 range 内的子串生成单元，用 range 的 start
-/// 作为 base_offset。越界或非 char boundary 的 range 被跳过（防御性，正常调用方
-/// 不会产生非法 range）。
-pub fn compute_animation_units(
+/// `old_animation_units` 从 `old_slices` 生成，`new_animation_units` 从
+/// `new_slices` 生成。每个 slice 的 `text` 是 affected range 内的局部文本，
+/// `absolute_start` 是正文绝对偏移。这是显式入口 — 调用方明确知道传的是局部文本。
+pub fn compute_animation_units_from_slices(
     animation_mode: AnimationMode,
-    old_text: &str,
-    new_text: &str,
+    old_slices: &[AnimationTextSlice<'_>],
+    new_slices: &[AnimationTextSlice<'_>],
     old_affected: &[Utf8ByteRange],
     new_affected: &[Utf8ByteRange],
 ) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
@@ -430,38 +443,22 @@ pub fn compute_animation_units(
             (old_affected.to_vec(), new_affected.to_vec())
         }
         AnimationMode::GlyphAnimation | AnimationMode::ClusterAnimation => (
-            collect_cluster_units(old_text, old_affected),
-            collect_cluster_units(new_text, new_affected),
+            collect_cluster_units_from_slices(old_slices),
+            collect_cluster_units_from_slices(new_slices),
         ),
         AnimationMode::RunAnimation => (
-            collect_run_units(old_text, old_affected),
-            collect_run_units(new_text, new_affected),
+            collect_run_units_from_slices(old_slices),
+            collect_run_units_from_slices(new_slices),
         ),
     }
 }
 
-/// 对 `text` 中每个 affected range 内的子串按 grapheme cluster 单元生成
-/// `Utf8ByteRange` 列表。`base_offset` = range.start。
-///
-/// `text` 可以是全文（affected range 在 text 内）或局部文本（text 就是
-/// affected range 内的文本，range.start 是正文绝对偏移）。实现根据 range.start
-/// 与 text.len() 的关系自动选择模式：
-/// - 全文模式：`start < text.len() && end <= text.len()`，从 text 截取 `[start, end)`。
-/// - 局部文本模式：`start >= text.len()`，text 就是 affected range 内的文本，
-///   base_offset = start。
-/// - 混合情况（start 在 text 内但 end 超出）跳过该 range。
-fn collect_cluster_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8ByteRange> {
+/// 对每个 slice 内的文本按 grapheme cluster 单元生成 `Utf8ByteRange` 列表。
+/// `slice.absolute_start` 作为 base_offset，生成正文绝对坐标的 unit ranges。
+fn collect_cluster_units_from_slices(slices: &[AnimationTextSlice<'_>]) -> Vec<Utf8ByteRange> {
     let mut units = Vec::new();
-    for range in affected {
-        let start = range.start().value();
-        let end = range.end().value();
-        if start >= end {
-            continue;
-        }
-        let Some((subtext, base)) = resolve_subtext(text, start, end) else {
-            continue;
-        };
-        for cluster in split_text_into_clusters(subtext, base) {
+    for slice in slices {
+        for cluster in split_text_into_clusters(slice.text, slice.absolute_start) {
             units.push(Utf8ByteRange::from_ordered(
                 cluster.byte_start.value(),
                 cluster.byte_end.value(),
@@ -471,22 +468,12 @@ fn collect_cluster_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8Byte
     units
 }
 
-/// 对 `text` 中每个 affected range 内的子串按 run 单元生成
-/// `Utf8ByteRange` 列表。`base_offset` = range.start。
-///
-/// 模式选择同 [collect_cluster_units]。
-fn collect_run_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8ByteRange> {
+/// 对每个 slice 内的文本按 run 单元生成 `Utf8ByteRange` 列表。
+/// `slice.absolute_start` 作为 base_offset，生成正文绝对坐标的 unit ranges。
+fn collect_run_units_from_slices(slices: &[AnimationTextSlice<'_>]) -> Vec<Utf8ByteRange> {
     let mut units = Vec::new();
-    for range in affected {
-        let start = range.start().value();
-        let end = range.end().value();
-        if start >= end {
-            continue;
-        }
-        let Some((subtext, base)) = resolve_subtext(text, start, end) else {
-            continue;
-        };
-        for run in split_text_into_runs(subtext, base) {
+    for slice in slices {
+        for run in split_text_into_runs(slice.text, slice.absolute_start) {
             units.push(Utf8ByteRange::from_ordered(
                 run.byte_start.value(),
                 run.byte_end.value(),
@@ -496,27 +483,77 @@ fn collect_run_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8ByteRang
     units
 }
 
-/// 确定 affected range 内的文本和 base_offset。
+/// #684 评论 5669048233：根据 animation_mode 生成动画单元 ranges（兼容入口）。
 ///
-/// - 全文模式：`start < text.len() && end <= text.len()`，从 text 截取 `[start, end)`，
-///   base = start。
-/// - 局部文本模式：`start >= text.len()`，text 就是 affected range 内的文本，
-///   base = start。
-/// - 混合情况返回 None。
-fn resolve_subtext(text: &str, start: usize, end: usize) -> Option<(&str, usize)> {
-    if start < text.len() && end <= text.len() {
-        // 全文模式
-        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
-            return None;
+/// 这是给测试和无法显式构建 slice 的调用方用的兼容入口。内部对每个 affected
+/// range 构建 [AnimationTextSlice]：
+/// - 局部文本模式（`range.start >= text.len()`）：`text` 就是 affected range 内
+///   的文本，slice = `(range.start, text)`。
+/// - 全文模式（`range.end <= text.len()` 且 char boundary）：从 `text` 截取
+///   `[range.start, range.end)`，slice = `(range.start, &text[range.start..range.end])`。
+/// - 混合情况（`range.start < text.len()` 且 `range.end > text.len()`）：
+///   #684 评论 5669048233 Bug1 修复 — 不再返回 None 丢失 units，而是按局部文本
+///   处理（调用方传的 `text` 是局部文本），slice = `(range.start, text)`。
+///
+/// 生产代码（apply.rs / composition.rs / history.rs）应优先调用
+/// [compute_animation_units_from_slices] 显式构建 slice，避免此入口的隐式推断。
+pub fn compute_animation_units(
+    animation_mode: AnimationMode,
+    old_text: &str,
+    new_text: &str,
+    old_affected: &[Utf8ByteRange],
+    new_affected: &[Utf8ByteRange],
+) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
+    let old_slices = build_slices_from_text(old_text, old_affected);
+    let new_slices = build_slices_from_text(new_text, new_affected);
+    compute_animation_units_from_slices(
+        animation_mode,
+        &old_slices,
+        &new_slices,
+        old_affected,
+        new_affected,
+    )
+}
+
+/// #684 评论 5669048233：从 `text` + `affected` 构建 [AnimationTextSlice] 列表。
+///
+/// 策略（不再有 mixed 分支返回 None）：
+/// - `range.start >= text.len()`：局部文本模式，slice = `(range.start, text)`。
+/// - `range.end <= text.len()` 且 char boundary：全文模式，slice = `(range.start, &text[range.start..range.end])`。
+/// - 否则（mixed 或越界）：按局部文本处理，slice = `(range.start, text)`。
+fn build_slices_from_text<'a>(
+    text: &'a str,
+    affected: &[Utf8ByteRange],
+) -> Vec<AnimationTextSlice<'a>> {
+    let mut slices = Vec::new();
+    for range in affected {
+        let start = range.start().value();
+        let end = range.end().value();
+        if start >= end {
+            continue;
         }
-        Some((&text[start..end], start))
-    } else if start >= text.len() {
-        // 局部文本模式：text 就是 affected range 内的文本
-        Some((text, start))
-    } else {
-        // start < text.len() 但 end > text.len()，混合情况
-        None
+        if start >= text.len() {
+            // 局部文本模式：text 就是 affected range 内的文本
+            slices.push(AnimationTextSlice {
+                absolute_start: start,
+                text,
+            });
+        } else if end <= text.len() && text.is_char_boundary(start) && text.is_char_boundary(end) {
+            // 全文模式：从 text 截取 [start, end)
+            slices.push(AnimationTextSlice {
+                absolute_start: start,
+                text: &text[start..end],
+            });
+        } else {
+            // mixed（start < text.len() 但 end > text.len()）或非 char boundary：
+            // #684 评论 5669048233 Bug1 修复 — 按局部文本处理，不丢失 units。
+            slices.push(AnimationTextSlice {
+                absolute_start: start,
+                text,
+            });
+        }
     }
+    slices
 }
 
 /// 判断编辑变更是否应产生动画。
