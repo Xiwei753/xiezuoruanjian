@@ -909,12 +909,12 @@ Rectangle {
                     }
 
                     // 光标动画 tick - 消费 Rust 侧 CursorController 的 visual_x/y 更新和 blink phase
-                    Timer {
+                    // Issue #679 评论 5657313927: 改用 FrameAnimation 与渲染帧同步，
+                    // 不再用 16ms 固定 interval 的 Timer。
+                    FrameAnimation {
                         id: cursorAnimationTick
-                        interval: 16
                         running: sujianEditor.editor_enabled
                                  && sujianEditor.focus
-                        repeat: true
                         onTriggered: {
                             sujianEditor.tick_cursor_animation()
                         }

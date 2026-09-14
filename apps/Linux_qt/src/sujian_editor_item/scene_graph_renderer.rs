@@ -233,17 +233,19 @@ fn render_cursor_layer(
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
 ) {
-    let cursor_plan = &plan.cursor;
+    // Issue #679 评论 5657313927: 直接画 CursorRenderState，
+    // 不再理解 Snap/Tween/driver/Timestamp。
+    let cursor = &plan.cursor;
     let cursor_style = &plan.cursor_style;
 
-    if !cursor_plan.should_be_visible {
+    if !cursor.visible {
         scene_graph::update_cursor_node(
             root_raw,
             item_ptr,
-            cursor_plan.cursor_x,
-            cursor_plan.cursor_y,
+            cursor.x,
+            cursor.y,
             cursor_style.width,
-            cursor_plan.cursor_h,
+            cursor.h,
             0.0,
             cursor_style.color.as_ptr(),
             cursor_style.color.len(),
@@ -251,19 +253,14 @@ fn render_cursor_layer(
         return;
     }
 
-    let opacity = match cursor_plan.blink_mode {
-        super::cursor_animation::CursorBlinkMode::Suppressed => 1.0,
-        super::cursor_animation::CursorBlinkMode::Normal => 1.0,
-    };
-
     scene_graph::update_cursor_node(
         root_raw,
         item_ptr,
-        cursor_plan.cursor_x,
-        cursor_plan.cursor_y,
+        cursor.x,
+        cursor.y,
         cursor_style.width,
-        cursor_plan.cursor_h,
-        opacity,
+        cursor.h,
+        cursor.opacity,
         cursor_style.color.as_ptr(),
         cursor_style.color.len(),
     );

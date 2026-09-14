@@ -36,19 +36,31 @@ impl SujianEditorItem {
             CursorBlinkMode::Normal
         };
 
-        let active_progress = self
-            .pipeline
-            .animation_coordinator_mut()
-            .active_cursor_progress();
-        let still_animating = if self.cursor_ctrl.animation.is_some() {
-            if let Some(progress) = active_progress {
-                self.cursor_ctrl.update_animation_progress(progress)
-            } else {
-                self.cursor_ctrl.tick_animation()
+        // Issue #679 评论 5657313927 (7b): 只消费当前 CursorAnimationState.driver_key，
+        // 不再调用 tick_animation() / active_cursor_progress()。
+        let mut still_animating = false;
+        if let Some(ref anim) = self.cursor_ctrl.animation {
+            let driver_key = anim.driver_key;
+            match self
+                .pipeline
+                .animation_coordinator_mut()
+                .cursor_timeline_sample(driver_key)
+            {
+                Some(animation_coordinator::CursorTimelineSample::Waiting) => {
+                    // 保持当前视觉位置，只请求下一帧。
+                    still_animating = true;
+                }
+                Some(animation_coordinator::CursorTimelineSample::Running(p)) => {
+                    still_animating = self.cursor_ctrl.update_animation_progress(p);
+                }
+                None => {
+                    // driver key 已不存在，Timeline 已结束/取消。
+                    still_animating = self.cursor_ctrl.finish_animation_to_target();
+                }
             }
-        } else {
-            false
-        };
+        }
+        // 没有 cursor animation 时只处理 blink。
+
         let blink_changed = self.cursor_ctrl.tick_blink(blink_mode);
         if still_animating || blink_changed {
             self.cursor_rect_changed();
@@ -795,7 +807,6 @@ impl SujianEditorItem {
         if next == self.buffer.cursor && !extend {
             return;
         }
-        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         self.cursor_ctrl.affinity = if forward {
             CaretAffinity::Downstream
         } else {
@@ -811,13 +822,9 @@ impl SujianEditorItem {
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
+        // Issue #679 评论 5657313927 (7a): CursorOnly 的创建统一放到
+        // update_cursor_visual_position() 里，这里不再手动调 handle_cursor_only。
         let _ = self.update_cursor_visual_position();
-        let new_cursor_rect = self.current_cursor_rect_for_transaction();
-        if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline
-                .animation_coordinator_mut()
-                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
-        }
         self.request_static_repaint();
     }
 
@@ -835,7 +842,6 @@ impl SujianEditorItem {
         if target_idx == line_idx {
             return;
         }
-        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         let index = self.index_at_line_x(&lines[target_idx], x);
         self.cursor_ctrl.affinity = self
             .editor_layout
@@ -850,13 +856,9 @@ impl SujianEditorItem {
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
+        // Issue #679 评论 5657313927 (7a): CursorOnly 的创建统一放到
+        // update_cursor_visual_position() 里，这里不再手动调 handle_cursor_only。
         let _ = self.update_cursor_visual_position();
-        let new_cursor_rect = self.current_cursor_rect_for_transaction();
-        if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline
-                .animation_coordinator_mut()
-                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
-        }
         self.request_static_repaint();
     }
 
@@ -872,7 +874,6 @@ impl SujianEditorItem {
         } else {
             (line.byte_start, CaretAffinity::Downstream)
         };
-        let old_cursor_rect = self.current_cursor_rect_for_transaction();
         self.cursor_ctrl.affinity = affinity;
         if extend {
             let anchor = self.buffer.selection_anchor;
@@ -883,13 +884,9 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
         self.cursor_position_changed();
         self.selection_changed();
+        // Issue #679 评论 5657313927 (7a): CursorOnly 的创建统一放到
+        // update_cursor_visual_position() 里，这里不再手动调 handle_cursor_only。
         let _ = self.update_cursor_visual_position();
-        let new_cursor_rect = self.current_cursor_rect_for_transaction();
-        if self.current_smooth_cursor_enabled && !extend {
-            self.pipeline
-                .animation_coordinator_mut()
-                .handle_cursor_only(old_cursor_rect, new_cursor_rect);
-        }
         self.request_static_repaint();
     }
 }

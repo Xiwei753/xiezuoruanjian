@@ -135,7 +135,11 @@ impl CursorController {
                 self.visual_y = plan.cursor_y;
                 self.animation = None;
             }
-            CursorTransition::Tween { old_rect, new_rect } => {
+            CursorTransition::Tween {
+                old_rect,
+                new_rect,
+                driver_key,
+            } => {
                 let start_x = old_rect.x;
                 let start_y = old_rect.top;
                 let target_x = new_rect.x;
@@ -147,6 +151,7 @@ impl CursorController {
                     {
                         let (cur_x, cur_y) = anim.current_position();
                         self.animation = Some(CursorAnimationState {
+                            driver_key: *driver_key,
                             start_x: cur_x,
                             start_y: cur_y,
                             target_x,
@@ -169,6 +174,7 @@ impl CursorController {
                     let prev_vy = self.visual_y;
                     if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
                         self.animation = Some(CursorAnimationState {
+                            driver_key: *driver_key,
                             start_x: if (start_x - prev_vx).abs() < 0.01
                                 && (start_y - prev_vy).abs() < 0.01
                             {
@@ -241,22 +247,16 @@ impl CursorController {
         }
     }
 
-    pub fn tick_animation(&mut self) -> bool {
-        if let Some(ref anim) = self.animation {
-            if anim.is_finished() {
-                self.visual_x = anim.target_x;
-                self.visual_y = anim.target_y;
-                self.animation = None;
-                self.dirty = false;
-                false
-            } else {
-                let (cx, cy) = anim.current_position();
-                self.visual_x = cx;
-                self.visual_y = cy;
-                true
-            }
-        } else {
+    /// Issue #679 评论 5657313927: driver key 已不存在（Timeline 已结束/取消）时，
+    /// 把 visual_x/y 精确落到 target_x/y 并删除 animation。
+    /// 返回 true 表示发生过位置收尾，需要请求下一帧/重绘。
+    pub fn finish_animation_to_target(&mut self) -> bool {
+        if let Some(anim) = self.animation.take() {
+            self.visual_x = anim.target_x;
+            self.visual_y = anim.target_y;
             self.dirty = false;
+            true
+        } else {
             false
         }
     }

@@ -797,7 +797,7 @@ impl LinuxEditorPipeline {
             if snapshot_ids.is_empty() {
                 self.animation_coordinator
                     .prepared_queue
-                    .mark_texture_prepared(key);
+                    .mark_prepared(key);
                 return;
             }
 
@@ -812,7 +812,7 @@ impl LinuxEditorPipeline {
             if all_found {
                 self.animation_coordinator
                     .prepared_queue
-                    .mark_texture_prepared(key);
+                    .mark_prepared(key);
                 return;
             }
 
@@ -849,7 +849,7 @@ impl LinuxEditorPipeline {
             } else {
                 self.animation_coordinator
                     .prepared_queue
-                    .mark_texture_prepared(key);
+                    .mark_prepared(key);
             }
         }
     }

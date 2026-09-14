@@ -34,8 +34,8 @@ pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, C
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
 pub(crate) use super::render_plan::{
-    PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange, TextAnimationGlyphInfo,
-    TextAnimationPlan,
+    CursorRenderState, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange,
+    TextAnimationGlyphInfo, TextAnimationPlan,
 };
 use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::{
@@ -43,6 +43,15 @@ use super::text_visual_transaction::{
     TextVisualTransactionState, TransactionTimeline,
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
+
+/// Issue #679 评论 5657313927 (3c): 按 driver key 取样 Timeline 进度的结果。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CursorTimelineSample {
+    /// 事务仍处于 Pending / Prepared，Timeline 还没开始走，应保持当前视觉位置。
+    Waiting,
+    /// 事务处于 Rendering / Paused，返回当前 progress（已 clamp 到 [0,1]）。
+    Running(f64),
+}
 
 /// 将旧事务的视觉帧 rebase 到新事务的 slice 上。
 ///
@@ -1334,6 +1343,9 @@ impl LinuxEditorAnimationCoordinator {
 
         self.layout_revision = new_revision;
         self.prepared_queue.enqueue(prepared);
+        // Issue #679 评论 5657313927 (3a): CursorOnly 没有文字切片也没有纹理准备阶段，
+        // 创建后立即推进到 Prepared，不要让它以 Pending 留在队列里导致光标不移动。
+        self.prepared_queue.mark_prepared(key);
         Some(key)
     }
 
@@ -1362,25 +1374,65 @@ impl LinuxEditorAnimationCoordinator {
         self.prepared_queue.has_active_insert()
     }
 
-    pub fn active_cursor_progress(&self) -> Option<f64> {
-        let now = Instant::now();
-        self.prepared_queue
+    /// Issue #679 评论 5657313927 (3c): 按 driver key 取样 Timeline 进度。
+    ///
+    /// 不再排除 1.0（旧 `active_cursor_progress` 过滤 `0 < p < 1` 导致 `p == 1`
+    /// 永远送不到光标）。key 不存在返回 None 说明 Timeline 已结束/取消。
+    pub(crate) fn cursor_timeline_sample(
+        &self,
+        key: VisualTransactionKey,
+    ) -> Option<CursorTimelineSample> {
+        let tx = self
+            .prepared_queue
             .active_transactions()
             .iter()
-            .filter(|t| {
-                t.state != TextVisualTransactionState::Cancelled
-                    && t.state != TextVisualTransactionState::Completed
-                    && t.state != TextVisualTransactionState::Pending
-            })
-            .filter_map(|t| {
-                let p = t.progress(now);
-                if p > 0.0 && p < 1.0 {
-                    Some(p)
-                } else {
-                    None
+            .find(|tx| tx.key == key)?;
+
+        match tx.state {
+            TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
+                Some(CursorTimelineSample::Waiting)
+            }
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
+                Some(CursorTimelineSample::Running(
+                    tx.progress(Instant::now()).clamp(0.0, 1.0),
+                ))
+            }
+            TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => None,
+        }
+    }
+
+    /// Issue #679 评论 5657313927 (3d): 按当前光标 target 查找对应的事务。
+    ///
+    /// 从新到旧（transactions 从后往前）找 `new_cursor_rect` 中 x/top 与 target 匹配
+    /// （容差 0.01）且 state 不是 Completed/Cancelled 的事务。返回
+    /// `(key, old_cursor_rect, new_cursor_rect)`，不再 `.first()` 拿最老的一条。
+    pub(crate) fn find_cursor_transaction_for_target(
+        &self,
+        target_x: f64,
+        target_y: f64,
+        _target_h: f64,
+    ) -> Option<(VisualTransactionKey, Option<CursorRect>, Option<CursorRect>)> {
+        for tx in self.prepared_queue.active_transactions().iter().rev() {
+            if matches!(
+                tx.state,
+                TextVisualTransactionState::Completed
+                    | TextVisualTransactionState::Cancelled
+            ) {
+                continue;
+            }
+            if let Some(ref new_rect) = tx.new_cursor_rect {
+                if (new_rect.x - target_x).abs() <= 0.01
+                    && (new_rect.top - target_y).abs() <= 0.01
+                {
+                    return Some((
+                        tx.key,
+                        tx.old_cursor_rect.clone(),
+                        tx.new_cursor_rect.clone(),
+                    ));
                 }
-            })
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            }
+        }
+        None
     }
 
     pub fn has_prepared_or_rendering(&self) -> bool {
@@ -1415,12 +1467,17 @@ impl LinuxEditorAnimationCoordinator {
         old_visual_y: f64,
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
+        // Issue #679 评论 5657313927: Tween 必须带 driver key（从找到的或刚创建的事务获取）。
+        // None 时所有 Tween 路径 fallback 到 Snap。
+        driver_key: Option<VisualTransactionKey>,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
 
         let has_active = self.has_active_insert();
-        let blink_mode = if coordinated_enabled && has_active {
+        // Issue #679 评论 5657313927: blink_mode 不再固化进 CursorAnimationPlan，
+        // 由 tick_cursor_animation 每帧从 has_active_insert() 实时计算。
+        let _blink_mode = if coordinated_enabled && has_active {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
@@ -1435,10 +1492,15 @@ impl LinuxEditorAnimationCoordinator {
         let large_distance = force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
         let cross_line_snap = dy > cursor_h * 3.0;
 
+        // Issue #679 评论 5657313927: 没有 driver key 时无法构造 Tween（需要 driver_key
+        // 字段），fallback 到 Snap。
+        let can_tween = driver_key.is_some();
+
         let transition = if !should_be_visible {
             CursorTransition::Snap
         } else if should_snap || !smooth_cursor_enabled || large_distance || cross_line_snap {
-            if coordinated_enabled
+            if can_tween
+                && coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
                 && new_cursor_rect.is_some()
@@ -1446,13 +1508,15 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
+                    driver_key: driver_key.unwrap(),
                 }
             } else {
                 CursorTransition::Snap
             }
         } else if let Some(anim) = cursor_animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                if coordinated_enabled
+                if can_tween
+                    && coordinated_enabled
                     && has_active
                     && old_cursor_rect.is_some()
                     && new_cursor_rect.is_some()
@@ -1460,8 +1524,9 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
+                        driver_key: driver_key.unwrap(),
                     }
-                } else {
+                } else if can_tween {
                     CursorTransition::Tween {
                         old_rect: CursorRect {
                             x: anim.start_x,
@@ -1475,13 +1540,17 @@ impl LinuxEditorAnimationCoordinator {
                             bottom: cursor_y + cursor_h,
                             baseline_y: cursor_y + cursor_h * 0.8,
                         },
+                        driver_key: driver_key.unwrap(),
                     }
+                } else {
+                    CursorTransition::Snap
                 }
             } else {
                 CursorTransition::Snap
             }
         } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
-            if coordinated_enabled
+            if can_tween
+                && coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
                 && new_cursor_rect.is_some()
@@ -1489,8 +1558,9 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
+                    driver_key: driver_key.unwrap(),
                 }
-            } else {
+            } else if can_tween {
                 CursorTransition::Tween {
                     old_rect: CursorRect {
                         x: old_visual_x,
@@ -1504,7 +1574,10 @@ impl LinuxEditorAnimationCoordinator {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
+                    driver_key: driver_key.unwrap(),
                 }
+            } else {
+                CursorTransition::Snap
             }
         } else {
             CursorTransition::Snap
@@ -1514,7 +1587,6 @@ impl LinuxEditorAnimationCoordinator {
 
         CursorAnimationPlan {
             should_be_visible,
-            blink_mode,
             transition,
             cursor_x,
             cursor_y,
@@ -1536,7 +1608,7 @@ impl LinuxEditorAnimationCoordinator {
 
     pub(crate) fn build_render_plan_full(
         &mut self,
-        cursor_plan: CursorAnimationPlan,
+        cursor_render_state: CursorRenderState,
         selection_preedit: SelectionPreeditPlan,
         mut frame_context: super::render_plan::FrameContext,
         cursor_style: super::render_plan::CursorStyle,
@@ -1557,9 +1629,19 @@ impl LinuxEditorAnimationCoordinator {
         // 避免纹理准备完成前出现空白帧。
         // 同时将 hidden_source_rects 通过 source_rect_to_document_rect()
         // 转换为 doc_hidden_rects，供 QSGClipNode 直接使用文档逻辑坐标。
+        // Issue #679 评论 5657313927 (3e): 只允许 Prepared / Rendering / Paused
+        // 的事务裁剪静态正文；Pending 无论 texture_prepared 是什么都不能隐藏正文，
+        // 否则资源还没准备好就会出现空洞。
         let mut static_patches = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
-            if tx.texture_prepared {
+            if tx.texture_prepared
+                && matches!(
+                    tx.state,
+                    TextVisualTransactionState::Prepared
+                        | TextVisualTransactionState::Rendering
+                        | TextVisualTransactionState::Paused
+                )
+            {
                 for mut patch in tx.static_patches.iter().cloned() {
                     // 查找对应行快照，将 hidden_source_rects 转换为文档坐标
                     if !patch.hidden_source_rects.is_empty() && patch.doc_hidden_rects.is_empty() {
@@ -1585,7 +1667,7 @@ impl LinuxEditorAnimationCoordinator {
         RenderPlan {
             text_animation,
             selection_preedit,
-            cursor: cursor_plan,
+            cursor: cursor_render_state,
             frame_context,
             cursor_style,
             selection_preedit_style,
@@ -1602,6 +1684,12 @@ impl LinuxEditorAnimationCoordinator {
             if tx.state == TextVisualTransactionState::Cancelled
                 || tx.state == TextVisualTransactionState::Completed
             {
+                continue;
+            }
+
+            // Issue #679 评论 5657313927 (3b): Pending 不算 progress、不出动画切片，
+            // 也不参与静态裁剪。只有 Prepared 才改为 Rendering 并 mark_first_frame。
+            if tx.state == TextVisualTransactionState::Pending {
                 continue;
             }
 

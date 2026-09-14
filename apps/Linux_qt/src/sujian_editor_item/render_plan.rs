@@ -1,4 +1,3 @@
-use super::cursor_animation::CursorAnimationPlan;
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
@@ -111,11 +110,25 @@ impl Default for SelectionPreeditStyle {
     }
 }
 
+/// Issue #679 评论 5657313927: 纯显示数据 — render thread 直接画这个，
+/// 不再理解 Snap/Tween/driver/Timestamp。由 qquickitem_impl 从 cursor_ctrl
+/// 的 visual_x/y/h/visible 和 blink opacity 构造。
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CursorRenderState {
+    pub visible: bool,
+    pub x: f64,
+    pub y: f64,
+    pub h: f64,
+    pub opacity: f64,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RenderPlan {
     pub text_animation: TextAnimationPlan,
     pub selection_preedit: SelectionPreeditPlan,
-    pub cursor: CursorAnimationPlan,
+    /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，
+    /// 不再携带 CursorAnimationPlan（Snap/Tween/driver 由 GUI 线程消费）。
+    pub cursor: CursorRenderState,
     pub frame_context: FrameContext,
     pub cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。

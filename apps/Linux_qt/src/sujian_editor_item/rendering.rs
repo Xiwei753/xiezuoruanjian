@@ -3,16 +3,19 @@ use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::QQuickItem;
 
-use super::animation_coordinator::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::cursor_controller::CursorUpdateResult;
+use super::transaction_key::VisualTransactionKey;
 use super::SujianEditorItem;
 
 /// 光标动画状态 — 使用事务 Timeline 的 progress 而非独立时间源。
 ///
 /// Issue #516: 光标不再维护独立 Choreographer/start_time，
 /// 而是消费与文字动画相同的 Timeline progress。
+/// Issue #679 评论 5657313927: 保存 `driver_key` 指向驱动本段光标动画的视觉事务，
+/// `tick_cursor_animation` 按 key 取样 Timeline progress。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
+    pub driver_key: VisualTransactionKey,
     pub start_x: f64,
     pub start_y: f64,
     pub target_x: f64,
@@ -49,6 +52,10 @@ impl SujianEditorItem {
     ///
     /// **IMPORTANT**: This method MUST only be called from the GUI thread.
     /// It directly emits signals and calls inputMethod()->update().
+    ///
+    /// Issue #679 评论 5657313927: 不再手写第二套 CursorAnimationPlan，
+    /// 统一调 `AnimationCoordinator::build_cursor_plan()`。
+    /// CursorOnly 的创建也统一放到这里：方向键、Home/End、程序化移动全走同一入口。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
@@ -60,48 +67,83 @@ impl SujianEditorItem {
         let visual_line_id = layout_res.visual_line_id;
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
-        let _is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
-        let _is_preediting = !self.pipeline.composition().preedit_text.is_empty();
+        let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
+        let is_preediting = !self.pipeline.composition().preedit_text.is_empty();
 
-        let cursor_plan = CursorAnimationPlan {
-            should_be_visible: self.current_editor_enabled
-                && !self.buffer.has_selection()
-                && cursor_y + cursor_h > 0.0
-                && cursor_y < vp_h
-                && !self.current_is_scrolling,
-            blink_mode: if self.current_coordinated_text_cursor_animation_enabled
-                && self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .has_active_insert()
+        // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
+        // 是否已经有对应的正文/预输入视觉事务。
+        let mut found_tx = self
+            .pipeline
+            .animation_coordinator()
+            .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
+        let mut created_cursor_only_key: Option<VisualTransactionKey> = None;
+
+        // Issue #679 评论 5657313927 (步骤 3): 如果没有事务、当前又确实应该平滑移动
+        // （不是点击强制 snap、不是滚动、不是选择），且 smooth cursor 开启，
+        // 就创建一个 CursorOnly，拿到它的 key。
+        // 注意：handle_cursor_only 是 &mut self，需要先做可变操作。
+        if found_tx.is_none()
+            && self.current_smooth_cursor_enabled
+            && !self.cursor_ctrl.force_snap_next
+            && !self.current_is_scrolling
+            && !is_selecting
+            && !is_preediting
+            && self.current_editor_enabled
+        {
+            let old_cursor_rect = self.current_cursor_rect_for_transaction();
+            let new_cursor_rect = Some(writer_core::editor::CursorRect {
+                x: cursor_x,
+                top: cursor_y,
+                bottom: cursor_y + cursor_h,
+                baseline_y: cursor_y + cursor_h * 0.8,
+            });
+            if let Some(key) = self
+                .pipeline
+                .animation_coordinator_mut()
+                .handle_cursor_only(old_cursor_rect, new_cursor_rect)
             {
-                CursorBlinkMode::Suppressed
-            } else {
-                CursorBlinkMode::Normal
-            },
-            transition: if self.current_smooth_cursor_enabled {
-                CursorTransition::Tween {
-                    old_rect: writer_core::editor::CursorRect {
-                        x: self.cursor_ctrl.visual_x,
-                        top: self.cursor_ctrl.visual_y,
-                        bottom: self.cursor_ctrl.visual_y + cursor_h,
-                        baseline_y: self.cursor_ctrl.visual_y + cursor_h * 0.8,
-                    },
-                    new_rect: writer_core::editor::CursorRect {
-                        x: cursor_x,
-                        top: cursor_y,
-                        bottom: cursor_y + cursor_h,
-                        baseline_y: cursor_y + cursor_h * 0.8,
-                    },
-                }
-            } else {
-                CursorTransition::Snap
-            },
+                created_cursor_only_key = Some(key);
+                found_tx = self
+                    .pipeline
+                    .animation_coordinator()
+                    .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
+            }
+        }
+
+        let (old_cursor_rect, new_cursor_rect, driver_key) = match found_tx {
+            Some((key, old_r, new_r)) => (old_r, new_r, Some(key)),
+            None => (None, None, created_cursor_only_key),
+        };
+
+        // Issue #679 评论 5657313927 (步骤 4): 调唯一的 build_cursor_plan。
+        // Tween 必须带 driver key（从找到的或刚创建的事务获取）。
+        let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
+            old_cursor_rect,
+            new_cursor_rect,
             cursor_x,
             cursor_y,
             cursor_h,
-        };
+            self.current_editor_enabled,
+            self.buffer.has_selection(),
+            vp_h,
+            self.current_is_scrolling,
+            is_selecting,
+            is_preediting,
+            self.current_smooth_cursor_enabled,
+            self.current_cursor_animation_duration_ms,
+            self.current_coordinated_text_cursor_animation_enabled,
+            f64::from(self.current_scroll_y),
+            self.cursor_ctrl.last_scroll_y,
+            self.cursor_ctrl.visible,
+            self.cursor_ctrl.blink_visible,
+            self.cursor_ctrl.visual_x,
+            self.cursor_ctrl.visual_y,
+            self.cursor_ctrl.force_snap_next,
+            self.cursor_ctrl.animation.as_ref(),
+            driver_key,
+        );
 
+        // Issue #679 评论 5657313927 (步骤 5): apply_plan。
         let result = self.cursor_ctrl.apply_plan(&cursor_plan);
 
         if result.needs_repaint {

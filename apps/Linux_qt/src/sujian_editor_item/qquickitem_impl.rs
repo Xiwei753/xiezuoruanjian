@@ -103,45 +103,27 @@ impl QQuickItem for SujianEditorItem {
                 scene_graph::clear_animation_layer(editor_root, item_ptr);
             }
 
-            let old_cursor_rect = self
-                .pipeline
-                .animation_coordinator_mut()
-                .prepared_queue
-                .active_transactions()
-                .first()
-                .and_then(|tx| tx.old_cursor_rect.clone());
-            let new_cursor_rect = self
-                .pipeline
-                .animation_coordinator_mut()
-                .prepared_queue
-                .active_transactions()
-                .first()
-                .and_then(|tx| tx.new_cursor_rect.clone());
-
-            let cursor_plan = self.pipeline.animation_coordinator_mut().build_cursor_plan(
-                old_cursor_rect,
-                new_cursor_rect,
-                self.cursor_ctrl.visual_x,
-                self.cursor_ctrl.visual_y,
-                self.cursor_ctrl.visual_h,
-                self.current_editor_enabled,
-                self.buffer.has_selection(),
-                f64::from(self.current_viewport_height),
-                false,
-                false,
-                false,
-                self.current_smooth_cursor_enabled,
-                self.current_cursor_animation_duration_ms,
-                self.current_coordinated_text_cursor_animation_enabled,
-                f64::from(self.current_scroll_y),
-                self.cursor_ctrl.last_scroll_y,
-                self.cursor_ctrl.visible,
-                self.cursor_ctrl.blink_visible,
-                self.cursor_ctrl.visual_x,
-                self.cursor_ctrl.visual_y,
-                self.cursor_ctrl.force_snap_next,
-                self.cursor_ctrl.animation.as_ref(),
-            );
+            // Issue #679 评论 5657313927: 删除 render thread 的第二次 build_cursor_plan()
+            // 调用。不再把 cursor_ctrl.visual_x/y 同时当"当前值"和"目标值"传进去。
+            // 直接从 GUI 侧已算好的 cursor_ctrl.visual_x/y/visual_h/visible 和
+            // blink opacity 填进 RenderPlan 的 CursorRenderState。
+            let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
+                && self
+                    .pipeline
+                    .animation_coordinator_mut()
+                    .has_active_insert()
+            {
+                super::cursor_animation::CursorBlinkMode::Suppressed
+            } else {
+                super::cursor_animation::CursorBlinkMode::Normal
+            };
+            let cursor_render_state = super::render_plan::CursorRenderState {
+                visible: self.cursor_ctrl.visible,
+                x: self.cursor_ctrl.visual_x,
+                y: self.cursor_ctrl.visual_y,
+                h: self.cursor_ctrl.visual_h,
+                opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
+            };
 
             // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
             // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
@@ -176,7 +158,7 @@ impl QQuickItem for SujianEditorItem {
                 .pipeline
                 .animation_coordinator_mut()
                 .build_render_plan_full(
-                    cursor_plan,
+                    cursor_render_state,
                     selection_preedit,
                     frame_context,
                     cursor_style,

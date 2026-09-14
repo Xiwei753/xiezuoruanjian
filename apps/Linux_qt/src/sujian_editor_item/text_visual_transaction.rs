@@ -213,10 +213,27 @@ impl PreparedTransactionQueue {
         self.transactions.push(tx);
     }
 
-    pub fn mark_texture_prepared(&mut self, key: VisualTransactionKey) {
-        if let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) {
-            tx.texture_prepared = true;
+    /// Issue #679 评论 5657313927: 把"资源准备完成"和"Pending -> Prepared 状态推进"
+    /// 绑在同一个入口，避免事务卡在 Pending 导致光标不移动、静态层错位。
+    ///
+    /// 状态链：`Pending -> Prepared -> Rendering -> Completed/Cancelled`。
+    /// 已 Completed/Cancelled 的事务不再推进，返回 false。
+    pub fn mark_prepared(&mut self, key: VisualTransactionKey) -> bool {
+        let Some(tx) = self.transactions.iter_mut().find(|t| t.key == key) else {
+            return false;
+        };
+        if matches!(
+            tx.state,
+            TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+        ) {
+            return false;
         }
+
+        tx.texture_prepared = true;
+        if tx.state == TextVisualTransactionState::Pending {
+            tx.state = TextVisualTransactionState::Prepared;
+        }
+        true
     }
 
     pub fn complete(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
