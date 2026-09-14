@@ -22,7 +22,7 @@ import org.robolectric.annotation.Config
 class SettingsRepositoryImmersiveFullscreenStateTest {
     private fun prefs(suffix: String) =
         RuntimeEnvironment.getApplication()
-            .getSharedPreferences("sujian_diagnostics_$suffix", android.content.Context.MODE_PRIVATE)
+            .getSharedPreferences("sujian_local_$suffix", android.content.Context.MODE_PRIVATE)
 
     @Test
     fun `immersiveFullscreenEnabled initializes from prefs at construction`() {
@@ -66,7 +66,7 @@ class SettingsRepositoryImmersiveFullscreenStateTest {
             )
         assertTrue(repo.immersiveFullscreenEnabled.value)
 
-        // 修改其它诊断 prefs 后重新读取完整设置 — 全屏位不得被 getLocalSettings 扰动。
+        // 修改其它本地 prefs 后重新读取完整设置 — 全屏位不得被 getLocalSettings 扰动。
         prefs(suffix).edit().putBoolean("diagnostics_verbose", false).commit()
         repo.getLocalSettings()
         assertTrue(
