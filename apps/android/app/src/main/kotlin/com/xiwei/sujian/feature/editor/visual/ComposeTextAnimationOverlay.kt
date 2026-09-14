@@ -30,42 +30,21 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
  * 只"画"，绝不能再改变 viewport / selection / IME 几何。
  *
- * 绘制规则：
- * - 新文字：从当前 [TextLayoutResult] 取 bounding box，当前 range 已被
- *   [OutputTransformation] 隐藏，overlay 做淡入/位移；
- * - 删除文字：保留上一份 [TextLayoutResult]，按旧 range 的 bounding box 画旧布局；
- * - 同行移动/自动折行/手动换行：old/new 坐标分别来自前后两份真实 [TextLayoutResult]；
- * - 视觉光标：从 `oldResult.getCursorRect(oldSelection.end)` 插值到
- *   `newResult.getCursorRect(newSelection.end)`，按 progress 插值 x/y/width/height。
+ * #644 评论 #684：绘制只能读 frozen transaction。
+ * 删除对 `visualState.currentLayout()` / `visualState.previousLayout()` 的调用。
+ * 绘制只允许读：
+ * - [ComposeVisualTransaction.oldLayout]
+ * - [ComposeVisualTransaction.newLayout]
+ * - [ComposeVisualTransaction.startFrame]
+ * - [ComposeVisualTransaction.retainedMoves]
+ * - [ComposeVisualTransaction.cursorStartRect]
+ * - [ComposeVisualTransaction.cursorEndRect]
  *
- * #641 评论 问题3 + 评论 5457777142 问题2：
- * - duration 来自 [EditorMotionPolicy]（不再写死 200ms）；
- * - 用 [Animatable] 手动控制动画，transaction id 变化时重新建立正确起点；
- * - 新事务到来时若 [ComposeVisualTransaction.startFrame] 非空，
- *   从 startFrame 对应的 progress 开始动画，而不是 `snapTo(0f)`；
- * - retained move 用 old/new `getPathForRange()` 的 bounds 算 dx/dy，
- *   按 progress 插值 translate，而不是 crossfade 冒充 move；
- * - 用 `getPathForRange` 替代整行 clip，同一行没参与动画的文字不会被 overlay 再画一遍；
- * - cursor 颜色吃 [cursorColor]，同一帧只画一次 cursor（不再闪烁叠加）。
+ * 协调动画只保留一个 master progress：
+ * 文字 Insert/Delete/Move、retained reflow、cursor move、startFrame rebase
+ * 都从同一个 progress 推导。
  *
- * #641 评论 5457777142 问题4：双 timeline。
- * - [EditorMotionPolicy.coordinated] = true：一个 timeline（textDurationMillis），
- *   cursor 共用主 timeline；
- * - [EditorMotionPolicy.coordinated] = false：textProgress + cursorProgress 两个 timeline；
- * - CURSOR_ONLY（textKind = None 且 cursor.animate = true）单独用 cursorDurationMillis；
- * - reduceMotion / textEnabled / cursorEnabled 在这一层一次性落实：
- *   textEnabled=false 时不画文字动画（直接显示最终态）；
- *   cursorEnabled=false 时不画视觉光标（用系统光标）；
- *   reduceMotion=true 时全静态。
- *
- * 动画通过 Compose animation progress 只改变 alpha/translate/绘制，
- * 不 scrollTo、不改 selection/IME/height/viewport。动画结束清 hiddenRanges，
- * 系统正文马上可见。
- *
- * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
- * 必须从 [WritingEditorSurface] 传入当前 textColor/字体 style。
- *
- * @param cursorColor 视觉光标颜色 — 从主题 role 注入，不再硬编码蓝色。
+ * @param cursorColor 视觉光标颜色 — 从主题 role 注入。
  */
 @Composable
 @Suppress("LongParameterList", "LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
@@ -86,94 +65,49 @@ fun ComposeTextAnimationOverlay(
     val transactionId = activeTransaction?.id ?: 0L
     val motionPolicy = activeTransaction?.motionPolicy ?: EditorMotionPolicy()
 
-    // #641 评论 5457777142 问题4 + 评论 5458283021 问题3a：根据 motionPolicy 决定 timeline 数量。
-    // coordinated=true 且非 CURSOR_ONLY：一个 textProgress，cursor 共用；
-    // coordinated=false：textProgress + cursorProgress 两个 timeline；
-    // CURSOR_ONLY（textKind=None 且 cursor.animate=true）单独用 cursorDurationMillis，
-    //   text 不动画，cursor 独立跑自己的 timeline。
+    // #644 评论 #684：单 master progress —
+    // 所有动画（文字、光标、rebase）都从同一个 progress 推导。
     val isCursorOnly =
         activeIntent?.textKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
-    // #641 评论 5458283021 问题3a：useSingleTimeline 不再包含 isCursorOnly —
-    // CURSOR_ONLY 时 cursor 单独跑自己的 timeline，不共用 textProgress。
-    val useSingleTimeline = motionPolicy.coordinated && !isCursorOnly
     val textEnabled = motionPolicy.textEnabled && !isCursorOnly
     val cursorEnabled = motionPolicy.cursorEnabled
 
-    val textDurationMillis = motionPolicy.textDurationMillis
-    val cursorDurationMillis = motionPolicy.cursorDurationMillis
+    val durationMs =
+        if (isCursorOnly) {
+            motionPolicy.cursorDurationMillis
+        } else {
+            motionPolicy.textDurationMillis
+        }
 
-    // #641 评论 问题3 + 5457777142 问题2：用 Animatable 手动控制动画 —
-    // transaction id 变化时若 startFrame 非空，从 startFrame 对应的 progress 开始；
-    // 否则 snapTo(0f)。不再用 animateFloatAsState(target=1f)。
-    // #641 评论 5458880786 问题1f：不再用 estimateStartProgress 把 frame 降维成平均 alpha —
-    // textProgress / cursorProgress 始终从 0f 开始。startFrame 层在 drawVisualTransaction 里
-    // 用 alpha = 1 - textProgress 淡出（已有逻辑），新事务层按 textProgress 画（已有 drawAnimatedRanges）。
-    // 这样 t=0 画 100% frozen startFrame，t=1 画 100% 新事务最终态。
-    // cursor 同理：cursorProgress 从 0f 开始，startFrame.cursorRect 在 drawStartFrameLayer 里
-    // 按 startLayerAlpha = 1 - textProgress 淡出，新事务 cursor 在 drawVisualCursor 里按 cursorProgress 画。
-    val textProgress = remember { Animatable(0f) }
-    val cursorProgress = remember { Animatable(0f) }
-    // #641 评论 5459271770 问题3：startFrame 文字层独立 rebase timeline —
-    // CURSOR_ONLY 打断文字动画时 textEnabled=false、textProgress snapTo(1f)，
-    // 若 startFrame 淡出仍用 textProgress，frozen 文字会瞬间消失。
-    // rebaseProgress 专门控制 startFrame 文字层淡出，不依赖当前 textKind/textEnabled。
-    val rebaseProgress = remember { Animatable(0f) }
+    // #644 评论 #684：单 master progress，不再有三套独立时间线。
+    val masterProgress = remember { Animatable(0f) }
 
     LaunchedEffect(transactionId) {
-        if (transactionId > 0L && textDurationMillis > 0L && textEnabled) {
-            textProgress.snapTo(0f)
-            textProgress.animateTo(
+        if (transactionId > 0L && durationMs > 0L) {
+            masterProgress.snapTo(0f)
+            masterProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = textDurationMillis.toInt()),
+                animationSpec = tween(durationMillis = durationMs.toInt()),
             )
         } else if (transactionId > 0L) {
-            // textEnabled=false 或 CURSOR_ONLY：直接显示最终态，不画文字动画。
-            textProgress.snapTo(1f)
+            masterProgress.snapTo(1f)
         }
     }
-    LaunchedEffect(transactionId) {
-        // #641 评论 5458283021 问题3a：CURSOR_ONLY 单独启动 cursor timeline；
-        // coordinated=true 的普通编辑才让 cursor 复用 text timeline；
-        // coordinated=false 才分别跑两条。
-        val shouldAnimateCursor =
-            transactionId > 0L && cursorDurationMillis > 0L && cursorEnabled &&
-                activeIntent?.cursor?.animate == true && (isCursorOnly || !useSingleTimeline)
-        if (shouldAnimateCursor) {
-            cursorProgress.snapTo(0f)
-            cursorProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = cursorDurationMillis.toInt()),
-            )
-        } else if (useSingleTimeline && transactionId > 0L) {
-            // coordinated=true 且非 CURSOR_ONLY：cursor 共用 textProgress。
-            cursorProgress.snapTo(textProgress.value)
-        } else if (transactionId > 0L) {
-            // 无 cursor 动画：直接最终态。
-            cursorProgress.snapTo(1f)
-        }
-    }
-    // #641 评论 5459271770 问题3：rebaseProgress 从 0→1 独立动画，
-    // 只要新事务的 startFrame 有文字 slice 就跑，不管当前 textKind 是不是 None。
-    LaunchedEffect(transactionId) {
-        val startFrameHasSlices = activeTransaction?.startFrame?.slices?.isNotEmpty() == true
-        if (transactionId > 0L && startFrameHasSlices && textDurationMillis > 0L) {
-            rebaseProgress.snapTo(0f)
-            rebaseProgress.animateTo(
-                targetValue = 1f,
-                animationSpec = tween(durationMillis = textDurationMillis.toInt()),
-            )
-        } else if (transactionId > 0L) {
-            rebaseProgress.snapTo(1f)
-        }
-    }
-    val rebaseProgressValue = rebaseProgress.value
-    val textProgressValue = textProgress.value
+
+    val masterProgressValue = masterProgress.value
+
+    // 从 master progress 推导 textProgress / cursorProgress / rebaseProgress。
+    val textProgressValue = if (textEnabled) masterProgressValue else 1f
     val cursorProgressValue =
-        if (useSingleTimeline) textProgressValue else cursorProgress.value
+        if (cursorEnabled && activeIntent?.cursor?.animate == true) {
+            masterProgressValue
+        } else {
+            1f
+        }
+    val rebaseProgressValue = masterProgressValue
 
-    // #641 评论 5458283021 问题1c：分别报告 textProgress / cursorProgress 给 visualState，
-    // 供下一事务物化 startFrame。coordinated=false 时 cursor 用 cursorProgress 不再错算。
-    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue, rebaseProgressValue) {
+    // #644 评论 #684：分别报告 progress 给 visualState，供下一事务物化 startFrame。
+    LaunchedEffect(transactionId, masterProgressValue) {
         if (transactionId > 0L) {
             visualState.reportProgress(
                 textProgress = textProgressValue,
@@ -193,18 +127,10 @@ fun ComposeTextAnimationOverlay(
     val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
     val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
 
-    // #641 评论 5458283021 问题3b：动画结束清 hiddenRanges，系统正文马上可见。
-    // 完成条件只等待真正存在的 timeline —
-    // 无 text 动画时 textDone=true，无 cursor 动画时 cursorDone=true，
-    // 不再硬要求 cursorProgress>=1 导致 hiddenRanges 永远不清。
-    LaunchedEffect(transactionId, textProgressValue, cursorProgressValue, rebaseProgressValue) {
-        if (transactionId > 0L) {
-            val textDone = !hasTextAnimation || textProgressValue >= 1f
-            val cursorDone = !hasCursorAnimation || cursorProgressValue >= 1f
-            val rebaseDone = !hasRebaseAnimation || rebaseProgressValue >= 1f
-            if (textDone && cursorDone && rebaseDone) {
-                visualState.clearAnimation()
-            }
+    // 动画结束清 hiddenRanges，系统正文马上可见。
+    LaunchedEffect(transactionId, masterProgressValue) {
+        if (transactionId > 0L && masterProgressValue >= 1f) {
+            visualState.clearAnimation()
         }
     }
 
@@ -213,14 +139,15 @@ fun ComposeTextAnimationOverlay(
             modifier
                 .drawBehind {
                     if (!hasAnimation) return@drawBehind
-                    val current = visualState.currentLayout() ?: return@drawBehind
-                    val previous = visualState.previousLayout()
-                    val intent = activeIntent ?: return@drawBehind
+                    // #644 评论 #684：绘制只读 frozen transaction，不再读 currentLayout/previousLayout。
                     val transaction = activeTransaction ?: return@drawBehind
+                    val currentResult = transaction.newLayout?.result ?: return@drawBehind
+                    val previousResult = transaction.oldLayout?.result
+                    val intent = activeIntent ?: return@drawBehind
 
                     drawVisualTransaction(
-                        currentResult = current.result,
-                        previousResult = previous?.result,
+                        currentResult = currentResult,
+                        previousResult = previousResult,
                         transaction = transaction,
                         textKind = intent.textKind,
                         cursorAnimate = intent.cursor?.animate == true && cursorEnabled,
@@ -241,9 +168,6 @@ fun ComposeTextAnimationOverlay(
 /**
  * #641 评论 5459896691：绘制视觉动画事务 —
  * 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
- *
- * startFrame 层用独立 rebaseProgress 控制 alpha/position 插值，
- * 不依赖当前 textEnabled/textKind。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -262,10 +186,7 @@ private fun DrawScope.drawVisualTransaction(
     textEnabled: Boolean,
     rebaseProgress: Float,
 ) {
-    // #641 评论 5459896691 第2项+第3项：startFrame 起始画面层 —
-    // 所有 slice 都是 RebasedTextSlice，每个携带自己的 sourceLayout。
-    // surviving slice（targetRange != null）：alpha 从 sourceAlpha 插值到 1，position 插值到 target。
-    // fading slice（targetRange == null）：alpha 从 sourceAlpha 淡到 0。
+    // startFrame 起始画面层。
     val startFrame = transaction.startFrame
     if (startFrame != null && startFrame.slices.isNotEmpty()) {
         drawStartFrameLayer(
@@ -291,21 +212,20 @@ private fun DrawScope.drawVisualTransaction(
         )
     }
 
-    // 视觉光标：按 cursorProgress 从 cursorStartRect 插值到 newCursorRect。
-    // #641 评论 问题2：只要 cursor?.animate == true 就画（不管 textKind）。
-    // #641 评论 问题3：同一帧只画一次 cursor（不再闪烁叠加）。
-    // #641 评论 5457777142 问题4：cursor 用 cursorProgress（coordinated=false 时独立 timeline）。
-    // #641 评论 5459531909 第3项：cursor 永远只画一根 —
-    // cursorStartRect 来自 startFrame?.cursorRect（frozen 中间位置）?: snapshot?.oldCursorRect，
-    // 同一个 drawVisualCursor 从 startRect 插值到 newRect。CURSOR_ONLY 同样走 cursor timeline，
-    // 不因 textEnabled=false 跳过（cursor 绘制条件只看 cursorAnimate，不看 textEnabled）。
-    if (cursorAnimate && cursorSnapshot != null) {
+    // 视觉光标：从 cursorStartRect 插值到 cursorEndRect。
+    // #644 评论 #684：从 frozen transaction 读取 cursorStartRect/cursorEndRect。
+    if (cursorAnimate) {
         val cursorStartRect =
-            transaction.startFrame?.cursorRect
-                ?: cursorSnapshot.oldCursorRect
+            transaction.cursorStartRect
+                ?: cursorSnapshot?.oldCursorRect
+                ?: return
+        val cursorEndRect =
+            transaction.cursorEndRect
+                ?: cursorSnapshot?.newCursorRect
+                ?: return
         drawVisualCursor(
             startRect = cursorStartRect,
-            newRect = cursorSnapshot.newCursorRect,
+            newRect = cursorEndRect,
             progress = cursorProgress,
             scrollY = scrollY,
             density = density,
@@ -315,16 +235,7 @@ private fun DrawScope.drawVisualTransaction(
 }
 
 /**
- * #641 评论 5459896691 第2项+第3项：绘制 startFrame 起始画面层 —
- * 所有 slice 都是 [RebasedTextSlice]，每个携带自己的 sourceLayout。
- *
- * - surviving slice（targetRange != null）：从 frozen 状态插值到当前最终 layout，
- *   alpha = lerp(sourceAlpha, 1f, rebaseProgress)，
- *   position = lerp(sourcePosition, targetPosition, rebaseProgress)。
- *   系统正文保持隐藏直到 rebase=1，此时 overlay 已和系统最终态完全一致，释放后不跳。
- * - fading slice（targetRange == null）：alpha = lerp(sourceAlpha, 0f, rebaseProgress)。
- *
- * cursor 由 [drawVisualCursor] 统一绘制，本函数不画 cursor。
+ * 绘制 startFrame 起始画面层 — 所有 slice 都是 [RebasedTextSlice]。
  */
 private fun DrawScope.drawStartFrameLayer(
     startFrame: ComposeVisualFrame,
@@ -338,7 +249,6 @@ private fun DrawScope.drawStartFrameLayer(
         if (slice.sourceRange.end > sourceResult.layoutInput.text.length) continue
         val targetRange = slice.targetRange
         if (targetRange != null) {
-            // 仍存活：从 frozen 状态插值到当前最终 layout
             val targetResult = currentResult ?: continue
             if (targetRange.end > targetResult.layoutInput.text.length) continue
             val sourceBounds = safePathBounds(sourceResult, slice.sourceRange) ?: continue
@@ -363,7 +273,6 @@ private fun DrawScope.drawStartFrameLayer(
                 textColor = textColor,
             )
         } else {
-            // 只属于旧画面：alpha 淡到 0
             val interpolatedAlpha = lerp(slice.sourceAlpha, 0f, rebaseProgress)
             if (interpolatedAlpha <= 0f) continue
             drawTranslatedRangeText(
@@ -378,26 +287,11 @@ private fun DrawScope.drawStartFrameLayer(
     }
 }
 
-// #641 评论 5458880786 问题1e：原 drawStartFrameCursor 已删除。
-// #641 评论 5459531909 第3项：cursor 永远只画一根 —
-// startFrame 的 cursor 不再单独淡出，统一由 [drawVisualCursor] 从 cursorStartRect
-// （startFrame?.cursorRect ?: snapshot?.oldCursorRect）插值到 newCursorRect。
-
 /** 视觉光标宽度（dp）。 */
 private val VisualCursorWidthDp: Dp = 2.dp
 
 /**
- * #641 评论1 第5节 / 问题3：视觉光标插值绘制 — 从 [startRect] 按 progress 插值到
- * [newRect]。光标宽度/高度随 rect 插值，颜色从 [cursorColor] 注入。
- * BasicTextField 的 cursorBrush 在动画期间透明，动画结束 clearAnimation 后恢复。
- *
- * #641 评论 问题3：同一帧只画一次 cursor — 删除 progress >= 0.85f 时的闪烁叠加。
- *
- * #641 评论 5459531909 第3项：cursor 永远只画一根 —
- * [startRect] 来自 `transaction.startFrame?.cursorRect ?: cursorSnapshot.oldCursorRect`
- * （frozen 中间位置或旧 cursor 位置），同一个 [drawVisualCursor] 从 startRect 插值到 newRect。
- * 不再有单独淡出的 drawStartFrameCursor 路径。CURSOR_ONLY 同样走 cursor timeline，
- * 从 frozen cursor 中间位置继续，不因 textEnabled=false 跳过。
+ * 视觉光标插值绘制 — 从 [startRect] 按 progress 插值到 [newRect]。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualCursor(
@@ -438,19 +332,7 @@ private fun lerp(
 ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
 /**
- * #641 评论1 第5节 / 问题3：对同一份 [TextLayoutResult] 做 `clipPath + drawText(result)`。
- *
- * #641 评论 问题3：用 `getPathForRange` 替代整行 clip —
- * 同一行没参与动画的文字不会被 overlay 再画一遍。
- * 官方 API：`TextLayoutResult.getPathForRange(start, end)` 返回 Path，用 `clipPath` 裁剪。
- *
- * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
- * 必须从 [WritingEditorSurface] 传入当前 textColor。
- *
- * #641 评论 5458283021 问题2d：统一改成"变换整个坐标系，再 clip + draw" —
- * 用 `translate(0f, -scrollY)` 同时变换后续绘制坐标系，
- * 保证 path 和 text 永远一起移动，滚动后 clip 和文字在同一坐标系。
- * Android 官方 DrawScope.translate 的语义是同时变换后续绘制坐标系，不要只移动文字。
+ * 对同一份 [TextLayoutResult] 做 `clipPath + drawText(result)`。
  */
 private fun DrawScope.drawRangeText(
     result: TextLayoutResult,
@@ -462,8 +344,6 @@ private fun DrawScope.drawRangeText(
     if (range.start >= range.end) return
     if (range.end > result.layoutInput.text.length) return
     val path = result.getPathForRange(range.start, range.end)
-    // #641 评论 5458283021 问题2d：先 translate 整个坐标系，再 clip + draw。
-    // path 和 text 在同一变换后坐标系，滚动后不会分离。
     translate(left = 0f, top = -scrollY.toFloat()) {
         clipPath(path) {
             drawText(
@@ -477,17 +357,7 @@ private fun DrawScope.drawRangeText(
 }
 
 /**
- * #641 评论1 第5节 / 问题3 + 5457777142 问题2：绘制受影响 range 的动画过程。
- *
- * #641 评论 问题3：
- * - Insert：用 newRanges，从 current layout 淡入。
- * - Delete：用 oldRanges，从 previous layout 淡出。
- * - Move：用 oldRanges 从 previous layout 淡出 + newRanges 从 current layout 淡入；
- *   retained moves 处理自动折行时被挤到下一行的"保留文字"。
- * - None：不画文字动画。
- *
- * #641 评论1 第3节：overlay 文字颜色不能硬编码成与正文不一致的黑色，
- * 必须从 [WritingEditorSurface] 传入当前 textColor。
+ * 绘制受影响 range 的动画过程。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawAnimatedRanges(
@@ -516,9 +386,6 @@ private fun DrawScope.drawAnimatedRanges(
             }
         }
         TextVisualKind.Move -> {
-            // Move：从 previous layout 的 old range 位置淡出，
-            // 从 current layout 的 new range 位置淡入。
-            // 若 previous layout 缺失，则只在 current 位置淡入。
             val alpha = progress
             if (previousResult != null) {
                 for (range in oldRanges) {
@@ -528,16 +395,12 @@ private fun DrawScope.drawAnimatedRanges(
             for (range in newRanges) {
                 drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
             }
-            // #641 评论 5458880786 问题2f：drawRetainedMoves 移到 when 块之后，
-            // Insert/Delete/Move 都画（自动折行最常见是 Insert 挤到下一行 / Delete 拉回上一行）。
         }
         TextVisualKind.None -> {
             // 没有文字动画（如 CURSOR_ONLY 事务）。
         }
     }
-    // #641 评论 5458880786 问题2f：retained move 不只 Move 才画 —
-    // 自动折行最常见是 Insert（挤到下一行）/Delete（拉回上一行），Insert/Delete/Move 都需要画 retained move，
-    // 否则被挤到新位置的保留文字会重影（hiddenRanges 隐藏了新位置，但 overlay 没画 old→new 位移过渡）。
+    // retained move：Insert/Delete/Move 都画。
     if (textKind != TextVisualKind.None) {
         drawRetainedMoves(
             previousResult = previousResult,
@@ -551,12 +414,7 @@ private fun DrawScope.drawAnimatedRanges(
 }
 
 /**
- * #641 评论 问题3 + 5457777142 问题2：绘制 retained moves —
- * 被挤到下一行的"保留文字"。
- *
- * 真实现：用 old/new `getPathForRange()` 的 bounds 算 dx/dy，
- * 按 progress 插值 translate，而不是 crossfade 冒充 move。
- * 提取以降低 [drawAnimatedRanges] 的认知复杂度。
+ * 绘制 retained moves — 被挤到下一行的"保留文字"。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawRetainedMoves(
@@ -568,12 +426,10 @@ private fun DrawScope.drawRetainedMoves(
     textColor: Color,
 ) {
     for (move in retainedMoves) {
-        // old bounds（previous layout）和 new bounds（current layout）。
         val oldBounds = safePathBounds(previousResult, move.oldRange) ?: continue
         val newBounds = safePathBounds(currentResult, move.newRange) ?: continue
         val dx = lerp(oldBounds.left, newBounds.left, progress) - newBounds.left
         val dy = lerp(oldBounds.top, newBounds.top, progress) - newBounds.top
-        // 按 translate 画 current layout 的 newRange，alpha=1（retained 文字全程可见）。
         drawTranslatedRangeText(
             result = currentResult,
             range = move.newRange,
@@ -601,15 +457,7 @@ private fun safePathBounds(
 }
 
 /**
- * #641 评论 5457777142 问题2 + 评论 5458283021 问题2c：按 translate 偏移绘制一段 range 文字。
- *
- * #641 评论 5458283021 问题2c：统一改成"变换整个坐标系，再 clip + draw" —
- * 用 `withTransform { translate(dx, dy - scrollY) }` 同时变换后续绘制坐标系，
- * 然后 `clipPath(path) { drawText(topLeft = Offset.Zero) }`。
- * path 和 text 在同一变换后坐标系，progress=0 时文字画在 old position，
- * clip 也跟着移到 old position，文字不会被自己 new position 的 clip 掉。
- * Android 官方 DrawScope.withTransform/translate 的语义是同时变换后续绘制坐标系，
- * 不要只移动文字。
+ * 按 translate 偏移绘制一段 range 文字。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawTranslatedRangeText(
@@ -624,9 +472,6 @@ private fun DrawScope.drawTranslatedRangeText(
     if (range.end > result.layoutInput.text.length) return
     if (alpha <= 0f) return
     val path = result.getPathForRange(range.start, range.end)
-    // #641 评论 5458283021 问题2c：先 translate 整个坐标系（含 scrollY），
-    // 再 clip + draw。path 和 text 在同一变换后坐标系，
-    // 文字不会被自己 new position 的 clip 掉，滚动后也不会分离。
     withTransform({
         translate(
             left = translate.x,

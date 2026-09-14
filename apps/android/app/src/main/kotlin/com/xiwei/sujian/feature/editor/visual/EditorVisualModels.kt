@@ -2,61 +2,40 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #641 评论1 第4/5节：Core 返回的视觉意图 — 受影响的 UTF-16 range 和动画类型。
  * 从 Core display patch / VisualIntent 映射，offset 是 UTF-16（已由调用方从
  * UTF-8 byte 转换），不再用 byte 作为 Compose offset。
  *
- * #641 评论 问题2：cursor 拆成和文字动画并列的字段 —
- * [textKind] 描述文字动画类型（Insert/Delete/Move/None），
- * [cursor] 描述光标视觉意图。只要 [cursor] 的 [CursorVisualIntent.animate] 为 true，
- * 不管 [textKind] 是什么，都隐藏系统光标、创建 [VisualCursorSnapshot]、overlay 插值画光标。
- * `CURSOR_ONLY` 只是"没有文字动画"（[textKind] = None），
- * 不是"只有这种事务才允许画视觉光标"。
+ * #644 评论 #684：Core 事务身份不再丢失 —
+ * [coreTransactionId]、[baseRevision]、[newRevision]、[animationMode]、[durationMs]
+ * 原样从 Core EditResult 传入，Android 视觉层不再自行生成伪事务 ID。
  *
- * #641 评论 5458283021 问题2a：两阶段 retained reflow —
- * [newTextLength] 用于 [ComposeEditorVisualState.onAuthoritativeLayout] 判断
- * 到达的 [TextLayoutResult] 是否对应这笔事务的 new text。
- * onVisualIntent 时若 currentSnapshot 已就绪且 text 长度匹配，立即创建 transaction；
- * 否则保存 pending，等 onAuthoritativeLayout 到达后再用确定的 old/new layout 生成
- * ComposeVisualTransaction 和 retained moves。
- *
- * #641 评论 5459531909 第1项：layout 关联不能再只看长度。
- * [newTextLength] 只能区分"长度不同"的事务，但 `i → W`、候选等长替换、自动纠错
- * 都可能长度相同而布局不同。新增 [expectedNewText] 保存完整新正文，
- * [ComposeEditorVisualState.canComputeRetainedNow] / [applyPendingRetainedMoves]
- * 改成比较 `result.layoutInput.text.text == expectedNewText` 才认这份 layout。
- * [newTextLength] 保留向后兼容（= expectedNewText.length），但不再作为唯一身份。
- *
- * @param transactionId 事务 ID — 由 [ComposeEditorVisualState.onVisualIntent] 内部分配，
- *   调用方可设为 0L。overlay 据此判断是否需要重新启动动画。
+ * @param coreTransactionId Core 事务 ID — 来自 Rust EditResult，单调递增。
+ * @param baseRevision 编辑前正文版本号。
+ * @param newRevision 编辑后正文版本号。
+ * @param animationMode Core 动画模式 — CLUSTER_ANIMATION / SYSTEM_SUPPRESSED 等。
+ * @param durationMs Core 建议动画时长。
+ * @param offsetMap Core UTF-8 offset map — 已由调用方转成 UTF-16 [VisualOffsetMap]。
  * @param oldRanges 旧受影响 UTF-16 ranges — 删除动画用（来自 Core oldAffectedByteRanges）。
  * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用（来自 Core newAffectedByteRanges）。
  * @param textKind 文字动画类型。
  * @param cursor 光标视觉意图 — null 表示不画视觉光标。
- * @param newTextLength 新正文 UTF-16 长度 — 保留向后兼容，由 [expectedNewText].length 推导。
- * @param expectedOldText #666 新增：完整旧正文（UTF-16 String）—
- *   和 [expectedNewText] 成对保存，[ComposeVisualRebase.buildCursorSnapshot] 用它验证
- *   previous layout 是否匹配本事务的 old text。不匹配说明对应的新布局还没到，
- *   返回 null 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
- *   默认空字符串保持现有测试构造兼容。
- * @param expectedNewText #641 评论 5459531909 第1项：完整新正文（UTF-16 String）—
- *   layout 关联判断改用 `result.layoutInput.text.text == expectedNewText`，
- *   不再只比较长度。默认空字符串保持现有测试构造兼容。
- * @param replaceBounds #641 评论 5458880786 问题2a：明确的 replace 边界（UTF-16）—
- *   retained reflow 用它算 prefix/suffix，不再从空 oldRanges/newRanges 猜。
- *   null 表示未提供（向后兼容，fallback 到 oldRanges/newRanges 推断）。
+ * @param replaceBounds 明确的 replace 边界（UTF-16）。
  */
 data class EditorVisualIntent(
-    val transactionId: Long = 0L,
+    val coreTransactionId: Long,
+    val baseRevision: Long,
+    val newRevision: Long,
+    val animationMode: AnimationModeDto,
+    val durationMs: Long,
+    val offsetMap: VisualOffsetMap?,
     val oldRanges: List<TextRange>,
     val newRanges: List<TextRange>,
     val textKind: TextVisualKind,
     val cursor: CursorVisualIntent?,
-    val newTextLength: Int = 0,
-    val expectedOldText: String = "",
-    val expectedNewText: String = "",
     val replaceBounds: VisualReplaceBounds? = null,
 )
 
@@ -118,3 +97,40 @@ data class VisualCursorSnapshot(
     val oldSelectionEnd: Int,
     val newSelectionEnd: Int,
 )
+
+/**
+ * #644 评论 #684：Android 视觉层自己的 UTF-16 offset map —
+ * 由 [WritingPaneEffects] 在 UI 映射边界从 Core UTF-8 offset map 转换而来，
+ * 视觉层只保存 UTF-16，不再拿 Core UTF-8 byte offset 算 Compose 几何。
+ *
+ * @param entries UTF-16 offset map 条目列表 — 顺序排列，覆盖受影响区域。
+ */
+data class VisualOffsetMap(
+    val entries: List<VisualOffsetMapEntry>,
+)
+
+/**
+ * #644 评论 #684：UTF-16 offset map 条目 —
+ * 表示一段 old UTF-16 range 到 new UTF-16 range 的映射。
+ *
+ * @param oldStart 旧正文 UTF-16 起始偏移。
+ * @param newStart 新正文 UTF-16 起始偏移。
+ * @param length 映射长度（UTF-16 code units）。
+ * @param kind 映射类型：IDENTITY 表示原文保留（位置可能平移），SHIFTED 表示内容变化。
+ */
+data class VisualOffsetMapEntry(
+    val oldStart: Int,
+    val newStart: Int,
+    val length: Int,
+    val kind: VisualOffsetMapKind,
+)
+
+/**
+ * #644 评论 #684：offset map 条目类型。
+ */
+enum class VisualOffsetMapKind {
+    /** 原文保留，位置可能因前后增删而平移。 */
+    IDENTITY,
+    /** 内容被替换/移动。 */
+    SHIFTED,
+}

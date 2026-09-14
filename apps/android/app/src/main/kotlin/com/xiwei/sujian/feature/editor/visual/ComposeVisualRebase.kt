@@ -105,7 +105,8 @@ internal object ComposeVisualRebase {
         }
 
         val cursorRect = materializeCursorRect(prev, cursorProgress, cursorSnapshot)
-        val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
+        val lastCursor = prev.intents.lastOrNull()?.cursor
+        val cursorAlpha = if (lastCursor?.animate == true) 1f else 0f
 
         return ComposeVisualFrame(
             slices = mappedSlices,
@@ -118,13 +119,14 @@ internal object ComposeVisualRebase {
 
     /**
      * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
-     * 按 [prev.textKind] 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     * 按最后一个 intent 的 textKind 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
      */
     fun collectCurrentSlicesAsRebased(
         prev: ComposeVisualTransaction,
         textProgress: Float,
-    ): List<RebasedTextSlice> =
-        when (prev.textKind) {
+    ): List<RebasedTextSlice> {
+        val textKind = prev.intents.lastOrNull()?.textKind ?: TextVisualKind.None
+        return when (textKind) {
             TextVisualKind.Delete ->
                 rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
             TextVisualKind.Move ->
@@ -134,6 +136,7 @@ internal object ComposeVisualRebase {
                 survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
             TextVisualKind.None -> emptyList()
         }
+    }
 
     /**
      * 把 [ranges] 里有效段物化成 [RebasedTextSlice]，alpha = [alphaRaw].coerceIn(0,1)。
@@ -342,7 +345,8 @@ internal object ComposeVisualRebase {
         cursorProgress: Float,
         cursorSnapshot: VisualCursorSnapshot?,
     ): Rect? {
-        if (cursorSnapshot == null || prev.cursor?.animate != true) return null
+        val lastCursor = prev.intents.lastOrNull()?.cursor
+        if (cursorSnapshot == null || lastCursor?.animate != true) return null
         val left =
             lerpFloat(
                 cursorSnapshot.oldCursorRect.left,
@@ -474,13 +478,8 @@ internal object ComposeVisualRebase {
      *
      * #641 评论 问题2：old/new selection end 从 [CursorVisualIntent] 读取。
      *
-     * #666：布局和事务正文严格配对。调用 `getCursorRect` 之前先检查：
-     * - `previousSnapshot.result.layoutInput.text.text == intent.expectedOldText`
-     * - `currentSnapshot.result.layoutInput.text.text == intent.expectedNewText`
-     * - old/new cursor offset 属于各自 layout 的合法 UTF-16 范围
-     * 任一不匹配返回 null，表示"对应的新布局还没到"，
-     * 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
-     * `intent` 为 null 时（向后兼容）跳过 expectedOldText/expectedNewText 检查，但仍检查 offset 范围。
+     * #644 评论 #684：布局验证已移至 [ComposeVisualFrameCoordinator]，
+     * 本方法只检查 offset 范围合法性。
      */
     fun buildCursorSnapshot(
         previousSnapshot: ComposeLayoutSnapshot?,
@@ -492,14 +491,8 @@ internal object ComposeVisualRebase {
         val cursor = intent?.cursor
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
-        // #666：布局和事务正文严格配对。不匹配说明对应的新布局还没到，返回 null
-        // 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
         val oldText = prev.result.layoutInput.text.text
         val newText = curr.result.layoutInput.text.text
-        if (intent != null) {
-            if (oldText != intent.expectedOldText) return null
-            if (newText != intent.expectedNewText) return null
-        }
         // old/new cursor offset 必须属于各自 layout 的合法 UTF-16 范围。
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
@@ -538,6 +531,70 @@ internal object ComposeVisualRebase {
             replaceBounds?.oldEnd ?: (intent.oldRanges.maxOfOrNull { it.end } ?: 0)
         val newSuffixStart =
             replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
+
+        val oldText = prev.result.layoutInput.text
+        val newText = curr.result.layoutInput.text
+        val oldTextLen = oldText.length
+        val newTextLen = newText.length
+
+        if (oldSuffixStart >= oldTextLen || newSuffixStart >= newTextLen) return emptyList()
+
+        val ctx =
+            RetainedMovesContext(
+                prev = prev,
+                curr = curr,
+                oldText = oldText,
+                newText = newText,
+                oldTextLen = oldTextLen,
+                newTextLen = newTextLen,
+                oldSuffixStart = oldSuffixStart,
+                newSuffixStart = newSuffixStart,
+            )
+        return computeRetainedMovesLoop(ctx)
+    }
+
+    /**
+     * #644 评论 #684：按 offset map chain 合并整条事务链的 retained moves。
+     *
+     * chain 中每一笔 [EditorVisualIntent] 的 [VisualOffsetMap] 顺序合成，
+     * 将 old UTF-16 range 映射到最终 new UTF-16 range。
+     * 然后只比较 old/new [TextLayoutResult] 的真实几何生成 [RetainedMove]。
+     *
+     * 这样输入导致软换行、Enter 导致硬换行、删除换行导致两段合并、
+     * 快速连续 Backspace 导致多次回流，全部走同一个 retained reflow，
+     * 不再通过 `\n`、长度、previous/current 猜。
+     *
+     * @param oldLayout 旧布局快照。
+     * @param newLayout 新布局快照。
+     * @param chain Core intent 链 — 按到达顺序排列。
+     */
+    fun computeRetainedMoves(
+        oldLayout: ComposeLayoutSnapshot?,
+        newLayout: ComposeLayoutSnapshot?,
+        chain: List<EditorVisualIntent>,
+    ): List<RetainedMove> {
+        val prev = oldLayout ?: return emptyList()
+        val curr = newLayout ?: return emptyList()
+        if (chain.isEmpty()) return emptyList()
+
+        // 找出 chain 中最后一个有 replaceBounds 的 intent 作为映射依据。
+        // 如果所有 intent 都没有 replaceBounds，fallback 到第一个 intent 的 ranges。
+        val lastWithBounds = chain.lastOrNull { it.replaceBounds != null }
+        val replaceBounds = lastWithBounds?.replaceBounds
+        val lastIntent = chain.last()
+
+        // 使用 chain 的 offset map 进行范围映射。
+        // 如果有 offsetMap，通过它确定 old→new 的存活范围。
+        val effectiveOldRanges = chain.flatMap { it.oldRanges }.filter { it.start < it.end }
+        val effectiveNewRanges = chain.flatMap { it.newRanges }.filter { it.start < it.end }
+
+        // 找出实际的 old suffix start 和 new suffix start。
+        val oldSuffixStart =
+            replaceBounds?.oldEnd
+                ?: (effectiveOldRanges.maxOfOrNull { it.end } ?: 0)
+        val newSuffixStart =
+            replaceBounds?.newEnd
+                ?: (effectiveNewRanges.maxOfOrNull { it.end } ?: 0)
 
         val oldText = prev.result.layoutInput.text
         val newText = curr.result.layoutInput.text

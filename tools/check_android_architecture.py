@@ -456,6 +456,8 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 与 ComposeVisualFrame 同类，不写正文持久状态。
             "feature/editor/visual/ComposeVisualRebase.kt",
             "feature/editor/visual/EditorVisualModels.kt",
+            # #644 评论 #684 项1-2：帧协调链核心类，引用 androidx.compose.ui.text.TextRange 做帧数据。
+            "feature/editor/visual/ComposeVisualFrameCoordinator.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

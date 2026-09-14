@@ -159,7 +159,14 @@ fun statsCountsFor(
  * EditorViewModel 不能直接依赖 ComposeEditorVisualState/EditorVisualIntent，
  * 但 commitToCore 成功后必须把 Core 返回的 visual intent 传到 UI 层。
  *
+ * #644 评论 #684：Core 事务身份不再丢失 —
+ * [transactionId]、[baseRevision]、[newRevision] 原样从 Core EditResult 传入，
+ * Android 视觉层不再自行生成伪事务 ID。
+ *
  * @param targetId 目标章节 ID，供 UI 层按 target 过滤。
+ * @param transactionId Core 事务 ID — 来自 Rust EditResult。
+ * @param baseRevision 编辑前正文版本号。
+ * @param newRevision 编辑后正文版本号。
  * @param oldText 提交前的完整正文（UTF-8），用于 oldAffectedByteRanges → UTF-16 换算。
  * @param newText 提交后的完整正文（UTF-8），用于 newAffectedByteRanges → UTF-16 换算。
  * @param visualIntent Core 返回的视觉意图（projection 层，纯数据）。
@@ -169,6 +176,9 @@ fun statsCountsFor(
 @Immutable
 data class CoreVisualIntentEvent(
     val targetId: String,
+    val transactionId: Long,
+    val baseRevision: Long,
+    val newRevision: Long,
     val oldText: String,
     val newText: String,
     val visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,

@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -164,19 +165,25 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
 
+    // #644 评论 #684：OutputTransformation 整个编辑器生命周期只创建一次，
+    // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
+    val latestHiddenRanges = rememberUpdatedState(hiddenRanges)
+    val latestSearchHighlights = rememberUpdatedState(searchHighlights)
+    val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
+
     val outputTransformation =
-        remember(hiddenRanges, searchHighlights, searchHighlightColor) {
+        remember {
             OutputTransformation {
-                searchHighlights.forEach { range ->
+                latestSearchHighlights.value.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
-                            SpanStyle(background = searchHighlightColor),
+                            SpanStyle(background = latestSearchHighlightColor.value),
                             range.start,
                             range.end,
                         )
                     }
                 }
-                hiddenRanges.forEach { range ->
+                latestHiddenRanges.value.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
                             SpanStyle(color = Color.Transparent),
@@ -200,6 +207,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             scrollState = viewportState.scrollState,
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
+            // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 overlay 画。
+            // smooth cursor 关闭时始终由系统画，overlay 永远不接管。
             cursorBrush =
                 if (drawsVisualCursor) {
                     SolidColor(Color.Transparent)

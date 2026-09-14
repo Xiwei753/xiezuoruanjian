@@ -563,6 +563,9 @@ class EditorViewModel(
                 _visualIntentEvents.send(
                     CoreVisualIntentEvent(
                         targetId = targetId,
+                        transactionId = editResult.transactionId,
+                        baseRevision = editResult.baseRevision,
+                        newRevision = editResult.newRevision,
                         oldText = edit.oldText,
                         newText = fullNewText,
                         visualIntent = editResult.visualIntent,
