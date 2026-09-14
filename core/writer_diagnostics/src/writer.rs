@@ -261,7 +261,12 @@ fn write_batch(s: &'static WriterState, batch: &[String]) -> bool {
         return false;
     }
     let current_file = current_log_path(&cfg.log_dir, &cfg.build_key);
-    let _ = prune_old_logs_global(&cfg.log_dir, &current_file);
+    // 裁剪失败（旧日志删不掉）说明日志目录已超边界或不可写，必须让 write_batch
+    // 返回失败，persistence_healthy 才能感知；不能用 `let _ =` 吞掉结果
+    // （Issue #682 评论 5658905879）。
+    if !prune_old_logs_global(&cfg.log_dir, &current_file) {
+        return false;
+    }
     if !rotate_if_needed(&cfg.log_dir, &current_file) {
         return false;
     }
@@ -341,8 +346,11 @@ fn prune_old_logs_global(log_dir: &Path, current_file: &Path) -> bool {
         mb.cmp(&ma)
     });
 
-    let reserve_for_current = usize::from(current_file.exists());
-    let keep_others = MAX_TOTAL_LOG_FILES.saturating_sub(reserve_for_current);
+    // current_file 是"当前正在写 / 马上要写"的文件，固定给它预留 1 个名额，
+    // 不能用 exists() 判断——新 build 首次写入时 current 还不存在，exists() 返回
+    // false 会导致 reserve=0，旧日志全部保留，随后 create(true) 再创建 current
+    // 就会突破 MAX_TOTAL_LOG_FILES 上限（Issue #682 评论 5658905879）。
+    let keep_others = MAX_TOTAL_LOG_FILES.saturating_sub(1);
     let mut ok = true;
     for path in others.iter().skip(keep_others) {
         if fs::remove_file(path).is_err() {
@@ -577,6 +585,60 @@ mod tests {
             "after rotate+prune+new current, should have exactly {} files, got {}",
             MAX_TOTAL_LOG_FILES, count
         );
+        reset_for_test();
+    }
+
+    /// 验证 Issue #682 评论 5658905879 指出的边界 bug 已修复：
+    /// 新 build 首次写入时 current_file 不存在，修复前 prune_old_logs_global 用
+    /// `current_file.exists()` 决定预留位置导致 reserve_for_current=0，5 个旧 build
+    /// 日志全部保留；随后 OpenOptions::create(true) 再创建新 current，目录变成 6 个
+    /// 文件，超过 MAX_TOTAL_LOG_FILES=5。修复后 prune_old_logs_global 固定给 current
+    /// 预留 1 个名额，新 build 首次写入后目录最多保留 MAX_TOTAL_LOG_FILES 个文件。
+    ///
+    /// 修复后断言：count <= MAX_TOTAL_LOG_FILES 且新 build 的 current 文件存在。
+    #[test]
+    fn new_build_first_write_keeps_max_5_files() {
+        let _lock = lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("log");
+        fs::create_dir_all(&log_dir).unwrap();
+
+        // 先在目录里放 5 个旧 build 的日志文件，间隔 10ms 修改时间确保排序正确。
+        for i in 0..5 {
+            let path = log_dir.join(format!("sujian-current-old{i}.log"));
+            fs::write(&path, "old build log content\n").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // 用一个目录里从未存在过的新 build key 走 init/enqueue/flush。
+        init(log_dir.clone(), "newbuild-repro".to_string(), true);
+        set_enabled(true);
+        enqueue(make_event_json("repro.event"));
+        assert!(flush(), "flush should succeed");
+
+        // 统计整个 log_dir 目录下所有 sujian-current*.log 文件数量。
+        let mut count = 0;
+        for entry in fs::read_dir(&log_dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(LOG_PREFIX) && name.ends_with(".log") {
+                count += 1;
+            }
+        }
+
+        // 修复后断言：目录文件数不超过 MAX_TOTAL_LOG_FILES。
+        assert!(
+            count <= MAX_TOTAL_LOG_FILES,
+            "修复后新 build 首次写入目录文件数应 <= MAX_TOTAL_LOG_FILES={}, 实际 {}",
+            MAX_TOTAL_LOG_FILES, count
+        );
+
+        // 同时断言新 build 的 current 文件存在。
+        let new_current = log_dir.join("sujian-current-newbuild-repro.log");
+        assert!(
+            new_current.exists(),
+            "新 build 的 current 文件应存在: {new_current:?}"
+        );
+
         reset_for_test();
     }
 }
