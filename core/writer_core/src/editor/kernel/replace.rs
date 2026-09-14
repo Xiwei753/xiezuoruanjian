@@ -1,4 +1,4 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
 
@@ -18,13 +18,15 @@ impl EditorKernel {
         replacement: &str,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         if search.is_empty() {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -42,7 +44,8 @@ impl EditorKernel {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -80,7 +83,7 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.composition_session = None;
 
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         // content delta / offset map / affected ranges 从 delta 构造，
         // 计算完成后才把 edits 移入 Undo 栈。
         let mut content_delta = EditorContentDelta::default();
@@ -114,13 +117,15 @@ impl EditorKernel {
                 new_revision,
                 replace_byte_range: d.old_range,
                 inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: new_selection,
+                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
+                    new_selection,
+                ),
             })
             .collect();
 
         self.undo_stack.push(UndoEntry {
             edits,
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -146,8 +151,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta,
         })

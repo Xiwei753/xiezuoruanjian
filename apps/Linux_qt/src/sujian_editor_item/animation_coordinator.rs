@@ -1392,11 +1392,9 @@ impl LinuxEditorAnimationCoordinator {
             TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
                 Some(CursorTimelineSample::Waiting)
             }
-            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
-                Some(CursorTimelineSample::Running(
-                    tx.progress(Instant::now()).clamp(0.0, 1.0),
-                ))
-            }
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => Some(
+                CursorTimelineSample::Running(tx.progress(Instant::now()).clamp(0.0, 1.0)),
+            ),
             TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => None,
         }
     }
@@ -1415,14 +1413,12 @@ impl LinuxEditorAnimationCoordinator {
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
-                TextVisualTransactionState::Completed
-                    | TextVisualTransactionState::Cancelled
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
             ) {
                 continue;
             }
             if let Some(ref new_rect) = tx.new_cursor_rect {
-                if (new_rect.x - target_x).abs() <= 0.01
-                    && (new_rect.top - target_y).abs() <= 0.01
+                if (new_rect.x - target_x).abs() <= 0.01 && (new_rect.top - target_y).abs() <= 0.01
                 {
                     return Some((
                         tx.key,
@@ -1492,11 +1488,8 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
         // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见/滚动变化都硬 Snap，
         // 不再被协调动画覆盖为 Tween。
-        let hard_snap = force_snap_next
-            || is_scrolling
-            || is_selecting
-            || !old_visible
-            || scroll_changed;
+        let hard_snap =
+            force_snap_next || is_scrolling || is_selecting || !old_visible || scroll_changed;
 
         // Issue #679 评论 5657313927: 没有 driver key 时无法构造 Tween（需要 driver_key
         // 字段），fallback 到 Snap。

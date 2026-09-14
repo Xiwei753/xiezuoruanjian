@@ -2275,4 +2275,201 @@ mod tests {
         });
         assert_eq!(kernel.revision(), 0, "composition delete 不应改 revision");
     }
+
+    // =========================================================================
+    // Issue #683：SetSelection 状态语义 + 反向选区方向保留 + undo/redo 方向保持
+    // =========================================================================
+
+    /// Issue #683：SetSelection 把光标移到旧正文中间位置，正文 revision 不变，
+    /// 但 outcome 是 Applied（状态已应用），让平台端 mirror cursor 跟着更新。
+    #[test]
+    fn set_selection_to_middle_of_old_text_is_state_applied() {
+        let mut kernel = EditorKernel::with_text("abcdef".to_string(), 6).unwrap();
+        let rev_before = kernel.revision();
+        let outcome = kernel.apply(EditorCommand::SetSelection {
+            anchor: Utf8ByteOffset::unchecked(3),
+            head: Utf8ByteOffset::unchecked(3),
+            expected_revision: EditorRevision::new(0),
+        });
+        // 正文 revision 不变（选区操作不改正文）。
+        assert_eq!(
+            kernel.revision(),
+            rev_before,
+            "选区操作不应改变正文 revision"
+        );
+        // kernel 内部状态确实变了。
+        assert_eq!(kernel.cursor(), 3, "kernel cursor 应已移到 3");
+        assert_eq!(kernel.selection_anchor(), 3, "kernel anchor 应已移到 3");
+        // outcome 反映状态已应用，平台端 mirror 才会跟着更新。
+        assert!(
+            outcome.is_applied(),
+            "SetSelection anchor/head 真变了应返回 Applied，实际 {:?}",
+            outcome
+        );
+    }
+
+    /// Issue #683：load "abcdef" -> set_selection(3,3) -> delete_backward()
+    /// 应删除旧正文里的 'c'（byte [2,3)），不是只能删本轮新增内容。
+    #[test]
+    fn set_selection_then_delete_removes_old_text_at_cursor() {
+        let mut kernel = EditorKernel::with_text("abcdef".to_string(), 6).unwrap();
+        // 把光标移到 3（'c' 后）。
+        let sel_outcome = kernel.apply(EditorCommand::SetSelection {
+            anchor: Utf8ByteOffset::unchecked(3),
+            head: Utf8ByteOffset::unchecked(3),
+            expected_revision: EditorRevision::new(0),
+        });
+        assert!(sel_outcome.is_applied(), "SetSelection(3,3) 应返回 Applied");
+        // 接着用 cursor=3 删除前一个字符 'c'（byte range [2,3)）。
+        let del_outcome = kernel.apply(EditorCommand::Delete {
+            byte_range: Utf8ByteRange::try_new("abcdef", 2, 3).unwrap(),
+            deleted_text: "c".to_string(),
+            cause: EditorTransactionCause::Delete,
+            expected_revision: EditorRevision::new(0),
+        });
+        assert!(del_outcome.is_applied(), "Delete 应成功应用");
+        assert_eq!(kernel.snapshot_text(), "abdef", "删除 'c' 后应为 'abdef'");
+    }
+
+    /// Issue #683：SetSelection 在 anchor/head 与当前状态完全相同时返回 NoChange。
+    #[test]
+    fn set_selection_same_anchor_head_returns_nochange() {
+        let mut kernel = EditorKernel::with_text("abcdef".to_string(), 3).unwrap();
+        // 初始 anchor=3, head=3。设置相同位置应返回 NoChange。
+        let outcome = kernel.apply(EditorCommand::SetSelection {
+            anchor: Utf8ByteOffset::unchecked(3),
+            head: Utf8ByteOffset::unchecked(3),
+            expected_revision: EditorRevision::new(0),
+        });
+        assert!(
+            matches!(outcome, EditorEditOutcome::NoChange(_)),
+            "SetSelection anchor/head 都没变应返回 NoChange，实际 {:?}",
+            outcome
+        );
+    }
+
+    /// Issue #683：反向选区 (anchor > head) 的方向必须在 EditorEditResult 中保留。
+    #[test]
+    fn reverse_selection_direction_preserved_in_result() {
+        let mut kernel = EditorKernel::with_text("abcdef".to_string(), 0).unwrap();
+        // 反向选区：anchor=3, head=0（用户从右往左拖选）。
+        let result = kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(0),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        // kernel 内部正确保留了方向。
+        assert_eq!(kernel.selection_anchor(), 3, "kernel anchor 应为 3");
+        assert_eq!(kernel.cursor(), 0, "kernel cursor(head) 应为 0");
+        // result 也保留方向。
+        assert_eq!(
+            result.new_selection.anchor.index.value(),
+            3,
+            "result new_selection anchor 应为 3"
+        );
+        assert_eq!(
+            result.new_selection.head.index.value(),
+            0,
+            "result new_selection head 应为 0"
+        );
+    }
+
+    /// Issue #683：Shift+Left 产生反向选区 (anchor > head)，undo/redo 后方向必须保持。
+    #[test]
+    fn reverse_selection_survives_undo_redo() {
+        let mut kernel = EditorKernel::with_text("abcdef".to_string(), 6).unwrap();
+        // 先插入一个字符产生可 undo 的编辑。
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(6),
+                text: "X".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abcdefX");
+        // 反向选区：anchor=3, head=0。
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(0),
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
+        assert_eq!(kernel.selection_anchor(), 3, "设置后 anchor=3");
+        assert_eq!(kernel.cursor(), 0, "设置后 cursor(head)=0");
+
+        // 再插入一个字符，把反向选区状态记进 undo 栈。
+        let r2 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(0),
+                text: "Y".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "YabcdefX");
+
+        // Undo：应恢复到反向选区 anchor=3, head=0。
+        kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r2.new_revision,
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abcdefX", "undo 后正文应恢复");
+        assert_eq!(
+            kernel.selection_anchor(),
+            3,
+            "undo 后 anchor 应恢复为 3（反向选区）"
+        );
+        assert_eq!(
+            kernel.cursor(),
+            0,
+            "undo 后 cursor(head) 应恢复为 0（反向选区）"
+        );
+    }
+
+    /// Issue #683：UndoEntry 用 EditorSelection 保留方向，undo 恢复 anchor/head。
+    #[test]
+    fn undo_entry_preserves_reverse_selection_direction() {
+        let mut kernel = EditorKernel::with_text("abc".to_string(), 3).unwrap();
+        // 反向选区：anchor=3, head=0。
+        kernel
+            .apply(EditorCommand::SetSelection {
+                anchor: Utf8ByteOffset::unchecked(3),
+                head: Utf8ByteOffset::unchecked(0),
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        assert_eq!(kernel.selection_anchor(), 3);
+        assert_eq!(kernel.cursor(), 0);
+        // 插入字符记进 undo 栈。
+        let r1 = kernel
+            .apply(EditorCommand::Insert {
+                byte_offset: Utf8ByteOffset::unchecked(0),
+                text: "Z".to_string(),
+                cause: EditorTransactionCause::Typing,
+                expected_revision: EditorRevision::new(0),
+            })
+            .into_result();
+        // Undo 应恢复反向选区。
+        kernel
+            .apply(EditorCommand::Undo {
+                expected_revision: r1.new_revision,
+            })
+            .into_result();
+        assert_eq!(kernel.snapshot_text(), "abc", "undo 后正文应恢复");
+        assert_eq!(
+            kernel.selection_anchor(),
+            3,
+            "undo 后 anchor 应为 3（反向选区方向保持）"
+        );
+        assert_eq!(
+            kernel.cursor(),
+            0,
+            "undo 后 cursor(head) 应为 0（反向选区方向保持）"
+        );
+    }
 }

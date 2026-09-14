@@ -110,23 +110,26 @@ impl CommittedTextMirror {
             self.text.replace_range(start..end, &patch.inserted_text);
             self.revision = patch.new_revision.value();
         }
-        let sel_range = result.new_selection_byte_range.to_std_range();
-        let anchor = sel_range.start;
-        let head = sel_range.end;
-        if anchor > self.text.len() || head > self.text.len() {
+        // Issue #683：用 result 的 new anchor/head 更新 mirror，不再从
+        // new_selection_byte_range.to_std_range() 反推 anchor=start, head=end
+        // （方向会丢失）。display_patches 为空时（如 SetSelection）也要更新
+        // mirror cursor/selection_anchor，否则光标锁死。
+        let new_anchor = result.new_selection.anchor.index.value();
+        let new_head = result.new_selection.head.index.value();
+        if new_anchor > self.text.len() || new_head > self.text.len() {
             return Err(format!(
                 "CommittedTextMirror selection out of bounds: ({}, {}) vs text len {}. Must reload from kernel snapshot.",
-                anchor, head, self.text.len()
+                new_anchor, new_head, self.text.len()
             ));
         }
-        if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
+        if !self.text.is_char_boundary(new_anchor) || !self.text.is_char_boundary(new_head) {
             return Err(format!(
                 "CommittedTextMirror selection not on char boundary: ({}, {}). Must reload from kernel snapshot.",
-                anchor, head
+                new_anchor, new_head
             ));
         }
-        self.cursor = head;
-        self.selection_anchor = anchor;
+        self.cursor = new_head;
+        self.selection_anchor = new_anchor;
         Ok(())
     }
 }
@@ -422,6 +425,69 @@ impl LinuxEditorPipeline {
             .set_cursor_animation_duration_ms(ms);
     }
 
+    /// 从 kernel snapshot 完整重建 mirror。
+    ///
+    /// 当 `apply_edit_result` 失败（revision 不连续、range 越界等）或
+    /// `StaleRevision` 时调用，保证 mirror 与 kernel 状态一致。
+    fn reload_mirror_from_kernel(&mut self) {
+        self.mirror.load_from_snapshot(
+            self.kernel.snapshot_text(),
+            self.kernel.cursor(),
+            self.kernel.revision(),
+            self.kernel.selection_anchor(),
+        );
+    }
+
+    /// 统一处理 `EditorEditOutcome`，把 Applied / AppliedWithAdjustedSelection /
+    /// NoChange 三种分支收成同一条 mirror 更新路径。
+    ///
+    /// Issue #683：`NoChange` 不再跳过 mirror 更新。真正的 `NoChange` 只代表
+    /// "命令没改变编辑器状态"，此时 `new_selection == old_selection`，调用
+    /// `apply_edit_result` 是幂等的——但关键修复是：`SetSelection` 在 anchor/head
+    /// 真变化时现在返回 `Applied`，mirror cursor 会跟着更新，不再锁死。
+    ///
+    /// `none_on_noop`：`true` 时 `NoChange`/`InvalidOffset`/`InvalidRange` 返回 `None`
+    /// （用于 undo/redo——无操作可撤销时返回 None）；`false` 时返回 `Some(result)`
+    /// （用于 insert/delete/replace/set_selection——调用方仍可拿到 result）。
+    fn apply_kernel_outcome(
+        &mut self,
+        outcome: EditorEditOutcome,
+        none_on_noop: bool,
+    ) -> Option<EditorEditResult> {
+        match outcome {
+            EditorEditOutcome::Applied(result)
+            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                Some(result)
+            }
+            EditorEditOutcome::NoChange(result) => {
+                // Issue #683：NoChange 也走 mirror 更新（此时 new==old，幂等）。
+                // 不再出现 NoChange 直接返回 Some 而不更新 mirror 的路径。
+                if self.mirror.apply_edit_result(&result).is_err() {
+                    self.reload_mirror_from_kernel();
+                }
+                if none_on_noop {
+                    None
+                } else {
+                    Some(result)
+                }
+            }
+            EditorEditOutcome::StaleRevision(result) => {
+                self.reload_mirror_from_kernel();
+                Some(result)
+            }
+            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
+                if none_on_noop {
+                    None
+                } else {
+                    Some(result)
+                }
+            }
+        }
+    }
+
     pub fn load_text(&mut self, text: String, cursor: usize) -> bool {
         let normalized = normalize_plain_text(&text);
         let clamped_cursor = clamp_to_char_boundary(&normalized, cursor);
@@ -456,33 +522,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(result) => Some(result),
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
-                Some(result)
-            }
-        }
+        self.apply_kernel_outcome(outcome, false)
     }
 
     pub fn delete_range(
@@ -502,33 +542,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(result) => Some(result),
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
-                Some(result)
-            }
-        }
+        self.apply_kernel_outcome(outcome, false)
     }
 
     pub fn replace_range(
@@ -550,33 +564,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(result) => Some(result),
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
-                Some(result)
-            }
-        }
+        self.apply_kernel_outcome(outcome, false)
     }
 
     pub fn set_selection(&mut self, anchor: usize, head: usize) -> Option<EditorEditResult> {
@@ -586,33 +574,9 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(result) => Some(result),
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(result) | EditorEditOutcome::InvalidRange(result) => {
-                Some(result)
-            }
-        }
+        // Issue #683：set_selection 不再出现 NoChange 直接返回 Some
+        // 然后什么都不更新的路径。apply_kernel_outcome 对 NoChange 也走 mirror 更新。
+        self.apply_kernel_outcome(outcome, false)
     }
 
     pub fn perform_undo(&mut self) -> Option<EditorEditResult> {
@@ -620,31 +584,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(_) => None,
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_) => None,
-        }
+        self.apply_kernel_outcome(outcome, true)
     }
 
     pub fn perform_redo(&mut self) -> Option<EditorEditResult> {
@@ -652,31 +592,7 @@ impl LinuxEditorPipeline {
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };
         let outcome = self.kernel.apply(command);
-        match outcome {
-            EditorEditOutcome::Applied(result)
-            | EditorEditOutcome::AppliedWithAdjustedSelection(result) => {
-                if self.mirror.apply_edit_result(&result).is_err() {
-                    self.mirror.load_from_snapshot(
-                        self.kernel.snapshot_text(),
-                        self.kernel.cursor(),
-                        self.kernel.revision(),
-                        self.kernel.selection_anchor(),
-                    );
-                }
-                Some(result)
-            }
-            EditorEditOutcome::NoChange(_) => None,
-            EditorEditOutcome::StaleRevision(result) => {
-                self.mirror.load_from_snapshot(
-                    self.kernel.snapshot_text(),
-                    self.kernel.cursor(),
-                    self.kernel.revision(),
-                    self.kernel.selection_anchor(),
-                );
-                Some(result)
-            }
-            EditorEditOutcome::InvalidOffset(_) | EditorEditOutcome::InvalidRange(_) => None,
-        }
+        self.apply_kernel_outcome(outcome, true)
     }
 
     pub fn clear_undo_redo(&mut self) {
@@ -795,9 +711,7 @@ impl LinuxEditorPipeline {
         if let Some(t) = tx {
             let snapshot_ids = t.snapshot_ids();
             if snapshot_ids.is_empty() {
-                self.animation_coordinator
-                    .prepared_queue
-                    .mark_prepared(key);
+                self.animation_coordinator.prepared_queue.mark_prepared(key);
                 return;
             }
 
@@ -810,9 +724,7 @@ impl LinuxEditorPipeline {
             }
 
             if all_found {
-                self.animation_coordinator
-                    .prepared_queue
-                    .mark_prepared(key);
+                self.animation_coordinator.prepared_queue.mark_prepared(key);
                 return;
             }
 
@@ -847,9 +759,7 @@ impl LinuxEditorPipeline {
                 self.animation_coordinator
                     .cancel_by_key(key, "texture_failed");
             } else {
-                self.animation_coordinator
-                    .prepared_queue
-                    .mark_prepared(key);
+                self.animation_coordinator.prepared_queue.mark_prepared(key);
             }
         }
     }

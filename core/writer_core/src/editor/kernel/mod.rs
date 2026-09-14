@@ -16,6 +16,7 @@ use crate::editor::strong_types::{
     EditorRevision, EditorSessionGeneration, EditorSessionId, Utf16CodeUnitOffset, Utf8ByteOffset,
     Utf8ByteRange,
 };
+use crate::editor::transaction::EditorSelection;
 use crop::Rope;
 
 /// 编辑 delta：只保存实际删除/插入的局部文本及 old/new ranges。
@@ -39,8 +40,12 @@ pub(crate) struct TextEditDelta {
 #[derive(Debug, Clone)]
 pub(crate) struct UndoEntry {
     pub(crate) edits: Vec<TextEditDelta>,
-    pub(crate) old_selection: Utf8ByteRange,
-    pub(crate) new_selection: Utf8ByteRange,
+    /// 编辑前选区（保留 anchor/head 方向）。
+    ///
+    /// Issue #683：undo/redo 必须恢复原方向，不能用排序后的
+    /// Utf8ByteRange 反推 anchor/head——反向选区会被翻成正向。
+    pub(crate) old_selection: EditorSelection,
+    pub(crate) new_selection: EditorSelection,
 }
 
 #[derive(Debug, Clone)]

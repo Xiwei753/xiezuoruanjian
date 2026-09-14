@@ -961,9 +961,11 @@ impl From<crate::editor::EditorContentDelta> for EditorContentDeltaDto {
 /// 包含正文变化（display_patches）、选区变化、视觉意图和 composition 会话状态。
 /// 平台端按此结果增量更新显示镜像、布局和动画。
 ///
-/// 选区字段 `old_selection_start/end` 和 `new_selection_start/end` 均为
-/// UTF-8 byte offset 半开区间 `[start, end)`。平台端使用 UTF-16 时
-/// 必须通过 TextIndexMap 转换，不得直接用于 SpannableStringBuilder。
+/// 选区字段 `old_selection_anchor/head` 和 `new_selection_anchor/head` 均为
+/// UTF-8 byte offset，**保留 anchor/head 方向**（Issue #683）。
+/// 平台端不得把 anchor/head 当作排序后的 range start/end——反向选区方向会丢失。
+/// 需要无方向的实际覆盖范围时由 `min(anchor,head)..max(anchor,head)` 派生。
+/// 平台端使用 UTF-16 时必须通过 TextIndexMap 转换，不得直接用于 SpannableStringBuilder。
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EditorEditResultDto {
@@ -972,10 +974,14 @@ pub struct EditorEditResultDto {
     pub base_revision: u64,
     pub new_revision: u64,
     pub display_patches: Vec<DisplayPatchDto>,
-    pub old_selection_start: u32,
-    pub old_selection_end: u32,
-    pub new_selection_start: u32,
-    pub new_selection_end: u32,
+    /// 编辑前选区 anchor（UTF-8 byte offset，保留方向）。
+    pub old_selection_anchor: u32,
+    /// 编辑前选区 head（UTF-8 byte offset，保留方向）。
+    pub old_selection_head: u32,
+    /// 编辑后选区 anchor（UTF-8 byte offset，保留方向）。
+    pub new_selection_anchor: u32,
+    /// 编辑后选区 head（UTF-8 byte offset，保留方向）。
+    pub new_selection_head: u32,
     pub visual_intent: EditorVisualIntentDto,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub composition_session: Option<CompositionSessionDto>,
@@ -997,10 +1003,10 @@ impl EditorEditResultDto {
             base_revision: 0,
             new_revision: 0,
             display_patches: vec![],
-            old_selection_start: 0,
-            old_selection_end: 0,
-            new_selection_start: 0,
-            new_selection_end: 0,
+            old_selection_anchor: 0,
+            old_selection_head: 0,
+            new_selection_anchor: 0,
+            new_selection_head: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
@@ -1015,10 +1021,10 @@ impl EditorEditResultDto {
             base_revision: 0,
             new_revision: 0,
             display_patches: vec![],
-            old_selection_start: 0,
-            old_selection_end: 0,
-            new_selection_start: 0,
-            new_selection_end: 0,
+            old_selection_anchor: 0,
+            old_selection_head: 0,
+            new_selection_anchor: 0,
+            new_selection_head: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
@@ -1033,10 +1039,10 @@ impl EditorEditResultDto {
             base_revision: 0,
             new_revision: 0,
             display_patches: vec![],
-            old_selection_start: 0,
-            old_selection_end: 0,
-            new_selection_start: 0,
-            new_selection_end: 0,
+            old_selection_anchor: 0,
+            old_selection_head: 0,
+            new_selection_anchor: 0,
+            new_selection_head: 0,
             visual_intent: EditorVisualIntentDto::default_fallback(),
             composition_session: None,
             content_delta: EditorContentDeltaDto::default(),
@@ -1090,10 +1096,10 @@ impl From<crate::editor::EditorEditOutcome> for EditorEditResultDto {
             base_revision: r.base_revision.value(),
             new_revision: r.new_revision.value(),
             display_patches: r.display_patches.into_iter().map(Into::into).collect(),
-            old_selection_start: r.old_selection_byte_range.start().value() as u32,
-            old_selection_end: r.old_selection_byte_range.end().value() as u32,
-            new_selection_start: r.new_selection_byte_range.start().value() as u32,
-            new_selection_end: r.new_selection_byte_range.end().value() as u32,
+            old_selection_anchor: r.old_selection.anchor.index.value() as u32,
+            old_selection_head: r.old_selection.head.index.value() as u32,
+            new_selection_anchor: r.new_selection.anchor.index.value() as u32,
+            new_selection_head: r.new_selection.head.index.value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
             content_delta: r.content_delta.into(),
@@ -1112,10 +1118,10 @@ impl From<crate::editor::EditorEditResult> for EditorEditResultDto {
             base_revision: r.base_revision.value(),
             new_revision: r.new_revision.value(),
             display_patches: r.display_patches.into_iter().map(Into::into).collect(),
-            old_selection_start: r.old_selection_byte_range.start().value() as u32,
-            old_selection_end: r.old_selection_byte_range.end().value() as u32,
-            new_selection_start: r.new_selection_byte_range.start().value() as u32,
-            new_selection_end: r.new_selection_byte_range.end().value() as u32,
+            old_selection_anchor: r.old_selection.anchor.index.value() as u32,
+            old_selection_head: r.old_selection.head.index.value() as u32,
+            new_selection_anchor: r.new_selection.anchor.index.value() as u32,
+            new_selection_head: r.new_selection.head.index.value() as u32,
             visual_intent: r.visual_intent.into(),
             composition_session: None,
             content_delta: r.content_delta.into(),
@@ -1827,23 +1833,23 @@ mod tests {
             json
         );
         assert!(
-            json.contains("\"oldSelectionStart\":"),
-            "DTO JSON should use camelCase for oldSelectionStart, got: {}",
+            json.contains("\"oldSelectionAnchor\":"),
+            "DTO JSON should use camelCase for oldSelectionAnchor, got: {}",
             json
         );
         assert!(
-            json.contains("\"oldSelectionEnd\":"),
-            "DTO JSON should use camelCase for oldSelectionEnd, got: {}",
+            json.contains("\"oldSelectionHead\":"),
+            "DTO JSON should use camelCase for oldSelectionHead, got: {}",
             json
         );
         assert!(
-            json.contains("\"newSelectionStart\":"),
-            "DTO JSON should use camelCase for newSelectionStart, got: {}",
+            json.contains("\"newSelectionAnchor\":"),
+            "DTO JSON should use camelCase for newSelectionAnchor, got: {}",
             json
         );
         assert!(
-            json.contains("\"newSelectionEnd\":"),
-            "DTO JSON should use camelCase for newSelectionEnd, got: {}",
+            json.contains("\"newSelectionHead\":"),
+            "DTO JSON should use camelCase for newSelectionHead, got: {}",
             json
         );
         assert!(

@@ -1,4 +1,4 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::EditorCommand;
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::{EditorKernel, TextEditDelta, UndoEntry};
@@ -78,8 +78,8 @@ impl EditorKernel {
         }
 
         let old_cursor = self.cursor;
-        let old_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let old_selection_anchor = self.selection_anchor.value();
+        let old_selection_head = self.cursor.value();
 
         match command {
             EditorCommand::Insert {
@@ -93,7 +93,8 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::Delete {
                 byte_range,
@@ -106,7 +107,8 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::Replace {
                 byte_range,
@@ -121,17 +123,29 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::SetSelection { anchor, head, .. } => self.apply_set_selection(
                 anchor.value(),
                 head.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
-            EditorCommand::Undo { .. } => self.apply_undo(base_revision, old_cursor, old_selection),
-            EditorCommand::Redo { .. } => self.apply_redo(base_revision, old_cursor, old_selection),
+            EditorCommand::Undo { .. } => self.apply_undo(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ),
+            EditorCommand::Redo { .. } => self.apply_redo(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ),
             EditorCommand::ReplaceAll {
                 search,
                 replacement,
@@ -141,7 +155,8 @@ impl EditorKernel {
                 &replacement,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::InsertLineBreak {
                 byte_offset,
@@ -154,7 +169,8 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::CommitText {
                 byte_range,
@@ -178,7 +194,8 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::DeleteSurrounding {
                 before_byte_range,
@@ -193,14 +210,16 @@ impl EditorKernel {
                 cause,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::BeginComposition { replace_range, .. } => self.apply_begin_composition(
                 replace_range.start().value(),
                 replace_range.end().value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::UpdateComposition {
                 composition_session_id,
@@ -215,7 +234,8 @@ impl EditorKernel {
                 new_preedit_cursor_utf16,
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::FinishComposition {
                 composition_session_id,
@@ -226,7 +246,8 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::CancelComposition {
                 composition_session_id,
@@ -237,7 +258,8 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             //  R8: composition 专用 grapheme 语义操作
             EditorCommand::CompositionMoveGraphemeLeft {
@@ -249,7 +271,8 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::CompositionMoveGraphemeRight {
                 composition_session_id,
@@ -260,7 +283,8 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::CompositionDeleteGraphemeBackward {
                 composition_session_id,
@@ -271,7 +295,8 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
             EditorCommand::CompositionDeleteGraphemeForward {
                 composition_session_id,
@@ -282,11 +307,13 @@ impl EditorKernel {
                 composition_generation.value(),
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ),
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_insert(
         &mut self,
         byte_offset: usize,
@@ -294,20 +321,23 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         if byte_offset > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(byte_offset) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -320,7 +350,7 @@ impl EditorKernel {
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::point(byte_offset),
             new_range: Utf8ByteRange::from_start_len(byte_offset, text.len()),
@@ -329,7 +359,7 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -342,7 +372,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::point(byte_offset),
             inserted_text: text.to_string(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let is_loading = cause == EditorTransactionCause::Load;
@@ -394,15 +424,15 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::from_inserted_text(text),
         })
     }
 
     // TODO(#597): 既有代码可读性技术债，待后续重构拆分
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn apply_delete(
         &mut self,
         byte_start: usize,
@@ -410,7 +440,8 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) =
             Self::normalize_range(byte_start, byte_end_exclusive);
@@ -418,7 +449,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(byte_start)
@@ -427,14 +459,16 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if byte_start >= byte_end_exclusive {
             return EditorEditOutcome::InvalidRange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -451,7 +485,7 @@ impl EditorKernel {
         self.cursor = Utf8ByteOffset::unchecked(byte_start);
         self.selection_anchor = Utf8ByteOffset::unchecked(byte_start);
 
-        let new_selection = Utf8ByteRange::point(byte_start);
+        let new_selection = make_selection(byte_start, byte_start);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             new_range: Utf8ByteRange::point(byte_start),
@@ -460,7 +494,7 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -473,7 +507,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: String::new(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let is_loading = cause == EditorTransactionCause::Load;
@@ -525,8 +559,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::from_deleted_text(&deleted_text),
         })
@@ -547,7 +581,8 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let (byte_start, byte_end_exclusive) =
             Self::normalize_range(byte_start, byte_end_exclusive);
@@ -555,7 +590,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(byte_start)
@@ -564,7 +600,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -583,7 +620,7 @@ impl EditorKernel {
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             new_range: Utf8ByteRange::from_start_len(byte_start, replacement_text.len()),
@@ -592,13 +629,13 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         let old_affected = vec![Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive)];
         let new_affected = vec![Utf8ByteRange::from_start_len(
             byte_start,
@@ -610,7 +647,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: replacement_text.to_string(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let is_loading = cause == EditorTransactionCause::Load;
@@ -675,13 +712,14 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn apply_insert_line_break(
         &mut self,
         byte_offset: usize,
@@ -689,20 +727,23 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         if byte_offset > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(byte_offset) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         // #606: Core 端 auto-indent — 从正文按 UTF-8 安全边界找到当前逻辑行开头，
@@ -725,7 +766,7 @@ impl EditorKernel {
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::point(byte_offset),
             new_range: Utf8ByteRange::from_start_len(byte_offset, text.len()),
@@ -734,13 +775,13 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let new_selection = Utf8ByteRange::point(new_cursor_val);
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
         let new_affected = vec![Utf8ByteRange::from_start_len(byte_offset, text.len())];
 
         let display_patches = vec![DisplayPatch {
@@ -748,7 +789,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::point(byte_offset),
             inserted_text: text.clone(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let animation_mode = if !self.animation_enabled {
@@ -794,8 +835,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::from_inserted_text(&text),
         })
@@ -858,7 +899,8 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         if let Some(ref session) = self.composition_session {
             if session.session_id.value() != composition_session_id
@@ -881,7 +923,8 @@ impl EditorKernel {
                 return EditorEditOutcome::InvalidRange(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ));
             }
         }
@@ -893,14 +936,16 @@ impl EditorKernel {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if byte_start > self.text.byte_len() || byte_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(byte_start)
@@ -909,7 +954,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -930,7 +976,7 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(sel_anchor);
         self.cursor = Utf8ByteOffset::unchecked(sel_head);
 
-        let new_selection = Utf8ByteRange::from_ordered(sel_anchor, sel_head);
+        let new_selection = make_selection(sel_anchor, sel_head);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             new_range: Utf8ByteRange::from_start_len(byte_start, replacement_text.len()),
@@ -939,7 +985,7 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -967,7 +1013,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(byte_start, byte_end_exclusive),
             inserted_text: replacement_text.to_string(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let cluster_count = count_grapheme_clusters(replacement_text);
@@ -1021,8 +1067,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::from_texts(replacement_text, &deleted_text),
         };
@@ -1051,7 +1097,8 @@ impl EditorKernel {
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let sel_anchor = self.selection_anchor.value();
         let sel_head = self.cursor.value();
@@ -1087,14 +1134,16 @@ impl EditorKernel {
                 return EditorEditOutcome::InvalidOffset(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ));
             }
             if as_ >= ae || as_ < sel_max {
                 return EditorEditOutcome::InvalidRange(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ));
             }
             // 局部 Rope delete 记录 delta。
@@ -1124,14 +1173,16 @@ impl EditorKernel {
                 return EditorEditOutcome::InvalidOffset(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ));
             }
             if bs >= be || be > sel_min {
                 return EditorEditOutcome::InvalidRange(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ));
             }
             // 局部 Rope delete 记录 delta。
@@ -1149,7 +1200,8 @@ impl EditorKernel {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -1169,7 +1221,7 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(new_sel_anchor);
         self.cursor = Utf8ByteOffset::unchecked(new_sel_head);
 
-        let new_selection = Utf8ByteRange::from_ordered(new_sel_anchor, new_sel_head);
+        let new_selection = make_selection(new_sel_anchor, new_sel_head);
 
         // content delta / offset map / affected ranges 全部从 delta 构造，
         // 计算完成后才把 edits 移入 Undo 栈。
@@ -1201,13 +1253,15 @@ impl EditorKernel {
                 new_revision,
                 replace_byte_range: d.old_range,
                 inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: new_selection,
+                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
+                    new_selection,
+                ),
             })
             .collect();
 
         self.undo_stack.push(UndoEntry {
             edits,
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -1232,8 +1286,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta,
         })

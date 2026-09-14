@@ -292,7 +292,11 @@ fn render_selection_preedit_layer(
         )
     } else {
         // 与原 fallback "#3381D1D1" / "#1A81D1D1" 的 RGB 部分一致。
-        (0x81 as f64 / 255.0, 0xD1 as f64 / 255.0, 0xD1 as f64 / 255.0)
+        (
+            0x81 as f64 / 255.0,
+            0xD1 as f64 / 255.0,
+            0xD1 as f64 / 255.0,
+        )
     };
     let selection_alpha = 0x33 as f64 / 255.0;
     let preedit_alpha = 0x1A as f64 / 255.0;
@@ -309,7 +313,16 @@ fn render_selection_preedit_layer(
             continue;
         }
         rect_data.extend_from_slice(&[
-            sel.x, screen_y, sel.w, sel.h, base_r, base_g, base_b, selection_alpha, 0.0, 0.0,
+            sel.x,
+            screen_y,
+            sel.w,
+            sel.h,
+            base_r,
+            base_g,
+            base_b,
+            selection_alpha,
+            0.0,
+            0.0,
         ]);
     }
 
@@ -320,7 +333,16 @@ fn render_selection_preedit_layer(
         }
         let underline = if pre.underline { 1.0 } else { 0.0 };
         rect_data.extend_from_slice(&[
-            pre.x, screen_y, pre.w, pre.h, base_r, base_g, base_b, preedit_alpha, underline, 0.0,
+            pre.x,
+            screen_y,
+            pre.w,
+            pre.h,
+            base_r,
+            base_g,
+            base_b,
+            preedit_alpha,
+            underline,
+            0.0,
         ]);
     }
 

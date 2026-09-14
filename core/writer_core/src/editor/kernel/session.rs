@@ -1,4 +1,4 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
@@ -10,8 +10,8 @@ impl EditorKernel {
     pub fn load_text(&mut self, text: String, cursor: usize) -> EditorEditOutcome {
         let base_revision = self.revision;
         let old_cursor = self.cursor;
-        let old_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let old_selection_anchor = self.selection_anchor.value();
+        let old_selection_head = self.cursor.value();
 
         let needs_clamp = cursor > text.len() || !text.is_char_boundary(cursor);
         let resolved_cursor = if needs_clamp {
@@ -33,7 +33,7 @@ impl EditorKernel {
         self.redo_stack.clear();
         self.composition_session = None;
 
-        let new_selection = Utf8ByteRange::point(resolved_cursor);
+        let new_selection = make_selection(resolved_cursor, resolved_cursor);
         let new_revision = self.revision;
         let new_text = self.snapshot_text();
         let new_len = new_text.len();
@@ -45,7 +45,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::from_start_len(0, old_len),
             inserted_text: new_text,
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: Utf8ByteRange::point(resolved_cursor),
         }];
 
         let visual_intent = EditorVisualIntent {
@@ -76,8 +76,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta {
                 inserted_chars: new_chars,
@@ -95,15 +95,16 @@ impl EditorKernel {
     }
 
     pub(crate) fn stale_session_result(&mut self) -> EditorEditResult {
-        let current_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let current_selection_anchor = self.selection_anchor.value();
+        let current_selection_head = self.cursor.value();
+        let current_selection = make_selection(current_selection_anchor, current_selection_head);
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision: self.revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: current_selection,
-            new_selection_byte_range: current_selection,
+            old_selection: current_selection,
+            new_selection: current_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::Programmatic,
                 operation_kind: EditorOperationKind::CursorOnly,
@@ -126,15 +127,17 @@ impl EditorKernel {
         &mut self,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditResult {
+        let old_selection = make_selection(old_selection_anchor, old_selection_head);
         EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: old_selection,
+            old_selection,
+            new_selection: old_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::Programmatic,
                 operation_kind: EditorOperationKind::CursorOnly,

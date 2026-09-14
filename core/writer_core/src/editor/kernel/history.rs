@@ -1,4 +1,4 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
@@ -12,11 +12,13 @@ impl EditorKernel {
     /// inverse delta（把 new_range 处的内容替换回 deleted_text），光标/选区恢复
     /// 为 old_selection。DisplayPatch、VisualIntent、OffsetMap、content delta
     /// 全部从 delta 生成，不再 clone 全文、不再 diff_plain_text、不再全文 build。
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn apply_undo(
         &mut self,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let entry = match self.undo_stack.pop() {
             Some(e) => e,
@@ -24,7 +26,8 @@ impl EditorKernel {
                 return EditorEditOutcome::NoChange(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ))
             }
         };
@@ -57,8 +60,11 @@ impl EditorKernel {
                 &delta.deleted_text,
             );
         }
-        self.cursor = Utf8ByteOffset::unchecked(entry.old_selection.end().value());
-        self.selection_anchor = Utf8ByteOffset::unchecked(entry.old_selection.start().value());
+        // Issue #683：直接恢复保存的 anchor/head，不再从排序后的 range 反推。
+        let restored_anchor = entry.old_selection.anchor.index.value();
+        let restored_head = entry.old_selection.head.index.value();
+        self.selection_anchor = Utf8ByteOffset::unchecked(restored_anchor);
+        self.cursor = Utf8ByteOffset::unchecked(restored_head);
         self.revision = self.revision.next();
         self.composition_session = None;
 
@@ -76,7 +82,9 @@ impl EditorKernel {
                 new_revision,
                 replace_byte_range: d.new_range,
                 inserted_text: d.deleted_text.clone(),
-                resulting_selection_byte_range: new_selection,
+                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
+                    new_selection,
+                ),
             })
             .collect();
 
@@ -135,8 +143,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches: patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta,
         })
@@ -148,11 +156,13 @@ impl EditorKernel {
     /// forward delta（把 old_range 处的内容替换回 inserted_text），光标/选区恢复
     /// 为 new_selection。DisplayPatch、VisualIntent、OffsetMap、content delta
     /// 全部从 delta 生成。
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn apply_redo(
         &mut self,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let entry = match self.redo_stack.pop() {
             Some(e) => e,
@@ -160,7 +170,8 @@ impl EditorKernel {
                 return EditorEditOutcome::NoChange(self.noop_result(
                     base_revision,
                     old_cursor,
-                    old_selection,
+                    old_selection_anchor,
+                    old_selection_head,
                 ))
             }
         };
@@ -178,8 +189,11 @@ impl EditorKernel {
                 &delta.inserted_text,
             );
         }
-        self.cursor = Utf8ByteOffset::unchecked(entry.new_selection.end().value());
-        self.selection_anchor = Utf8ByteOffset::unchecked(entry.new_selection.start().value());
+        // Issue #683：直接恢复保存的 anchor/head，不再从排序后的 range 反推。
+        let restored_anchor = entry.new_selection.anchor.index.value();
+        let restored_head = entry.new_selection.head.index.value();
+        self.selection_anchor = Utf8ByteOffset::unchecked(restored_anchor);
+        self.cursor = Utf8ByteOffset::unchecked(restored_head);
         self.revision = self.revision.next();
         self.composition_session = None;
 
@@ -196,7 +210,9 @@ impl EditorKernel {
                 new_revision,
                 replace_byte_range: d.old_range,
                 inserted_text: d.inserted_text.clone(),
-                resulting_selection_byte_range: new_selection,
+                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
+                    new_selection,
+                ),
             })
             .collect();
         patches.sort_by_key(|p| p.replace_byte_range.start().value());
@@ -255,8 +271,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches: patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta,
         })

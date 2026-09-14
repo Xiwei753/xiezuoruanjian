@@ -636,13 +636,20 @@ mod tests {
     #[test]
     fn undo_entry_uses_strong_cursor_types() {
         use crate::editor::kernel::UndoEntry;
+        use crate::editor::transaction::{EditorCursor, EditorSelection};
         let entry = UndoEntry {
             edits: vec![],
-            old_selection: Utf8ByteRange::point(0),
-            new_selection: Utf8ByteRange::point(5),
+            old_selection: EditorSelection {
+                anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
+                head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(0)),
+            },
+            new_selection: EditorSelection {
+                anchor: EditorCursor::from_offset(Utf8ByteOffset::unchecked(5)),
+                head: EditorCursor::from_offset(Utf8ByteOffset::unchecked(5)),
+            },
         };
-        assert_eq!(entry.old_selection.end().value(), 0);
-        assert_eq!(entry.new_selection.end().value(), 5);
+        assert_eq!(entry.old_selection.head.index.value(), 0);
+        assert_eq!(entry.new_selection.head.index.value(), 5);
     }
 
     #[test]

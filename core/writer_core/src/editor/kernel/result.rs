@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 use super::types::{DisplayPatch, EditorVisualIntent};
 use crate::editor::strong_types::{EditorRevision, Utf8ByteRange};
+use crate::editor::transaction::{EditorCursor, EditorSelection};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -130,11 +131,39 @@ pub struct EditorEditResult {
     pub base_revision: EditorRevision,
     pub new_revision: EditorRevision,
     pub display_patches: Vec<DisplayPatch>,
-    pub old_selection_byte_range: Utf8ByteRange,
-    pub new_selection_byte_range: Utf8ByteRange,
+    /// 编辑前选区（保留 anchor/head 方向）。
+    ///
+    /// Issue #683：selection 状态必须保留 anchor/head 方向，
+    /// 不能用排序后的 Utf8ByteRange 表示——否则反向选区会被翻成正向。
+    /// 需要无方向的实际覆盖范围时由 `selection_byte_range()` 派生。
+    pub old_selection: EditorSelection,
+    /// 编辑后选区（保留 anchor/head 方向）。
+    pub new_selection: EditorSelection,
     pub visual_intent: EditorVisualIntent,
     /// 本次编辑的字符增量（正文无变化时为全 0）。
     pub content_delta: EditorContentDelta,
+}
+
+impl EditorEditResult {
+    /// 由有方向的 selection 派生无方向的 byte range（min..max）。
+    ///
+    /// 仅供需要"实际覆盖范围"的边界使用（如 DisplayPatch.resulting_selection_byte_range）；
+    /// 不得从此 range 反推 anchor/head（方向会丢失）。
+    pub fn selection_byte_range(selection: EditorSelection) -> Utf8ByteRange {
+        Utf8ByteRange::from_ordered(selection.anchor.index.value(), selection.head.index.value())
+    }
+}
+
+/// kernel 内部辅助：从两个 usize 构造有方向的 EditorSelection。
+pub(crate) fn make_selection(anchor: usize, head: usize) -> EditorSelection {
+    EditorSelection {
+        anchor: EditorCursor::from_offset(crate::editor::strong_types::Utf8ByteOffset::unchecked(
+            anchor,
+        )),
+        head: EditorCursor::from_offset(crate::editor::strong_types::Utf8ByteOffset::unchecked(
+            head,
+        )),
+    }
 }
 
 #[derive(Debug, Clone)]

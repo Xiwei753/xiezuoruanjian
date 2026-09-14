@@ -1,4 +1,4 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorVisualIntent};
 use super::{CompositionSessionState, EditorKernel, TextEditDelta, UndoEntry};
 
@@ -18,7 +18,8 @@ impl EditorKernel {
         replace_end_exclusive: usize,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         // Session-divergence recovery: if a composition session already exists, the
         // platform has lost track of it (e.g. an aborted IME interaction, or a soft reset
@@ -31,14 +32,16 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidRange(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if replace_start > self.text.byte_len() || replace_end_exclusive > self.text.byte_len() {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(replace_start)
@@ -47,7 +50,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -65,15 +69,14 @@ impl EditorKernel {
             preedit_cursor_utf16: Utf16CodeUnitOffset::default(),
         });
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
@@ -101,7 +104,8 @@ impl EditorKernel {
         new_preedit_cursor_utf16: Utf16CodeUnitOffset,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s)
@@ -130,15 +134,14 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
@@ -170,7 +173,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
             Some(s)
@@ -185,15 +189,14 @@ impl EditorKernel {
 
         if session.preedit_text.is_empty() {
             self.composition_session = None;
-            let new_selection =
-                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
                 new_revision: self.revision,
                 display_patches: vec![],
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
+                old_selection: make_selection(old_selection_anchor, old_selection_head),
+                new_selection,
                 visual_intent: EditorVisualIntent {
                     cause: EditorTransactionCause::TypingCommit,
                     operation_kind: EditorOperationKind::CompositionCommit,
@@ -222,7 +225,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -258,7 +262,7 @@ impl EditorKernel {
         self.selection_anchor = Utf8ByteOffset::unchecked(resulting_cursor);
         self.composition_session = None;
 
-        let new_selection = Utf8ByteRange::point(resulting_cursor);
+        let new_selection = make_selection(resulting_cursor, resulting_cursor);
         let delta = TextEditDelta {
             old_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
             new_range: Utf8ByteRange::from_start_len(replace_start, committed_text.len()),
@@ -267,7 +271,7 @@ impl EditorKernel {
         };
         self.undo_stack.push(UndoEntry {
             edits: vec![delta],
-            old_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
         });
         self.redo_stack.clear();
@@ -279,7 +283,7 @@ impl EditorKernel {
             new_revision,
             replace_byte_range: Utf8ByteRange::from_ordered(replace_start, replace_end),
             inserted_text: committed_text.clone(),
-            resulting_selection_byte_range: new_selection,
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
         }];
 
         let classification = classify_composition_visual(
@@ -296,8 +300,8 @@ impl EditorKernel {
             base_revision,
             new_revision,
             display_patches,
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::TypingCommit,
                 operation_kind: EditorOperationKind::CompositionCommit,
@@ -334,7 +338,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &self.composition_session {
             Some(s)
@@ -357,7 +362,8 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
 
@@ -372,15 +378,14 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionCancel,
@@ -420,7 +425,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s)
@@ -441,15 +447,14 @@ impl EditorKernel {
 
         if cursor_byte == 0 {
             // 已在 preedit 最左端，no-op（但 generation 不变，直接返回）
-            let new_selection =
-                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
                 new_revision: self.revision,
                 display_patches: vec![],
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
+                old_selection: make_selection(old_selection_anchor, old_selection_head),
+                new_selection,
                 visual_intent: EditorVisualIntent {
                     cause: EditorTransactionCause::ImeComposition,
                     operation_kind: EditorOperationKind::CompositionUpdate,
@@ -475,15 +480,14 @@ impl EditorKernel {
         session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
         session.generation = session.generation.next();
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
@@ -508,7 +512,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s)
@@ -527,15 +532,14 @@ impl EditorKernel {
 
         if cursor_utf16 >= preedit_utf16_len {
             // 已在 preedit 最右端，no-op
-            let new_selection =
-                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
                 new_revision: self.revision,
                 display_patches: vec![],
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
+                old_selection: make_selection(old_selection_anchor, old_selection_head),
+                new_selection,
                 visual_intent: EditorVisualIntent {
                     cause: EditorTransactionCause::ImeComposition,
                     operation_kind: EditorOperationKind::CompositionUpdate,
@@ -561,15 +565,14 @@ impl EditorKernel {
         session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
         session.generation = session.generation.next();
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
@@ -594,7 +597,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s)
@@ -613,15 +617,14 @@ impl EditorKernel {
 
         if cursor_byte == 0 {
             // preedit 已空或光标在最左端，no-op
-            let new_selection =
-                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
                 new_revision: self.revision,
                 display_patches: vec![],
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
+                old_selection: make_selection(old_selection_anchor, old_selection_head),
+                new_selection,
                 visual_intent: EditorVisualIntent {
                     cause: EditorTransactionCause::ImeComposition,
                     operation_kind: EditorOperationKind::CompositionUpdate,
@@ -652,15 +655,14 @@ impl EditorKernel {
         session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
         session.generation = session.generation.next();
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,
@@ -685,7 +687,8 @@ impl EditorKernel {
         composition_generation: u64,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let session = match &mut self.composition_session {
             Some(s)
@@ -704,15 +707,14 @@ impl EditorKernel {
 
         if cursor_utf16 >= preedit_utf16_len {
             // preedit 已空或光标在最右端，no-op
-            let new_selection =
-                Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+            let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
             return EditorEditOutcome::Applied(EditorEditResult {
                 transaction_id: self.take_transaction_id(),
                 base_revision,
                 new_revision: self.revision,
                 display_patches: vec![],
-                old_selection_byte_range: old_selection,
-                new_selection_byte_range: new_selection,
+                old_selection: make_selection(old_selection_anchor, old_selection_head),
+                new_selection,
                 visual_intent: EditorVisualIntent {
                     cause: EditorTransactionCause::ImeComposition,
                     operation_kind: EditorOperationKind::CompositionUpdate,
@@ -744,15 +746,14 @@ impl EditorKernel {
         session.preedit_cursor_utf16 = Utf16CodeUnitOffset::unchecked(new_cursor_utf16);
         session.generation = session.generation.next();
 
-        let new_selection =
-            Utf8ByteRange::from_ordered(self.selection_anchor.value(), self.cursor.value());
+        let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent: EditorVisualIntent {
                 cause: EditorTransactionCause::ImeComposition,
                 operation_kind: EditorOperationKind::CompositionUpdate,

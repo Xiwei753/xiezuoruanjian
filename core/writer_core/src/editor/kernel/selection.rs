@@ -1,8 +1,8 @@
-use super::result::{EditorContentDelta, EditorEditOutcome, EditorEditResult};
+use super::result::{make_selection, EditorContentDelta, EditorEditOutcome, EditorEditResult};
 use super::types::{CoordinatedCursor, EditorOperationKind, EditorVisualIntent};
 use super::EditorKernel;
 
-use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
+use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset};
 use crate::editor::transaction::{AnimationMode, EditorTransactionCause};
 
 impl EditorKernel {
@@ -12,7 +12,8 @@ impl EditorKernel {
         head_byte_offset: usize,
         base_revision: EditorRevision,
         old_cursor: Utf8ByteOffset,
-        old_selection: Utf8ByteRange,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
     ) -> EditorEditOutcome {
         let anchor = anchor_byte_offset;
         let head = head_byte_offset;
@@ -20,20 +21,29 @@ impl EditorKernel {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
         if !self.text.is_char_boundary(anchor) || !self.text.is_char_boundary(head) {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
-                old_selection,
+                old_selection_anchor,
+                old_selection_head,
             ));
         }
+
+        // Issue #683：只有 anchor/head 与当前状态完全相同时才返回 NoChange。
+        // 只要 anchor 或 head 真变了，就返回 Applied——Applied 表示命令改变了
+        // 编辑器状态，不等于"正文一定发生变化"。平台端据此更新 mirror cursor，
+        // 不再把"正文没变"误解成"什么都没变"。
+        let state_unchanged = anchor == old_selection_anchor && head == old_selection_head;
+
         self.selection_anchor = Utf8ByteOffset::unchecked(anchor);
         self.cursor = Utf8ByteOffset::unchecked(head);
 
-        let new_selection = Utf8ByteRange::from_ordered(anchor, head);
+        let new_selection = make_selection(anchor, head);
 
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Programmatic,
@@ -55,15 +65,21 @@ impl EditorKernel {
             offset_map: None,
         };
 
-        EditorEditOutcome::NoChange(EditorEditResult {
+        let result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
             new_revision: self.revision,
             display_patches: vec![],
-            old_selection_byte_range: old_selection,
-            new_selection_byte_range: new_selection,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
             visual_intent,
             content_delta: EditorContentDelta::default(),
-        })
+        };
+
+        if state_unchanged {
+            EditorEditOutcome::NoChange(result)
+        } else {
+            EditorEditOutcome::Applied(result)
+        }
     }
 }

@@ -84,8 +84,7 @@ impl SujianEditorItem {
         // 注意：handle_cursor_only 是 &mut self，需要先做可变操作。
         // Issue #679 评论 5658087764 (3): 创建 CursorOnly 前先判断光标是否真的移动了，
         // 避免创建没有实际位移的事务白白压住 blink/请求动画帧。
-        let needs_cursor_motion =
-            (self.cursor_ctrl.visual_x - cursor_x).abs() > 0.01
+        let needs_cursor_motion = (self.cursor_ctrl.visual_x - cursor_x).abs() > 0.01
             || (self.cursor_ctrl.visual_y - cursor_y).abs() > 0.01;
 
         if found_tx.is_none()
