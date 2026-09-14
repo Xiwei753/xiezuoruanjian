@@ -296,4 +296,47 @@ mod tests {
         assert!(zip_path.exists());
         super::super::writer::reset_for_test();
     }
+
+    /// 验证 ZIP 包中日志文件使用 Deflate 压缩而非 Stored。
+    #[test]
+    fn export_zip_uses_deflate_compression() {
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        super::super::writer::init(tmp.path().join("log"), "deflate-test".to_string(), true);
+        super::super::writer::set_enabled(true);
+        super::super::writer::enqueue(
+            r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
+                .to_string(),
+        );
+        assert!(super::super::writer::flush());
+
+        let out_dir = tmp.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let attachments = vec![];
+        let zip_path = export_diagnostics(&out_dir, "test", "deflate-test", &attachments)
+            .expect("export should succeed");
+
+        // 用 ZipArchive 打开验证压缩方法
+        let zip_file = fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).expect("zip archive should be valid");
+
+        let mut found_log_entry = false;
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i).unwrap();
+            let name = entry.name().to_string();
+            if name.ends_with(".log") {
+                found_log_entry = true;
+                assert_eq!(
+                    entry.compression(),
+                    zip::CompressionMethod::Deflated,
+                    "log entry '{}' should use Deflated compression, got {:?}",
+                    name,
+                    entry.compression()
+                );
+            }
+        }
+        assert!(found_log_entry, "zip should contain at least one .log entry");
+
+        super::super::writer::reset_for_test();
+    }
 }

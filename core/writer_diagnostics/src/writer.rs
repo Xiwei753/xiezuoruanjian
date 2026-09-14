@@ -261,7 +261,7 @@ fn write_batch(s: &'static WriterState, batch: &[String]) -> bool {
         return false;
     }
     let current_file = current_log_path(&cfg.log_dir, &cfg.build_key);
-    prune_old_logs_global(&cfg.log_dir, &current_file);
+    let _ = prune_old_logs_global(&cfg.log_dir, &current_file);
     if !rotate_if_needed(&cfg.log_dir, &current_file) {
         return false;
     }
@@ -287,7 +287,7 @@ fn write_batch(s: &'static WriterState, batch: &[String]) -> bool {
     true
 }
 
-/// 当前文件超过 1 MiB 时移动到带时间戳的轮转文件。
+/// 当前文件超过 1 MiB 时移动到带时间戳的轮转文件，然后裁剪旧日志。
 fn rotate_if_needed(log_dir: &Path, current_file: &Path) -> bool {
     let metadata = match fs::metadata(current_file) {
         Ok(m) => m,
@@ -302,48 +302,54 @@ fn rotate_if_needed(log_dir: &Path, current_file: &Path) -> bool {
         .unwrap_or(LOG_PREFIX);
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
     let rotated = log_dir.join(format!("{base_name}-{ts}.log"));
-    fs::rename(current_file, &rotated).is_ok()
+    if fs::rename(current_file, &rotated).is_err() {
+        return false;
+    }
+    // 创建新的空 current 文件，确保 prune 能为它预留位置（reserve_for_current=1）。
+    // write_batch() 后续会用 OpenOptions::create(true).append(true) 打开它写入。
+    if fs::write(current_file, b"").is_err() {
+        return false;
+    }
+    prune_old_logs_global(log_dir, current_file)
 }
 
 /// 全局裁剪日志文件：扫描整个 `log_dir` 中所有 `sujian-current*.log`，
-/// 按 `modified()` 从新到旧排序；当前正在写的 `current_file` 固定保留，
-/// 其余文件按时间保留到总数 `MAX_TOTAL_LOG_FILES` 个，多的直接删。
+/// 按 `modified()` 从新到旧排序；当前正在写的 `current_file` 固定排除，
+/// 其余文件按时间保留到总数 `MAX_TOTAL_LOG_FILES` 个（含 current），多的直接删。
 /// 这样换 build 也不会重新获得一套"5 个名额"。
-fn prune_old_logs_global(log_dir: &Path, current_file: &Path) {
+fn prune_old_logs_global(log_dir: &Path, current_file: &Path) -> bool {
     let entries = match fs::read_dir(log_dir) {
         Ok(e) => e,
-        Err(_) => return,
+        Err(_) => return true,
     };
-    let mut files: Vec<PathBuf> = Vec::new();
+
+    let mut others = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() {
+        if !path.is_file() || path == current_file {
             continue;
         }
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if name.starts_with(LOG_PREFIX) && name.ends_with(".log") {
-            files.push(path);
+            others.push(path);
         }
     }
-    // 按修改时间降序排序。
-    files.sort_by(|a, b| {
+
+    others.sort_by(|a, b| {
         let ma = fs::metadata(a).and_then(|m| m.modified()).ok();
         let mb = fs::metadata(b).and_then(|m| m.modified()).ok();
         mb.cmp(&ma)
     });
-    // 保留 current_file + 最新的 MAX_TOTAL_LOG_FILES - 1 个。
-    let mut kept = 0usize;
-    for path in &files {
-        if path == current_file {
-            kept += 1;
-            continue;
+
+    let reserve_for_current = usize::from(current_file.exists());
+    let keep_others = MAX_TOTAL_LOG_FILES.saturating_sub(reserve_for_current);
+    let mut ok = true;
+    for path in others.iter().skip(keep_others) {
+        if fs::remove_file(path).is_err() {
+            ok = false;
         }
-        if kept < MAX_TOTAL_LOG_FILES {
-            kept += 1;
-            continue;
-        }
-        let _ = fs::remove_file(path);
     }
+    ok
 }
 
 /// 删除日志目录下的所有文件（仅由 writer 线程调用）。
@@ -496,6 +502,81 @@ mod tests {
         assert!(flush());
         // enabled=false 时事件被丢弃，文件不应存在
         assert!(log_files().is_empty());
+        reset_for_test();
+    }
+
+    #[test]
+    fn prune_global_keeps_max_5_files() {
+        let _lock = lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("log");
+        fs::create_dir_all(&log_dir).unwrap();
+
+        // 创建 6 个不同 build 的日志文件
+        for i in 0..6 {
+            let path = log_dir.join(format!("sujian-current-build{i}.log"));
+            fs::write(&path, "test log content\n").unwrap();
+            // 稍微间隔修改时间，确保排序正确
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        let current_file = log_dir.join("sujian-current-build0.log");
+        prune_old_logs_global(&log_dir, &current_file);
+
+        let mut count = 0;
+        for entry in fs::read_dir(&log_dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(LOG_PREFIX) && name.ends_with(".log") {
+                count += 1;
+            }
+        }
+        assert_eq!(
+            count, MAX_TOTAL_LOG_FILES,
+            "should keep at most {} files, got {}", MAX_TOTAL_LOG_FILES, count
+        );
+        reset_for_test();
+    }
+
+    #[test]
+    fn rotate_then_prune_keeps_max_5_files() {
+        let _lock = lock();
+        let tmp = tempfile::tempdir().unwrap();
+        let log_dir = tmp.path().join("log");
+        fs::create_dir_all(&log_dir).unwrap();
+
+        // 先创建 4 个旧的轮转日志（不同 build）
+        for i in 0..4 {
+            let path = log_dir.join(format!("sujian-current-build{i}.log"));
+            fs::write(&path, "old log content\n").unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // 创建当前 build 的日志文件，大小超过 1 MiB
+        let current_file = log_dir.join("sujian-current-currentbuild.log");
+        let big_content = "x".repeat(MAX_FILE_SIZE as usize + 1);
+        fs::write(&current_file, &big_content).unwrap();
+        // 确保当前文件修改时间最新
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // 触发轮转：rotate_if_needed 会把 current 改名，然后 prune
+        assert!(rotate_if_needed(&log_dir, &current_file), "rotate should succeed");
+
+        // 创建新的 current 文件
+        fs::write(&current_file, "new current\n").unwrap();
+
+        // 统计文件数
+        let mut count = 0;
+        for entry in fs::read_dir(&log_dir).unwrap().flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with(LOG_PREFIX) && name.ends_with(".log") {
+                count += 1;
+            }
+        }
+        assert_eq!(
+            count, MAX_TOTAL_LOG_FILES,
+            "after rotate+prune+new current, should have exactly {} files, got {}",
+            MAX_TOTAL_LOG_FILES, count
+        );
         reset_for_test();
     }
 }
