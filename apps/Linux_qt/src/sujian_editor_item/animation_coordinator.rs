@@ -349,8 +349,13 @@ fn build_cluster_reflow_slices(
                 let old_cluster = &old_line.clusters[oref.cluster_idx];
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                // Issue #686 评论 5664857575 领域1：reflow 中检测到的纯 old cluster
-                // 走 delete_conceal，默认 conceal_from_left = true（Backspace 最常见场景）。
+                // Issue #686 评论 5666452462：按新光标落在被删文字哪一侧决定
+                // 保留左段还是右段。光标靠近左端 → 保留右段
+                // （collapse_to_left=false，Delete 键场景）；光标靠近右端 → 保留左段
+                // （collapse_to_left=true，Backspace 场景）。
+                let left = old_doc.x;
+                let right = old_doc.x + old_doc.w;
+                let collapse_to_left = (new_cx - left).abs() <= (new_cx - right).abs();
                 slices.push(AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
@@ -361,7 +366,7 @@ fn build_cluster_reflow_slices(
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
-                    true,
+                    collapse_to_left,
                 ));
             }
             continue;
@@ -1060,8 +1065,13 @@ impl LinuxEditorAnimationCoordinator {
                                 old_cluster.byte_end,
                             ) {
                                 let from_doc = old_line.source_rect_to_document_rect(&old_sr);
-                                // Issue #686 评论 5664857575 领域1：cancel 时 preedit 文字
-                                // 走 delete_conceal，默认 conceal_from_left = true。
+                                // Issue #686 评论 5666452462：cancel 时 preedit 文字
+                                // 走 delete_conceal，按 old rect 两侧与新光标距离
+                                // 决定收进方向，不再写死 true。
+                                let left = from_doc.x;
+                                let right = from_doc.x + from_doc.w;
+                                let collapse_to_left =
+                                    (shrink_x - left).abs() <= (shrink_x - right).abs();
                                 slices.push(AnimatedSlice::delete_conceal(
                                     key,
                                     old_line.id,
@@ -1072,7 +1082,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_start,
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
-                                    true,
+                                    collapse_to_left,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {

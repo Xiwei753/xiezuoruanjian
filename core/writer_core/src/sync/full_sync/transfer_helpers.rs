@@ -174,44 +174,56 @@ pub(super) fn transfer_live_project(
         for attempt in 0..MAX_CAS_RETRIES {
             let generation_id = uuid::Uuid::new_v4().to_string();
 
-            // 每次迭代重新评估冲突状态：上一次 merge 的冲突可能在新 snapshot 下不再存在。
-            // 不清除的话，CAS 成功后会错误返回旧的 PartialConflict。
-            let _ = retained_conflict.take();
-
             // 1. 用当前 catalog_snapshot 找 visible generation → merge 到 staging。
             //    每次重试都重新 load_sync_state，merge 对同一个 staging 可重复执行。
-            let merge_outcome: crate::error::Result<Option<crate::sync::lww::LwwMergeOutcome>> =
-                (|| {
-                    if let Some(source_record) = crate::sync::target_lifecycle::find_record(
-                        &catalog_snapshot.catalog,
-                        &planned.target.remote_prefix,
-                    ) {
-                        if let Some(source_prefix) =
-                            crate::sync::target_lifecycle::resolve_visible_project_prefix(
-                                source_record,
-                                &planned.target.remote_prefix,
-                            )?
-                        {
-                            log::info!(
-                                "[sync] run_transfer: LiveProject {} (attempt {}) — merging from visible source {}",
-                                planned.target.remote_prefix,
-                                attempt + 1,
-                                source_prefix
-                            );
-                            let mut merge_state =
-                                crate::sync::SyncService::load_sync_state(sync_root)?;
-                            let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
-                                sync_root,
-                                provider,
-                                &source_prefix,
-                                planned.target.scope,
-                                &mut merge_state,
-                            )?;
-                            return Ok(Some(outcome));
-                        }
+            //
+            //    Issue #686 评论 5666452462：闭包同时返回当前 staging 的完整未解决冲突
+            //    状态。不用 outcome.conflicts 判断——第二次 merge 会 skip 已在
+            //    state.conflicted_files 中的路径，outcome.conflicts 可能为空，
+            //    但 staging 的 SyncState 仍保留着未解决冲突。
+            let merge_outcome: crate::error::Result<
+                Option<(
+                    crate::sync::lww::LwwMergeOutcome,
+                    Vec<crate::sync::types::SyncConflict>,
+                )>,
+            > = (|| {
+                if let Some(source_record) = crate::sync::target_lifecycle::find_record(
+                    &catalog_snapshot.catalog,
+                    &planned.target.remote_prefix,
+                ) {
+                    if let Some(source_prefix) =
+                        crate::sync::target_lifecycle::resolve_visible_project_prefix(
+                            source_record,
+                            &planned.target.remote_prefix,
+                        )?
+                    {
+                        log::info!(
+                            "[sync] run_transfer: LiveProject {} (attempt {}) — merging from visible source {}",
+                            planned.target.remote_prefix,
+                            attempt + 1,
+                            source_prefix
+                        );
+                        let mut merge_state = crate::sync::SyncService::load_sync_state(sync_root)?;
+                        let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
+                            sync_root,
+                            provider,
+                            &source_prefix,
+                            planned.target.scope,
+                            &mut merge_state,
+                        )?;
+                        // 从当前 staging 的完整未解决冲突状态生成快照。
+                        let unresolved_conflicts: Vec<crate::sync::types::SyncConflict> =
+                            merge_state
+                                .conflicts
+                                .iter()
+                                .filter(|c| merge_state.conflicted_files.contains(&c.local_path))
+                                .cloned()
+                                .collect();
+                        return Ok(Some((outcome, unresolved_conflicts)));
                     }
-                    Ok(None)
-                })();
+                }
+                Ok(None)
+            })();
 
             // 2. 构造 generation prefix。
             let gen_remote_prefix = match super::generation::generation_remote_prefix(
@@ -232,18 +244,22 @@ pub(super) fn transfer_live_project(
             //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
             //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
             let content_result = match merge_outcome {
-                Ok(Some(outcome)) => {
-                    if !outcome.conflicts.is_empty() {
-                        // clone 字段而非 move，outcome 仍需借用传给 publish_generation。
+                Ok(Some((outcome, unresolved_conflicts))) => {
+                    // 用当前 staging 的完整未解决冲突状态重建 retained_conflict。
+                    // CAS 重试后冲突仍未解决 → 继续返回 PartialConflict；
+                    // 这一轮确实没有未解决冲突 → 才允许回到 Success。
+                    if !unresolved_conflicts.is_empty() {
                         let mut r = SyncResult::success();
                         r.status = SyncStatus::PartialConflict;
-                        r.conflicts = outcome.conflicts.clone();
+                        r.conflicts = unresolved_conflicts;
                         r.downloaded_files = outcome.downloaded_files.clone();
                         r.local_deletes = outcome.remote_delete_paths.clone();
                         r.remote_deletes = outcome.local_deletes.clone();
                         r.overwritten_files = outcome.overwritten_files.clone();
                         r.ignored_files = outcome.ignored_files.clone();
                         retained_conflict = Some(r);
+                    } else {
+                        retained_conflict = None;
                     }
                     super::generation::publish_generation(
                         provider,
