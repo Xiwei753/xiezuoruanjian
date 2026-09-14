@@ -3,7 +3,7 @@
 //! 把 Android `PersistentLogWriter.kt` 的有序队列/屏障语义搬到 Rust：
 //! - 单一 writer 线程独占文件 I/O
 //! - 命令队列：Append / FlushBarrier / ClearBarrier
-//! - 1 MiB / 5 文件轮转（4 轮转 + 1 当前）
+//! - 日志目录全局最多 5 文件（1 MiB 轮转 + 全局裁剪）
 //! - flush/clear 返回 Boolean 表示成功
 //! - 落盘健康位
 //! - 日志文件名：`sujian-current-{build_key}.log`，build_key 从 init 传入
@@ -28,10 +28,8 @@ use std::time::{Duration, Instant};
 const LOG_PREFIX: &str = "sujian-current";
 /// 单文件大小上限：1 MiB。
 const MAX_FILE_SIZE: u64 = 1024 * 1024;
-/// 同一构建下日志文件总数上限（当前 + 轮转）。
-const MAX_TOTAL_FILES_PER_BUILD: usize = 5;
-/// 同一构建下轮转文件上限（不含当前文件）。
-const MAX_ROTATED_FILES_PER_BUILD: usize = MAX_TOTAL_FILES_PER_BUILD - 1;
+/// 日志目录全局最多保留的文件数（当前 + 轮转）。
+const MAX_TOTAL_LOG_FILES: usize = 5;
 /// flush/clear 等待上限：writer 死亡时调用方不能永久挂起。
 const BARRIER_TIMEOUT_MS: u64 = 5_000;
 
@@ -263,7 +261,8 @@ fn write_batch(s: &'static WriterState, batch: &[String]) -> bool {
         return false;
     }
     let current_file = current_log_path(&cfg.log_dir, &cfg.build_key);
-    if !rotate_if_needed(&cfg.log_dir, &current_file, &cfg.build_key) {
+    prune_old_logs_global(&cfg.log_dir, &current_file);
+    if !rotate_if_needed(&cfg.log_dir, &current_file) {
         return false;
     }
     let mut file = match fs::OpenOptions::new()
@@ -288,9 +287,8 @@ fn write_batch(s: &'static WriterState, batch: &[String]) -> bool {
     true
 }
 
-/// 当前文件超过 1 MiB 时移动到带时间戳的轮转文件，并裁剪到当前 buildKey 的
-/// `MAX_ROTATED_FILES_PER_BUILD` 个轮转文件。
-fn rotate_if_needed(log_dir: &Path, current_file: &Path, build_key: &str) -> bool {
+/// 当前文件超过 1 MiB 时移动到带时间戳的轮转文件。
+fn rotate_if_needed(log_dir: &Path, current_file: &Path) -> bool {
     let metadata = match fs::metadata(current_file) {
         Ok(m) => m,
         Err(_) => return true, // 文件不存在，无需轮转
@@ -304,42 +302,48 @@ fn rotate_if_needed(log_dir: &Path, current_file: &Path, build_key: &str) -> boo
         .unwrap_or(LOG_PREFIX);
     let ts = chrono::Local::now().format("%Y%m%d-%H%M%S%.3f").to_string();
     let rotated = log_dir.join(format!("{base_name}-{ts}.log"));
-    if fs::rename(current_file, &rotated).is_err() {
-        return false;
-    }
-    prune_old_logs(log_dir, build_key)
+    fs::rename(current_file, &rotated).is_ok()
 }
 
-/// 按最后修改时间降序保留当前 buildKey 的前 `MAX_ROTATED_FILES_PER_BUILD` 个轮转文件，
-/// 多余删除。当前文件不参与 rotated 计数。
-fn prune_old_logs(log_dir: &Path, build_key: &str) -> bool {
-    let current_name = format!("{LOG_PREFIX}-{build_key}.log");
-    let prefix = format!("{LOG_PREFIX}-{build_key}");
-    let mut rotated: Vec<PathBuf> = Vec::new();
+/// 全局裁剪日志文件：扫描整个 `log_dir` 中所有 `sujian-current*.log`，
+/// 按 `modified()` 从新到旧排序；当前正在写的 `current_file` 固定保留，
+/// 其余文件按时间保留到总数 `MAX_TOTAL_LOG_FILES` 个，多的直接删。
+/// 这样换 build 也不会重新获得一套"5 个名额"。
+fn prune_old_logs_global(log_dir: &Path, current_file: &Path) {
     let entries = match fs::read_dir(log_dir) {
         Ok(e) => e,
-        Err(_) => return true, // 目录不可读，视为无多余文件
+        Err(_) => return,
     };
+    let mut files: Vec<PathBuf> = Vec::new();
     for entry in entries.flatten() {
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str.starts_with(&prefix) && name_str.ends_with(".log") && name_str != current_name {
-            rotated.push(entry.path());
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if name.starts_with(LOG_PREFIX) && name.ends_with(".log") {
+            files.push(path);
         }
     }
     // 按修改时间降序排序。
-    rotated.sort_by(|a, b| {
+    files.sort_by(|a, b| {
         let ma = fs::metadata(a).and_then(|m| m.modified()).ok();
         let mb = fs::metadata(b).and_then(|m| m.modified()).ok();
         mb.cmp(&ma)
     });
-    let mut all_deleted = true;
-    for path in rotated.iter().skip(MAX_ROTATED_FILES_PER_BUILD) {
-        if fs::remove_file(path).is_err() {
-            all_deleted = false;
+    // 保留 current_file + 最新的 MAX_TOTAL_LOG_FILES - 1 个。
+    let mut kept = 0usize;
+    for path in &files {
+        if path == current_file {
+            kept += 1;
+            continue;
         }
+        if kept < MAX_TOTAL_LOG_FILES {
+            kept += 1;
+            continue;
+        }
+        let _ = fs::remove_file(path);
     }
-    all_deleted
 }
 
 /// 删除日志目录下的所有文件（仅由 writer 线程调用）。
@@ -371,7 +375,8 @@ fn current_log_path(log_dir: &Path, build_key: &str) -> PathBuf {
     log_dir.join(format!("{LOG_PREFIX}-{build_key}.log"))
 }
 
-/// 返回当前日志目录下所有 `sujian-current*.log` 文件路径（供 export 复制）。
+/// 返回当前 build_key 对应的 current + rotated 日志文件路径（供 export 复制）。
+/// 旧版本日志留在本机全局保留窗口里还有意义，但新诊断包只应该携带当前 build 的日志。
 pub(crate) fn log_files() -> Vec<PathBuf> {
     let s = state();
     let cfg = match s.config.lock() {
@@ -381,6 +386,7 @@ pub(crate) fn log_files() -> Vec<PathBuf> {
     let Some(cfg) = cfg else {
         return Vec::new();
     };
+    let prefix = format!("{LOG_PREFIX}-{}", cfg.build_key);
     let entries = match fs::read_dir(&cfg.log_dir) {
         Ok(e) => e,
         Err(_) => return Vec::new(),
@@ -389,7 +395,7 @@ pub(crate) fn log_files() -> Vec<PathBuf> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name_str = name.to_string_lossy();
-        if name_str.starts_with(LOG_PREFIX) && name_str.ends_with(".log") {
+        if name_str.starts_with(&prefix) && name_str.ends_with(".log") {
             files.push(entry.path());
         }
     }
