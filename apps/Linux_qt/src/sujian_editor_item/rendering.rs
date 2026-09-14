@@ -82,7 +82,14 @@ impl SujianEditorItem {
         // （不是点击强制 snap、不是滚动、不是选择），且 smooth cursor 开启，
         // 就创建一个 CursorOnly，拿到它的 key。
         // 注意：handle_cursor_only 是 &mut self，需要先做可变操作。
+        // Issue #679 评论 5658087764 (3): 创建 CursorOnly 前先判断光标是否真的移动了，
+        // 避免创建没有实际位移的事务白白压住 blink/请求动画帧。
+        let needs_cursor_motion =
+            (self.cursor_ctrl.visual_x - cursor_x).abs() > 0.01
+            || (self.cursor_ctrl.visual_y - cursor_y).abs() > 0.01;
+
         if found_tx.is_none()
+            && needs_cursor_motion
             && self.current_smooth_cursor_enabled
             && !self.cursor_ctrl.force_snap_next
             && !self.current_is_scrolling

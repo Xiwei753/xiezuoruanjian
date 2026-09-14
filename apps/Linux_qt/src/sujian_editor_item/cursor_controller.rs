@@ -146,9 +146,13 @@ impl CursorController {
                 let target_y = new_rect.top;
 
                 if let Some(ref anim) = self.animation {
-                    if (anim.target_x - target_x).abs() > 0.01
-                        || (anim.target_y - target_y).abs() > 0.01
-                    {
+                    // Issue #679 评论 5658087764 (2): 事务换了，即使目标点一样，
+                    // 也必须从当前视觉位置 rebase 到新 driver，不能继续挂旧事务。
+                    let driver_changed = anim.driver_key != *driver_key;
+                    let target_changed = (anim.target_x - target_x).abs() > 0.01
+                        || (anim.target_y - target_y).abs() > 0.01;
+
+                    if target_changed || driver_changed {
                         let (cur_x, cur_y) = anim.current_position();
                         self.animation = Some(CursorAnimationState {
                             driver_key: *driver_key,

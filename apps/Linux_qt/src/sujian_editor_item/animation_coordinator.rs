@@ -1484,21 +1484,27 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         let scroll_changed = (old_scroll_y - scroll_y).abs() > 0.01;
-        let should_snap = is_scrolling || is_selecting || !old_visible || scroll_changed;
 
-        let dx = (cursor_x - old_visual_x).abs();
         let dy = (cursor_y - old_visual_y).abs();
 
-        let large_distance = force_snap_next && (dx > 80.0 || dy > cursor_h * 1.5);
         let cross_line_snap = dy > cursor_h * 3.0;
+
+        // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
+        // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见/滚动变化都硬 Snap，
+        // 不再被协调动画覆盖为 Tween。
+        let hard_snap = force_snap_next
+            || is_scrolling
+            || is_selecting
+            || !old_visible
+            || scroll_changed;
 
         // Issue #679 评论 5657313927: 没有 driver key 时无法构造 Tween（需要 driver_key
         // 字段），fallback 到 Snap。
         let can_tween = driver_key.is_some();
 
-        let transition = if !should_be_visible {
+        let transition = if !should_be_visible || hard_snap {
             CursorTransition::Snap
-        } else if should_snap || !smooth_cursor_enabled || large_distance || cross_line_snap {
+        } else if !smooth_cursor_enabled || cross_line_snap {
             if can_tween
                 && coordinated_enabled
                 && has_active
