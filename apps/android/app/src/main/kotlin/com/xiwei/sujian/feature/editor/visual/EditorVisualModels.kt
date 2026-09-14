@@ -118,7 +118,8 @@ data class VisualOffsetMap(
  * @param oldStart 旧正文 UTF-16 起始偏移。
  * @param newStart 新正文 UTF-16 起始偏移。
  * @param length 映射长度（UTF-16 code units）。
- * @param kind 映射类型：IDENTITY 表示原文保留（位置可能平移），SHIFTED 表示内容变化。
+ * @param kind 映射类型：IDENTITY 表示文本相同且 offset 不变；SHIFTED 表示文本相同但 offset 改变
+ *   （被前后增删平移）。内容变化/被编辑/删除的区域根本没有 mapping 条目。
  */
 data class VisualOffsetMapEntry(
     val oldStart: Int,
@@ -131,8 +132,8 @@ data class VisualOffsetMapEntry(
  * #644 评论 #684：offset map 条目类型。
  */
 enum class VisualOffsetMapKind {
-    /** 原文保留，位置可能因前后增删而平移。 */
+    /** 文本相同且 offset 不变（位置不变）。 */
     IDENTITY,
-    /** 内容被替换/移动。 */
+    /** 文本相同但 offset 改变（被前后增删平移）；内容变化/删除区域没有 mapping。 */
     SHIFTED,
 }

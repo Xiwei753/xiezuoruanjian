@@ -106,6 +106,38 @@ class ComposeEditorVisualStateTest {
     }
 
     @Test
+    fun onVisualIntent_systemSuppressed_doesNotHideBody() {
+        // #684 评论 5662132136 第3项：SYSTEM_SUPPRESSED 时 overlay 不画自定义正文，
+        // 帧协调器也必须把正文留为可见（hiddenRanges 为空），否则正文会被隐藏到事务结束。
+        // 是否隐藏正文与 overlay 是否真的画正文必须收口成同一个判断。
+        val state = ComposeEditorVisualState(targetId = "test-target")
+        val layouts = captureLayouts("abc", "abcd")
+        state.onAuthoritativeLayout(layouts[0], TextRange(3, 3), 0)
+        state.onVisualIntent(
+            EditorVisualIntent(
+                coreTransactionId = 1L,
+                baseRevision = 0L,
+                newRevision = 1L,
+                animationMode = AnimationModeDto.SYSTEM_SUPPRESSED,
+                durationMs = 100L,
+                offsetMap = null,
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(3, 4)),
+                textKind = TextVisualKind.Insert,
+                cursor = null,
+                expectedOldText = "abc",
+                expectedNewText = "abcd",
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(4, 4), 0)
+        assertTrue(
+            "SYSTEM_SUPPRESSED 时不隐藏正文（hiddenRanges 为空）",
+            state.hiddenRanges.value.isEmpty(),
+        )
+    }
+
+    @Test
     fun onVisualIntent_cursorAnimate_drawsVisualCursorFromSetting() {
         // #684 评论 #5660899405 第4项：drawsVisualCursor 只由 smooth cursor 设置决定。
         val layouts = captureLayouts("", "a")
@@ -296,6 +328,9 @@ class ComposeEditorVisualStateTest {
         assertTrue(state.drawsVisualCursor.value)
         state.clearAnimation()
         assertTrue("clearAnimation 后 drawsVisualCursor 保持 true（smooth cursor 设置）", state.drawsVisualCursor.value)
+        // #684 评论 5662132136 第2项：动画结束后静止光标仍可由最新布局 + 当前 selection 绘制，
+        // 因此 latestLayout 不能被 clearAnimation 清掉（overlay 的 idle-cursor 分支依赖它）。
+        assertNotNull("clearAnimation 后 latestLayout 仍保留（静止光标来源）", state.latestLayout.value)
     }
 
     @Test

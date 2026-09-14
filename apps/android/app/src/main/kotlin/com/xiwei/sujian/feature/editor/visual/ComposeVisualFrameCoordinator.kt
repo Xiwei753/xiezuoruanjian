@@ -4,6 +4,7 @@ import android.util.Log
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #644 评论 #684：帧协调器 — 解决"Core 一笔事务不等于屏幕一帧"的问题。
@@ -195,10 +196,15 @@ class ComposeVisualFrameCoordinator(
             }
 
         // 计算 hidden ranges — 由 overlay 接管的范围。
-        val hasTextAnimation =
-            lastMotionPolicy.textEnabled && lastIntent.textKind != TextVisualKind.None
+        // 是否隐藏正文必须与 overlay 是否真的画正文收口成同一个判断：
+        // SYSTEM_SUPPRESSED 时 overlay 不画自定义正文（textEnabled=false），
+        // 这里也必须把正文留为可见（hiddenRanges 为空），否则正文会被隐藏到事务结束。
+        val customTextAnimationEnabled =
+            lastMotionPolicy.textEnabled &&
+                lastIntent.textKind != TextVisualKind.None &&
+                lastIntent.animationMode != AnimationModeDto.SYSTEM_SUPPRESSED
         val hiddenRanges =
-            if (hasTextAnimation) {
+            if (customTextAnimationEnabled) {
                 mergedNewRanges.filter { it.start < it.end }
             } else {
                 emptyList()

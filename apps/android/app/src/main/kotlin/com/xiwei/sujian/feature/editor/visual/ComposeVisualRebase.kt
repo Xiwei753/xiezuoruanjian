@@ -592,19 +592,25 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #644 评论 #684：用合成后的 offset map 计算 retained moves。
-     * 只取 IDENTITY（内容保留、可能平移）的 entry，比较真实几何，位置变化才生成 [RetainedMove]。
-     * 相邻且位移向量一致的 IDENTITY entry 先合并，避免产生过多碎 move。
+     * #644 评论 #684 + 评论 5662132136 第1项：用合成后的 offset map 计算 retained moves。
+     *
+     * IDENTITY 与 SHIFTED 都表示"这段旧文字在新正文里仍然存在（内容相同）"，
+     * 只是 IDENTITY 的 offset 没变、SHIFTED 的 offset 变了（被前后增删平移）。
+     * 内容真正变化/被编辑/删除的区域 Core 根本不生成映射条目，所以不在 composed map 里。
+     *
+     * 因此两种 entry 都进入 oldRange -> newRange 的真实几何比较；
+     * 只有 old/new [TextLayoutResult] 的真实 rect 真变了才生成 [RetainedMove]。
+     * kind 只说明逻辑 offset 是否平移，不决定"画不画 move"。
+     * 相邻且位移向量（newStart - oldStart）一致的 entry 先合并，避免产生过多碎 move。
      */
     private fun computeRetainedMovesFromComposedMap(
         prev: ComposeLayoutSnapshot,
         curr: ComposeLayoutSnapshot,
         composed: List<VisualOffsetMapEntry>,
     ): List<RetainedMove> {
-        val merged = mergeIdentityEntries(composed)
+        val merged = mergeComposedEntries(composed)
         val moves = mutableListOf<RetainedMove>()
         for (entry in merged) {
-            if (entry.kind != VisualOffsetMapKind.IDENTITY) continue
             val oldRange = TextRange(entry.oldStart, entry.oldStart + entry.length)
             val newRange = TextRange(entry.newStart, entry.newStart + entry.length)
             if (oldRange.start >= oldRange.end || newRange.start >= newRange.end) continue
@@ -622,26 +628,24 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #644 评论 #684：合并相邻、位移向量一致的 IDENTITY entry —
-     * 同一段被平移的保留文字合成一个 entry，减少 retained move 数量。
+     * #644 评论 #684 + 评论 5662132136 第1项：合并相邻、位移向量（newStart - oldStart）
+     * 一致的 entry — 同一段被平移的保留文字合成一个 entry，减少 retained move 数量。
+     *
+     * IDENTITY（位移 0）与 SHIFTED（位移非 0）都参与合并；
+     * 只要相邻、连续且位移向量相同就合并，kind 由合并后位移是否为 0 决定。
      */
-    private fun mergeIdentityEntries(
+    private fun mergeComposedEntries(
         entries: List<VisualOffsetMapEntry>,
     ): List<VisualOffsetMapEntry> {
         val result = mutableListOf<VisualOffsetMapEntry>()
         for (entry in entries) {
-            if (entry.kind != VisualOffsetMapKind.IDENTITY) {
-                result.add(entry)
-                continue
-            }
+            val delta = entry.newStart - entry.oldStart
             val last = result.lastOrNull()
             if (last != null &&
-                last.kind == VisualOffsetMapKind.IDENTITY &&
-                (last.newStart - last.oldStart) == (entry.newStart - entry.oldStart) &&
+                (last.newStart - last.oldStart) == delta &&
                 last.oldStart + last.length == entry.oldStart
             ) {
-                result[result.lastIndex] =
-                    last.copy(length = last.length + entry.length)
+                result[result.lastIndex] = last.copy(length = last.length + entry.length)
             } else {
                 result.add(entry)
             }
@@ -723,8 +727,7 @@ internal object ComposeVisualRebase {
 
         for (intent in chain) {
             val entries = intent.offsetMap?.entries ?: return null
-            val stageOldLen = intent.expectedOldText.length
-            val stage = buildStageSegments(entries, stageOldLen)
+            val stage = buildStageSegments(entries)
             acc = composeStage(acc, stage)
         }
 
@@ -739,47 +742,28 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #644 评论 #684：把单阶段 offset map entries 铺成覆盖整段 old 文本的线段表，
-     * 未被 entry 覆盖的区间视为 identity（位置不变）。
+     * #644 评论 #684 + 评论 5662132136 第1项：把单阶段 offset map entries 铺成线段表，
+     * **只由 Core 给出的 entries 构成**。
+     *
+     * 绝对不要补 identity gap：Core 故意不给中间编辑区生成映射，"无 entry" 就是
+     * "这段旧文字没有对应的新文字"（被编辑/删除/替换）。把这些区间补成 IDENTITY 会把
+     * 已删除文字当成存活文字参与 chain 合成，正好打坏快速删除和换行回流。
+     *
+     * entry 之间的空洞直接没有 segment；[composeStage] 只对真实映射段求交。
      */
     private fun buildStageSegments(
         entries: List<VisualOffsetMapEntry>,
-        oldTextLen: Int,
     ): List<StageSegment> {
-        val segs = mutableListOf<StageSegment>()
-        var cursor = 0
-        for (e in entries.sortedBy { it.oldStart }) {
-            if (e.oldStart > cursor) {
-                segs.add(
-                    StageSegment(
-                        oldStart = cursor,
-                        newStart = cursor,
-                        length = e.oldStart - cursor,
-                        kind = VisualOffsetMapKind.IDENTITY,
-                    ),
-                )
-            }
-            segs.add(
+        return entries
+            .sortedBy { it.oldStart }
+            .map { e ->
                 StageSegment(
                     oldStart = e.oldStart,
                     newStart = e.newStart,
                     length = e.length,
                     kind = e.kind,
-                ),
-            )
-            cursor = e.oldStart + e.length
-        }
-        if (cursor < oldTextLen) {
-            segs.add(
-                StageSegment(
-                    oldStart = cursor,
-                    newStart = cursor,
-                    length = oldTextLen - cursor,
-                    kind = VisualOffsetMapKind.IDENTITY,
-                ),
-            )
-        }
-        return segs
+                )
+            }
     }
 
     /**

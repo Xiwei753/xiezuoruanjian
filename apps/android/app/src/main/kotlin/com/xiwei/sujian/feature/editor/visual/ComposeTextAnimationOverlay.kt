@@ -24,6 +24,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import uniffi.writer_core.AnimationModeDto
 
@@ -62,6 +63,12 @@ fun ComposeTextAnimationOverlay(
     val cursorSnapshotValue by visualState.visualCursorSnapshot.collectAsStateWithLifecycle()
     val density = LocalDensity.current
     val cursorSnapshot = remember(cursorSnapshotValue) { cursorSnapshotValue }
+
+    // #644 评论 5662132136 第2项：smooth cursor 接管后必须有静止光标绘制路径。
+    // drawsVisualCursor 由设置/attach 生命周期决定（overlay 是否整个会话拥有光标）。
+    // latestLayout 为最新权威布局，静止光标从中取 caret rect。
+    val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
+    val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
 
     val transactionId = activeTransaction?.id ?: 0L
     val motionPolicy = activeTransaction?.motionPolicy ?: EditorMotionPolicy()
@@ -138,29 +145,51 @@ fun ComposeTextAnimationOverlay(
         modifier =
             modifier
                 .drawBehind {
-                    if (!hasAnimation) return@drawBehind
-                    // #644 评论 #684：绘制只读 frozen transaction，不再读 currentLayout/previousLayout。
-                    val transaction = activeTransaction ?: return@drawBehind
-                    val currentResult = transaction.newLayout?.result ?: return@drawBehind
-                    val previousResult = transaction.oldLayout?.result
-                    val intent = activeIntent ?: return@drawBehind
+                    // 1. 动画帧：文字 Insert/Delete/Move、retained reflow、光标插值、startFrame rebase。
+                    //    绘制只读 frozen transaction，不再读 currentLayout/previousLayout。
+                    if (hasAnimation) {
+                        val transaction = activeTransaction
+                        val currentResult = transaction?.newLayout?.result
+                        val previousResult = transaction?.oldLayout?.result
+                        val intent = activeIntent
+                        if (transaction != null && currentResult != null && intent != null) {
+                            drawVisualTransaction(
+                                currentResult = currentResult,
+                                previousResult = previousResult,
+                                transaction = transaction,
+                                textKind = intent.textKind,
+                                // smooth cursor 关闭时系统光标负责绘制，overlay 不画光标动画。
+                                cursorAnimate =
+                                    drawsVisualCursor &&
+                                        intent.cursor?.animate == true && cursorEnabled,
+                                textProgress = textProgressValue,
+                                cursorProgress = cursorProgressValue,
+                                scrollY = scrollY,
+                                textColor = textColor,
+                                cursorColor = cursorColor,
+                                cursorSnapshot = cursorSnapshot,
+                                density = density,
+                                textEnabled = textEnabled,
+                                rebaseProgress = rebaseProgressValue,
+                            )
+                        }
+                    }
 
-                    drawVisualTransaction(
-                        currentResult = currentResult,
-                        previousResult = previousResult,
-                        transaction = transaction,
-                        textKind = intent.textKind,
-                        cursorAnimate = intent.cursor?.animate == true && cursorEnabled,
-                        textProgress = textProgressValue,
-                        cursorProgress = cursorProgressValue,
-                        scrollY = scrollY,
-                        textColor = textColor,
-                        cursorColor = cursorColor,
-                        cursorSnapshot = cursorSnapshot,
-                        density = density,
-                        textEnabled = textEnabled,
-                        rebaseProgress = rebaseProgressValue,
-                    )
+                    // 2. 静止光标：smooth cursor 开启时 overlay 整个会话拥有光标。
+                    //    动画进行中已在第 1 步按 old→new 插值画过，这里只在无光标动画时补 resting caret。
+                    //    刚 attach、两次输入之间、纯等待、动画结束（clearAnimation 后）都画静止光标，
+                    //    不会因为没有 active transaction 而丢失光标。
+                    if (drawsVisualCursor && !hasCursorAnimation) {
+                        val restingRect = computeRestingCursorRect(latestLayout) ?: return@drawBehind
+                        drawVisualCursor(
+                            startRect = restingRect,
+                            newRect = restingRect,
+                            progress = 1f,
+                            scrollY = scrollY,
+                            density = density,
+                            cursorColor = cursorColor,
+                        )
+                    }
                 },
     )
 }
@@ -330,6 +359,22 @@ private fun lerp(
     b: Float,
     t: Float,
 ): Float = a + (b - a) * t.coerceIn(0f, 1f)
+
+/**
+ * #644 评论 5662132136 第2项：静止光标 rect — 从最新权威布局 + 当前 selection 取 caret rect。
+ *
+ * smooth cursor 开启、当前没有光标动画时（attach、两次输入之间、纯等待、动画结束后），
+ * overlay 直接画这个 rect 作为静止光标。layout 缺失或 offset 越界时返回 null。
+ */
+private fun computeRestingCursorRect(layout: ComposeLayoutSnapshot?): Rect? {
+    if (layout == null) return null
+    return try {
+        val selectionEnd = layout.selection.end.coerceIn(0, layout.result.layoutInput.text.length)
+        layout.result.getCursorRect(selectionEnd)
+    } catch (_: Throwable) {
+        null
+    }
+}
 
 /**
  * 对同一份 [TextLayoutResult] 做 `clipPath + drawText(result)`。
