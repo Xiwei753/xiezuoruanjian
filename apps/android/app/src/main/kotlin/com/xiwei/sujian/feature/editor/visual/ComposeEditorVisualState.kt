@@ -95,22 +95,22 @@ class ComposeEditorVisualState(
     private val _masterProgress = MutableStateFlow(0f)
     val masterProgress: StateFlow<Float> = _masterProgress.asStateFlow()
 
-    /** 最后一次 onVisualIntent 传入的 motionPolicy — 供 onAuthoritativeLayout 使用。 */
-    private var lastMotionPolicy: EditorMotionPolicy = EditorMotionPolicy()
-
     /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator（附上当前 master progress），
      * 不启动动画、不改 layout。
      *
+     * #684 评论 5667483662 问题1：把本笔 effective policy 一起交给 coordinator，
+     * 让 pending chain 自己携带 policy，tryStartTransaction 用 chain 同源 policy。
+     * onAuthoritativeLayout 只负责 layout 汇合，不再决定这笔事务该用什么动画设置。
+     *
      * @param intent Core 视觉意图。
-     * @param motionPolicy 动画策略。
+     * @param motionPolicy 动画策略 — 传入前先 effective() 收口 reduce-motion。
      */
     fun onVisualIntent(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
     ) {
-        lastMotionPolicy = motionPolicy
-        val update = frameCoordinator.onVisualIntent(intent, _masterProgress.value)
+        val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective(), _masterProgress.value)
         applyFrameUpdate(update)
     }
 
@@ -136,8 +136,9 @@ class ComposeEditorVisualState(
         _latestLayout.update { snapshot }
 
         // 让 frameCoordinator 生成冻结事务（附上当前 master progress 供 rebase 物化）。
-        val effective = lastMotionPolicy.effective()
-        val update = frameCoordinator.onLayout(snapshot, effective, _masterProgress.value)
+        // #684 评论 5667483662 问题1：onLayout 不再传 motionPolicy —
+        // 事务的动画策略由 pending chain 自己携带（与 intent 同源）。
+        val update = frameCoordinator.onLayout(snapshot, _masterProgress.value)
 
         applyFrameUpdate(update)
     }
@@ -202,18 +203,21 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * 动画结束 — 通知 coordinator 清 active，再清本地 overlay 状态。
-     * 由 overlay 的动画完成回调调用（progress 到达 1f）。
+     * 动画结束 — 收口带 ID 守卫的完成方法。
+     *
+     * #684 评论 5667483662 问题2：快速连续输入时，A 刚到 1f，B 已生成并写进 visual state，
+     * 随后 A 的完成回调执行；旧实现 `completeActiveTransaction(A)` + `clearAnimation()` 分两步，
+     * `clearAnimation()` 没有 ID 守卫，会把 B 的 visual state 清空。
+     *
+     * 现在收口成一个带 ID 的方法：先检查 `_activeTransaction.value?.id == transactionId`，
+     * 不匹配直接 return；匹配才同步调用 `frameCoordinator.completeTransaction(transactionId)`
+     * 并清当前这笔对应的 visual state。overlay 到 1f 只调用这一个方法。
+     *
+     * @param transactionId overlay 报告完成的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
      */
-    fun completeActiveTransaction(transactionId: Long) {
+    fun finishTransaction(transactionId: Long) {
+        if (_activeTransaction.value?.id != transactionId) return
         frameCoordinator.completeTransaction(transactionId)
-    }
-
-    /**
-     * 动画结束 — 清 hiddenRanges，系统正文马上可见。
-     * 由 overlay 的动画完成回调调用。光标所有权（_drawsVisualCursor）不在此重置。
-     */
-    fun clearAnimation() {
         _hiddenRanges.update { emptyList() }
         _activeIntent.update { null }
         _visualCursorSnapshot.update { null }

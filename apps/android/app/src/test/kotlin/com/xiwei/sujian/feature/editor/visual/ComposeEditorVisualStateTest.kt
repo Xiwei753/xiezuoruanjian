@@ -27,7 +27,7 @@ import uniffi.writer_core.AnimationModeDto
  * 覆盖：
  * - [onAuthoritativeLayout] 记录布局快照（previous/current）；
  * - [onVisualIntent] 设置 hiddenRanges、动画类型、cursor 和 transaction；
- * - [clearAnimation] 清 hiddenRanges，系统正文马上可见；
+ * - [finishTransaction] 带 ID 守卫清 hiddenRanges/activeIntent/activeTransaction，系统正文马上可见；
  * - drawsVisualCursor 仅由设置/attach 生命周期决定（#684 评论 #5660899405 第4项）；
  * - #641 评论 问题2：cursor?.animate == true 时画视觉光标，不管 textKind。
  *
@@ -271,7 +271,7 @@ class ComposeEditorVisualStateTest {
     }
 
     @Test
-    fun clearAnimation_clearsHiddenRangesAndIntent() {
+    fun finishTransaction_clearsHiddenRangesAndIntent() {
         val state = ComposeEditorVisualState(targetId = "test-target")
         val layouts = captureLayouts("", "abc")
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -293,15 +293,16 @@ class ComposeEditorVisualStateTest {
             motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
-        state.clearAnimation()
-        assertTrue("clearAnimation 后无 hiddenRanges", state.hiddenRanges.value.isEmpty())
-        assertNull("clearAnimation 后无活跃 intent", state.activeIntent.value)
-        assertNull("clearAnimation 后无活跃 transaction", state.activeTransaction.value)
+        val txId = state.activeTransaction.value?.id ?: 0L
+        state.finishTransaction(txId)
+        assertTrue("finishTransaction 后无 hiddenRanges", state.hiddenRanges.value.isEmpty())
+        assertNull("finishTransaction 后无活跃 intent", state.activeIntent.value)
+        assertNull("finishTransaction 后无活跃 transaction", state.activeTransaction.value)
     }
 
     @Test
-    fun clearAnimation_afterCursorIntent_keepsDrawsVisualCursorFromSetting() {
-        // #684 评论 #5660899405 第4项：clearAnimation 不重置 drawsVisualCursor，
+    fun finishTransaction_afterCursorIntent_keepsDrawsVisualCursorFromSetting() {
+        // #684 评论 #5660899405 第4项：finishTransaction 不重置 drawsVisualCursor，
         // 它由 smooth cursor 设置（attach 生命周期）决定。
         val layouts = captureLayouts("", "a")
         val state = ComposeEditorVisualState(targetId = "test-target", initialDrawsVisualCursor = true)
@@ -326,11 +327,12 @@ class ComposeEditorVisualStateTest {
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         assertTrue(state.drawsVisualCursor.value)
-        state.clearAnimation()
-        assertTrue("clearAnimation 后 drawsVisualCursor 保持 true（smooth cursor 设置）", state.drawsVisualCursor.value)
+        val txId = state.activeTransaction.value?.id ?: 0L
+        state.finishTransaction(txId)
+        assertTrue("finishTransaction 后 drawsVisualCursor 保持 true（smooth cursor 设置）", state.drawsVisualCursor.value)
         // #684 评论 5662132136 第2项：动画结束后静止光标仍可由最新布局 + 当前 selection 绘制，
-        // 因此 latestLayout 不能被 clearAnimation 清掉（overlay 的 idle-cursor 分支依赖它）。
-        assertNotNull("clearAnimation 后 latestLayout 仍保留（静止光标来源）", state.latestLayout.value)
+        // 因此 latestLayout 不能被 finishTransaction 清掉（overlay 的 idle-cursor 分支依赖它）。
+        assertNotNull("finishTransaction 后 latestLayout 仍保留（静止光标来源）", state.latestLayout.value)
     }
 
     @Test

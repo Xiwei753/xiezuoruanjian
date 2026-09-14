@@ -136,12 +136,14 @@ fun ComposeTextAnimationOverlay(
     val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
     val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
 
-    // 动画结束：先通知 coordinator 清 active（避免下一笔拿已结束的旧事务当当前事务），
-    // 再清本地 overlay 状态。系统正文马上可见。
+    // 动画结束：收口成一个带 ID 守卫的 finishTransaction 调用。
+    // #684 评论 5667483662 问题2：不再分两步 complete + clear —
+    // 旧事务迟到的完成回调若分两步，clearAnimation 无 ID 守卫会清掉新事务的 visual state。
+    // finishTransaction 内部先检查 _activeTransaction.id == transactionId 才生效。
+    // 系统正文马上可见。
     LaunchedEffect(transactionId, masterProgressValue) {
         if (transactionId > 0L && masterProgressValue >= 1f) {
-            visualState.completeActiveTransaction(transactionId)
-            visualState.clearAnimation()
+            visualState.finishTransaction(transactionId)
         }
     }
 
@@ -183,7 +185,7 @@ fun ComposeTextAnimationOverlay(
 
                     // 2. 静止光标：smooth cursor 开启时 overlay 整个会话拥有光标。
                     //    动画进行中已在第 1 步按 old→new 插值画过，这里只在无光标动画时补 resting caret。
-                    //    刚 attach、两次输入之间、纯等待、动画结束（clearAnimation 后）都画静止光标，
+                    //    刚 attach、两次输入之间、纯等待、动画结束（finishTransaction 后）都画静止光标，
                     //    不会因为没有 active transaction 而丢失光标。
                     //    #684 评论 5663032418 断点3：光标 offset 从 live TextFieldState.selection 读取，
                     //    不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。

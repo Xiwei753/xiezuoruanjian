@@ -369,9 +369,9 @@ class ComposeVisualStateSuppressionReproTest {
 
         // completeTransaction(A) — latest 是窄 "abc"，与 A.newLayout.text 同文本，
         // lastConsumed 应推进到窄 "abc"。
-        state.completeActiveTransaction(txAId)
-        // clearAnimation 模拟 overlay 动画结束清本地状态。
-        state.clearAnimation()
+        // #684 评论 5667483662 问题2：用 finishTransaction 收口带 ID 守卫的完成方法，
+        // 不再分两步 completeActiveTransaction + clearAnimation。
+        state.finishTransaction(txAId)
 
         // 发一笔 intent expectedOldText="abc" expectedNewText="abcd"。
         val intentB =

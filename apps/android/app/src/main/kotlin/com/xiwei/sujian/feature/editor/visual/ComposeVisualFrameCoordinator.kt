@@ -48,15 +48,20 @@ class ComposeVisualFrameCoordinator(
     /** 单调递增的事务 ID。 */
     private var nextTransactionId: Long = 0L
 
-    /** 最近一次 onLayout 传入的动画策略 — 供 tryStartTransaction 在 intent 先到时也用到。 */
-    private var lastMotionPolicy: EditorMotionPolicy = EditorMotionPolicy()
-
     /**
      * Core intent 到达 — 只串进 pending chain（连续才拼接，不连续不开硬拼），
      * 然后尝试合流生成事务。
+     *
+     * #684 评论 5667483662 问题1：motionPolicy 一起存进 pending chain，
+     * 让 tryStartTransaction 永远使用和这条 pending chain 同源的 policy，
+     * 不再依赖"最近一次 onLayout 顺手记住的 policy"。
+     * 传入前先在 visualState 层 effective()，这里直接存。
+     *
+     * @param motionPolicy 本笔 intent 的 effective 动画策略 — 与 pending chain 同源。
      */
     fun onVisualIntent(
         intent: EditorVisualIntent,
+        motionPolicy: EditorMotionPolicy,
         masterProgress: Float,
     ): FrameUpdate {
         val existing = pending
@@ -66,6 +71,7 @@ class ComposeVisualFrameCoordinator(
                     baseText = intent.expectedOldText,
                     targetText = intent.expectedNewText,
                     intents = listOf(intent),
+                    motionPolicy = motionPolicy,
                 )
         } else {
             // 连续 chain 必须满足上一笔 expectedNewText == 下一笔 expectedOldText；
@@ -76,6 +82,8 @@ class ComposeVisualFrameCoordinator(
                     existing.copy(
                         intents = existing.intents + intent,
                         targetText = intent.expectedNewText,
+                        // 同一条 chain 内 policy 以最新一笔为准（连续输入同一设置）。
+                        motionPolicy = motionPolicy,
                     )
             } else {
                 pending =
@@ -83,6 +91,7 @@ class ComposeVisualFrameCoordinator(
                         baseText = intent.expectedOldText,
                         targetText = intent.expectedNewText,
                         intents = listOf(intent),
+                        motionPolicy = motionPolicy,
                     )
             }
         }
@@ -103,14 +112,16 @@ class ComposeVisualFrameCoordinator(
      *
      * 从上一份已呈现 layout（[lastConsumed]）→ 当前 layout（[latest]）
      * + 中间积累的 intent chain → 一个 [ComposeVisualTransaction]，创建后不再修改。
+     *
+     * #684 评论 5667483662 问题1：onLayout 不再接收 motionPolicy —
+     * 事务的动画策略由 pending chain 自己携带（与 intent 同源），
+     * onLayout 只负责 layout 汇合，不决定这笔事务该用什么动画设置。
      */
     fun onLayout(
         snapshot: ComposeLayoutSnapshot,
-        motionPolicy: EditorMotionPolicy,
         masterProgress: Float,
     ): FrameUpdate {
         latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
-        lastMotionPolicy = motionPolicy
 
         EditorDiagnosticsEvents.editorLayoutPresented(
             targetId = targetId,
@@ -291,7 +302,10 @@ class ComposeVisualFrameCoordinator(
         // overlay 据此 transaction.animationMode 判断 systemSuppressed，不再从 _activeIntent 读取。
         // #684 评论 5666730754：用 screenSuppressed（整条 chain 任一笔 SYSTEM_SUPPRESSED）收口，
         // 不再只看最后一笔 intent 的 animationMode。
-        val customAnimationEnabled = lastMotionPolicy.textEnabled && !screenSuppressed
+        // #684 评论 5667483662 问题1：用 pendingChain.motionPolicy（与 intent 同源），
+        // 不再用 lastMotionPolicy（最近一次 onLayout 顺手记住的 policy）。
+        val chainMotionPolicy = pendingChain.motionPolicy
+        val customAnimationEnabled = chainMotionPolicy.textEnabled && !screenSuppressed
         val customTextAnimationEnabled =
             customAnimationEnabled && transactionTextKind != TextVisualKind.None
 
@@ -302,7 +316,7 @@ class ComposeVisualFrameCoordinator(
         val textAnimationActive = customTextAnimationEnabled
         val cursorAnimationActive =
             !screenSuppressed &&
-                lastMotionPolicy.cursorEnabled &&
+                chainMotionPolicy.cursorEnabled &&
                 firstCursor != null &&
                 lastCursor != null &&
                 chain.any { it.cursor?.animate == true } &&
@@ -417,7 +431,7 @@ class ComposeVisualFrameCoordinator(
                 cursorEndRect = cursorEndRect,
                 startFrame = startFrame,
                 durationMs = effectiveDurationMs,
-                motionPolicy = lastMotionPolicy,
+                motionPolicy = chainMotionPolicy,
                 // #684 评论 5663862982：事务生成后冻结的 suppressed ranges —
                 // 下一笔 rebase 时按 composedOffsetMap 映射到新坐标系。
                 suppressedCurrentRanges = hiddenRanges,
@@ -524,11 +538,17 @@ private data class PresentedLayout(
  *
  * [baseText]/[targetText] 始终携带用于匹配的文本身份（来自每笔 intent 的
  * expectedOldText/expectedNewText），不再永远写成空串。
+ *
+ * #684 评论 5667483662 问题1：[motionPolicy] 与 intent 同源 —
+ * tryStartTransaction 永远使用这条 pending chain 自己携带的 policy，
+ * 不再依赖"最近一次 onLayout 顺手记住的 policy"。
+ * 传入前已 effective()，这里存的是 effective 后的策略。
  */
 private data class PendingVisualChain(
     val baseText: String,
     val targetText: String,
     val intents: List<EditorVisualIntent>,
+    val motionPolicy: EditorMotionPolicy,
 )
 
 /**
