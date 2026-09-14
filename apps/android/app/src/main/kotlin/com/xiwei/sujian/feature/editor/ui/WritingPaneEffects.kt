@@ -473,6 +473,17 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
             TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
         }
 
+    // #684 评论 5668108597 问题2：Core 计算好的动画单元 UTF-8 byte ranges → UTF-16 ranges。
+    // 与 oldRanges/newRanges 的转换方式一致，overlay 按单元做吐字/吞字动画。
+    val oldAnimationUnits =
+        event.visualIntent.oldAnimationUnitRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
+        }
+    val newAnimationUnits =
+        event.visualIntent.newAnimationUnitRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
+        }
+
     val coordinatedCursor = event.visualIntent.coordinatedCursor
     val cursor =
         if (coordinatedCursor.shouldAnimate) {
@@ -548,6 +559,8 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
         replaceBounds = replaceBounds,
         expectedOldText = event.oldText,
         expectedNewText = event.newText,
+        oldAnimationUnits = oldAnimationUnits,
+        newAnimationUnits = newAnimationUnits,
     )
 }
 

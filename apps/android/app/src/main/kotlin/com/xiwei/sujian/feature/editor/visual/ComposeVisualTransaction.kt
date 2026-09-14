@@ -66,6 +66,12 @@ data class RetainedMove(
  *   当 screenSuppressed 或 motionPolicy 关闭光标动画或 chain 里没有 cursor.animate==true
  *   或光标位置未变（firstCursor.oldEndUtf16 == lastCursor.newEndUtf16）时为 false。
  *   interruptedCursorRect 据此决定是否从上一笔插值，overlay 据此决定 cursorEnabled。
+ * @param oldAnimationUnits #684 评论 5668108597 问题2：屏幕事务冻结的旧动画单元 UTF-16 ranges —
+ *   overlay 按单元做吞字动画。多 Core intent 合成一帧时，单笔直接用其 units，
+ *   多笔回退到 mergedOldRanges 作为整块单元。空列表回退到整段 alpha 行为。
+ * @param newAnimationUnits #684 评论 5668108597 问题2：屏幕事务冻结的新动画单元 UTF-16 ranges —
+ *   overlay 按单元做吐字动画。多 Core intent 合成一帧时，单笔直接用其 units，
+ *   多笔回退到 mergedNewRanges 作为整块单元。空列表回退到整段 alpha 行为。
  */
 data class ComposeVisualTransaction(
     val id: Long,
@@ -86,4 +92,6 @@ data class ComposeVisualTransaction(
     val animationMode: AnimationModeDto = AnimationModeDto.CLUSTER_ANIMATION,
     val textAnimationActive: Boolean = false,
     val cursorAnimationActive: Boolean = false,
+    val oldAnimationUnits: List<TextRange> = emptyList(),
+    val newAnimationUnits: List<TextRange> = emptyList(),
 )

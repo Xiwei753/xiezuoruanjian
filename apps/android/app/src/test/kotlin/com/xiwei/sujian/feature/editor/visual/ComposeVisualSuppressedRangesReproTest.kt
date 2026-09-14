@@ -176,7 +176,7 @@ class ComposeVisualSuppressedRangesReproTest {
         assertNotNull("事务 A 应生成", txA)
 
         // A 跑到 progress=0.5（surviving slice alpha=0.5，物化 B 时 startFrame 非 null）。
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // === 生成事务 B（两笔 intent chain T0->T1->T2）===
         // intent1: T0="abcdefgh" -> T1="abefgh"（删除 old[2,4)="cd"）

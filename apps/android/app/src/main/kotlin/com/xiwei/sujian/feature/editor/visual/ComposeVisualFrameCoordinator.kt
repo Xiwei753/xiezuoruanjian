@@ -417,6 +417,17 @@ class ComposeVisualFrameCoordinator(
             } else {
                 lastIntent.durationMs
             }
+        // #684 评论 5668108597 问题2：多 Core intent 合成一帧时，animation units 映射到最终 T0→Tn 坐标。
+        // 简单处理：chain 只有一笔直接用它的 animation units；chain 有多笔用 merged ranges 作为整块单元（保守）。
+        val oldAnimationUnits: List<androidx.compose.ui.text.TextRange>
+        val newAnimationUnits: List<androidx.compose.ui.text.TextRange>
+        if (chain.size == 1) {
+            oldAnimationUnits = chain[0].oldAnimationUnits
+            newAnimationUnits = chain[0].newAnimationUnits
+        } else {
+            oldAnimationUnits = mergedOldRanges
+            newAnimationUnits = mergedNewRanges
+        }
         val transaction =
             ComposeVisualTransaction(
                 id = nextTransactionId,
@@ -449,6 +460,9 @@ class ComposeVisualFrameCoordinator(
                 // #684 评论 5666730754：冻结正文/光标视觉所有权。
                 textAnimationActive = textAnimationActive,
                 cursorAnimationActive = cursorAnimationActive,
+                // #684 评论 5668108597 问题2：冻结 animation units 供 overlay 按单元做吐字/吞字。
+                oldAnimationUnits = oldAnimationUnits,
+                newAnimationUnits = newAnimationUnits,
             )
 
         active = transaction

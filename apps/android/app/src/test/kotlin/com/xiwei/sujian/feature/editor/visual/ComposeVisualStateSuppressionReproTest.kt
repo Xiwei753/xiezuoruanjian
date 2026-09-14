@@ -94,7 +94,7 @@ class ComposeVisualStateSuppressionReproTest {
         )
 
         // A 跑到 progress=0.5（物化 B 时若未收口 startFrame 会非 null）。
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // === 生成事务 B（SYSTEM_SUPPRESSED "abc" → "abcd"）===
         val intentB =

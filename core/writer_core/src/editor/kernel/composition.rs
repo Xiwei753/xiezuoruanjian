@@ -7,8 +7,8 @@ use crate::editor::strong_types::{
     Utf8ByteRange,
 };
 use crate::editor::transaction::{
-    classify_composition_visual, AnimationMode, CompositionOperationKind, EditorTransactionCause,
-    OffsetMap,
+    classify_composition_visual, compute_animation_units, AnimationMode, CompositionOperationKind,
+    EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -90,6 +90,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -134,6 +136,14 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
+        let (old_animation_units, new_animation_units) = compute_animation_units(
+            classification.animation_mode,
+            &old_preedit_text,
+            new_preedit_text,
+            &classification.old_affected_byte_ranges,
+            &classification.new_affected_byte_ranges,
+        );
+
         let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -155,6 +165,8 @@ impl EditorKernel {
                     should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
                 offset_map: None,
+                old_animation_units,
+                new_animation_units,
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -210,6 +222,8 @@ impl EditorKernel {
                         should_animate: false,
                     },
                     offset_map: None,
+                    old_animation_units: vec![],
+                    new_animation_units: vec![],
                 },
                 content_delta: EditorContentDelta::default(),
             });
@@ -295,6 +309,14 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
+        let (old_animation_units, new_animation_units) = compute_animation_units(
+            classification.animation_mode,
+            &committed_text,
+            &committed_text,
+            &classification.old_affected_byte_ranges,
+            &classification.new_affected_byte_ranges,
+        );
+
         let edit_result = EditorEditResult {
             transaction_id: self.take_transaction_id(),
             base_revision,
@@ -321,6 +343,8 @@ impl EditorKernel {
                     (replace_start, replace_end),
                     committed_text.len(),
                 )),
+                old_animation_units,
+                new_animation_units,
             },
             content_delta: EditorContentDelta::from_texts(&committed_text, &deleted_text),
         };
@@ -378,6 +402,14 @@ impl EditorKernel {
             self.animation_enabled,
         );
 
+        let (old_animation_units, new_animation_units) = compute_animation_units(
+            classification.animation_mode,
+            &session.preedit_text,
+            "",
+            &classification.old_affected_byte_ranges,
+            &classification.new_affected_byte_ranges,
+        );
+
         let new_selection = make_selection(self.selection_anchor.value(), self.cursor.value());
         EditorEditOutcome::Applied(EditorEditResult {
             transaction_id: self.take_transaction_id(),
@@ -399,6 +431,8 @@ impl EditorKernel {
                     should_animate: self.animation_enabled && old_cursor != self.cursor,
                 },
                 offset_map: None,
+                old_animation_units,
+                new_animation_units,
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -468,6 +502,8 @@ impl EditorKernel {
                         should_animate: false,
                     },
                     offset_map: None,
+                    old_animation_units: vec![],
+                    new_animation_units: vec![],
                 },
                 content_delta: EditorContentDelta::default(),
             });
@@ -501,6 +537,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -553,6 +591,8 @@ impl EditorKernel {
                         should_animate: false,
                     },
                     offset_map: None,
+                    old_animation_units: vec![],
+                    new_animation_units: vec![],
                 },
                 content_delta: EditorContentDelta::default(),
             });
@@ -586,6 +626,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -638,6 +680,8 @@ impl EditorKernel {
                         should_animate: false,
                     },
                     offset_map: None,
+                    old_animation_units: vec![],
+                    new_animation_units: vec![],
                 },
                 content_delta: EditorContentDelta::default(),
             });
@@ -676,6 +720,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         })
@@ -728,6 +774,8 @@ impl EditorKernel {
                         should_animate: false,
                     },
                     offset_map: None,
+                    old_animation_units: vec![],
+                    new_animation_units: vec![],
                 },
                 content_delta: EditorContentDelta::default(),
             });
@@ -767,6 +815,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         })

@@ -24,6 +24,12 @@ import uniffi.writer_core.AnimationModeDto
  * @param textKind 文字动画类型。
  * @param cursor 光标视觉意图 — null 表示不画视觉光标。
  * @param replaceBounds 明确的 replace 边界（UTF-16）。
+ * @param oldAnimationUnits #684 评论 5668108597 问题2：Core 计算好的旧动画单元 UTF-16 ranges —
+ *   平台端按单元做吞字动画（Delete/Move）。每个 unit 在原位按 master progress 依次消失。
+ *   空列表回退到整段 alpha 行为（向后兼容）。
+ * @param newAnimationUnits #684 评论 5668108597 问题2：Core 计算好的新动画单元 UTF-16 ranges —
+ *   平台端按单元做吐字动画（Insert/Move）。每个 unit 在原位按 master progress 依次显现。
+ *   空列表回退到整段 alpha 行为（向后兼容）。
  */
 data class EditorVisualIntent(
     val coreTransactionId: Long,
@@ -39,6 +45,8 @@ data class EditorVisualIntent(
     val replaceBounds: VisualReplaceBounds? = null,
     val expectedOldText: String = "",
     val expectedNewText: String = "",
+    val oldAnimationUnits: List<TextRange> = emptyList(),
+    val newAnimationUnits: List<TextRange> = emptyList(),
 )
 
 /**

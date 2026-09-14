@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
@@ -120,9 +121,11 @@ fun ComposeTextAnimationOverlay(
     val rebaseProgressValue = masterProgressValue
 
     // #644 评论 #684：报告单 master progress 给 visualState，供下一事务物化 startFrame。
+    // #684 评论 5668108597 问题1：reportProgress 带 transactionId 守卫 —
+    // 旧事务迟到的 progress 不会污染新事务的 _masterProgress。
     LaunchedEffect(transactionId, masterProgressValue) {
         if (transactionId > 0L) {
-            visualState.reportProgress(masterProgressValue)
+            visualState.reportProgress(transactionId, masterProgressValue)
         }
     }
 
@@ -243,6 +246,9 @@ private fun DrawScope.drawVisualTransaction(
             previousResult = previousResult,
             oldRanges = transaction.oldRanges,
             newRanges = transaction.newRanges,
+            oldAnimationUnits = transaction.oldAnimationUnits,
+            newAnimationUnits = transaction.newAnimationUnits,
+            animationMode = transaction.animationMode,
             retainedMoves = transaction.retainedMoves,
             textKind = textKind,
             progress = textProgress,
@@ -426,42 +432,120 @@ private fun DrawScope.drawRangeText(
 
 /**
  * 绘制受影响 range 的动画过程。
+ *
+ * #684 评论 5668108597 问题2：按 Core 计算的 animation units 做吐字/吞字动画。
+ * - `oldAnimationUnits` / `newAnimationUnits` 为空时回退到整段 alpha 行为（向后兼容）。
+ * - 有 units 时每个 unit 在原位按 master progress 依次显现/消失：
+ *   N 个 unit，unit i 的局部 progress = ((progress * N) - i).coerceIn(0f, 1f)。
+ * - Insert: newAnimationUnits 依次淡入（吐字）。
+ * - Delete: oldAnimationUnits 依次淡出（吞字）。
+ * - Move: oldAnimationUnits 淡出 + newAnimationUnits 淡入。
+ * - RunAnimation: 按 run 组推进（每个 run 作为一个整体，run 之间依次出现）。
+ * - LineReflowAnimation: 同时驱动 retained move（保留现有行为）。
+ * - SystemSuppressed: 不画（textEnabled 已经是 false）。
+ *
+ * 一笔输入仍只有一个 master timeline，文字、reflow、光标继续协调，不重新拆成几套时钟。
+ * 不做"整段从左边滑进来" — 每个 Core 单元在原位按 master progress 依次显现/消失。
  */
-@Suppress("LongParameterList")
+@Suppress("LongParameterList", "CyclomaticComplexity", "CognitiveComplexMethod")
 private fun DrawScope.drawAnimatedRanges(
     currentResult: TextLayoutResult,
     previousResult: TextLayoutResult?,
     oldRanges: List<TextRange>,
     newRanges: List<TextRange>,
+    oldAnimationUnits: List<TextRange>,
+    newAnimationUnits: List<TextRange>,
+    animationMode: AnimationModeDto,
     retainedMoves: List<RetainedMove>,
     textKind: TextVisualKind,
     progress: Float,
     scrollY: Int,
     textColor: Color,
 ) {
+    // #684 评论 5668108597 问题2：各 Core 动画模式的处理策略 —
+    // SystemSuppressed 已被外层 textEnabled=false 拦截（不会进入本函数）。
+    // LineReflowAnimation 的 retained move 在函数末尾统一驱动。
+    // RunAnimation 的"按 run 组依次出现"由 unit-wise 默认行为覆盖（unit 即 Core 算好的 run 边界）。
+    // GlyphAnimation/ClusterAnimation/SnapshotAnimation：unit 在原位按 localProgress 依次显现/消失。
+    when (animationMode) {
+        AnimationModeDto.SYSTEM_SUPPRESSED -> {
+            // 不画 — textEnabled 已是 false，理论上不会进入本分支。保留防御。
+            return
+        }
+        AnimationModeDto.GLYPH_ANIMATION,
+        AnimationModeDto.CLUSTER_ANIMATION,
+        AnimationModeDto.RUN_ANIMATION,
+        AnimationModeDto.LINE_REFLOW_ANIMATION,
+        AnimationModeDto.SNAPSHOT_ANIMATION,
+        -> Unit
+    }
     when (textKind) {
         TextVisualKind.Insert -> {
-            val alpha = progress
-            for (range in newRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            if (newAnimationUnits.isNotEmpty()) {
+                drawUnitWiseAppear(
+                    result = currentResult,
+                    units = newAnimationUnits,
+                    progress = progress,
+                    scrollY = scrollY,
+                    textColor = textColor,
+                )
+            } else {
+                // 回退到整段 alpha（向后兼容）。
+                val alpha = progress
+                for (range in newRanges) {
+                    drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+                }
             }
         }
         TextVisualKind.Delete -> {
-            val alpha = 1f - progress
             val result = previousResult ?: currentResult
-            for (range in oldRanges) {
-                drawRangeText(result, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            if (oldAnimationUnits.isNotEmpty()) {
+                drawUnitWiseDisappear(
+                    result = result,
+                    units = oldAnimationUnits,
+                    progress = progress,
+                    scrollY = scrollY,
+                    textColor = textColor,
+                )
+            } else {
+                // 回退到整段 alpha（向后兼容）。
+                val alpha = 1f - progress
+                for (range in oldRanges) {
+                    drawRangeText(result, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+                }
             }
         }
         TextVisualKind.Move -> {
-            val alpha = progress
+            // Move: old units 淡出 + new units 淡入。
             if (previousResult != null) {
-                for (range in oldRanges) {
-                    drawRangeText(previousResult, range, alpha = 1f - alpha, scrollY = scrollY, textColor = textColor)
+                if (oldAnimationUnits.isNotEmpty()) {
+                    drawUnitWiseDisappear(
+                        result = previousResult,
+                        units = oldAnimationUnits,
+                        progress = progress,
+                        scrollY = scrollY,
+                        textColor = textColor,
+                    )
+                } else {
+                    val alpha = 1f - progress
+                    for (range in oldRanges) {
+                        drawRangeText(previousResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+                    }
                 }
             }
-            for (range in newRanges) {
-                drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+            if (newAnimationUnits.isNotEmpty()) {
+                drawUnitWiseAppear(
+                    result = currentResult,
+                    units = newAnimationUnits,
+                    progress = progress,
+                    scrollY = scrollY,
+                    textColor = textColor,
+                )
+            } else {
+                val alpha = progress
+                for (range in newRanges) {
+                    drawRangeText(currentResult, range, alpha = alpha, scrollY = scrollY, textColor = textColor)
+                }
             }
         }
         TextVisualKind.None -> {
@@ -469,12 +553,74 @@ private fun DrawScope.drawAnimatedRanges(
         }
     }
     // retained move：Insert/Delete/Move 都画。
+    // LineReflowAnimation 同时驱动 retained move（保留现有行为）。
     if (textKind != TextVisualKind.None) {
         drawRetainedMoves(
             previousResult = previousResult,
             currentResult = currentResult,
             retainedMoves = retainedMoves,
             progress = progress,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
+    }
+}
+
+/**
+ * #684 评论 5668108597 问题2：按 unit 依次淡入（吐字）。
+ *
+ * N 个 unit，unit i 的局部 progress = ((progress * N) - i).coerceIn(0f, 1f)。
+ * RunAnimation 模式下每个 run 作为一个整体，run 之间依次出现（与默认行为一致，
+ * 因为 unit 已经是 Core 算好的 run 边界）。
+ */
+private fun DrawScope.drawUnitWiseAppear(
+    result: TextLayoutResult,
+    units: List<TextRange>,
+    progress: Float,
+    scrollY: Int,
+    textColor: Color,
+) {
+    if (units.isEmpty()) return
+    val n = units.size
+    for ((i, unit) in units.withIndex()) {
+        val localProgress = ((progress * n) - i).coerceIn(0f, 1f)
+        if (localProgress <= 0f) continue
+        // RunAnimation: 每个 run 整体出现（unit 即 run，无需特殊处理）。
+        // 其他模式（GlyphAnimation/ClusterAnimation/LineReflowAnimation/SnapshotAnimation）：
+        // unit 在原位按 localProgress 淡入。
+        drawRangeText(
+            result = result,
+            range = unit,
+            alpha = localProgress,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
+    }
+}
+
+/**
+ * #684 评论 5668108597 问题2：按 unit 依次淡出（吞字）。
+ *
+ * N 个 unit，unit i 的局部 progress = ((progress * N) - i).coerceIn(0f, 1f)。
+ * alpha = 1f - localProgress（先消失的 unit alpha 先到 0）。
+ */
+private fun DrawScope.drawUnitWiseDisappear(
+    result: TextLayoutResult,
+    units: List<TextRange>,
+    progress: Float,
+    scrollY: Int,
+    textColor: Color,
+) {
+    if (units.isEmpty()) return
+    val n = units.size
+    for ((i, unit) in units.withIndex()) {
+        val localProgress = ((progress * n) - i).coerceIn(0f, 1f)
+        val alpha = 1f - localProgress
+        if (alpha <= 0f) continue
+        drawRangeText(
+            result = result,
+            range = unit,
+            alpha = alpha,
             scrollY = scrollY,
             textColor = textColor,
         )

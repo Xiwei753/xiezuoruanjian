@@ -3,7 +3,9 @@ use super::types::{CoordinatedCursor, DisplayPatch, EditorOperationKind, EditorV
 use super::EditorKernel;
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
-use crate::editor::transaction::{AnimationMode, EditorTransactionCause, OffsetMap};
+use crate::editor::transaction::{
+    compute_animation_units, AnimationMode, EditorTransactionCause, OffsetMap,
+};
 
 impl EditorKernel {
     /// Undo 通过 inverse delta 局部应用。
@@ -121,6 +123,11 @@ impl EditorKernel {
             AnimationMode::SnapshotAnimation
         };
 
+        // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
+        // 两者都不访问 text 参数，传空字符串即可。
+        let (old_animation_units, new_animation_units) =
+            compute_animation_units(animation_mode, "", "", &old_affected, &new_affected);
+
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Undo,
             operation_kind: EditorOperationKind::Replace,
@@ -134,6 +141,8 @@ impl EditorKernel {
                 should_animate: self.animation_enabled && old_cursor != new_cursor_val,
             },
             offset_map: Some(offset_map),
+            old_animation_units,
+            new_animation_units,
         };
 
         self.redo_stack.push(entry);
@@ -249,6 +258,11 @@ impl EditorKernel {
             AnimationMode::SnapshotAnimation
         };
 
+        // undo/redo 的 animation_mode 只会是 SnapshotAnimation 或 SystemSuppressed，
+        // 两者都不访问 text 参数，传空字符串即可。
+        let (old_animation_units, new_animation_units) =
+            compute_animation_units(animation_mode, "", "", &old_affected, &new_affected);
+
         let visual_intent = EditorVisualIntent {
             cause: EditorTransactionCause::Redo,
             operation_kind: EditorOperationKind::Replace,
@@ -262,6 +276,8 @@ impl EditorKernel {
                 should_animate: self.animation_enabled && old_cursor != new_cursor_val,
             },
             offset_map: Some(offset_map),
+            old_animation_units,
+            new_animation_units,
         };
 
         self.undo_stack.push(entry);

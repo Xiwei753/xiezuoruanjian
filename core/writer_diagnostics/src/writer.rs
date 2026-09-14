@@ -540,7 +540,8 @@ mod tests {
         }
         assert_eq!(
             count, MAX_TOTAL_LOG_FILES,
-            "should keep at most {} files, got {}", MAX_TOTAL_LOG_FILES, count
+            "should keep at most {} files, got {}",
+            MAX_TOTAL_LOG_FILES, count
         );
         reset_for_test();
     }
@@ -567,7 +568,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         // 触发轮转：rotate_if_needed 会把 current 改名，然后 prune
-        assert!(rotate_if_needed(&log_dir, &current_file), "rotate should succeed");
+        assert!(
+            rotate_if_needed(&log_dir, &current_file),
+            "rotate should succeed"
+        );
 
         // 创建新的 current 文件
         fs::write(&current_file, "new current\n").unwrap();
@@ -629,7 +633,8 @@ mod tests {
         assert!(
             count <= MAX_TOTAL_LOG_FILES,
             "修复后新 build 首次写入目录文件数应 <= MAX_TOTAL_LOG_FILES={}, 实际 {}",
-            MAX_TOTAL_LOG_FILES, count
+            MAX_TOTAL_LOG_FILES,
+            count
         );
 
         // 同时断言新 build 的 current 文件存在。

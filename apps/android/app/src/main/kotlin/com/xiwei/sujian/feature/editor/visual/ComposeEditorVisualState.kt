@@ -155,6 +155,11 @@ class ComposeEditorVisualState(
                 // 无新事务 — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
             is FrameUpdate.NewTransaction -> {
+                // #684 评论 5668108597 问题1：visual state 接管新事务时同步重置 _masterProgress=0f，
+                // 不等 Compose 下一帧再靠 Animatable.snapTo(0f) 修正。
+                // 否则在新事务的 LaunchedEffect 启动前，旧事务迟到的 reportProgress(A.id, 0.9f)
+                // 会把全局 _masterProgress 写成 0.9f，下一笔 rebase 物化 startFrame 拿到错误进度。
+                _masterProgress.update { 0f }
                 _activeTransaction.update { update.transaction }
                 _hiddenRanges.update { update.hiddenRanges }
 
@@ -197,8 +202,16 @@ class ComposeEditorVisualState(
     /**
      * overlay 报告当前动画 master progress — 物化 startFrame（下一笔 rebase）用。
      * 文字/光标/rebase 共用同一进度。
+     *
+     * #684 评论 5668108597 问题1：加 transactionId 守卫 —
+     * 快速连续输入时 A 的旧 LaunchedEffect 可能在 B 已成为 active 后继续写全局 progress。
+     * 只有当前活跃事务 ID 匹配时才允许写入，迟到的旧事务 progress 直接丢弃。
+     *
+     * @param transactionId overlay 报告进度的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
+     * @param progress 当前动画进度（0f..1f）。
      */
-    fun reportProgress(progress: Float) {
+    fun reportProgress(transactionId: Long, progress: Float) {
+        if (_activeTransaction.value?.id != transactionId) return
         _masterProgress.update { progress.coerceIn(0f, 1f) }
     }
 

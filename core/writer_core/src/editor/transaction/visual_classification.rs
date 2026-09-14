@@ -400,6 +400,125 @@ pub fn split_text_into_clusters(text: &str, base_offset: usize) -> Vec<ClusterRe
     clusters
 }
 
+/// #684 评论 5668108597：根据 animation_mode 生成动画单元 ranges。
+///
+/// 平台端据此做吐字/吞字动画，不再整段淡入淡出。
+///
+/// - `GlyphAnimation` / `ClusterAnimation`: 对每个 affected range 内的文本按
+///   grapheme cluster 单元（`split_text_into_clusters`）生成 cluster ranges。
+/// - `RunAnimation`: 对每个 affected range 内的文本按 run 单元
+///   （`split_text_into_runs`）生成 run ranges。
+/// - `LineReflowAnimation` / `SnapshotAnimation`: 直接返回 `old_affected` /
+///   `new_affected`（整块 affected range 作为一个单元）。
+/// - `SystemSuppressed`: 返回空 vec。
+///
+/// `old_animation_units` 从 `old_text` + `old_affected` 生成，
+/// `new_animation_units` 从 `new_text` + `new_affected` 生成。
+/// affected range 可能是多个，对每个 range 内的子串生成单元，用 range 的 start
+/// 作为 base_offset。越界或非 char boundary 的 range 被跳过（防御性，正常调用方
+/// 不会产生非法 range）。
+pub fn compute_animation_units(
+    animation_mode: AnimationMode,
+    old_text: &str,
+    new_text: &str,
+    old_affected: &[Utf8ByteRange],
+    new_affected: &[Utf8ByteRange],
+) -> (Vec<Utf8ByteRange>, Vec<Utf8ByteRange>) {
+    match animation_mode {
+        AnimationMode::SystemSuppressed => (Vec::new(), Vec::new()),
+        AnimationMode::LineReflowAnimation | AnimationMode::SnapshotAnimation => {
+            (old_affected.to_vec(), new_affected.to_vec())
+        }
+        AnimationMode::GlyphAnimation | AnimationMode::ClusterAnimation => (
+            collect_cluster_units(old_text, old_affected),
+            collect_cluster_units(new_text, new_affected),
+        ),
+        AnimationMode::RunAnimation => (
+            collect_run_units(old_text, old_affected),
+            collect_run_units(new_text, new_affected),
+        ),
+    }
+}
+
+/// 对 `text` 中每个 affected range 内的子串按 grapheme cluster 单元生成
+/// `Utf8ByteRange` 列表。`base_offset` = range.start。
+///
+/// `text` 可以是全文（affected range 在 text 内）或局部文本（text 就是
+/// affected range 内的文本，range.start 是正文绝对偏移）。实现根据 range.start
+/// 与 text.len() 的关系自动选择模式：
+/// - 全文模式：`start < text.len() && end <= text.len()`，从 text 截取 `[start, end)`。
+/// - 局部文本模式：`start >= text.len()`，text 就是 affected range 内的文本，
+///   base_offset = start。
+/// - 混合情况（start 在 text 内但 end 超出）跳过该 range。
+fn collect_cluster_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8ByteRange> {
+    let mut units = Vec::new();
+    for range in affected {
+        let start = range.start().value();
+        let end = range.end().value();
+        if start >= end {
+            continue;
+        }
+        let Some((subtext, base)) = resolve_subtext(text, start, end) else {
+            continue;
+        };
+        for cluster in split_text_into_clusters(subtext, base) {
+            units.push(Utf8ByteRange::from_ordered(
+                cluster.byte_start.value(),
+                cluster.byte_end.value(),
+            ));
+        }
+    }
+    units
+}
+
+/// 对 `text` 中每个 affected range 内的子串按 run 单元生成
+/// `Utf8ByteRange` 列表。`base_offset` = range.start。
+///
+/// 模式选择同 [collect_cluster_units]。
+fn collect_run_units(text: &str, affected: &[Utf8ByteRange]) -> Vec<Utf8ByteRange> {
+    let mut units = Vec::new();
+    for range in affected {
+        let start = range.start().value();
+        let end = range.end().value();
+        if start >= end {
+            continue;
+        }
+        let Some((subtext, base)) = resolve_subtext(text, start, end) else {
+            continue;
+        };
+        for run in split_text_into_runs(subtext, base) {
+            units.push(Utf8ByteRange::from_ordered(
+                run.byte_start.value(),
+                run.byte_end.value(),
+            ));
+        }
+    }
+    units
+}
+
+/// 确定 affected range 内的文本和 base_offset。
+///
+/// - 全文模式：`start < text.len() && end <= text.len()`，从 text 截取 `[start, end)`，
+///   base = start。
+/// - 局部文本模式：`start >= text.len()`，text 就是 affected range 内的文本，
+///   base = start。
+/// - 混合情况返回 None。
+fn resolve_subtext(text: &str, start: usize, end: usize) -> Option<(&str, usize)> {
+    if start < text.len() && end <= text.len() {
+        // 全文模式
+        if !text.is_char_boundary(start) || !text.is_char_boundary(end) {
+            return None;
+        }
+        Some((&text[start..end], start))
+    } else if start >= text.len() {
+        // 局部文本模式：text 就是 affected range 内的文本
+        Some((text, start))
+    } else {
+        // start < text.len() 但 end > text.len()，混合情况
+        None
+    }
+}
+
 /// 判断编辑变更是否应产生动画。
 pub(crate) fn should_animate_changes(
     changes: &[EditorChange],

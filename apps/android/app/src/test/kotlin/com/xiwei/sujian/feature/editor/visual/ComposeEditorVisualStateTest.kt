@@ -569,14 +569,39 @@ class ComposeEditorVisualStateTest {
 
     /**
      * #684 评论 #5660899405：单 master progress —
-     * reportProgress(Float) 更新内部 _masterProgress。
+     * reportProgress(transactionId, Float) 更新内部 _masterProgress（ID 匹配时）。
+     *
+     * #684 评论 5668108597 问题1：reportProgress 加了 transactionId 守卫，
+     * 无 active transaction 或 ID 不匹配时为 no-op（由 ComposeVisualMasterProgressGuardTest 覆盖）。
+     * 本测试验证 ID 匹配时确实写入。
      */
     @Test
     fun reportProgress_updatesMasterProgress() {
+        val layouts = captureLayouts("", "abc")
         val state = ComposeEditorVisualState(targetId = "test-target")
-        state.reportProgress(0.5f)
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onVisualIntent(
+            EditorVisualIntent(
+                coreTransactionId = 1L,
+                baseRevision = 0L,
+                newRevision = 1L,
+                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                durationMs = 100L,
+                offsetMap = null,
+                oldRanges = emptyList(),
+                newRanges = listOf(TextRange(0, 3)),
+                textKind = TextVisualKind.Insert,
+                cursor = null,
+                expectedOldText = "",
+                expectedNewText = "abc",
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
+        val txId = state.activeTransaction.value?.id ?: return
+        state.reportProgress(txId, 0.5f)
         assertEquals(0.5f, state.masterProgress.value, 0.001f)
-        state.reportProgress(1f)
+        state.reportProgress(txId, 1f)
         assertEquals(1f, state.masterProgress.value, 0.001f)
     }
 
@@ -624,7 +649,7 @@ class ComposeEditorVisualStateTest {
         state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
 
         // B 的 "a" 只淡入到 alpha=0.5（真实当前 master progress）
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         state.onAuthoritativeLayout(layouts[2], TextRange(1, 1), 0)
 
@@ -712,7 +737,7 @@ class ComposeEditorVisualStateTest {
         state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
 
         // B 的 "a" 只淡入到 alpha=0.5
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         state.onAuthoritativeLayout(layouts[2], TextRange(3, 3), 0)
 
@@ -950,8 +975,8 @@ class ComposeEditorVisualStateTest {
         // A.startFrame = null（第一笔事务，无 active 事务可 materialize）
         assertNull("A.startFrame 应为 null", state.activeTransaction.value?.startFrame)
 
-        // 报告 progress 0.5（A 跑到一半）
-        state.reportProgress(0f)
+        // 报告 progress 0（A 跑到 0）
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0f)
 
         // 第二笔 Insert 事务到来
         state.onVisualIntent(
@@ -976,7 +1001,7 @@ class ComposeEditorVisualStateTest {
         assertNotNull("B.startFrame 应非 null（rebase A 的真实进度）", state.activeTransaction.value?.startFrame)
 
         // A 跑到 0.5（真实当前进度）
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // 第三笔 Insert 事务到来
         state.onVisualIntent(

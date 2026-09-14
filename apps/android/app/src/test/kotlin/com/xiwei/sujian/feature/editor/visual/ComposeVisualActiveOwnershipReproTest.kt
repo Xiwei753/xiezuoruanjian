@@ -97,7 +97,7 @@ class ComposeVisualActiveOwnershipReproTest {
         assertNotNull("事务 A 应生成", txA)
 
         // A 跑到 progress=0.5。
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // === 生成事务 B（SYSTEM_SUPPRESSED "abc" → "abcd"）===
         val intentB =
@@ -135,7 +135,7 @@ class ComposeVisualActiveOwnershipReproTest {
         )
 
         // B 的 master progress 到一半（overlay 不画 B 的正文，但 active 仍指向 B）。
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // === 生成事务 C（CLUSTER_ANIMATION "abcd" → "abcde"）===
         val intentC =
@@ -276,7 +276,7 @@ class ComposeVisualActiveOwnershipReproTest {
         )
 
         // B 的 master progress 到一半（overlay 不画 B 的光标动画，屏幕光标已直接在 B.end）。
-        state.reportProgress(0.5f)
+        state.reportProgress(state.activeTransaction.value?.id ?: 0L, 0.5f)
 
         // === 生成事务 C（CLUSTER_ANIMATION "abc\nd" → "abc\nde"，cursor animate=true）===
         val intentC =

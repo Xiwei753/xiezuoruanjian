@@ -5,8 +5,8 @@ use super::{EditorKernel, TextEditDelta, UndoEntry};
 
 use crate::editor::strong_types::{EditorRevision, Utf8ByteOffset, Utf8ByteRange};
 use crate::editor::transaction::{
-    choose_animation_mode, count_grapheme_clusters, text_contains_complex_grapheme, AnimationMode,
-    EditorTransactionCause, OffsetMap,
+    choose_animation_mode, compute_animation_units, count_grapheme_clusters,
+    text_contains_complex_grapheme, AnimationMode, EditorTransactionCause, OffsetMap,
 };
 
 impl EditorKernel {
@@ -396,6 +396,9 @@ impl EditorKernel {
             )
         };
 
+        let (old_animation_units, new_animation_units) =
+            compute_animation_units(animation_mode, "", text, &[], &new_affected);
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Insert,
@@ -417,6 +420,8 @@ impl EditorKernel {
                 (byte_offset, byte_offset),
                 text.len(),
             )),
+            old_animation_units,
+            new_animation_units,
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -531,6 +536,9 @@ impl EditorKernel {
             )
         };
 
+        let (old_animation_units, new_animation_units) =
+            compute_animation_units(animation_mode, &deleted_text, "", &old_affected, &[]);
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Delete,
@@ -552,6 +560,8 @@ impl EditorKernel {
                 (byte_start, byte_end_exclusive),
                 0,
             )),
+            old_animation_units,
+            new_animation_units,
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -684,6 +694,14 @@ impl EditorKernel {
             EditorOperationKind::Replace
         };
 
+        let (old_animation_units, new_animation_units) = compute_animation_units(
+            animation_mode,
+            &deleted_text,
+            replacement_text,
+            &old_affected,
+            &new_affected,
+        );
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind,
@@ -705,6 +723,8 @@ impl EditorKernel {
                 (byte_start, byte_end_exclusive),
                 replacement_text.len(),
             )),
+            old_animation_units,
+            new_animation_units,
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -810,6 +830,9 @@ impl EditorKernel {
             )
         };
 
+        let (old_animation_units, new_animation_units) =
+            compute_animation_units(animation_mode, "", &text, &[], &new_affected);
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: EditorOperationKind::Insert,
@@ -828,6 +851,8 @@ impl EditorKernel {
                 (byte_offset, byte_offset),
                 text.len(),
             )),
+            old_animation_units,
+            new_animation_units,
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
@@ -989,11 +1014,14 @@ impl EditorKernel {
             new_selection,
         });
         self.redo_stack.clear();
-        let preedit_byte_len = self
+        // #684 评论 5668108597：保存 preedit_text 用于生成 old_animation_units。
+        // composition commit 时 old_affected 是 preedit_text 的范围，old_text 应为 preedit_text。
+        let preedit_text: String = self
             .composition_session
             .as_ref()
-            .map(|s| s.preedit_text.len())
-            .unwrap_or(0);
+            .map(|s| s.preedit_text.clone())
+            .unwrap_or_default();
+        let preedit_byte_len = preedit_text.len();
         let is_composition_commit = self.composition_session.is_some();
         self.composition_session = None;
 
@@ -1034,6 +1062,21 @@ impl EditorKernel {
             )
         };
 
+        // #684: composition commit 时 old 侧视觉文本是 preedit_text，
+        // 普通 commit 时 old 侧是 deleted_text。
+        let old_text_for_units = if preedit_byte_len > 0 {
+            &preedit_text
+        } else {
+            &deleted_text
+        };
+        let (old_animation_units, new_animation_units) = compute_animation_units(
+            animation_mode,
+            old_text_for_units,
+            replacement_text,
+            &old_affected,
+            &new_affected,
+        );
+
         let visual_intent = EditorVisualIntent {
             cause,
             operation_kind: if is_composition_commit {
@@ -1060,6 +1103,8 @@ impl EditorKernel {
                 (byte_start, byte_end_exclusive),
                 replacement_text.len(),
             )),
+            old_animation_units,
+            new_animation_units,
         };
 
         let edit_result = EditorEditResult {
@@ -1279,6 +1324,9 @@ impl EditorKernel {
                 should_animate: false,
             },
             offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
+            // delete-surrounding 的 animation_mode 永远是 SystemSuppressed，无动画单元。
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         };
 
         EditorEditOutcome::Applied(EditorEditResult {
