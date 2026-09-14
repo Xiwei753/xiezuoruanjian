@@ -849,7 +849,9 @@ Rectangle {
                         font_pixel_size: settingsBackend ? settingsBackend.setting_font_size : (root.backendRef ? root.backendRef.setting_font_size : 16)
                         font_family: "serif"
                         line_spacing: settingsBackend ? settingsBackend.setting_line_spacing : 1.5
-                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled) ? Math.max(Math.round((settingsBackend.setting_font_size || 16) * 2), 28) : 0
+                        text_indent: (settingsBackend && settingsBackend.setting_auto_indent_enabled)
+                            ? Math.max(0, (settingsBackend.setting_font_size || 16) * settingsBackend.setting_auto_indent_width)
+                            : 0
                         padding: dt.sp16
                         text_color: editorController.colorToHex(dt.editorText, dt.textPrimaryHex)
                         selection_color: editorController.colorToHex(dt.primary, dt.primaryFallback)

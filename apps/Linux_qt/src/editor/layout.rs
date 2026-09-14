@@ -112,7 +112,7 @@ cpp! {{
         int pos = cursor_qchar;
         if (pos < line_start) pos = line_start;
         if (pos > line_end) pos = line_end;
-        return line.cursorToX(pos, use_trailing ? QTextLine::Trailing : QTextLine::Leading);
+        return line.cursorToX(pos, use_trailing ? QTextLine::Trailing : QTextLine::Leading) - line.x();
     }
 
     int get_paragraph_layout_x_to_cursor_on_line(
@@ -125,7 +125,7 @@ cpp! {{
         if (!line.isValid()) return 0;
         int line_start = line.textStart();
         int line_end = line_start + line.textLength();
-        int pos = line.xToCursor(x);
+        int pos = line.xToCursor(x + line.x());
         if (pos < line_start) pos = line_start;
         if (pos > line_end) pos = line_end;
         return pos;
@@ -902,14 +902,14 @@ cpp! {{
         CanonicalLineEntry entry;
         entry.qcharStart = line.textStart();
         entry.qcharEnd = line.textStart() + line.textLength();
-        entry.xPos = (qtextline_idx == 0) ? 0.0 : 0.0; // 缩进由调用方处理
+        entry.xPos = line.x();
         entry.width = line.naturalTextWidth();
         entry.height = line.height();
         entry.ascent = line.ascent();
         entry.descent = line.descent();
         entry.y = line.y();
-        entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading);
-        entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing);
+        entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading) - line.x();
+        entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing) - line.x();
 
         double logical_w = line.naturalTextWidth();
         double logical_h = line.height();
@@ -925,7 +925,7 @@ cpp! {{
             QPainter painter(&img);
             painter.setRenderHint(QPainter::TextAntialiasing, true);
             painter.setPen(QPen(textColor));
-            QPointF pos(0, line.ascent());
+            QPointF pos(-line.x(), -line.y());
             line.draw(&painter, pos);
 
             entry.imagePhysW = phys_w;
@@ -1090,8 +1090,8 @@ cpp! {{
         for (int qpos = entry.qcharStart; qpos <= entry.qcharEnd; qpos++) {
             CursorXMapEntry me;
             me.qcharPos = qpos;
-            me.xLeading = line.cursorToX(qpos, QTextLine::Leading);
-            me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing);
+            me.xLeading = line.cursorToX(qpos, QTextLine::Leading) - line.x();
+            me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing) - line.x();
             g_cursor_x_map_buf.push_back(me);
             entry.cursorXMapCount++;
         }
@@ -1153,8 +1153,8 @@ cpp! {{
             entry.ascent = line.ascent();
             entry.descent = line.descent();
             entry.y = line.y();
-            entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading);
-            entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing);
+            entry.xEndLeading = line.cursorToX(entry.qcharEnd, QTextLine::Leading) - line.x();
+            entry.xEndTrailing = line.cursorToX(entry.qcharEnd, QTextLine::Trailing) - line.x();
 
             double logical_w = wrap_w;
             double logical_h = line.height();
@@ -1173,7 +1173,7 @@ cpp! {{
                 QPainter painter(&img);
                 painter.setRenderHint(QPainter::TextAntialiasing, true);
                 painter.setPen(QPen(textColor));
-                QPointF pos(0, line.ascent());
+                QPointF pos(-line.x(), -line.y());
                 line.draw(&painter, pos);
 
                 entry.imagePhysW = phys_w;
@@ -1339,8 +1339,8 @@ cpp! {{
             for (int qpos = entry.qcharStart; qpos <= entry.qcharEnd; qpos++) {
                 CursorXMapEntry me;
                 me.qcharPos = qpos;
-                me.xLeading = line.cursorToX(qpos, QTextLine::Leading);
-                me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing);
+                me.xLeading = line.cursorToX(qpos, QTextLine::Leading) - line.x();
+                me.xTrailing = line.cursorToX(qpos, QTextLine::Trailing) - line.x();
                 g_cursor_x_map_buf.push_back(me);
                 entry.cursorXMapCount++;
             }
