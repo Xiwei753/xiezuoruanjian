@@ -58,10 +58,10 @@ function makeResult(overrides) {
     baseRevision: 1,
     newRevision: 2,
     displayPatches: [],
-    oldSelectionStart: 0,
-    oldSelectionEnd: 0,
-    newSelectionStart: 0,
-    newSelectionEnd: 0,
+    oldSelectionAnchor: 0,
+    oldSelectionHead: 0,
+    newSelectionAnchor: 0,
+    newSelectionHead: 0,
     visualIntent: {},
     compositionSession: null,
     contentDelta: {
@@ -286,7 +286,7 @@ test('applyEditResultToSnapshot: applied 正常更新 → { ok: true, snapshot: 
       replaceByteStart: 5, replaceByteEndExclusive: 5,
       insertedText: '!', resultingSelectionStart: 6, resultingSelectionEnd: 6,
     }],
-    newSelectionStart: 6, newSelectionEnd: 6,
+    newSelectionAnchor: 6, newSelectionHead: 6,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -308,7 +308,7 @@ test('applyEditResultToSnapshot: 中文 patch 正常应用 → "你好世界"', 
       replaceByteStart: 6, replaceByteEndExclusive: 6,
       insertedText: '世界', resultingSelectionStart: 4, resultingSelectionEnd: 4,
     }],
-    newSelectionStart: 4, newSelectionEnd: 4,
+    newSelectionAnchor: 4, newSelectionHead: 4,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -327,7 +327,7 @@ test('applyEditResultToSnapshot: 多 patch 顺序应用含中文 → "大家你�
       { baseRevision: 2, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0,
         insertedText: '大家', resultingSelectionStart: 0, resultingSelectionEnd: 2 },
     ],
-    newSelectionStart: 0, newSelectionEnd: 2,
+    newSelectionAnchor: 0, newSelectionHead: 2,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -341,7 +341,7 @@ test('applyEditResultToSnapshot: composition generation 流转 begin→update→
 
   const beginResult = makeResult({
     outcome: APPLIED, baseRevision: 1, newRevision: 1, displayPatches: [],
-    newSelectionStart: 1, newSelectionEnd: 1,
+    newSelectionAnchor: 1, newSelectionHead: 1,
     compositionSession: { sessionId: 42, baseRevision: 1, generation: 1 },
   })
   let r = applyEditResultToSnapshot(snapshot, beginResult)
@@ -351,7 +351,7 @@ test('applyEditResultToSnapshot: composition generation 流转 begin→update→
 
   const updateResult = makeResult({
     outcome: APPLIED, baseRevision: 1, newRevision: 1, displayPatches: [],
-    newSelectionStart: 1, newSelectionEnd: 1,
+    newSelectionAnchor: 1, newSelectionHead: 1,
     compositionSession: { sessionId: 42, baseRevision: 1, generation: 2 },
   })
   r = applyEditResultToSnapshot(snapshot, updateResult)
@@ -361,7 +361,7 @@ test('applyEditResultToSnapshot: composition generation 流转 begin→update→
 
   const finishResult = makeResult({
     outcome: APPLIED, baseRevision: 1, newRevision: 1, displayPatches: [],
-    newSelectionStart: 1, newSelectionEnd: 1,
+    newSelectionAnchor: 1, newSelectionHead: 1,
     compositionSession: null,
   })
   r = applyEditResultToSnapshot(snapshot, finishResult)
@@ -374,7 +374,7 @@ test('applyEditResultToSnapshot: noChange 保留 text 但更新 cursor/selection
   const snapshot = makeSnapshot({ text: 'hello', revision: 3, cursor: 0, selectionAnchor: 0, generation: 0 })
   const result = makeResult({
     outcome: NO_CHANGE, baseRevision: 3, newRevision: 3, displayPatches: [],
-    newSelectionStart: 2, newSelectionEnd: 4,
+    newSelectionAnchor: 2, newSelectionHead: 4,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -395,7 +395,7 @@ test('applyEditResultToSnapshot: appliedWithAdjustedSelection 正常应用', () 
       replaceByteStart: 5, replaceByteEndExclusive: 5,
       insertedText: ' world', resultingSelectionStart: 6, resultingSelectionEnd: 11,
     }],
-    newSelectionStart: 3, newSelectionEnd: 8,
+    newSelectionAnchor: 3, newSelectionHead: 8,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -415,7 +415,7 @@ test('applyEditResultToSnapshot: emoji patch 正常应用 text="😀" 后插 "Y"
       replaceByteStart: 4, replaceByteEndExclusive: 4,
       insertedText: 'Y', resultingSelectionStart: 3, resultingSelectionEnd: 3,
     }],
-    newSelectionStart: 3, newSelectionEnd: 3,
+    newSelectionAnchor: 3, newSelectionHead: 3,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -437,7 +437,7 @@ test('applyEditResultToSnapshot: staleRevision → { ok: false, reason: "staleRe
       replaceByteStart: 0, replaceByteEndExclusive: 5,
       insertedText: 'SHOULD_NOT_APPLY', resultingSelectionStart: 0, resultingSelectionEnd: 0,
     }],
-    newSelectionStart: 0, newSelectionEnd: 0,
+    newSelectionAnchor: 0, newSelectionHead: 0,
     compositionSession: { sessionId: 1, baseRevision: 1, generation: 99 },
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -483,7 +483,7 @@ test('applyEditResultToSnapshot: patch 失败（非字符边界）→ { ok: fals
       replaceByteStart: 1, replaceByteEndExclusive: 3,  // 1 非字符边界
       insertedText: 'X', resultingSelectionStart: 0, resultingSelectionEnd: 0,
     }],
-    newSelectionStart: 0, newSelectionEnd: 0,
+    newSelectionAnchor: 0, newSelectionHead: 0,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -503,7 +503,7 @@ test('applyEditResultToSnapshot: 多 patch 中途失败 → { ok: false, reason:
       { baseRevision: 2, newRevision: 3, replaceByteStart: 1, replaceByteEndExclusive: 3,  // 非边界
         insertedText: 'X', resultingSelectionStart: 0, resultingSelectionEnd: 0 },
     ],
-    newSelectionStart: 0, newSelectionEnd: 0,
+    newSelectionAnchor: 0, newSelectionHead: 0,
     compositionSession: null,
   })
   const r = applyEditResultToSnapshot(snapshot, result)
@@ -532,8 +532,8 @@ test('DTO 形状: EditorEditResult 所有字段可访问', () => {
       replaceByteStart: 0, replaceByteEndExclusive: 0,
       insertedText: 'x', resultingSelectionStart: 0, resultingSelectionEnd: 1,
     }],
-    oldSelectionStart: 0, oldSelectionEnd: 0,
-    newSelectionStart: 0, newSelectionEnd: 1,
+    oldSelectionAnchor: 0, oldSelectionHead: 0,
+    newSelectionAnchor: 0, newSelectionHead: 1,
     visualIntent: { kind: 'Insert' },
     compositionSession: { sessionId: 7, baseRevision: 1, generation: 3 },
     contentDelta: { insertedChars: 1, deletedChars: 0, insertedNonWhitespaceChars: 1, deletedNonWhitespaceChars: 0 },

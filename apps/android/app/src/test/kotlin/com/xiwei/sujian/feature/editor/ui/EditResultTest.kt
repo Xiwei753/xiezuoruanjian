@@ -62,10 +62,10 @@ class EditResultTest {
                     listOf(
                         DisplayPatch(0, 1, 2, 2, "c", 3, 3),
                     ),
-                oldSelectionStart = 2,
-                oldSelectionEnd = 2,
-                newSelectionStart = 3,
-                newSelectionEnd = 3,
+                oldSelectionAnchor = 2,
+                oldSelectionHead = 2,
+                newSelectionAnchor = 3,
+                newSelectionHead = 3,
                 visualIntent =
                     VisualIntent(
                         cause = uniffi.writer_core.EditorTransactionCauseDto.TYPING,
@@ -79,7 +79,7 @@ class EditResultTest {
             )
         assertEquals(1, result.transactionId)
         assertEquals(1, result.displayPatches.size)
-        assertEquals(3, result.newSelectionEnd)
+        assertEquals(3, result.newSelectionHead)
         assertTrue(result.isApplied())
     }
 
@@ -109,10 +109,10 @@ class EditorContentDeltaConsumptionTest {
                 baseRevision = 0u,
                 newRevision = 1u,
                 displayPatches = emptyList(),
-                oldSelectionStart = 6u,
-                oldSelectionEnd = 12u,
-                newSelectionStart = 6u,
-                newSelectionEnd = 10u,
+                oldSelectionAnchor = 6u,
+                oldSelectionHead = 12u,
+                newSelectionAnchor = 6u,
+                newSelectionHead = 10u,
                 visualIntent =
                     uniffi.writer_core.EditorVisualIntentDto(
                         cause = uniffi.writer_core.EditorTransactionCauseDto.DELETE,

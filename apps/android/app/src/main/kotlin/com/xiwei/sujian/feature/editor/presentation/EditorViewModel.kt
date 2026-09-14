@@ -543,8 +543,8 @@ class EditorViewModel(
                     targetId = targetId,
                     revision = result.newRevision.toLong(),
                     transactionId = result.transactionId.toLong(),
-                    selectionAnchorUtf8 = result.newSelectionStart.toInt(),
-                    selectionHeadUtf8 = result.newSelectionEnd.toInt(),
+                    selectionAnchorUtf8 = result.newSelectionAnchor.toInt(),
+                    selectionHeadUtf8 = result.newSelectionHead.toInt(),
                     lease = lease,
                     contentChanged = result.displayPatches.isNotEmpty(),
                 ),
@@ -566,8 +566,8 @@ class EditorViewModel(
                         oldText = edit.oldText,
                         newText = fullNewText,
                         visualIntent = editResult.visualIntent,
-                        oldSelectionEndUtf8 = result.oldSelectionEnd.toInt(),
-                        newSelectionEndUtf8 = result.newSelectionEnd.toInt(),
+                        oldSelectionHeadUtf8 = result.oldSelectionHead.toInt(),
+                        newSelectionHeadUtf8 = result.newSelectionHead.toInt(),
                     ),
                 )
             }

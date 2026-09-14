@@ -138,10 +138,10 @@ export interface EditorEditResult {
   baseRevision: number
   newRevision: number
   displayPatches: DisplayPatch[]
-  oldSelectionStart: number
-  oldSelectionEnd: number
-  newSelectionStart: number
-  newSelectionEnd: number
+  oldSelectionAnchor: number
+  oldSelectionHead: number
+  newSelectionAnchor: number
+  newSelectionHead: number
   visualIntent: EditorVisualIntent
   compositionSession: CompositionSession | null
   contentDelta: EditorContentDelta

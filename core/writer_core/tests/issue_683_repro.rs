@@ -225,54 +225,17 @@ fn repro_reverse_selection_survives_undo_redo() {
 
 // ===========================================================================
 // 复现 6：pipeline.rs set_selection() 的 NoChange 分支不更新 mirror —
-// 这是"光标锁死"的直接根因。由于 integration test 无法访问 Linux Qt pipeline
-// 的 pub(crate) API，这里用静态分析确认缺陷代码模式已被移除。
+// 这是"光标锁死"的直接根因。
 //
-// 修复后：set_selection 不再含 `NoChange(result) => Some(result)` 分支，
-// 而是统一走 apply_kernel_outcome()，NoChange 也调 apply_edit_result。
+// 该行为测试已移至 Linux_Qt pipeline 模块内（pipeline.rs 的 #[cfg(test)] mod tests），
+// 因为 CommittedTextMirror 是 pub(crate)，integration test 无法直接访问。
+// 测试链路：load "abcdef" → set_selection(3,3) → mirror.cursor == 3 →
+// delete_range(2,3) → "abdef"
+//
+// Core 层的等价行为已由复现 2 和复现 3 覆盖：
+// - 复现 2 验证 SetSelection 后 outcome 为 Applied（mirror 会跟着更新）
+// - 复现 3 验证 SetSelection 后 outcome 携带的 new_selection 能让消费方知道 cursor 在 3
 // ===========================================================================
-#[test]
-fn repro_pipeline_set_selection_nochange_branch_does_not_update_mirror() {
-    use std::fs;
-    use std::path::PathBuf;
-
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    // core/writer_core -> core -> repo root
-    let manifest_path = PathBuf::from(manifest_dir);
-    let repo_root = manifest_path
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("repo root");
-    let pipeline_path = repo_root.join("apps/Linux_qt/src/sujian_editor_item/pipeline.rs");
-    let source = fs::read_to_string(&pipeline_path)
-        .unwrap_or_else(|e| panic!("读取 {:?} 失败: {e}", pipeline_path));
-
-    // 修复后：set_selection 函数体内不应再有 `NoChange(result) => Some(result)` 分支。
-    let set_sel_start = source
-        .find("pub fn set_selection(")
-        .expect("pipeline.rs 应有 set_selection 函数");
-    let set_sel_section = &source[set_sel_start..];
-    // 取 set_selection 函数体的大致范围（到下一个 pub fn 为止）。
-    let set_sel_body_end = set_sel_section[3..]
-        .find("pub fn ")
-        .map(|i| i + 3)
-        .unwrap_or(set_sel_section.len());
-    let set_sel_body = &set_sel_section[..set_sel_body_end];
-    assert!(
-        !set_sel_body.contains("NoChange(result) => Some(result)"),
-        "FAIL: set_selection() 函数内仍含 `NoChange(result) => Some(result)` 分支。\
-         该分支返回 Some(result) 但不调 self.mirror.apply_edit_result()，\
-         mirror.cursor/selection_anchor 不更新 → 光标锁死。\
-         修复后应统一走 apply_kernel_outcome()。"
-    );
-
-    // 修复后：set_selection 应通过 apply_kernel_outcome 统一处理 outcome。
-    assert!(
-        set_sel_body.contains("apply_kernel_outcome"),
-        "FAIL: set_selection() 应通过 apply_kernel_outcome() 统一处理 outcome，\
-         NoChange 也走 mirror 更新。"
-    );
-}
 
 // ===========================================================================
 // 复现 7：EditorEditResult 用 EditorSelection { anchor, head } 表示 selection

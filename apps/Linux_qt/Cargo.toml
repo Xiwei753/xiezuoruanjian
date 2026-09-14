@@ -6,7 +6,7 @@ edition = "2021"
 [[bin]]
 name = "sujian-linux-qt"
 path = "src/main.rs"
-test = false
+test = true
 bench = false
 
 [lints]

@@ -196,8 +196,8 @@ fn test_ffi_editor_session_lifecycle() {
         ))
     };
     let data = assert_success(&v);
-    assert_eq!(data["newSelectionStart"], 0);
-    assert_eq!(data["newSelectionEnd"], 5);
+    assert_eq!(data["newSelectionAnchor"], 0);
+    assert_eq!(data["newSelectionHead"], 5);
     let rev2 = data["newRevision"].as_u64().unwrap();
 
     // delete [0, 5] → "World"

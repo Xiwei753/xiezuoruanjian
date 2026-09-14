@@ -60,10 +60,10 @@ export interface EditorEditResult {
   readonly baseRevision: number
   readonly newRevision: number
   readonly displayPatches: DisplayPatch[]
-  readonly oldSelectionStart: number
-  readonly oldSelectionEnd: number
-  readonly newSelectionStart: number
-  readonly newSelectionEnd: number
+  readonly oldSelectionAnchor: number
+  readonly oldSelectionHead: number
+  readonly newSelectionAnchor: number
+  readonly newSelectionHead: number
   readonly visualIntent: Record<string, unknown>
   readonly compositionSession: CompositionSession | null
   readonly contentDelta: EditorContentDelta
@@ -237,8 +237,8 @@ export function applyEditResultToSnapshot(
     snapshot: {
       text: newText,
       revision: result.newRevision,
-      cursor: result.newSelectionEnd,
-      selectionAnchor: result.newSelectionStart,
+      cursor: result.newSelectionHead,
+      selectionAnchor: result.newSelectionAnchor,
       generation: result.compositionSession ? result.compositionSession.generation : snapshot.generation,
       chapterId: snapshot.chapterId,
       // #629 评论6 Part B：把 Core 返回的 composition 完整状态透传到新 snapshot，

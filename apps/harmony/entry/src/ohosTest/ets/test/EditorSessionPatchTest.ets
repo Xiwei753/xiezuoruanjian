@@ -164,8 +164,8 @@ class MockEditorSessionBridge implements IEditorSessionBridge {
       baseRevision: this.mockSnapshot.revision,
       newRevision: this.mockSnapshot.revision + 1,
       displayPatches: [],
-      oldSelectionStart: 0, oldSelectionEnd: 0,
-      newSelectionStart: 0, newSelectionEnd: 0,
+      oldSelectionAnchor: 0, oldSelectionHead: 0,
+      newSelectionAnchor: 0, newSelectionHead: 0,
       visualIntent: {} as EditorVisualIntent,
       compositionSession: null,
       contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
@@ -181,8 +181,8 @@ export default function editorSessionPatchTest() {
         outcome: EditorEditOutcome.Applied,
         transactionId: 1, baseRevision: 1, newRevision: 2,
         displayPatches: [],
-        oldSelectionStart: 0, oldSelectionEnd: 0,
-        newSelectionStart: 0, newSelectionEnd: 0,
+        oldSelectionAnchor: 0, oldSelectionHead: 0,
+        newSelectionAnchor: 0, newSelectionHead: 0,
         visualIntent: {} as EditorVisualIntent,
         compositionSession: null,
         contentDelta: { insertedChars: 0, deletedChars: 0, insertedNonWhitespaceChars: 0, deletedNonWhitespaceChars: 0 } as EditorContentDelta,
@@ -208,7 +208,7 @@ export default function editorSessionPatchTest() {
       }
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.Applied, baseRevision: 1, newRevision: 2,
-        displayPatches: [patch], newSelectionStart: 6, newSelectionEnd: 6, compositionSession: null
+        displayPatches: [patch], newSelectionAnchor: 6, newSelectionHead: 6, compositionSession: null
       })
       const outcome: EditStateOutcome = state.withEditResult(result)
       expect(outcome.ok).assertTrue()
@@ -265,7 +265,7 @@ export default function editorSessionPatchTest() {
       }
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.Applied, baseRevision: 5, newRevision: 6,
-        displayPatches: [patch], newSelectionStart: 0, newSelectionEnd: 0, compositionSession: null
+        displayPatches: [patch], newSelectionAnchor: 0, newSelectionHead: 0, compositionSession: null
       })
       const outcome: EditStateOutcome = state.withEditResult(result)
       expect(outcome.ok).assertFalse()
@@ -296,7 +296,7 @@ export default function editorSessionPatchTest() {
       }
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.AppliedWithAdjustedSelection, baseRevision: 1, newRevision: 2,
-        displayPatches: [patch], newSelectionStart: 3, newSelectionEnd: 8, compositionSession: null
+        displayPatches: [patch], newSelectionAnchor: 3, newSelectionHead: 8, compositionSession: null
       })
       const outcome: EditStateOutcome = state.withEditResult(result)
       expect(outcome.ok).assertTrue()
@@ -313,7 +313,7 @@ export default function editorSessionPatchTest() {
       const state: EditorSessionState = EditorSessionState.fromCreate(42, snap)
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.NoChange, baseRevision: 3, newRevision: 3,
-        displayPatches: [], newSelectionStart: 2, newSelectionEnd: 4, compositionSession: null
+        displayPatches: [], newSelectionAnchor: 2, newSelectionHead: 4, compositionSession: null
       })
       const outcome: EditStateOutcome = state.withEditResult(result)
       expect(outcome.ok).assertTrue()
@@ -332,7 +332,7 @@ export default function editorSessionPatchTest() {
       const patch2: DisplayPatch = { baseRevision: 2, newRevision: 3, replaceByteStart: 0, replaceByteEndExclusive: 0, insertedText: 'XYZ', resultingSelectionStart: 0, resultingSelectionEnd: 3 }
       const result: EditorEditResult = makeResult({
         outcome: EditorEditOutcome.Applied, baseRevision: 1, newRevision: 3,
-        displayPatches: [patch1, patch2], newSelectionStart: 0, newSelectionEnd: 3, compositionSession: null
+        displayPatches: [patch1, patch2], newSelectionAnchor: 0, newSelectionHead: 3, compositionSession: null
       })
       const outcome: EditStateOutcome = state.withEditResult(result)
       expect(outcome.ok).assertTrue()

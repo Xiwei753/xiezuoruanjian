@@ -163,8 +163,8 @@ fun statsCountsFor(
  * @param oldText 提交前的完整正文（UTF-8），用于 oldAffectedByteRanges → UTF-16 换算。
  * @param newText 提交后的完整正文（UTF-8），用于 newAffectedByteRanges → UTF-16 换算。
  * @param visualIntent Core 返回的视觉意图（projection 层，纯数据）。
- * @param oldSelectionEndUtf8 提交前光标位置（UTF-8），用于 cursor rect 插值。
- * @param newSelectionEndUtf8 提交后光标位置（UTF-8），用于 cursor rect 插值。
+ * @param oldSelectionHeadUtf8 提交前光标位置（head，UTF-8），用于 cursor rect 插值。
+ * @param newSelectionHeadUtf8 提交后光标位置（head，UTF-8），用于 cursor rect 插值。
  */
 @Immutable
 data class CoreVisualIntentEvent(
@@ -172,6 +172,6 @@ data class CoreVisualIntentEvent(
     val oldText: String,
     val newText: String,
     val visualIntent: com.xiwei.sujian.feature.editor.projection.VisualIntent,
-    val oldSelectionEndUtf8: Int,
-    val newSelectionEndUtf8: Int,
+    val oldSelectionHeadUtf8: Int,
+    val newSelectionHeadUtf8: Int,
 )

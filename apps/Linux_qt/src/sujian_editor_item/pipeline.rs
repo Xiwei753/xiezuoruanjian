@@ -1172,3 +1172,42 @@ fn make_cursor_rect_from_caret_doc(
         baseline_y,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Issue #683 复现 6（行为测试版）：验证 set_selection 后 mirror.cursor 正确更新，
+    /// 后续 delete_range 能删除旧正文中的字符，而非因光标锁死删除错误位置。
+    ///
+    /// 链路：load "abcdef" → set_selection(3,3) → mirror.cursor == 3 →
+    /// delete_range(2,3) → "abdef"
+    #[test]
+    fn set_selection_updates_mirror_cursor_then_delete_removes_correct_char() {
+        let mut pipeline = LinuxEditorPipeline::new();
+        assert!(pipeline.load_text("abcdef".to_string(), 6));
+
+        // 光标初始在末尾 (6)。
+        assert_eq!(pipeline.mirror().cursor(), 6);
+
+        // 把光标移到 3（'c' 后面）。
+        pipeline.set_selection(3, 3);
+
+        // mirror.cursor 必须跟着更新到 3，否则光标锁死。
+        assert_eq!(
+            pipeline.mirror().cursor(),
+            3,
+            "set_selection(3,3) 后 mirror.cursor 应为 3，实际 {} — 光标锁死",
+            pipeline.mirror().cursor()
+        );
+
+        // 删除 [2,3) 即 'c'，应得到 "abdef"。
+        pipeline.delete_range(2, 3, EditorTransactionCause::Delete);
+        assert_eq!(
+            pipeline.mirror().text(),
+            "abdef",
+            "删除 'c' 后应为 'abdef'，实际 {:?}",
+            pipeline.mirror().text()
+        );
+    }
+}

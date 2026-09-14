@@ -1053,9 +1053,9 @@ impl EditorEditResultDto {
 
 /// 编辑结果分类 DTO — 平台必须区分不同结果走不同恢复路径。
 ///
-/// - `Applied`：编辑成功应用，正文已变更
+/// - `Applied`：编辑器状态发生了实际变化（可能只是 selection/cursor 变化，此时 new_revision 可以不变、display_patches 可以为空）
 /// - `AppliedWithAdjustedSelection`：编辑成功，但平台传入的选区 offset 不在 char boundary 上，内核已自动对齐
-/// - `NoChange`：命令无实际效果（如空替换、空选区变更），正文未变
+/// - `NoChange`：正文和 selection/cursor 都没有变化
 /// - `StaleRevision`：expected_revision 与当前 revision 不匹配，平台需用结果中的最新 revision 重试
 /// - `InvalidOffset`：offset 不在 UTF-8 char boundary 上或超出文本范围
 /// - `InvalidRange`：range 语义非法（如 start ≥ end 对于 delete）
