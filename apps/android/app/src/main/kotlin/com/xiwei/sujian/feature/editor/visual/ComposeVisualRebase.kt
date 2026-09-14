@@ -26,14 +26,21 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 internal object ComposeVisualRebase {
     /**
      * 物化 start_frame 的参数 — 提取以降低 [materializeStartFrame] 参数列表长度。
+     *
+     * #684 评论 5663862982 Bug2：增加 [nextOffsetMap] — 多笔 intent 合成一个屏幕事务时，
+     *   startFrame 的 targetRange 是 T0 坐标，必须用整条 chain 的 composedOffsetMap
+     *   （T0->Tn）映射。[nextReplaceBounds] 仅作回退（单笔或无 offset map 时）。
+     *   [currentSuppressedRanges] 表示"上一帧此刻已经被系统正文隐藏的 ranges"，
+     *   不是新事务刚算出的 hiddenRanges — 两者概念不能混。
      */
     data class MaterializeStartFrameParams(
         val transaction: ComposeVisualTransaction?,
         val textProgress: Float,
         val cursorProgress: Float,
         val rebaseProgress: Float,
+        val nextOffsetMap: List<VisualOffsetMapEntry>?,
         val nextReplaceBounds: VisualReplaceBounds?,
-        val hiddenRanges: List<TextRange>,
+        val currentSuppressedRanges: List<TextRange>,
         val cursorSnapshot: VisualCursorSnapshot?,
     )
 
@@ -67,8 +74,9 @@ internal object ComposeVisualRebase {
         val textProgress = params.textProgress
         val cursorProgress = params.cursorProgress
         val rebaseProgress = params.rebaseProgress
+        val nextOffsetMap = params.nextOffsetMap
         val nextReplaceBounds = params.nextReplaceBounds
-        val hiddenRanges = params.hiddenRanges
+        val currentSuppressedRanges = params.currentSuppressedRanges
         val cursorSnapshot = params.cursorSnapshot
         val prev = transaction ?: return null
         // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
@@ -77,63 +85,187 @@ internal object ComposeVisualRebase {
         val prevStartFrame = prev.startFrame
         // #641 评论 5460160958 问题3：先按当前 rebaseProgress 物化旧 startFrame slice。
         // #641 评论 5460233781 问题2：materializeRebasedSlice 可能返回 null，用 mapNotNull 过滤。
+        // 注意：materializedOlder（prev.startFrame 的 slice）与 prev 自己的 textAnimationActive 无关 —
+        // prev.startFrame 是更早事务留下的帧，必须照常物化。
         val materializedOlder =
             prevStartFrame?.slices?.mapNotNull {
                 materializeRebasedSlice(it, prev.newLayout, rebaseProgress)
             } ?: emptyList()
 
-        val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
-        val retainedSlices = collectRetainedMoveSlicesAsRebased(prev, textProgress)
+        // #684 评论 5666730754 问题1：currentSlices 和 retainedSlices 只在 prev.textAnimationActive==true
+        // 时才物化。当 prev 是 SYSTEM_SUPPRESSED（textAnimationActive=false）时，prev 的正文从未被
+        // overlay 动画过，屏幕已经在 prev 的最终正文，不应把 prev 当"半途动画"物化出来。
+        // materializedOlder（prev.startFrame 的 slice）仍然照常物化 — 那是更早事务留下的帧。
+        val currentSlices =
+            if (prev.textAnimationActive) {
+                collectCurrentSlicesAsRebased(prev, textProgress)
+            } else {
+                emptyList()
+            }
+        val retainedSlices =
+            if (prev.textAnimationActive) {
+                collectRetainedMoveSlicesAsRebased(prev, textProgress)
+            } else {
+                emptyList()
+            }
 
-        // #641 评论 5460160958 问题2+问题4：统一用 nextReplaceBounds 映射 surviving targetRange。
+        // #641 评论 5460160958 问题2+问题4：统一用 nextOffsetMap/nextReplaceBounds 映射 surviving targetRange。
         // #641 评论 5460373035 问题2：聚合所有 split 的 ownedOldRanges 计入返回 frame。
+        //
+        // #684 评论 5663862982 Bug2：优先用 nextOffsetMap（整条 chain 的 T0->Tn 映射）切 slice；
+        //   回退到 nextReplaceBounds（单笔 replace bounds）；都没有则原样保留。
         val allSlices = materializedOlder + currentSlices + retainedSlices
         val mappedSlices = mutableListOf<RebasedTextSlice>()
         val ownedOldRanges = mutableListOf<TextRange>()
-        if (nextReplaceBounds == null) {
-            mappedSlices.addAll(allSlices)
-        } else {
-            for (slice in allSlices) {
-                if (slice.targetRange == null) {
-                    mappedSlices.add(slice)
-                } else {
-                    val split = splitRebasedSliceThroughReplace(slice, nextReplaceBounds)
-                    mappedSlices.addAll(split.slices)
-                    ownedOldRanges.addAll(split.ownedOldRanges)
+        when {
+            // #684 评论 5664636035 Bug3：空 map 也必须走 splitRebasedSliceThroughOffsetMap（零存活映射，
+            // 所有 slice 都 fading）。只有 nextOffsetMap == null 才回退到 nextReplaceBounds。
+            nextOffsetMap != null -> {
+                for (slice in allSlices) {
+                    if (slice.targetRange == null) {
+                        mappedSlices.add(slice)
+                    } else {
+                        val split = splitRebasedSliceThroughOffsetMap(slice, nextOffsetMap)
+                        mappedSlices.addAll(split.slices)
+                        ownedOldRanges.addAll(split.ownedOldRanges)
+                    }
                 }
+            }
+            nextReplaceBounds != null -> {
+                for (slice in allSlices) {
+                    if (slice.targetRange == null) {
+                        mappedSlices.add(slice)
+                    } else {
+                        val split = splitRebasedSliceThroughReplace(slice, nextReplaceBounds)
+                        mappedSlices.addAll(split.slices)
+                        ownedOldRanges.addAll(split.ownedOldRanges)
+                    }
+                }
+            }
+            else -> {
+                mappedSlices.addAll(allSlices)
             }
         }
 
         val cursorRect = materializeCursorRect(prev, cursorProgress, cursorSnapshot)
-        val cursorAlpha = if (prev.cursor?.animate == true) 1f else 0f
+        val lastCursor = prev.intents.lastOrNull()?.cursor
+        val cursorAlpha = if (lastCursor?.animate == true) 1f else 0f
 
         return ComposeVisualFrame(
             slices = mappedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
-            suppressedCurrentRanges = hiddenRanges,
+            suppressedCurrentRanges = currentSuppressedRanges,
             ownedOldRanges = ownedOldRanges,
         )
     }
 
     /**
+     * #684 评论 5670182711 问题2：unit-wise 动画的局部 progress 纯函数。
+     *
+     * N 个 unit 共享一个 master progress，unit i 的局部 progress 按阶梯式分配：
+     * `((master.coerceIn(0,1) * count) - index).coerceIn(0, 1)`。
+     *
+     * 这是视觉层纯计算 — [ComposeTextAnimationOverlay] 的 drawUnitWiseAppear/
+     * drawUnitWiseDisappear 与本文件的 [collectCurrentSlicesAsRebased] 都调用它，
+     * 保证 overlay 绘制与 startFrame 物化使用同一套 alpha 公式。
+     */
+    fun unitLocalProgress(master: Float, index: Int, count: Int): Float {
+        if (count <= 0) return 0f
+        return ((master.coerceIn(0f, 1f) * count) - index).coerceIn(0f, 1f)
+    }
+
+    /**
      * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
-     * 按 [prev.textKind] 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     * 按最后一个 intent 的 textKind 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     *
+     * #684 评论 5670182711 问题2：按事务真实 unit 逐个物化，与 overlay 的
+     * drawUnitWiseAppear/drawUnitWiseDisappear 使用同一套 alpha 公式（[unitLocalProgress]）。
+     * units 为空时回退到整段 oldRanges/newRanges 行为。new unit 即使当前 alpha=0 也不能丢掉，
+     * 它仍属于被 BasicTextField 隐藏、后续 startFrame 需要继续从 0→1 的 surviving slice。
      */
     fun collectCurrentSlicesAsRebased(
         prev: ComposeVisualTransaction,
         textProgress: Float,
-    ): List<RebasedTextSlice> =
-        when (prev.textKind) {
-            TextVisualKind.Delete ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
+    ): List<RebasedTextSlice> {
+        // #684 评论 5664636035 Bug1：用屏幕事务的 textKind（按最终净变化决定），
+        // 不再从最后一笔 intent 的 textKind 读。
+        val textKind = prev.textKind
+        return when (textKind) {
+            TextVisualKind.Delete -> collectDeleteSlicesAsRebased(prev, textProgress)
             TextVisualKind.Move ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null) +
-                    survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
-            TextVisualKind.Insert ->
-                survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+                collectDeleteSlicesAsRebased(prev, textProgress) +
+                    collectInsertSlicesAsRebased(prev, textProgress)
+            TextVisualKind.Insert -> collectInsertSlicesAsRebased(prev, textProgress)
             TextVisualKind.None -> emptyList()
         }
+    }
+
+    /**
+     * #684 评论 5670182711 问题2：Insert/Move 的 new units 逐个物化为 surviving slice。
+     * alpha = [unitLocalProgress]；targetRange = sourceRange（surviving）。
+     * new unit 即使当前 alpha=0 也不丢掉 — 它仍属于被 BasicTextField 隐藏、后续
+     * startFrame 需要继续从 0→1 的 surviving slice，否则下一事务期间会一直空着，
+     * 到结束突然跳出来。units 为空时回退到整段 [survivingRebasedSlices] 行为。
+     */
+    private fun collectInsertSlicesAsRebased(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<RebasedTextSlice> {
+        val units = prev.newAnimationUnits
+        if (units.isEmpty()) {
+            return survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+        }
+        val layout = prev.newLayout ?: return emptyList()
+        val n = units.size
+        val textLen = layout.result.layoutInput.text.length
+        val slices = mutableListOf<RebasedTextSlice>()
+        for ((i, range) in units.withIndex()) {
+            if (range.start >= range.end || range.end > textLen) continue
+            slices.add(
+                RebasedTextSlice(
+                    sourceLayout = layout,
+                    sourceRange = range,
+                    sourceTranslate = Offset.Zero,
+                    sourceAlpha = unitLocalProgress(textProgress, i, n),
+                    targetRange = range,
+                ),
+            )
+        }
+        return slices
+    }
+
+    /**
+     * #684 评论 5670182711 问题2：Delete/Move 的 old units 逐个物化为 fading slice。
+     * alpha = 1f - [unitLocalProgress]；targetRange = null（只属于旧画面，rebase 期间淡出）。
+     * units 为空时回退到整段 [rebasedSlices] 行为。
+     */
+    private fun collectDeleteSlicesAsRebased(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<RebasedTextSlice> {
+        val units = prev.oldAnimationUnits
+        if (units.isEmpty()) {
+            return rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
+        }
+        val layout = prev.oldLayout ?: return emptyList()
+        val n = units.size
+        val textLen = layout.result.layoutInput.text.length
+        val slices = mutableListOf<RebasedTextSlice>()
+        for ((i, range) in units.withIndex()) {
+            if (range.start >= range.end || range.end > textLen) continue
+            slices.add(
+                RebasedTextSlice(
+                    sourceLayout = layout,
+                    sourceRange = range,
+                    sourceTranslate = Offset.Zero,
+                    sourceAlpha = 1f - unitLocalProgress(textProgress, i, n),
+                    targetRange = null,
+                ),
+            )
+        }
+        return slices
+    }
 
     /**
      * 把 [ranges] 里有效段物化成 [RebasedTextSlice]，alpha = [alphaRaw].coerceIn(0,1)。
@@ -335,6 +467,183 @@ internal object ComposeVisualRebase {
     }
 
     /**
+     * #684 评论 5664636035 Bug1：从 T0→Tn composed offset map 的补集算屏幕事务的 old/new changed ranges。
+     *
+     * 屏幕事务的 old/new changed ranges 不能用 chain.flatMap { it.oldRanges }，因为 chain 里的
+     * 第 2、3 笔 range 属于 T1/T2 中间正文，不属于屏幕事务的 T0 oldLayout / Tn newLayout。
+     * 正确做法：oldRanges = [0,oldLength) 中没有被 composed map old 区间覆盖的部分；
+     * newRanges = [0,newLength) 中没有被 composed map new 区间覆盖的部分。
+     *
+     * @param map 整条 chain 合成后的 T0->Tn offset map（null 时返回空列表）。
+     * @param oldLength T0 旧正文长度。
+     * @param newLength Tn 新正文长度。
+     * @return [FrameChangedRanges] — 屏幕坐标的 old/new changed ranges。
+     */
+    fun changedRangesFromComposedMap(
+        map: List<VisualOffsetMapEntry>?,
+        oldLength: Int,
+        newLength: Int,
+    ): FrameChangedRanges {
+        if (map == null) return FrameChangedRanges(emptyList(), emptyList())
+        val oldRanges = complementRanges(map.map { TextRange(it.oldStart, it.oldStart + it.length) }, oldLength)
+        val newRanges = complementRanges(map.map { TextRange(it.newStart, it.newStart + it.length) }, newLength)
+        return FrameChangedRanges(oldRanges, newRanges)
+    }
+
+    /**
+     * 计算 [0, totalLength) 中没有被 [covered] 区间覆盖的部分 — 补集。
+     */
+    private fun complementRanges(
+        covered: List<TextRange>,
+        totalLength: Int,
+    ): List<TextRange> {
+        if (totalLength <= 0) return emptyList()
+        val sorted = covered.filter { it.start < it.end }.sortedBy { it.start }
+        val result = mutableListOf<TextRange>()
+        var pos = 0
+        for (range in sorted) {
+            if (range.start > pos) {
+                result.add(TextRange(pos, minOf(range.start, totalLength)))
+            }
+            pos = maxOf(pos, range.end)
+            if (pos >= totalLength) break
+        }
+        if (pos < totalLength) {
+            result.add(TextRange(pos, totalLength))
+        }
+        return result
+    }
+
+    /**
+     * #684 评论 5664636035 Bug1：屏幕事务的 old/new changed ranges — 从 composed offset map 补集算出。
+     */
+    data class FrameChangedRanges(
+        val oldRanges: List<TextRange>,
+        val newRanges: List<TextRange>,
+    )
+
+    /**
+     * #684 评论 5663862982 Bug2：按 composed offset map 切 surviving slice。
+     *
+     * 多笔 intent（T0->T1->...->Tn）合成一个屏幕事务时，slice.targetRange 是 T0 坐标，
+     * [offsetMap] 是整条 chain 合成后的 T0->Tn 映射。对 targetRange 的每个部分：
+     * - 与 offsetMap entry 的 old range 有交集 → 映射到 entry 的 new range（surviving）；
+     * - 不在任何 entry 里 → fading slice（targetRange=null）+ ownedOldRange。
+     *
+     * 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
+     * 若长度不等（不应发生），不静默复制整段——结束该 surviving 映射，按旧画面离场处理：
+     * 返回 SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())。
+     *
+     * @param slice 待切分的 surviving slice（targetRange 非 null）。
+     * @param offsetMap 整条 chain 合成后的 T0->Tn offset map 条目列表。
+     */
+    fun splitRebasedSliceThroughOffsetMap(
+        slice: RebasedTextSlice,
+        offsetMap: List<VisualOffsetMapEntry>,
+    ): SplitRebasedResult {
+        val oldTarget = slice.targetRange ?: return SplitRebasedResult(listOf(slice), emptyList())
+        val sourceRange = slice.sourceRange
+        // 前提：sourceRange 长度应等于 oldTarget 长度（同一逻辑文本）
+        if ((sourceRange.end - sourceRange.start) != (oldTarget.end - oldTarget.start)) {
+            return SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())
+        }
+        val outSlices = mutableListOf<RebasedTextSlice>()
+        val ownedOldRanges = mutableListOf<TextRange>()
+        val sortedEntries = offsetMap.sortedBy { it.oldStart }
+        var pos = oldTarget.start
+        for (entry in sortedEntries) {
+            val entryOldEnd = entry.oldStart + entry.length
+            if (entryOldEnd <= pos) continue
+            if (entry.oldStart >= oldTarget.end) break
+            // gap 部分 [pos, entry.oldStart) → fading（不在任何 entry 里，不存活）
+            val gapEnd = minOf(entry.oldStart, oldTarget.end)
+            if (pos < gapEnd) {
+                val sourceOffset = pos - oldTarget.start
+                val len = gapEnd - pos
+                outSlices.add(
+                    slice.copy(
+                        sourceRange = TextRange(
+                            sourceRange.start + sourceOffset,
+                            sourceRange.start + sourceOffset + len,
+                        ),
+                        targetRange = null,
+                    ),
+                )
+                ownedOldRanges.add(TextRange(pos, gapEnd))
+            }
+            // overlap 部分 → surviving，映射到 new range
+            val overlapStart = maxOf(pos, entry.oldStart)
+            val overlapEnd = minOf(entryOldEnd, oldTarget.end)
+            if (overlapStart < overlapEnd) {
+                val sourceOffset = overlapStart - oldTarget.start
+                val len = overlapEnd - overlapStart
+                val newStart = entry.newStart + (overlapStart - entry.oldStart)
+                outSlices.add(
+                    slice.copy(
+                        sourceRange = TextRange(
+                            sourceRange.start + sourceOffset,
+                            sourceRange.start + sourceOffset + len,
+                        ),
+                        targetRange = TextRange(newStart, newStart + len),
+                    ),
+                )
+            }
+            pos = maxOf(pos, entryOldEnd)
+        }
+        // 尾部 gap [pos, oldTarget.end) → fading
+        if (pos < oldTarget.end) {
+            val sourceOffset = pos - oldTarget.start
+            val len = oldTarget.end - pos
+            outSlices.add(
+                slice.copy(
+                    sourceRange = TextRange(
+                        sourceRange.start + sourceOffset,
+                        sourceRange.start + sourceOffset + len,
+                    ),
+                    targetRange = null,
+                ),
+            )
+            ownedOldRanges.add(TextRange(pos, oldTarget.end))
+        }
+        return SplitRebasedResult(outSlices, ownedOldRanges)
+    }
+
+    /**
+     * #684 评论 5663862982 Bug2：把 suppressed ranges（T0 坐标）按 composed offset map
+     * 映射到 Tn 坐标，只返回 surviving 的 new ranges。
+     *
+     * 多笔 intent 合成一个屏幕事务时，上一帧的 suppressedCurrentRanges 是 T0 坐标，
+     * 必须用整条 chain 的 composedOffsetMap（T0->Tn）映射到当前 new text 坐标，
+     * 而不是最后一笔 replaceBounds（T(n-1)->Tn 坐标）。
+     *
+     * 不在任何 entry 里的部分不存活（被编辑/删除），丢弃。
+     *
+     * @param ranges 上一帧的 suppressed ranges（T0 坐标）。
+     * @param offsetMap 整条 chain 合成后的 T0->Tn offset map，null 或空时返回空列表。
+     */
+    fun mapSuppressedRangesThroughOffsetMap(
+        ranges: List<TextRange>,
+        offsetMap: List<VisualOffsetMapEntry>?,
+    ): List<TextRange> {
+        if (offsetMap == null || offsetMap.isEmpty()) return emptyList()
+        val sortedEntries = offsetMap.sortedBy { it.oldStart }
+        val result = mutableListOf<TextRange>()
+        for (range in ranges) {
+            if (range.start >= range.end) continue
+            for (entry in sortedEntries) {
+                val entryOldEnd = entry.oldStart + entry.length
+                val overlapStart = maxOf(range.start, entry.oldStart)
+                val overlapEnd = minOf(range.end, entryOldEnd)
+                if (overlapStart < overlapEnd) {
+                    val newStart = entry.newStart + (overlapStart - entry.oldStart)
+                    result.add(TextRange(newStart, newStart + (overlapEnd - overlapStart)))
+                }
+            }
+        }
+        return result
+    }
+
+    /**
      * cursor rect：按 [cursorProgress] 插值 old→new。无 cursor 动画时返回 null。
      */
     fun materializeCursorRect(
@@ -342,7 +651,8 @@ internal object ComposeVisualRebase {
         cursorProgress: Float,
         cursorSnapshot: VisualCursorSnapshot?,
     ): Rect? {
-        if (cursorSnapshot == null || prev.cursor?.animate != true) return null
+        val lastCursor = prev.intents.lastOrNull()?.cursor
+        if (cursorSnapshot == null || lastCursor?.animate != true) return null
         val left =
             lerpFloat(
                 cursorSnapshot.oldCursorRect.left,
@@ -454,6 +764,30 @@ internal object ComposeVisualRebase {
         t: Float,
     ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
+    /**
+     * #684 评论 5663032418 断点1：对 [Rect] 做 lerp —
+     * 中断续跑时把当前活跃事务的 cursorStartRect/cursorEndRect 按 masterProgress 插值，
+     * 得到当前屏幕上的光标位置，作为下一笔事务的 cursorStartRect，
+     * 与文字用 masterProgress 物化保持一致。
+     *
+     * [startRect] / [endRect] 任一为 null 时返回 null（无光标动画可物化）。
+     * [progress] 会被 coerceIn(0, 1)。
+     */
+    fun interpolateCursorRect(
+        startRect: Rect?,
+        endRect: Rect?,
+        progress: Float,
+    ): Rect? {
+        if (startRect == null || endRect == null) return null
+        val t = progress.coerceIn(0f, 1f)
+        return Rect(
+            left = lerpFloat(startRect.left, endRect.left, t),
+            top = lerpFloat(startRect.top, endRect.top, t),
+            right = lerpFloat(startRect.right, endRect.right, t),
+            bottom = lerpFloat(startRect.bottom, endRect.bottom, t),
+        )
+    }
+
     /** 安全获取 path bounds — range 无效或越界时返回 null。 */
     fun safePathBounds(
         result: TextLayoutResult,
@@ -474,13 +808,8 @@ internal object ComposeVisualRebase {
      *
      * #641 评论 问题2：old/new selection end 从 [CursorVisualIntent] 读取。
      *
-     * #666：布局和事务正文严格配对。调用 `getCursorRect` 之前先检查：
-     * - `previousSnapshot.result.layoutInput.text.text == intent.expectedOldText`
-     * - `currentSnapshot.result.layoutInput.text.text == intent.expectedNewText`
-     * - old/new cursor offset 属于各自 layout 的合法 UTF-16 范围
-     * 任一不匹配返回 null，表示"对应的新布局还没到"，
-     * 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
-     * `intent` 为 null 时（向后兼容）跳过 expectedOldText/expectedNewText 检查，但仍检查 offset 范围。
+     * #644 评论 #684：布局验证已移至 [ComposeVisualFrameCoordinator]，
+     * 本方法只检查 offset 范围合法性。
      */
     fun buildCursorSnapshot(
         previousSnapshot: ComposeLayoutSnapshot?,
@@ -492,14 +821,8 @@ internal object ComposeVisualRebase {
         val cursor = intent?.cursor
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
-        // #666：布局和事务正文严格配对。不匹配说明对应的新布局还没到，返回 null
-        // 而不是用 coerceIn() 把越界 offset 硬夹回去拿错布局继续画。
         val oldText = prev.result.layoutInput.text.text
         val newText = curr.result.layoutInput.text.text
-        if (intent != null) {
-            if (oldText != intent.expectedOldText) return null
-            if (newText != intent.expectedNewText) return null
-        }
         // old/new cursor offset 必须属于各自 layout 的合法 UTF-16 范围。
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
@@ -559,6 +882,544 @@ internal object ComposeVisualRebase {
             )
         return computeRetainedMovesLoop(ctx)
     }
+
+    /**
+     * #644 评论 #684：按 offset map chain 合并整条事务链的 retained moves。
+     *
+     * chain 中每一笔 [EditorVisualIntent] 的 [VisualOffsetMap] 顺序合成（[composeOffsetMapChain]），
+     * 将最初屏幕 old UTF-16 range 映射到最终屏幕 new UTF-16 range。
+     * 然后只比较 old/new [TextLayoutResult] 的真实几何，位置没变就不画，位置变化才生成 [RetainedMove]。
+     *
+     * 这样输入导致软换行、Enter 导致硬换行、删除换行导致两段合并、
+     * 快速连续 Backspace 导致多次回流，全部走同一个 retained reflow，
+     * 不再通过 `\n`、长度、previous/current 猜，也不再只用最后一笔的 replaceBounds
+     * 去对应整帧最开始的 old layout（第二/三笔快速删除的坐标是中间文本）。
+     *
+     * 当 chain 中任一 intent 缺失 offset map 时，回退到旧式 suffix 线性平移算法
+     * （取最后一笔 replaceBounds / 所有 ranges 摊平），保证无 offset map 的降级路径仍然可用。
+     *
+     * @param oldLayout 旧布局快照（最初屏幕 old 文本）。
+     * @param newLayout 新布局快照（最终屏幕 new 文本）。
+     * @param chain Core intent 链 — 按到达顺序排列。
+     */
+    fun computeRetainedMoves(
+        oldLayout: ComposeLayoutSnapshot?,
+        newLayout: ComposeLayoutSnapshot?,
+        chain: List<EditorVisualIntent>,
+    ): List<RetainedMove> {
+        val prev = oldLayout ?: return emptyList()
+        val curr = newLayout ?: return emptyList()
+        if (chain.isEmpty()) return emptyList()
+
+        // 当整条链都有 offset map 时，按合成后的 map 找存活 range，再比较真实几何。
+        val composed = composeOffsetMapChain(chain)
+        if (composed != null) {
+            return computeRetainedMovesFromComposedMap(prev, curr, composed)
+        }
+
+        // 回退：旧式 suffix 线性平移（取最后一笔 replaceBounds / 所有 ranges 摊平）。
+        return computeRetainedMovesLegacy(prev, curr, chain)
+    }
+
+    /**
+     * #644 评论 #684 + 评论 5662132136 第1项 + 评论 5663032418 断点2：
+     * 用合成后的 offset map 计算 retained moves。
+     *
+     * IDENTITY 与 SHIFTED 都表示"这段旧文字在新正文里仍然存在（内容相同）"，
+     * 只是 IDENTITY 的 offset 没变、SHIFTED 的 offset 变了（被前后增删平移）。
+     * 内容真正变化/被编辑/删除的区域 Core 根本不生成映射条目，所以不在 composed map 里。
+     *
+     * 因此两种 entry 都进入 oldRange -> newRange 的真实几何比较；
+     * 只有 old/new [TextLayoutResult] 的真实 rect 真变了才生成 [RetainedMove]。
+     * kind 只说明逻辑 offset 是否平移，不决定"画不画 move"。
+     *
+     * #684 评论 5663032418 断点2：不能再先合并相邻 entry 再整段算一个 dx/dy —
+     * 软换行场景下同一段后缀里前半段仍在原行只横向移动、中间一段被挤到下一行、
+     * 更后面的视觉行只纵向移动，不可能共用一个 bounding box 和一个位移向量。
+     *
+     * 新策略：对每个合成后的 mapped entry 再按 old/new 两边真实视觉行边界切片，
+     * 每个 chunk 单独比较 old/new rect，只有 dx/dy 一致且 old/new 都连续的 chunk
+     * 才合并成 RetainedMove。切点避开 surrogate pair / code point 中间。
+     */
+    private fun computeRetainedMovesFromComposedMap(
+        prev: ComposeLayoutSnapshot,
+        curr: ComposeLayoutSnapshot,
+        composed: List<VisualOffsetMapEntry>,
+    ): List<RetainedMove> {
+        val moves = mutableListOf<RetainedMove>()
+        for (entry in composed) {
+            val oldStart = entry.oldStart
+            val newStart = entry.newStart
+            val length = entry.length
+            if (length <= 0) continue
+            if (oldStart + length > prev.result.layoutInput.text.length) continue
+            if (newStart + length > curr.result.layoutInput.text.length) continue
+
+            // 按两边视觉行边界切片 — 每个 chunk 单独算 dx/dy。
+            val chunks = splitEntryByVisualLines(prev.result, curr.result, oldStart, newStart, length)
+            // 只有 dx/dy 一致且 old/new 都连续的 chunk 才合并。
+            mergeChunksIntoMoves(chunks, moves)
+        }
+        return moves
+    }
+
+    /**
+     * #684 评论 5663032418 断点2：把一个合成 entry 按 old/new 两边真实视觉行边界切片。
+     *
+     * 切点是 old/new 两边各自视觉行结束 offset 的并集（映射回 entry 内部偏移），
+     * 取两边更早的边界切成 chunk。切点避开 surrogate pair / code point 中间。
+     *
+     * 返回每个 chunk 的 (oldRange, newRange, oldBounds, newBounds)；
+     * bounds 为 null 的 chunk 会被保留为 null（调用方据此跳过合并）。
+     */
+    private fun splitEntryByVisualLines(
+        prevResult: TextLayoutResult,
+        currResult: TextLayoutResult,
+        oldStart: Int,
+        newStart: Int,
+        length: Int,
+    ): List<RetainedMoveChunk> {
+        val oldText = prevResult.layoutInput.text
+        val newText = currResult.layoutInput.text
+        // 收集所有切点（相对 entry 起始的偏移 0..length）。
+        val cutOffsets = sortedSetOf(0, length)
+        // old 侧视觉行边界
+        var scan = 0
+        while (scan < length) {
+            val oldOffset = oldStart + scan
+            if (oldOffset >= oldText.length) break
+            val oldLine = prevResult.getLineForOffset(oldOffset)
+            val oldLineEnd = prevResult.getLineEnd(oldLine)
+            val nextCut = oldLineEnd - oldStart
+            if (nextCut in (scan + 1)..length) {
+                cutOffsets.add(avoidSurrogateCut(oldText, oldStart, nextCut, length))
+            }
+            scan = oldLineEnd - oldStart
+            if (scan <= 0) scan = 1 // 防御：避免死循环
+        }
+        // new 侧视觉行边界
+        scan = 0
+        while (scan < length) {
+            val newOffset = newStart + scan
+            if (newOffset >= newText.length) break
+            val newLine = currResult.getLineForOffset(newOffset)
+            val newLineEnd = currResult.getLineEnd(newLine)
+            val nextCut = newLineEnd - newStart
+            if (nextCut in (scan + 1)..length) {
+                cutOffsets.add(avoidSurrogateCut(newText, newStart, nextCut, length))
+            }
+            scan = newLineEnd - newStart
+            if (scan <= 0) scan = 1
+        }
+
+        // 按切点生成 chunk。
+        val chunks = mutableListOf<RetainedMoveChunk>()
+        val sortedCuts = cutOffsets.toList()
+        for (i in 0 until sortedCuts.size - 1) {
+            val chunkStart = sortedCuts[i]
+            val chunkEnd = sortedCuts[i + 1]
+            if (chunkEnd <= chunkStart) continue
+            val oldRange = TextRange(oldStart + chunkStart, oldStart + chunkEnd)
+            val newRange = TextRange(newStart + chunkStart, newStart + chunkEnd)
+            val oldBounds = safePathBounds(prevResult, oldRange)
+            val newBounds = safePathBounds(currResult, newRange)
+            if (oldBounds == null || newBounds == null) continue
+            val dx = newBounds.left - oldBounds.left
+            val dy = newBounds.top - oldBounds.top
+            chunks.add(
+                RetainedMoveChunk(
+                    oldRange = oldRange,
+                    newRange = newRange,
+                    dx = dx,
+                    dy = dy,
+                ),
+            )
+        }
+        return chunks
+    }
+
+    /**
+     * 调整切点以避开 surrogate pair / code point 中间。
+     * 如果 cutOffset 处正好切在一个 surrogate pair 中间，向前退一位。
+     */
+    private fun avoidSurrogateCut(
+        text: AnnotatedString,
+        base: Int,
+        cutOffset: Int,
+        maxOffset: Int,
+    ): Int {
+        if (cutOffset <= 0 || cutOffset >= maxOffset) return cutOffset.coerceIn(0, maxOffset)
+        val absCut = base + cutOffset
+        if (absCut in 1 until text.length &&
+            text[absCut - 1].isHighSurrogate() &&
+            text[absCut].isLowSurrogate()
+        ) {
+            return (cutOffset - 1).coerceIn(0, maxOffset)
+        }
+        return cutOffset
+    }
+
+    /**
+     * #684 评论 5663032418 断点2：单个 chunk — 一段 old/new range + 算好的 dx/dy。
+     */
+    private data class RetainedMoveChunk(
+        val oldRange: TextRange,
+        val newRange: TextRange,
+        val dx: Float,
+        val dy: Float,
+    )
+
+    /**
+     * #684 评论 5663032418 断点2：把 chunk 合并成 RetainedMove —
+     * 只有 dx/dy 一致（容差 1f）且 old/new 都连续的 chunk 才合并。
+     */
+    private fun mergeChunksIntoMoves(
+        chunks: List<RetainedMoveChunk>,
+        out: MutableList<RetainedMove>,
+    ) {
+        if (chunks.isEmpty()) return
+        var mergeStartIdx = 0
+        for (i in 1..chunks.size) {
+            val prevChunk = chunks[i - 1]
+            val canContinue =
+                i < chunks.size &&
+                    kotlin.math.abs(chunks[i].dx - prevChunk.dx) <= 1f &&
+                    kotlin.math.abs(chunks[i].dy - prevChunk.dy) <= 1f &&
+                    chunks[i].oldRange.start == prevChunk.oldRange.end &&
+                    chunks[i].newRange.start == prevChunk.newRange.end
+            if (!canContinue) {
+                // 把 [mergeStartIdx, i) 这段合并成一个 RetainedMove（如果位移真变了）。
+                val first = chunks[mergeStartIdx]
+                val last = chunks[i - 1]
+                val dx = first.dx
+                val dy = first.dy
+                if (kotlin.math.abs(dx) > 1f || kotlin.math.abs(dy) > 1f) {
+                    out.add(
+                        RetainedMove(
+                            oldRange = TextRange(first.oldRange.start, last.oldRange.end),
+                            newRange = TextRange(first.newRange.start, last.newRange.end),
+                        ),
+                    )
+                }
+                mergeStartIdx = i
+            }
+        }
+    }
+
+    /**
+     * #644 评论 #684：回退路径 — 取最后一个 replaceBounds / 所有 ranges 摊平做线性平移。
+     */
+    private fun computeRetainedMovesLegacy(
+        prev: ComposeLayoutSnapshot,
+        curr: ComposeLayoutSnapshot,
+        chain: List<EditorVisualIntent>,
+    ): List<RetainedMove> {
+        val lastWithBounds = chain.lastOrNull { it.replaceBounds != null }
+        val replaceBounds = lastWithBounds?.replaceBounds
+
+        val effectiveOldRanges = chain.flatMap { it.oldRanges }.filter { it.start < it.end }
+        val effectiveNewRanges = chain.flatMap { it.newRanges }.filter { it.start < it.end }
+
+        val oldSuffixStart =
+            replaceBounds?.oldEnd
+                ?: (effectiveOldRanges.maxOfOrNull { it.end } ?: 0)
+        val newSuffixStart =
+            replaceBounds?.newEnd
+                ?: (effectiveNewRanges.maxOfOrNull { it.end } ?: 0)
+
+        val oldText = prev.result.layoutInput.text
+        val newText = curr.result.layoutInput.text
+        val oldTextLen = oldText.length
+        val newTextLen = newText.length
+
+        if (oldSuffixStart >= oldTextLen || newSuffixStart >= newTextLen) return emptyList()
+
+        val ctx =
+            RetainedMovesContext(
+                prev = prev,
+                curr = curr,
+                oldText = oldText,
+                newText = newText,
+                oldTextLen = oldTextLen,
+                newTextLen = newTextLen,
+                oldSuffixStart = oldSuffixStart,
+                newSuffixStart = newSuffixStart,
+            )
+        return computeRetainedMovesLoop(ctx)
+    }
+
+    /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 newAnimationUnits
+     * 合成到最终 Tn 坐标。
+     *
+     * 第 i 笔的 newAnimationUnits 在 T(i+1) 坐标。顺着后续 intent 的 offsetMap
+     * 一路映射到最终 Tn：每一步用该笔 offsetMap.entries 的 old→new 映射，unit range
+     * 与 entry 的 old range 求交，交集映射到 new range；不在任何 entry 里的部分
+     * 丢弃（被删除/改掉）。如果某笔没有 offsetMap（null），无法跨笔映射，保留原坐标。
+     *
+     * 保留 chain 的先后顺序和 Core 原来的 unit 边界；只去掉完全重复的 range，
+     * 不把相邻 unit 再 merge 成一块。单笔 chain 时等价于直接返回该笔的 newAnimationUnits。
+     */
+    fun composeNewAnimationUnitsToFinal(
+        chain: List<EditorVisualIntent>,
+    ): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val result = mutableListOf<TextRange>()
+        for (i in chain.indices) {
+            var units: List<TextRange> = chain[i].newAnimationUnits
+            // 从第 i+1 笔开始，用每笔的 offsetMap 把 unit 从 T(i+1) 映射到 Tn
+            mapForwardLoop@ for (j in (i + 1) until chain.size) {
+                // #684 评论 5670182711 问题1：循环标签只能用 break/continue，不能用 return。
+                // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+                // 该阶段坐标不变，直接跳过该阶段继续映射后续正文事务。
+                val entries = chain[j].offsetMap?.entries
+                if (entries == null) continue@mapForwardLoop
+                if (entries.isEmpty()) {
+                    // 空 entries 表示整段删除/替换，无存活映射，所有 unit 丢失
+                    units = emptyList()
+                    break@mapForwardLoop
+                }
+                units = mapRangesForwardThroughOffsetMap(units, entries)
+            }
+            result.addAll(units)
+        }
+        return deduplicateRanges(result)
+    }
+
+    /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 oldAnimationUnits
+     * 合成回最初 T0 坐标。
+     *
+     * 第 i 笔的 oldAnimationUnits 在 Ti 坐标。把前面 intent 的 offsetMap 的
+     * entry 反向使用（new→old），从 Ti 一路映射回 T0：每一步用该笔 offsetMap.entries
+     * 的 new→old 逆映射，unit range 与 entry 的 new range 求交，交集映射到 old range；
+     * 不在任何 entry 里的部分丢弃（在 T0 中没有前身）。如果某笔没有 offsetMap（null），
+     * 无法跨笔映射，保留原坐标。
+     *
+     * 保留 chain 的先后顺序和 Core 原来的 unit 边界；只去掉完全重复的 range，
+     * 不把相邻 unit 再 merge 成一块。单笔 chain 时等价于直接返回该笔的 oldAnimationUnits。
+     */
+    fun composeOldAnimationUnitsToBase(
+        chain: List<EditorVisualIntent>,
+    ): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val result = mutableListOf<TextRange>()
+        for (i in chain.indices) {
+            var units: List<TextRange> = chain[i].oldAnimationUnits
+            // 从第 i-1 笔开始反向，用每笔的 offsetMap 的逆映射把 unit 从 Ti 映射回 T0
+            mapBackwardLoop@ for (j in (i - 1) downTo 0) {
+                // #684 评论 5670182711 问题1：循环标签只能用 break/continue，不能用 return。
+                // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+                // 该阶段坐标不变，直接跳过该阶段继续映射前面的正文事务。
+                val entries = chain[j].offsetMap?.entries
+                if (entries == null) continue@mapBackwardLoop
+                if (entries.isEmpty()) {
+                    units = emptyList()
+                    break@mapBackwardLoop
+                }
+                units = mapRangesBackwardThroughOffsetMap(units, entries)
+            }
+            result.addAll(units)
+        }
+        return deduplicateRanges(result)
+    }
+
+    /**
+     * 把 ranges 沿 offsetMap entries 的 old→new 方向映射。
+     * 每个 range 与每个 entry 的 old range [oldStart, oldStart+length) 求交，
+     * 交集映射到 new range。不在任何 entry 里的部分丢弃。
+     */
+    private fun mapRangesForwardThroughOffsetMap(
+        ranges: List<TextRange>,
+        entries: List<VisualOffsetMapEntry>,
+    ): List<TextRange> {
+        val result = mutableListOf<TextRange>()
+        for (unit in ranges) {
+            if (unit.start >= unit.end) continue
+            for (entry in entries) {
+                val oldStart = entry.oldStart
+                val oldEnd = entry.oldStart + entry.length
+                val overlapStart = maxOf(unit.start, oldStart)
+                val overlapEnd = minOf(unit.end, oldEnd)
+                if (overlapStart >= overlapEnd) continue
+                val newStart = entry.newStart + (overlapStart - oldStart)
+                val newEnd = entry.newStart + (overlapEnd - oldStart)
+                result.add(TextRange(newStart, newEnd))
+            }
+        }
+        return result
+    }
+
+    /**
+     * 把 ranges 沿 offsetMap entries 的 new→old 方向（逆映射）映射。
+     * 每个 range 与每个 entry 的 new range [newStart, newStart+length) 求交，
+     * 交集映射到 old range。不在任何 entry 里的部分丢弃。
+     */
+    private fun mapRangesBackwardThroughOffsetMap(
+        ranges: List<TextRange>,
+        entries: List<VisualOffsetMapEntry>,
+    ): List<TextRange> {
+        val result = mutableListOf<TextRange>()
+        for (unit in ranges) {
+            if (unit.start >= unit.end) continue
+            for (entry in entries) {
+                val newStart = entry.newStart
+                val newEnd = entry.newStart + entry.length
+                val overlapStart = maxOf(unit.start, newStart)
+                val overlapEnd = minOf(unit.end, newEnd)
+                if (overlapStart >= overlapEnd) continue
+                val oldStart = entry.oldStart + (overlapStart - newStart)
+                val oldEnd = entry.oldStart + (overlapEnd - newStart)
+                result.add(TextRange(oldStart, oldEnd))
+            }
+        }
+        return result
+    }
+
+    /**
+     * 去掉完全重复的 range（start 和 end 都相同），不合并相邻 range。
+     * 保留首次出现的顺序。
+     */
+    private fun deduplicateRanges(ranges: List<TextRange>): List<TextRange> {
+        val seen = LinkedHashSet<Pair<Int, Int>>()
+        val result = mutableListOf<TextRange>()
+        for (range in ranges) {
+            val key = range.start to range.end
+            if (seen.add(key)) {
+                result.add(range)
+            }
+        }
+        return result
+    }
+
+    /**
+     * #644 评论 #684：合成整条 offset map chain —
+     * 把每笔 intent 的 [VisualOffsetMap] 顺序合成，得到最初屏幕 old UTF-16 range
+     * → 最终屏幕 new UTF-16 range 的 map。
+     *
+     * 合成方式：把累积 map 维护成「初始 old 文本坐标 → 当前 frontier 文本坐标」的线段表；
+     * 对每一阶段（intent[i] 的 old→new map），把当前 frontier 与这一阶段 map 求交，
+     * 交集映射回初始 old 坐标并映射到下一阶段 new 坐标。逐笔做完后，acc 的坐标已经是最初 old → 最终 new。
+     *
+     * 仅当 chain 中每一笔都带非空 offset map 才返回非 null；否则返回 null，
+     * 调用方回退到旧式 suffix 算法。
+     */
+    fun composeOffsetMapChain(
+        chain: List<EditorVisualIntent>,
+    ): List<VisualOffsetMapEntry>? {
+        if (chain.isEmpty()) return null
+        // #684 评论 5664636035 Bug3：空 offsetMap.entries 是合法"零存活映射"（整段删除/整段替换），
+        // 不能当成没有 map。只有 offsetMap == null 才表示该笔没有 offset map。
+        if (chain.any { it.offsetMap == null }) return null
+
+        // acc：初始 old 文本坐标 → 当前 frontier 文本坐标。
+        val initialOldLen = chain.first().expectedOldText.length
+        var acc: List<AccSegment> =
+            listOf(
+                AccSegment(
+                    oldStart = 0,
+                    newStart = 0,
+                    length = initialOldLen,
+                    kind = VisualOffsetMapKind.IDENTITY,
+                ),
+            )
+
+        for (intent in chain) {
+            val entries = intent.offsetMap?.entries ?: return null
+            val stage = buildStageSegments(entries)
+            acc = composeStage(acc, stage)
+        }
+
+        return acc.map {
+            VisualOffsetMapEntry(
+                oldStart = it.oldStart,
+                newStart = it.newStart,
+                length = it.length,
+                kind = it.kind,
+            )
+        }
+    }
+
+    /**
+     * #644 评论 #684 + 评论 5662132136 第1项：把单阶段 offset map entries 铺成线段表，
+     * **只由 Core 给出的 entries 构成**。
+     *
+     * 绝对不要补 identity gap：Core 故意不给中间编辑区生成映射，"无 entry" 就是
+     * "这段旧文字没有对应的新文字"（被编辑/删除/替换）。把这些区间补成 IDENTITY 会把
+     * 已删除文字当成存活文字参与 chain 合成，正好打坏快速删除和换行回流。
+     *
+     * entry 之间的空洞直接没有 segment；[composeStage] 只对真实映射段求交。
+     */
+    private fun buildStageSegments(
+        entries: List<VisualOffsetMapEntry>,
+    ): List<StageSegment> {
+        return entries
+            .sortedBy { it.oldStart }
+            .map { e ->
+                StageSegment(
+                    oldStart = e.oldStart,
+                    newStart = e.newStart,
+                    length = e.length,
+                    kind = e.kind,
+                )
+            }
+    }
+
+    /**
+     * #644 评论 #684：把累积 acc（initial old → frontier）与单阶段 stage（frontier → next frontier）
+     * 求交合成，返回新的 acc（initial old → next frontier）。
+     */
+    private fun composeStage(
+        acc: List<AccSegment>,
+        stage: List<StageSegment>,
+    ): List<AccSegment> {
+        val result = mutableListOf<AccSegment>()
+        for (a in acc) {
+            val aNewStart = a.newStart
+            val aEnd = a.newStart + a.length
+            for (s in stage) {
+                val overlapStart = maxOf(aNewStart, s.oldStart)
+                val overlapEnd = minOf(aEnd, s.oldStart + s.length)
+                if (overlapStart >= overlapEnd) continue
+                val offsetInAcc = overlapStart - aNewStart
+                val oldStartInitial = a.oldStart + offsetInAcc
+                val newStartFrontier = s.newStart + (overlapStart - s.oldStart)
+                val kind =
+                    if (a.kind == VisualOffsetMapKind.SHIFTED ||
+                        s.kind == VisualOffsetMapKind.SHIFTED
+                    ) {
+                        VisualOffsetMapKind.SHIFTED
+                    } else {
+                        VisualOffsetMapKind.IDENTITY
+                    }
+                result.add(
+                    AccSegment(
+                        oldStart = oldStartInitial,
+                        newStart = newStartFrontier,
+                        length = overlapEnd - overlapStart,
+                        kind = kind,
+                    ),
+                )
+            }
+        }
+        return result
+    }
+
+    /** #644 评论 #684：累积线段 — initial old 坐标 → 当前 frontier 坐标。 */
+    private data class AccSegment(
+        val oldStart: Int,
+        val newStart: Int,
+        val length: Int,
+        val kind: VisualOffsetMapKind,
+    )
+
+    /** #644 评论 #684：单阶段线段 — frontier_old 坐标 → frontier_new 坐标。 */
+    private data class StageSegment(
+        val oldStart: Int,
+        val newStart: Int,
+        val length: Int,
+        val kind: VisualOffsetMapKind,
+    )
 
     /**
      * Retained moves 计算上下文 — 封装循环中不变的参数，降低函数参数数量。

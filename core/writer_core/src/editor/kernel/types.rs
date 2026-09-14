@@ -137,6 +137,14 @@ pub struct EditorVisualIntent {
     /// 纯选区/光标操作（不修改正文）为 `None`。平台端 AffectedLayoutPlanner
     /// 直接消费此字段，不再在 Kotlin 中独立推导 offset mapping。
     pub offset_map: Option<OffsetMap>,
+    /// #684 评论 5668108597：Core 计算好的动画单元范围 — 按 animation_mode 决定的粒度，
+    /// 平台端据此做吐字/吞字动画，不再整段淡入淡出。
+    /// Glyph/Cluster: 按 grapheme 单元；Run: 按 run 单元；LineReflow/Snapshot: 整块 affected range；SystemSuppressed: 空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old_animation_units: Vec<Utf8ByteRange>,
+    /// #684 评论 5668108597：新正文侧的动画单元范围，与 `old_animation_units` 对应。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_animation_units: Vec<Utf8ByteRange>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

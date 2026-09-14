@@ -1776,6 +1776,9 @@ dictionary EditorVisualIntentDto {
     CoordinatedCursorDto coordinated_cursor;
     // Core 计算的 old/new 正文偏移映射，平台端 AffectedLayoutPlanner 不再独立推导
     OffsetMapDto? offset_map;
+    // #684 评论 5668108597：Core 计算好的动画单元范围，平台端按单元做吐字/吞字动画
+    sequence<EditorByteRangeDto> old_animation_units;
+    sequence<EditorByteRangeDto> new_animation_units;
 };
 
 dictionary EditorByteRangeDto {

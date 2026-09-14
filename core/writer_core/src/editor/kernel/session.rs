@@ -69,6 +69,9 @@ impl EditorKernel {
                 should_animate: false,
             },
             offset_map: Some(OffsetMap::from_single_edit(old_len, (0, old_len), new_len)),
+            // load 的 animation_mode 永远是 SystemSuppressed，无动画单元。
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         };
 
         let result = EditorEditResult {
@@ -118,6 +121,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         }
@@ -151,6 +156,8 @@ impl EditorKernel {
                     should_animate: false,
                 },
                 offset_map: None,
+                old_animation_units: vec![],
+                new_animation_units: vec![],
             },
             content_delta: EditorContentDelta::default(),
         }

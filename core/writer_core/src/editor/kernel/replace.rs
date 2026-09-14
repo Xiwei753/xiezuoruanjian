@@ -144,6 +144,9 @@ impl EditorKernel {
             },
             // 从 delta 直接构造 offset map，不再全文 diff。
             offset_map: Some(OffsetMap::from_edits(old_text.len(), &offset_pairs)),
+            // replace-all 的 animation_mode 永远是 SystemSuppressed，无动画单元。
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         };
 
         EditorEditOutcome::Applied(EditorEditResult {

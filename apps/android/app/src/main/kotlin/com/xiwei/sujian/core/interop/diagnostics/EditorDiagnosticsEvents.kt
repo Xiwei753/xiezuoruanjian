@@ -120,6 +120,98 @@ object EditorDiagnosticsEvents {
         "charCount" to charCount,
         KEY_RESULT to result,
     )
+
+    // ── 视觉动画帧协调链（#684 评论 #5660899405 第 6 项）──────────────
+
+    /**
+     * Core 视觉意图进入帧协调器待合流链 —
+     * 不记录正文，只记录事务身份、版本与待合流链长度。
+     */
+    fun editorVisualIntentQueued(
+        targetId: String,
+        coreTransactionId: Long,
+        baseRevision: Long,
+        newRevision: Long,
+        pendingChainSize: Int,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.visual.intent_queued",
+        "targetId" to targetId,
+        "coreTransactionId" to coreTransactionId,
+        "baseRevision" to baseRevision,
+        "newRevision" to newRevision,
+        "pendingChainSize" to pendingChainSize,
+    )
+
+    /**
+     * 真实屏幕布局被帧协调器呈现（合流基线推进或新事务旧侧）。
+     * [layoutTextLength] 只记录长度，不记录正文。
+     */
+    fun editorLayoutPresented(
+        targetId: String,
+        layoutTextLength: Int,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.layout.presented",
+        "targetId" to targetId,
+        "layoutTextLength" to layoutTextLength,
+    )
+
+    /**
+     * 帧协调器把 pending 链 + 真实 layout 合流成一个冻结视觉事务。
+     */
+    fun editorVisualTransactionStarted(
+        targetId: String,
+        visualTransactionId: Long,
+        coreTransactionIds: List<Long>,
+        baseRevision: Long,
+        newRevision: Long,
+        pendingChainSize: Int,
+        layoutTextLength: Int,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.visual.transaction_started",
+        "targetId" to targetId,
+        "visualTransactionId" to visualTransactionId,
+        "coreTransactionIds" to coreTransactionIds.joinToString(","),
+        "coreTransactionId" to coreTransactionIds.firstOrNull(),
+        "baseRevision" to baseRevision,
+        "newRevision" to newRevision,
+        "pendingChainSize" to pendingChainSize,
+        "layoutTextLength" to layoutTextLength,
+    )
+
+    /**
+     * 上一笔动画被下一笔输入打断，从真实当前 progress 物化 startFrame rebase。
+     */
+    fun editorVisualTransactionRebased(
+        targetId: String,
+        visualTransactionId: Long,
+        rebasedFromVisualTransactionId: Long,
+        pendingChainSize: Int,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.visual.transaction_rebased",
+        "targetId" to targetId,
+        "visualTransactionId" to visualTransactionId,
+        "rebasedFromVisualTransactionId" to rebasedFromVisualTransactionId,
+        "pendingChainSize" to pendingChainSize,
+    )
+
+    /**
+     * 视觉事务动画完成 — 由 overlay 在 master progress 到达 1f 后通知协调器清 active。
+     */
+    fun editorVisualTransactionCompleted(
+        targetId: String,
+        visualTransactionId: Long,
+        coreTransactionIds: List<Long>,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.visual.transaction_completed",
+        "targetId" to targetId,
+        "visualTransactionId" to visualTransactionId,
+        "coreTransactionIds" to coreTransactionIds.joinToString(","),
+    )
 }
 
 /**

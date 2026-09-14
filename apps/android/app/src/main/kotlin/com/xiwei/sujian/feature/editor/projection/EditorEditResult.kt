@@ -50,6 +50,10 @@ data class VisualIntent(
     val durationMs: Long,
     val coordinatedCursor: CoordinatedCursor,
     val offsetMap: OffsetMap? = null,
+    // #684 评论 5668108597 问题2：Core 计算好的动画单元范围（UTF-8 byte ranges）—
+    // 平台端按单元做吐字/吞字动画。每个 Pair = (startByte, endExclusiveByte)。
+    val oldAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
+    val newAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
 ) {
     companion object {
         fun fromDto(dto: EditorVisualIntentDto): VisualIntent =
@@ -74,6 +78,20 @@ data class VisualIntent(
                 durationMs = dto.durationMs.toLong(),
                 coordinatedCursor = CoordinatedCursor.fromDto(dto.coordinatedCursor),
                 offsetMap = dto.offsetMap?.let { OffsetMap.fromDto(it) },
+                oldAnimationUnitRanges =
+                    dto.oldAnimationUnits.map {
+                        Pair(
+                            it.start.toInt(),
+                            it.endExclusive.toInt(),
+                        )
+                    },
+                newAnimationUnitRanges =
+                    dto.newAnimationUnits.map {
+                        Pair(
+                            it.start.toInt(),
+                            it.endExclusive.toInt(),
+                        )
+                    },
             )
     }
 

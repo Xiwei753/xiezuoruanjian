@@ -31,6 +31,9 @@ import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.CursorVisualIntent
 import com.xiwei.sujian.feature.editor.visual.EditorVisualIntent
 import com.xiwei.sujian.feature.editor.visual.TextVisualKind
+import com.xiwei.sujian.feature.editor.visual.VisualOffsetMap
+import com.xiwei.sujian.feature.editor.visual.VisualOffsetMapEntry
+import com.xiwei.sujian.feature.editor.visual.VisualOffsetMapKind
 import com.xiwei.sujian.feature.editor.visual.VisualReplaceBounds
 import com.xiwei.sujian.feature.editor.window.EditorWindowHost
 import kotlinx.coroutines.flow.filter
@@ -443,6 +446,10 @@ internal fun CollectVisualIntentEvents(
 
 /**
  * #641 评论 问题2：把 Core [VisualIntent]（UTF-8 byte ranges）转成 Compose [EditorVisualIntent]（UTF-16 ranges）。
+ *
+ * #644 评论 #684：在 UI 映射边界一次性把 UTF-8 转成 UTF-16，
+ * [animationMode]、[durationMs]、[transactionId]、[baseRevision]、[newRevision] 原样传入，
+ * 不要再到 ComposeVisualRebase 或 overlay 里碰 UTF-8。
  */
 private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent): EditorVisualIntent {
     val textKind =
@@ -463,6 +470,17 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
 
     val newRanges =
         event.visualIntent.newAffectedByteRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
+        }
+
+    // #684 评论 5668108597 问题2：Core 计算好的动画单元 UTF-8 byte ranges → UTF-16 ranges。
+    // 与 oldRanges/newRanges 的转换方式一致，overlay 按单元做吐字/吞字动画。
+    val oldAnimationUnits =
+        event.visualIntent.oldAnimationUnitRanges.map { (start: Int, end: Int) ->
+            TextOffsetUtils.utf16TextRangeForUtf8(event.oldText, start, end)
+        }
+    val newAnimationUnits =
+        event.visualIntent.newAnimationUnitRanges.map { (start: Int, end: Int) ->
             TextOffsetUtils.utf16TextRangeForUtf8(event.newText, start, end)
         }
 
@@ -494,15 +512,55 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
 
     val replaceBounds = computeVisualReplaceBounds(event.oldText, event.newText)
 
+    // #644 评论 #684：在 UI 映射边界一次性把 Core UTF-8 offset map 转成 UTF-16。
+    val visualOffsetMap = event.visualIntent.offsetMap?.let { coreOffsetMap ->
+        VisualOffsetMap(
+            entries =
+                coreOffsetMap.entries.map { entry ->
+                    val oldStartUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
+                    val newStartUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
+                    val lengthUtf16 = entry.length // Core length is in bytes, need to convert
+                    // 简化处理：用 newText 从 newStartUtf16 开始计算实际 UTF-16 长度
+                    val oldEndByte = entry.oldByteOffset + entry.length
+                    val newEndByte = entry.newByteOffset + entry.length
+                    val oldEndUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size))
+                    val newEndUtf16 =
+                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size))
+                    VisualOffsetMapEntry(
+                        oldStart = oldStartUtf16,
+                        newStart = newStartUtf16,
+                        length = newEndUtf16 - newStartUtf16,
+                        kind =
+                            when (entry.kind) {
+                                com.xiwei.sujian.feature.editor.projection.OffsetMapKind.IDENTITY ->
+                                    VisualOffsetMapKind.IDENTITY
+                                com.xiwei.sujian.feature.editor.projection.OffsetMapKind.SHIFTED ->
+                                    VisualOffsetMapKind.SHIFTED
+                            },
+                    )
+                },
+        )
+    }
+
     return EditorVisualIntent(
+        coreTransactionId = event.transactionId,
+        baseRevision = event.baseRevision,
+        newRevision = event.newRevision,
+        animationMode = event.visualIntent.animationMode,
+        durationMs = event.visualIntent.durationMs,
+        offsetMap = visualOffsetMap,
         oldRanges = oldRanges,
         newRanges = newRanges,
         textKind = textKind,
         cursor = cursor,
-        newTextLength = event.newText.length,
+        replaceBounds = replaceBounds,
         expectedOldText = event.oldText,
         expectedNewText = event.newText,
-        replaceBounds = replaceBounds,
+        oldAnimationUnits = oldAnimationUnits,
+        newAnimationUnits = newAnimationUnits,
     )
 }
 

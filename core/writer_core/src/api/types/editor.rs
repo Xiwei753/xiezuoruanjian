@@ -793,6 +793,13 @@ pub struct EditorVisualIntentDto {
     /// 平台端 AffectedLayoutPlanner 直接消费此字段。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset_map: Option<OffsetMapDto>,
+    /// #684 评论 5668108597：Core 计算好的动画单元范围 — 按 animation_mode 决定的粒度，
+    /// 平台端据此做吐字/吞字动画，不再整段淡入淡出。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old_animation_units: Vec<EditorByteRangeDto>,
+    /// #684 评论 5668108597：新正文侧的动画单元范围，与 `old_animation_units` 对应。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new_animation_units: Vec<EditorByteRangeDto>,
 }
 
 impl EditorVisualIntentDto {
@@ -810,6 +817,8 @@ impl EditorVisualIntentDto {
                 should_animate: false,
             },
             offset_map: None,
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         }
     }
 }
@@ -850,6 +859,8 @@ impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
             duration_ms: vi.duration_ms,
             coordinated_cursor: vi.coordinated_cursor.into(),
             offset_map: vi.offset_map.map(Into::into),
+            old_animation_units: vi.old_animation_units.into_iter().map(Into::into).collect(),
+            new_animation_units: vi.new_animation_units.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1791,6 +1802,8 @@ mod tests {
                 should_animate: true,
             },
             offset_map: None,
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         };
         let dto: EditorVisualIntentDto = intent.into();
         assert_eq!(dto.operation_kind, EditorOperationKindDto::Insert);

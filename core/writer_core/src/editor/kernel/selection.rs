@@ -63,6 +63,9 @@ impl EditorKernel {
             },
             // 选区操作不变更正文，无 offset_map
             offset_map: None,
+            // cursor-only 无 affected ranges，无动画单元。
+            old_animation_units: vec![],
+            new_animation_units: vec![],
         };
 
         let result = EditorEditResult {

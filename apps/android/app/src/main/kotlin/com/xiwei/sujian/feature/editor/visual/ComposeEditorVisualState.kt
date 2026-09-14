@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import android.util.Log
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
@@ -10,33 +11,53 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 /**
- * #641 评论1 第4/5节：Compose 显示层视觉状态 — 保存上一份和当前一份
- * [ComposeLayoutSnapshot]，根据 Core 的 [EditorVisualIntent] 算受影响 UTF-16 range。
+ * #641 评论1 第4/5节：Compose 显示层视觉状态 — 保存当前一份 [ComposeLayoutSnapshot]，
+ * 根据 Core 的 [EditorVisualIntent] 算受影响 UTF-16 range。
  *
- * #644 评论 5467821839 第5节剩余子项：本类只负责保存 previous/current layout、
- * pending intent、active transaction、progress，并调用 [ComposeVisualRebase] 里的纯函数。
- * viewport 恢复、session attach、正文写回不进 visual 层。rebase 物化、range subtract/split、
- * retained moves、startFrame 几何计算全部在 [ComposeVisualRebase]。
+ * #644 评论 #684：删掉旧的"双快照 + 单 pending"状态机。
+ * 旧字段 `previousSnapshot`、`currentSnapshot` 作为事务 old/new 配对来源、
+ * `PendingVisualIntent`、`pendingVisualIntent`、`applyPendingRetainedMoves()`、
+ * `tryActivateVisualCursor()`、`currentLayout()`、`previousLayout()` 全部删除。
  *
- * 动画层只"画"，绝不能再改变 viewport / selection / IME 几何。
- * [onAuthoritativeLayout] 由 [BasicTextField] 的 `onTextLayout` 回调调用，
- * 把系统最终 [TextLayoutResult] 记录为权威布局，不反向修改输入。
+ * 改为持有 [ComposeVisualFrameCoordinator]，由它负责：
+ * - 收集 Core intent chain（双向汇合）
+ * - 在真实屏幕 layout 到达且匹配时生成冻结的 [ComposeVisualTransaction]
  *
- * #641 评论 问题3 + 评论 5457777142 问题2：transaction/rebase —
- * 新事务到来时如果旧事务还在跑，先用旧 transaction + 当前 progress 物化
- * [ComposeVisualFrame]，再把它作为新事务的 start_frame。
+ * 本类只负责：
+ * - 暴露 `_latestLayout` 供 overlay 读取
+ * - 暴露 `_activeTransaction` 供 overlay 读取冻结事务
+ * - 暴露 `_hiddenRanges` 供 OutputTransformation 读取
+ * - 暴露 `_drawsVisualCursor` 控制系统光标显隐（仅由设置/attach 生命周期决定）
+ * - 暴露单 master progress（[reportProgress]）供 coordinator 物化 startFrame
  *
- * #641 评论 5457777142 问题4：[onVisualIntent] 签名改为接收 [EditorMotionPolicy]
- * 而非 `durationMillis`，overlay 据此决定 text/cursor 两条 timeline。
+ * smooth cursor 规则：
+ * - smooth cursor 开启：编辑器 attach 以后系统光标一直透明，始终由 overlay 画
+ * - smooth cursor 关闭：始终由系统画，overlay 永远不接管
+ * 光标所有权只能由设置/attach 生命周期决定，不由某一笔事务是否带 cursor 动画决定。
+ *
+ * #641 评论1 第5节 / 问题3：overlay 只"画"，绝不能再改变 viewport / selection / IME 几何。
+ *
+ * @param targetId 当前编辑目标 ID — 用于结构化诊断事件。
+ * @param initialDrawsVisualCursor 初始视觉光标状态 — smooth cursor 开启时从 attach 后一直为 true。
  */
 class ComposeEditorVisualState(
+    private val targetId: String,
     initialDrawsVisualCursor: Boolean = false,
 ) {
-    /** 上一份布局快照 — 删除文字动画按旧 range 的 bounding box 画旧布局。 */
-    private var previousSnapshot: ComposeLayoutSnapshot? = null
+    companion object {
+        private const val TAG = "EditorVisualState"
+    }
 
-    /** 当前布局快照 — 来自系统 [BasicTextField] 的最终 [TextLayoutResult]。 */
-    private var currentSnapshot: ComposeLayoutSnapshot? = null
+    /** 帧协调器 — 核心状态机，管理 intent chain + 帧事务生成（双向汇合）。 */
+    private val frameCoordinator = ComposeVisualFrameCoordinator(targetId)
+
+    /** 最新 layout 快照 — 供 overlay 读取 bounding box。 */
+    private val _latestLayout = MutableStateFlow<ComposeLayoutSnapshot?>(null)
+    val latestLayout: StateFlow<ComposeLayoutSnapshot?> = _latestLayout.asStateFlow()
+
+    /** 当前活跃的视觉动画事务（冻结的）— overlay 只读此事务。 */
+    private val _activeTransaction = MutableStateFlow<ComposeVisualTransaction?>(null)
+    val activeTransaction: StateFlow<ComposeVisualTransaction?> = _activeTransaction.asStateFlow()
 
     /**
      * 当前正在动画的 UTF-16 range — 这些 range 在 [OutputTransformation] 里被设为透明，
@@ -46,373 +67,196 @@ class ComposeEditorVisualState(
     val hiddenRanges: StateFlow<List<TextRange>> = _hiddenRanges.asStateFlow()
 
     /**
-     * 视觉光标是否由 overlay 绘制 — true 时 [BasicTextField] 的 cursorBrush 设为透明，
-     * overlay 从 `oldResult.getCursorRect(oldSelection.end)` 插值到
-     * `newResult.getCursorRect(newSelection.end)`。
+     * 视觉光标是否由 overlay 绘制 —
+     * smooth cursor 开启：编辑器 attach 以后一直为 true（系统光标透明）。
+     * smooth cursor 关闭：一直为 false（系统光标正常画）。
+     * 仅由设置/attach 生命周期决定，不在某笔事务到达时改写。
      */
     private val _drawsVisualCursor = MutableStateFlow(initialDrawsVisualCursor)
     val drawsVisualCursor: StateFlow<Boolean> = _drawsVisualCursor.asStateFlow()
 
-    /** 当前活跃的视觉意图 — 供 overlay 读取动画类型。 */
+    /**
+     * 当前活跃的视觉意图 — 供 overlay 读取动画类型。
+     * 从活跃事务的最后一个 intent 推导。
+     */
     private val _activeIntent = MutableStateFlow<EditorVisualIntent?>(null)
     val activeIntent: StateFlow<EditorVisualIntent?> = _activeIntent.asStateFlow()
 
     /**
-     * 视觉光标插值快照 — cursor animate=true 时由 [onVisualIntent] 根据当前/上一份
-     * [TextLayoutResult] 的 cursor rect 计算并保存，overlay 据此按 progress 插值。
+     * 视觉光标插值快照 — 供 overlay 按 progress 插值绘制。
      */
     private val _visualCursorSnapshot = MutableStateFlow<VisualCursorSnapshot?>(null)
     val visualCursorSnapshot: StateFlow<VisualCursorSnapshot?> = _visualCursorSnapshot.asStateFlow()
 
-    /** #641 评论 问题3：当前事务 ID — 单调递增，overlay 据此判断是否需要重新启动动画。 */
-    private var currentTransactionId: Long = 0L
+    /**
+     * 单 master progress — overlay 报告当前动画进度（文字/光标/rebase 共用同一进度）。
+     * 下一笔事务物化 startFrame 时由 coordinator 读取此真实进度，不再写死 1f。
+     */
+    private val _masterProgress = MutableStateFlow(0f)
+    val masterProgress: StateFlow<Float> = _masterProgress.asStateFlow()
 
     /**
-     * #641 评论 问题3：当前活跃的视觉动画事务 — 供 overlay 读取 motionPolicy 和 ranges。
+     * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator（附上当前 master progress），
+     * 不启动动画、不改 layout。
      *
-     * #641 评论 5458283021 问题1a：删除 previousTransaction 滞后缓存。
-     * rebase 直接读 [_activeTransaction]（当前正在跑的事务），不再慢一笔。
-     */
-    private val _activeTransaction = MutableStateFlow<ComposeVisualTransaction?>(null)
-    val activeTransaction: StateFlow<ComposeVisualTransaction?> = _activeTransaction.asStateFlow()
-
-    /**
-     * #641 评论 5457777142 问题2 + 评论 5458283021 问题1c：overlay 报告的当前动画 progress —
-     * 新事务到来时用它物化 [ComposeVisualFrame] 作为新事务的 start_frame。
+     * #684 评论 5667483662 问题1：把本笔 effective policy 一起交给 coordinator，
+     * 让 pending chain 自己携带 policy，tryStartTransaction 用 chain 同源 policy。
+     * onAuthoritativeLayout 只负责 layout 汇合，不再决定这笔事务该用什么动画设置。
      *
-     * #641 评论 5458283021 问题1c：coordinated=false 时 text/cursor 是两条 timeline，
-     * 分别报告 textProgress / cursorProgress，物化 cursor 用 cursorProgress 不再错算。
+     * @param intent Core 视觉意图。
+     * @param motionPolicy 动画策略 — 传入前先 effective() 收口 reduce-motion。
      */
-    private val _currentTextProgress = MutableStateFlow(0f)
-    val currentTextProgress: StateFlow<Float> = _currentTextProgress.asStateFlow()
-
-    private val _currentCursorProgress = MutableStateFlow(0f)
-    val currentCursorProgress: StateFlow<Float> = _currentCursorProgress.asStateFlow()
+    fun onVisualIntent(
+        intent: EditorVisualIntent,
+        motionPolicy: EditorMotionPolicy,
+    ) {
+        val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective(), _masterProgress.value)
+        applyFrameUpdate(update)
+    }
 
     /**
-     * #641 评论 5459896691 第1项：overlay 报告的 rebaseProgress —
-     * 控制 startFrame 文字层淡出的独立 timeline。
-     */
-    private val _currentRebaseProgress = MutableStateFlow(0f)
-    val currentRebaseProgress: StateFlow<Float> = _currentRebaseProgress.asStateFlow()
-
-    /**
-     * #641 评论 5458283021 问题2a：pending visual intent — onVisualIntent 保存，
-     * 等 onAuthoritativeLayout 到达对应 new layout 后才生成 ComposeVisualTransaction
-     * 和 retained moves（两阶段 retained reflow）。
-     */
-    private data class PendingVisualIntent(
-        val intent: EditorVisualIntent,
-        val motionPolicy: EditorMotionPolicy,
-    )
-
-    private var pendingVisualIntent: PendingVisualIntent? = null
-
-    /**
-     * #641 评论1 第5节：系统给出权威布局 — 只记录，不修改输入几何。
-     * 动画层据此算受影响 range，但不 scrollTo、不改 selection、不改 editor height。
+     * 系统给出权威布局 — 只记录，不修改输入几何。
      *
-     * #641 评论 5458283021 问题2a：两阶段 retained reflow —
-     * onVisualIntent 只保存 pending visual intent，不提前算 reflow。
-     * 新 TextLayoutResult 到达本方法后，若存在 pending 且 text 长度匹配 pending.newTextLength，
-     * 用确定的 oldLayout（previousSnapshot）+ newLayout（currentSnapshot）生成
-     * ComposeVisualTransaction 和 retained moves，消费 pending。
+     * [BasicTextField] 的 `onTextLayout` 回调调用本方法，
+     * 把系统最终 [TextLayoutResult] 记录为权威布局，不反向修改输入。
+     *
+     * #644 评论 #684：真正生成视觉事务发生在 onLayout —
+     * 上一份真正显示过的 layout → 当前真正显示出来的 layout →
+     * 中间积累的 Core intent chain → 一个冻结的 [ComposeVisualTransaction]（双向汇合）。
+     *
+     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/cursorStartRect/cursorEndRect/startFrame
+     * 全部不可再被后续 `onTextLayout` 修改。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
         selection: TextRange,
         scrollY: Int,
     ) {
-        previousSnapshot = currentSnapshot
-        currentSnapshot = ComposeLayoutSnapshot(result, selection, scrollY)
-        // #666：新 layout 到达后，尝试为当前事务创建 cursor snapshot。
-        // 只有 old/new layout 都匹配 expectedOldText/expectedNewText 时才启用视觉光标。
-        tryActivateVisualCursor()
-        // #641 评论 5458283021 问题2a + 评论 5458880786 问题2e：pending visual intent 补算 retainedMoves
-        // + 同步 hiddenRanges。抽成 [applyPendingRetainedMoves] 降低 onAuthoritativeLayout 嵌套深度。
-        applyPendingRetainedMoves(result)
+        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+        _latestLayout.update { snapshot }
+
+        // 让 frameCoordinator 生成冻结事务（附上当前 master progress 供 rebase 物化）。
+        // #684 评论 5667483662 问题1：onLayout 不再传 motionPolicy —
+        // 事务的动画策略由 pending chain 自己携带（与 intent 同源）。
+        val update = frameCoordinator.onLayout(snapshot, _masterProgress.value)
+
+        applyFrameUpdate(update)
     }
 
     /**
-     * #641 评论 5458283021 问题2a：两阶段 — pending visual intent 在新 layout 到达后补算 retainedMoves。
-     * 不创建新 transaction（transaction 已在 onVisualIntent 立即创建），
-     * 只更新当前 activeTransaction 的 retainedMoves + oldLayout/newLayout。
-     *
-     * #641 评论 5458880786 问题2e：补算 retainedMoves 后同步更新 _hiddenRanges。
+     * 把帧协调器的更新结果应用到本地状态 —
+     * 不论事务是在 [onVisualIntent]（intent 先到、匹配 layout 已在）还是
+     * [onAuthoritativeLayout]（layout 后到、匹配 pending 已在）时生成，
+     * 都用同一套逻辑把冻结事务、hiddenRanges、activeIntent、cursor snapshot 暴露出去。
      */
-    private fun applyPendingRetainedMoves(result: TextLayoutResult) {
-        val pending = pendingVisualIntent ?: return
-        // #641 评论 5459531909 第1项：layout 关联改成正文一致才认这份 layout。
-        if (result.layoutInput.text.text != pending.intent.expectedNewText) return
-        pendingVisualIntent = null
-        val retainedMoves =
-            ComposeVisualRebase.computeRetainedMoves(pending.intent, previousSnapshot, currentSnapshot)
-        val active = _activeTransaction.value ?: return
-        if (active.id != pending.intent.transactionId) return
-        val effective = active.motionPolicy.effective()
-        val hasText = effective.textEnabled && pending.intent.textKind != TextVisualKind.None
-        if (hasText) {
-            val baseOwnedNewRanges =
-                (
-                    when (pending.intent.textKind) {
-                        TextVisualKind.Insert -> pending.intent.newRanges
-                        TextVisualKind.Move -> pending.intent.newRanges
-                        else -> emptyList()
-                    }
-                ).filter { it.start < it.end }
-            val retainedNewRanges =
-                retainedMoves.map { it.newRange }.filter { it.start < it.end }
-            // #641 评论 5459531909 第2项：补算 retainedMoves 后仍要保留 frozenStartFrame.suppressedCurrentRanges。
-            val frozenSuppressed =
-                active.startFrame?.suppressedCurrentRanges ?: emptyList()
-            val mappedSuppressed =
-                ComposeVisualRebase.mapSuppressedRangesThroughReplace(frozenSuppressed, pending.intent.replaceBounds)
-            val suppressedNotOverlapping =
-                ComposeVisualRebase.subtractRanges(mappedSuppressed, baseOwnedNewRanges + retainedNewRanges)
-            _hiddenRanges.update {
-                baseOwnedNewRanges + retainedNewRanges + suppressedNotOverlapping
+    private fun applyFrameUpdate(update: FrameUpdate) {
+        when (update) {
+            is FrameUpdate.Empty -> {
+                // 无新事务 — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
-        }
-        _activeTransaction.update {
-            it?.copy(
-                oldLayout = previousSnapshot,
-                newLayout = currentSnapshot,
-                retainedMoves = retainedMoves,
-            )
-        }
-    }
+            is FrameUpdate.NewTransaction -> {
+                // #684 评论 5668108597 问题1：visual state 接管新事务时同步重置 _masterProgress=0f，
+                // 不等 Compose 下一帧再靠 Animatable.snapTo(0f) 修正。
+                // 否则在新事务的 LaunchedEffect 启动前，旧事务迟到的 reportProgress(A.id, 0.9f)
+                // 会把全局 _masterProgress 写成 0.9f，下一笔 rebase 物化 startFrame 拿到错误进度。
+                _masterProgress.update { 0f }
+                _activeTransaction.update { update.transaction }
+                _hiddenRanges.update { update.hiddenRanges }
 
-    /**
-     * #641 评论1 第5节 / 问题2 / 问题3 + 评论 5457777142 问题2/问题3/问题4：
-     * Core 给出视觉意图 — 设置受影响 UTF-16 range、动画类型、cursor 和 transaction。
-     *
-     * #641 评论 5458283021 问题2a：两阶段 retained reflow —
-     * transaction 立即创建（overlay 能立即开始画文字动画、hiddenRanges 生效），
-     * 只是 retainedMoves 初始为 emptyList，等 onAuthoritativeLayout 到达后
-     * 用确定的 old/new layout 补算 retainedMoves。
-     *
-     * #641 评论 5458283021 问题3c：把 policy 提前落实到视觉状态 —
-     * 用 [EditorMotionPolicy.effective] 算 hasTextAnimation/hasCursorAnimation，
-     * 只在真正有动画时设置 hiddenRanges/drawsVisualCursor。
-     *
-     * @param motionPolicy 动画策略 — 调用方传入原始策略，本方法内部调用 [EditorMotionPolicy.effective]。
-     */
-    fun onVisualIntent(
-        intent: EditorVisualIntent,
-        motionPolicy: EditorMotionPolicy,
-    ) {
-        // #641 评论 问题3：分配新事务 ID。
-        val newId = currentTransactionId + 1
-        currentTransactionId = newId
-        val intentWithId = intent.copy(transactionId = newId)
+                // 从最后一个 intent 推导 activeIntent。
+                val lastIntent = update.transaction.intents.lastOrNull()
+                _activeIntent.update { lastIntent }
 
-        // #641 评论 5458880786 问题1d：先冻结上一事务当前帧，再切 _activeIntent / 新 cursor snapshot。
-        // #641 评论 5460160958 问题2：frozenStartFrame 马上要交给本事务（C）绘制，
-        // surviving targetRange 必须是 C 的 new text 坐标，因此用 incoming 的 replaceBounds 映射。
-        val runningTransaction = _activeTransaction.value
-        val frozenStartFrame =
-            ComposeVisualRebase.materializeStartFrame(
-                ComposeVisualRebase.MaterializeStartFrameParams(
-                    transaction = runningTransaction,
-                    textProgress = _currentTextProgress.value,
-                    cursorProgress = _currentCursorProgress.value,
-                    rebaseProgress = _currentRebaseProgress.value,
-                    nextReplaceBounds = intentWithId.replaceBounds,
-                    hiddenRanges = _hiddenRanges.value,
-                    cursorSnapshot = _visualCursorSnapshot.value,
-                ),
-            )
-
-        _activeIntent.update { intentWithId }
-
-        // #641 评论 5458283021 问题3c：把 policy 提前落实到视觉状态。
-        val effective = motionPolicy.effective()
-        val hasTextAnimation =
-            effective.textEnabled && intentWithId.textKind != TextVisualKind.None
-        val hasCursorAnimation = effective.cursorEnabled && intentWithId.cursor?.animate == true
-
-        // #641 评论 5457777142 问题3 + 评论 5458283021 问题3c：hiddenRanges 修正。
-        // Delete 不隐藏新正文 range。需要隐藏的是当前正文里由 overlay 接管的范围：
-        // Insert/Move 的 newRanges、retained move 的 newRange。
-        // #641 评论 5458283021 问题3c：只在 hasTextAnimation 时设置 hiddenRanges。
-        val currentOwnedNewRanges =
-            if (hasTextAnimation) {
-                (
-                    when (intentWithId.textKind) {
-                        TextVisualKind.Insert -> intentWithId.newRanges
-                        TextVisualKind.Delete -> emptyList()
-                        TextVisualKind.Move -> intentWithId.newRanges
-                        TextVisualKind.None -> emptyList()
-                    }
-                ).filter { it.start < it.end }
-            } else {
-                emptyList()
-            }
-
-        // #641 评论 5458283021 问题2a：两阶段 retained reflow。
-        val currentSnapshotLocal = currentSnapshot
-        // #641 评论 5459531909 第1项：layout 关联改成正文一致。
-        val canComputeRetainedNow =
-            currentSnapshotLocal != null &&
-                currentSnapshotLocal.result.layoutInput.text.text == intentWithId.expectedNewText
-        val retainedMoves =
-            if (canComputeRetainedNow) {
-                ComposeVisualRebase.computeRetainedMoves(intentWithId, previousSnapshot, currentSnapshot)
-            } else {
-                emptyList()
-            }
-
-        val currentRetainedNewRanges =
-            retainedMoves.map { it.newRange }.filter { it.start < it.end }
-        // #641 评论 5459531909 第2项：frozen startFrame 保留抑制范围。
-        val mappedSuppressed =
-            ComposeVisualRebase.mapSuppressedRangesThroughReplace(
-                frozenStartFrame?.suppressedCurrentRanges ?: emptyList(),
-                intentWithId.replaceBounds,
-            )
-        val suppressedNotOverlapping =
-            ComposeVisualRebase.subtractRanges(
-                mappedSuppressed,
-                currentOwnedNewRanges + currentRetainedNewRanges,
-            )
-        _hiddenRanges.update {
-            currentOwnedNewRanges + currentRetainedNewRanges + suppressedNotOverlapping
-        }
-
-        // #666：布局和事务正文严格配对。收到 cursor 动画后不立即设 _drawsVisualCursor = true。
-        // 只有当前 previous/current layout 已经与 expectedOldText/expectedNewText 配对成功时，
-        // 才创建 VisualCursorSnapshot 并打开 _drawsVisualCursor。
-        // 布局还没到时保持系统光标正常显示，不沿用上一笔 _visualCursorSnapshot。
-        if (hasCursorAnimation) {
-            val cursorSnapshot = buildCursorSnapshot()
-            if (cursorSnapshot != null) {
-                _drawsVisualCursor.update { true }
+                // 为 cursor 动画创建 snapshot（仍由事务的 cursorStartRect/cursorEndRect 决定）。
+                val cursorSnapshot = buildCursorSnapshot(update.transaction)
                 _visualCursorSnapshot.update { cursorSnapshot }
-            } else {
-                // 布局还没到：保持系统光标正常显示，不沿用上一笔 cursor snapshot。
-                _drawsVisualCursor.update { false }
-                _visualCursorSnapshot.update { null }
+
+                // 光标所有权只由设置/attach 决定（_drawsVisualCursor 不在此改写）。
+
+                Log.d(
+                    TAG,
+                    "transaction_started: id=${update.transaction.id} " +
+                        "coreTxnIds=${update.transaction.coreTransactionIds} " +
+                        "drawsVisualCursor=${_drawsVisualCursor.value}",
+                )
             }
-        } else {
-            _drawsVisualCursor.update { false }
-            _visualCursorSnapshot.update { null }
         }
+    }
 
-        buildAndActivateTransaction(
-            intent = intentWithId,
-            motionPolicy = effective,
-            retainedMoves = retainedMoves,
-            startFrame = frozenStartFrame,
+    /**
+     * 从冻结事务构建 cursor snapshot — 用事务的 cursorStartRect/cursorEndRect。
+     */
+    private fun buildCursorSnapshot(transaction: ComposeVisualTransaction): VisualCursorSnapshot? {
+        val startRect = transaction.cursorStartRect ?: return null
+        val endRect = transaction.cursorEndRect ?: return null
+        val lastIntent = transaction.intents.lastOrNull() ?: return null
+        val cursor = lastIntent.cursor ?: return null
+        return VisualCursorSnapshot(
+            oldCursorRect = startRect,
+            newCursorRect = endRect,
+            oldSelectionEnd = cursor.oldEndUtf16,
+            newSelectionEnd = cursor.newEndUtf16,
         )
-        // 若不能立即算 retainedMoves，保存 pending 等 onAuthoritativeLayout 补算。
-        if (!canComputeRetainedNow) {
-            pendingVisualIntent = PendingVisualIntent(intent = intentWithId, motionPolicy = effective)
-        } else {
-            pendingVisualIntent = null
-        }
     }
 
     /**
-     * #641 评论 5458283021 问题2a：用确定的 old/new layout 生成 ComposeVisualTransaction，
-     * 设为活跃事务。retainedMoves 由调用方决定（两阶段：初始 emptyList，onAuthoritativeLayout 后补算）。
+     * overlay 报告当前动画 master progress — 物化 startFrame（下一笔 rebase）用。
+     * 文字/光标/rebase 共用同一进度。
      *
-     * #641 评论 5458880786 问题1d：startFrame 由 [onVisualIntent] 提前物化传入，
-     * 不再在本方法内部调 materializeStartFrame — 避免物化时读到下一事务的 cursor snapshot。
+     * #684 评论 5668108597 问题1：加 transactionId 守卫 —
+     * 快速连续输入时 A 的旧 LaunchedEffect 可能在 B 已成为 active 后继续写全局 progress。
+     * 只有当前活跃事务 ID 匹配时才允许写入，迟到的旧事务 progress 直接丢弃。
      *
-     * #641 评论 5460373035 问题2：用 effectiveOldRanges = subtractRanges(intent.oldRanges, startFrame.ownedOldRanges)。
-     * startFrame 已接管的 old range 从本事务 oldRanges 减掉 — 同一段旧文字永远只由一条绘制路径拥有。
+     * @param transactionId overlay 报告进度的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
+     * @param progress 当前动画进度（0f..1f）。
      */
-    private fun buildAndActivateTransaction(
-        intent: EditorVisualIntent,
-        motionPolicy: EditorMotionPolicy,
-        retainedMoves: List<RetainedMove>,
-        startFrame: ComposeVisualFrame?,
-    ) {
-        val effectiveOldRanges =
-            ComposeVisualRebase.subtractRanges(
-                intent.oldRanges,
-                startFrame?.ownedOldRanges.orEmpty(),
-            )
-        val transaction =
-            ComposeVisualTransaction(
-                id = intent.transactionId,
-                oldLayout = previousSnapshot,
-                newLayout = currentSnapshot,
-                oldRanges = effectiveOldRanges,
-                newRanges = intent.newRanges,
-                retainedMoves = retainedMoves,
-                textKind = intent.textKind,
-                cursor = intent.cursor,
-                startFrame = startFrame,
-                motionPolicy = motionPolicy,
-            )
-        _activeTransaction.update { transaction }
+    fun reportProgress(transactionId: Long, progress: Float) {
+        if (_activeTransaction.value?.id != transactionId) return
+        _masterProgress.update { progress.coerceIn(0f, 1f) }
     }
 
     /**
-     * 从当前/上一份 [TextLayoutResult] 取真实 cursor rect 构建插值快照。
-     * 任一 layout 缺失时不构建快照（overlay 只画已有的一侧）。
-     * 转发到 [ComposeVisualRebase.buildCursorSnapshot] 纯函数。
+     * 动画结束 — 收口带 ID 守卫的完成方法。
+     *
+     * #684 评论 5667483662 问题2：快速连续输入时，A 刚到 1f，B 已生成并写进 visual state，
+     * 随后 A 的完成回调执行；旧实现 `completeActiveTransaction(A)` + `clearAnimation()` 分两步，
+     * `clearAnimation()` 没有 ID 守卫，会把 B 的 visual state 清空。
+     *
+     * 现在收口成一个带 ID 的方法：先检查 `_activeTransaction.value?.id == transactionId`，
+     * 不匹配直接 return；匹配才同步调用 `frameCoordinator.completeTransaction(transactionId)`
+     * 并清当前这笔对应的 visual state。overlay 到 1f 只调用这一个方法。
+     *
+     * @param transactionId overlay 报告完成的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
      */
-    private fun buildCursorSnapshot(): VisualCursorSnapshot? =
-        ComposeVisualRebase.buildCursorSnapshot(
-            previousSnapshot = previousSnapshot,
-            currentSnapshot = currentSnapshot,
-            intent = _activeIntent.value,
-        )
-
-    /**
-     * #666：尝试为当前活跃 intent 创建 cursor snapshot 并启用视觉光标。
-     * 只有当前 intent 的 cursor 要动画，且 old/new layout 都匹配
-     * expectedOldText/expectedNewText 时才启用视觉光标。
-     * 布局还没到时不启用，保持系统光标正常显示。
-     */
-    private fun tryActivateVisualCursor() {
-        val activeIntent = _activeIntent.value ?: return
-        if (activeIntent.cursor?.animate != true) return
-        val cursorSnapshot = buildCursorSnapshot()
-        if (cursorSnapshot != null) {
-            _drawsVisualCursor.update { true }
-            _visualCursorSnapshot.update { cursorSnapshot }
-        }
-        // cursorSnapshot 为 null 时保持当前状态：
-        // - 若之前已启用视觉光标（布局已匹配过），保持不变
-        // - 若之前未启用（布局还没到），不强行启用
-    }
-
-    /**
-     * #641 评论 5457777142 问题2 + 评论 5458283021 问题1c：overlay 报告当前动画 progress —
-     * 新事务到来时用它物化 [ComposeVisualFrame]。
-     */
-    fun reportProgress(
-        textProgress: Float,
-        cursorProgress: Float,
-        rebaseProgress: Float,
-    ) {
-        _currentTextProgress.update { textProgress }
-        _currentCursorProgress.update { cursorProgress }
-        _currentRebaseProgress.update { rebaseProgress }
-    }
-
-    /**
-     * #641 评论1 第5节：动画结束 — 清 hiddenRanges，系统正文马上可见。
-     * 由 overlay 的动画完成回调调用。
-     */
-    fun clearAnimation() {
+    fun finishTransaction(transactionId: Long) {
+        if (_activeTransaction.value?.id != transactionId) return
+        frameCoordinator.completeTransaction(transactionId)
         _hiddenRanges.update { emptyList() }
         _activeIntent.update { null }
-        _drawsVisualCursor.update { false }
         _visualCursorSnapshot.update { null }
         _activeTransaction.update { null }
-        _currentTextProgress.update { 0f }
-        _currentCursorProgress.update { 0f }
-        _currentRebaseProgress.update { 0f }
-        pendingVisualIntent = null
+        _masterProgress.update { 0f }
     }
 
-    /** 当前布局快照 — 供 overlay 读取 bounding box。 */
-    fun currentLayout(): ComposeLayoutSnapshot? = currentSnapshot
+    /**
+     * 清除所有状态 — 章节切换或 detach 时调用。
+     */
+    fun clear() {
+        frameCoordinator.clear()
+        _latestLayout.update { null }
+        _activeTransaction.update { null }
+        _hiddenRanges.update { emptyList() }
+        // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
+        _activeIntent.update { null }
+        _visualCursorSnapshot.update { null }
+        _masterProgress.update { 0f }
+    }
 
-    /** 上一份布局快照 — 删除文字动画用旧布局画。 */
-    fun previousLayout(): ComposeLayoutSnapshot? = previousSnapshot
+    /**
+     * 设置 smooth cursor 状态 — 由外部设置变更驱动。
+     * smooth cursor 开启时，编辑器 attach 以后系统光标一直透明。
+     */
+    fun setSmoothCursorEnabled(enabled: Boolean) {
+        _drawsVisualCursor.update { enabled }
+    }
 }

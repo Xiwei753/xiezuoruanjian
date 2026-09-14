@@ -123,6 +123,8 @@ class EditorContentDeltaConsumptionTest {
                         durationMs = 0u,
                         coordinatedCursor = uniffi.writer_core.CoordinatedCursorDto(6u, 6u, false),
                         offsetMap = null,
+                        oldAnimationUnits = emptyList(),
+                        newAnimationUnits = emptyList(),
                     ),
                 compositionSession = null,
                 contentDelta =
