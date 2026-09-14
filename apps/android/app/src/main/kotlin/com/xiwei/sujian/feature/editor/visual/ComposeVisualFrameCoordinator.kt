@@ -420,8 +420,22 @@ class ComposeVisualFrameCoordinator(
         // #684 评论 5669048233 Bug2 修复：多 Core intent 合成一帧时，animation units
         // 映射到最终 T0→Tn 坐标。不再退化成整块 mergedRanges — 用 compose 函数把每笔
         // intent 的 units 沿 offsetMap chain 映射到统一坐标系，保留 Core 原来的 unit 边界。
-        val oldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
+        val composedOldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
         val newAnimationUnits = ComposeVisualRebase.composeNewAnimationUnitsToFinal(chain)
+
+        // #684 评论 5670941608：oldAnimationUnits 也要与 effectiveOldRanges 使用同一个
+        // startFrame.ownedOldRanges ownership subtraction。否则"上一笔动画尚未结束，下一笔
+        // 马上删除/替换刚才那段文字"时，同一段旧文字同时由 startFrame fading slice 和
+        // unit-delete 路径绘制，出现重影。blocker 只覆盖 unit 一部分时保留 subtraction 后
+        // 剩下的片段，保持 Core 的动画粒度，不把相邻 unit 再 merge。
+        val startFrameOwnedOldRanges = startFrame?.ownedOldRanges.orEmpty()
+        val effectiveOldAnimationUnits =
+            composedOldAnimationUnits.flatMap { unit ->
+                ComposeVisualRebase.subtractRanges(
+                    candidates = listOf(unit),
+                    blockers = startFrameOwnedOldRanges,
+                )
+            }
         val transaction =
             ComposeVisualTransaction(
                 id = nextTransactionId,
@@ -455,7 +469,9 @@ class ComposeVisualFrameCoordinator(
                 textAnimationActive = textAnimationActive,
                 cursorAnimationActive = cursorAnimationActive,
                 // #684 评论 5668108597 问题2：冻结 animation units 供 overlay 按单元做吐字/吞字。
-                oldAnimationUnits = oldAnimationUnits,
+                // #684 评论 5670941608：oldAnimationUnits 已扣除 startFrame.ownedOldRanges，
+                // 避免同一段旧文字被 startFrame 和 unit-delete 双重绘制。
+                oldAnimationUnits = effectiveOldAnimationUnits,
                 newAnimationUnits = newAnimationUnits,
             )
 
