@@ -55,6 +55,13 @@ fun ComposeTextAnimationOverlay(
     scrollY: Int,
     textColor: Color,
     cursorColor: Color,
+    /**
+     * #684 评论 5663032418 断点3：live selection — 直接从 [TextFieldState.selection] 读取，
+     * 不再依赖 [ComposeLayoutSnapshot.selection]（只在 onTextLayout 时更新，纯 selection 变化会过期）。
+     *
+     * [TextFieldState.selection] 本身就是 Compose 可观察状态，selection 变化会驱动这里更新。
+     */
+    liveSelection: TextRange?,
     modifier: Modifier = Modifier,
 ) {
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
@@ -179,8 +186,10 @@ fun ComposeTextAnimationOverlay(
                     //    动画进行中已在第 1 步按 old→new 插值画过，这里只在无光标动画时补 resting caret。
                     //    刚 attach、两次输入之间、纯等待、动画结束（clearAnimation 后）都画静止光标，
                     //    不会因为没有 active transaction 而丢失光标。
+                    //    #684 评论 5663032418 断点3：光标 offset 从 live TextFieldState.selection 读取，
+                    //    不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
                     if (drawsVisualCursor && !hasCursorAnimation) {
-                        val restingRect = computeRestingCursorRect(latestLayout) ?: return@drawBehind
+                        val restingRect = computeRestingCursorRect(latestLayout, liveSelection) ?: return@drawBehind
                         drawVisualCursor(
                             startRect = restingRect,
                             newRect = restingRect,
@@ -361,15 +370,28 @@ private fun lerp(
 ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
 /**
- * #644 评论 5662132136 第2项：静止光标 rect — 从最新权威布局 + 当前 selection 取 caret rect。
+ * #644 评论 5662132136 第2项 + #684 评论 5663032418 断点3：静止光标 rect —
+ * 从最新权威布局的几何 + **live** selection offset 取 caret rect。
  *
  * smooth cursor 开启、当前没有光标动画时（attach、两次输入之间、纯等待、动画结束后），
  * overlay 直接画这个 rect 作为静止光标。layout 缺失或 offset 越界时返回 null。
+ *
+ * #684 评论 5663032418 断点3：布局几何继续用 [layout.result]，但光标 offset 不再从
+ * [ComposeLayoutSnapshot.selection]（只在 onTextLayout 时快照）读取，而是由调用方传入
+ * live [TextFieldState.selection] 的 end。这样纯 selection 变化（方向键、点击移动光标）
+ * 不触发新 layout 时，静止光标也能立即更新。
+ *
+ * [liveSelection] 为 null 时回退到 [layout.selection]（保持向后兼容，例如测试场景）。
  */
-private fun computeRestingCursorRect(layout: ComposeLayoutSnapshot?): Rect? {
+private fun computeRestingCursorRect(
+    layout: ComposeLayoutSnapshot?,
+    liveSelection: TextRange?,
+): Rect? {
     if (layout == null) return null
     return try {
-        val selectionEnd = layout.selection.end.coerceIn(0, layout.result.layoutInput.text.length)
+        val selectionEnd =
+            (liveSelection?.end ?: layout.selection.end)
+                .coerceIn(0, layout.result.layoutInput.text.length)
         layout.result.getCursorRect(selectionEnd)
     } catch (_: Throwable) {
         null

@@ -458,6 +458,30 @@ internal object ComposeVisualRebase {
         t: Float,
     ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
+    /**
+     * #684 评论 5663032418 断点1：对 [Rect] 做 lerp —
+     * 中断续跑时把当前活跃事务的 cursorStartRect/cursorEndRect 按 masterProgress 插值，
+     * 得到当前屏幕上的光标位置，作为下一笔事务的 cursorStartRect，
+     * 与文字用 masterProgress 物化保持一致。
+     *
+     * [startRect] / [endRect] 任一为 null 时返回 null（无光标动画可物化）。
+     * [progress] 会被 coerceIn(0, 1)。
+     */
+    fun interpolateCursorRect(
+        startRect: Rect?,
+        endRect: Rect?,
+        progress: Float,
+    ): Rect? {
+        if (startRect == null || endRect == null) return null
+        val t = progress.coerceIn(0f, 1f)
+        return Rect(
+            left = lerpFloat(startRect.left, endRect.left, t),
+            top = lerpFloat(startRect.top, endRect.top, t),
+            right = lerpFloat(startRect.right, endRect.right, t),
+            bottom = lerpFloat(startRect.bottom, endRect.bottom, t),
+        )
+    }
+
     /** 安全获取 path bounds — range 无效或越界时返回 null。 */
     fun safePathBounds(
         result: TextLayoutResult,
@@ -592,7 +616,8 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #644 评论 #684 + 评论 5662132136 第1项：用合成后的 offset map 计算 retained moves。
+     * #644 评论 #684 + 评论 5662132136 第1项 + 评论 5663032418 断点2：
+     * 用合成后的 offset map 计算 retained moves。
      *
      * IDENTITY 与 SHIFTED 都表示"这段旧文字在新正文里仍然存在（内容相同）"，
      * 只是 IDENTITY 的 offset 没变、SHIFTED 的 offset 变了（被前后增删平移）。
@@ -601,56 +626,178 @@ internal object ComposeVisualRebase {
      * 因此两种 entry 都进入 oldRange -> newRange 的真实几何比较；
      * 只有 old/new [TextLayoutResult] 的真实 rect 真变了才生成 [RetainedMove]。
      * kind 只说明逻辑 offset 是否平移，不决定"画不画 move"。
-     * 相邻且位移向量（newStart - oldStart）一致的 entry 先合并，避免产生过多碎 move。
+     *
+     * #684 评论 5663032418 断点2：不能再先合并相邻 entry 再整段算一个 dx/dy —
+     * 软换行场景下同一段后缀里前半段仍在原行只横向移动、中间一段被挤到下一行、
+     * 更后面的视觉行只纵向移动，不可能共用一个 bounding box 和一个位移向量。
+     *
+     * 新策略：对每个合成后的 mapped entry 再按 old/new 两边真实视觉行边界切片，
+     * 每个 chunk 单独比较 old/new rect，只有 dx/dy 一致且 old/new 都连续的 chunk
+     * 才合并成 RetainedMove。切点避开 surrogate pair / code point 中间。
      */
     private fun computeRetainedMovesFromComposedMap(
         prev: ComposeLayoutSnapshot,
         curr: ComposeLayoutSnapshot,
         composed: List<VisualOffsetMapEntry>,
     ): List<RetainedMove> {
-        val merged = mergeComposedEntries(composed)
         val moves = mutableListOf<RetainedMove>()
-        for (entry in merged) {
-            val oldRange = TextRange(entry.oldStart, entry.oldStart + entry.length)
-            val newRange = TextRange(entry.newStart, entry.newStart + entry.length)
-            if (oldRange.start >= oldRange.end || newRange.start >= newRange.end) continue
-            if (oldRange.end > prev.result.layoutInput.text.length) continue
-            if (newRange.end > curr.result.layoutInput.text.length) continue
-            val oldBounds = safePathBounds(prev.result, oldRange) ?: continue
-            val newBounds = safePathBounds(curr.result, newRange) ?: continue
-            val dx = newBounds.left - oldBounds.left
-            val dy = newBounds.top - oldBounds.top
-            if (kotlin.math.abs(dx) > 1f || kotlin.math.abs(dy) > 1f) {
-                moves.add(RetainedMove(oldRange, newRange))
-            }
+        for (entry in composed) {
+            val oldStart = entry.oldStart
+            val newStart = entry.newStart
+            val length = entry.length
+            if (length <= 0) continue
+            if (oldStart + length > prev.result.layoutInput.text.length) continue
+            if (newStart + length > curr.result.layoutInput.text.length) continue
+
+            // 按两边视觉行边界切片 — 每个 chunk 单独算 dx/dy。
+            val chunks = splitEntryByVisualLines(prev.result, curr.result, oldStart, newStart, length)
+            // 只有 dx/dy 一致且 old/new 都连续的 chunk 才合并。
+            mergeChunksIntoMoves(chunks, moves)
         }
         return moves
     }
 
     /**
-     * #644 评论 #684 + 评论 5662132136 第1项：合并相邻、位移向量（newStart - oldStart）
-     * 一致的 entry — 同一段被平移的保留文字合成一个 entry，减少 retained move 数量。
+     * #684 评论 5663032418 断点2：把一个合成 entry 按 old/new 两边真实视觉行边界切片。
      *
-     * IDENTITY（位移 0）与 SHIFTED（位移非 0）都参与合并；
-     * 只要相邻、连续且位移向量相同就合并，kind 由合并后位移是否为 0 决定。
+     * 切点是 old/new 两边各自视觉行结束 offset 的并集（映射回 entry 内部偏移），
+     * 取两边更早的边界切成 chunk。切点避开 surrogate pair / code point 中间。
+     *
+     * 返回每个 chunk 的 (oldRange, newRange, oldBounds, newBounds)；
+     * bounds 为 null 的 chunk 会被保留为 null（调用方据此跳过合并）。
      */
-    private fun mergeComposedEntries(
-        entries: List<VisualOffsetMapEntry>,
-    ): List<VisualOffsetMapEntry> {
-        val result = mutableListOf<VisualOffsetMapEntry>()
-        for (entry in entries) {
-            val delta = entry.newStart - entry.oldStart
-            val last = result.lastOrNull()
-            if (last != null &&
-                (last.newStart - last.oldStart) == delta &&
-                last.oldStart + last.length == entry.oldStart
-            ) {
-                result[result.lastIndex] = last.copy(length = last.length + entry.length)
-            } else {
-                result.add(entry)
+    private fun splitEntryByVisualLines(
+        prevResult: TextLayoutResult,
+        currResult: TextLayoutResult,
+        oldStart: Int,
+        newStart: Int,
+        length: Int,
+    ): List<RetainedMoveChunk> {
+        val oldText = prevResult.layoutInput.text
+        val newText = currResult.layoutInput.text
+        // 收集所有切点（相对 entry 起始的偏移 0..length）。
+        val cutOffsets = sortedSetOf(0, length)
+        // old 侧视觉行边界
+        var scan = 0
+        while (scan < length) {
+            val oldOffset = oldStart + scan
+            if (oldOffset >= oldText.length) break
+            val oldLine = prevResult.getLineForOffset(oldOffset)
+            val oldLineEnd = prevResult.getLineEnd(oldLine)
+            val nextCut = oldLineEnd - oldStart
+            if (nextCut in (scan + 1)..length) {
+                cutOffsets.add(avoidSurrogateCut(oldText, oldStart, nextCut, length))
+            }
+            scan = oldLineEnd - oldStart
+            if (scan <= 0) scan = 1 // 防御：避免死循环
+        }
+        // new 侧视觉行边界
+        scan = 0
+        while (scan < length) {
+            val newOffset = newStart + scan
+            if (newOffset >= newText.length) break
+            val newLine = currResult.getLineForOffset(newOffset)
+            val newLineEnd = currResult.getLineEnd(newLine)
+            val nextCut = newLineEnd - newStart
+            if (nextCut in (scan + 1)..length) {
+                cutOffsets.add(avoidSurrogateCut(newText, newStart, nextCut, length))
+            }
+            scan = newLineEnd - newStart
+            if (scan <= 0) scan = 1
+        }
+
+        // 按切点生成 chunk。
+        val chunks = mutableListOf<RetainedMoveChunk>()
+        val sortedCuts = cutOffsets.toList()
+        for (i in 0 until sortedCuts.size - 1) {
+            val chunkStart = sortedCuts[i]
+            val chunkEnd = sortedCuts[i + 1]
+            if (chunkEnd <= chunkStart) continue
+            val oldRange = TextRange(oldStart + chunkStart, oldStart + chunkEnd)
+            val newRange = TextRange(newStart + chunkStart, newStart + chunkEnd)
+            val oldBounds = safePathBounds(prevResult, oldRange)
+            val newBounds = safePathBounds(currResult, newRange)
+            if (oldBounds == null || newBounds == null) continue
+            val dx = newBounds.left - oldBounds.left
+            val dy = newBounds.top - oldBounds.top
+            chunks.add(
+                RetainedMoveChunk(
+                    oldRange = oldRange,
+                    newRange = newRange,
+                    dx = dx,
+                    dy = dy,
+                ),
+            )
+        }
+        return chunks
+    }
+
+    /**
+     * 调整切点以避开 surrogate pair / code point 中间。
+     * 如果 cutOffset 处正好切在一个 surrogate pair 中间，向前退一位。
+     */
+    private fun avoidSurrogateCut(
+        text: AnnotatedString,
+        base: Int,
+        cutOffset: Int,
+        maxOffset: Int,
+    ): Int {
+        if (cutOffset <= 0 || cutOffset >= maxOffset) return cutOffset.coerceIn(0, maxOffset)
+        val absCut = base + cutOffset
+        if (absCut in 1 until text.length &&
+            text[absCut - 1].isHighSurrogate() &&
+            text[absCut].isLowSurrogate()
+        ) {
+            return (cutOffset - 1).coerceIn(0, maxOffset)
+        }
+        return cutOffset
+    }
+
+    /**
+     * #684 评论 5663032418 断点2：单个 chunk — 一段 old/new range + 算好的 dx/dy。
+     */
+    private data class RetainedMoveChunk(
+        val oldRange: TextRange,
+        val newRange: TextRange,
+        val dx: Float,
+        val dy: Float,
+    )
+
+    /**
+     * #684 评论 5663032418 断点2：把 chunk 合并成 RetainedMove —
+     * 只有 dx/dy 一致（容差 1f）且 old/new 都连续的 chunk 才合并。
+     */
+    private fun mergeChunksIntoMoves(
+        chunks: List<RetainedMoveChunk>,
+        out: MutableList<RetainedMove>,
+    ) {
+        if (chunks.isEmpty()) return
+        var mergeStartIdx = 0
+        for (i in 1..chunks.size) {
+            val prevChunk = chunks[i - 1]
+            val canContinue =
+                i < chunks.size &&
+                    kotlin.math.abs(chunks[i].dx - prevChunk.dx) <= 1f &&
+                    kotlin.math.abs(chunks[i].dy - prevChunk.dy) <= 1f &&
+                    chunks[i].oldRange.start == prevChunk.oldRange.end &&
+                    chunks[i].newRange.start == prevChunk.newRange.end
+            if (!canContinue) {
+                // 把 [mergeStartIdx, i) 这段合并成一个 RetainedMove（如果位移真变了）。
+                val first = chunks[mergeStartIdx]
+                val last = chunks[i - 1]
+                val dx = first.dx
+                val dy = first.dy
+                if (kotlin.math.abs(dx) > 1f || kotlin.math.abs(dy) > 1f) {
+                    out.add(
+                        RetainedMove(
+                            oldRange = TextRange(first.oldRange.start, last.oldRange.end),
+                            newRange = TextRange(first.newRange.start, last.newRange.end),
+                        ),
+                    )
+                }
+                mergeStartIdx = i
             }
         }
-        return result
     }
 
     /**

@@ -167,8 +167,25 @@ class ComposeVisualFrameCoordinator(
             )
 
         // 计算 cursor start/end rect。
-        val cursorStartRect =
-            if (cursorInfo != null && consumed.layout != null) {
+        // #684 评论 5663032418 断点1：中断续跑时，文字用 masterProgress 物化当前屏幕帧，
+        // 光标也必须从当前屏幕位置继续，而不是从上一笔的逻辑终点重新起跑。
+        // 先用当前活跃事务的 cursorStartRect/cursorEndRect + masterProgress 算出
+        // 当前屏幕上的光标位置 interruptedCursorRect，作为下一笔 cursorStartRect 的首选。
+        val activeTx = active
+        val interruptedCursorRect =
+            if (activeTx != null && cursorInfo?.animate == true) {
+                ComposeVisualRebase.interpolateCursorRect(
+                    startRect = activeTx.cursorStartRect,
+                    endRect = activeTx.cursorEndRect,
+                    progress = masterProgress,
+                )
+            } else {
+                null
+            }
+
+        // 逻辑旧位置回退：当没有活跃事务或没有 cursor 动画时，从 consumed.layout 算逻辑旧位置。
+        val logicalOldCursorRect =
+            if (cursorInfo != null) {
                 try {
                     val startOffset =
                         cursorInfo.oldEndUtf16
@@ -180,6 +197,9 @@ class ComposeVisualFrameCoordinator(
             } else {
                 null
             }
+
+        // 优先用当前屏幕插值位置；没有可物化的光标动画时回退到逻辑旧位置。
+        val cursorStartRect = interruptedCursorRect ?: logicalOldCursorRect
 
         val cursorEndRect =
             if (cursorInfo != null) {

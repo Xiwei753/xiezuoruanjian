@@ -234,6 +234,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             scrollY = viewportState.scrollState.value,
             textColor = textColor,
             cursorColor = cursorColor,
+            // #684 评论 5663032418 断点3：直接读 live TextFieldState.selection，
+            // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
+            // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
+            liveSelection = bridge.state.selection,
             modifier = Modifier.fillMaxSize(),
         )
     }
