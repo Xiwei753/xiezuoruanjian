@@ -102,7 +102,9 @@ internal object ComposeVisualRebase {
         val mappedSlices = mutableListOf<RebasedTextSlice>()
         val ownedOldRanges = mutableListOf<TextRange>()
         when {
-            nextOffsetMap != null && nextOffsetMap.isNotEmpty() -> {
+            // #684 评论 5664636035 Bug3：空 map 也必须走 splitRebasedSliceThroughOffsetMap（零存活映射，
+            // 所有 slice 都 fading）。只有 nextOffsetMap == null 才回退到 nextReplaceBounds。
+            nextOffsetMap != null -> {
                 for (slice in allSlices) {
                     if (slice.targetRange == null) {
                         mappedSlices.add(slice)
@@ -150,7 +152,9 @@ internal object ComposeVisualRebase {
         prev: ComposeVisualTransaction,
         textProgress: Float,
     ): List<RebasedTextSlice> {
-        val textKind = prev.intents.lastOrNull()?.textKind ?: TextVisualKind.None
+        // #684 评论 5664636035 Bug1：用屏幕事务的 textKind（按最终净变化决定），
+        // 不再从最后一笔 intent 的 textKind 读。
+        val textKind = prev.textKind
         return when (textKind) {
             TextVisualKind.Delete ->
                 rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
@@ -361,6 +365,62 @@ internal object ComposeVisualRebase {
         }
         return SplitRebasedResult(outSlices, ownedOldRanges)
     }
+
+    /**
+     * #684 评论 5664636035 Bug1：从 T0→Tn composed offset map 的补集算屏幕事务的 old/new changed ranges。
+     *
+     * 屏幕事务的 old/new changed ranges 不能用 chain.flatMap { it.oldRanges }，因为 chain 里的
+     * 第 2、3 笔 range 属于 T1/T2 中间正文，不属于屏幕事务的 T0 oldLayout / Tn newLayout。
+     * 正确做法：oldRanges = [0,oldLength) 中没有被 composed map old 区间覆盖的部分；
+     * newRanges = [0,newLength) 中没有被 composed map new 区间覆盖的部分。
+     *
+     * @param map 整条 chain 合成后的 T0->Tn offset map（null 时返回空列表）。
+     * @param oldLength T0 旧正文长度。
+     * @param newLength Tn 新正文长度。
+     * @return [FrameChangedRanges] — 屏幕坐标的 old/new changed ranges。
+     */
+    fun changedRangesFromComposedMap(
+        map: List<VisualOffsetMapEntry>?,
+        oldLength: Int,
+        newLength: Int,
+    ): FrameChangedRanges {
+        if (map == null) return FrameChangedRanges(emptyList(), emptyList())
+        val oldRanges = complementRanges(map.map { TextRange(it.oldStart, it.oldStart + it.length) }, oldLength)
+        val newRanges = complementRanges(map.map { TextRange(it.newStart, it.newStart + it.length) }, newLength)
+        return FrameChangedRanges(oldRanges, newRanges)
+    }
+
+    /**
+     * 计算 [0, totalLength) 中没有被 [covered] 区间覆盖的部分 — 补集。
+     */
+    private fun complementRanges(
+        covered: List<TextRange>,
+        totalLength: Int,
+    ): List<TextRange> {
+        if (totalLength <= 0) return emptyList()
+        val sorted = covered.filter { it.start < it.end }.sortedBy { it.start }
+        val result = mutableListOf<TextRange>()
+        var pos = 0
+        for (range in sorted) {
+            if (range.start > pos) {
+                result.add(TextRange(pos, minOf(range.start, totalLength)))
+            }
+            pos = maxOf(pos, range.end)
+            if (pos >= totalLength) break
+        }
+        if (pos < totalLength) {
+            result.add(TextRange(pos, totalLength))
+        }
+        return result
+    }
+
+    /**
+     * #684 评论 5664636035 Bug1：屏幕事务的 old/new changed ranges — 从 composed offset map 补集算出。
+     */
+    data class FrameChangedRanges(
+        val oldRanges: List<TextRange>,
+        val newRanges: List<TextRange>,
+    )
 
     /**
      * #684 评论 5663862982 Bug2：按 composed offset map 切 surviving slice。
@@ -1004,7 +1064,9 @@ internal object ComposeVisualRebase {
         chain: List<EditorVisualIntent>,
     ): List<VisualOffsetMapEntry>? {
         if (chain.isEmpty()) return null
-        if (chain.any { it.offsetMap == null || it.offsetMap.entries.isEmpty() }) return null
+        // #684 评论 5664636035 Bug3：空 offsetMap.entries 是合法"零存活映射"（整段删除/整段替换），
+        // 不能当成没有 map。只有 offsetMap == null 才表示该笔没有 offset map。
+        if (chain.any { it.offsetMap == null }) return null
 
         // acc：初始 old 文本坐标 → 当前 frontier 文本坐标。
         val initialOldLen = chain.first().expectedOldText.length

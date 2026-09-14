@@ -152,11 +152,33 @@ class ComposeVisualFrameCoordinator(
         // 合流生成事务。
         val chain = pendingChain.intents
         val coreTransactionIds = chain.map { it.coreTransactionId }
-        val mergedOldRanges = chain.flatMap { it.oldRanges }
-        val mergedNewRanges = chain.flatMap { it.newRanges }
+        // #684 评论 5664636035 Bug1：屏幕事务的 old/new changed ranges 应该直接从 T0→Tn composed
+        // offset map 的补集算，不再用 chain.flatMap（中间事务坐标不能直接当屏幕坐标）。
+        // 当 composedOffsetMap 为 null（chain 中有笔没有 offset map）时，回退到 chain.flatMap。
+        val composedOffsetMapForRanges = ComposeVisualRebase.composeOffsetMapChain(chain)
+        val oldLength = consumed.layout.result.layoutInput.text.length
+        val newLength = newest.layout.result.layoutInput.text.length
+        val mergedOldRanges: List<androidx.compose.ui.text.TextRange>
+        val mergedNewRanges: List<androidx.compose.ui.text.TextRange>
+        if (composedOffsetMapForRanges != null) {
+            val frameChangedRanges =
+                ComposeVisualRebase.changedRangesFromComposedMap(
+                    composedOffsetMapForRanges,
+                    oldLength,
+                    newLength,
+                )
+            mergedOldRanges = frameChangedRanges.oldRanges
+            mergedNewRanges = frameChangedRanges.newRanges
+        } else {
+            mergedOldRanges = chain.flatMap { it.oldRanges }
+            mergedNewRanges = chain.flatMap { it.newRanges }
+        }
 
+        // #684 评论 5664636035 Bug2：无旧动画时光标起点应从 chain 第一笔 old cursor 起跑，
+        // 而非最后一笔。firstCursor 用于 cursorStartRect（T0 坐标），lastCursor 用于 cursorEndRect（Tn 坐标）。
+        val firstCursor = chain.mapNotNull { it.cursor }.firstOrNull()
+        val lastCursor = chain.mapNotNull { it.cursor }.lastOrNull()
         val lastIntent = chain.last()
-        val cursorInfo = lastIntent.cursor
 
         // 计算 retained moves — 用 offset map chain 合成。
         val retainedMoves =
@@ -173,7 +195,7 @@ class ComposeVisualFrameCoordinator(
         // 当前屏幕上的光标位置 interruptedCursorRect，作为下一笔 cursorStartRect 的首选。
         val activeTx = active
         val interruptedCursorRect =
-            if (activeTx != null && cursorInfo?.animate == true) {
+            if (activeTx != null && firstCursor?.animate == true) {
                 ComposeVisualRebase.interpolateCursorRect(
                     startRect = activeTx.cursorStartRect,
                     endRect = activeTx.cursorEndRect,
@@ -183,12 +205,13 @@ class ComposeVisualFrameCoordinator(
                 null
             }
 
-        // 逻辑旧位置回退：当没有活跃事务或没有 cursor 动画时，从 consumed.layout 算逻辑旧位置。
+        // #684 评论 5664636035 Bug2：无旧动画时从 chain 第一笔 old cursor（T0 坐标）起跑，
+        // 不再用最后一笔 old cursor（T(n-1) 坐标）查 T0 布局。
         val logicalOldCursorRect =
-            if (cursorInfo != null) {
+            if (firstCursor != null) {
                 try {
                     val startOffset =
-                        cursorInfo.oldEndUtf16
+                        firstCursor.oldEndUtf16
                             .coerceIn(0, consumed.layout.result.layoutInput.text.length)
                     consumed.layout.result.getCursorRect(startOffset)
                 } catch (_: Throwable) {
@@ -201,11 +224,12 @@ class ComposeVisualFrameCoordinator(
         // 优先用当前屏幕插值位置；没有可物化的光标动画时回退到逻辑旧位置。
         val cursorStartRect = interruptedCursorRect ?: logicalOldCursorRect
 
+        // #684 评论 5664636035 Bug2：cursorEndRect 用最后一笔 new cursor（Tn 坐标）查 newest 布局。
         val cursorEndRect =
-            if (cursorInfo != null) {
+            if (lastCursor != null) {
                 try {
                     val endOffset =
-                        cursorInfo.newEndUtf16
+                        lastCursor.newEndUtf16
                             .coerceIn(0, newest.layout.result.layoutInput.text.length)
                     newest.layout.result.getCursorRect(endOffset)
                 } catch (_: Throwable) {
@@ -226,15 +250,23 @@ class ComposeVisualFrameCoordinator(
         // #684 评论 5663862982 Bug2：多笔 intent 合成一个屏幕事务时，上一帧的 suppressed
         //   ranges 必须按整条 chain 的 composedOffsetMap（T0->Tn）映射，而不是最后一笔
         //   replaceBounds（T(n-1)->Tn 坐标）。
+        // #684 评论 5664636035 Bug1：屏幕事务的 textKind 按最终净变化决定，不再从最后一笔 intent 读。
+        val transactionTextKind =
+            when {
+                mergedOldRanges.isEmpty() && mergedNewRanges.isEmpty() -> TextVisualKind.None
+                mergedOldRanges.isEmpty() -> TextVisualKind.Insert
+                mergedNewRanges.isEmpty() -> TextVisualKind.Delete
+                else -> TextVisualKind.Move
+            }
         val customTextAnimationEnabled =
             lastMotionPolicy.textEnabled &&
-                lastIntent.textKind != TextVisualKind.None &&
+                transactionTextKind != TextVisualKind.None &&
                 lastIntent.animationMode != AnimationModeDto.SYSTEM_SUPPRESSED
 
         // (1) 本事务自己 owned 的 new ranges — Insert/Move 的 newRanges。
         val currentOwnedNewRanges =
             if (customTextAnimationEnabled) {
-                when (lastIntent.textKind) {
+                when (transactionTextKind) {
                     TextVisualKind.Insert,
                     TextVisualKind.Move,
                     -> mergedNewRanges
@@ -256,7 +288,7 @@ class ComposeVisualFrameCoordinator(
 
         // (3) 上一帧仍由 startFrame 接管、且映射到当前 new text 后仍存活的 suppressed ranges。
         //     用整条 chain 的 composedOffsetMap（T0->Tn）映射，不能用最后一笔 replaceBounds。
-        val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
+        val composedOffsetMap = composedOffsetMapForRanges
         val prevSuppressedRanges = active?.suppressedCurrentRanges ?: emptyList()
         val mappedPrevSuppressedRanges =
             ComposeVisualRebase.mapSuppressedRangesThroughOffsetMap(prevSuppressedRanges, composedOffsetMap)
@@ -317,6 +349,8 @@ class ComposeVisualFrameCoordinator(
                 // #684 评论 5663862982：事务生成后冻结的 suppressed ranges —
                 // 下一笔 rebase 时按 composedOffsetMap 映射到新坐标系。
                 suppressedCurrentRanges = hiddenRanges,
+                // #684 评论 5664636035 Bug1：屏幕事务的 textKind 按最终净变化决定。
+                textKind = transactionTextKind,
             )
 
         active = transaction

@@ -45,6 +45,9 @@ data class RetainedMove(
  *   (2) retained moves 的 newRanges（被挤到下一行的保留文字，overlay 画时系统正文必须透明）；
  *   (3) 上一帧仍由 startFrame 接管、按 composedOffsetMap 映射到当前 new text 后仍存活的 suppressed ranges。
  *   overlay 据此隐藏 BasicTextField 对应区间，避免重影/跳行。
+ * @param textKind #684 评论 5664636035 Bug1：屏幕事务自己的文字类型 — 按最终净变化决定，
+ *   不再从最后一笔 intent 的 textKind 读。oldChanged/newChanged 都空→None；
+ *   oldChanged 空→Insert；newChanged 空→Delete；否则→Move。
  */
 data class ComposeVisualTransaction(
     val id: Long,
@@ -61,4 +64,5 @@ data class ComposeVisualTransaction(
     val durationMs: Long,
     val motionPolicy: EditorMotionPolicy,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
+    val textKind: TextVisualKind = TextVisualKind.None,
 )

@@ -86,10 +86,13 @@ fun ComposeTextAnimationOverlay(
     // 设置层 motionPolicy 只负责总开关 / reduce motion，不覆盖 Core 已经决定好的本笔动画事实。
     val animationMode = activeIntent?.animationMode
     val systemSuppressed = animationMode == AnimationModeDto.SYSTEM_SUPPRESSED
+    // #684 评论 5664636035 Bug1：textKind 从 transaction 读取（屏幕事务按最终净变化决定），
+    // 不再从 activeIntent 读取（最后一笔 intent 的 textKind 不代表整条 chain 的净变化）。
+    val transactionTextKind = activeTransaction?.textKind ?: TextVisualKind.None
     val isCursorOnly =
-        activeIntent?.textKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
+        transactionTextKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
     val textEnabled =
-        motionPolicy.textEnabled && !systemSuppressed && activeIntent?.textKind != TextVisualKind.None
+        motionPolicy.textEnabled && !systemSuppressed && transactionTextKind != TextVisualKind.None
     val cursorEnabled = motionPolicy.cursorEnabled
 
     // 直接使用冻结事务的 durationMs 作为 master timeline；Core 已决定本笔时长。
@@ -131,7 +134,7 @@ fun ComposeTextAnimationOverlay(
 
     val hasTextAnimation =
         activeTransaction != null && textEnabled &&
-            (hiddenRanges.isNotEmpty() || activeIntent?.textKind != TextVisualKind.None)
+            (hiddenRanges.isNotEmpty() || transactionTextKind != TextVisualKind.None)
     val hasCursorAnimation =
         activeTransaction != null && cursorEnabled &&
             activeIntent?.cursor?.animate == true
@@ -164,7 +167,9 @@ fun ComposeTextAnimationOverlay(
                                 currentResult = currentResult,
                                 previousResult = previousResult,
                                 transaction = transaction,
-                                textKind = intent.textKind,
+                                // #684 评论 5664636035 Bug1：绘制正文时读取 transaction.textKind，
+                                // 不再读 activeIntent 的 textKind（屏幕事务的 textKind 按最终净变化决定）。
+                                textKind = transaction.textKind,
                                 // smooth cursor 关闭时系统光标负责绘制，overlay 不画光标动画。
                                 cursorAnimate =
                                     drawsVisualCursor &&
