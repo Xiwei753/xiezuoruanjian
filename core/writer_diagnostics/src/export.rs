@@ -161,8 +161,7 @@ fn redact_attachment_content(content: &[u8]) -> Vec<u8> {
 /// 把目录打 zip 包。使用标准 zip crate 的 Deflate 压缩，
 /// 诊断日志是 JSONL/文本，Deflate 对这种重复字段非常有效。
 fn zip_directory(source_dir: &Path, zip_path: &Path) -> Result<(), String> {
-    let file = fs::File::create(zip_path)
-        .map_err(|e| format!("create zip failed: {e}"))?;
+    let file = fs::File::create(zip_path).map_err(|e| format!("create zip failed: {e}"))?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
@@ -335,7 +334,10 @@ mod tests {
                 );
             }
         }
-        assert!(found_log_entry, "zip should contain at least one .log entry");
+        assert!(
+            found_log_entry,
+            "zip should contain at least one .log entry"
+        );
 
         super::super::writer::reset_for_test();
     }

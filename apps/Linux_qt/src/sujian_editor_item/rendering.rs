@@ -78,6 +78,15 @@ impl SujianEditorItem {
             .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
         let mut created_cursor_only_key: Option<VisualTransactionKey> = None;
 
+        // Issue #686 评论 5664857575 领域2：存在活动正文事务时，光标位置由最新正文事务
+        // 的同一条 Timeline 决定，不再额外创建 CursorOnly。CursorOnly 只用于没有正文事务
+        // 的纯光标移动（方向键、Home/End、鼠标点击后的平滑移动）。
+        let has_active_text_tx = self
+            .pipeline
+            .animation_coordinator()
+            .active_text_transaction_key()
+            .is_some();
+
         // Issue #679 评论 5657313927 (步骤 3): 如果没有事务、当前又确实应该平滑移动
         // （不是点击强制 snap、不是滚动、不是选择），且 smooth cursor 开启，
         // 就创建一个 CursorOnly，拿到它的 key。
@@ -88,6 +97,7 @@ impl SujianEditorItem {
             || (self.cursor_ctrl.visual_y - cursor_y).abs() > 0.01;
 
         if found_tx.is_none()
+            && !has_active_text_tx
             && needs_cursor_motion
             && self.current_smooth_cursor_enabled
             && !self.cursor_ctrl.force_snap_next

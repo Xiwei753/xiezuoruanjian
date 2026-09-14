@@ -116,12 +116,15 @@ impl WorkspaceBackend {
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
     }
     fn try_restore_last_workspace(&mut self) {
-        if self
+        let restored = self
             .with_app_mut(|app| app.try_restore_last_workspace())
-            .is_ok()
-        {
+            .unwrap_or(false);
+        if restored {
+            // 真的恢复成功，发 workspace_opened 等信号
             self.emit_workspace_changed();
         }
+        // 无可恢复工作区时，AppBackend 内部已发 workspace_state_changed 等信号，
+        // 此处不再发 workspace_opened，避免 QML 去读未初始化的 workspace。
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
         let result = self.with_app_mut(|app| app.create_new_workspace());
@@ -282,16 +285,39 @@ impl AppBackend {
 
     // AppBackend::try_restore_last_workspace
     //
-    // last_workspace_path 已从 AppConfig 删除。Linux 平台层不再自动恢复上次数据根；
-    // 用户需要手动选择数据根目录。此处只加载应用级主题等设置。
-    pub(crate) fn try_restore_last_workspace(&mut self) {
+    // 启动时尝试恢复上次打开的工作区（数据根）。
+    // 读取 AppConfig 持久化的 last_workspace_path：
+    //   - 路径存在且目录仍在 → 走 internal_open_data_root 恢复，返回 true 表示恢复成功。
+    //   - 路径为 None 或目录已不存在 → 回到"未选择工作区"，返回 false。
+    // 返回值供 WorkspaceBackend 包装层决定是否发 workspace_opened 信号。
+    pub(crate) fn try_restore_last_workspace(&mut self) -> bool {
         self.debug_log("workspace", "try_restore_last_workspace_start", "");
-        self.debug_log(
-            "workspace",
-            "try_restore_last_workspace_no_saved_path",
-            "last_workspace_path removed; waiting for user selection",
-        );
-        // No saved data root to restore
+        let saved_path = writer_core::app_config::get_last_workspace_path();
+        if let Some(path) = saved_path {
+            if std::path::Path::new(&path).exists() {
+                self.debug_log(
+                    "workspace",
+                    "try_restore_last_workspace_found",
+                    &format!("path={}", path),
+                );
+                let _ = self.internal_open_data_root(&path);
+                // internal_open_data_root 成功时设置 current_has_data_root=true；
+                // bootstrap 失败时保持 false。
+                return self.current_has_data_root;
+            }
+            self.debug_log(
+                "workspace",
+                "try_restore_last_workspace_path_missing",
+                &format!("saved path no longer exists: {}", path),
+            );
+        } else {
+            self.debug_log(
+                "workspace",
+                "try_restore_last_workspace_no_saved_path",
+                "no last_workspace_path saved; waiting for user selection",
+            );
+        }
+        // 无可恢复工作区：回到未选择工作区状态
         self.current_has_data_root = false;
         self.current_sync_status = "no_workspace".to_string();
         self.sync_status_changed();
@@ -299,6 +325,7 @@ impl AppBackend {
         // Load app-level theme mode even without data root
         self.load_app_theme_mode();
         self.ai_available_changed();
+        false
     }
 
     // AppBackend::internal_open_data_root
@@ -362,6 +389,12 @@ impl AppBackend {
         self.load_sync_config();
         self.load_local_settings();
 
+        // bootstrap 成功且数据根状态已设置，持久化 last_workspace_path 供下次启动自动恢复。
+        // 失败时不写 path，保留旧值（切换工作区失败时旧 path 不被覆盖）。
+        if let Err(e) = writer_core::app_config::save_last_workspace_path(path) {
+            self.debug_warn("workspace", "save_last_workspace_path_failed", &e);
+        }
+
         // 写入 current_device.json 设备信息
         if let Err(e) = api.ensure_device_info("desktop", "desktop") {
             self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
@@ -402,9 +435,11 @@ impl AppBackend {
         }
     }
 
-    // AppBackend::close_workspace
-    pub(crate) fn close_workspace(&mut self) {
-        self.debug_log("workspace", "close_workspace_start", "");
+    // AppBackend::reset_workspace_state
+    //
+    // 关闭/切换工作区的共享内部逻辑：清数据根状态、清选区、清树、重置同步状态、清编辑器、发信号。
+    // 不清 last_workspace_path，由调用方（close_workspace / switch_workspace）决定是否清。
+    fn reset_workspace_state(&mut self) {
         self.flush_writing_stats();
         self.flush_recent_edits();
         // Clear data root state
@@ -427,12 +462,29 @@ impl AppBackend {
         self.workspace_state_changed();
         self.trigger_projects_reloaded();
         self.sync_status_changed();
+    }
+
+    // AppBackend::close_workspace
+    //
+    // 显式关闭工作区：清除持久化的 last_workspace_path，避免下次启动自动恢复到已关闭的工作区。
+    pub(crate) fn close_workspace(&mut self) {
+        self.debug_log("workspace", "close_workspace_start", "");
+        if let Err(e) = writer_core::app_config::clear_last_workspace_path() {
+            self.debug_warn("workspace", "clear_last_workspace_path_failed", &e);
+        }
+        self.reset_workspace_state();
         self.debug_log("workspace", "close_workspace_success", "");
     }
 
     // AppBackend::switch_workspace
+    //
+    // 切换工作区：不清除 last_workspace_path，保留旧 path。
+    // 用户选择新目录成功后 internal_open_data_root 会覆盖 path；
+    // 失败或取消时旧 path 保留，下次启动仍可恢复。
     pub(crate) fn switch_workspace(&mut self) {
-        self.close_workspace();
+        self.debug_log("workspace", "switch_workspace_start", "");
+        self.reset_workspace_state();
+        self.debug_log("workspace", "switch_workspace_success", "");
     }
 
     // AppBackend::init_workspace_from_github

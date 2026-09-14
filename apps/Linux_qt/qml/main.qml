@@ -371,12 +371,9 @@ ApplicationWindow {
             appController.refreshState(qsTr("刷新工作区状态失败"));
         }
         function onWorkspace_opened() {
-            if (settingsBackend) {
-                settingsBackend.load_local_settings();
-            }
-            if (syncBackend) {
-                syncBackend.load_sync_config();
-            }
+            // load_local_settings 和 load_sync_config 已由
+            // AppBackend::internal_open_data_root 在 Core 初始化成功后加载，
+            // QML 收到 workspace_opened 后只负责启动 workspace-open 自动同步。
             workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {

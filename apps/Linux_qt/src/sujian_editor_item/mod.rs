@@ -72,12 +72,6 @@ use writer_core::editor::{
     EditorVisualTransaction, GlyphRect, PreeditVisualTransaction,
 };
 
-#[cfg(test)]
-use writer_core::editor::AnimationMode as CoreAnimationMode;
-
-#[cfg(test)]
-use animation_coordinator::AnimationMode;
-
 #[derive(Clone, Debug)]
 pub(crate) struct PreeditAttribute {
     pub start: usize,
@@ -773,19 +767,6 @@ impl SujianEditorItem {
             self.pipeline.set_previous_canonical_snapshot(None);
             self.request_scene_rebuild();
             self.cursor_rect_changed();
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn animation_mode_from_core(mode: CoreAnimationMode) -> AnimationMode {
-        match mode {
-            CoreAnimationMode::GlyphAnimation => AnimationMode::GlyphAnimation,
-            CoreAnimationMode::ClusterAnimation => AnimationMode::ClusterAnimation,
-            CoreAnimationMode::RunAnimation => AnimationMode::RunAnimation,
-            CoreAnimationMode::LineReflowAnimation => AnimationMode::LineReflowAnimation,
-            CoreAnimationMode::SnapshotAnimation | CoreAnimationMode::SystemSuppressed => {
-                AnimationMode::SystemSuppressed
-            }
         }
     }
 

@@ -397,6 +397,11 @@ impl SaveTransaction {
     /// `recover_pending_transactions` 看到 Finished/RolledBack phase 会再删一次。
     fn cleanup(&self) {
         if let Err(e) = fs::remove_dir_all(&self.tx_dir) {
+            // NotFound 说明目录已经清掉，按幂等语义视为成功，不记 warning。
+            // 只有其他 IO 错误才记 warning，避免 staging 日志充满假故障。
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return;
+            }
             log::warn!(
                 "[transaction] cleanup: failed to remove tx_dir {}: {} \
                  (phase already persisted, next recover will retry)",

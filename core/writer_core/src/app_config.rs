@@ -37,6 +37,8 @@ pub struct AppConfig {
     pub last_chapter_id: Option<String>,
     #[serde(default)]
     pub last_starmap_id: Option<String>,
+    #[serde(default)]
+    pub last_workspace_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +125,30 @@ pub fn clear_last_navigation_state() -> Result<(), String> {
     config.last_volume_id = None;
     config.last_chapter_id = None;
     config.last_starmap_id = None;
+    save_app_config(&config)
+}
+
+/// 持久化上次打开的工作区（数据根）路径，供下次启动自动恢复。
+/// 空字符串视为无路径，存为 None。
+pub fn save_last_workspace_path(path: &str) -> Result<(), String> {
+    let mut config = load_app_config();
+    config.last_workspace_path = if path.is_empty() {
+        None
+    } else {
+        Some(path.to_string())
+    };
+    save_app_config(&config)
+}
+
+/// 读取上次打开的工作区（数据根）路径。返回 None 表示无可恢复路径。
+pub fn get_last_workspace_path() -> Option<String> {
+    load_app_config().last_workspace_path
+}
+
+/// 清除持久化的上次工作区路径。显式关闭工作区时调用，避免下次启动自动恢复。
+pub fn clear_last_workspace_path() -> Result<(), String> {
+    let mut config = load_app_config();
+    config.last_workspace_path = None;
     save_app_config(&config)
 }
 
@@ -260,6 +286,7 @@ mod tests {
                 last_volume_id: Some("vol-001".to_string()),
                 last_chapter_id: Some("chap-001".to_string()),
                 last_starmap_id: Some("star-001".to_string()),
+                ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
             store.save(content.as_bytes()).unwrap();
@@ -304,6 +331,7 @@ mod tests {
                 last_volume_id: Some("vol-001".to_string()),
                 last_chapter_id: Some("chap-001".to_string()),
                 last_starmap_id: Some("star-001".to_string()),
+                ..Default::default()
             };
             let content = serde_json::to_string_pretty(&config).unwrap();
             store.save(content.as_bytes()).unwrap();
@@ -341,5 +369,109 @@ mod tests {
             .and_then(|bytes| serde_json::from_slice::<AppConfig>(&bytes).ok())
             .unwrap_or_default();
         assert_eq!(loaded.last_route, None);
+    }
+
+    #[test]
+    fn test_last_workspace_path_roundtrip() {
+        let dir = tempfile::tempdir().expect("无法创建临时目录");
+        let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
+        set_default_config_store(store);
+
+        // 初始无保存路径
+        assert_eq!(get_last_workspace_path(), None);
+
+        // save 后 get 应返回相同路径
+        save_last_workspace_path("/home/user/sujian-data").expect("save 应成功");
+        assert_eq!(
+            get_last_workspace_path(),
+            Some("/home/user/sujian-data".to_string())
+        );
+
+        // 覆盖写入新路径
+        save_last_workspace_path("/data/another").expect("save 覆盖应成功");
+        assert_eq!(get_last_workspace_path(), Some("/data/another".to_string()));
+
+        // clear 后应为 None
+        clear_last_workspace_path().expect("clear 应成功");
+        assert_eq!(get_last_workspace_path(), None);
+    }
+
+    #[test]
+    fn test_save_last_workspace_path_empty_string_is_none() {
+        let dir = tempfile::tempdir().expect("无法创建临时目录");
+        let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
+        set_default_config_store(store);
+
+        save_last_workspace_path("/some/path").expect("save 应成功");
+        assert_eq!(get_last_workspace_path(), Some("/some/path".to_string()));
+
+        // 空字符串视为无路径
+        save_last_workspace_path("").expect("save 空串应成功");
+        assert_eq!(get_last_workspace_path(), None);
+    }
+
+    #[test]
+    fn test_last_workspace_path_preserves_navigation_state() {
+        let dir = tempfile::tempdir().expect("无法创建临时目录");
+        let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
+        set_default_config_store(store);
+
+        // 先保存导航状态
+        save_last_navigation_state("editor", Some("p1"), Some("v1"), Some("c1"), Some("s1"))
+            .expect("save nav 应成功");
+        // 再保存工作区路径
+        save_last_workspace_path("/workspace/path").expect("save ws 应成功");
+
+        // 导航状态不应被工作区路径保存破坏
+        let nav = get_last_navigation_state();
+        assert_eq!(nav.route, Some("editor".to_string()));
+        assert_eq!(nav.project_id, Some("p1".to_string()));
+        assert_eq!(nav.volume_id, Some("v1".to_string()));
+        assert_eq!(nav.chapter_id, Some("c1".to_string()));
+        assert_eq!(nav.starmap_id, Some("s1".to_string()));
+        assert_eq!(
+            get_last_workspace_path(),
+            Some("/workspace/path".to_string())
+        );
+
+        // 清工作区路径不应破坏导航状态
+        clear_last_workspace_path().expect("clear ws 应成功");
+        let nav2 = get_last_navigation_state();
+        assert_eq!(nav2.route, Some("editor".to_string()));
+        assert_eq!(nav2.project_id, Some("p1".to_string()));
+        assert_eq!(get_last_workspace_path(), None);
+    }
+
+    #[test]
+    fn test_app_config_workspace_path_serde_roundtrip() {
+        with_test_store(|store| {
+            let config = AppConfig {
+                last_workspace_path: Some("/home/user/data".to_string()),
+                ..Default::default()
+            };
+            let content = serde_json::to_string_pretty(&config).unwrap();
+            store.save(content.as_bytes()).unwrap();
+
+            let loaded_bytes = store.load().unwrap().unwrap();
+            let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
+            assert_eq!(
+                loaded.last_workspace_path,
+                Some("/home/user/data".to_string())
+            );
+        });
+    }
+
+    #[test]
+    fn test_app_config_workspace_path_absent_defaults_none() {
+        with_test_store(|store| {
+            // 不含 lastWorkspacePath 字段的旧配置应默认为 None
+            let legacy_json = r#"{"lastRoute":"editor"}"#;
+            store.save(legacy_json.as_bytes()).unwrap();
+
+            let loaded_bytes = store.load().unwrap().unwrap();
+            let loaded: AppConfig = serde_json::from_slice(&loaded_bytes).unwrap();
+            assert_eq!(loaded.last_workspace_path, None);
+            assert_eq!(loaded.last_route, Some("editor".to_string()));
+        });
     }
 }

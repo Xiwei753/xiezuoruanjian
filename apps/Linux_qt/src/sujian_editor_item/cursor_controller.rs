@@ -148,11 +148,15 @@ impl CursorController {
                 if let Some(ref anim) = self.animation {
                     // Issue #679 评论 5658087764 (2): 事务换了，即使目标点一样，
                     // 也必须从当前视觉位置 rebase 到新 driver，不能继续挂旧事务。
+                    // Issue #686 评论 5664857575 领域2：连续 Insert/Delete 的 driver 切换时，
+                    // 从 `anim.current_position()` rebase 到最新 target，
+                    // 不把视觉光标先落回旧 old_cursor_rect（start_x/start_y 不用于此分支）。
                     let driver_changed = anim.driver_key != *driver_key;
                     let target_changed = (anim.target_x - target_x).abs() > 0.01
                         || (anim.target_y - target_y).abs() > 0.01;
 
                     if target_changed || driver_changed {
+                        // 从当前视觉位置 rebase，不落回 old_rect。
                         let (cur_x, cur_y) = anim.current_position();
                         self.animation = Some(CursorAnimationState {
                             driver_key: *driver_key,

@@ -154,79 +154,94 @@ pub(super) fn transfer_live_project(
     use crate::sync::types::TargetLifecycleApplyResult;
     use crate::sync::SyncStatus;
 
+    /// LiveProject lifecycle CAS 重试上限。
+    ///
+    /// 远端 generation 持续变化时，最多重试这么多次 merge→publish→CAS。
+    /// 超过后返回 `RecoverableError`（错误文字不含 "retrying"，因为已经不重试了，
+    /// 是最终失败）。旧未引用 generation 留给现有 generation GC 清理。
+    const MAX_CAS_RETRIES: usize = 5;
+
     if planned.live_lww.is_some() {
-        let generation_id = uuid::Uuid::new_v4().to_string();
         let sync_root = planned
             .staging_root
             .as_deref()
             .unwrap_or(&planned.local_root);
-        let merge_outcome: crate::error::Result<Option<crate::sync::lww::LwwMergeOutcome>> =
-            (|| {
-                if let Some(source_record) = crate::sync::target_lifecycle::find_record(
-                    &catalog_snapshot.catalog,
-                    &planned.target.remote_prefix,
-                ) {
-                    if let Some(source_prefix) =
-                        crate::sync::target_lifecycle::resolve_visible_project_prefix(
-                            source_record,
-                            &planned.target.remote_prefix,
-                        )?
-                    {
-                        log::info!(
-                            "[sync] run_transfer: LiveProject {} — merging from visible source {}",
-                            planned.target.remote_prefix,
-                            source_prefix
-                        );
-                        let mut merge_state = crate::sync::SyncService::load_sync_state(sync_root)?;
-                        let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
-                            sync_root,
-                            provider,
-                            &source_prefix,
-                            planned.target.scope,
-                            &mut merge_state,
-                        )?;
-                        return Ok(Some(outcome));
-                    }
-                }
-                Ok(None)
-            })();
-        match super::generation::generation_remote_prefix(
-            &planned.target.remote_prefix,
-            &generation_id,
-        ) {
-            Ok(gen_remote_prefix) => {
-                log::info!(
-                    "[sync] run_transfer: LiveProject {} — uploading to generation prefix {}",
-                    planned.target.remote_prefix,
-                    gen_remote_prefix
-                );
-                let content_result = match merge_outcome {
-                    Ok(Some(outcome)) => {
-                        if !outcome.conflicts.is_empty() {
-                            let mut r = SyncResult::success();
-                            r.status = SyncStatus::PartialConflict;
-                            r.conflicts = outcome.conflicts;
-                            r.downloaded_files = outcome.downloaded_files;
-                            r.local_deletes = outcome.remote_delete_paths;
-                            r.remote_deletes = outcome.local_deletes;
-                            r.overwritten_files = outcome.overwritten_files;
-                            r.ignored_files = outcome.ignored_files;
-                            r
-                        } else {
-                            super::generation::publish_generation(
-                                provider,
+
+        // 保留冲突状态：多次 merge 可能产生冲突，最终 CAS 成功后仍要返回 PartialConflict，
+        // 不让 CAS 竞争错误覆盖成泛化 RecoverableError。
+        let mut retained_conflict: Option<SyncResult> = None;
+
+        for attempt in 0..MAX_CAS_RETRIES {
+            let generation_id = uuid::Uuid::new_v4().to_string();
+
+            // 1. 用当前 catalog_snapshot 找 visible generation → merge 到 staging。
+            //    每次重试都重新 load_sync_state，merge 对同一个 staging 可重复执行。
+            let merge_outcome: crate::error::Result<Option<crate::sync::lww::LwwMergeOutcome>> =
+                (|| {
+                    if let Some(source_record) = crate::sync::target_lifecycle::find_record(
+                        &catalog_snapshot.catalog,
+                        &planned.target.remote_prefix,
+                    ) {
+                        if let Some(source_prefix) =
+                            crate::sync::target_lifecycle::resolve_visible_project_prefix(
+                                source_record,
+                                &planned.target.remote_prefix,
+                            )?
+                        {
+                            log::info!(
+                                "[sync] run_transfer: LiveProject {} (attempt {}) — merging from visible source {}",
+                                planned.target.remote_prefix,
+                                attempt + 1,
+                                source_prefix
+                            );
+                            let mut merge_state =
+                                crate::sync::SyncService::load_sync_state(sync_root)?;
+                            let outcome = crate::sync::lww::merge_remote_into_local_snapshot(
                                 sync_root,
-                                &gen_remote_prefix,
-                                &generation_id,
-                                planned.project_id.as_deref().unwrap_or(""),
+                                provider,
+                                &source_prefix,
                                 planned.target.scope,
-                                &plan.sync_policy,
-                                plan.force_sync,
-                                Some(&outcome),
-                            )
+                                &mut merge_state,
+                            )?;
+                            return Ok(Some(outcome));
                         }
                     }
-                    Ok(None) => super::generation::publish_generation(
+                    Ok(None)
+                })();
+
+            // 2. 构造 generation prefix。
+            let gen_remote_prefix = match super::generation::generation_remote_prefix(
+                &planned.target.remote_prefix,
+                &generation_id,
+            ) {
+                Ok(p) => p,
+                Err(e) => return (sync_result_from_error(e), None, None),
+            };
+            log::info!(
+                "[sync] run_transfer: LiveProject {} (attempt {}) — uploading to generation prefix {}",
+                planned.target.remote_prefix,
+                attempt + 1,
+                gen_remote_prefix
+            );
+
+            // 3. publish generation。
+            //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
+            //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
+            let content_result = match merge_outcome {
+                Ok(Some(outcome)) => {
+                    if !outcome.conflicts.is_empty() {
+                        // clone 字段而非 move，outcome 仍需借用传给 publish_generation。
+                        let mut r = SyncResult::success();
+                        r.status = SyncStatus::PartialConflict;
+                        r.conflicts = outcome.conflicts.clone();
+                        r.downloaded_files = outcome.downloaded_files.clone();
+                        r.local_deletes = outcome.remote_delete_paths.clone();
+                        r.remote_deletes = outcome.local_deletes.clone();
+                        r.overwritten_files = outcome.overwritten_files.clone();
+                        r.ignored_files = outcome.ignored_files.clone();
+                        retained_conflict = Some(r);
+                    }
+                    super::generation::publish_generation(
                         provider,
                         sync_root,
                         &gen_remote_prefix,
@@ -235,131 +250,142 @@ pub(super) fn transfer_live_project(
                         planned.target.scope,
                         &plan.sync_policy,
                         plan.force_sync,
+                        Some(&outcome),
+                    )
+                }
+                Ok(None) => super::generation::publish_generation(
+                    provider,
+                    sync_root,
+                    &gen_remote_prefix,
+                    &generation_id,
+                    planned.project_id.as_deref().unwrap_or(""),
+                    planned.target.scope,
+                    &plan.sync_policy,
+                    plan.force_sync,
+                    None,
+                ),
+                Err(e) => sync_result_from_error(e),
+            };
+
+            let content_ok = matches!(
+                content_result.status,
+                SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+            );
+            if !content_ok {
+                return (content_result, None, None);
+            }
+
+            // 4. read_post_transfer_lww → 构造 candidate → CAS。
+            let post_transfer_root = planned
+                .staging_root
+                .as_deref()
+                .unwrap_or(&planned.local_root);
+            let post_transfer_lww = match super::plan::read_post_transfer_lww(post_transfer_root) {
+                Some(lww) => lww,
+                None => {
+                    let msg = "post-transfer staging manifest unreadable".to_string();
+                    return (
+                        SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
                         None,
-                    ),
-                    Err(e) => sync_result_from_error(e),
-                };
-                let content_ok = matches!(
-                    content_result.status,
-                    SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
-                );
-                if !content_ok {
-                    (content_result, None, None)
-                } else {
-                    let post_transfer_root = planned
-                        .staging_root
-                        .as_deref()
-                        .unwrap_or(&planned.local_root);
-                    match super::plan::read_post_transfer_lww(post_transfer_root) {
-                        Some(post_transfer_lww) => {
-                            let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
-                                &planned.target.remote_prefix,
-                                &planned.target.remote_prefix,
-                                post_transfer_lww.lww_time_ms,
-                                &post_transfer_lww.device_id,
-                            )
-                            .with_active_generation(&generation_id);
-                            match crate::sync::target_lifecycle::apply_lifecycle_record(
-                                provider,
-                                catalog_snapshot,
-                                candidate,
-                            ) {
-                                TargetLifecycleApplyResult::Applied(persisted) => {
-                                    *catalog_snapshot = persisted;
-                                    (content_result, None, None)
-                                }
-                                TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
-                                    *catalog_snapshot = persisted;
-                                    (content_result, None, None)
-                                }
-                                TargetLifecycleApplyResult::RemoteWinner {
-                                    snapshot: persisted,
-                                    record: winner,
-                                } => {
-                                    *catalog_snapshot = persisted;
-                                    match winner.op {
-                                        crate::sync::types::TargetOp::Upsert => {
-                                            log::info!(
-                                                "[sync] run_transfer: LiveProject RemoteWinner(Upsert) {} — retrying",
-                                                planned.target.remote_prefix
-                                            );
-                                            let msg = "LiveProject: remote generation changed during merge, retrying".to_string();
-                                            (
-                                                SyncResult::error(
-                                                    SyncStatus::RecoverableError(msg.clone()),
-                                                    msg,
-                                                    None,
-                                                ),
-                                                None,
-                                                None,
-                                            )
-                                        }
-                                        crate::sync::types::TargetOp::Delete => {
-                                            log::info!(
-                                                "[sync] run_transfer: LiveProject RemoteWinner(Delete) {} — cleaning remote + deferring to Commit",
-                                                planned.target.remote_prefix
-                                            );
-                                            let cleanup_result = delete_all_remote_objects(
-                                                provider,
-                                                &planned.target.remote_prefix,
-                                            );
-                                            let cleanup_ok = matches!(
-                                                cleanup_result.status,
-                                                SyncStatus::Success | SyncStatus::NoChanges
-                                            );
-                                            if !cleanup_ok {
-                                                let expected_time =
-                                                    crate::sync::target_lifecycle::record_lww_time(
-                                                        &winner,
-                                                    );
-                                                let expected_device = &winner.device_id;
-                                                let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
-                                                    &plan.app_data_root, &planned.target.remote_prefix,
-                                                    planned.project_id.as_deref().unwrap_or(""),
-                                                    &format!("LiveProject RemoteWinner(Delete) cleanup failed: {:?}", cleanup_result.status),
-                                                    expected_time, expected_device,
-                                                );
-                                                if let Err(e) = record_result {
-                                                    (sync_result_from_error(e), None, None)
-                                                } else {
-                                                    (cleanup_result, None, None)
-                                                }
-                                            } else {
-                                                let action = planned.project_id.as_ref().and_then(|pid| {
-                                                    planned.live_lww.as_ref().map(|lww| {
-                                                        crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
-                                                            project_id: pid.clone(),
-                                                            expected_local_lww: crate::sync::types::LiveTargetLwwSerde::from_lww(lww),
-                                                        }
-                                                    })
-                                                });
-                                                (content_result, None, action)
-                                            }
-                                        }
-                                    }
-                                }
-                                TargetLifecycleApplyResult::Retry(e) => {
-                                    (sync_result_from_error(e), None, None)
-                                }
-                            }
+                        None,
+                    );
+                }
+            };
+            let candidate = crate::sync::types::TargetLifecycleRecord::upsert(
+                &planned.target.remote_prefix,
+                &planned.target.remote_prefix,
+                post_transfer_lww.lww_time_ms,
+                &post_transfer_lww.device_id,
+            )
+            .with_active_generation(&generation_id);
+
+            match crate::sync::target_lifecycle::apply_lifecycle_record(
+                provider,
+                catalog_snapshot,
+                candidate,
+            ) {
+                TargetLifecycleApplyResult::Applied(persisted) => {
+                    *catalog_snapshot = persisted;
+                    return (retained_conflict.unwrap_or(content_result), None, None);
+                }
+                TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
+                    *catalog_snapshot = persisted;
+                    return (retained_conflict.unwrap_or(content_result), None, None);
+                }
+                TargetLifecycleApplyResult::RemoteWinner {
+                    snapshot: persisted,
+                    record: winner,
+                } => {
+                    *catalog_snapshot = persisted;
+                    match winner.op {
+                        crate::sync::types::TargetOp::Upsert => {
+                            log::info!(
+                                "[sync] run_transfer: LiveProject RemoteWinner(Upsert) {} (attempt {}) — re-merging with latest snapshot",
+                                planned.target.remote_prefix,
+                                attempt + 1
+                            );
+                            // 写回最新 snapshot，重新读取 visible generation，
+                            // 对同一个 staging 继续 merge + publish + CAS。
+                            // 旧未引用 generation 留给 generation GC 清理。
+                            continue;
                         }
-                        None => {
-                            let msg = "post-transfer staging manifest unreadable".to_string();
-                            (
-                                SyncResult::error(
-                                    SyncStatus::RecoverableError(msg.clone()),
-                                    msg,
-                                    None,
-                                ),
-                                None,
-                                None,
-                            )
+                        crate::sync::types::TargetOp::Delete => {
+                            log::info!(
+                                "[sync] run_transfer: LiveProject RemoteWinner(Delete) {} — cleaning remote + deferring to Commit",
+                                planned.target.remote_prefix
+                            );
+                            let cleanup_result =
+                                delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                            let cleanup_ok = matches!(
+                                cleanup_result.status,
+                                SyncStatus::Success | SyncStatus::NoChanges
+                            );
+                            if !cleanup_ok {
+                                let expected_time =
+                                    crate::sync::target_lifecycle::record_lww_time(&winner);
+                                let expected_device = &winner.device_id;
+                                let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                    &plan.app_data_root, &planned.target.remote_prefix,
+                                    planned.project_id.as_deref().unwrap_or(""),
+                                    &format!("LiveProject RemoteWinner(Delete) cleanup failed: {:?}", cleanup_result.status),
+                                    expected_time, expected_device,
+                                );
+                                if let Err(e) = record_result {
+                                    return (sync_result_from_error(e), None, None);
+                                } else {
+                                    return (cleanup_result, None, None);
+                                }
+                            } else {
+                                let action = planned.project_id.as_ref().and_then(|pid| {
+                                    planned.live_lww.as_ref().map(|lww| {
+                                        crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                                            project_id: pid.clone(),
+                                            expected_local_lww: crate::sync::types::LiveTargetLwwSerde::from_lww(lww),
+                                        }
+                                    })
+                                });
+                                return (retained_conflict.unwrap_or(content_result), None, action);
+                            }
                         }
                     }
                 }
+                TargetLifecycleApplyResult::Retry(e) => {
+                    return (sync_result_from_error(e), None, None);
+                }
             }
-            Err(e) => (sync_result_from_error(e), None, None),
         }
+
+        // CAS 持续竞争达到上限 → 远端持续变化，无法完成同步。
+        // 错误文字不含 "retrying"（已经不重试了，是最终失败）。
+        let msg = format!(
+            "LiveProject: remote generation kept changing during merge, exceeded retry limit ({} attempts) for {}",
+            MAX_CAS_RETRIES, planned.target.remote_prefix
+        );
+        (
+            SyncResult::error(SyncStatus::RecoverableError(msg.clone()), msg, None),
+            None,
+            None,
+        )
     } else {
         let msg = "live project missing lww (manifest unreadable)".to_string();
         (

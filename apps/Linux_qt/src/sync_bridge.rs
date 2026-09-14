@@ -33,8 +33,13 @@ pub fn mask_sync_error(msg: &str) -> String {
 }
 
 /// 将 core 返回的强类型错误分类映射为 UI 状态码。
+///
+/// 先尝试 `legacy_category_compat` 处理旧 GitHub/Git 特定 code，
+/// 再回退到 `from_code` 处理 provider-neutral code。
 pub fn sync_error_category_from_code(category: Option<&str>, fallback_msg: &str) -> String {
-    let cat = writer_core::sync::SyncErrorCategory::from_code(category.unwrap_or(""), fallback_msg);
+    let code = category.unwrap_or("");
+    let cat = writer_core::sync::legacy_category_compat(code)
+        .unwrap_or_else(|| writer_core::sync::SyncErrorCategory::from_code(code, fallback_msg));
     cat.to_ui_status().to_string()
 }
 
@@ -47,7 +52,7 @@ mod tests {
     fn typed_sync_error_category_takes_precedence() {
         assert_eq!(
             sync_error_category_from_code(Some("repo_not_found_or_no_permission"), "unhelpful"),
-            "repo_not_found_or_no_permission"
+            "token_permission_denied"
         );
         assert_eq!(
             sync_error_category_from_code(Some("dns_failed"), "unhelpful"),
@@ -75,31 +80,31 @@ mod tests {
     fn test_not_found_maps_to_not_found_category() {
         assert_eq!(
             sync_error_category_from_code(Some("not_found"), "some error occurred"),
-            "auth_failed"
+            "not_found"
         );
     }
 
     #[test]
-    fn test_file_not_found_maps_to_auth_failed() {
+    fn test_file_not_found_maps_to_not_found() {
         assert_eq!(
             sync_error_category_from_code(Some("file_not_found"), "some error"),
-            "auth_failed"
+            "not_found"
         );
     }
 
     #[test]
-    fn test_repo_not_found_mapped_to_own_category() {
+    fn test_repo_not_found_mapped_to_permission_denied() {
         assert_eq!(
             sync_error_category_from_code(Some("repo_not_found_or_no_permission"), "any message"),
-            "repo_not_found_or_no_permission"
+            "token_permission_denied"
         );
     }
 
     #[test]
-    fn test_remote_branch_missing_mapped_to_branch_missing() {
+    fn test_remote_branch_missing_mapped_to_error() {
         assert_eq!(
             sync_error_category_from_code(Some("remote_branch_missing"), "any message"),
-            "branch_missing"
+            "error"
         );
     }
 
@@ -107,7 +112,7 @@ mod tests {
     fn test_token_invalid_and_permission_denied_mapped_to_own_categories() {
         assert_eq!(
             sync_error_category_from_code(Some("token_invalid"), "any message"),
-            "token_invalid"
+            "auth_failed"
         );
         assert_eq!(
             sync_error_category_from_code(Some("token_permission_denied"), "any message"),
@@ -178,7 +183,7 @@ mod tests {
         result.success = false;
 
         result.error_category = "token_invalid".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "token_invalid");
+        assert_eq!(determine_diagnostics_status(&result), "auth_failed");
 
         result.error_category = "token_permission_denied".to_string();
         assert_eq!(
@@ -189,7 +194,7 @@ mod tests {
         result.error_category = "repo_not_found_or_no_permission".to_string();
         assert_eq!(
             determine_diagnostics_status(&result),
-            "repo_not_found_or_no_permission"
+            "token_permission_denied"
         );
     }
 
@@ -198,7 +203,7 @@ mod tests {
         let mut result = make_success_dto();
         result.success = false;
         result.error_category = "remote_branch_missing".to_string();
-        assert_eq!(determine_diagnostics_status(&result), "branch_missing");
+        assert_eq!(determine_diagnostics_status(&result), "error");
     }
 
     #[test]

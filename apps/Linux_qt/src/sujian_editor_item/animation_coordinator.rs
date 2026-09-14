@@ -148,14 +148,14 @@ struct ReflowRun {
 /// 1. 建关系：遍历所有未 excluded 的 old/new cluster，用 OffsetMap range mapping
 ///    变到同一逻辑 byte 坐标，只要逻辑范围有重叠就连边，对二分图求 connected components。
 /// 2. 按 run 分类：每个 component 按 old/new 成员数量和 shaping 一致性决定动画类型。
-///    真正没有任何映射边的 new cluster 才是 insert_fade_in；
-///    真正没有任何映射边的 old cluster 才是 delete_fade_out。
+///    真正没有任何映射边的 new cluster 才是 insert_reveal；
+///    真正没有任何映射边的 old cluster 才是 delete_conceal。
 ///
 /// # 参数
 /// - `excluded_old_ranges`：已被 insert/delete 动画接管的 old byte range，跳过不处理。
 /// - `excluded_new_ranges`：已被 insert/delete 动画接管的 new byte range，跳过不处理。
-/// - `old_cursor_rect`：用于 reflow 中检测到的 insert_fade_in 的起始位置。
-/// - `new_cursor_rect`：用于 reflow 中检测到的 delete_fade_out 的收缩目标。
+/// - `old_cursor_rect`：用于 reflow 中检测到的 insert_reveal 的起始位置。
+/// - `new_cursor_rect`：用于 reflow 中检测到的 delete_conceal 的收缩目标。
 ///
 /// # 返回
 /// `(slices, static_patches)`：动画切片和 cluster 级静态行补丁。
@@ -180,7 +180,7 @@ fn build_cluster_reflow_slices(
     // ── 阶段 1：收集所有未 excluded 的 old/new cluster refs ──
     // Issue #658 评论 5630181473 问题 3: 被 excluded 的 old cluster 仍保留在
     // old_refs 中（标记 excluded=true），不参与边构建，但最终在阶段 4 中作为
-    // "纯 old" run 生成 delete_fade_out。被 excluded 的 new cluster 直接跳过。
+    // "纯 old" run 生成 delete_conceal。被 excluded 的 new cluster 直接跳过。
     let mut old_refs: Vec<ReflowClusterRef> = Vec::new();
     let mut old_excluded_flags: Vec<bool> = Vec::new();
     for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
@@ -217,7 +217,7 @@ fn build_cluster_reflow_slices(
     }
 
     // ── 阶段 2：构建二分图边（byte range 重叠）──
-    // 被 excluded 的 old cluster 不参与连边，最终作为 "纯 old" run 生成 delete_fade_out。
+    // 被 excluded 的 old cluster 不参与连边，最终作为 "纯 old" run 生成 delete_conceal。
     // Union-Find: 0..old_refs.len() 为 old 节点, old_refs.len().. 为 new 节点
     let n_old = old_refs.len();
     let n_new = new_refs.len();
@@ -319,14 +319,14 @@ fn build_cluster_reflow_slices(
         let run_old = &run.old;
         let run_new = &run.new;
 
-        // 纯 new（无 old 对应）→ insert_fade_in
+        // 纯 new（无 old 对应）→ insert_reveal
         if run_old.is_empty() {
             for nref in run_new {
                 let new_line = &new_snapshot.line_snapshots[nref.line_idx];
                 let new_cluster = &new_line.clusters[nref.cluster_idx];
                 let new_sr = new_cluster.source_rect.clone();
                 let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-                slices.push(AnimatedSlice::insert_fade_in(
+                slices.push(AnimatedSlice::insert_reveal(
                     key,
                     new_line.id,
                     new_sr.clone(),
@@ -342,14 +342,16 @@ fn build_cluster_reflow_slices(
             continue;
         }
 
-        // 纯 old（无 new 对应）→ delete_fade_out
+        // 纯 old（无 new 对应）→ delete_conceal
         if run_new.is_empty() {
             for oref in run_old {
                 let old_line = &old_snapshot.line_snapshots[oref.line_idx];
                 let old_cluster = &old_line.clusters[oref.cluster_idx];
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                slices.push(AnimatedSlice::delete_fade_out(
+                // Issue #686 评论 5664857575 领域1：reflow 中检测到的纯 old cluster
+                // 走 delete_conceal，默认 conceal_from_left = true（Backspace 最常见场景）。
+                slices.push(AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
                     old_sr,
@@ -359,6 +361,7 @@ fn build_cluster_reflow_slices(
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
+                    true,
                 ));
             }
             continue;
@@ -499,8 +502,8 @@ fn build_cluster_reflow_slices(
 /// 2. 相同 `snapshot_id`（来自同一行快照）
 /// 3. 相邻 byte range：`slice[i].byte_end == slice[i+1].byte_start`
 /// 4. 同方向：
-///    - InsertFadeIn：`from_document_rect` 的 x/y 相同（从同一光标位置淡入）
-///    - DeleteFadeOut：`to_document_rect` 的 x/y 相同（向同一光标位置收缩）
+///    - InsertReveal：`from_document_rect` 的 y 相同（同一行吐字）
+///    - DeleteConceal：`from_document_rect` 的 y 相同（同一行吞字）且 `conceal_from_left` 相同
 ///    - ReflowMove：移动向量相同（dx/dy 差值在 0.5 像素以内）
 ///    - ReflowCrossFade：移动向量相同
 ///
@@ -542,15 +545,14 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
     }
     // 条件 4：同方向
     match a.kind {
-        AnimatedSliceKind::InsertFadeIn => {
-            // 从同一光标位置淡入：from_document_rect 的 x/y 相同
-            (a.from_document_rect.x - b.from_document_rect.x).abs() < 0.5
-                && (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
+        AnimatedSliceKind::InsertReveal => {
+            // 同一行吐字：from_document_rect 的 y 相同
+            (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
         }
-        AnimatedSliceKind::DeleteFadeOut => {
-            // 向同一光标位置收缩：to_document_rect 的 x/y 相同
-            (a.to_document_rect.x - b.to_document_rect.x).abs() < 0.5
-                && (a.to_document_rect.y - b.to_document_rect.y).abs() < 0.5
+        AnimatedSliceKind::DeleteConceal => {
+            // 同一行吞字且同方向：from_document_rect 的 y 相同，conceal_from_left 相同
+            (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
+                && a.conceal_from_left == b.conceal_from_left
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
             // 移动向量相同：dx = to.x - from.x, dy = to.y - from.y
@@ -578,6 +580,7 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         byte_start: a.byte_start.min(b.byte_start),
         byte_end: a.byte_end.max(b.byte_end),
         shaping_identity: a.shaping_identity.clone(),
+        conceal_from_left: a.conceal_from_left,
     }
 }
 
@@ -1011,7 +1014,7 @@ impl LinuxEditorAnimationCoordinator {
 
         if !is_commit {
             // Issue #658 评论 5630181473: cancel 时 preedit 范围的 old cluster
-            // 应该被排除在 reflow 匹配之外，生成 delete_fade_out 而非 crossfade。
+            // 应该被排除在 reflow 匹配之外，生成 delete_conceal 而非 crossfade。
             let cancel_excluded_old: [(usize, usize); 1] = [(preedit_byte_start, preedit_byte_end)];
             let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                 key,
@@ -1057,7 +1060,9 @@ impl LinuxEditorAnimationCoordinator {
                                 old_cluster.byte_end,
                             ) {
                                 let from_doc = old_line.source_rect_to_document_rect(&old_sr);
-                                slices.push(AnimatedSlice::delete_fade_out(
+                                // Issue #686 评论 5664857575 领域1：cancel 时 preedit 文字
+                                // 走 delete_conceal，默认 conceal_from_left = true。
+                                slices.push(AnimatedSlice::delete_conceal(
                                     key,
                                     old_line.id,
                                     old_sr,
@@ -1067,6 +1072,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_start,
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
+                                    true,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -1138,7 +1144,7 @@ impl LinuxEditorAnimationCoordinator {
                                 new_cluster.byte_end,
                             ) {
                                 let to_doc = new_line.source_rect_to_document_rect(&new_sr);
-                                slices.push(AnimatedSlice::insert_fade_in(
+                                slices.push(AnimatedSlice::insert_reveal(
                                     key,
                                     new_line.id,
                                     new_sr.clone(),
@@ -1399,17 +1405,54 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    /// Issue #686 评论 5664857575 领域2：返回当前活动的正文编辑事务（Insert/Delete，
+    /// 不含 Cursor）的 key。光标按事务身份绑定，不靠浮点坐标反查。
+    ///
+    /// 从新到旧找最近一条 state 不是 Completed/Cancelled 的正文事务（operation_kind
+    /// 为 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel）。
+    pub(crate) fn active_text_transaction_key(&self) -> Option<VisualTransactionKey> {
+        for tx in self.prepared_queue.active_transactions().iter().rev() {
+            if matches!(
+                tx.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            ) {
+                continue;
+            }
+            if tx.operation_kind != TextVisualOperationKind::Cursor {
+                return Some(tx.key);
+            }
+        }
+        None
+    }
+
     /// Issue #679 评论 5657313927 (3d): 按当前光标 target 查找对应的事务。
     ///
-    /// 从新到旧（transactions 从后往前）找 `new_cursor_rect` 中 x/top 与 target 匹配
-    /// （容差 0.01）且 state 不是 Completed/Cancelled 的事务。返回
-    /// `(key, old_cursor_rect, new_cursor_rect)`，不再 `.first()` 拿最老的一条。
+    /// Issue #686 评论 5664857575 领域2：当存在活动正文事务时，直接返回该事务的 key
+    /// 和它的 old/new cursor rect，不靠浮点坐标相等反查。光标按事务身份绑定。
+    /// 只有在没有正文事务时才走原来的 CursorOnly 查找逻辑（按 target x/y 匹配）。
     pub(crate) fn find_cursor_transaction_for_target(
         &self,
         target_x: f64,
         target_y: f64,
         _target_h: f64,
     ) -> Option<(VisualTransactionKey, Option<CursorRect>, Option<CursorRect>)> {
+        // 领域2：优先按事务身份绑定——存在活动正文事务时直接返回。
+        if let Some(key) = self.active_text_transaction_key() {
+            if let Some(tx) = self
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+            {
+                return Some((
+                    tx.key,
+                    tx.old_cursor_rect.clone(),
+                    tx.new_cursor_rect.clone(),
+                ));
+            }
+        }
+
+        // 没有正文事务时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
@@ -1784,7 +1827,7 @@ mod tests {
         ];
 
         let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect {
@@ -1805,7 +1848,7 @@ mod tests {
                 60,
                 Some(sid_a.clone()),
             ),
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect {
@@ -1858,7 +1901,7 @@ mod tests {
             vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect {
@@ -1879,7 +1922,7 @@ mod tests {
                 15,
                 Some(sid_dup.clone()),
             ),
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect {
@@ -1924,18 +1967,18 @@ mod tests {
             dist_0
         );
         assert!(
-            (slices[1].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 1 (center={}, abs dist={}) should match rebase frame, got x={}",
+            (slices[1].opacity_from - 0.3).abs() < 0.01,
+            "slice 1 (center={}, abs dist={}) should match rebase frame, got opacity={}",
             center_1,
             dist_1,
-            slices[1].from_document_rect.x
+            slices[1].opacity_from
         );
         assert!(
-            (slices[0].from_document_rect.x - 0.0).abs() < 0.01,
-            "slice 0 (center={}, abs dist={}) should NOT be matched, got x={}",
+            (slices[0].opacity_from - 1.0).abs() < 0.01,
+            "slice 0 (center={}, abs dist={}) should NOT be matched, got opacity={}",
             center_0,
             dist_0,
-            slices[0].from_document_rect.x
+            slices[0].opacity_from
         );
     }
 
@@ -1955,7 +1998,7 @@ mod tests {
             vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect {
@@ -1976,7 +2019,7 @@ mod tests {
                 15,
                 Some(sid_dup.clone()),
             ),
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect {
@@ -2028,9 +2071,9 @@ mod tests {
             abs_1,
             abs_0
         );
-        assert!((slices[1].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got x={}",
-            abs_1, abs_0, signed_0, slices[1].from_document_rect.x);
+        assert!((slices[1].opacity_from - 0.3).abs() < 0.01,
+            "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got opacity={}",
+            abs_1, abs_0, signed_0, slices[1].opacity_from);
     }
 
     #[test]
@@ -2049,7 +2092,7 @@ mod tests {
             (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone())),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_fade_in(
+        let mut slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2077,9 +2120,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}",
-            slices[0].from_document_rect.x
+            (slices[0].opacity_from - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame opacity 0.3 (not second 0.5), got {}",
+            slices[0].opacity_from
         );
     }
 
@@ -2101,7 +2144,7 @@ mod tests {
         ];
 
         let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect {
@@ -2122,7 +2165,7 @@ mod tests {
                 15,
                 Some(sid_dup.clone()),
             ),
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect {
@@ -2162,14 +2205,14 @@ mod tests {
         let dist_1 = (center_1 - mapped_center).abs();
         assert!(dist_1 < dist_0, "test setup: slice 1 should be closer");
         assert!(
-            (slices[1].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 1 should get first rebase frame (x=10.0), got x={}",
-            slices[1].from_document_rect.x
+            (slices[1].opacity_from - 0.3).abs() < 0.01,
+            "slice 1 should get first rebase frame (opacity=0.3), got opacity={}",
+            slices[1].opacity_from
         );
         assert!(
-            (slices[0].from_document_rect.x - 20.0).abs() < 0.01,
-            "slice 0 should get second rebase frame (x=20.0), not reuse slice 1's frame, got x={}",
-            slices[0].from_document_rect.x
+            (slices[0].opacity_from - 0.5).abs() < 0.01,
+            "slice 0 should get second rebase frame (opacity=0.5), not reuse slice 1's frame, got opacity={}",
+            slices[0].opacity_from
         );
     }
 
@@ -2190,7 +2233,7 @@ mod tests {
             (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone())),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_fade_in(
+        let mut slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2223,9 +2266,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame via tier2 (x=10.0), got x={}",
-            slices[0].from_document_rect.x
+            (slices[0].opacity_from - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame via tier2 (opacity=0.3), got opacity={}",
+            slices[0].opacity_from
         );
     }
 
@@ -2246,7 +2289,7 @@ mod tests {
             (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_fade_in(
+        let mut slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2279,9 +2322,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 should get first rebase frame 10.0 (not second 20.0), got {}",
-            slices[0].from_document_rect.x
+            (slices[0].opacity_from - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame opacity 0.3 (not second 0.5), got {}",
+            slices[0].opacity_from
         );
     }
 
@@ -2301,7 +2344,7 @@ mod tests {
             vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
 
         let mut slices = vec![
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
                 SourceRect {
@@ -2322,7 +2365,7 @@ mod tests {
                 15,
                 Some(sid_dup.clone()),
             ),
-            AnimatedSlice::insert_fade_in(
+            AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
                 LineSnapshotId::new(1, 0, 1),
                 SourceRect {
@@ -2365,14 +2408,14 @@ mod tests {
             "test setup: both slices should have equal distance"
         );
         assert!(
-            (slices[0].from_document_rect.x - 10.0).abs() < 0.01,
-            "slice 0 (lower byte_start) should win tiebreak, got x={}",
-            slices[0].from_document_rect.x
+            (slices[0].opacity_from - 0.3).abs() < 0.01,
+            "slice 0 (lower byte_start) should win tiebreak, got opacity={}",
+            slices[0].opacity_from
         );
         assert!(
-            (slices[1].from_document_rect.x - 0.0).abs() < 0.01,
-            "slice 1 should not be matched, got x={}",
-            slices[1].from_document_rect.x
+            (slices[1].opacity_from - 1.0).abs() < 0.01,
+            "slice 1 should not be matched, got opacity={}",
+            slices[1].opacity_from
         );
     }
 
@@ -2846,11 +2889,11 @@ mod tests {
         let delete_slices: Vec<&AnimatedSlice> = tx
             .slices
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::DeleteFadeOut)
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
             .collect();
         assert!(
             !delete_slices.is_empty(),
-            "cancel should create DeleteFadeOut for preedit range"
+            "cancel should create DeleteConceal for preedit range"
         );
     }
 
@@ -2858,7 +2901,7 @@ mod tests {
     fn test_many_to_one_reflow_one_old_splits_to_two_new() {
         // Issue #658 评论 5630181473 问题 3: one old cluster [0,3) maps to
         // two new clusters [0,1) + [4,6) via OffsetMap (insert "XYZ" at position 1).
-        // new cluster [1,4) is inserted text with no old counterpart → InsertFadeIn.
+        // new cluster [1,4) is inserted text with no old counterpart → InsertReveal.
         // old cluster [0,3) connects to both [0,1) and [4,6) → N→M crossfade run.
         let sid_common = ShapingIdentity {
             text_content_hash: 42,
@@ -2925,24 +2968,24 @@ mod tests {
             "expected 3 crossfade slices (1 old + 2 new), got {}",
             crossfade_count
         );
-        // new cluster [1,4) is inserted text (no old counterpart) → InsertFadeIn
+        // new cluster [1,4) is inserted text (no old counterpart) → InsertReveal
         let insert_count = tx
             .slices
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::InsertFadeIn)
+            .filter(|s| s.kind == AnimatedSliceKind::InsertReveal)
             .filter(|s| s.byte_start == 1 && s.byte_end == 4)
             .count();
         assert_eq!(
             insert_count, 1,
-            "inserted cluster [1,4) should produce exactly 1 InsertFadeIn, got {}",
+            "inserted cluster [1,4) should produce exactly 1 InsertReveal, got {}",
             insert_count
         );
-        // No DeleteFadeOut for these ranges
+        // No DeleteConceal for these ranges
         let delete_count = tx
             .slices
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::DeleteFadeOut)
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
             .count();
-        assert_eq!(delete_count, 0, "should not produce DeleteFadeOut");
+        assert_eq!(delete_count, 0, "should not produce DeleteConceal");
     }
 }
