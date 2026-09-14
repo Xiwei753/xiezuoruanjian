@@ -350,12 +350,12 @@ fn build_cluster_reflow_slices(
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
                 // Issue #686 评论 5666452462：按新光标落在被删文字哪一侧决定
-                // 保留左段还是右段。光标靠近左端 → 保留右段
-                // （collapse_to_left=false，Delete 键场景）；光标靠近右端 → 保留左段
-                // （collapse_to_left=true，Backspace 场景）。
+                // 保留左段还是右段。光标靠近右端 → 保留左段
+                // （conceal_from_left=true，Backspace 场景）；光标靠近左端 → 保留右段
+                // （conceal_from_left=false，Delete 键场景）。
                 let left = old_doc.x;
                 let right = old_doc.x + old_doc.w;
-                let collapse_to_left = (new_cx - left).abs() <= (new_cx - right).abs();
+                let conceal_from_left = (new_cx - right).abs() <= (new_cx - left).abs();
                 slices.push(AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
@@ -366,7 +366,7 @@ fn build_cluster_reflow_slices(
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
-                    collapse_to_left,
+                    conceal_from_left,
                 ));
             }
             continue;
@@ -1067,11 +1067,12 @@ impl LinuxEditorAnimationCoordinator {
                                 let from_doc = old_line.source_rect_to_document_rect(&old_sr);
                                 // Issue #686 评论 5666452462：cancel 时 preedit 文字
                                 // 走 delete_conceal，按 old rect 两侧与新光标距离
-                                // 决定收进方向，不再写死 true。
+                                // 决定收进方向：靠近右端 → 保留左段（Backspace），
+                                // 靠近左端 → 保留右段（Delete 键）。
                                 let left = from_doc.x;
                                 let right = from_doc.x + from_doc.w;
-                                let collapse_to_left =
-                                    (shrink_x - left).abs() <= (shrink_x - right).abs();
+                                let conceal_from_left =
+                                    (shrink_x - right).abs() <= (shrink_x - left).abs();
                                 slices.push(AnimatedSlice::delete_conceal(
                                     key,
                                     old_line.id,
@@ -1082,7 +1083,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_start,
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
-                                    collapse_to_left,
+                                    conceal_from_left,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -2997,5 +2998,102 @@ mod tests {
             .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
             .count();
         assert_eq!(delete_count, 0, "should not produce DeleteConceal");
+    }
+
+    /// Issue #686 评论 5667184642：回归测试——吞字方向必须与光标位置匹配。
+    ///
+    /// `conceal_from_left = true` 表示保留左段（Backspace，光标在文字右侧）；
+    /// `conceal_from_left = false` 表示保留右段（Delete 键，光标在文字左侧）。
+    /// 上一轮把比较式写反了（靠左算成 true），这里锁定正确语义。
+    ///
+    /// 测试布局：old cluster [0,3) source_rect x=10 w=30，dpr=1 visual_x=0
+    /// → document rect x=10 w=30 → left=10, right=40。
+    fn make_delete_direction_snapshots() -> (EditorLayoutSnapshot, EditorLayoutSnapshot, OffsetMap)
+    {
+        let sid = ShapingIdentity {
+            text_content_hash: 1,
+            raw_font_fingerprint: "font".into(),
+            glyph_indexes_hash: 10,
+            cluster_glyph_count: 1,
+            direction_rtl: false,
+            format_fingerprint: 0,
+        };
+        let old_snapshot = make_test_snapshot("abc", vec![(0, 3, 10.0, 0.0, sid)]);
+        // new 为空 → old cluster 成为纯 old run → delete_conceal
+        let new_snapshot = make_test_snapshot("", vec![]);
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+        (old_snapshot, new_snapshot, offset_map)
+    }
+
+    #[test]
+    fn test_delete_conceal_direction_cursor_near_right_is_backspace() {
+        let (old_snapshot, new_snapshot, offset_map) = make_delete_direction_snapshots();
+        let key = VisualTransactionKey::new(1, 1);
+        // 新光标靠近右端 (x=39, right=40) → Backspace → conceal_from_left=true
+        let new_cursor = CursorRect {
+            x: 39.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        };
+        let (slices, _patches) = build_cluster_reflow_slices(
+            key,
+            &old_snapshot,
+            &new_snapshot,
+            &offset_map,
+            &[],
+            &[],
+            None,
+            Some(&new_cursor),
+        );
+        let delete_slices: Vec<_> = slices
+            .iter()
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .collect();
+        assert_eq!(
+            delete_slices.len(),
+            1,
+            "pure-old cluster should produce exactly one DeleteConceal"
+        );
+        assert!(
+            delete_slices[0].conceal_from_left,
+            "cursor near right (x=39, right=40) should be Backspace → conceal_from_left=true"
+        );
+    }
+
+    #[test]
+    fn test_delete_conceal_direction_cursor_near_left_is_delete() {
+        let (old_snapshot, new_snapshot, offset_map) = make_delete_direction_snapshots();
+        let key = VisualTransactionKey::new(1, 1);
+        // 新光标靠近左端 (x=11, left=10) → Delete 键 → conceal_from_left=false
+        let new_cursor = CursorRect {
+            x: 11.0,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        };
+        let (slices, _patches) = build_cluster_reflow_slices(
+            key,
+            &old_snapshot,
+            &new_snapshot,
+            &offset_map,
+            &[],
+            &[],
+            None,
+            Some(&new_cursor),
+        );
+        let delete_slices: Vec<_> = slices
+            .iter()
+            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .collect();
+        assert_eq!(
+            delete_slices.len(),
+            1,
+            "pure-old cluster should produce exactly one DeleteConceal"
+        );
+        assert!(
+            !delete_slices[0].conceal_from_left,
+            "cursor near left (x=11, left=10) should be Delete → conceal_from_left=false"
+        );
     }
 }
