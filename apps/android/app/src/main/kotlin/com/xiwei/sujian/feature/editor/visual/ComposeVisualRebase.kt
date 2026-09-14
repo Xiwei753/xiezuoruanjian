@@ -161,8 +161,28 @@ internal object ComposeVisualRebase {
     }
 
     /**
+     * #684 评论 5670182711 问题2：unit-wise 动画的局部 progress 纯函数。
+     *
+     * N 个 unit 共享一个 master progress，unit i 的局部 progress 按阶梯式分配：
+     * `((master.coerceIn(0,1) * count) - index).coerceIn(0, 1)`。
+     *
+     * 这是视觉层纯计算 — [ComposeTextAnimationOverlay] 的 drawUnitWiseAppear/
+     * drawUnitWiseDisappear 与本文件的 [collectCurrentSlicesAsRebased] 都调用它，
+     * 保证 overlay 绘制与 startFrame 物化使用同一套 alpha 公式。
+     */
+    fun unitLocalProgress(master: Float, index: Int, count: Int): Float {
+        if (count <= 0) return 0f
+        return ((master.coerceIn(0f, 1f) * count) - index).coerceIn(0f, 1f)
+    }
+
+    /**
      * #641 评论 5459896691 第2项 + 评论 5460070064 第3项：
      * 按最后一个 intent 的 textKind 物化当前屏幕仍可见的 slice 为 [RebasedTextSlice]。
+     *
+     * #684 评论 5670182711 问题2：按事务真实 unit 逐个物化，与 overlay 的
+     * drawUnitWiseAppear/drawUnitWiseDisappear 使用同一套 alpha 公式（[unitLocalProgress]）。
+     * units 为空时回退到整段 oldRanges/newRanges 行为。new unit 即使当前 alpha=0 也不能丢掉，
+     * 它仍属于被 BasicTextField 隐藏、后续 startFrame 需要继续从 0→1 的 surviving slice。
      */
     fun collectCurrentSlicesAsRebased(
         prev: ComposeVisualTransaction,
@@ -172,15 +192,79 @@ internal object ComposeVisualRebase {
         // 不再从最后一笔 intent 的 textKind 读。
         val textKind = prev.textKind
         return when (textKind) {
-            TextVisualKind.Delete ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
+            TextVisualKind.Delete -> collectDeleteSlicesAsRebased(prev, textProgress)
             TextVisualKind.Move ->
-                rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null) +
-                    survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
-            TextVisualKind.Insert ->
-                survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+                collectDeleteSlicesAsRebased(prev, textProgress) +
+                    collectInsertSlicesAsRebased(prev, textProgress)
+            TextVisualKind.Insert -> collectInsertSlicesAsRebased(prev, textProgress)
             TextVisualKind.None -> emptyList()
         }
+    }
+
+    /**
+     * #684 评论 5670182711 问题2：Insert/Move 的 new units 逐个物化为 surviving slice。
+     * alpha = [unitLocalProgress]；targetRange = sourceRange（surviving）。
+     * new unit 即使当前 alpha=0 也不丢掉 — 它仍属于被 BasicTextField 隐藏、后续
+     * startFrame 需要继续从 0→1 的 surviving slice，否则下一事务期间会一直空着，
+     * 到结束突然跳出来。units 为空时回退到整段 [survivingRebasedSlices] 行为。
+     */
+    private fun collectInsertSlicesAsRebased(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<RebasedTextSlice> {
+        val units = prev.newAnimationUnits
+        if (units.isEmpty()) {
+            return survivingRebasedSlices(prev.newRanges, prev.newLayout, textProgress)
+        }
+        val layout = prev.newLayout ?: return emptyList()
+        val n = units.size
+        val textLen = layout.result.layoutInput.text.length
+        val slices = mutableListOf<RebasedTextSlice>()
+        for ((i, range) in units.withIndex()) {
+            if (range.start >= range.end || range.end > textLen) continue
+            slices.add(
+                RebasedTextSlice(
+                    sourceLayout = layout,
+                    sourceRange = range,
+                    sourceTranslate = Offset.Zero,
+                    sourceAlpha = unitLocalProgress(textProgress, i, n),
+                    targetRange = range,
+                ),
+            )
+        }
+        return slices
+    }
+
+    /**
+     * #684 评论 5670182711 问题2：Delete/Move 的 old units 逐个物化为 fading slice。
+     * alpha = 1f - [unitLocalProgress]；targetRange = null（只属于旧画面，rebase 期间淡出）。
+     * units 为空时回退到整段 [rebasedSlices] 行为。
+     */
+    private fun collectDeleteSlicesAsRebased(
+        prev: ComposeVisualTransaction,
+        textProgress: Float,
+    ): List<RebasedTextSlice> {
+        val units = prev.oldAnimationUnits
+        if (units.isEmpty()) {
+            return rebasedSlices(prev.oldRanges, prev.oldLayout, 1f - textProgress, targetRange = null)
+        }
+        val layout = prev.oldLayout ?: return emptyList()
+        val n = units.size
+        val textLen = layout.result.layoutInput.text.length
+        val slices = mutableListOf<RebasedTextSlice>()
+        for ((i, range) in units.withIndex()) {
+            if (range.start >= range.end || range.end > textLen) continue
+            slices.add(
+                RebasedTextSlice(
+                    sourceLayout = layout,
+                    sourceRange = range,
+                    sourceTranslate = Offset.Zero,
+                    sourceAlpha = 1f - unitLocalProgress(textProgress, i, n),
+                    targetRange = null,
+                ),
+            )
+        }
+        return slices
     }
 
     /**
@@ -1085,11 +1169,15 @@ internal object ComposeVisualRebase {
             var units: List<TextRange> = chain[i].newAnimationUnits
             // 从第 i+1 笔开始，用每笔的 offsetMap 把 unit 从 T(i+1) 映射到 Tn
             mapForwardLoop@ for (j in (i + 1) until chain.size) {
-                val entries = chain[j].offsetMap?.entries ?: return@mapForwardLoop
+                // #684 评论 5670182711 问题1：循环标签只能用 break/continue，不能用 return。
+                // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+                // 该阶段坐标不变，直接跳过该阶段继续映射后续正文事务。
+                val entries = chain[j].offsetMap?.entries
+                if (entries == null) continue@mapForwardLoop
                 if (entries.isEmpty()) {
                     // 空 entries 表示整段删除/替换，无存活映射，所有 unit 丢失
                     units = emptyList()
-                    break
+                    break@mapForwardLoop
                 }
                 units = mapRangesForwardThroughOffsetMap(units, entries)
             }
@@ -1120,10 +1208,14 @@ internal object ComposeVisualRebase {
             var units: List<TextRange> = chain[i].oldAnimationUnits
             // 从第 i-1 笔开始反向，用每笔的 offsetMap 的逆映射把 unit 从 Ti 映射回 T0
             mapBackwardLoop@ for (j in (i - 1) downTo 0) {
-                val entries = chain[j].offsetMap?.entries ?: return@mapBackwardLoop
+                // #684 评论 5670182711 问题1：循环标签只能用 break/continue，不能用 return。
+                // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+                // 该阶段坐标不变，直接跳过该阶段继续映射前面的正文事务。
+                val entries = chain[j].offsetMap?.entries
+                if (entries == null) continue@mapBackwardLoop
                 if (entries.isEmpty()) {
                     units = emptyList()
-                    break
+                    break@mapBackwardLoop
                 }
                 units = mapRangesBackwardThroughOffsetMap(units, entries)
             }

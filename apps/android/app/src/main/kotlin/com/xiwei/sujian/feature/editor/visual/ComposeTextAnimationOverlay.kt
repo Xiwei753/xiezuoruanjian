@@ -571,7 +571,10 @@ private fun DrawScope.drawAnimatedRanges(
  *
  * N 个 unit，unit i 的局部 progress = ((progress * N) - i).coerceIn(0f, 1f)。
  * RunAnimation 模式下每个 run 作为一个整体，run 之间依次出现（与默认行为一致，
- * 因为 unit 已经是 Core 算好的 run 边界）。
+ * 因为 unit 已经是 Core 管好的 run 边界）。
+ *
+ * #684 评论 5670182711 问题2：alpha 公式收成 [ComposeVisualRebase.unitLocalProgress] 纯函数，
+ * 与 startFrame 物化（collectCurrentSlicesAsRebased）使用同一套公式。
  */
 private fun DrawScope.drawUnitWiseAppear(
     result: TextLayoutResult,
@@ -583,7 +586,7 @@ private fun DrawScope.drawUnitWiseAppear(
     if (units.isEmpty()) return
     val n = units.size
     for ((i, unit) in units.withIndex()) {
-        val localProgress = ((progress * n) - i).coerceIn(0f, 1f)
+        val localProgress = ComposeVisualRebase.unitLocalProgress(progress, i, n)
         if (localProgress <= 0f) continue
         // RunAnimation: 每个 run 整体出现（unit 即 run，无需特殊处理）。
         // 其他模式（GlyphAnimation/ClusterAnimation/LineReflowAnimation/SnapshotAnimation）：
@@ -603,6 +606,9 @@ private fun DrawScope.drawUnitWiseAppear(
  *
  * N 个 unit，unit i 的局部 progress = ((progress * N) - i).coerceIn(0f, 1f)。
  * alpha = 1f - localProgress（先消失的 unit alpha 先到 0）。
+ *
+ * #684 评论 5670182711 问题2：alpha 公式收成 [ComposeVisualRebase.unitLocalProgress] 纯函数，
+ * 与 startFrame 物化（collectCurrentSlicesAsRebased）使用同一套公式。
  */
 private fun DrawScope.drawUnitWiseDisappear(
     result: TextLayoutResult,
@@ -614,7 +620,7 @@ private fun DrawScope.drawUnitWiseDisappear(
     if (units.isEmpty()) return
     val n = units.size
     for ((i, unit) in units.withIndex()) {
-        val localProgress = ((progress * n) - i).coerceIn(0f, 1f)
+        val localProgress = ComposeVisualRebase.unitLocalProgress(progress, i, n)
         val alpha = 1f - localProgress
         if (alpha <= 0f) continue
         drawRangeText(
