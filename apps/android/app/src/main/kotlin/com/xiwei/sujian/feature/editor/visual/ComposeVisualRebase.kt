@@ -556,16 +556,20 @@ internal object ComposeVisualRebase {
     /**
      * #644 评论 #684：按 offset map chain 合并整条事务链的 retained moves。
      *
-     * chain 中每一笔 [EditorVisualIntent] 的 [VisualOffsetMap] 顺序合成，
-     * 将 old UTF-16 range 映射到最终 new UTF-16 range。
-     * 然后只比较 old/new [TextLayoutResult] 的真实几何生成 [RetainedMove]。
+     * chain 中每一笔 [EditorVisualIntent] 的 [VisualOffsetMap] 顺序合成（[composeOffsetMapChain]），
+     * 将最初屏幕 old UTF-16 range 映射到最终屏幕 new UTF-16 range。
+     * 然后只比较 old/new [TextLayoutResult] 的真实几何，位置没变就不画，位置变化才生成 [RetainedMove]。
      *
      * 这样输入导致软换行、Enter 导致硬换行、删除换行导致两段合并、
      * 快速连续 Backspace 导致多次回流，全部走同一个 retained reflow，
-     * 不再通过 `\n`、长度、previous/current 猜。
+     * 不再通过 `\n`、长度、previous/current 猜，也不再只用最后一笔的 replaceBounds
+     * 去对应整帧最开始的 old layout（第二/三笔快速删除的坐标是中间文本）。
      *
-     * @param oldLayout 旧布局快照。
-     * @param newLayout 新布局快照。
+     * 当 chain 中任一 intent 缺失 offset map 时，回退到旧式 suffix 线性平移算法
+     * （取最后一笔 replaceBounds / 所有 ranges 摊平），保证无 offset map 的降级路径仍然可用。
+     *
+     * @param oldLayout 旧布局快照（最初屏幕 old 文本）。
+     * @param newLayout 新布局快照（最终屏幕 new 文本）。
      * @param chain Core intent 链 — 按到达顺序排列。
      */
     fun computeRetainedMoves(
@@ -577,18 +581,88 @@ internal object ComposeVisualRebase {
         val curr = newLayout ?: return emptyList()
         if (chain.isEmpty()) return emptyList()
 
-        // 找出 chain 中最后一个有 replaceBounds 的 intent 作为映射依据。
-        // 如果所有 intent 都没有 replaceBounds，fallback 到第一个 intent 的 ranges。
+        // 当整条链都有 offset map 时，按合成后的 map 找存活 range，再比较真实几何。
+        val composed = composeOffsetMapChain(chain)
+        if (composed != null) {
+            return computeRetainedMovesFromComposedMap(prev, curr, composed)
+        }
+
+        // 回退：旧式 suffix 线性平移（取最后一笔 replaceBounds / 所有 ranges 摊平）。
+        return computeRetainedMovesLegacy(prev, curr, chain)
+    }
+
+    /**
+     * #644 评论 #684：用合成后的 offset map 计算 retained moves。
+     * 只取 IDENTITY（内容保留、可能平移）的 entry，比较真实几何，位置变化才生成 [RetainedMove]。
+     * 相邻且位移向量一致的 IDENTITY entry 先合并，避免产生过多碎 move。
+     */
+    private fun computeRetainedMovesFromComposedMap(
+        prev: ComposeLayoutSnapshot,
+        curr: ComposeLayoutSnapshot,
+        composed: List<VisualOffsetMapEntry>,
+    ): List<RetainedMove> {
+        val merged = mergeIdentityEntries(composed)
+        val moves = mutableListOf<RetainedMove>()
+        for (entry in merged) {
+            if (entry.kind != VisualOffsetMapKind.IDENTITY) continue
+            val oldRange = TextRange(entry.oldStart, entry.oldStart + entry.length)
+            val newRange = TextRange(entry.newStart, entry.newStart + entry.length)
+            if (oldRange.start >= oldRange.end || newRange.start >= newRange.end) continue
+            if (oldRange.end > prev.result.layoutInput.text.length) continue
+            if (newRange.end > curr.result.layoutInput.text.length) continue
+            val oldBounds = safePathBounds(prev.result, oldRange) ?: continue
+            val newBounds = safePathBounds(curr.result, newRange) ?: continue
+            val dx = newBounds.left - oldBounds.left
+            val dy = newBounds.top - oldBounds.top
+            if (kotlin.math.abs(dx) > 1f || kotlin.math.abs(dy) > 1f) {
+                moves.add(RetainedMove(oldRange, newRange))
+            }
+        }
+        return moves
+    }
+
+    /**
+     * #644 评论 #684：合并相邻、位移向量一致的 IDENTITY entry —
+     * 同一段被平移的保留文字合成一个 entry，减少 retained move 数量。
+     */
+    private fun mergeIdentityEntries(
+        entries: List<VisualOffsetMapEntry>,
+    ): List<VisualOffsetMapEntry> {
+        val result = mutableListOf<VisualOffsetMapEntry>()
+        for (entry in entries) {
+            if (entry.kind != VisualOffsetMapKind.IDENTITY) {
+                result.add(entry)
+                continue
+            }
+            val last = result.lastOrNull()
+            if (last != null &&
+                last.kind == VisualOffsetMapKind.IDENTITY &&
+                (last.newStart - last.oldStart) == (entry.newStart - entry.oldStart) &&
+                last.oldStart + last.length == entry.oldStart
+            ) {
+                result[result.lastIndex] =
+                    last.copy(length = last.length + entry.length)
+            } else {
+                result.add(entry)
+            }
+        }
+        return result
+    }
+
+    /**
+     * #644 评论 #684：回退路径 — 取最后一个 replaceBounds / 所有 ranges 摊平做线性平移。
+     */
+    private fun computeRetainedMovesLegacy(
+        prev: ComposeLayoutSnapshot,
+        curr: ComposeLayoutSnapshot,
+        chain: List<EditorVisualIntent>,
+    ): List<RetainedMove> {
         val lastWithBounds = chain.lastOrNull { it.replaceBounds != null }
         val replaceBounds = lastWithBounds?.replaceBounds
-        val lastIntent = chain.last()
 
-        // 使用 chain 的 offset map 进行范围映射。
-        // 如果有 offsetMap，通过它确定 old→new 的存活范围。
         val effectiveOldRanges = chain.flatMap { it.oldRanges }.filter { it.start < it.end }
         val effectiveNewRanges = chain.flatMap { it.newRanges }.filter { it.start < it.end }
 
-        // 找出实际的 old suffix start 和 new suffix start。
         val oldSuffixStart =
             replaceBounds?.oldEnd
                 ?: (effectiveOldRanges.maxOfOrNull { it.end } ?: 0)
@@ -616,6 +690,153 @@ internal object ComposeVisualRebase {
             )
         return computeRetainedMovesLoop(ctx)
     }
+
+    /**
+     * #644 评论 #684：合成整条 offset map chain —
+     * 把每笔 intent 的 [VisualOffsetMap] 顺序合成，得到最初屏幕 old UTF-16 range
+     * → 最终屏幕 new UTF-16 range 的 map。
+     *
+     * 合成方式：把累积 map 维护成「初始 old 文本坐标 → 当前 frontier 文本坐标」的线段表；
+     * 对每一阶段（intent[i] 的 old→new map），把当前 frontier 与这一阶段 map 求交，
+     * 交集映射回初始 old 坐标并映射到下一阶段 new 坐标。逐笔做完后，acc 的坐标已经是最初 old → 最终 new。
+     *
+     * 仅当 chain 中每一笔都带非空 offset map 才返回非 null；否则返回 null，
+     * 调用方回退到旧式 suffix 算法。
+     */
+    fun composeOffsetMapChain(
+        chain: List<EditorVisualIntent>,
+    ): List<VisualOffsetMapEntry>? {
+        if (chain.isEmpty()) return null
+        if (chain.any { it.offsetMap == null || it.offsetMap.entries.isEmpty() }) return null
+
+        // acc：初始 old 文本坐标 → 当前 frontier 文本坐标。
+        val initialOldLen = chain.first().expectedOldText.length
+        var acc: List<AccSegment> =
+            listOf(
+                AccSegment(
+                    oldStart = 0,
+                    newStart = 0,
+                    length = initialOldLen,
+                    kind = VisualOffsetMapKind.IDENTITY,
+                ),
+            )
+
+        for (intent in chain) {
+            val entries = intent.offsetMap?.entries ?: return null
+            val stageOldLen = intent.expectedOldText.length
+            val stage = buildStageSegments(entries, stageOldLen)
+            acc = composeStage(acc, stage)
+        }
+
+        return acc.map {
+            VisualOffsetMapEntry(
+                oldStart = it.oldStart,
+                newStart = it.newStart,
+                length = it.length,
+                kind = it.kind,
+            )
+        }
+    }
+
+    /**
+     * #644 评论 #684：把单阶段 offset map entries 铺成覆盖整段 old 文本的线段表，
+     * 未被 entry 覆盖的区间视为 identity（位置不变）。
+     */
+    private fun buildStageSegments(
+        entries: List<VisualOffsetMapEntry>,
+        oldTextLen: Int,
+    ): List<StageSegment> {
+        val segs = mutableListOf<StageSegment>()
+        var cursor = 0
+        for (e in entries.sortedBy { it.oldStart }) {
+            if (e.oldStart > cursor) {
+                segs.add(
+                    StageSegment(
+                        oldStart = cursor,
+                        newStart = cursor,
+                        length = e.oldStart - cursor,
+                        kind = VisualOffsetMapKind.IDENTITY,
+                    ),
+                )
+            }
+            segs.add(
+                StageSegment(
+                    oldStart = e.oldStart,
+                    newStart = e.newStart,
+                    length = e.length,
+                    kind = e.kind,
+                ),
+            )
+            cursor = e.oldStart + e.length
+        }
+        if (cursor < oldTextLen) {
+            segs.add(
+                StageSegment(
+                    oldStart = cursor,
+                    newStart = cursor,
+                    length = oldTextLen - cursor,
+                    kind = VisualOffsetMapKind.IDENTITY,
+                ),
+            )
+        }
+        return segs
+    }
+
+    /**
+     * #644 评论 #684：把累积 acc（initial old → frontier）与单阶段 stage（frontier → next frontier）
+     * 求交合成，返回新的 acc（initial old → next frontier）。
+     */
+    private fun composeStage(
+        acc: List<AccSegment>,
+        stage: List<StageSegment>,
+    ): List<AccSegment> {
+        val result = mutableListOf<AccSegment>()
+        for (a in acc) {
+            val aNewStart = a.newStart
+            val aEnd = a.newStart + a.length
+            for (s in stage) {
+                val overlapStart = maxOf(aNewStart, s.oldStart)
+                val overlapEnd = minOf(aEnd, s.oldStart + s.length)
+                if (overlapStart >= overlapEnd) continue
+                val offsetInAcc = overlapStart - aNewStart
+                val oldStartInitial = a.oldStart + offsetInAcc
+                val newStartFrontier = s.newStart + (overlapStart - s.oldStart)
+                val kind =
+                    if (a.kind == VisualOffsetMapKind.SHIFTED ||
+                        s.kind == VisualOffsetMapKind.SHIFTED
+                    ) {
+                        VisualOffsetMapKind.SHIFTED
+                    } else {
+                        VisualOffsetMapKind.IDENTITY
+                    }
+                result.add(
+                    AccSegment(
+                        oldStart = oldStartInitial,
+                        newStart = newStartFrontier,
+                        length = overlapEnd - overlapStart,
+                        kind = kind,
+                    ),
+                )
+            }
+        }
+        return result
+    }
+
+    /** #644 评论 #684：累积线段 — initial old 坐标 → 当前 frontier 坐标。 */
+    private data class AccSegment(
+        val oldStart: Int,
+        val newStart: Int,
+        val length: Int,
+        val kind: VisualOffsetMapKind,
+    )
+
+    /** #644 评论 #684：单阶段线段 — frontier_old 坐标 → frontier_new 坐标。 */
+    private data class StageSegment(
+        val oldStart: Int,
+        val newStart: Int,
+        val length: Int,
+        val kind: VisualOffsetMapKind,
+    )
 
     /**
      * Retained moves 计算上下文 — 封装循环中不变的参数，降低函数参数数量。

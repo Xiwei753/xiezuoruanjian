@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import android.util.Log
+import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 
@@ -12,23 +13,32 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
  * 旧实现试图为每笔 Core 事务单独创建动画事务，导致中间的 `TextLayoutResult`
  * 根本不存在、光标抖动、换行重排错位。
  *
- * 本协调器的策略：
- * - `onVisualIntent()` 只把 Core intent 串进 pending chain，不创建事务。
- * - `onLayout()` 在真正收到 Compose 屏幕布局时，
- *   把上一份已呈现的 layout → 当前 layout + 中间积累的 intent chain
- *   合成一个冻结的 [ComposeVisualTransaction]。
+ * 本协调器的策略（双向汇合）：
+ * - `onVisualIntent()` 只把 Core intent 串进 pending chain，然后 tryStartTransaction()。
+ * - `onLayout()` 保存最新真实 layout，然后 tryStartTransaction()。
+ * - 两份概念同时保存：
+ *   - [lastConsumed]（lastConsumedPresentedLayout）：上一次真正生成事务消费的旧侧 layout，
+ *     只在生成事务时推进；首次 layout 设为基线。
+ *   - [latest]（latestUnconsumedPresentedLayout）：每一次 onLayout 都更新的最新真实 layout。
+ * - 只有满足 `chain.baseText == lastConsumed.text` 且 `chain.targetText == latest.text`
+ *   才生成屏幕事务 —— 无论 intent 先到还是 layout 先到都能汇合。
  *
  * 这样快速输入、快速删除、Enter、软换行都只对真实屏幕帧做动画。
  */
-class ComposeVisualFrameCoordinator {
+class ComposeVisualFrameCoordinator(
+    private val targetId: String,
+) {
     companion object {
         private const val TAG = "VisualFrameCoord"
     }
 
-    /** 已呈现到屏幕的布局快照 — 上一次真正由 overlay 消费的 layout。 */
-    private var presented: PresentedLayout? = null
+    /** 上一次真正生成事务消费的旧侧 layout（基线）；首次 layout 设为基线，之后只在生成时推进。 */
+    private var lastConsumed: PresentedLayout? = null
 
-    /** 中间积累的 Core intent chain — 等下一个 onLayout 到达后一起合成事务。 */
+    /** 最新真实 layout — 每一次 onLayout 都更新。 */
+    private var latest: PresentedLayout? = null
+
+    /** 中间积累的 Core intent chain — 等匹配的真实 layout 到达后一起合成事务。 */
     private var pending: PendingVisualChain? = null
 
     /** 当前正在跑的视觉事务 — overlay 读取。 */
@@ -37,76 +47,132 @@ class ComposeVisualFrameCoordinator {
     /** 单调递增的事务 ID。 */
     private var nextTransactionId: Long = 0L
 
+    /** 最近一次 onLayout 传入的动画策略 — 供 tryStartTransaction 在 intent 先到时也用到。 */
+    private var lastMotionPolicy: EditorMotionPolicy = EditorMotionPolicy()
+
     /**
-     * Core intent 到达 — 只串进 pending chain，不启动动画、不创建事务。
+     * Core intent 到达 — 只串进 pending chain（连续才拼接，不连续不开硬拼），
+     * 然后尝试合流生成事务。
      */
-    fun onVisualIntent(intent: EditorVisualIntent) {
+    fun onVisualIntent(
+        intent: EditorVisualIntent,
+        masterProgress: Float,
+    ): FrameUpdate {
         val existing = pending
         if (existing == null) {
             pending =
                 PendingVisualChain(
-                    baseText = intent.offsetMap?.entries?.firstOrNull()?.let {
-                        // 将来可从 intent 推导 baseText，当前先用空串。
-                        ""
-                    } ?: "",
-                    targetText = "",
+                    baseText = intent.expectedOldText,
+                    targetText = intent.expectedNewText,
                     intents = listOf(intent),
                 )
         } else {
-            // 验证连续性：上一笔 expectedNewText == 下一笔 expectedOldText 不再严格校验，
-            // 因为 Core 可能合并或拆分事务。直接追加即可。
-            pending = existing.copy(intents = existing.intents + intent)
+            // 连续 chain 必须满足上一笔 expectedNewText == 下一笔 expectedOldText；
+            // 不连续就不能硬拼，以当前 intent 重开一条链。
+            val lastExpectedNew = existing.intents.last().expectedNewText
+            if (lastExpectedNew == intent.expectedOldText) {
+                pending =
+                    existing.copy(
+                        intents = existing.intents + intent,
+                        targetText = intent.expectedNewText,
+                    )
+            } else {
+                pending =
+                    PendingVisualChain(
+                        baseText = intent.expectedOldText,
+                        targetText = intent.expectedNewText,
+                        intents = listOf(intent),
+                    )
+            }
         }
 
-        Log.d(TAG, "intent_queued: coreTxn=${intent.coreTransactionId} pending=${pending?.intents?.size}")
+        EditorDiagnosticsEvents.editorVisualIntentQueued(
+            targetId = targetId,
+            coreTransactionId = intent.coreTransactionId,
+            baseRevision = intent.baseRevision,
+            newRevision = intent.newRevision,
+            pendingChainSize = pending?.intents?.size ?: 0,
+        )
+
+        return tryStartTransaction(masterProgress)
     }
 
     /**
-     * 真实屏幕布局到达 — 生成冻结事务。
+     * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成冻结事务。
      *
-     * 从上一份已呈现 layout → 当前 layout + 中间积累的 intent chain
-     * → 一个 [ComposeVisualTransaction]，创建后不再修改。
+     * 从上一份已呈现 layout（[lastConsumed]）→ 当前 layout（[latest]）
+     * + 中间积累的 intent chain → 一个 [ComposeVisualTransaction]，创建后不再修改。
      */
     fun onLayout(
         snapshot: ComposeLayoutSnapshot,
         motionPolicy: EditorMotionPolicy,
+        masterProgress: Float,
     ): FrameUpdate {
-        val previousPresented = presented
-        val chain = pending
-        pending = null
+        latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        lastMotionPolicy = motionPolicy
 
-        if (previousPresented == null || chain == null || chain.intents.isEmpty()) {
-            // 首帧或无 pending intent — 只更新 presented，不创建事务。
-            presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
-            return FrameUpdate.Empty
+        EditorDiagnosticsEvents.editorLayoutPresented(
+            targetId = targetId,
+            layoutTextLength = snapshot.result.layoutInput.text.length,
+        )
+
+        // 首次 layout 设为基线，使第一笔事务的 base 能匹配上。
+        if (lastConsumed == null) {
+            lastConsumed = latest
         }
 
-        // 合并 chain 中所有 intent 的 ranges 和 Core 事务 ID。
-        val allIntents = chain.intents
-        val coreTransactionIds = allIntents.map { it.coreTransactionId }
-        val mergedOldRanges = allIntents.flatMap { it.oldRanges }
-        val mergedNewRanges = allIntents.flatMap { it.newRanges }
+        val update = tryStartTransaction(masterProgress)
+        return update
+    }
 
-        // 取最后一个 intent 的 cursor 信息。
-        val lastIntent = allIntents.last()
+    /**
+     * 双向合流：当 pending chain 与两份 layout 概念同时满足匹配条件时生成事务。
+     *
+     * 匹配条件（无论 intent 先到还是 layout 先到）：
+     * - pending != null
+     * - lastConsumed != null && latest != null
+     * - latest 不是 lastConsumed 本身（确有新 layout）
+     * - pending.baseText == lastConsumed.text
+     * - pending.targetText == latest.text
+     */
+    private fun tryStartTransaction(masterProgress: Float): FrameUpdate {
+        val pendingChain = pending
+        if (pendingChain == null) {
+            // 无 pending：基线不动（只在生成事务时推进）。
+            return FrameUpdate.Empty
+        }
+        val consumed = lastConsumed
+        val newest = latest
+        if (consumed == null || newest == null) return FrameUpdate.Empty
+        if (newest === consumed) return FrameUpdate.Empty
+        if (pendingChain.baseText != consumed.text) return FrameUpdate.Empty
+        if (pendingChain.targetText != newest.text) return FrameUpdate.Empty
+
+        // 合流生成事务。
+        val chain = pendingChain.intents
+        val coreTransactionIds = chain.map { it.coreTransactionId }
+        val mergedOldRanges = chain.flatMap { it.oldRanges }
+        val mergedNewRanges = chain.flatMap { it.newRanges }
+
+        val lastIntent = chain.last()
         val cursorInfo = lastIntent.cursor
 
         // 计算 retained moves — 用 offset map chain 合成。
         val retainedMoves =
             ComposeVisualRebase.computeRetainedMoves(
-                oldLayout = previousPresented.layout,
-                newLayout = snapshot,
-                chain = allIntents,
+                oldLayout = consumed.layout,
+                newLayout = newest.layout,
+                chain = chain,
             )
 
         // 计算 cursor start/end rect。
         val cursorStartRect =
-            if (cursorInfo != null && previousPresented.layout != null) {
+            if (cursorInfo != null && consumed.layout != null) {
                 try {
                     val startOffset =
                         cursorInfo.oldEndUtf16
-                            .coerceIn(0, previousPresented.layout.result.layoutInput.text.length)
-                    previousPresented.layout.result.getCursorRect(startOffset)
+                            .coerceIn(0, consumed.layout.result.layoutInput.text.length)
+                    consumed.layout.result.getCursorRect(startOffset)
                 } catch (_: Throwable) {
                     null
                 }
@@ -119,8 +185,8 @@ class ComposeVisualFrameCoordinator {
                 try {
                     val endOffset =
                         cursorInfo.newEndUtf16
-                            .coerceIn(0, snapshot.result.layoutInput.text.length)
-                    snapshot.result.getCursorRect(endOffset)
+                            .coerceIn(0, newest.layout.result.layoutInput.text.length)
+                    newest.layout.result.getCursorRect(endOffset)
                 } catch (_: Throwable) {
                     null
                 }
@@ -130,7 +196,7 @@ class ComposeVisualFrameCoordinator {
 
         // 计算 hidden ranges — 由 overlay 接管的范围。
         val hasTextAnimation =
-            motionPolicy.textEnabled && lastIntent.textKind != TextVisualKind.None
+            lastMotionPolicy.textEnabled && lastIntent.textKind != TextVisualKind.None
         val hiddenRanges =
             if (hasTextAnimation) {
                 mergedNewRanges.filter { it.start < it.end }
@@ -138,15 +204,17 @@ class ComposeVisualFrameCoordinator {
                 emptyList()
             }
 
-        // 计算 startFrame — 物化当前帧作为新事务的起点。
+        // 计算 startFrame — 用真实当前 master progress 物化当前屏幕帧。
+        // 动画被下一笔输入打断时，startFrame 从半途继续，而不是假定上一笔已经跑到 1f。
+        val rebasedFromId = active?.id
         val startFrame =
             active?.let { current ->
                 ComposeVisualRebase.materializeStartFrame(
                     ComposeVisualRebase.MaterializeStartFrameParams(
                         transaction = current,
-                        textProgress = 1f,
-                        cursorProgress = 1f,
-                        rebaseProgress = 1f,
+                        textProgress = masterProgress,
+                        cursorProgress = masterProgress,
+                        rebaseProgress = masterProgress,
                         nextReplaceBounds = lastIntent.replaceBounds,
                         hiddenRanges = hiddenRanges,
                         cursorSnapshot = null,
@@ -167,9 +235,9 @@ class ComposeVisualFrameCoordinator {
             ComposeVisualTransaction(
                 id = nextTransactionId,
                 coreTransactionIds = coreTransactionIds,
-                oldLayout = previousPresented.layout,
-                newLayout = snapshot,
-                intents = allIntents,
+                oldLayout = consumed.layout,
+                newLayout = newest.layout,
+                intents = chain,
                 oldRanges = effectiveOldRanges,
                 newRanges = mergedNewRanges,
                 retainedMoves = retainedMoves,
@@ -177,17 +245,37 @@ class ComposeVisualFrameCoordinator {
                 cursorEndRect = cursorEndRect,
                 startFrame = startFrame,
                 durationMs = lastIntent.durationMs,
-                motionPolicy = motionPolicy,
+                motionPolicy = lastMotionPolicy,
             )
 
         active = transaction
-        presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        lastConsumed = newest
+        pending = null
+
+        EditorDiagnosticsEvents.editorVisualTransactionStarted(
+            targetId = targetId,
+            visualTransactionId = transaction.id,
+            coreTransactionIds = coreTransactionIds,
+            baseRevision = chain.first().baseRevision,
+            newRevision = chain.last().newRevision,
+            pendingChainSize = chain.size,
+            layoutTextLength = newest.layout.result.layoutInput.text.length,
+        )
+        if (rebasedFromId != null) {
+            EditorDiagnosticsEvents.editorVisualTransactionRebased(
+                targetId = targetId,
+                visualTransactionId = transaction.id,
+                rebasedFromVisualTransactionId = rebasedFromId,
+                pendingChainSize = chain.size,
+            )
+        }
 
         Log.d(
             TAG,
             "transaction_started: id=${transaction.id} coreTxnIds=$coreTransactionIds " +
-                "retained=${retainedMoves.size} oldTextLen=${previousPresented.layout?.result?.layoutInput?.text?.length ?: 0} " +
-                "newTextLen=${snapshot.result.layoutInput.text.length}",
+                "rebasedFrom=$rebasedFromId retained=${retainedMoves.size} " +
+                "oldTextLen=${consumed.layout?.result?.layoutInput?.text?.length ?: 0} " +
+                "newTextLen=${newest.layout.result.layoutInput.text.length}",
         )
 
         return FrameUpdate.NewTransaction(transaction, hiddenRanges)
@@ -199,10 +287,25 @@ class ComposeVisualFrameCoordinator {
     fun currentTransaction(): ComposeVisualTransaction? = active
 
     /**
+     * 动画完成时由 overlay 通知 — 清除内部 active，避免下一笔拿已结束的旧事务当当前事务。
+     */
+    fun completeTransaction(transactionId: Long) {
+        val current = active ?: return
+        if (current.id != transactionId) return
+        EditorDiagnosticsEvents.editorVisualTransactionCompleted(
+            targetId = targetId,
+            visualTransactionId = current.id,
+            coreTransactionIds = current.coreTransactionIds,
+        )
+        active = null
+    }
+
+    /**
      * 清除所有状态 — 章节切换或 detach 时调用。
      */
     fun clear() {
-        presented = null
+        lastConsumed = null
+        latest = null
         pending = null
         active = null
         nextTransactionId = 0L
@@ -219,6 +322,9 @@ private data class PresentedLayout(
 
 /**
  * 中间积累的 Core intent chain — 等 onLayout 到达后一起合成事务。
+ *
+ * [baseText]/[targetText] 始终携带用于匹配的文本身份（来自每笔 intent 的
+ * expectedOldText/expectedNewText），不再永远写成空串。
  */
 private data class PendingVisualChain(
     val baseText: String,
@@ -230,7 +336,7 @@ private data class PendingVisualChain(
  * 帧更新结果 — onLayout 返回。
  */
 sealed interface FrameUpdate {
-    /** 无新事务（首帧或无 pending intent）。 */
+    /** 无新事务（无 pending / 无匹配 layout）。 */
     data object Empty : FrameUpdate
 
     /** 新事务生成 — overlay 读取 transaction 并更新 hiddenRanges。 */

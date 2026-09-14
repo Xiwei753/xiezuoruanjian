@@ -37,6 +37,8 @@ data class EditorVisualIntent(
     val textKind: TextVisualKind,
     val cursor: CursorVisualIntent?,
     val replaceBounds: VisualReplaceBounds? = null,
+    val expectedOldText: String = "",
+    val expectedNewText: String = "",
 )
 
 /**

@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
@@ -65,19 +66,20 @@ fun ComposeTextAnimationOverlay(
     val transactionId = activeTransaction?.id ?: 0L
     val motionPolicy = activeTransaction?.motionPolicy ?: EditorMotionPolicy()
 
-    // #644 评论 #684：单 master progress —
-    // 所有动画（文字、光标、rebase）都从同一个 progress 推导。
+    // #644 评论 #684（评论 #5660899405 第 5 项）：Core 的动画语义必须被真正消费 —
+    // 正文视觉事务的 master timeline 直接使用冻结事务里的 durationMs；
+    // AnimationModeDto.SYSTEM_SUPPRESSED 必须禁止正文自定义动画；
+    // 设置层 motionPolicy 只负责总开关 / reduce motion，不覆盖 Core 已经决定好的本笔动画事实。
+    val animationMode = activeIntent?.animationMode
+    val systemSuppressed = animationMode == AnimationModeDto.SYSTEM_SUPPRESSED
     val isCursorOnly =
         activeIntent?.textKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
-    val textEnabled = motionPolicy.textEnabled && !isCursorOnly
+    val textEnabled =
+        motionPolicy.textEnabled && !systemSuppressed && activeIntent?.textKind != TextVisualKind.None
     val cursorEnabled = motionPolicy.cursorEnabled
 
-    val durationMs =
-        if (isCursorOnly) {
-            motionPolicy.cursorDurationMillis
-        } else {
-            motionPolicy.textDurationMillis
-        }
+    // 直接使用冻结事务的 durationMs 作为 master timeline；Core 已决定本笔时长。
+    val durationMs = activeTransaction?.durationMs ?: 0L
 
     // #644 评论 #684：单 master progress，不再有三套独立时间线。
     val masterProgress = remember { Animatable(0f) }
@@ -106,14 +108,10 @@ fun ComposeTextAnimationOverlay(
         }
     val rebaseProgressValue = masterProgressValue
 
-    // #644 评论 #684：分别报告 progress 给 visualState，供下一事务物化 startFrame。
+    // #644 评论 #684：报告单 master progress 给 visualState，供下一事务物化 startFrame。
     LaunchedEffect(transactionId, masterProgressValue) {
         if (transactionId > 0L) {
-            visualState.reportProgress(
-                textProgress = textProgressValue,
-                cursorProgress = cursorProgressValue,
-                rebaseProgress = rebaseProgressValue,
-            )
+            visualState.reportProgress(masterProgressValue)
         }
     }
 
@@ -127,9 +125,11 @@ fun ComposeTextAnimationOverlay(
     val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
     val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
 
-    // 动画结束清 hiddenRanges，系统正文马上可见。
+    // 动画结束：先通知 coordinator 清 active（避免下一笔拿已结束的旧事务当当前事务），
+    // 再清本地 overlay 状态。系统正文马上可见。
     LaunchedEffect(transactionId, masterProgressValue) {
         if (transactionId > 0L && masterProgressValue >= 1f) {
+            visualState.completeActiveTransaction(transactionId)
             visualState.clearAnimation()
         }
     }

@@ -546,6 +546,8 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
         textKind = textKind,
         cursor = cursor,
         replaceBounds = replaceBounds,
+        expectedOldText = event.oldText,
+        expectedNewText = event.newText,
     )
 }
 
