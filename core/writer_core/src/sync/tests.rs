@@ -21,6 +21,8 @@ mod tests {
     #[cfg(feature = "github-api")]
     use crate::sync::types::SyncStatus;
     #[cfg(feature = "github-api")]
+    use crate::sync::types::Tombstone;
+    #[cfg(feature = "github-api")]
     use base64::Engine;
     #[cfg(feature = "github-api")]
     use std::path::Path;
@@ -1257,9 +1259,23 @@ mod tests {
         state
             .known_files
             .insert("project.json".to_string(), "old_hash".to_string());
+        // 使用远大于远端 updated_at_ms(900) 的时间戳，确保本地删除 LWW 胜出。
+        // 同时远大于 30 天前的 purge 阈值，确保 delete record 不被 manifest purge 过滤掉。
+        let local_delete_time_ms: i64 = 2_000_000_000_000;
         state
             .known_files_updated_at
-            .insert("project.json".to_string(), 1000);
+            .insert("project.json".to_string(), local_delete_time_ms);
+        // snapshot_local_records_read_only 要求 known file 缺失时必须有 tombstone
+        // 才能生成 delete record，否则返回 Err。添加 tombstone 使本地删除合法化。
+        state.tombstones.push(Tombstone {
+            original_path: "project.json".to_string(),
+            trash_path: "trash/project.json".to_string(),
+            deleted_at: local_delete_time_ms / 1000,
+            purge_after: local_delete_time_ms / 1000 + 365 * 24 * 3600,
+            deleted_by: "device_local".to_string(),
+            original_hash: "old_hash".to_string(),
+            kind: "local_delete".to_string(),
+        });
         SyncService::save_sync_state(dir.path(), &state).unwrap();
 
         let mut initial_files = std::collections::HashMap::new();

@@ -174,6 +174,10 @@ pub(super) fn transfer_live_project(
         for attempt in 0..MAX_CAS_RETRIES {
             let generation_id = uuid::Uuid::new_v4().to_string();
 
+            // 每次迭代重新评估冲突状态：上一次 merge 的冲突可能在新 snapshot 下不再存在。
+            // 不清除的话，CAS 成功后会错误返回旧的 PartialConflict。
+            let _ = retained_conflict.take();
+
             // 1. 用当前 catalog_snapshot 找 visible generation → merge 到 staging。
             //    每次重试都重新 load_sync_state，merge 对同一个 staging 可重复执行。
             let merge_outcome: crate::error::Result<Option<crate::sync::lww::LwwMergeOutcome>> =
