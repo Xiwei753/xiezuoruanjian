@@ -193,6 +193,12 @@ class ComposeVisualFrameCoordinator(
         val lastCursor = chain.mapNotNull { it.cursor }.lastOrNull()
         val lastIntent = chain.last()
 
+        // #684 评论 5666730754：screenSuppressed — 整条 chain 里只要有一笔 SYSTEM_SUPPRESSED
+        // 就算。overlay 实际只需要区分 suppressed / 非 suppressed，用 screenSuppressed 收口
+        // animationMode 和 textAnimationActive/cursorAnimationActive。
+        val screenSuppressed =
+            chain.any { it.animationMode == AnimationModeDto.SYSTEM_SUPPRESSED }
+
         // 计算 retained moves — 用 offset map chain 合成。
         val retainedMoves =
             ComposeVisualRebase.computeRetainedMoves(
@@ -207,8 +213,14 @@ class ComposeVisualFrameCoordinator(
         // 先用当前活跃事务的 cursorStartRect/cursorEndRect + masterProgress 算出
         // 当前屏幕上的光标位置 interruptedCursorRect，作为下一笔 cursorStartRect 的首选。
         val activeTx = active
+        // #684 评论 5666730754 问题2：interruptedCursorRect 只在上一笔 activeTx 的光标
+        // 真的被 overlay 动画过（cursorAnimationActive==true）时才插值。
+        // 当上一笔是 SYSTEM_SUPPRESSED 且 cursor.animate=false 时，overlay 的 cursorProgressValue=1f，
+        // 屏幕光标已直接在 activeTx.end；这里不应从 activeTx.cursorStartRect/cursorEndRect 插值，
+        // 否则拿一个屏幕上从未出现过的中间 rect 当 C 的起点。
+        // 没有上一笔真实 cursor 动画时回退到 logicalOldCursorRect（当前屏幕真实 T0 光标）。
         val interruptedCursorRect =
-            if (activeTx != null && firstCursor?.animate == true) {
+            if (activeTx?.cursorAnimationActive == true) {
                 ComposeVisualRebase.interpolateCursorRect(
                     startRect = activeTx.cursorStartRect,
                     endRect = activeTx.cursorEndRect,
@@ -277,11 +289,24 @@ class ComposeVisualFrameCoordinator(
         // - 不映射/继承 active.suppressedCurrentRanges（mappedPrevSuppressedRanges = emptyList）
         // - 不计算 startFrame（不让上一笔 overlay 动画跨过这笔 suppressed 事务继续跑）
         // overlay 据此 transaction.animationMode 判断 systemSuppressed，不再从 _activeIntent 读取。
-        val customAnimationEnabled =
-            lastMotionPolicy.textEnabled &&
-                lastIntent.animationMode != AnimationModeDto.SYSTEM_SUPPRESSED
+        // #684 评论 5666730754：用 screenSuppressed（整条 chain 任一笔 SYSTEM_SUPPRESSED）收口，
+        // 不再只看最后一笔 intent 的 animationMode。
+        val customAnimationEnabled = lastMotionPolicy.textEnabled && !screenSuppressed
         val customTextAnimationEnabled =
             customAnimationEnabled && transactionTextKind != TextVisualKind.None
+
+        // #684 评论 5666730754：冻结正文/光标视觉所有权 — 屏幕事务创建时一次算死，
+        // 表示这笔事务的正文/光标是否真的被 overlay 接管动画过（不是"事务还挂着"）。
+        // materializeStartFrame / interruptedCursorRect / overlay 绘制 / 无 overlay 事务 settle
+        // 四处统一读这两个冻结字段。
+        val textAnimationActive = customTextAnimationEnabled
+        val cursorAnimationActive =
+            !screenSuppressed &&
+                lastMotionPolicy.cursorEnabled &&
+                firstCursor != null &&
+                lastCursor != null &&
+                chain.any { it.cursor?.animate == true } &&
+                firstCursor.oldEndUtf16 != lastCursor.newEndUtf16
 
         // (1) 本事务自己 owned 的 new ranges — Insert/Move 的 newRanges。
         val currentOwnedNewRanges =
@@ -365,6 +390,19 @@ class ComposeVisualFrameCoordinator(
             )
 
         nextTransactionId++
+        // #684 评论 5666730754：无 overlay 工作的事务不按 durationMs 假装 active。
+        // 如果一笔事务 textAnimationActive==false && cursorAnimationActive==false && startFrame==null，
+        // 它本身没有任何 overlay 工作，不要让它按 durationMs 假装 active 100ms。
+        // 把 durationMs 设为 0，overlay 的 LaunchedEffect 会走 snapTo(1f) 分支立即完成并
+        // completeTransaction，active 被清掉，lastConsumed 也会在 completeTransaction 里推进。
+        // overlay 的 hasAnimation 此时为 false（textAnimationActive/cursorAnimationActive 都 false
+        // 且 startFrame==null），不会画出任何东西。
+        val effectiveDurationMs =
+            if (!textAnimationActive && !cursorAnimationActive && startFrame == null) {
+                0L
+            } else {
+                lastIntent.durationMs
+            }
         val transaction =
             ComposeVisualTransaction(
                 id = nextTransactionId,
@@ -378,16 +416,25 @@ class ComposeVisualFrameCoordinator(
                 cursorStartRect = cursorStartRect,
                 cursorEndRect = cursorEndRect,
                 startFrame = startFrame,
-                durationMs = lastIntent.durationMs,
+                durationMs = effectiveDurationMs,
                 motionPolicy = lastMotionPolicy,
                 // #684 评论 5663862982：事务生成后冻结的 suppressed ranges —
                 // 下一笔 rebase 时按 composedOffsetMap 映射到新坐标系。
                 suppressedCurrentRanges = hiddenRanges,
                 // #684 评论 5664636035 Bug1：屏幕事务的 textKind 按最终净变化决定。
                 textKind = transactionTextKind,
-                // #684 评论 5665907509 问题1：把最终的 animationMode 直接冻结进事务，
-                // overlay 据此判断 systemSuppressed，不再从 _activeIntent（最后一笔 Core intent）判断。
-                animationMode = lastIntent.animationMode,
+                // #684 评论 5665907509 问题1 + 评论 5666730754：用 screenSuppressed 收口 —
+                // 整条 chain 里只要有一笔 SYSTEM_SUPPRESSED，当前屏幕事务的 animationMode 就是
+                // SYSTEM_SUPPRESSED。overlay 据此判断 systemSuppressed，不再从 _activeIntent 读取。
+                animationMode =
+                    if (screenSuppressed) {
+                        AnimationModeDto.SYSTEM_SUPPRESSED
+                    } else {
+                        lastIntent.animationMode
+                    },
+                // #684 评论 5666730754：冻结正文/光标视觉所有权。
+                textAnimationActive = textAnimationActive,
+                cursorAnimationActive = cursorAnimationActive,
             )
 
         active = transaction

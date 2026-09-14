@@ -25,8 +25,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
-import uniffi.writer_core.AnimationModeDto
 
 /**
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
@@ -78,7 +76,6 @@ fun ComposeTextAnimationOverlay(
     val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
 
     val transactionId = activeTransaction?.id ?: 0L
-    val motionPolicy = activeTransaction?.motionPolicy ?: EditorMotionPolicy()
 
     // #644 评论 #684（评论 #5660899405 第 5 项）：Core 的动画语义必须被真正消费 —
     // 正文视觉事务的 master timeline 直接使用冻结事务里的 durationMs；
@@ -87,16 +84,13 @@ fun ComposeTextAnimationOverlay(
     // #684 评论 5665907509 问题1：animationMode 从冻结事务读取，不再从 _activeIntent 读取。
     //   overlay 据此判断 systemSuppressed，保证 SYSTEM_SUPPRESSED 到来时直接落到系统最终正文，
     //   不会让上一笔动画的 suppressed ranges / startFrame 跨过这笔 suppressed 事务继续跑。
-    val animationMode = activeTransaction?.animationMode
-    val systemSuppressed = animationMode == AnimationModeDto.SYSTEM_SUPPRESSED
-    // #684 评论 5664636035 Bug1：textKind 从 transaction 读取（屏幕事务按最终净变化决定），
-    // 不再从 activeIntent 读取（最后一笔 intent 的 textKind 不代表整条 chain 的净变化）。
+    // #684 评论 5666730754：textEnabled/cursorEnabled 直接从 transaction 的冻结字段读，
+    //   不再用 motionPolicy/systemSuppressed/activeIntent?.cursor?.animate 在 overlay 侧重新判断。
+    //   视觉所有权在 coordinator 生成事务时一次算死，overlay 只读冻结结果。
     val transactionTextKind = activeTransaction?.textKind ?: TextVisualKind.None
-    val isCursorOnly =
-        transactionTextKind == TextVisualKind.None && activeIntent?.cursor?.animate == true
-    val textEnabled =
-        motionPolicy.textEnabled && !systemSuppressed && transactionTextKind != TextVisualKind.None
-    val cursorEnabled = motionPolicy.cursorEnabled
+    val textEnabled = activeTransaction?.textAnimationActive == true
+    val cursorEnabled = activeTransaction?.cursorAnimationActive == true
+    val isCursorOnly = transactionTextKind == TextVisualKind.None && cursorEnabled
 
     // 直接使用冻结事务的 durationMs 作为 master timeline；Core 已决定本笔时长。
     val durationMs = activeTransaction?.durationMs ?: 0L
@@ -120,12 +114,9 @@ fun ComposeTextAnimationOverlay(
 
     // 从 master progress 推导 textProgress / cursorProgress / rebaseProgress。
     val textProgressValue = if (textEnabled) masterProgressValue else 1f
-    val cursorProgressValue =
-        if (cursorEnabled && activeIntent?.cursor?.animate == true) {
-            masterProgressValue
-        } else {
-            1f
-        }
+    // #684 评论 5666730754：cursorProgressValue 直接读 transaction 冻结的 cursorAnimationActive，
+    // 不再叠加 activeIntent?.cursor?.animate 判断。
+    val cursorProgressValue = if (cursorEnabled) masterProgressValue else 1f
     val rebaseProgressValue = masterProgressValue
 
     // #644 评论 #684：报告单 master progress 给 visualState，供下一事务物化 startFrame。
@@ -138,9 +129,9 @@ fun ComposeTextAnimationOverlay(
     val hasTextAnimation =
         activeTransaction != null && textEnabled &&
             (hiddenRanges.isNotEmpty() || transactionTextKind != TextVisualKind.None)
-    val hasCursorAnimation =
-        activeTransaction != null && cursorEnabled &&
-            activeIntent?.cursor?.animate == true
+    // #684 评论 5666730754：hasCursorAnimation 直接读 transaction 冻结的 cursorAnimationActive，
+    // 不再叠加 activeIntent?.cursor?.animate 判断。
+    val hasCursorAnimation = activeTransaction != null && cursorEnabled
     val startFrameHasSlices = activeTransaction?.startFrame?.slices?.isNotEmpty() == true
     val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
     val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
@@ -174,9 +165,9 @@ fun ComposeTextAnimationOverlay(
                                 // 不再读 activeIntent 的 textKind（屏幕事务的 textKind 按最终净变化决定）。
                                 textKind = transaction.textKind,
                                 // smooth cursor 关闭时系统光标负责绘制，overlay 不画光标动画。
-                                cursorAnimate =
-                                    drawsVisualCursor &&
-                                        intent.cursor?.animate == true && cursorEnabled,
+                                // #684 评论 5666730754：cursorAnimate 直接读 transaction 冻结的
+                                // cursorAnimationActive（cursorEnabled），不再叠加 intent.cursor?.animate。
+                                cursorAnimate = drawsVisualCursor && cursorEnabled,
                                 textProgress = textProgressValue,
                                 cursorProgress = cursorProgressValue,
                                 scrollY = scrollY,

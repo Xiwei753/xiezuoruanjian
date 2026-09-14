@@ -85,13 +85,29 @@ internal object ComposeVisualRebase {
         val prevStartFrame = prev.startFrame
         // #641 评论 5460160958 问题3：先按当前 rebaseProgress 物化旧 startFrame slice。
         // #641 评论 5460233781 问题2：materializeRebasedSlice 可能返回 null，用 mapNotNull 过滤。
+        // 注意：materializedOlder（prev.startFrame 的 slice）与 prev 自己的 textAnimationActive 无关 —
+        // prev.startFrame 是更早事务留下的帧，必须照常物化。
         val materializedOlder =
             prevStartFrame?.slices?.mapNotNull {
                 materializeRebasedSlice(it, prev.newLayout, rebaseProgress)
             } ?: emptyList()
 
-        val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
-        val retainedSlices = collectRetainedMoveSlicesAsRebased(prev, textProgress)
+        // #684 评论 5666730754 问题1：currentSlices 和 retainedSlices 只在 prev.textAnimationActive==true
+        // 时才物化。当 prev 是 SYSTEM_SUPPRESSED（textAnimationActive=false）时，prev 的正文从未被
+        // overlay 动画过，屏幕已经在 prev 的最终正文，不应把 prev 当"半途动画"物化出来。
+        // materializedOlder（prev.startFrame 的 slice）仍然照常物化 — 那是更早事务留下的帧。
+        val currentSlices =
+            if (prev.textAnimationActive) {
+                collectCurrentSlicesAsRebased(prev, textProgress)
+            } else {
+                emptyList()
+            }
+        val retainedSlices =
+            if (prev.textAnimationActive) {
+                collectRetainedMoveSlicesAsRebased(prev, textProgress)
+            } else {
+                emptyList()
+            }
 
         // #641 评论 5460160958 问题2+问题4：统一用 nextOffsetMap/nextReplaceBounds 映射 surviving targetRange。
         // #641 评论 5460373035 问题2：聚合所有 split 的 ownedOldRanges 计入返回 frame。

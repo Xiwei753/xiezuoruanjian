@@ -50,11 +50,22 @@ data class RetainedMove(
  *   不再从最后一笔 intent 的 textKind 读。oldChanged/newChanged 都空→None；
  *   oldChanged 空→Insert；newChanged 空→Delete；否则→Move。
  * @param animationMode #684 评论 5665907509 问题1：屏幕事务冻结的 Core 动画模式 —
- *   从 chain 最后一笔 intent 的 animationMode 直接冻结进事务。overlay 据此判断
- *   systemSuppressed（不再从 _activeIntent 读取），保证 SYSTEM_SUPPRESSED 到来时
- *   overlay 直接落到系统最终正文，不会让上一笔动画的 suppressed ranges / startFrame
- *   跨过这笔 suppressed 事务继续跑。默认 [AnimationModeDto.CLUSTER_ANIMATION] 兼容
- *   不显式传 animationMode 的现有调用。
+ *   用 screenSuppressed 收口：整条 chain 里只要有一笔 SYSTEM_SUPPRESSED，当前屏幕事务
+ *   的 animationMode 就是 SYSTEM_SUPPRESSED。overlay 据此判断 systemSuppressed
+ *   （不再从 _activeIntent 读取），保证 SYSTEM_SUPPRESSED 到来时 overlay 直接落到
+ *   系统最终正文，不会让上一笔动画的 suppressed ranges / startFrame 跨过这笔
+ *   suppressed 事务继续跑。默认 [AnimationModeDto.CLUSTER_ANIMATION] 兼容不显式传
+ *   animationMode 的现有调用。
+ * @param textAnimationActive #684 评论 5666730754：屏幕事务创建时一次算死的正文视觉所有权 —
+ *   表示这笔事务的正文是否真的被 overlay 接管动画过（不是"事务还挂着"）。
+ *   当 screenSuppressed 或 motionPolicy 关闭文字动画或 transactionTextKind==None 时为 false。
+ *   materializeStartFrame 据此决定是否物化 prev 自己的 currentSlices/retainedSlices，
+ *   overlay 据此决定 textEnabled，无 overlay 工作的事务据此决定是否立即 settle。
+ * @param cursorAnimationActive #684 评论 5666730754：屏幕事务创建时一次算死的光标视觉所有权 —
+ *   表示这笔事务的光标是否真的被 overlay 接管动画过（不是"事务还挂着"）。
+ *   当 screenSuppressed 或 motionPolicy 关闭光标动画或 chain 里没有 cursor.animate==true
+ *   或光标位置未变（firstCursor.oldEndUtf16 == lastCursor.newEndUtf16）时为 false。
+ *   interruptedCursorRect 据此决定是否从上一笔插值，overlay 据此决定 cursorEnabled。
  */
 data class ComposeVisualTransaction(
     val id: Long,
@@ -73,4 +84,6 @@ data class ComposeVisualTransaction(
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
     val textKind: TextVisualKind = TextVisualKind.None,
     val animationMode: AnimationModeDto = AnimationModeDto.CLUSTER_ANIMATION,
+    val textAnimationActive: Boolean = false,
+    val cursorAnimationActive: Boolean = false,
 )
