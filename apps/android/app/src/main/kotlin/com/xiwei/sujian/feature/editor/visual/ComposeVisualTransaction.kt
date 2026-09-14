@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #641 评论 问题3 + 评论 5457777142 问题2/问题4：retained move —
@@ -48,6 +49,12 @@ data class RetainedMove(
  * @param textKind #684 评论 5664636035 Bug1：屏幕事务自己的文字类型 — 按最终净变化决定，
  *   不再从最后一笔 intent 的 textKind 读。oldChanged/newChanged 都空→None；
  *   oldChanged 空→Insert；newChanged 空→Delete；否则→Move。
+ * @param animationMode #684 评论 5665907509 问题1：屏幕事务冻结的 Core 动画模式 —
+ *   从 chain 最后一笔 intent 的 animationMode 直接冻结进事务。overlay 据此判断
+ *   systemSuppressed（不再从 _activeIntent 读取），保证 SYSTEM_SUPPRESSED 到来时
+ *   overlay 直接落到系统最终正文，不会让上一笔动画的 suppressed ranges / startFrame
+ *   跨过这笔 suppressed 事务继续跑。默认 [AnimationModeDto.CLUSTER_ANIMATION] 兼容
+ *   不显式传 animationMode 的现有调用。
  */
 data class ComposeVisualTransaction(
     val id: Long,
@@ -65,4 +72,5 @@ data class ComposeVisualTransaction(
     val motionPolicy: EditorMotionPolicy,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
     val textKind: TextVisualKind = TextVisualKind.None,
+    val animationMode: AnimationModeDto = AnimationModeDto.CLUSTER_ANIMATION,
 )

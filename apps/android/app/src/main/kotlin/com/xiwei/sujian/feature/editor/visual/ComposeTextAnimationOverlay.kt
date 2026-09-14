@@ -84,7 +84,10 @@ fun ComposeTextAnimationOverlay(
     // 正文视觉事务的 master timeline 直接使用冻结事务里的 durationMs；
     // AnimationModeDto.SYSTEM_SUPPRESSED 必须禁止正文自定义动画；
     // 设置层 motionPolicy 只负责总开关 / reduce motion，不覆盖 Core 已经决定好的本笔动画事实。
-    val animationMode = activeIntent?.animationMode
+    // #684 评论 5665907509 问题1：animationMode 从冻结事务读取，不再从 _activeIntent 读取。
+    //   overlay 据此判断 systemSuppressed，保证 SYSTEM_SUPPRESSED 到来时直接落到系统最终正文，
+    //   不会让上一笔动画的 suppressed ranges / startFrame 跨过这笔 suppressed 事务继续跑。
+    val animationMode = activeTransaction?.animationMode
     val systemSuppressed = animationMode == AnimationModeDto.SYSTEM_SUPPRESSED
     // #684 评论 5664636035 Bug1：textKind 从 transaction 读取（屏幕事务按最终净变化决定），
     // 不再从 activeIntent 读取（最后一笔 intent 的 textKind 不代表整条 chain 的净变化）。

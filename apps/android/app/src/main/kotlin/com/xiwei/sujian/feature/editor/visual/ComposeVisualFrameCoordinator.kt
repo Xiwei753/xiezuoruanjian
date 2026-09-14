@@ -122,6 +122,19 @@ class ComposeVisualFrameCoordinator(
             lastConsumed = latest
         }
 
+        // #684 评论 5665907509 问题2：没有 pending 文本事务的真实重新排版也要推进 lastConsumed。
+        // lastConsumed 必须表示"下一笔动画开始前，屏幕最后真实采用的 TextLayoutResult"。
+        // 当没有 pending chain 且没有正在跑的 active transaction 且文本未变时，屏幕已经真实呈现，
+        // 直接把 lastConsumed 推进到这份 latest，不需要创建文字动画事务。
+        // 否则正文没变但真实 TextLayoutResult 已变（宽度变化、字体/字号变化、窗口/方向变化导致
+        // 软换行重排）时，屏幕已在 layout B，coordinator 旧侧基线还停在 layout A，
+        // 下一次输入生成 layout C 时事务错误地拿 A→C 做 retained move / cursor geometry。
+        // 注意：只在文本相同时推进 — 文本变化但无 pending 属于"layout 先到、intent 后到"的
+        // 双向汇合场景，lastConsumed 不能提前推进，否则 intent 到达时 baseText 匹配不上。
+        if (pending == null && active == null && lastConsumed?.text == latest?.text) {
+            lastConsumed = latest
+        }
+
         val update = tryStartTransaction(masterProgress)
         return update
     }
@@ -258,10 +271,17 @@ class ComposeVisualFrameCoordinator(
                 mergedNewRanges.isEmpty() -> TextVisualKind.Delete
                 else -> TextVisualKind.Move
             }
-        val customTextAnimationEnabled =
+        // #684 评论 5665907509 问题1：屏幕事务级 customAnimationEnabled —
+        // SYSTEM_SUPPRESSED 到来时直接落到系统最终正文，不是"本事务不画，但上一事务继续画"。
+        // 当 !customAnimationEnabled（SYSTEM_SUPPRESSED 或 motion policy 关闭文字动画）时：
+        // - 不映射/继承 active.suppressedCurrentRanges（mappedPrevSuppressedRanges = emptyList）
+        // - 不计算 startFrame（不让上一笔 overlay 动画跨过这笔 suppressed 事务继续跑）
+        // overlay 据此 transaction.animationMode 判断 systemSuppressed，不再从 _activeIntent 读取。
+        val customAnimationEnabled =
             lastMotionPolicy.textEnabled &&
-                transactionTextKind != TextVisualKind.None &&
                 lastIntent.animationMode != AnimationModeDto.SYSTEM_SUPPRESSED
+        val customTextAnimationEnabled =
+            customAnimationEnabled && transactionTextKind != TextVisualKind.None
 
         // (1) 本事务自己 owned 的 new ranges — Insert/Move 的 newRanges。
         val currentOwnedNewRanges =
@@ -288,10 +308,17 @@ class ComposeVisualFrameCoordinator(
 
         // (3) 上一帧仍由 startFrame 接管、且映射到当前 new text 后仍存活的 suppressed ranges。
         //     用整条 chain 的 composedOffsetMap（T0->Tn）映射，不能用最后一笔 replaceBounds。
+        // #684 评论 5665907509 问题1：当 !customAnimationEnabled（SYSTEM_SUPPRESSED 或 motion policy
+        //     关闭文字动画）时不映射/继承 active.suppressedCurrentRanges —
+        //     上一笔动画留下的正文不应跨过这笔 suppressed 事务继续被 OutputTransformation 设透明。
         val composedOffsetMap = composedOffsetMapForRanges
         val prevSuppressedRanges = active?.suppressedCurrentRanges ?: emptyList()
         val mappedPrevSuppressedRanges =
-            ComposeVisualRebase.mapSuppressedRangesThroughOffsetMap(prevSuppressedRanges, composedOffsetMap)
+            if (customAnimationEnabled) {
+                ComposeVisualRebase.mapSuppressedRangesThroughOffsetMap(prevSuppressedRanges, composedOffsetMap)
+            } else {
+                emptyList()
+            }
 
         val hiddenRanges =
             (currentOwnedNewRanges + retainedNewRanges + mappedPrevSuppressedRanges)
@@ -305,21 +332,28 @@ class ComposeVisualFrameCoordinator(
         //   而不是最后一笔 replaceBounds（T(n-1)->Tn 坐标）。nextReplaceBounds 仅作回退。
         //   currentSuppressedRanges 传上一帧的 suppressedCurrentRanges（表示"上一帧此刻
         //   已经被系统正文隐藏的 ranges"），不是新事务刚算出的 hiddenRanges。
+        // #684 评论 5665907509 问题1：当 !customAnimationEnabled 时不计算 startFrame —
+        //   不让上一笔 overlay 动画跨过这笔 suppressed 事务继续跑 startFrame rebase。
+        //   SYSTEM_SUPPRESSED 到来时 overlay 应直接落到系统最终正文。
         val rebasedFromId = active?.id
         val startFrame =
-            active?.let { current ->
-                ComposeVisualRebase.materializeStartFrame(
-                    ComposeVisualRebase.MaterializeStartFrameParams(
-                        transaction = current,
-                        textProgress = masterProgress,
-                        cursorProgress = masterProgress,
-                        rebaseProgress = masterProgress,
-                        nextOffsetMap = composedOffsetMap,
-                        nextReplaceBounds = lastIntent.replaceBounds,
-                        currentSuppressedRanges = current.suppressedCurrentRanges,
-                        cursorSnapshot = null,
-                    ),
-                )
+            if (customAnimationEnabled) {
+                active?.let { current ->
+                    ComposeVisualRebase.materializeStartFrame(
+                        ComposeVisualRebase.MaterializeStartFrameParams(
+                            transaction = current,
+                            textProgress = masterProgress,
+                            cursorProgress = masterProgress,
+                            rebaseProgress = masterProgress,
+                            nextOffsetMap = composedOffsetMap,
+                            nextReplaceBounds = lastIntent.replaceBounds,
+                            currentSuppressedRanges = current.suppressedCurrentRanges,
+                            cursorSnapshot = null,
+                        ),
+                    )
+                }
+            } else {
+                null
             }
 
         // 从 mergedOldRanges 中减去 startFrame 已接管的 old ranges，
@@ -351,6 +385,9 @@ class ComposeVisualFrameCoordinator(
                 suppressedCurrentRanges = hiddenRanges,
                 // #684 评论 5664636035 Bug1：屏幕事务的 textKind 按最终净变化决定。
                 textKind = transactionTextKind,
+                // #684 评论 5665907509 问题1：把最终的 animationMode 直接冻结进事务，
+                // overlay 据此判断 systemSuppressed，不再从 _activeIntent（最后一笔 Core intent）判断。
+                animationMode = lastIntent.animationMode,
             )
 
         active = transaction
@@ -402,6 +439,16 @@ class ComposeVisualFrameCoordinator(
             visualTransactionId = current.id,
             coreTransactionIds = current.coreTransactionIds,
         )
+        // #684 评论 5665907509 问题2：动画结束时，如果最新真实 layout 与事务 newLayout 同文本，
+        // 把 lastConsumed 更新到最新真实 layout，避免动画结束后基线仍是旧几何。
+        // 动画期间可能发生宽度变化、字体/字号变化、窗口/方向变化导致软换行重排，
+        // 屏幕已在 layout B（同文本新几何），但 lastConsumed 仍停在事务开始时的 layout A，
+        // 下一次输入生成 layout C 时事务错误地拿 A→C 做 retained move / cursor geometry。
+        val newest = latest
+        val currentNewText = current.newLayout?.result?.layoutInput?.text?.text
+        if (newest != null && currentNewText != null && newest.text == currentNewText) {
+            lastConsumed = newest
+        }
         active = null
     }
 
