@@ -219,19 +219,60 @@ class ComposeVisualFrameCoordinator(
         // 是否隐藏正文必须与 overlay 是否真的画正文收口成同一个判断：
         // SYSTEM_SUPPRESSED 时 overlay 不画自定义正文（textEnabled=false），
         // 这里也必须把正文留为可见（hiddenRanges 为空），否则正文会被隐藏到事务结束。
+        //
+        // #684 评论 5663862982 Bug1：hiddenRanges 必须包含 retained moves 的 newRanges。
+        //   overlay 画 retainedMoves（被挤到下一行的保留文字），但这些 newRange 对应的
+        //   系统正文若不隐藏，BasicTextField 在最终新位置的那份正文同时可见 → 重影/跳行。
+        // #684 评论 5663862982 Bug2：多笔 intent 合成一个屏幕事务时，上一帧的 suppressed
+        //   ranges 必须按整条 chain 的 composedOffsetMap（T0->Tn）映射，而不是最后一笔
+        //   replaceBounds（T(n-1)->Tn 坐标）。
         val customTextAnimationEnabled =
             lastMotionPolicy.textEnabled &&
                 lastIntent.textKind != TextVisualKind.None &&
                 lastIntent.animationMode != AnimationModeDto.SYSTEM_SUPPRESSED
-        val hiddenRanges =
+
+        // (1) 本事务自己 owned 的 new ranges — Insert/Move 的 newRanges。
+        val currentOwnedNewRanges =
             if (customTextAnimationEnabled) {
-                mergedNewRanges.filter { it.start < it.end }
+                when (lastIntent.textKind) {
+                    TextVisualKind.Insert,
+                    TextVisualKind.Move,
+                    -> mergedNewRanges
+                    TextVisualKind.Delete,
+                    TextVisualKind.None,
+                    -> emptyList()
+                }
             } else {
                 emptyList()
             }
 
+        // (2) retained moves 的 newRanges — overlay 画 retained 文字时系统正文必须透明。
+        val retainedNewRanges =
+            if (customTextAnimationEnabled) {
+                retainedMoves.map { it.newRange }
+            } else {
+                emptyList()
+            }
+
+        // (3) 上一帧仍由 startFrame 接管、且映射到当前 new text 后仍存活的 suppressed ranges。
+        //     用整条 chain 的 composedOffsetMap（T0->Tn）映射，不能用最后一笔 replaceBounds。
+        val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
+        val prevSuppressedRanges = active?.suppressedCurrentRanges ?: emptyList()
+        val mappedPrevSuppressedRanges =
+            ComposeVisualRebase.mapSuppressedRangesThroughOffsetMap(prevSuppressedRanges, composedOffsetMap)
+
+        val hiddenRanges =
+            (currentOwnedNewRanges + retainedNewRanges + mappedPrevSuppressedRanges)
+                .filter { it.start < it.end }
+
         // 计算 startFrame — 用真实当前 master progress 物化当前屏幕帧。
         // 动画被下一笔输入打断时，startFrame 从半途继续，而不是假定上一笔已经跑到 1f。
+        //
+        // #684 评论 5663862982 Bug2：多笔 intent 合成一个屏幕事务时，startFrame 的
+        //   targetRange 是 T0 坐标，必须用整条 chain 的 composedOffsetMap（T0->Tn）映射，
+        //   而不是最后一笔 replaceBounds（T(n-1)->Tn 坐标）。nextReplaceBounds 仅作回退。
+        //   currentSuppressedRanges 传上一帧的 suppressedCurrentRanges（表示"上一帧此刻
+        //   已经被系统正文隐藏的 ranges"），不是新事务刚算出的 hiddenRanges。
         val rebasedFromId = active?.id
         val startFrame =
             active?.let { current ->
@@ -241,8 +282,9 @@ class ComposeVisualFrameCoordinator(
                         textProgress = masterProgress,
                         cursorProgress = masterProgress,
                         rebaseProgress = masterProgress,
+                        nextOffsetMap = composedOffsetMap,
                         nextReplaceBounds = lastIntent.replaceBounds,
-                        hiddenRanges = hiddenRanges,
+                        currentSuppressedRanges = current.suppressedCurrentRanges,
                         cursorSnapshot = null,
                     ),
                 )
@@ -272,6 +314,9 @@ class ComposeVisualFrameCoordinator(
                 startFrame = startFrame,
                 durationMs = lastIntent.durationMs,
                 motionPolicy = lastMotionPolicy,
+                // #684 评论 5663862982：事务生成后冻结的 suppressed ranges —
+                // 下一笔 rebase 时按 composedOffsetMap 映射到新坐标系。
+                suppressedCurrentRanges = hiddenRanges,
             )
 
         active = transaction

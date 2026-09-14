@@ -39,6 +39,12 @@ data class RetainedMove(
  * @param startFrame 上一事务物化出的视觉帧 — 新事务从该帧对应的 progress 开始。
  * @param durationMs 动画时长（ms）。
  * @param motionPolicy 动画策略 — overlay 据此决定 text/cursor timeline。
+ * @param suppressedCurrentRanges #684 评论 5663862982：这一笔动画期间 BasicTextField
+ *   必须保持透明的最终正文 ranges。事务生成后冻结。包含三部分：
+ *   (1) 本事务自己 owned 的 new ranges（Insert/Move 的 newRanges）；
+ *   (2) retained moves 的 newRanges（被挤到下一行的保留文字，overlay 画时系统正文必须透明）；
+ *   (3) 上一帧仍由 startFrame 接管、按 composedOffsetMap 映射到当前 new text 后仍存活的 suppressed ranges。
+ *   overlay 据此隐藏 BasicTextField 对应区间，避免重影/跳行。
  */
 data class ComposeVisualTransaction(
     val id: Long,
@@ -54,4 +60,5 @@ data class ComposeVisualTransaction(
     val startFrame: ComposeVisualFrame?,
     val durationMs: Long,
     val motionPolicy: EditorMotionPolicy,
+    val suppressedCurrentRanges: List<TextRange> = emptyList(),
 )

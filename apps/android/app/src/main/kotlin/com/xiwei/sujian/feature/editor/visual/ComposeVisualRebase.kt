@@ -26,14 +26,21 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 internal object ComposeVisualRebase {
     /**
      * 物化 start_frame 的参数 — 提取以降低 [materializeStartFrame] 参数列表长度。
+     *
+     * #684 评论 5663862982 Bug2：增加 [nextOffsetMap] — 多笔 intent 合成一个屏幕事务时，
+     *   startFrame 的 targetRange 是 T0 坐标，必须用整条 chain 的 composedOffsetMap
+     *   （T0->Tn）映射。[nextReplaceBounds] 仅作回退（单笔或无 offset map 时）。
+     *   [currentSuppressedRanges] 表示"上一帧此刻已经被系统正文隐藏的 ranges"，
+     *   不是新事务刚算出的 hiddenRanges — 两者概念不能混。
      */
     data class MaterializeStartFrameParams(
         val transaction: ComposeVisualTransaction?,
         val textProgress: Float,
         val cursorProgress: Float,
         val rebaseProgress: Float,
+        val nextOffsetMap: List<VisualOffsetMapEntry>?,
         val nextReplaceBounds: VisualReplaceBounds?,
-        val hiddenRanges: List<TextRange>,
+        val currentSuppressedRanges: List<TextRange>,
         val cursorSnapshot: VisualCursorSnapshot?,
     )
 
@@ -67,8 +74,9 @@ internal object ComposeVisualRebase {
         val textProgress = params.textProgress
         val cursorProgress = params.cursorProgress
         val rebaseProgress = params.rebaseProgress
+        val nextOffsetMap = params.nextOffsetMap
         val nextReplaceBounds = params.nextReplaceBounds
-        val hiddenRanges = params.hiddenRanges
+        val currentSuppressedRanges = params.currentSuppressedRanges
         val cursorSnapshot = params.cursorSnapshot
         val prev = transaction ?: return null
         // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
@@ -85,22 +93,39 @@ internal object ComposeVisualRebase {
         val currentSlices = collectCurrentSlicesAsRebased(prev, textProgress)
         val retainedSlices = collectRetainedMoveSlicesAsRebased(prev, textProgress)
 
-        // #641 评论 5460160958 问题2+问题4：统一用 nextReplaceBounds 映射 surviving targetRange。
+        // #641 评论 5460160958 问题2+问题4：统一用 nextOffsetMap/nextReplaceBounds 映射 surviving targetRange。
         // #641 评论 5460373035 问题2：聚合所有 split 的 ownedOldRanges 计入返回 frame。
+        //
+        // #684 评论 5663862982 Bug2：优先用 nextOffsetMap（整条 chain 的 T0->Tn 映射）切 slice；
+        //   回退到 nextReplaceBounds（单笔 replace bounds）；都没有则原样保留。
         val allSlices = materializedOlder + currentSlices + retainedSlices
         val mappedSlices = mutableListOf<RebasedTextSlice>()
         val ownedOldRanges = mutableListOf<TextRange>()
-        if (nextReplaceBounds == null) {
-            mappedSlices.addAll(allSlices)
-        } else {
-            for (slice in allSlices) {
-                if (slice.targetRange == null) {
-                    mappedSlices.add(slice)
-                } else {
-                    val split = splitRebasedSliceThroughReplace(slice, nextReplaceBounds)
-                    mappedSlices.addAll(split.slices)
-                    ownedOldRanges.addAll(split.ownedOldRanges)
+        when {
+            nextOffsetMap != null && nextOffsetMap.isNotEmpty() -> {
+                for (slice in allSlices) {
+                    if (slice.targetRange == null) {
+                        mappedSlices.add(slice)
+                    } else {
+                        val split = splitRebasedSliceThroughOffsetMap(slice, nextOffsetMap)
+                        mappedSlices.addAll(split.slices)
+                        ownedOldRanges.addAll(split.ownedOldRanges)
+                    }
                 }
+            }
+            nextReplaceBounds != null -> {
+                for (slice in allSlices) {
+                    if (slice.targetRange == null) {
+                        mappedSlices.add(slice)
+                    } else {
+                        val split = splitRebasedSliceThroughReplace(slice, nextReplaceBounds)
+                        mappedSlices.addAll(split.slices)
+                        ownedOldRanges.addAll(split.ownedOldRanges)
+                    }
+                }
+            }
+            else -> {
+                mappedSlices.addAll(allSlices)
             }
         }
 
@@ -112,7 +137,7 @@ internal object ComposeVisualRebase {
             slices = mappedSlices,
             cursorRect = cursorRect,
             cursorAlpha = cursorAlpha,
-            suppressedCurrentRanges = hiddenRanges,
+            suppressedCurrentRanges = currentSuppressedRanges,
             ownedOldRanges = ownedOldRanges,
         )
     }
@@ -335,6 +360,127 @@ internal object ComposeVisualRebase {
             outSlices.add(slice.copy(sourceRange = newSource, targetRange = newTarget))
         }
         return SplitRebasedResult(outSlices, ownedOldRanges)
+    }
+
+    /**
+     * #684 评论 5663862982 Bug2：按 composed offset map 切 surviving slice。
+     *
+     * 多笔 intent（T0->T1->...->Tn）合成一个屏幕事务时，slice.targetRange 是 T0 坐标，
+     * [offsetMap] 是整条 chain 合成后的 T0->Tn 映射。对 targetRange 的每个部分：
+     * - 与 offsetMap entry 的 old range 有交集 → 映射到 entry 的 new range（surviving）；
+     * - 不在任何 entry 里 → fading slice（targetRange=null）+ ownedOldRange。
+     *
+     * 前提：surviving slice 表示同一逻辑文本，sourceRange 长度应等于 oldTarget 长度。
+     * 若长度不等（不应发生），不静默复制整段——结束该 surviving 映射，按旧画面离场处理：
+     * 返回 SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())。
+     *
+     * @param slice 待切分的 surviving slice（targetRange 非 null）。
+     * @param offsetMap 整条 chain 合成后的 T0->Tn offset map 条目列表。
+     */
+    fun splitRebasedSliceThroughOffsetMap(
+        slice: RebasedTextSlice,
+        offsetMap: List<VisualOffsetMapEntry>,
+    ): SplitRebasedResult {
+        val oldTarget = slice.targetRange ?: return SplitRebasedResult(listOf(slice), emptyList())
+        val sourceRange = slice.sourceRange
+        // 前提：sourceRange 长度应等于 oldTarget 长度（同一逻辑文本）
+        if ((sourceRange.end - sourceRange.start) != (oldTarget.end - oldTarget.start)) {
+            return SplitRebasedResult(listOf(slice.copy(targetRange = null)), emptyList())
+        }
+        val outSlices = mutableListOf<RebasedTextSlice>()
+        val ownedOldRanges = mutableListOf<TextRange>()
+        val sortedEntries = offsetMap.sortedBy { it.oldStart }
+        var pos = oldTarget.start
+        for (entry in sortedEntries) {
+            val entryOldEnd = entry.oldStart + entry.length
+            if (entryOldEnd <= pos) continue
+            if (entry.oldStart >= oldTarget.end) break
+            // gap 部分 [pos, entry.oldStart) → fading（不在任何 entry 里，不存活）
+            val gapEnd = minOf(entry.oldStart, oldTarget.end)
+            if (pos < gapEnd) {
+                val sourceOffset = pos - oldTarget.start
+                val len = gapEnd - pos
+                outSlices.add(
+                    slice.copy(
+                        sourceRange = TextRange(
+                            sourceRange.start + sourceOffset,
+                            sourceRange.start + sourceOffset + len,
+                        ),
+                        targetRange = null,
+                    ),
+                )
+                ownedOldRanges.add(TextRange(pos, gapEnd))
+            }
+            // overlap 部分 → surviving，映射到 new range
+            val overlapStart = maxOf(pos, entry.oldStart)
+            val overlapEnd = minOf(entryOldEnd, oldTarget.end)
+            if (overlapStart < overlapEnd) {
+                val sourceOffset = overlapStart - oldTarget.start
+                val len = overlapEnd - overlapStart
+                val newStart = entry.newStart + (overlapStart - entry.oldStart)
+                outSlices.add(
+                    slice.copy(
+                        sourceRange = TextRange(
+                            sourceRange.start + sourceOffset,
+                            sourceRange.start + sourceOffset + len,
+                        ),
+                        targetRange = TextRange(newStart, newStart + len),
+                    ),
+                )
+            }
+            pos = maxOf(pos, entryOldEnd)
+        }
+        // 尾部 gap [pos, oldTarget.end) → fading
+        if (pos < oldTarget.end) {
+            val sourceOffset = pos - oldTarget.start
+            val len = oldTarget.end - pos
+            outSlices.add(
+                slice.copy(
+                    sourceRange = TextRange(
+                        sourceRange.start + sourceOffset,
+                        sourceRange.start + sourceOffset + len,
+                    ),
+                    targetRange = null,
+                ),
+            )
+            ownedOldRanges.add(TextRange(pos, oldTarget.end))
+        }
+        return SplitRebasedResult(outSlices, ownedOldRanges)
+    }
+
+    /**
+     * #684 评论 5663862982 Bug2：把 suppressed ranges（T0 坐标）按 composed offset map
+     * 映射到 Tn 坐标，只返回 surviving 的 new ranges。
+     *
+     * 多笔 intent 合成一个屏幕事务时，上一帧的 suppressedCurrentRanges 是 T0 坐标，
+     * 必须用整条 chain 的 composedOffsetMap（T0->Tn）映射到当前 new text 坐标，
+     * 而不是最后一笔 replaceBounds（T(n-1)->Tn 坐标）。
+     *
+     * 不在任何 entry 里的部分不存活（被编辑/删除），丢弃。
+     *
+     * @param ranges 上一帧的 suppressed ranges（T0 坐标）。
+     * @param offsetMap 整条 chain 合成后的 T0->Tn offset map，null 或空时返回空列表。
+     */
+    fun mapSuppressedRangesThroughOffsetMap(
+        ranges: List<TextRange>,
+        offsetMap: List<VisualOffsetMapEntry>?,
+    ): List<TextRange> {
+        if (offsetMap == null || offsetMap.isEmpty()) return emptyList()
+        val sortedEntries = offsetMap.sortedBy { it.oldStart }
+        val result = mutableListOf<TextRange>()
+        for (range in ranges) {
+            if (range.start >= range.end) continue
+            for (entry in sortedEntries) {
+                val entryOldEnd = entry.oldStart + entry.length
+                val overlapStart = maxOf(range.start, entry.oldStart)
+                val overlapEnd = minOf(range.end, entryOldEnd)
+                if (overlapStart < overlapEnd) {
+                    val newStart = entry.newStart + (overlapStart - entry.oldStart)
+                    result.add(TextRange(newStart, newStart + (overlapEnd - overlapStart)))
+                }
+            }
+        }
+        return result
     }
 
     /**
