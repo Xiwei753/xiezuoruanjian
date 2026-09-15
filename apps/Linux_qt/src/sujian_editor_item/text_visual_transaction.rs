@@ -260,18 +260,29 @@ pub(crate) struct RebaseFrame {
 pub(crate) struct PreparedCursorVisualTrack {
     pub from: CursorRect,
     pub to: CursorRect,
-    pub started_at: Instant,
+    /// Issue #690 评论 5682867529: caret track 不再在事务创建时就启动计时，
+    /// 而是等到进入 `Rendering` 状态才和文字 unit 共用同一个 `frame_now` 起跑。
+    /// `None` 表示尚未开始播放，`progress` 返回 0、`remaining_duration_ms` 返回全长。
+    pub started_at: Option<Instant>,
     pub duration_ms: u64,
+    /// 暂停起点；`Some` 表示当前处于暂停中，`resume` 时把 `started_at` 推前暂停时长。
+    pub pause_start: Option<Instant>,
 }
 
 impl PreparedCursorVisualTrack {
     /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
+    /// `started_at = None`（尚未进入 Rendering）时返回 0。
     pub fn progress(&self, now: Instant) -> f64 {
-        if self.duration_ms == 0 {
-            return 1.0;
+        match self.started_at {
+            None => 0.0,
+            Some(start) => {
+                if self.duration_ms == 0 {
+                    return 1.0;
+                }
+                let elapsed = now.duration_since(start).as_millis() as f64;
+                (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
+            }
         }
-        let elapsed = now.duration_since(self.started_at).as_millis() as f64;
-        (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
     }
 
     /// 与文字帧同一条 easing（`AnimatedSlice::ease_out_quad`）。
@@ -294,32 +305,59 @@ impl PreparedCursorVisualTrack {
     }
 
     /// 旧 track 剩余的播放时长：`duration - elapsed`，下溢保护为 0。
+    /// `started_at = None`（尚未进入 Rendering）时返回 `duration_ms` 全长。
     pub fn remaining_duration_ms(&self, now: Instant) -> u64 {
-        let elapsed_ms = now.duration_since(self.started_at).as_millis() as u64;
-        self.duration_ms.saturating_sub(elapsed_ms)
+        match self.started_at {
+            None => self.duration_ms,
+            Some(start) => {
+                let elapsed_ms = now.duration_since(start).as_millis() as u64;
+                self.duration_ms.saturating_sub(elapsed_ms)
+            }
+        }
     }
 
     /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
-    /// `started_at = now`，`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
+    /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
     pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
         let sampled = self.sampled_rect(now);
         let remaining = self.remaining_duration_ms(now).max(1);
         Self {
             from: sampled,
             to: new_to,
-            started_at: now,
+            started_at: None,
             duration_ms: remaining,
+            pause_start: None,
         }
     }
 
     /// 首次事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
-    /// `started_at = now`，`duration_ms = 事务时长`。
-    pub fn new_first(from: CursorRect, to: CursorRect, now: Instant, duration_ms: u64) -> Self {
+    /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 事务时长`。
+    pub fn new_first(from: CursorRect, to: CursorRect, duration_ms: u64) -> Self {
         Self {
             from,
             to,
-            started_at: now,
+            started_at: None,
             duration_ms,
+            pause_start: None,
+        }
+    }
+
+    /// Issue #690 评论 5682867529: caret track 跟文字视觉单元一起暂停/恢复，
+    /// 不自己按墙钟继续走。暂停时记录 pause_start，resume 时把 started_at 推前
+    /// 暂停时长，这样 progress(now) 自动跳过暂停区间。
+    pub fn pause(&mut self, now: Instant) {
+        if self.started_at.is_none() || self.pause_start.is_some() {
+            return;
+        }
+        self.pause_start = Some(now);
+    }
+
+    pub fn resume(&mut self, now: Instant) {
+        if let (Some(start), Some(pause_start)) =
+            (self.started_at.as_mut(), self.pause_start.take())
+        {
+            let paused_duration = now.duration_since(pause_start);
+            *start = *start + paused_duration;
         }
     }
 }
@@ -427,13 +465,23 @@ impl PreparedTextVisualTransaction {
     pub fn pause(&mut self) {
         if self.state == TextVisualTransactionState::Rendering {
             self.state = TextVisualTransactionState::Paused;
-            self.timeline.pause(Instant::now());
+            let now = Instant::now();
+            self.timeline.pause(now);
+            // Issue #690 评论 5682867529: caret track 跟文字 timeline 一起暂停。
+            if let Some(track) = self.cursor_visual_track.as_mut() {
+                track.pause(now);
+            }
         }
     }
 
     pub fn resume(&mut self) {
         if self.state == TextVisualTransactionState::Paused {
-            self.timeline.resume(Instant::now());
+            let now = Instant::now();
+            self.timeline.resume(now);
+            // Issue #690 评论 5682867529: caret track 跟文字 timeline 一起恢复。
+            if let Some(track) = self.cursor_visual_track.as_mut() {
+                track.resume(now);
+            }
             self.state = TextVisualTransactionState::Rendering;
         }
     }

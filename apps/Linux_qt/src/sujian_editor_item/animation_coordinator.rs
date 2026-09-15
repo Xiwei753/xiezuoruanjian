@@ -220,19 +220,22 @@ struct RebaseCaretHandoff {
     remaining_duration_ms: u64,
 }
 
-/// Issue #690 评论 5681206040: 构建新事务的 caret track，四个正文入口共用。
+/// Issue #690 评论 5681206040 + 5682867529: 构建新事务的 caret track，四个正文入口共用。
 ///
 /// - 有 rebase handoff（发生过交棒）：`from = sampled caret`，`to = new_cursor_rect`，
-///   `started_at = now`，`duration_ms = handoff.remaining_duration_ms`。
+///   `started_at = None`（等进入 Rendering 再启动），`duration_ms = handoff.remaining_duration_ms`。
 /// - 无 rebase handoff（首次事务）：`from = old_cursor_rect`，`to = new_cursor_rect`，
-///   `started_at = now`，`duration_ms = 事务时长`。
+///   `started_at = None`（等进入 Rendering 再启动），`duration_ms = 事务时长`。
 /// - `new_cursor_rect` 缺失：返回 `None`（无法构成 track）。
 /// - 无 handoff 且 `old_cursor_rect` 缺失：返回 `None`。
+///
+/// Issue #690 评论 5682867529: 不再在事务创建时就用 `now` 启动计时，而是把 `started_at`
+/// 留为 `None`，等 `build_text_animation_plan_with_sample` 在 Prepared→Rendering 分支
+/// 跟文字 unit 共用同一个 `frame_now` 起跑，保证第一帧文字和光标 progress 都 = 0。
 fn build_cursor_visual_track(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
     handoff: Option<RebaseCaretHandoff>,
-    now: Instant,
     tx_duration_ms: u64,
 ) -> Option<PreparedCursorVisualTrack> {
     let to = new_cursor_rect?;
@@ -240,15 +243,15 @@ fn build_cursor_visual_track(
         Some(h) => Some(PreparedCursorVisualTrack {
             from: h.sampled,
             to: to.clone(),
-            started_at: now,
+            started_at: None,
             duration_ms: h.remaining_duration_ms,
+            pause_start: None,
         }),
         None => {
             let from = old_cursor_rect?;
             Some(PreparedCursorVisualTrack::new_first(
                 from.clone(),
                 to.clone(),
-                now,
                 tx_duration_ms,
             ))
         }
@@ -1203,11 +1206,11 @@ impl LinuxEditorAnimationCoordinator {
                     // Issue #690 评论 5681206040: 构建 caret track。
                     // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
                     // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
+                    // Issue #690 评论 5682867529: 不再传 now，started_at 留 None，等 Rendering 再启动。
                     let cursor_visual_track = build_cursor_visual_track(
                         old_cursor_rect.as_ref(),
                         new_cursor_rect.as_ref(),
                         caret_handoff,
-                        now,
                         u64::from(vt.duration_ms),
                     );
                     let prepared = PreparedTextVisualTransaction {
@@ -1310,12 +1313,11 @@ impl LinuxEditorAnimationCoordinator {
                     .collect();
                 match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
 
-                // Issue #690 评论 5681206040: 构建 caret track。
+                // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
                 let cursor_visual_track = build_cursor_visual_track(
                     old_cursor_rect.as_ref(),
                     new_cursor_rect.as_ref(),
                     caret_handoff,
-                    now,
                     u64::from(vt.duration_ms),
                 );
                 let prepared = PreparedTextVisualTransaction {
@@ -1467,12 +1469,11 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
-        // Issue #690 评论 5681206040: 构建 caret track。
+        // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
         let cursor_visual_track = build_cursor_visual_track(
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
             caret_handoff,
-            now,
             unit_duration_ms,
         );
         let prepared = PreparedTextVisualTransaction {
@@ -1824,12 +1825,11 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
-        // Issue #690 评论 5681206040: 构建 caret track。
+        // Issue #690 评论 5681206040 + 5682867529: 构建 caret track（不传 now，等 Rendering 再启动）。
         let cursor_visual_track = build_cursor_visual_track(
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
             caret_handoff,
-            now,
             unit_duration_ms,
         );
         let prepared = PreparedTextVisualTransaction {
@@ -2345,6 +2345,14 @@ impl LinuxEditorAnimationCoordinator {
                 for unit in &mut tx.units {
                     if unit.started_at.is_none() {
                         unit.started_at = Some(sample.frame_now);
+                    }
+                }
+                // Issue #690 评论 5682867529: caret track 跟文字 unit 同一个 frame_now 启动，
+                // 不再在事务创建时就开始计时。这样第一帧 text unit progress = 0 且
+                // caret track progress = 0，文字和光标从同一屏幕帧起跑。
+                if let Some(track) = tx.cursor_visual_track.as_mut() {
+                    if track.started_at.is_none() {
+                        track.started_at = Some(sample.frame_now);
                     }
                 }
             }
@@ -4573,22 +4581,25 @@ mod tests {
             10,
         );
         // caret track 与 reflow unit 同一条时间线：started_at = now - 50ms, duration = 100ms
-        tx.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            CursorRect {
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数（始终 started_at = None）。
+        // 测试要模拟"已经播了 50ms"的场景，直接用结构体字面量设置 started_at = Some(...)。
+        tx.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: CursorRect {
                 x: 100.0,
                 top: 0.0,
                 bottom: 20.0,
                 baseline_y: 16.0,
             },
-            CursorRect {
+            to: CursorRect {
                 x: 200.0,
                 top: 40.0,
                 bottom: 60.0,
                 baseline_y: 56.0,
             },
-            now - Duration::from_millis(50),
-            100,
-        ));
+            started_at: Some(now - Duration::from_millis(50)),
+            duration_ms: 100,
+            pause_start: None,
+        });
         coord.prepared_queue.enqueue(tx);
 
         let plan = coord.build_render_plan_full(
@@ -4714,12 +4725,14 @@ mod tests {
         // 修复后：rebase 交棒时把采样到的旧事务屏幕光标作为 cursor_visual_from，
         // new_cursor_rect 作为 cursor_visual_to，compute_coordinated_cursor_position
         // 消费这条同帧 caret track，不再用裸 old_cursor_rect 当 reflow 光标起点。
-        new_tx.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            sampled_cursor.sampled,
-            caret(20.0),
-            now,
-            100,
-        ));
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数，用结构体字面量设置 started_at。
+        new_tx.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: sampled_cursor.sampled,
+            to: caret(20.0),
+            started_at: Some(now),
+            duration_ms: 100,
+            pause_start: None,
+        });
         coord.prepared_queue.enqueue(new_tx);
 
         // ── 新事务第一帧（frame_now = now，reflow unit progress = 0）──
@@ -4787,12 +4800,14 @@ mod tests {
             now,
             50,
         );
-        tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            caret(190.0),
-            caret(20.0),
-            now - Duration::from_millis(50),
-            100,
-        ));
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数，用结构体字面量设置 started_at。
+        tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: caret(190.0),
+            to: caret(20.0),
+            started_at: Some(now - Duration::from_millis(50)),
+            duration_ms: 100,
+            pause_start: None,
+        });
         coord.prepared_queue.enqueue(tx_b);
 
         // 前置断言：compute_coordinated_cursor_position 已修复用 visual track，
@@ -4904,12 +4919,14 @@ mod tests {
             now,
             50,
         );
-        tx_a.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            caret(100.0),
-            caret(220.0),
-            now - Duration::from_millis(50),
-            100,
-        ));
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数，用结构体字面量设置 started_at。
+        tx_a.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: caret(100.0),
+            to: caret(220.0),
+            started_at: Some(now - Duration::from_millis(50)),
+            duration_ms: 100,
+            pause_start: None,
+        });
         coord.prepared_queue.enqueue(tx_a);
 
         // 验证事务 A 当前屏幕光标 = 190
@@ -4955,8 +4972,9 @@ mod tests {
         tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: handoff_a.sampled,
             to: caret(20.0),
-            started_at: now,
+            started_at: Some(now),
             duration_ms: handoff_a.remaining_duration_ms,
+            pause_start: None,
         });
         coord.prepared_queue.enqueue(tx_b);
 
@@ -5036,12 +5054,14 @@ mod tests {
             now,
             40,
         );
-        tx_d1.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            caret(0.0),
-            caret(200.0),
-            now - Duration::from_millis(40),
-            200,
-        ));
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数，用结构体字面量设置 started_at。
+        tx_d1.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: caret(0.0),
+            to: caret(200.0),
+            started_at: Some(now - Duration::from_millis(40)),
+            duration_ms: 200,
+            pause_start: None,
+        });
         coord1.prepared_queue.enqueue(tx_d1);
 
         let mut sample_d1 = AnimationFrameSample::new(now);
@@ -5073,12 +5093,14 @@ mod tests {
             now,
             40,
         );
-        tx_d2.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
-            caret(0.0),
-            caret(200.0),
-            now - Duration::from_millis(40),
-            200,
-        ));
+        // Issue #690 评论 5682867529: new_first 不再接受 now 参数，用结构体字面量设置 started_at。
+        tx_d2.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: caret(0.0),
+            to: caret(200.0),
+            started_at: Some(now - Duration::from_millis(40)),
+            duration_ms: 200,
+            pause_start: None,
+        });
         coord2.prepared_queue.enqueue(tx_d2);
 
         let mut sample_d2 = AnimationFrameSample::new(now);
@@ -5139,5 +5161,194 @@ mod tests {
             expected_d,
             sampled1.x
         );
+    }
+
+    /// Issue #690 评论 5682867529: caret track 跟文字 unit 共用同一个"开始播放时刻"。
+    ///
+    /// 真正经过 Pending → Prepared → Rendering 生命周期的行为测试：
+    /// - 创建纯 reflow 事务，caret track 此时尚未开始（started_at = None）；
+    /// - 模拟在 Pending/Prepared 阶段过去 40ms；
+    /// - 第一帧进入 Rendering；
+    /// - 断言同一个 frame_now 下文字 reflow unit progress == 0，caret track progress == 0；
+    /// - 再推进 50ms，断言二者从同一个起点同时前进。
+    #[test]
+    fn issue690_comment5682867529_caret_track_starts_with_text_unit_at_rendering() {
+        let create_now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let key = VisualTransactionKey::new(100, 100);
+
+        // 构造一笔纯 reflow 事务（无 InsertReveal/DeleteConceal，只有 ReflowMove）。
+        // caret track: from=caret(0), to=caret(200), duration=200ms。
+        // 事务创建时 started_at = None（尚未开始）。
+        let reflow_unit = PreparedVisualUnit::wrap(reflow_slice(0, 3, 0.0, 100.0), 200);
+        let cursor_visual_track = PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), 200);
+        let tx = PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            timeline: TransactionTimeline::new(200),
+            units: vec![reflow_unit],
+            static_patches: Vec::new(),
+            old_cursor_rect: Some(caret(0.0)),
+            new_cursor_rect: Some(caret(200.0)),
+            cursor_visual_track: Some(cursor_visual_track),
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: None,
+        };
+        coord.prepared_queue.enqueue(tx);
+
+        // 断言 1: 事务创建时 caret track started_at = None，progress = 0。
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+                .expect("事务应在队列中");
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            assert!(
+                track.started_at.is_none(),
+                "事务创建时 caret track started_at 应为 None，got {:?}",
+                track.started_at
+            );
+            assert!(
+                (track.progress(create_now) - 0.0).abs() < 1e-9,
+                "started_at=None 时 progress 应为 0"
+            );
+            assert!(
+                tx_ref.units[0].started_at.is_none(),
+                "事务创建时文字 unit started_at 应为 None"
+            );
+            assert!(
+                (tx_ref.units[0].progress(create_now) - 0.0).abs() < 1e-9,
+                "文字 unit progress 应为 0"
+            );
+        }
+
+        // 模拟 Pending → Prepared 阶段过去 40ms（纹理准备等）。
+        let prepared_now = create_now + Duration::from_millis(40);
+        coord.prepared_queue.mark_prepared(key);
+
+        // 断言 2: Prepared 阶段过去 40ms 后，caret track 仍未开始。
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+                .expect("事务应在队列中");
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            assert!(
+                track.started_at.is_none(),
+                "Prepared 阶段过去 40ms 后 caret track started_at 仍应为 None \
+                （Pending/Prepared 等待时间不算进动画播放时间），got {:?}",
+                track.started_at
+            );
+            assert!(
+                (track.progress(prepared_now) - 0.0).abs() < 1e-9,
+                "Prepared 阶段 progress 仍应为 0（未开始计时），got {}",
+                track.progress(prepared_now)
+            );
+            assert!(
+                (tx_ref.units[0].progress(prepared_now) - 0.0).abs() < 1e-9,
+                "Prepared 阶段文字 unit progress 仍应为 0"
+            );
+        }
+
+        // 第一帧进入 Rendering。
+        let frame_now_0 = prepared_now + Duration::from_millis(16);
+        let mut sample_0 = AnimationFrameSample::new(frame_now_0);
+        sample_0.set_progress(key, 0.0);
+        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0);
+
+        // 断言 3: 同一个 frame_now_0 下 progress 都 == 0。
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+                .expect("事务应在队列中");
+            assert_eq!(
+                tx_ref.state,
+                TextVisualTransactionState::Rendering,
+                "第一帧后事务应进入 Rendering"
+            );
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            assert!(
+                track.started_at.is_some(),
+                "进入 Rendering 后 caret track started_at 应被设置"
+            );
+            assert_eq!(
+                track.started_at,
+                Some(frame_now_0),
+                "caret track started_at 应等于第一帧 frame_now"
+            );
+            let track_progress = track.progress(frame_now_0);
+            assert!(
+                (track_progress - 0.0).abs() < 1e-9,
+                "第一帧 caret track progress 应为 0（刚启动），got {}",
+                track_progress
+            );
+            let unit_progress = tx_ref.units[0].progress(frame_now_0);
+            assert!(
+                (unit_progress - 0.0).abs() < 1e-9,
+                "第一帧文字 unit progress 应为 0（刚启动），got {}",
+                unit_progress
+            );
+            assert!(!plan_0.glyphs.is_empty(), "应有文字 glyph 输出");
+        }
+
+        // 推进 50ms，断言二者从同一个起点同时前进。
+        let frame_now_1 = frame_now_0 + Duration::from_millis(50);
+        let mut sample_1 = AnimationFrameSample::new(frame_now_1);
+        sample_1.set_progress(key, 0.25);
+        let (plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1);
+
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key)
+                .expect("事务应在队列中");
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            let track_progress = track.progress(frame_now_1);
+            let unit_progress = tx_ref.units[0].progress(frame_now_1);
+            assert!(
+                (track_progress - 0.25).abs() < 1e-9,
+                "推进 50ms 后 caret track progress 应为 0.25（50/200），got {}",
+                track_progress
+            );
+            assert!(
+                (unit_progress - 0.25).abs() < 1e-9,
+                "推进 50ms 后文字 unit progress 应为 0.25（50/200），got {}",
+                unit_progress
+            );
+            assert!(
+                (track_progress - unit_progress).abs() < 1e-9,
+                "caret track 和文字 unit 的 progress 应完全相同（从同一帧起跑），\
+                 got track={} unit={}",
+                track_progress,
+                unit_progress
+            );
+            assert!(!plan_1.glyphs.is_empty(), "推进 50ms 后应有文字 glyph 输出");
+        }
+
+        println!("[BUGFIX_690_VERIFY] 评论5682867529 caret track 与文字 unit 同帧起跑 (FIXED)");
     }
 }
