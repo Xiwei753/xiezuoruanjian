@@ -1,8 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.test.junit4.createComposeRule
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -62,18 +61,20 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         // 构建带 cursor motion 的 patch
         val oldCursorRect = Rect(0f, 0f, 2f, 14f)
         val newCursorRect = Rect(7f, 0f, 9f, 14f)
-        val path = CursorMotionPath(
-            points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-        )
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = emptyLayout,
-            newLayout = aLayout,
-            insertedUnits = listOf(TextRange(0, 1)),
-            cursorMotionPath = path,
-            durationMs = 100L,
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
-        )
+        val path =
+            CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+            )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = aLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                cursorMotionPath = path,
+                durationMs = 100L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+            )
 
         // #691：在单个 frameTimeNanos(=0) 上同时处理文字与光标 position（同一 VisualScene 所有者）。
         timeline.applyPatch(
@@ -131,7 +132,12 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
             makeInsertIntent(
-                2L, 1L, 2L, "a", "ab", TextRange(1, 2),
+                2L,
+                1L,
+                2L,
+                "a",
+                "ab",
+                TextRange(1, 2),
                 offsetMap = VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, cursorDurationMillis = 80L),
@@ -145,7 +151,12 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
         state.onVisualIntent(
             makeInsertIntent(
-                3L, 2L, 3L, "ab", "abc", TextRange(2, 3),
+                3L,
+                2L,
+                3L,
+                "ab",
+                "abc",
+                TextRange(2, 3),
                 offsetMap = VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, cursorDurationMillis = 80L),
@@ -180,23 +191,26 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         val oldCursorRect = Rect(0f, 0f, 2f, 14f)
         val newCursorRect = Rect(7f, 0f, 9f, 14f)
-        val path = CursorMotionPath(
-            points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-        )
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = emptyLayout,
-            newLayout = aLayout,
-            insertedUnits = listOf(TextRange(0, 1)),
-            cursorMotionPath = path,
-            durationMs = 100L,
-            motionPolicy = EditorMotionPolicy(
-                textDurationMillis = 100L,
-                cursorEnabled = true,
-                cursorDurationMillis = 80L,
-                coordinated = true,
-            ),
-        )
+        val path =
+            CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+            )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = aLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                cursorMotionPath = path,
+                durationMs = 100L,
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textDurationMillis = 100L,
+                        cursorEnabled = true,
+                        cursorDurationMillis = 80L,
+                        coordinated = true,
+                    ),
+            )
 
         val frameTime = 50L * NANOS_PER_MS
         timeline.applyPatch(
@@ -241,23 +255,26 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         val oldCursorRect = Rect(0f, 0f, 2f, 14f)
         val newCursorRect = Rect(7f, 0f, 9f, 14f)
-        val path = CursorMotionPath(
-            points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-        )
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = emptyLayout,
-            newLayout = aLayout,
-            insertedUnits = listOf(TextRange(0, 1)),
-            cursorMotionPath = path,
-            durationMs = 100L,
-            motionPolicy = EditorMotionPolicy(
-                textDurationMillis = 100L,
-                cursorEnabled = true,
-                cursorDurationMillis = 50L,
-                coordinated = false,
-            ),
-        )
+        val path =
+            CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+            )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = aLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                cursorMotionPath = path,
+                durationMs = 100L,
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textDurationMillis = 100L,
+                        cursorEnabled = true,
+                        cursorDurationMillis = 50L,
+                        coordinated = false,
+                    ),
+            )
 
         val frameTime = 50L * NANOS_PER_MS
         timeline.applyPatch(
@@ -306,18 +323,25 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             val timeline = ComposeVisualTimeline()
             val oldCursorRect = Rect(0f, 0f, 2f, 14f)
             val newCursorRect = Rect(7f, 0f, 9f, 14f)
-            val path = CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-            )
-            val patch = makePatch(
-                id = 1L,
-                oldLayout = emptyLayout,
-                newLayout = aLayout,
-                insertedUnits = listOf(TextRange(0, 1)),
-                cursorMotionPath = path,
-                durationMs = 100L,
-                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
-            )
+            val path =
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+                )
+            val patch =
+                makePatch(
+                    id = 1L,
+                    oldLayout = emptyLayout,
+                    newLayout = aLayout,
+                    insertedUnits = listOf(TextRange(0, 1)),
+                    cursorMotionPath = path,
+                    durationMs = 100L,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = 100L,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
 
             val intervalNanos = 1_000_000_000L / hz
             // 在单一 frameTimeNanos(=0) 上同时把文字与光标交给同一个 timeline。
@@ -446,7 +470,12 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[0], TextRange(5, 5), 0)
         state.onVisualIntent(
             makeInsertIntent(
-                1L, 0L, 1L, "abcde", "abcdef", TextRange(5, 6),
+                1L,
+                0L,
+                1L,
+                "abcde",
+                "abcdef",
+                TextRange(5, 6),
             ),
             EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, cursorDurationMillis = 80L),
         )
@@ -565,7 +594,12 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
             makeInsertIntent(
-                2L, 1L, 2L, "a", "ab", TextRange(1, 2),
+                2L,
+                1L,
+                2L,
+                "a",
+                "ab",
+                TextRange(1, 2),
                 offsetMap = VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY))),
                 durationMs = 1000L,
             ),
@@ -639,7 +673,12 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         // 第二笔用 coordinated=false
         state.onVisualIntent(
             makeInsertIntent(
-                2L, 1L, 2L, "a", "ab", TextRange(1, 2),
+                2L,
+                1L,
+                2L,
+                "a",
+                "ab",
+                TextRange(1, 2),
                 offsetMap = VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = false),
@@ -956,22 +995,30 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         val timeline = ComposeVisualTimeline()
 
         // 构造带 retainedMoves 的 patch（模拟 reflow：前两个字符移到后面）
-        val retainedMoves = listOf(
-            RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4)),
-        )
+        val retainedMoves =
+            listOf(
+                RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4)),
+            )
         val cursorRect = Rect(30f, 0f, 32f, 14f)
-        val cursorPath = CursorMotionPath(
-            points = listOf(CursorMotionPoint(rect = cursorRect, endFraction = 1f)),
-        )
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = layout,
-            newLayout = layout,
-            retainedMoves = retainedMoves,
-            cursorMotionPath = cursorPath,
-            durationMs = 100L,
-            motionPolicy = EditorMotionPolicy(textEnabled = false, cursorEnabled = true, cursorDurationMillis = 100L),
-        )
+        val cursorPath =
+            CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = cursorRect, endFraction = 1f)),
+            )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = layout,
+                newLayout = layout,
+                retainedMoves = retainedMoves,
+                cursorMotionPath = cursorPath,
+                durationMs = 100L,
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textEnabled = false,
+                        cursorEnabled = true,
+                        cursorDurationMillis = 100L,
+                    ),
+            )
 
         // applyPatch — textEnabled=false，不应创建任何文字 track
         timeline.applyPatch(
@@ -1069,15 +1116,16 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
         val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
 
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = emptyLayout,
-            newLayout = abcLayout,
-            insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
-            cursorMotionPath = cursorPath,
-            durationMs = 300L,
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
-        )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
 
         // fromRect 在起点
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -1141,15 +1189,16 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         val point2 = CursorMotionPoint(rect = Rect(20f, 20f, 22f, 34f), endFraction = 1f)
         val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
 
-        val patch = makePatch(
-            id = 1L,
-            oldLayout = emptyLayout,
-            newLayout = abcLayout,
-            insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
-            cursorMotionPath = cursorPath,
-            durationMs = 300L,
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
-        )
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
 
         // fromRect 在第 0 行首
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -1232,12 +1281,19 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             oldRanges = emptyList(),
             newRanges = listOf(newRange),
             textKind = TextVisualKind.Insert,
-            cursor = CursorVisualIntent(
-                oldEndUtf16 = oldText.length,
-                newEndUtf16 = newText.length,
-                animate = true,
-            ),
-            replaceBounds = VisualReplaceBounds(oldStart = oldText.length, oldEnd = oldText.length, newStart = newRange.start, newEnd = newRange.end),
+            cursor =
+                CursorVisualIntent(
+                    oldEndUtf16 = oldText.length,
+                    newEndUtf16 = newText.length,
+                    animate = true,
+                ),
+            replaceBounds =
+                VisualReplaceBounds(
+                    oldStart = oldText.length,
+                    oldEnd = oldText.length,
+                    newStart = newRange.start,
+                    newEnd = newRange.end,
+                ),
             expectedOldText = oldText,
             expectedNewText = newText,
         )
@@ -1262,12 +1318,19 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             oldRanges = listOf(deletedRange),
             newRanges = emptyList(),
             textKind = TextVisualKind.Delete,
-            cursor = CursorVisualIntent(
-                oldEndUtf16 = oldText.length,
-                newEndUtf16 = newText.length,
-                animate = true,
-            ),
-            replaceBounds = VisualReplaceBounds(oldStart = deletedRange.start, oldEnd = deletedRange.end, newStart = newText.length, newEnd = newText.length),
+            cursor =
+                CursorVisualIntent(
+                    oldEndUtf16 = oldText.length,
+                    newEndUtf16 = newText.length,
+                    animate = true,
+                ),
+            replaceBounds =
+                VisualReplaceBounds(
+                    oldStart = deletedRange.start,
+                    oldEnd = deletedRange.end,
+                    newStart = newText.length,
+                    newEnd = newText.length,
+                ),
             expectedOldText = oldText,
             expectedNewText = newText,
         )

@@ -42,6 +42,7 @@ class ComposeEditorVisualState(
 ) {
     companion object {
         private const val TAG = "EditorVisualState"
+
         /** 1 ms = 1_000_000 ns。 */
         private const val NANOS_PER_MS = 1_000_000L
     }
@@ -275,9 +276,7 @@ class ComposeEditorVisualState(
      * #691 评论 5679242735 修改3：返回完整 path（List<CursorMotionPoint>），
      * 不再只取 path.points.last().rect。多字符一次提交时多段 cursor path 不再被压成一条直线。
      */
-    private fun computeCursorParamsForPatch(
-        patch: ComposeVisualPatch,
-    ): CursorMotionParams? {
+    private fun computeCursorParamsForPatch(patch: ComposeVisualPatch): CursorMotionParams? {
         val motionPolicy = patch.motionPolicy.effective()
         if (!motionPolicy.cursorEnabled) {
             // 光标动画关闭 — 不创建 cursorChannel，使用静态光标
