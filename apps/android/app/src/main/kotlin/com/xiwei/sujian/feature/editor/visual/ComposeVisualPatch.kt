@@ -44,7 +44,8 @@ data class RetainedMove(
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range —
  *   只给真正发生 oldRect → newRect 位移的存活 unit 新建/重定向 position 通道。
  *   删除换行时几何没变的文字就没有 position track，绝对不会跟着抽一下。
- * @param cursorMotionPath 光标运动路径 — overlay 用跨 patch 的 Animatable 分段 animateTo。
+ * @param cursorMotionPath 光标运动路径 — [ComposeVisualTimeline] 据此把光标 rect 并入统一的
+ *   VisualScene / frame clock（cursorChannel），不再用跨 patch 的 Animatable 分段 animateTo。
  *   null 表示无光标动画语义。
  * @param durationMs 动画时长（ms）— Core 建议，timeline 据此设置通道 durationNanos。
  * @param animationMode Core 动画模式 — SYSTEM_SUPPRESSED 时 timeline 不新建文字通道。

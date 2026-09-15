@@ -1,8 +1,10 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
 
 /**
@@ -36,37 +38,247 @@ class ComposeVisualTimeline {
     private var nextUnitKey: Long = 1L
 
     /**
+     * #691：统一光标位置 — 由同一个 VisualScene / frame clock 维护。
+     * 不再使用独立的 Animatable<Rect> + LaunchedEffect。
+     *
+     * #691 评论 5679242735 修改3：cursorChannel 改成 [CursorTrack]，
+     * 支持多段 [CursorMotionPath]（一次提交多个插入 unit 时光标依次经过每个字/cluster）。
+     */
+    private var cursorChannel: CursorTrack? = null
+
+    /**
+     * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
+     *
+     * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
+     * 才把 unit.key 计入。applyPatch 判断 started/pending 只看这份持久状态，
+     * 不再从 TimedFloat.startedAtNanos/from 反推（那些字段会被 rebaseUnitForPatch 改写）。
+     *
+     * #691 评论 5685940102：语义从"alpha 是否离开起点"扩展到"unit 是否已在可见帧呈现过"，
+     * 覆盖 retained reflow unit（alpha 1→1，只有 position 通道在动）。
+     * 之前只看 alpha 是否离开起点会把 retained reflow unit 漏掉，
+     * 导致下一笔 patch 把它判成 pending 重建 alpha 0→1，已可见的文字突然变透明再淡入。
+     *
+     * - 新 unit 创建时不在集合里。
+     * - mapSurvivingSlice/rebase 保持 key（copy 保留 key）。
+     * - unit 收口移除/转 ghost/clear/settleForPolicyChange 时同步清理对应 key。
+     */
+    private var presentedKeys: MutableSet<Long> = mutableSetOf()
+
+    /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
-     * 再处理新 patch。不能从旧事务的 progress 反算，也不能先归零。
+     * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
+     *
+     * #691：同时接受光标 motion 参数，在同一个调用内处理文字和光标，
+     * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
+     *
+     * #691 评论 5679242735 修改2：检查 [patch.motionPolicy.effective] 的 textEnabled —
+     * 文字动画关闭时不创建任何文字 alpha/position track（units = emptyList()），
+     * 不只是把 duration 改成 0。否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
+     *
+     * #691 评论 5679242735 修改3：cursor 参数从 `cursorToRect: Rect?` 改成
+     * `cursorPath: List<CursorMotionPoint>?`，支持多段路径。
+     * 一次提交多个插入 unit 时光标依次经过每个字/cluster，不再被压成一条直线。
      *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
+     * @param cursorFromRect 光标在旧 layout 中的位置（屏幕坐标）— null 表示无光标 motion。
+     * @param cursorPath 光标运动路径点序列（屏幕坐标）— null 表示无光标 motion。
+     *   单点路径：snap；多点路径：按 [CursorMotionPoint.endFraction] 分段插值。
+     * @param cursorDurationNanos 光标动画时长 — 0 表示瞬时 snap。
      */
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        cursorFromRect: Rect? = null,
+        cursorPath: List<CursorMotionPoint>? = null,
+        cursorDurationNanos: Long = 0L,
     ) {
-        // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
-        val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
+        // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
+        // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
+        val policy = patch.motionPolicy.effective()
+        val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
-        val durationNanos = patch.durationMs.coerceAtLeast(0L) * NANOS_PER_MS
-
-        // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
+        // #691 评论 5681258225：surviving 列表在 if/else 之前声明，
+        // 让 cursor 合并逻辑在 textEnabled=false 时也能访问（此时为空列表）。
         val surviving = mutableListOf<VisualTextUnit>()
-        val ghosting = mutableListOf<VisualTextUnit>()
-        mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
-        // 第三步：处理本 patch 新插入的 unit。
-        val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos)
+        // #691 评论 5679242735 修改2：textEnabled=false 时不创建任何文字 alpha/position track。
+        // 不要只把 duration 改成 0 — 否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
+        // #691 评论 5684136311：在 rebase 之前用原始 unit 判断是否已产生可见进度。
+        // rebase 会把进行中通道的 startedAt 重设为 frameTimeNanos，丢失"是否同一 VSync"信息。
+        // textEnabled=false 时给空 map（cursor 路径不会用到）。
+        // #691 评论 5684993243 / 评论 5685940102：hasBeenPresented 内部优先看 [presentedKeys] 持久状态，
+        // 处理"同一 VSync 连续 patch"场景；否则回退到 [isUnitVisibleAndPresented] 通道判断
+        // "unit 是否已可见呈现"（覆盖插入 unit alpha 0→1 和 retained reflow unit alpha 1→1），
+        // 处理"不同时间 patch 但中间未 sample"场景。
+        val progressByKey =
+            if (policy.textEnabled) {
+                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }
+            } else {
+                emptyMap()
+            }
 
-        // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
-        createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
+        if (policy.textEnabled) {
+            // 第一步：先 rebase 当前所有 unit 到此刻的真实 alpha/位置。
+            // #691 评论 5680711648 修复1：不能用 sampleUnit() — 它会把尚未开始的通道也 rebase 到 now，
+            // 丢失绝对 start time。改用 rebaseUnitForPatch()：尚未开始的通道原样保留未来起点。
+            val sampledUnits = units.map { rebaseUnitForPatch(it, frameTimeNanos) }
 
-        // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
-        applyRetainedMoves(patch, frameTimeNanos, durationNanos, surviving)
+            // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
+            val ghosting = mutableListOf<VisualTextUnit>()
+            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
-        // 合并：存活 + 新插入 + ghost
-        units = surviving + inserted + ghosting
+            // 第三步：处理本 patch 新插入的 unit。
+            // #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
+            // 已开始的 unit 保留当前 alpha/position；尚未开始的 surviving + 新 inserted 一起在
+            // [frameTimeNanos, frameTimeNanos + durationNanos] 有界窗口内按正文顺序均匀分段。
+            // 这样动画尾巴不随字符数线性增长，最后一笔输入后最多再过一个 textDuration 全部完成。
+            val startedSurviving = mutableListOf<VisualTextUnit>()
+            val pendingSurviving = mutableListOf<VisualTextUnit>()
+            for (unit in surviving) {
+                if (unit.targetRange == null) {
+                    // ghost（targetRange == null）不应出现在 surviving 里，但防御性保留
+                    startedSurviving.add(unit)
+                    continue
+                }
+                // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos <= frameTimeNanos。
+                // 同一 VSync、零进度 → 可重新分段；已在之前可见帧产生真实进度 → 从当前状态继续，不归零。
+                if (progressByKey[unit.key] == true) {
+                    startedSurviving.add(unit)
+                } else {
+                    pendingSurviving.add(unit)
+                }
+            }
+            val repartitioned =
+                repartitionPendingAndInsertedUnits(
+                    pendingSurviving,
+                    patch,
+                    frameTimeNanos,
+                    durationNanos,
+                )
+
+            // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
+            createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
+
+            // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
+            // 注意：retainedMoves 作用于 startedSurviving（已开始 unit 的位置重定向），
+            // 不应作用于 pendingSurviving（它们已被重新分段）。
+            applyRetainedMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
+
+            // 合并：已开始存活 + 重新分段（pending + 新插入） + ghost
+            units = startedSurviving + repartitioned.allUnits + ghosting
+            // surviving 列表对外暴露给 cursor 合并逻辑：只含 startedSurviving + repartitionedPending
+            // （不含新 inserted units，避免 cursor 把新 inserted 当 surviving 重复计算 endFraction）。
+            // cursor 的 unstartedSurviving 从此列表取"尚未开始"的 unit，只会取到 repartitionedPending。
+            surviving.clear()
+            surviving.addAll(startedSurviving)
+            surviving.addAll(repartitioned.repartitionedPending)
+        } else {
+            // 文字动画关闭：不创建任何文字 alpha/position track。
+            units = emptyList()
+        }
+
+        // #691 评论 5679242735 修改3：光标 motion 并入 timeline — 与文字共享同一个 frameTimeNanos。
+        // cursor 独立按 policy.cursorEnabled 继续处理（由调用方 computeCursorParamsForPatch 决定是否传参）。
+        // 支持多段路径：cursorPath 是 List<CursorMotionPoint>，不再只取 last().rect。
+        if (cursorFromRect != null && cursorPath != null && cursorPath.isNotEmpty()) {
+            applyCursorPatch(
+                patch = patch,
+                policy = policy,
+                frameTimeNanos = frameTimeNanos,
+                cursorFromRect = cursorFromRect,
+                cursorPath = cursorPath,
+                cursorDurationNanos = cursorDurationNanos,
+                surviving = surviving,
+                progressByKey = progressByKey,
+            )
+        }
+    }
+
+    /**
+     * #691 评论 5682970101：cursor 从文字 segment 时间表生成。
+     *
+     * survivingCursorPoints 只取"尚未开始"的 unit（alpha.startedAtNanos > frameTimeNanos），
+     * 不包含已开始但未完成的 unit（它们已经在屏幕上，不需要 cursor 再追到它们的 caret）。
+     * endFraction 从同一份 segment 时间表生成：n = pendingSurviving.size + 新 cursorPath points 数量，
+     * 第 i 个 point 的 endFraction = (i + 1f) / n。
+     *
+     * #691 评论 5686733880：cursor 时长决定权收口到 [ComposeEditorVisualState.computeCursorParamsForPatch]，
+     * 这里不再按 `policy.coordinated` 二次改时长。调用方传入的 `cursorDurationNanos` 已经是最终决定值：
+     * - 真正的协同文字事务（textEnabled && cursorEnabled && coordinated && !isCursorOnly）→ textDurationMillis
+     * - 其他所有情况（含设置矩阵 D：textEnabled=false, cursorEnabled=true, coordinated=true）→ cursorDurationMillis
+     * 旧逻辑在此处又做一次 `if (policy.coordinated) durationNanos else cursorDurationNanos`，
+     * 会把上层算好的 cursorDurationNanos 再次覆盖成 textDurationMillis，导致设置矩阵 D 下
+     * cursor 错误使用 textDurationMillis（拖到 1000ms 才完成）。
+     */
+    @Suppress("LongParameterList")
+    private fun applyCursorPatch(
+        patch: ComposeVisualPatch,
+        policy: EditorMotionPolicy,
+        frameTimeNanos: Long,
+        cursorFromRect: Rect,
+        cursorPath: List<CursorMotionPoint>,
+        cursorDurationNanos: Long,
+        surviving: List<VisualTextUnit>,
+        progressByKey: Map<Long, Boolean>,
+    ) {
+        val current = cursorChannel
+        val startRect =
+            if (current != null) {
+                sampleCursorRect(frameTimeNanos) ?: cursorFromRect
+            } else {
+                cursorFromRect
+            }
+
+        val survivingCursorPoints = mutableListOf<CursorMotionPoint>()
+        if (policy.textEnabled) {
+            // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos > frameTimeNanos。
+            // 尚未产生可见进度的 unit（含同一 VSync 零进度 unit）都纳入 cursor 路径，
+            // 让 cursor 用同一份 segment 表生成 caret point，而不是跳过零进度 unit。
+            val unstartedSurviving =
+                surviving
+                    .filter {
+                        it.targetRange != null &&
+                            progressByKey[it.key] != true
+                    }
+                    .sortedBy { it.targetRange!!.start }
+            for (unit in unstartedSurviving) {
+                val caretOffset = unit.targetRange!!.end
+                // #691 评论 5681258225：跨行场景关键 — 用最新 layout 取 caret rect，不用旧 layout。
+                val caretRect = safeCursorRectFromLayout(patch.newLayout, caretOffset) ?: continue
+                survivingCursorPoints.add(CursorMotionPoint(rect = caretRect, endFraction = 0f))
+            }
+        }
+
+        // 合并 surviving cursor points + 新 patch cursorPath points
+        // #691 评论 5682970101：endFraction 从文字 segment 时间表生成 —
+        // n = pendingSurviving.size + 新 cursorPath points 数量，
+        // 第 i 个 point 的 endFraction = (i + 1f) / n。
+        // 这在有界窗口内均匀分段时等于文字 segment 的结束分数。
+        // #691 评论 5681258225：只有当存在 surviving cursor points 时才重算 endFraction —
+        // 没有 surviving points 时保持原 cursorPath 的自定义 endFraction 不变
+        // （单笔 patch 的 cursor path 可能有不均匀的 endFraction，如 1/3, 1/2, 1.0）。
+        val allPoints = survivingCursorPoints + cursorPath
+        val normalizedPoints =
+            if (survivingCursorPoints.isNotEmpty() && allPoints.size > 1) {
+                val n = allPoints.size
+                allPoints.mapIndexed { i, point ->
+                    point.copy(endFraction = (i + 1f) / n)
+                }
+            } else {
+                allPoints
+            }
+
+        // #691 评论 5686733880：直接使用调用方传入的 cursorDurationNanos。
+        // cursor 时长决定只保留在 [ComposeEditorVisualState.computeCursorParamsForPatch] 一处，
+        // 这里不再按 policy.coordinated 二次覆盖（避免设置矩阵 D 下 cursor 错误使用 textDurationMillis）。
+        cursorChannel =
+            CursorTrack(
+                fromRect = startRect,
+                points = normalizedPoints,
+                startedAtNanos = frameTimeNanos,
+                durationNanos = cursorDurationNanos,
+            )
     }
 
     /**
@@ -168,33 +380,93 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * 第三步：处理本 patch 新插入的 unit。
+     * 第三步：处理本 patch 新插入的 unit + 重新分段尚未开始的 surviving unit。
+     *
+     * #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
+     * 把 [pendingSurviving]（尚未开始的 surviving）+ 本 patch 新 insertedRanges 合并成待显示序列，
+     * 按正文顺序（range.start）排序，在 [frameTimeNanos, frameTimeNanos + durationNanos] 有界窗口内
+     * 均匀分段：n = 待显示序列长度，第 i 个的 startFraction = i/n, endFraction = (i+1)/n，
+     * startedAt = frameTimeNanos + durationNanos * startFraction, duration = durationNanos / n。
+     *
+     * - 对 pendingSurviving 中的已有 unit：copy 并重设 alpha 通道（TimedFloat(0f, 1f, unitStartedAt, unitDuration)），
+     *   layout/range/position 保持（range 已映射到新正文）。
+     * - 对新 insertedRanges：创建新 VisualTextUnit（和原 createInsertedUnits 类似，但从有界窗口起点开始）。
+     *
+     * @param pendingSurviving 尚未开始的 surviving unit（alpha.startedAtNanos > frameTimeNanos）。
+     * @param patch 本帧的屏幕 diff。
+     * @param frameTimeNanos 当前帧时间戳。
+     * @param durationNanos 文字动画时长（有界窗口长度）。
+     * @return [RepartitionResult] 包含 allUnits（pendingSurviving 重设 alpha + 新 insertedUnits）
+     *   和 repartitionedPending（仅 pendingSurviving 重设 alpha，给 cursor 合并用）。
      */
-    private fun createInsertedUnits(
+    private fun repartitionPendingAndInsertedUnits(
+        pendingSurviving: List<VisualTextUnit>,
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
         durationNanos: Long,
-    ): List<VisualTextUnit> {
+    ): RepartitionResult {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
-        val inserted = mutableListOf<VisualTextUnit>()
-        for (range in patch.insertedUnits) {
-            if (range.start >= range.end) continue
-            if (range.end > newTextLength) continue
-            val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
-            inserted.add(
-                VisualTextUnit(
-                    key = nextUnitKey++,
-                    layout = newLayout,
-                    range = range,
-                    targetRange = range,
-                    alpha = TimedFloat(0f, 1f, frameTimeNanos, durationNanos),
-                    position = TimedOffset(position, position, frameTimeNanos, 0L),
-                ),
-            )
+        val validInsertedRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
+
+        // 构建待显示序列：pendingSurviving + 新 insertedRanges，按正文顺序（range.start）排序。
+        // 用 Pair<TextRange, VisualTextUnit?> 标记：second != null 表示 pendingSurviving 的已有 unit，
+        // second == null 表示新 insertedRange（需要创建新 unit）。
+        val displayItems: List<Pair<TextRange, VisualTextUnit?>> =
+            (pendingSurviving.map { it.targetRange!! to it } + validInsertedRanges.map { it to null })
+                .sortedBy { it.first.start }
+
+        if (displayItems.isEmpty()) {
+            return RepartitionResult(allUnits = emptyList(), repartitionedPending = emptyList())
         }
-        return inserted
+
+        val n = displayItems.size
+        val allUnits = mutableListOf<VisualTextUnit>()
+        val repartitionedPending = mutableListOf<VisualTextUnit>()
+        for ((i, item) in displayItems.withIndex()) {
+            val range = item.first
+            val existingUnit = item.second
+            val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
+            val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
+            val unitStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
+            val unitDuration = (durationNanos * (endFraction - startFraction)).toLong()
+            if (existingUnit != null) {
+                // pendingSurviving：copy 并重设 alpha 通道，layout/range/position 保持
+                val repartitioned =
+                    existingUnit.copy(
+                        alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
+                    )
+                allUnits.add(repartitioned)
+                repartitionedPending.add(repartitioned)
+            } else {
+                // 新 insertedRange：创建新 VisualTextUnit
+                val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
+                allUnits.add(
+                    VisualTextUnit(
+                        key = nextUnitKey++,
+                        layout = newLayout,
+                        range = range,
+                        targetRange = range,
+                        alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
+                        position = TimedOffset(position, position, frameTimeNanos, 0L),
+                    ),
+                )
+            }
+        }
+        return RepartitionResult(allUnits = allUnits, repartitionedPending = repartitionedPending)
     }
+
+    /**
+     * [repartitionPendingAndInsertedUnits] 的返回结果。
+     *
+     * @param allUnits 所有重新分段后的 unit（pendingSurviving 重设 alpha + 新 insertedUnits）。
+     * @param repartitionedPending 仅 pendingSurviving 重设 alpha 后的 unit（给 cursor 合并用，
+     *   不含新 inserted units，避免 cursor 把新 inserted 当 surviving 重复计算 endFraction）。
+     */
+    private data class RepartitionResult(
+        val allUnits: List<VisualTextUnit>,
+        val repartitionedPending: List<VisualTextUnit>,
+    )
 
     /**
      * #689 评论 5675270164 缺陷1：处理删除 unit。
@@ -326,16 +598,31 @@ class ComposeVisualTimeline {
             if (target != null) {
                 // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
                 if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
+                    // #691 评论 5684993243 / 评论 5685940102：收口移除时同步清理 presentedKeys
+                    presentedKeys.remove(unit.key)
                     continue
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
                 if (alphaFinished && sampled.alpha.to <= 0f) {
+                    // #691 评论 5684993243 / 评论 5685940102：ghost 收口移除时同步清理 presentedKeys
+                    presentedKeys.remove(unit.key)
                     continue
                 }
             }
             sampledUnits.add(sampled)
             remainingUnits.add(unit)
+            // #691 评论 5684993243 / 评论 5685940102：只有真正 sample 到一个存活 unit 且该帧它已被
+            // scene 接管并可见时，才把 unit.key 计入 presentedKeys。这个事实只能由可见帧推进，
+            // 不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
+            // 必须用原始 unit（循环变量 unit）的 alpha/position 判断，不是 sampled 的 —
+            // sampled 的 alpha.from 已被 sampleUnit rebase 成当前值，
+            // currentAlpha(sampled.alpha, now) == sampled.alpha.from 永远成立，无法判断。
+            // #691 评论 5685940102：isUnitVisibleAndPresented 同时覆盖插入 unit（alpha 0→1）
+            // 和 retained reflow unit（alpha 1→1，position 已开始）。
+            if (target != null && isUnitVisibleAndPresented(unit, frameTimeNanos)) {
+                presentedKeys.add(unit.key)
+            }
         }
         // 缺陷3：收口要修改 timeline 内部 units 列表（移除已稳定的 unit）
         units = remainingUnits
@@ -347,20 +634,28 @@ class ComposeVisualTimeline {
                 .filter { it.targetRange != null }
                 .mapNotNull { it.targetRange }
                 .filter { it.start < it.end }
-        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges)
+        // #691：采样光标位置 — 与文字使用同一个 frameTimeNanos
+        val sampledCursor = sampleCursorRect(frameTimeNanos)
+        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges, cursorRect = sampledCursor)
     }
 
     /**
      * 是否还有活动动画 — overlay 据此决定是否继续推进帧时钟。
      *
+     * #691：同时检查文字 units 和光标 cursorChannel 的活动状态。
+     *
      * @param frameTimeNanos 当前帧时间戳。
-     * @return true 表示还有 unit 的 alpha 或 position 通道未完成。
+     * @return true 表示还有 unit 的 alpha 或 position 通道未完成，或光标动画未完成。
      */
     fun hasActiveAnimation(frameTimeNanos: Long): Boolean {
-        return units.any { unit ->
-            !isAlphaFinished(unit.alpha, frameTimeNanos) ||
-                !isPositionFinished(unit.position, frameTimeNanos)
-        }
+        val textActive =
+            units.any { unit ->
+                !isAlphaFinished(unit.alpha, frameTimeNanos) ||
+                    !isPositionFinished(unit.position, frameTimeNanos)
+            }
+        if (textActive) return true
+        // #691：光标动画也算活动状态
+        return hasActiveCursorAnimation(frameTimeNanos)
     }
 
     /**
@@ -369,6 +664,114 @@ class ComposeVisualTimeline {
     fun clear() {
         units = emptyList()
         nextUnitKey = 1L
+        cursorChannel = null
+        // #691 评论 5684993243 / 评论 5685940102：清空已呈现 unit key 集合
+        presentedKeys.clear()
+    }
+
+    /**
+     * #691 评论 5679242735 修改2：运行时 policy 切换时清掉旧 text units / ghost / cursorChannel。
+     *
+     * 由 [ComposeEditorVisualState.applyMotionPolicyAtFrame] 调用 —
+     * 用户在动画进行中关闭文字动画或打开 reduce-motion 时，
+     * 旧 patch 已带着原来的 insertedUnits/deletedUnits/retainedMoves 入队，
+     * drain 时会再把文字动画重新启动。本方法把当前 timeline 里所有活动文字/光标动画清空，
+     * 让后续 drain 用新 policy 重新决定是否创建 track。
+     */
+    fun settleForPolicyChange() {
+        units = emptyList()
+        cursorChannel = null
+        // #691 评论 5684993243 / 评论 5685940102：policy 切换时清空已呈现 unit key 集合，
+        // 让后续 drain 用新 policy 重新决定是否创建 track。
+        presentedKeys.clear()
+    }
+
+    // ==================== 统一光标位置（#691） ====================
+
+    /**
+     * #691：snapshot 光标到当前帧时间 — 返回当前位置。
+     * 如果光标动画已完成，返回最终位置。
+     *
+     * #691 评论 5679242735 修改3：支持多段 [CursorTrack] 路径插值。
+     */
+    fun sampleCursorRect(frameTimeNanos: Long): Rect? {
+        val ch = cursorChannel ?: return null
+        return currentRect(ch, frameTimeNanos)
+    }
+
+    /**
+     * #691：光标动画是否仍在进行。
+     *
+     * #691 评论 5679242735 修改3：基于 [CursorTrack] 判断。
+     */
+    fun hasActiveCursorAnimation(frameTimeNanos: Long): Boolean {
+        val ch = cursorChannel ?: return false
+        return !isCursorFinished(ch, frameTimeNanos)
+    }
+
+    /**
+     * #691 评论 5679242735 修改3：计算 [CursorTrack] 在指定帧时间的当前位置。
+     *
+     * 多段路径插值：按 [CursorMotionPoint.endFraction] 把整条 timeline 分成多段，
+     * 每段在前一段终点和本段目标点之间线性插值。
+     * 单点路径退化为 from -> points[0].rect 的线性插值。
+     */
+    private fun currentRect(
+        channel: CursorTrack,
+        frameTimeNanos: Long,
+    ): Rect {
+        if (channel.durationNanos <= 0L) return channel.points.last().rect
+        val elapsed = frameTimeNanos - channel.startedAtNanos
+        if (elapsed <= 0L) return channel.fromRect
+        if (elapsed >= channel.durationNanos) return channel.points.last().rect
+        val progress = elapsed.toFloat() / channel.durationNanos.toFloat()
+        val points = channel.points
+        if (points.size == 1) {
+            return interpolateRect(channel.fromRect, points[0].rect, progress)
+        }
+        var prevRect = channel.fromRect
+        var prevFraction = 0f
+        for (i in points.indices) {
+            val point = points[i]
+            if (progress <= point.endFraction || i == points.size - 1) {
+                val segmentProgress =
+                    if (point.endFraction > prevFraction) {
+                        ((progress - prevFraction) / (point.endFraction - prevFraction)).coerceIn(0f, 1f)
+                    } else {
+                        1f
+                    }
+                return interpolateRect(prevRect, point.rect, segmentProgress)
+            }
+            prevRect = point.rect
+            prevFraction = point.endFraction
+        }
+        return points.last().rect
+    }
+
+    /**
+     * #691 评论 5679242735 修改3：两个 Rect 之间的线性插值。
+     */
+    private fun interpolateRect(
+        from: Rect,
+        to: Rect,
+        t: Float,
+    ): Rect =
+        Rect(
+            left = from.left + (to.left - from.left) * t,
+            top = from.top + (to.top - from.top) * t,
+            right = from.right + (to.right - from.right) * t,
+            bottom = from.bottom + (to.bottom - from.bottom) * t,
+        )
+
+    /**
+     * #691 评论 5679242735 修改3：[CursorTrack] 是否已完成。
+     */
+    private fun isCursorFinished(
+        channel: CursorTrack,
+        frameTimeNanos: Long,
+    ): Boolean {
+        if (channel.durationNanos <= 0L) return true
+        return frameTimeNanos - channel.startedAtNanos >= channel.durationNanos
     }
 
     // ==================== 内部采样与通道计算 ====================
@@ -437,6 +840,144 @@ class ComposeVisualTimeline {
                     durationNanos = remainingDurationNanos(unit.position, frameTimeNanos),
                 ),
         )
+    }
+
+    /**
+     * #691 评论 5680711648 修复1：applyPatch 专用 rebase —
+     * 把 unit 的 alpha/position 通道 rebase 到 [frameTimeNanos]，
+     * 但**尚未开始的通道必须原样保留未来起点**。
+     *
+     * 与 [sampleUnit] 的关键区别：
+     * - [sampleUnit] 用于 [sample] 画当前帧：把所有通道都 rebase 到 now，
+     *   返回插值后的 unit 给 scene。对于尚未开始的通道，rebase 后
+     *   from=currentAlpha=0f, startedAtNanos=now, durationNanos=remainingDuration。
+     *   这会让"尚未开始"变成"从 now 开始"，丢失绝对 start time。
+     * - [rebaseUnitForPatch] 用于 [applyPatch] 准备 surviving unit：尚未开始的通道
+     *   原样保留（startedAtNanos 不变），这样下一笔 patch 不会让未来 unit 提前启动。
+     *
+     * alpha rebase 规则：
+     * - now < channel.startedAtNanos：原样保留（尚未开始）
+     * - now >= channel.startedAtNanos + channel.durationNanos：塌缩到 (to, to, now, 0)（已完成）
+     * - 否则：from=currentAlpha(now), to=channel.to, startedAtNanos=now,
+     *   durationNanos=channel.startedAtNanos + channel.durationNanos - now（进行中）
+     *
+     * position 通道同样处理。
+     */
+    private fun rebaseUnitForPatch(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): VisualTextUnit =
+        unit.copy(
+            alpha = rebaseTimedFloat(unit.alpha, frameTimeNanos),
+            position = rebaseTimedOffset(unit.position, frameTimeNanos),
+        )
+
+    /**
+     * #691 评论 5680711648 修复1：alpha 通道 rebase — 尚未开始原样保留。
+     */
+    private fun rebaseTimedFloat(
+        channel: TimedFloat,
+        now: Long,
+    ): TimedFloat =
+        when {
+            // 尚未开始：原样保留未来起点
+            now < channel.startedAtNanos -> channel
+            // 已完成：塌缩到 to
+            now >= channel.startedAtNanos + channel.durationNanos ->
+                TimedFloat(channel.to, channel.to, now, 0L)
+            // 进行中：从当前值继续到 to，剩余时长 = 原结束时间 - now
+            else ->
+                TimedFloat(
+                    from = currentAlpha(channel, now),
+                    to = channel.to,
+                    startedAtNanos = now,
+                    durationNanos = channel.startedAtNanos + channel.durationNanos - now,
+                )
+        }
+
+    /**
+     * #691 评论 5680711648 修复1：position 通道 rebase — 尚未开始原样保留。
+     */
+    private fun rebaseTimedOffset(
+        channel: TimedOffset,
+        now: Long,
+    ): TimedOffset =
+        when {
+            // 尚未开始：原样保留未来起点
+            now < channel.startedAtNanos -> channel
+            // 已完成：塌缩到 to
+            now >= channel.startedAtNanos + channel.durationNanos ->
+                TimedOffset(channel.to, channel.to, now, 0L)
+            // 进行中：从当前值继续到 to，剩余时长 = 原结束时间 - now
+            else ->
+                TimedOffset(
+                    from = currentOffset(channel, now) ?: channel.from,
+                    to = channel.to,
+                    startedAtNanos = now,
+                    durationNanos = channel.startedAtNanos + channel.durationNanos - now,
+                )
+        }
+
+    /**
+     * #691 评论 5685940102：判断 unit 这一帧是否实际被 scene 接管并可见 —
+     * 用于决定是否计入 [presentedKeys]。
+     *
+     * 覆盖两种 unit：
+     * - 插入 unit（alpha 0→1）：alpha 已离开起点（> 0）即算可见呈现。
+     * - retained reflow unit（alpha 1→1）：alpha 本来就是 1，
+     *   只要 position 通道已开始（frameTimeNanos >= position.startedAtNanos）即算可见呈现。
+     *
+     * 不覆盖：
+     * - 尚未开始的未来 unit（alpha=0 且 position 未开始）。
+     * - ghost unit（target == null，由调用方过滤）。
+     */
+    private fun isUnitVisibleAndPresented(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): Boolean {
+        val alphaNow = currentAlpha(unit.alpha, frameTimeNanos)
+        // alpha == 0：不可见，不算 presented
+        if (alphaNow <= 0f) return false
+        // alpha 已离开起点：插入 unit 已显示中间帧
+        if (alphaNow != unit.alpha.from) return true
+        // alpha 没离开起点但 > 0：retained reflow unit（alpha 1→1），
+        // 只要 position 通道已开始/正在，就算 presented
+        return frameTimeNanos >= unit.position.startedAtNanos
+    }
+
+    /**
+     * #691 评论 5684993243 / 评论 5685940102：判断 unit 是否已在前一可见帧真正呈现过 —
+     * 优先看 [presentedKeys] 持久状态，否则用 [isUnitVisibleAndPresented] 通道判断
+     * "unit 是否已可见呈现"。
+     *
+     * #691 评论 5684136311 原始版本：从 TimedFloat.startedAtNanos 和 from 反推"是否已显示过"：
+     *   frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
+     * 这在"同一 VSync 连续 patch"场景会误判 — 第一笔 patch 的 rebaseUnitForPatch 把进行中通道
+     * rebase 成 from=currentAlpha(now), startedAtNanos=now，第二笔 patch 时 frameTimeNanos == startedAtNanos，
+     * 30 > 30 == false，已显示过的 unit 被误判成"零进度 pending"，alpha 跳回 0。
+     *
+     * #691 评论 5684993243 修复：优先看 [presentedKeys] 持久状态 —
+     * 这个事实只能由真正的 sample()/可见帧推进，不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
+     * 这处理"同一 VSync 连续 patch"场景：第一笔 rebase 改写 startedAtNanos 后，
+     * 第二笔仍能通过 presentedKeys 知道 a 已显示过。
+     *
+     * #691 评论 5685940102：回退逻辑从"alpha 是否离开起点"扩展到 [isUnitVisibleAndPresented]，
+     * 覆盖 retained reflow unit（alpha 1→1，position 已开始）。
+     * 否则 retained reflow unit 在"不同时间 patch 但中间未 sample"场景会被漏判，
+     * 下一笔 patch 把它重建 alpha 0→1，已可见的文字突然变透明再淡入。
+     *
+     * 必须用 rebase 前的原始 unit 调用 — rebase 会把进行中通道的 startedAt 重设为
+     * frameTimeNanos，丢失"是否同一 VSync"信息。
+     */
+    private fun hasBeenPresented(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): Boolean {
+        // #691 评论 5684993243：优先看 presentedKeys 持久状态。
+        if (unit.key in presentedKeys) return true
+        // #691 评论 5685940102：否则用通道判断"unit 是否已可见呈现"。
+        // 这处理"不同时间 patch 但中间未 sample"场景。
+        return isUnitVisibleAndPresented(unit, frameTimeNanos)
     }
 
     /**
@@ -515,6 +1056,20 @@ class ComposeVisualTimeline {
     }
 
     /**
+     * #691 评论 5681258225：从 layout 快照安全取 cursor rect。
+     * offset 越界或 layout 抛异常时返回 null。
+     */
+    private fun safeCursorRectFromLayout(
+        layout: ComposeLayoutSnapshot,
+        offset: Int,
+    ): Rect? =
+        try {
+            layout.result.getCursorRect(offset)
+        } catch (_: Throwable) {
+            null
+        }
+
+    /**
      * 从 layout 取 unit 的真实位置（左上角）。
      */
     private fun computeUnitPosition(
@@ -577,16 +1132,55 @@ data class VisualTextUnit(
 )
 
 /**
+ * #691：带时间戳的 Rect 通道 —
+ * 从 [from] 到 [to]，从 [startedAtNanos] 开始，持续 [durationNanos]。
+ *
+ * 用于光标位置动画，与文字 timeline 共享同一个 frame clock。
+ *
+ * #691 评论 5679242735 修改3：cursor 不再用本类，改用 [CursorTrack] 支持多段路径。
+ * 保留本数据类以兼容可能的其他引用。
+ */
+data class TimedRect(
+    val from: Rect,
+    val to: Rect,
+    val startedAtNanos: Long,
+    val durationNanos: Long,
+)
+
+/**
+ * #691 评论 5679242735 修改3：带时间戳的多段光标路径通道 —
+ * 从 [fromRect] 出发，依次经过 [points] 中每个 [CursorMotionPoint]，
+ * 从 [startedAtNanos] 开始，持续 [durationNanos]。
+ *
+ * 单点路径退化为 fromRect -> points[0].rect 的线性插值。
+ * 多点路径按 [CursorMotionPoint.endFraction] 分段插值 —
+ * 一次提交多个插入 unit 时光标依次经过每个字/cluster，不再被压成一条直线。
+ *
+ * 与文字 timeline 共享同一个 frame clock。
+ */
+data class CursorTrack(
+    val fromRect: Rect,
+    val points: List<CursorMotionPoint>,
+    val startedAtNanos: Long,
+    val durationNanos: Long,
+)
+
+/**
  * #689 评论 5674631257 步骤2：一帧的视觉场景 — sample() 返回。
+ *
+ * #691：新增 [cursorRect] — 光标位置由同一个 timeline / frame clock 采样，
+ * 不再由独立的 Animatable<Rect> 维护。
  *
  * @param units 当前所有文字单元（alpha/position 已插值到当前帧）。
  * @param hiddenRanges 当前应由 overlay 接管、BasicTextField 需设透明的 ranges。
  *   每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
  *   不从"上一事务 suppressed ranges"继承。
+ * @param cursorRect 光标当前位置（已插值到当前帧）— null 表示无光标动画且无静止光标。
  */
 data class ComposeVisualScene(
     val units: List<VisualTextUnit>,
     val hiddenRanges: List<TextRange>,
+    val cursorRect: Rect? = null,
 ) {
     companion object {
         /** 空场景。 */

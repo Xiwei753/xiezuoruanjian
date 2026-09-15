@@ -1,7 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange

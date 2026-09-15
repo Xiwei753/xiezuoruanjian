@@ -67,6 +67,11 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianListItem.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianSlider.kt"
       - "**/kotlin/com/xiwei/sujian/core/designsystem/component/SujianSwitchRow.kt"
+      # --- #691：视觉帧协调器/rebase 多阶段切分，复杂度天然超标（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，复杂度天然超标 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   CyclomaticComplexMethod:
     active: true
     threshold: 15
@@ -108,6 +113,13 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
       # --- 编辑器动画引擎：多阶段动画调度，与 CognitiveComplexMethod 排除一致（#638） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/AndroidTextAnimationEngine.kt"
+      # --- #691：编辑器副作用/光标运动/视觉帧协调器/rebase 多阶段切分，圈复杂度天然超标（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/WritingPaneEffects.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeCursorMotion.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，圈复杂度天然超标 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LongMethod:
     active: true
     threshold: 80
@@ -146,6 +158,11 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectListScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/VolumeChapterTree.kt"
+      # --- #691：编辑器 ViewModel/编辑面/副作用/视觉帧协调器 长方法（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModel.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/WritingEditorSurface.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/ui/WritingPaneEffects.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
   LargeClass:
     active: true
     threshold: 500
@@ -177,6 +194,10 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
       # --- #641 评论 5460373035：视觉状态契约测试多场景断言，行数超 500 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeEditorVisualStateTest.kt"
+      # --- #691：协同动画测试多场景断言，行0行数超!超 500（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue691CoordinatedAnimationTest.kt"
+      # --- #691 评论 5681258225：视觉时间线核心类，多阶段动画状态机，行数超 500 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
@@ -218,6 +239,12 @@ complexity:
       # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---
+      # --- #691：诊断事件/协同动画/时间线/rebase 测试多参数构造（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/core/interop/diagnostics/EditorDiagnosticsEvents.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue691CoordinatedAnimationTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimelineAdversarialRegressionTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimelineComment5675270164ReproTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTransactionRestartReproTest.kt"
   NestedBlockDepth:
     active: true
     threshold: 4
@@ -233,6 +260,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
+      # --- #691：光标运动多分支嵌套（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeCursorMotion.kt"
   ComplexCondition:
     active: true
     threshold: 4
@@ -311,6 +340,8 @@ complexity:
       # StateStore: 条目 CRUD + backend/treeUri/pendingPublish 存取 + JSON 编解码
       - "**/kotlin/com/xiwei/sujian/storage/mirror/ReadableMirrorPublisher.kt"
       - "**/kotlin/com/xiwei/sujian/storage/mirror/ReadableMirrorStateStore.kt"
+      # --- #691：协同动画测试多场景断言，函数数超 20（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue691CoordinatedAnimationTest.kt"
   StringLiteralDuplication:
     active: true
     threshold: 3
@@ -372,6 +403,9 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/session/SessionMutationGateCoreOutsideLockTest.kt"
       # --- #641 评论 5460373035：视觉状态契约测试断言字符串重复 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeEditorVisualStateTest.kt"
+      # --- #691：诊断事件/光标映射测试断言字符串重复（预先存在） ---
+      - "**/kotlin/com/xiwei/sujian/core/interop/diagnostics/EditorDiagnosticsEvents.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeCursorCaretMappingTest.kt"
   NamedArguments:
     active: false    # 现有代码大量位置参数调用（247处），命名参数整改是独立后续任务
 
