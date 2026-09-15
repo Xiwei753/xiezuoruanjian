@@ -850,6 +850,7 @@ impl LinuxEditorPipeline {
                 let new_generation = layout::begin_layout_generation();
 
                 // Issue #658 评论 5624570557 问题 2: 先做 new 基础排版，得到 new_lines 用于比较
+                // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
                 let mut new_doc_snapshot = layout::prepare_document_visual_snapshot_scoped(
                     &new.text,
                     0,
@@ -860,7 +861,7 @@ impl LinuxEditorPipeline {
                     ctx.text_indent,
                     ctx.bounding_width,
                     ctx.dpr,
-                    &ctx.text_color,
+                    Some(&ctx.text_color),
                     new_generation,
                     affected_byte_start,
                     affected_byte_end,

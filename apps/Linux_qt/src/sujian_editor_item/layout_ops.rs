@@ -103,6 +103,7 @@ impl SujianEditorItem {
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
+        // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             &self.buffer.text,
             self.pipeline.text_revision(),
@@ -113,7 +114,7 @@ impl SujianEditorItem {
             text_indent,
             width,
             dpr,
-            text_color,
+            Some(text_color),
             generation,
             affected_start,
             affected_end,
@@ -261,6 +262,7 @@ impl SujianEditorItem {
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
         let (affected_start, affected_end) = composition_range.unwrap_or((0, 0));
+        // Issue #688: 动画路径需要 text_color 用于 QImage 绘制
         let mut doc_snapshot = crate::editor::layout::prepare_document_visual_snapshot_scoped(
             virtual_text,
             self.pipeline.text_revision(),
@@ -271,7 +273,7 @@ impl SujianEditorItem {
             text_indent,
             width,
             dpr,
-            text_color,
+            Some(text_color),
             generation,
             affected_start,
             affected_end,
