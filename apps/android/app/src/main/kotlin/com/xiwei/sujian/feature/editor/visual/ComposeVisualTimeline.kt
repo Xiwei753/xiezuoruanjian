@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
 
 /**
@@ -96,26 +97,48 @@ class ComposeVisualTimeline {
             mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
             // 第三步：处理本 patch 新插入的 unit。
-            // #691 评论 5681258225：计算当前未完成文字队列的尾部计划结束时间，
-            // 让新 inserted units 接到队列后面，不从 frameTimeNanos 开始。
-            val queueTailEndNanos =
-                surviving
-                    .filter {
-                        it.targetRange != null &&
-                            it.alpha.startedAtNanos + it.alpha.durationNanos > frameTimeNanos
-                    }
-                    .maxOfOrNull { it.alpha.startedAtNanos + it.alpha.durationNanos }
-                    ?: frameTimeNanos
-            val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos, queueTailEndNanos)
+            // #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
+            // 已开始的 unit 保留当前 alpha/position；尚未开始的 surviving + 新 inserted 一起在
+            // [frameTimeNanos, frameTimeNanos + durationNanos] 有界窗口内按正文顺序均匀分段。
+            // 这样动画尾巴不随字符数线性增长，最后一笔输入后最多再过一个 textDuration 全部完成。
+            val startedSurviving = mutableListOf<VisualTextUnit>()
+            val pendingSurviving = mutableListOf<VisualTextUnit>()
+            for (unit in surviving) {
+                if (unit.targetRange != null && unit.alpha.startedAtNanos <= frameTimeNanos) {
+                    // alpha 已开始：保留当前 alpha/position，不重新从 0 开始
+                    startedSurviving.add(unit)
+                } else if (unit.targetRange != null) {
+                    // 尚未开始：需要和新 inserted 一起重新分段
+                    pendingSurviving.add(unit)
+                } else {
+                    // ghost（targetRange == null）不应出现在 surviving 里，但防御性保留
+                    startedSurviving.add(unit)
+                }
+            }
+            val repartitioned =
+                repartitionPendingAndInsertedUnits(
+                    pendingSurviving,
+                    patch,
+                    frameTimeNanos,
+                    durationNanos,
+                )
 
             // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
             createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
 
             // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
-            applyRetainedMoves(patch, frameTimeNanos, durationNanos, surviving)
+            // 注意：retainedMoves 作用于 startedSurviving（已开始 unit 的位置重定向），
+            // 不应作用于 pendingSurviving（它们已被重新分段）。
+            applyRetainedMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
 
-            // 合并：存活 + 新插入 + ghost
-            units = surviving + inserted + ghosting
+            // 合并：已开始存活 + 重新分段（pending + 新插入） + ghost
+            units = startedSurviving + repartitioned.allUnits + ghosting
+            // surviving 列表对外暴露给 cursor 合并逻辑：只含 startedSurviving + repartitionedPending
+            // （不含新 inserted units，避免 cursor 把新 inserted 当 surviving 重复计算 endFraction）。
+            // cursor 的 unstartedSurviving 从此列表取"尚未开始"的 unit，只会取到 repartitionedPending。
+            surviving.clear()
+            surviving.addAll(startedSurviving)
+            surviving.addAll(repartitioned.repartitionedPending)
         } else {
             // 文字动画关闭：不创建任何文字 alpha/position track。
             units = emptyList()
@@ -125,57 +148,99 @@ class ComposeVisualTimeline {
         // cursor 独立按 policy.cursorEnabled 继续处理（由调用方 computeCursorParamsForPatch 决定是否传参）。
         // 支持多段路径：cursorPath 是 List<CursorMotionPoint>，不再只取 last().rect。
         if (cursorFromRect != null && cursorPath != null && cursorPath.isNotEmpty()) {
-            val current = cursorChannel
-            val startRect =
-                if (current != null) {
-                    sampleCursorRect(frameTimeNanos) ?: cursorFromRect
-                } else {
-                    cursorFromRect
-                }
+            applyCursorPatch(
+                patch = patch,
+                policy = policy,
+                frameTimeNanos = frameTimeNanos,
+                cursorFromRect = cursorFromRect,
+                cursorPath = cursorPath,
+                cursorDurationNanos = cursorDurationNanos,
+                durationNanos = durationNanos,
+                surviving = surviving,
+            )
+        }
+    }
 
-            // #691 评论 5681258225：cursor 必须消费同一条文字队列。
-            // 存在未完成 surviving unit 时，不直接用新 patch 的 cursorPath 覆盖旧 track；
-            // 把 surviving 的未完成 caret 点与新 patch 的点组合成新的剩余 cursor path。
-            val survivingCursorPoints = mutableListOf<CursorMotionPoint>()
-            if (policy.textEnabled) {
-                val unfinishedSurviving =
-                    surviving
-                        .filter {
-                            it.targetRange != null &&
-                                it.alpha.startedAtNanos + it.alpha.durationNanos > frameTimeNanos
-                        }
-                        .sortedBy { it.targetRange!!.start }
-                for (unit in unfinishedSurviving) {
-                    val caretOffset = unit.targetRange!!.end
-                    // #691 评论 5681258225：跨行场景关键 — 用最新 layout 取 caret rect，不用旧 layout。
-                    val caretRect = safeCursorRectFromLayout(patch.newLayout, caretOffset) ?: continue
-                    survivingCursorPoints.add(CursorMotionPoint(rect = caretRect, endFraction = 0f))
-                }
+    /**
+     * #691 评论 5682970101：cursor 从文字 segment 时间表生成。
+     *
+     * survivingCursorPoints 只取"尚未开始"的 unit（alpha.startedAtNanos > frameTimeNanos），
+     * 不包含已开始但未完成的 unit（它们已经在屏幕上，不需要 cursor 再追到它们的 caret）。
+     * endFraction 从同一份 segment 时间表生成：n = pendingSurviving.size + 新 cursorPath points 数量，
+     * 第 i 个 point 的 endFraction = (i + 1f) / n。
+     * CursorTrack.durationNanos 在 coordinated=true 时用文字 durationNanos（有界窗口），
+     * coordinated=false 时保持 cursorDurationNanos（独立时长）。
+     */
+    @Suppress("LongParameterList")
+    private fun applyCursorPatch(
+        patch: ComposeVisualPatch,
+        policy: EditorMotionPolicy,
+        frameTimeNanos: Long,
+        cursorFromRect: Rect,
+        cursorPath: List<CursorMotionPoint>,
+        cursorDurationNanos: Long,
+        durationNanos: Long,
+        surviving: List<VisualTextUnit>,
+    ) {
+        val current = cursorChannel
+        val startRect =
+            if (current != null) {
+                sampleCursorRect(frameTimeNanos) ?: cursorFromRect
+            } else {
+                cursorFromRect
             }
 
-            // 合并 surviving cursor points + 新 patch cursorPath points
-            // #691 评论 5681258225：只有当存在 surviving cursor points 时才重算 endFraction —
-            // 没有 surviving points 时保持原 cursorPath 的自定义 endFraction 不变
-            // （单笔 patch 的 cursor path 可能有不均匀的 endFraction，如 1/3, 1/2, 1.0）。
-            val allPoints = survivingCursorPoints + cursorPath
-            val normalizedPoints =
-                if (survivingCursorPoints.isNotEmpty() && allPoints.size > 1) {
-                    val n = allPoints.size
-                    allPoints.mapIndexed { i, point ->
-                        point.copy(endFraction = (i + 1f) / n)
+        val survivingCursorPoints = mutableListOf<CursorMotionPoint>()
+        if (policy.textEnabled) {
+            val unstartedSurviving =
+                surviving
+                    .filter {
+                        it.targetRange != null &&
+                            it.alpha.startedAtNanos > frameTimeNanos
                     }
-                } else {
-                    allPoints
-                }
-
-            cursorChannel =
-                CursorTrack(
-                    fromRect = startRect,
-                    points = normalizedPoints,
-                    startedAtNanos = frameTimeNanos,
-                    durationNanos = cursorDurationNanos,
-                )
+                    .sortedBy { it.targetRange!!.start }
+            for (unit in unstartedSurviving) {
+                val caretOffset = unit.targetRange!!.end
+                // #691 评论 5681258225：跨行场景关键 — 用最新 layout 取 caret rect，不用旧 layout。
+                val caretRect = safeCursorRectFromLayout(patch.newLayout, caretOffset) ?: continue
+                survivingCursorPoints.add(CursorMotionPoint(rect = caretRect, endFraction = 0f))
+            }
         }
+
+        // 合并 surviving cursor points + 新 patch cursorPath points
+        // #691 评论 5682970101：endFraction 从文字 segment 时间表生成 —
+        // n = pendingSurviving.size + 新 cursorPath points 数量，
+        // 第 i 个 point 的 endFraction = (i + 1f) / n。
+        // 这在有界窗口内均匀分段时等于文字 segment 的结束分数。
+        // #691 评论 5681258225：只有当存在 surviving cursor points 时才重算 endFraction —
+        // 没有 surviving points 时保持原 cursorPath 的自定义 endFraction 不变
+        // （单笔 patch 的 cursor path 可能有不均匀的 endFraction，如 1/3, 1/2, 1.0）。
+        val allPoints = survivingCursorPoints + cursorPath
+        val normalizedPoints =
+            if (survivingCursorPoints.isNotEmpty() && allPoints.size > 1) {
+                val n = allPoints.size
+                allPoints.mapIndexed { i, point ->
+                    point.copy(endFraction = (i + 1f) / n)
+                }
+            } else {
+                allPoints
+            }
+
+        // #691 评论 5682970101：CursorTrack.durationNanos 在 coordinated=true 时用文字 durationNanos
+        // （有界窗口），coordinated=false 时保持 cursorDurationNanos（独立时长）。
+        val effectiveCursorDurationNanos =
+            if (policy.coordinated) {
+                durationNanos
+            } else {
+                cursorDurationNanos
+            }
+        cursorChannel =
+            CursorTrack(
+                fromRect = startRect,
+                points = normalizedPoints,
+                startedAtNanos = frameTimeNanos,
+                durationNanos = effectiveCursorDurationNanos,
+            )
     }
 
     /**
@@ -277,53 +342,93 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * 第三步：处理本 patch 新插入的 unit。
+     * 第三步：处理本 patch 新插入的 unit + 重新分段尚未开始的 surviving unit。
      *
-     * #691 评论 5681258225：新 inserted units 从 [queueTailEndNanos] 开始依次排，
-     * 不再从 [frameTimeNanos] 开始。这样视觉顺序永远和正文顺序一致 —
-     * 新 patch 的文字接到当前还没完成的有序文字队列后面，
-     * 新 unit 的 startedAtNanos 从前一个尚未完成文字 unit 的计划结束时间继续。
+     * #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
+     * 把 [pendingSurviving]（尚未开始的 surviving）+ 本 patch 新 insertedRanges 合并成待显示序列，
+     * 按正文顺序（range.start）排序，在 [frameTimeNanos, frameTimeNanos + durationNanos] 有界窗口内
+     * 均匀分段：n = 待显示序列长度，第 i 个的 startFraction = i/n, endFraction = (i+1)/n，
+     * startedAt = frameTimeNanos + durationNanos * startFraction, duration = durationNanos / n。
      *
-     * @param queueTailEndNanos 当前未完成文字队列的尾部计划结束时间。
-     *   没有未完成 surviving unit 时 = [frameTimeNanos]（退化为原行为）。
+     * - 对 pendingSurviving 中的已有 unit：copy 并重设 alpha 通道（TimedFloat(0f, 1f, unitStartedAt, unitDuration)），
+     *   layout/range/position 保持（range 已映射到新正文）。
+     * - 对新 insertedRanges：创建新 VisualTextUnit（和原 createInsertedUnits 类似，但从有界窗口起点开始）。
+     *
+     * @param pendingSurviving 尚未开始的 surviving unit（alpha.startedAtNanos > frameTimeNanos）。
+     * @param patch 本帧的屏幕 diff。
+     * @param frameTimeNanos 当前帧时间戳。
+     * @param durationNanos 文字动画时长（有界窗口长度）。
+     * @return [RepartitionResult] 包含 allUnits（pendingSurviving 重设 alpha + 新 insertedUnits）
+     *   和 repartitionedPending（仅 pendingSurviving 重设 alpha，给 cursor 合并用）。
      */
-    private fun createInsertedUnits(
+    private fun repartitionPendingAndInsertedUnits(
+        pendingSurviving: List<VisualTextUnit>,
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
         durationNanos: Long,
-        queueTailEndNanos: Long,
-    ): List<VisualTextUnit> {
+    ): RepartitionResult {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
-        val inserted = mutableListOf<VisualTextUnit>()
-        // #691 评论 5679815971 问题2：一次 patch 有 N 个 insertedUnits 时，
-        // 把总时长按 unit 顺序分段，而不是所有 unit 同时从 0ms 跑满总时长。
-        // 第 i 个 unit：startFraction = i/N, endFraction = (i+1)/N,
-        // startedAt = queueTailEndNanos + totalDuration * startFraction,
-        // duration = totalDuration * (endFraction - startFraction).
-        // 这样 cursor 的 CursorMotionPoint.endFraction 才和对应文字真正是同一进度语义。
-        val validRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
-        val n = validRanges.size
-        for ((i, range) in validRanges.withIndex()) {
-            val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
+        val validInsertedRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
+
+        // 构建待显示序列：pendingSurviving + 新 insertedRanges，按正文顺序（range.start）排序。
+        // 用 Pair<TextRange, VisualTextUnit?> 标记：second != null 表示 pendingSurviving 的已有 unit，
+        // second == null 表示新 insertedRange（需要创建新 unit）。
+        val displayItems: List<Pair<TextRange, VisualTextUnit?>> =
+            (pendingSurviving.map { it.targetRange!! to it } + validInsertedRanges.map { it to null })
+                .sortedBy { it.first.start }
+
+        if (displayItems.isEmpty()) {
+            return RepartitionResult(allUnits = emptyList(), repartitionedPending = emptyList())
+        }
+
+        val n = displayItems.size
+        val allUnits = mutableListOf<VisualTextUnit>()
+        val repartitionedPending = mutableListOf<VisualTextUnit>()
+        for ((i, item) in displayItems.withIndex()) {
+            val range = item.first
+            val existingUnit = item.second
             val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
             val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
-            // #691 评论 5681258225：从队列尾部计划结束时间开始排，不从 frameTimeNanos 开始。
-            val unitStartedAt = queueTailEndNanos + (durationNanos * startFraction).toLong()
+            val unitStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
             val unitDuration = (durationNanos * (endFraction - startFraction)).toLong()
-            inserted.add(
-                VisualTextUnit(
-                    key = nextUnitKey++,
-                    layout = newLayout,
-                    range = range,
-                    targetRange = range,
-                    alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
-                    position = TimedOffset(position, position, frameTimeNanos, 0L),
-                ),
-            )
+            if (existingUnit != null) {
+                // pendingSurviving：copy 并重设 alpha 通道，layout/range/position 保持
+                val repartitioned =
+                    existingUnit.copy(
+                        alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
+                    )
+                allUnits.add(repartitioned)
+                repartitionedPending.add(repartitioned)
+            } else {
+                // 新 insertedRange：创建新 VisualTextUnit
+                val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
+                allUnits.add(
+                    VisualTextUnit(
+                        key = nextUnitKey++,
+                        layout = newLayout,
+                        range = range,
+                        targetRange = range,
+                        alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
+                        position = TimedOffset(position, position, frameTimeNanos, 0L),
+                    ),
+                )
+            }
         }
-        return inserted
+        return RepartitionResult(allUnits = allUnits, repartitionedPending = repartitionedPending)
     }
+
+    /**
+     * [repartitionPendingAndInsertedUnits] 的返回结果。
+     *
+     * @param allUnits 所有重新分段后的 unit（pendingSurviving 重设 alpha + 新 insertedUnits）。
+     * @param repartitionedPending 仅 pendingSurviving 重设 alpha 后的 unit（给 cursor 合并用，
+     *   不含新 inserted units，避免 cursor 把新 inserted 当 surviving 重复计算 endFraction）。
+     */
+    private data class RepartitionResult(
+        val allUnits: List<VisualTextUnit>,
+        val repartitionedPending: List<VisualTextUnit>,
+    )
 
     /**
      * #689 评论 5675270164 缺陷1：处理删除 unit。

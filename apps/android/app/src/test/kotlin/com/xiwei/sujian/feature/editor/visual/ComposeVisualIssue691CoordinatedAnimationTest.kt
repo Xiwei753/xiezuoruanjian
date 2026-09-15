@@ -1569,56 +1569,59 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         )
 
         // === 连续帧采样（第二笔后）：32ms/40ms/48ms/50ms ===
-        // 修复1核心验证：rebase 后 b/c 仍保留 startedAt=100/200，alpha 必须仍为 0
+        // 评论 5682970101：b/c 在第二笔时被重新分段（不再保留 startedAt=100/200）。
+        // abc@0ms：a:0-100, b:100-200, c:200-300
+        // d@30ms：a 已开始；待显示=[b,c,d] 在 [30,330] 分段 → b:30-130, c:130-230, d:230-330
+        // 32ms 时 b 已开始（startedAt=30ms，alpha≈0.02）；c/d 仍为 0
         for (ms in listOf(32L, 40L, 48L, 50L)) {
             val scene = timeline.sample(ms * NANOS_PER_MS)
-            val unitB = scene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
             val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-            assertNotNull("$ms ms: unit b 应存在（尚未开始动画）", unitB)
-            assertTrue(
-                "$ms ms: unit b alpha 应为 0（rebase 保留未来起点），实际=${unitB!!.alpha.from}",
-                unitB.alpha.from < 0.01f,
-            )
+            val unitD = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
             assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
             assertTrue(
-                "$ms ms: unit c alpha 应为 0（rebase 保留未来起点），实际=${unitC!!.alpha.from}",
+                "$ms ms: unit c alpha 应为 0（startedAt=130ms），实际=${unitC!!.alpha.from}",
                 unitC.alpha.from < 0.01f,
+            )
+            assertNotNull("$ms ms: unit d 应存在（尚未开始动画）", unitD)
+            assertTrue(
+                "$ms ms: unit d alpha 应为 0（startedAt=230ms），实际=${unitD!!.alpha.from}",
+                unitD.alpha.from < 0.01f,
             )
         }
 
         // === 50ms：cursor 不能越过当前已出现文字 ===
-        // 修复2核心验证：cursorStartedAt = max(30, earliestUnstartedSurvivingStart=100) = 100
-        // 50ms < 100ms，cursor 停留在 startRect = cursorAt30ms = (3, 0, 5, 14)
+        // 修复后 b 在 30ms 重新分段后 startedAt=30ms，cursor 在 b segment 内（b:30-130）
+        // cursor 在 startRect 和 b caret 之间，不应到达 d 的位置
         val scene50 = timeline.sample(50L * NANOS_PER_MS)
         val cursor50 = scene50.cursorRect
         assertNotNull("50ms: cursor rect 不应为 null", cursor50)
         assertTrue(
-            "50ms: cursor 应停留在 startRect (left≈3f)，不越过已出现文字，实际=${cursor50!!.left}",
-            kotlin.math.abs(cursor50.left - 3f) < 1f,
+            "50ms: cursor 不应到达 d 的位置 (left 应远小于 40f)，实际=${cursor50!!.left}",
+            cursor50.left < 35f,
         )
 
-        // === 100ms：b 刚开始（alpha≈0），c 尚未开始（alpha=0）===
+        // === 100ms：b alpha≈0.7（30-130,elapsed=70），c 尚未开始（alpha=0）===
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        assertNotNull("100ms: unit b 应存在（刚开始动画）", unitB100)
+        assertNotNull("100ms: unit b 应存在", unitB100)
         assertTrue(
-            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
-            unitB100.alpha.from < 0.2f,
+            "100ms: unit b alpha 应≈0.7（30-130,elapsed=70），实际=${unitB100!!.alpha.from}",
+            kotlin.math.abs(unitB100.alpha.from - 0.7f) < 0.15f,
         )
         assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
         assertTrue(
-            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            "100ms: unit c alpha 应为 0（startedAt=130ms），实际=${unitC100!!.alpha.from}",
             unitC100.alpha.from < 0.01f,
         )
 
-        // === 200ms：c 刚开始（alpha≈0）===
+        // === 200ms：c alpha≈0.7（130-230,elapsed=70）===
         val scene200 = timeline.sample(200L * NANOS_PER_MS)
         val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        assertNotNull("200ms: unit c 应存在（刚开始动画）", unitC200)
+        assertNotNull("200ms: unit c 应存在", unitC200)
         assertTrue(
-            "200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
-            unitC200.alpha.from < 0.2f,
+            "200ms: unit c alpha 应≈0.7（130-230,elapsed=70），实际=${unitC200!!.alpha.from}",
+            kotlin.math.abs(unitC200!!.alpha.from - 0.7f) < 0.15f,
         )
     }
 
@@ -1695,47 +1698,50 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         )
 
         // === 连续帧采样：8ms/16ms ===
-        // 修复1核心验证：同一 VSync 0ms drain 后，b/c 仍保留 startedAt=100/200，alpha=0
+        // 评论 5682970101：同一 VSync 0ms 两笔。a 已开始（0<=0）；待显示=[b,c,d] 在 [0,300] 分段
+        // b:0-100, c:100-200, d:200-300（和单笔 abc 一样的分段，d 不排到 300ms 后）
+        // 8ms 时 b 已开始（startedAt=0，alpha≈0.08）；c/d 仍为 0
         for (ms in listOf(8L, 16L)) {
             val scene = timeline.sample(ms * NANOS_PER_MS)
-            val unitB = scene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
             val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-            assertNotNull("$ms ms: unit b 应存在（尚未开始动画）", unitB)
-            assertTrue(
-                "$ms ms: unit b alpha 应为 0（同 VSync drain 不提前启动），实际=${unitB!!.alpha.from}",
-                unitB.alpha.from < 0.01f,
-            )
+            val unitD = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
             assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
             assertTrue(
-                "$ms ms: unit c alpha 应为 0（同 VSync drain 不提前启动），实际=${unitC!!.alpha.from}",
+                "$ms ms: unit c alpha 应为 0（startedAt=100ms），实际=${unitC!!.alpha.from}",
                 unitC.alpha.from < 0.01f,
+            )
+            assertNotNull("$ms ms: unit d 应存在（尚未开始动画）", unitD)
+            assertTrue(
+                "$ms ms: unit d alpha 应为 0（startedAt=200ms），实际=${unitD!!.alpha.from}",
+                unitD.alpha.from < 0.01f,
             )
         }
 
-        // === 10ms：cursor 停留在 startRect，不越过已出现文字 ===
-        // 修复2核心验证：cursorStartedAt = max(0, earliestUnstartedSurvivingStart=100) = 100
-        // 10ms < 100ms，cursor 停留在 startRect = fromRect = (0, 0, 2, 14)
+        // === 10ms：cursor 在 b segment 内，不越过已出现文字 ===
+        // 修复后 b 从 0ms 开始，cursor 在 b segment 内
         val scene10 = timeline.sample(10L * NANOS_PER_MS)
         val cursor10 = scene10.cursorRect
         assertNotNull("10ms: cursor rect 不应为 null", cursor10)
         assertTrue(
-            "10ms: cursor 应停留在 startRect (left≈0f)，不越过已出现文字，实际=${cursor10!!.left}",
-            kotlin.math.abs(cursor10.left - 0f) < 1f,
+            "10ms: cursor 不应到达 d 的位置 (left 应远小于 40f)，实际=${cursor10!!.left}",
+            cursor10.left < 35f,
         )
 
-        // === 100ms：b 刚开始（alpha≈0），c 尚未开始（alpha=0）===
+        // === 100ms：b 完成（alpha≈1），c 刚开始（alpha≈0），d 尚未开始 ===
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        assertNotNull("100ms: unit b 应存在（刚开始动画）", unitB100)
+        // unit b：要么已交还系统正文（unitB100 == null），要么 alpha ≈ 1
+        if (unitB100 != null) {
+            assertTrue(
+                "100ms: unit b alpha 应已完成（≈1），实际=${unitB100.alpha.from}",
+                unitB100.alpha.from > 0.8f,
+            )
+        }
+        assertNotNull("100ms: unit c 应存在（刚开始动画）", unitC100)
         assertTrue(
-            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
-            unitB100.alpha.from < 0.2f,
-        )
-        assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
-        assertTrue(
-            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
-            unitC100.alpha.from < 0.01f,
+            "100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.2f,
         )
     }
 
@@ -1800,22 +1806,21 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     // ==================== #691 评论 5681258225 协同动画修复测试 ====================
 
     /**
-     * #691 评论 5681258225 修复1：abc@0ms + d@30ms — 新 unit 排在队列尾部，cursor 与文字同步。
+     * #691 评论 5681258225 修复1 / 评论 5682970101：abc@0ms + d@30ms — scene redirect 有界窗口。
      *
      * 第一笔：0ms "" → "abc"，3 个 insertedUnits，duration=300ms。
      *   a: 0..100ms, b: 100..200ms, c: 200..300ms
      * 第二笔：30ms "abc" → "abcd"，1 个 insertedUnit (d)。
-     *   修复后：queueTailEndNanos = max(100, 200, 300) = 300ms
-     *   d: startedAt=300ms, duration=300ms（不插队到 b/c 前面）
-     *   cursor 合并：surviving 未完成 = [a, b, c] + 新 patch = [d] → 4 points
-     *   cursor startedAtNanos=30ms, durationNanos=300ms
+     *   修复后（评论 5682970101）：a 已开始保留；待显示=[b,c,d] 在 [30,330] 有界窗口分段
+     *   b: 30..130ms, c: 130..230ms, d: 230..330ms
+     *   cursor 合并：surviving 未开始 = [b, c] + 新 patch = [d] → 3 points
+     *   cursor startedAtNanos=30ms, durationNanos=300ms（coordinated=true 用文字时长）
      *
      * 关键验证：
-     * - 50ms：d 的 alpha 必须为 0（d 的 startedAt=300ms >> 50ms）
-     * - 50ms：cursor 不应到达 d 的位置
-     * - 100ms：b 的 alpha 刚开始（≈0）
-     * - 200ms：c 的 alpha 刚开始（≈0）
-     * - 300ms+：d 才开始淡入
+     * - 50ms：d alpha=0（d startedAt=230ms）；b alpha≈0.2（30-130,elapsed=20）
+     * - 100ms：b alpha≈0.7（30-130,elapsed=70）；c/d alpha=0
+     * - 200ms：c alpha≈0.7（130-230,elapsed=70）；d alpha=0
+     * - 350ms：d alpha 进行中（230-330,elapsed=120,progress=0.4）
      */
     @Test
     fun abcAt0ms_dAt30ms_newUnitQueuedAfterSurviving_cursorSyncedWithText() {
@@ -1882,21 +1887,19 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             cursorDurationNanos = 300L * NANOS_PER_MS,
         )
 
-        // === 50ms：d 的 alpha 必须为 0 ===
-        // 修复核心：d 的 startedAt = queueTailEndNanos = 300ms，50ms << 300ms
+        // === 50ms：d alpha=0（d startedAt=230ms）；b alpha≈0.2（30-130,elapsed=20）===
         val scene50 = timeline.sample(50L * NANOS_PER_MS)
         val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
         assertNotNull("50ms: unit d 应存在（尚未开始动画）", unitD50)
         assertTrue(
-            "50ms: unit d alpha 应为 0（queued after surviving，startedAt=300ms），实际=${unitD50!!.alpha.from}",
+            "50ms: unit d alpha 应为 0（startedAt=230ms），实际=${unitD50!!.alpha.from}",
             unitD50.alpha.from < 0.01f,
         )
 
         // === 50ms：cursor 不应到达 d 的位置 ===
-        // cursor 合并路径 = [a caret, b caret, c caret, d caret]，4 points
-        // cursor startedAt=30ms, duration=300ms
-        // 50ms: progress = 20/300 ≈ 0.067, 在第一段（endFraction=0.25）
-        // segmentProgress = 0.067/0.25 ≈ 0.27, cursor 在 startRect 和 a caret 之间
+        // cursor 合并路径 = [b caret, c caret, d caret]，3 points
+        // cursor startedAt=30ms, duration=300ms（coordinated=true 用文字时长）
+        // 50ms: progress = 20/300 ≈ 0.067, 在第一段（endFraction=1/3）
         // 不应到达 d 的位置（left≈40f）
         val cursor50 = scene50.cursorRect
         assertNotNull("50ms: cursor rect 不应为 null", cursor50)
@@ -1905,43 +1908,43 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             cursor50.left < 35f,
         )
 
-        // === 100ms：b 的 alpha 刚开始，c 尚未开始 ===
+        // === 100ms：b alpha≈0.7（30-130,elapsed=70），c/d alpha=0 ===
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
         val unitD100 = scene100.units.firstOrNull { it.targetRange == TextRange(3, 4) }
         assertNotNull("100ms: unit b 应存在", unitB100)
         assertTrue(
-            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
-            unitB100.alpha.from < 0.2f,
+            "100ms: unit b alpha 应≈0.7（30-130,elapsed=70），实际=${unitB100!!.alpha.from}",
+            kotlin.math.abs(unitB100.alpha.from - 0.7f) < 0.15f,
         )
         assertNotNull("100ms: unit c 应存在", unitC100)
         assertTrue(
-            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            "100ms: unit c alpha 应为 0（startedAt=130ms），实际=${unitC100!!.alpha.from}",
             unitC100.alpha.from < 0.01f,
         )
         assertNotNull("100ms: unit d 应存在", unitD100)
         assertTrue(
-            "100ms: unit d alpha 应为 0（尚未开始，startedAt=300ms），实际=${unitD100!!.alpha.from}",
+            "100ms: unit d alpha 应为 0（startedAt=230ms），实际=${unitD100!!.alpha.from}",
             unitD100.alpha.from < 0.01f,
         )
 
-        // === 200ms：c 的 alpha 刚开始，d 仍为 0 ===
+        // === 200ms：c alpha≈0.7（130-230,elapsed=70），d 仍为 0 ===
         val scene200 = timeline.sample(200L * NANOS_PER_MS)
         val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
         val unitD200 = scene200.units.firstOrNull { it.targetRange == TextRange(3, 4) }
         assertNotNull("200ms: unit c 应存在", unitC200)
         assertTrue(
-            "200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
-            unitC200.alpha.from < 0.2f,
+            "200ms: unit c alpha 应≈0.7（130-230,elapsed=70），实际=${unitC200!!.alpha.from}",
+            kotlin.math.abs(unitC200!!.alpha.from - 0.7f) < 0.15f,
         )
         assertNotNull("200ms: unit d 应存在", unitD200)
         assertTrue(
-            "200ms: unit d alpha 应为 0（尚未开始，startedAt=300ms），实际=${unitD200!!.alpha.from}",
+            "200ms: unit d alpha 应为 0（startedAt=230ms），实际=${unitD200!!.alpha.from}",
             unitD200.alpha.from < 0.01f,
         )
 
-        // === 350ms：d 的 alpha 应已开始（startedAt=300ms，elapsed=50ms） ===
+        // === 350ms：d alpha 应已开始（startedAt=230ms，elapsed=120,progress=0.4） ===
         val scene350 = timeline.sample(350L * NANOS_PER_MS)
         val unitD350 = scene350.units.firstOrNull { it.targetRange == TextRange(3, 4) }
         if (unitD350 != null) {
@@ -1953,17 +1956,17 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
-     * #691 评论 5681258225 修复2：同一 VSync abc+d — 文字顺序 a→b→c→d，cursor 使用最终 layout。
+     * #691 评论 5681258225 修复2 / 评论 5682970101：同一 VSync abc+d — scene redirect 有界窗口。
      *
      * 同一 frameTimeNanos=0 连续两笔 patch（abc + d）。
-     * 修复后：queueTailEndNanos = max(100, 200, 300) = 300ms
-     * d: startedAt=300ms（不插队）
-     * cursor 合并：surviving 未完成 = [a, b, c] + 新 patch = [d] → 4 points
+     * 修复后（评论 5682970101）：a 已开始（0<=0）；待显示=[b,c,d] 在 [0,300] 有界窗口分段
+     * b: 0..100ms, c: 100..200ms, d: 200..300ms（和单笔 abc 一样的分段，d 不排到 300ms 后）
+     * cursor 合并：surviving 未开始 = [b, c] + 新 patch = [d] → 3 points
      *
      * 关键验证：
-     * - 50ms：d alpha = 0
-     * - 100ms：b alpha 刚开始
-     * - 200ms：c alpha 刚开始
+     * - 50ms：d alpha=0（d startedAt=200ms）；b alpha≈0.5
+     * - 100ms：b 完成；c 刚开始；d alpha=0
+     * - 200ms：c 完成；d 刚开始
      * - 文字顺序始终 a→b→c→d
      */
     @Test
@@ -2026,29 +2029,31 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             cursorDurationNanos = 300L * NANOS_PER_MS,
         )
 
-        // === 50ms：d alpha = 0 ===
+        // === 50ms：d alpha=0（d startedAt=200ms）；b alpha≈0.5 ===
         val scene50 = timeline.sample(50L * NANOS_PER_MS)
         val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
         assertNotNull("同VSync 50ms: unit d 应存在", unitD50)
         assertTrue(
-            "同VSync 50ms: unit d alpha 应为 0（queued after surviving），实际=${unitD50!!.alpha.from}",
+            "同VSync 50ms: unit d alpha 应为 0（startedAt=200ms），实际=${unitD50!!.alpha.from}",
             unitD50.alpha.from < 0.01f,
         )
 
-        // === 100ms：b alpha 刚开始，c/d 仍为 0 ===
+        // === 100ms：b 完成（alpha≈1）；c 刚开始；d 仍为 0 ===
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
         val unitD100 = scene100.units.firstOrNull { it.targetRange == TextRange(3, 4) }
-        assertNotNull("同VSync 100ms: unit b 应存在", unitB100)
-        assertTrue(
-            "同VSync 100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
-            unitB100.alpha.from < 0.2f,
-        )
+        // unit b：要么已交还系统正文（unitB100 == null），要么 alpha ≈ 1
+        if (unitB100 != null) {
+            assertTrue(
+                "同VSync 100ms: unit b alpha 应已完成（≈1），实际=${unitB100.alpha.from}",
+                unitB100.alpha.from > 0.8f,
+            )
+        }
         assertNotNull("同VSync 100ms: unit c 应存在", unitC100)
         assertTrue(
-            "同VSync 100ms: unit c alpha 应为 0，实际=${unitC100!!.alpha.from}",
-            unitC100.alpha.from < 0.01f,
+            "同VSync 100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.2f,
         )
         assertNotNull("同VSync 100ms: unit d 应存在", unitD100)
         assertTrue(
@@ -2056,30 +2061,30 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             unitD100.alpha.from < 0.01f,
         )
 
-        // === 200ms：c alpha 刚开始，d 仍为 0 ===
+        // === 200ms：c 完成；d 刚开始 ===
         val scene200 = timeline.sample(200L * NANOS_PER_MS)
         val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
         val unitD200 = scene200.units.firstOrNull { it.targetRange == TextRange(3, 4) }
-        assertNotNull("同VSync 200ms: unit c 应存在", unitC200)
-        assertTrue(
-            "同VSync 200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
-            unitC200.alpha.from < 0.2f,
-        )
+        // unit c：要么已交还系统正文，要么 alpha ≈ 1
+        if (unitC200 != null) {
+            assertTrue(
+                "同VSync 200ms: unit c alpha 应已完成（≈1），实际=${unitC200.alpha.from}",
+                unitC200.alpha.from > 0.8f,
+            )
+        }
         assertNotNull("同VSync 200ms: unit d 应存在", unitD200)
         assertTrue(
-            "同VSync 200ms: unit d alpha 应为 0，实际=${unitD200!!.alpha.from}",
-            unitD200.alpha.from < 0.01f,
+            "同VSync 200ms: unit d alpha 应刚开始（≈0），实际=${unitD200!!.alpha.from}",
+            unitD200.alpha.from < 0.2f,
         )
 
         // === 文字顺序验证：a→b→c→d ===
-        // 在 50ms 时验证（此时 a 尚未被收口移除，alpha≈0.17）
+        // 在 50ms 时验证（此时 a 尚未被收口移除，alpha≈0.5）
         val allUnits = scene50.units.filter { it.targetRange != null }.sortedBy { it.targetRange!!.start }
         assertTrue(
             "同VSync: 应有 a/b/c/d 四个 unit，实际 ${allUnits.size} 个",
             allUnits.size >= 4,
         )
-        // sample 后 startedAtNanos 会被 rebase 到当前帧时间，无法直接比较。
-        // 但 alpha.from 可以反映动画进度：a 正在进行（alpha>0），b/c/d 尚未开始（alpha≈0）。
         val unitA = allUnits.firstOrNull { it.targetRange == TextRange(0, 1) }
         val unitD = allUnits.firstOrNull { it.targetRange == TextRange(3, 4) }
         if (unitA != null && unitD != null) {
@@ -2088,7 +2093,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 unitA.alpha.from > 0f,
             )
             assertTrue(
-                "同VSync: d 的 alpha 应为 0（尚未开始，queued after surviving），实际=${unitD.alpha.from}",
+                "同VSync: d 的 alpha 应为 0（startedAt=200ms），实际=${unitD.alpha.from}",
                 unitD.alpha.from < 0.01f,
             )
         }
@@ -2219,42 +2224,45 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             )
         }
 
-        // === 验证：b/c 的 alpha 在 100ms/200ms 时按序开始 ===
+        // === 验证：b/c 的 alpha 在 100ms/200ms 时按序开始（评论 5682970101 有界窗口分段）===
+        // 修复后：a 已开始保留；待显示=[b,c,d] 在 [30,330] 分段：b:30-130, c:130-230, d:230-330
+        // 100ms: b alpha≈0.7（30-130,elapsed=70）
+        // 200ms: c alpha≈0.7（130-230,elapsed=70）
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         assertNotNull("跨行 100ms: unit b 应存在", unitB100)
         assertTrue(
-            "跨行 100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
-            unitB100.alpha.from < 0.2f,
+            "跨行 100ms: unit b alpha 应≈0.7（30-130,elapsed=70），实际=${unitB100!!.alpha.from}",
+            kotlin.math.abs(unitB100.alpha.from - 0.7f) < 0.15f,
         )
 
         val scene200 = timeline.sample(200L * NANOS_PER_MS)
         val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
         assertNotNull("跨行 200ms: unit c 应存在", unitC200)
         assertTrue(
-            "跨行 200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
-            unitC200.alpha.from < 0.2f,
+            "跨行 200ms: unit c alpha 应≈0.7（130-230,elapsed=70），实际=${unitC200!!.alpha.from}",
+            kotlin.math.abs(unitC200!!.alpha.from - 0.7f) < 0.15f,
         )
     }
 
     /**
-     * #691 评论 5681258225 修复4：默认 100ms 和长时长 1000ms — 连续 patch 不重启不插队。
+     * #691 评论 5681258225 修复4 / 评论 5682970101：默认 100ms 和长时长 1000ms — 连续 patch 有界窗口分段。
      *
      * 子测试 A：默认 100ms
      * - patch1："" → "ab"，duration=100ms（a: 0..50ms, b: 50..100ms）
      * - 20ms 时 patch2："ab" → "abc"，duration=100ms
-     * - queueTailEndNanos = max(50+50) = 100ms（b 未完成）
-     * - c: startedAt=100ms
-     * - 30ms：c alpha = 0
-     * - 100ms：c 刚开始
+     * - 修复后（评论 5682970101）：20ms 时 a 已开始（0<=20）；b 尚未开始（50>20）；
+     *   待显示=[b,c] 在 [20,120] 有界窗口分段：b: 20..70ms, c: 70..120ms
+     * - 30ms：c alpha=0（c startedAt=70ms）；b alpha≈0.2（20-70,elapsed=10）
+     * - 100ms：c alpha≈0.6（70-120,elapsed=30）；b 已完成
      *
      * 子测试 B：长时长 1000ms
      * - patch1："" → "ab"，duration=1000ms（a: 0..500ms, b: 500..1000ms）
      * - 100ms 时 patch2："ab" → "abc"，duration=1000ms
-     * - queueTailEndNanos = max(500+500) = 1000ms（b 未完成）
-     * - c: startedAt=1000ms
-     * - 200ms：c alpha = 0
-     * - 1000ms：c 刚开始
+     * - 修复后：100ms 时 a 已开始；b 尚未开始（500>100）；
+     *   待显示=[b,c] 在 [100,1100] 有界窗口分段：b: 100..600ms, c: 600..1100ms
+     * - 200ms：c alpha=0（c startedAt=600ms）；b alpha≈0.2（100-600,elapsed=100）
+     * - 1000ms：c alpha≈0.8（600-1100,elapsed=400）；b 已完成
      */
     @Test
     fun default100ms_andLongDuration1000ms_continuousPatchNoRestartNoJumping() {
@@ -2304,8 +2312,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             )
 
             // patch2：20ms "ab" → "abc"，duration=100ms
-            // queueTailEndNanos = max(50+50) = 100ms（b 未完成）
-            // c: startedAt=100ms, duration=100ms
+            // 修复后：a 已开始；b 尚未开始（50>20）；待显示=[b,c] 在 [20,120] 分段
+            // b: 20..70ms, c: 70..120ms
             val frameTime2 = 20L * NANOS_PER_MS
             val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))
             val cursorPath2 =
@@ -2337,22 +2345,22 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorDurationNanos = 100L * NANOS_PER_MS,
             )
 
-            // 30ms：c alpha = 0（c 的 startedAt=100ms >> 30ms）
+            // 30ms：c alpha=0（c startedAt=70ms >> 30ms）；b alpha≈0.2（20-70,elapsed=10）
             val scene30 = timeline.sample(30L * NANOS_PER_MS)
             val unitC30 = scene30.units.firstOrNull { it.targetRange == TextRange(2, 3) }
             assertNotNull("100ms 子测试 30ms: unit c 应存在", unitC30)
             assertTrue(
-                "100ms 子测试 30ms: unit c alpha 应为 0（queued after surviving，startedAt=100ms），实际=${unitC30!!.alpha.from}",
+                "100ms 子测试 30ms: unit c alpha 应为 0（startedAt=70ms），实际=${unitC30!!.alpha.from}",
                 unitC30.alpha.from < 0.01f,
             )
 
-            // 100ms：c 刚开始（startedAt=100ms，elapsed=0）
+            // 100ms：c alpha≈0.6（70-120,elapsed=30）；b 已完成
             val scene100 = timeline.sample(100L * NANOS_PER_MS)
             val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
             assertNotNull("100ms 子测试 100ms: unit c 应存在", unitC100)
             assertTrue(
-                "100ms 子测试 100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
-                unitC100.alpha.from < 0.2f,
+                "100ms 子测试 100ms: unit c alpha 应≈0.6（70-120,elapsed=30），实际=${unitC100!!.alpha.from}",
+                kotlin.math.abs(unitC100.alpha.from - 0.6f) < 0.15f,
             )
 
             // a 的 alpha 不应被重置（持续 timeline 核心不变量）
@@ -2405,8 +2413,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             )
 
             // patch2：100ms "ab" → "abc"，duration=1000ms
-            // queueTailEndNanos = max(500+500) = 1000ms（b 未完成）
-            // c: startedAt=1000ms, duration=1000ms
+            // 修复后：a 已开始；b 尚未开始（500>100）；待显示=[b,c] 在 [100,1100] 分段
+            // b: 100..600ms, c: 600..1100ms
             val frameTime2 = 100L * NANOS_PER_MS
             val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))
             val cursorPath2 =
@@ -2438,23 +2446,23 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorDurationNanos = 1000L * NANOS_PER_MS,
             )
 
-            // 200ms：c alpha = 0（c 的 startedAt=1000ms >> 200ms）
+            // 200ms：c alpha=0（c startedAt=600ms >> 200ms）；b alpha≈0.2（100-600,elapsed=100）
             val scene200 = timeline.sample(200L * NANOS_PER_MS)
             val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
             assertNotNull("1000ms 子测试 200ms: unit c 应存在", unitC200)
             assertTrue(
-                "1000ms 子测试 200ms: unit c alpha 应为 0（queued after surviving），" +
+                "1000ms 子测试 200ms: unit c alpha 应为 0（startedAt=600ms），" +
                     "实际=${unitC200!!.alpha.from}",
                 unitC200.alpha.from < 0.01f,
             )
 
-            // 1000ms：c 刚开始（startedAt=1000ms，elapsed=0）
+            // 1000ms：c alpha≈0.8（600-1100,elapsed=400）；b 已完成
             val scene1000 = timeline.sample(1000L * NANOS_PER_MS)
             val unitC1000 = scene1000.units.firstOrNull { it.targetRange == TextRange(2, 3) }
             assertNotNull("1000ms 子测试 1000ms: unit c 应存在", unitC1000)
             assertTrue(
-                "1000ms 子测试 1000ms: unit c alpha 应刚开始（≈0），实际=${unitC1000!!.alpha.from}",
-                unitC1000.alpha.from < 0.2f,
+                "1000ms 子测试 1000ms: unit c alpha 应≈0.8（600-1100,elapsed=400），实际=${unitC1000!!.alpha.from}",
+                kotlin.math.abs(unitC1000.alpha.from - 0.8f) < 0.15f,
             )
 
             // a 的 alpha 不应被重置（持续 timeline 核心不变量）
@@ -2466,6 +2474,314 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 )
             }
         }
+    }
+
+    // ==================== #691 评论 5682970101 有界窗口测试 ====================
+
+    /**
+     * #691 评论 5682970101 新增测试1：快速输入时动画尾巴不随字符数线性增长。
+     *
+     * 100ms duration，30ms 间隔连续输入 12 个字符。
+     * 串行 FIFO 下：12 个字最后一个字要在 12*100=1200ms 才完成。
+     * 有界窗口下：最后一笔在 (11)*30=330ms 输入，动画应在 330+100=430ms 内全部完成。
+     *
+     * 关键验证：
+     * - 430ms 时 hasActiveAnimation 应为 false（所有动画已收敛到最新正文）
+     * - 对比串行 FIFO：12 个字最后一个字要 1200ms 才完成，430ms << 1200ms
+     */
+    @Test
+    fun rapidInput_boundedTailDoesNotGrowLinearly() {
+        // 一次性获取所有需要的 layout："" → "a" → "ab" → ... → "abcdefghijkl"
+        val texts = listOf("") + (1..12).map { i -> ('a'..'l').toList().subList(0, i).joinToString("") }
+        val layouts = captureLayouts(*texts.toTypedArray())
+        val timeline = ComposeVisualTimeline()
+
+        val textDurationMs = 100L
+        val inputIntervalMs = 30L
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+
+        // 连续输入 12 个字符，每 30ms 一笔
+        for (i in 1..12) {
+            val oldText = texts[i - 1]
+            val newText = texts[i]
+            val oldLayout = ComposeLayoutSnapshot(layouts[i - 1], TextRange(i - 1, i - 1), 0)
+            val newLayout = ComposeLayoutSnapshot(layouts[i], TextRange(i, i), 0)
+            val frameTime = (i - 1) * inputIntervalMs * NANOS_PER_MS
+
+            // offsetMap：旧文字 identity 映射
+            val offsetMap =
+                if (oldText.isNotEmpty()) {
+                    listOf(VisualOffsetMapEntry(0, 0, oldText.length, VisualOffsetMapKind.IDENTITY))
+                } else {
+                    null
+                }
+            val cursorPath =
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = Rect(i * 10f, 0f, i * 10f + 2f, 14f), endFraction = 1f)),
+                )
+            val patch =
+                makePatch(
+                    id = i.toLong(),
+                    oldLayout = oldLayout,
+                    newLayout = newLayout,
+                    offsetMap = offsetMap,
+                    insertedUnits = listOf(TextRange(i - 1, i)),
+                    cursorMotionPath = cursorPath,
+                    durationMs = textDurationMs,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = textDurationMs,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
+            timeline.applyPatch(
+                patch = patch,
+                frameTimeNanos = frameTime,
+                cursorFromRect = fromRect,
+                cursorPath = cursorPath.points,
+                cursorDurationNanos = textDurationMs * NANOS_PER_MS,
+            )
+        }
+
+        // 最后一笔在 (12-1)*30=330ms 输入。
+        // 有界窗口：动画应在 330+100=430ms 内全部完成。
+        // 串行 FIFO：12 个字最后一个字要 12*100=1200ms 才完成。
+        val convergenceTimeMs = (11 * inputIntervalMs) + textDurationMs // 430ms
+        val scene = timeline.sample(convergenceTimeMs * NANOS_PER_MS)
+        assertFalse(
+            "有界窗口：$convergenceTimeMs ms 时不应有活动文字动画（应已收敛），" +
+                "实际 units=${scene.units.size}，串行 FIFO 下 12 个字要 1200ms 才完成",
+            timeline.hasActiveAnimation(convergenceTimeMs * NANOS_PER_MS),
+        )
+    }
+
+    /**
+     * #691 评论 5682970101 新增测试2：abc@0ms + d@30ms — cursor 和文字来自同一份 schedule。
+     *
+     * 修复后时间表（duration=300ms）：
+     * - abc@0ms：a:0-100, b:100-200, c:200-300
+     * - d@30ms：a 已开始保留；待显示=[b,c,d] 在 [30,330] 分段
+     *   b:30-130, c:130-230, d:230-330
+     *
+     * 关键验证（连续采样）：
+     * - 130ms：cursor 到达 b caret（b segment 30-130 结束），b alpha≈1
+     * - 230ms：cursor 到达 c caret，c alpha≈1
+     * - 330ms：cursor 到达 d caret，d alpha≈1
+     * - 不出现 cursor 已到 d、d 还要几百毫秒才完成
+     */
+    @Test
+    fun abcAt0ms_dAt30ms_cursorAndTextFromSameSchedule() {
+        val layouts = captureLayouts("", "abc", "abcd")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 第一笔：0ms "" → "abc"，duration=300ms
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // 第二笔：30ms "abc" → "abcd"，插入 d
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+        val cursorAt30ms = Rect(3f, 0f, 5f, 14f)
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = 30L * NANOS_PER_MS,
+            cursorFromRect = cursorAt30ms,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // 130ms：b segment（30-130）结束，b alpha≈1，cursor 到达 b caret（point1.left=20）
+        val scene130 = timeline.sample(130L * NANOS_PER_MS)
+        val unitB130 = scene130.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        if (unitB130 != null) {
+            assertTrue(
+                "130ms: unit b alpha 应已完成（≈1），实际=${unitB130.alpha.from}",
+                unitB130.alpha.from > 0.8f,
+            )
+        }
+
+        // 230ms：c segment（130-230）结束，c alpha≈1，cursor 到达 c caret（point2.left=30）
+        val scene230 = timeline.sample(230L * NANOS_PER_MS)
+        val unitC230 = scene230.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        if (unitC230 != null) {
+            assertTrue(
+                "230ms: unit c alpha 应已完成（≈1），实际=${unitC230.alpha.from}",
+                unitC230.alpha.from > 0.8f,
+            )
+        }
+
+        // 330ms：d segment（230-330）结束，d alpha≈1，cursor 到达 d caret（pointD.left=40）
+        val scene330 = timeline.sample(330L * NANOS_PER_MS)
+        val unitD330 = scene330.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitD330 != null) {
+            assertTrue(
+                "330ms: unit d alpha 应已完成（≈1），实际=${unitD330.alpha.from}",
+                unitD330.alpha.from > 0.8f,
+            )
+        }
+
+        // 关键验证：不出现 cursor 已到 d、d 还要几百毫秒才完成
+        // 在 130ms 时，cursor 应在 b caret 附近（不应到达 d 的 left=40）
+        val cursor130 = scene130.cursorRect
+        assertNotNull("130ms: cursor rect 不应为 null", cursor130)
+        assertTrue(
+            "130ms: cursor 不应到达 d 的位置 (left 应远小于 40f)，实际=${cursor130!!.left}",
+            cursor130.left < 35f,
+        )
+    }
+
+    /**
+     * #691 评论 5682970101 新增测试3：同一 VSync 多 patch — cursor 只追最终 layout。
+     *
+     * 同一 VSync 0ms drain 3 笔：a, ab, abc。
+     * 验证：
+     * - insert unit 语义保留（a/b/c 都有 insert unit）
+     * - cursor/reflow 只追最终 layout 的几何目标
+     * - cursor 不创建肉眼不可见的中间几何轨迹
+     */
+    @Test
+    fun sameVsyncMultiplePatches_cursorOnlyFinalLayout() {
+        val layouts = captureLayouts("", "a", "ab", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val aLayout = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0)
+        val abLayout = ComposeLayoutSnapshot(layouts[2], TextRange(2, 2), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[3], TextRange(3, 3), 0)
+
+        val timeline = ComposeVisualTimeline()
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+
+        // 第一笔：0ms "" → "a"
+        val cursorPath1 =
+            CursorMotionPath(points = listOf(CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f)))
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = aLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 100L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+            )
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // 第二笔：同一 VSync 0ms "a" → "ab"
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY))
+        val cursorPath2 =
+            CursorMotionPath(points = listOf(CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 1f)))
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = aLayout,
+                newLayout = abLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(1, 2)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 100L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+            )
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // 第三笔：同一 VSync 0ms "ab" → "abc"
+        val offsetMap3 = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))
+        val cursorPath3 =
+            CursorMotionPath(points = listOf(CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)))
+        val patch3 =
+            makePatch(
+                id = 3L,
+                oldLayout = abLayout,
+                newLayout = abcLayout,
+                offsetMap = offsetMap3,
+                insertedUnits = listOf(TextRange(2, 3)),
+                cursorMotionPath = cursorPath3,
+                durationMs = 100L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+            )
+        timeline.applyPatch(
+            patch = patch3,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath3.points,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // 验证：insert unit 语义保留 — a/b/c 都有 insert unit
+        // 修复后：a 已开始（0<=0）；待显示=[b,c] 在 [0,100] 分段：b:0-50, c:50-100
+        val scene50 = timeline.sample(50L * NANOS_PER_MS)
+        val unitA = scene50.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB = scene50.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC = scene50.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        // a：要么已交还系统正文，要么 alpha > 0
+        if (unitA != null) {
+            assertTrue(
+                "同VSync多patch 50ms: unit a alpha 应 > 0，实际=${unitA.alpha.from}",
+                unitA.alpha.from > 0f,
+            )
+        }
+        // b：应存在且 alpha > 0（b:0-50，50ms 时刚完成或接近完成）
+        assertNotNull("同VSync多patch 50ms: unit b 应存在", unitB)
+        // c：应存在
+        assertNotNull("同Vsync多patch 50ms: unit c 应存在", unitC)
+
+        // 验证：cursor 只追最终 layout — cursor 不创建肉眼不可见的中间几何轨迹
+        // cursor 最终应到达 c 的 caret 位置（最终 layout 的 cursor rect）
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val cursor100 = scene100.cursorRect
+        assertNotNull("同VSync多patch 100ms: cursor rect 不应为 null", cursor100)
+        // 100ms 时 cursor 应已到达最终位置（c 的 caret，left≈30）
+        assertTrue(
+            "同VSync多patch 100ms: cursor 应到达最终位置 (left≈30)，实际=${cursor100!!.left}",
+            kotlin.math.abs(cursor100.left - 30f) < 5f,
+        )
     }
 
     // ==================== 辅助方法 ====================
