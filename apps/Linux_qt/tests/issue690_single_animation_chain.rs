@@ -170,16 +170,18 @@ fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
     let frame_start = src
         .find("pub(crate) struct RebaseFrame")
         .expect("步骤3: 必须存在 RebaseFrame");
-    let frame_def = &src[frame_start..frame_start + 900];
+    // Issue #690 评论 5679744253 问题 1: 截取长度加大以包含新字段 sampled_at /
+    // remaining_duration_ms（它们在结构体末尾，旧 900 字符不够）。
+    let frame_def = &src[frame_start..frame_start + 1100];
     for field in [
         "visible_fraction",
-        "started_at: Option<Instant>",
-        "duration_ms",
+        "sampled_at",
+        "remaining_duration_ms",
         "shaping_identity",
     ] {
         assert!(
             frame_def.contains(field),
-            "步骤3: RebaseFrame 必须携带 `{}`，只传 (x, y, opacity) 会被重启",
+            "步骤3: RebaseFrame 必须携带 `{}`，retarget 从当前帧重新起段",
             field
         );
     }
@@ -192,11 +194,12 @@ fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
         collect.contains("unit.current_visible_fraction(now)"),
         "步骤3: 可见比例按单元自己的时间线算，不用事务级 progress 一刀切"
     );
+    // Issue #690 评论 5679744253 问题 1: retarget 时 started_at 重置到当前帧，
+    // duration 用剩余时长，不沿用旧时间线。
     let rebase = method_body(&src, "pub fn rebase_from_frame(");
     assert!(
-        rebase.contains("self.started_at = Some(started_at)")
-            && rebase.contains("self.duration_ms"),
-        "步骤3: 交棒后沿用旧单元时间线，事务 key 换了也不归零"
+        rebase.contains("frame.sampled_at") && rebase.contains("frame.remaining_duration_ms"),
+        "步骤3: retarget 时 started_at 重置到当前帧，duration 用剩余时长，不沿用旧时间线"
     );
     assert!(
         src.contains("struct PreparedVisualUnit"),
@@ -219,8 +222,8 @@ fn issue690_blink_change_requests_frame_update() {
     let src = read_src("src/sujian_editor_item/editing.rs");
     let body = method_body(&src, "pub(crate) fn tick_cursor_animation(");
     assert!(
-        body.contains("still_animating || blink_changed"),
-        "步骤4: blink_changed 必须像 still_animating 一样触发更新，否则空正文光标停在不可见"
+        body.contains("blink_changed"),
+        "步骤4: blink_changed 必须触发更新，否则空正文光标停在不可见"
     );
     let blink_idx = body
         .find("let blink_changed")
@@ -230,11 +233,26 @@ fn issue690_blink_change_requests_frame_update() {
         after_blink.contains("self.request_frame_update()"),
         "步骤4: blink 切换后要显式请求 Scene Graph 重绘"
     );
-    assert!(
-        body.contains("self.last_frame_now"),
-        "步骤4: CursorOnly 链复用渲染帧的采样点，不新开时钟"
-    );
     println!("[BUGFIX_690_VERIFY] 步骤4 blink 触发重绘 (FIXED)");
+}
+
+#[test]
+fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
+    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
+    let body = method_body(&src, "fn update_paint_node(");
+    assert!(
+        body.contains("active_text_transaction_key"),
+        "步骤2: update_paint_node 必须判断是否有活跃正文事务"
+    );
+    assert!(
+        body.contains("cursor_timeline_sample_with_time"),
+        "步骤2: CursorOnly 位置由 frame_now 采样驱动，不再只靠 blink Timer"
+    );
+    assert!(
+        body.contains("CursorTimelineSample::Running"),
+        "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y"
+    );
+    println!("[BUGFIX_690_VERIFY] 步骤2 CursorOnly 帧驱动 (FIXED)");
 }
 
 #[test]

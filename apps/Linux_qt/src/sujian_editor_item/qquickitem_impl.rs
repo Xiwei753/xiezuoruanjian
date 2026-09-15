@@ -113,6 +113,38 @@ impl QQuickItem for SujianEditorItem {
             // 调用。不再把 cursor_ctrl.visual_x/y 同时当"当前值"和"目标值"传进去。
             // 直接从 GUI 侧已算好的 cursor_ctrl.visual_x/y/visual_h/visible 和
             // blink opacity 填进 RenderPlan 的 CursorRenderState。
+
+            // Issue #690 评论 5679744253 问题 2: CursorOnly 位置动画也由 Scene Graph
+            // 当前帧驱动，不再只靠 265ms blink Timer（~4Hz）。没有活跃正文事务时，
+            // 用 frame_now 采样并推进 cursor_ctrl.visual_x/y。
+            let has_active_text_tx = self
+                .pipeline
+                .animation_coordinator_mut()
+                .active_text_transaction_key()
+                .is_some();
+            if !has_active_text_tx {
+                let driver_key = self
+                    .cursor_ctrl
+                    .animation
+                    .as_ref()
+                    .map(|a| a.driver_key);
+                if let Some(driver_key) = driver_key {
+                    match self
+                        .pipeline
+                        .animation_coordinator_mut()
+                        .cursor_timeline_sample_with_time(driver_key, frame_now)
+                    {
+                        Some(animation_coordinator::CursorTimelineSample::Waiting) => {}
+                        Some(animation_coordinator::CursorTimelineSample::Running(p)) => {
+                            self.cursor_ctrl.update_animation_progress(p);
+                        }
+                        None => {
+                            self.cursor_ctrl.finish_animation_to_target();
+                        }
+                    }
+                }
+            }
+
             let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
                 && self
                     .pipeline

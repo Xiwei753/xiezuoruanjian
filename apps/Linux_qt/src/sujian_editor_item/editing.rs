@@ -1,5 +1,4 @@
 use super::*;
-use std::time::Instant;
 
 impl SujianEditorItem {
     pub(crate) fn current_cursor_rect_for_transaction(&self) -> Option<CursorRect> {
@@ -30,9 +29,9 @@ impl SujianEditorItem {
     /// 必须请求 item 更新，否则空正文光标闪烁切到不可见后，下一次切回可见未必触发
     /// Scene Graph 重绘，表现成"莫名其妙消失"。
     ///
-    /// 同时，正文编辑事务播放期间，光标位置由 `build_render_plan_full()` 从同一
-    /// `frame_now` 计算（跟随文字吞吐边界），不再依赖 GUI 线程 FrameAnimation tick
-    /// 提前采样 cursor_ctrl.visual_x/y。
+    /// Issue #690 评论 5679744253 问题 2: CursorOnly 位置动画已由 `update_paint_node`
+    /// 的 `frame_now` 驱动，本函数只负责 blink。QML 265ms Timer 不再推进位置，
+    /// 避免 CursorOnly 被低频 blink Timer 降成 ~4Hz。
     pub(crate) fn tick_cursor_animation(&mut self) {
         use animation_coordinator::CursorBlinkMode;
         let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
@@ -45,38 +44,11 @@ impl SujianEditorItem {
         } else {
             CursorBlinkMode::Normal
         };
-
-        let mut still_animating = false;
-        if let Some(ref anim) = self.cursor_ctrl.animation {
-            let driver_key = anim.driver_key;
-            // Issue #690: 使用 render thread 上次采样的 frame_now，
-            // 不再各自 Instant::now()，确保光标和文字 progress 来自同一帧。
-            let frame_now = self.last_frame_now.unwrap_or_else(Instant::now);
-            match self
-                .pipeline
-                .animation_coordinator_mut()
-                .cursor_timeline_sample_with_time(driver_key, frame_now)
-            {
-                Some(animation_coordinator::CursorTimelineSample::Waiting) => {
-                    still_animating = true;
-                }
-                Some(animation_coordinator::CursorTimelineSample::Running(p)) => {
-                    still_animating = self.cursor_ctrl.update_animation_progress(p);
-                }
-                None => {
-                    still_animating = self.cursor_ctrl.finish_animation_to_target();
-                }
-            }
-        }
-
+        // Issue #690 评论 5679744253 问题 2: CursorOnly 位置动画已由 update_paint_node 的
+        // frame_now 驱动，本函数只负责 blink。QML 265ms Timer 不再推进位置。
         let blink_changed = self.cursor_ctrl.tick_blink(blink_mode);
-        // Issue #690 评论 5675007226 步骤 4: blink_changed 也必须请求 item 更新。
-        // 修复空正文光标闪烁消失：正文删空后没有文字动画帮忙刷帧，
-        // 光标某次闪烁切到不可见后，下一次切回可见未必触发 Scene Graph 重绘。
-        if still_animating || blink_changed {
+        if blink_changed {
             self.cursor_rect_changed();
-        }
-        if still_animating || blink_changed {
             self.request_frame_update();
         }
     }

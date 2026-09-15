@@ -2173,6 +2173,22 @@ impl LinuxEditorAnimationCoordinator {
         let op = tx.operation_kind;
         let frame_now = sample.frame_now;
 
+        // Issue #690 评论 5679744253 问题 3: 找到 reflow unit 的 progress，不再回退到
+        // 事务级 progress。reflow unit 有自己的时间线，rebase/retarget 后事务 progress
+        // 和 unit progress 可能不同。没有 reflow unit 时（事务已完成或纯 cursor move），
+        // 光标应在 new_rect，返回 1.0。
+        let reflow_progress = || -> f64 {
+            for unit in &tx.units {
+                match unit.slice.kind {
+                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                        return unit.progress(frame_now);
+                    }
+                    _ => {}
+                }
+            }
+            1.0
+        };
+
         match op {
             TextVisualOperationKind::Insert => {
                 let mut rightmost_x: Option<f64> = None;
@@ -2194,7 +2210,7 @@ impl LinuxEditorAnimationCoordinator {
                 match rightmost_x {
                     Some(x) => Some((x, cursor_y, h)),
                     None => {
-                        let progress = sample.progress(key);
+                        let progress = reflow_progress();
                         let eased = AnimatedSlice::ease_out_quad(progress);
                         let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
                         let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
@@ -2236,7 +2252,7 @@ impl LinuxEditorAnimationCoordinator {
                     Some((new_rect.x, new_rect.top, h))
                 } else {
                     // 没有可直接当边界的 glyph（跨行 reflow 等）：与 ReflowMove 同一条 easing。
-                    let progress = sample.progress(key);
+                    let progress = reflow_progress();
                     let eased = AnimatedSlice::ease_out_quad(progress);
                     let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
                     let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
@@ -2244,7 +2260,7 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
             _ => {
-                let progress = sample.progress(key);
+                let progress = reflow_progress();
                 let eased = AnimatedSlice::ease_out_quad(progress);
                 let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
                 let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
@@ -2320,8 +2336,8 @@ mod tests {
             opacity,
             shaping_identity,
             visible_fraction,
-            started_at: None,
-            duration_ms: 0,
+            sampled_at: Instant::now(),
+            remaining_duration_ms: 0,
         }
     }
 
@@ -3854,8 +3870,10 @@ mod tests {
         );
         assert_eq!((frame.byte_start, frame.byte_end), (0, 3));
         assert!((frame.x - 100.0).abs() < 1e-6);
-        assert_eq!(frame.duration_ms, 100);
-        assert_eq!(frame.started_at, Some(now - Duration::from_millis(50)));
+        // Issue #690 评论 5679744253 问题 1: 采集时计算剩余时长，不再沿用旧起始时间。
+        // 旧单元演了 50ms，总时长 100ms，剩余 50ms。
+        assert_eq!(frame.remaining_duration_ms, 50);
+        assert_eq!(frame.sampled_at, now);
         // 采集到的比例必须与文字帧同一个几何结果（右边界 100 + 60*0.75 = 145）
         let edge = reveal_slice(0, 3, 100.0, 60.0).compute_frame(frame.visible_fraction);
         assert!(
@@ -3871,6 +3889,9 @@ mod tests {
         let old_unit = elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now);
         let visible_fraction = old_unit.current_visible_fraction(now);
         let frame = old_unit.slice.compute_frame(visible_fraction);
+        // Issue #690 评论 5679744253 问题 1: RebaseFrame 携带 sampled_at 和
+        // remaining_duration_ms，retarget 时从当前帧重新起段。
+        // 旧单元演了 50ms，总时长 100ms，剩余 50ms。
         let frames = vec![RebaseFrame {
             byte_start: old_unit.slice.byte_start,
             byte_end: old_unit.slice.byte_end,
@@ -3879,8 +3900,8 @@ mod tests {
             opacity: frame.opacity,
             shaping_identity: None,
             visible_fraction,
-            started_at: old_unit.started_at,
-            duration_ms: old_unit.duration_ms,
+            sampled_at: now,
+            remaining_duration_ms: 50,
         }];
 
         let mut units = wrap_units(vec![reveal_slice(0, 3, 100.0, 60.0)]);
@@ -3899,20 +3920,22 @@ mod tests {
             unit.start_fraction
         );
         assert_eq!(
-            unit.duration_ms, 100,
-            "单元时长沿用旧单元，不被新事务 wrap 的默认时长覆盖"
+            unit.duration_ms, 50,
+            "单元时长用剩余时长，不被新事务 wrap 的默认时长覆盖"
         );
+        // Issue #690 评论 5679744253 问题 1: retarget 时从当前帧重新起段，
+        // started_at 重置到 sampled_at（now），progress 从 0 开始。
         let progress = unit.progress(now);
         assert!(
-            (progress - 0.5).abs() < 1e-6,
-            "事务 key 换了也不能把生命周期归零重播，got {}",
+            progress.abs() < 1e-9,
+            "retarget 时从当前帧重新起段，progress 从 0 开始，got {}",
             progress
         );
-        // 继续播放：0.75 → 1.0 的窗口，而不是重新 0 → 1
+        // 可见比例连续：start_fraction=0.75 + (1-0.75)*ease_out_quad(0) = 0.75
         let visible = unit.current_visible_fraction(now);
         assert!(
-            (visible - 0.9375).abs() < 1e-6,
-            "续播后的可见比例 = 0.75 + 0.25*ease_out_quad(0.5)，got {}",
+            (visible - 0.75).abs() < 1e-6,
+            "retarget 后可见比例应连续（0.75），不重复吃进度，got {}",
             visible
         );
     }
@@ -4309,15 +4332,17 @@ mod tests {
             now,
             true,
         );
-        // 事务 progress 0.1 → ease_out_quad = 0.19 → x = 100 + 100*0.19
+        // Issue #690 评论 5679744253 问题 3: 无边界 glyph 时用 reflow unit 自己的
+        // progress，不再回退到事务级 progress。reflow unit 演了 50/100ms → progress 0.5
+        // → ease_out_quad = 0.75 → x = 100 + 100*0.75 = 175
         assert!(
-            (plan.cursor.x - 119.0).abs() < 1e-6,
-            "无边界 glyph 时用与 ReflowMove 相同的二次 easing 插值，got {}",
+            (plan.cursor.x - 175.0).abs() < 1e-6,
+            "无边界 glyph 时用 reflow unit 自己的 progress 插值，got {}",
             plan.cursor.x
         );
         assert!(
-            (plan.cursor.y - 7.6).abs() < 1e-6,
-            "y 同一条曲线，got {}",
+            (plan.cursor.y - 30.0).abs() < 1e-6,
+            "y 同一条曲线（0 + 40*0.75 = 30），got {}",
             plan.cursor.y
         );
         assert!(

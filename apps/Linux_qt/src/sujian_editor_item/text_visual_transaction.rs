@@ -195,22 +195,35 @@ impl PreparedVisualUnit {
     /// Issue #690 评论 5675007226 步骤 3: 可见比例成为新单元的起点，时间线沿用旧单元的
     /// `started_at` / `duration_ms`——事务 key 换了也不归零，否则上一笔吐到 60% 的字
     /// 会被重新从 0 吐一遍。
+    ///
+    /// Issue #690 评论 5679744253 问题 1: 原实现同时继承 `start_fraction`（已走过的可见
+    /// 比例）和 `started_at`/`duration_ms`（已走过的时间线），下一帧 progress 用旧时间线
+    /// 算，再从 `start_fraction` 到 target 做 easing，进度被重复应用。现在改为从当前帧
+    /// 重新起一段：`start_fraction` 已是当前可见比例，时间线从 `sampled_at` 开始，
+    /// `duration_ms` 用剩余时长，不再沿用旧起始时间。
     pub fn rebase_from_frame(&mut self, frame: &RebaseFrame) {
         self.slice
             .rebase_from(frame.x, frame.y, frame.opacity, frame.visible_fraction);
         self.start_fraction = self.slice.start_fraction;
-        if let (Some(started_at), true) = (frame.started_at, frame.duration_ms > 0) {
-            self.started_at = Some(started_at);
-            self.duration_ms = frame.duration_ms;
-        }
+        // 从当前帧重新起一段：start_fraction 已是当前可见比例，
+        // 时间线从 sampled_at 开始，duration 用剩余时长，不再沿用旧起始时间。
+        self.started_at = Some(frame.sampled_at);
+        self.duration_ms = frame.remaining_duration_ms.max(1);
     }
 }
 
 /// 旧事务某个视觉单元在当前时刻的视觉帧，交棒给新事务继续播放。
 ///
 /// Issue #690 评论 5675007226 步骤 3: 除了位置与透明度，必须带当前 `visible_fraction`
-/// 和单元自己的时间线（`started_at` / `duration_ms`）。只传 `(x, y, opacity)` 时
-/// Reveal/Conceal 会按新事务 progress 重新 0→1 / 1→0，快速连打时上一笔的字被反复重启。
+/// 和单元自己的时间线。只传 `(x, y, opacity)` 时 Reveal/Conceal 会按新事务 progress
+/// 重新 0→1 / 1→0，快速连打时上一笔的字被反复重启。
+///
+/// Issue #690 评论 5679744253 问题 1: 原来同时携带 `started_at`（旧起点）和 `duration_ms`
+/// （旧总时长），下一帧 `current_visible_fraction()` 用旧时间线算 progress，再从
+/// `start_fraction` 到 target 做 easing，进度被重复应用，快速连打时制造跳变。
+/// 现在改为携带 `sampled_at`（采集帧时间点）和 `remaining_duration_ms`（旧 unit 剩余
+/// 播放时长），retarget 时从当前帧重新起一段：`started_at = sampled_at`，
+/// `duration_ms = remaining_duration_ms`，不再沿用旧起始时间。
 #[derive(Clone, Debug)]
 pub(crate) struct RebaseFrame {
     pub byte_start: usize,
@@ -220,8 +233,10 @@ pub(crate) struct RebaseFrame {
     pub opacity: f64,
     pub shaping_identity: Option<ShapingIdentity>,
     pub visible_fraction: f64,
-    pub started_at: Option<Instant>,
-    pub duration_ms: u64,
+    /// 采集本帧的时间点；retarget 后作为新单元的 `started_at`。
+    pub sampled_at: Instant,
+    /// 旧单元剩余的播放时长；retarget 后作为新单元的 `duration_ms`。
+    pub remaining_duration_ms: u64,
 }
 
 /// 一次平台视觉事务持有的全部资源。
@@ -280,6 +295,9 @@ impl PreparedTextVisualTransaction {
     /// Issue #690 评论 5675007226 步骤 3: 逐单元用自己的 `progress`，不再用事务级
     /// timeline progress 一刀切——后者会把"已经吐到 60%"的单元算成事务的 30%，
     /// 交棒后视觉上仍会跳回一半。已播完（progress >= 1）的单元已是稳定终态，不采集。
+    ///
+    /// Issue #690 评论 5679744253 问题 1: 采集时计算剩余时长，retarget 时从当前帧
+    /// 重新起一段，避免同时继承可见比例和已走过的时间线导致进度被重复应用。
     pub fn collect_rebase_frames(&self, now: Instant) -> Vec<RebaseFrame> {
         self.units
             .iter()
@@ -287,6 +305,12 @@ impl PreparedTextVisualTransaction {
             .map(|unit| {
                 let visible_fraction = unit.current_visible_fraction(now);
                 let frame = unit.slice.compute_frame(visible_fraction);
+                // 旧单元剩余的播放时长：duration - elapsed，下溢保护为 0。
+                let elapsed_ms = match unit.started_at {
+                    Some(start) => now.duration_since(start).as_millis() as u64,
+                    None => 0,
+                };
+                let remaining_duration_ms = unit.duration_ms.saturating_sub(elapsed_ms);
                 RebaseFrame {
                     byte_start: unit.slice.byte_start,
                     byte_end: unit.slice.byte_end,
@@ -295,8 +319,8 @@ impl PreparedTextVisualTransaction {
                     opacity: frame.opacity,
                     shaping_identity: unit.slice.shaping_identity.clone(),
                     visible_fraction,
-                    started_at: unit.started_at,
-                    duration_ms: unit.duration_ms,
+                    sampled_at: now,
+                    remaining_duration_ms,
                 }
             })
             .collect()
