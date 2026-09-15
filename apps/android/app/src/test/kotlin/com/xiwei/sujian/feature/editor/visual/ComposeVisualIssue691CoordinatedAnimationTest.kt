@@ -34,7 +34,7 @@ import uniffi.writer_core.AnimationModeDto
  * 7. 无文字时 smooth cursor 仍必须保持可见
  * 8. 任意设置组合都不能改变真实正文、selection、composition、IME 和 TextField 权威布局
  */
-@Suppress("StringLiteralDuplication", "MaxLineLength")
+@Suppress("StringLiteralDuplication", "MaxLineLength", "LongMethod")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualIssue691CoordinatedAnimationTest {
@@ -1223,6 +1223,306 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             "150ms: cursor y 应在第 1 行 (≈20)，经过中间 point，实际=$cursorY。" +
                 "直线插值到最终位置的中点 y=10，不应是中点。",
             kotlin.math.abs(cursorY - 20f) < 3f,
+        )
+    }
+
+    /**
+     * #691 评论 5679815971 问题2：一次提交 3 个 unit，文字与 cursor 真正协同。
+     *
+     * 一次提交 "abc"（3 个 insertedUnits），总时长 300ms，cursor path 有 3 个 point
+     * （endFraction = 1/3, 2/3, 1.0）。
+     *
+     * 在 100ms(1/3) 时：
+     * - 第一个 unit (a) 的 alpha 应已完成（≈1）或已交还系统正文（从 timeline 移除）
+     * - 第二个 unit (b) 的 alpha 应刚开始（≈0 或很小）
+     * - 第三个 unit (c) 的 alpha 应为 0（尚未开始）
+     * - cursor 同时到达第一个 point
+     *
+     * 在 200ms(2/3) 时：
+     * - 第一、二个 unit 已完成或交还系统正文
+     * - 第三个 unit 刚开始
+     * - cursor 到达第二个 point
+     */
+    @Test
+    fun multiCharInsert_textAndCursorTrulyCoordinated_atThirds() {
+        val layouts = captureLayouts("", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 3 个 point 在不同水平位置
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 100ms (1/3) 采样 ===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+
+        // cursor 应接近 point0
+        val cursor100 = scene100.cursorRect
+        assertNotNull("100ms: cursor rect 不应为 null", cursor100)
+        assertTrue(
+            "100ms: cursor 应接近 point0 (left≈${point0.rect.left})，实际=${cursor100!!.left}",
+            kotlin.math.abs(cursor100.left - point0.rect.left) < 1f,
+        )
+
+        // 文字协同断言：
+        // 第一个 unit (a, range 0-1)：startedAt=0, duration=100ms，在 100ms 时 alpha 应已完成（≈1）
+        //   → sample 后可能已从 timeline 移除（交还系统正文），或 alpha.from ≈ 1
+        // 第二个 unit (b, range 1-2)：startedAt=100ms, duration=100ms，在 100ms 时刚开始（alpha ≈ 0）
+        // 第三个 unit (c, range 2-3)：startedAt=200ms, duration=100ms，在 100ms 时尚未开始（alpha = 0）
+        val unitA100 = scene100.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+
+        // unit a：要么已交还系统正文（unitA100 == null），要么 alpha ≈ 1
+        if (unitA100 != null) {
+            assertTrue(
+                "100ms: unit a alpha 应已完成（≈1），实际=${unitA100.alpha.from}",
+                unitA100.alpha.from > 0.9f,
+            )
+        }
+        // unit b：应存在且 alpha 刚开始（≈0）
+        assertNotNull("100ms: unit b 应存在（刚开始动画）", unitB100)
+        assertTrue(
+            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        // unit c：应存在且 alpha = 0（尚未开始）
+        assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
+        assertTrue(
+            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+
+        // === 200ms (2/3) 采样 ===
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+
+        // cursor 应接近 point1
+        val cursor200 = scene200.cursorRect
+        assertNotNull("200ms: cursor rect 不应为 null", cursor200)
+        assertTrue(
+            "200ms: cursor 应接近 point1 (left≈${point1.rect.left})，实际=${cursor200!!.left}",
+            kotlin.math.abs(cursor200.left - point1.rect.left) < 1f,
+        )
+
+        // unit a：已交还系统正文（unitA200 == null）或 alpha ≈ 1
+        val unitA200 = scene200.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        if (unitA200 != null) {
+            assertTrue(
+                "200ms: unit a alpha 应已完成（≈1），实际=${unitA200.alpha.from}",
+                unitA200.alpha.from > 0.9f,
+            )
+        }
+        // unit b：要么已交还系统正文，要么 alpha ≈ 1
+        val unitB200 = scene200.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        if (unitB200 != null) {
+            assertTrue(
+                "200ms: unit b alpha 应已完成（≈1），实际=${unitB200.alpha.from}",
+                unitB200.alpha.from > 0.9f,
+            )
+        }
+        // unit c：应存在且 alpha 刚开始（≈0）
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull("200ms: unit c 应存在（刚开始动画）", unitC200)
+        assertTrue(
+            "200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+    }
+
+    /**
+     * #691 评论 5679815971 问题2：跨行多字符提交，文字与 cursor 同时断言。
+     *
+     * 跨行多字符提交：cursor fromRect 在第 0 行，3 个 point 分别在第 0 行末、第 1 行首、第 1 行中。
+     * duration=300ms。在 100ms(1/3) 和 200ms(2/3) 时同时断言文字 alpha 分段和 cursor 位置。
+     */
+    @Test
+    fun multiCharInsert_acrossLines_textAndCursorCoordinated() {
+        val layouts = captureLayouts("", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 跨行：fromRect 在第 0 行 (y=0)，point0 在第 0 行末 (y=0)，
+        // point1 在第 1 行首 (y=20)，point2 在第 1 行中 (y=20)
+        val point0 = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(0f, 20f, 2f, 34f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(20f, 20f, 22f, 34f), endFraction = 1f)
+        val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 100ms (1/3) 采样 ===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+
+        // cursor 应在第 0 行末（接近 point0），y ≈ 0
+        val cursor100 = scene100.cursorRect
+        assertNotNull("跨行 100ms: cursor rect 不应为 null", cursor100)
+        assertTrue(
+            "跨行 100ms: cursor 应在第 0 行末 (y≈0)，实际 y=${cursor100!!.top}",
+            kotlin.math.abs(cursor100.top - 0f) < 3f,
+        )
+        assertTrue(
+            "跨行 100ms: cursor 应接近 point0 (left≈${point0.rect.left})，实际=${cursor100.left}",
+            kotlin.math.abs(cursor100.left - point0.rect.left) < 1f,
+        )
+
+        // 文字断言：unit a 已完成或交还，unit b 刚开始，unit c 尚未开始
+        val unitA100 = scene100.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        if (unitA100 != null) {
+            assertTrue(
+                "跨行 100ms: unit a alpha 应已完成（≈1），实际=${unitA100.alpha.from}",
+                unitA100.alpha.from > 0.9f,
+            )
+        }
+        assertNotNull("跨行 100ms: unit b 应存在", unitB100)
+        assertTrue(
+            "跨行 100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        assertNotNull("跨行 100ms: unit c 应存在", unitC100)
+        assertTrue(
+            "跨行 100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+
+        // === 200ms (2/3) 采样 ===
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+
+        // cursor 应在第 1 行首（接近 point1），y ≈ 20
+        val cursor200 = scene200.cursorRect
+        assertNotNull("跨行 200ms: cursor rect 不应为 null", cursor200)
+        assertTrue(
+            "跨行 200ms: cursor 应在第 1 行首 (y≈20)，实际 y=${cursor200!!.top}",
+            kotlin.math.abs(cursor200.top - 20f) < 3f,
+        )
+        assertTrue(
+            "跨行 200ms: cursor 应接近 point1 (left≈${point1.rect.left})，实际=${cursor200.left}",
+            kotlin.math.abs(cursor200.left - point1.rect.left) < 1f,
+        )
+
+        // 文字断言：unit a、b 已完成或交还，unit c 刚开始
+        val unitA200 = scene200.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB200 = scene200.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        if (unitA200 != null) {
+            assertTrue(
+                "跨行 200ms: unit a alpha 应已完成（≈1），实际=${unitA200.alpha.from}",
+                unitA200.alpha.from > 0.9f,
+            )
+        }
+        if (unitB200 != null) {
+            assertTrue(
+                "跨行 200ms: unit b alpha 应已完成（≈1），实际=${unitB200.alpha.from}",
+                unitB200.alpha.from > 0.9f,
+            )
+        }
+        assertNotNull("跨行 200ms: unit c 应存在", unitC200)
+        assertTrue(
+            "跨行 200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+    }
+
+    /**
+     * #691 评论 5679815971 问题1：applyMotionPolicyAtFrame 一次性同步所有 UI 状态。
+     *
+     * 验证调用 applyMotionPolicyAtFrame 后：
+     * - drawsVisualCursor 跟随 effective.cursorEnabled
+     * - hiddenRanges 被清空
+     * - visualScene 被重置为 Empty
+     */
+    @Test
+    fun applyMotionPolicyAtFrame_syncsAllUiStates() {
+        val state = ComposeEditorVisualState(targetId = "test-policy-sync", initialDrawsVisualCursor = true)
+
+        // 先建立一些状态
+        val layouts = captureLayouts("", "a")
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+        state.onVisualIntent(
+            makeInsertIntent(1L, 0L, 1L, "", "a", TextRange(0, 1)),
+            EditorMotionPolicy(textEnabled = true, cursorEnabled = true, textDurationMillis = 100L),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        state.sampleVisualScene(0L)
+
+        // 切换 policy：cursorEnabled=false
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = true, cursorEnabled = false))
+
+        // drawsVisualCursor 应跟随 effective.cursorEnabled = false
+        assertFalse(
+            "applyMotionPolicyAtFrame 后 drawsVisualCursor 应为 false",
+            state.drawsVisualCursor.value,
+        )
+        // hiddenRanges 应被清空
+        assertTrue(
+            "applyMotionPolicyAtFrame 后 hiddenRanges 应为空",
+            state.hiddenRanges.value.isEmpty(),
+        )
+        // visualScene 应被重置为 Empty
+        assertEquals(
+            "applyMotionPolicyAtFrame 后 visualScene 应为 Empty",
+            ComposeVisualScene.Empty,
+            state.visualScene.value,
+        )
+
+        // 再切换：cursorEnabled=true
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = true, cursorEnabled = true))
+        assertTrue(
+            "切回 cursorEnabled=true 后 drawsVisualCursor 应为 true",
+            state.drawsVisualCursor.value,
+        )
+
+        // reduceMotion=true 时 effective.cursorEnabled=false
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(reduceMotion = true))
+        assertFalse(
+            "reduceMotion=true 后 drawsVisualCursor 应为 false",
+            state.drawsVisualCursor.value,
         )
     }
 

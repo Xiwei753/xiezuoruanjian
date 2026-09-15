@@ -381,6 +381,13 @@ class ComposeEditorVisualState(
         currentMotionPolicy = effective
         // 清掉旧 text units / ghost / cursorChannel
         visualTimeline.settleForPolicyChange()
+        // #691 评论 5679815971 问题1：一次性同步所有 UI 状态，
+        // 不要让 setSmoothCursorEnabled() 和 motion policy 走两套生命周期。
+        // smooth cursor 所有权跟随 policy.cursorEnabled；
+        // 已发布给 Compose 的旧 visualScene/hiddenRanges 清空，直到下一次 sampleVisualScene() 重建。
+        _drawsVisualCursor.update { effective.cursorEnabled }
+        _hiddenRanges.update { emptyList() }
+        _visualScene.update { ComposeVisualScene.Empty }
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
         if (pendingPatches.isNotEmpty()) {
             val updated = mutableListOf<ComposeVisualPatch>()

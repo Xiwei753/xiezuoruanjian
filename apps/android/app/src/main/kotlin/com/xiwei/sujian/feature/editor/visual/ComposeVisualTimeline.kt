@@ -236,17 +236,27 @@ class ComposeVisualTimeline {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
         val inserted = mutableListOf<VisualTextUnit>()
-        for (range in patch.insertedUnits) {
-            if (range.start >= range.end) continue
-            if (range.end > newTextLength) continue
+        // #691 评论 5679815971 问题2：一次 patch 有 N 个 insertedUnits 时，
+        // 把总时长按 unit 顺序分段，而不是所有 unit 同时从 0ms 跑满总时长。
+        // 第 i 个 unit：startFraction = i/N, endFraction = (i+1)/N,
+        // startedAt = frameTime + totalDuration * startFraction,
+        // duration = totalDuration * (endFraction - startFraction).
+        // 这样 cursor 的 CursorMotionPoint.endFraction 才和对应文字真正是同一进度语义。
+        val validRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
+        val n = validRanges.size
+        for ((i, range) in validRanges.withIndex()) {
             val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
+            val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
+            val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
+            val unitStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
+            val unitDuration = (durationNanos * (endFraction - startFraction)).toLong()
             inserted.add(
                 VisualTextUnit(
                     key = nextUnitKey++,
                     layout = newLayout,
                     range = range,
                     targetRange = range,
-                    alpha = TimedFloat(0f, 1f, frameTimeNanos, durationNanos),
+                    alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                     position = TimedOffset(position, position, frameTimeNanos, 0L),
                 ),
             )
