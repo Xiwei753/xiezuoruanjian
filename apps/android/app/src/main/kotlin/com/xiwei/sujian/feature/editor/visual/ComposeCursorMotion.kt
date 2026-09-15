@@ -9,7 +9,8 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * 把"光标路径"从单纯 start/end 两点升级成和文字 unit 对应的路径。
  *
  * 路径描述"这一笔应该经过哪里"，但不描述"现在屏幕光标在哪里"。
- * 当前屏幕位置由 overlay 内长生命周期的 [androidx.compose.animation.core.Animatable] 自己持有。
+ * 当前屏幕位置由 [ComposeVisualTimeline] 的 cursorChannel 持有，与文字 units 共享同一个
+ * frame clock / VisualScene，不再由独立的 [androidx.compose.animation.core.Animatable] 维护。
  *
  * - 单字符输入/删除：就是一个目标点。
  * - 一次提交多个插入 unit：按 [newAnimationUnits] 顺序，每个字/cluster 出现后光标应到的位置组成路径，

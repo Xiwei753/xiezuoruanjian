@@ -1,17 +1,9 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.AnimationVector4D
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.VectorConverter
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -30,7 +22,6 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
@@ -38,34 +29,26 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  *
  * #689 评论 5674631257 步骤8：把视觉动画从"事务重启"改成"持续时间线"。
  *
- * 删除：
- * - 全局 `masterProgress = remember { Animatable(0f) }`
- * - `LaunchedEffect(transactionId) { masterProgress.snapTo(0f); masterProgress.animateTo(1f, ...) }`
- * - textProgressValue / rebaseProgressValue
- * - reportProgress() / finishTransaction()
- * - drawStartFrameLayer()
- * - drawUnitWiseAppear()/drawUnitWiseDisappear() 对全局 progress 的依赖
- * - drawRetainedMoves(... progress)
+ * #691：把光标 position 也并入同一持续视觉时间线。
  *
- * 改成只在 timeline 有活动 unit 时用 Compose 的帧时钟推进：
- * ```kotlin
- * LaunchedEffect(patchVersion) {
- *     while (visualState.hasActiveVisuals()) {
- *         withFrameNanos { frameTimeNanos -> visualState.advanceVisualFrame(frameTimeNanos) }
- *     }
- * }
- * ```
+ * 删除：
+ * - 独立的 `Animatable<Rect, AnimationVector4D>` 光标位置
+ * - `LaunchedEffect(patchVersion)` 驱动的独立 cursor path 动画
+ * - `animateCursorPath()` 作为独立位置时间线
+ * - `computeRestingCursorRect()` — 静止光标由 visualState.restingCursorRect 提供
+ *
+ * 改成：
+ * - 光标位置从 [ComposeVisualScene.cursorRect] 读取 — 与文字 units 共享同一个 frame clock
+ * - 无光标动画时从 visualState.restingCursorRect 读取最终真实位置
+ * - 光标闪烁（alpha）在 draw 阶段独立计算，不改变几何位置
  *
  * 绘制直接读 [ComposeVisualScene.units]。每个 unit 的 alpha、屏幕位置已经由 timeline
  * 按这个 frameTimeNanos 算好，draw 阶段不再二次插值。
  *
- * 光标保留跨 patch 的 `Animatable<Rect>` 思路（已做到新目标到来时从当前 value 继续）；
- * 触发条件从 `transactionId` 换成 patch/cursor target 的版本号。
- *
  * @param cursorColor 视觉光标颜色 — 从主题 role 注入。
  */
 @Composable
-@Suppress("LongParameterList", "LongMethod", "CyclomaticComplexity", "CognitiveComplexMethod")
+@Suppress("LongParameterList")
 fun ComposeTextAnimationOverlay(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
@@ -81,43 +64,15 @@ fun ComposeTextAnimationOverlay(
     val density = LocalDensity.current
 
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
-    val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
-    val latestPatch by visualState.latestPatch.collectAsStateWithLifecycle()
     val visualScene by visualState.visualScene.collectAsStateWithLifecycle()
+    val restingCursorRect by visualState.restingCursorRect.collectAsStateWithLifecycle()
 
     val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
-    val hasCursorMotionPath = latestPatch?.cursorMotionPath != null
-
-    // #684 评论 5672654866：光标的位置改成一个跨 patch 保持的 Animatable<Rect, AnimationVector4D>。
-    // 新 patch 取消旧 LaunchedEffect 后，同一个 Animatable 仍然保留刚才屏幕实际画到的 rect；
-    // 下一次 animateTo() 从这个真实 rect 出发。
-    // 第一次 attach、章节切换或当前还没有任何视觉光标位置时，才允许 snapTo(restingRect)。
-    // patch 切换时禁止 snapTo(path.first())，直接从 cursorRect.value 继续。
-    var cursorInitialized by remember { mutableStateOf(false) }
-    val cursorRect =
-        remember {
-            Animatable(Rect.Zero, Rect.VectorConverter)
-        }
-    val restingRect = computeRestingCursorRect(latestLayout, liveSelection)
-    val hasCursorAnimation = latestPatch != null && hasCursorMotionPath
-    LaunchedEffect(drawsVisualCursor, hasCursorAnimation, restingRect) {
-        if (drawsVisualCursor && !hasCursorAnimation && restingRect != null) {
-            cursorRect.snapTo(restingRect)
-            cursorInitialized = true
-        }
-    }
-    LaunchedEffect(drawsVisualCursor, latestLayout) {
-        if (!drawsVisualCursor || latestLayout == null) {
-            cursorInitialized = false
-        }
-    }
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
     // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
-    // 这样即使 LaunchedEffect 因 key 变化重启，patch 数据仍在队列里不会丢。
-    // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos，
-    // 不用 System.nanoTime()（Compose 官方明确 withFrameNanos 的 frameTimeNanos
-    // time base 是 implementation-defined，不保证等于 System.nanoTime()）。
+    // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos。
+    // #691：cursor 动画也并入 timeline，不再需要第二个 LaunchedEffect。
     LaunchedEffect(patchVersion) {
         if (patchVersion <= 0L) return@LaunchedEffect
         while (true) {
@@ -129,23 +84,6 @@ fun ComposeTextAnimationOverlay(
                 }
             if (!active) break
         }
-    }
-
-    // #684 评论 5672654866：光标动画 — 按 cursorMotionPath 分段 animateTo。
-    // #689 评论 5676120929 问题1：用 patchVersion 与帧循环同步。
-    LaunchedEffect(patchVersion) {
-        if (patchVersion <= 0L) return@LaunchedEffect
-        val path = latestPatch?.cursorMotionPath ?: return@LaunchedEffect
-        val durationMs = latestPatch?.durationMs ?: 0L
-        if (durationMs <= 0L) {
-            path.points.lastOrNull()?.let { cursorRect.snapTo(it.rect) }
-            return@LaunchedEffect
-        }
-        animateCursorPath(
-            cursor = cursorRect,
-            path = path,
-            durationMs = durationMs,
-        )
     }
 
     Box(
@@ -165,15 +103,20 @@ fun ComposeTextAnimationOverlay(
                     }
 
                     // 2. 光标：smooth cursor 开启时 overlay 整个会话拥有光标。
-                    //    动画进行中 cursorRect.value 是 animateCursorPath 当前画到的 rect；
-                    //    无光标动画时 cursorRect.value 是上次 snapTo 的 resting rect。
+                    //    #691：光标位置从 scene.cursorRect（timeline 统一采样）读取，
+                    //    或从 restingCursorRect（无动画时的最终真实位置）读取。
+                    //    不再使用独立的 Animatable<Rect>。
                     if (drawsVisualCursor) {
-                        drawVisualCursorRect(
-                            rect = cursorRect.value,
-                            scrollY = scrollY,
-                            density = density,
-                            cursorColor = cursorColor,
-                        )
+                        val cursorRectValue =
+                            scene.cursorRect ?: restingCursorRect
+                        if (cursorRectValue != null) {
+                            drawVisualCursorRect(
+                                rect = cursorRectValue,
+                                scrollY = scrollY,
+                                density = density,
+                                cursorColor = cursorColor,
+                            )
+                        }
                     }
                 },
     )
@@ -239,7 +182,9 @@ private fun DrawScope.drawVisualScene(
 private val VisualCursorWidthDp: Dp = 2.dp
 
 /**
- * #684 评论 5672654866：视觉光标绘制 — 接收单个 [rect]，不再在 draw 阶段第二次插值。
+ * #684 评论 5672654866 + #691：视觉光标绘制 —
+ * 接收单个 [rect]，不再在 draw 阶段第二次插值。
+ * 光标位置由 timeline 统一采样，不再使用独立的 Animatable。
  */
 private fun DrawScope.drawVisualCursorRect(
     rect: Rect,
@@ -262,58 +207,6 @@ private fun DrawScope.drawVisualCursorRect(
         topLeft = Offset(cursorLeft, cursorTop),
         size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
     )
-}
-
-/**
- * #684 评论 5672654866：按 [CursorMotionPath] 分段 animateTo。
- */
-suspend fun animateCursorPath(
-    cursor: Animatable<Rect, AnimationVector4D>,
-    path: CursorMotionPath,
-    durationMs: Long,
-) {
-    val points = path.points
-    if (points.isEmpty()) return
-    val totalMs = durationMs.toInt().coerceAtLeast(0)
-    if (points.size == 1) {
-        cursor.animateTo(
-            targetValue = points[0].rect,
-            animationSpec = tween(durationMillis = totalMs, easing = LinearEasing),
-        )
-        return
-    }
-    var prevFraction = 0f
-    for (point in points) {
-        val segmentFraction = (point.endFraction - prevFraction).coerceIn(0f, 1f)
-        val segmentMs = (totalMs * segmentFraction).toInt().coerceAtLeast(0)
-        if (segmentMs > 0) {
-            cursor.animateTo(
-                targetValue = point.rect,
-                animationSpec = tween(durationMillis = segmentMs, easing = LinearEasing),
-            )
-        } else {
-            cursor.snapTo(point.rect)
-        }
-        prevFraction = point.endFraction
-    }
-}
-
-/**
- * #644 评论 5662132136 第2项 + #684 评论 5663032418 断点3：静止光标 rect。
- */
-private fun computeRestingCursorRect(
-    layout: ComposeLayoutSnapshot?,
-    liveSelection: TextRange?,
-): Rect? {
-    if (layout == null) return null
-    return try {
-        val selectionEnd =
-            (liveSelection?.end ?: layout.selection.end)
-                .coerceIn(0, layout.result.layoutInput.text.length)
-        layout.result.getCursorRect(selectionEnd)
-    } catch (_: Throwable) {
-        null
-    }
 }
 
 /** 安全获取 path bounds — result 为 null 或 range 无效时返回 null。 */

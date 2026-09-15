@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import android.util.Log
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
@@ -41,6 +42,8 @@ class ComposeEditorVisualState(
 ) {
     companion object {
         private const val TAG = "EditorVisualState"
+        /** 1 ms = 1_000_000 ns。 */
+        private const val NANOS_PER_MS = 1_000_000L
     }
 
     /** 帧协调器 — 只回答"旧屏幕帧到新屏幕帧改了什么"。 */
@@ -92,6 +95,13 @@ class ComposeEditorVisualState(
     val latestPatch: StateFlow<ComposeVisualPatch?> = _latestPatch.asStateFlow()
 
     /**
+     * #691：静止光标 rect — 当没有光标动画时，overlay 从这里读取光标的最终真实位置。
+     * 由 [onAuthoritativeLayout] 更新，始终反映当前 selection 对应的光标几何。
+     */
+    private val _restingCursorRect = MutableStateFlow<Rect?>(null)
+    val restingCursorRect: StateFlow<Rect?> = _restingCursorRect.asStateFlow()
+
+    /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
      * @param intent Core 视觉意图。
@@ -109,6 +119,8 @@ class ComposeEditorVisualState(
      * 系统给出权威布局 — 只记录，不修改输入几何。
      *
      * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
+     *
+     * #691：同时更新 restingCursorRect — 当没有光标动画时 overlay 从这里读取最终位置。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
@@ -117,6 +129,10 @@ class ComposeEditorVisualState(
     ) {
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
         _latestLayout.update { snapshot }
+
+        // #691：更新静止光标 rect
+        val cursorRect = computeCursorRectFromLayout(snapshot)
+        _restingCursorRect.update { cursorRect }
 
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
@@ -150,6 +166,9 @@ class ComposeEditorVisualState(
      * overlay 监听 [patchVersion]，在 `withFrameNanos` 里调用本方法，
      * 把队列中所有 pending patch 逐个应用到 timeline。时间戳必须来自 Compose frame clock。
      *
+     * #691：同时把光标 motion 并入 timeline — 与文字在同一个 applyPatch 内处理，
+     * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
+     *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
      */
@@ -157,7 +176,15 @@ class ComposeEditorVisualState(
         val applied = mutableListOf<ComposeVisualPatch>()
         while (pendingPatches.isNotEmpty()) {
             val patch = pendingPatches.removeFirst()
-            visualTimeline.applyPatch(patch, frameTimeNanos)
+            // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
+            val cursorParams = computeCursorParamsForPatch(patch)
+            visualTimeline.applyPatch(
+                patch = patch,
+                frameTimeNanos = frameTimeNanos,
+                cursorFromRect = cursorParams?.first,
+                cursorToRect = cursorParams?.second,
+                cursorDurationNanos = cursorParams?.third ?: 0L,
+            )
             applied += patch
         }
         return applied
@@ -209,6 +236,70 @@ class ComposeEditorVisualState(
         return visualTimeline.hasActiveAnimation(frameTimeNanos)
     }
 
+    // ==================== #691 统一光标位置 ====================
+
+    /**
+     * #691：计算 patch 的光标 motion 参数 — 返回 (fromRect, toRect, durationNanos) 或 null。
+     * 由 [drainPendingPatchesAtFrame] 传入 [ComposeVisualTimeline.applyPatch]，
+     * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
+     */
+    private fun computeCursorParamsForPatch(
+        patch: ComposeVisualPatch,
+    ): Triple<Rect, Rect, Long>? {
+        val motionPolicy = patch.motionPolicy.effective()
+        if (!motionPolicy.cursorEnabled) {
+            // 光标动画关闭 — 不创建 cursorChannel，使用静态光标
+            return null
+        }
+
+        val path = patch.cursorMotionPath
+        if (path == null || path.points.isEmpty()) {
+            // 无光标 motion — snap 到新 layout 的光标位置
+            val newCursorRect = computeCursorRectFromLayout(patch.newLayout) ?: return null
+            return Triple(newCursorRect, newCursorRect, 0L)
+        }
+
+        // #691 修复：from 必须是"旧 layout 的真实光标位置"（屏幕此刻光标所在），
+        // 不能用新 layout 的 restingCursorRect——那已经是最终位置，会导致 from == to、光标不动画。
+        // 取不到时回退到 snap（toRect），避免残留上一个 cursorChannel 的旧位置。
+        val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.last().rect
+        val toRect = path.points.last().rect
+
+        // #691 / 设置语义 G：coordinated=true 且有文字变化时，光标与文字共享 textDurationMillis
+        // （用户设置）作为整条编辑视觉事务时长；不再用 Core intent 的 patch.durationMs。
+        val durationNanos = patch.motionPolicy.effective().textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+
+        // CURSOR_ONLY（没有文字视觉变化）：始终使用 cursorDurationMillis，
+        // 即使 coordinated=true 也不跟随 textDurationMillis（见 EditorMotionPolicy 语义）。
+        val isCursorOnly =
+            patch.insertedUnits.isEmpty() &&
+                patch.deletedUnits.isEmpty() &&
+                patch.retainedMoves.isEmpty()
+        val effectiveDurationNanos =
+            if (motionPolicy.coordinated && !isCursorOnly) {
+                // coordinated=true 且有文字变化：光标与文字共享整条编辑视觉事务时长。
+                durationNanos
+            } else {
+                // coordinated=false，或 CURSOR_ONLY：光标使用独立的 cursorDurationMillis。
+                motionPolicy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            }
+
+        return Triple(fromRect, toRect, effectiveDurationNanos)
+    }
+
+    /**
+     * #691：从 layout + selection 计算光标 rect（屏幕坐标）。
+     */
+    private fun computeCursorRectFromLayout(layout: ComposeLayoutSnapshot): Rect? {
+        return try {
+            val selectionEnd =
+                layout.selection.end.coerceIn(0, layout.result.layoutInput.text.length)
+            layout.result.getCursorRect(selectionEnd)
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     /**
      * 清除所有状态 — 章节切换或 detach 时调用。
      */
@@ -221,6 +312,7 @@ class ComposeEditorVisualState(
         _hiddenRanges.update { emptyList() }
         _visualScene.update { ComposeVisualScene.Empty }
         _latestPatch.update { null }
+        _restingCursorRect.update { null }
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 

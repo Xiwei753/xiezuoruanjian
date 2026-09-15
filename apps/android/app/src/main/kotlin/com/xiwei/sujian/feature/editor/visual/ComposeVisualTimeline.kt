@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import kotlin.math.max
@@ -36,20 +37,37 @@ class ComposeVisualTimeline {
     private var nextUnitKey: Long = 1L
 
     /**
+     * #691：统一光标位置 — 由同一个 VisualScene / frame clock 维护。
+     * 不再使用独立的 Animatable<Rect> + LaunchedEffect。
+     */
+    private var cursorChannel: TimedRect? = null
+
+    /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
-     * 再处理新 patch。不能从旧事务的 progress 反算，也不能先归零。
+     * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
+     *
+     * #691：同时接受光标 motion 参数，在同一个调用内处理文字和光标，
+     * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
      *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
+     * @param cursorFromRect 光标在旧 layout 中的位置（屏幕坐标）— null 表示无光标 motion。
+     * @param cursorToRect 光标在新 layout 中的位置（屏幕坐标）— null 表示无光标 motion。
+     * @param cursorDurationNanos 光标动画时长 — 0 表示瞬时 snap。
      */
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        cursorFromRect: Rect? = null,
+        cursorToRect: Rect? = null,
+        cursorDurationNanos: Long = 0L,
     ) {
         // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
         val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
 
-        val durationNanos = patch.durationMs.coerceAtLeast(0L) * NANOS_PER_MS
+        // #691 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
+        // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
+        val durationNanos = patch.motionPolicy.effective().textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
         // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
         val surviving = mutableListOf<VisualTextUnit>()
@@ -67,6 +85,31 @@ class ComposeVisualTimeline {
 
         // 合并：存活 + 新插入 + ghost
         units = surviving + inserted + ghosting
+
+        // #691：光标 motion 并入 timeline — 与文字共享同一个 frameTimeNanos
+        if (cursorFromRect != null && cursorToRect != null) {
+            val current = cursorChannel
+            if (current != null) {
+                // 从当前屏幕位置继续
+                val currentRect = currentRect(current, frameTimeNanos)
+                cursorChannel =
+                    TimedRect(
+                        from = currentRect,
+                        to = cursorToRect,
+                        startedAtNanos = frameTimeNanos,
+                        durationNanos = cursorDurationNanos,
+                    )
+            } else {
+                cursorChannel =
+                    TimedRect(
+                        from = cursorFromRect,
+                        to = cursorToRect,
+                        startedAtNanos = frameTimeNanos,
+                        durationNanos = cursorDurationNanos,
+                    )
+            }
+
+        }
     }
 
     /**
@@ -347,20 +390,28 @@ class ComposeVisualTimeline {
                 .filter { it.targetRange != null }
                 .mapNotNull { it.targetRange }
                 .filter { it.start < it.end }
-        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges)
+        // #691：采样光标位置 — 与文字使用同一个 frameTimeNanos
+        val sampledCursor = sampleCursorRect(frameTimeNanos)
+        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges, cursorRect = sampledCursor)
     }
 
     /**
      * 是否还有活动动画 — overlay 据此决定是否继续推进帧时钟。
      *
+     * #691：同时检查文字 units 和光标 cursorChannel 的活动状态。
+     *
      * @param frameTimeNanos 当前帧时间戳。
-     * @return true 表示还有 unit 的 alpha 或 position 通道未完成。
+     * @return true 表示还有 unit 的 alpha 或 position 通道未完成，或光标动画未完成。
      */
     fun hasActiveAnimation(frameTimeNanos: Long): Boolean {
-        return units.any { unit ->
-            !isAlphaFinished(unit.alpha, frameTimeNanos) ||
-                !isPositionFinished(unit.position, frameTimeNanos)
-        }
+        val textActive =
+            units.any { unit ->
+                !isAlphaFinished(unit.alpha, frameTimeNanos) ||
+                    !isPositionFinished(unit.position, frameTimeNanos)
+            }
+        if (textActive) return true
+        // #691：光标动画也算活动状态
+        return hasActiveCursorAnimation(frameTimeNanos)
     }
 
     /**
@@ -369,6 +420,57 @@ class ComposeVisualTimeline {
     fun clear() {
         units = emptyList()
         nextUnitKey = 1L
+        cursorChannel = null
+    }
+
+    // ==================== 统一光标位置（#691） ====================
+
+    /**
+     * #691：snapshot 光标到当前帧时间 — 返回当前位置。
+     * 如果光标动画已完成，返回最终位置。
+     */
+    fun sampleCursorRect(frameTimeNanos: Long): Rect? {
+        val ch = cursorChannel ?: return null
+        return currentRect(ch, frameTimeNanos)
+    }
+
+    /**
+     * #691：光标动画是否仍在进行。
+     */
+    fun hasActiveCursorAnimation(frameTimeNanos: Long): Boolean {
+        val ch = cursorChannel ?: return false
+        return !isRectFinished(ch, frameTimeNanos)
+    }
+
+    /**
+     * #691：计算 TimedRect 在指定帧时间的当前位置。
+     */
+    private fun currentRect(
+        channel: TimedRect,
+        frameTimeNanos: Long,
+    ): Rect {
+        if (channel.durationNanos <= 0L) return channel.to
+        val elapsed = frameTimeNanos - channel.startedAtNanos
+        if (elapsed <= 0L) return channel.from
+        if (elapsed >= channel.durationNanos) return channel.to
+        val t = elapsed.toFloat() / channel.durationNanos.toFloat()
+        return Rect(
+            left = channel.from.left + (channel.to.left - channel.from.left) * t,
+            top = channel.from.top + (channel.to.top - channel.from.top) * t,
+            right = channel.from.right + (channel.to.right - channel.from.right) * t,
+            bottom = channel.from.bottom + (channel.to.bottom - channel.from.bottom) * t,
+        )
+    }
+
+    /**
+     * #691：TimedRect 是否已完成。
+     */
+    private fun isRectFinished(
+        channel: TimedRect,
+        frameTimeNanos: Long,
+    ): Boolean {
+        if (channel.durationNanos <= 0L) return true
+        return frameTimeNanos - channel.startedAtNanos >= channel.durationNanos
     }
 
     // ==================== 内部采样与通道计算 ====================
@@ -577,16 +679,34 @@ data class VisualTextUnit(
 )
 
 /**
+ * #691：带时间戳的 Rect 通道 —
+ * 从 [from] 到 [to]，从 [startedAtNanos] 开始，持续 [durationNanos]。
+ *
+ * 用于光标位置动画，与文字 timeline 共享同一个 frame clock。
+ */
+data class TimedRect(
+    val from: Rect,
+    val to: Rect,
+    val startedAtNanos: Long,
+    val durationNanos: Long,
+)
+
+/**
  * #689 评论 5674631257 步骤2：一帧的视觉场景 — sample() 返回。
+ *
+ * #691：新增 [cursorRect] — 光标位置由同一个 timeline / frame clock 采样，
+ * 不再由独立的 Animatable<Rect> 维护。
  *
  * @param units 当前所有文字单元（alpha/position 已插值到当前帧）。
  * @param hiddenRanges 当前应由 overlay 接管、BasicTextField 需设透明的 ranges。
  *   每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
  *   不从"上一事务 suppressed ranges"继承。
+ * @param cursorRect 光标当前位置（已插值到当前帧）— null 表示无光标动画且无静止光标。
  */
 data class ComposeVisualScene(
     val units: List<VisualTextUnit>,
     val hiddenRanges: List<TextRange>,
+    val cursorRect: Rect? = null,
 ) {
     companion object {
         /** 空场景。 */
