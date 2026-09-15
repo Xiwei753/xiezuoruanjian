@@ -1,12 +1,17 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector4D
+import androidx.compose.animation.core.VectorConverter
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -38,8 +43,6 @@ import uniffi.writer_core.AnimationModeDto
  * - [ComposeVisualTransaction.newLayout]
  * - [ComposeVisualTransaction.startFrame]
  * - [ComposeVisualTransaction.retainedMoves]
- * - [ComposeVisualTransaction.cursorStartRect]
- * - [ComposeVisualTransaction.cursorEndRect]
  *
  * 协调动画只保留一个 master progress：
  * 文字 Insert/Delete/Move、retained reflow、cursor move、startFrame rebase
@@ -66,9 +69,7 @@ fun ComposeTextAnimationOverlay(
     val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val activeIntent by visualState.activeIntent.collectAsStateWithLifecycle()
     val activeTransaction by visualState.activeTransaction.collectAsStateWithLifecycle()
-    val cursorSnapshotValue by visualState.visualCursorSnapshot.collectAsStateWithLifecycle()
     val density = LocalDensity.current
-    val cursorSnapshot = remember(cursorSnapshotValue) { cursorSnapshotValue }
 
     // #644 评论 5662132136 第2项：smooth cursor 接管后必须有静止光标绘制路径。
     // drawsVisualCursor 由设置/attach 生命周期决定（overlay 是否整个会话拥有光标）。
@@ -77,6 +78,40 @@ fun ComposeTextAnimationOverlay(
     val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
 
     val transactionId = activeTransaction?.id ?: 0L
+
+    // #684 评论 5673384335 缺口1：cursorEnabled / hasCursorAnimation 提前定义，
+    // 供 restingRect 同步 LaunchedEffect 引用（hasCursorAnimation 决定是否 snapTo restingRect）。
+    val cursorEnabled = activeTransaction?.cursorAnimationActive == true
+    val hasCursorAnimation = activeTransaction != null && cursorEnabled
+
+    // #684 评论 5672654866：光标的位置改成一个跨 transaction 保持的 Animatable<Rect, AnimationVector4D>。
+    // 旧 LaunchedEffect(transactionId) 被新事务取消后，同一个 Animatable 仍然保留刚才屏幕实际画到的 rect；
+    // 下一次 animateTo() 从这个真实 rect 出发，不再出现"用落后一帧的 progress 反算起点再往回抽"。
+    // 第一次 attach、章节切换或当前还没有任何视觉光标位置时，才允许 snapTo(restingRect)。
+    // 事务切换时禁止 snapTo(path.first())，直接从 cursorRect.value 继续。
+    var cursorInitialized by remember { mutableStateOf(false) }
+    val cursorRect = remember {
+        Animatable(Rect.Zero, Rect.VectorConverter)
+    }
+    // 首次 attach / 章节切换 / 当前还没有任何视觉光标位置时，把权威 layout 的 resting rect 同步进 Animatable。
+    // 只有 selection 被鼠标/方向键直接改动且没有 cursor 动画语义时才走这条路径。
+    // #684 评论 5673384335 缺口1：静止状态也把 restingRect 同步进同一个 Animatable，
+    // 这样下次输入/删除时 animateCursorPath 从正确的当前位置出发，不会先回旧位置再追新目标。
+    val restingRect = computeRestingCursorRect(latestLayout, liveSelection)
+    LaunchedEffect(drawsVisualCursor, hasCursorAnimation, restingRect) {
+        if (drawsVisualCursor && !hasCursorAnimation && restingRect != null) {
+            cursorRect.snapTo(restingRect)
+            cursorInitialized = true
+        }
+    }
+    // 章节切换（drawsVisualCursor 从 false→true 或 layout 重置）时重置初始化标志，让上面的 LaunchedEffect 重新 snapTo。
+    // #684 评论 5673384335 缺口1：smooth cursor 一直开着时切章节，latestLayout==null 也需要重置 cursorInitialized，
+    // 新章节第一份 layout 再 snap 到新的 resting rect。
+    LaunchedEffect(drawsVisualCursor, latestLayout) {
+        if (!drawsVisualCursor || latestLayout == null) {
+            cursorInitialized = false
+        }
+    }
 
     // #644 评论 #684（评论 #5660899405 第 5 项）：Core 的动画语义必须被真正消费 —
     // 正文视觉事务的 master timeline 直接使用冻结事务里的 durationMs；
@@ -90,8 +125,6 @@ fun ComposeTextAnimationOverlay(
     //   视觉所有权在 coordinator 生成事务时一次算死，overlay 只读冻结结果。
     val transactionTextKind = activeTransaction?.textKind ?: TextVisualKind.None
     val textEnabled = activeTransaction?.textAnimationActive == true
-    val cursorEnabled = activeTransaction?.cursorAnimationActive == true
-    val isCursorOnly = transactionTextKind == TextVisualKind.None && cursorEnabled
 
     // 直接使用冻结事务的 durationMs 作为 master timeline；Core 已决定本笔时长。
     val durationMs = activeTransaction?.durationMs ?: 0L
@@ -104,7 +137,7 @@ fun ComposeTextAnimationOverlay(
             masterProgress.snapTo(0f)
             masterProgress.animateTo(
                 targetValue = 1f,
-                animationSpec = tween(durationMillis = durationMs.toInt()),
+                animationSpec = tween(durationMillis = durationMs.toInt(), easing = LinearEasing),
             )
         } else if (transactionId > 0L) {
             masterProgress.snapTo(1f)
@@ -113,12 +146,32 @@ fun ComposeTextAnimationOverlay(
 
     val masterProgressValue = masterProgress.value
 
-    // 从 master progress 推导 textProgress / cursorProgress / rebaseProgress。
+    // 从 master progress 推导 textProgress / rebaseProgress。
     val textProgressValue = if (textEnabled) masterProgressValue else 1f
-    // #684 评论 5666730754：cursorProgressValue 直接读 transaction 冻结的 cursorAnimationActive，
-    // 不再叠加 activeIntent?.cursor?.animate 判断。
-    val cursorProgressValue = if (cursorEnabled) masterProgressValue else 1f
+    // #684 评论 5672654866：cursorProgressValue 不再用于光标绘制 —
+    // 光标由跨 transaction 的 cursorRect Animatable + cursorMotionPath 驱动。
     val rebaseProgressValue = masterProgressValue
+
+    // #684 评论 5672654866：光标动画 — 按 cursorMotionPath 分段 animateTo。
+    // 一次提交多个字时，光标依次经过每个 unit 的 caret rect；
+    // 文字第几个 unit 正在吐，光标就移动到对应的第几个位置。
+    // 旧 LaunchedEffect(transactionId) 被新事务取消后，同一个 cursorRect Animatable
+    // 仍然保留刚才屏幕实际画到的 rect；下一次 animateTo() 从这个真实 rect 出发。
+    LaunchedEffect(transactionId) {
+        if (transactionId <= 0L) return@LaunchedEffect
+        val path = activeTransaction?.cursorMotionPath ?: return@LaunchedEffect
+        val durationMs = activeTransaction?.durationMs ?: 0L
+        if (durationMs <= 0L) {
+            // 无时长事务：直接 snapTo 路径最后一个点（最终光标位置）。
+            path.points.lastOrNull()?.let { cursorRect.snapTo(it.rect) }
+            return@LaunchedEffect
+        }
+        animateCursorPath(
+            cursor = cursorRect,
+            path = path,
+            durationMs = durationMs,
+        )
+    }
 
     // #644 评论 #684：报告单 master progress 给 visualState，供下一事务物化 startFrame。
     // #684 评论 5668108597 问题1：reportProgress 带 transactionId 守卫 —
@@ -132,9 +185,6 @@ fun ComposeTextAnimationOverlay(
     val hasTextAnimation =
         activeTransaction != null && textEnabled &&
             (hiddenRanges.isNotEmpty() || transactionTextKind != TextVisualKind.None)
-    // #684 评论 5666730754：hasCursorAnimation 直接读 transaction 冻结的 cursorAnimationActive，
-    // 不再叠加 activeIntent?.cursor?.animate 判断。
-    val hasCursorAnimation = activeTransaction != null && cursorEnabled
     val startFrameHasSlices = activeTransaction?.startFrame?.slices?.isNotEmpty() == true
     val hasRebaseAnimation = activeTransaction != null && startFrameHasSlices && rebaseProgressValue < 1f
     val hasAnimation = hasTextAnimation || hasCursorAnimation || hasRebaseAnimation
@@ -154,8 +204,10 @@ fun ComposeTextAnimationOverlay(
         modifier =
             modifier
                 .drawBehind {
-                    // 1. 动画帧：文字 Insert/Delete/Move、retained reflow、光标插值、startFrame rebase。
+                    // 1. 动画帧：文字 Insert/Delete/Move、retained reflow、startFrame rebase。
                     //    绘制只读 frozen transaction，不再读 currentLayout/previousLayout。
+                    //    #684 评论 5672654866：光标不再在此分支绘制 —
+                    //    光标由跨 transaction 的 cursorRect Animatable 驱动，在第 2 步统一画。
                     if (hasAnimation) {
                         val transaction = activeTransaction
                         val currentResult = transaction?.newLayout?.result
@@ -169,16 +221,9 @@ fun ComposeTextAnimationOverlay(
                                 // #684 评论 5664636035 Bug1：绘制正文时读取 transaction.textKind，
                                 // 不再读 activeIntent 的 textKind（屏幕事务的 textKind 按最终净变化决定）。
                                 textKind = transaction.textKind,
-                                // smooth cursor 关闭时系统光标负责绘制，overlay 不画光标动画。
-                                // #684 评论 5666730754：cursorAnimate 直接读 transaction 冻结的
-                                // cursorAnimationActive（cursorEnabled），不再叠加 intent.cursor?.animate。
-                                cursorAnimate = drawsVisualCursor && cursorEnabled,
                                 textProgress = textProgressValue,
-                                cursorProgress = cursorProgressValue,
                                 scrollY = scrollY,
                                 textColor = textColor,
-                                cursorColor = cursorColor,
-                                cursorSnapshot = cursorSnapshot,
                                 density = density,
                                 textEnabled = textEnabled,
                                 rebaseProgress = rebaseProgressValue,
@@ -186,18 +231,18 @@ fun ComposeTextAnimationOverlay(
                         }
                     }
 
-                    // 2. 静止光标：smooth cursor 开启时 overlay 整个会话拥有光标。
-                    //    动画进行中已在第 1 步按 old→new 插值画过，这里只在无光标动画时补 resting caret。
-                    //    刚 attach、两次输入之间、纯等待、动画结束（finishTransaction 后）都画静止光标，
-                    //    不会因为没有 active transaction 而丢失光标。
-                    //    #684 评论 5663032418 断点3：光标 offset 从 live TextFieldState.selection 读取，
+                    // 2. 光标：smooth cursor 开启时 overlay 整个会话拥有光标。
+                    //    #684 评论 5672654866：光标动画进行中、静止光标都用同一个 cursorRect.value。
+                    //    动画进行中 cursorRect.value 是 animateCursorPath 当前画到的 rect；
+                    //    无光标动画时 cursorRect.value 是上次 snapTo 的 resting rect。
+                    //    不再在 draw 阶段第二次插值 — cursorRect.value 已经是当前应画的真实位置。
+                    //    #684 评论 5663032418 断点3：静止光标 offset 从 live TextFieldState.selection 读取，
                     //    不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
-                    if (drawsVisualCursor && !hasCursorAnimation) {
-                        val restingRect = computeRestingCursorRect(latestLayout, liveSelection) ?: return@drawBehind
-                        drawVisualCursor(
-                            startRect = restingRect,
-                            newRect = restingRect,
-                            progress = 1f,
+                    if (drawsVisualCursor) {
+                        // #684 评论 5673384335 缺口1：smooth cursor 开启后无论动画中还是静止，
+                        // 都只画 cursorRect.value。静止时 restingRect 已由 LaunchedEffect 同步进 Animatable。
+                        drawVisualCursorRect(
+                            rect = cursorRect.value,
                             scrollY = scrollY,
                             density = density,
                             cursorColor = cursorColor,
@@ -210,6 +255,9 @@ fun ComposeTextAnimationOverlay(
 /**
  * #641 评论 5459896691：绘制视觉动画事务 —
  * 提取以降低 [ComposeTextAnimationOverlay] 的认知复杂度。
+ *
+ * #684 评论 5672654866：本函数只画正文动画 + startFrame rebase，不画光标。
+ * 光标由 overlay 主体用跨 transaction 的 cursorRect Animatable 统一画。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawVisualTransaction(
@@ -217,13 +265,9 @@ private fun DrawScope.drawVisualTransaction(
     previousResult: TextLayoutResult?,
     transaction: ComposeVisualTransaction,
     textKind: TextVisualKind,
-    cursorAnimate: Boolean,
     textProgress: Float,
-    cursorProgress: Float,
     scrollY: Int,
     textColor: Color,
-    cursorColor: Color,
-    cursorSnapshot: VisualCursorSnapshot?,
     density: androidx.compose.ui.unit.Density,
     textEnabled: Boolean,
     rebaseProgress: Float,
@@ -256,27 +300,8 @@ private fun DrawScope.drawVisualTransaction(
             textColor = textColor,
         )
     }
-
-    // 视觉光标：从 cursorStartRect 插值到 cursorEndRect。
-    // #644 评论 #684：从 frozen transaction 读取 cursorStartRect/cursorEndRect。
-    if (cursorAnimate) {
-        val cursorStartRect =
-            transaction.cursorStartRect
-                ?: cursorSnapshot?.oldCursorRect
-                ?: return
-        val cursorEndRect =
-            transaction.cursorEndRect
-                ?: cursorSnapshot?.newCursorRect
-                ?: return
-        drawVisualCursor(
-            startRect = cursorStartRect,
-            newRect = cursorEndRect,
-            progress = cursorProgress,
-            scrollY = scrollY,
-            density = density,
-            cursorColor = cursorColor,
-        )
-    }
+    // #684 评论 5672654866：光标不再在此绘制 —
+    // 光标由 overlay 主体用 cursorRect.value 统一画，不在 draw 阶段第二次插值。
 }
 
 /**
@@ -336,28 +361,24 @@ private fun DrawScope.drawStartFrameLayer(
 private val VisualCursorWidthDp: Dp = 2.dp
 
 /**
- * 视觉光标插值绘制 — 从 [startRect] 按 progress 插值到 [newRect]。
+ * #684 评论 5672654866：视觉光标绘制 — 接收单个 [rect]，不再在 draw 阶段第二次插值。
+ *
+ * 光标动画由 overlay 内长生命周期 [Animatable]<Rect, AnimationVector4D> 驱动，
+ * animateCursorPath 按 [CursorMotionPoint.endFraction] 分段 animateTo，
+ * draw 阶段直接画 cursorRect.value 当前值。
  */
-@Suppress("LongParameterList")
-private fun DrawScope.drawVisualCursor(
-    startRect: Rect,
-    newRect: Rect,
-    progress: Float,
+private fun DrawScope.drawVisualCursorRect(
+    rect: Rect,
     scrollY: Int,
     density: androidx.compose.ui.unit.Density,
     cursorColor: Color,
 ) {
-    val interpolatedLeft = lerp(startRect.left, newRect.left, progress)
-    val interpolatedTop = lerp(startRect.top, newRect.top, progress)
-    val interpolatedBottom = lerp(startRect.bottom, newRect.bottom, progress)
-    val interpolatedWidth = lerp(startRect.width, newRect.width, progress)
-
     val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
-    val cursorLeft = interpolatedLeft - cursorWidth / 2
-    val cursorRight = cursorLeft + maxOf(cursorWidth, interpolatedWidth)
+    val cursorLeft = rect.left - cursorWidth / 2
+    val cursorRight = cursorLeft + maxOf(cursorWidth, rect.width)
 
-    val cursorTop = interpolatedTop - scrollY.toFloat()
-    val cursorBottom = interpolatedBottom - scrollY.toFloat()
+    val cursorTop = rect.top - scrollY.toFloat()
+    val cursorBottom = rect.bottom - scrollY.toFloat()
 
     if (cursorBottom <= 0f || cursorTop >= size.height) return
     if (cursorRight <= 0f || cursorLeft >= size.width) return
@@ -367,6 +388,48 @@ private fun DrawScope.drawVisualCursor(
         topLeft = Offset(cursorLeft, cursorTop),
         size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
     )
+}
+
+/**
+ * #684 评论 5672654866：按 [CursorMotionPath] 分段 animateTo —
+ * 一次提交多个字时，光标依次经过每个 unit 的 caret rect；
+ * 文字第几个 unit 正在吐，光标就移动到对应的第几个位置。
+ *
+ * 每段 durationMs = totalDurationMs * (next.endFraction - current.endFraction)。
+ * 路径只有一个点时直接 animateTo 到那个点。
+ * 新事务取消旧 LaunchedEffect 后，同一个 [cursor] Animatable 仍然保留刚才屏幕实际画到的 rect，
+ * 下一次 animateTo() 从这个真实 rect 出发。
+ */
+suspend fun animateCursorPath(
+    cursor: Animatable<Rect, AnimationVector4D>,
+    path: CursorMotionPath,
+    durationMs: Long,
+) {
+    val points = path.points
+    if (points.isEmpty()) return
+    val totalMs = durationMs.toInt().coerceAtLeast(0)
+    if (points.size == 1) {
+        cursor.animateTo(
+            targetValue = points[0].rect,
+            animationSpec = tween(durationMillis = totalMs, easing = LinearEasing),
+        )
+        return
+    }
+    var prevFraction = 0f
+    for (point in points) {
+        val segmentFraction = (point.endFraction - prevFraction).coerceIn(0f, 1f)
+        val segmentMs = (totalMs * segmentFraction).toInt().coerceAtLeast(0)
+        if (segmentMs > 0) {
+            cursor.animateTo(
+                targetValue = point.rect,
+                animationSpec = tween(durationMillis = segmentMs, easing = LinearEasing),
+            )
+        } else {
+            // 零时长段：直接 snapTo 避免 animateTo 默认时长。
+            cursor.snapTo(point.rect)
+        }
+        prevFraction = point.endFraction
+    }
 }
 
 /** 线性插值 helper。 */

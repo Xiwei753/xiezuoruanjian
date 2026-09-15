@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
@@ -23,7 +22,7 @@ data class RetainedMove(
  *
  * #644 评论 #684：事务创建后彻底冻结 —
  * 该对象创建以后禁止 `.copy(oldLayout=...)`、`.copy(newLayout=...)` 之类的后补行为。
- * oldLayout/newLayout/retainedMoves/cursorStartRect/cursorEndRect/startFrame
+ * oldLayout/newLayout/retainedMoves/startFrame
  * 全部在 [ComposeVisualFrameCoordinator.onLayout] 中一次性确定。
  *
  * @param id 事务 ID — [ComposeVisualFrameCoordinator] 内部分配，overlay 据此判断是否需要重新启动动画。
@@ -35,8 +34,10 @@ data class RetainedMove(
  * @param oldRanges 旧受影响 UTF-16 ranges — 删除动画用。
  * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用。
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range。
- * @param cursorStartRect 视觉光标起始矩形 — 事务创建时确定。
- * @param cursorEndRect 视觉光标结束矩形 — 事务创建时确定。
+ * @param cursorMotionPath #684 评论 5672654866：光标运动路径 —
+ *   把"光标路径"从单纯 start/end 两点升级成和文字 unit 对应的路径。
+ *   overlay 用一个跨 transaction 保持的 [androidx.compose.animation.core.Animatable]
+ *   按 [CursorMotionPoint.endFraction] 分段 animateTo。null 表示无光标动画语义。
  * @param startFrame 上一事务物化出的视觉帧 — 新事务从该帧对应的 progress 开始。
  * @param durationMs 动画时长（ms）。
  * @param motionPolicy 动画策略 — overlay 据此决定 text/cursor timeline。
@@ -82,8 +83,7 @@ data class ComposeVisualTransaction(
     val oldRanges: List<TextRange>,
     val newRanges: List<TextRange>,
     val retainedMoves: List<RetainedMove>,
-    val cursorStartRect: Rect?,
-    val cursorEndRect: Rect?,
+    val cursorMotionPath: CursorMotionPath? = null,
     val startFrame: ComposeVisualFrame?,
     val durationMs: Long,
     val motionPolicy: EditorMotionPolicy,

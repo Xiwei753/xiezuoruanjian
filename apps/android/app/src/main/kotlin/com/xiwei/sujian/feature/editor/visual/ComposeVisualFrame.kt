@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
@@ -15,9 +14,12 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  * 每次物化都把当前屏幕正在显示的所有内容 flatten 成一层新 frame，
  * 不再形成 startFrame → startFrame → startFrame 的链。
  *
+ * #684 评论 5672654866：frame 回到纯文字视觉帧 —
+ * 删除 cursorRect / cursorAlpha 字段。光标本来就是独立的当前几何状态，
+ * 由 overlay 内长生命周期 Animatable 持有，不应该塞进文字 startFrame 再反推。
+ * overlay 的 drawStartFrameLayer 并没有消费 cursorRect/cursorAlpha。
+ *
  * @param slices 扁平的 rebase slice 列表 — 每个 slice 携带自己的 sourceLayout。
- * @param cursorRect 物化时的 cursor rect。
- * @param cursorAlpha 物化时的 cursor alpha。
  * @param suppressedCurrentRanges 物化时由 overlay 接管的 current text ranges。
  * @param ownedOldRanges #641 评论 5460373035 问题2：startFrame 接管的旧正文 range —
  *   这些 range 已由 startFrame 的 fading slice 绘制，新事务 oldRanges 必须用
@@ -28,8 +30,6 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  */
 data class ComposeVisualFrame(
     val slices: List<RebasedTextSlice>,
-    val cursorRect: Rect? = null,
-    val cursorAlpha: Float = 1f,
     val suppressedCurrentRanges: List<TextRange> = emptyList(),
     val ownedOldRanges: List<TextRange> = emptyList(),
 )

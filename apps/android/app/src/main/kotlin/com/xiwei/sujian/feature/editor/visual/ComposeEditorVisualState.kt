@@ -83,14 +83,12 @@ class ComposeEditorVisualState(
     val activeIntent: StateFlow<EditorVisualIntent?> = _activeIntent.asStateFlow()
 
     /**
-     * 视觉光标插值快照 — 供 overlay 按 progress 插值绘制。
-     */
-    private val _visualCursorSnapshot = MutableStateFlow<VisualCursorSnapshot?>(null)
-    val visualCursorSnapshot: StateFlow<VisualCursorSnapshot?> = _visualCursorSnapshot.asStateFlow()
-
-    /**
-     * 单 master progress — overlay 报告当前动画进度（文字/光标/rebase 共用同一进度）。
+     * 单 master progress — overlay 报告当前动画进度（文字/rebase 共用同一进度）。
      * 下一笔事务物化 startFrame 时由 coordinator 读取此真实进度，不再写死 1f。
+     *
+     * #684 评论 5672654866：_masterProgress 只服务正文/startFrame rebase，
+     * 不再被 coordinator 用来求 cursor rect。光标当前位置由 overlay 内长生命周期
+     * Animatable 持有，coordinator 不再用 _masterProgress 反算屏幕光标位置。
      */
     private val _masterProgress = MutableStateFlow(0f)
     val masterProgress: StateFlow<Float> = _masterProgress.asStateFlow()
@@ -124,7 +122,7 @@ class ComposeEditorVisualState(
      * 上一份真正显示过的 layout → 当前真正显示出来的 layout →
      * 中间积累的 Core intent chain → 一个冻结的 [ComposeVisualTransaction]（双向汇合）。
      *
-     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/cursorStartRect/cursorEndRect/startFrame
+     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/startFrame
      * 全部不可再被后续 `onTextLayout` 修改。
      */
     fun onAuthoritativeLayout(
@@ -159,6 +157,8 @@ class ComposeEditorVisualState(
                 // 不等 Compose 下一帧再靠 Animatable.snapTo(0f) 修正。
                 // 否则在新事务的 LaunchedEffect 启动前，旧事务迟到的 reportProgress(A.id, 0.9f)
                 // 会把全局 _masterProgress 写成 0.9f，下一笔 rebase 物化 startFrame 拿到错误进度。
+                // #684 评论 5672654866：_masterProgress 归零只影响正文/startFrame rebase，
+                // 不再影响 cursor Animatable（cursor 由 overlay 内 Animatable 自己持有）。
                 _masterProgress.update { 0f }
                 _activeTransaction.update { update.transaction }
                 _hiddenRanges.update { update.hiddenRanges }
@@ -167,11 +167,9 @@ class ComposeEditorVisualState(
                 val lastIntent = update.transaction.intents.lastOrNull()
                 _activeIntent.update { lastIntent }
 
-                // 为 cursor 动画创建 snapshot（仍由事务的 cursorStartRect/cursorEndRect 决定）。
-                val cursorSnapshot = buildCursorSnapshot(update.transaction)
-                _visualCursorSnapshot.update { cursorSnapshot }
-
                 // 光标所有权只由设置/attach 决定（_drawsVisualCursor 不在此改写）。
+                // #684 评论 5672654866：不再创建 visualCursorSnapshot —
+                // 光标动画由 overlay 内长生命周期 Animatable + cursorMotionPath 驱动。
 
                 Log.d(
                     TAG,
@@ -181,22 +179,6 @@ class ComposeEditorVisualState(
                 )
             }
         }
-    }
-
-    /**
-     * 从冻结事务构建 cursor snapshot — 用事务的 cursorStartRect/cursorEndRect。
-     */
-    private fun buildCursorSnapshot(transaction: ComposeVisualTransaction): VisualCursorSnapshot? {
-        val startRect = transaction.cursorStartRect ?: return null
-        val endRect = transaction.cursorEndRect ?: return null
-        val lastIntent = transaction.intents.lastOrNull() ?: return null
-        val cursor = lastIntent.cursor ?: return null
-        return VisualCursorSnapshot(
-            oldCursorRect = startRect,
-            newCursorRect = endRect,
-            oldSelectionEnd = cursor.oldEndUtf16,
-            newSelectionEnd = cursor.newEndUtf16,
-        )
     }
 
     /**
@@ -233,7 +215,6 @@ class ComposeEditorVisualState(
         frameCoordinator.completeTransaction(transactionId)
         _hiddenRanges.update { emptyList() }
         _activeIntent.update { null }
-        _visualCursorSnapshot.update { null }
         _activeTransaction.update { null }
         _masterProgress.update { 0f }
     }
@@ -248,7 +229,6 @@ class ComposeEditorVisualState(
         _hiddenRanges.update { emptyList() }
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
         _activeIntent.update { null }
-        _visualCursorSnapshot.update { null }
         _masterProgress.update { 0f }
     }
 

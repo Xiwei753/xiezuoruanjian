@@ -27,9 +27,8 @@ import uniffi.writer_core.AnimationModeDto
  * 而是对补丁新引入逻辑的对抗式验证：
  *
  * 1. Bug1: changedRangesFromComposedMap / complementRanges 正确性 — 三笔 chain、边界。
- * 2. Bug2: firstCursor/lastCursor 在三笔 chain 中的正确性 — cursorStartRect 用第一笔，cursorEndRect 用最后一笔。
- * 3. Bug3: 空 entries compose 传播 — 空 + 非空 = 空（整段删除后插入，T0→Tn 没有任何存活文字）。
- * 4. textKind 按最终净变化决定 — Insert+Delete chain 的 transactionTextKind 应为 Move（oldChanged 和 newChanged 都非空）。
+ * 2. Bug3: 空 entries compose 传播 — 空 + 非空 = 空（整段删除后插入，T0→Tn 没有任何存活文字）。
+ * 3. textKind 按最终净变化决定 — Insert+Delete chain 的 transactionTextKind 应为 Move（oldChanged 和 newChanged 都非空）。
  *
  * 所有测试在补丁应用后应 PASS。如果测试被削弱（例如断言改为 assertFalse），这些对抗测试会暴露。
  */
@@ -154,137 +153,6 @@ class ComposeVisualPatchAdversarialTest {
             "相邻区间覆盖 [0,4) 时 oldRanges 应为 [4,5)",
             listOf(TextRange(4, 5)),
             result.oldRanges,
-        )
-    }
-
-    /**
-     * Bug2 对抗：三笔连续 Backspace chain 的 firstCursor/lastCursor 正确性。
-     *
-     * 场景：T0 cursor=5 → T1=4 → T2=3 → T3=2（Backspace 三次）。
-     * firstCursor.oldEndUtf16=5（T0 坐标），lastCursor.newEndUtf16=2（T3 坐标）。
-     * cursorStartRect 应对应 T0 layout offset=5，cursorEndRect 应对应 T3 layout offset=2。
-     *
-     * 这验证 firstCursor/lastCursor 在三笔 chain 下正确工作，
-     * 而不是只在两笔 chain（复现测试）下正确。
-     */
-    @Test
-    fun bug2_threeIntentChain_firstAndLastCursor_correct() {
-        val layouts = captureLayouts("abcde", "abcd", "abc", "ab")
-        val oldLayout = layouts[0] // T0 = "abcde"
-        val newLayout = layouts[3] // T3 = "ab"
-
-        val state = ComposeEditorVisualState(targetId = "test-target-bug2-three")
-
-        // 1. 基线 layout "abcde" 到达，cursor 在末尾 (offset=5)。
-        state.onAuthoritativeLayout(oldLayout, TextRange(5, 5), 0)
-
-        // 2. intent1: T0="abcde" -> T1="abcd"（Backspace 删除 "e"，cursor 5->4）
-        val intent1 =
-            EditorVisualIntent(
-                coreTransactionId = 1L,
-                baseRevision = 0L,
-                newRevision = 1L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-                durationMs = 100L,
-                offsetMap =
-                    VisualOffsetMap(
-                        entries =
-                            listOf(
-                                VisualOffsetMapEntry(0, 0, 4, VisualOffsetMapKind.IDENTITY),
-                            ),
-                    ),
-                oldRanges = listOf(TextRange(4, 5)),
-                newRanges = emptyList(),
-                textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 5, newEndUtf16 = 4, animate = true),
-                replaceBounds = VisualReplaceBounds(oldStart = 4, oldEnd = 5, newStart = 4, newEnd = 4),
-                expectedOldText = "abcde",
-                expectedNewText = "abcd",
-            )
-        state.onVisualIntent(intent1, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
-
-        // 3. intent2: T1="abcd" -> T2="abc"（Backspace 删除 "d"，cursor 4->3）
-        val intent2 =
-            EditorVisualIntent(
-                coreTransactionId = 2L,
-                baseRevision = 1L,
-                newRevision = 2L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-                durationMs = 100L,
-                offsetMap =
-                    VisualOffsetMap(
-                        entries =
-                            listOf(
-                                VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY),
-                            ),
-                    ),
-                oldRanges = listOf(TextRange(3, 4)),
-                newRanges = emptyList(),
-                textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 4, newEndUtf16 = 3, animate = true),
-                replaceBounds = VisualReplaceBounds(oldStart = 3, oldEnd = 4, newStart = 3, newEnd = 3),
-                expectedOldText = "abcd",
-                expectedNewText = "abc",
-            )
-        state.onVisualIntent(intent2, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
-
-        // 4. intent3: T2="abc" -> T3="ab"（Backspace 删除 "c"，cursor 3->2）
-        val intent3 =
-            EditorVisualIntent(
-                coreTransactionId = 3L,
-                baseRevision = 2L,
-                newRevision = 3L,
-                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-                durationMs = 100L,
-                offsetMap =
-                    VisualOffsetMap(
-                        entries =
-                            listOf(
-                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
-                            ),
-                    ),
-                oldRanges = listOf(TextRange(2, 3)),
-                newRanges = emptyList(),
-                textKind = TextVisualKind.Delete,
-                cursor = CursorVisualIntent(oldEndUtf16 = 3, newEndUtf16 = 2, animate = true),
-                replaceBounds = VisualReplaceBounds(oldStart = 2, oldEnd = 3, newStart = 2, newEnd = 2),
-                expectedOldText = "abc",
-                expectedNewText = "ab",
-            )
-        state.onVisualIntent(intent3, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
-
-        // 5. 新 layout "ab" 到达 → 生成事务（chain=[intent1, intent2, intent3]）。
-        state.onAuthoritativeLayout(newLayout, TextRange(2, 2), 0)
-
-        val transaction = state.activeTransaction.value
-        assertNotNull("事务应生成", transaction)
-
-        // cursorStartRect 应对应 T0 的 firstCursor.oldEndUtf16=5
-        val cursorStartRect = transaction?.cursorStartRect
-        assertNotNull("cursorStartRect 应非 null", cursorStartRect)
-        val correctStartRect = oldLayout.getCursorRect(5) // 第一笔 old cursor = 5
-        val startRect = cursorStartRect!!
-        val matchesCorrectStart =
-            kotlin.math.abs(startRect.left - correctStartRect.left) < 1f &&
-                kotlin.math.abs(startRect.top - correctStartRect.top) < 1f
-        assertTrue(
-            "三笔 chain cursorStartRect 应对应 T0 的 firstCursor=5\n" +
-                "实际=$startRect, 正确(offset=5)=$correctStartRect",
-            matchesCorrectStart,
-        )
-
-        // cursorEndRect 应对应 T3 的 lastCursor.newEndUtf16=2
-        val cursorEndRect = transaction?.cursorEndRect
-        assertNotNull("cursorEndRect 应非 null", cursorEndRect)
-        val correctEndRect = newLayout.getCursorRect(2) // 最后一笔 new cursor = 2
-        val endRect = cursorEndRect!!
-        val matchesCorrectEnd =
-            kotlin.math.abs(endRect.left - correctEndRect.left) < 1f &&
-                kotlin.math.abs(endRect.top - correctEndRect.top) < 1f
-        assertTrue(
-            "三笔 chain cursorEndRect 应对应 T3 的 lastCursor=2\n" +
-                "实际=$endRect, 正确(offset=2)=$correctEndRect",
-            matchesCorrectEnd,
         )
     }
 

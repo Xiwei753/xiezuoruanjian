@@ -163,7 +163,7 @@ class ComposeEditorVisualStateTest {
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         assertTrue("smooth cursor 开启时 drawsVisualCursor 为 true", state.drawsVisualCursor.value)
-        assertNotNull("cursor animate 事务生成 visualCursorSnapshot", state.visualCursorSnapshot.value)
+        assertNotNull("cursor animate 事务生成 cursorMotionPath", state.activeTransaction.value?.cursorMotionPath)
     }
 
     @Test
@@ -780,10 +780,10 @@ class ComposeEditorVisualStateTest {
 
     /**
      * #666 回归：空章节首次输入时 [ComposeEditorVisualState] 必须等待匹配布局到达后
-     * 才生成事务与 visualCursorSnapshot。
+     * 才生成事务与 cursorMotionPath。
      *
      * 新模型（#684 评论 #5660899405 第4项）：drawsVisualCursor 仅由设置决定，
-     * 这里用 initialDrawsVisualCursor=false 验证默认行为；事务与 snapshot 仍等布局匹配。
+     * 这里用 initialDrawsVisualCursor=false 验证默认行为；事务与 cursorMotionPath 仍等布局匹配。
      */
     @Test
     fun repro_emptyChapterFirstInput_cursorOffsetOutOfBounds() {
@@ -818,19 +818,19 @@ class ComposeEditorVisualStateTest {
         assertNull("activeTransaction 应为 null（intent 排队，布局未到）", state.activeTransaction.value)
         // drawsVisualCursor 由设置决定（false）
         assertFalse("drawsVisualCursor 应为 false（设置关闭）", state.drawsVisualCursor.value)
-        // visualCursorSnapshot 应为 null（不基于错误布局）
-        assertNull("visualCursorSnapshot 应为 null（布局未到）", state.visualCursorSnapshot.value)
+        // cursorMotionPath 应为 null（不基于错误布局，事务未生成）
+        assertNull("activeTransaction 应为 null（布局未到，无 cursorMotionPath）", state.activeTransaction.value)
 
-        // 当正确的 layout("a") 到达后，事务与 snapshot 生成。
+        // 当正确的 layout("a") 到达后，事务与 cursorMotionPath 生成。
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         assertNotNull("layout(\"a\") 到达后 activeTransaction 应非 null", state.activeTransaction.value)
-        assertNotNull("layout(\"a\") 到达后 visualCursorSnapshot 应非 null", state.visualCursorSnapshot.value)
+        assertNotNull("layout(\"a\") 到达后 cursorMotionPath 应非 null", state.activeTransaction.value?.cursorMotionPath)
         assertFalse("layout(\"a\") 到达后 drawsVisualCursor 仍为 false（设置关闭）", state.drawsVisualCursor.value)
     }
 
     /**
      * #666 时序测试 1：空章节第一次输入完整时序 —
-     * 验证事务与 visualCursorSnapshot 等待匹配布局到达，drawsVisualCursor 由设置决定。
+     * 验证事务与 cursorMotionPath 等待匹配布局到达，drawsVisualCursor 由设置决定。
      */
     @Test
     fun emptyChapterFirstInput_waitsForMatchingLayoutBeforeVisualCursor() {
@@ -858,15 +858,15 @@ class ComposeEditorVisualStateTest {
             motionPolicy = EditorMotionPolicy(cursorDurationMillis = 80L),
         )
 
-        // intent 排队，无匹配布局 → 无事务、无 snapshot；drawsVisualCursor 由设置决定（true）
+        // intent 排队，无匹配布局 → 无事务、无 cursorMotionPath；drawsVisualCursor 由设置决定（true）
         assertNull("activeTransaction 应为 null（布局未到）", state.activeTransaction.value)
-        assertNull("visualCursorSnapshot 应为 null（布局未到）", state.visualCursorSnapshot.value)
+        assertNull("activeTransaction 应为 null（布局未到，无 cursorMotionPath）", state.activeTransaction.value)
         assertTrue("drawsVisualCursor 应为 true（设置开启）", state.drawsVisualCursor.value)
 
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
 
         assertNotNull("layout(\"a\") 到达后 activeTransaction 应非 null", state.activeTransaction.value)
-        assertNotNull("layout(\"a\") 到达后 visualCursorSnapshot 应非 null", state.visualCursorSnapshot.value)
+        assertNotNull("layout(\"a\") 到达后 cursorMotionPath 应非 null", state.activeTransaction.value?.cursorMotionPath)
         assertTrue("drawsVisualCursor 保持 true（设置开启）", state.drawsVisualCursor.value)
     }
 
@@ -903,7 +903,7 @@ class ComposeEditorVisualStateTest {
 
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         assertNotNull("第一笔匹配后 activeTransaction 应非 null", state.activeTransaction.value)
-        assertNotNull("第一笔匹配后 visualCursorSnapshot 应非 null", state.visualCursorSnapshot.value)
+        assertNotNull("第一笔匹配后 cursorMotionPath 应非 null", state.activeTransaction.value?.cursorMotionPath)
         assertTrue("drawsVisualCursor 应为 true（设置开启）", state.drawsVisualCursor.value)
 
         // 第二笔 intent: "a" -> "ab"，但 layout("ab") 还没到
@@ -932,7 +932,7 @@ class ComposeEditorVisualStateTest {
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
 
         assertNotNull("layout(\"ab\") 到达后 activeTransaction 应非 null", state.activeTransaction.value)
-        assertNotNull("layout(\"ab\") 到达后 visualCursorSnapshot 应非 null", state.visualCursorSnapshot.value)
+        assertNotNull("layout(\"ab\") 到达后 cursorMotionPath 应非 null", state.activeTransaction.value?.cursorMotionPath)
         assertTrue("drawsVisualCursor 保持 true（设置开启）", state.drawsVisualCursor.value)
     }
 
