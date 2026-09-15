@@ -208,6 +208,118 @@ fn conflicting_units_are_untouched(
     playing_units > 0
 }
 
+/// Issue #690 评论 5680276931: 采样旧事务在 `now` 时刻真正显示的 coordinated cursor rect。
+///
+/// 在 `take_rebase_frames` 取消旧事务之前调用，把结果作为新事务纯 reflow 光标动画的
+/// 视觉起点（`cursor_visual_from`）。采样逻辑与 `compute_coordinated_cursor_position`
+/// 的边界选择完全一致，按评论四种场景：
+/// - InsertReveal：取这一帧 reveal 边界（frame.x + frame.w）。
+/// - Backspace DeleteConceal（conceal_from_left）：取这一帧 conceal 边界（frame.x + frame.w）。
+/// - forward Delete（conceal_from_right）：取当前固定 cursor rect（new_rect）。
+/// - 纯 reflow（无上述 glyph）：按旧事务 reflow unit 当前帧计算
+///   `old_rect + (new_rect - old_rect) * ease_out_quad(reflow_progress)`。
+///
+/// 返回的 `CursorRect` 用采样到的 `(x, y)` 和 `new_rect` 的高度/baseline 构造，
+/// 供新事务 `cursor_visual_from` 直接消费。
+fn sample_coordinated_cursor_rect_at(
+    tx: &PreparedTextVisualTransaction,
+    now: Instant,
+) -> Option<CursorRect> {
+    let old_rect = tx.old_cursor_rect.as_ref()?;
+    let new_rect = tx.new_cursor_rect.as_ref()?;
+    let h = new_rect.bottom - new_rect.top;
+    let op = tx.operation_kind;
+
+    let reflow_progress = || -> f64 {
+        for unit in &tx.units {
+            match unit.slice.kind {
+                AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                    return unit.progress(now);
+                }
+                _ => {}
+            }
+        }
+        1.0
+    };
+
+    let (cx, cy) = match op {
+        TextVisualOperationKind::Insert => {
+            let mut rightmost_x: Option<f64> = None;
+            let mut cursor_y = new_rect.top;
+            for unit in &tx.units {
+                if unit.slice.kind != AnimatedSliceKind::InsertReveal {
+                    continue;
+                }
+                let visible = unit.current_visible_fraction(now);
+                let frame = unit.slice.compute_frame(visible);
+                let edge_x = frame.x + frame.w;
+                rightmost_x = Some(match rightmost_x {
+                    Some(prev) => prev.max(edge_x),
+                    None => edge_x,
+                });
+                cursor_y = frame.y;
+            }
+            match rightmost_x {
+                Some(x) => (x, cursor_y),
+                None => {
+                    let progress = reflow_progress();
+                    let eased = AnimatedSlice::ease_out_quad(progress);
+                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                    (x, y)
+                }
+            }
+        }
+        TextVisualOperationKind::Delete => {
+            let mut has_conceal_from_right = false;
+            let mut conceal_edge: Option<f64> = None;
+            let mut cursor_y = new_rect.top;
+            for unit in &tx.units {
+                if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
+                    continue;
+                }
+                let visible = unit.current_visible_fraction(now);
+                let frame = unit.slice.compute_frame(visible);
+                if unit.slice.conceal_from_left {
+                    let edge = frame.x + frame.w;
+                    conceal_edge = Some(match conceal_edge {
+                        Some(prev) => prev.min(edge),
+                        None => edge,
+                    });
+                    cursor_y = frame.y;
+                } else {
+                    has_conceal_from_right = true;
+                }
+            }
+            if let Some(x) = conceal_edge {
+                (x, cursor_y)
+            } else if has_conceal_from_right {
+                (new_rect.x, new_rect.top)
+            } else {
+                let progress = reflow_progress();
+                let eased = AnimatedSlice::ease_out_quad(progress);
+                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                (x, y)
+            }
+        }
+        _ => {
+            let progress = reflow_progress();
+            let eased = AnimatedSlice::ease_out_quad(progress);
+            let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+            let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+            (x, y)
+        }
+    };
+
+    Some(CursorRect {
+        x: cx,
+        top: cy,
+        bottom: cy + h,
+        baseline_y: new_rect.baseline_y,
+    })
+}
+
 /// Issue #690 评论 5675007226 步骤 5: 每个事务生命周期点各写一条紧凑事件进正式诊断包。
 ///
 /// 字段：transaction key、operation kind、old/new caret、visual unit kinds、首帧时间
@@ -857,15 +969,20 @@ impl LinuxEditorAnimationCoordinator {
     /// 若旧事务里仍在播放的单元都没被本次编辑覆盖，就完全不取消它：事务 key 保留自己的
     /// snapshot/纹理所有权，单元沿自己的时间线播完（`editor.anim.keep`）。预输入入口传
     /// `None`——preedit 文本整体被替换，旧单元必然失效。
+    ///
+    /// Issue #690 评论 5680276931: 返回值同时带上 `sampled_cursor_rect`——在取消旧事务
+    /// 之前用同一个 `now` 采样旧事务当前真正显示的 coordinated cursor rect，交给新事务
+    /// 作为纯 reflow 光标动画的视觉起点（`cursor_visual_from`）。这样 rebase 交棒后
+    /// 光标不再从逻辑 old caret 重新起步，而是与文字 reflow 同帧从屏幕位置续播。
     fn take_rebase_frames(
         &mut self,
         conflicting: Option<VisualTransactionKey>,
         reason: &str,
         now: Instant,
         preserve: Option<(&[(usize, usize)], &OffsetMap)>,
-    ) -> Vec<RebaseFrame> {
+    ) -> (Vec<RebaseFrame>, Option<CursorRect>) {
         let Some(old_key) = conflicting else {
-            return Vec::new();
+            return (Vec::new(), None);
         };
         let untouched = match preserve {
             Some((changed_old_ranges, offset_map)) => self
@@ -890,9 +1007,9 @@ impl LinuxEditorAnimationCoordinator {
                 "anim_keep: key={:?} reason={} (units outside changed range keep playing)",
                 old_key, reason,
             ));
-            return Vec::new();
+            return (Vec::new(), None);
         }
-        let frames = match self
+        let (frames, sampled_cursor) = match self
             .prepared_queue
             .active_transactions()
             .iter()
@@ -900,19 +1017,26 @@ impl LinuxEditorAnimationCoordinator {
         {
             Some(tx) => {
                 let frames = tx.collect_rebase_frames(now);
+                // Issue #690 评论 5680276931: 在取消旧事务之前，用同一个 now 采样
+                // 旧事务这一帧正在屏幕上显示的 coordinated cursor rect，带给新事务。
+                // 采样逻辑按评论四种场景：InsertReveal→reveal 边界；
+                // Backspace DeleteConceal→conceal 边界；纯 reflow→旧事务 reflow unit
+                // 当前帧计算；forward Delete→当前固定 cursor rect。
+                let sampled_cursor = sample_coordinated_cursor_rect_at(tx, now);
                 emit_transaction_diagnostic(tx, "editor.anim.rebase", reason);
-                frames
+                (frames, sampled_cursor)
             }
-            None => Vec::new(),
+            None => (Vec::new(), None),
         };
         self.prepared_queue.cancel(old_key, "rebased");
         editor_animation_debug_log(&format!(
-            "anim_rebase: old_key={:?} reason={} carried_units={}",
+            "anim_rebase: old_key={:?} reason={} carried_units={} carried_cursor={}",
             old_key,
             reason,
             frames.len(),
+            sampled_cursor.is_some(),
         ));
-        frames
+        (frames, sampled_cursor)
     }
 
     pub fn process_transaction(
@@ -954,7 +1078,7 @@ impl LinuxEditorAnimationCoordinator {
                         .prepared_queue
                         .find_conflicting_transaction(range_start, range_end);
                     // 纯插入在 old 文档里就是 range_start 这一个位置点。
-                    let rebase_frames = self.take_rebase_frames(
+                    let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
                         conflicting,
                         "rebased_by_insert",
                         Instant::now(),
@@ -995,6 +1119,15 @@ impl LinuxEditorAnimationCoordinator {
                         .collect();
                     match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
 
+                    // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
+                    // 作为新事务纯 reflow 光标动画的视觉起点，new_cursor_rect 保持权威
+                    // 新布局目标不变。
+                    let cursor_visual_from = sampled_cursor;
+                    let cursor_visual_to = if cursor_visual_from.is_some() {
+                        new_cursor_rect.clone()
+                    } else {
+                        None
+                    };
                     let prepared = PreparedTextVisualTransaction {
                         key,
                         state: TextVisualTransactionState::Pending,
@@ -1004,6 +1137,8 @@ impl LinuxEditorAnimationCoordinator {
                         static_patches,
                         old_cursor_rect,
                         new_cursor_rect,
+                        cursor_visual_from,
+                        cursor_visual_to,
                         cancel_reason: None,
                         texture_prepared: false,
                         old_snapshot: Some(old_snapshot.clone()),
@@ -1048,7 +1183,7 @@ impl LinuxEditorAnimationCoordinator {
                 let conflicting = self
                     .prepared_queue
                     .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let rebase_frames = self.take_rebase_frames(
+                let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
                     conflicting,
                     "rebased_by_delete",
                     Instant::now(),
@@ -1093,6 +1228,14 @@ impl LinuxEditorAnimationCoordinator {
                     .collect();
                 match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
 
+                // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
+                // 作为新事务纯 reflow 光标动画的视觉起点。
+                let cursor_visual_from = sampled_cursor;
+                let cursor_visual_to = if cursor_visual_from.is_some() {
+                    new_cursor_rect.clone()
+                } else {
+                    None
+                };
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
@@ -1102,6 +1245,8 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches,
                     old_cursor_rect,
                     new_cursor_rect,
+                    cursor_visual_from,
+                    cursor_visual_to,
                     cancel_reason: None,
                     texture_prepared: false,
                     old_snapshot: Some(old_snapshot.clone()),
@@ -1136,6 +1281,8 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches: Vec::new(),
                     old_cursor_rect,
                     new_cursor_rect,
+                    cursor_visual_from: None,
+                    cursor_visual_to: None,
                     cancel_reason: None,
                     texture_prepared: false,
                     old_snapshot: None,
@@ -1166,7 +1313,7 @@ impl LinuxEditorAnimationCoordinator {
             .prepared_queue
             .find_conflicting_transaction(composition_byte_start, composition_byte_end);
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
-        let rebase_frames = self.take_rebase_frames(
+        let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
             conflicting,
             "rebased_by_composition_update",
             Instant::now(),
@@ -1239,6 +1386,14 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
+        // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
+        // 作为新事务纯 reflow 光标动画的视觉起点。
+        let cursor_visual_from = sampled_cursor;
+        let cursor_visual_to = if cursor_visual_from.is_some() {
+            new_cursor_rect.clone()
+        } else {
+            None
+        };
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -1248,6 +1403,8 @@ impl LinuxEditorAnimationCoordinator {
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
+            cursor_visual_from,
+            cursor_visual_to,
             cancel_reason: None,
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
@@ -1289,7 +1446,7 @@ impl LinuxEditorAnimationCoordinator {
             .prepared_queue
             .find_conflicting_transaction(conflict_start, conflict_end);
         // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
-        let rebase_frames = self.take_rebase_frames(
+        let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
             conflicting,
             "rebased_by_composition_commit",
             Instant::now(),
@@ -1586,6 +1743,14 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
+        // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
+        // 作为新事务纯 reflow 光标动画的视觉起点。
+        let cursor_visual_from = sampled_cursor;
+        let cursor_visual_to = if cursor_visual_from.is_some() {
+            new_cursor_rect.clone()
+        } else {
+            None
+        };
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -1595,6 +1760,8 @@ impl LinuxEditorAnimationCoordinator {
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
+            cursor_visual_from,
+            cursor_visual_to,
             cancel_reason: None,
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
@@ -1662,6 +1829,8 @@ impl LinuxEditorAnimationCoordinator {
             static_patches: Vec::new(),
             old_cursor_rect: old_cursor_rect.clone(),
             new_cursor_rect: new_cursor_rect.clone(),
+            cursor_visual_from: None,
+            cursor_visual_to: None,
             cancel_reason: None,
             texture_prepared: true,
             old_snapshot: None,
@@ -2173,6 +2342,14 @@ impl LinuxEditorAnimationCoordinator {
         let op = tx.operation_kind;
         let frame_now = sample.frame_now;
 
+        // Issue #690 评论 5680276931: 纯 reflow 光标动画的视觉起点/终点。
+        // 发生过 rebase 交棒时，`cursor_visual_from` 是旧事务这一帧的屏幕光标，
+        // `cursor_visual_to` 镜像 `new_cursor_rect`（权威新布局目标）。
+        // 未发生 rebase（首次事务）时两者为 None，回退到 `old_rect`/`new_rect`，
+        // 保持首次事务从逻辑 old caret 走向 new caret 的原语义。
+        let from_rect = tx.cursor_visual_from.as_ref().unwrap_or(old_rect);
+        let to_rect = tx.cursor_visual_to.as_ref().unwrap_or(new_rect);
+
         // Issue #690 评论 5679744253 问题 3: 找到 reflow unit 的 progress，不再回退到
         // 事务级 progress。reflow unit 有自己的时间线，rebase/retarget 后事务 progress
         // 和 unit progress 可能不同。没有 reflow unit 时（事务已完成或纯 cursor move），
@@ -2210,10 +2387,13 @@ impl LinuxEditorAnimationCoordinator {
                 match rightmost_x {
                     Some(x) => Some((x, cursor_y, h)),
                     None => {
+                        // Issue #690 评论 5680276931: 纯 reflow（无 InsertReveal glyph 当边界）
+                        // 用 cursor_visual_from/cursor_visual_to 同帧 caret track，
+                        // 不再用裸 old_cursor_rect（逻辑 old caret）当起点。
                         let progress = reflow_progress();
                         let eased = AnimatedSlice::ease_out_quad(progress);
-                        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                        let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
+                        let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
                         Some((x, y, h))
                     }
                 }
@@ -2251,19 +2431,23 @@ impl LinuxEditorAnimationCoordinator {
                     // 只让右侧文字向光标方向收掉。
                     Some((new_rect.x, new_rect.top, h))
                 } else {
-                    // 没有可直接当边界的 glyph（跨行 reflow 等）：与 ReflowMove 同一条 easing。
+                    // Issue #690 评论 5680276931: 没有可直接当边界的 glyph（跨行 reflow 等）：
+                    // 用 cursor_visual_from/cursor_visual_to 同帧 caret track，
+                    // 与 ReflowMove 同一条 easing。
                     let progress = reflow_progress();
                     let eased = AnimatedSlice::ease_out_quad(progress);
-                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                    let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
+                    let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
                     Some((x, y, h))
                 }
             }
             _ => {
+                // Issue #690 评论 5680276931: CompositionUpdate/Commit/Cursor 纯 reflow
+                // 用 cursor_visual_from/cursor_visual_to 同帧 caret track。
                 let progress = reflow_progress();
                 let eased = AnimatedSlice::ease_out_quad(progress);
-                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
+                let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
                 Some((x, y, h))
             }
         }
@@ -3818,6 +4002,8 @@ mod tests {
             static_patches: Vec::new(),
             old_cursor_rect: Some(old_cursor),
             new_cursor_rect: Some(new_cursor),
+            cursor_visual_from: None,
+            cursor_visual_to: None,
             cancel_reason: None,
             texture_prepared: true,
             old_snapshot: None,
@@ -3955,17 +4141,17 @@ mod tests {
             50,
         ));
 
-        let frames = coord.take_rebase_frames(Some(old_key), "rebased_by_insert", now, None);
+        let (frames, _) = coord.take_rebase_frames(Some(old_key), "rebased_by_insert", now, None);
         assert_eq!(frames.len(), 1, "旧事务的未播完单元要全部交棒");
         assert!((frames[0].visible_fraction - 0.75).abs() < 1e-6);
         assert!(
             coord.prepared_queue.is_empty(),
             "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
         );
+        let (no_frames, _) =
+            coord.take_rebase_frames(None, "rebased_by_insert", now, None);
         assert!(
-            coord
-                .take_rebase_frames(None, "rebased_by_insert", now, None)
-                .is_empty(),
+            no_frames.is_empty(),
             "无冲突事务时不产生交棒帧"
         );
     }
@@ -3988,7 +4174,7 @@ mod tests {
 
         // 在 "abc" 末尾插入 "d"：old 坐标里只是位置 3 这一个点，前面的单元没被覆盖。
         let offset_map = OffsetMap::build("abc", "abcd");
-        let frames = coord.take_rebase_frames(
+        let (frames, _) = coord.take_rebase_frames(
             Some(old_key),
             "rebased_by_insert",
             now,
@@ -4029,7 +4215,7 @@ mod tests {
         ));
 
         let offset_map = OffsetMap::build("abc", "ab");
-        let frames = coord.take_rebase_frames(
+        let (frames, _) = coord.take_rebase_frames(
             Some(old_key),
             "rebased_by_delete",
             now,
@@ -4057,7 +4243,7 @@ mod tests {
 
         // 在开头插入：old 单元 0..3 在新文档里变成 1..4，几何位置变了必须重排。
         let offset_map = OffsetMap::build("abc", "xabc");
-        let frames = coord.take_rebase_frames(
+        let (frames, _) = coord.take_rebase_frames(
             Some(old_key),
             "rebased_by_insert",
             now,
@@ -4084,7 +4270,7 @@ mod tests {
         ));
 
         let offset_map = OffsetMap::build("abc", "abcd");
-        let frames = coord.take_rebase_frames(
+        let (frames, _) = coord.take_rebase_frames(
             Some(old_key),
             "rebased_by_insert",
             now,
@@ -4348,6 +4534,139 @@ mod tests {
         assert!(
             (plan.cursor.h - 20.0).abs() < 1e-6,
             "光标高度取 new caret 行高"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Issue #690 评论 5680276931: rebase 交棒后 reflow 光标从逻辑 old caret 重新起步
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not_logical_old_caret() {
+        // 评论 5680276931 指出：take_rebase_frames() 交棒时只采集文字视觉单元，
+        // 没有把旧事务这一帧正在屏幕上显示的 coordinated cursor rect 带给新事务。
+        // 新事务的 old_cursor_rect 仍来自 pipeline 对旧正文做的权威布局 caret
+        // （逻辑 old caret），不是旧动画当前显示到的位置。
+        // compute_coordinated_cursor_position() 在 Enter/删除换行/纯 reflow 这类
+        // 没有 InsertReveal/DeleteConceal glyph 当边界的场景，走 old/new caret 插值，
+        // rebase 后第一帧 progress=0 → cursor.x = old_cursor_rect.x（逻辑 old caret），
+        // 而文字 reflow unit 的 from_document_rect 已被 rebase 成屏幕位置 → 文字不跳。
+        // 结果：文字保持在屏幕位置，光标却瞬间跳回逻辑 old caret 再往新位置走。
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // ── 旧事务：一个正在播放的 reflow unit，屏幕光标已离开 old_cursor_rect ──
+        // old_cursor_rect = 100（逻辑 old caret），new_cursor_rect = 220
+        // reflow unit 演了 50/100ms → progress 0.5 → ease_out_quad(0.5) = 0.75
+        // 屏幕光标 = 100 + (220-100)*0.75 = 190
+        // 用 Insert 操作（对应 Enter 产生换行：有 reflow 但无 InsertReveal glyph），
+        // 这样 active_text_transaction_key() 才会返回本事务。
+        let old_key = VisualTransactionKey::new(1, 1);
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reflow_slice(0, 3, 100.0, 220.0), 50, 100, now)],
+            caret(100.0),
+            caret(220.0),
+            now,
+            50,
+        ));
+
+        // 前置断言：旧事务当前屏幕光标 = 190
+        let mut old_sample = AnimationFrameSample::new(now);
+        old_sample.set_progress(old_key, 0.5);
+        let (cx_old, _, _) = coord
+            .compute_coordinated_cursor_position(&old_sample)
+            .expect("旧事务应能算出协同光标");
+        assert!(
+            (cx_old - 190.0).abs() < 1e-6,
+            "前置：旧事务屏幕光标应在 190（reflow progress 0.5 → eased 0.75），got {}",
+            cx_old
+        );
+
+        // ── rebase 交棒：take_rebase_frames 现在同时采集文字单元和屏幕光标 ──
+        let (rebase_frames, sampled_cursor) =
+            coord.take_rebase_frames(Some(old_key), "rebased_by_enter", now, None);
+        assert_eq!(rebase_frames.len(), 1, "应采集到一个正在播放的 reflow unit 帧");
+        assert!(
+            (rebase_frames[0].x - 190.0).abs() < 1e-6,
+            "rebase 帧应携带旧 unit 当前屏幕位置 190，got {}",
+            rebase_frames[0].x
+        );
+        let sampled_cursor = sampled_cursor.expect("rebase 交棒应采样到旧事务屏幕光标");
+        assert!(
+            (sampled_cursor.x - 190.0).abs() < 1e-6,
+            "sampled_cursor_rect 应为旧事务屏幕光标 190，got {}",
+            sampled_cursor.x
+        );
+
+        // ── 新事务：Enter/纯 reflow，没有 InsertReveal/DeleteConceal glyph 当边界 ──
+        // old_cursor_rect = 100：pipeline.record_visual_transaction() 对旧正文做的
+        //   权威布局 caret（逻辑 old caret），不等于旧事务屏幕光标 190。
+        // new_cursor_rect = 20：下一行最终 caret。
+        // 修复后 cursor_visual_from = sampled_cursor（190），cursor_visual_to = new_cursor_rect（20）。
+        let new_key = VisualTransactionKey::new(2, 2);
+        let mut new_units = wrap_units(vec![reflow_slice(0, 3, 100.0, 20.0)]);
+        let offset_map = OffsetMap::build("abc", "abc");
+        match_rebase_frames(&rebase_frames, &mut new_units, &offset_map);
+        // rebase 后新 reflow unit：from_document_rect.x = 190（屏幕位置），progress(now) = 0
+        assert!(
+            (new_units[0].slice.from_document_rect.x - 190.0).abs() < 1e-6,
+            "rebase 后新 reflow unit 的 from 应为屏幕位置 190，got {}",
+            new_units[0].slice.from_document_rect.x
+        );
+        assert!(
+            new_units[0].progress(now).abs() < 1e-9,
+            "rebase 后新 unit progress 从 0 开始，got {}",
+            new_units[0].progress(now)
+        );
+
+        let mut new_tx = rendering_tx(
+            new_key,
+            TextVisualOperationKind::Insert,
+            new_units,
+            caret(100.0), // ← 逻辑 old caret（pipeline 权威布局），≠屏幕光标 190
+            caret(20.0),
+            now,
+            0,
+        );
+        // 修复后：rebase 交棒时把采样到的旧事务屏幕光标作为 cursor_visual_from，
+        // new_cursor_rect 作为 cursor_visual_to，compute_coordinated_cursor_position
+        // 消费这条同帧 caret track，不再用裸 old_cursor_rect 当 reflow 光标起点。
+        new_tx.cursor_visual_from = Some(sampled_cursor);
+        new_tx.cursor_visual_to = Some(caret(20.0));
+        coord.prepared_queue.enqueue(new_tx);
+
+        // ── 新事务第一帧（frame_now = now，reflow unit progress = 0）──
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            true,
+        );
+
+        // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）
+        assert!(
+            !plan.text_animation.glyphs.is_empty(),
+            "新事务应产出文字帧"
+        );
+        let text_x = plan.text_animation.glyphs[0].x;
+        assert!(
+            (text_x - 190.0).abs() < 1e-6,
+            "文字 reflow 应从屏幕位置 190 起步不跳，got {}",
+            text_x
+        );
+
+        // 光标 reflow：修复后从 cursor_visual_from.x = 190 起步（屏幕光标不跳）。
+        let cx_new = plan.cursor.x;
+        assert!(
+            (cx_new - 190.0).abs() < 1e-6,
+            "Issue #690 评论 5680276931: rebase 交棒后 reflow 光标应从上一帧屏幕光标 190 起步，\
+             修复后 cursor_visual_from 同步 rebase，第一帧光标不跳（got cursor.x={}）",
+            cx_new
         );
     }
 }

@@ -256,6 +256,17 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub static_patches: Vec<StaticLinePatch>,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
+    /// Issue #690 评论 5680276931: rebase 交棒时采样到的旧事务当前屏幕
+    /// coordinated cursor rect，作为新事务纯 reflow 光标动画的视觉起点。
+    ///
+    /// `None` 表示本事务没有经过 rebase 交棒（首次事务或 CursorOnly），
+    /// `compute_coordinated_cursor_position` 回退到 `old_cursor_rect`。
+    /// `new_cursor_rect` 仍保持权威新布局目标不变，由 `cursor_visual_to` 镜像。
+    pub cursor_visual_from: Option<CursorRect>,
+    /// 与 `cursor_visual_from` 配对的视觉终点，等于 `new_cursor_rect`。
+    /// 独立字段避免 `compute_coordinated_cursor_position` 再去解引用
+    /// `new_cursor_rect` 判断是否发生过 rebase。
+    pub cursor_visual_to: Option<CursorRect>,
     pub cancel_reason: Option<String>,
     pub texture_prepared: bool,
     pub old_snapshot: Option<EditorLayoutSnapshot>,
