@@ -1095,6 +1095,150 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
+     * #691 评论 5686733880：设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=true）
+     * 从 [ComposeEditorVisualState] 完整生产路径验证 cursor 使用 cursorDurationMillis 而非 textDurationMillis。
+     *
+     * 场景："" → "a" 插入。patch 在 textEnabled=true 时生成（含 insertedUnits，确保不是 CURSOR_ONLY），
+     * 然后通过 [applyMotionPolicyAtFrame] 切换到设置矩阵 D（textEnabled=false, cursorEnabled=true,
+     * coordinated=true, textDurationMillis=1000, cursorDurationMillis=80）。
+     * drain 时 patch 仍含 insertedUnits，但 motionPolicy 已被替换成 textEnabled=false。
+     *
+     * 旧缺陷1：[computeCursorParamsForPatch] 只判断 `coordinated && !isCursorOnly`，
+     * 漏掉 textEnabled，textEnabled=false 时仍用 textDurationMillis=1000ms。
+     * 旧缺陷2：[applyCursorPatch] 又按 `policy.coordinated` 二次覆盖成 textDurationMillis。
+     * 两处叠加导致 cursor 动画拖到 1000ms 才完成。
+     *
+     * 修复后：
+     * - [computeCursorParamsForPatch] 用 `usesCoordinatedTextTimeline =
+     *   textEnabled && cursorEnabled && coordinated && !isCursorOnly`，textEnabled=false → false → cursorDurationMillis=80ms。
+     * - [applyCursorPatch] 不再二次覆盖，直接用传入的 cursorDurationNanos。
+     *
+     * 断言：
+     * - 40ms 时 cursor 在中间（80ms 时长 50% 进度），未到最终位置
+     * - 80ms 时 cursor 已到最终位置，hasActiveVisuals=false（动画结束）
+     * - 500ms 时 cursor 仍在最终位置（绝不拖到 1000ms 才完成）
+     * - textEnabled=false 时 scene.units 始终为空（文字立即显示，不创建文字 track）
+     */
+    @Test
+    fun textDisabled_cursorEnabled_coordinatedTrue_cursorUsesCursorDurationNotTextDuration_fromFullProductionPath() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState(targetId = "test-comment-5686733880-matrix-d")
+
+        // 从 layout 直接计算 cursor rect（与生产代码 computeCursorRectFromLayout 一致）
+        val oldCursorRect = layouts[0].getCursorRect(0)
+        val newCursorRect = layouts[1].getCursorRect(1)
+        // 确认旧/新 cursor 位置不同（否则动画无法验证）
+        assertTrue(
+            "旧/新 cursor 位置应不同（old.left=${oldCursorRect.left}, new.left=${newCursorRect.left}）",
+            kotlin.math.abs(oldCursorRect.left - newCursorRect.left) > 0.5f,
+        )
+
+        // 步骤1：建立旧 layout（空文本）
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 步骤2：用 textEnabled=true 生成含 insertedUnits 的 patch（确保不是 CURSOR_ONLY）
+        // 此时 patch 入队，insertedUnits = [TextRange(0,1)] 非空
+        state.onVisualIntent(
+            makeInsertIntent(1L, 0L, 1L, "", "a", TextRange(0, 1)),
+            EditorMotionPolicy(
+                textEnabled = true,
+                cursorEnabled = true,
+                coordinated = true,
+                textDurationMillis = 1000L,
+                cursorDurationMillis = 80L,
+            ),
+        )
+
+        // 步骤3：新 layout 到达，patch 生成并入队
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        assertTrue("drain 前应有 pending patch", state.hasPendingPatches())
+
+        // 步骤4：切换 policy 到设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=true）
+        // patch 的 motionPolicy 被替换成 textEnabled=false，但 insertedUnits 保留（非空）
+        state.applyMotionPolicyAtFrame(
+            EditorMotionPolicy(
+                textEnabled = false,
+                cursorEnabled = true,
+                coordinated = true,
+                textDurationMillis = 1000L,
+                cursorDurationMillis = 80L,
+            ),
+        )
+
+        // 步骤5：drain — patch 含 insertedUnits（isCursorOnly=false），motionPolicy.textEnabled=false
+        // 修复后：usesCoordinatedTextTimeline = false → cursorDurationMillis=80ms
+        // 旧缺陷：coordinated && !isCursorOnly = true → textDurationMillis=1000ms
+        state.drainPendingPatchesAtFrame(0L)
+
+        // === 断言1：40ms 时 cursor 在中间（80ms 时长 50% 进度）===
+        val scene40 = state.sampleVisualScene(40L * NANOS_PER_MS)
+        // textEnabled=false：不创建文字 track，scene.units 始终为空
+        assertTrue(
+            "40ms: textEnabled=false 时 scene.units 应为空（文字立即显示），实际=${scene40.units.size}",
+            scene40.units.isEmpty(),
+        )
+        val cursorRect40 = scene40.cursorRect
+        assertNotNull("40ms: cursor rect 应存在", cursorRect40)
+        val cursorRect40Value = cursorRect40!!
+        // cursor 应在中间位置（progress = 40/80 = 0.5）
+        val expectedMidLeft = oldCursorRect.left + (newCursorRect.left - oldCursorRect.left) * 0.5f
+        assertTrue(
+            "40ms: cursor 应在中间位置（left≈$expectedMidLeft），实际=${cursorRect40Value.left}；" +
+                "若错误使用 textDurationMillis=1000ms，40ms 时 progress=0.04，cursor 仍在起点附近",
+            kotlin.math.abs(cursorRect40Value.left - expectedMidLeft) < 1f,
+        )
+        // cursor 不应已到最终位置
+        // 阈值用 0.3f 而非 0.5f：cursor 移动范围可能正好 1.0（old.left=0 → new.left=1），
+        // 中间位置 0.5 距终点 1.0 正好 0.5，严格大于 0.5 会误判。
+        // 0.3f 既能可靠区分"中间位置"（差 0.5 > 0.3 通过）和"终点位置"（差 0 > 0.3 失败），
+        // 又不会因边界条件失败。
+        assertTrue(
+            "40ms: cursor 不应已到最终位置（left≈${newCursorRect.left}），实际=${cursorRect40Value.left}",
+            kotlin.math.abs(cursorRect40Value.left - newCursorRect.left) > 0.3f,
+        )
+
+        // === 断言2：80ms 时 cursor 已到最终位置，动画结束 ===
+        val scene80 = state.sampleVisualScene(80L * NANOS_PER_MS)
+        assertTrue(
+            "80ms: textEnabled=false 时 scene.units 应为空，实际=${scene80.units.size}",
+            scene80.units.isEmpty(),
+        )
+        val cursorRect80 = scene80.cursorRect
+        assertNotNull("80ms: cursor rect 应存在", cursorRect80)
+        val cursorRect80Value = cursorRect80!!
+        assertTrue(
+            "80ms: cursor 应已到最终位置（left≈${newCursorRect.left}），实际=${cursorRect80Value.left}；" +
+                "若错误使用 textDurationMillis=1000ms，80ms 时 progress=0.08，cursor 仍在起点附近",
+            kotlin.math.abs(cursorRect80Value.left - newCursorRect.left) < 1f,
+        )
+        assertFalse(
+            "80ms: cursor 动画应已完成（hasActiveVisuals=false）；" +
+                "若错误使用 textDurationMillis=1000ms，80ms 时动画仍在进行",
+            state.hasActiveVisuals(80L * NANOS_PER_MS),
+        )
+
+        // === 断言3：500ms 时 cursor 仍在最终位置（绝不拖到 1000ms 才完成）===
+        val scene500 = state.sampleVisualScene(500L * NANOS_PER_MS)
+        assertTrue(
+            "500ms: textEnabled=false 时 scene.units 应为空，实际=${scene500.units.size}",
+            scene500.units.isEmpty(),
+        )
+        val cursorRect500 = scene500.cursorRect
+        assertNotNull("500ms: cursor rect 应存在", cursorRect500)
+        val cursorRect500Value = cursorRect500!!
+        assertTrue(
+            "500ms: cursor 应仍在最终位置（left≈${newCursorRect.left}），实际=${cursorRect500Value.left}；" +
+                "若错误使用 textDurationMillis=1000ms，500ms 时 progress=0.5，cursor 在中间",
+            kotlin.math.abs(cursorRect500Value.left - newCursorRect.left) < 1f,
+        )
+        assertFalse(
+            "500ms: cursor 动画应早已完成（hasActiveVisuals=false）；" +
+                "若错误使用 textDurationMillis=1000ms，500ms 时动画仍在进行",
+            state.hasActiveVisuals(500L * NANOS_PER_MS),
+        )
+    }
+
+    /**
      * #691 评论 5679242735 修改3a：一次提交 3 个 unit，cursor path 有 3 个 point。
      *
      * 一次提交 3 个 newAnimationUnits，cursor path 有 3 个 point（endFraction = 1/3, 2/3, 1.0），

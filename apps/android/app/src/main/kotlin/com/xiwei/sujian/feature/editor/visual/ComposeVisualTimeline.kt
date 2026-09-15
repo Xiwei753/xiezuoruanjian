@@ -189,7 +189,6 @@ class ComposeVisualTimeline {
                 cursorFromRect = cursorFromRect,
                 cursorPath = cursorPath,
                 cursorDurationNanos = cursorDurationNanos,
-                durationNanos = durationNanos,
                 surviving = surviving,
                 progressByKey = progressByKey,
             )
@@ -203,8 +202,14 @@ class ComposeVisualTimeline {
      * 不包含已开始但未完成的 unit（它们已经在屏幕上，不需要 cursor 再追到它们的 caret）。
      * endFraction 从同一份 segment 时间表生成：n = pendingSurviving.size + 新 cursorPath points 数量，
      * 第 i 个 point 的 endFraction = (i + 1f) / n。
-     * CursorTrack.durationNanos 在 coordinated=true 时用文字 durationNanos（有界窗口），
-     * coordinated=false 时保持 cursorDurationNanos（独立时长）。
+     *
+     * #691 评论 5686733880：cursor 时长决定权收口到 [ComposeEditorVisualState.computeCursorParamsForPatch]，
+     * 这里不再按 `policy.coordinated` 二次改时长。调用方传入的 `cursorDurationNanos` 已经是最终决定值：
+     * - 真正的协同文字事务（textEnabled && cursorEnabled && coordinated && !isCursorOnly）→ textDurationMillis
+     * - 其他所有情况（含设置矩阵 D：textEnabled=false, cursorEnabled=true, coordinated=true）→ cursorDurationMillis
+     * 旧逻辑在此处又做一次 `if (policy.coordinated) durationNanos else cursorDurationNanos`，
+     * 会把上层算好的 cursorDurationNanos 再次覆盖成 textDurationMillis，导致设置矩阵 D 下
+     * cursor 错误使用 textDurationMillis（拖到 1000ms 才完成）。
      */
     @Suppress("LongParameterList")
     private fun applyCursorPatch(
@@ -214,7 +219,6 @@ class ComposeVisualTimeline {
         cursorFromRect: Rect,
         cursorPath: List<CursorMotionPoint>,
         cursorDurationNanos: Long,
-        durationNanos: Long,
         surviving: List<VisualTextUnit>,
         progressByKey: Map<Long, Boolean>,
     ) {
@@ -265,20 +269,15 @@ class ComposeVisualTimeline {
                 allPoints
             }
 
-        // #691 评论 5682970101：CursorTrack.durationNanos 在 coordinated=true 时用文字 durationNanos
-        // （有界窗口），coordinated=false 时保持 cursorDurationNanos（独立时长）。
-        val effectiveCursorDurationNanos =
-            if (policy.coordinated) {
-                durationNanos
-            } else {
-                cursorDurationNanos
-            }
+        // #691 评论 5686733880：直接使用调用方传入的 cursorDurationNanos。
+        // cursor 时长决定只保留在 [ComposeEditorVisualState.computeCursorParamsForPatch] 一处，
+        // 这里不再按 policy.coordinated 二次覆盖（避免设置矩阵 D 下 cursor 错误使用 textDurationMillis）。
         cursorChannel =
             CursorTrack(
                 fromRect = startRect,
                 points = normalizedPoints,
                 startedAtNanos = frameTimeNanos,
-                durationNanos = effectiveCursorDurationNanos,
+                durationNanos = cursorDurationNanos,
             )
     }
 

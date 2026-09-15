@@ -298,22 +298,36 @@ class ComposeEditorVisualState(
         // （取不到回退 path.points.first().rect），points = path.points 完整保留。
         val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.first().rect
 
-        // #691 / 设置语义 G：coordinated=true 且有文字变化时，光标与文字共享 textDurationMillis
-        // （用户设置）作为整条编辑视觉事务时长；不再用 Core intent 的 patch.durationMs。
-        val durationNanos = patch.motionPolicy.effective().textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
-
-        // CURSOR_ONLY（没有文字视觉变化）：始终使用 cursorDurationMillis，
-        // 即使 coordinated=true 也不跟随 textDurationMillis（见 EditorMotionPolicy 语义）。
+        // #691 评论 5686733880：cursor 时长决定逻辑收口到此一处。
+        // 只有真正的协同文字事务才用 textDurationMillis，必须同时满足四个条件：
+        //   1. textEnabled=true（文字动画开启，才有"文字事务时长"可言）
+        //   2. cursorEnabled=true（光标动画开启）
+        //   3. coordinated=true（用户选择协同）
+        //   4. 不是 CURSOR_ONLY（有 insertedUnits/deletedUnits/retainedMoves 文字视觉变化）
+        // 任意一个不满足都用 cursorDurationMillis。
+        //
+        // 这覆盖设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=true）：
+        // 即使 coordinated=true 且 patch 含 insertedUnits（isCursorOnly=false），
+        // 因为 textEnabled=false，也不应使用 textDurationMillis，而应使用 cursorDurationMillis。
+        // 旧逻辑只判断 `motionPolicy.coordinated && !isCursorOnly`，漏掉 textEnabled/cursorEnabled，
+        // 导致 textEnabled=false 时仍错误走到 textDurationMillis 分支。
         val isCursorOnly =
             patch.insertedUnits.isEmpty() &&
                 patch.deletedUnits.isEmpty() &&
                 patch.retainedMoves.isEmpty()
+        val usesCoordinatedTextTimeline =
+            motionPolicy.textEnabled &&
+                motionPolicy.cursorEnabled &&
+                motionPolicy.coordinated &&
+                !isCursorOnly
         val effectiveDurationNanos =
-            if (motionPolicy.coordinated && !isCursorOnly) {
-                // coordinated=true 且有文字变化：光标与文字共享整条编辑视觉事务时长。
-                durationNanos
+            if (usesCoordinatedTextTimeline) {
+                // 真正的协同文字事务：光标与文字共享 textDurationMillis
+                // 作为整条编辑视觉事务时长（用户设置）。
+                motionPolicy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             } else {
-                // coordinated=false，或 CURSOR_ONLY：光标使用独立的 cursorDurationMillis。
+                // 其他所有情况（textEnabled=false / cursorEnabled=false /
+                // coordinated=false / CURSOR_ONLY）：光标使用独立的 cursorDurationMillis。
                 motionPolicy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             }
 
