@@ -191,7 +191,7 @@ impl CursorController {
                     let prev_vx = self.visual_x;
                     let prev_vy = self.visual_y;
                     if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
-                        let (init_x, init_y) = if self.visible {
+                        let (init_x, init_y) = if old_visible {
                             (prev_vx, prev_vy)
                         } else {
                             // 首次出现：尚无可信 visual position，用 old_rect 初始化。

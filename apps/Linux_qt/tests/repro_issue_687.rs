@@ -117,10 +117,15 @@ fn issue687_p2_apply_plan_none_branch_uses_visual_position() {
         !src.contains("(start_x - prev_vx).abs() < 0.01"),
         "问题2修复: apply_plan None 分支不应再用 (start_x - prev_vx).abs() < 0.01 判断"
     );
-    // 应包含 self.visible 作为判断条件（光标可见时用 visual_x/visual_y）
+    // 应包含 old_visible 作为判断条件（光标此前已可见时用 visual_x/visual_y）
     assert!(
-        src.contains("if self.visible"),
-        "问题2修复: apply_plan None 分支应用 self.visible 判断是否用 visual 位置"
+        src.contains("if old_visible"),
+        "问题2修复: apply_plan None 分支应用 old_visible 判断是否用 visual 位置"
+    );
+    // 不应再用覆盖后的 self.visible 作为判断条件
+    assert!(
+        !src.contains("if self.visible"),
+        "问题2修复: apply_plan None 分支不应再用覆盖后的 self.visible 判断"
     );
     println!("[BUGFIX_687_VERIFY] P2 apply_plan None branch uses visual_x/visual_y (FIXED)");
 }
