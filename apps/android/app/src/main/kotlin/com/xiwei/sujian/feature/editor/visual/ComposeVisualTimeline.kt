@@ -39,7 +39,7 @@ class ComposeVisualTimeline {
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
      * 再处理新 patch。不能从旧事务的 progress 反算，也不能先归零。
      *
-     * @param patch 这一帧的屏幕 diff。
+     * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
      */
     fun applyPatch(
@@ -94,7 +94,7 @@ class ComposeVisualTimeline {
                 }
                 continue
             }
-            val slices = computeSlices(target, offsetMap, newTextLength)
+            val slices = computeSlices(target, offsetMap, newTextLength, patch.intent)
             for (slice in slices) {
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
                     surviving.add(mapSurvivingSlice(unit, slice.newSubRange, newLayout, frameTimeNanos, durationNanos))
@@ -110,11 +110,14 @@ class ComposeVisualTimeline {
         target: TextRange,
         offsetMap: List<VisualOffsetMapEntry>?,
         newTextLength: Int,
+        intent: EditorVisualIntent? = null,
     ): List<ComposeVisualRebase.MappedRangeSlice> {
-        if (offsetMap != null) {
-            return ComposeVisualRebase.splitMappedRangeForward(target, offsetMap)
+        val effectiveMap =
+            offsetMap ?: intent?.let { ComposeVisualRebase.entriesForIntent(it) }
+        if (effectiveMap != null) {
+            return ComposeVisualRebase.splitMappedRangeForward(target, effectiveMap)
         }
-        // 无 offset map：若 target 仍在新正文范围内且文本未变，保留；否则转 ghost
+        // 无 offset map 且无 intent 信息：若 target 仍在新正文范围内，保留；否则转 ghost
         return if (target.end <= newTextLength) {
             listOf(
                 ComposeVisualRebase.MappedRangeSlice(

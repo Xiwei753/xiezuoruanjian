@@ -19,12 +19,13 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import uniffi.writer_core.AnimationModeDto
-import com.xiwei.sujian.feature.editor.visual.VisualReplaceBounds
 
 /**
- * #689 评论 5676120929 复现测试 — 暴露当前 ComposeVisualTimeline/Rebase/Overlay 的剩余 3 个硬问题。
+ * #689 评论 5676120929 复现+验证测试 — 修复后的断言。
  *
- * 这些测试在修复前全部 FAIL，用于证据驱动的缺陷复现。
+ * 问题1：latestPatch 改为 pendingPatches 队列，快速输入时 patch 不丢。
+ * 问题2：ghost 绘制使用 currentPosition，删除过程中不跳。
+ * 问题3：offsetMap==null 时用 entriesForIntent fallback，等长替换不错认。
  */
 @Suppress("StringLiteralDuplication", "MaxLineLength", "FunctionNaming")
 @RunWith(RobolectricTestRunner::class)
@@ -38,17 +39,15 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
     /**
      * 问题1：latestPatch 还是"只保留最后一个值"，快速输入时前一笔 patch 直接丢掉。
      *
-     * 场景：直接测试 ComposeEditorVisualState 的 patch 队列机制。
+     * 场景："" -> "a" -> "ab" -> "abc"，连续生成 A/B/C 三个 patch，
+     * 中间一次都不要手工 applyVisualPatchAtFrame()，最后只推进一次 frame。
      *
-     * 期望：连续发布三笔 intent 后，队列中必须有 3 笔 patch。
+     * 期望：timeline 必须能看到 a、b、c 三笔都进入持续状态，而不是只剩最后 C。
      */
     @Test
     fun issue1_rapidInput_patchesNotLost() {
         val visualState = ComposeEditorVisualState(targetId = "test")
 
-        // 模拟快速输入：连续发布三笔 intent
-        // 注意：onVisualIntent 需要匹配 layout 才能生成 patch
-        // 先设置初始 layout（""）
         val layouts = captureLayouts("", "a", "ab", "abc")
         val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
         val aLayout = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0)
@@ -94,6 +93,10 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
 
         // 验证：没有待消费的 patch 了
         assertTrue("问题1: 消费后没有待消费的 patch", !visualState.hasPendingPatches())
+
+        // 验证：sample 后 timeline 能正常推进（不抛异常）
+        val scene = visualState.sampleVisualScene(0L)
+        assertNotNull("问题1: sample 必须返回 scene", scene)
     }
 
     // ==================== 问题 2 ====================
@@ -152,14 +155,12 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         val ghostPosition = computeCurrentPosition(ghostA?.position, halfFrameTime)
 
         // 验证：ghost 位置必须等于删除前的位置
-        val delta = Offset(
-            (ghostPosition?.x ?: 0f) - (halfPosition?.x ?: 0f),
-            (ghostPosition?.y ?: 0f) - (halfPosition?.y ?: 0f),
-        )
+        val deltaX = (ghostPosition?.x ?: 0f) - (halfPosition?.x ?: 0f)
+        val deltaY = (ghostPosition?.y ?: 0f) - (halfPosition?.y ?: 0f)
         assertTrue(
             "问题2: ghost 位置必须等于删除前的当前位置，" +
-                "实际 ghostPosition=$ghostPosition, halfPosition=$halfPosition, delta=$delta",
-            kotlin.math.abs(delta.x) < 1f && kotlin.math.abs(delta.y) < 1f,
+                "实际 ghostPosition=$ghostPosition, halfPosition=$halfPosition",
+            kotlin.math.abs(deltaX) < 1f && kotlin.math.abs(deltaY) < 1f,
         )
     }
 
@@ -170,9 +171,10 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
      *
      * 场景：active "a"，随后 replace 成 "b"，offsetMap = null，replaceBounds = (0,1,0,1)。
      *
-     * 期望：旧 "a" -> ghost，新 "b" -> inserted。
+     * 期望：旧 "a" -> ghost，新 "b" -> inserted；不能出现旧 unit 直接 surviving 到新 [0,1)。
      */
     @Test
+    @Suppress("LongMethod")
     fun issue3_nullOffsetMap_replaceDoesNotSurviveOldUnit() {
         val layouts = captureLayouts("a", "b")
         val aLayout = ComposeLayoutSnapshot(layouts[0], TextRange(1, 1), 0)
@@ -199,8 +201,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             midScene.units.count { it.targetRange != null },
         )
 
-        // Step 2: 测试 entriesForIntent 在 offsetMap=null 时生成 fallback entries
-        // 创建一个 intent，offsetMap=null，replaceBounds=(0,1,0,1)
+        // Step 2: 创建 replace intent，offsetMap=null，replaceBounds=(0,1,0,1)
         val replaceIntent =
             EditorVisualIntent(
                 coreTransactionId = 2L,
@@ -208,7 +209,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 newRevision = 0L,
                 animationMode = AnimationModeDto.CLUSTER_ANIMATION,
                 durationMs = 100L,
-                offsetMap = null, // Core 没给 offsetMap
+                offsetMap = null,
                 oldRanges = listOf(TextRange(0, 1)),
                 newRanges = listOf(TextRange(0, 1)),
                 textKind = TextVisualKind.Move,
@@ -218,28 +219,73 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 replaceBounds = VisualReplaceBounds(oldStart = 0, oldEnd = 1, newStart = 0, newEnd = 1),
             )
 
-        // 调试：验证 replaceBounds 不为 null
-        assertNotNull("问题3: replaceBounds 不应为 null", replaceIntent.replaceBounds)
-
-        // 验证：entriesForIntent 应该生成 fallback entries
+        // 验证：entriesForIntent 应该生成 fallback entries（空，因为整个文本被替换）
         val entries = ComposeVisualRebase.entriesForIntent(replaceIntent)
-        // 当 replaceBounds=(0,1,0,1) 时，被替换的区域就是整个文本，没有前缀和后缀
-        // 所以 entries 为空是正常的（表示没有存活的映射）
-        assertTrue(
-            "问题3: entriesForIntent 应生成 fallback entries（可能为空，表示没有存活映射）",
-            entries.isNotEmpty() || true, // entries 为空是允许的
+        // replaceBounds=(0,1,0,1) 时没有前缀和后缀，entries 为空 — 表示没有存活映射
+        assertEquals(
+            "问题3: 等长全替换的 fallback entries 应为空（无存活映射）",
+            0,
+            entries.size,
         )
 
-        // 关键验证：composeOffsetMapChain 不应该返回 null（之前会因为 offsetMap==null 返回 null）
+        // 验证：composeOffsetMapChain 不应该返回 null
         val composed = ComposeVisualRebase.composeOffsetMapChain(listOf(replaceIntent))
         assertNotNull(
             "问题3: composeOffsetMapChain 不应因 offsetMap==null 返回 null，实际=$composed",
             composed,
         )
+
+        // Step 3: 构建包含 intent 的 patch，应用到 timeline
+        val replacePatch =
+            makePatch(
+                id = 2L,
+                oldLayout = aLayout,
+                newLayout = bLayout,
+                offsetMap = null,
+                insertedUnits = listOf(TextRange(0, 1)),
+                deletedUnits = listOf(TextRange(0, 1)),
+                intent = replaceIntent,
+            )
+        timeline.applyPatch(replacePatch, frameTimeNanos = midFrameTime)
+
+        // Step 4: 验证结果 — 旧 "a" 应该转成 ghost，新 "b" 应该 inserted
+        val resultScene = timeline.sample(midFrameTime)
+        val ghosts = resultScene.units.filter { it.targetRange == null }
+        val surviving = resultScene.units.filter { it.targetRange != null }
+
+        // 旧 "a" 应该是 ghost（targetRange == null）
+        val ghostA = ghosts.firstOrNull { it.range == TextRange(0, 1) }
+        assertNotNull(
+            "问题3: 旧 'a' 必须转成 ghost，实际 ghosts=${ghosts.map { "${it.range}->${it.targetRange}" }}",
+            ghostA,
+        )
+
+        // 新 "b" 应该是 surviving/inserted（targetRange != null）
+        val insertedB = surviving.firstOrNull { it.range == TextRange(0, 1) }
+        assertNotNull(
+            "问题3: 新 'b' 必须作为 inserted/surviving 存在，" +
+                "实际 surviving=${surviving.map { "${it.range}->${it.targetRange}" }}",
+            insertedB,
+        )
+
+        // 关键：不应该有旧 unit 直接 surviving 到新 [0,1)
+        val wrongSurvival =
+            surviving.any {
+                it.targetRange == TextRange(0, 1) && it.layout == aLayout
+            }
+        val survivingInfo =
+            surviving.map {
+                "layout=${it.layout == aLayout},range=${it.range},target=${it.targetRange}"
+            }
+        assertTrue(
+            "问题3: 旧 unit 不应直接 surviving 到新 [0,1)，实际=$survivingInfo",
+            !wrongSurvival,
+        )
     }
 
     // ==================== 辅助方法 ====================
 
+    @Suppress("LongParameterList")
     private fun makePatch(
         id: Long,
         oldLayout: ComposeLayoutSnapshot,
@@ -249,6 +295,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
+        intent: EditorVisualIntent? = null,
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -263,6 +310,7 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs),
+            intent = intent,
         )
 
     private fun makeIntent(

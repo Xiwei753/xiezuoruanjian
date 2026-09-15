@@ -275,6 +275,7 @@ class ComposeVisualFrameCoordinator(
                         lastIntent.animationMode
                     },
                 motionPolicy = chainMotionPolicy,
+                intent = lastIntent,
             )
 
         // patch 生成后照常推进基线、清 pending，但不要保存一个 active transaction 等待结束。

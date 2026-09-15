@@ -771,105 +771,105 @@ internal object ComposeVisualRebase {
     }
 
 /**
- * #689 评论 5676120929 问题3：获取 intent 的 entries — 优先用 offsetMap，没有则根据
- * replaceBounds + expectedOldText/expectedNewText 生成 fallback survival map。
- *
- * 等长替换（oldText.length == newText.length）时，如果 Core 没返回 offsetMap，
- * 旧实现会直接把整段旧文本当存活（"target.end <= newTextLength → SURVIVING"），
- * 把旧 unit 错认成新 unit，导致同一 range 两个 overlay unit。
- * 现在用 replaceBounds 显式区分前缀/后缀（存活）和被替换区域（没有 entry = 删除）。
- */
-fun entriesForIntent(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
-    intent.offsetMap?.entries?.let { return it }
-    return buildFallbackEntriesFromReplaceBounds(intent)
-}
+     * #689 评论 5676120929 问题3：获取 intent 的 entries — 优先用 offsetMap，没有则根据
+     * replaceBounds + expectedOldText/expectedNewText 生成 fallback survival map。
+     *
+     * 等长替换（oldText.length == newText.length）时，如果 Core 没返回 offsetMap，
+     * 旧实现会直接把整段旧文本当存活（"target.end <= newTextLength → SURVIVING"），
+     * 把旧 unit 错认成新 unit，导致同一 range 两个 overlay unit。
+     * 现在用 replaceBounds 显式区分前缀/后缀（存活）和被替换区域（没有 entry = 删除）。
+     */
+    fun entriesForIntent(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
+        intent.offsetMap?.entries?.let { return it }
+        return buildFallbackEntriesFromReplaceBounds(intent)
+    }
 
 /**
- * 根据 replaceBounds + expectedOldText.length + expectedNewText.length
- * 生成 fallback survival map：
- * - replace 前面的前缀：old [0, oldStart) -> new [0, newStart)
- * - replace 后面的后缀：old [oldEnd, oldLen) -> new [newEnd, newLen)
- * - 被替换的中间区域没有 entry（被编辑/删除，不存活）。
- */
-private fun buildFallbackEntriesFromReplaceBounds(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
-    val replaceBounds = intent.replaceBounds
-    val oldLen = intent.expectedOldText.length
-    val newLen = intent.expectedNewText.length
-    if (replaceBounds == null || oldLen == 0 || newLen == 0) return emptyList()
+     * 根据 replaceBounds + expectedOldText.length + expectedNewText.length
+     * 生成 fallback survival map：
+     * - replace 前面的前缀：old [0, oldStart) -> new [0, newStart)
+     * - replace 后面的后缀：old [oldEnd, oldLen) -> new [newEnd, newLen)
+     * - 被替换的中间区域没有 entry（被编辑/删除，不存活）。
+     */
+    private fun buildFallbackEntriesFromReplaceBounds(intent: EditorVisualIntent): List<VisualOffsetMapEntry> {
+        val replaceBounds = intent.replaceBounds
+        val oldLen = intent.expectedOldText.length
+        val newLen = intent.expectedNewText.length
+        if (replaceBounds == null || oldLen == 0 || newLen == 0) return emptyList()
 
-    val entries = mutableListOf<VisualOffsetMapEntry>()
+        val entries = mutableListOf<VisualOffsetMapEntry>()
 
-    // 前缀：old [0, oldStart) -> new [0, newStart)
-    if (replaceBounds.oldStart > 0 && replaceBounds.newStart > 0) {
-        val prefixLen = minOf(replaceBounds.oldStart, replaceBounds.newStart)
-        if (prefixLen > 0) {
-            entries.add(
-                VisualOffsetMapEntry(
+        // 前缀：old [0, oldStart) -> new [0, newStart)
+        if (replaceBounds.oldStart > 0 && replaceBounds.newStart > 0) {
+            val prefixLen = minOf(replaceBounds.oldStart, replaceBounds.newStart)
+            if (prefixLen > 0) {
+                entries.add(
+                    VisualOffsetMapEntry(
+                        oldStart = 0,
+                        newStart = 0,
+                        length = prefixLen,
+                        kind = VisualOffsetMapKind.IDENTITY,
+                    ),
+                )
+            }
+        }
+
+        // 后缀：old [oldEnd, oldLen) -> new [newEnd, newLen)
+        val oldSuffixStart = replaceBounds.oldEnd
+        val newSuffixStart = replaceBounds.newEnd
+        if (oldSuffixStart < oldLen && newSuffixStart < newLen) {
+            val suffixLen = minOf(oldLen - oldSuffixStart, newLen - newSuffixStart)
+            if (suffixLen > 0) {
+                entries.add(
+                    VisualOffsetMapEntry(
+                        oldStart = oldSuffixStart,
+                        newStart = newSuffixStart,
+                        length = suffixLen,
+                        kind = VisualOffsetMapKind.IDENTITY,
+                    ),
+                )
+            }
+        }
+
+        return entries
+    }
+
+/**
+     * #644 评论 #684：合成整条 offset map chain。
+     *
+     * #689 评论 5676120929 问题3：不再因某一笔 offsetMap == null 就返回 null，
+     * 而是每笔都用 [entriesForIntent] 拿 entries（优先 offsetMap，没有则从 replaceBounds 生成 fallback），
+     * 保证等长替换时被替换区域不会被错当成存活。
+     */
+    fun composeOffsetMapChain(chain: List<EditorVisualIntent>): List<VisualOffsetMapEntry>? {
+        if (chain.isEmpty()) return null
+
+        val initialOldLen = chain.first().expectedOldText.length
+        var acc: List<AccSegment> =
+            listOf(
+                AccSegment(
                     oldStart = 0,
                     newStart = 0,
-                    length = prefixLen,
+                    length = initialOldLen,
                     kind = VisualOffsetMapKind.IDENTITY,
                 ),
             )
-        }
-    }
 
-    // 后缀：old [oldEnd, oldLen) -> new [newEnd, newLen)
-    val oldSuffixStart = replaceBounds.oldEnd
-    val newSuffixStart = replaceBounds.newEnd
-    if (oldSuffixStart < oldLen && newSuffixStart < newLen) {
-        val suffixLen = minOf(oldLen - oldSuffixStart, newLen - newSuffixStart)
-        if (suffixLen > 0) {
-            entries.add(
-                VisualOffsetMapEntry(
-                    oldStart = oldSuffixStart,
-                    newStart = newSuffixStart,
-                    length = suffixLen,
-                    kind = VisualOffsetMapKind.IDENTITY,
-                ),
+        for (intent in chain) {
+            val entries = entriesForIntent(intent)
+            val stage = buildStageSegments(entries)
+            acc = composeStage(acc, stage)
+        }
+
+        return acc.map {
+            VisualOffsetMapEntry(
+                oldStart = it.oldStart,
+                newStart = it.newStart,
+                length = it.length,
+                kind = it.kind,
             )
         }
     }
-
-    return entries
-}
-
-/**
- * #644 评论 #684：合成整条 offset map chain。
- *
- * #689 评论 5676120929 问题3：不再因某一笔 offsetMap == null 就返回 null，
- * 而是每笔都用 [entriesForIntent] 拿 entries（优先 offsetMap，没有则从 replaceBounds 生成 fallback），
- * 保证等长替换时被替换区域不会被错当成存活。
- */
-fun composeOffsetMapChain(chain: List<EditorVisualIntent>): List<VisualOffsetMapEntry>? {
-    if (chain.isEmpty()) return null
-
-    val initialOldLen = chain.first().expectedOldText.length
-    var acc: List<AccSegment> =
-        listOf(
-            AccSegment(
-                oldStart = 0,
-                newStart = 0,
-                length = initialOldLen,
-                kind = VisualOffsetMapKind.IDENTITY,
-            ),
-        )
-
-    for (intent in chain) {
-        val entries = entriesForIntent(intent)
-        val stage = buildStageSegments(entries)
-        acc = composeStage(acc, stage)
-    }
-
-    return acc.map {
-        VisualOffsetMapEntry(
-            oldStart = it.oldStart,
-            newStart = it.newStart,
-            length = it.length,
-            kind = it.kind,
-        )
-    }
-}
 
     private fun buildStageSegments(entries: List<VisualOffsetMapEntry>): List<StageSegment> {
         return entries

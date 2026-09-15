@@ -85,7 +85,7 @@ fun ComposeTextAnimationOverlay(
     val latestPatch by visualState.latestPatch.collectAsStateWithLifecycle()
     val visualScene by visualState.visualScene.collectAsStateWithLifecycle()
 
-    val patchId = latestPatch?.id ?: 0L
+    val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
     val hasCursorMotionPath = latestPatch?.cursorMotionPath != null
 
     // #684 评论 5672654866：光标的位置改成一个跨 patch 保持的 Animatable<Rect, AnimationVector4D>。
@@ -113,32 +113,28 @@ fun ComposeTextAnimationOverlay(
     }
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
-    // patch 到达时先 applyVisualPatchAtFrame，然后循环 sample + withFrameNanos 推进。
+    // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
+    // 这样即使 LaunchedEffect 因 key 变化重启，patch 数据仍在队列里不会丢。
     // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos，
     // 不用 System.nanoTime()（Compose 官方明确 withFrameNanos 的 frameTimeNanos
     // time base 是 implementation-defined，不保证等于 System.nanoTime()）。
-    LaunchedEffect(patchId) {
-        if (patchId <= 0L) return@LaunchedEffect
-        val patch = latestPatch ?: return@LaunchedEffect
-        var firstFrame = true
+    LaunchedEffect(patchVersion) {
+        if (patchVersion <= 0L) return@LaunchedEffect
         while (true) {
             val active =
                 withFrameNanos { frameTimeNanos ->
-                    if (firstFrame) {
-                        visualState.applyVisualPatchAtFrame(patch, frameTimeNanos)
-                        firstFrame = false
-                    }
+                    visualState.drainPendingPatchesAtFrame(frameTimeNanos)
                     visualState.sampleVisualScene(frameTimeNanos)
-                    visualState.hasActiveVisuals(frameTimeNanos)
+                    visualState.hasPendingPatches() || visualState.hasActiveVisuals(frameTimeNanos)
                 }
             if (!active) break
         }
     }
 
     // #684 评论 5672654866：光标动画 — 按 cursorMotionPath 分段 animateTo。
-    // 触发条件从 transactionId 换成 patchId。
-    LaunchedEffect(patchId) {
-        if (patchId <= 0L) return@LaunchedEffect
+    // #689 评论 5676120929 问题1：用 patchVersion 与帧循环同步。
+    LaunchedEffect(patchVersion) {
+        if (patchVersion <= 0L) return@LaunchedEffect
         val path = latestPatch?.cursorMotionPath ?: return@LaunchedEffect
         val durationMs = latestPatch?.durationMs ?: 0L
         if (durationMs <= 0L) {
@@ -222,10 +218,11 @@ private fun DrawScope.drawVisualScene(
         } else {
             // ghost unit：在旧 layout 的真实位置淡出
             val sourceBounds = safePathBounds(result, range) ?: continue
-            val translate = Offset(
-                currentPosition.x - sourceBounds.left,
-                currentPosition.y - sourceBounds.top,
-            )
+            val translate =
+                Offset(
+                    currentPosition.x - sourceBounds.left,
+                    currentPosition.y - sourceBounds.top,
+                )
             drawTranslatedRangeText(
                 result = result,
                 range = range,

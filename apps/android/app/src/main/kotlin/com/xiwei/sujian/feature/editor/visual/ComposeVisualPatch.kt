@@ -49,6 +49,8 @@ data class RetainedMove(
  * @param durationMs 动画时长（ms）— Core 建议，timeline 据此设置通道 durationNanos。
  * @param animationMode Core 动画模式 — SYSTEM_SUPPRESSED 时 timeline 不新建文字通道。
  * @param motionPolicy 动画策略 — effective 后的策略，overlay 据此决定 text/cursor timeline。
+ * @param intent 原始 Core intent — 用于 offsetMap==null 时根据 replaceBounds
+ *   生成 fallback survival map，防止等长替换时旧 unit 被错认成新 unit。
  */
 data class ComposeVisualPatch(
     val id: Long,
@@ -63,4 +65,5 @@ data class ComposeVisualPatch(
     val durationMs: Long,
     val animationMode: AnimationModeDto,
     val motionPolicy: EditorMotionPolicy,
+    val intent: EditorVisualIntent? = null,
 )
