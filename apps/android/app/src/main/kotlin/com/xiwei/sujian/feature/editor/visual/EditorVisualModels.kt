@@ -142,6 +142,7 @@ data class VisualOffsetMapEntry(
 enum class VisualOffsetMapKind {
     /** 文本相同且 offset 不变（位置不变）。 */
     IDENTITY,
+
     /** 文本相同但 offset 改变（被前后增删平移）；内容变化/删除区域没有 mapping。 */
     SHIFTED,
 }

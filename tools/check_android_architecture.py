@@ -449,8 +449,14 @@ def rule_visual_motion_pure() -> list[Finding]:
         _641_visual_exemptions = {
             "feature/editor/visual/ComposeEditorVisualState.kt",
             "feature/editor/visual/ComposeTextAnimationOverlay.kt",
-            "feature/editor/visual/ComposeVisualTransaction.kt",
-            "feature/editor/visual/ComposeVisualFrame.kt",
+            # #689 评论 5674631257：持续视觉状态重构。ComposeVisualTransaction/
+            # ComposeVisualFrame 已删除，由 ComposeVisualPatch（屏幕 diff 数据类）
+            # 和 ComposeVisualTimeline（持续视觉状态数据类）替代。二者引用
+            # androidx.compose.ui.geometry.Offset / androidx.compose.ui.text.TextRange
+            # 做显示数据，与旧 ComposeVisualFrame/ComposeVisualTransaction 同类，
+            # 不写正文持久状态，加入豁免。
+            "feature/editor/visual/ComposeVisualPatch.kt",
+            "feature/editor/visual/ComposeVisualTimeline.kt",
             # #644 评论 5467821839 第5节：从 ComposeEditorVisualState 拆出的纯计算/
             # 数据类，引用 androidx.compose.ui.geometry.Rect / TextLayoutResult 做显示，
             # 与 ComposeVisualFrame 同类，不写正文持久状态。

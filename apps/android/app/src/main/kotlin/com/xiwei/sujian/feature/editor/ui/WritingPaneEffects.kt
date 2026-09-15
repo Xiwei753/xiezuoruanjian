@@ -513,37 +513,44 @@ private fun mapCoreVisualIntentToEditorVisualIntent(event: CoreVisualIntentEvent
     val replaceBounds = computeVisualReplaceBounds(event.oldText, event.newText)
 
     // #644 评论 #684：在 UI 映射边界一次性把 Core UTF-8 offset map 转成 UTF-16。
-    val visualOffsetMap = event.visualIntent.offsetMap?.let { coreOffsetMap ->
-        VisualOffsetMap(
-            entries =
-                coreOffsetMap.entries.map { entry ->
-                    val oldStartUtf16 =
-                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
-                    val newStartUtf16 =
-                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
-                    val lengthUtf16 = entry.length // Core length is in bytes, need to convert
-                    // 简化处理：用 newText 从 newStartUtf16 开始计算实际 UTF-16 长度
-                    val oldEndByte = entry.oldByteOffset + entry.length
-                    val newEndByte = entry.newByteOffset + entry.length
-                    val oldEndUtf16 =
-                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size))
-                    val newEndUtf16 =
-                        TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size))
-                    VisualOffsetMapEntry(
-                        oldStart = oldStartUtf16,
-                        newStart = newStartUtf16,
-                        length = newEndUtf16 - newStartUtf16,
-                        kind =
-                            when (entry.kind) {
-                                com.xiwei.sujian.feature.editor.projection.OffsetMapKind.IDENTITY ->
-                                    VisualOffsetMapKind.IDENTITY
-                                com.xiwei.sujian.feature.editor.projection.OffsetMapKind.SHIFTED ->
-                                    VisualOffsetMapKind.SHIFTED
-                            },
-                    )
-                },
-        )
-    }
+    val visualOffsetMap =
+        event.visualIntent.offsetMap?.let { coreOffsetMap ->
+            VisualOffsetMap(
+                entries =
+                    coreOffsetMap.entries.map { entry ->
+                        val oldStartUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.oldText, entry.oldByteOffset)
+                        val newStartUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(event.newText, entry.newByteOffset)
+                        val lengthUtf16 = entry.length // Core length is in bytes, need to convert
+                        // 简化处理：用 newText 从 newStartUtf16 开始计算实际 UTF-16 长度
+                        val oldEndByte = entry.oldByteOffset + entry.length
+                        val newEndByte = entry.newByteOffset + entry.length
+                        val oldEndUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                                event.oldText,
+                                oldEndByte.coerceAtMost(event.oldText.toByteArray(Charsets.UTF_8).size),
+                            )
+                        val newEndUtf16 =
+                            TextOffsetUtils.utf16OffsetForUtf8Byte(
+                                event.newText,
+                                newEndByte.coerceAtMost(event.newText.toByteArray(Charsets.UTF_8).size),
+                            )
+                        VisualOffsetMapEntry(
+                            oldStart = oldStartUtf16,
+                            newStart = newStartUtf16,
+                            length = newEndUtf16 - newStartUtf16,
+                            kind =
+                                when (entry.kind) {
+                                    com.xiwei.sujian.feature.editor.projection.OffsetMapKind.IDENTITY ->
+                                        VisualOffsetMapKind.IDENTITY
+                                    com.xiwei.sujian.feature.editor.projection.OffsetMapKind.SHIFTED ->
+                                        VisualOffsetMapKind.SHIFTED
+                                },
+                        )
+                    },
+            )
+        }
 
     return EditorVisualIntent(
         coreTransactionId = event.transactionId,
