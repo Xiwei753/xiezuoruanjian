@@ -24,11 +24,13 @@
 //!   都意味着旧视觉资源与新排版结果不是同一视觉对象，强行移动会导致 ligature/RTL/emoji
 //!   渲染错误。
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap};
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
+use super::text_visual_transaction::PreparedVisualUnit;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
@@ -51,15 +53,31 @@ use crate::sujian_editor_item::editor_animation_debug_log;
 /// `update_paint_node()` 入口处取一次 `Instant::now()` 作为 `frame_now`，
 /// 后续文字 progress、光标 progress、cursor timeline sample 全部从这一个时间点计算。
 /// 消除 GUI 线程 FrameAnimation tick 和 Scene Graph 渲染帧之间的采样偏差。
-#[derive(Clone, Copy, Debug)]
+///
+/// 每个 active 正文事务的 progress 在 `build_render_plan_full()` 入口处只算一次，
+/// 写入 `progress_by_key`，后面 `build_text_animation_plan` / `compute_coordinated_cursor`
+/// 都从同一个 sample 读取，不再各自 `Instant::now()`。
 pub(crate) struct AnimationFrameSample {
     /// 本帧统一采样时间点。
     pub frame_now: Instant,
+    progress_by_key: HashMap<VisualTransactionKey, f64>,
 }
 
 impl AnimationFrameSample {
     pub fn new(frame_now: Instant) -> Self {
-        Self { frame_now }
+        Self {
+            frame_now,
+            progress_by_key: HashMap::new(),
+        }
+    }
+
+    pub fn set_progress(&mut self, key: VisualTransactionKey, progress: f64) {
+        self.progress_by_key.insert(key, progress);
+    }
+
+    /// 读取本帧该事务的预计算 progress（未记录则视为 0）。
+    pub fn progress(&self, key: VisualTransactionKey) -> f64 {
+        *self.progress_by_key.get(&key).unwrap_or(&0.0)
     }
 }
 
@@ -72,11 +90,11 @@ pub(crate) enum CursorTimelineSample {
     Running(f64),
 }
 
-/// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉帧 rebase 到新事务的 slice 上。
+/// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉帧 rebase 到新事务的视觉单元上。
 ///
 /// 与旧版的区别：rebase 时传入 `visible_fraction`，使 InsertReveal/DeleteConceal
 /// 从当前可见比例继续，而不是重新 0→1 / 1→0。
-/// `visible_fraction` 从旧 slice 的 `compute_frame(old_progress)` 计算：
+/// `visible_fraction` 从旧 unit 的 `slice.compute_frame(old_progress)` 计算：
 /// - InsertReveal：visible = frame.w / slice.to_document_rect.w（已吐出比例）
 /// - DeleteConceal：visible = frame.w / slice.from_document_rect.w（剩余比例）
 ///
@@ -319,10 +337,6 @@ fn build_cluster_reflow_slices(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
 ) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
-    eprintln!(
-        "[BUGFIX_REPRO_TRACE] build_cluster_reflow_slices: excluded_old_ranges={:?}, excluded_new_ranges={:?}",
-        excluded_old_ranges, excluded_new_ranges
-    );
     let mut slices = Vec::new();
     let mut static_patches = Vec::new();
 
@@ -807,19 +821,19 @@ impl LinuxEditorAnimationCoordinator {
                             {
                                 let old_progress = old_tx.progress(Instant::now());
                                 if old_progress > 0.0 && old_progress < 1.0 {
-                                    for old_slice in &old_tx.slices {
-                                        let frame = old_slice.compute_frame(old_progress);
-                                        let visible_fraction = match old_slice.kind {
+                                    for old_unit in &old_tx.units {
+                                        let frame = old_unit.slice.compute_frame(old_progress);
+                                        let visible_fraction = match old_unit.slice.kind {
                                             AnimatedSliceKind::InsertReveal => {
-                                                if old_slice.to_document_rect.w > 0.0 {
-                                                    frame.w / old_slice.to_document_rect.w
+                                                if old_unit.slice.to_document_rect.w > 0.0 {
+                                                    frame.w / old_unit.slice.to_document_rect.w
                                                 } else {
                                                     0.0
                                                 }
                                             }
                                             AnimatedSliceKind::DeleteConceal => {
-                                                if old_slice.from_document_rect.w > 0.0 {
-                                                    frame.w / old_slice.from_document_rect.w
+                                                if old_unit.slice.from_document_rect.w > 0.0 {
+                                                    frame.w / old_unit.slice.from_document_rect.w
                                                 } else {
                                                     0.0
                                                 }
@@ -827,18 +841,22 @@ impl LinuxEditorAnimationCoordinator {
                                             _ => 0.0,
                                         };
                                         frames.push((
-                                            old_slice.byte_start,
-                                            old_slice.byte_end,
+                                            old_unit.slice.byte_start,
+                                            old_unit.slice.byte_end,
                                             frame.x,
                                             frame.y,
                                             frame.opacity,
-                                            old_slice.shaping_identity.clone(),
+                                            old_unit.slice.shaping_identity.clone(),
                                             visible_fraction,
                                         ));
                                     }
                                 }
                             }
                             self.prepared_queue.cancel(old_key, "rebased");
+                            editor_animation_debug_log(&format!(
+                                "anim_rebase: old_key={:?} reason=rebased_by_insert",
+                                old_key,
+                            ));
                             frames
                         } else {
                             Vec::new()
@@ -912,7 +930,10 @@ impl LinuxEditorAnimationCoordinator {
                         state: TextVisualTransactionState::Pending,
                         operation_kind: TextVisualOperationKind::Insert,
                         timeline: TransactionTimeline::new(vt.duration_ms),
-                        slices,
+                        units: slices
+                            .into_iter()
+                            .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                            .collect(),
                         static_patches,
                         old_cursor_rect,
                         new_cursor_rect,
@@ -969,19 +990,19 @@ impl LinuxEditorAnimationCoordinator {
                         {
                             let old_progress = old_tx.progress(Instant::now());
                             if old_progress > 0.0 && old_progress < 1.0 {
-                                for old_slice in &old_tx.slices {
-                                    let frame = old_slice.compute_frame(old_progress);
-                                    let visible_fraction = match old_slice.kind {
+                                for old_unit in &old_tx.units {
+                                    let frame = old_unit.slice.compute_frame(old_progress);
+                                    let visible_fraction = match old_unit.slice.kind {
                                         AnimatedSliceKind::InsertReveal => {
-                                            if old_slice.to_document_rect.w > 0.0 {
-                                                frame.w / old_slice.to_document_rect.w
+                                            if old_unit.slice.to_document_rect.w > 0.0 {
+                                                frame.w / old_unit.slice.to_document_rect.w
                                             } else {
                                                 0.0
                                             }
                                         }
                                         AnimatedSliceKind::DeleteConceal => {
-                                            if old_slice.from_document_rect.w > 0.0 {
-                                                frame.w / old_slice.from_document_rect.w
+                                            if old_unit.slice.from_document_rect.w > 0.0 {
+                                                frame.w / old_unit.slice.from_document_rect.w
                                             } else {
                                                 0.0
                                             }
@@ -989,18 +1010,22 @@ impl LinuxEditorAnimationCoordinator {
                                         _ => 0.0,
                                     };
                                     frames.push((
-                                        old_slice.byte_start,
-                                        old_slice.byte_end,
+                                        old_unit.slice.byte_start,
+                                        old_unit.slice.byte_end,
                                         frame.x,
                                         frame.y,
                                         frame.opacity,
-                                        old_slice.shaping_identity.clone(),
+                                        old_unit.slice.shaping_identity.clone(),
                                         visible_fraction,
                                     ));
                                 }
                             }
                         }
                         self.prepared_queue.cancel(old_key, "rebased");
+                        editor_animation_debug_log(&format!(
+                            "anim_rebase: old_key={:?} reason=rebased_by_delete",
+                            old_key,
+                        ));
                         frames
                     } else {
                         Vec::new()
@@ -1066,7 +1091,10 @@ impl LinuxEditorAnimationCoordinator {
                     state: TextVisualTransactionState::Pending,
                     operation_kind: TextVisualOperationKind::Delete,
                     timeline: TransactionTimeline::new(vt.duration_ms),
-                    slices,
+                    units: slices
+                        .into_iter()
+                        .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                        .collect(),
                     static_patches,
                     old_cursor_rect: old_cursor_rect.clone(),
                     new_cursor_rect: new_cursor_rect.clone(),
@@ -1099,7 +1127,7 @@ impl LinuxEditorAnimationCoordinator {
                     state: TextVisualTransactionState::Pending,
                     operation_kind: TextVisualOperationKind::Cursor,
                     timeline: TransactionTimeline::new(vt.duration_ms),
-                    slices: Vec::new(),
+                    units: Vec::new(),
                     static_patches: Vec::new(),
                     old_cursor_rect,
                     new_cursor_rect,
@@ -1140,38 +1168,29 @@ impl LinuxEditorAnimationCoordinator {
                 {
                     let old_progress = old_tx.progress(Instant::now());
                     if old_progress > 0.0 && old_progress < 1.0 {
-                        for old_slice in &old_tx.slices {
-                            let frame = old_slice.compute_frame(old_progress);
-                            let visible_fraction = match old_slice.kind {
-                                AnimatedSliceKind::InsertReveal => {
-                                    if old_slice.to_document_rect.w > 0.0 {
-                                        frame.w / old_slice.to_document_rect.w
-                                    } else {
-                                        0.0
-                                    }
-                                }
-                                AnimatedSliceKind::DeleteConceal => {
-                                    if old_slice.from_document_rect.w > 0.0 {
-                                        frame.w / old_slice.from_document_rect.w
-                                    } else {
-                                        0.0
-                                    }
-                                }
-                                _ => 0.0,
-                            };
+                        for old_unit in &old_tx.units {
+                            // 旧事务当前真实可见比例（含 start_fraction 起点与 easing），
+                            // 后续 rebase 到新事务时作为新单元的起点。
+                            let visible =
+                                old_unit.slice.current_visible_fraction(old_progress);
+                            let frame = old_unit.slice.compute_frame(visible);
                             frames.push((
-                                old_slice.byte_start,
-                                old_slice.byte_end,
+                                old_unit.slice.byte_start,
+                                old_unit.slice.byte_end,
                                 frame.x,
                                 frame.y,
                                 frame.opacity,
-                                old_slice.shaping_identity.clone(),
-                                visible_fraction,
+                                old_unit.slice.shaping_identity.clone(),
+                                visible,
                             ));
                         }
                     }
                 }
                 self.prepared_queue.cancel(old_key, "rebased");
+                editor_animation_debug_log(&format!(
+                    "anim_rebase: old_key={:?} reason=rebased_by_cursor",
+                    old_key,
+                ));
                 frames
             } else {
                 Vec::new()
@@ -1243,7 +1262,12 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
             timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            slices,
+            units: slices
+                .into_iter()
+                .map(|s| {
+                    PreparedVisualUnit::wrap(s, u64::from(self.typing_animation_duration_ms))
+                })
+                .collect(),
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
@@ -1289,38 +1313,29 @@ impl LinuxEditorAnimationCoordinator {
                 {
                     let old_progress = old_tx.progress(Instant::now());
                     if old_progress > 0.0 && old_progress < 1.0 {
-                        for old_slice in &old_tx.slices {
-                            let frame = old_slice.compute_frame(old_progress);
-                            let visible_fraction = match old_slice.kind {
-                                AnimatedSliceKind::InsertReveal => {
-                                    if old_slice.to_document_rect.w > 0.0 {
-                                        frame.w / old_slice.to_document_rect.w
-                                    } else {
-                                        0.0
-                                    }
-                                }
-                                AnimatedSliceKind::DeleteConceal => {
-                                    if old_slice.from_document_rect.w > 0.0 {
-                                        frame.w / old_slice.from_document_rect.w
-                                    } else {
-                                        0.0
-                                    }
-                                }
-                                _ => 0.0,
-                            };
+                        for old_unit in &old_tx.units {
+                            // 旧事务当前真实可见比例（含 start_fraction 起点与 easing），
+                            // 后续 rebase 到新事务时作为新单元的起点。
+                            let visible =
+                                old_unit.slice.current_visible_fraction(old_progress);
+                            let frame = old_unit.slice.compute_frame(visible);
                             frames.push((
-                                old_slice.byte_start,
-                                old_slice.byte_end,
+                                old_unit.slice.byte_start,
+                                old_unit.slice.byte_end,
                                 frame.x,
                                 frame.y,
                                 frame.opacity,
-                                old_slice.shaping_identity.clone(),
-                                visible_fraction,
+                                old_unit.slice.shaping_identity.clone(),
+                                visible,
                             ));
                         }
                     }
                 }
                 self.prepared_queue.cancel(old_key, "rebased");
+                editor_animation_debug_log(&format!(
+                    "anim_rebase: old_key={:?} reason=rebased_by_composition",
+                    old_key,
+                ));
                 frames
             } else {
                 Vec::new()
@@ -1616,7 +1631,12 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
             timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            slices,
+            units: slices
+                .into_iter()
+                .map(|s| {
+                    PreparedVisualUnit::wrap(s, u64::from(self.typing_animation_duration_ms))
+                })
+                .collect(),
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
@@ -1674,7 +1694,7 @@ impl LinuxEditorAnimationCoordinator {
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::Cursor,
             timeline: TransactionTimeline::new(u64::from(self.cursor_animation_duration_ms)),
-            slices: Vec::new(),
+            units: Vec::new(),
             static_patches: Vec::new(),
             old_cursor_rect: old_cursor_rect.clone(),
             new_cursor_rect: new_cursor_rect.clone(),
@@ -1715,31 +1735,6 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn has_active_insert(&self) -> bool {
         self.prepared_queue.has_active_insert()
-    }
-
-    /// Issue #679 评论 5657313927 (3c): 按 driver key 取样 Timeline 进度。
-    ///
-    /// 不再排除 1.0（旧 `active_cursor_progress` 过滤 `0 < p < 1` 导致 `p == 1`
-    /// 永远送不到光标）。key 不存在返回 None 说明 Timeline 已结束/取消。
-    pub(crate) fn cursor_timeline_sample(
-        &self,
-        key: VisualTransactionKey,
-    ) -> Option<CursorTimelineSample> {
-        let tx = self
-            .prepared_queue
-            .active_transactions()
-            .iter()
-            .find(|tx| tx.key == key)?;
-
-        match tx.state {
-            TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
-                Some(CursorTimelineSample::Waiting)
-            }
-            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => Some(
-                CursorTimelineSample::Running(tx.progress(Instant::now()).clamp(0.0, 1.0)),
-            ),
-            TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => None,
-        }
     }
 
     /// Issue #686 评论 5664857575 领域2：返回当前活动的正文编辑事务（Insert/Delete，
@@ -2001,8 +1996,19 @@ impl LinuxEditorAnimationCoordinator {
         frame_now: Instant,
         coordinated_enabled: bool,
     ) -> RenderPlan {
+        // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
+        // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
+        let mut frame_sample = AnimationFrameSample::new(frame_now);
+        for tx in self.prepared_queue.active_transactions() {
+            if !matches!(
+                tx.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            ) {
+                frame_sample.set_progress(tx.key, tx.progress(frame_now));
+            }
+        }
         let (text_animation, keys_to_complete) =
-            self.build_text_animation_plan_with_time(frame_now);
+            self.build_text_animation_plan_with_sample(&frame_sample);
         frame_context.keys_to_complete = keys_to_complete;
         let active_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -2053,12 +2059,11 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         // Issue #690 评论 5675007226 步骤 2: 协同光标位置从同一 frame_now 计算。
-        // 当正文编辑事务活跃且 coordinated 动画启用时，光标位置直接从 text animation
-        // progress 计算（跟随文字吞吐边界），不再使用 GUI 线程上一帧留下的
-        // cursor_ctrl.visual_x/y。
+        // 光标严格跟随文字吞吐边界：InsertReveal → 右边界，DeleteConceal → 吞字边界，
+        // Reflow/Cursor → old/new 插值。不再用单一 progress 在 old/new rect 之间线性插值。
         if coordinated_enabled {
-            if let Some((progress, old_rect, new_rect)) =
-                self.compute_coordinated_cursor(frame_now)
+            if let Some((cx, cy, ch)) =
+                self.compute_coordinated_cursor_position(&frame_sample)
             {
                 let suppressed = matches!(
                     self.active_operation_kind(),
@@ -2069,10 +2074,6 @@ impl LinuxEditorAnimationCoordinator {
                 } else {
                     CursorBlinkMode::Normal
                 };
-                let eased = 1.0 - (1.0 - progress.clamp(0.0, 1.0)).powi(3);
-                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                let h = new_rect.bottom - new_rect.top;
                 let opacity = if blink_mode == CursorBlinkMode::Suppressed {
                     1.0
                 } else {
@@ -2080,9 +2081,9 @@ impl LinuxEditorAnimationCoordinator {
                 };
                 cursor_render_state = CursorRenderState {
                     visible: true,
-                    x,
-                    y,
-                    h,
+                    x: cx,
+                    y: cy,
+                    h: ch,
                     opacity,
                 };
             }
@@ -2099,13 +2100,14 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    /// Issue #690 评论 5675007226 步骤 1: 用 `frame_now` 统一采样文字 progress。
+    /// Issue #690 评论 5675007226 步骤 1+3: 从同一 `AnimationFrameSample` 读取文字 progress，
     ///
-    /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`），
-    /// 所有 transaction 的 progress 都从同一个 `frame_now` 计算。
-    fn build_text_animation_plan_with_time(
+    /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`）。每个视觉单元
+    /// 拥有自己的 `started_at` / `duration_ms`，从自己的时间线计算 per-unit progress；
+    /// `start_fraction` 由 rebase 决定（新单元为 0，被连续输入覆盖的单元从已显示比例继续）。
+    fn build_text_animation_plan_with_sample(
         &mut self,
-        frame_now: Instant,
+        sample: &AnimationFrameSample,
     ) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
@@ -2126,17 +2128,39 @@ impl LinuxEditorAnimationCoordinator {
                 if !tx.timeline.is_started() {
                     tx.timeline.mark_first_frame();
                 }
+                // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
+                // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
+                for unit in &mut tx.units {
+                    if unit.started_at.is_none() {
+                        unit.started_at = Some(sample.frame_now);
+                    }
+                }
             }
 
-            let progress = tx.progress(frame_now);
+            let all_units_done = if tx.units.is_empty() {
+                sample.progress(tx.key) >= 1.0
+            } else {
+                tx.units
+                    .iter()
+                    .all(|u| u.progress(sample.frame_now) >= 1.0)
+            };
 
-            if progress >= 1.0 {
+            if all_units_done {
+                editor_animation_debug_log(&format!(
+                    "anim_complete: key={:?} op={:?} units={}",
+                    tx.key, tx.operation_kind, tx.units.len(),
+                ));
                 keys_to_complete.push(tx.key);
                 continue;
             }
 
-            for slice in &tx.slices {
-                let frame = slice.compute_frame(progress);
+            for unit in &tx.units {
+                // 单元视觉窗口 [start_fraction, target_fraction] 内，按自己的生命周期 0→1 推进。
+                let lifecycle = unit.progress(sample.frame_now);
+                let eased = AnimatedSlice::ease_out_quad(lifecycle);
+                let visible = unit.start_fraction
+                    + (unit.target_fraction - unit.start_fraction) * eased;
+                let frame = unit.slice.compute_frame(visible);
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,
                     y: frame.y,
@@ -2152,15 +2176,21 @@ impl LinuxEditorAnimationCoordinator {
         (TextAnimationPlan { glyphs }, keys_to_complete)
     }
 
-    /// Issue #690 评论 5675007226 步骤 2: 从当前正文事务计算协同光标位置。
+    /// Issue #690 评论 5675007226 步骤 2: 协同光标直接计算最终屏幕位置。
     ///
-    /// 返回 `(progress, old_cursor_rect, new_cursor_rect)` 供 `build_render_plan_full`
-    /// 用同一 ease 函数计算光标中间位置。光标和文字共用同一个 progress，
-    /// 不再有 GUI 线程 tick 和 Scene Graph 渲染帧的采样偏差。
-    fn compute_coordinated_cursor(
+    /// 光标严格跟随文字吞吐边界，不再在 old/new cursor rect 之间用 progress 插值：
+    /// - InsertReveal：光标 x = 本帧所有 reveal 单元的最右可见边界（frame.x + frame.w）。
+    /// - DeleteConceal (Backspace, conceal_from_left)：光标跟 frame.x + frame.w 往左走，
+    ///   旧字正好被光标"吞掉"。
+    /// - DeleteConceal (forward Delete, !conceal_from_left)：逻辑光标不移动，
+    ///   固定在 new_cursor_rect.x。
+    /// - Reflow / Cursor / Enter：用 old/new cursor rect 按 ease_out_quad 插值。
+    ///
+    /// 返回 `(x, y, h)` 供 `build_render_plan_full` 直接写入 `CursorRenderState`。
+    fn compute_coordinated_cursor_position(
         &self,
-        frame_now: Instant,
-    ) -> Option<(f64, CursorRect, CursorRect)> {
+        sample: &AnimationFrameSample,
+    ) -> Option<(f64, f64, f64)> {
         let key = self.active_text_transaction_key()?;
         let tx = self
             .prepared_queue
@@ -2168,15 +2198,97 @@ impl LinuxEditorAnimationCoordinator {
             .iter()
             .find(|t| t.key == key)?;
 
-        let old_rect = tx.old_cursor_rect.clone()?;
-        let new_rect = tx.new_cursor_rect.clone()?;
+        let old_rect = tx.old_cursor_rect.as_ref()?;
+        let new_rect = tx.new_cursor_rect.as_ref()?;
+        let h = new_rect.bottom - new_rect.top;
 
         match tx.state {
-            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
-                let progress = tx.progress(frame_now);
-                Some((progress, old_rect, new_rect))
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {}
+            _ => return None,
+        }
+
+        let op = tx.operation_kind;
+        let frame_now = sample.frame_now;
+
+        match op {
+            TextVisualOperationKind::Insert => {
+                let mut rightmost_x: Option<f64> = None;
+                let mut cursor_y = new_rect.top;
+                for unit in &tx.units {
+                    if unit.slice.kind != AnimatedSliceKind::InsertReveal {
+                        continue;
+                    }
+                    let lifecycle = unit.progress(frame_now);
+                    let eased = AnimatedSlice::ease_out_quad(lifecycle);
+                    let visible = unit.start_fraction
+                        + (unit.target_fraction - unit.start_fraction) * eased;
+                    let frame = unit.slice.compute_frame(visible.clamp(0.0, 1.0));
+                    let edge_x = frame.x + frame.w;
+                    rightmost_x = Some(match rightmost_x {
+                        Some(prev) => prev.max(edge_x),
+                        None => edge_x,
+                    });
+                    cursor_y = frame.y;
+                }
+                match rightmost_x {
+                    Some(x) => Some((x, cursor_y, h)),
+                    None => {
+                        let progress = sample.progress(key);
+                        let eased = AnimatedSlice::ease_out_quad(progress);
+                        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                        Some((x, y, h))
+                    }
+                }
             }
-            _ => None,
+            TextVisualOperationKind::Delete => {
+                let mut has_conceal_from_left = false;
+                let mut has_conceal_from_right = false;
+                let mut conceal_edge: Option<f64> = None;
+                let mut cursor_y = new_rect.top;
+
+                for unit in &tx.units {
+                    if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
+                        continue;
+                    }
+                    let lifecycle = unit.progress(frame_now);
+                    let eased = AnimatedSlice::ease_out_quad(lifecycle);
+                    let visible = unit.start_fraction
+                        + (unit.target_fraction - unit.start_fraction) * eased;
+                    let frame = unit.slice.compute_frame(visible.clamp(0.0, 1.0));
+
+                    if unit.slice.conceal_from_left {
+                        has_conceal_from_left = true;
+                        let edge = frame.x + frame.w;
+                        conceal_edge = Some(match conceal_edge {
+                            Some(prev) => prev.min(edge),
+                            None => edge,
+                        });
+                        cursor_y = frame.y;
+                    } else {
+                        has_conceal_from_right = true;
+                    }
+                }
+
+                if has_conceal_from_left {
+                    Some((conceal_edge.unwrap_or(new_rect.x), cursor_y, h))
+                } else if has_conceal_from_right || !tx.units.is_empty() {
+                    let progress = sample.progress(key);
+                    let eased = AnimatedSlice::ease_out_quad(progress);
+                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                    Some((x, y, h))
+                } else {
+                    Some((new_rect.x, new_rect.top, h))
+                }
+            }
+            _ => {
+                let progress = sample.progress(key);
+                let eased = AnimatedSlice::ease_out_quad(progress);
+                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                Some((x, y, h))
+            }
         }
     }
 
@@ -3013,9 +3125,9 @@ mod tests {
             .find(|t| t.key == key.unwrap())
             .unwrap();
         let has_move = tx
-            .slices
+            .units
             .iter()
-            .any(|s| s.kind == AnimatedSliceKind::ReflowMove);
+            .any(|u| u.slice.kind == AnimatedSliceKind::ReflowMove);
         assert!(
             has_move,
             "commit with same shaping but different geometry should create ReflowMove slice"
@@ -3101,9 +3213,9 @@ mod tests {
             .find(|t| t.key == key.unwrap())
             .unwrap();
         let crossfade_count = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade)
+            .filter(|u| u.slice.kind == AnimatedSliceKind::ReflowCrossFade)
             .count();
         assert!(
             crossfade_count >= 2,
@@ -3183,9 +3295,10 @@ mod tests {
             .find(|t| t.key == key.unwrap())
             .unwrap();
         let first_cluster_slices: Vec<&AnimatedSlice> = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.byte_start == 0 && s.byte_end == 3)
+            .filter(|u| u.slice.byte_start == 0 && u.slice.byte_end == 3)
+            .map(|u| &u.slice)
             .collect();
         assert!(
             first_cluster_slices.is_empty(),
@@ -3267,18 +3380,20 @@ mod tests {
             .find(|t| t.key == key.unwrap())
             .unwrap();
         let old_preedit_slices: Vec<&AnimatedSlice> = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.byte_start >= 3 && s.byte_end <= 10)
+            .filter(|u| u.slice.byte_start >= 3 && u.slice.byte_end <= 10)
+            .map(|u| &u.slice)
             .collect();
         assert!(
             !old_preedit_slices.is_empty(),
             "preedit range should have animated slices"
         );
         let new_candidate_slices: Vec<&AnimatedSlice> = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.byte_start >= 3 && s.byte_end <= 5)
+            .filter(|u| u.slice.byte_start >= 3 && u.slice.byte_end <= 5)
+            .map(|u| &u.slice)
             .collect();
         assert!(
             !new_candidate_slices.is_empty(),
@@ -3342,9 +3457,10 @@ mod tests {
             .find(|t| t.key == key.unwrap())
             .unwrap();
         let delete_slices: Vec<&AnimatedSlice> = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .filter(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
+            .map(|u| &u.slice)
             .collect();
         assert!(
             !delete_slices.is_empty(),
@@ -3413,9 +3529,9 @@ mod tests {
         // N→M run: 1 old [0,3) + 2 new [0,1),[4,6) → crossfade slices
         // old cluster [0,3) produces crossfade_old (uses first new's byte range [0,1))
         let crossfade_count = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::ReflowCrossFade)
+            .filter(|u| u.slice.kind == AnimatedSliceKind::ReflowCrossFade)
             .count();
         // 1 crossfade_old (old [0,3)) + 2 crossfade_new (new [0,1) + new [4,6)) = 3
         assert_eq!(
@@ -3425,10 +3541,10 @@ mod tests {
         );
         // new cluster [1,4) is inserted text (no old counterpart) → InsertReveal
         let insert_count = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::InsertReveal)
-            .filter(|s| s.byte_start == 1 && s.byte_end == 4)
+            .filter(|u| u.slice.kind == AnimatedSliceKind::InsertReveal)
+            .filter(|u| u.slice.byte_start == 1 && u.slice.byte_end == 4)
             .count();
         assert_eq!(
             insert_count, 1,
@@ -3437,9 +3553,9 @@ mod tests {
         );
         // No DeleteConceal for these ranges
         let delete_count = tx
-            .slices
+            .units
             .iter()
-            .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
+            .filter(|u| u.slice.kind == AnimatedSliceKind::DeleteConceal)
             .count();
         assert_eq!(delete_count, 0, "should not produce DeleteConceal");
     }

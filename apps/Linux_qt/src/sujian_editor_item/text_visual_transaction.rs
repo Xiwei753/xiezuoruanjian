@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use writer_core::editor::CursorRect;
 
-use super::animated_slice::AnimatedSlice;
+use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
@@ -102,21 +102,83 @@ impl TransactionTimeline {
     }
 }
 
+/// Issue #690 评论 5675007226 步骤 3: 单个视觉单元，拥有自己的动画生命期。
+///
+/// 不再让整笔 `PreparedTextVisualTransaction` 单一的 `TransactionTimeline` 同时驱动
+/// 所有 slice 的 0→1。每个 unit 保存自己的 `started_at` / `duration_ms`，从自己的
+/// 时间线计算 progress；`start_fraction` / `target_fraction` 描述这一帧单元在
+/// 0→1 范围内的可视起点/终点：
+/// - InsertReveal：`start_fraction` = 当前已吐出比例（0→1），`target_fraction` = 1。
+/// - DeleteConceal：`start_fraction` = 当前还剩比例（1→0），`target_fraction` = 0。
+/// - ReflowMove / ReflowCrossFade：`start_fraction` = 0，`target_fraction` = 1。
+///
+/// 快速连续输入时，旧事务被 cancel 并 rebase：匹配的旧 unit 通过 `rebase_from` 把当前
+/// `visible_fraction` 写入 `start_fraction`，文字从"已经吐/吞到一半"的位置继续，
+/// 而不是重新 0→1 / 1→0。新插入的字追加新的 unit，沿用自己独立的 `started_at`。
+/// 只有被新编辑实际覆盖的 unit 才结束/替换。
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedVisualUnit {
+    pub slice: AnimatedSlice,
+    pub started_at: Option<Instant>,
+    pub duration_ms: u64,
+    pub start_fraction: f64,
+    pub target_fraction: f64,
+}
+
+impl PreparedVisualUnit {
+    fn target_for_kind(kind: AnimatedSliceKind) -> f64 {
+        match kind {
+            AnimatedSliceKind::DeleteConceal => 0.0,
+            _ => 1.0,
+        }
+    }
+
+    /// 把一个 `AnimatedSlice` 包成拥有独立生命期的视觉单元。
+    ///
+    /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致）。
+    /// `started_at` 在事务首次进入 Rendering 时由 coordinator 填入。
+    pub fn wrap(slice: AnimatedSlice, duration_ms: u64) -> Self {
+        let target_fraction = Self::target_for_kind(slice.kind);
+        let start_fraction = slice.start_fraction.clamp(0.0, 1.0);
+        Self {
+            slice,
+            started_at: None,
+            duration_ms,
+            start_fraction,
+            target_fraction,
+        }
+    }
+
+    /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
+    /// `started_at` 为 `None` 表示尚未开始，返回 0。
+    pub fn progress(&self, now: Instant) -> f64 {
+        match self.started_at {
+            None => 0.0,
+            Some(start) => {
+                if self.duration_ms == 0 {
+                    return 1.0;
+                }
+                let elapsed = now.duration_since(start).as_millis() as f64;
+                (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
+            }
+        }
+    }
+}
+
 /// 一次平台视觉事务持有的全部资源。
 ///
-/// 它拥有一次动画所需的 slices、patches、cursor transition
-/// 和 old/new snapshots。
+/// 它拥有一次动画所需的 units、patches、cursor transition
+/// 和 old/new snapshots。事务 key 负责资源和 snapshot 所有权；
+/// 逐个 `PreparedVisualUnit` 负责自己显示到哪里（见 `PreparedVisualUnit`）。
 /// `texture_prepared` 为 true 后，静态层才允许隐藏对应范围，否则会出现一帧空洞。
 /// 事务完成、取消或超时移除后，对应快照资源才可以释放。
-///
-/// 文字切片、光标、预输入装饰全部消费同一个 Timeline progress。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedTextVisualTransaction {
     pub key: VisualTransactionKey,
     pub state: TextVisualTransactionState,
     pub operation_kind: TextVisualOperationKind,
     pub timeline: TransactionTimeline,
-    pub slices: Vec<AnimatedSlice>,
+    pub units: Vec<PreparedVisualUnit>,
     pub static_patches: Vec<StaticLinePatch>,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
@@ -169,9 +231,9 @@ impl PreparedTextVisualTransaction {
     }
 
     pub fn overlaps_byte_range(&self, byte_start: usize, byte_end: usize) -> bool {
-        self.slices
+        self.units
             .iter()
-            .any(|s| s.byte_end > byte_start && s.byte_start < byte_end)
+            .any(|u| u.slice.byte_end > byte_start && u.slice.byte_start < byte_end)
             || self
                 .static_patches
                 .iter()
@@ -179,7 +241,7 @@ impl PreparedTextVisualTransaction {
     }
 
     pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {
-        let mut ids: Vec<LineSnapshotId> = self.slices.iter().map(|s| s.snapshot_id).collect();
+        let mut ids: Vec<LineSnapshotId> = self.units.iter().map(|u| u.slice.snapshot_id).collect();
         for patch in &self.static_patches {
             ids.push(patch.snapshot_id);
         }

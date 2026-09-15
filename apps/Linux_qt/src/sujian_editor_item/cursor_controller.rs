@@ -97,11 +97,6 @@ impl CursorController {
     }
 
     pub fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
-        eprintln!(
-            "[BUGFIX_REPRO_TRACE] apply_plan: animation.is_some()={}, transition={:?}",
-            self.animation.is_some(),
-            plan.transition
-        );
         let old_x = self.target_x;
         let old_y = self.target_y;
         let old_visible = self.visible;

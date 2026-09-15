@@ -73,6 +73,17 @@ pub(crate) struct AnimatedSlice {
 }
 
 impl AnimatedSlice {
+    /// Issue #690 评论 5675007226 步骤 2: 协同动画唯一 easing 函数。
+    ///
+    /// Reveal、Conceal、Reflow 的逐帧进度，以及协调光标（跟随文字吞吐边界）共用它，
+    /// 保证文字和光标沿同一条 ease-out quadratic 曲线运动，不再出现"文字甩开光标"。
+    /// 普通 CursorOnly（方向键、Home/End、鼠标点选后的平滑移动）仍保留自己的平滑曲线，
+    /// 不调用本函数。
+    pub(crate) fn ease_out_quad(p: f64) -> f64 {
+        let p = p.clamp(0.0, 1.0);
+        1.0 - (1.0 - p).powi(2)
+    }
+
     /// 创建 Insert 吐字切片。
     ///
     /// 文字始终在 `to_document_rect` 位置，动画进度控制可见纹理宽度从 0 → 100%。
@@ -261,24 +272,18 @@ impl AnimatedSlice {
         }
     }
 
-    /// 纯插值计算：根据 progress 计算当前帧的 destination rect 和 source rect。
+    /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
+    /// 和 source rect。
     ///
-    /// Issue #690 评论 5675007226 步骤 3: 使用 `start_fraction` 支持视觉单元独立生命周期。
-    /// 快速连续输入时，rebase 会设置 `start_fraction` 为当前已显示比例，
-    /// 动画从该比例继续而不是从头开始。
-    ///
-    /// - InsertReveal：effective = start_fraction + (1 - start_fraction) * eased(progress)
-    /// - DeleteConceal：effective = start_fraction * (1 - eased(progress))
-    /// - ReflowMove/ReflowCrossFade：不使用 start_fraction（移动/淡入淡出无"已显示比例"概念）。
-    ///
-    /// 缓动函数：`1.0 - (1.0 - progress).powi(2)` 即 ease-out quadratic。
-    pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
+    /// Issue #690 评论 5675007226 步骤 3: `visible` 已经过 `current_visible_fraction`
+    /// 由单元生命周期 + 单元视觉窗口（[`PreparedVisualUnit::start_fraction`,
+    /// `PreparedVisualUnit::target_fraction`]）映射得到，并施加了同一条 ease-out quadratic
+    /// 曲线。这里只做几何与透明度的线性插值，不再重复施加 easing 或 `start_fraction`，
+    /// 避免与协调光标重复缓动。
+    pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
+        let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                let eased = 1.0 - (1.0 - progress).powi(2);
-                // Issue #690: 从 start_fraction 继续，不从 0 开始。
-                let visible =
-                    (self.start_fraction + (1.0 - self.start_fraction) * eased).clamp(0.0, 1.0);
                 let frame_w = self.to_document_rect.w * visible;
                 let frame_h = self.to_document_rect.h;
                 let frame_source_rect = SourceRect {
@@ -298,9 +303,6 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                let eased = 1.0 - (1.0 - progress).powi(2);
-                // Issue #690: 从 start_fraction 继续收缩。
-                let visible = (self.start_fraction * (1.0 - eased)).clamp(0.0, 1.0);
                 let frame_w = self.from_document_rect.w * visible;
                 let frame_h = self.from_document_rect.h;
                 let (frame_x, src_x) = if self.conceal_from_left {
@@ -328,11 +330,10 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::ReflowMove => {
-                let eased = 1.0 - (1.0 - progress).powi(2);
                 let x = self.from_document_rect.x
-                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                    + (self.to_document_rect.x - self.from_document_rect.x) * visible;
                 let y = self.from_document_rect.y
-                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                    + (self.to_document_rect.y - self.from_document_rect.y) * visible;
                 AnimatedSliceFrame {
                     x,
                     y,
@@ -344,16 +345,15 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::ReflowCrossFade => {
-                let eased = 1.0 - (1.0 - progress).powi(2);
                 let x = self.from_document_rect.x
-                    + (self.to_document_rect.x - self.from_document_rect.x) * eased;
+                    + (self.to_document_rect.x - self.from_document_rect.x) * visible;
                 let y = self.from_document_rect.y
-                    + (self.to_document_rect.y - self.from_document_rect.y) * eased;
+                    + (self.to_document_rect.y - self.from_document_rect.y) * visible;
                 let w = self.from_document_rect.w
-                    + (self.to_document_rect.w - self.from_document_rect.w) * eased;
+                    + (self.to_document_rect.w - self.from_document_rect.w) * visible;
                 let h = self.from_document_rect.h
-                    + (self.to_document_rect.h - self.from_document_rect.h) * eased;
-                let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * eased;
+                    + (self.to_document_rect.h - self.from_document_rect.h) * visible;
+                let opacity = self.opacity_from + (self.opacity_to - self.opacity_from) * visible;
                 AnimatedSliceFrame {
                     x,
                     y,
@@ -365,6 +365,23 @@ impl AnimatedSlice {
                 }
             }
         }
+    }
+
+    /// 把单元生命周期进度（`progress`，0..1）映射成"最终可见比例"（0..1）。
+    ///
+    /// Issue #690 评论 5675007226 步骤 2+3: 与协调光标共用同一条 ease-out quadratic；
+    /// `start_fraction` 为单元在窗口内的起点（Reveal 当前已吐出比例 / Conceal 当前还剩比例），
+    /// `DeleteConceal` 终点为 0、其余为 1，正好对应 [`PreparedVisualUnit::target_fraction`]。
+    pub fn current_visible_fraction(&self, progress: f64) -> f64 {
+        let eased = AnimatedSlice::ease_out_quad(progress);
+        match self.kind {
+            AnimatedSliceKind::InsertReveal => {
+                self.start_fraction + (1.0 - self.start_fraction) * eased
+            }
+            AnimatedSliceKind::DeleteConceal => self.start_fraction * (1.0 - eased),
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => eased,
+        }
+        .clamp(0.0, 1.0)
     }
 }
 
