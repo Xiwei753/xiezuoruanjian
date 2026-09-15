@@ -12,11 +12,9 @@
 import QtQuick
 import QtQuick.Controls
 
-Text {
+AppText {
     id: control
-    property var theme: null
 
-    font.pixelSize: control.theme.fontXl
+    font.pixelSize: resolvedDt.fontXl
     font.weight: Font.Bold
-    color: control.theme.textPrimary
 }

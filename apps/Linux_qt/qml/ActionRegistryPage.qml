@@ -33,16 +33,17 @@ ScrollView {
         spacing: root.appTheme.sp12
 
         // Header
-        Text {
+        AppText {
+            dt: root.appTheme
             text: qsTr("Action 调试")
             font.pixelSize: root.appTheme.fontXl
             font.weight: Font.Bold
-            color: root.appTheme.textPrimary
         }
 
-        Text {
+        AppText {
+            dt: root.appTheme
+            variant: "secondary"
             text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
-            color: root.appTheme.textSecondary
             font.pixelSize: root.appTheme.fontSm
             wrapMode: Text.Wrap
             Layout.fillWidth: true
@@ -126,14 +127,15 @@ ScrollView {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Text {
+                        AppText {
+                            dt: root.appTheme
                             text: modelData.title || modelData.id || ""
                             font.pixelSize: root.appTheme.fontMd
                             font.weight: Font.DemiBold
-                            color: root.appTheme.textPrimary
                             Layout.fillWidth: true
                         }
-                        Text {
+                        AppText {
+                            dt: root.appTheme
                             text: {
                                 var risk = modelData.riskLevel || ""
                                 if (risk === "dangerous") return qsTr("危险")
@@ -152,17 +154,19 @@ ScrollView {
                         }
                     }
 
-                    Text {
+                    AppText {
+                        dt: root.appTheme
                         text: modelData.id || ""
                         font.pixelSize: root.appTheme.fontXs
-                        color: root.appTheme.textSecondary
+                        variant: "secondary"
                         font.family: "monospace"
                     }
 
-                    Text {
+                    AppText {
+                        dt: root.appTheme
+                        variant: "secondary"
                         text: modelData.description || ""
                         font.pixelSize: root.appTheme.fontSm
-                        color: root.appTheme.textSecondary
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -254,7 +258,8 @@ ScrollView {
                                 radius: root.appTheme.radiusSm
                             }
                         }
-                        Text {
+                        AppText {
+                            dt: root.appTheme
                             text: qsTr("危险操作已阻断")
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
                             color: root.appTheme.danger

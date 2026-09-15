@@ -1627,6 +1627,8 @@ impl EditorLayout {
             // g_layout_generations[self.current_generation]。
             // 真正需要 line images 的动画/IME 路径各自分配独立 generation
             // 调 prepare_document_visual_snapshot 传 generate_animation_visuals=true。
+            // Issue #688: 静态布局准备不接收颜色参数；text_color 仅在
+            // generate_animation_visuals=true 时用于 QImage 绘制。
             let doc_snapshot = prepare_document_visual_snapshot(
                 text,
                 text_revision,
@@ -1637,7 +1639,6 @@ impl EditorLayout {
                 f64::from(params.text_indent),
                 params.width,
                 1.0,
-                "#000000",
                 self.current_generation,
                 false,
             );
@@ -2514,7 +2515,7 @@ pub fn prepare_paragraph_visual_snapshot(
     wrap_w: f64,
     indent_w: f64,
     dpr: f64,
-    text_color: &str,
+    text_color: Option<&str>,
     cache_slot: i32,
     line_spacing: f64,
     generation: u64,
@@ -2525,12 +2526,18 @@ pub fn prepare_paragraph_visual_snapshot(
         paragraph_document_byte_start,
     );
 
+    // Issue #688: 静态布局路径不接收颜色参数；只有 generate_animation_visuals=true 时才使用真实颜色
+    let color = if generate_animation_visuals {
+        text_color.map_or_else(|| qmetaobject::QColor::from_name(""), |c| qmetaobject::QColor::from_name(c))
+    } else {
+        qmetaobject::QColor::from_name("")
+    };
+
     if paragraph_text.is_empty() {
         // Issue #658: 空段落也调用 C++ 占 null slot，保持 cache_slot 与文档段落一一对应。
         let para: QString = paragraph_text.to_string().into();
         let fs = font_size as f32;
         let ff: QString = font_family.to_string().into();
-        let color = qmetaobject::QColor::from_name(text_color);
         let ls = line_spacing;
         // SAFETY: GUI thread only; cache_slot 是文档段落索引，由调用方保证有效。
         cpp!(unsafe [
@@ -2559,7 +2566,6 @@ pub fn prepare_paragraph_visual_snapshot(
     let para: QString = paragraph_text.to_string().into();
     let fs = font_size as f32;
     let ff: QString = font_family.to_string().into();
-    let color = qmetaobject::QColor::from_name(text_color);
     let ls = line_spacing;
 
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; GUI thread only; null-checked or guaranteed non-null by caller.
@@ -3034,12 +3040,12 @@ pub fn prepare_document_visual_snapshot(
     indent: f64,
     width: f64,
     dpr: f64,
-    text_color: &str,
     generation: u64,
     generate_animation_visuals: bool,
 ) -> CanonicalDocumentVisualSnapshot {
     // Issue #658 评论 5623746506 问题 2a: 收口到受影响范围生成动画视觉。
     // affected_byte_start >= affected_byte_end 表示全篇生成（保持原语义）。
+    // Issue #688: 静态布局路径不接收颜色参数；只有 generate_animation_visuals=true 时才需要
     prepare_document_visual_snapshot_impl(
         text,
         text_revision,
@@ -3050,7 +3056,7 @@ pub fn prepare_document_visual_snapshot(
         indent,
         width,
         dpr,
-        text_color,
+        None,
         generation,
         generate_animation_visuals,
         0,
@@ -3079,7 +3085,7 @@ pub fn prepare_document_visual_snapshot_scoped(
     indent: f64,
     width: f64,
     dpr: f64,
-    text_color: &str,
+    text_color: Option<&str>,
     generation: u64,
     affected_byte_start: usize,
     affected_byte_end: usize,
@@ -3087,6 +3093,7 @@ pub fn prepare_document_visual_snapshot_scoped(
     // Issue #658 评论 5624570557 问题 2: 基础排版不生成动画视觉，
     // 只得到 QTextLayout/VisualLine/cursor 几何。
     // 动画视觉由 prepare_animation_visuals_from_layout 单独提取。
+    // Issue #688: 静态布局路径传 None；动画路径传 Some(text_color)
     prepare_document_visual_snapshot_impl(
         text,
         text_revision,
@@ -3115,7 +3122,7 @@ fn prepare_document_visual_snapshot_impl(
     indent: f64,
     width: f64,
     dpr: f64,
-    text_color: &str,
+    text_color: Option<&str>,
     generation: u64,
     generate_animation_visuals: bool,
     affected_byte_start: usize,
@@ -3126,6 +3133,7 @@ fn prepare_document_visual_snapshot_impl(
     // 与静态正文路径互不干扰。
     // Issue #658 评论 5623746506 问题 2a: affected_byte_start < affected_byte_end
     // 时只对受影响段落生成 QImage/glyph/cluster；>= 时全篇生成（原语义）。
+    // Issue #688: 静态布局路径不接收颜色参数
     let scoped_animation = generate_animation_visuals && affected_byte_start < affected_byte_end;
 
     let metrics_h = get_font_ascent(font_family, font_size as f32)
@@ -3217,7 +3225,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-            text_color,
+                            text_color,
             paragraph_idx,
             line_spacing,
             generation,
@@ -3294,7 +3302,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-            text_color,
+                            text_color,
             0,
             line_spacing,
             generation,
@@ -3343,7 +3351,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-            text_color,
+                            text_color,
             paragraph_idx,
             line_spacing,
             generation,
@@ -3660,7 +3668,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         available,
                         indent,
                         dpr,
-                        text_color,
+                        Some(text_color),
                         current_para_idx as i32,
                         line_spacing,
                         generation,
@@ -3701,7 +3709,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                         available,
                         indent,
                         dpr,
-                        text_color,
+                        Some(text_color),
                         current_para_idx as i32,
                         line_spacing,
                         generation,
@@ -3768,7 +3776,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
                 available,
                 indent,
                 dpr,
-                text_color,
+                Some(text_color),
                 current_para_idx as i32,
                 line_spacing,
                 generation,
@@ -3825,7 +3833,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             available,
             indent,
             dpr,
-            text_color,
+            Some(text_color),
             current_para_idx as i32,
             line_spacing,
             generation,
@@ -3892,7 +3900,7 @@ pub fn prepare_affected_paragraphs_visual_snapshot(
             available,
             indent,
             dpr,
-            text_color,
+            Some(text_color),
             current_para_idx as i32,
             line_spacing,
             generation,

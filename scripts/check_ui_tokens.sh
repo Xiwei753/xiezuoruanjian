@@ -234,6 +234,14 @@ for COMPONENT in AppText AppButton HubPageHeader; do
         LINENUM=$(echo "$line" | cut -d: -f2)
         # Skip the component definition file itself
         if [[ "$FILE" == *"/${COMPONENT}.qml" ]]; then continue; fi
+        # Skip root-element subclass files (e.g. SectionHeader.qml root is "AppText {")
+        # These files define components that inherit from COMPONENT; they don't need dt injection.
+        # Only skip when the component name starts at column 1 (no leading whitespace) —
+        # indented instances inside pages must still be checked.
+        MATCHED_LINE=$(cd "$REPO_ROOT" && sed -n "${LINENUM}p" "$FILE" 2>/dev/null || true)
+        if [[ "$MATCHED_LINE" == "${COMPONENT} {"* ]]; then
+            continue  # Root element subclass, inherits dt
+        fi
         # Check if the line contains the component instantiation but NOT dt:
         # Look at a wider context (5 lines) to find dt: assignment
         START=$((LINENUM > 5 ? LINENUM - 2 : 1))
@@ -249,6 +257,47 @@ done
 if [[ -n "$DT_INJECTION_ISSUES" ]]; then
     echo "   FAIL: Found ${COMPONENT:-component} instances without dt injection:"
     echo "$DT_INJECTION_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 10: QML bare Text usage (should use AppText) ---
+echo "10. Checking QML bare Text usage (should use AppText with dt)..."
+QML_BARE_TEXT_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    LINENUM=$(echo "$line" | cut -d: -f2)
+    # Skip AppText.qml itself (it IS the Text wrapper)
+    if [[ "$FILE" == *"AppText.qml" ]]; then continue; fi
+    # Skip contentItem: AppText (Button contentItem patterns) — AppText is already used
+    if [[ "$line" == *"AppText {"* ]]; then continue; fi
+    # Skip if inside a Button/MenuItem contentItem (inline AppText usage)
+    if [[ "$line" == *"contentItem:"* ]]; then continue; fi
+    QML_BARE_TEXT_ISSUES="${QML_BARE_TEXT_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn 'Text {' apps/Linux_qt/qml/ 2>/dev/null | grep -v 'AppText {' | grep -v 'AppTextField {' | grep -v 'TextArea {' | grep -v 'TextField {' | grep -v 'TextInput {' || true)
+
+if [[ -n "$QML_BARE_TEXT_ISSUES" ]]; then
+    echo "   FAIL: Found bare Text usage in QML (use AppText with dt instead):"
+    echo "$QML_BARE_TEXT_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 11: Rust editor text color (no #000000 in text rendering path) ---
+echo "11. Checking Rust editor text color (no #000000 in text rendering path)..."
+RUST_COLOR_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Only check editor and sujian_editor_item directories
+    if [[ "$FILE" != *"apps/Linux_qt/src/editor/"* ]] && [[ "$FILE" != *"apps/Linux_qt/src/sujian_editor_item/"* ]]; then continue; fi
+    RUST_COLOR_ISSUES="${RUST_COLOR_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn '"#000000"' apps/Linux_qt/src/editor/ apps/Linux_qt/src/sujian_editor_item/ 2>/dev/null || true)
+
+if [[ -n "$RUST_COLOR_ISSUES" ]]; then
+    echo "   FAIL: Found #000000 in Rust editor text rendering path:"
+    echo "$RUST_COLOR_ISSUES"
     ERRORS=$((ERRORS + 1))
 else
     echo "   PASS"

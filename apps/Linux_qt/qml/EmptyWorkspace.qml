@@ -93,22 +93,23 @@ Item {
         }
 
         // Title
-        Text {
+        AppText {
+            dt: root.dt
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("未打开工作区")
             font.pixelSize: _title
             font.family: _fontFamily
             font.bold: true
-            color: _textPrimary
         }
 
         // Description
-        Text {
+        AppText {
+            dt: root.dt
+            variant: "secondary"
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
             font.pixelSize: _body
             font.family: _fontFamily
-            color: _textSecondary
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
