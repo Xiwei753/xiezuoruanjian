@@ -1,39 +1,36 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 /**
- * #689 评论 5674631257：持续视觉状态重构。
+ * #689 评论 5675270164 缺陷7：旧 placeholder 测试迁移为新 timeline 行为测试。
  *
- * 本测试文件原断言旧事务机制（masterProgress 归零、startFrame 物化、activeTransaction、
- * suppressedCurrentRanges 继承、textAnimationActive/cursorAnimationActive 冻结字段等）。
- * 旧机制已被完全删除（不是修改），断言对象已不存在。
+ * 原测试断言旧 masterProgress guard。旧机制已删除，本测试验证新持续 timeline
+ * 没有 masterProgress 概念，用 hasActiveVisuals 判断动画状态。
  *
- * 新持续 timeline 的行为由 [ComposeVisualTransactionRestartReproTest] 验证：
- * - 快速输入时已有 unit 的 alpha 通道 startedAtNanos 不被重置
- * - 新事务不把 masterProgress 归零（因为已不存在）
- * - 删换行时几何没变的存活 unit 不产生 position track
- * - hiddenRanges 从当前 overlay unit 推导而非继承
- * - patch 不携带旧事务状态（startFrame / suppressedCurrentRanges 等）
- *
- * 旧测试方法已删除。如需在新模型下重写等价测试，参见
- * [ComposeVisualTransactionRestartReproTest] 的测试模式。
+ * 等价行为覆盖参见 [ComposeVisualTransactionRestartReproTest] newModel_doesNotExpose_oldTransactionApis。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualMasterProgressGuardTest {
-    /**
-     * 占位测试 — 确保本类编译通过。
-     * 旧事务机制已删除，本测试文件的历史测试方法已移除。
-     */
     @Test
-    fun placeholder_oldTransactionMechanismRemoved() {
-        // 旧事务机制（masterProgress / startFrame / activeTransaction / suppressedCurrentRanges /
-        // textAnimationActive / cursorAnimationActive / reportProgress / finishTransaction）
-        // 已由 #689 评论 5674631257 持续视觉状态重构删除。
-        // 新持续 timeline 行为由 ComposeVisualTransactionRestartReproTest 验证。
+    fun masterProgress_removed_hasActiveVisuals_isNewGuard() {
+        val state = ComposeEditorVisualState(targetId = "test-master-progress")
+        val methods = ComposeEditorVisualState::class.java.methods.map { it.name }
+        assertFalse("旧 reportProgress 应已删除", methods.contains("reportProgress"))
+        assertFalse("旧 finishTransaction 应已删除", methods.contains("finishTransaction"))
+        assertTrue("新 hasActiveVisuals 应存在（替代 masterProgress guard）", methods.contains("hasActiveVisuals"))
+    }
+
+    @Test
+    fun patch_doesNotHave_masterProgress() {
+        val fields = ComposeVisualPatch::class.java.declaredFields.map { it.name }
+        assertFalse("patch 不应有 masterProgress 字段", fields.contains("masterProgress"))
+        assertFalse("patch 不应有 textAnimationActive 字段", fields.contains("textAnimationActive"))
     }
 }

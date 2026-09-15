@@ -104,9 +104,10 @@ class ComposeVisualTransactionRestartReproTest {
                 newText = "abcde",
                 newRange = TextRange(3, 5),
                 replaceBounds = VisualReplaceBounds(3, 3, 3, 5),
-                offsetMap = VisualOffsetMap(
-                    entries = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY)),
-                ),
+                offsetMap =
+                    VisualOffsetMap(
+                        entries = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY)),
+                    ),
             ),
             motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
@@ -220,13 +221,18 @@ class ComposeVisualTransactionRestartReproTest {
                 newRevision = 2L,
                 animationMode = AnimationModeDto.CLUSTER_ANIMATION,
                 durationMs = 100L,
-                offsetMap = VisualOffsetMap(
-                    entries = listOf(
-                        VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY), // "ab"
-                        VisualOffsetMapEntry(3, 2, 1, VisualOffsetMapKind.SHIFTED), // "c"
+                offsetMap =
+                    VisualOffsetMap(
+                        entries =
+                            listOf(
+                                // "ab"
+                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                                // "c"
+                                VisualOffsetMapEntry(3, 2, 1, VisualOffsetMapKind.SHIFTED),
+                            ),
                     ),
-                ),
-                oldRanges = listOf(TextRange(2, 3)), // "\n"
+                // "\n"
+                oldRanges = listOf(TextRange(2, 3)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
                 cursor = null,

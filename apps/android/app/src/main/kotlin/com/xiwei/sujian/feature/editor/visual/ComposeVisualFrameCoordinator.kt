@@ -98,9 +98,7 @@ class ComposeVisualFrameCoordinator(
     /**
      * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成 patch。
      */
-    fun onLayout(
-        snapshot: ComposeLayoutSnapshot,
-    ): FrameUpdate {
+    fun onLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
         latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
 
         EditorDiagnosticsEvents.editorLayoutPresented(

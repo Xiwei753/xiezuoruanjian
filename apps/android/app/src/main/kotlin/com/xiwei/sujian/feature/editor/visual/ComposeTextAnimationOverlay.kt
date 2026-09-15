@@ -2,8 +2,8 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.AnimationVector4D
-import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.VectorConverter
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
@@ -94,9 +94,10 @@ fun ComposeTextAnimationOverlay(
     // 第一次 attach、章节切换或当前还没有任何视觉光标位置时，才允许 snapTo(restingRect)。
     // patch 切换时禁止 snapTo(path.first())，直接从 cursorRect.value 继续。
     var cursorInitialized by remember { mutableStateOf(false) }
-    val cursorRect = remember {
-        Animatable(Rect.Zero, Rect.VectorConverter)
-    }
+    val cursorRect =
+        remember {
+            Animatable(Rect.Zero, Rect.VectorConverter)
+        }
     val restingRect = computeRestingCursorRect(latestLayout, liveSelection)
     val hasCursorAnimation = latestPatch != null && hasCursorMotionPath
     LaunchedEffect(drawsVisualCursor, hasCursorAnimation, restingRect) {
@@ -113,19 +114,24 @@ fun ComposeTextAnimationOverlay(
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
     // patch 到达时先 applyVisualPatchAtFrame，然后循环 sample + withFrameNanos 推进。
+    // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos，
+    // 不用 System.nanoTime()（Compose 官方明确 withFrameNanos 的 frameTimeNanos
+    // time base 是 implementation-defined，不保证等于 System.nanoTime()）。
     LaunchedEffect(patchId) {
         if (patchId <= 0L) return@LaunchedEffect
         val patch = latestPatch ?: return@LaunchedEffect
-        // 第一帧：用当前帧时间应用 patch
-        withFrameNanos { frameTimeNanos ->
-            visualState.applyVisualPatchAtFrame(patch, frameTimeNanos)
-            visualState.sampleVisualScene(frameTimeNanos)
-        }
-        // 后续帧：只要 timeline 还有活动动画就继续推进
-        while (visualState.hasActiveVisuals(System.nanoTime())) {
-            withFrameNanos { frameTimeNanos ->
-                visualState.sampleVisualScene(frameTimeNanos)
-            }
+        var firstFrame = true
+        while (true) {
+            val active =
+                withFrameNanos { frameTimeNanos ->
+                    if (firstFrame) {
+                        visualState.applyVisualPatchAtFrame(patch, frameTimeNanos)
+                        firstFrame = false
+                    }
+                    visualState.sampleVisualScene(frameTimeNanos)
+                    visualState.hasActiveVisuals(frameTimeNanos)
+                }
+            if (!active) break
         }
     }
 

@@ -143,7 +143,10 @@ class ComposeEditorVisualState(
      * @param patch 要应用的屏幕 diff。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      */
-    fun applyVisualPatchAtFrame(patch: ComposeVisualPatch, frameTimeNanos: Long) {
+    fun applyVisualPatchAtFrame(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+    ) {
         visualTimeline.applyPatch(patch, frameTimeNanos)
     }
 

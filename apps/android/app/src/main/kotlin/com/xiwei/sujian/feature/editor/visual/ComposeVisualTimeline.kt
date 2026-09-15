@@ -42,172 +42,308 @@ class ComposeVisualTimeline {
      * @param patch 这一帧的屏幕 diff。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
      */
-    fun applyPatch(patch: ComposeVisualPatch, frameTimeNanos: Long) {
+    fun applyPatch(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+    ) {
         // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
         val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
 
-        // 第二步：把存活 unit 通过 offsetMap 映射到新正文。
-        val offsetMap = patch.offsetMap
-        val newLayout = patch.newLayout
-        val newTextLength = newLayout.result.layoutInput.text.length
+        val durationNanos = patch.durationMs.coerceAtLeast(0L) * NANOS_PER_MS
 
-        // 分类：存活 / ghost（被覆盖或删除）
+        // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
         val surviving = mutableListOf<VisualTextUnit>()
         val ghosting = mutableListOf<VisualTextUnit>()
-
-        for (unit in sampledUnits) {
-            val target = unit.targetRange
-            if (target == null) {
-                // 已经是 ghost：继续淡出。alpha 已到 0 的丢弃。
-                val currentAlpha = currentAlpha(unit.alpha, frameTimeNanos)
-                if (currentAlpha > 0f) {
-                    ghosting.add(unit)
-                }
-                continue
-            }
-            // 尝试把 target 映射到新正文
-            val mappedRange = if (offsetMap != null) {
-                ComposeVisualRebase.mapRangeForwardThroughOffsetMapPublic(target, offsetMap, newTextLength)
-            } else {
-                // 无 offset map：若 target 仍在新正文范围内且文本未变，保留；否则转 ghost
-                if (target.end <= newTextLength) target else null
-            }
-            if (mappedRange == null) {
-                // 映射失败 → 转成 ghost fade-out
-                ghosting.add(unit.copy(targetRange = null))
-            } else {
-                // 存活：alpha 通道不变（继续使用原 startedAtNanos）。
-                // position 通道：只在新 layout 让位置发生变化时重定向。
-                val newPosition = computeUnitPosition(newLayout, mappedRange)
-                val oldPosition = currentOffset(unit.position, frameTimeNanos)
-                val positionChannel =
-                    if (newPosition != null && oldPosition != null && newPosition != oldPosition) {
-                        // 位置变了：从此刻屏幕位置重定向到新位置
-                        TimedOffset(
-                            from = oldPosition,
-                            to = newPosition,
-                            startedAtNanos = frameTimeNanos,
-                            durationNanos = patch.durationMs.coerceAtLeast(0L) * NANOS_PER_MS,
-                        )
-                    } else {
-                        // 位置没变或无法计算：保留原 position 通道（不重建）
-                        unit.position
-                    }
-                surviving.add(
-                    unit.copy(
-                        layout = newLayout,
-                        range = mappedRange,
-                        targetRange = mappedRange,
-                        position = positionChannel,
-                    ),
-                )
-            }
-        }
+        mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
         // 第三步：处理本 patch 新插入的 unit。
-        val insertDurationNanos = patch.durationMs.coerceAtLeast(0L) * NANOS_PER_MS
-        val inserted = mutableListOf<VisualTextUnit>()
-        for (range in patch.insertedUnits) {
-            if (range.start >= range.end) continue
-            if (range.end > newTextLength) continue
-            val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
-            val key = nextUnitKey++
-            inserted.add(
-                VisualTextUnit(
-                    key = key,
-                    layout = newLayout,
-                    range = range,
-                    targetRange = range,
-                    alpha = TimedFloat(
-                        from = 0f,
-                        to = 1f,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = insertDurationNanos,
-                    ),
-                    position = TimedOffset(
-                        from = position,
-                        to = position,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = 0L,
-                    ),
-                ),
-            )
-        }
+        val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos)
 
-        // 第四步：处理本 patch 显式删除的 unit（Delete/Move 的 oldRanges）。
-        // 这些 range 在 oldLayout 里，尝试找已存在的 unit 匹配；找不到就新建一个 ghost。
-        for (range in patch.deletedUnits) {
-            if (range.start >= range.end) continue
-            val oldTextLength = patch.oldLayout.result.layoutInput.text.length
-            if (range.end > oldTextLength) continue
-            // 查找已存在 unit 中 range 匹配的（可能已被上面转成 ghost，跳过）
-            val existing = surviving.firstOrNull { it.range == range }
-            if (existing != null) {
-                // 已存在：转成 ghost
-                val currentAlphaValue = currentAlpha(existing.alpha, frameTimeNanos)
-                val currentPosition = currentOffset(existing.position, frameTimeNanos) ?: Offset.Zero
-                val idx = surviving.indexOf(existing)
-                surviving[idx] = existing.copy(
-                    targetRange = null,
-                    alpha = TimedFloat(
-                        from = currentAlphaValue,
-                        to = 0f,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = insertDurationNanos,
-                    ),
-                    position = TimedOffset(
-                        from = currentPosition,
-                        to = currentPosition,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = 0L,
-                    ),
-                )
-            }
-            // 不在 surviving 里的删除 unit：oldLayout 上的文字本来就不由 timeline 接管，
-            // 不需要新建 ghost（系统正文已经把它移除了）。
-        }
+        // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
+        createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
 
-        // 第五步：retainedMoves — 只给真正发生位移的存活 unit 重定向 position 通道。
-        for (move in patch.retainedMoves) {
-            val newRange = move.newRange
-            if (newRange.start >= newRange.end) continue
-            if (newRange.end > newTextLength) continue
-            val idx = surviving.indexOfFirst { it.targetRange == newRange }
-            if (idx < 0) continue
-            val unit = surviving[idx]
-            val newPosition = computeUnitPosition(newLayout, newRange) ?: continue
-            val oldPosition = currentOffset(unit.position, frameTimeNanos) ?: newPosition
-            // 只有位置真变了才重定向（删换行时几何没变的文字不产生 position track）
-            if (newPosition != oldPosition) {
-                surviving[idx] = unit.copy(
-                    position = TimedOffset(
-                        from = oldPosition,
-                        to = newPosition,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = insertDurationNanos,
-                    ),
-                )
-            }
-        }
+        // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
+        applyRetainedMoves(patch, frameTimeNanos, durationNanos, surviving)
 
         // 合并：存活 + 新插入 + ghost
         units = surviving + inserted + ghosting
     }
 
     /**
+     * #689 评论 5675270164 缺陷5：把存活 unit 通过 offsetMap 映射到新正文。
+     * 用 splitMappedRangeForward 切片，不整块判死。
+     */
+    @Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
+    private fun mapSurvivingUnits(
+        sampledUnits: List<VisualTextUnit>,
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+        surviving: MutableList<VisualTextUnit>,
+        ghosting: MutableList<VisualTextUnit>,
+    ) {
+        val offsetMap = patch.offsetMap
+        val newLayout = patch.newLayout
+        val newTextLength = newLayout.result.layoutInput.text.length
+        for (unit in sampledUnits) {
+            val target = unit.targetRange
+            if (target == null) {
+                // 已经是 ghost：继续淡出。alpha 已到 0 的丢弃。
+                if (currentAlpha(unit.alpha, frameTimeNanos) > 0f) {
+                    ghosting.add(unit)
+                }
+                continue
+            }
+            val slices = computeSlices(target, offsetMap, newTextLength)
+            for (slice in slices) {
+                if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
+                    surviving.add(mapSurvivingSlice(unit, slice.newSubRange, newLayout, frameTimeNanos, durationNanos))
+                } else {
+                    // 缺陷5 GHOST slice：按 slice.oldSubRange 创建 ghost，alpha 当前值 -> 0
+                    ghosting.add(toGhost(unit, frameTimeNanos, durationNanos, slice.oldSubRange))
+                }
+            }
+        }
+    }
+
+    private fun computeSlices(
+        target: TextRange,
+        offsetMap: List<VisualOffsetMapEntry>?,
+        newTextLength: Int,
+    ): List<ComposeVisualRebase.MappedRangeSlice> {
+        if (offsetMap != null) {
+            return ComposeVisualRebase.splitMappedRangeForward(target, offsetMap)
+        }
+        // 无 offset map：若 target 仍在新正文范围内且文本未变，保留；否则转 ghost
+        return if (target.end <= newTextLength) {
+            listOf(
+                ComposeVisualRebase.MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = target,
+                    kind = ComposeVisualRebase.MappedRangeSliceKind.SURVIVING,
+                ),
+            )
+        } else {
+            listOf(
+                ComposeVisualRebase.MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = null,
+                    kind = ComposeVisualRebase.MappedRangeSliceKind.GHOST,
+                ),
+            )
+        }
+    }
+
+    private fun mapSurvivingSlice(
+        unit: VisualTextUnit,
+        mappedRange: TextRange,
+        newLayout: ComposeLayoutSnapshot,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+    ): VisualTextUnit {
+        // 存活：alpha 通道不变（继续使用原 startedAtNanos）。
+        // position 通道：只在新 layout 让位置发生变化时重定向。
+        val newPosition = computeUnitPosition(newLayout, mappedRange)
+        val oldPosition = currentOffset(unit.position, frameTimeNanos)
+        val positionChannel =
+            if (newPosition != null && oldPosition != null && newPosition != oldPosition) {
+                TimedOffset(
+                    from = oldPosition,
+                    to = newPosition,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = durationNanos,
+                )
+            } else {
+                unit.position
+            }
+        return unit.copy(
+            layout = newLayout,
+            range = mappedRange,
+            targetRange = mappedRange,
+            position = positionChannel,
+        )
+    }
+
+    /**
+     * 第三步：处理本 patch 新插入的 unit。
+     */
+    private fun createInsertedUnits(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+    ): List<VisualTextUnit> {
+        val newLayout = patch.newLayout
+        val newTextLength = newLayout.result.layoutInput.text.length
+        val inserted = mutableListOf<VisualTextUnit>()
+        for (range in patch.insertedUnits) {
+            if (range.start >= range.end) continue
+            if (range.end > newTextLength) continue
+            val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
+            inserted.add(
+                VisualTextUnit(
+                    key = nextUnitKey++,
+                    layout = newLayout,
+                    range = range,
+                    targetRange = range,
+                    alpha = TimedFloat(0f, 1f, frameTimeNanos, durationNanos),
+                    position = TimedOffset(position, position, frameTimeNanos, 0L),
+                ),
+            )
+        }
+        return inserted
+    }
+
+    /**
+     * #689 评论 5675270164 缺陷1：处理删除 unit。
+     * 找不到 active unit 时从 patch.oldLayout 建 ghost（alpha 1->0）。
+     */
+    private fun createDeletedGhosts(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+        sampledUnits: List<VisualTextUnit>,
+        ghosting: MutableList<VisualTextUnit>,
+    ) {
+        val oldTextLength = patch.oldLayout.result.layoutInput.text.length
+        for (range in patch.deletedUnits) {
+            if (range.start >= range.end) continue
+            if (range.end > oldTextLength) continue
+            // 检查 ghosting 里是否已有覆盖此 range 的 ghost（存活映射阶段已切片处理）
+            if (ghosting.any { it.range == range }) continue
+            // 检查 sampledUnits 里是否有 active unit 覆盖此 range（已在存活映射阶段处理）
+            if (sampledUnits.any { it.targetRange != null && it.range == range }) continue
+            // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
+            val oldPosition = computeUnitPosition(patch.oldLayout, range) ?: continue
+            ghosting +=
+                VisualTextUnit(
+                    key = nextUnitKey++,
+                    layout = patch.oldLayout,
+                    range = range,
+                    targetRange = null,
+                    alpha = TimedFloat(1f, 0f, frameTimeNanos, durationNanos),
+                    position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
+                )
+        }
+    }
+
+    /**
+     * #689 评论 5675270164 缺陷4：retainedMoves 不能依赖 unit 事先存在。
+     * 匹配不到 active unit 时从 patch.oldLayout + move.oldRange 创建 move unit。
+     */
+    private fun applyRetainedMoves(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+        surviving: MutableList<VisualTextUnit>,
+    ) {
+        val newLayout = patch.newLayout
+        val newTextLength = newLayout.result.layoutInput.text.length
+        for (move in patch.retainedMoves) {
+            val newRange = move.newRange
+            if (newRange.start >= newRange.end) continue
+            if (newRange.end > newTextLength) continue
+            val idx = surviving.indexOfFirst { it.targetRange == newRange }
+            if (idx >= 0) {
+                redirectExistingMoveUnit(surviving, idx, newRange, newLayout, frameTimeNanos, durationNanos)
+            } else {
+                createMoveUnitForReflow(patch, move, frameTimeNanos, durationNanos, surviving)
+            }
+        }
+    }
+
+    private fun redirectExistingMoveUnit(
+        surviving: MutableList<VisualTextUnit>,
+        idx: Int,
+        newRange: TextRange,
+        newLayout: ComposeLayoutSnapshot,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+    ) {
+        val unit = surviving[idx]
+        val newPosition = computeUnitPosition(newLayout, newRange) ?: return
+        val oldPosition = currentOffset(unit.position, frameTimeNanos) ?: newPosition
+        // 只有位置真变了才重定向（删换行时几何没变的文字不产生 position track）
+        if (newPosition != oldPosition) {
+            surviving[idx] =
+                unit.copy(
+                    position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                )
+        }
+    }
+
+    private fun createMoveUnitForReflow(
+        patch: ComposeVisualPatch,
+        move: RetainedMove,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+        surviving: MutableList<VisualTextUnit>,
+    ) {
+        // 缺陷4：匹配不到 active unit，从 oldLayout + move.oldRange 创建 move unit
+        val newRange = move.newRange
+        val newLayout = patch.newLayout
+        val oldPosition = computeUnitPosition(patch.oldLayout, move.oldRange) ?: return
+        val newPosition = computeUnitPosition(newLayout, newRange) ?: return
+        // 只有位置真变了才创建 move unit
+        if (newPosition == oldPosition) return
+        surviving +=
+            VisualTextUnit(
+                key = nextUnitKey++,
+                layout = newLayout,
+                range = newRange,
+                targetRange = newRange,
+                alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
+                position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+            )
+    }
+
+    /**
      * 采样当前时间线到指定帧时间 — 返回当前应绘制的 [ComposeVisualScene]。
+     *
+     * #689 评论 5675270164 缺陷3：sample 后做收口 — 持续 timeline 只保存"当前仍需要
+     * overlay 接管的东西"。
+     * - 存活 unit（targetRange != null）：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
+     * - ghost unit（targetRange == null）：alpha==0 -> 删除
+     * - 仍在 alpha/position 动画中的 unit -> 保留
+     *
+     * 收口要修改 timeline 内部的 units 列表（移除已稳定的 unit），不只是过滤返回值。
+     * 否则 units 里残留的 unit 会在下次 applyPatch 时被处理，可能导致问题。
      *
      * @param frameTimeNanos 当前帧时间戳。
      * @return 当前场景（units + hiddenRanges）。
      */
     fun sample(frameTimeNanos: Long): ComposeVisualScene {
-        val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
+        // 缺陷3：收口 — 移除已稳定的 unit，只保留仍需 overlay 接管的 unit
+        val remainingUnits = mutableListOf<VisualTextUnit>()
+        val sampledUnits = mutableListOf<VisualTextUnit>()
+        for (unit in units) {
+            val sampled = sampleUnit(unit, frameTimeNanos)
+            val target = sampled.targetRange
+            val alphaFinished = isAlphaFinished(sampled.alpha, frameTimeNanos)
+            val positionFinished = isPositionFinished(sampled.position, frameTimeNanos)
+            if (target != null) {
+                // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
+                if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
+                    continue
+                }
+            } else {
+                // ghost unit：alpha==0 -> 删除
+                if (alphaFinished && sampled.alpha.to <= 0f) {
+                    continue
+                }
+            }
+            sampledUnits.add(sampled)
+            remainingUnits.add(unit)
+        }
+        // 缺陷3：收口要修改 timeline 内部 units 列表（移除已稳定的 unit）
+        units = remainingUnits
         // hiddenRanges：从当前 targetRange != null 且仍由 overlay 绘制的 unit 推导。
-        // 不从上一事务 suppressed ranges 继承。
-        val hiddenRanges = sampledUnits
-            .filter { it.targetRange != null && currentAlpha(it.alpha, frameTimeNanos) < 1f }
-            .mapNotNull { it.targetRange }
-            .filter { it.start < it.end }
+        // 收口后 sampledUnits 里的存活 unit 都是"仍由 overlay 接管"的（未稳定的），
+        // 所以它们的 targetRange 都应在 hiddenRanges 中。
+        val hiddenRanges =
+            sampledUnits
+                .filter { it.targetRange != null }
+                .mapNotNull { it.targetRange }
+                .filter { it.start < it.end }
         return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges)
     }
 
@@ -235,23 +371,64 @@ class ComposeVisualTimeline {
     // ==================== 内部采样与通道计算 ====================
 
     /**
+     * #689 评论 5675270164 缺陷2：把 unit 转成 ghost — alpha 从当前值继续到 0。
+     *
+     * 旧实现 `unit.copy(targetRange = null)` 只把 targetRange 设 null，没把 alpha 改成
+     * "当前值 -> 0"。如果 unit 原来正在做插入动画（alpha 0->1），快速输入后马上删除，
+     * 它会变成 ghost 继续淡入到 1，alpha 到 1 后 hasActiveAnimation 认为完成但 units 里
+     * 没删掉，overlay 继续以 alpha=1 画在旧位置。
+     *
+     * @param unit 要转 ghost 的 unit。
+     * @param now 当前帧时间。
+     * @param durationNanos ghost 淡出时长。
+     * @param ghostRange ghost 的 range；默认 unit.range（整个 unit 变 ghost）。
+     *   切片场景传入 slice.oldSubRange（unit 的一部分变 ghost）。
+     */
+    private fun toGhost(
+        unit: VisualTextUnit,
+        now: Long,
+        durationNanos: Long,
+        ghostRange: TextRange = unit.range,
+    ): VisualTextUnit {
+        val alphaNow = currentAlpha(unit.alpha, now)
+        val positionNow =
+            if (ghostRange == unit.range) {
+                currentOffset(unit.position, now) ?: unit.position.to
+            } else {
+                // 切片 ghost：用 slice 在旧 layout 的真实位置
+                computeUnitPosition(unit.layout, ghostRange) ?: currentOffset(unit.position, now) ?: Offset.Zero
+            }
+        return unit.copy(
+            range = ghostRange,
+            targetRange = null,
+            alpha = TimedFloat(alphaNow, 0f, now, durationNanos),
+            position = TimedOffset(positionNow, positionNow, now, 0L),
+        )
+    }
+
+    /**
      * 采样单个 unit 到指定帧时间 — 返回 alpha/position 已插值后的 unit。
      * 采样后的 unit 的 alpha/position 通道表示"此刻屏幕真实画到的状态"。
      */
-    private fun sampleUnit(unit: VisualTextUnit, frameTimeNanos: Long): VisualTextUnit {
+    private fun sampleUnit(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): VisualTextUnit {
         return unit.copy(
-            alpha = unit.alpha.copy(
-                from = currentAlpha(unit.alpha, frameTimeNanos),
-                to = unit.alpha.to,
-                startedAtNanos = frameTimeNanos,
-                durationNanos = remainingDurationNanos(unit.alpha, frameTimeNanos),
-            ),
-            position = unit.position.copy(
-                from = currentOffset(unit.position, frameTimeNanos) ?: unit.position.from,
-                to = unit.position.to,
-                startedAtNanos = frameTimeNanos,
-                durationNanos = remainingDurationNanos(unit.position, frameTimeNanos),
-            ),
+            alpha =
+                unit.alpha.copy(
+                    from = currentAlpha(unit.alpha, frameTimeNanos),
+                    to = unit.alpha.to,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = remainingDurationNanos(unit.alpha, frameTimeNanos),
+                ),
+            position =
+                unit.position.copy(
+                    from = currentOffset(unit.position, frameTimeNanos) ?: unit.position.from,
+                    to = unit.position.to,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = remainingDurationNanos(unit.position, frameTimeNanos),
+                ),
         )
     }
 
@@ -259,7 +436,10 @@ class ComposeVisualTimeline {
      * 计算通道当前值（alpha）。
      * durationNanos <= 0 表示瞬时完成，直接返回 to。
      */
-    private fun currentAlpha(channel: TimedFloat, frameTimeNanos: Long): Float {
+    private fun currentAlpha(
+        channel: TimedFloat,
+        frameTimeNanos: Long,
+    ): Float {
         if (channel.durationNanos <= 0L) return channel.to
         val elapsed = frameTimeNanos - channel.startedAtNanos
         if (elapsed <= 0L) return channel.from
@@ -271,7 +451,10 @@ class ComposeVisualTimeline {
     /**
      * 计算通道当前值（offset）。
      */
-    private fun currentOffset(channel: TimedOffset, frameTimeNanos: Long): Offset? {
+    private fun currentOffset(
+        channel: TimedOffset,
+        frameTimeNanos: Long,
+    ): Offset? {
         if (channel.durationNanos <= 0L) return channel.to
         val elapsed = frameTimeNanos - channel.startedAtNanos
         if (elapsed <= 0L) return channel.from
@@ -286,7 +469,10 @@ class ComposeVisualTimeline {
     /**
      * 通道是否已完成（alpha）。
      */
-    private fun isAlphaFinished(channel: TimedFloat, frameTimeNanos: Long): Boolean {
+    private fun isAlphaFinished(
+        channel: TimedFloat,
+        frameTimeNanos: Long,
+    ): Boolean {
         if (channel.durationNanos <= 0L) return true
         return frameTimeNanos - channel.startedAtNanos >= channel.durationNanos
     }
@@ -294,7 +480,10 @@ class ComposeVisualTimeline {
     /**
      * 通道是否已完成（position）。
      */
-    private fun isPositionFinished(channel: TimedOffset, frameTimeNanos: Long): Boolean {
+    private fun isPositionFinished(
+        channel: TimedOffset,
+        frameTimeNanos: Long,
+    ): Boolean {
         if (channel.durationNanos <= 0L) return true
         return frameTimeNanos - channel.startedAtNanos >= channel.durationNanos
     }
@@ -302,12 +491,18 @@ class ComposeVisualTimeline {
     /**
      * 通道剩余 duration — 采样后用。
      */
-    private fun remainingDurationNanos(channel: TimedFloat, frameTimeNanos: Long): Long {
+    private fun remainingDurationNanos(
+        channel: TimedFloat,
+        frameTimeNanos: Long,
+    ): Long {
         if (channel.durationNanos <= 0L) return 0L
         return max(0L, channel.startedAtNanos + channel.durationNanos - frameTimeNanos)
     }
 
-    private fun remainingDurationNanos(channel: TimedOffset, frameTimeNanos: Long): Long {
+    private fun remainingDurationNanos(
+        channel: TimedOffset,
+        frameTimeNanos: Long,
+    ): Long {
         if (channel.durationNanos <= 0L) return 0L
         return max(0L, channel.startedAtNanos + channel.durationNanos - frameTimeNanos)
     }
@@ -315,7 +510,10 @@ class ComposeVisualTimeline {
     /**
      * 从 layout 取 unit 的真实位置（左上角）。
      */
-    private fun computeUnitPosition(layout: ComposeLayoutSnapshot, range: TextRange): Offset? {
+    private fun computeUnitPosition(
+        layout: ComposeLayoutSnapshot,
+        range: TextRange,
+    ): Offset? {
         val bounds = ComposeVisualRebase.safePathBounds(layout.result, range) ?: return null
         return Offset(bounds.left, bounds.top)
     }

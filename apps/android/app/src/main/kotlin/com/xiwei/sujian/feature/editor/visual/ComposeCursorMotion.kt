@@ -104,9 +104,10 @@ fun buildCursorMotionPath(
     if (intents.size > 1) {
         val points = mutableListOf<CursorMotionPoint>()
         // 收集有 cursor 的 intents 及其在 chain 中的原始索引
-        val cursorIntents = intents.mapIndexedNotNull { idx, intent ->
-            intent.cursor?.let { idx to it }
-        }
+        val cursorIntents =
+            intents.mapIndexedNotNull { idx, intent ->
+                intent.cursor?.let { idx to it }
+            }
         val n = cursorIntents.size
         for ((i, pair) in cursorIntents.withIndex()) {
             val (intentIdx, cursor) = pair

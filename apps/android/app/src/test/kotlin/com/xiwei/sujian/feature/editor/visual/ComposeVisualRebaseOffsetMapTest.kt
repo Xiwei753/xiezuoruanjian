@@ -96,8 +96,10 @@ class ComposeVisualRebaseOffsetMapTest {
                     VisualOffsetMap(
                         entries =
                             listOf(
-                                VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY), // "ab\n"
-                                VisualOffsetMapEntry(3, 2, 2, VisualOffsetMapKind.SHIFTED), // "cd" 上移
+                                // "ab\n"
+                                VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY),
+                                // "cd" 上移
+                                VisualOffsetMapEntry(3, 2, 2, VisualOffsetMapKind.SHIFTED),
                             ),
                     ),
                 oldRanges = emptyList(),
@@ -168,10 +170,14 @@ class ComposeVisualRebaseOffsetMapTest {
                     VisualOffsetMap(
                         entries =
                             listOf(
-                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY), // "xx"
-                                VisualOffsetMapEntry(3, 2, 2, VisualOffsetMapKind.SHIFTED), // "aa" 上移
-                                VisualOffsetMapEntry(5, 4, 1, VisualOffsetMapKind.SHIFTED), // "\n" 前移
-                                VisualOffsetMapEntry(6, 5, 2, VisualOffsetMapKind.SHIFTED), // "bb" 上移
+                                // "xx"
+                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                                // "aa" 上移
+                                VisualOffsetMapEntry(3, 2, 2, VisualOffsetMapKind.SHIFTED),
+                                // "\n" 前移
+                                VisualOffsetMapEntry(5, 4, 1, VisualOffsetMapKind.SHIFTED),
+                                // "bb" 上移
+                                VisualOffsetMapEntry(6, 5, 2, VisualOffsetMapKind.SHIFTED),
                             ),
                     ),
                 oldRanges = emptyList(),

@@ -61,7 +61,13 @@ class ComposeVisualTimelineAdversarialRegressionTest {
         val frameTimeB = 30L * 1_000_000L
         state.onVisualIntent(
             makeInsertIntent(
-                2L, 1L, 2L, "a", "ab", TextRange(1, 2), VisualReplaceBounds(1, 1, 1, 2),
+                2L,
+                1L,
+                2L,
+                "a",
+                "ab",
+                TextRange(1, 2),
+                VisualReplaceBounds(1, 1, 1, 2),
                 VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L),
@@ -74,7 +80,13 @@ class ComposeVisualTimelineAdversarialRegressionTest {
         val frameTimeC = 60L * 1_000_000L
         state.onVisualIntent(
             makeInsertIntent(
-                3L, 2L, 3L, "ab", "abc", TextRange(2, 3), VisualReplaceBounds(2, 2, 2, 3),
+                3L,
+                2L,
+                3L,
+                "ab",
+                "abc",
+                TextRange(2, 3),
+                VisualReplaceBounds(2, 2, 2, 3),
                 VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L),
@@ -138,13 +150,15 @@ class ComposeVisualTimelineAdversarialRegressionTest {
     }
 
     /**
-     * Type 3 终态正确性：动画结束后 sample 返回 alpha=1 的 unit。
+     * Type 3 终态正确性：动画结束后存活 unit 从 timeline 移除交还 BasicTextField。
+     *
+     * #689 评论 5675270164 缺陷3 修复后：动画完成的存活 unit（alpha==1 且 position 已到目标）
+     * 从 timeline 移除，交还 BasicTextField。scene.units 为空，hasActiveVisuals 为 false。
      *
      * 场景：应用 patch A（duration=100ms），在 frameTime=200ms（动画已结束）sample。
-     * 断言：unit 的 alpha 应为 1f（动画已完成）。
      */
     @Test
-    fun animationCompleted_unitAlphaReachesOne() {
+    fun animationCompleted_unitRemovedFromTimeline() {
         val layouts = captureLayouts("", "abc")
         val state = ComposeEditorVisualState(targetId = "test-adv-terminal")
 
@@ -160,14 +174,11 @@ class ComposeVisualTimelineAdversarialRegressionTest {
         // 在 200ms sample（动画时长 100ms，已结束）
         val frameTimeEnd = 200L * 1_000_000L
         val scene = state.sampleVisualScene(frameTimeEnd)
-        assertEquals("动画结束后应有 1 个 unit", 1, scene.units.size)
-        val unit = scene.units[0]
         assertEquals(
-            "动画结束后 alpha 应为 1f，实际=${unit.alpha.from}\n" +
-                "Type 3 终态正确性：动画完成后 unit alpha 到达 1",
-            1f,
-            unit.alpha.from,
-            0.001f,
+            "动画结束后存活 unit 应从 timeline 移除交还 BasicTextField（缺陷3修复），实际 size=${scene.units.size}\n" +
+                "Type 3 终态正确性：动画完成后 unit 不再留在 overlay 和 BasicTextField 重画",
+            0,
+            scene.units.size,
         )
         assertFalse(
             "动画结束后 hasActiveVisuals 应为 false",
@@ -236,12 +247,14 @@ class ComposeVisualTimelineAdversarialRegressionTest {
                 newRevision = 2L,
                 animationMode = AnimationModeDto.CLUSTER_ANIMATION,
                 durationMs = 100L,
-                offsetMap = VisualOffsetMap(
-                    entries = listOf(
-                        VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
-                        VisualOffsetMapEntry(3, 2, 1, VisualOffsetMapKind.SHIFTED),
+                offsetMap =
+                    VisualOffsetMap(
+                        entries =
+                            listOf(
+                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                                VisualOffsetMapEntry(3, 2, 1, VisualOffsetMapKind.SHIFTED),
+                            ),
                     ),
-                ),
                 oldRanges = listOf(TextRange(2, 3)),
                 newRanges = emptyList(),
                 textKind = TextVisualKind.Delete,
@@ -260,7 +273,13 @@ class ComposeVisualTimelineAdversarialRegressionTest {
         val frameTimeC = 60L * 1_000_000L
         state.onVisualIntent(
             makeInsertIntent(
-                3L, 2L, 3L, "abc", "abcde", TextRange(3, 5), VisualReplaceBounds(3, 3, 3, 5),
+                3L,
+                2L,
+                3L,
+                "abc",
+                "abcde",
+                TextRange(3, 5),
+                VisualReplaceBounds(3, 3, 3, 5),
                 VisualOffsetMap(listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))),
             ),
             EditorMotionPolicy(textDurationMillis = 100L),
@@ -305,8 +324,7 @@ class ComposeVisualTimelineAdversarialRegressionTest {
             expectedNewText = newText,
         )
 
-    private fun captureLayouts(vararg texts: String): List<TextLayoutResult> =
-        captureLayoutsWithWidth(texts, 1000)
+    private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)
 
     private fun captureLayoutsWithWidth(
         texts: Array<out String>,
