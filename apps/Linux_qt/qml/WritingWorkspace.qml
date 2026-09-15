@@ -657,8 +657,9 @@ Rectangle {
                             var planW = root.layoutPlan && root.layoutPlan.contentMaxWidthVp > 0
                                     ? root.layoutPlan.contentMaxWidthVp
                                     : 820
-                            var userW = settingsBackend && settingsBackend.setting_linux_qt_editor_width > 0
-                                    ? settingsBackend.setting_linux_qt_editor_width
+                            // Issue #687: 统一走 backendRef.setting_desktop_editor_width
+                            var userW = root.backendRef && root.backendRef.setting_desktop_editor_width > 0
+                                    ? root.backendRef.setting_desktop_editor_width
                                     : 0
                             var targetW = userW > 0 ? userW : planW
                             return Math.max(480, Math.min(parent.width, targetW))
@@ -700,11 +701,12 @@ Rectangle {
                         }
 
                         onPositionChanged: function(mouse) {
-                            if (pressed && settingsBackend) {
+                            if (pressed && root.backendRef) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth - dx * 2));
-                                settingsBackend.setting_linux_qt_editor_width = newWidth;
-                                settingsBackend.debounced_save_local_settings();
+                                // Issue #687: 统一走 backendRef.setting_desktop_editor_width
+                                root.backendRef.setting_desktop_editor_width = newWidth;
+                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }
@@ -738,11 +740,12 @@ Rectangle {
                         }
 
                         onPositionChanged: function(mouse) {
-                            if (pressed && settingsBackend) {
+                            if (pressed && root.backendRef) {
                                 var dx = mouse.x - startX;
                                 var newWidth = Math.max(480, Math.min(parent.width - 16, startWidth + dx * 2));
-                                settingsBackend.setting_linux_qt_editor_width = newWidth;
-                                settingsBackend.debounced_save_local_settings();
+                                // Issue #687: 统一走 backendRef.setting_desktop_editor_width
+                                root.backendRef.setting_desktop_editor_width = newWidth;
+                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }

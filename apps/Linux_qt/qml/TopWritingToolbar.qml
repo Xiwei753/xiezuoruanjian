@@ -670,11 +670,12 @@ Rectangle {
                         from: 480
                         to: 3840
                         stepSize: 10
-                        value: settingsBackend && settingsBackend.setting_linux_qt_editor_width > 0 ? settingsBackend.setting_linux_qt_editor_width : 820
+                        // Issue #687: 统一走 backendRef.setting_desktop_editor_width
+                        value: root.backendRef && root.backendRef.setting_desktop_editor_width > 0 ? root.backendRef.setting_desktop_editor_width : 820
                         onMoved: {
-                            if (settingsBackend) {
-                                settingsBackend.setting_linux_qt_editor_width = value;
-                                settingsBackend.debounced_save_local_settings();
+                            if (root.backendRef) {
+                                root.backendRef.setting_desktop_editor_width = value;
+                                if (settingsBackend) settingsBackend.debounced_save_local_settings();
                             }
                         }
                     }

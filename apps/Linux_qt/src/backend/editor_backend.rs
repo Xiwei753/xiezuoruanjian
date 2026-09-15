@@ -66,6 +66,10 @@ pub struct EditorBackend {
     setting_smooth_cursor_duration_ms: qt_property!(u32; READ setting_smooth_cursor_duration_ms NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_typing_animation_duration_ms: qt_property!(u32; READ setting_typing_animation_duration_ms NOTIFY settings_changed),
+    /// Issue #687: 编辑器宽度属性委托，使 QML 可通过 backendRef 统一访问
+    /// setting_desktop_editor_width，不再偷读全局 settingsBackend。
+    #[allow(dead_code)]
+    setting_desktop_editor_width: qt_property!(f64; READ setting_desktop_editor_width WRITE set_setting_desktop_editor_width NOTIFY settings_changed),
     #[allow(dead_code)]
     has_workspace: qt_property!(bool; READ has_workspace NOTIFY workspace_state_changed),
     #[allow(dead_code)]
@@ -313,6 +317,18 @@ impl EditorBackend {
     }
     fn setting_typing_animation_duration_ms(&self) -> u32 {
         self.snap().setting_typing_animation_duration_ms
+    }
+    /// Issue #687: 编辑器宽度属性委托给 AppBackend，使 QML 通过 backendRef 统一访问。
+    fn setting_desktop_editor_width(&self) -> f64 {
+        self.snap().setting_desktop_editor_width
+    }
+    fn set_setting_desktop_editor_width(&mut self, val: f64) {
+        if self
+            .with_app_mut(|app| app.set_setting_desktop_editor_width(val))
+            .is_ok()
+        {
+            self.settings_changed();
+        }
     }
     fn has_workspace(&self) -> bool {
         self.snap().has_workspace

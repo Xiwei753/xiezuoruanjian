@@ -142,6 +142,140 @@ struct ReflowRun {
     new: Vec<ReflowClusterRef>,
 }
 
+// ── Issue #687: 显式 changed range 拥有函数 ──
+//
+// 插入和删除的 changed range 必须由 Core 给出的 inserted_range / deleted_range
+// 显式拥有，不再让 reflow cluster 二分图推断。这两个函数按明确范围直接生成
+// InsertReveal / DeleteConceal 切片和对应的 StaticLinePatch。
+
+/// 按 Core 给出的 inserted_range 从 new_snapshot 显式生成 InsertReveal 切片。
+///
+/// 只接 `vt.inserted_range + new_snapshot`。按这个明确范围找 new cluster/sourceRect，
+/// 直接生成 `InsertReveal`，同时生成对应 new line 的 `StaticLinePatch`，
+/// 静态层在动画期间只隐藏这些新字的 sourceRect。
+///
+/// # 参数
+/// - `key`：事务键。
+/// - `new_snapshot`：新布局快照。
+/// - `inserted_range`：Core 给出的插入范围 (byte_start, byte_end)。
+///
+/// # 返回
+/// `(slices, static_patches)`：InsertReveal 动画切片和 insert 级静态行补丁。
+fn build_insert_reveal_slices(
+    key: VisualTransactionKey,
+    new_snapshot: &EditorLayoutSnapshot,
+    inserted_range: (usize, usize),
+) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
+    let mut slices = Vec::new();
+    let mut managed_new_clusters: Vec<(usize, usize, SourceRect)> = Vec::new();
+    let (range_start, range_end) = inserted_range;
+
+    for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
+        for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
+            // 只处理落在 inserted_range 内的 cluster
+            if new_cluster.byte_start >= range_start && new_cluster.byte_end <= range_end {
+                let new_sr = new_cluster.source_rect.clone();
+                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+                slices.push(AnimatedSlice::insert_reveal(
+                    key,
+                    new_line.id,
+                    new_sr.clone(),
+                    new_doc,
+                    0.0,
+                    0.0,
+                    new_cluster.byte_start,
+                    new_cluster.byte_end,
+                    Some(new_cluster.shaping_identity.clone()),
+                ));
+                managed_new_clusters.push((line_idx, cluster_idx, new_sr));
+            }
+        }
+    }
+
+    // 生成 StaticLinePatches：Insert 的新字 sourceRect 必须在静态层隐藏到 Reveal 完成。
+    let mut patches_by_line: std::collections::HashMap<usize, Vec<SourceRect>> =
+        std::collections::HashMap::new();
+    for (line_idx, _cluster_idx, sr) in &managed_new_clusters {
+        patches_by_line
+            .entry(*line_idx)
+            .or_default()
+            .push(sr.clone());
+    }
+    let mut static_patches = Vec::new();
+    for (line_idx, hidden_rects) in patches_by_line {
+        let new_line = &new_snapshot.line_snapshots[line_idx];
+        static_patches.push(StaticLinePatch::insert_patch(
+            new_line.id,
+            hidden_rects,
+            Vec::new(),
+            new_line.byte_start,
+            new_line.byte_end,
+        ));
+    }
+
+    let slices = merge_adjacent_slices(slices);
+    (slices, static_patches)
+}
+
+/// 按 Core 给出的 deleted_range 从 old_snapshot 显式生成 DeleteConceal 切片。
+///
+/// 只接 `vt.deleted_range + old_snapshot + new_cursor_rect`。按明确删除范围从
+/// old snapshot 取纹理，直接生成 `DeleteConceal`。删除后的 canonical new text
+/// 可以立即作为背景，旧字只由 overlay 吞掉，因此不生成 StaticLinePatch。
+///
+/// # 参数
+/// - `key`：事务键。
+/// - `old_snapshot`：旧布局快照。
+/// - `deleted_range`：Core 给出的删除范围 (byte_start, byte_end)。
+/// - `new_cursor_rect`：新光标矩形，用于决定吞字方向（conceal_from_left）。
+///
+/// # 返回
+/// `slices`：DeleteConceal 动画切片。
+fn build_delete_conceal_slices(
+    key: VisualTransactionKey,
+    old_snapshot: &EditorLayoutSnapshot,
+    deleted_range: (usize, usize),
+    new_cursor_rect: Option<&CursorRect>,
+) -> Vec<AnimatedSlice> {
+    let mut slices = Vec::new();
+    let (range_start, range_end) = deleted_range;
+    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+
+    for old_line in &old_snapshot.line_snapshots {
+        for old_cluster in &old_line.clusters {
+            // 只处理落在 deleted_range 内的 cluster
+            if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
+                let old_sr = old_cluster.source_rect.clone();
+                let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+                // 按新光标落在被删文字哪一侧决定保留左段还是右段。
+                // 光标靠近右端 → 保留左段（conceal_from_left=true，Backspace 场景）；
+                // 光标靠近左端 → 保留右段（conceal_from_left=false，Delete 键场景）。
+                let left = old_doc.x;
+                let right = old_doc.x + old_doc.w;
+                let conceal_from_left = (new_cx - right).abs() <= (new_cx - left).abs();
+                slices.push(AnimatedSlice::delete_conceal(
+                    key,
+                    old_line.id,
+                    old_sr,
+                    old_doc,
+                    new_cx,
+                    new_cy,
+                    old_cluster.byte_start,
+                    old_cluster.byte_end,
+                    Some(old_cluster.shaping_identity.clone()),
+                    conceal_from_left,
+                ));
+            }
+        }
+    }
+
+    // Delete 不生成 StaticLinePatch：删除后的 canonical new text 可以立即作为背景，
+    // 旧字只由 overlay 吞掉。
+    let slices = merge_adjacent_slices(slices);
+    slices
+}
+
 /// 构建 cluster/run 级 reflow 切片和静态行补丁。
 ///
 /// 两阶段算法：
@@ -169,13 +303,17 @@ fn build_cluster_reflow_slices(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
 ) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
+    eprintln!(
+        "[BUGFIX_REPRO_TRACE] build_cluster_reflow_slices: excluded_old_ranges={:?}, excluded_new_ranges={:?}",
+        excluded_old_ranges, excluded_new_ranges
+    );
     let mut slices = Vec::new();
     let mut static_patches = Vec::new();
 
-    let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
-    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    // Issue #687: old_cx/old_cy/new_cx/new_cy 不再需要——changed range 由
+    // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有，
+    // reflow 只处理 unchanged material。
+    let _ = (old_cursor_rect, new_cursor_rect);
 
     // ── 阶段 1：收集所有未 excluded 的 old/new cluster refs ──
     // Issue #658 评论 5630181473 问题 3: 被 excluded 的 old cluster 仍保留在
@@ -319,56 +457,13 @@ fn build_cluster_reflow_slices(
         let run_old = &run.old;
         let run_new = &run.new;
 
-        // 纯 new（无 old 对应）→ insert_reveal
-        if run_old.is_empty() {
-            for nref in run_new {
-                let new_line = &new_snapshot.line_snapshots[nref.line_idx];
-                let new_cluster = &new_line.clusters[nref.cluster_idx];
-                let new_sr = new_cluster.source_rect.clone();
-                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-                slices.push(AnimatedSlice::insert_reveal(
-                    key,
-                    new_line.id,
-                    new_sr.clone(),
-                    new_doc,
-                    old_cx,
-                    old_cy,
-                    new_cluster.byte_start,
-                    new_cluster.byte_end,
-                    Some(new_cluster.shaping_identity.clone()),
-                ));
-                run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
-            }
-            continue;
-        }
-
-        // 纯 old（无 new 对应）→ delete_conceal
-        if run_new.is_empty() {
-            for oref in run_old {
-                let old_line = &old_snapshot.line_snapshots[oref.line_idx];
-                let old_cluster = &old_line.clusters[oref.cluster_idx];
-                let old_sr = old_cluster.source_rect.clone();
-                let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                // Issue #686 评论 5666452462：按新光标落在被删文字哪一侧决定
-                // 保留左段还是右段。光标靠近右端 → 保留左段
-                // （conceal_from_left=true，Backspace 场景）；光标靠近左端 → 保留右段
-                // （conceal_from_left=false，Delete 键场景）。
-                let left = old_doc.x;
-                let right = old_doc.x + old_doc.w;
-                let conceal_from_left = (new_cx - right).abs() <= (new_cx - left).abs();
-                slices.push(AnimatedSlice::delete_conceal(
-                    key,
-                    old_line.id,
-                    old_sr,
-                    old_doc,
-                    new_cx,
-                    new_cy,
-                    old_cluster.byte_start,
-                    old_cluster.byte_end,
-                    Some(old_cluster.shaping_identity.clone()),
-                    conceal_from_left,
-                ));
-            }
+        // Issue #687: 纯 new（无 old 对应）和纯 old（无 new 对应）的 run 不再由
+        // reflow 推断 InsertReveal / DeleteConceal。changed range 所有权由
+        // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有。
+        // reflow 只处理 unchanged material（ReflowMove / ReflowCrossFade）。
+        // 纯 new / 纯 old run 理论上不应出现（changed range 已被 excluded），
+        // 若因边界情况出现则直接跳过，不生成切片。
+        if run_old.is_empty() || run_new.is_empty() {
             continue;
         }
 
@@ -719,13 +814,25 @@ impl LinuxEditorAnimationCoordinator {
                     let mut static_patches = Vec::new();
 
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+
+                    // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
+                    // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
+                    let inserted_range_tuple = (range_start, range_end);
+                    let (reveal_slices, reveal_patches) = build_insert_reveal_slices(
+                        key,
+                        new_snapshot,
+                        inserted_range_tuple,
+                    );
+                    slices.extend(reveal_slices);
+                    static_patches.extend(reveal_patches);
+
                     let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                         key,
                         old_snapshot,
                         new_snapshot,
                         &insert_offset_map,
                         &[],
-                        &[],
+                        &[inserted_range_tuple],
                         old_cursor_rect.as_ref(),
                         new_cursor_rect.as_ref(),
                     );
@@ -733,6 +840,15 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches.extend(reflow_patches);
 
                     match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
+
+                    // Issue #687: 动画生命周期日志
+                    eprintln!(
+                        "[BUGFIX_687] Insert tx: key={:?}, inserted_range={:?}, slice_kinds={:?}, slice_count={}",
+                        key,
+                        inserted_range_tuple,
+                        slices.iter().map(|s| s.kind).collect::<Vec<_>>(),
+                        slices.len()
+                    );
 
                     let prepared = PreparedTextVisualTransaction {
                         key,
@@ -813,12 +929,26 @@ impl LinuxEditorAnimationCoordinator {
                 let mut static_patches = Vec::new();
 
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
+
+                // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
+                // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
+                // 对每个 deleted range 生成显式 DeleteConceal 切片。
+                for &(d_start, d_end) in &deleted_ranges {
+                    let conceal_slices = build_delete_conceal_slices(
+                        key,
+                        old_snapshot,
+                        (d_start, d_end),
+                        new_cursor_rect.as_ref(),
+                    );
+                    slices.extend(conceal_slices);
+                }
+
                 let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                     key,
                     old_snapshot,
                     new_snapshot,
                     &delete_offset_map,
-                    &[],
+                    &deleted_ranges,
                     &[],
                     old_cursor_rect.as_ref(),
                     new_cursor_rect.as_ref(),
@@ -827,6 +957,15 @@ impl LinuxEditorAnimationCoordinator {
                 static_patches.extend(reflow_patches);
 
                 match_rebase_frames(&rebase_frames, &mut slices, &delete_offset_map);
+
+                // Issue #687: 动画生命周期日志
+                eprintln!(
+                    "[BUGFIX_687] Delete tx: key={:?}, deleted_ranges={:?}, slice_kinds={:?}, slice_count={}",
+                    key,
+                    deleted_ranges,
+                    slices.iter().map(|s| s.kind).collect::<Vec<_>>(),
+                    slices.len()
+                );
 
                 let prepared = PreparedTextVisualTransaction {
                     key,
@@ -924,13 +1063,51 @@ impl LinuxEditorAnimationCoordinator {
         let mut slices = Vec::new();
         let mut static_patches = Vec::new();
 
+        // Issue #687: IME 组合更新也显式拥有 changed range。
+        // 用 diff_plain_text 找到 inserted/deleted range，显式生成 InsertReveal/DeleteConceal，
+        // reflow 只处理 unchanged material。
+        let comp_changes = writer_core::editor::diff_plain_text(
+            &old_snapshot.virtual_text,
+            &new_snapshot.virtual_text,
+        );
+        let mut comp_inserted_ranges: Vec<(usize, usize)> = Vec::new();
+        let mut comp_deleted_ranges: Vec<(usize, usize)> = Vec::new();
+        for change in &comp_changes {
+            match change {
+                writer_core::editor::EditorChange::Insert { index, text } => {
+                    let rs = index.value();
+                    comp_inserted_ranges.push((rs, rs + text.len()));
+                }
+                writer_core::editor::EditorChange::Delete { index, text } => {
+                    let rs = index.value();
+                    comp_deleted_ranges.push((rs, rs + text.len()));
+                }
+            }
+        }
+
+        for &(i_start, i_end) in &comp_inserted_ranges {
+            let (reveal_slices, reveal_patches) =
+                build_insert_reveal_slices(key, new_snapshot, (i_start, i_end));
+            slices.extend(reveal_slices);
+            static_patches.extend(reveal_patches);
+        }
+        for &(d_start, d_end) in &comp_deleted_ranges {
+            let conceal_slices = build_delete_conceal_slices(
+                key,
+                old_snapshot,
+                (d_start, d_end),
+                new_cursor_rect.as_ref(),
+            );
+            slices.extend(conceal_slices);
+        }
+
         let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
             key,
             old_snapshot,
             new_snapshot,
             &offset_map,
-            &[],
-            &[],
+            &comp_deleted_ranges,
+            &comp_inserted_ranges,
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
         );
@@ -1018,9 +1195,18 @@ impl LinuxEditorAnimationCoordinator {
         let mut static_patches = Vec::new();
 
         if !is_commit {
-            // Issue #658 评论 5630181473: cancel 时 preedit 范围的 old cluster
-            // 应该被排除在 reflow 匹配之外，生成 delete_conceal 而非 crossfade。
-            let cancel_excluded_old: [(usize, usize); 1] = [(preedit_byte_start, preedit_byte_end)];
+            // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
+            // reflow 只处理 unchanged material。changed range 由显式函数拥有。
+            let cancel_deleted_range = (preedit_byte_start, preedit_byte_end);
+            let conceal_slices = build_delete_conceal_slices(
+                key,
+                old_snapshot,
+                cancel_deleted_range,
+                new_cursor_rect.as_ref(),
+            );
+            slices.extend(conceal_slices);
+
+            let cancel_excluded_old: [(usize, usize); 1] = [cancel_deleted_range];
             let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
                 key,
                 old_snapshot,
@@ -3027,7 +3213,7 @@ mod tests {
 
     #[test]
     fn test_delete_conceal_direction_cursor_near_right_is_backspace() {
-        let (old_snapshot, new_snapshot, offset_map) = make_delete_direction_snapshots();
+        let (old_snapshot, _new_snapshot, _offset_map) = make_delete_direction_snapshots();
         let key = VisualTransactionKey::new(1, 1);
         // 新光标靠近右端 (x=39, right=40) → Backspace → conceal_from_left=true
         let new_cursor = CursorRect {
@@ -3036,14 +3222,12 @@ mod tests {
             bottom: 20.0,
             baseline_y: 16.0,
         };
-        let (slices, _patches) = build_cluster_reflow_slices(
+        // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
+        // old cluster [0,3) 是被删除的范围。
+        let slices = build_delete_conceal_slices(
             key,
             &old_snapshot,
-            &new_snapshot,
-            &offset_map,
-            &[],
-            &[],
-            None,
+            (0, 3),
             Some(&new_cursor),
         );
         let delete_slices: Vec<_> = slices
@@ -3053,7 +3237,7 @@ mod tests {
         assert_eq!(
             delete_slices.len(),
             1,
-            "pure-old cluster should produce exactly one DeleteConceal"
+            "deleted range [0,3) should produce exactly one DeleteConceal"
         );
         assert!(
             delete_slices[0].conceal_from_left,
@@ -3063,7 +3247,7 @@ mod tests {
 
     #[test]
     fn test_delete_conceal_direction_cursor_near_left_is_delete() {
-        let (old_snapshot, new_snapshot, offset_map) = make_delete_direction_snapshots();
+        let (old_snapshot, _new_snapshot, _offset_map) = make_delete_direction_snapshots();
         let key = VisualTransactionKey::new(1, 1);
         // 新光标靠近左端 (x=11, left=10) → Delete 键 → conceal_from_left=false
         let new_cursor = CursorRect {
@@ -3072,14 +3256,12 @@ mod tests {
             bottom: 20.0,
             baseline_y: 16.0,
         };
-        let (slices, _patches) = build_cluster_reflow_slices(
+        // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
+        // old cluster [0,3) 是被删除的范围。
+        let slices = build_delete_conceal_slices(
             key,
             &old_snapshot,
-            &new_snapshot,
-            &offset_map,
-            &[],
-            &[],
-            None,
+            (0, 3),
             Some(&new_cursor),
         );
         let delete_slices: Vec<_> = slices
@@ -3089,7 +3271,7 @@ mod tests {
         assert_eq!(
             delete_slices.len(),
             1,
-            "pure-old cluster should produce exactly one DeleteConceal"
+            "deleted range [0,3) should produce exactly one DeleteConceal"
         );
         assert!(
             !delete_slices[0].conceal_from_left,

@@ -97,6 +97,11 @@ impl CursorController {
     }
 
     pub fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
+        eprintln!(
+            "[BUGFIX_REPRO_TRACE] apply_plan: animation.is_some()={}, transition={:?}",
+            self.animation.is_some(),
+            plan.transition
+        );
         let old_x = self.target_x;
         let old_y = self.target_y;
         let old_visible = self.visible;
@@ -178,25 +183,24 @@ impl CursorController {
                         self.visual_y = cur_y;
                     }
                 } else {
+                    // Issue #687: animation == None 分支永远从当前屏幕帧继续。
+                    // 只要光标已经可见且 visual_x/visual_y 是有效当前屏幕位置，
+                    // 新 Tween 的 start 永远取 self.visual_x/self.visual_y。
+                    // old_rect 只作为首次出现、尚无可信 visual position 时的初始化来源，
+                    // 不再作为连续编辑动画的回退起点。
                     let prev_vx = self.visual_x;
                     let prev_vy = self.visual_y;
                     if (prev_vx - target_x).abs() > 0.01 || (prev_vy - target_y).abs() > 0.01 {
+                        let (init_x, init_y) = if self.visible {
+                            (prev_vx, prev_vy)
+                        } else {
+                            // 首次出现：尚无可信 visual position，用 old_rect 初始化。
+                            (start_x, start_y)
+                        };
                         self.animation = Some(CursorAnimationState {
                             driver_key: *driver_key,
-                            start_x: if (start_x - prev_vx).abs() < 0.01
-                                && (start_y - prev_vy).abs() < 0.01
-                            {
-                                prev_vx
-                            } else {
-                                start_x
-                            },
-                            start_y: if (start_x - prev_vx).abs() < 0.01
-                                && (start_y - prev_vy).abs() < 0.01
-                            {
-                                prev_vy
-                            } else {
-                                start_y
-                            },
+                            start_x: init_x,
+                            start_y: init_y,
                             target_x,
                             target_y,
                             progress: 0.0,
