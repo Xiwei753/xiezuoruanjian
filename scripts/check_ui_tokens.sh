@@ -236,10 +236,10 @@ for COMPONENT in AppText AppButton HubPageHeader; do
         if [[ "$FILE" == *"/${COMPONENT}.qml" ]]; then continue; fi
         # Skip root-element subclass files (e.g. SectionHeader.qml root is "AppText {")
         # These files define components that inherit from COMPONENT; they don't need dt injection.
+        # Only skip when the component name starts at column 1 (no leading whitespace) —
+        # indented instances inside pages must still be checked.
         MATCHED_LINE=$(cd "$REPO_ROOT" && sed -n "${LINENUM}p" "$FILE" 2>/dev/null || true)
-        # Root element = no leading whitespace before "ComponentName {"
-        TRIMMED=$(echo "$MATCHED_LINE" | sed 's/^[[:space:]]*//')
-        if [[ "$TRIMMED" == "${COMPONENT} {"* ]]; then
+        if [[ "$MATCHED_LINE" == "${COMPONENT} {"* ]]; then
             continue  # Root element subclass, inherits dt
         fi
         # Check if the line contains the component instantiation but NOT dt:
