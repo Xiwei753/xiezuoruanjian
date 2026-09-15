@@ -172,7 +172,10 @@ fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
         .expect("步骤3: 必须存在 RebaseFrame");
     // Issue #690 评论 5679744253 问题 1: 截取长度加大以包含新字段 sampled_at /
     // remaining_duration_ms（它们在结构体末尾，旧 900 字符不够）。
-    let frame_def = &src[frame_start..frame_start + 1100];
+    // 使用安全的字符边界截取，避免落在 UTF-8 多字节字符中间。
+    let raw_end = frame_start + 1100;
+    let safe_end = src.ceil_char_boundary(raw_end);
+    let frame_def = &src[frame_start..safe_end];
     for field in [
         "visible_fraction",
         "sampled_at",

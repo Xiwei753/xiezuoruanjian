@@ -41,8 +41,8 @@ pub(crate) use super::render_plan::{
 };
 use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::{
-    PreparedTextVisualTransaction, PreparedTransactionQueue, RebaseFrame, TextVisualOperationKind,
-    TextVisualTransactionState, TransactionTimeline,
+    PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedTransactionQueue,
+    RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
 
@@ -208,38 +208,94 @@ fn conflicting_units_are_untouched(
     playing_units > 0
 }
 
-/// Issue #690 评论 5680276931: 采样旧事务在 `now` 时刻真正显示的 coordinated cursor rect。
+/// Issue #690 评论 5681206040: rebase 交棒时携带的 caret handoff 信息。
+///
+/// `sampled` 是旧事务在 `now` 时刻真正显示的 coordinated cursor rect，
+/// `remaining_duration_ms` 是旧 caret track 剩余的播放时长。新事务用 `sampled` 当
+/// `cursor_visual_track.from`，用 `remaining_duration_ms` 当 `cursor_visual_track.duration_ms`，
+/// 不再借任何文字 unit 的 progress。
+#[derive(Clone, Debug)]
+struct RebaseCaretHandoff {
+    sampled: CursorRect,
+    remaining_duration_ms: u64,
+}
+
+/// Issue #690 评论 5681206040: 构建新事务的 caret track，四个正文入口共用。
+///
+/// - 有 rebase handoff（发生过交棒）：`from = sampled caret`，`to = new_cursor_rect`，
+///   `started_at = now`，`duration_ms = handoff.remaining_duration_ms`。
+/// - 无 rebase handoff（首次事务）：`from = old_cursor_rect`，`to = new_cursor_rect`，
+///   `started_at = now`，`duration_ms = 事务时长`。
+/// - `new_cursor_rect` 缺失：返回 `None`（无法构成 track）。
+/// - 无 handoff 且 `old_cursor_rect` 缺失：返回 `None`。
+fn build_cursor_visual_track(
+    old_cursor_rect: Option<&CursorRect>,
+    new_cursor_rect: Option<&CursorRect>,
+    handoff: Option<RebaseCaretHandoff>,
+    now: Instant,
+    tx_duration_ms: u64,
+) -> Option<PreparedCursorVisualTrack> {
+    let to = new_cursor_rect?;
+    match handoff {
+        Some(h) => Some(PreparedCursorVisualTrack {
+            from: h.sampled,
+            to: to.clone(),
+            started_at: now,
+            duration_ms: h.remaining_duration_ms,
+        }),
+        None => {
+            let from = old_cursor_rect?;
+            Some(PreparedCursorVisualTrack::new_first(
+                from.clone(),
+                to.clone(),
+                now,
+                tx_duration_ms,
+            ))
+        }
+    }
+}
+
+/// Issue #690 评论 5680276931 + 5681206040: 采样旧事务在 `now` 时刻真正显示的
+/// coordinated cursor rect。
 ///
 /// 在 `take_rebase_frames` 取消旧事务之前调用，把结果作为新事务纯 reflow 光标动画的
-/// 视觉起点（`cursor_visual_from`）。采样逻辑与 `compute_coordinated_cursor_position`
+/// 视觉起点（`cursor_visual_track.from`）。采样逻辑与 `compute_coordinated_cursor_position`
 /// 的边界选择完全一致，按评论四种场景：
 /// - InsertReveal：取这一帧 reveal 边界（frame.x + frame.w）。
 /// - Backspace DeleteConceal（conceal_from_left）：取这一帧 conceal 边界（frame.x + frame.w）。
 /// - forward Delete（conceal_from_right）：取当前固定 cursor rect（new_rect）。
-/// - 纯 reflow（无上述 glyph）：按旧事务 reflow unit 当前帧计算
-///   `old_rect + (new_rect - old_rect) * ease_out_quad(reflow_progress)`。
+/// - 纯 reflow（无上述 glyph）：直接 sample `cursor_visual_track`（自带 started_at/duration_ms），
+///   不再借任何文字 unit 的 progress，也不再回头使用逻辑 `old_cursor_rect`。
 ///
 /// 返回的 `CursorRect` 用采样到的 `(x, y)` 和 `new_rect` 的高度/baseline 构造，
-/// 供新事务 `cursor_visual_from` 直接消费。
+/// 供新事务 `cursor_visual_track.from` 直接消费。
 fn sample_coordinated_cursor_rect_at(
     tx: &PreparedTextVisualTransaction,
     now: Instant,
 ) -> Option<CursorRect> {
+    // 保留 old_cursor_rect 的 early return 语义：旧事务没有 old caret 时不参与交棒。
     let old_rect = tx.old_cursor_rect.as_ref()?;
     let new_rect = tx.new_cursor_rect.as_ref()?;
     let h = new_rect.bottom - new_rect.top;
     let op = tx.operation_kind;
 
-    let reflow_progress = || -> f64 {
-        for unit in &tx.units {
-            match unit.slice.kind {
-                AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                    return unit.progress(now);
-                }
-                _ => {}
-            }
-        }
-        1.0
+    // Issue #690 评论 5681206040: 纯 reflow 光标直接 sample caret track，
+    // 不再借第一个 reflow unit 的 progress。track 自带 started_at/duration_ms。
+    // 没有 caret track 时（首次事务未经过 rebase），回退到 old/new cursor rect
+    // 按事务 progress 插值——与 compute_coordinated_cursor_position 的 fallback 一致。
+    let sample_from_track = |track: &PreparedCursorVisualTrack| -> (f64, f64) {
+        let r = track.sampled_rect(now);
+        (r.x, r.top)
+    };
+
+    // 首次事务没有 caret track 时的 fallback：按事务 progress 插值 old/new cursor rect。
+    // 与 compute_coordinated_cursor_position 的 sample_reflow fallback 保持一致。
+    let sample_reflow_fallback = || -> (f64, f64) {
+        let progress = tx.progress(now);
+        let eased = AnimatedSlice::ease_out_quad(progress);
+        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+        (x, y)
     };
 
     let (cx, cy) = match op {
@@ -262,11 +318,11 @@ fn sample_coordinated_cursor_rect_at(
             match rightmost_x {
                 Some(x) => (x, cursor_y),
                 None => {
-                    let progress = reflow_progress();
-                    let eased = AnimatedSlice::ease_out_quad(progress);
-                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                    (x, y)
+                    // 纯 reflow（无 InsertReveal glyph 当边界）：直接 sample caret track。
+                    match tx.cursor_visual_track.as_ref() {
+                        Some(track) => sample_from_track(track),
+                        None => sample_reflow_fallback(),
+                    }
                 }
             }
         }
@@ -296,19 +352,19 @@ fn sample_coordinated_cursor_rect_at(
             } else if has_conceal_from_right {
                 (new_rect.x, new_rect.top)
             } else {
-                let progress = reflow_progress();
-                let eased = AnimatedSlice::ease_out_quad(progress);
-                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                (x, y)
+                // 跨行 reflow 等没有可直接当边界的 glyph：直接 sample caret track。
+                match tx.cursor_visual_track.as_ref() {
+                    Some(track) => sample_from_track(track),
+                    None => sample_reflow_fallback(),
+                }
             }
         }
         _ => {
-            let progress = reflow_progress();
-            let eased = AnimatedSlice::ease_out_quad(progress);
-            let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-            let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-            (x, y)
+            // CompositionUpdate / Commit / Cursor 纯 reflow：直接 sample caret track。
+            match tx.cursor_visual_track.as_ref() {
+                Some(track) => sample_from_track(track),
+                None => sample_reflow_fallback(),
+            }
         }
     };
 
@@ -970,17 +1026,18 @@ impl LinuxEditorAnimationCoordinator {
     /// snapshot/纹理所有权，单元沿自己的时间线播完（`editor.anim.keep`）。预输入入口传
     /// `None`——preedit 文本整体被替换，旧单元必然失效。
     ///
-    /// Issue #690 评论 5680276931: 返回值同时带上 `sampled_cursor_rect`——在取消旧事务
-    /// 之前用同一个 `now` 采样旧事务当前真正显示的 coordinated cursor rect，交给新事务
-    /// 作为纯 reflow 光标动画的视觉起点（`cursor_visual_from`）。这样 rebase 交棒后
-    /// 光标不再从逻辑 old caret 重新起步，而是与文字 reflow 同帧从屏幕位置续播。
+    /// Issue #690 评论 5680276931 + 5681206040: 返回值同时带上 `RebaseCaretHandoff`——
+    /// 在取消旧事务之前用同一个 `now` 采样旧事务当前真正显示的 coordinated cursor rect
+    /// 和旧 caret track 剩余时长，交给新事务作为 caret track 的起点和 duration。
+    /// 这样 rebase 交棒后光标不再从逻辑 old caret 重新起步，而是与文字 reflow 同帧
+    /// 从屏幕位置续播；连续交棒也精确，因为新 caret track 自带时间状态。
     fn take_rebase_frames(
         &mut self,
         conflicting: Option<VisualTransactionKey>,
         reason: &str,
         now: Instant,
         preserve: Option<(&[(usize, usize)], &OffsetMap)>,
-    ) -> (Vec<RebaseFrame>, Option<CursorRect>) {
+    ) -> (Vec<RebaseFrame>, Option<RebaseCaretHandoff>) {
         let Some(old_key) = conflicting else {
             return (Vec::new(), None);
         };
@@ -1009,7 +1066,7 @@ impl LinuxEditorAnimationCoordinator {
             ));
             return (Vec::new(), None);
         }
-        let (frames, sampled_cursor) = match self
+        let (frames, caret_handoff) = match self
             .prepared_queue
             .active_transactions()
             .iter()
@@ -1017,14 +1074,37 @@ impl LinuxEditorAnimationCoordinator {
         {
             Some(tx) => {
                 let frames = tx.collect_rebase_frames(now);
-                // Issue #690 评论 5680276931: 在取消旧事务之前，用同一个 now 采样
-                // 旧事务这一帧正在屏幕上显示的 coordinated cursor rect，带给新事务。
-                // 采样逻辑按评论四种场景：InsertReveal→reveal 边界；
-                // Backspace DeleteConceal→conceal 边界；纯 reflow→旧事务 reflow unit
-                // 当前帧计算；forward Delete→当前固定 cursor rect。
+                // Issue #690 评论 5680276931 + 5681206040: 在取消旧事务之前，用同一个
+                // now 采样旧事务这一帧正在屏幕上显示的 coordinated cursor rect，并取旧
+                // caret track 的剩余时长，一起带给新事务。新事务用 sampled caret 当
+                // caret track.from，用剩余时长当 caret track.duration_ms，不再借任何
+                // 文字 unit 的 progress。
                 let sampled_cursor = sample_coordinated_cursor_rect_at(tx, now);
+                let caret_handoff = match (sampled_cursor, tx.cursor_visual_track.as_ref()) {
+                    (Some(sampled), Some(track)) => Some(RebaseCaretHandoff {
+                        sampled,
+                        remaining_duration_ms: track.remaining_duration_ms(now).max(1),
+                    }),
+                    (Some(sampled), None) => {
+                        // 旧事务没有 caret track（理论上正文事务都应有，防御性 fallback）：
+                        // 用事务 timeline 剩余时长估算。
+                        let tx_remaining = tx
+                            .timeline
+                            .duration_ms
+                            .saturating_sub(
+                                now.duration_since(tx.timeline.effective_start().unwrap_or(now))
+                                    .as_millis() as u64,
+                            )
+                            .max(1);
+                        Some(RebaseCaretHandoff {
+                            sampled,
+                            remaining_duration_ms: tx_remaining,
+                        })
+                    }
+                    (None, _) => None,
+                };
                 emit_transaction_diagnostic(tx, "editor.anim.rebase", reason);
-                (frames, sampled_cursor)
+                (frames, caret_handoff)
             }
             None => (Vec::new(), None),
         };
@@ -1034,9 +1114,9 @@ impl LinuxEditorAnimationCoordinator {
             old_key,
             reason,
             frames.len(),
-            sampled_cursor.is_some(),
+            caret_handoff.is_some(),
         ));
-        (frames, sampled_cursor)
+        (frames, caret_handoff)
     }
 
     pub fn process_transaction(
@@ -1078,10 +1158,11 @@ impl LinuxEditorAnimationCoordinator {
                         .prepared_queue
                         .find_conflicting_transaction(range_start, range_end);
                     // 纯插入在 old 文档里就是 range_start 这一个位置点。
-                    let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
+                    let now = Instant::now();
+                    let (rebase_frames, caret_handoff) = self.take_rebase_frames(
                         conflicting,
                         "rebased_by_insert",
-                        Instant::now(),
+                        now,
                         Some((&[(range_start, range_start)], &insert_offset_map)),
                     );
 
@@ -1119,15 +1200,16 @@ impl LinuxEditorAnimationCoordinator {
                         .collect();
                     match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
 
-                    // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
-                    // 作为新事务纯 reflow 光标动画的视觉起点，new_cursor_rect 保持权威
-                    // 新布局目标不变。
-                    let cursor_visual_from = sampled_cursor;
-                    let cursor_visual_to = if cursor_visual_from.is_some() {
-                        new_cursor_rect.clone()
-                    } else {
-                        None
-                    };
+                    // Issue #690 评论 5681206040: 构建 caret track。
+                    // 有 handoff 时 from = sampled caret, duration = 旧 track 剩余时长；
+                    // 无 handoff 时 from = old_cursor_rect, duration = 事务时长。
+                    let cursor_visual_track = build_cursor_visual_track(
+                        old_cursor_rect.as_ref(),
+                        new_cursor_rect.as_ref(),
+                        caret_handoff,
+                        now,
+                        u64::from(vt.duration_ms),
+                    );
                     let prepared = PreparedTextVisualTransaction {
                         key,
                         state: TextVisualTransactionState::Pending,
@@ -1137,8 +1219,7 @@ impl LinuxEditorAnimationCoordinator {
                         static_patches,
                         old_cursor_rect,
                         new_cursor_rect,
-                        cursor_visual_from,
-                        cursor_visual_to,
+                        cursor_visual_track,
                         cancel_reason: None,
                         texture_prepared: false,
                         old_snapshot: Some(old_snapshot.clone()),
@@ -1183,10 +1264,11 @@ impl LinuxEditorAnimationCoordinator {
                 let conflicting = self
                     .prepared_queue
                     .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
+                let now = Instant::now();
+                let (rebase_frames, caret_handoff) = self.take_rebase_frames(
                     conflicting,
                     "rebased_by_delete",
-                    Instant::now(),
+                    now,
                     Some((&deleted_ranges, &delete_offset_map)),
                 );
 
@@ -1228,14 +1310,14 @@ impl LinuxEditorAnimationCoordinator {
                     .collect();
                 match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
 
-                // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
-                // 作为新事务纯 reflow 光标动画的视觉起点。
-                let cursor_visual_from = sampled_cursor;
-                let cursor_visual_to = if cursor_visual_from.is_some() {
-                    new_cursor_rect.clone()
-                } else {
-                    None
-                };
+                // Issue #690 评论 5681206040: 构建 caret track。
+                let cursor_visual_track = build_cursor_visual_track(
+                    old_cursor_rect.as_ref(),
+                    new_cursor_rect.as_ref(),
+                    caret_handoff,
+                    now,
+                    u64::from(vt.duration_ms),
+                );
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
@@ -1245,8 +1327,7 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches,
                     old_cursor_rect,
                     new_cursor_rect,
-                    cursor_visual_from,
-                    cursor_visual_to,
+                    cursor_visual_track,
                     cancel_reason: None,
                     texture_prepared: false,
                     old_snapshot: Some(old_snapshot.clone()),
@@ -1281,8 +1362,7 @@ impl LinuxEditorAnimationCoordinator {
                     static_patches: Vec::new(),
                     old_cursor_rect,
                     new_cursor_rect,
-                    cursor_visual_from: None,
-                    cursor_visual_to: None,
+                    cursor_visual_track: None,
                     cancel_reason: None,
                     texture_prepared: false,
                     old_snapshot: None,
@@ -1313,10 +1393,11 @@ impl LinuxEditorAnimationCoordinator {
             .prepared_queue
             .find_conflicting_transaction(composition_byte_start, composition_byte_end);
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
-        let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
+        let now = Instant::now();
+        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
             conflicting,
             "rebased_by_composition_update",
-            Instant::now(),
+            now,
             None,
         );
 
@@ -1386,14 +1467,14 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
-        // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
-        // 作为新事务纯 reflow 光标动画的视觉起点。
-        let cursor_visual_from = sampled_cursor;
-        let cursor_visual_to = if cursor_visual_from.is_some() {
-            new_cursor_rect.clone()
-        } else {
-            None
-        };
+        // Issue #690 评论 5681206040: 构建 caret track。
+        let cursor_visual_track = build_cursor_visual_track(
+            old_cursor_rect.as_ref(),
+            new_cursor_rect.as_ref(),
+            caret_handoff,
+            now,
+            unit_duration_ms,
+        );
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -1403,8 +1484,7 @@ impl LinuxEditorAnimationCoordinator {
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
-            cursor_visual_from,
-            cursor_visual_to,
+            cursor_visual_track,
             cancel_reason: None,
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
@@ -1446,10 +1526,11 @@ impl LinuxEditorAnimationCoordinator {
             .prepared_queue
             .find_conflicting_transaction(conflict_start, conflict_end);
         // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
-        let (rebase_frames, sampled_cursor) = self.take_rebase_frames(
+        let now = Instant::now();
+        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
             conflicting,
             "rebased_by_composition_commit",
-            Instant::now(),
+            now,
             None,
         );
 
@@ -1743,14 +1824,14 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
-        // Issue #690 评论 5680276931: rebase 交棒时把采样到的旧事务屏幕光标
-        // 作为新事务纯 reflow 光标动画的视觉起点。
-        let cursor_visual_from = sampled_cursor;
-        let cursor_visual_to = if cursor_visual_from.is_some() {
-            new_cursor_rect.clone()
-        } else {
-            None
-        };
+        // Issue #690 评论 5681206040: 构建 caret track。
+        let cursor_visual_track = build_cursor_visual_track(
+            old_cursor_rect.as_ref(),
+            new_cursor_rect.as_ref(),
+            caret_handoff,
+            now,
+            unit_duration_ms,
+        );
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -1760,8 +1841,7 @@ impl LinuxEditorAnimationCoordinator {
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
-            cursor_visual_from,
-            cursor_visual_to,
+            cursor_visual_track,
             cancel_reason: None,
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
@@ -1829,8 +1909,7 @@ impl LinuxEditorAnimationCoordinator {
             static_patches: Vec::new(),
             old_cursor_rect: old_cursor_rect.clone(),
             new_cursor_rect: new_cursor_rect.clone(),
-            cursor_visual_from: None,
-            cursor_visual_to: None,
+            cursor_visual_track: None,
             cancel_reason: None,
             texture_prepared: true,
             old_snapshot: None,
@@ -2308,7 +2387,7 @@ impl LinuxEditorAnimationCoordinator {
         (TextAnimationPlan { glyphs }, keys_to_complete)
     }
 
-    /// Issue #690 评论 5675007226 步骤 2: 协同光标直接计算最终屏幕位置。
+    /// Issue #690 评论 5675007226 步骤 2 + 5681206040: 协同光标直接计算最终屏幕位置。
     ///
     /// 光标严格跟随文字吞吐边界，不再在 old/new cursor rect 之间用 progress 插值：
     /// - InsertReveal：光标 x = 本帧所有 reveal 单元的最右可见边界（frame.x + frame.w）。
@@ -2316,7 +2395,8 @@ impl LinuxEditorAnimationCoordinator {
     ///   旧字正好被光标"吞掉"。
     /// - DeleteConceal (forward Delete, !conceal_from_left)：逻辑光标不移动，
     ///   固定在 new_cursor_rect.x。
-    /// - Reflow / Cursor / Enter：用 old/new cursor rect 按 ease_out_quad 插值。
+    /// - Reflow / Cursor / Enter：直接 sample `cursor_visual_track`（自带
+    ///   started_at/duration_ms），不再借任何文字 unit 的 progress。
     ///
     /// 返回 `(x, y, h)` 供 `build_render_plan_full` 直接写入 `CursorRenderState`。
     fn compute_coordinated_cursor_position(
@@ -2342,28 +2422,25 @@ impl LinuxEditorAnimationCoordinator {
         let op = tx.operation_kind;
         let frame_now = sample.frame_now;
 
-        // Issue #690 评论 5680276931: 纯 reflow 光标动画的视觉起点/终点。
-        // 发生过 rebase 交棒时，`cursor_visual_from` 是旧事务这一帧的屏幕光标，
-        // `cursor_visual_to` 镜像 `new_cursor_rect`（权威新布局目标）。
-        // 未发生 rebase（首次事务）时两者为 None，回退到 `old_rect`/`new_rect`，
-        // 保持首次事务从逻辑 old caret 走向 new caret 的原语义。
-        let from_rect = tx.cursor_visual_from.as_ref().unwrap_or(old_rect);
-        let to_rect = tx.cursor_visual_to.as_ref().unwrap_or(new_rect);
-
-        // Issue #690 评论 5679744253 问题 3: 找到 reflow unit 的 progress，不再回退到
-        // 事务级 progress。reflow unit 有自己的时间线，rebase/retarget 后事务 progress
-        // 和 unit progress 可能不同。没有 reflow unit 时（事务已完成或纯 cursor move），
-        // 光标应在 new_rect，返回 1.0。
-        let reflow_progress = || -> f64 {
-            for unit in &tx.units {
-                match unit.slice.kind {
-                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-                        return unit.progress(frame_now);
-                    }
-                    _ => {}
+        // Issue #690 评论 5681206040: 纯 reflow 光标直接 sample caret track，
+        // 不再借第一个 reflow unit 的 progress。track 自带 started_at/duration_ms。
+        // 没有 caret track 时（首次事务未经过 rebase，或 CursorOnly），回退到
+        // old/new cursor rect 从事务 progress 插值——保持首次事务原语义。
+        let sample_reflow = || -> Option<(f64, f64)> {
+            match tx.cursor_visual_track.as_ref() {
+                Some(track) => {
+                    let r = track.sampled_rect(frame_now);
+                    Some((r.x, r.top))
+                }
+                None => {
+                    // 首次事务没有 caret track：用 old/new cursor rect 按事务 progress 插值。
+                    let progress = tx.progress(frame_now);
+                    let eased = AnimatedSlice::ease_out_quad(progress);
+                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                    Some((x, y))
                 }
             }
-            1.0
         };
 
         match op {
@@ -2387,13 +2464,8 @@ impl LinuxEditorAnimationCoordinator {
                 match rightmost_x {
                     Some(x) => Some((x, cursor_y, h)),
                     None => {
-                        // Issue #690 评论 5680276931: 纯 reflow（无 InsertReveal glyph 当边界）
-                        // 用 cursor_visual_from/cursor_visual_to 同帧 caret track，
-                        // 不再用裸 old_cursor_rect（逻辑 old caret）当起点。
-                        let progress = reflow_progress();
-                        let eased = AnimatedSlice::ease_out_quad(progress);
-                        let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
-                        let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
+                        // 纯 reflow（无 InsertReveal glyph 当边界）：直接 sample caret track。
+                        let (x, y) = sample_reflow()?;
                         Some((x, y, h))
                     }
                 }
@@ -2431,23 +2503,14 @@ impl LinuxEditorAnimationCoordinator {
                     // 只让右侧文字向光标方向收掉。
                     Some((new_rect.x, new_rect.top, h))
                 } else {
-                    // Issue #690 评论 5680276931: 没有可直接当边界的 glyph（跨行 reflow 等）：
-                    // 用 cursor_visual_from/cursor_visual_to 同帧 caret track，
-                    // 与 ReflowMove 同一条 easing。
-                    let progress = reflow_progress();
-                    let eased = AnimatedSlice::ease_out_quad(progress);
-                    let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
-                    let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
+                    // 没有可直接当边界的 glyph（跨行 reflow 等）：直接 sample caret track。
+                    let (x, y) = sample_reflow()?;
                     Some((x, y, h))
                 }
             }
             _ => {
-                // Issue #690 评论 5680276931: CompositionUpdate/Commit/Cursor 纯 reflow
-                // 用 cursor_visual_from/cursor_visual_to 同帧 caret track。
-                let progress = reflow_progress();
-                let eased = AnimatedSlice::ease_out_quad(progress);
-                let x = from_rect.x + (to_rect.x - from_rect.x) * eased;
-                let y = from_rect.top + (to_rect.top - from_rect.top) * eased;
+                // CompositionUpdate/Commit/Cursor 纯 reflow：直接 sample caret track。
+                let (x, y) = sample_reflow()?;
                 Some((x, y, h))
             }
         }
@@ -4002,8 +4065,7 @@ mod tests {
             static_patches: Vec::new(),
             old_cursor_rect: Some(old_cursor),
             new_cursor_rect: Some(new_cursor),
-            cursor_visual_from: None,
-            cursor_visual_to: None,
+            cursor_visual_track: None,
             cancel_reason: None,
             texture_prepared: true,
             old_snapshot: None,
@@ -4488,8 +4550,10 @@ mod tests {
         let now = Instant::now();
         let mut coord = LinuxEditorAnimationCoordinator::new();
         // 跨行/软换行 reflow：没有可直接当边界的 reveal/conceal 单元，
-        // 走 old/new caret 插值，easing 与 ReflowMove 同为二次曲线。
-        coord.prepared_queue.enqueue(rendering_tx(
+        // 走 caret track 插值，easing 与 ReflowMove 同为二次曲线。
+        // Issue #690 评论 5681206040: caret track 自带 started_at/duration_ms，
+        // 不再借 reflow unit 的 progress。
+        let mut tx = rendering_tx(
             VisualTransactionKey::new(6, 6),
             TextVisualOperationKind::Insert,
             vec![elapsed_unit(reflow_slice(0, 3, 100.0, 200.0), 50, 100, now)],
@@ -4507,7 +4571,25 @@ mod tests {
             },
             now,
             10,
+        );
+        // caret track 与 reflow unit 同一条时间线：started_at = now - 50ms, duration = 100ms
+        tx.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            CursorRect {
+                x: 100.0,
+                top: 0.0,
+                bottom: 20.0,
+                baseline_y: 16.0,
+            },
+            CursorRect {
+                x: 200.0,
+                top: 40.0,
+                bottom: 60.0,
+                baseline_y: 56.0,
+            },
+            now - Duration::from_millis(50),
+            100,
         ));
+        coord.prepared_queue.enqueue(tx);
 
         let plan = coord.build_render_plan_full(
             stale_cursor_state(),
@@ -4518,12 +4600,11 @@ mod tests {
             now,
             true,
         );
-        // Issue #690 评论 5679744253 问题 3: 无边界 glyph 时用 reflow unit 自己的
-        // progress，不再回退到事务级 progress。reflow unit 演了 50/100ms → progress 0.5
-        // → ease_out_quad = 0.75 → x = 100 + 100*0.75 = 175
+        // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
+        // → x = 100 + 100*0.75 = 175
         assert!(
             (plan.cursor.x - 175.0).abs() < 1e-6,
-            "无边界 glyph 时用 reflow unit 自己的 progress 插值，got {}",
+            "无边界 glyph 时用 caret track 的 progress 插值，got {}",
             plan.cursor.x
         );
         assert!(
@@ -4595,9 +4676,9 @@ mod tests {
         );
         let sampled_cursor = sampled_cursor.expect("rebase 交棒应采样到旧事务屏幕光标");
         assert!(
-            (sampled_cursor.x - 190.0).abs() < 1e-6,
+            (sampled_cursor.sampled.x - 190.0).abs() < 1e-6,
             "sampled_cursor_rect 应为旧事务屏幕光标 190，got {}",
-            sampled_cursor.x
+            sampled_cursor.sampled.x
         );
 
         // ── 新事务：Enter/纯 reflow，没有 InsertReveal/DeleteConceal glyph 当边界 ──
@@ -4633,8 +4714,12 @@ mod tests {
         // 修复后：rebase 交棒时把采样到的旧事务屏幕光标作为 cursor_visual_from，
         // new_cursor_rect 作为 cursor_visual_to，compute_coordinated_cursor_position
         // 消费这条同帧 caret track，不再用裸 old_cursor_rect 当 reflow 光标起点。
-        new_tx.cursor_visual_from = Some(sampled_cursor);
-        new_tx.cursor_visual_to = Some(caret(20.0));
+        new_tx.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            sampled_cursor.sampled,
+            caret(20.0),
+            now,
+            100,
+        ));
         coord.prepared_queue.enqueue(new_tx);
 
         // ── 新事务第一帧（frame_now = now，reflow unit progress = 0）──
@@ -4667,6 +4752,392 @@ mod tests {
             "Issue #690 评论 5680276931: rebase 交棒后 reflow 光标应从上一帧屏幕光标 190 起步，\
              修复后 cursor_visual_from 同步 rebase，第一帧光标不跳（got cursor.x={}）",
             cx_new
+        );
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // Issue #690 评论 5681206040 复现：连续交棒光标跳变 + reflow_progress 原地取首
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// 评论 5681206040 问题 1：`sample_coordinated_cursor_rect_at()` 没有采样旧事务
+    /// 自己的 visual caret track（`tx.cursor_visual_from` / `tx.cursor_visual_to`），
+    /// 仍然固定用 `old_cursor_rect / new_cursor_rect`。连续交棒（第二次 rebase）时
+    /// 采样到的光标会回到逻辑 old caret 起算，与旧事务当前屏幕光标不一致，
+    /// 新事务拿错误的 sampled cursor 当起点，连续快速操作时光标跳变。
+    #[test]
+    fn issue690_comment5681206040_continuous_handoff_sample_uses_tx_visual_caret_track() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // ── 第一次交棒后的新事务 B（手工装配，模拟第一次 rebase 后的状态）──
+        // cursor_visual_from = 190：第一次 rebase 采样的旧事务屏幕光标。
+        // cursor_visual_to   = 20 ：new_cursor_rect 镜像。
+        // old_cursor_rect    = 100：pipeline 对旧正文做的权威布局 caret（逻辑 old caret），
+        //                          ≠ 旧事务屏幕光标 190。
+        // new_cursor_rect    = 20。
+        // reflow unit 已播 50/100ms → progress 0.5 → ease_out_quad(0.5) = 0.75。
+        // 事务 B 当前屏幕光标 = 190 + (20 - 190) * 0.75 = 62.5。
+        let key_b = VisualTransactionKey::new(2, 2);
+        let mut tx_b = rendering_tx(
+            key_b,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reflow_slice(0, 3, 190.0, 20.0), 50, 100, now)],
+            caret(100.0),
+            caret(20.0),
+            now,
+            50,
+        );
+        tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            caret(190.0),
+            caret(20.0),
+            now - Duration::from_millis(50),
+            100,
+        ));
+        coord.prepared_queue.enqueue(tx_b);
+
+        // 前置断言：compute_coordinated_cursor_position 已修复用 visual track，
+        // 事务 B 当前屏幕光标 = 62.5。
+        let expected_screen_cursor = 190.0 + (20.0 - 190.0) * AnimatedSlice::ease_out_quad(0.5);
+        let mut sample_b = AnimationFrameSample::new(now);
+        sample_b.set_progress(key_b, 0.5);
+        let (cx_b, _, _) = coord
+            .compute_coordinated_cursor_position(&sample_b)
+            .expect("事务 B 应能算出协同光标");
+        assert!(
+            (cx_b - expected_screen_cursor).abs() < 1e-6,
+            "前置：事务 B 屏幕光标应在 {}（visual track 190→20, progress 0.5），got {}",
+            expected_screen_cursor,
+            cx_b
+        );
+
+        // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
+        // sample_coordinated_cursor_rect_at(B, now) 应返回事务 B 当前屏幕光标 62.5。
+        // 当前缺陷：reflow 分支用 old_cursor_rect=100, new_cursor_rect=20
+        //   → 100 + (20-100)*0.75 = 40，而非屏幕上的 62.5。
+        let (_rebase_frames, sampled_cursor) =
+            coord.take_rebase_frames(Some(key_b), "rebased_by_second_input", now, None);
+        let sampled_cursor = sampled_cursor.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
+
+        let buggy_value = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+        assert!(
+            (sampled_cursor.sampled.x - expected_screen_cursor).abs() < 1e-6,
+            "Issue #690 评论 5681206040 问题1: 连续交棒第二次 sampled_cursor 应为事务 B \
+             屏幕光标 {} (用 cursor_visual_track)，但当前实现用 \
+             old_cursor_rect/new_cursor_rect 算出 {} (got sampled_cursor.sampled.x={})",
+            expected_screen_cursor,
+            buggy_value,
+            sampled_cursor.sampled.x
+        );
+    }
+
+    /// 评论 5681206040 问题 2：cursor reflow 仍然"随便拿第一个 reflow unit 的 progress"。
+    /// `sample_coordinated_cursor_rect_at()` 和 `compute_coordinated_cursor_position()` 里
+    /// `reflow_progress()` 遍历 `tx.units`，遇到第一个 `ReflowMove/ReflowCrossFade` 就直接
+    /// 返回它的 progress。视觉单元各自持有 `started_at / duration_ms`，rebase 后不同 unit
+    /// 可能有不同剩余时长。第一个 reflow unit 可能已经到 1.0，另一个与当前 caret 更相关的
+    /// reflow unit 还在 0.4，光标提前冲到目标，与实际正在移动的文字不同步。
+    #[test]
+    fn issue690_comment5681206040_reflow_progress_should_not_take_first_unit() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // 事务 C：Insert 纯 reflow（无 InsertReveal glyph），首次事务（无 visual track）。
+        // old_cursor_rect = 0, new_cursor_rect = 200。
+        // 两个 ReflowMove unit：
+        //   unit1: duration=100ms, 已播 100ms → progress=1.0（已播完）
+        //   unit2: duration=200ms, 已播 40ms → progress=0.2（仍在播）
+        // reflow_progress() 遇到 unit1 直接返回 1.0 → eased=1.0 → 光标 = 200（目标）。
+        // 但 unit2 还在 0.2，事务整体未完成，光标不应已到目标。
+        let key_c = VisualTransactionKey::new(3, 3);
+        let tx_c = rendering_tx(
+            key_c,
+            TextVisualOperationKind::Insert,
+            vec![
+                elapsed_unit(reflow_slice(0, 3, 0.0, 100.0), 100, 100, now),
+                elapsed_unit(reflow_slice(3, 6, 50.0, 150.0), 40, 200, now),
+            ],
+            caret(0.0),
+            caret(200.0),
+            now,
+            40,
+        );
+        coord.prepared_queue.enqueue(tx_c);
+
+        let mut sample_c = AnimationFrameSample::new(now);
+        sample_c.set_progress(key_c, 0.2);
+        let (cx_c, _, _) = coord
+            .compute_coordinated_cursor_position(&sample_c)
+            .expect("事务 C 应能算出协同光标");
+
+        // 期望：unit2 还在 progress=0.2，事务未完成，光标不应已到 new_cursor_rect.x=200。
+        // 当前缺陷：reflow_progress 取 unit1.progress=1.0 → 光标 = 200（提前冲到目标）。
+        let new_cx = 200.0;
+        assert!(
+            (cx_c - new_cx).abs() > 1e-6,
+            "Issue #690 评论 5681206040 问题2: unit2 还在 progress=0.2，事务未完成，\
+             光标不应已到 new_cursor_rect.x={}，但 reflow_progress 取第一个 unit1.progress=1.0 \
+             导致光标提前冲到目标 (got cursor.x={})",
+            new_cx,
+            cx_c
+        );
+    }
+
+    /// 评论 5681206040 要求：测试补真实连续交棒，不要只测一次。
+    /// 旧事务 `100 -> 220` 播到中间 -> 第一次 rebase 成 `190 -> 20` -> 再播一段 ->
+    /// 第二次 rebase；断言第二次 sampled caret 精确等于第二次 rebase 前
+    /// `compute_coordinated_cursor_position()` 的屏幕结果，而不是按逻辑 old/new caret 重算。
+    #[test]
+    fn issue690_comment5681206040_real_continuous_handoff_two_rebases() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // ── 旧事务 A：caret 100→220，reflow unit 播到中间 ──
+        // reflow unit: from_x=100, to_x=220, duration=100ms, 已播 50ms → progress 0.5
+        // ease_out_quad(0.5) = 0.75 → 屏幕光标 = 100 + (220-100)*0.75 = 190
+        let key_a = VisualTransactionKey::new(1, 1);
+        let mut tx_a = rendering_tx(
+            key_a,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reflow_slice(0, 3, 100.0, 220.0), 50, 100, now)],
+            caret(100.0),
+            caret(220.0),
+            now,
+            50,
+        );
+        tx_a.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            caret(100.0),
+            caret(220.0),
+            now - Duration::from_millis(50),
+            100,
+        ));
+        coord.prepared_queue.enqueue(tx_a);
+
+        // 验证事务 A 当前屏幕光标 = 190
+        let expected_a = 100.0 + (220.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+        let mut sample_a = AnimationFrameSample::new(now);
+        sample_a.set_progress(key_a, 0.5);
+        let (cx_a, _, _) = coord
+            .compute_coordinated_cursor_position(&sample_a)
+            .expect("事务 A 应能算出协同光标");
+        assert!(
+            (cx_a - expected_a).abs() < 1e-6,
+            "事务 A 屏幕光标应为 {}，got {}",
+            expected_a,
+            cx_a
+        );
+
+        // ── 第一次 rebase：take_rebase_frames 采集事务 A 的屏幕光标 ──
+        let (rebase_frames_a, handoff_a) =
+            coord.take_rebase_frames(Some(key_a), "first_rebase", now, None);
+        let handoff_a = handoff_a.expect("第一次 rebase 应采样到事务 A 的屏幕光标");
+        assert!(
+            (handoff_a.sampled.x - expected_a).abs() < 1e-6,
+            "第一次 rebase sampled caret 应为 {}，got {}",
+            expected_a,
+            handoff_a.sampled.x
+        );
+
+        // ── 新事务 B：用 handoff_a 构造 cursor_visual_track ──
+        // from = 190（sampled），to = 20（new_cursor_rect），duration = handoff_a.remaining_duration_ms
+        let key_b = VisualTransactionKey::new(2, 2);
+        let mut new_units_b = wrap_units(vec![reflow_slice(0, 3, 190.0, 20.0)]);
+        let offset_map = OffsetMap::build("abc", "abc");
+        match_rebase_frames(&rebase_frames_a, &mut new_units_b, &offset_map);
+        let mut tx_b = rendering_tx(
+            key_b,
+            TextVisualOperationKind::Insert,
+            new_units_b,
+            caret(100.0),
+            caret(20.0),
+            now,
+            0,
+        );
+        tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: handoff_a.sampled,
+            to: caret(20.0),
+            started_at: now,
+            duration_ms: handoff_a.remaining_duration_ms,
+        });
+        coord.prepared_queue.enqueue(tx_b);
+
+        // ── 事务 B 播一段：50ms 后 ──
+        // caret track: from=190, to=20, started_at=now, duration=50ms（handoff remaining）
+        // progress = 50/50 = 1.0 → eased = 1.0 → caret = 20
+        // 但我们要测"再播一段"不是"播完"，所以用 25ms → progress = 25/50 = 0.5
+        // ease_out_quad(0.5) = 0.75 → 屏幕光标 = 190 + (20-190)*0.75 = 62.5
+        let now_after_b = now + Duration::from_millis(25);
+        let expected_b = 190.0 + (20.0 - 190.0) * AnimatedSlice::ease_out_quad(0.5);
+        let mut sample_b = AnimationFrameSample::new(now_after_b);
+        sample_b.set_progress(key_b, 0.5);
+        let (cx_b, _, _) = coord
+            .compute_coordinated_cursor_position(&sample_b)
+            .expect("事务 B 应能算出协同光标");
+        assert!(
+            (cx_b - expected_b).abs() < 1e-6,
+            "事务 B 屏幕光标应为 {}（visual track 190→20, progress 0.5），got {}",
+            expected_b,
+            cx_b
+        );
+
+        // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
+        let (_rebase_frames_b, handoff_b) =
+            coord.take_rebase_frames(Some(key_b), "second_rebase", now_after_b, None);
+        let handoff_b = handoff_b.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
+
+        // 断言：第二次 sampled caret 精确等于第二次 rebase 前
+        // compute_coordinated_cursor_position() 的屏幕结果
+        assert!(
+            (handoff_b.sampled.x - expected_b).abs() < 1e-6,
+            "Issue #690 评论 5681206040: 连续交棒第二次 sampled caret 应为事务 B 屏幕光标 {}，\
+             但 got {}（如果按逻辑 old/new caret 重算会得到不同值）",
+            expected_b,
+            handoff_b.sampled.x
+        );
+
+        // 额外验证：第二次 sampled caret 不等于按逻辑 old/new caret 重算的值
+        let logical_recalc = 100.0 + (20.0 - 100.0) * AnimatedSlice::ease_out_quad(0.5);
+        assert!(
+            (handoff_b.sampled.x - logical_recalc).abs() > 1e-6,
+            "第二次 sampled caret 不应等于按逻辑 old/new caret 重算的值 {}",
+            logical_recalc
+        );
+    }
+
+    /// 评论 5681206040 要求：再补两个不同 `started_at/duration_ms` 的 reflow unit，
+    /// 确认 caret 不依赖 `units` 顺序。
+    #[test]
+    fn issue690_comment5681206040_caret_track_independent_of_units_order() {
+        let now = Instant::now();
+
+        // 事务 D：有两个不同 started_at/duration_ms 的 reflow unit，有 cursor_visual_track。
+        // caret track: from=0, to=200, started_at=now-40ms, duration=200ms
+        // 已播 40ms → progress = 40/200 = 0.2 → ease_out_quad(0.2) = 0.36
+        // 屏幕光标 = 0 + (200-0)*0.36 = 72
+        let expected_d = 0.0 + (200.0 - 0.0) * AnimatedSlice::ease_out_quad(0.2);
+
+        // unit1: duration=100ms, 已播 100ms → progress=1.0（已播完）
+        // unit2: duration=200ms, 已播 40ms → progress=0.2（仍在播）
+        // 如果 caret 依赖 units 顺序（取第一个 reflow unit 的 progress），
+        // 会用 unit1.progress=1.0 → eased=1.0 → caret=200（错误）。
+        // 正确行为：caret track 自带 started_at/duration_ms，不依赖任何 unit 的 progress。
+
+        // ── 顺序 1：unit1 在前，unit2 在后 ──
+        let mut coord1 = LinuxEditorAnimationCoordinator::new();
+        let key_d1 = VisualTransactionKey::new(4, 4);
+        let mut tx_d1 = rendering_tx(
+            key_d1,
+            TextVisualOperationKind::Insert,
+            vec![
+                elapsed_unit(reflow_slice(0, 3, 0.0, 100.0), 100, 100, now),
+                elapsed_unit(reflow_slice(3, 6, 50.0, 150.0), 40, 200, now),
+            ],
+            caret(0.0),
+            caret(200.0),
+            now,
+            40,
+        );
+        tx_d1.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            caret(0.0),
+            caret(200.0),
+            now - Duration::from_millis(40),
+            200,
+        ));
+        coord1.prepared_queue.enqueue(tx_d1);
+
+        let mut sample_d1 = AnimationFrameSample::new(now);
+        sample_d1.set_progress(key_d1, 0.2);
+        let (cx_d1, _, _) = coord1
+            .compute_coordinated_cursor_position(&sample_d1)
+            .expect("事务 D1 应能算出协同光标");
+
+        assert!(
+            (cx_d1 - expected_d).abs() < 1e-6,
+            "事务 D1（unit1在前）屏幕光标应为 {}（caret track 0→200, progress 0.2），\
+             got {} — caret 不应依赖 units 顺序",
+            expected_d,
+            cx_d1
+        );
+
+        // ── 顺序 2：unit2 在前，unit1 在后（交换 units 顺序）──
+        let mut coord2 = LinuxEditorAnimationCoordinator::new();
+        let key_d2 = VisualTransactionKey::new(5, 5);
+        let mut tx_d2 = rendering_tx(
+            key_d2,
+            TextVisualOperationKind::Insert,
+            vec![
+                elapsed_unit(reflow_slice(3, 6, 50.0, 150.0), 40, 200, now),
+                elapsed_unit(reflow_slice(0, 3, 0.0, 100.0), 100, 100, now),
+            ],
+            caret(0.0),
+            caret(200.0),
+            now,
+            40,
+        );
+        tx_d2.cursor_visual_track = Some(PreparedCursorVisualTrack::new_first(
+            caret(0.0),
+            caret(200.0),
+            now - Duration::from_millis(40),
+            200,
+        ));
+        coord2.prepared_queue.enqueue(tx_d2);
+
+        let mut sample_d2 = AnimationFrameSample::new(now);
+        sample_d2.set_progress(key_d2, 0.2);
+        let (cx_d2, _, _) = coord2
+            .compute_coordinated_cursor_position(&sample_d2)
+            .expect("事务 D2 应能算出协同光标");
+
+        assert!(
+            (cx_d2 - expected_d).abs() < 1e-6,
+            "事务 D2（unit2在前）屏幕光标应为 {}（caret track 0→200, progress 0.2），\
+             got {} — caret 不应依赖 units 顺序",
+            expected_d,
+            cx_d2
+        );
+
+        // ── 关键断言：两种 units 顺序的 caret 结果完全相同 ──
+        assert!(
+            (cx_d1 - cx_d2).abs() < 1e-6,
+            "Issue #690 评论 5681206040: 不同 units 顺序的 caret 结果应完全相同，\
+             但 got cx_d1={} vs cx_d2={} — caret track 不应依赖 units 顺序",
+            cx_d1,
+            cx_d2
+        );
+
+        // ── 额外验证：sample_coordinated_cursor_rect_at 也不依赖 units 顺序 ──
+        let sampled1 = sample_coordinated_cursor_rect_at(
+            coord1
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key_d1)
+                .unwrap(),
+            now,
+        )
+        .expect("事务 D1 应能采样到光标");
+        let sampled2 = sample_coordinated_cursor_rect_at(
+            coord2
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == key_d2)
+                .unwrap(),
+            now,
+        )
+        .expect("事务 D2 应能采样到光标");
+
+        assert!(
+            (sampled1.x - sampled2.x).abs() < 1e-6,
+            "Issue #690 评论 5681206040: sample_coordinated_cursor_rect_at 也不应依赖 units 顺序，\
+             但 got sampled1.x={} vs sampled2.x={}",
+            sampled1.x,
+            sampled2.x
+        );
+        assert!(
+            (sampled1.x - expected_d).abs() < 1e-6,
+            "sample_coordinated_cursor_rect_at 结果应为 {}，got {}",
+            expected_d,
+            sampled1.x
         );
     }
 }

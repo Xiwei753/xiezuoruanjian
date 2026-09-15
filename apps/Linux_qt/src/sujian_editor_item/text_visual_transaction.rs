@@ -239,6 +239,91 @@ pub(crate) struct RebaseFrame {
     pub remaining_duration_ms: u64,
 }
 
+/// Issue #690 评论 5681206040: coordinated caret 的正式视觉 track。
+///
+/// 之前 `cursor_visual_from` / `cursor_visual_to` 只是 `CursorRect` 端点，没有自己的
+/// 时间状态（`started_at` / `duration_ms`），所以 `compute_coordinated_cursor_position`
+/// 不得不借第一个 reflow unit 的 progress，`sample_coordinated_cursor_rect_at` 干脆
+/// 不读这两个字段、固定用 `old_cursor_rect` / `new_cursor_rect`。连续交棒时第二次
+/// rebase 采样到的光标回到逻辑 old caret 起算，与旧事务当前屏幕光标不一致。
+///
+/// 收成一个完整 caret track 后，两处问题一起消失：
+/// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
+///   `started_at = now`，`duration_ms = 事务时长`。
+/// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
+///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，`started_at = now`，
+///   `duration_ms` 用旧 track 剩余时长，不再借任何文字 unit 的 progress。
+/// - InsertReveal / Backspace 有明确文字边界时，最终屏幕 x/y 仍直接取文字边界；
+///   Enter、删除换行、软换行、纯 reflow 等没有明确边界时，直接 sample 这个 caret track。
+/// - 下一次 rebase 再从同一个 caret track 采样，不能回头使用逻辑 `old_cursor_rect`。
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedCursorVisualTrack {
+    pub from: CursorRect,
+    pub to: CursorRect,
+    pub started_at: Instant,
+    pub duration_ms: u64,
+}
+
+impl PreparedCursorVisualTrack {
+    /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
+    pub fn progress(&self, now: Instant) -> f64 {
+        if self.duration_ms == 0 {
+            return 1.0;
+        }
+        let elapsed = now.duration_since(self.started_at).as_millis() as f64;
+        (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
+    }
+
+    /// 与文字帧同一条 easing（`AnimatedSlice::ease_out_quad`）。
+    pub fn eased(&self, now: Instant) -> f64 {
+        AnimatedSlice::ease_out_quad(self.progress(now))
+    }
+
+    /// 在 `now` 时刻按 `from -> to` 插值采样当前屏幕 caret rect。
+    pub fn sampled_rect(&self, now: Instant) -> CursorRect {
+        let eased = self.eased(now);
+        let x = self.from.x + (self.to.x - self.from.x) * eased;
+        let top = self.from.top + (self.to.top - self.from.top) * eased;
+        let h = self.to.bottom - self.to.top;
+        CursorRect {
+            x,
+            top,
+            bottom: top + h,
+            baseline_y: self.to.baseline_y,
+        }
+    }
+
+    /// 旧 track 剩余的播放时长：`duration - elapsed`，下溢保护为 0。
+    pub fn remaining_duration_ms(&self, now: Instant) -> u64 {
+        let elapsed_ms = now.duration_since(self.started_at).as_millis() as u64;
+        self.duration_ms.saturating_sub(elapsed_ms)
+    }
+
+    /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
+    /// `started_at = now`，`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
+    pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
+        let sampled = self.sampled_rect(now);
+        let remaining = self.remaining_duration_ms(now).max(1);
+        Self {
+            from: sampled,
+            to: new_to,
+            started_at: now,
+            duration_ms: remaining,
+        }
+    }
+
+    /// 首次事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
+    /// `started_at = now`，`duration_ms = 事务时长`。
+    pub fn new_first(from: CursorRect, to: CursorRect, now: Instant, duration_ms: u64) -> Self {
+        Self {
+            from,
+            to,
+            started_at: now,
+            duration_ms,
+        }
+    }
+}
+
 /// 一次平台视觉事务持有的全部资源。
 ///
 /// 它拥有一次动画所需的 units、patches、cursor transition
@@ -256,17 +341,19 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub static_patches: Vec<StaticLinePatch>,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
-    /// Issue #690 评论 5680276931: rebase 交棒时采样到的旧事务当前屏幕
-    /// coordinated cursor rect，作为新事务纯 reflow 光标动画的视觉起点。
+    /// Issue #690 评论 5681206040: coordinated caret 的正式视觉 track。
     ///
-    /// `None` 表示本事务没有经过 rebase 交棒（首次事务或 CursorOnly），
-    /// `compute_coordinated_cursor_position` 回退到 `old_cursor_rect`。
-    /// `new_cursor_rect` 仍保持权威新布局目标不变，由 `cursor_visual_to` 镜像。
-    pub cursor_visual_from: Option<CursorRect>,
-    /// 与 `cursor_visual_from` 配对的视觉终点，等于 `new_cursor_rect`。
-    /// 独立字段避免 `compute_coordinated_cursor_position` 再去解引用
-    /// `new_cursor_rect` 判断是否发生过 rebase。
-    pub cursor_visual_to: Option<CursorRect>,
+    /// 替代之前的 `cursor_visual_from` / `cursor_visual_to`（只有端点没有时间状态）。
+    /// 自带 `started_at` / `duration_ms`，不再借任何文字 unit 的 progress。
+    ///
+    /// - 首次正文事务：`from = old_cursor_rect`，`to = new_cursor_rect`。
+    /// - rebase 时：先用这个 track 在同一个 `now` 采样当前屏幕 caret；
+    ///   新事务 `from = sampled caret`，`to = 最新 new_cursor_rect`，
+    ///   `started_at = now`，`duration_ms` 用旧 track 剩余时长。
+    /// - InsertReveal / Backspace 有明确文字边界时，最终屏幕 x/y 仍直接取文字边界；
+    ///   纯 reflow 等没有明确边界时，直接 sample 这个 caret track。
+    /// - `None` 表示本事务没有视觉 caret track（CursorOnly 或无 old/new cursor rect）。
+    pub cursor_visual_track: Option<PreparedCursorVisualTrack>,
     pub cancel_reason: Option<String>,
     pub texture_prepared: bool,
     pub old_snapshot: Option<EditorLayoutSnapshot>,
