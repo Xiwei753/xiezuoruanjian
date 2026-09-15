@@ -2819,7 +2819,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
      * #691 评论 5684993243：同一 VSync 连续两笔 patch 时，已在前一可见帧产生真实 alpha 进度的
      * surviving unit 被错误判成"零进度 pending"，alpha 跳回 0。
      *
-     * 根因：hasVisibleAlphaProgress() 从 TimedFloat.startedAtNanos 和 from 反推"是否已显示过"：
+     * 根因：hasBeenPresented() 从 TimedFloat.startedAtNanos 和 from 反推"是否已显示过"：
      *   frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
      * 这两个字段恰好会在同一个 VSync 的第一笔 patch 里被 rebaseUnitForPatch() 改写。
      *
@@ -2827,9 +2827,9 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
      * 1. 0ms 建立插入动画 a 的 alpha 0→1，100ms。
      * 2. 24ms sample/draw，a 肉眼已显示到约 0.24。
      * 3. 30ms 同一 VSync 连续来 patch2、patch3。
-     * 4. patch2 开始时 hasVisibleAlphaProgress(a, 30ms)=true，a 正确保留当前进度；
+     * 4. patch2 开始时 hasBeenPresented(a, 30ms)=true，a 正确保留当前进度；
      *    rebaseUnitForPatch() 把 a 改成 from≈0.30, startedAtNanos=30ms, remaining=70ms。
-     * 5. patch3 仍用 frameTimeNanos=30ms。再次 hasVisibleAlphaProgress(a, 30ms)：
+     * 5. patch3 仍用 frameTimeNanos=30ms。再次 hasBeenPresented(a, 30ms)：
      *    30 > 30 == false → 返回 false，已显示过的 a 被判成"零进度 pending"。
      * 6. repartitionPendingAndInsertedUnits() 给 a 重建 TimedFloat(0f, 1f, ...)，
      *    a 从已画出的约 0.24/0.30 跳回 0。
@@ -2893,7 +2893,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         // === patch3@30ms：同一 VSync 第二笔，"ab" → "abc"，插入 c ===
         // 关键：frameTimeNanos 仍是 30ms（同一 VSync 时间戳）。
         // patch2 的 rebaseUnitForPatch 已把 a 改成 startedAtNanos=30ms，
-        // 此处 hasVisibleAlphaProgress(a, 30ms) 中 30 > 30 == false → 误判 a 为零进度 pending。
+        // 此处 hasBeenPresented(a, 30ms) 中 30 > 30 == false → 误判 a 为零进度 pending。
         val patch3 =
             makePatch(
                 id = 3L,
@@ -2917,7 +2917,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         // 复现断言（期望正确行为）：a 已在 24ms 可见帧显示到约 0.24/0.30，
         // 不应被同一 VSync 的第二笔 patch 重置回 0。
-        // 当前 bug：hasVisibleAlphaProgress 在 patch3 误判 a 为零进度，
+        // 当前 bug：hasBeenPresented 在 patch3 误判 a 为零进度，
         // repartition 给 a 重建 TimedFloat(0f, 1f, ...)，a 跳回 0 → 本断言 FAIL。
         assertTrue(
             "评论5684993243: a 已在 24ms 产生可见 alpha 进度(≈$alphaAt24)，" +
@@ -2927,7 +2927,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
-     * #691 评论 5684993243 修复后完整断言 — 验证 presentedProgressKeys 持久状态集合
+     * #691 评论 5684993243 修复后完整断言 — 验证 presentedKeys 持久状态集合
      * 让同一 VSync 连续 patch 不会把已显示 unit 误判成"零进度 pending"。
      *
      * 这是 [comment5684993243_sampledUnitJumpsBackToZeroOnSecondSameVsyncPatch] 的配套测试，
@@ -2939,10 +2939,10 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
      *
      * 场景与原复现测试一致：
      * - patch1@0ms: "" → "a"，alpha 0→1，duration=100ms
-     * - sample@24ms: a 的 alpha≈0.24，肉眼已显示中间帧 → a.key 计入 presentedProgressKeys
-     * - patch2@30ms: "a" → "ab"，插入 b（a 已在 presentedProgressKeys，保留当前进度）
-     * - patch3@30ms: "ab" → "abc"，插入 c（a 仍在 presentedProgressKeys，不归零；
-     *   b 从未被 sample 过，不在 presentedProgressKeys，和 c 一起重新分段）
+     * - sample@24ms: a 的 alpha≈0.24，肉眼已显示中间帧 → a.key 计入 presentedKeys
+     * - patch2@30ms: "a" → "ab"，插入 b（a 已在 presentedKeys，保留当前进度）
+     * - patch3@30ms: "ab" → "abc"，插入 c（a 仍在 presentedKeys，不归零；
+     *   b 从未被 sample 过，不在 presentedKeys，和 c 一起重新分段）
      * - sample@30ms: a 保留 from≈0.30，b/c 在 [30ms, 130ms] 有界窗口内均匀分段
      */
     @Test
@@ -2971,7 +2971,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             frameTimeNanos = 0L,
         )
 
-        // === sample@24ms：a 的 alpha 应约 0.24，肉眼已显示中间帧 → a.key 计入 presentedProgressKeys ===
+        // === sample@24ms：a 的 alpha 应约 0.24，肉眼已显示中间帧 → a.key 计入 presentedKeys ===
         val scene24 = timeline.sample(24L * NANOS_PER_MS)
         val unitA24 = scene24.units.firstOrNull { it.targetRange == TextRange(0, 1) }
         assertNotNull("24ms: unit a 应存在", unitA24)
@@ -3000,7 +3000,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         // === patch3@30ms：同一 VSync 第二笔，"ab" → "abc"，插入 c ===
         // 关键：frameTimeNanos 仍是 30ms（同一 VSync 时间戳）。
-        // 修复后：a.key 已在 presentedProgressKeys（24ms sample 时记入），
+        // 修复后：a.key 已在 presentedKeys（24ms sample 时记入），
         // applyPatch 判断 started/pending 只看持久状态，a 不被误判成"零进度 pending"。
         val patch3 =
             makePatch(
@@ -3050,7 +3050,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         // === 断言3：b/c/新插入 unit 仍然被压进有界窗口，尾巴不能重新线性增长 ===
         // b 和 c 的 alpha 通道 startedAtNanos 应在 [30ms, 30ms+100ms] 有界窗口内。
-        // b 从未被 sample 过（不在 presentedProgressKeys），和 c 一起重新分段；
+        // b 从未被 sample 过（不在 presentedKeys），和 c 一起重新分段；
         // c 是新插入。两者都在 [frameTimeNanos, frameTimeNanos + durationNanos] 有界窗口内均匀分段。
         val unitB30 = scene30.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC30 = scene30.units.firstOrNull { it.targetRange == TextRange(2, 3) }
@@ -3084,9 +3084,9 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
      * cursor 行为分析：
      * - patch1: cursor 从 (0,0,2,14) 到 a 的 caret (10,0,12,14)
      * - sample@24ms: cursor 在 a caret 附近（progress=0.24, segmentProgress=0.24）
-     * - patch2@30ms: a 已在 presentedProgressKeys → startedSurviving → 不纳入 cursor 路径
+     * - patch2@30ms: a 已在 presentedKeys → startedSurviving → 不纳入 cursor 路径
      *   cursor 路径 = [b caret (20,0,22,14)]（只有新插入 b 的 caret）
-     * - patch3@30ms: a 仍在 presentedProgressKeys → 不纳入 cursor 路径
+     * - patch3@30ms: a 仍在 presentedKeys → 不纳入 cursor 路径
      *   b 从未被 sample 过 → pendingSurviving → 纳入 survivingCursorPoints
      *   cursor 路径 = [b caret (20,0,22,14), c caret (30,0,32,14)]
      *   **不应包含 a 的 caret (10,0,12,14)**
@@ -3170,7 +3170,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         // === patch3@30ms：同一 VSync 第二笔，"ab" → "abc"，插入 c ===
         // 关键：frameTimeNanos 仍是 30ms（同一 VSync 时间戳）。
-        // 修复后：a.key 已在 presentedProgressKeys（24ms sample 时记入），
+        // 修复后：a.key 已在 presentedKeys（24ms sample 时记入），
         // a 不被误判成"零进度 pending"，cursor 路径不包含 a 的 caret。
         val cursorPath3 = listOf(CursorMotionPoint(rect = cCaretRect, endFraction = 1f))
         val patch3 =
@@ -3293,6 +3293,359 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 kotlin.math.abs(cursor32.left - aCaretRect.left) > 3f,
             )
         }
+    }
+
+    /**
+     * #691 评论 5685940102 复现测试（纯文字场景） —
+     * retained reflow unit（alpha 1→1, position old→new）在同一 VSync 连续 patch 下
+     * 不应被重建成插入 unit（alpha 0→1）。
+     *
+     * 根因（评论 5685940102 指出）：
+     * - createMoveUnitForReflow 创建的 retained unit alpha = TimedFloat(1f, 1f, ...)，alpha 永远不变
+     * - 旧逻辑 sample() 记录 presentedKeys 的条件是 `currentAlpha != alpha.from`，
+     *   对 alpha 1→1 的 retained unit 永远为 false → retained unit 永远不计入 presentedKeys
+     * - 下一笔 patch 的 progressByKey 把它判成 false → 进入 pendingSurviving →
+     *   repartitionPendingAndInsertedUnits 重建 alpha 0→1 → 已可见文字突然变透明再淡入
+     *
+     * 场景：
+     * - patch1@0ms: "ab" → "c\nab"，产生 retained move（"ab" 从第一行 reflow 到第二行）
+     *   - insertedUnits = [TextRange(0,2)]（"c\n" 新插入，alpha 0→1）
+     *   - retainedMoves = [RetainedMove(TextRange(0,2), TextRange(2,4))]（"ab" reflow，alpha 1→1）
+     * - sample@16ms: retained unit alpha=1，position 正在动画
+     *   → isUnitVisibleAndPresented 返回 true（alpha>0 且 position 已开始）
+     *   → retained unit.key 计入 presentedKeys
+     * - patch2@30ms: "c\nab" → "c\nabc"，插入 "c"（同一 VSync 第一笔）
+     * - patch3@30ms: "c\nabc" → "c\nabcd"，插入 "d"（同一 VSync 第二笔）
+     * - sample@30ms: 断言 retained unit alpha 始终为 1，不被重建成 0→1
+     */
+    @Test
+    fun comment5685940102_retainedReflowUnitNotRebuiltAsInsertOnSameVsyncPatch() {
+        val layouts = captureLayouts("ab", "c\nab", "c\nabc", "c\nabcd")
+        val abLayout = ComposeLayoutSnapshot(layouts[0], TextRange(2, 2), 0)
+        val cabLayout = ComposeLayoutSnapshot(layouts[1], TextRange(4, 4), 0)
+        val cabcLayout = ComposeLayoutSnapshot(layouts[2], TextRange(5, 5), 0)
+        val cabcdLayout = ComposeLayoutSnapshot(layouts[3], TextRange(6, 6), 0)
+
+        val timeline = ComposeVisualTimeline()
+        val textPolicy = EditorMotionPolicy(textDurationMillis = 100L)
+
+        // === patch1@0ms："ab" → "c\nab"，产生 retained move（"ab" reflow 到第二行） ===
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = abLayout,
+                newLayout = cabLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 2, 2, VisualOffsetMapKind.SHIFTED)),
+                insertedUnits = listOf(TextRange(0, 2)),
+                retainedMoves = listOf(RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4))),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+        )
+
+        // 验证 patch1 后 retained unit 存在且 alpha 是 1→1
+        val scene0 = timeline.sample(0L)
+        val retainedUnit0 = scene0.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("0ms: retained unit (ab) 应存在", retainedUnit0)
+        assertEquals(
+            "0ms: retained unit alpha.from 应为 1（alpha 1→1）",
+            1f,
+            retainedUnit0!!.alpha.from,
+        )
+        assertEquals(
+            "0ms: retained unit alpha.to 应为 1（alpha 1→1）",
+            1f,
+            retainedUnit0.alpha.to,
+        )
+        val retainedKey = retainedUnit0.key
+
+        // === sample@16ms：retained unit alpha=1，position 正在动画 ===
+        // isUnitVisibleAndPresented: alphaNow=1 > 0, alphaNow == from(1),
+        // position.startedAtNanos=0 <= 16ms → true → retained unit.key 计入 presentedKeys
+        val scene16 = timeline.sample(16L * NANOS_PER_MS)
+        val retainedUnit16 = scene16.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("16ms: retained unit (ab) 应仍存在", retainedUnit16)
+        assertEquals(
+            "16ms: retained unit alpha.from 应为 1（alpha 1→1，不应变）",
+            1f,
+            retainedUnit16!!.alpha.from,
+        )
+
+        // === patch2@30ms：同一 VSync 第一笔，"c\nab" → "c\nabc"，插入 "c" ===
+        val frameTime30ms = 30L * NANOS_PER_MS
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = cabLayout,
+                newLayout = cabcLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 4, VisualOffsetMapKind.IDENTITY)),
+                insertedUnits = listOf(TextRange(4, 5)),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = frameTime30ms,
+        )
+
+        // === patch3@30ms：同一 VSync 第二笔，"c\nabc" → "c\nabcd"，插入 "d" ===
+        // 关键：frameTimeNanos 仍是 30ms（同一 VSync 时间戳）。
+        // 修复后：retained unit.key 已在 presentedKeys（16ms sample 时记入），
+        // applyPatch 判断 started/pending 只看持久状态，retained unit 不被误判成"零进度 pending"。
+        val patch3 =
+            makePatch(
+                id = 3L,
+                oldLayout = cabcLayout,
+                newLayout = cabcdLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 5, VisualOffsetMapKind.IDENTITY)),
+                insertedUnits = listOf(TextRange(5, 6)),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        timeline.applyPatch(
+            patch = patch3,
+            frameTimeNanos = frameTime30ms,
+        )
+
+        // === sample@30ms：采样最终 scene ===
+        val scene30 = timeline.sample(frameTime30ms)
+        // retained unit 的 targetRange 通过 offsetMap 映射后仍是 TextRange(2,4)
+        val retainedUnit30 = scene30.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("30ms: retained unit (ab) 应仍存在（position 动画未完成）", retainedUnit30)
+
+        // === 断言1：retained unit alpha 始终为 1，不被重建成 0→1 ===
+        assertEquals(
+            "评论5685940102 断言1: retained unit alpha.from 应为 1（不应被重建成 from=0），" +
+                "实际 from=${retainedUnit30!!.alpha.from}",
+            1f,
+            retainedUnit30.alpha.from,
+        )
+        assertEquals(
+            "评论5685940102 断言1: retained unit alpha.to 应为 1（不应被重建成插入通道），" +
+                "实际 to=${retainedUnit30.alpha.to}",
+            1f,
+            retainedUnit30.alpha.to,
+        )
+        assertFalse(
+            "评论5685940102 断言1: retained unit 不应被重建成 from=0f & to=1f 的全新插入通道",
+            retainedUnit30.alpha.from == 0f && retainedUnit30.alpha.to == 1f,
+        )
+
+        // === 断言2：retained unit key 保持不变（未被销毁重建） ===
+        assertEquals(
+            "评论5685940102 断言2: retained unit key 应保持不变（未被销毁重建），" +
+                "原 key=$retainedKey, 现 key=${retainedUnit30.key}",
+            retainedKey,
+            retainedUnit30.key,
+        )
+
+        // === 断言3：retained unit position 从当前屏幕位置继续，不跳回旧位置 ===
+        // patch1 创建时 position.from = oldLayout "ab" 中 TextRange(0,2) 的位置 = (0,0)
+        // 修复后 position 应从 30ms 时的屏幕位置继续，不应跳回 (0,0)
+        val positionFrom30 = retainedUnit30.position.from
+        assertTrue(
+            "评论5685940102 断言3: retained unit position.from 不应跳回旧位置 (0,0)，" +
+                "实际 from=$positionFrom30",
+            kotlin.math.abs(positionFrom30.x) > 0.1f || kotlin.math.abs(positionFrom30.y) > 0.1f,
+        )
+    }
+
+    /**
+     * #691 评论 5685940102 复现测试（带 cursor 场景） —
+     * cursor 不应把已显示的 retained reflow unit 当 pending caret 再走一遍。
+     *
+     * 在 [comment5685940102_retainedReflowUnitNotRebuiltAsInsertOnSameVsyncPatch] 基础上
+     * 增加 cursor 参数，验证评论要求的全部断言：
+     * 1. retained unit alpha 始终为 1，不被重建成 0→1
+     * 2. retained unit key 保持不变
+     * 3. **cursor 不得在 patch2/patch3 后重新经过 retained unit 的旧 caret** — 关键新增断言
+     *
+     * cursor 行为分析：
+     * - patch1: cursor 从初始位置到 "c\n" 插入后的 caret
+     * - sample@16ms: cursor 在动画中
+     * - patch2@30ms: retained unit 已在 presentedKeys → startedSurviving → 不纳入 cursor 路径
+     *   cursor 路径 = [新插入 "c" 的 caret]
+     * - patch3@30ms: retained unit 仍在 presentedKeys → 不纳入 cursor 路径
+     *   cursor 路径 = [新插入 "d" 的 caret]
+     *   **不应包含 retained unit 的 caret**
+     *
+     * 如果 bug 存在（retained unit 被误判为 pending），它会进入 survivingCursorPoints，
+     * cursor 路径会包含 retained unit 的 caret → cursor 重新经过旧 caret。
+     */
+    @Test
+    fun comment5685940102_cursorDoesNotRevisitRetainedReflowUnitCaretOnSameVsyncPatch() {
+        val layouts = captureLayouts("ab", "c\nab", "c\nabc", "c\nabcd")
+        val abLayout = ComposeLayoutSnapshot(layouts[0], TextRange(2, 2), 0)
+        val cabLayout = ComposeLayoutSnapshot(layouts[1], TextRange(4, 4), 0)
+        val cabcLayout = ComposeLayoutSnapshot(layouts[2], TextRange(5, 5), 0)
+        val cabcdLayout = ComposeLayoutSnapshot(layouts[3], TextRange(6, 6), 0)
+
+        val timeline = ComposeVisualTimeline()
+        val textPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+
+        // 从 layout 获取 caret rect — retained unit 的 caret 在 "c\nab" 的 offset=4（"ab" 后面）
+        val retainedCaretRect = cabLayout.result.getCursorRect(4)
+        // 新插入字符的 caret
+        val insertCaretAt2 = cabLayout.result.getCursorRect(2)
+        val insertCaretAt5 = cabcLayout.result.getCursorRect(5)
+        val insertCaretAt6 = cabcdLayout.result.getCursorRect(6)
+        val initialCursorRect = Rect(0f, 0f, 2f, 14f)
+
+        // === patch1@0ms："ab" → "c\nab"，产生 retained move，cursor 到 "c\n" 后的 caret ===
+        val cursorPath1 = listOf(CursorMotionPoint(rect = insertCaretAt2, endFraction = 1f))
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = abLayout,
+                newLayout = cabLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 2, 2, VisualOffsetMapKind.SHIFTED)),
+                insertedUnits = listOf(TextRange(0, 2)),
+                retainedMoves = listOf(RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4))),
+                cursorMotionPath = CursorMotionPath(points = cursorPath1),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = initialCursorRect,
+            cursorPath = cursorPath1,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // 验证 patch1 后 retained unit 存在且 alpha 是 1→1
+        val scene0 = timeline.sample(0L)
+        val retainedUnit0 = scene0.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("0ms: retained unit (ab) 应存在", retainedUnit0)
+        assertEquals(
+            "0ms: retained unit alpha.from 应为 1（alpha 1→1）",
+            1f,
+            retainedUnit0!!.alpha.from,
+        )
+        val retainedKey = retainedUnit0.key
+
+        // === sample@16ms：retained unit alpha=1，position 正在动画 → 计入 presentedKeys ===
+        val scene16 = timeline.sample(16L * NANOS_PER_MS)
+        val retainedUnit16 = scene16.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("16ms: retained unit (ab) 应仍存在", retainedUnit16)
+        assertEquals(
+            "16ms: retained unit alpha.from 应为 1（alpha 1→1，不应变）",
+            1f,
+            retainedUnit16!!.alpha.from,
+        )
+
+        // === patch2@30ms：同一 VSync 第一笔，"c\nab" → "c\nabc"，插入 "c" ===
+        val frameTime30ms = 30L * NANOS_PER_MS
+        val cursorPath2 = listOf(CursorMotionPoint(rect = insertCaretAt5, endFraction = 1f))
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = cabLayout,
+                newLayout = cabcLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 4, VisualOffsetMapKind.IDENTITY)),
+                insertedUnits = listOf(TextRange(4, 5)),
+                cursorMotionPath = CursorMotionPath(points = cursorPath2),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        val cursorAt30ms = timeline.sampleCursorRect(frameTime30ms) ?: initialCursorRect
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = frameTime30ms,
+            cursorFromRect = cursorAt30ms,
+            cursorPath = cursorPath2,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // === patch3@30ms：同一 VSync 第二笔，"c\nabc" → "c\nabcd"，插入 "d" ===
+        // 修复后：retained unit.key 已在 presentedKeys（16ms sample 时记入），
+        // retained unit 不被误判成"零进度 pending"，cursor 路径不包含 retained unit 的 caret。
+        val cursorPath3 = listOf(CursorMotionPoint(rect = insertCaretAt6, endFraction = 1f))
+        val patch3 =
+            makePatch(
+                id = 3L,
+                oldLayout = cabcLayout,
+                newLayout = cabcdLayout,
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 5, VisualOffsetMapKind.IDENTITY)),
+                insertedUnits = listOf(TextRange(5, 6)),
+                cursorMotionPath = CursorMotionPath(points = cursorPath3),
+                durationMs = 100L,
+                motionPolicy = textPolicy,
+            )
+        val cursorAfterPatch2 = timeline.sampleCursorRect(frameTime30ms) ?: cursorAt30ms
+        timeline.applyPatch(
+            patch = patch3,
+            frameTimeNanos = frameTime30ms,
+            cursorFromRect = cursorAfterPatch2,
+            cursorPath = cursorPath3,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // === sample@30ms：采样最终 scene ===
+        val scene30 = timeline.sample(frameTime30ms)
+        val retainedUnit30 = scene30.units.firstOrNull { it.targetRange == TextRange(2, 4) }
+        assertNotNull("30ms: retained unit (ab) 应仍存在", retainedUnit30)
+
+        // === 断言1：retained unit alpha 始终为 1，不被重建成 0→1 ===
+        assertEquals(
+            "评论5685940102 断言1: retained unit alpha.from 应为 1（不应被重建成 from=0），" +
+                "实际 from=${retainedUnit30!!.alpha.from}",
+            1f,
+            retainedUnit30.alpha.from,
+        )
+        assertEquals(
+            "评论5685940102 断言1: retained unit alpha.to 应为 1（不应被重建成插入通道），" +
+                "实际 to=${retainedUnit30.alpha.to}",
+            1f,
+            retainedUnit30.alpha.to,
+        )
+        assertFalse(
+            "评论5685940102 断言1: retained unit 不应被重建成 from=0f & to=1f 的全新插入通道",
+            retainedUnit30.alpha.from == 0f && retainedUnit30.alpha.to == 1f,
+        )
+
+        // === 断言2：retained unit key 保持不变 ===
+        assertEquals(
+            "评论5685940102 断言2: retained unit key 应保持不变，原 key=$retainedKey, 现 key=${retainedUnit30.key}",
+            retainedKey,
+            retainedUnit30.key,
+        )
+
+        // === 断言3：cursor 不得在 patch3 后把 retained unit 当 pending caret 再走一遍 ===
+        // patch3 后 cursor 路径应为 [新插入 "d" 的 caret]，不应包含 retained unit 的 caret。
+        //
+        // 关键区分：如果 bug 存在，retained unit 被误判为 pending → 进入 survivingCursorPoints →
+        // cursor 路径 = [retained caret, 新插入 caret]（2 个点），endFraction = [0.5, 1.0]，
+        // cursor 在 50% 时间（80ms）**精确**到达 retained caret。
+        // 修复后 cursor 路径 = [新插入 caret]（1 个点），cursor 从起点直接插值到新 caret，
+        // 80ms 时 cursor 不等于 retained caret。
+        //
+        // 因此只在 80ms（50% 时间点）检查 cursor 是否**精确**到达 retained caret，
+        // 用严格容差 0.5f 区分"因 bug 精确到达"和"自然路径恰好经过附近"。
+        val retainedCaretLeft = retainedCaretRect.left
+        val retainedCaretTop = retainedCaretRect.top
+        val cursorPrecisionTolerance = 0.5f
+        val scene80 = timeline.sample(80L * NANOS_PER_MS)
+        val cursor80 = scene80.cursorRect
+        assertNotNull("80ms: cursor rect 不应为 null", cursor80)
+        assertTrue(
+            "评论5685940102 断言3: 80ms（50% 时间点）时 cursor(left=${cursor80!!.left}, top=${cursor80.top}) " +
+                "不应精确到达 retained unit 旧 caret(left=$retainedCaretLeft, top=$retainedCaretTop)，" +
+                "cursor 不得把已显示的 retained unit 当 pending caret 再走一遍",
+            kotlin.math.abs(cursor80.left - retainedCaretLeft) > cursorPrecisionTolerance ||
+                kotlin.math.abs(cursor80.top - retainedCaretTop) > cursorPrecisionTolerance,
+        )
+
+        // === 断言4：retained unit position 从当前屏幕位置继续，不跳回旧位置 ===
+        val positionFrom30 = retainedUnit30.position.from
+        assertTrue(
+            "评论5685940102 断言4: retained unit position.from 不应跳回旧位置 (0,0)，" +
+                "实际 from=$positionFrom30",
+            kotlin.math.abs(positionFrom30.x) > 0.1f || kotlin.math.abs(positionFrom30.y) > 0.1f,
+        )
     }
 
     // ==================== 辅助方法 ====================

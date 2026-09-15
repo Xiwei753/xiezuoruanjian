@@ -47,17 +47,22 @@ class ComposeVisualTimeline {
     private var cursorChannel: CursorTrack? = null
 
     /**
-     * #691 评论 5684993243：已在前一可见帧产生真实 alpha 进度的 unit key 集合。
+     * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
      *
-     * 这个事实由 [sample] 推进 — 只有真正采样到一个存活插入 unit 且该帧 alpha 已离开起点时，
+     * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
      * 才把 unit.key 计入。applyPatch 判断 started/pending 只看这份持久状态，
      * 不再从 TimedFloat.startedAtNanos/from 反推（那些字段会被 rebaseUnitForPatch 改写）。
+     *
+     * #691 评论 5685940102：语义从"alpha 是否离开起点"扩展到"unit 是否已在可见帧呈现过"，
+     * 覆盖 retained reflow unit（alpha 1→1，只有 position 通道在动）。
+     * 之前只看 alpha 是否离开起点会把 retained reflow unit 漏掉，
+     * 导致下一笔 patch 把它判成 pending 重建 alpha 0→1，已可见的文字突然变透明再淡入。
      *
      * - 新 unit 创建时不在集合里。
      * - mapSurvivingSlice/rebase 保持 key（copy 保留 key）。
      * - unit 收口移除/转 ghost/clear/settleForPolicyChange 时同步清理对应 key。
      */
-    private var presentedProgressKeys: MutableSet<Long> = mutableSetOf()
+    private var presentedKeys: MutableSet<Long> = mutableSetOf()
 
     /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
@@ -102,12 +107,13 @@ class ComposeVisualTimeline {
         // #691 评论 5684136311：在 rebase 之前用原始 unit 判断是否已产生可见进度。
         // rebase 会把进行中通道的 startedAt 重设为 frameTimeNanos，丢失"是否同一 VSync"信息。
         // textEnabled=false 时给空 map（cursor 路径不会用到）。
-        // #691 评论 5684993243：hasVisibleAlphaProgress 内部优先看 [presentedProgressKeys] 持久状态，
-        // 处理"同一 VSync 连续 patch"场景；否则回退到原始通道判断"时间是否真的推进了"，
+        // #691 评论 5684993243 / 评论 5685940102：hasBeenPresented 内部优先看 [presentedKeys] 持久状态，
+        // 处理"同一 VSync 连续 patch"场景；否则回退到 [isUnitVisibleAndPresented] 通道判断
+        // "unit 是否已可见呈现"（覆盖插入 unit alpha 0→1 和 retained reflow unit alpha 1→1），
         // 处理"不同时间 patch 但中间未 sample"场景。
         val progressByKey =
             if (policy.textEnabled) {
-                units.associate { it.key to hasVisibleAlphaProgress(it, frameTimeNanos) }
+                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }
             } else {
                 emptyMap()
             }
@@ -593,28 +599,30 @@ class ComposeVisualTimeline {
             if (target != null) {
                 // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
                 if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
-                    // #691 评论 5684993243：收口移除时同步清理 presentedProgressKeys
-                    presentedProgressKeys.remove(unit.key)
+                    // #691 评论 5684993243 / 评论 5685940102：收口移除时同步清理 presentedKeys
+                    presentedKeys.remove(unit.key)
                     continue
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
                 if (alphaFinished && sampled.alpha.to <= 0f) {
-                    // #691 评论 5684993243：ghost 收口移除时同步清理 presentedProgressKeys
-                    presentedProgressKeys.remove(unit.key)
+                    // #691 评论 5684993243 / 评论 5685940102：ghost 收口移除时同步清理 presentedKeys
+                    presentedKeys.remove(unit.key)
                     continue
                 }
             }
             sampledUnits.add(sampled)
             remainingUnits.add(unit)
-            // #691 评论 5684993243：只有真正 sample 到一个存活插入 unit 且该帧 alpha 已离开起点时，
-            // 才把 unit.key 计入 presentedProgressKeys。这个事实只能由可见帧推进，
+            // #691 评论 5684993243 / 评论 5685940102：只有真正 sample 到一个存活 unit 且该帧它已被
+            // scene 接管并可见时，才把 unit.key 计入 presentedKeys。这个事实只能由可见帧推进，
             // 不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
-            // 必须用原始 unit（循环变量 unit）的 alpha 判断，不是 sampled 的 —
+            // 必须用原始 unit（循环变量 unit）的 alpha/position 判断，不是 sampled 的 —
             // sampled 的 alpha.from 已被 sampleUnit rebase 成当前值，
             // currentAlpha(sampled.alpha, now) == sampled.alpha.from 永远成立，无法判断。
-            if (target != null && currentAlpha(unit.alpha, frameTimeNanos) != unit.alpha.from) {
-                presentedProgressKeys.add(unit.key)
+            // #691 评论 5685940102：isUnitVisibleAndPresented 同时覆盖插入 unit（alpha 0→1）
+            // 和 retained reflow unit（alpha 1→1，position 已开始）。
+            if (target != null && isUnitVisibleAndPresented(unit, frameTimeNanos)) {
+                presentedKeys.add(unit.key)
             }
         }
         // 缺陷3：收口要修改 timeline 内部 units 列表（移除已稳定的 unit）
@@ -658,8 +666,8 @@ class ComposeVisualTimeline {
         units = emptyList()
         nextUnitKey = 1L
         cursorChannel = null
-        // #691 评论 5684993243：清空已显示 unit key 集合
-        presentedProgressKeys.clear()
+        // #691 评论 5684993243 / 评论 5685940102：清空已呈现 unit key 集合
+        presentedKeys.clear()
     }
 
     /**
@@ -674,9 +682,9 @@ class ComposeVisualTimeline {
     fun settleForPolicyChange() {
         units = emptyList()
         cursorChannel = null
-        // #691 评论 5684993243：policy 切换时清空已显示 unit key 集合，
+        // #691 评论 5684993243 / 评论 5685940102：policy 切换时清空已呈现 unit key 集合，
         // 让后续 drain 用新 policy 重新决定是否创建 track。
-        presentedProgressKeys.clear()
+        presentedKeys.clear()
     }
 
     // ==================== 统一光标位置（#691） ====================
@@ -912,8 +920,36 @@ class ComposeVisualTimeline {
         }
 
     /**
-     * #691 评论 5684993243：判断 unit 是否已在前一可见帧产生真实 alpha 进度 —
-     * 优先看 [presentedProgressKeys] 持久状态，否则用原始通道判断"时间是否真的推进了"。
+     * #691 评论 5685940102：判断 unit 这一帧是否实际被 scene 接管并可见 —
+     * 用于决定是否计入 [presentedKeys]。
+     *
+     * 覆盖两种 unit：
+     * - 插入 unit（alpha 0→1）：alpha 已离开起点（> 0）即算可见呈现。
+     * - retained reflow unit（alpha 1→1）：alpha 本来就是 1，
+     *   只要 position 通道已开始（frameTimeNanos >= position.startedAtNanos）即算可见呈现。
+     *
+     * 不覆盖：
+     * - 尚未开始的未来 unit（alpha=0 且 position 未开始）。
+     * - ghost unit（target == null，由调用方过滤）。
+     */
+    private fun isUnitVisibleAndPresented(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): Boolean {
+        val alphaNow = currentAlpha(unit.alpha, frameTimeNanos)
+        // alpha == 0：不可见，不算 presented
+        if (alphaNow <= 0f) return false
+        // alpha 已离开起点：插入 unit 已显示中间帧
+        if (alphaNow != unit.alpha.from) return true
+        // alpha 没离开起点但 > 0：retained reflow unit（alpha 1→1），
+        // 只要 position 通道已开始/正在，就算 presented
+        return frameTimeNanos >= unit.position.startedAtNanos
+    }
+
+    /**
+     * #691 评论 5684993243 / 评论 5685940102：判断 unit 是否已在前一可见帧真正呈现过 —
+     * 优先看 [presentedKeys] 持久状态，否则用 [isUnitVisibleAndPresented] 通道判断
+     * "unit 是否已可见呈现"。
      *
      * #691 评论 5684136311 原始版本：从 TimedFloat.startedAtNanos 和 from 反推"是否已显示过"：
      *   frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
@@ -921,28 +957,28 @@ class ComposeVisualTimeline {
      * rebase 成 from=currentAlpha(now), startedAtNanos=now，第二笔 patch 时 frameTimeNanos == startedAtNanos，
      * 30 > 30 == false，已显示过的 unit 被误判成"零进度 pending"，alpha 跳回 0。
      *
-     * #691 评论 5684993243 修复：优先看 [presentedProgressKeys] 持久状态 —
+     * #691 评论 5684993243 修复：优先看 [presentedKeys] 持久状态 —
      * 这个事实只能由真正的 sample()/可见帧推进，不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
      * 这处理"同一 VSync 连续 patch"场景：第一笔 rebase 改写 startedAtNanos 后，
-     * 第二笔仍能通过 presentedProgressKeys 知道 a 已显示过。
+     * 第二笔仍能通过 presentedKeys 知道 a 已显示过。
      *
-     * 否则回退到原始通道判断"时间是否真的推进了" —
-     * 这处理"不同时间 patch 但中间未 sample"场景（时间推进了，a 应保留进度）。
-     * 同一 VSync 零进度 unit（frameTimeNanos == startedAtNanos 且 alphaNow == from）
-     * 不会被误判，因为 frameTimeNanos > startedAtNanos 为 false。
+     * #691 评论 5685940102：回退逻辑从"alpha 是否离开起点"扩展到 [isUnitVisibleAndPresented]，
+     * 覆盖 retained reflow unit（alpha 1→1，position 已开始）。
+     * 否则 retained reflow unit 在"不同时间 patch 但中间未 sample"场景会被漏判，
+     * 下一笔 patch 把它重建 alpha 0→1，已可见的文字突然变透明再淡入。
      *
      * 必须用 rebase 前的原始 unit 调用 — rebase 会把进行中通道的 startedAt 重设为
      * frameTimeNanos，丢失"是否同一 VSync"信息。
      */
-    private fun hasVisibleAlphaProgress(
+    private fun hasBeenPresented(
         unit: VisualTextUnit,
         frameTimeNanos: Long,
     ): Boolean {
-        // #691 评论 5684993243：优先看 presentedProgressKeys 持久状态。
-        if (unit.key in presentedProgressKeys) return true
-        // 否则用原始通道判断"时间是否真的推进了"。
-        val alphaNow = currentAlpha(unit.alpha, frameTimeNanos)
-        return frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
+        // #691 评论 5684993243：优先看 presentedKeys 持久状态。
+        if (unit.key in presentedKeys) return true
+        // #691 评论 5685940102：否则用通道判断"unit 是否已可见呈现"。
+        // 这处理"不同时间 patch 但中间未 sample"场景。
+        return isUnitVisibleAndPresented(unit, frameTimeNanos)
     }
 
     /**
