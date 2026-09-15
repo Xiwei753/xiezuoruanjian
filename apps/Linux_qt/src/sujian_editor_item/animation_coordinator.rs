@@ -34,14 +34,14 @@ use super::text_visual_transaction::PreparedVisualUnit;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity, SourceRect};
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
 pub(crate) use super::render_plan::{
     CursorRenderState, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange,
     TextAnimationGlyphInfo, TextAnimationPlan,
 };
 use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::{
-    PreparedTextVisualTransaction, PreparedTransactionQueue, TextVisualOperationKind,
+    PreparedTextVisualTransaction, PreparedTransactionQueue, RebaseFrame, TextVisualOperationKind,
     TextVisualTransactionState, TransactionTimeline,
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
@@ -90,66 +90,140 @@ pub(crate) enum CursorTimelineSample {
     Running(f64),
 }
 
-/// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉帧 rebase 到新事务的视觉单元上。
+/// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉单元当前帧 rebase 到新事务的视觉单元上。
 ///
-/// 与旧版的区别：rebase 时传入 `visible_fraction`，使 InsertReveal/DeleteConceal
-/// 从当前可见比例继续，而不是重新 0→1 / 1→0。
-/// `visible_fraction` 从旧 unit 的 `slice.compute_frame(old_progress)` 计算：
-/// - InsertReveal：visible = frame.w / slice.to_document_rect.w（已吐出比例）
-/// - DeleteConceal：visible = frame.w / slice.from_document_rect.w（剩余比例）
-///
-/// 三层匹配策略不变（tier1 精确匹配 → tier2 offset map → tier3 shaping identity）。
+/// `RebaseFrame` 由 [`PreparedTextVisualTransaction::collect_rebase_frames`] 逐单元采集：
+/// `visible_fraction` 是单元自己的可见比例（单元时间线 + `[start_fraction, target_fraction]`
+/// 窗口 + 协同 easing），Reveal/Conceal 因此从当前比例继续，而不是重新 0→1 / 1→0。
 fn match_rebase_frames(
-    rebase_frames: &[(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)],
-    slices: &mut [AnimatedSlice],
+    rebase_frames: &[RebaseFrame],
+    units: &mut [PreparedVisualUnit],
     offset_map: &OffsetMap,
 ) {
     let mut consumed_indices: Vec<usize> = Vec::new();
-    for (bs, be, fx, fy, fo, ref shaping, visible_fraction) in rebase_frames {
-        let tier1 = slices
+    for frame in rebase_frames {
+        let tier1 = units
             .iter_mut()
             .enumerate()
             .filter(|(idx, _)| !consumed_indices.contains(idx))
-            .find(|(_, ns)| ns.byte_start == *bs && ns.byte_end == *be);
-        if let Some((idx, new_slice)) = tier1 {
-            new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
+            .find(|(_, nu)| {
+                nu.slice.byte_start == frame.byte_start && nu.slice.byte_end == frame.byte_end
+            });
+        if let Some((idx, new_unit)) = tier1 {
+            new_unit.rebase_from_frame(frame);
             consumed_indices.push(idx);
             continue;
         }
         if let (Some(mbs), Some(mbe)) = (
-            offset_map.map_old_to_new(*bs),
-            offset_map.map_old_to_new(*be),
+            offset_map.map_old_to_new(frame.byte_start),
+            offset_map.map_old_to_new(frame.byte_end),
         ) {
-            let tier2 = slices
+            let tier2 = units
                 .iter_mut()
                 .enumerate()
                 .filter(|(idx, _)| !consumed_indices.contains(idx))
-                .find(|(_, ns)| ns.byte_start == mbs && ns.byte_end == mbe);
-            if let Some((idx, new_slice)) = tier2 {
-                new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
+                .find(|(_, nu)| nu.slice.byte_start == mbs && nu.slice.byte_end == mbe);
+            if let Some((idx, new_unit)) = tier2 {
+                new_unit.rebase_from_frame(frame);
                 consumed_indices.push(idx);
                 continue;
             }
-            if let Some(ref sid) = shaping {
+            if let Some(ref sid) = frame.shaping_identity {
                 let mapped_center = (mbs + mbe) as i64 / 2;
-                let best = slices
+                let best = units
                     .iter_mut()
                     .enumerate()
                     .filter(|(idx, _)| !consumed_indices.contains(idx))
-                    .filter(|(_, ns)| ns.shaping_identity.as_ref() == Some(sid))
-                    .filter(|(_, ns)| ns.byte_start >= mbs && ns.byte_end <= mbe.max(mbs + 1))
-                    .min_by_key(|(idx, ns)| {
-                        let candidate_center = (ns.byte_start + ns.byte_end) as i64 / 2;
+                    .filter(|(_, nu)| nu.slice.shaping_identity.as_ref() == Some(sid))
+                    .filter(|(_, nu)| {
+                        nu.slice.byte_start >= mbs && nu.slice.byte_end <= mbe.max(mbs + 1)
+                    })
+                    .min_by_key(|(idx, nu)| {
+                        let candidate_center =
+                            (nu.slice.byte_start + nu.slice.byte_end) as i64 / 2;
                         let abs_dist = (candidate_center - mapped_center).abs();
-                        (abs_dist, ns.byte_start, *idx)
+                        (abs_dist, nu.slice.byte_start, *idx)
                     });
-                if let Some((idx, new_slice)) = best {
-                    new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
+                if let Some((idx, new_unit)) = best {
+                    new_unit.rebase_from_frame(frame);
                     consumed_indices.push(idx);
                 }
             }
         }
     }
+}
+
+/// 事务操作类型的诊断标签（与 `TextVisualOperationKind` 一一对应，进正式诊断包）。
+fn operation_kind_label(kind: TextVisualOperationKind) -> &'static str {
+    match kind {
+        TextVisualOperationKind::Insert => "Insert",
+        TextVisualOperationKind::Delete => "Delete",
+        TextVisualOperationKind::Cursor => "Cursor",
+        TextVisualOperationKind::CompositionUpdate => "CompositionUpdate",
+        TextVisualOperationKind::CompositionCommitOrCancel => "CompositionCommitOrCancel",
+    }
+}
+
+/// 视觉单元类型列表，用于紧凑诊断事件的 `unit_kinds` 字段。
+fn unit_kind_labels(units: &[PreparedVisualUnit]) -> Vec<String> {
+    units
+        .iter()
+        .map(|u| format!("{:?}", u.slice.kind))
+        .collect()
+}
+
+/// Issue #690 评论 5675007226 步骤 3: 本次编辑是否真的覆盖了冲突事务里仍在播放的单元。
+///
+/// 单元自己的 byte range 完全落在编辑范围之外，且映射前后偏移一致（说明它左边没有内容
+/// 变化、排版位置没变）时才算"没被覆盖"。这类单元继续留在原事务里播完自己的时间线——
+/// 换事务 id 既不该把它归零重播，也不该让它提前跳到终态（文字甩开光标的另一半表现）。
+/// 全部单元都已播完时返回 false：那笔事务该走正常的完成/取消路径释放资源。
+fn conflicting_units_are_untouched(
+    tx: &PreparedTextVisualTransaction,
+    changed_old_ranges: &[(usize, usize)],
+    offset_map: &OffsetMap,
+    now: Instant,
+) -> bool {
+    let mut playing_units = 0usize;
+    for unit in &tx.units {
+        if unit.progress(now) >= 1.0 {
+            continue;
+        }
+        playing_units += 1;
+        let start = unit.slice.byte_start;
+        let end = unit.slice.byte_end;
+        if changed_old_ranges
+            .iter()
+            .any(|(cs, ce)| end > *cs && start < *ce)
+        {
+            return false;
+        }
+        // 半开区间语义：end 恰为映射条目末端也算完整落在同一区域内。
+        // 逐端点查表会在"文本末尾追加"场景返回 None（end == old 长度），
+        // 把还在播的单元误判成被影响。
+        if offset_map.map_old_range_to_new(start, end) != Some((start, end)) {
+            return false;
+        }
+    }
+    playing_units > 0
+}
+
+/// Issue #690 评论 5675007226 步骤 5: 每个事务生命周期点各写一条紧凑事件进正式诊断包。
+///
+/// 字段：transaction key、operation kind、old/new caret、visual unit kinds、首帧时间
+/// （`timeline.first_render_wall_ms`，真正进入渲染的那一帧；create 事件里还没有则为空）、
+/// 完成/被 retarget 原因。不逐帧刷日志。
+fn emit_transaction_diagnostic(tx: &PreparedTextVisualTransaction, event: &str, reason: &str) {
+    crate::sujian_editor_item::editor_animation_diagnostic_event(
+        event,
+        &tx.key,
+        operation_kind_label(tx.operation_kind),
+        tx.old_cursor_rect.as_ref().map(|r| (r.x, r.top)),
+        tx.new_cursor_rect.as_ref().map(|r| (r.x, r.top)),
+        &unit_kind_labels(&tx.units).join(","),
+        tx.timeline.first_render_wall_ms,
+        reason,
+    );
 }
 
 /// Issue #658 评论 5630181473 问题 3: cluster 级 reflow 的引用条目。
@@ -773,6 +847,74 @@ impl LinuxEditorAnimationCoordinator {
         self.cursor_animation_duration_ms = ms;
     }
 
+    /// Issue #690 评论 5675007226 步骤 3+5: 冲突事务交棒给新事务，只留一条紧凑诊断事件。
+    ///
+    /// 逐单元采集当前可见比例与单元时间线（[`PreparedTextVisualTransaction::collect_rebase_frames`]），
+    /// 再取消旧事务。四个正文编辑入口共用本函数，避免各自拿事务级 progress 重算可见比例
+    /// ——那正是"上一笔吐到 60% 的字被重启"的来源。
+    ///
+    /// `preserve` 为 `Some((编辑的 old 坐标范围, OffsetMap))` 时（Insert/Delete 入口），
+    /// 若旧事务里仍在播放的单元都没被本次编辑覆盖，就完全不取消它：事务 key 保留自己的
+    /// snapshot/纹理所有权，单元沿自己的时间线播完（`editor.anim.keep`）。预输入入口传
+    /// `None`——preedit 文本整体被替换，旧单元必然失效。
+    fn take_rebase_frames(
+        &mut self,
+        conflicting: Option<VisualTransactionKey>,
+        reason: &str,
+        now: Instant,
+        preserve: Option<(&[(usize, usize)], &OffsetMap)>,
+    ) -> Vec<RebaseFrame> {
+        let Some(old_key) = conflicting else {
+            return Vec::new();
+        };
+        let untouched = match preserve {
+            Some((changed_old_ranges, offset_map)) => self
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|tx| tx.key == old_key)
+                .map(|tx| conflicting_units_are_untouched(tx, changed_old_ranges, offset_map, now))
+                .unwrap_or(false),
+            None => false,
+        };
+        if untouched {
+            if let Some(tx) = self
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|tx| tx.key == old_key)
+            {
+                emit_transaction_diagnostic(tx, "editor.anim.keep", "units_untouched");
+            }
+            editor_animation_debug_log(&format!(
+                "anim_keep: key={:?} reason={} (units outside changed range keep playing)",
+                old_key, reason,
+            ));
+            return Vec::new();
+        }
+        let frames = match self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|tx| tx.key == old_key)
+        {
+            Some(tx) => {
+                let frames = tx.collect_rebase_frames(now);
+                emit_transaction_diagnostic(tx, "editor.anim.rebase", reason);
+                frames
+            }
+            None => Vec::new(),
+        };
+        self.prepared_queue.cancel(old_key, "rebased");
+        editor_animation_debug_log(&format!(
+            "anim_rebase: old_key={:?} reason={} carried_units={}",
+            old_key,
+            reason,
+            frames.len(),
+        ));
+        frames
+    }
+
     pub fn process_transaction(
         &mut self,
         vt: &EditorVisualTransaction,
@@ -807,66 +949,21 @@ impl LinuxEditorAnimationCoordinator {
                 if let Some(range) = vt.inserted_range {
                     let range_start = range.start().value();
                     let range_end = range.end().value();
+                    let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                     let conflicting = self
                         .prepared_queue
                         .find_conflicting_transaction(range_start, range_end);
-                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-                        if let Some(old_key) = conflicting {
-                            let mut frames = Vec::new();
-                            if let Some(old_tx) = self
-                                .prepared_queue
-                                .active_transactions()
-                                .iter()
-                                .find(|t| t.key == old_key)
-                            {
-                                let old_progress = old_tx.progress(Instant::now());
-                                if old_progress > 0.0 && old_progress < 1.0 {
-                                    for old_unit in &old_tx.units {
-                                        let frame = old_unit.slice.compute_frame(old_progress);
-                                        let visible_fraction = match old_unit.slice.kind {
-                                            AnimatedSliceKind::InsertReveal => {
-                                                if old_unit.slice.to_document_rect.w > 0.0 {
-                                                    frame.w / old_unit.slice.to_document_rect.w
-                                                } else {
-                                                    0.0
-                                                }
-                                            }
-                                            AnimatedSliceKind::DeleteConceal => {
-                                                if old_unit.slice.from_document_rect.w > 0.0 {
-                                                    frame.w / old_unit.slice.from_document_rect.w
-                                                } else {
-                                                    0.0
-                                                }
-                                            }
-                                            _ => 0.0,
-                                        };
-                                        frames.push((
-                                            old_unit.slice.byte_start,
-                                            old_unit.slice.byte_end,
-                                            frame.x,
-                                            frame.y,
-                                            frame.opacity,
-                                            old_unit.slice.shaping_identity.clone(),
-                                            visible_fraction,
-                                        ));
-                                    }
-                                }
-                            }
-                            self.prepared_queue.cancel(old_key, "rebased");
-                            editor_animation_debug_log(&format!(
-                                "anim_rebase: old_key={:?} reason=rebased_by_insert",
-                                old_key,
-                            ));
-                            frames
-                        } else {
-                            Vec::new()
-                        };
+                    // 纯插入在 old 文档里就是 range_start 这一个位置点。
+                    let rebase_frames = self.take_rebase_frames(
+                        conflicting,
+                        "rebased_by_insert",
+                        Instant::now(),
+                        Some((&[(range_start, range_start)], &insert_offset_map)),
+                    );
 
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
                     let mut static_patches = Vec::new();
-
-                    let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
 
                     // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
                     // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
@@ -892,48 +989,18 @@ impl LinuxEditorAnimationCoordinator {
                     slices.extend(reflow_slices);
                     static_patches.extend(reflow_patches);
 
-                    match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
-
-                    // Issue #690 评论 5675007226 步骤 5: rebase 诊断事件。
-                    if !rebase_frames.is_empty() {
-                        editor_animation_debug_log(&format!(
-                            "anim_rebase: new_key={:?} rebase_count={} rebase_fractions={:?}",
-                            key,
-                            rebase_frames.len(),
-                            rebase_frames.iter().map(|r| r.6).collect::<Vec<_>>(),
-                        ));
-                    }
-
-                    // Issue #687: 动画生命周期日志
-                    eprintln!(
-                        "[BUGFIX_687] Insert tx: key={:?}, inserted_range={:?}, slice_kinds={:?}, slice_count={}",
-                        key,
-                        inserted_range_tuple,
-                        slices.iter().map(|s| s.kind).collect::<Vec<_>>(),
-                        slices.len()
-                    );
-
-                    // Issue #690 评论 5675007226 步骤 5: 紧凑诊断事件日志。
-                    // 每笔动画只留一条进正式诊断日志：transaction key、operation kind、
-                    // old/new caret、visual unit kinds、首帧时间。
-                    let log_slice_kinds: Vec<String> =
-                        slices.iter().map(|s| format!("{:?}", s.kind)).collect();
-                    let log_old_caret = old_cursor_rect
-                        .as_ref()
-                        .map(|r| format!("({:.1},{:.1})", r.x, r.top));
-                    let log_new_caret = new_cursor_rect
-                        .as_ref()
-                        .map(|r| format!("({:.1},{:.1})", r.x, r.top));
+                    let mut units: Vec<PreparedVisualUnit> = slices
+                        .into_iter()
+                        .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                        .collect();
+                    match_rebase_frames(&rebase_frames, &mut units, &insert_offset_map);
 
                     let prepared = PreparedTextVisualTransaction {
                         key,
                         state: TextVisualTransactionState::Pending,
                         operation_kind: TextVisualOperationKind::Insert,
                         timeline: TransactionTimeline::new(vt.duration_ms),
-                        units: slices
-                            .into_iter()
-                            .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                            .collect(),
+                        units,
                         static_patches,
                         old_cursor_rect,
                         new_cursor_rect,
@@ -943,17 +1010,18 @@ impl LinuxEditorAnimationCoordinator {
                         new_snapshot: Some(new_snapshot.clone()),
                     };
 
-                    self.layout_revision = new_revision;
-                    self.prepared_queue.enqueue(prepared);
-
+                    // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                    emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
                     editor_animation_debug_log(&format!(
-                        "anim_event: key={:?} op=Insert inserted={:?} slice_kinds={:?} old_caret={:?} new_caret={:?}",
+                        "anim_event: key={:?} op=Insert inserted={:?} unit_kinds={:?} carried_rebase={}",
                         key,
                         inserted_range_tuple,
-                        log_slice_kinds,
-                        log_old_caret,
-                        log_new_caret,
+                        unit_kind_labels(&prepared.units),
+                        rebase_frames.len(),
                     ));
+
+                    self.layout_revision = new_revision;
+                    self.prepared_queue.enqueue(prepared);
 
                     return Some(key);
                 }
@@ -976,68 +1044,22 @@ impl LinuxEditorAnimationCoordinator {
 
                 let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
                 let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
+                let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
                 let conflicting = self
                     .prepared_queue
                     .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-                    if let Some(old_key) = conflicting {
-                        let mut frames = Vec::new();
-                        if let Some(old_tx) = self
-                            .prepared_queue
-                            .active_transactions()
-                            .iter()
-                            .find(|t| t.key == old_key)
-                        {
-                            let old_progress = old_tx.progress(Instant::now());
-                            if old_progress > 0.0 && old_progress < 1.0 {
-                                for old_unit in &old_tx.units {
-                                    let frame = old_unit.slice.compute_frame(old_progress);
-                                    let visible_fraction = match old_unit.slice.kind {
-                                        AnimatedSliceKind::InsertReveal => {
-                                            if old_unit.slice.to_document_rect.w > 0.0 {
-                                                frame.w / old_unit.slice.to_document_rect.w
-                                            } else {
-                                                0.0
-                                            }
-                                        }
-                                        AnimatedSliceKind::DeleteConceal => {
-                                            if old_unit.slice.from_document_rect.w > 0.0 {
-                                                frame.w / old_unit.slice.from_document_rect.w
-                                            } else {
-                                                0.0
-                                            }
-                                        }
-                                        _ => 0.0,
-                                    };
-                                    frames.push((
-                                        old_unit.slice.byte_start,
-                                        old_unit.slice.byte_end,
-                                        frame.x,
-                                        frame.y,
-                                        frame.opacity,
-                                        old_unit.slice.shaping_identity.clone(),
-                                        visible_fraction,
-                                    ));
-                                }
-                            }
-                        }
-                        self.prepared_queue.cancel(old_key, "rebased");
-                        editor_animation_debug_log(&format!(
-                            "anim_rebase: old_key={:?} reason=rebased_by_delete",
-                            old_key,
-                        ));
-                        frames
-                    } else {
-                        Vec::new()
-                    };
+                let rebase_frames = self.take_rebase_frames(
+                    conflicting,
+                    "rebased_by_delete",
+                    Instant::now(),
+                    Some((&deleted_ranges, &delete_offset_map)),
+                );
 
                 let key = self.alloc_key();
                 let new_revision = LayoutRevision::next();
 
                 let mut slices = Vec::new();
                 let mut static_patches = Vec::new();
-
-                let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
 
                 // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
                 // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
@@ -1065,56 +1087,39 @@ impl LinuxEditorAnimationCoordinator {
                 slices.extend(reflow_slices);
                 static_patches.extend(reflow_patches);
 
-                match_rebase_frames(&rebase_frames, &mut slices, &delete_offset_map);
-
-                // Issue #687: 动画生命周期日志
-                eprintln!(
-                    "[BUGFIX_687] Delete tx: key={:?}, deleted_ranges={:?}, slice_kinds={:?}, slice_count={}",
-                    key,
-                    deleted_ranges,
-                    slices.iter().map(|s| s.kind).collect::<Vec<_>>(),
-                    slices.len()
-                );
-
-                // Issue #690 评论 5675007226 步骤 5: 紧凑诊断事件日志。
-                let log_slice_kinds: Vec<String> =
-                    slices.iter().map(|s| format!("{:?}", s.kind)).collect();
-                let log_old_caret = old_cursor_rect
-                    .as_ref()
-                    .map(|r| format!("({:.1},{:.1})", r.x, r.top));
-                let log_new_caret = new_cursor_rect
-                    .as_ref()
-                    .map(|r| format!("({:.1},{:.1})", r.x, r.top));
+                let mut units: Vec<PreparedVisualUnit> = slices
+                    .into_iter()
+                    .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
+                    .collect();
+                match_rebase_frames(&rebase_frames, &mut units, &delete_offset_map);
 
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
                     operation_kind: TextVisualOperationKind::Delete,
                     timeline: TransactionTimeline::new(vt.duration_ms),
-                    units: slices
-                        .into_iter()
-                        .map(|s| PreparedVisualUnit::wrap(s, vt.duration_ms))
-                        .collect(),
+                    units,
                     static_patches,
-                    old_cursor_rect: old_cursor_rect.clone(),
-                    new_cursor_rect: new_cursor_rect.clone(),
+                    old_cursor_rect,
+                    new_cursor_rect,
                     cancel_reason: None,
                     texture_prepared: false,
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
                 };
 
-                self.layout_revision = new_revision;
-                self.prepared_queue.enqueue(prepared);
-
+                // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+                emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
                 editor_animation_debug_log(&format!(
-                    "anim_event: key={:?} op=Delete deleted={:?} slice_kinds={:?} old_caret={:?} new_caret={:?}",
+                    "anim_event: key={:?} op=Delete deleted={:?} unit_kinds={:?} carried_rebase={}",
                     key,
                     deleted_ranges,
-                    log_slice_kinds,
-                    log_old_caret,
-                    log_new_caret,
+                    unit_kind_labels(&prepared.units),
+                    rebase_frames.len(),
                 ));
+
+                self.layout_revision = new_revision;
+                self.prepared_queue.enqueue(prepared);
 
                 return Some(key);
             }
@@ -1138,6 +1143,9 @@ impl LinuxEditorAnimationCoordinator {
                 };
 
                 self.layout_revision = new_revision;
+
+                // Issue #690 评论 5675007226 步骤 5: CursorOnly 也走同一条紧凑事件链。
+                emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
                 self.prepared_queue.enqueue(prepared);
                 return Some(key);
             }
@@ -1157,44 +1165,13 @@ impl LinuxEditorAnimationCoordinator {
         let conflicting = self
             .prepared_queue
             .find_conflicting_transaction(composition_byte_start, composition_byte_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-            if let Some(old_key) = conflicting {
-                let mut frames = Vec::new();
-                if let Some(old_tx) = self
-                    .prepared_queue
-                    .active_transactions()
-                    .iter()
-                    .find(|t| t.key == old_key)
-                {
-                    let old_progress = old_tx.progress(Instant::now());
-                    if old_progress > 0.0 && old_progress < 1.0 {
-                        for old_unit in &old_tx.units {
-                            // 旧事务当前真实可见比例（含 start_fraction 起点与 easing），
-                            // 后续 rebase 到新事务时作为新单元的起点。
-                            let visible =
-                                old_unit.slice.current_visible_fraction(old_progress);
-                            let frame = old_unit.slice.compute_frame(visible);
-                            frames.push((
-                                old_unit.slice.byte_start,
-                                old_unit.slice.byte_end,
-                                frame.x,
-                                frame.y,
-                                frame.opacity,
-                                old_unit.slice.shaping_identity.clone(),
-                                visible,
-                            ));
-                        }
-                    }
-                }
-                self.prepared_queue.cancel(old_key, "rebased");
-                editor_animation_debug_log(&format!(
-                    "anim_rebase: old_key={:?} reason=rebased_by_cursor",
-                    old_key,
-                ));
-                frames
-            } else {
-                Vec::new()
-            };
+        // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
+        let rebase_frames = self.take_rebase_frames(
+            conflicting,
+            "rebased_by_composition_update",
+            Instant::now(),
+            None,
+        );
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -1255,19 +1232,19 @@ impl LinuxEditorAnimationCoordinator {
         slices.extend(reflow_slices);
         static_patches.extend(reflow_patches);
 
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let unit_duration_ms = u64::from(self.typing_animation_duration_ms);
+        let mut units: Vec<PreparedVisualUnit> = slices
+            .into_iter()
+            .map(|s| PreparedVisualUnit::wrap(s, unit_duration_ms))
+            .collect();
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionUpdate,
-            timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            units: slices
-                .into_iter()
-                .map(|s| {
-                    PreparedVisualUnit::wrap(s, u64::from(self.typing_animation_duration_ms))
-                })
-                .collect(),
+            timeline: TransactionTimeline::new(unit_duration_ms),
+            units,
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
@@ -1276,6 +1253,15 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
         };
+
+        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+        emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
+        editor_animation_debug_log(&format!(
+            "anim_event: key={:?} op=CompositionUpdate unit_kinds={:?} carried_rebase={}",
+            key,
+            unit_kind_labels(&prepared.units),
+            rebase_frames.len(),
+        ));
 
         self.layout_revision = new_revision;
         self.prepared_queue.enqueue(prepared);
@@ -1302,44 +1288,13 @@ impl LinuxEditorAnimationCoordinator {
         let conflicting = self
             .prepared_queue
             .find_conflicting_transaction(conflict_start, conflict_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-            if let Some(old_key) = conflicting {
-                let mut frames = Vec::new();
-                if let Some(old_tx) = self
-                    .prepared_queue
-                    .active_transactions()
-                    .iter()
-                    .find(|t| t.key == old_key)
-                {
-                    let old_progress = old_tx.progress(Instant::now());
-                    if old_progress > 0.0 && old_progress < 1.0 {
-                        for old_unit in &old_tx.units {
-                            // 旧事务当前真实可见比例（含 start_fraction 起点与 easing），
-                            // 后续 rebase 到新事务时作为新单元的起点。
-                            let visible =
-                                old_unit.slice.current_visible_fraction(old_progress);
-                            let frame = old_unit.slice.compute_frame(visible);
-                            frames.push((
-                                old_unit.slice.byte_start,
-                                old_unit.slice.byte_end,
-                                frame.x,
-                                frame.y,
-                                frame.opacity,
-                                old_unit.slice.shaping_identity.clone(),
-                                visible,
-                            ));
-                        }
-                    }
-                }
-                self.prepared_queue.cancel(old_key, "rebased");
-                editor_animation_debug_log(&format!(
-                    "anim_rebase: old_key={:?} reason=rebased_by_composition",
-                    old_key,
-                ));
-                frames
-            } else {
-                Vec::new()
-            };
+        // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
+        let rebase_frames = self.take_rebase_frames(
+            conflicting,
+            "rebased_by_composition_commit",
+            Instant::now(),
+            None,
+        );
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -1624,19 +1579,19 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let unit_duration_ms = u64::from(self.typing_animation_duration_ms);
+        let mut units: Vec<PreparedVisualUnit> = slices
+            .into_iter()
+            .map(|s| PreparedVisualUnit::wrap(s, unit_duration_ms))
+            .collect();
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
-            timeline: TransactionTimeline::new(u64::from(self.typing_animation_duration_ms)),
-            units: slices
-                .into_iter()
-                .map(|s| {
-                    PreparedVisualUnit::wrap(s, u64::from(self.typing_animation_duration_ms))
-                })
-                .collect(),
+            timeline: TransactionTimeline::new(unit_duration_ms),
+            units,
             static_patches,
             old_cursor_rect,
             new_cursor_rect,
@@ -1645,6 +1600,15 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
         };
+
+        // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
+        emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
+        editor_animation_debug_log(&format!(
+            "anim_event: key={:?} op=CompositionCommitOrCancel unit_kinds={:?} carried_rebase={}",
+            key,
+            unit_kind_labels(&prepared.units),
+            rebase_frames.len(),
+        ));
 
         self.layout_revision = new_revision;
         self.prepared_queue.enqueue(prepared);
@@ -2146,6 +2110,8 @@ impl LinuxEditorAnimationCoordinator {
             };
 
             if all_units_done {
+                // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
+                emit_transaction_diagnostic(tx, "editor.anim.complete", "completed");
                 editor_animation_debug_log(&format!(
                     "anim_complete: key={:?} op={:?} units={}",
                     tx.key, tx.operation_kind, tx.units.len(),
@@ -2155,11 +2121,8 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // 单元视觉窗口 [start_fraction, target_fraction] 内，按自己的生命周期 0→1 推进。
-                let lifecycle = unit.progress(sample.frame_now);
-                let eased = AnimatedSlice::ease_out_quad(lifecycle);
-                let visible = unit.start_fraction
-                    + (unit.target_fraction - unit.start_fraction) * eased;
+                // 单元生命期 + 单元视觉窗口，唯一公式（与协同光标完全一致）。
+                let visible = unit.current_visible_fraction(sample.frame_now);
                 let frame = unit.slice.compute_frame(visible);
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,
@@ -2218,11 +2181,9 @@ impl LinuxEditorAnimationCoordinator {
                     if unit.slice.kind != AnimatedSliceKind::InsertReveal {
                         continue;
                     }
-                    let lifecycle = unit.progress(frame_now);
-                    let eased = AnimatedSlice::ease_out_quad(lifecycle);
-                    let visible = unit.start_fraction
-                        + (unit.target_fraction - unit.start_fraction) * eased;
-                    let frame = unit.slice.compute_frame(visible.clamp(0.0, 1.0));
+                    // 与文字帧同一个函数、同一个 frame_now：光标边界 == 本帧 reveal 边界。
+                    let visible = unit.current_visible_fraction(frame_now);
+                    let frame = unit.slice.compute_frame(visible);
                     let edge_x = frame.x + frame.w;
                     rightmost_x = Some(match rightmost_x {
                         Some(prev) => prev.max(edge_x),
@@ -2242,7 +2203,6 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
             TextVisualOperationKind::Delete => {
-                let mut has_conceal_from_left = false;
                 let mut has_conceal_from_right = false;
                 let mut conceal_edge: Option<f64> = None;
                 let mut cursor_y = new_rect.top;
@@ -2251,14 +2211,11 @@ impl LinuxEditorAnimationCoordinator {
                     if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
                         continue;
                     }
-                    let lifecycle = unit.progress(frame_now);
-                    let eased = AnimatedSlice::ease_out_quad(lifecycle);
-                    let visible = unit.start_fraction
-                        + (unit.target_fraction - unit.start_fraction) * eased;
-                    let frame = unit.slice.compute_frame(visible.clamp(0.0, 1.0));
+                    // 与文字帧同一个函数、同一个 frame_now：光标边界 == 本帧 conceal 边界。
+                    let visible = unit.current_visible_fraction(frame_now);
+                    let frame = unit.slice.compute_frame(visible);
 
                     if unit.slice.conceal_from_left {
-                        has_conceal_from_left = true;
                         let edge = frame.x + frame.w;
                         conceal_edge = Some(match conceal_edge {
                             Some(prev) => prev.min(edge),
@@ -2270,16 +2227,20 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                if has_conceal_from_left {
-                    Some((conceal_edge.unwrap_or(new_rect.x), cursor_y, h))
-                } else if has_conceal_from_right || !tx.units.is_empty() {
+                if let Some(x) = conceal_edge {
+                    // Backspace：光标带着旧字往左吞。
+                    Some((x, cursor_y, h))
+                } else if has_conceal_from_right {
+                    // 前向 Delete：逻辑光标本来不移动，固定在 new_cursor_rect，
+                    // 只让右侧文字向光标方向收掉。
+                    Some((new_rect.x, new_rect.top, h))
+                } else {
+                    // 没有可直接当边界的 glyph（跨行 reflow 等）：与 ReflowMove 同一条 easing。
                     let progress = sample.progress(key);
                     let eased = AnimatedSlice::ease_out_quad(progress);
                     let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
                     let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
                     Some((x, y, h))
-                } else {
-                    Some((new_rect.x, new_rect.top, h))
                 }
             }
             _ => {
@@ -2338,7 +2299,39 @@ impl LinuxEditorAnimationCoordinator {
 mod tests {
     use super::*;
     use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
+    use crate::sujian_editor_item::layout_snapshot::ShapingIdentity;
     use writer_core::editor::Utf8ByteOffset;
+
+    /// 构造不带时间线的 `RebaseFrame`，用于只验证三层匹配策略的用例。
+    fn rebase_frame(
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        y: f64,
+        opacity: f64,
+        shaping_identity: Option<ShapingIdentity>,
+        visible_fraction: f64,
+    ) -> RebaseFrame {
+        RebaseFrame {
+            byte_start,
+            byte_end,
+            x,
+            y,
+            opacity,
+            shaping_identity,
+            visible_fraction,
+            started_at: None,
+            duration_ms: 0,
+        }
+    }
+
+    /// `match_rebase_frames` 现在作用在视觉单元上（Issue #690 评论 5675007226 步骤 3）。
+    fn wrap_units(slices: Vec<AnimatedSlice>) -> Vec<PreparedVisualUnit> {
+        slices
+            .into_iter()
+            .map(|s| PreparedVisualUnit::wrap(s, 100))
+            .collect()
+    }
 
     #[test]
     fn test_coordinator_suppress_all() {
@@ -2388,12 +2381,12 @@ mod tests {
             format_fingerprint: 200,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
-            (10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone()), 0.0),
-            (30, 40, 150.0, 250.0, 0.7, Some(sid_b.clone()), 0.0),
+        let rebase_frames: Vec<RebaseFrame> = vec![
+            rebase_frame(10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone()), 0.0),
+            rebase_frame(30, 40, 150.0, 250.0, 0.7, Some(sid_b.clone()), 0.0),
         ];
 
-        let mut slices = vec![
+        let slices = vec![
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
@@ -2446,10 +2439,11 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
-        assert!((slices[0].from_document_rect.x - 0.0).abs() < 0.01);
-        assert!((slices[1].from_document_rect.x - 0.0).abs() < 0.01);
+        assert!((units[0].slice.from_document_rect.x - 0.0).abs() < 0.01);
+        assert!((units[1].slice.from_document_rect.x - 0.0).abs() < 0.01);
     }
 
     #[test]
@@ -2464,10 +2458,10 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> =
+            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
-        let mut slices = vec![
+        let slices = vec![
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
@@ -2520,7 +2514,8 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let mapped_center = 20i64;
         let center_0 = (11 + 15) as i64 / 2;
@@ -2534,18 +2529,18 @@ mod tests {
             dist_0
         );
         assert!(
-            (slices[1].start_fraction - 0.3).abs() < 0.01,
+            (units[1].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 1 (center={}, abs dist={}) should match rebase frame, got start_fraction={}",
             center_1,
             dist_1,
-            slices[1].start_fraction
+            units[1].slice.start_fraction
         );
         assert!(
-            (slices[0].start_fraction - 0.0).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.0).abs() < 0.01,
             "slice 0 (center={}, abs dist={}) should NOT be matched, got start_fraction={}",
             center_0,
             dist_0,
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
     }
 
@@ -2561,10 +2556,10 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> =
+            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
-        let mut slices = vec![
+        let slices = vec![
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
@@ -2617,7 +2612,8 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let mapped_center = 20i64;
         let center_0 = (11 + 15) as i64 / 2;
@@ -2638,9 +2634,9 @@ mod tests {
             abs_1,
             abs_0
         );
-        assert!((slices[1].start_fraction - 0.3).abs() < 0.01,
+        assert!((units[1].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got start_fraction={}",
-            abs_1, abs_0, signed_0, slices[1].start_fraction);
+            abs_1, abs_0, signed_0, units[1].slice.start_fraction);
     }
 
     #[test]
@@ -2654,12 +2650,12 @@ mod tests {
             format_fingerprint: 100,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
-            (50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
-            (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
+        let rebase_frames: Vec<RebaseFrame> = vec![
+            rebase_frame(50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
+            rebase_frame(50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_reveal(
+        let slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2684,12 +2680,13 @@ mod tests {
         let offset_map = OffsetMap {
             entries: Vec::new(),
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         assert!(
-            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 0 should get first rebase frame start_fraction 0.3 (not second 0.5), got {}",
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
     }
 
@@ -2705,12 +2702,12 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
-            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
-            (10, 30, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
+        let rebase_frames: Vec<RebaseFrame> = vec![
+            rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
+            rebase_frame(10, 30, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
         ];
 
-        let mut slices = vec![
+        let slices = vec![
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
@@ -2763,7 +2760,8 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let mapped_center = 20i64;
         let center_0 = (11 + 15) as i64 / 2;
@@ -2772,14 +2770,14 @@ mod tests {
         let dist_1 = (center_1 - mapped_center).abs();
         assert!(dist_1 < dist_0, "test setup: slice 1 should be closer");
         assert!(
-            (slices[1].start_fraction - 0.3).abs() < 0.01,
+            (units[1].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 1 should get first rebase frame (start_fraction=0.3), got start_fraction={}",
-            slices[1].start_fraction
+            units[1].slice.start_fraction
         );
         assert!(
-            (slices[0].start_fraction - 0.5).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.5).abs() < 0.01,
             "slice 0 should get second rebase frame (start_fraction=0.5), not reuse slice 1's frame, got start_fraction={}",
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
     }
 
@@ -2795,12 +2793,12 @@ mod tests {
             format_fingerprint: 100,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
-            (50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
-            (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
+        let rebase_frames: Vec<RebaseFrame> = vec![
+            rebase_frame(50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
+            rebase_frame(50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_reveal(
+        let slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2830,12 +2828,13 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         assert!(
-            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 0 should get first rebase frame via tier2 (start_fraction=0.3), got start_fraction={}",
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
     }
 
@@ -2851,12 +2850,12 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
-            (50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
-            (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
+        let rebase_frames: Vec<RebaseFrame> = vec![
+            rebase_frame(50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
+            rebase_frame(40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
         ];
 
-        let mut slices = vec![AnimatedSlice::insert_reveal(
+        let slices = vec![AnimatedSlice::insert_reveal(
             VisualTransactionKey::new(1, 1),
             LineSnapshotId::new(1, 0, 0),
             SourceRect {
@@ -2886,12 +2885,13 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         assert!(
-            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 0 should get first rebase frame start_fraction 0.3 (not second 0.5), got {}",
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
     }
 
@@ -2907,10 +2907,10 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> =
+            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
-        let mut slices = vec![
+        let slices = vec![
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 1),
                 LineSnapshotId::new(1, 0, 0),
@@ -2963,7 +2963,8 @@ mod tests {
                 kind: OffsetMapKind::Identity,
             }],
         };
-        match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
+        let mut units = wrap_units(slices);
+        match_rebase_frames(&rebase_frames, &mut units, &offset_map);
 
         let mapped_center = 20i64;
         let center_0 = (11 + 15) as i64 / 2;
@@ -2975,14 +2976,14 @@ mod tests {
             "test setup: both slices should have equal distance"
         );
         assert!(
-            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            (units[0].slice.start_fraction - 0.3).abs() < 0.01,
             "slice 0 (lower byte_start) should win tiebreak, got start_fraction={}",
-            slices[0].start_fraction
+            units[0].slice.start_fraction
         );
         assert!(
-            (slices[1].start_fraction - 0.0).abs() < 0.01,
+            (units[1].slice.start_fraction - 0.0).abs() < 0.01,
             "slice 1 should not be matched, got start_fraction={}",
-            slices[1].start_fraction
+            units[1].slice.start_fraction
         );
     }
 
@@ -3650,6 +3651,678 @@ mod tests {
         assert!(
             !delete_slices[0].conceal_from_left,
             "cursor near left (x=11, left=10) should be Delete → conceal_from_left=false"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // Issue #690 评论 5675007226 步骤 1+2+3: 一条动画链的行为回归测试。
+    //
+    // 覆盖三个真实缺陷：
+    // - 交棒帧曾按事务级 timeline progress 计算可见比例（吐到 60% 的字被交棒成 19%）；
+    // - 交棒后单元时间线归零重播（事务 key 换了就重新 0→1）；
+    // - Scene Graph 仍把 GUI 线程上一帧的 visual_x 当最终屏幕坐标（文字甩开光标）。
+    // ─────────────────────────────────────────────────────────────────────
+
+    use std::time::Duration;
+
+    use crate::sujian_editor_item::render_plan::{
+        CursorStyle, FrameContext, SelectionPreeditStyle,
+    };
+
+    fn reveal_slice(byte_start: usize, byte_end: usize, x: f64, w: f64) -> AnimatedSlice {
+        AnimatedSlice::insert_reveal(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            SourceRect {
+                x,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            x,
+            0.0,
+            byte_start,
+            byte_end,
+            None,
+        )
+    }
+
+    fn conceal_slice(
+        byte_start: usize,
+        byte_end: usize,
+        x: f64,
+        w: f64,
+        conceal_from_left: bool,
+    ) -> AnimatedSlice {
+        AnimatedSlice::delete_conceal(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            SourceRect {
+                x,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
+            x,
+            0.0,
+            byte_start,
+            byte_end,
+            None,
+            conceal_from_left,
+        )
+    }
+
+    fn reflow_slice(byte_start: usize, byte_end: usize, from_x: f64, to_x: f64) -> AnimatedSlice {
+        AnimatedSlice::reflow_move(
+            VisualTransactionKey::new(1, 1),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            SourceRect {
+                x: from_x,
+                y: 0.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect {
+                x: 0.0,
+                y: 0.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            SourceRect {
+                x: to_x,
+                y: 0.0,
+                w: 30.0,
+                h: 20.0,
+            },
+            byte_start,
+            byte_end,
+            None,
+        )
+    }
+
+    fn caret(x: f64) -> CursorRect {
+        CursorRect {
+            x,
+            top: 0.0,
+            bottom: 20.0,
+            baseline_y: 16.0,
+        }
+    }
+
+    /// 已经演进了 `elapsed_ms` 的视觉单元（单元自己的时间线，与事务 timeline 无关）。
+    fn elapsed_unit(
+        slice: AnimatedSlice,
+        elapsed_ms: u64,
+        duration_ms: u64,
+        now: Instant,
+    ) -> PreparedVisualUnit {
+        let mut unit = PreparedVisualUnit::wrap(slice, duration_ms);
+        unit.started_at = Some(now - Duration::from_millis(elapsed_ms));
+        unit
+    }
+
+    /// 手工装配一笔处于 Rendering 的正文事务。事务 timeline 从 `tx_elapsed_ms` 起算，
+    /// 与单元各自的 `elapsed_ms` 故意取不同值，用来验证两者不再互相顶替。
+    fn rendering_tx(
+        key: VisualTransactionKey,
+        operation_kind: TextVisualOperationKind,
+        units: Vec<PreparedVisualUnit>,
+        old_cursor: CursorRect,
+        new_cursor: CursorRect,
+        now: Instant,
+        tx_elapsed_ms: u64,
+    ) -> PreparedTextVisualTransaction {
+        let mut timeline = TransactionTimeline::new(100);
+        timeline.rendering_started_at = Some(now - Duration::from_millis(tx_elapsed_ms));
+        PreparedTextVisualTransaction {
+            key,
+            state: TextVisualTransactionState::Rendering,
+            operation_kind,
+            timeline,
+            units,
+            static_patches: Vec::new(),
+            old_cursor_rect: Some(old_cursor),
+            new_cursor_rect: Some(new_cursor),
+            cancel_reason: None,
+            texture_prepared: true,
+            old_snapshot: None,
+            new_snapshot: None,
+        }
+    }
+
+    fn stale_cursor_state() -> CursorRenderState {
+        CursorRenderState {
+            visible: true,
+            x: 1234.5,
+            y: 999.0,
+            h: 20.0,
+            opacity: 0.0,
+        }
+    }
+
+    #[test]
+    fn issue690_collect_rebase_frames_uses_per_unit_progress() {
+        let now = Instant::now();
+        let mut tx = rendering_tx(
+            VisualTransactionKey::new(1, 1),
+            TextVisualOperationKind::Insert,
+            vec![
+                // 单元自己的时间线：50/100ms → progress 0.5 → 可见比例 ease_out_quad(0.5)=0.75
+                elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now),
+                // 已播完的单元是稳定终态，不再交棒
+                elapsed_unit(reveal_slice(3, 6, 160.0, 60.0), 500, 100, now),
+            ],
+            caret(100.0),
+            caret(220.0),
+            now,
+            10,
+        );
+        // 事务级 progress = 0.1（eased 0.19）。旧实现按它一刀切采集，会把吐到 75% 的字
+        // 交棒成 19%，视觉上跳回一半。
+        tx.timeline.rendering_started_at = Some(now - Duration::from_millis(10));
+
+        let frames = tx.collect_rebase_frames(now);
+        assert_eq!(
+            frames.len(),
+            1,
+            "已播完的单元不应再交棒，got {:?}",
+            frames.iter().map(|f| f.byte_start).collect::<Vec<_>>()
+        );
+        let frame = &frames[0];
+        assert!(
+            (frame.visible_fraction - 0.75).abs() < 1e-6,
+            "交棒帧必须按单元自己的 progress 计算可见比例（期望 0.75，按事务 progress 会得 0.19）",
+        );
+        assert_eq!((frame.byte_start, frame.byte_end), (0, 3));
+        assert!((frame.x - 100.0).abs() < 1e-6);
+        assert_eq!(frame.duration_ms, 100);
+        assert_eq!(frame.started_at, Some(now - Duration::from_millis(50)));
+        // 采集到的比例必须与文字帧同一个几何结果（右边界 100 + 60*0.75 = 145）
+        let edge = reveal_slice(0, 3, 100.0, 60.0).compute_frame(frame.visible_fraction);
+        assert!(
+            (edge.x + edge.w - 145.0).abs() < 1e-6,
+            "可见比例应还原出同一帧的文字右边界，got {}",
+            edge.x + edge.w
+        );
+    }
+
+    #[test]
+    fn issue690_match_rebase_frames_continues_unit_timeline() {
+        let now = Instant::now();
+        let old_unit = elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now);
+        let visible_fraction = old_unit.current_visible_fraction(now);
+        let frame = old_unit.slice.compute_frame(visible_fraction);
+        let frames = vec![RebaseFrame {
+            byte_start: old_unit.slice.byte_start,
+            byte_end: old_unit.slice.byte_end,
+            x: frame.x,
+            y: frame.y,
+            opacity: frame.opacity,
+            shaping_identity: None,
+            visible_fraction,
+            started_at: old_unit.started_at,
+            duration_ms: old_unit.duration_ms,
+        }];
+
+        let mut units = wrap_units(vec![reveal_slice(0, 3, 100.0, 60.0)]);
+        assert!(
+            units[0].current_visible_fraction(now) < 1e-9,
+            "交棒前新单元从 0 起步"
+        );
+
+        let offset_map = OffsetMap::build("abc", "abc");
+        match_rebase_frames(&frames, &mut units, &offset_map);
+
+        let unit = &units[0];
+        assert!(
+            (unit.start_fraction - 0.75).abs() < 1e-6,
+            "Reveal 单元交棒后应从已显示比例继续，got {}",
+            unit.start_fraction
+        );
+        assert_eq!(
+            unit.duration_ms, 100,
+            "单元时长沿用旧单元，不被新事务 wrap 的默认时长覆盖"
+        );
+        let progress = unit.progress(now);
+        assert!(
+            (progress - 0.5).abs() < 1e-6,
+            "事务 key 换了也不能把生命周期归零重播，got {}",
+            progress
+        );
+        // 继续播放：0.75 → 1.0 的窗口，而不是重新 0 → 1
+        let visible = unit.current_visible_fraction(now);
+        assert!(
+            (visible - 0.9375).abs() < 1e-6,
+            "续播后的可见比例 = 0.75 + 0.25*ease_out_quad(0.5)，got {}",
+            visible
+        );
+    }
+
+    #[test]
+    fn issue690_take_rebase_frames_carries_frames_and_cancels_old_transaction() {
+        let now = Instant::now();
+        let old_key = VisualTransactionKey::new(7, 7);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        let frames = coord.take_rebase_frames(Some(old_key), "rebased_by_insert", now, None);
+        assert_eq!(frames.len(), 1, "旧事务的未播完单元要全部交棒");
+        assert!((frames[0].visible_fraction - 0.75).abs() < 1e-6);
+        assert!(
+            coord.prepared_queue.is_empty(),
+            "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
+        );
+        assert!(
+            coord
+                .take_rebase_frames(None, "rebased_by_insert", now, None)
+                .is_empty(),
+            "无冲突事务时不产生交棒帧"
+        );
+    }
+
+    /// Issue #690 评论 5675007226 步骤 3: 未被新编辑覆盖的单元继续自己的时间线。
+    #[test]
+    fn issue690_take_rebase_frames_keeps_transaction_when_units_are_untouched() {
+        let now = Instant::now();
+        let old_key = VisualTransactionKey::new(11, 11);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        // 在 "abc" 末尾插入 "d"：old 坐标里只是位置 3 这一个点，前面的单元没被覆盖。
+        let offset_map = OffsetMap::build("abc", "abcd");
+        let frames = coord.take_rebase_frames(
+            Some(old_key),
+            "rebased_by_insert",
+            now,
+            Some((&[(3, 3)], &offset_map)),
+        );
+
+        assert!(frames.is_empty(), "未覆盖的单元不该交棒，旧事务自己播完");
+        assert_eq!(
+            coord.prepared_queue.active_transactions().len(),
+            1,
+            "旧事务要留在队列里，继续持有自己的 snapshot 与静态隐藏区"
+        );
+        let unit = &coord.prepared_queue.active_transactions()[0].units[0];
+        assert!(
+            unit.start_fraction.abs() < 1e-9,
+            "保留的单元起点不能被改写，got {}",
+            unit.start_fraction
+        );
+        assert!(
+            (unit.current_visible_fraction(now) - 0.75).abs() < 1e-6,
+            "保留的单元沿自己的 started_at 继续，不因新事务 id 归零重播"
+        );
+    }
+
+    #[test]
+    fn issue690_take_rebase_frames_cancels_when_edit_covers_playing_unit() {
+        let now = Instant::now();
+        let old_key = VisualTransactionKey::new(12, 12);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        let offset_map = OffsetMap::build("abc", "ab");
+        let frames = coord.take_rebase_frames(
+            Some(old_key),
+            "rebased_by_delete",
+            now,
+            Some((&[(2, 3)], &offset_map)),
+        );
+
+        assert_eq!(frames.len(), 1, "被编辑覆盖的单元必须交棒给新事务");
+        assert!(coord.prepared_queue.is_empty(), "覆盖后旧事务结束生命期");
+    }
+
+    #[test]
+    fn issue690_take_rebase_frames_cancels_when_unit_offsets_shift() {
+        let now = Instant::now();
+        let old_key = VisualTransactionKey::new(13, 13);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        // 在开头插入：old 单元 0..3 在新文档里变成 1..4，几何位置变了必须重排。
+        let offset_map = OffsetMap::build("abc", "xabc");
+        let frames = coord.take_rebase_frames(
+            Some(old_key),
+            "rebased_by_insert",
+            now,
+            Some((&[(0, 0)], &offset_map)),
+        );
+
+        assert_eq!(frames.len(), 1, "偏移被平移的单元仍属被影响范围，要交棒");
+        assert!(coord.prepared_queue.is_empty());
+    }
+
+    #[test]
+    fn issue690_take_rebase_frames_cancels_finished_transaction_without_frames() {
+        let now = Instant::now();
+        let old_key = VisualTransactionKey::new(14, 14);
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 500, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            500,
+        ));
+
+        let offset_map = OffsetMap::build("abc", "abcd");
+        let frames = coord.take_rebase_frames(
+            Some(old_key),
+            "rebased_by_insert",
+            now,
+            Some((&[(3, 3)], &offset_map)),
+        );
+
+        assert!(frames.is_empty(), "已播完的单元是稳定终态，不该再交棒");
+        assert!(
+            coord.prepared_queue.is_empty(),
+            "全部单元播完的事务没有保留价值，交给新事务接管资源"
+        );
+    }
+
+    #[test]
+    fn issue690_render_plan_cursor_sits_on_reveal_boundary_of_same_frame() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            VisualTransactionKey::new(3, 3),
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            true,
+        );
+
+        assert_eq!(plan.text_animation.glyphs.len(), 1);
+        let glyph = &plan.text_animation.glyphs[0];
+        let text_right_edge = glyph.x + glyph.w;
+        assert!(
+            (text_right_edge - 145.0).abs() < 1e-6,
+            "本帧文字右边界应为 100 + 60*0.75，got {}",
+            text_right_edge
+        );
+        assert!(
+            (plan.cursor.x - text_right_edge).abs() < 1e-6,
+            "光标必须落在同一帧的文字吞吐边界上，got cursor={} text_right={}",
+            plan.cursor.x,
+            text_right_edge
+        );
+        assert!(
+            (plan.cursor.x - 1234.5).abs() > 1.0,
+            "正文事务期间不再把 GUI 线程留下的 visual_x 当最终屏幕坐标"
+        );
+        assert_eq!(plan.cursor.y, glyph.y);
+        assert!(
+            (plan.cursor.opacity - 1.0).abs() < 1e-6,
+            "Insert 期间光标闪烁抑制，恒为不透明"
+        );
+    }
+
+    #[test]
+    fn issue690_render_plan_keeps_cursor_only_state_when_coordinated_disabled() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        coord.prepared_queue.enqueue(rendering_tx(
+            VisualTransactionKey::new(3, 3),
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        ));
+
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            false,
+        );
+
+        assert!(
+            (plan.cursor.x - 1234.5).abs() < 1e-6,
+            "关闭协同动画时走 CursorOnly 自己的平滑曲线，位置不由事务改写"
+        );
+        assert!(
+            plan.cursor.opacity < 1e-6,
+            "CursorOnly 链保留 caller 传入的 blink opacity"
+        );
+    }
+
+    #[test]
+    fn issue690_fresh_conceal_unit_runs_from_fully_visible() {
+        let now = Instant::now();
+        let fresh = PreparedVisualUnit::wrap(conceal_slice(0, 3, 100.0, 60.0, true), 100);
+        assert!(
+            (fresh.current_visible_fraction(now) - 1.0).abs() < 1e-6,
+            "吞字单元第一帧必须完整可见，否则被删的字一帧都不出现",
+        );
+
+        // 同一条 ease-out 曲线镜像到 1→0：eased(0.5)=0.75 → 还剩 0.25。
+        let half = elapsed_unit(conceal_slice(0, 3, 100.0, 60.0, true), 50, 100, now);
+        let visible = half.current_visible_fraction(now);
+        assert!(
+            (visible - 0.25).abs() < 1e-6,
+            "吞字比例必须走与吐字同一条曲线（镜像），got {}",
+            visible
+        );
+        let frame = half.slice.compute_frame(visible);
+        assert!(
+            (frame.w - 15.0).abs() < 1e-6,
+            "演到一半时可见宽度 = 60 * 0.25，got {}",
+            frame.w
+        );
+        // Backspace 保留左段：右边界 160 → 115，前半程已扫过 45px（ease-out 减速）。
+        assert!(
+            (160.0 - (frame.x + frame.w)) > (frame.x + frame.w - 100.0),
+            "吞字边界应先快后慢地逼近终点，got edge={}",
+            frame.x + frame.w
+        );
+
+        let done = elapsed_unit(conceal_slice(0, 3, 100.0, 60.0, true), 200, 100, now);
+        let frame = done.slice.compute_frame(done.current_visible_fraction(now));
+        assert!(frame.w.abs() < 1e-6, "播完后旧字彻底消失，got {}", frame.w);
+    }
+
+    #[test]
+    fn issue690_backspace_cursor_tracks_shrinking_conceal_edge() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        // Backspace：保留左段，可见宽度 60 → 15，右边界 160 → 115 往左走。
+        coord.prepared_queue.enqueue(rendering_tx(
+            VisualTransactionKey::new(4, 4),
+            TextVisualOperationKind::Delete,
+            vec![elapsed_unit(
+                conceal_slice(100, 103, 100.0, 60.0, true),
+                50,
+                100,
+                now,
+            )],
+            caret(160.0),
+            caret(100.0),
+            now,
+            50,
+        ));
+
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            true,
+        );
+        assert!(
+            (plan.cursor.x - 115.0).abs() < 1e-6,
+            "Backspace 光标跟着正在被吞掉的右边界（100 + 60*0.25），got {}",
+            plan.cursor.x
+        );
+        let glyph = &plan.text_animation.glyphs[0];
+        assert!(
+            (plan.cursor.x - (glyph.x + glyph.w)).abs() < 1e-6,
+            "光标与文字帧来自同一个采样点"
+        );
+        assert!(
+            plan.cursor.opacity < 1e-6,
+            "Delete 不抑制闪烁，blink 状态由 caller 决定"
+        );
+    }
+
+    #[test]
+    fn issue690_forward_delete_cursor_stays_pinned_at_new_caret() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        // 前向 Delete：保留右段，逻辑光标本来不动，右侧文字向光标收。
+        coord.prepared_queue.enqueue(rendering_tx(
+            VisualTransactionKey::new(5, 5),
+            TextVisualOperationKind::Delete,
+            vec![elapsed_unit(
+                conceal_slice(100, 103, 100.0, 60.0, false),
+                50,
+                100,
+                now,
+            )],
+            caret(100.0),
+            caret(100.0),
+            now,
+            50,
+        ));
+
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            true,
+        );
+        assert!(
+            (plan.cursor.x - 100.0).abs() < 1e-6,
+            "前向 Delete 光标固定在 new caret，不回抽，got {}",
+            plan.cursor.x
+        );
+    }
+
+    #[test]
+    fn issue690_cursor_without_boundary_glyph_uses_reflow_easing() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        // 跨行/软换行 reflow：没有可直接当边界的 reveal/conceal 单元，
+        // 走 old/new caret 插值，easing 与 ReflowMove 同为二次曲线。
+        coord.prepared_queue.enqueue(rendering_tx(
+            VisualTransactionKey::new(6, 6),
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reflow_slice(0, 3, 100.0, 200.0), 50, 100, now)],
+            CursorRect {
+                x: 100.0,
+                top: 0.0,
+                bottom: 20.0,
+                baseline_y: 16.0,
+            },
+            CursorRect {
+                x: 200.0,
+                top: 40.0,
+                bottom: 60.0,
+                baseline_y: 56.0,
+            },
+            now,
+            10,
+        ));
+
+        let plan = coord.build_render_plan_full(
+            stale_cursor_state(),
+            SelectionPreeditPlan::default(),
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            now,
+            true,
+        );
+        // 事务 progress 0.1 → ease_out_quad = 0.19 → x = 100 + 100*0.19
+        assert!(
+            (plan.cursor.x - 119.0).abs() < 1e-6,
+            "无边界 glyph 时用与 ReflowMove 相同的二次 easing 插值，got {}",
+            plan.cursor.x
+        );
+        assert!(
+            (plan.cursor.y - 7.6).abs() < 1e-6,
+            "y 同一条曲线，got {}",
+            plan.cursor.y
+        );
+        assert!(
+            (plan.cursor.h - 20.0).abs() < 1e-6,
+            "光标高度取 new caret 行高"
         );
     }
 }

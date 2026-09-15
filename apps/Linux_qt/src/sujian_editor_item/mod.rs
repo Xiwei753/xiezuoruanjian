@@ -120,6 +120,82 @@ pub(crate) fn editor_animation_debug_log(msg: &str) {
     }
 }
 
+/// 当前 Unix 毫秒时间戳，用于动画诊断事件的"首帧时间"字段（与 `record_event`
+/// 内部 `timestamp_ms` 同一时基，便于诊断包内关联）。
+pub(crate) fn diagnostic_now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Issue #690 评论 5675007226 步骤 5: 把每笔动画的紧凑事件写入正式诊断包
+/// （`writer_diagnostics`），不再只走 env 控制的 `editor_animation_debug_log` eprintln。
+///
+/// 只在四点各触发一次：事务创建（create）、被新编辑 retarget（rebase）、
+/// 未被本次编辑覆盖而继续自播（keep）、播放完成（complete）。
+/// 不逐帧刷日志。diagnostics 在桌面端默认开启，普通实测包（不带 debug 环境变量）即可在
+/// zip 中看到 transaction key / operation kind / old-new caret / visual unit kinds /
+/// 首帧时间 / 完成或 retarget 原因，便于排查"文字领先光标"是不是同一个 frame sample、
+/// 哪个 unit 被重启。
+///
+/// `record_event` 经由 `writer_diagnostics` 后台 writer 落盘；未初始化/禁用时直接丢弃，
+/// 因此在本模块单测中调用也安全、不会 panic。
+pub(crate) fn editor_animation_diagnostic_event(
+    event: &str,
+    key: &VisualTransactionKey,
+    operation_kind: &str,
+    old_caret: Option<(f64, f64)>,
+    new_caret: Option<(f64, f64)>,
+    unit_kinds: &str,
+    first_frame_ms: Option<i64>,
+    reason: &str,
+) {
+    use std::collections::BTreeMap;
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "transaction_id".to_string(),
+        serde_json::json!(key.transaction_id),
+    );
+    fields.insert("generation".to_string(), serde_json::json!(key.generation));
+    fields.insert(
+        "operation_kind".to_string(),
+        serde_json::Value::String(operation_kind.to_string()),
+    );
+    if let Some((x, y)) = old_caret {
+        fields.insert("old_caret_x".to_string(), serde_json::json!(x));
+        fields.insert("old_caret_y".to_string(), serde_json::json!(y));
+    }
+    if let Some((x, y)) = new_caret {
+        fields.insert("new_caret_x".to_string(), serde_json::json!(x));
+        fields.insert("new_caret_y".to_string(), serde_json::json!(y));
+    }
+    fields.insert(
+        "unit_kinds".to_string(),
+        serde_json::Value::String(unit_kinds.to_string()),
+    );
+    if let Some(t) = first_frame_ms {
+        fields.insert("first_frame_ms".to_string(), serde_json::json!(t));
+    }
+    fields.insert(
+        "reason".to_string(),
+        serde_json::Value::String(reason.to_string()),
+    );
+
+    writer_diagnostics::record_event(writer_diagnostics::DiagnosticEvent {
+        timestamp_ms: chrono::Utc::now().timestamp_millis(),
+        // sequence / session_id 由 writer_diagnostics::record_event 统一补全
+        sequence: 0,
+        session_id: String::new(),
+        level: writer_diagnostics::DiagnosticLevel::Info,
+        origin: writer_diagnostics::DiagnosticOrigin::App,
+        event: event.to_string(),
+        target: "editor.anim".to_string(),
+        message: None,
+        fields,
+    });
+}
+
 pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     let cp = ch as u32;
     if cp > 0xFFFF {

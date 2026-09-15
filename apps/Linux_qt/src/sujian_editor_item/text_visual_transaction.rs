@@ -3,7 +3,7 @@ use std::time::Instant;
 use writer_core::editor::CursorRect;
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId};
+use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity};
 use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
 
@@ -35,6 +35,9 @@ pub(crate) enum TextVisualOperationKind {
 pub(crate) struct TransactionTimeline {
     pub duration_ms: u64,
     pub first_render_frame: Option<Instant>,
+    /// `first_render_frame` 对应的 Unix 毫秒，供诊断事件使用
+    /// （`Instant` 只有本进程意义，不能直接进日志）。
+    pub first_render_wall_ms: Option<i64>,
     pub rendering_started_at: Option<Instant>,
     pub pause_start: Option<Instant>,
     pub accumulated_paused_duration_ms: u64,
@@ -46,6 +49,7 @@ impl TransactionTimeline {
         Self {
             duration_ms,
             first_render_frame: None,
+            first_render_wall_ms: None,
             rendering_started_at: None,
             pause_start: None,
             accumulated_paused_duration_ms: 0,
@@ -72,6 +76,7 @@ impl TransactionTimeline {
         let now = Instant::now();
         if self.first_render_frame.is_none() {
             self.first_render_frame = Some(now);
+            self.first_render_wall_ms = Some(crate::sujian_editor_item::diagnostic_now_ms());
         }
         if self.rendering_started_at.is_none() {
             self.rendering_started_at = Some(now);
@@ -133,13 +138,25 @@ impl PreparedVisualUnit {
         }
     }
 
+    /// 新建单元的起点比例 = 这类动画第一帧的可见状态。
+    ///
+    /// 不能取 `slice.start_fraction`：builder 生成的 slice 该字段恒为 0.0，
+    /// 对 `DeleteConceal` 意味着"已经吞完"，被删的字会一帧都不显示。
+    /// slice 上的 `start_fraction` 只作为 rebase 交棒的载体（见 `rebase_from_frame`）。
+    fn initial_fraction_for_kind(kind: AnimatedSliceKind) -> f64 {
+        match kind {
+            AnimatedSliceKind::DeleteConceal => 1.0,
+            _ => 0.0,
+        }
+    }
+
     /// 把一个 `AnimatedSlice` 包成拥有独立生命期的视觉单元。
     ///
     /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致）。
     /// `started_at` 在事务首次进入 Rendering 时由 coordinator 填入。
     pub fn wrap(slice: AnimatedSlice, duration_ms: u64) -> Self {
         let target_fraction = Self::target_for_kind(slice.kind);
-        let start_fraction = slice.start_fraction.clamp(0.0, 1.0);
+        let start_fraction = Self::initial_fraction_for_kind(slice.kind);
         Self {
             slice,
             started_at: None,
@@ -163,6 +180,48 @@ impl PreparedVisualUnit {
             }
         }
     }
+
+    /// 单元在 `now` 时刻的真实可见比例（0..1）。
+    ///
+    /// Issue #690 评论 5675007226 步骤 2+3: 文字帧、协同光标、rebase 采集共用这一个公式，
+    /// 全部走 `AnimatedSlice::ease_out_quad`，不再各自施加一遍 easing。
+    pub fn current_visible_fraction(&self, now: Instant) -> f64 {
+        let eased = AnimatedSlice::ease_out_quad(self.progress(now));
+        (self.start_fraction + (self.target_fraction - self.start_fraction) * eased).clamp(0.0, 1.0)
+    }
+
+    /// 按旧单元的当前帧续播本单元。
+    ///
+    /// Issue #690 评论 5675007226 步骤 3: 可见比例成为新单元的起点，时间线沿用旧单元的
+    /// `started_at` / `duration_ms`——事务 key 换了也不归零，否则上一笔吐到 60% 的字
+    /// 会被重新从 0 吐一遍。
+    pub fn rebase_from_frame(&mut self, frame: &RebaseFrame) {
+        self.slice
+            .rebase_from(frame.x, frame.y, frame.opacity, frame.visible_fraction);
+        self.start_fraction = self.slice.start_fraction;
+        if let (Some(started_at), true) = (frame.started_at, frame.duration_ms > 0) {
+            self.started_at = Some(started_at);
+            self.duration_ms = frame.duration_ms;
+        }
+    }
+}
+
+/// 旧事务某个视觉单元在当前时刻的视觉帧，交棒给新事务继续播放。
+///
+/// Issue #690 评论 5675007226 步骤 3: 除了位置与透明度，必须带当前 `visible_fraction`
+/// 和单元自己的时间线（`started_at` / `duration_ms`）。只传 `(x, y, opacity)` 时
+/// Reveal/Conceal 会按新事务 progress 重新 0→1 / 1→0，快速连打时上一笔的字被反复重启。
+#[derive(Clone, Debug)]
+pub(crate) struct RebaseFrame {
+    pub byte_start: usize,
+    pub byte_end: usize,
+    pub x: f64,
+    pub y: f64,
+    pub opacity: f64,
+    pub shaping_identity: Option<ShapingIdentity>,
+    pub visible_fraction: f64,
+    pub started_at: Option<Instant>,
+    pub duration_ms: u64,
 }
 
 /// 一次平台视觉事务持有的全部资源。
@@ -214,6 +273,33 @@ impl PreparedTextVisualTransaction {
 
     pub fn progress(&self, now: Instant) -> f64 {
         self.timeline.progress(now)
+    }
+
+    /// 采集本事务中尚未播完的视觉单元当前帧，交棒给下一个事务。
+    ///
+    /// Issue #690 评论 5675007226 步骤 3: 逐单元用自己的 `progress`，不再用事务级
+    /// timeline progress 一刀切——后者会把"已经吐到 60%"的单元算成事务的 30%，
+    /// 交棒后视觉上仍会跳回一半。已播完（progress >= 1）的单元已是稳定终态，不采集。
+    pub fn collect_rebase_frames(&self, now: Instant) -> Vec<RebaseFrame> {
+        self.units
+            .iter()
+            .filter(|unit| unit.progress(now) < 1.0)
+            .map(|unit| {
+                let visible_fraction = unit.current_visible_fraction(now);
+                let frame = unit.slice.compute_frame(visible_fraction);
+                RebaseFrame {
+                    byte_start: unit.slice.byte_start,
+                    byte_end: unit.slice.byte_end,
+                    x: frame.x,
+                    y: frame.y,
+                    opacity: frame.opacity,
+                    shaping_identity: unit.slice.shaping_identity.clone(),
+                    visible_fraction,
+                    started_at: unit.started_at,
+                    duration_ms: unit.duration_ms,
+                }
+            })
+            .collect()
     }
 
     pub fn pause(&mut self) {

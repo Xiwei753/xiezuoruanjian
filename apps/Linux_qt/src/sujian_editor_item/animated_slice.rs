@@ -275,11 +275,10 @@ impl AnimatedSlice {
     /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
     /// 和 source rect。
     ///
-    /// Issue #690 评论 5675007226 步骤 3: `visible` 已经过 `current_visible_fraction`
-    /// 由单元生命周期 + 单元视觉窗口（[`PreparedVisualUnit::start_fraction`,
-    /// `PreparedVisualUnit::target_fraction`]）映射得到，并施加了同一条 ease-out quadratic
-    /// 曲线。这里只做几何与透明度的线性插值，不再重复施加 easing 或 `start_fraction`，
-    /// 避免与协调光标重复缓动。
+    /// Issue #690 评论 5675007226 步骤 2+3: `visible` 一律由
+    /// `PreparedVisualUnit::current_visible_fraction` 给出（单元自己的时间线 +
+    /// `[start_fraction, target_fraction]` 视觉窗口 + 协同 easing）。这里只做几何与
+    /// 透明度的线性插值，不再重复施加 easing 或 `start_fraction`，避免与协调光标重复缓动。
     pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
@@ -365,23 +364,6 @@ impl AnimatedSlice {
                 }
             }
         }
-    }
-
-    /// 把单元生命周期进度（`progress`，0..1）映射成"最终可见比例"（0..1）。
-    ///
-    /// Issue #690 评论 5675007226 步骤 2+3: 与协调光标共用同一条 ease-out quadratic；
-    /// `start_fraction` 为单元在窗口内的起点（Reveal 当前已吐出比例 / Conceal 当前还剩比例），
-    /// `DeleteConceal` 终点为 0、其余为 1，正好对应 [`PreparedVisualUnit::target_fraction`]。
-    pub fn current_visible_fraction(&self, progress: f64) -> f64 {
-        let eased = AnimatedSlice::ease_out_quad(progress);
-        match self.kind {
-            AnimatedSliceKind::InsertReveal => {
-                self.start_fraction + (1.0 - self.start_fraction) * eased
-            }
-            AnimatedSliceKind::DeleteConceal => self.start_fraction * (1.0 - eased),
-            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => eased,
-        }
-        .clamp(0.0, 1.0)
     }
 }
 
