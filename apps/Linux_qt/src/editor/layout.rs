@@ -1627,6 +1627,8 @@ impl EditorLayout {
             // g_layout_generations[self.current_generation]。
             // 真正需要 line images 的动画/IME 路径各自分配独立 generation
             // 调 prepare_document_visual_snapshot 传 generate_animation_visuals=true。
+            // Issue #688: 静态布局准备不接收颜色参数；text_color 仅在
+            // generate_animation_visuals=true 时用于 QImage 绘制。
             let doc_snapshot = prepare_document_visual_snapshot(
                 text,
                 text_revision,
@@ -1637,7 +1639,7 @@ impl EditorLayout {
                 f64::from(params.text_indent),
                 params.width,
                 1.0,
-                "#000000",
+                "",
                 self.current_generation,
                 false,
             );

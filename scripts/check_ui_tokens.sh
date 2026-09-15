@@ -254,6 +254,47 @@ else
     echo "   PASS"
 fi
 
+# --- Check 10: QML bare Text usage (should use AppText) ---
+echo "10. Checking QML bare Text usage (should use AppText with dt)..."
+QML_BARE_TEXT_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    LINENUM=$(echo "$line" | cut -d: -f2)
+    # Skip AppText.qml itself (it IS the Text wrapper)
+    if [[ "$FILE" == *"AppText.qml" ]]; then continue; fi
+    # Skip contentItem: AppText (Button contentItem patterns) — AppText is already used
+    if [[ "$line" == *"AppText {"* ]]; then continue; fi
+    # Skip if inside a Button/MenuItem contentItem (inline AppText usage)
+    if [[ "$line" == *"contentItem:"* ]]; then continue; fi
+    QML_BARE_TEXT_ISSUES="${QML_BARE_TEXT_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn 'Text {' apps/Linux_qt/qml/ 2>/dev/null | grep -v 'AppText {' | grep -v 'AppTextField {' | grep -v 'TextArea {' | grep -v 'TextField {' | grep -v 'TextInput {' || true)
+
+if [[ -n "$QML_BARE_TEXT_ISSUES" ]]; then
+    echo "   FAIL: Found bare Text usage in QML (use AppText with dt instead):"
+    echo "$QML_BARE_TEXT_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
+# --- Check 11: Rust editor text color (no #000000 in text rendering path) ---
+echo "11. Checking Rust editor text color (no #000000 in text rendering path)..."
+RUST_COLOR_ISSUES=""
+while IFS= read -r line; do
+    FILE=$(echo "$line" | cut -d: -f1)
+    # Only check editor and sujian_editor_item directories
+    if [[ "$FILE" != *"apps/Linux_qt/src/editor/"* ]] && [[ "$FILE" != *"apps/Linux_qt/src/sujian_editor_item/"* ]]; then continue; fi
+    RUST_COLOR_ISSUES="${RUST_COLOR_ISSUES}  $line"$'\n'
+done < <(cd "$REPO_ROOT" && grep -rn '"#000000"' apps/Linux_qt/src/editor/ apps/Linux_qt/src/sujian_editor_item/ 2>/dev/null || true)
+
+if [[ -n "$RUST_COLOR_ISSUES" ]]; then
+    echo "   FAIL: Found #000000 in Rust editor text rendering path:"
+    echo "$RUST_COLOR_ISSUES"
+    ERRORS=$((ERRORS + 1))
+else
+    echo "   PASS"
+fi
+
 # --- Self-test (optional) ---
 if [[ "${CHECK_UI_TOKENS_SELFTEST:-0}" == "1" ]]; then
     echo ""

@@ -34,10 +34,11 @@ Item {
         anchors.fill: parent
         spacing: control.resolvedDt.sp4
 
-        Text {
+        AppText {
+            dt: control.resolvedDt
             text: control.label
+            variant: "onSurfaceVariant"
             font.pixelSize: control.resolvedDt.label
-            color: control.labelColor
             font.weight: Font.Medium
             font.family: control.resolvedDt.fontFamily
             visible: control.label.length > 0
