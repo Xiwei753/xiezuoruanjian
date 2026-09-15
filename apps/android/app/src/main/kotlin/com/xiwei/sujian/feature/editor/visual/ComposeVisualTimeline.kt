@@ -79,11 +79,17 @@ class ComposeVisualTimeline {
         val policy = patch.motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
+        // #691 评论 5680711648：surviving unit 中尚未开始的最早 start time —
+        // cursor rebase 时不能越过这些 unit（见下方 cursor 处理）。
+        var earliestUnstartedSurvivingStart: Long? = null
+
         // #691 评论 5679242735 修改2：textEnabled=false 时不创建任何文字 alpha/position track。
         // 不要只把 duration 改成 0 — 否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
         if (policy.textEnabled) {
-            // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
-            val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
+            // 第一步：先 rebase 当前所有 unit 到此刻的真实 alpha/位置。
+            // #691 评论 5680711648 修复1：不能用 sampleUnit() — 它会把尚未开始的通道也 rebase 到 now，
+            // 丢失绝对 start time。改用 rebaseUnitForPatch()：尚未开始的通道原样保留未来起点。
+            val sampledUnits = units.map { rebaseUnitForPatch(it, frameTimeNanos) }
 
             // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
             val surviving = mutableListOf<VisualTextUnit>()
@@ -101,6 +107,14 @@ class ComposeVisualTimeline {
 
             // 合并：存活 + 新插入 + ghost
             units = surviving + inserted + ghosting
+
+            // #691 评论 5680711648 修复2：找 surviving unit 中尚未开始的最早 start time。
+            // rebaseUnitForPatch 保留了未来 unit 的绝对 startedAtNanos，
+            // 所以 surviving 里尚未开始的 unit 满足 alpha.startedAtNanos > frameTimeNanos。
+            earliestUnstartedSurvivingStart =
+                surviving
+                    .filter { it.targetRange != null && it.alpha.startedAtNanos > frameTimeNanos }
+                    .minOfOrNull { it.alpha.startedAtNanos }
         } else {
             // 文字动画关闭：不创建任何文字 alpha/position track。
             units = emptyList()
@@ -117,11 +131,18 @@ class ComposeVisualTimeline {
                 } else {
                     cursorFromRect
                 }
+            // #691 评论 5680711648 修复2：cursor rebase 不越过尚未开始的 surviving unit。
+            // 如果存在尚未开始的 surviving insert unit（alpha.startedAtNanos > frameTimeNanos），
+            // cursor 的 startedAtNanos 应延后到最早的未开始 unit 的 startedAtNanos，
+            // 这样 cursor 在未开始 unit 出现前停留在 startRect，不会越过当前已出现文字。
+            // 第一笔 patch 时没有 surviving unit，earliestUnstartedSurvivingStart=null，
+            // cursorStartedAt=frameTimeNanos，与原行为一致。
+            val cursorStartedAt = maxOf(frameTimeNanos, earliestUnstartedSurvivingStart ?: frameTimeNanos)
             cursorChannel =
                 CursorTrack(
                     fromRect = startRect,
                     points = cursorPath,
-                    startedAtNanos = frameTimeNanos,
+                    startedAtNanos = cursorStartedAt,
                     durationNanos = cursorDurationNanos,
                 )
         }
@@ -617,6 +638,82 @@ class ComposeVisualTimeline {
                 ),
         )
     }
+
+    /**
+     * #691 评论 5680711648 修复1：applyPatch 专用 rebase —
+     * 把 unit 的 alpha/position 通道 rebase 到 [frameTimeNanos]，
+     * 但**尚未开始的通道必须原样保留未来起点**。
+     *
+     * 与 [sampleUnit] 的关键区别：
+     * - [sampleUnit] 用于 [sample] 画当前帧：把所有通道都 rebase 到 now，
+     *   返回插值后的 unit 给 scene。对于尚未开始的通道，rebase 后
+     *   from=currentAlpha=0f, startedAtNanos=now, durationNanos=remainingDuration。
+     *   这会让"尚未开始"变成"从 now 开始"，丢失绝对 start time。
+     * - [rebaseUnitForPatch] 用于 [applyPatch] 准备 surviving unit：尚未开始的通道
+     *   原样保留（startedAtNanos 不变），这样下一笔 patch 不会让未来 unit 提前启动。
+     *
+     * alpha rebase 规则：
+     * - now < channel.startedAtNanos：原样保留（尚未开始）
+     * - now >= channel.startedAtNanos + channel.durationNanos：塌缩到 (to, to, now, 0)（已完成）
+     * - 否则：from=currentAlpha(now), to=channel.to, startedAtNanos=now,
+     *   durationNanos=channel.startedAtNanos + channel.durationNanos - now（进行中）
+     *
+     * position 通道同样处理。
+     */
+    private fun rebaseUnitForPatch(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): VisualTextUnit =
+        unit.copy(
+            alpha = rebaseTimedFloat(unit.alpha, frameTimeNanos),
+            position = rebaseTimedOffset(unit.position, frameTimeNanos),
+        )
+
+    /**
+     * #691 评论 5680711648 修复1：alpha 通道 rebase — 尚未开始原样保留。
+     */
+    private fun rebaseTimedFloat(
+        channel: TimedFloat,
+        now: Long,
+    ): TimedFloat =
+        when {
+            // 尚未开始：原样保留未来起点
+            now < channel.startedAtNanos -> channel
+            // 已完成：塌缩到 to
+            now >= channel.startedAtNanos + channel.durationNanos ->
+                TimedFloat(channel.to, channel.to, now, 0L)
+            // 进行中：从当前值继续到 to，剩余时长 = 原结束时间 - now
+            else ->
+                TimedFloat(
+                    from = currentAlpha(channel, now),
+                    to = channel.to,
+                    startedAtNanos = now,
+                    durationNanos = channel.startedAtNanos + channel.durationNanos - now,
+                )
+        }
+
+    /**
+     * #691 评论 5680711648 修复1：position 通道 rebase — 尚未开始原样保留。
+     */
+    private fun rebaseTimedOffset(
+        channel: TimedOffset,
+        now: Long,
+    ): TimedOffset =
+        when {
+            // 尚未开始：原样保留未来起点
+            now < channel.startedAtNanos -> channel
+            // 已完成：塌缩到 to
+            now >= channel.startedAtNanos + channel.durationNanos ->
+                TimedOffset(channel.to, channel.to, now, 0L)
+            // 进行中：从当前值继续到 to，剩余时长 = 原结束时间 - now
+            else ->
+                TimedOffset(
+                    from = currentOffset(channel, now) ?: channel.from,
+                    to = channel.to,
+                    startedAtNanos = now,
+                    durationNanos = channel.startedAtNanos + channel.durationNanos - now,
+                )
+        }
 
     /**
      * 计算通道当前值（alpha）。

@@ -1469,6 +1469,277 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
+     * #691 评论 5680711648 修复1+修复2 测试A：两笔 patch，第二笔在 30ms 到来。
+     *
+     * 第一笔：一次提交 abc，总时长 300ms（3 个 insertedUnits，cursor path 3 个 point）。
+     * 第二笔：30ms 时再输入 d（第 4 个 unit，cursor path 新增 point）。
+     *
+     * 关键验证：
+     * - 8ms/16ms/24ms（第一笔后）和 32ms/40ms/48ms/50ms（第二笔后）连续帧采样：
+     *   b/c 仍必须是 alpha=0（尚未到 100ms/200ms）。
+     *   这验证了修复1：rebaseUnitForPatch 保留了未来 unit 的绝对 start time。
+     * - 50ms：cursor 不能越过当前已出现文字（cursor 停留在 startRect，不跑到 b/c/d 位置）。
+     *   这验证了修复2：cursor rebase 不越过尚未开始的 surviving unit。
+     * - 100ms/200ms：文字 unit 与 cursor 仍按同一分段推进。
+     */
+    @Test
+    fun twoPatches_secondAt30ms_futureUnitsKeepAbsoluteStart() {
+        val layouts = captureLayouts("", "abc", "abcd")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // === 第一笔："" → "abc"，duration=300ms ===
+        // a: startedAt=0, duration=100; b: startedAt=100, duration=100; c: startedAt=200, duration=100
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 连续帧采样（第一笔后，第二笔前）：8ms/16ms/24ms ===
+        // b: startedAt=100ms, c: startedAt=200ms — 都尚未开始，alpha 必须为 0
+        for (ms in listOf(8L, 16L, 24L)) {
+            val scene = timeline.sample(ms * NANOS_PER_MS)
+            val unitB = scene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+            val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("$ms ms: unit b 应存在（尚未开始动画）", unitB)
+            assertTrue(
+                "$ms ms: unit b alpha 应为 0（尚未开始），实际=${unitB!!.alpha.from}",
+                unitB.alpha.from < 0.01f,
+            )
+            assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
+            assertTrue(
+                "$ms ms: unit c alpha 应为 0（尚未开始），实际=${unitC!!.alpha.from}",
+                unitC.alpha.from < 0.01f,
+            )
+        }
+
+        // === 第二笔：30ms 时 "abc" → "abcd"，插入 d ===
+        val frameTime2 = 30L * NANOS_PER_MS
+        // offsetMap：a/b/c 在新正文中位置不变（identity 映射 0..3 → 0..3）
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        // d 的 cursor point（单点路径）
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        // cursor 在 30ms 时的位置（第一笔 cursor 在 30ms 的插值结果）
+        // elapsed=30ms, progress=0.1, point0 endFraction=1/3, segmentProgress=0.3
+        // cursor = interpolate(fromRect, point0, 0.3) = (3, 0, 5, 14)
+        val cursorAt30ms = Rect(3f, 0f, 5f, 14f)
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = frameTime2,
+            cursorFromRect = cursorAt30ms,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 连续帧采样（第二笔后）：32ms/40ms/48ms/50ms ===
+        // 修复1核心验证：rebase 后 b/c 仍保留 startedAt=100/200，alpha 必须仍为 0
+        for (ms in listOf(32L, 40L, 48L, 50L)) {
+            val scene = timeline.sample(ms * NANOS_PER_MS)
+            val unitB = scene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+            val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("$ms ms: unit b 应存在（尚未开始动画）", unitB)
+            assertTrue(
+                "$ms ms: unit b alpha 应为 0（rebase 保留未来起点），实际=${unitB!!.alpha.from}",
+                unitB.alpha.from < 0.01f,
+            )
+            assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
+            assertTrue(
+                "$ms ms: unit c alpha 应为 0（rebase 保留未来起点），实际=${unitC!!.alpha.from}",
+                unitC.alpha.from < 0.01f,
+            )
+        }
+
+        // === 50ms：cursor 不能越过当前已出现文字 ===
+        // 修复2核心验证：cursorStartedAt = max(30, earliestUnstartedSurvivingStart=100) = 100
+        // 50ms < 100ms，cursor 停留在 startRect = cursorAt30ms = (3, 0, 5, 14)
+        val scene50 = timeline.sample(50L * NANOS_PER_MS)
+        val cursor50 = scene50.cursorRect
+        assertNotNull("50ms: cursor rect 不应为 null", cursor50)
+        assertTrue(
+            "50ms: cursor 应停留在 startRect (left≈3f)，不越过已出现文字，实际=${cursor50!!.left}",
+            kotlin.math.abs(cursor50.left - 3f) < 1f,
+        )
+
+        // === 100ms：b 刚开始（alpha≈0），c 尚未开始（alpha=0）===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull("100ms: unit b 应存在（刚开始动画）", unitB100)
+        assertTrue(
+            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
+        assertTrue(
+            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+
+        // === 200ms：c 刚开始（alpha≈0）===
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull("200ms: unit c 应存在（刚开始动画）", unitC200)
+        assertTrue(
+            "200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+    }
+
+    /**
+     * #691 评论 5680711648 修复1+修复2 测试B：同一 VSync 两个 patch 都在 0ms drain。
+     *
+     * abc patch 和下一笔 patch 在同一个 frameTimeNanos=0 drain。
+     * 修复前：sampleUnit 会把 b/c 的 startedAt 重置到 0，三个 unit 重新一起开始。
+     * 修复后：rebaseUnitForPatch 保留 b/c 的 startedAt=100/200，b/c 不会提前启动。
+     *
+     * 关键验证：
+     * - 8ms/16ms 连续帧采样：b/c alpha=0（尚未到 100ms/200ms）。
+     * - 10ms：cursor 停留在 startRect，不越过已出现文字。
+     */
+    @Test
+    fun sameVsyncTwoPatchesAt0ms_futureUnitsDoNotRestart() {
+        val layouts = captureLayouts("", "abc", "abcd")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // === 第一笔：0ms "" → "abc"，duration=300ms ===
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 第二笔：同一 VSync 0ms "abc" → "abcd"，插入 d ===
+        // 与第一笔在同一个 frameTimeNanos=0 drain
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 连续帧采样：8ms/16ms ===
+        // 修复1核心验证：同一 VSync 0ms drain 后，b/c 仍保留 startedAt=100/200，alpha=0
+        for (ms in listOf(8L, 16L)) {
+            val scene = timeline.sample(ms * NANOS_PER_MS)
+            val unitB = scene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+            val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("$ms ms: unit b 应存在（尚未开始动画）", unitB)
+            assertTrue(
+                "$ms ms: unit b alpha 应为 0（同 VSync drain 不提前启动），实际=${unitB!!.alpha.from}",
+                unitB.alpha.from < 0.01f,
+            )
+            assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
+            assertTrue(
+                "$ms ms: unit c alpha 应为 0（同 VSync drain 不提前启动），实际=${unitC!!.alpha.from}",
+                unitC.alpha.from < 0.01f,
+            )
+        }
+
+        // === 10ms：cursor 停留在 startRect，不越过已出现文字 ===
+        // 修复2核心验证：cursorStartedAt = max(0, earliestUnstartedSurvivingStart=100) = 100
+        // 10ms < 100ms，cursor 停留在 startRect = fromRect = (0, 0, 2, 14)
+        val scene10 = timeline.sample(10L * NANOS_PER_MS)
+        val cursor10 = scene10.cursorRect
+        assertNotNull("10ms: cursor rect 不应为 null", cursor10)
+        assertTrue(
+            "10ms: cursor 应停留在 startRect (left≈0f)，不越过已出现文字，实际=${cursor10!!.left}",
+            kotlin.math.abs(cursor10.left - 0f) < 1f,
+        )
+
+        // === 100ms：b 刚开始（alpha≈0），c 尚未开始（alpha=0）===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull("100ms: unit b 应存在（刚开始动画）", unitB100)
+        assertTrue(
+            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
+        assertTrue(
+            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+    }
+
+    /**
      * #691 评论 5679815971 问题1：applyMotionPolicyAtFrame 一次性同步所有 UI 状态。
      *
      * 验证调用 applyMotionPolicyAtFrame 后：
