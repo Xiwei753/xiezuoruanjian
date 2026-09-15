@@ -13,7 +13,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  *
  * - 单字符输入/删除：就是一个目标点。
  * - 一次提交多个插入 unit：按 [newAnimationUnits] 顺序，每个字/cluster 出现后光标应到的位置组成路径，
- *   [CursorMotionPoint.endFraction] 与 [ComposeVisualRebase.unitLocalProgress] 的分段时序一致。
+ *   [CursorMotionPoint.endFraction] 与 timeline 的 unit-wise 分段时序一致。
  * - 多 Core intent 合成一个屏幕事务：优先用每笔 intent 的 cursor old/new offset，
  *   经 offset-map chain 映射到最终布局后组成路径；不能映射的中间点不猜，
  *   最终点仍取最后一笔真实 cursor。
@@ -21,7 +21,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
  *
  * @param rect 该路径点对应的光标矩形（从 [androidx.compose.ui.text.TextLayoutResult.getCursorRect] 取）。
  * @param endFraction 该路径点在整条动画 timeline 上到达的归一化时间（0..1）。
- *   与 [ComposeVisualRebase.unitLocalProgress] 的分段时序一致：
+ *   与 timeline 的 unit-wise 分段时序一致：
  *   N 个 unit，unit i 的 endFraction = (i + 1f) / N。
  */
 data class CursorMotionPoint(
@@ -49,7 +49,7 @@ data class CursorMotionPath(
  * 1. 单字符输入/删除：就是一个目标点（endFraction = 1f）。
  * 2. 一次提交多个插入 unit：按 [newAnimationUnits] 顺序，用
  *    `newLayout.result.getCursorRect(unit.end)` 得到每个字/cluster 出现后光标应该到的位置；
- *    `endFraction = (index + 1f) / unitCount`，和 [ComposeVisualRebase.unitLocalProgress] 分段时序一致。
+ *    `endFraction = (index + 1f) / unitCount`，和 timeline 的 unit-wise 分段时序一致。
  * 3. 多 Core intent 合成一个屏幕事务时，优先使用每笔 intent 的 cursor old/new offset，
  *    经现有 offset-map chain 映射到最终布局后组成路径；不能映射的中间点不要猜，
  *    最终点仍取最后一笔真实 cursor。
