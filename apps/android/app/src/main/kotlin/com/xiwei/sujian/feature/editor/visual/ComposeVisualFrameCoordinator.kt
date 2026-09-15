@@ -219,31 +219,13 @@ class ComposeVisualFrameCoordinator(
             )
 
         // 计算 cursor start/end rect。
-        // #684 评论 5663032418 断点1：中断续跑时，文字用 masterProgress 物化当前屏幕帧，
-        // 光标也必须从当前屏幕位置继续，而不是从上一笔的逻辑终点重新起跑。
-        // 先用当前活跃事务的 cursorStartRect/cursorEndRect + masterProgress 算出
-        // 当前屏幕上的光标位置 interruptedCursorRect，作为下一笔 cursorStartRect 的首选。
-        val activeTx = active
-        // #684 评论 5666730754 问题2：interruptedCursorRect 只在上一笔 activeTx 的光标
-        // 真的被 overlay 动画过（cursorAnimationActive==true）时才插值。
-        // 当上一笔是 SYSTEM_SUPPRESSED 且 cursor.animate=false 时，overlay 的 cursorProgressValue=1f，
-        // 屏幕光标已直接在 activeTx.end；这里不应从 activeTx.cursorStartRect/cursorEndRect 插值，
-        // 否则拿一个屏幕上从未出现过的中间 rect 当 C 的起点。
-        // 没有上一笔真实 cursor 动画时回退到 logicalOldCursorRect（当前屏幕真实 T0 光标）。
-        val interruptedCursorRect =
-            if (activeTx?.cursorAnimationActive == true) {
-                ComposeVisualRebase.interpolateCursorRect(
-                    startRect = activeTx.cursorStartRect,
-                    endRect = activeTx.cursorEndRect,
-                    progress = masterProgress,
-                )
-            } else {
-                null
-            }
-
-        // #684 评论 5664636035 Bug2：无旧动画时从 chain 第一笔 old cursor（T0 坐标）起跑，
-        // 不再用最后一笔 old cursor（T(n-1) 坐标）查 T0 布局。
-        val logicalOldCursorRect =
+        // #684 评论 5672654866：coordinator 不再负责重建"此刻屏幕光标在哪"。
+        // 当前 cursor rect 始终留在 overlay 的长生命周期 Animatable 里。
+        // coordinator 只根据本事务 old/new layout、intent chain、animation units
+        // 生成冻结的 cursorMotionPath。下一笔到来时不再把上一笔 progress 换算成 rect。
+        // cursorStartRect/cursorEndRect 保留作为兼容字段，从 logicalOldCursorRect/cursorEndRect 计算。
+        // #684 评论 5664636035 Bug2：无旧动画时光标起点应从 chain 第一笔 old cursor 起跑（T0 坐标）。
+        val cursorStartRect =
             if (firstCursor != null) {
                 try {
                     val startOffset =
@@ -256,9 +238,6 @@ class ComposeVisualFrameCoordinator(
             } else {
                 null
             }
-
-        // 优先用当前屏幕插值位置；没有可物化的光标动画时回退到逻辑旧位置。
-        val cursorStartRect = interruptedCursorRect ?: logicalOldCursorRect
 
         // #684 评论 5664636035 Bug2：cursorEndRect 用最后一笔 new cursor（Tn 坐标）查 newest 布局。
         val cursorEndRect =
@@ -382,12 +361,10 @@ class ComposeVisualFrameCoordinator(
                         ComposeVisualRebase.MaterializeStartFrameParams(
                             transaction = current,
                             textProgress = masterProgress,
-                            cursorProgress = masterProgress,
                             rebaseProgress = masterProgress,
                             nextOffsetMap = composedOffsetMap,
                             nextReplaceBounds = lastIntent.replaceBounds,
                             currentSuppressedRanges = current.suppressedCurrentRanges,
-                            cursorSnapshot = null,
                         ),
                     )
                 }
@@ -436,6 +413,23 @@ class ComposeVisualFrameCoordinator(
                     blockers = startFrameOwnedOldRanges,
                 )
             }
+        // #684 评论 5672654866：构建光标运动路径 —
+        // 把"光标路径"从单纯 start/end 两点升级成和文字 unit 对应的路径。
+        // 一次提交多个插入 unit 时按 newAnimationUnits 顺序取每个 unit 出现后的 caret rect，
+        // endFraction 与 unitLocalProgress 分段时序一致。
+        // cursorAnimationActive==false 时不构建路径（overlay 不会动画光标）。
+        val cursorMotionPath =
+            if (cursorAnimationActive) {
+                buildCursorMotionPath(
+                    oldLayout = consumed.layout,
+                    newLayout = newest.layout,
+                    intents = chain,
+                    oldAnimationUnits = effectiveOldAnimationUnits,
+                    newAnimationUnits = newAnimationUnits,
+                )
+            } else {
+                null
+            }
         val transaction =
             ComposeVisualTransaction(
                 id = nextTransactionId,
@@ -448,6 +442,7 @@ class ComposeVisualFrameCoordinator(
                 retainedMoves = retainedMoves,
                 cursorStartRect = cursorStartRect,
                 cursorEndRect = cursorEndRect,
+                cursorMotionPath = cursorMotionPath,
                 startFrame = startFrame,
                 durationMs = effectiveDurationMs,
                 motionPolicy = chainMotionPolicy,

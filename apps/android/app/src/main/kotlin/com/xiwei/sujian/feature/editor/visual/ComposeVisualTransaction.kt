@@ -36,7 +36,15 @@ data class RetainedMove(
  * @param newRanges 新受影响 UTF-16 ranges — 插入/移动动画用。
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range。
  * @param cursorStartRect 视觉光标起始矩形 — 事务创建时确定。
+ *   #684 评论 5672654866：保留作为兼容字段，光标动画运行时不再以此作为唯一模型。
+ *   路径的第一个点就是本事务的逻辑起点。
  * @param cursorEndRect 视觉光标结束矩形 — 事务创建时确定。
+ *   #684 评论 5672654866：保留作为兼容字段，光标动画运行时不再以此作为唯一模型。
+ *   路径的最后一个点就是本事务的逻辑终点。
+ * @param cursorMotionPath #684 评论 5672654866：光标运动路径 —
+ *   把"光标路径"从单纯 start/end 两点升级成和文字 unit 对应的路径。
+ *   overlay 用一个跨 transaction 保持的 [androidx.compose.animation.core.Animatable]
+ *   按 [CursorMotionPoint.endFraction] 分段 animateTo。null 表示无光标动画语义。
  * @param startFrame 上一事务物化出的视觉帧 — 新事务从该帧对应的 progress 开始。
  * @param durationMs 动画时长（ms）。
  * @param motionPolicy 动画策略 — overlay 据此决定 text/cursor timeline。
@@ -84,6 +92,7 @@ data class ComposeVisualTransaction(
     val retainedMoves: List<RetainedMove>,
     val cursorStartRect: Rect?,
     val cursorEndRect: Rect?,
+    val cursorMotionPath: CursorMotionPath? = null,
     val startFrame: ComposeVisualFrame?,
     val durationMs: Long,
     val motionPolicy: EditorMotionPolicy,

@@ -32,16 +32,19 @@ internal object ComposeVisualRebase {
      *   （T0->Tn）映射。[nextReplaceBounds] 仅作回退（单笔或无 offset map 时）。
      *   [currentSuppressedRanges] 表示"上一帧此刻已经被系统正文隐藏的 ranges"，
      *   不是新事务刚算出的 hiddenRanges — 两者概念不能混。
+     *
+     * #684 评论 5672654866：删除 cursorProgress / cursorSnapshot —
+     *   startFrame 只物化正文 slice / retained move，不再携带光标。
+     *   光标本来就是独立的当前几何状态，由 overlay 内长生命周期 Animatable 持有，
+     *   不应该塞进文字 startFrame 再反推。
      */
     data class MaterializeStartFrameParams(
         val transaction: ComposeVisualTransaction?,
         val textProgress: Float,
-        val cursorProgress: Float,
         val rebaseProgress: Float,
         val nextOffsetMap: List<VisualOffsetMapEntry>?,
         val nextReplaceBounds: VisualReplaceBounds?,
         val currentSuppressedRanges: List<TextRange>,
-        val cursorSnapshot: VisualCursorSnapshot?,
     )
 
     /**
@@ -64,23 +67,26 @@ internal object ComposeVisualRebase {
      *   overlap 部分生成 fading slice + ownedOldRange。本方法聚合所有 split 的 ownedOldRanges
      *   计入返回 frame 的 [ComposeVisualFrame.ownedOldRanges]。
      *
-     * [hiddenRanges] / [cursorSnapshot] 由调用方从 visual state 读出后传入，
+     * [hiddenRanges] 由调用方从 visual state 读出后传入，
      * 本函数不直接访问任何 mutable state。
      *
-     * 如果没有旧事务或 text/cursor/rebase 三条 progress 都已到 1f，返回 null。
+     * 如果没有旧事务或 text/rebase 两条 progress 都已到 1f，返回 null。
+     *
+     * #684 评论 5672654866：不再物化光标 — materializeCursorRect 已删除，
+     *   返回 frame 不再携带 cursorRect / cursorAlpha。光标由 overlay 内长生命周期
+     *   Animatable 持有，不塞进文字 startFrame 再反推。
      */
     fun materializeStartFrame(params: MaterializeStartFrameParams): ComposeVisualFrame? {
         val transaction = params.transaction
         val textProgress = params.textProgress
-        val cursorProgress = params.cursorProgress
         val rebaseProgress = params.rebaseProgress
         val nextOffsetMap = params.nextOffsetMap
         val nextReplaceBounds = params.nextReplaceBounds
         val currentSuppressedRanges = params.currentSuppressedRanges
-        val cursorSnapshot = params.cursorSnapshot
         val prev = transaction ?: return null
-        // #641 评论 5459896691 第1项：三条当前实际存在的 timeline 都结束才算没有视觉帧。
-        if (textProgress >= 1f && cursorProgress >= 1f && rebaseProgress >= 1f) return null
+        // #641 评论 5459896691 第1项：两条当前实际存在的 timeline 都结束才算没有视觉帧。
+        // #684 评论 5672654866：cursor timeline 不再由 startFrame 物化，只看 text/rebase。
+        if (textProgress >= 1f && rebaseProgress >= 1f) return null
 
         val prevStartFrame = prev.startFrame
         // #641 评论 5460160958 问题3：先按当前 rebaseProgress 物化旧 startFrame slice。
@@ -147,14 +153,8 @@ internal object ComposeVisualRebase {
             }
         }
 
-        val cursorRect = materializeCursorRect(prev, cursorProgress, cursorSnapshot)
-        val lastCursor = prev.intents.lastOrNull()?.cursor
-        val cursorAlpha = if (lastCursor?.animate == true) 1f else 0f
-
         return ComposeVisualFrame(
             slices = mappedSlices,
-            cursorRect = cursorRect,
-            cursorAlpha = cursorAlpha,
             suppressedCurrentRanges = currentSuppressedRanges,
             ownedOldRanges = ownedOldRanges,
         )
@@ -644,41 +644,10 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * cursor rect：按 [cursorProgress] 插值 old→new。无 cursor 动画时返回 null。
+     * #684 评论 5672654866：materializeCursorRect 已删除 —
+     * startFrame 不再物化光标。光标由 overlay 内长生命周期 Animatable 持有。
+     * 保留 lerpFloat 等纯函数供其他场景使用。
      */
-    fun materializeCursorRect(
-        prev: ComposeVisualTransaction,
-        cursorProgress: Float,
-        cursorSnapshot: VisualCursorSnapshot?,
-    ): Rect? {
-        val lastCursor = prev.intents.lastOrNull()?.cursor
-        if (cursorSnapshot == null || lastCursor?.animate != true) return null
-        val left =
-            lerpFloat(
-                cursorSnapshot.oldCursorRect.left,
-                cursorSnapshot.newCursorRect.left,
-                cursorProgress,
-            )
-        val top =
-            lerpFloat(
-                cursorSnapshot.oldCursorRect.top,
-                cursorSnapshot.newCursorRect.top,
-                cursorProgress,
-            )
-        val right =
-            lerpFloat(
-                cursorSnapshot.oldCursorRect.right,
-                cursorSnapshot.newCursorRect.right,
-                cursorProgress,
-            )
-        val bottom =
-            lerpFloat(
-                cursorSnapshot.oldCursorRect.bottom,
-                cursorSnapshot.newCursorRect.bottom,
-                cursorProgress,
-            )
-        return Rect(left, top, right, bottom)
-    }
 
     /**
      * #641 评论 5459531909 第2项：把上一事务的 suppressedCurrentRanges 映射到本次 new text 坐标。
@@ -765,28 +734,11 @@ internal object ComposeVisualRebase {
     ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
     /**
-     * #684 评论 5663032418 断点1：对 [Rect] 做 lerp —
-     * 中断续跑时把当前活跃事务的 cursorStartRect/cursorEndRect 按 masterProgress 插值，
-     * 得到当前屏幕上的光标位置，作为下一笔事务的 cursorStartRect，
-     * 与文字用 masterProgress 物化保持一致。
-     *
-     * [startRect] / [endRect] 任一为 null 时返回 null（无光标动画可物化）。
-     * [progress] 会被 coerceIn(0, 1)。
+     * #684 评论 5672654866：interpolateCursorRect 已删除 —
+     * coordinator 不再用 _masterProgress 反算屏幕光标位置。
+     * 当前 cursor rect 始终留在 overlay 的长生命周期 Animatable 里，
+     * 新事务只改 target/path 不重置当前 rect。
      */
-    fun interpolateCursorRect(
-        startRect: Rect?,
-        endRect: Rect?,
-        progress: Float,
-    ): Rect? {
-        if (startRect == null || endRect == null) return null
-        val t = progress.coerceIn(0f, 1f)
-        return Rect(
-            left = lerpFloat(startRect.left, endRect.left, t),
-            top = lerpFloat(startRect.top, endRect.top, t),
-            right = lerpFloat(startRect.right, endRect.right, t),
-            bottom = lerpFloat(startRect.bottom, endRect.bottom, t),
-        )
-    }
 
     /** 安全获取 path bounds — range 无效或越界时返回 null。 */
     fun safePathBounds(
