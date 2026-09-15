@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.collections.ArrayDeque
 
 /**
  * #641 评论1 第4/5节：Compose 显示层视觉状态。
@@ -77,8 +78,15 @@ class ComposeEditorVisualState(
     val visualScene: StateFlow<ComposeVisualScene> = _visualScene.asStateFlow()
 
     /**
-     * 最新生成的 patch — overlay 据此驱动 LaunchedEffect 推进 timeline。
-     * null 表示尚无 patch。
+     * 待消费的 patch 队列 — 解决快速输入时 LaunchedEffect 取消旧协程导致丢 patch 的问题。
+     * 使用队列而非 conflated state，确保每一笔 patch 都能被处理。
+     */
+    private val pendingPatches = ArrayDeque<ComposeVisualPatch>()
+    private val _patchVersion = MutableStateFlow(0L)
+    val patchVersion: StateFlow<Long> = _patchVersion.asStateFlow()
+
+    /**
+     * 最新生成的 patch — 仅保留给日志/调试使用，timeline 输入不再依赖它。
      */
     private val _latestPatch = MutableStateFlow<ComposeVisualPatch?>(null)
     val latestPatch: StateFlow<ComposeVisualPatch?> = _latestPatch.asStateFlow()
@@ -115,7 +123,7 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * 把帧协调器的更新结果应用到本地状态 — 只暂存 patch 供 overlay 推进 timeline。
+     * 把帧协调器的更新结果应用到本地状态 — 暂存 patch 到待消费队列供 overlay 推进 timeline。
      */
     private fun applyFrameUpdate(update: FrameUpdate) {
         when (update) {
@@ -123,6 +131,8 @@ class ComposeEditorVisualState(
                 // 无新 patch — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
             is FrameUpdate.NewPatch -> {
+                pendingPatches.addLast(update.patch)
+                _patchVersion.update { it + 1L }
                 _latestPatch.update { update.patch }
                 Log.d(
                     TAG,
@@ -135,10 +145,34 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * 在 Compose 帧时钟的回调里消费所有待处理的 patch 并应用到 timeline。
+     *
+     * overlay 监听 [patchVersion]，在 `withFrameNanos` 里调用本方法，
+     * 把队列中所有 pending patch 逐个应用到 timeline。时间戳必须来自 Compose frame clock。
+     *
+     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
+     * @return 本次帧实际应用的 patch 列表。
+     */
+    fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
+        val applied = mutableListOf<ComposeVisualPatch>()
+        while (pendingPatches.isNotEmpty()) {
+            val patch = pendingPatches.removeFirst()
+            visualTimeline.applyPatch(patch, frameTimeNanos)
+            applied += patch
+        }
+        return applied
+    }
+
+    /**
+     * 是否还有待处理的 patch — overlay 据此决定是否继续推进帧时钟。
+     */
+    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty()
+
+    /**
      * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里应用 patch 到 timeline。
      *
-     * overlay 拿到 [latestPatch] 后在 `withFrameNanos` 里调用本方法，
-     * 把 patch 应用到 timeline。时间戳必须来自 Compose frame clock。
+     * 已废弃 — 请改用 [drainPendingPatchesAtFrame]。
+     * 保留此方法是为了兼容旧调用路径。
      *
      * @param patch 要应用的屏幕 diff。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
@@ -181,6 +215,8 @@ class ComposeEditorVisualState(
     fun clear() {
         frameCoordinator.clear()
         visualTimeline.clear()
+        pendingPatches.clear()
+        _patchVersion.update { 0L }
         _latestLayout.update { null }
         _hiddenRanges.update { emptyList() }
         _visualScene.update { ComposeVisualScene.Empty }

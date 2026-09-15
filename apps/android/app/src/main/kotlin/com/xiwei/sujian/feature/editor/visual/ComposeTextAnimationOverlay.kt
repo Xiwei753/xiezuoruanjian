@@ -220,11 +220,16 @@ private fun DrawScope.drawVisualScene(
                 textColor = textColor,
             )
         } else {
-            // ghost unit：在旧 layout 的原位置淡出
+            // ghost unit：在旧 layout 的真实位置淡出
+            val sourceBounds = safePathBounds(result, range) ?: continue
+            val translate = Offset(
+                currentPosition.x - sourceBounds.left,
+                currentPosition.y - sourceBounds.top,
+            )
             drawTranslatedRangeText(
                 result = result,
                 range = range,
-                translate = Offset.Zero,
+                translate = translate,
                 alpha = alpha,
                 scrollY = scrollY,
                 textColor = textColor,

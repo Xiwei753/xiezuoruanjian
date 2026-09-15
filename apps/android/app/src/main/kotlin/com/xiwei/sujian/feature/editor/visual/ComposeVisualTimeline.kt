@@ -395,8 +395,12 @@ class ComposeVisualTimeline {
             if (ghostRange == unit.range) {
                 currentOffset(unit.position, now) ?: unit.position.to
             } else {
-                // 切片 ghost：用 slice 在旧 layout 的真实位置
-                computeUnitPosition(unit.layout, ghostRange) ?: currentOffset(unit.position, now) ?: Offset.Zero
+                // 切片 ghost：如果父 unit 正在移动，切片应继承父 unit 当前的屏幕位移量
+                val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
+                val parentNatural = computeUnitPosition(unit.layout, unit.range) ?: parentCurrent
+                val parentDelta = Offset(parentCurrent.x - parentNatural.x, parentCurrent.y - parentNatural.y)
+                val sliceNatural = computeUnitPosition(unit.layout, ghostRange) ?: parentCurrent
+                Offset(sliceNatural.x + parentDelta.x, sliceNatural.y + parentDelta.y)
             }
         return unit.copy(
             range = ghostRange,
