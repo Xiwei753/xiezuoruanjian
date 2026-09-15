@@ -1177,18 +1177,23 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #684 评论 5673384335 缺口3：把某笔 intent 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
+     * #684 评论 5673811415：把某笔 intent 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
      *
-     * 从 `intentIndex + 1` 开始，用每笔 intent 的 `offsetMap.entries` 把 offset 从 T(intentIndex+1)
-     * 映射到 Tn。每一步：在当前 offset 处找包含该 offset 的 entry（offset 在 `[oldStart, oldStart + length)`
-     * 范围内），映射到 `newStart + (offset - oldStart)`。
+     * 从 `intentIndex + 1` 开始，用每笔 intent 的 caret 边界语义把 offset 从 T(intentIndex+1)
+     * 映射到 Tn。每一步调用 [mapCaretThroughIntent] — 优先用 `replaceBounds` 处理编辑边界，
+     * 没有 `replaceBounds` 时回退到 `offsetMap`，对 entry 端点按 caret 边界处理。
      *
-     * - 如果某笔没有 offsetMap（null），跳过该笔（坐标不变）。
+     * - 如果某笔没有 offsetMap（null）且没有 replaceBounds，跳过该笔（坐标不变）。
      * - 如果某笔的 offsetMap entries 为空，表示整段删除/替换，无法映射，返回 null。
-     * - 如果 offset 不在任何 entry 里，返回 null（该位置被编辑/删除）。
+     * - 如果 offset 在被替换掉的正文内部（oldStart < offset < oldEnd），返回 null（不猜）。
      * - 如果成功映射到最终 Tn，返回最终 offset。
      *
-     * 与 [mapRangesForwardThroughOffsetMap] 类似，但处理单个 offset 而不是 range。
+     * 与旧实现的区别：旧实现用半开区间 `[oldStart, oldEnd)` 查找字符 range 所属的 entry，
+     * 但 caret 是边界点（合法范围 `0..textLength`），经常落在 changed range 的边界上。
+     * 快速 Backspace 时中间 cursor point 落在 surviving prefix 的右边界（== oldEnd），
+     * 半开区间找不到包含该 offset 的 entry，返回 null，中间点被丢掉。
+     * 新实现用 caret 边界语义：`offset == oldEnd` 映射到 `newEnd`（删除/替换后的右边界），
+     * `offset == oldStart` 映射到 `newStart`，纯插入时 `offset == oldStart == oldEnd` 映射到 `newStart`。
      */
     fun mapCursorOffsetThroughChain(
         chain: List<EditorVisualIntent>,
@@ -1197,31 +1202,119 @@ internal object ComposeVisualRebase {
     ): Int? {
         var currentOffset = offset
         for (j in (intentIndex + 1) until chain.size) {
-            val entries = chain[j].offsetMap?.entries
-            // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
-            // 该阶段坐标不变，直接跳过继续映射后续正文事务。
-            if (entries == null) continue
-            if (entries.isEmpty()) {
-                // 空 entries 表示整段删除/替换，无存活映射，该 offset 无法映射到 Tn
-                return null
-            }
-            // 在当前 offset 处找包含该 offset 的 entry
-            var mapped: Int? = null
-            for (entry in entries) {
-                val oldStart = entry.oldStart
-                val oldEnd = entry.oldStart + entry.length
-                if (currentOffset >= oldStart && currentOffset < oldEnd) {
-                    mapped = entry.newStart + (currentOffset - oldStart)
-                    break
-                }
-            }
+            val intent = chain[j]
+            val mapped = mapCaretThroughIntent(intent, currentOffset)
             if (mapped == null) {
-                // offset 不在任何 entry 里，该位置被编辑/删除
                 return null
             }
             currentOffset = mapped
         }
         return currentOffset
+    }
+
+    /**
+     * #684 评论 5673811415：用 caret 边界语义把 offset 穿过单笔 intent 映射。
+     *
+     * 优先用 [EditorVisualIntent.replaceBounds] 处理编辑边界；没有 `replaceBounds` 时
+     * 回退到 [VisualOffsetMap] entries，对 entry 端点也按 caret 边界处理。
+     *
+     * caret 边界语义（与字符 range 的半开区间语义不同）：
+     * - `offset < oldStart` → 前缀，位置不变
+     * - `offset == oldStart` → newStart
+     * - `oldStart < offset < oldEnd` → null（点落在被替换掉的正文内部，不猜）
+     * - `offset == oldEnd`:
+     *    - `oldStart < oldEnd` → newEnd（删除/替换后的右边界）
+     *    - `oldStart == oldEnd` → newStart（纯插入：历史 cursor 应留在新文字左边）
+     * - `offset > oldEnd` → suffix 平移
+     */
+    private fun mapCaretThroughIntent(
+        intent: EditorVisualIntent,
+        offset: Int,
+    ): Int? {
+        // 优先用 replaceBounds 处理编辑边界
+        val replaceBounds = intent.replaceBounds
+        if (replaceBounds != null) {
+            return mapCaretThroughReplaceBounds(replaceBounds, offset)
+        }
+
+        // 回退到 offsetMap，对 entry 端点按 caret 边界处理
+        val entries = intent.offsetMap?.entries
+        // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+        // 该阶段坐标不变，直接跳过继续映射后续正文事务。
+        if (entries == null) return offset
+        if (entries.isEmpty()) {
+            // 空 entries 表示整段删除/替换，无存活映射，该 offset 无法映射到 Tn
+            return null
+        }
+        return mapCaretThroughOffsetMapEntries(entries, offset)
+    }
+
+    /**
+     * #684 评论 5673811415：用 [VisualReplaceBounds] 的 caret 边界语义映射 offset。
+     */
+    private fun mapCaretThroughReplaceBounds(
+        rb: VisualReplaceBounds,
+        offset: Int,
+    ): Int? {
+        return when {
+            offset < rb.oldStart -> offset
+            offset == rb.oldStart -> rb.newStart
+            offset < rb.oldEnd -> null
+            offset == rb.oldEnd -> {
+                if (rb.oldStart < rb.oldEnd) rb.newEnd else rb.newStart
+            }
+            else -> offset + (rb.newEnd - rb.oldEnd)
+        }
+    }
+
+    /**
+     * #684 评论 5673811415：用 [VisualOffsetMapEntry] 列表的 caret 边界语义映射 offset。
+     *
+     * 对每个 entry 的端点按 caret 边界处理（闭区间 `[oldStart, oldEnd]`）：
+     * - `offset == entry.oldStart` → `entry.newStart`
+     * - `oldStart < offset < oldEnd` → `entry.newStart + (offset - oldStart)`（存活正文内部）
+     * - `offset == entry.oldEnd` → `entry.newStart + entry.length`（右边界）
+     *
+     * 不在任何 entry 的闭区间里的 offset：
+     * - 在所有 entry 之前 → 前缀，位置不变
+     * - 在所有 entry 之后 → suffix 平移（按最后一个 entry 的 newEnd-oldEnd delta）
+     * - 在两个 entry 之间的 gap 里 → null（被删除/编辑的区域，不猜）
+     */
+    private fun mapCaretThroughOffsetMapEntries(
+        entries: List<VisualOffsetMapEntry>,
+        offset: Int,
+    ): Int? {
+        val sorted = entries.sortedBy { it.oldStart }
+
+        // 遍历 entries，找包含 offset 的 entry（闭区间 [oldStart, oldEnd]）
+        for (entry in sorted) {
+            val oldEnd = entry.oldStart + entry.length
+            if (offset in entry.oldStart..oldEnd) {
+                return when {
+                    offset == entry.oldStart -> entry.newStart
+                    offset == oldEnd -> entry.newStart + entry.length
+                    else -> entry.newStart + (offset - entry.oldStart)
+                }
+            }
+        }
+
+        // offset 不在任何 entry 的闭区间里
+        val firstOldStart = sorted.first().oldStart
+        if (offset < firstOldStart) {
+            // 前缀，位置不变
+            return offset
+        }
+
+        val lastEntry = sorted.last()
+        val lastOldEnd = lastEntry.oldStart + lastEntry.length
+        if (offset > lastOldEnd) {
+            // suffix 平移
+            val delta = (lastEntry.newStart + lastEntry.length) - lastOldEnd
+            return offset + delta
+        }
+
+        // offset 在两个 entry 之间的 gap 里（被删除/编辑的区域），不猜
+        return null
     }
 
     /**
