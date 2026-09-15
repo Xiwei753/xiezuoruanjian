@@ -4180,7 +4180,17 @@ mod tests {
             "单元时长用剩余时长，不被新事务 wrap 的默认时长覆盖"
         );
         // Issue #690 评论 5679744253 问题 1: retarget 时从当前帧重新起段，
-        // started_at 重置到 sampled_at（now），progress 从 0 开始。
+        // started_at 留 None，等进入 Rendering 再启动，progress 从 0 开始。
+        // Issue #690 评论 5683759796: 原来写 Some(sampled_at) 会让 rebased 文字 unit
+        // 从旧事务交棒时刻提前计时，与等 Rendering 才启动的 caret track 错拍；
+        // 改成 None 后跟 fresh unit、caret track 一样由 build_text_animation_plan_with_sample
+        // 在 Prepared→Rendering 时用同一个 sample.frame_now 启动。
+        assert!(
+            unit.started_at.is_none(),
+            "Issue #690 评论 5683759796: rebase 后 started_at 应为 None（等 Rendering 再启动），\
+             got {:?}",
+            unit.started_at
+        );
         let progress = unit.progress(now);
         assert!(
             progress.abs() < 1e-9,
@@ -5350,5 +5360,289 @@ mod tests {
         }
 
         println!("[BUGFIX_690_VERIFY] 评论5682867529 caret track 与文字 unit 同帧起跑 (FIXED)");
+    }
+
+    /// Issue #690 评论 5683759796: rebased 文字 unit 和 caret track 在 Rendering 阶段同帧起跑。
+    ///
+    /// 真正经过 rebase 交棒 + Pending → Prepared → Rendering 生命周期的行为测试：
+    /// - 构造旧事务（Rendering），含一个播到 50% 的 InsertReveal unit 和已播 50ms 的 caret track；
+    /// - 用 collect_rebase_frames 采集旧事务的 rebase frames；
+    /// - 构造新事务的 units（fresh wrap），用 match_rebase_frames rebase；
+    /// - 构造新事务的 caret track（rebase_to，started_at = None）；
+    /// - 新事务以 Pending 入队，模拟 Pending → Prepared 过去 40ms；
+    /// - 断言 Prepared 阶段：rebased text unit started_at == None 且 progress == 0；
+    ///   caret track started_at == None 且 progress == 0；
+    /// - 第一帧进入 Rendering，断言 rebased text unit progress == 0 且 caret track progress == 0
+    ///   （修复前 rebased text unit progress 会 > 0，因为 started_at = Some(旧事务交棒时刻)）；
+    /// - 推进 25ms / 50ms，断言二者一起前进（progress 相同）。
+    #[test]
+    fn issue690_comment5683759796_rebased_unit_and_caret_track_start_together_at_rendering() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // ── 1. 构造旧事务（Rendering 状态） ──
+        // 文字 unit: InsertReveal, elapsed 50ms / duration 100ms → progress 0.5
+        // → ease_out_quad(0.5) = 0.75 → visible_fraction = 0.75
+        let old_unit = elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now);
+        // caret track: from=caret(100), to=caret(160), 已播 50ms / duration 100ms → progress 0.5
+        let old_caret_track = PreparedCursorVisualTrack {
+            from: caret(100.0),
+            to: caret(160.0),
+            started_at: Some(now - Duration::from_millis(50)),
+            duration_ms: 100,
+            pause_start: None,
+        };
+        let old_key = VisualTransactionKey::new(7, 7);
+        let mut old_tx = rendering_tx(
+            old_key,
+            TextVisualOperationKind::Insert,
+            vec![old_unit],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        );
+        old_tx.cursor_visual_track = Some(old_caret_track.clone());
+
+        // ── 2. 用 collect_rebase_frames(now) 采集旧事务的 rebase frames ──
+        let rebase_frames = old_tx.collect_rebase_frames(now);
+        assert_eq!(
+            rebase_frames.len(),
+            1,
+            "应采集到一个 rebase frame（旧 unit 未播完）"
+        );
+        let rebase_frame = &rebase_frames[0];
+        assert_eq!(rebase_frame.sampled_at, now);
+        assert_eq!(rebase_frame.remaining_duration_ms, 50);
+
+        // ── 3. 构造新事务的 units（fresh wrap），用 match_rebase_frames rebase ──
+        let mut new_units = wrap_units(vec![reveal_slice(0, 3, 100.0, 60.0)]);
+        let offset_map = OffsetMap::build("abc", "abc");
+        match_rebase_frames(&rebase_frames, &mut new_units, &offset_map);
+
+        // rebased text unit: start_fraction = 0.75（旧 unit 当前可见比例），
+        // duration_ms = 50（剩余时长）。
+        // Issue #690 评论 5683759796 关键断言: started_at 必须是 None（不是 Some(sampled_at)），
+        // 这样才不会从旧事务交棒时刻提前计时。
+        assert!(
+            new_units[0].started_at.is_none(),
+            "Issue #690 评论 5683759796: rebase 后文字 unit started_at 应为 None\
+             （等 Rendering 再启动），got {:?}",
+            new_units[0].started_at
+        );
+        assert_eq!(
+            new_units[0].duration_ms, 50,
+            "rebase 后文字 unit duration_ms 应为剩余时长 50"
+        );
+
+        // ── 4. 构造新事务的 caret track（rebase_to，started_at = None） ──
+        let new_caret_track = old_caret_track.rebase_to(caret(220.0), now);
+        assert!(
+            new_caret_track.started_at.is_none(),
+            "rebase_to 后 caret track started_at 应为 None"
+        );
+        assert_eq!(
+            new_caret_track.duration_ms, 50,
+            "rebase_to 后 caret track duration_ms 应为剩余时长 50"
+        );
+
+        // ── 5. 把新事务以 Pending 状态入队 ──
+        let new_key = VisualTransactionKey::new(8, 8);
+        let new_tx = PreparedTextVisualTransaction {
+            key: new_key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            timeline: TransactionTimeline::new(50),
+            units: new_units,
+            static_patches: Vec::new(),
+            old_cursor_rect: Some(caret(100.0)),
+            new_cursor_rect: Some(caret(220.0)),
+            cursor_visual_track: Some(new_caret_track),
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: None,
+        };
+        coord.prepared_queue.enqueue(new_tx);
+
+        // ── 6. 模拟 Pending → Prepared 过去 40ms ──
+        let prepared_now = now + Duration::from_millis(40);
+        coord.prepared_queue.mark_prepared(new_key);
+
+        // ── 7. 断言 Prepared 阶段 ──
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == new_key)
+                .expect("新事务应在队列中");
+            assert_eq!(
+                tx_ref.state,
+                TextVisualTransactionState::Prepared,
+                "mark_prepared 后事务应处于 Prepared"
+            );
+            assert!(
+                tx_ref.units[0].started_at.is_none(),
+                "Prepared 阶段 rebased text unit started_at 应为 None，got {:?}",
+                tx_ref.units[0].started_at
+            );
+            assert!(
+                (tx_ref.units[0].progress(prepared_now) - 0.0).abs() < 1e-9,
+                "Prepared 阶段 rebased text unit progress 应为 0，got {}",
+                tx_ref.units[0].progress(prepared_now)
+            );
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            assert!(
+                track.started_at.is_none(),
+                "Prepared 阶段 caret track started_at 应为 None，got {:?}",
+                track.started_at
+            );
+            assert!(
+                (track.progress(prepared_now) - 0.0).abs() < 1e-9,
+                "Prepared 阶段 caret track progress 应为 0，got {}",
+                track.progress(prepared_now)
+            );
+        }
+
+        // ── 8. 第一帧进入 Rendering ──
+        let frame_now_0 = prepared_now + Duration::from_millis(16);
+        let mut sample_0 = AnimationFrameSample::new(frame_now_0);
+        sample_0.set_progress(new_key, 0.0);
+        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0);
+
+        // ── 9. 断言第一帧 Rendering：二者 progress == 0（同帧起跑，没有错拍） ──
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == new_key)
+                .expect("新事务应在队列中");
+            assert_eq!(
+                tx_ref.state,
+                TextVisualTransactionState::Rendering,
+                "第一帧后事务应进入 Rendering"
+            );
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            assert_eq!(
+                track.started_at,
+                Some(frame_now_0),
+                "进入 Rendering 后 caret track started_at 应等于第一帧 frame_now"
+            );
+            assert_eq!(
+                tx_ref.units[0].started_at,
+                Some(frame_now_0),
+                "Issue #690 评论 5683759796: 进入 Rendering 后 rebased text unit started_at \
+                 应等于第一帧 frame_now（由 build_text_animation_plan_with_sample 设置），\
+                 got {:?}",
+                tx_ref.units[0].started_at
+            );
+            let track_progress = track.progress(frame_now_0);
+            let unit_progress = tx_ref.units[0].progress(frame_now_0);
+            assert!(
+                (track_progress - 0.0).abs() < 1e-9,
+                "第一帧 caret track progress 应为 0（刚启动），got {}",
+                track_progress
+            );
+            assert!(
+                (unit_progress - 0.0).abs() < 1e-9,
+                "Issue #690 评论 5683759796: 第一帧 rebased text unit progress 应为 0\
+                 （刚启动，不再从旧事务交棒时刻提前计时），got {}",
+                unit_progress
+            );
+            assert!(
+                (track_progress - unit_progress).abs() < 1e-9,
+                "第一帧 caret track 和 rebased text unit 的 progress 应完全相同（同帧起跑），\
+                 got track={} unit={}",
+                track_progress,
+                unit_progress
+            );
+            assert!(!plan_0.glyphs.is_empty(), "第一帧应有文字 glyph 输出");
+        }
+
+        // ── 10. 推进 25ms，断言二者一起前进到 0.5 ──
+        // rebased text unit duration_ms = 50（剩余时长），caret track duration_ms = 50（剩余时长）。
+        // 推进 25ms 后二者 progress 都应到 0.5。
+        let frame_now_mid = frame_now_0 + Duration::from_millis(25);
+        let mut sample_mid = AnimationFrameSample::new(frame_now_mid);
+        sample_mid.set_progress(new_key, 0.5);
+        let (_plan_mid, _) = coord.build_text_animation_plan_with_sample(&sample_mid);
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == new_key)
+                .expect("新事务应在队列中");
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            let track_progress = track.progress(frame_now_mid);
+            let unit_progress = tx_ref.units[0].progress(frame_now_mid);
+            assert!(
+                (track_progress - 0.5).abs() < 1e-9,
+                "推进 25ms 后 caret track progress 应为 0.5（25/50），got {}",
+                track_progress
+            );
+            assert!(
+                (unit_progress - 0.5).abs() < 1e-9,
+                "推进 25ms 后 rebased text unit progress 应为 0.5（25/50），got {}",
+                unit_progress
+            );
+            assert!(
+                (track_progress - unit_progress).abs() < 1e-9,
+                "推进 25ms 后 caret track 和 rebased text unit 的 progress 应完全相同，\
+                 got track={} unit={}",
+                track_progress,
+                unit_progress
+            );
+        }
+
+        // ── 11. 推进到 50ms，断言二者一起到 1.0 ──
+        let frame_now_1 = frame_now_0 + Duration::from_millis(50);
+        let mut sample_1 = AnimationFrameSample::new(frame_now_1);
+        sample_1.set_progress(new_key, 1.0);
+        let (_plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1);
+        {
+            let tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == new_key)
+                .expect("新事务应在队列中");
+            let track = tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("应有 caret track");
+            let track_progress = track.progress(frame_now_1);
+            let unit_progress = tx_ref.units[0].progress(frame_now_1);
+            assert!(
+                (track_progress - 1.0).abs() < 1e-9,
+                "推进 50ms 后 caret track progress 应为 1.0（50/50），got {}",
+                track_progress
+            );
+            assert!(
+                (unit_progress - 1.0).abs() < 1e-9,
+                "推进 50ms 后 rebased text unit progress 应为 1.0（50/50），got {}",
+                unit_progress
+            );
+            assert!(
+                (track_progress - unit_progress).abs() < 1e-9,
+                "推进 50ms 后 caret track 和 rebased text unit 的 progress 应完全相同，\
+                 got track={} unit={}",
+                track_progress,
+                unit_progress
+            );
+        }
+
+        println!("[BUGFIX_690_VERIFY] 评论5683759796 rebased 文字 unit 和 caret track 在 Rendering 同帧起跑 (FIXED)");
     }
 }

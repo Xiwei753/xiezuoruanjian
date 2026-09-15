@@ -199,15 +199,25 @@ impl PreparedVisualUnit {
     /// Issue #690 评论 5679744253 问题 1: 原实现同时继承 `start_fraction`（已走过的可见
     /// 比例）和 `started_at`/`duration_ms`（已走过的时间线），下一帧 progress 用旧时间线
     /// 算，再从 `start_fraction` 到 target 做 easing，进度被重复应用。现在改为从当前帧
-    /// 重新起一段：`start_fraction` 已是当前可见比例，时间线从 `sampled_at` 开始，
-    /// `duration_ms` 用剩余时长，不再沿用旧起始时间。
+    /// 重新起一段：`start_fraction` 已是当前可见比例，`duration_ms` 用剩余时长，
+    /// 不再沿用旧起始时间。
+    ///
+    /// Issue #690 评论 5683759796: `started_at` 留 `None`，不再写成 `Some(frame.sampled_at)`。
+    /// `frame.sampled_at` 是旧事务交棒时刻（t0），新事务此时通常还在 Pending/Prepared，
+    /// 直接用它会让 rebased 文字 unit 从 t0 起跑，而 caret track（`rebase_to` /
+    /// `new_first` / handoff 全部 `started_at = None`）等到进入 Rendering 才用
+    /// `sample.frame_now` 启动，第一帧文字 progress > 0 而 caret track progress = 0，
+    /// 造成"文字已经走了一截，光标才刚起步"的错拍。改成 `None` 后，rebased unit 跟
+    /// fresh unit、caret track 一样，由 `build_text_animation_plan_with_sample` 在
+    /// Prepared→Rendering 时用同一个 `sample.frame_now` 启动，三者同帧起跑。
     pub fn rebase_from_frame(&mut self, frame: &RebaseFrame) {
         self.slice
             .rebase_from(frame.x, frame.y, frame.opacity, frame.visible_fraction);
         self.start_fraction = self.slice.start_fraction;
-        // 从当前帧重新起一段：start_fraction 已是当前可见比例，
-        // 时间线从 sampled_at 开始，duration 用剩余时长，不再沿用旧起始时间。
-        self.started_at = Some(frame.sampled_at);
+        // Issue #690 评论 5683759796: 从当前帧重新起一段：start_fraction 已是当前可见比例，
+        // duration 用剩余时长；started_at 留 None，等进入 Rendering 再用 sample.frame_now 启动，
+        // 不再用 frame.sampled_at（旧事务交棒时刻）提前计时。
+        self.started_at = None;
         self.duration_ms = frame.remaining_duration_ms.max(1);
     }
 }
@@ -222,8 +232,14 @@ impl PreparedVisualUnit {
 /// （旧总时长），下一帧 `current_visible_fraction()` 用旧时间线算 progress，再从
 /// `start_fraction` 到 target 做 easing，进度被重复应用，快速连打时制造跳变。
 /// 现在改为携带 `sampled_at`（采集帧时间点）和 `remaining_duration_ms`（旧 unit 剩余
-/// 播放时长），retarget 时从当前帧重新起一段：`started_at = sampled_at`，
-/// `duration_ms = remaining_duration_ms`，不再沿用旧起始时间。
+/// 播放时长），retarget 时从当前帧重新起一段：`duration_ms = remaining_duration_ms`，
+/// 不再沿用旧起始时间。
+///
+/// Issue #690 评论 5683759796: `sampled_at` 不再直接作为新 unit 的 `started_at`——
+/// `rebase_from_frame` 现在把 `started_at` 留 `None`，等进入 Rendering 才用
+/// `sample.frame_now` 启动。`sampled_at` 字段保留做诊断/连续性断言
+/// （`issue690_collect_rebase_frames_uses_per_unit_progress` 断言 `frame.sampled_at == now`，
+/// `collect_rebase_frames` 仍设置 `sampled_at: now`）。
 #[derive(Clone, Debug)]
 pub(crate) struct RebaseFrame {
     pub byte_start: usize,
@@ -233,7 +249,9 @@ pub(crate) struct RebaseFrame {
     pub opacity: f64,
     pub shaping_identity: Option<ShapingIdentity>,
     pub visible_fraction: f64,
-    /// 采集本帧的时间点；retarget 后作为新单元的 `started_at`。
+    /// 采集本帧的时间点。Issue #690 评论 5683759796: 不再作为新单元的 `started_at`，
+    /// 仅保留做诊断/连续性断言；新单元 `started_at = None`，等进入 Rendering 再启动。
+    #[allow(dead_code)]
     pub sampled_at: Instant,
     /// 旧单元剩余的播放时长；retarget 后作为新单元的 `duration_ms`。
     pub remaining_duration_ms: u64,
