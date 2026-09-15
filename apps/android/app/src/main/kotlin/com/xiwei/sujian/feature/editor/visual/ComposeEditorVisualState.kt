@@ -9,33 +9,28 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlin.collections.ArrayDeque
 
 /**
- * #641 评论1 第4/5节：Compose 显示层视觉状态 — 保存当前一份 [ComposeLayoutSnapshot]，
- * 根据 Core 的 [EditorVisualIntent] 算受影响 UTF-16 range。
+ * #641 评论1 第4/5节：Compose 显示层视觉状态。
  *
- * #644 评论 #684：删掉旧的"双快照 + 单 pending"状态机。
- * 旧字段 `previousSnapshot`、`currentSnapshot` 作为事务 old/new 配对来源、
- * `PendingVisualIntent`、`pendingVisualIntent`、`applyPendingRetainedMoves()`、
- * `tryActivateVisualCursor()`、`currentLayout()`、`previousLayout()` 全部删除。
+ * #689 评论 5674631257 步骤7：把视觉动画从"事务重启"改成"持续时间线"。
  *
- * 改为持有 [ComposeVisualFrameCoordinator]，由它负责：
- * - 收集 Core intent chain（双向汇合）
- * - 在真实屏幕 layout 到达且匹配时生成冻结的 [ComposeVisualTransaction]
+ * 删除：
+ * - _activeTransaction / activeTransaction
+ * - _activeIntent / activeIntent
+ * - _masterProgress / masterProgress
+ * - reportProgress()
+ * - finishTransaction()
+ * - applyFrameUpdate() 里 _masterProgress = 0f
  *
- * 本类只负责：
- * - 暴露 `_latestLayout` 供 overlay 读取
- * - 暴露 `_activeTransaction` 供 overlay 读取冻结事务
- * - 暴露 `_hiddenRanges` 供 OutputTransformation 读取
- * - 暴露 `_drawsVisualCursor` 控制系统光标显隐（仅由设置/attach 生命周期决定）
- * - 暴露单 master progress（[reportProgress]）供 coordinator 物化 startFrame
+ * 改成持有：
+ * - [frameCoordinator]（只返回 [ComposeVisualPatch]）
+ * - [visualTimeline]（长期持续视觉状态）
+ * - [_visualScene]（每次 sample 后同步给 overlay）
  *
- * smooth cursor 规则：
- * - smooth cursor 开启：编辑器 attach 以后系统光标一直透明，始终由 overlay 画
- * - smooth cursor 关闭：始终由系统画，overlay 永远不接管
- * 光标所有权只能由设置/attach 生命周期决定，不由某一笔事务是否带 cursor 动画决定。
- *
- * #641 评论1 第5节 / 问题3：overlay 只"画"，绝不能再改变 viewport / selection / IME 几何。
+ * 时间戳来自 Compose frame clock（由 overlay 调用 [applyVisualPatchAtFrame] /
+ * [sampleVisualScene] 时传入），不在这里用 `System.nanoTime()` 猜当前帧。
  *
  * @param targetId 当前编辑目标 ID — 用于结构化诊断事件。
  * @param initialDrawsVisualCursor 初始视觉光标状态 — smooth cursor 开启时从 attach 后一直为 true。
@@ -48,20 +43,20 @@ class ComposeEditorVisualState(
         private const val TAG = "EditorVisualState"
     }
 
-    /** 帧协调器 — 核心状态机，管理 intent chain + 帧事务生成（双向汇合）。 */
+    /** 帧协调器 — 只回答"旧屏幕帧到新屏幕帧改了什么"。 */
     private val frameCoordinator = ComposeVisualFrameCoordinator(targetId)
+
+    /** 持续视觉时间线 — 真正长期存在的屏幕动画状态。 */
+    private val visualTimeline = ComposeVisualTimeline()
 
     /** 最新 layout 快照 — 供 overlay 读取 bounding box。 */
     private val _latestLayout = MutableStateFlow<ComposeLayoutSnapshot?>(null)
     val latestLayout: StateFlow<ComposeLayoutSnapshot?> = _latestLayout.asStateFlow()
 
-    /** 当前活跃的视觉动画事务（冻结的）— overlay 只读此事务。 */
-    private val _activeTransaction = MutableStateFlow<ComposeVisualTransaction?>(null)
-    val activeTransaction: StateFlow<ComposeVisualTransaction?> = _activeTransaction.asStateFlow()
-
     /**
-     * 当前正在动画的 UTF-16 range — 这些 range 在 [OutputTransformation] 里被设为透明，
-     * overlay 补画动画过程；动画完成立即从该列表删除，系统正文已在最终位置。
+     * 当前应由 overlay 接管、BasicTextField 需设透明的 ranges —
+     * 每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
+     * 不从"上一事务 suppressed ranges"继承。
      */
     private val _hiddenRanges = MutableStateFlow<List<TextRange>>(emptyList())
     val hiddenRanges: StateFlow<List<TextRange>> = _hiddenRanges.asStateFlow()
@@ -70,36 +65,34 @@ class ComposeEditorVisualState(
      * 视觉光标是否由 overlay 绘制 —
      * smooth cursor 开启：编辑器 attach 以后一直为 true（系统光标透明）。
      * smooth cursor 关闭：一直为 false（系统光标正常画）。
-     * 仅由设置/attach 生命周期决定，不在某笔事务到达时改写。
+     * 仅由设置/attach 生命周期决定，不在某笔 patch 到达时改写。
      */
     private val _drawsVisualCursor = MutableStateFlow(initialDrawsVisualCursor)
     val drawsVisualCursor: StateFlow<Boolean> = _drawsVisualCursor.asStateFlow()
 
     /**
-     * 当前活跃的视觉意图 — 供 overlay 读取动画类型。
-     * 从活跃事务的最后一个 intent 推导。
+     * 当前视觉场景 — overlay 读取绘制。
+     * 每次 [sampleVisualScene] 后更新。
      */
-    private val _activeIntent = MutableStateFlow<EditorVisualIntent?>(null)
-    val activeIntent: StateFlow<EditorVisualIntent?> = _activeIntent.asStateFlow()
+    private val _visualScene = MutableStateFlow(ComposeVisualScene.Empty)
+    val visualScene: StateFlow<ComposeVisualScene> = _visualScene.asStateFlow()
 
     /**
-     * 单 master progress — overlay 报告当前动画进度（文字/rebase 共用同一进度）。
-     * 下一笔事务物化 startFrame 时由 coordinator 读取此真实进度，不再写死 1f。
-     *
-     * #684 评论 5672654866：_masterProgress 只服务正文/startFrame rebase，
-     * 不再被 coordinator 用来求 cursor rect。光标当前位置由 overlay 内长生命周期
-     * Animatable 持有，coordinator 不再用 _masterProgress 反算屏幕光标位置。
+     * 待消费的 patch 队列 — 解决快速输入时 LaunchedEffect 取消旧协程导致丢 patch 的问题。
+     * 使用队列而非 conflated state，确保每一笔 patch 都能被处理。
      */
-    private val _masterProgress = MutableStateFlow(0f)
-    val masterProgress: StateFlow<Float> = _masterProgress.asStateFlow()
+    private val pendingPatches = ArrayDeque<ComposeVisualPatch>()
+    private val _patchVersion = MutableStateFlow(0L)
+    val patchVersion: StateFlow<Long> = _patchVersion.asStateFlow()
 
     /**
-     * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator（附上当前 master progress），
-     * 不启动动画、不改 layout。
-     *
-     * #684 评论 5667483662 问题1：把本笔 effective policy 一起交给 coordinator，
-     * 让 pending chain 自己携带 policy，tryStartTransaction 用 chain 同源 policy。
-     * onAuthoritativeLayout 只负责 layout 汇合，不再决定这笔事务该用什么动画设置。
+     * 最新生成的 patch — 仅保留给日志/调试使用，timeline 输入不再依赖它。
+     */
+    private val _latestPatch = MutableStateFlow<ComposeVisualPatch?>(null)
+    val latestPatch: StateFlow<ComposeVisualPatch?> = _latestPatch.asStateFlow()
+
+    /**
+     * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
      * @param intent Core 视觉意图。
      * @param motionPolicy 动画策略 — 传入前先 effective() 收口 reduce-motion。
@@ -108,22 +101,14 @@ class ComposeEditorVisualState(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
     ) {
-        val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective(), _masterProgress.value)
+        val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective())
         applyFrameUpdate(update)
     }
 
     /**
      * 系统给出权威布局 — 只记录，不修改输入几何。
      *
-     * [BasicTextField] 的 `onTextLayout` 回调调用本方法，
-     * 把系统最终 [TextLayoutResult] 记录为权威布局，不反向修改输入。
-     *
-     * #644 评论 #684：真正生成视觉事务发生在 onLayout —
-     * 上一份真正显示过的 layout → 当前真正显示出来的 layout →
-     * 中间积累的 Core intent chain → 一个冻结的 [ComposeVisualTransaction]（双向汇合）。
-     *
-     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/startFrame
-     * 全部不可再被后续 `onTextLayout` 修改。
+     * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
@@ -133,48 +118,26 @@ class ComposeEditorVisualState(
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
         _latestLayout.update { snapshot }
 
-        // 让 frameCoordinator 生成冻结事务（附上当前 master progress 供 rebase 物化）。
-        // #684 评论 5667483662 问题1：onLayout 不再传 motionPolicy —
-        // 事务的动画策略由 pending chain 自己携带（与 intent 同源）。
-        val update = frameCoordinator.onLayout(snapshot, _masterProgress.value)
-
+        val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
     }
 
     /**
-     * 把帧协调器的更新结果应用到本地状态 —
-     * 不论事务是在 [onVisualIntent]（intent 先到、匹配 layout 已在）还是
-     * [onAuthoritativeLayout]（layout 后到、匹配 pending 已在）时生成，
-     * 都用同一套逻辑把冻结事务、hiddenRanges、activeIntent、cursor snapshot 暴露出去。
+     * 把帧协调器的更新结果应用到本地状态 — 暂存 patch 到待消费队列供 overlay 推进 timeline。
      */
     private fun applyFrameUpdate(update: FrameUpdate) {
         when (update) {
             is FrameUpdate.Empty -> {
-                // 无新事务 — 首帧、无 pending、或 pending 与 layout 尚未匹配。
+                // 无新 patch — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
-            is FrameUpdate.NewTransaction -> {
-                // #684 评论 5668108597 问题1：visual state 接管新事务时同步重置 _masterProgress=0f，
-                // 不等 Compose 下一帧再靠 Animatable.snapTo(0f) 修正。
-                // 否则在新事务的 LaunchedEffect 启动前，旧事务迟到的 reportProgress(A.id, 0.9f)
-                // 会把全局 _masterProgress 写成 0.9f，下一笔 rebase 物化 startFrame 拿到错误进度。
-                // #684 评论 5672654866：_masterProgress 归零只影响正文/startFrame rebase，
-                // 不再影响 cursor Animatable（cursor 由 overlay 内 Animatable 自己持有）。
-                _masterProgress.update { 0f }
-                _activeTransaction.update { update.transaction }
-                _hiddenRanges.update { update.hiddenRanges }
-
-                // 从最后一个 intent 推导 activeIntent。
-                val lastIntent = update.transaction.intents.lastOrNull()
-                _activeIntent.update { lastIntent }
-
-                // 光标所有权只由设置/attach 决定（_drawsVisualCursor 不在此改写）。
-                // #684 评论 5672654866：不再创建 visualCursorSnapshot —
-                // 光标动画由 overlay 内长生命周期 Animatable + cursorMotionPath 驱动。
-
+            is FrameUpdate.NewPatch -> {
+                pendingPatches.addLast(update.patch)
+                _patchVersion.update { it + 1L }
+                _latestPatch.update { update.patch }
                 Log.d(
                     TAG,
-                    "transaction_started: id=${update.transaction.id} " +
-                        "coreTxnIds=${update.transaction.coreTransactionIds} " +
+                    "patch_published: id=${update.patch.id} " +
+                        "coreTxnIds=${update.patch.coreTransactionIds} " +
                         "drawsVisualCursor=${_drawsVisualCursor.value}",
                 )
             }
@@ -182,41 +145,68 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * overlay 报告当前动画 master progress — 物化 startFrame（下一笔 rebase）用。
-     * 文字/光标/rebase 共用同一进度。
+     * 在 Compose 帧时钟的回调里消费所有待处理的 patch 并应用到 timeline。
      *
-     * #684 评论 5668108597 问题1：加 transactionId 守卫 —
-     * 快速连续输入时 A 的旧 LaunchedEffect 可能在 B 已成为 active 后继续写全局 progress。
-     * 只有当前活跃事务 ID 匹配时才允许写入，迟到的旧事务 progress 直接丢弃。
+     * overlay 监听 [patchVersion]，在 `withFrameNanos` 里调用本方法，
+     * 把队列中所有 pending patch 逐个应用到 timeline。时间戳必须来自 Compose frame clock。
      *
-     * @param transactionId overlay 报告进度的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
-     * @param progress 当前动画进度（0f..1f）。
+     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
+     * @return 本次帧实际应用的 patch 列表。
      */
-    fun reportProgress(transactionId: Long, progress: Float) {
-        if (_activeTransaction.value?.id != transactionId) return
-        _masterProgress.update { progress.coerceIn(0f, 1f) }
+    fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
+        val applied = mutableListOf<ComposeVisualPatch>()
+        while (pendingPatches.isNotEmpty()) {
+            val patch = pendingPatches.removeFirst()
+            visualTimeline.applyPatch(patch, frameTimeNanos)
+            applied += patch
+        }
+        return applied
     }
 
     /**
-     * 动画结束 — 收口带 ID 守卫的完成方法。
-     *
-     * #684 评论 5667483662 问题2：快速连续输入时，A 刚到 1f，B 已生成并写进 visual state，
-     * 随后 A 的完成回调执行；旧实现 `completeActiveTransaction(A)` + `clearAnimation()` 分两步，
-     * `clearAnimation()` 没有 ID 守卫，会把 B 的 visual state 清空。
-     *
-     * 现在收口成一个带 ID 的方法：先检查 `_activeTransaction.value?.id == transactionId`，
-     * 不匹配直接 return；匹配才同步调用 `frameCoordinator.completeTransaction(transactionId)`
-     * 并清当前这笔对应的 visual state。overlay 到 1f 只调用这一个方法。
-     *
-     * @param transactionId overlay 报告完成的事务 ID — 必须与当前活跃事务 ID 匹配才生效。
+     * 是否还有待处理的 patch — overlay 据此决定是否继续推进帧时钟。
      */
-    fun finishTransaction(transactionId: Long) {
-        if (_activeTransaction.value?.id != transactionId) return
-        frameCoordinator.completeTransaction(transactionId)
-        _hiddenRanges.update { emptyList() }
-        _activeIntent.update { null }
-        _activeTransaction.update { null }
-        _masterProgress.update { 0f }
+    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty()
+
+    /**
+     * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里应用 patch 到 timeline。
+     *
+     * 已废弃 — 请改用 [drainPendingPatchesAtFrame]。
+     * 保留此方法是为了兼容旧调用路径。
+     *
+     * @param patch 要应用的屏幕 diff。
+     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
+     */
+    fun applyVisualPatchAtFrame(
+        patch: ComposeVisualPatch,
+        frameTimeNanos: Long,
+    ) {
+        visualTimeline.applyPatch(patch, frameTimeNanos)
+    }
+
+    /**
+     * #689 评论 5674631257 步骤7：采样当前视觉场景 — overlay 在每帧 draw 前调用。
+     *
+     * 每次 sample 后把 [ComposeVisualScene.hiddenRanges] 同步给 [_hiddenRanges]，
+     * [OutputTransformation] 继续只负责把这些正在由 overlay 画的最终正文 range 设透明。
+     *
+     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
+     * @return 当前应绘制的视觉场景。
+     */
+    fun sampleVisualScene(frameTimeNanos: Long): ComposeVisualScene {
+        val scene = visualTimeline.sample(frameTimeNanos)
+        _visualScene.update { scene }
+        _hiddenRanges.update { scene.hiddenRanges }
+        return scene
+    }
+
+    /**
+     * 是否还有活动动画 — overlay 据此决定是否继续推进帧时钟。
+     *
+     * @param frameTimeNanos 当前帧时间戳。
+     */
+    fun hasActiveVisuals(frameTimeNanos: Long): Boolean {
+        return visualTimeline.hasActiveAnimation(frameTimeNanos)
     }
 
     /**
@@ -224,12 +214,14 @@ class ComposeEditorVisualState(
      */
     fun clear() {
         frameCoordinator.clear()
+        visualTimeline.clear()
+        pendingPatches.clear()
+        _patchVersion.update { 0L }
         _latestLayout.update { null }
-        _activeTransaction.update { null }
         _hiddenRanges.update { emptyList() }
+        _visualScene.update { ComposeVisualScene.Empty }
+        _latestPatch.update { null }
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
-        _activeIntent.update { null }
-        _masterProgress.update { 0f }
     }
 
     /**

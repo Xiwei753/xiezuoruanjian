@@ -163,12 +163,13 @@ private fun WritingPaneEditorContent(
                     initialAnchor = projection?.viewportAnchor,
                 )
 
-            val visualState = remember(targetId) {
-                ComposeEditorVisualState(
-                    targetId = targetId,
-                    initialDrawsVisualCursor = uiState.settings.smoothCursorEnabled,
-                )
-            }
+            val visualState =
+                remember(targetId) {
+                    ComposeEditorVisualState(
+                        targetId = targetId,
+                        initialDrawsVisualCursor = uiState.settings.smoothCursorEnabled,
+                    )
+                }
 
             // 光标所有权只由设置/attach 生命周期决定：smooth cursor 变化实时同步。
             androidx.compose.runtime.LaunchedEffect(uiState.settings.smoothCursorEnabled) {
