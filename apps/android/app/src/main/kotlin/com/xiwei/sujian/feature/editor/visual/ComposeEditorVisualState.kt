@@ -102,6 +102,15 @@ class ComposeEditorVisualState(
     val restingCursorRect: StateFlow<Rect?> = _restingCursorRect.asStateFlow()
 
     /**
+     * #691 评论 5679242735 修改2：运行时 policy 切换的最新 effective policy。
+     *
+     * 非 null 时，[drainPendingPatchesAtFrame] 会把已入队 patch 的 motionPolicy 替换成它，
+     * 防止旧 patch 带着原来的 insertedUnits/deletedUnits/retainedMoves 再进入 timeline
+     * 把文字动画重新启动（用户已关闭文字动画或打开 reduce-motion）。
+     */
+    private var currentMotionPolicy: EditorMotionPolicy? = null
+
+    /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
      * @param intent Core 视觉意图。
@@ -169,21 +178,30 @@ class ComposeEditorVisualState(
      * #691：同时把光标 motion 并入 timeline — 与文字在同一个 applyPatch 内处理，
      * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
      *
+     * #691 评论 5679242735 修改2：如果 [currentMotionPolicy] 非 null，
+     * 把已入队 patch 的 motionPolicy 替换成最新 policy，
+     * 防止旧 patch 把文字动画重新启动。
+     *
+     * #691 评论 5679242735 修改3：cursor 参数从 (fromRect, toRect) 改成
+     * (fromRect, path: List<CursorMotionPoint>)，支持多段路径。
+     *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
      */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
         val applied = mutableListOf<ComposeVisualPatch>()
         while (pendingPatches.isNotEmpty()) {
-            val patch = pendingPatches.removeFirst()
+            val raw = pendingPatches.removeFirst()
+            // #691 评论 5679242735 修改2：用 currentMotionPolicy 替换 patch 的 motionPolicy
+            val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
             // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
             val cursorParams = computeCursorParamsForPatch(patch)
             visualTimeline.applyPatch(
                 patch = patch,
                 frameTimeNanos = frameTimeNanos,
-                cursorFromRect = cursorParams?.first,
-                cursorToRect = cursorParams?.second,
-                cursorDurationNanos = cursorParams?.third ?: 0L,
+                cursorFromRect = cursorParams?.fromRect,
+                cursorPath = cursorParams?.points,
+                cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
             )
             applied += patch
         }
@@ -239,13 +257,27 @@ class ComposeEditorVisualState(
     // ==================== #691 统一光标位置 ====================
 
     /**
-     * #691：计算 patch 的光标 motion 参数 — 返回 (fromRect, toRect, durationNanos) 或 null。
+     * #691 评论 5679242735 修改3：光标 motion 参数 — fromRect + 完整 path + durationNanos。
+     *
+     * internal 可见性以便测试访问。
+     */
+    internal data class CursorMotionParams(
+        val fromRect: Rect,
+        val points: List<CursorMotionPoint>,
+        val durationNanos: Long,
+    )
+
+    /**
+     * #691：计算 patch 的光标 motion 参数 — 返回 [CursorMotionParams] 或 null。
      * 由 [drainPendingPatchesAtFrame] 传入 [ComposeVisualTimeline.applyPatch]，
      * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
+     *
+     * #691 评论 5679242735 修改3：返回完整 path（List<CursorMotionPoint>），
+     * 不再只取 path.points.last().rect。多字符一次提交时多段 cursor path 不再被压成一条直线。
      */
     private fun computeCursorParamsForPatch(
         patch: ComposeVisualPatch,
-    ): Triple<Rect, Rect, Long>? {
+    ): CursorMotionParams? {
         val motionPolicy = patch.motionPolicy.effective()
         if (!motionPolicy.cursorEnabled) {
             // 光标动画关闭 — 不创建 cursorChannel，使用静态光标
@@ -254,16 +286,18 @@ class ComposeEditorVisualState(
 
         val path = patch.cursorMotionPath
         if (path == null || path.points.isEmpty()) {
-            // 无光标 motion — snap 到新 layout 的光标位置
+            // 无光标 motion — snap 到新 layout 的光标位置，返回单点 path
             val newCursorRect = computeCursorRectFromLayout(patch.newLayout) ?: return null
-            return Triple(newCursorRect, newCursorRect, 0L)
+            return CursorMotionParams(
+                fromRect = newCursorRect,
+                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+                durationNanos = 0L,
+            )
         }
 
-        // #691 修复：from 必须是"旧 layout 的真实光标位置"（屏幕此刻光标所在），
-        // 不能用新 layout 的 restingCursorRect——那已经是最终位置，会导致 from == to、光标不动画。
-        // 取不到时回退到 snap（toRect），避免残留上一个 cursorChannel 的旧位置。
-        val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.last().rect
-        val toRect = path.points.last().rect
+        // #691 评论 5679242735 修改3：fromRect = 旧 layout 真实光标位置
+        // （取不到回退 path.points.first().rect），points = path.points 完整保留。
+        val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.first().rect
 
         // #691 / 设置语义 G：coordinated=true 且有文字变化时，光标与文字共享 textDurationMillis
         // （用户设置）作为整条编辑视觉事务时长；不再用 Core intent 的 patch.durationMs。
@@ -284,7 +318,11 @@ class ComposeEditorVisualState(
                 motionPolicy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             }
 
-        return Triple(fromRect, toRect, effectiveDurationNanos)
+        return CursorMotionParams(
+            fromRect = fromRect,
+            points = path.points,
+            durationNanos = effectiveDurationNanos,
+        )
     }
 
     /**
@@ -313,6 +351,8 @@ class ComposeEditorVisualState(
         _visualScene.update { ComposeVisualScene.Empty }
         _latestPatch.update { null }
         _restingCursorRect.update { null }
+        // #691 评论 5679242735 修改2：重置运行时 policy 切换状态
+        currentMotionPolicy = null
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 
@@ -322,5 +362,34 @@ class ComposeEditorVisualState(
      */
     fun setSmoothCursorEnabled(enabled: Boolean) {
         _drawsVisualCursor.update { enabled }
+    }
+
+    /**
+     * #691 评论 5679242735 修改2：运行时 policy 切换 — 在帧边界应用新 motion policy。
+     *
+     * 场景：patch 已入队但还没 drain，此时用户关闭文字动画或打开 reduce-motion；
+     * 旧 patch 会带着原来的 insertedUnits/deletedUnits/retainedMoves 再进入 timeline，
+     * 把文字动画重新启动。本方法：
+     * 1. 记录最新 effective policy 到 [currentMotionPolicy]，
+     *    [drainPendingPatchesAtFrame] 会用它替换已入队 patch 的 motionPolicy。
+     * 2. 调用 [ComposeVisualTimeline.settleForPolicyChange] 清掉旧 text units / ghost / cursorChannel。
+     * 3. 把已入队 patch 的 motionPolicy 替换成最新 policy（防止旧 patch 重新启动文字动画）。
+     *
+     * @param newPolicy 新的动画策略 — 内部会先 effective() 收口 reduce-motion。
+     */
+    fun applyMotionPolicyAtFrame(newPolicy: EditorMotionPolicy) {
+        val effective = newPolicy.effective()
+        currentMotionPolicy = effective
+        // 清掉旧 text units / ghost / cursorChannel
+        visualTimeline.settleForPolicyChange()
+        // 把已入队 patch 的 motionPolicy 替换成最新 policy
+        if (pendingPatches.isNotEmpty()) {
+            val updated = mutableListOf<ComposeVisualPatch>()
+            while (pendingPatches.isNotEmpty()) {
+                val p = pendingPatches.removeFirst()
+                updated.add(p.copy(motionPolicy = effective))
+            }
+            updated.forEach { pendingPatches.addLast(it) }
+        }
     }
 }

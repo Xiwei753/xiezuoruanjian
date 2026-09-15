@@ -39,8 +39,11 @@ class ComposeVisualTimeline {
     /**
      * #691：统一光标位置 — 由同一个 VisualScene / frame clock 维护。
      * 不再使用独立的 Animatable<Rect> + LaunchedEffect。
+     *
+     * #691 评论 5679242735 修改3：cursorChannel 改成 [CursorTrack]，
+     * 支持多段 [CursorMotionPath]（一次提交多个插入 unit 时光标依次经过每个字/cluster）。
      */
-    private var cursorChannel: TimedRect? = null
+    private var cursorChannel: CursorTrack? = null
 
     /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
@@ -49,66 +52,78 @@ class ComposeVisualTimeline {
      * #691：同时接受光标 motion 参数，在同一个调用内处理文字和光标，
      * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
      *
+     * #691 评论 5679242735 修改2：检查 [patch.motionPolicy.effective] 的 textEnabled —
+     * 文字动画关闭时不创建任何文字 alpha/position track（units = emptyList()），
+     * 不只是把 duration 改成 0。否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
+     *
+     * #691 评论 5679242735 修改3：cursor 参数从 `cursorToRect: Rect?` 改成
+     * `cursorPath: List<CursorMotionPoint>?`，支持多段路径。
+     * 一次提交多个插入 unit 时光标依次经过每个字/cluster，不再被压成一条直线。
+     *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
      * @param cursorFromRect 光标在旧 layout 中的位置（屏幕坐标）— null 表示无光标 motion。
-     * @param cursorToRect 光标在新 layout 中的位置（屏幕坐标）— null 表示无光标 motion。
+     * @param cursorPath 光标运动路径点序列（屏幕坐标）— null 表示无光标 motion。
+     *   单点路径：snap；多点路径：按 [CursorMotionPoint.endFraction] 分段插值。
      * @param cursorDurationNanos 光标动画时长 — 0 表示瞬时 snap。
      */
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
         cursorFromRect: Rect? = null,
-        cursorToRect: Rect? = null,
+        cursorPath: List<CursorMotionPoint>? = null,
         cursorDurationNanos: Long = 0L,
     ) {
-        // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
-        val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
-
-        // #691 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
+        // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
-        val durationNanos = patch.motionPolicy.effective().textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+        val policy = patch.motionPolicy.effective()
+        val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
-        // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
-        val surviving = mutableListOf<VisualTextUnit>()
-        val ghosting = mutableListOf<VisualTextUnit>()
-        mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
+        // #691 评论 5679242735 修改2：textEnabled=false 时不创建任何文字 alpha/position track。
+        // 不要只把 duration 改成 0 — 否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
+        if (policy.textEnabled) {
+            // 第一步：先 sample 当前所有 unit 到此刻的真实 alpha/位置。
+            val sampledUnits = units.map { sampleUnit(it, frameTimeNanos) }
 
-        // 第三步：处理本 patch 新插入的 unit。
-        val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos)
+            // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
+            val surviving = mutableListOf<VisualTextUnit>()
+            val ghosting = mutableListOf<VisualTextUnit>()
+            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
-        // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
-        createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
+            // 第三步：处理本 patch 新插入的 unit。
+            val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos)
 
-        // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
-        applyRetainedMoves(patch, frameTimeNanos, durationNanos, surviving)
+            // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
+            createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
 
-        // 合并：存活 + 新插入 + ghost
-        units = surviving + inserted + ghosting
+            // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
+            applyRetainedMoves(patch, frameTimeNanos, durationNanos, surviving)
 
-        // #691：光标 motion 并入 timeline — 与文字共享同一个 frameTimeNanos
-        if (cursorFromRect != null && cursorToRect != null) {
+            // 合并：存活 + 新插入 + ghost
+            units = surviving + inserted + ghosting
+        } else {
+            // 文字动画关闭：不创建任何文字 alpha/position track。
+            units = emptyList()
+        }
+
+        // #691 评论 5679242735 修改3：光标 motion 并入 timeline — 与文字共享同一个 frameTimeNanos。
+        // cursor 独立按 policy.cursorEnabled 继续处理（由调用方 computeCursorParamsForPatch 决定是否传参）。
+        // 支持多段路径：cursorPath 是 List<CursorMotionPoint>，不再只取 last().rect。
+        if (cursorFromRect != null && cursorPath != null && cursorPath.isNotEmpty()) {
             val current = cursorChannel
-            if (current != null) {
-                // 从当前屏幕位置继续
-                val currentRect = currentRect(current, frameTimeNanos)
-                cursorChannel =
-                    TimedRect(
-                        from = currentRect,
-                        to = cursorToRect,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = cursorDurationNanos,
-                    )
-            } else {
-                cursorChannel =
-                    TimedRect(
-                        from = cursorFromRect,
-                        to = cursorToRect,
-                        startedAtNanos = frameTimeNanos,
-                        durationNanos = cursorDurationNanos,
-                    )
-            }
-
+            val startRect =
+                if (current != null) {
+                    sampleCursorRect(frameTimeNanos) ?: cursorFromRect
+                } else {
+                    cursorFromRect
+                }
+            cursorChannel =
+                CursorTrack(
+                    fromRect = startRect,
+                    points = cursorPath,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = cursorDurationNanos,
+                )
         }
     }
 
@@ -423,11 +438,27 @@ class ComposeVisualTimeline {
         cursorChannel = null
     }
 
+    /**
+     * #691 评论 5679242735 修改2：运行时 policy 切换时清掉旧 text units / ghost / cursorChannel。
+     *
+     * 由 [ComposeEditorVisualState.applyMotionPolicyAtFrame] 调用 —
+     * 用户在动画进行中关闭文字动画或打开 reduce-motion 时，
+     * 旧 patch 已带着原来的 insertedUnits/deletedUnits/retainedMoves 入队，
+     * drain 时会再把文字动画重新启动。本方法把当前 timeline 里所有活动文字/光标动画清空，
+     * 让后续 drain 用新 policy 重新决定是否创建 track。
+     */
+    fun settleForPolicyChange() {
+        units = emptyList()
+        cursorChannel = null
+    }
+
     // ==================== 统一光标位置（#691） ====================
 
     /**
      * #691：snapshot 光标到当前帧时间 — 返回当前位置。
      * 如果光标动画已完成，返回最终位置。
+     *
+     * #691 评论 5679242735 修改3：支持多段 [CursorTrack] 路径插值。
      */
     fun sampleCursorRect(frameTimeNanos: Long): Rect? {
         val ch = cursorChannel ?: return null
@@ -436,37 +467,73 @@ class ComposeVisualTimeline {
 
     /**
      * #691：光标动画是否仍在进行。
+     *
+     * #691 评论 5679242735 修改3：基于 [CursorTrack] 判断。
      */
     fun hasActiveCursorAnimation(frameTimeNanos: Long): Boolean {
         val ch = cursorChannel ?: return false
-        return !isRectFinished(ch, frameTimeNanos)
+        return !isCursorFinished(ch, frameTimeNanos)
     }
 
     /**
-     * #691：计算 TimedRect 在指定帧时间的当前位置。
+     * #691 评论 5679242735 修改3：计算 [CursorTrack] 在指定帧时间的当前位置。
+     *
+     * 多段路径插值：按 [CursorMotionPoint.endFraction] 把整条 timeline 分成多段，
+     * 每段在前一段终点和本段目标点之间线性插值。
+     * 单点路径退化为 from -> points[0].rect 的线性插值。
      */
     private fun currentRect(
-        channel: TimedRect,
+        channel: CursorTrack,
         frameTimeNanos: Long,
     ): Rect {
-        if (channel.durationNanos <= 0L) return channel.to
+        if (channel.durationNanos <= 0L) return channel.points.last().rect
         val elapsed = frameTimeNanos - channel.startedAtNanos
-        if (elapsed <= 0L) return channel.from
-        if (elapsed >= channel.durationNanos) return channel.to
-        val t = elapsed.toFloat() / channel.durationNanos.toFloat()
-        return Rect(
-            left = channel.from.left + (channel.to.left - channel.from.left) * t,
-            top = channel.from.top + (channel.to.top - channel.from.top) * t,
-            right = channel.from.right + (channel.to.right - channel.from.right) * t,
-            bottom = channel.from.bottom + (channel.to.bottom - channel.from.bottom) * t,
-        )
+        if (elapsed <= 0L) return channel.fromRect
+        if (elapsed >= channel.durationNanos) return channel.points.last().rect
+        val progress = elapsed.toFloat() / channel.durationNanos.toFloat()
+        val points = channel.points
+        if (points.size == 1) {
+            return interpolateRect(channel.fromRect, points[0].rect, progress)
+        }
+        var prevRect = channel.fromRect
+        var prevFraction = 0f
+        for (i in points.indices) {
+            val point = points[i]
+            if (progress <= point.endFraction || i == points.size - 1) {
+                val segmentProgress =
+                    if (point.endFraction > prevFraction) {
+                        ((progress - prevFraction) / (point.endFraction - prevFraction)).coerceIn(0f, 1f)
+                    } else {
+                        1f
+                    }
+                return interpolateRect(prevRect, point.rect, segmentProgress)
+            }
+            prevRect = point.rect
+            prevFraction = point.endFraction
+        }
+        return points.last().rect
     }
 
     /**
-     * #691：TimedRect 是否已完成。
+     * #691 评论 5679242735 修改3：两个 Rect 之间的线性插值。
      */
-    private fun isRectFinished(
-        channel: TimedRect,
+    private fun interpolateRect(
+        from: Rect,
+        to: Rect,
+        t: Float,
+    ): Rect =
+        Rect(
+            left = from.left + (to.left - from.left) * t,
+            top = from.top + (to.top - from.top) * t,
+            right = from.right + (to.right - from.right) * t,
+            bottom = from.bottom + (to.bottom - from.bottom) * t,
+        )
+
+    /**
+     * #691 评论 5679242735 修改3：[CursorTrack] 是否已完成。
+     */
+    private fun isCursorFinished(
+        channel: CursorTrack,
         frameTimeNanos: Long,
     ): Boolean {
         if (channel.durationNanos <= 0L) return true
@@ -683,10 +750,31 @@ data class VisualTextUnit(
  * 从 [from] 到 [to]，从 [startedAtNanos] 开始，持续 [durationNanos]。
  *
  * 用于光标位置动画，与文字 timeline 共享同一个 frame clock。
+ *
+ * #691 评论 5679242735 修改3：cursor 不再用本类，改用 [CursorTrack] 支持多段路径。
+ * 保留本数据类以兼容可能的其他引用。
  */
 data class TimedRect(
     val from: Rect,
     val to: Rect,
+    val startedAtNanos: Long,
+    val durationNanos: Long,
+)
+
+/**
+ * #691 评论 5679242735 修改3：带时间戳的多段光标路径通道 —
+ * 从 [fromRect] 出发，依次经过 [points] 中每个 [CursorMotionPoint]，
+ * 从 [startedAtNanos] 开始，持续 [durationNanos]。
+ *
+ * 单点路径退化为 fromRect -> points[0].rect 的线性插值。
+ * 多点路径按 [CursorMotionPoint.endFraction] 分段插值 —
+ * 一次提交多个插入 unit 时光标依次经过每个字/cluster，不再被压成一条直线。
+ *
+ * 与文字 timeline 共享同一个 frame clock。
+ */
+data class CursorTrack(
+    val fromRect: Rect,
+    val points: List<CursorMotionPoint>,
     val startedAtNanos: Long,
     val durationNanos: Long,
 )

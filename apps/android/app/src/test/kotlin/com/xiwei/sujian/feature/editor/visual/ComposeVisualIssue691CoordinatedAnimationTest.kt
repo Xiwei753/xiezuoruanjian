@@ -80,7 +80,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             patch = patch,
             frameTimeNanos = 0L,
             cursorFromRect = oldCursorRect,
-            cursorToRect = newCursorRect,
+            cursorPath = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
             cursorDurationNanos = 100L * NANOS_PER_MS,
         )
 
@@ -203,7 +203,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             patch = patch,
             frameTimeNanos = 0L,
             cursorFromRect = oldCursorRect,
-            cursorToRect = newCursorRect,
+            cursorPath = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
             cursorDurationNanos = 100L * NANOS_PER_MS,
         )
         val scene = timeline.sample(frameTime)
@@ -264,7 +264,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             patch = patch,
             frameTimeNanos = 0L,
             cursorFromRect = oldCursorRect,
-            cursorToRect = newCursorRect,
+            cursorPath = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
             // #691：coordinated=false 时 cursor 使用 cursorDurationMillis=50ms（独立 position track）。
             cursorDurationNanos = 50L * NANOS_PER_MS,
         )
@@ -325,7 +325,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 patch = patch,
                 frameTimeNanos = 0L,
                 cursorFromRect = oldCursorRect,
-                cursorToRect = newCursorRect,
+                cursorPath = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
                 cursorDurationNanos = 100L * NANOS_PER_MS,
             )
 
@@ -880,6 +880,301 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         assertTrue("1000ms: 500ms 时应有活动", state.hasActiveVisuals(500L * 1_000_000L))
         // 在 1000ms 时动画应已完成
         assertFalse("1000ms: 1000ms 时不应有活动", state.hasActiveVisuals(1000L * 1_000_000L))
+    }
+
+    // ==================== #691 评论 5679242735 补充测试 ====================
+
+    /**
+     * #691 评论 5679242735 修改1：纯 selection 变化时静止光标跟随 live selection。
+     *
+     * 同一份 TextLayoutResult 不变（多行文本 "abcde\nfghij" 不变），
+     * 只把 selection 从第 0 行首(0) 改到第 0 行末(5)、第 1 行首(6)、第 1 行末(11)。
+     * smooth cursor 开启且没有文字 patch。用 [computeRestingCursorRect] 实时计算静止光标，
+     * 验证不同 selection 返回不同 rect（跨行时 top 不同，同行时 left 不同）。
+     *
+     * 这验证了 [ComposeTextAnimationOverlay] 中 liveSelection 参数的实际用途 —
+     * BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
+     * 纯 selection 变化不保证重新计算文字布局，restingCursorRect 会停在旧位置。
+     *
+     * 用多行文本确保 Robolectric 下不同行的 cursor rect top 有明显差异
+     * （单行短文本在 Robolectric 下不同 offset 的 getCursorRect 可能返回相同 left）。
+     */
+    @Test
+    fun restingCursor_followsLiveSelection_notJustOnTextLayout() {
+        val layouts = captureLayouts("abcde\nfghij")
+        val state = ComposeEditorVisualState(targetId = "test-resting-live-selection", initialDrawsVisualCursor = true)
+
+        // 建立布局（文本 "abcde\nfghij"，selection 在 0）
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 同一份 layout 不变，只改 selection — 模拟鼠标点选/方向键移动
+        val layout = state.latestLayout.value
+        assertNotNull("latestLayout 应存在", layout)
+
+        val rectAt0 = computeRestingCursorRect(layout, TextRange(0, 0))
+        val rectAt6 = computeRestingCursorRect(layout, TextRange(6, 6))
+        val rectAt11 = computeRestingCursorRect(layout, TextRange(11, 11))
+
+        assertNotNull("selection=0: cursor rect 不应为 null", rectAt0)
+        assertNotNull("selection=6: cursor rect 不应为 null", rectAt6)
+        assertNotNull("selection=11: cursor rect 不应为 null", rectAt11)
+
+        // 跨行对比：第 0 行 (offset=0) 与第 1 行 (offset=6) 的 top 应不同
+        assertTrue(
+            "跨行: selection=0 (第0行) 与 selection=6 (第1行) 的 cursor rect top 应不同: " +
+                "rectAt0.top=${rectAt0!!.top}, rectAt6.top=${rectAt6!!.top}",
+            kotlin.math.abs(rectAt0.top - rectAt6.top) > 0.1f,
+        )
+        // 跨行对比：第 0 行 (offset=0) 与第 1 行末 (offset=11) 的 top 应不同
+        assertTrue(
+            "跨行: selection=0 (第0行) 与 selection=11 (第1行末) 的 cursor rect top 应不同: " +
+                "rectAt0.top=${rectAt0.top}, rectAt11.top=${rectAt11!!.top}",
+            kotlin.math.abs(rectAt0.top - rectAt11.top) > 0.1f,
+        )
+        // 同行对比：第 1 行首 (offset=6) 与第 1 行末 (offset=11) 的 left 或 top 应不同
+        assertTrue(
+            "同行: selection=6 与 selection=11 的 cursor rect 应不同: " +
+                "rectAt6.left=${rectAt6.left}, rectAt11.left=${rectAt11.left}, " +
+                "rectAt6.top=${rectAt6.top}, rectAt11.top=${rectAt11.top}",
+            kotlin.math.abs(rectAt6.left - rectAt11.left) > 0.1f || kotlin.math.abs(rectAt6.top - rectAt11.top) > 0.1f,
+        )
+    }
+
+    /**
+     * #691 评论 5679242735 修改2a：textEnabled=false + reflow 时 scene.units 始终为空。
+     *
+     * 构造一个会产生 retained reflow 的场景，textEnabled=false, cursorEnabled=true。
+     * 用 [ComposeVisualTimeline] 直接 applyPatch（带 retainedMoves），然后 sample，
+     * 断言 scene.units 为空，scene.cursorRect 可以非 null（只允许 cursor track）。
+     * 在动画中间和结束都采样验证 units 始终为空。
+     */
+    @Test
+    fun textDisabled_cursorEnabled_reflow_producesNoTextUnits_onlyCursorTrack() {
+        val layouts = captureLayouts("aaaa")
+        val layout = ComposeLayoutSnapshot(layouts[0], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 构造带 retainedMoves 的 patch（模拟 reflow：前两个字符移到后面）
+        val retainedMoves = listOf(
+            RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4)),
+        )
+        val cursorRect = Rect(30f, 0f, 32f, 14f)
+        val cursorPath = CursorMotionPath(
+            points = listOf(CursorMotionPoint(rect = cursorRect, endFraction = 1f)),
+        )
+        val patch = makePatch(
+            id = 1L,
+            oldLayout = layout,
+            newLayout = layout,
+            retainedMoves = retainedMoves,
+            cursorMotionPath = cursorPath,
+            durationMs = 100L,
+            motionPolicy = EditorMotionPolicy(textEnabled = false, cursorEnabled = true, cursorDurationMillis = 100L),
+        )
+
+        // applyPatch — textEnabled=false，不应创建任何文字 track
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = Rect(10f, 0f, 12f, 14f),
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 100L * NANOS_PER_MS,
+        )
+
+        // 在动画中间（50ms）采样
+        val midScene = timeline.sample(50L * NANOS_PER_MS)
+        assertTrue(
+            "textEnabled=false: 动画中间不应有文字 units，实际=${midScene.units.size}",
+            midScene.units.isEmpty(),
+        )
+
+        // 在动画结束（100ms）采样
+        val endScene = timeline.sample(100L * NANOS_PER_MS)
+        assertTrue(
+            "textEnabled=false: 动画结束不应有文字 units，实际=${endScene.units.size}",
+            endScene.units.isEmpty(),
+        )
+
+        // cursor track 可以非 null（cursorEnabled=true）
+        // 不强制断言 cursorRect 非 null，因为 50ms 时可能在动画中，100ms 时可能已收口
+    }
+
+    /**
+     * #691 评论 5679242735 修改2b：patch 入队后切 textEnabled=false 再 drain 不出现 text units。
+     *
+     * 场景：
+     * 1. 先 onAuthoritativeLayout 建立旧 layout（空文本）
+     * 2. 用 onVisualIntent + onAuthoritativeLayout 生成并入队一个 textEnabled=true 的插入 patch
+     * 3. 不要 drain
+     * 4. 调用 applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled=false, cursorEnabled=true))
+     * 5. 然后 drainPendingPatchesAtFrame(0L)
+     * 6. sampleVisualScene(0L) 后断言 scene.units 为空且 scene.hiddenRanges 为空
+     */
+    @Test
+    fun queuedPatch_textEnabledTrue_thenPolicyChangeToDisabled_drainProducesNoTextUnits() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState(targetId = "test-queued-policy-change")
+
+        // 1. 建立旧 layout（空文本）
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 2. 生成并入队一个 textEnabled=true 的插入 patch
+        state.onVisualIntent(
+            makeInsertIntent(1L, 0L, 1L, "", "a", TextRange(0, 1)),
+            EditorMotionPolicy(textEnabled = true, cursorEnabled = true, textDurationMillis = 100L),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+
+        // 3. 不要 drain — patch 已入队
+        assertTrue("应有 pending patch", state.hasPendingPatches())
+
+        // 4. 切换 policy 到 textEnabled=false
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = false, cursorEnabled = true))
+
+        // 5. drain
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 6. sample 后断言 units 和 hiddenRanges 为空
+        val scene = state.sampleVisualScene(0L)
+        assertTrue(
+            "切 textEnabled=false 后 drain: scene.units 应为空，实际=${scene.units.size}",
+            scene.units.isEmpty(),
+        )
+        assertTrue(
+            "切 textEnabled=false 后 drain: scene.hiddenRanges 应为空，实际=${scene.hiddenRanges.size}",
+            scene.hiddenRanges.isEmpty(),
+        )
+    }
+
+    /**
+     * #691 评论 5679242735 修改3a：一次提交 3 个 unit，cursor path 有 3 个 point。
+     *
+     * 一次提交 3 个 newAnimationUnits，cursor path 有 3 个 point（endFraction = 1/3, 2/3, 1.0），
+     * 3 个 point 的 rect 在不同水平位置。用 [ComposeVisualTimeline] 直接 applyPatch（传入完整 cursorPath），
+     * duration=300ms。在 100ms(1/3)、200ms(2/3)、300ms(1.0) 时分别采样，
+     * 断言 cursor rect 接近对应 point 的 rect（不是直接从旧位置线性插值到最终位置）。
+     */
+    @Test
+    fun multiCharInsert_cursorPathHasMultiplePoints_sampledAtThirds() {
+        val layouts = captureLayouts("", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 3 个 point 在不同水平位置
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch = makePatch(
+            id = 1L,
+            oldLayout = emptyLayout,
+            newLayout = abcLayout,
+            insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+            cursorMotionPath = cursorPath,
+            durationMs = 300L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+        )
+
+        // fromRect 在起点
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // 在 100ms(1/3) 采样 — cursor 应接近 point0.rect
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val cursor100 = scene100.cursorRect
+        assertNotNull("100ms: cursor rect 不应为 null", cursor100)
+        assertTrue(
+            "100ms: cursor 应接近 point0 (left≈${point0.rect.left})，实际=${cursor100!!.left}",
+            kotlin.math.abs(cursor100.left - point0.rect.left) < 1f,
+        )
+
+        // 在 200ms(2/3) 采样 — cursor 应接近 point1.rect
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+        val cursor200 = scene200.cursorRect
+        assertNotNull("200ms: cursor rect 不应为 null", cursor200)
+        assertTrue(
+            "200ms: cursor 应接近 point1 (left≈${point1.rect.left})，实际=${cursor200!!.left}",
+            kotlin.math.abs(cursor200.left - point1.rect.left) < 1f,
+        )
+
+        // 在 300ms(1.0) 采样 — cursor 应等于 point2.rect
+        val scene300 = timeline.sample(300L * NANOS_PER_MS)
+        val cursor300 = scene300.cursorRect
+        assertNotNull("300ms: cursor rect 不应为 null", cursor300)
+        assertTrue(
+            "300ms: cursor 应接近 point2 (left≈${point2.rect.left})，实际=${cursor300!!.left}",
+            kotlin.math.abs(cursor300.left - point2.rect.left) < 1f,
+        )
+    }
+
+    /**
+     * #691 评论 5679242735 修改3b：跨行多字符提交不直接从旧位置插值到最终行末。
+     *
+     * 构造一个跨行的多字符提交：cursor fromRect 在第 0 行，3 个 point 分别在第 0 行末、第 1 行首、第 1 行中。
+     * duration=300ms。在 150ms（中间）采样，断言 cursor rect 的 y 坐标在第 1 行
+     * （不是从第 0 行 y 线性插值到第 1 行 y 的中点）。
+     * 即验证光标经过中间 point 而不是直线追最终位置。
+     */
+    @Test
+    fun multiCharInsert_acrossLines_cursorNotStraightLineToFinal() {
+        val layouts = captureLayouts("", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 跨行：fromRect 在第 0 行 (y=0)，point0 在第 0 行末 (y=0)，
+        // point1 在第 1 行首 (y=20)，point2 在第 1 行中 (y=20)
+        // endFraction: 1/3, 1/2, 1.0 — 在 150ms (progress=0.5) 时光标到达 point1 (第 1 行)
+        val point0 = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(0f, 20f, 2f, 34f), endFraction = 0.5f)
+        val point2 = CursorMotionPoint(rect = Rect(20f, 20f, 22f, 34f), endFraction = 1f)
+        val cursorPath = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch = makePatch(
+            id = 1L,
+            oldLayout = emptyLayout,
+            newLayout = abcLayout,
+            insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+            cursorMotionPath = cursorPath,
+            durationMs = 300L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+        )
+
+        // fromRect 在第 0 行首
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // 在 150ms（中间）采样
+        val scene150 = timeline.sample(150L * NANOS_PER_MS)
+        val cursor150 = scene150.cursorRect
+        assertNotNull("150ms: cursor rect 不应为 null", cursor150)
+
+        // 断言 y 坐标在第 1 行（接近 point1.y = 20），而不是从第 0 行线性插值到第 1 行的中点 (y=10)
+        // 经过中间 point：150ms 时 cursor 到达 point1，y ≈ 20
+        // 直线到最终：150ms 时 y = 0 + (20-0)*0.5 = 10
+        val cursorY = cursor150!!.top
+        assertTrue(
+            "150ms: cursor y 应在第 1 行 (≈20)，经过中间 point，实际=$cursorY。" +
+                "直线插值到最终位置的中点 y=10，不应是中点。",
+            kotlin.math.abs(cursorY - 20f) < 3f,
+        )
     }
 
     // ==================== 辅助方法 ====================

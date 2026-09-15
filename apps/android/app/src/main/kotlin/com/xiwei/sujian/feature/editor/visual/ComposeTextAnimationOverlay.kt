@@ -22,6 +22,7 @@ import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
  * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
@@ -66,6 +67,11 @@ fun ComposeTextAnimationOverlay(
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
     val visualScene by visualState.visualScene.collectAsStateWithLifecycle()
     val restingCursorRect by visualState.restingCursorRect.collectAsStateWithLifecycle()
+    // #691 评论 5679242735 修改1：静止光标需要 live selection + latestLayout 实时计算。
+    // BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
+    // 纯 selection 变化（鼠标点选、方向键移动）不保证重新计算文字布局，
+    // 此时 restingCursorRect（只在 onAuthoritativeLayout 里更新）会停在旧位置。
+    val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
 
     val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
 
@@ -106,9 +112,14 @@ fun ComposeTextAnimationOverlay(
                     //    #691：光标位置从 scene.cursorRect（timeline 统一采样）读取，
                     //    或从 restingCursorRect（无动画时的最终真实位置）读取。
                     //    不再使用独立的 Animatable<Rect>。
+                    //    #691 评论 5679242735 修改1：纯 selection 变化时 onTextLayout 不一定回调，
+                    //    restingCursorRect 可能停在旧位置。此时用 latestLayout + liveSelection
+                    //    实时计算静止光标；只有拿不到 live selection/layout 时才回退 restingCursorRect。
                     if (drawsVisualCursor) {
                         val cursorRectValue =
-                            scene.cursorRect ?: restingCursorRect
+                            scene.cursorRect
+                                ?: computeRestingCursorRect(latestLayout, liveSelection)
+                                ?: restingCursorRect
                         if (cursorRectValue != null) {
                             drawVisualCursorRect(
                                 rect = cursorRectValue,
@@ -219,6 +230,34 @@ private fun safePathBounds(
     if (range.end > result.layoutInput.text.length) return null
     return try {
         result.getPathForRange(range.start, range.end).getBounds()
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/**
+ * #691 评论 5679242735 修改1：纯函数 — 从 layout + liveSelection 实时计算静止光标 rect。
+ *
+ * BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
+ * 纯 selection 变化（鼠标点选、方向键移动）不保证重新计算文字布局，
+ * 此时 [ComposeEditorVisualState.restingCursorRect]（只在 onAuthoritativeLayout 里更新）
+ * 会停在旧位置。overlay 用本函数 + [ComposeEditorVisualState.latestLayout] + liveSelection
+ * 实时算出当前 selection 对应的光标几何。
+ *
+ * 不重新引入 `Animatable` — 这只是静态几何查询。
+ *
+ * @param layout 最新 layout 快照；null 时返回 null。
+ * @param liveSelection 当前 live selection；null 时返回 null。
+ * @return 当前 selection.end 对应的光标 rect；越界或异常时返回 null。
+ */
+internal fun computeRestingCursorRect(
+    layout: ComposeLayoutSnapshot?,
+    liveSelection: TextRange?,
+): Rect? {
+    if (layout == null || liveSelection == null) return null
+    return try {
+        val end = liveSelection.end.coerceIn(0, layout.result.layoutInput.text.length)
+        layout.result.getCursorRect(end)
     } catch (_: Throwable) {
         null
     }
