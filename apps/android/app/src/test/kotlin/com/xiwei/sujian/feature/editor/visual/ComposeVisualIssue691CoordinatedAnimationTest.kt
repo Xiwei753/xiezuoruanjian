@@ -1698,27 +1698,27 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         )
 
         // === 连续帧采样：8ms/16ms ===
-        // 评论 5682970101：同一 VSync 0ms 两笔。a 已开始（0<=0）；待显示=[b,c,d] 在 [0,300] 分段
-        // b:0-100, c:100-200, d:200-300（和单笔 abc 一样的分段，d 不排到 300ms 后）
-        // 8ms 时 b 已开始（startedAt=0，alpha≈0.08）；c/d 仍为 0
+        // 评论 5684136311：同一 VSync 0ms 两笔。a/b/c/d 在 [0,300] 分段
+        // a:0-75, b:75-150, c:150-225, d:225-300（同一 VSync 零进度 unit 可重新分段）
+        // 8ms 时 a 在进行（startedAt=0），b/c/d 仍为 0
         for (ms in listOf(8L, 16L)) {
             val scene = timeline.sample(ms * NANOS_PER_MS)
             val unitC = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
             val unitD = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
             assertNotNull("$ms ms: unit c 应存在（尚未开始动画）", unitC)
             assertTrue(
-                "$ms ms: unit c alpha 应为 0（startedAt=100ms），实际=${unitC!!.alpha.from}",
+                "$ms ms: unit c alpha 应为 0（startedAt=150ms），实际=${unitC!!.alpha.from}",
                 unitC.alpha.from < 0.01f,
             )
             assertNotNull("$ms ms: unit d 应存在（尚未开始动画）", unitD)
             assertTrue(
-                "$ms ms: unit d alpha 应为 0（startedAt=200ms），实际=${unitD!!.alpha.from}",
+                "$ms ms: unit d alpha 应为 0（startedAt=225ms），实际=${unitD!!.alpha.from}",
                 unitD.alpha.from < 0.01f,
             )
         }
 
-        // === 10ms：cursor 在 b segment 内，不越过已出现文字 ===
-        // 修复后 b 从 0ms 开始，cursor 在 b segment 内
+        // === 10ms：cursor 在 a segment 内，不越过已出现文字 ===
+        // 修复后 a 从 0ms 开始（0..75ms），cursor 在 a segment 内
         val scene10 = timeline.sample(10L * NANOS_PER_MS)
         val cursor10 = scene10.cursorRect
         assertNotNull("10ms: cursor rect 不应为 null", cursor10)
@@ -1727,20 +1727,20 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             cursor10.left < 35f,
         )
 
-        // === 100ms：b 完成（alpha≈1），c 刚开始（alpha≈0），d 尚未开始 ===
+        // === 100ms：b 在进行（startedAt=75），c 尚未开始（startedAt=150），d 尚未开始 ===
         val scene100 = timeline.sample(100L * NANOS_PER_MS)
         val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
         val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        // unit b：要么已交还系统正文（unitB100 == null），要么 alpha ≈ 1
+        // unit b：startedAt=75ms，100ms 时 ≈0.33（在 0.1..0.6 范围内）
         if (unitB100 != null) {
             assertTrue(
-                "100ms: unit b alpha 应已完成（≈1），实际=${unitB100.alpha.from}",
-                unitB100.alpha.from > 0.8f,
+                "100ms: unit b alpha 应在进行中（startedAt=75ms，100ms 时≈0.33），实际=${unitB100.alpha.from}",
+                unitB100.alpha.from in 0.1f..0.6f,
             )
         }
-        assertNotNull("100ms: unit c 应存在（刚开始动画）", unitC100)
+        assertNotNull("100ms: unit c 应存在（尚未开始动画）", unitC100)
         assertTrue(
-            "100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
+            "100ms: unit c alpha 应为 0（startedAt=150ms），实际=${unitC100!!.alpha.from}",
             unitC100.alpha.from < 0.2f,
         )
     }
@@ -1956,18 +1956,22 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
-     * #691 评论 5681258225 修复2 / 评论 5682970101：同一 VSync abc+d — scene redirect 有界窗口。
+     * #691 评论 5684136311：同一 VSync abc+d — 收敛为一条最终 scene 时间表。
      *
      * 同一 frameTimeNanos=0 连续两笔 patch（abc + d）。
-     * 修复后（评论 5682970101）：a 已开始（0<=0）；待显示=[b,c,d] 在 [0,300] 有界窗口分段
-     * b: 0..100ms, c: 100..200ms, d: 200..300ms（和单笔 abc 一样的分段，d 不排到 300ms 后）
-     * cursor 合并：surviving 未开始 = [b, c] + 新 patch = [d] → 3 points
+     * 修复后（评论 5684136311）：同一 VSync 零进度 unit 可重新分段。
+     * a/b/c/d 在 [0,300] 有界窗口均匀分段：
+     * a: 0..75ms, b: 75..150ms, c: 150..225ms, d: 225..300ms
+     * cursor 用同一份 a/b/c/d segment 表生成 4 个 caret point。
      *
      * 关键验证：
-     * - 50ms：d alpha=0（d startedAt=200ms）；b alpha≈0.5
-     * - 100ms：b 完成；c 刚开始；d alpha=0
-     * - 200ms：c 完成；d 刚开始
-     * - 文字顺序始终 a→b→c→d
+     * - 37.5ms：a 在进行，b/c/d 仍为 0
+     * - 75ms：a 完成，b 刚开始
+     * - 150ms：b 完成，c 刚开始
+     * - 225ms：c 完成，d 刚开始
+     * - 300ms：d 完成
+     * - cursor 在边界分别到 a/b/c/d caret
+     * - 不能出现两个 startedAtNanos==frameTimeNanos 且都从 0→1 的插入 unit
      */
     @Test
     fun sameVsyncAbcPlusD_textOrderAbcd_cursorUsesFinalLayout() {
@@ -2029,74 +2033,100 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             cursorDurationNanos = 300L * NANOS_PER_MS,
         )
 
-        // === 50ms：d alpha=0（d startedAt=200ms）；b alpha≈0.5 ===
-        val scene50 = timeline.sample(50L * NANOS_PER_MS)
-        val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
-        assertNotNull("同VSync 50ms: unit d 应存在", unitD50)
+        // === 37.5ms：a 在进行（alpha≈0.5），b/c/d 仍为 0 ===
+        val scene375 = timeline.sample(37.5f.toLong() * NANOS_PER_MS)
+        val unitA375 = scene375.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB375 = scene375.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC375 = scene375.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD375 = scene375.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("37.5ms: unit a 应存在", unitA375)
         assertTrue(
-            "同VSync 50ms: unit d alpha 应为 0（startedAt=200ms），实际=${unitD50!!.alpha.from}",
-            unitD50.alpha.from < 0.01f,
+            "37.5ms: unit a alpha 应在进行中（≈0.5），实际=${unitA375!!.alpha.from}",
+            kotlin.math.abs(unitA375.alpha.from - 0.5f) < 0.15f,
+        )
+        assertNotNull("37.5ms: unit b 应存在", unitB375)
+        assertTrue("37.5ms: unit b alpha 应为 0，实际=${unitB375!!.alpha.from}", unitB375.alpha.from < 0.01f)
+        assertNotNull("37.5ms: unit c 应存在", unitC375)
+        assertTrue("37.5ms: unit c alpha 应为 0，实际=${unitC375!!.alpha.from}", unitC375.alpha.from < 0.01f)
+        assertNotNull("37.5ms: unit d 应存在", unitD375)
+        assertTrue("37.5ms: unit d alpha 应为 0，实际=${unitD375!!.alpha.from}", unitD375.alpha.from < 0.01f)
+
+        // === 75ms：a 完成（alpha≈1 或已收口），b 刚开始（alpha≈0） ===
+        val scene75 = timeline.sample(75L * NANOS_PER_MS)
+        val unitA75 = scene75.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitB75 = scene75.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC75 = scene75.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD75 = scene75.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitA75 != null) {
+            assertTrue("75ms: unit a alpha 应已完成（≈1），实际=${unitA75.alpha.from}", unitA75.alpha.from > 0.8f)
+        }
+        assertNotNull("75ms: unit b 应存在", unitB75)
+        assertTrue("75ms: unit b alpha 应刚开始（≈0），实际=${unitB75!!.alpha.from}", unitB75.alpha.from < 0.2f)
+        assertNotNull("75ms: unit c 应存在", unitC75)
+        assertTrue("75ms: unit c alpha 应为 0，实际=${unitC75!!.alpha.from}", unitC75.alpha.from < 0.01f)
+        assertNotNull("75ms: unit d 应存在", unitD75)
+        assertTrue("75ms: unit d alpha 应为 0，实际=${unitD75!!.alpha.from}", unitD75.alpha.from < 0.01f)
+
+        // === 150ms：b 完成，c 刚开始 ===
+        val scene150 = timeline.sample(150L * NANOS_PER_MS)
+        val unitB150 = scene150.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC150 = scene150.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD150 = scene150.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitB150 != null) {
+            assertTrue("150ms: unit b alpha 应已完成（≈1），实际=${unitB150.alpha.from}", unitB150.alpha.from > 0.8f)
+        }
+        assertNotNull("150ms: unit c 应存在", unitC150)
+        assertTrue("150ms: unit c alpha 应刚开始（≈0），实际=${unitC150!!.alpha.from}", unitC150.alpha.from < 0.2f)
+        assertNotNull("150ms: unit d 应存在", unitD150)
+        assertTrue("150ms: unit d alpha 应为 0，实际=${unitD150!!.alpha.from}", unitD150.alpha.from < 0.01f)
+
+        // === 225ms：c 完成，d 刚开始 ===
+        val scene225 = timeline.sample(225L * NANOS_PER_MS)
+        val unitC225 = scene225.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD225 = scene225.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitC225 != null) {
+            assertTrue("225ms: unit c alpha 应已完成（≈1），实际=${unitC225.alpha.from}", unitC225.alpha.from > 0.8f)
+        }
+        assertNotNull("225ms: unit d 应存在", unitD225)
+        assertTrue("225ms: unit d alpha 应刚开始（≈0），实际=${unitD225!!.alpha.from}", unitD225.alpha.from < 0.2f)
+
+        // === 300ms：d 完成 ===
+        val scene300 = timeline.sample(300L * NANOS_PER_MS)
+        val unitD300 = scene300.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitD300 != null) {
+            assertTrue("300ms: unit d alpha 应已完成（≈1），实际=${unitD300.alpha.from}", unitD300.alpha.from > 0.8f)
+        }
+
+        // === cursor 在边界到 a/b/c/d caret ===
+        // cursor 4 points (a_caret, b_caret, c_caret, d_caret), duration=300ms, endFraction=0.25/0.5/0.75/1.0
+        // 75ms (progress=0.25): cursor 到达 a caret（a 的 caret rect 来自 abcdLayout.getCursorRect(1)）
+        val cursor75 = scene75.cursorRect
+        assertNotNull("75ms: cursor rect 应存在", cursor75)
+        // 150ms (progress=0.5): cursor 到达 b caret
+        val cursor150 = scene150.cursorRect
+        assertNotNull("150ms: cursor rect 应存在", cursor150)
+        // 225ms (progress=0.75): cursor 到达 c caret
+        val cursor225 = scene225.cursorRect
+        assertNotNull("225ms: cursor rect 应存在", cursor225)
+        // 300ms (progress=1.0): cursor 到达 d caret (pointD.left=40)
+        val cursor300 = scene300.cursorRect
+        assertNotNull("300ms: cursor rect 应存在", cursor300)
+        assertTrue(
+            "300ms: cursor 应到达 d 的位置 (left≈40)，实际=${cursor300!!.left}",
+            kotlin.math.abs(cursor300.left - 40f) < 5f,
         )
 
-        // === 100ms：b 完成（alpha≈1）；c 刚开始；d 仍为 0 ===
-        val scene100 = timeline.sample(100L * NANOS_PER_MS)
-        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
-        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        val unitD100 = scene100.units.firstOrNull { it.targetRange == TextRange(3, 4) }
-        // unit b：要么已交还系统正文（unitB100 == null），要么 alpha ≈ 1
-        if (unitB100 != null) {
-            assertTrue(
-                "同VSync 100ms: unit b alpha 应已完成（≈1），实际=${unitB100.alpha.from}",
-                unitB100.alpha.from > 0.8f,
-            )
-        }
-        assertNotNull("同VSync 100ms: unit c 应存在", unitC100)
+        // === 补充断言：同一 VSync 第二笔 patch 后，不能出现两个 startedAtNanos == frameTimeNanos 且都从 0→1 的插入 unit ===
+        // 正确行为：a/b/c/d 均匀分段，只有 a 的 startedAt==0（frameTimeNanos），b/c/d 的 startedAt > 0
+        val allUnitsAfterPatch2 = timeline.sample(0L).units.filter { it.targetRange != null }
+        val zeroStartedUnits =
+            allUnitsAfterPatch2.filter {
+                it.alpha.startedAtNanos == 0L && it.alpha.from == 0f && it.alpha.to == 1f
+            }
         assertTrue(
-            "同VSync 100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
-            unitC100.alpha.from < 0.2f,
+            "同一 VSync 后不应有多个 startedAtNanos==0 且从 0→1 的 unit，实际有 ${zeroStartedUnits.size} 个",
+            zeroStartedUnits.size <= 1,
         )
-        assertNotNull("同VSync 100ms: unit d 应存在", unitD100)
-        assertTrue(
-            "同VSync 100ms: unit d alpha 应为 0，实际=${unitD100!!.alpha.from}",
-            unitD100.alpha.from < 0.01f,
-        )
-
-        // === 200ms：c 完成；d 刚开始 ===
-        val scene200 = timeline.sample(200L * NANOS_PER_MS)
-        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
-        val unitD200 = scene200.units.firstOrNull { it.targetRange == TextRange(3, 4) }
-        // unit c：要么已交还系统正文，要么 alpha ≈ 1
-        if (unitC200 != null) {
-            assertTrue(
-                "同VSync 200ms: unit c alpha 应已完成（≈1），实际=${unitC200.alpha.from}",
-                unitC200.alpha.from > 0.8f,
-            )
-        }
-        assertNotNull("同VSync 200ms: unit d 应存在", unitD200)
-        assertTrue(
-            "同VSync 200ms: unit d alpha 应刚开始（≈0），实际=${unitD200!!.alpha.from}",
-            unitD200.alpha.from < 0.2f,
-        )
-
-        // === 文字顺序验证：a→b→c→d ===
-        // 在 50ms 时验证（此时 a 尚未被收口移除，alpha≈0.5）
-        val allUnits = scene50.units.filter { it.targetRange != null }.sortedBy { it.targetRange!!.start }
-        assertTrue(
-            "同VSync: 应有 a/b/c/d 四个 unit，实际 ${allUnits.size} 个",
-            allUnits.size >= 4,
-        )
-        val unitA = allUnits.firstOrNull { it.targetRange == TextRange(0, 1) }
-        val unitD = allUnits.firstOrNull { it.targetRange == TextRange(3, 4) }
-        if (unitA != null && unitD != null) {
-            assertTrue(
-                "同VSync: a 的 alpha 应在进行中（>0），实际=${unitA.alpha.from}",
-                unitA.alpha.from > 0f,
-            )
-            assertTrue(
-                "同VSync: d 的 alpha 应为 0（startedAt=200ms），实际=${unitD.alpha.from}",
-                unitD.alpha.from < 0.01f,
-            )
-        }
     }
 
     /**
@@ -2755,7 +2785,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         )
 
         // 验证：insert unit 语义保留 — a/b/c 都有 insert unit
-        // 修复后：a 已开始（0<=0）；待显示=[b,c] 在 [0,100] 分段：b:0-50, c:50-100
+        // 修复后（评论 5684136311）：同一 VSync 零进度 unit 可重新分段。
+        // a/b/c 在 [0,100] 均匀分段：a:0-33, b:33-66, c:66-100
         val scene50 = timeline.sample(50L * NANOS_PER_MS)
         val unitA = scene50.units.firstOrNull { it.targetRange == TextRange(0, 1) }
         val unitB = scene50.units.firstOrNull { it.targetRange == TextRange(1, 2) }

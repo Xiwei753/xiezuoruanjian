@@ -86,6 +86,16 @@ class ComposeVisualTimeline {
 
         // #691 评论 5679242735 修改2：textEnabled=false 时不创建任何文字 alpha/position track。
         // 不要只把 duration 改成 0 — 否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
+        // #691 评论 5684136311：在 rebase 之前用原始 unit 判断是否已产生可见进度。
+        // rebase 会把进行中通道的 startedAt 重设为 frameTimeNanos，丢失"是否同一 VSync"信息。
+        // textEnabled=false 时给空 map（cursor 路径不会用到）。
+        val progressByKey =
+            if (policy.textEnabled) {
+                units.associate { it.key to hasVisibleAlphaProgress(it, frameTimeNanos) }
+            } else {
+                emptyMap()
+            }
+
         if (policy.textEnabled) {
             // 第一步：先 rebase 当前所有 unit 到此刻的真实 alpha/位置。
             // #691 评论 5680711648 修复1：不能用 sampleUnit() — 它会把尚未开始的通道也 rebase 到 now，
@@ -104,15 +114,17 @@ class ComposeVisualTimeline {
             val startedSurviving = mutableListOf<VisualTextUnit>()
             val pendingSurviving = mutableListOf<VisualTextUnit>()
             for (unit in surviving) {
-                if (unit.targetRange != null && unit.alpha.startedAtNanos <= frameTimeNanos) {
-                    // alpha 已开始：保留当前 alpha/position，不重新从 0 开始
-                    startedSurviving.add(unit)
-                } else if (unit.targetRange != null) {
-                    // 尚未开始：需要和新 inserted 一起重新分段
-                    pendingSurviving.add(unit)
-                } else {
+                if (unit.targetRange == null) {
                     // ghost（targetRange == null）不应出现在 surviving 里，但防御性保留
                     startedSurviving.add(unit)
+                    continue
+                }
+                // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos <= frameTimeNanos。
+                // 同一 VSync、零进度 → 可重新分段；已在之前可见帧产生真实进度 → 从当前状态继续，不归零。
+                if (progressByKey[unit.key] == true) {
+                    startedSurviving.add(unit)
+                } else {
+                    pendingSurviving.add(unit)
                 }
             }
             val repartitioned =
@@ -157,6 +169,7 @@ class ComposeVisualTimeline {
                 cursorDurationNanos = cursorDurationNanos,
                 durationNanos = durationNanos,
                 surviving = surviving,
+                progressByKey = progressByKey,
             )
         }
     }
@@ -181,6 +194,7 @@ class ComposeVisualTimeline {
         cursorDurationNanos: Long,
         durationNanos: Long,
         surviving: List<VisualTextUnit>,
+        progressByKey: Map<Long, Boolean>,
     ) {
         val current = cursorChannel
         val startRect =
@@ -192,11 +206,14 @@ class ComposeVisualTimeline {
 
         val survivingCursorPoints = mutableListOf<CursorMotionPoint>()
         if (policy.textEnabled) {
+            // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos > frameTimeNanos。
+            // 尚未产生可见进度的 unit（含同一 VSync 零进度 unit）都纳入 cursor 路径，
+            // 让 cursor 用同一份 segment 表生成 caret point，而不是跳过零进度 unit。
             val unstartedSurviving =
                 surviving
                     .filter {
                         it.targetRange != null &&
-                            it.alpha.startedAtNanos > frameTimeNanos
+                            progressByKey[it.key] != true
                     }
                     .sortedBy { it.targetRange!!.start }
             for (unit in unstartedSurviving) {
@@ -859,6 +876,24 @@ class ComposeVisualTimeline {
                     durationNanos = channel.startedAtNanos + channel.durationNanos - now,
                 )
         }
+
+    /**
+     * #691 评论 5684136311：判断 unit 是否已经在前一个可见帧产生真实 alpha 进度。
+     *
+     * 同一 VSync、零进度（frameTimeNanos == startedAtNanos 且 alpha 仍在起点）的 unit
+     * 还没有在屏幕上显示过任何中间帧，可以和本帧后续 patch 一起重新分段收敛到最终 scene。
+     * 已经在之前可见帧产生真实进度的 unit 从当前屏幕状态继续，不归零。
+     *
+     * 必须用 rebase 前的原始 unit 调用 — rebase 会把进行中通道的 startedAt 重设为
+     * frameTimeNanos，丢失"是否同一 VSync"信息。
+     */
+    private fun hasVisibleAlphaProgress(
+        unit: VisualTextUnit,
+        frameTimeNanos: Long,
+    ): Boolean {
+        val alphaNow = currentAlpha(unit.alpha, frameTimeNanos)
+        return frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
+    }
 
     /**
      * 计算通道当前值（alpha）。
