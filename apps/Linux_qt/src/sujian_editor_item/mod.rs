@@ -394,6 +394,10 @@ pub struct SujianEditorItem {
     /// - `None` 表示需要 GUI 侧重新准备，render thread 跳过静态正文渲染。
     prepared_frame: Option<render_plan::PreparedEditorFrame>,
     cursor_ctrl: cursor_controller::CursorController,
+    /// Issue #690 评论 5675007226 步骤 1: render thread 上次采样的帧时间。
+    /// 供 `tick_cursor_animation()` 在 GUI 线程使用，确保光标和文字 progress
+    /// 来自同一个 `frame_now`，不再各自 `Instant::now()`。
+    last_frame_now: Option<std::time::Instant>,
 }
 
 impl Default for SujianEditorItem {
@@ -527,6 +531,7 @@ impl Default for SujianEditorItem {
             scene_dirty: true,
             prepared_frame: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
+            last_frame_now: None,
         }
     }
 }

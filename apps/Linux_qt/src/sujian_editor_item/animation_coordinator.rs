@@ -44,6 +44,25 @@ use super::text_visual_transaction::{
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
 
+use crate::sujian_editor_item::editor_animation_debug_log;
+
+/// Issue #690 评论 5675007226 步骤 1: 同一帧的统一时间采样。
+///
+/// `update_paint_node()` 入口处取一次 `Instant::now()` 作为 `frame_now`，
+/// 后续文字 progress、光标 progress、cursor timeline sample 全部从这一个时间点计算。
+/// 消除 GUI 线程 FrameAnimation tick 和 Scene Graph 渲染帧之间的采样偏差。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct AnimationFrameSample {
+    /// 本帧统一采样时间点。
+    pub frame_now: Instant,
+}
+
+impl AnimationFrameSample {
+    pub fn new(frame_now: Instant) -> Self {
+        Self { frame_now }
+    }
+}
+
 /// Issue #679 评论 5657313927 (3c): 按 driver key 取样 Timeline 进度的结果。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) enum CursorTimelineSample {
@@ -53,32 +72,29 @@ pub(crate) enum CursorTimelineSample {
     Running(f64),
 }
 
-/// 将旧事务的视觉帧 rebase 到新事务的 slice 上。
+/// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉帧 rebase 到新事务的 slice 上。
 ///
-/// 三层匹配策略（优先级从高到低）：
-/// 1. **tier1 — 精确 byte range 匹配**：旧帧的 `(byte_start, byte_end)` 与新 slice 完全一致。
-///    适用于连续输入同一位置（如逐字打字）。
-/// 2. **tier2 — offset map 映射后匹配**：旧 byte range 通过 `OffsetMap` 映射到新文本坐标后匹配。
-///    适用于插入/删除导致偏移但文本内容未变的场景。
-/// 3. **tier3 — shaping identity + 范围包含匹配**：映射后按 shaping 一致性和范围包含关系
-///    选择最佳匹配。适用于格式变化或换行导致 slice 拆分的场景。
+/// 与旧版的区别：rebase 时传入 `visible_fraction`，使 InsertReveal/DeleteConceal
+/// 从当前可见比例继续，而不是重新 0→1 / 1→0。
+/// `visible_fraction` 从旧 slice 的 `compute_frame(old_progress)` 计算：
+/// - InsertReveal：visible = frame.w / slice.to_document_rect.w（已吐出比例）
+/// - DeleteConceal：visible = frame.w / slice.from_document_rect.w（剩余比例）
 ///
-/// 匹配成功后调用 `rebase_from` 将旧帧的当前位置设为新 slice 的动画起点，
-/// 保证视觉连续性。未匹配的旧帧被丢弃（对应 slice 不再存在）。
+/// 三层匹配策略不变（tier1 精确匹配 → tier2 offset map → tier3 shaping identity）。
 fn match_rebase_frames(
-    rebase_frames: &[(usize, usize, f64, f64, f64, Option<ShapingIdentity>)],
+    rebase_frames: &[(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)],
     slices: &mut [AnimatedSlice],
     offset_map: &OffsetMap,
 ) {
     let mut consumed_indices: Vec<usize> = Vec::new();
-    for (bs, be, fx, fy, fo, ref shaping) in rebase_frames {
+    for (bs, be, fx, fy, fo, ref shaping, visible_fraction) in rebase_frames {
         let tier1 = slices
             .iter_mut()
             .enumerate()
             .filter(|(idx, _)| !consumed_indices.contains(idx))
             .find(|(_, ns)| ns.byte_start == *bs && ns.byte_end == *be);
         if let Some((idx, new_slice)) = tier1 {
-            new_slice.rebase_from(*fx, *fy, *fo);
+            new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
             consumed_indices.push(idx);
             continue;
         }
@@ -92,7 +108,7 @@ fn match_rebase_frames(
                 .filter(|(idx, _)| !consumed_indices.contains(idx))
                 .find(|(_, ns)| ns.byte_start == mbs && ns.byte_end == mbe);
             if let Some((idx, new_slice)) = tier2 {
-                new_slice.rebase_from(*fx, *fy, *fo);
+                new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
                 consumed_indices.push(idx);
                 continue;
             }
@@ -110,7 +126,7 @@ fn match_rebase_frames(
                         (abs_dist, ns.byte_start, *idx)
                     });
                 if let Some((idx, new_slice)) = best {
-                    new_slice.rebase_from(*fx, *fy, *fo);
+                    new_slice.rebase_from(*fx, *fy, *fo, *visible_fraction);
                     consumed_indices.push(idx);
                 }
             }
@@ -681,6 +697,7 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         byte_end: a.byte_end.max(b.byte_end),
         shaping_identity: a.shaping_identity.clone(),
         conceal_from_left: a.conceal_from_left,
+        start_fraction: a.start_fraction.min(b.start_fraction),
     }
 }
 
@@ -779,7 +796,7 @@ impl LinuxEditorAnimationCoordinator {
                     let conflicting = self
                         .prepared_queue
                         .find_conflicting_transaction(range_start, range_end);
-                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+                    let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
                         if let Some(old_key) = conflicting {
                             let mut frames = Vec::new();
                             if let Some(old_tx) = self
@@ -792,6 +809,23 @@ impl LinuxEditorAnimationCoordinator {
                                 if old_progress > 0.0 && old_progress < 1.0 {
                                     for old_slice in &old_tx.slices {
                                         let frame = old_slice.compute_frame(old_progress);
+                                        let visible_fraction = match old_slice.kind {
+                                            AnimatedSliceKind::InsertReveal => {
+                                                if old_slice.to_document_rect.w > 0.0 {
+                                                    frame.w / old_slice.to_document_rect.w
+                                                } else {
+                                                    0.0
+                                                }
+                                            }
+                                            AnimatedSliceKind::DeleteConceal => {
+                                                if old_slice.from_document_rect.w > 0.0 {
+                                                    frame.w / old_slice.from_document_rect.w
+                                                } else {
+                                                    0.0
+                                                }
+                                            }
+                                            _ => 0.0,
+                                        };
                                         frames.push((
                                             old_slice.byte_start,
                                             old_slice.byte_end,
@@ -799,6 +833,7 @@ impl LinuxEditorAnimationCoordinator {
                                             frame.y,
                                             frame.opacity,
                                             old_slice.shaping_identity.clone(),
+                                            visible_fraction,
                                         ));
                                     }
                                 }
@@ -841,6 +876,16 @@ impl LinuxEditorAnimationCoordinator {
 
                     match_rebase_frames(&rebase_frames, &mut slices, &insert_offset_map);
 
+                    // Issue #690 评论 5675007226 步骤 5: rebase 诊断事件。
+                    if !rebase_frames.is_empty() {
+                        editor_animation_debug_log(&format!(
+                            "anim_rebase: new_key={:?} rebase_count={} rebase_fractions={:?}",
+                            key,
+                            rebase_frames.len(),
+                            rebase_frames.iter().map(|r| r.6).collect::<Vec<_>>(),
+                        ));
+                    }
+
                     // Issue #687: 动画生命周期日志
                     eprintln!(
                         "[BUGFIX_687] Insert tx: key={:?}, inserted_range={:?}, slice_kinds={:?}, slice_count={}",
@@ -849,6 +894,18 @@ impl LinuxEditorAnimationCoordinator {
                         slices.iter().map(|s| s.kind).collect::<Vec<_>>(),
                         slices.len()
                     );
+
+                    // Issue #690 评论 5675007226 步骤 5: 紧凑诊断事件日志。
+                    // 每笔动画只留一条进正式诊断日志：transaction key、operation kind、
+                    // old/new caret、visual unit kinds、首帧时间。
+                    let log_slice_kinds: Vec<String> =
+                        slices.iter().map(|s| format!("{:?}", s.kind)).collect();
+                    let log_old_caret = old_cursor_rect
+                        .as_ref()
+                        .map(|r| format!("({:.1},{:.1})", r.x, r.top));
+                    let log_new_caret = new_cursor_rect
+                        .as_ref()
+                        .map(|r| format!("({:.1},{:.1})", r.x, r.top));
 
                     let prepared = PreparedTextVisualTransaction {
                         key,
@@ -867,6 +924,15 @@ impl LinuxEditorAnimationCoordinator {
 
                     self.layout_revision = new_revision;
                     self.prepared_queue.enqueue(prepared);
+
+                    editor_animation_debug_log(&format!(
+                        "anim_event: key={:?} op=Insert inserted={:?} slice_kinds={:?} old_caret={:?} new_caret={:?}",
+                        key,
+                        inserted_range_tuple,
+                        log_slice_kinds,
+                        log_old_caret,
+                        log_new_caret,
+                    ));
 
                     return Some(key);
                 }
@@ -892,7 +958,7 @@ impl LinuxEditorAnimationCoordinator {
                 let conflicting = self
                     .prepared_queue
                     .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
-                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+                let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
                     if let Some(old_key) = conflicting {
                         let mut frames = Vec::new();
                         if let Some(old_tx) = self
@@ -905,6 +971,23 @@ impl LinuxEditorAnimationCoordinator {
                             if old_progress > 0.0 && old_progress < 1.0 {
                                 for old_slice in &old_tx.slices {
                                     let frame = old_slice.compute_frame(old_progress);
+                                    let visible_fraction = match old_slice.kind {
+                                        AnimatedSliceKind::InsertReveal => {
+                                            if old_slice.to_document_rect.w > 0.0 {
+                                                frame.w / old_slice.to_document_rect.w
+                                            } else {
+                                                0.0
+                                            }
+                                        }
+                                        AnimatedSliceKind::DeleteConceal => {
+                                            if old_slice.from_document_rect.w > 0.0 {
+                                                frame.w / old_slice.from_document_rect.w
+                                            } else {
+                                                0.0
+                                            }
+                                        }
+                                        _ => 0.0,
+                                    };
                                     frames.push((
                                         old_slice.byte_start,
                                         old_slice.byte_end,
@@ -912,6 +995,7 @@ impl LinuxEditorAnimationCoordinator {
                                         frame.y,
                                         frame.opacity,
                                         old_slice.shaping_identity.clone(),
+                                        visible_fraction,
                                     ));
                                 }
                             }
@@ -967,6 +1051,16 @@ impl LinuxEditorAnimationCoordinator {
                     slices.len()
                 );
 
+                // Issue #690 评论 5675007226 步骤 5: 紧凑诊断事件日志。
+                let log_slice_kinds: Vec<String> =
+                    slices.iter().map(|s| format!("{:?}", s.kind)).collect();
+                let log_old_caret = old_cursor_rect
+                    .as_ref()
+                    .map(|r| format!("({:.1},{:.1})", r.x, r.top));
+                let log_new_caret = new_cursor_rect
+                    .as_ref()
+                    .map(|r| format!("({:.1},{:.1})", r.x, r.top));
+
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
@@ -984,6 +1078,16 @@ impl LinuxEditorAnimationCoordinator {
 
                 self.layout_revision = new_revision;
                 self.prepared_queue.enqueue(prepared);
+
+                editor_animation_debug_log(&format!(
+                    "anim_event: key={:?} op=Delete deleted={:?} slice_kinds={:?} old_caret={:?} new_caret={:?}",
+                    key,
+                    deleted_ranges,
+                    log_slice_kinds,
+                    log_old_caret,
+                    log_new_caret,
+                ));
+
                 return Some(key);
             }
             EditorAnimationKind::Cursor => {
@@ -1025,7 +1129,7 @@ impl LinuxEditorAnimationCoordinator {
         let conflicting = self
             .prepared_queue
             .find_conflicting_transaction(composition_byte_start, composition_byte_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
             if let Some(old_key) = conflicting {
                 let mut frames = Vec::new();
                 if let Some(old_tx) = self
@@ -1038,6 +1142,23 @@ impl LinuxEditorAnimationCoordinator {
                     if old_progress > 0.0 && old_progress < 1.0 {
                         for old_slice in &old_tx.slices {
                             let frame = old_slice.compute_frame(old_progress);
+                            let visible_fraction = match old_slice.kind {
+                                AnimatedSliceKind::InsertReveal => {
+                                    if old_slice.to_document_rect.w > 0.0 {
+                                        frame.w / old_slice.to_document_rect.w
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                AnimatedSliceKind::DeleteConceal => {
+                                    if old_slice.from_document_rect.w > 0.0 {
+                                        frame.w / old_slice.from_document_rect.w
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                _ => 0.0,
+                            };
                             frames.push((
                                 old_slice.byte_start,
                                 old_slice.byte_end,
@@ -1045,6 +1166,7 @@ impl LinuxEditorAnimationCoordinator {
                                 frame.y,
                                 frame.opacity,
                                 old_slice.shaping_identity.clone(),
+                                visible_fraction,
                             ));
                         }
                     }
@@ -1156,7 +1278,7 @@ impl LinuxEditorAnimationCoordinator {
         let conflicting = self
             .prepared_queue
             .find_conflicting_transaction(conflict_start, conflict_end);
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
             if let Some(old_key) = conflicting {
                 let mut frames = Vec::new();
                 if let Some(old_tx) = self
@@ -1169,6 +1291,23 @@ impl LinuxEditorAnimationCoordinator {
                     if old_progress > 0.0 && old_progress < 1.0 {
                         for old_slice in &old_tx.slices {
                             let frame = old_slice.compute_frame(old_progress);
+                            let visible_fraction = match old_slice.kind {
+                                AnimatedSliceKind::InsertReveal => {
+                                    if old_slice.to_document_rect.w > 0.0 {
+                                        frame.w / old_slice.to_document_rect.w
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                AnimatedSliceKind::DeleteConceal => {
+                                    if old_slice.from_document_rect.w > 0.0 {
+                                        frame.w / old_slice.from_document_rect.w
+                                    } else {
+                                        0.0
+                                    }
+                                }
+                                _ => 0.0,
+                            };
                             frames.push((
                                 old_slice.byte_start,
                                 old_slice.byte_end,
@@ -1176,6 +1315,7 @@ impl LinuxEditorAnimationCoordinator {
                                 frame.y,
                                 frame.opacity,
                                 old_slice.shaping_identity.clone(),
+                                visible_fraction,
                             ));
                         }
                     }
@@ -1845,15 +1985,24 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    /// Issue #690 评论 5675007226 步骤 1+2: 接受 `frame_now`，统一采样文字和光标 progress。
+    ///
+    /// 文字和光标的 progress 全部从同一个 `frame_now` 计算，消除 GUI 线程 tick 和
+    /// Scene Graph 渲染帧之间的采样偏差。当正文编辑事务活跃且 coordinated 动画启用时，
+    /// 光标位置直接从 text animation progress 计算（跟随文字吞吐边界），
+    /// 不再使用 GUI 线程上一帧留下的 `cursor_ctrl.visual_x/y`。
     pub(crate) fn build_render_plan_full(
         &mut self,
-        cursor_render_state: CursorRenderState,
+        mut cursor_render_state: CursorRenderState,
         selection_preedit: SelectionPreeditPlan,
         mut frame_context: super::render_plan::FrameContext,
         cursor_style: super::render_plan::CursorStyle,
         selection_preedit_style: super::render_plan::SelectionPreeditStyle,
+        frame_now: Instant,
+        coordinated_enabled: bool,
     ) -> RenderPlan {
-        let (text_animation, keys_to_complete) = self.build_text_animation_plan();
+        let (text_animation, keys_to_complete) =
+            self.build_text_animation_plan_with_time(frame_now);
         frame_context.keys_to_complete = keys_to_complete;
         let active_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -1903,6 +2052,42 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
+        // Issue #690 评论 5675007226 步骤 2: 协同光标位置从同一 frame_now 计算。
+        // 当正文编辑事务活跃且 coordinated 动画启用时，光标位置直接从 text animation
+        // progress 计算（跟随文字吞吐边界），不再使用 GUI 线程上一帧留下的
+        // cursor_ctrl.visual_x/y。
+        if coordinated_enabled {
+            if let Some((progress, old_rect, new_rect)) =
+                self.compute_coordinated_cursor(frame_now)
+            {
+                let suppressed = matches!(
+                    self.active_operation_kind(),
+                    Some(TextVisualOperationKind::Insert)
+                );
+                let blink_mode = if suppressed {
+                    CursorBlinkMode::Suppressed
+                } else {
+                    CursorBlinkMode::Normal
+                };
+                let eased = 1.0 - (1.0 - progress.clamp(0.0, 1.0)).powi(3);
+                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                let h = new_rect.bottom - new_rect.top;
+                let opacity = if blink_mode == CursorBlinkMode::Suppressed {
+                    1.0
+                } else {
+                    cursor_render_state.opacity
+                };
+                cursor_render_state = CursorRenderState {
+                    visible: true,
+                    x,
+                    y,
+                    h,
+                    opacity,
+                };
+            }
+        }
+
         RenderPlan {
             text_animation,
             selection_preedit,
@@ -1914,10 +2099,16 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    fn build_text_animation_plan(&mut self) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
+    /// Issue #690 评论 5675007226 步骤 1: 用 `frame_now` 统一采样文字 progress。
+    ///
+    /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`），
+    /// 所有 transaction 的 progress 都从同一个 `frame_now` 计算。
+    fn build_text_animation_plan_with_time(
+        &mut self,
+        frame_now: Instant,
+    ) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
-        let now = Instant::now();
 
         for tx in self.prepared_queue.active_transactions_mut() {
             if tx.state == TextVisualTransactionState::Cancelled
@@ -1926,8 +2117,6 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            // Issue #679 评论 5657313927 (3b): Pending 不算 progress、不出动画切片，
-            // 也不参与静态裁剪。只有 Prepared 才改为 Rendering 并 mark_first_frame。
             if tx.state == TextVisualTransactionState::Pending {
                 continue;
             }
@@ -1939,7 +2128,7 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
 
-            let progress = tx.progress(now);
+            let progress = tx.progress(frame_now);
 
             if progress >= 1.0 {
                 keys_to_complete.push(tx.key);
@@ -1961,6 +2150,75 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         (TextAnimationPlan { glyphs }, keys_to_complete)
+    }
+
+    /// Issue #690 评论 5675007226 步骤 2: 从当前正文事务计算协同光标位置。
+    ///
+    /// 返回 `(progress, old_cursor_rect, new_cursor_rect)` 供 `build_render_plan_full`
+    /// 用同一 ease 函数计算光标中间位置。光标和文字共用同一个 progress，
+    /// 不再有 GUI 线程 tick 和 Scene Graph 渲染帧的采样偏差。
+    fn compute_coordinated_cursor(
+        &self,
+        frame_now: Instant,
+    ) -> Option<(f64, CursorRect, CursorRect)> {
+        let key = self.active_text_transaction_key()?;
+        let tx = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key)?;
+
+        let old_rect = tx.old_cursor_rect.clone()?;
+        let new_rect = tx.new_cursor_rect.clone()?;
+
+        match tx.state {
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
+                let progress = tx.progress(frame_now);
+                Some((progress, old_rect, new_rect))
+            }
+            _ => None,
+        }
+    }
+
+    /// Issue #690 评论 5675007226 步骤 1: 用 `frame_now` 取样 cursor timeline。
+    ///
+    /// 替代原来的 `cursor_timeline_sample()`（内部 `Instant::now()`），
+    /// 确保光标 progress 和文字 progress 来自同一个帧采样时间点。
+    pub(crate) fn cursor_timeline_sample_with_time(
+        &self,
+        key: VisualTransactionKey,
+        frame_now: Instant,
+    ) -> Option<CursorTimelineSample> {
+        let tx = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|tx| tx.key == key)?;
+
+        match tx.state {
+            TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
+                Some(CursorTimelineSample::Waiting)
+            }
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => Some(
+                CursorTimelineSample::Running(tx.progress(frame_now).clamp(0.0, 1.0)),
+            ),
+            TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => None,
+        }
+    }
+
+    /// 返回当前最新正文编辑事务的操作类型，用于决定光标 blink mode。
+    fn active_operation_kind(&self) -> Option<TextVisualOperationKind> {
+        self.prepared_queue
+            .active_transactions()
+            .iter()
+            .rev()
+            .find(|t| {
+                !matches!(
+                    t.state,
+                    TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+                ) && t.operation_kind != TextVisualOperationKind::Cursor
+            })
+            .map(|t| t.operation_kind)
     }
 }
 
@@ -2018,9 +2276,9 @@ mod tests {
             format_fingerprint: 200,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone())),
-            (30, 40, 150.0, 250.0, 0.7, Some(sid_b.clone())),
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
+            (10, 20, 100.0, 200.0, 0.5, Some(sid_a.clone()), 0.0),
+            (30, 40, 150.0, 250.0, 0.7, Some(sid_b.clone()), 0.0),
         ];
 
         let mut slices = vec![
@@ -2094,8 +2352,8 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
         let mut slices = vec![
             AnimatedSlice::insert_reveal(
@@ -2164,18 +2422,18 @@ mod tests {
             dist_0
         );
         assert!(
-            (slices[1].opacity_from - 0.3).abs() < 0.01,
-            "slice 1 (center={}, abs dist={}) should match rebase frame, got opacity={}",
+            (slices[1].start_fraction - 0.3).abs() < 0.01,
+            "slice 1 (center={}, abs dist={}) should match rebase frame, got start_fraction={}",
             center_1,
             dist_1,
-            slices[1].opacity_from
+            slices[1].start_fraction
         );
         assert!(
-            (slices[0].opacity_from - 1.0).abs() < 0.01,
-            "slice 0 (center={}, abs dist={}) should NOT be matched, got opacity={}",
+            (slices[0].start_fraction - 0.0).abs() < 0.01,
+            "slice 0 (center={}, abs dist={}) should NOT be matched, got start_fraction={}",
             center_0,
             dist_0,
-            slices[0].opacity_from
+            slices[0].start_fraction
         );
     }
 
@@ -2191,8 +2449,8 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
         let mut slices = vec![
             AnimatedSlice::insert_reveal(
@@ -2227,7 +2485,7 @@ mod tests {
                 },
                 SourceRect {
                     x: 0.0,
-                    y: 20.0,
+                    y: 0.0,
                     w: 100.0,
                     h: 20.0,
                 },
@@ -2268,9 +2526,9 @@ mod tests {
             abs_1,
             abs_0
         );
-        assert!((slices[1].opacity_from - 0.3).abs() < 0.01,
-            "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got opacity={}",
-            abs_1, abs_0, signed_0, slices[1].opacity_from);
+        assert!((slices[1].start_fraction - 0.3).abs() < 0.01,
+            "slice 1 (abs dist={}) should be chosen over slice 0 (abs dist={}, signed={}), got start_fraction={}",
+            abs_1, abs_0, signed_0, slices[1].start_fraction);
     }
 
     #[test]
@@ -2284,9 +2542,9 @@ mod tests {
             format_fingerprint: 100,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone())),
-            (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone())),
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
+            (50, 60, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
+            (50, 60, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
         ];
 
         let mut slices = vec![AnimatedSlice::insert_reveal(
@@ -2317,9 +2575,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].opacity_from - 0.3).abs() < 0.01,
-            "slice 0 should get first rebase frame opacity 0.3 (not second 0.5), got {}",
-            slices[0].opacity_from
+            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame start_fraction 0.3 (not second 0.5), got {}",
+            slices[0].start_fraction
         );
     }
 
@@ -2335,9 +2593,9 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-            (10, 30, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
+            (10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
+            (10, 30, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
         ];
 
         let mut slices = vec![
@@ -2402,14 +2660,14 @@ mod tests {
         let dist_1 = (center_1 - mapped_center).abs();
         assert!(dist_1 < dist_0, "test setup: slice 1 should be closer");
         assert!(
-            (slices[1].opacity_from - 0.3).abs() < 0.01,
-            "slice 1 should get first rebase frame (opacity=0.3), got opacity={}",
-            slices[1].opacity_from
+            (slices[1].start_fraction - 0.3).abs() < 0.01,
+            "slice 1 should get first rebase frame (start_fraction=0.3), got start_fraction={}",
+            slices[1].start_fraction
         );
         assert!(
-            (slices[0].opacity_from - 0.5).abs() < 0.01,
-            "slice 0 should get second rebase frame (opacity=0.5), not reuse slice 1's frame, got opacity={}",
-            slices[0].opacity_from
+            (slices[0].start_fraction - 0.5).abs() < 0.01,
+            "slice 0 should get second rebase frame (start_fraction=0.5), not reuse slice 1's frame, got start_fraction={}",
+            slices[0].start_fraction
         );
     }
 
@@ -2425,9 +2683,9 @@ mod tests {
             format_fingerprint: 100,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone())),
-            (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone())),
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
+            (50, 70, 10.0, 100.0, 0.3, Some(sid_a.clone()), 0.3),
+            (50, 70, 20.0, 200.0, 0.5, Some(sid_a.clone()), 0.5),
         ];
 
         let mut slices = vec![AnimatedSlice::insert_reveal(
@@ -2463,9 +2721,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].opacity_from - 0.3).abs() < 0.01,
-            "slice 0 should get first rebase frame via tier2 (opacity=0.3), got opacity={}",
-            slices[0].opacity_from
+            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame via tier2 (start_fraction=0.3), got start_fraction={}",
+            slices[0].start_fraction
         );
     }
 
@@ -2481,9 +2739,9 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> = vec![
-            (50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone())),
-            (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone())),
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> = vec![
+            (50, 60, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3),
+            (40, 80, 20.0, 200.0, 0.5, Some(sid_dup.clone()), 0.5),
         ];
 
         let mut slices = vec![AnimatedSlice::insert_reveal(
@@ -2519,9 +2777,9 @@ mod tests {
         match_rebase_frames(&rebase_frames, &mut slices, &offset_map);
 
         assert!(
-            (slices[0].opacity_from - 0.3).abs() < 0.01,
-            "slice 0 should get first rebase frame opacity 0.3 (not second 0.5), got {}",
-            slices[0].opacity_from
+            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            "slice 0 should get first rebase frame start_fraction 0.3 (not second 0.5), got {}",
+            slices[0].start_fraction
         );
     }
 
@@ -2537,8 +2795,8 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>)> =
-            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()))];
+        let rebase_frames: Vec<(usize, usize, f64, f64, f64, Option<ShapingIdentity>, f64)> =
+            vec![(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
 
         let mut slices = vec![
             AnimatedSlice::insert_reveal(
@@ -2605,14 +2863,14 @@ mod tests {
             "test setup: both slices should have equal distance"
         );
         assert!(
-            (slices[0].opacity_from - 0.3).abs() < 0.01,
-            "slice 0 (lower byte_start) should win tiebreak, got opacity={}",
-            slices[0].opacity_from
+            (slices[0].start_fraction - 0.3).abs() < 0.01,
+            "slice 0 (lower byte_start) should win tiebreak, got start_fraction={}",
+            slices[0].start_fraction
         );
         assert!(
-            (slices[1].opacity_from - 1.0).abs() < 0.01,
-            "slice 1 should not be matched, got opacity={}",
-            slices[1].opacity_from
+            (slices[1].start_fraction - 0.0).abs() < 0.01,
+            "slice 1 should not be matched, got start_fraction={}",
+            slices[1].start_fraction
         );
     }
 

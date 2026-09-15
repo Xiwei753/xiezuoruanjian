@@ -51,7 +51,13 @@ impl QQuickItem for SujianEditorItem {
     ) -> qmetaobject::scenegraph::SGNode<qmetaobject::scenegraph::ContainerNode> {
         let frame_start = Instant::now();
 
-        let animation_set_changed = self.tick_text_animations();
+        // Issue #690 评论 5675007226 步骤 1: 整帧只取一次 Instant::now()。
+        // 后续文字 progress、光标 progress、cursor timeline sample 全部从这一个时间点计算，
+        // 消除 GUI 线程 FrameAnimation tick 和 Scene Graph 渲染帧之间的采样偏差。
+        let frame_now = frame_start;
+        self.last_frame_now = Some(frame_now);
+
+        let animation_set_changed = self.tick_text_animations_with_time(frame_now);
         if animation_set_changed {
             self.scene_dirty = true;
         }
@@ -163,6 +169,8 @@ impl QQuickItem for SujianEditorItem {
                     frame_context,
                     cursor_style,
                     selection_preedit_style,
+                    frame_now,
+                    self.current_coordinated_text_cursor_animation_enabled,
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
@@ -271,8 +279,9 @@ impl QQuickItem for SujianEditorItem {
 }
 
 impl SujianEditorItem {
-    pub(crate) fn tick_text_animations(&mut self) -> bool {
-        let now = Instant::now();
-        self.pipeline.animation_coordinator_mut().tick(now)
+    /// Issue #690 评论 5675007226 步骤 1: 接受统一 `frame_now`，
+    /// 替代内部各自 `Instant::now()`。
+    pub(crate) fn tick_text_animations_with_time(&mut self, frame_now: Instant) -> bool {
+        self.pipeline.animation_coordinator_mut().tick(frame_now)
     }
 }

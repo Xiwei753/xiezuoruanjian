@@ -61,6 +61,15 @@ pub(crate) struct AnimatedSlice {
     pub byte_end: usize,
     pub shaping_identity: Option<ShapingIdentity>,
     pub conceal_from_left: bool,
+    /// Issue #690 评论 5675007226 步骤 3: 视觉单元的动画起始比例。
+    ///
+    /// InsertReveal：当前已吐出来的比例（0.0 = 未显示，1.0 = 完全显示）。
+    /// DeleteConceal：当前还剩多少比例（1.0 = 完全可见，0.0 = 完全消失）。
+    /// ReflowMove / ReflowCrossFade：不使用此字段（保持 0.0）。
+    ///
+    /// 快速连续输入时，旧 slice 被 rebase 后从 `start_fraction` 继续播放，
+    /// 不再从 0 重新开始（避免文字"吐到一半被重启"）。
+    pub start_fraction: f64,
 }
 
 impl AnimatedSlice {
@@ -93,6 +102,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_from_left: false,
+            start_fraction: 0.0,
         }
     }
 
@@ -127,6 +137,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_from_left,
+            start_fraction: 0.0,
         }
     }
 
@@ -160,6 +171,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_from_left: false,
+            start_fraction: 0.0,
         }
     }
 
@@ -186,6 +198,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_from_left: false,
+            start_fraction: 0.0,
         }
     }
 
@@ -212,50 +225,60 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_from_left: false,
+            start_fraction: 0.0,
         }
     }
 
-    /// 接收当前已显示视觉帧的位置和透明度，用于连续事务无跳变衔接。
+    /// 接收当前已显示视觉帧的位置、透明度和可见比例，用于连续事务无跳变衔接。
     ///
-    /// 触发条件：新事务开始时旧事务仍在播放中，rebase 使动画从当前视觉状态
-    /// 平滑过渡到新目标，而不是从原始逻辑起点重新播放（避免跳变）。
-    ///
-    /// Issue #686 评论 5664857575 领域1：对 InsertReveal/DeleteConceal，
-    /// rebase 不改变 from/to 位置（它们始终是最终/初始位置），
-    /// 只保留传入的视觉坐标供 ReflowMove/ReflowCrossFade 使用。
-    pub fn rebase_from(&mut self, current_x: f64, current_y: f64, current_opacity: f64) {
+    /// Issue #690 评论 5675007226 步骤 3: 对 InsertReveal/DeleteConceal，
+    /// 传入的 `visible_fraction` 作为新 slice 的 `start_fraction`，
+    /// 使快速连续输入时上一笔吐到一半的字从当前可见比例继续，而不是重新 0→1 / 1→0。
+    /// ReflowMove/ReflowCrossFade 继续保存当前屏幕位置作为新的 from。
+    pub fn rebase_from(
+        &mut self,
+        current_x: f64,
+        current_y: f64,
+        current_opacity: f64,
+        visible_fraction: f64,
+    ) {
         match self.kind {
-            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                // 吐字/吞字动画的位置始终固定，rebase 不改变 from/to。
-                // 保留 current_opacity 供 ReflowCrossFade 衔接。
-                let _ = (current_x, current_y);
-                self.opacity_from = current_opacity;
+            AnimatedSliceKind::InsertReveal => {
+                self.start_fraction = visible_fraction.clamp(0.0, 1.0);
+                let _ = (current_x, current_y, current_opacity);
+            }
+            AnimatedSliceKind::DeleteConceal => {
+                self.start_fraction = visible_fraction.clamp(0.0, 1.0);
+                let _ = (current_x, current_y, current_opacity);
             }
             AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                 self.from_document_rect.x = current_x;
                 self.from_document_rect.y = current_y;
                 self.opacity_from = current_opacity;
                 self.scale_from = 1.0;
+                let _ = visible_fraction;
             }
         }
     }
 
     /// 纯插值计算：根据 progress 计算当前帧的 destination rect 和 source rect。
     ///
-    /// Issue #686 评论 5664857575 领域1：
-    /// - InsertReveal：x/y 固定用 to_document_rect；visible = progress；
-    ///   destination 宽度和 source_rect 宽度都乘 visible（从左侧开始放出来）；opacity 固定 1.0。
-    /// - DeleteConceal：x/y 固定用 from_document_rect；visible = 1 - progress；
-    ///   destination/source_rect 同比例收窄，按 conceal_from_left 决定保留左段还是右段；opacity 固定 1.0。
-    /// - ReflowMove/ReflowCrossFade：继续负责真正的重排移动和 shaping 改变。
+    /// Issue #690 评论 5675007226 步骤 3: 使用 `start_fraction` 支持视觉单元独立生命周期。
+    /// 快速连续输入时，rebase 会设置 `start_fraction` 为当前已显示比例，
+    /// 动画从该比例继续而不是从头开始。
+    ///
+    /// - InsertReveal：effective = start_fraction + (1 - start_fraction) * eased(progress)
+    /// - DeleteConceal：effective = start_fraction * (1 - eased(progress))
+    /// - ReflowMove/ReflowCrossFade：不使用 start_fraction（移动/淡入淡出无"已显示比例"概念）。
     ///
     /// 缓动函数：`1.0 - (1.0 - progress).powi(2)` 即 ease-out quadratic。
     pub fn compute_frame(&self, progress: f64) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let visible = eased.clamp(0.0, 1.0);
-                // 吐字：从左侧开始放出来，x/y 固定，宽度和 source_rect 宽度都乘 visible。
+                // Issue #690: 从 start_fraction 继续，不从 0 开始。
+                let visible =
+                    (self.start_fraction + (1.0 - self.start_fraction) * eased).clamp(0.0, 1.0);
                 let frame_w = self.to_document_rect.w * visible;
                 let frame_h = self.to_document_rect.h;
                 let frame_source_rect = SourceRect {
@@ -276,13 +299,10 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::DeleteConceal => {
                 let eased = 1.0 - (1.0 - progress).powi(2);
-                let visible = (1.0 - eased).clamp(0.0, 1.0);
-                // 吞字：在原位收窄。
+                // Issue #690: 从 start_fraction 继续收缩。
+                let visible = (self.start_fraction * (1.0 - eased)).clamp(0.0, 1.0);
                 let frame_w = self.from_document_rect.w * visible;
                 let frame_h = self.from_document_rect.h;
-                // 按 conceal_from_left 决定保留左段还是右段。
-                // conceal_from_left = true（Backspace）：保留左段，x 不变，source_rect.x 不变。
-                // conceal_from_left = false（Delete 键）：保留右段，x 右移，source_rect.x 右移。
                 let (frame_x, src_x) = if self.conceal_from_left {
                     (self.from_document_rect.x, self.source_rect.x)
                 } else {

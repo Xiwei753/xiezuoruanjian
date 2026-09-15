@@ -913,11 +913,14 @@ Rectangle {
                         dt: root.dt
                     }
 
-                    // 光标动画 tick - 消费 Rust 侧 CursorController 的 visual_x/y 更新和 blink phase
-                    // Issue #679 评论 5657313927: 改用 FrameAnimation 与渲染帧同步，
-                    // 不再用 16ms 固定 interval 的 Timer。
-                    FrameAnimation {
-                        id: cursorAnimationTick
+                    // Issue #690 评论 5675007226 步骤 4: 光标闪烁改用低频 Timer，
+                    // 不再用 FrameAnimation 每帧回调。正文位置动画已由 RenderPlan 同帧计算，
+                    // 不再需要 QML 每帧推进。空闲闪烁只需要低频定时触发 blink，
+                    // 并且每次切换显式 request_frame_update()。
+                    Timer {
+                        id: cursorBlinkTimer
+                        interval: 265
+                        repeat: true
                         running: sujianEditor.editor_enabled
                                  && sujianEditor.focus
                         onTriggered: {
