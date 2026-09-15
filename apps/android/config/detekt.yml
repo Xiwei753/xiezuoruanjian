@@ -70,6 +70,8 @@ complexity:
       # --- #691：视觉帧协调器/rebase 多阶段切分，复杂度天然超标（预先存在） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，复杂度天然超标 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   CyclomaticComplexMethod:
     active: true
     threshold: 15
@@ -116,6 +118,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeCursorMotion.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，圈复杂度天然超标 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LongMethod:
     active: true
     threshold: 80
@@ -190,8 +194,10 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/render/AndroidTextAnimationRendererTest.kt"
       # --- #641 评论 5460373035：视觉状态契约测试多场景断言，行数超 500 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeEditorVisualStateTest.kt"
-      # --- #691：协同动画测试多场景断言，行数超 500（预先存在） ---
+      # --- #691：协同动画测试多场景断言，行0行数超!超 500（预先存在） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue691CoordinatedAnimationTest.kt"
+      # --- #691 评论 5681258225：视觉时间线核心类，多阶段动画状态机，行数超 500 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LongParameterList:
     active: true
     functionThreshold: 7

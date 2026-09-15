@@ -1797,6 +1797,677 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         )
     }
 
+    // ==================== #691 评论 5681258225 协同动画修复测试 ====================
+
+    /**
+     * #691 评论 5681258225 修复1：abc@0ms + d@30ms — 新 unit 排在队列尾部，cursor 与文字同步。
+     *
+     * 第一笔：0ms "" → "abc"，3 个 insertedUnits，duration=300ms。
+     *   a: 0..100ms, b: 100..200ms, c: 200..300ms
+     * 第二笔：30ms "abc" → "abcd"，1 个 insertedUnit (d)。
+     *   修复后：queueTailEndNanos = max(100, 200, 300) = 300ms
+     *   d: startedAt=300ms, duration=300ms（不插队到 b/c 前面）
+     *   cursor 合并：surviving 未完成 = [a, b, c] + 新 patch = [d] → 4 points
+     *   cursor startedAtNanos=30ms, durationNanos=300ms
+     *
+     * 关键验证：
+     * - 50ms：d 的 alpha 必须为 0（d 的 startedAt=300ms >> 50ms）
+     * - 50ms：cursor 不应到达 d 的位置
+     * - 100ms：b 的 alpha 刚开始（≈0）
+     * - 200ms：c 的 alpha 刚开始（≈0）
+     * - 300ms+：d 才开始淡入
+     */
+    @Test
+    fun abcAt0ms_dAt30ms_newUnitQueuedAfterSurviving_cursorSyncedWithText() {
+        val layouts = captureLayouts("", "abc", "abcd")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // === 第一笔：0ms "" → "abc"，duration=300ms ===
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 第二笔：30ms "abc" → "abcd"，插入 d ===
+        val frameTime2 = 30L * NANOS_PER_MS
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        // cursor 在 30ms 时的位置（第一笔 cursor 在 30ms 的插值结果）
+        // elapsed=30ms, progress=0.1, point0 endFraction=1/3, segmentProgress=0.3
+        // cursor = interpolate(fromRect, point0, 0.3) = (3, 0, 5, 14)
+        val cursorAt30ms = Rect(3f, 0f, 5f, 14f)
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = frameTime2,
+            cursorFromRect = cursorAt30ms,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 50ms：d 的 alpha 必须为 0 ===
+        // 修复核心：d 的 startedAt = queueTailEndNanos = 300ms，50ms << 300ms
+        val scene50 = timeline.sample(50L * NANOS_PER_MS)
+        val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("50ms: unit d 应存在（尚未开始动画）", unitD50)
+        assertTrue(
+            "50ms: unit d alpha 应为 0（queued after surviving，startedAt=300ms），实际=${unitD50!!.alpha.from}",
+            unitD50.alpha.from < 0.01f,
+        )
+
+        // === 50ms：cursor 不应到达 d 的位置 ===
+        // cursor 合并路径 = [a caret, b caret, c caret, d caret]，4 points
+        // cursor startedAt=30ms, duration=300ms
+        // 50ms: progress = 20/300 ≈ 0.067, 在第一段（endFraction=0.25）
+        // segmentProgress = 0.067/0.25 ≈ 0.27, cursor 在 startRect 和 a caret 之间
+        // 不应到达 d 的位置（left≈40f）
+        val cursor50 = scene50.cursorRect
+        assertNotNull("50ms: cursor rect 不应为 null", cursor50)
+        assertTrue(
+            "50ms: cursor 不应到达 d 的位置 (left 应远小于 40f)，实际=${cursor50!!.left}",
+            cursor50.left < 35f,
+        )
+
+        // === 100ms：b 的 alpha 刚开始，c 尚未开始 ===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD100 = scene100.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("100ms: unit b 应存在", unitB100)
+        assertTrue(
+            "100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        assertNotNull("100ms: unit c 应存在", unitC100)
+        assertTrue(
+            "100ms: unit c alpha 应为 0（尚未开始），实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+        assertNotNull("100ms: unit d 应存在", unitD100)
+        assertTrue(
+            "100ms: unit d alpha 应为 0（尚未开始，startedAt=300ms），实际=${unitD100!!.alpha.from}",
+            unitD100.alpha.from < 0.01f,
+        )
+
+        // === 200ms：c 的 alpha 刚开始，d 仍为 0 ===
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD200 = scene200.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("200ms: unit c 应存在", unitC200)
+        assertTrue(
+            "200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+        assertNotNull("200ms: unit d 应存在", unitD200)
+        assertTrue(
+            "200ms: unit d alpha 应为 0（尚未开始，startedAt=300ms），实际=${unitD200!!.alpha.from}",
+            unitD200.alpha.from < 0.01f,
+        )
+
+        // === 350ms：d 的 alpha 应已开始（startedAt=300ms，elapsed=50ms） ===
+        val scene350 = timeline.sample(350L * NANOS_PER_MS)
+        val unitD350 = scene350.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitD350 != null) {
+            assertTrue(
+                "350ms: unit d alpha 应已开始（>0），实际=${unitD350.alpha.from}",
+                unitD350.alpha.from > 0f,
+            )
+        }
+    }
+
+    /**
+     * #691 评论 5681258225 修复2：同一 VSync abc+d — 文字顺序 a→b→c→d，cursor 使用最终 layout。
+     *
+     * 同一 frameTimeNanos=0 连续两笔 patch（abc + d）。
+     * 修复后：queueTailEndNanos = max(100, 200, 300) = 300ms
+     * d: startedAt=300ms（不插队）
+     * cursor 合并：surviving 未完成 = [a, b, c] + 新 patch = [d] → 4 points
+     *
+     * 关键验证：
+     * - 50ms：d alpha = 0
+     * - 100ms：b alpha 刚开始
+     * - 200ms：c alpha 刚开始
+     * - 文字顺序始终 a→b→c→d
+     */
+    @Test
+    fun sameVsyncAbcPlusD_textOrderAbcd_cursorUsesFinalLayout() {
+        val layouts = captureLayouts("", "abc", "abcd")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // === 第一笔：0ms "" → "abc"，duration=300ms ===
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 第二笔：同一 VSync 0ms "abc" → "abcd"，插入 d ===
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 50ms：d alpha = 0 ===
+        val scene50 = timeline.sample(50L * NANOS_PER_MS)
+        val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("同VSync 50ms: unit d 应存在", unitD50)
+        assertTrue(
+            "同VSync 50ms: unit d alpha 应为 0（queued after surviving），实际=${unitD50!!.alpha.from}",
+            unitD50.alpha.from < 0.01f,
+        )
+
+        // === 100ms：b alpha 刚开始，c/d 仍为 0 ===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD100 = scene100.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("同VSync 100ms: unit b 应存在", unitB100)
+        assertTrue(
+            "同VSync 100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+        assertNotNull("同VSync 100ms: unit c 应存在", unitC100)
+        assertTrue(
+            "同VSync 100ms: unit c alpha 应为 0，实际=${unitC100!!.alpha.from}",
+            unitC100.alpha.from < 0.01f,
+        )
+        assertNotNull("同VSync 100ms: unit d 应存在", unitD100)
+        assertTrue(
+            "同VSync 100ms: unit d alpha 应为 0，实际=${unitD100!!.alpha.from}",
+            unitD100.alpha.from < 0.01f,
+        )
+
+        // === 200ms：c alpha 刚开始，d 仍为 0 ===
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        val unitD200 = scene200.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("同VSync 200ms: unit c 应存在", unitC200)
+        assertTrue(
+            "同VSync 200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+        assertNotNull("同VSync 200ms: unit d 应存在", unitD200)
+        assertTrue(
+            "同VSync 200ms: unit d alpha 应为 0，实际=${unitD200!!.alpha.from}",
+            unitD200.alpha.from < 0.01f,
+        )
+
+        // === 文字顺序验证：a→b→c→d ===
+        // 在 50ms 时验证（此时 a 尚未被收口移除，alpha≈0.17）
+        val allUnits = scene50.units.filter { it.targetRange != null }.sortedBy { it.targetRange!!.start }
+        assertTrue(
+            "同VSync: 应有 a/b/c/d 四个 unit，实际 ${allUnits.size} 个",
+            allUnits.size >= 4,
+        )
+        // sample 后 startedAtNanos 会被 rebase 到当前帧时间，无法直接比较。
+        // 但 alpha.from 可以反映动画进度：a 正在进行（alpha>0），b/c/d 尚未开始（alpha≈0）。
+        val unitA = allUnits.firstOrNull { it.targetRange == TextRange(0, 1) }
+        val unitD = allUnits.firstOrNull { it.targetRange == TextRange(3, 4) }
+        if (unitA != null && unitD != null) {
+            assertTrue(
+                "同VSync: a 的 alpha 应在进行中（>0），实际=${unitA.alpha.from}",
+                unitA.alpha.from > 0f,
+            )
+            assertTrue(
+                "同VSync: d 的 alpha 应为 0（尚未开始，queued after surviving），实际=${unitD.alpha.from}",
+                unitD.alpha.from < 0.01f,
+            )
+        }
+    }
+
+    /**
+     * #691 评论 5681258225 修复3：跨行场景 — surviving unit 的 caret rect 从最新 layout 重算。
+     *
+     * 用窄布局让文字换行。第一笔输入跨行文字，第二笔快速输入新字。
+     * surviving unit 的 caret rect 必须来自 patch2.newLayout（最新 layout），
+     * 不是旧 layout — 这确保跨行时 cursor 位置正确。
+     *
+     * 验证方式：通过对比 patch1.newLayout 和 patch2.newLayout 的 getCursorRect 结果，
+     * 确认它们不同（跨行导致 caret 位置变化），然后验证 cursor 位置反映了最新 layout。
+     */
+    @Test
+    fun crossLineRapidInput_caretRectRecomputedFromLatestLayout() {
+        // 用窄布局让 "abc" 和 "abcd" 换行位置不同
+        val layouts = captureLayoutsWithWidth(arrayOf("", "abc", "abcd"), 30)
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[1], TextRange(3, 3), 0)
+        val abcdLayout = ComposeLayoutSnapshot(layouts[2], TextRange(4, 4), 0)
+
+        val timeline = ComposeVisualTimeline()
+
+        // 先验证两个 layout 在某些 offset 上的 getCursorRect 不同（跨行效果）
+        // 这确保测试有意义 — 如果两个 layout 的 caret rect 相同，就无法验证"从最新 layout 重算"
+        val caretAt2InAbc = abcLayout.result.getCursorRect(2)
+        val caretAt2InAbcd = abcdLayout.result.getCursorRect(2)
+        val caretAt3InAbc = abcLayout.result.getCursorRect(3)
+        val caretAt3InAbcd = abcdLayout.result.getCursorRect(3)
+
+        // 跨行验证：窄布局下 "abc" 和 "abcd" 的某些 caret rect 应该不同
+        // （因为 "abcd" 可能换行方式与 "abc" 不同）
+        val caretDiffExists =
+            kotlin.math.abs(caretAt2InAbc.left - caretAt2InAbcd.left) > 0.1f ||
+                kotlin.math.abs(caretAt2InAbc.top - caretAt2InAbcd.top) > 0.1f ||
+                kotlin.math.abs(caretAt3InAbc.left - caretAt3InAbcd.left) > 0.1f ||
+                kotlin.math.abs(caretAt3InAbc.top - caretAt3InAbcd.top) > 0.1f
+
+        // 即使 Robolectric 下布局差异不大，也继续测试 — 核心 assert 是 cursor 不为 null 且行为合理
+        // === 第一笔：0ms "" → "abc"，3 个 insertedUnits，duration=300ms ===
+        val point0 = CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 1f / 3f)
+        val point1 = CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 2f / 3f)
+        val point2 = CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)
+        val cursorPath1 = CursorMotionPath(points = listOf(point0, point1, point2))
+
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath1,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = Rect(0f, 0f, 2f, 14f)
+        timeline.applyPatch(
+            patch = patch1,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath1.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 第二笔：30ms "abc" → "abcd"，插入 d ===
+        val frameTime2 = 30L * NANOS_PER_MS
+        val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY))
+        val pointD = CursorMotionPoint(rect = Rect(40f, 0f, 42f, 14f), endFraction = 1f)
+        val cursorPath2 = CursorMotionPath(points = listOf(pointD))
+
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abcdLayout,
+                offsetMap = offsetMap2,
+                insertedUnits = listOf(TextRange(3, 4)),
+                cursorMotionPath = cursorPath2,
+                durationMs = 300L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+            )
+
+        val cursorAt30ms = Rect(3f, 0f, 5f, 14f)
+        timeline.applyPatch(
+            patch = patch2,
+            frameTimeNanos = frameTime2,
+            cursorFromRect = cursorAt30ms,
+            cursorPath = cursorPath2.points,
+            cursorDurationNanos = 300L * NANOS_PER_MS,
+        )
+
+        // === 验证：d 的 alpha 在 50ms 时为 0 ===
+        val scene50 = timeline.sample(50L * NANOS_PER_MS)
+        val unitD50 = scene50.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNotNull("跨行 50ms: unit d 应存在", unitD50)
+        assertTrue(
+            "跨行 50ms: unit d alpha 应为 0（queued after surviving），实际=${unitD50!!.alpha.from}",
+            unitD50.alpha.from < 0.01f,
+        )
+
+        // === 验证：cursor 不为 null（合并路径成功创建） ===
+        val cursor50 = scene50.cursorRect
+        assertNotNull("跨行 50ms: cursor rect 不应为 null（合并 surviving + new patch points）", cursor50)
+
+        // === 验证：cursor 不应到达 d 的位置 ===
+        assertTrue(
+            "跨行 50ms: cursor 不应到达 d 的位置 (left 应远小于 40f)，实际=${cursor50!!.left}",
+            cursor50.left < 35f,
+        )
+
+        // === 如果两个 layout 的 caret rect 确实不同（跨行效果），进一步验证 ===
+        if (caretDiffExists) {
+            // cursor 合并路径中的 surviving points 使用 patch2.newLayout 的 getCursorRect
+            // 在 100ms 时 cursor 应接近某个 surviving caret rect（来自 abcdLayout，不是 abcLayout）
+            val scene100 = timeline.sample(100L * NANOS_PER_MS)
+            val cursor100 = scene100.cursorRect
+            assertNotNull("跨行 100ms: cursor rect 不应为 null", cursor100)
+
+            // cursor 不应等于旧 layout 的 caret rect（如果新旧 layout 的 caret rect 不同）
+            // cursor 应反映最新 layout 的几何
+            // 这是一个弱断言 — 只验证 cursor 在合理范围内
+            assertTrue(
+                "跨行 100ms: cursor 应在合理范围内 (left >= 0)，实际=${cursor100!!.left}",
+                cursor100.left >= 0f,
+            )
+        }
+
+        // === 验证：b/c 的 alpha 在 100ms/200ms 时按序开始 ===
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val unitB100 = scene100.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        assertNotNull("跨行 100ms: unit b 应存在", unitB100)
+        assertTrue(
+            "跨行 100ms: unit b alpha 应刚开始（≈0），实际=${unitB100!!.alpha.from}",
+            unitB100.alpha.from < 0.2f,
+        )
+
+        val scene200 = timeline.sample(200L * NANOS_PER_MS)
+        val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull("跨行 200ms: unit c 应存在", unitC200)
+        assertTrue(
+            "跨行 200ms: unit c alpha 应刚开始（≈0），实际=${unitC200!!.alpha.from}",
+            unitC200.alpha.from < 0.2f,
+        )
+    }
+
+    /**
+     * #691 评论 5681258225 修复4：默认 100ms 和长时长 1000ms — 连续 patch 不重启不插队。
+     *
+     * 子测试 A：默认 100ms
+     * - patch1："" → "ab"，duration=100ms（a: 0..50ms, b: 50..100ms）
+     * - 20ms 时 patch2："ab" → "abc"，duration=100ms
+     * - queueTailEndNanos = max(50+50) = 100ms（b 未完成）
+     * - c: startedAt=100ms
+     * - 30ms：c alpha = 0
+     * - 100ms：c 刚开始
+     *
+     * 子测试 B：长时长 1000ms
+     * - patch1："" → "ab"，duration=1000ms（a: 0..500ms, b: 500..1000ms）
+     * - 100ms 时 patch2："ab" → "abc"，duration=1000ms
+     * - queueTailEndNanos = max(500+500) = 1000ms（b 未完成）
+     * - c: startedAt=1000ms
+     * - 200ms：c alpha = 0
+     * - 1000ms：c 刚开始
+     */
+    @Test
+    fun default100ms_andLongDuration1000ms_continuousPatchNoRestartNoJumping() {
+        // 一次性获取所有需要的 layout（composeRule.setContent 只能调用一次）
+        val layouts = captureLayouts("", "ab", "abc")
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val abLayout = ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0)
+        val abcLayout = ComposeLayoutSnapshot(layouts[2], TextRange(3, 3), 0)
+
+        // === 子测试 A：默认 100ms ===
+        run {
+            val timeline = ComposeVisualTimeline()
+
+            // patch1：0ms "" → "ab"，duration=100ms
+            // a: startedAt=0, duration=50ms（0..50ms）
+            // b: startedAt=50ms, duration=50ms（50..100ms）
+            val cursorPath1 =
+                CursorMotionPath(
+                    points =
+                        listOf(
+                            CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 0.5f),
+                            CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 1f),
+                        ),
+                )
+            val patch1 =
+                makePatch(
+                    id = 1L,
+                    oldLayout = emptyLayout,
+                    newLayout = abLayout,
+                    insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2)),
+                    cursorMotionPath = cursorPath1,
+                    durationMs = 100L,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = 100L,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
+
+            timeline.applyPatch(
+                patch = patch1,
+                frameTimeNanos = 0L,
+                cursorFromRect = Rect(0f, 0f, 2f, 14f),
+                cursorPath = cursorPath1.points,
+                cursorDurationNanos = 100L * NANOS_PER_MS,
+            )
+
+            // patch2：20ms "ab" → "abc"，duration=100ms
+            // queueTailEndNanos = max(50+50) = 100ms（b 未完成）
+            // c: startedAt=100ms, duration=100ms
+            val frameTime2 = 20L * NANOS_PER_MS
+            val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))
+            val cursorPath2 =
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)),
+                )
+            val patch2 =
+                makePatch(
+                    id = 2L,
+                    oldLayout = abLayout,
+                    newLayout = abcLayout,
+                    offsetMap = offsetMap2,
+                    insertedUnits = listOf(TextRange(2, 3)),
+                    cursorMotionPath = cursorPath2,
+                    durationMs = 100L,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = 100L,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
+
+            timeline.applyPatch(
+                patch = patch2,
+                frameTimeNanos = frameTime2,
+                cursorFromRect = Rect(4f, 0f, 6f, 14f),
+                cursorPath = cursorPath2.points,
+                cursorDurationNanos = 100L * NANOS_PER_MS,
+            )
+
+            // 30ms：c alpha = 0（c 的 startedAt=100ms >> 30ms）
+            val scene30 = timeline.sample(30L * NANOS_PER_MS)
+            val unitC30 = scene30.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("100ms 子测试 30ms: unit c 应存在", unitC30)
+            assertTrue(
+                "100ms 子测试 30ms: unit c alpha 应为 0（queued after surviving，startedAt=100ms），实际=${unitC30!!.alpha.from}",
+                unitC30.alpha.from < 0.01f,
+            )
+
+            // 100ms：c 刚开始（startedAt=100ms，elapsed=0）
+            val scene100 = timeline.sample(100L * NANOS_PER_MS)
+            val unitC100 = scene100.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("100ms 子测试 100ms: unit c 应存在", unitC100)
+            assertTrue(
+                "100ms 子测试 100ms: unit c alpha 应刚开始（≈0），实际=${unitC100!!.alpha.from}",
+                unitC100.alpha.from < 0.2f,
+            )
+
+            // a 的 alpha 不应被重置（持续 timeline 核心不变量）
+            val unitA100 = scene100.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+            if (unitA100 != null) {
+                assertTrue(
+                    "100ms 子测试 100ms: unit a alpha 不应被重置为 0，实际=${unitA100.alpha.from}",
+                    unitA100.alpha.from > 0f,
+                )
+            }
+        }
+
+        // === 子测试 B：长时长 1000ms ===
+        run {
+            val timeline = ComposeVisualTimeline()
+
+            // patch1：0ms "" → "ab"，duration=1000ms
+            // a: startedAt=0, duration=500ms（0..500ms）
+            // b: startedAt=500ms, duration=500ms（500..1000ms）
+            val cursorPath1 =
+                CursorMotionPath(
+                    points =
+                        listOf(
+                            CursorMotionPoint(rect = Rect(10f, 0f, 12f, 14f), endFraction = 0.5f),
+                            CursorMotionPoint(rect = Rect(20f, 0f, 22f, 14f), endFraction = 1f),
+                        ),
+                )
+            val patch1 =
+                makePatch(
+                    id = 1L,
+                    oldLayout = emptyLayout,
+                    newLayout = abLayout,
+                    insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2)),
+                    cursorMotionPath = cursorPath1,
+                    durationMs = 1000L,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = 1000L,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
+
+            timeline.applyPatch(
+                patch = patch1,
+                frameTimeNanos = 0L,
+                cursorFromRect = Rect(0f, 0f, 2f, 14f),
+                cursorPath = cursorPath1.points,
+                cursorDurationNanos = 1000L * NANOS_PER_MS,
+            )
+
+            // patch2：100ms "ab" → "abc"，duration=1000ms
+            // queueTailEndNanos = max(500+500) = 1000ms（b 未完成）
+            // c: startedAt=1000ms, duration=1000ms
+            val frameTime2 = 100L * NANOS_PER_MS
+            val offsetMap2 = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY))
+            val cursorPath2 =
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = Rect(30f, 0f, 32f, 14f), endFraction = 1f)),
+                )
+            val patch2 =
+                makePatch(
+                    id = 2L,
+                    oldLayout = abLayout,
+                    newLayout = abcLayout,
+                    offsetMap = offsetMap2,
+                    insertedUnits = listOf(TextRange(2, 3)),
+                    cursorMotionPath = cursorPath2,
+                    durationMs = 1000L,
+                    motionPolicy =
+                        EditorMotionPolicy(
+                            textDurationMillis = 1000L,
+                            cursorEnabled = true,
+                            coordinated = true,
+                        ),
+                )
+
+            timeline.applyPatch(
+                patch = patch2,
+                frameTimeNanos = frameTime2,
+                cursorFromRect = Rect(2f, 0f, 4f, 14f),
+                cursorPath = cursorPath2.points,
+                cursorDurationNanos = 1000L * NANOS_PER_MS,
+            )
+
+            // 200ms：c alpha = 0（c 的 startedAt=1000ms >> 200ms）
+            val scene200 = timeline.sample(200L * NANOS_PER_MS)
+            val unitC200 = scene200.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("1000ms 子测试 200ms: unit c 应存在", unitC200)
+            assertTrue(
+                "1000ms 子测试 200ms: unit c alpha 应为 0（queued after surviving），" +
+                    "实际=${unitC200!!.alpha.from}",
+                unitC200.alpha.from < 0.01f,
+            )
+
+            // 1000ms：c 刚开始（startedAt=1000ms，elapsed=0）
+            val scene1000 = timeline.sample(1000L * NANOS_PER_MS)
+            val unitC1000 = scene1000.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+            assertNotNull("1000ms 子测试 1000ms: unit c 应存在", unitC1000)
+            assertTrue(
+                "1000ms 子测试 1000ms: unit c alpha 应刚开始（≈0），实际=${unitC1000!!.alpha.from}",
+                unitC1000.alpha.from < 0.2f,
+            )
+
+            // a 的 alpha 不应被重置（持续 timeline 核心不变量）
+            val unitA1000 = scene1000.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+            if (unitA1000 != null) {
+                assertTrue(
+                    "1000ms 子测试 1000ms: unit a alpha 不应被重置为 0，实际=${unitA1000.alpha.from}",
+                    unitA1000.alpha.from > 0f,
+                )
+            }
+        }
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {

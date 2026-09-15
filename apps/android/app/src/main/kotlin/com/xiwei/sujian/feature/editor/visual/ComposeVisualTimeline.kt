@@ -79,9 +79,9 @@ class ComposeVisualTimeline {
         val policy = patch.motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
-        // #691 评论 5680711648：surviving unit 中尚未开始的最早 start time —
-        // cursor rebase 时不能越过这些 unit（见下方 cursor 处理）。
-        var earliestUnstartedSurvivingStart: Long? = null
+        // #691 评论 5681258225：surviving 列表在 if/else 之前声明，
+        // 让 cursor 合并逻辑在 textEnabled=false 时也能访问（此时为空列表）。
+        val surviving = mutableListOf<VisualTextUnit>()
 
         // #691 评论 5679242735 修改2：textEnabled=false 时不创建任何文字 alpha/position track。
         // 不要只把 duration 改成 0 — 否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
@@ -92,12 +92,21 @@ class ComposeVisualTimeline {
             val sampledUnits = units.map { rebaseUnitForPatch(it, frameTimeNanos) }
 
             // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
-            val surviving = mutableListOf<VisualTextUnit>()
             val ghosting = mutableListOf<VisualTextUnit>()
             mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
 
             // 第三步：处理本 patch 新插入的 unit。
-            val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos)
+            // #691 评论 5681258225：计算当前未完成文字队列的尾部计划结束时间，
+            // 让新 inserted units 接到队列后面，不从 frameTimeNanos 开始。
+            val queueTailEndNanos =
+                surviving
+                    .filter {
+                        it.targetRange != null &&
+                            it.alpha.startedAtNanos + it.alpha.durationNanos > frameTimeNanos
+                    }
+                    .maxOfOrNull { it.alpha.startedAtNanos + it.alpha.durationNanos }
+                    ?: frameTimeNanos
+            val inserted = createInsertedUnits(patch, frameTimeNanos, durationNanos, queueTailEndNanos)
 
             // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
             createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
@@ -107,14 +116,6 @@ class ComposeVisualTimeline {
 
             // 合并：存活 + 新插入 + ghost
             units = surviving + inserted + ghosting
-
-            // #691 评论 5680711648 修复2：找 surviving unit 中尚未开始的最早 start time。
-            // rebaseUnitForPatch 保留了未来 unit 的绝对 startedAtNanos，
-            // 所以 surviving 里尚未开始的 unit 满足 alpha.startedAtNanos > frameTimeNanos。
-            earliestUnstartedSurvivingStart =
-                surviving
-                    .filter { it.targetRange != null && it.alpha.startedAtNanos > frameTimeNanos }
-                    .minOfOrNull { it.alpha.startedAtNanos }
         } else {
             // 文字动画关闭：不创建任何文字 alpha/position track。
             units = emptyList()
@@ -131,18 +132,47 @@ class ComposeVisualTimeline {
                 } else {
                     cursorFromRect
                 }
-            // #691 评论 5680711648 修复2：cursor rebase 不越过尚未开始的 surviving unit。
-            // 如果存在尚未开始的 surviving insert unit（alpha.startedAtNanos > frameTimeNanos），
-            // cursor 的 startedAtNanos 应延后到最早的未开始 unit 的 startedAtNanos，
-            // 这样 cursor 在未开始 unit 出现前停留在 startRect，不会越过当前已出现文字。
-            // 第一笔 patch 时没有 surviving unit，earliestUnstartedSurvivingStart=null，
-            // cursorStartedAt=frameTimeNanos，与原行为一致。
-            val cursorStartedAt = maxOf(frameTimeNanos, earliestUnstartedSurvivingStart ?: frameTimeNanos)
+
+            // #691 评论 5681258225：cursor 必须消费同一条文字队列。
+            // 存在未完成 surviving unit 时，不直接用新 patch 的 cursorPath 覆盖旧 track；
+            // 把 surviving 的未完成 caret 点与新 patch 的点组合成新的剩余 cursor path。
+            val survivingCursorPoints = mutableListOf<CursorMotionPoint>()
+            if (policy.textEnabled) {
+                val unfinishedSurviving =
+                    surviving
+                        .filter {
+                            it.targetRange != null &&
+                                it.alpha.startedAtNanos + it.alpha.durationNanos > frameTimeNanos
+                        }
+                        .sortedBy { it.targetRange!!.start }
+                for (unit in unfinishedSurviving) {
+                    val caretOffset = unit.targetRange!!.end
+                    // #691 评论 5681258225：跨行场景关键 — 用最新 layout 取 caret rect，不用旧 layout。
+                    val caretRect = safeCursorRectFromLayout(patch.newLayout, caretOffset) ?: continue
+                    survivingCursorPoints.add(CursorMotionPoint(rect = caretRect, endFraction = 0f))
+                }
+            }
+
+            // 合并 surviving cursor points + 新 patch cursorPath points
+            // #691 评论 5681258225：只有当存在 surviving cursor points 时才重算 endFraction —
+            // 没有 surviving points 时保持原 cursorPath 的自定义 endFraction 不变
+            // （单笔 patch 的 cursor path 可能有不均匀的 endFraction，如 1/3, 1/2, 1.0）。
+            val allPoints = survivingCursorPoints + cursorPath
+            val normalizedPoints =
+                if (survivingCursorPoints.isNotEmpty() && allPoints.size > 1) {
+                    val n = allPoints.size
+                    allPoints.mapIndexed { i, point ->
+                        point.copy(endFraction = (i + 1f) / n)
+                    }
+                } else {
+                    allPoints
+                }
+
             cursorChannel =
                 CursorTrack(
                     fromRect = startRect,
-                    points = cursorPath,
-                    startedAtNanos = cursorStartedAt,
+                    points = normalizedPoints,
+                    startedAtNanos = frameTimeNanos,
                     durationNanos = cursorDurationNanos,
                 )
         }
@@ -248,11 +278,20 @@ class ComposeVisualTimeline {
 
     /**
      * 第三步：处理本 patch 新插入的 unit。
+     *
+     * #691 评论 5681258225：新 inserted units 从 [queueTailEndNanos] 开始依次排，
+     * 不再从 [frameTimeNanos] 开始。这样视觉顺序永远和正文顺序一致 —
+     * 新 patch 的文字接到当前还没完成的有序文字队列后面，
+     * 新 unit 的 startedAtNanos 从前一个尚未完成文字 unit 的计划结束时间继续。
+     *
+     * @param queueTailEndNanos 当前未完成文字队列的尾部计划结束时间。
+     *   没有未完成 surviving unit 时 = [frameTimeNanos]（退化为原行为）。
      */
     private fun createInsertedUnits(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
         durationNanos: Long,
+        queueTailEndNanos: Long,
     ): List<VisualTextUnit> {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
@@ -260,7 +299,7 @@ class ComposeVisualTimeline {
         // #691 评论 5679815971 问题2：一次 patch 有 N 个 insertedUnits 时，
         // 把总时长按 unit 顺序分段，而不是所有 unit 同时从 0ms 跑满总时长。
         // 第 i 个 unit：startFraction = i/N, endFraction = (i+1)/N,
-        // startedAt = frameTime + totalDuration * startFraction,
+        // startedAt = queueTailEndNanos + totalDuration * startFraction,
         // duration = totalDuration * (endFraction - startFraction).
         // 这样 cursor 的 CursorMotionPoint.endFraction 才和对应文字真正是同一进度语义。
         val validRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
@@ -269,7 +308,8 @@ class ComposeVisualTimeline {
             val position = computeUnitPosition(newLayout, range) ?: Offset.Zero
             val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
             val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
-            val unitStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
+            // #691 评论 5681258225：从队列尾部计划结束时间开始排，不从 frameTimeNanos 开始。
+            val unitStartedAt = queueTailEndNanos + (durationNanos * startFraction).toLong()
             val unitDuration = (durationNanos * (endFraction - startFraction)).toLong()
             inserted.add(
                 VisualTextUnit(
@@ -789,6 +829,20 @@ class ComposeVisualTimeline {
         if (channel.durationNanos <= 0L) return 0L
         return max(0L, channel.startedAtNanos + channel.durationNanos - frameTimeNanos)
     }
+
+    /**
+     * #691 评论 5681258225：从 layout 快照安全取 cursor rect。
+     * offset 越界或 layout 抛异常时返回 null。
+     */
+    private fun safeCursorRectFromLayout(
+        layout: ComposeLayoutSnapshot,
+        offset: Int,
+    ): Rect? =
+        try {
+            layout.result.getCursorRect(offset)
+        } catch (_: Throwable) {
+            null
+        }
 
     /**
      * 从 layout 取 unit 的真实位置（左上角）。
