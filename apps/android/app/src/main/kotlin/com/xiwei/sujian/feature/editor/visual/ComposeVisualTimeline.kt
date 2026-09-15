@@ -47,6 +47,19 @@ class ComposeVisualTimeline {
     private var cursorChannel: CursorTrack? = null
 
     /**
+     * #691 评论 5684993243：已在前一可见帧产生真实 alpha 进度的 unit key 集合。
+     *
+     * 这个事实由 [sample] 推进 — 只有真正采样到一个存活插入 unit 且该帧 alpha 已离开起点时，
+     * 才把 unit.key 计入。applyPatch 判断 started/pending 只看这份持久状态，
+     * 不再从 TimedFloat.startedAtNanos/from 反推（那些字段会被 rebaseUnitForPatch 改写）。
+     *
+     * - 新 unit 创建时不在集合里。
+     * - mapSurvivingSlice/rebase 保持 key（copy 保留 key）。
+     * - unit 收口移除/转 ghost/clear/settleForPolicyChange 时同步清理对应 key。
+     */
+    private var presentedProgressKeys: MutableSet<Long> = mutableSetOf()
+
+    /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
      * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
      *
@@ -89,6 +102,9 @@ class ComposeVisualTimeline {
         // #691 评论 5684136311：在 rebase 之前用原始 unit 判断是否已产生可见进度。
         // rebase 会把进行中通道的 startedAt 重设为 frameTimeNanos，丢失"是否同一 VSync"信息。
         // textEnabled=false 时给空 map（cursor 路径不会用到）。
+        // #691 评论 5684993243：hasVisibleAlphaProgress 内部优先看 [presentedProgressKeys] 持久状态，
+        // 处理"同一 VSync 连续 patch"场景；否则回退到原始通道判断"时间是否真的推进了"，
+        // 处理"不同时间 patch 但中间未 sample"场景。
         val progressByKey =
             if (policy.textEnabled) {
                 units.associate { it.key to hasVisibleAlphaProgress(it, frameTimeNanos) }
@@ -577,16 +593,29 @@ class ComposeVisualTimeline {
             if (target != null) {
                 // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
                 if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
+                    // #691 评论 5684993243：收口移除时同步清理 presentedProgressKeys
+                    presentedProgressKeys.remove(unit.key)
                     continue
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
                 if (alphaFinished && sampled.alpha.to <= 0f) {
+                    // #691 评论 5684993243：ghost 收口移除时同步清理 presentedProgressKeys
+                    presentedProgressKeys.remove(unit.key)
                     continue
                 }
             }
             sampledUnits.add(sampled)
             remainingUnits.add(unit)
+            // #691 评论 5684993243：只有真正 sample 到一个存活插入 unit 且该帧 alpha 已离开起点时，
+            // 才把 unit.key 计入 presentedProgressKeys。这个事实只能由可见帧推进，
+            // 不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
+            // 必须用原始 unit（循环变量 unit）的 alpha 判断，不是 sampled 的 —
+            // sampled 的 alpha.from 已被 sampleUnit rebase 成当前值，
+            // currentAlpha(sampled.alpha, now) == sampled.alpha.from 永远成立，无法判断。
+            if (target != null && currentAlpha(unit.alpha, frameTimeNanos) != unit.alpha.from) {
+                presentedProgressKeys.add(unit.key)
+            }
         }
         // 缺陷3：收口要修改 timeline 内部 units 列表（移除已稳定的 unit）
         units = remainingUnits
@@ -629,6 +658,8 @@ class ComposeVisualTimeline {
         units = emptyList()
         nextUnitKey = 1L
         cursorChannel = null
+        // #691 评论 5684993243：清空已显示 unit key 集合
+        presentedProgressKeys.clear()
     }
 
     /**
@@ -643,6 +674,9 @@ class ComposeVisualTimeline {
     fun settleForPolicyChange() {
         units = emptyList()
         cursorChannel = null
+        // #691 评论 5684993243：policy 切换时清空已显示 unit key 集合，
+        // 让后续 drain 用新 policy 重新决定是否创建 track。
+        presentedProgressKeys.clear()
     }
 
     // ==================== 统一光标位置（#691） ====================
@@ -878,11 +912,24 @@ class ComposeVisualTimeline {
         }
 
     /**
-     * #691 评论 5684136311：判断 unit 是否已经在前一个可见帧产生真实 alpha 进度。
+     * #691 评论 5684993243：判断 unit 是否已在前一可见帧产生真实 alpha 进度 —
+     * 优先看 [presentedProgressKeys] 持久状态，否则用原始通道判断"时间是否真的推进了"。
      *
-     * 同一 VSync、零进度（frameTimeNanos == startedAtNanos 且 alpha 仍在起点）的 unit
-     * 还没有在屏幕上显示过任何中间帧，可以和本帧后续 patch 一起重新分段收敛到最终 scene。
-     * 已经在之前可见帧产生真实进度的 unit 从当前屏幕状态继续，不归零。
+     * #691 评论 5684136311 原始版本：从 TimedFloat.startedAtNanos 和 from 反推"是否已显示过"：
+     *   frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
+     * 这在"同一 VSync 连续 patch"场景会误判 — 第一笔 patch 的 rebaseUnitForPatch 把进行中通道
+     * rebase 成 from=currentAlpha(now), startedAtNanos=now，第二笔 patch 时 frameTimeNanos == startedAtNanos，
+     * 30 > 30 == false，已显示过的 unit 被误判成"零进度 pending"，alpha 跳回 0。
+     *
+     * #691 评论 5684993243 修复：优先看 [presentedProgressKeys] 持久状态 —
+     * 这个事实只能由真正的 sample()/可见帧推进，不会被同一 VSync 的 rebaseUnitForPatch 改写抹掉。
+     * 这处理"同一 VSync 连续 patch"场景：第一笔 rebase 改写 startedAtNanos 后，
+     * 第二笔仍能通过 presentedProgressKeys 知道 a 已显示过。
+     *
+     * 否则回退到原始通道判断"时间是否真的推进了" —
+     * 这处理"不同时间 patch 但中间未 sample"场景（时间推进了，a 应保留进度）。
+     * 同一 VSync 零进度 unit（frameTimeNanos == startedAtNanos 且 alphaNow == from）
+     * 不会被误判，因为 frameTimeNanos > startedAtNanos 为 false。
      *
      * 必须用 rebase 前的原始 unit 调用 — rebase 会把进行中通道的 startedAt 重设为
      * frameTimeNanos，丢失"是否同一 VSync"信息。
@@ -891,6 +938,9 @@ class ComposeVisualTimeline {
         unit: VisualTextUnit,
         frameTimeNanos: Long,
     ): Boolean {
+        // #691 评论 5684993243：优先看 presentedProgressKeys 持久状态。
+        if (unit.key in presentedProgressKeys) return true
+        // 否则用原始通道判断"时间是否真的推进了"。
         val alphaNow = currentAlpha(unit.alpha, frameTimeNanos)
         return frameTimeNanos > unit.alpha.startedAtNanos && alphaNow != unit.alpha.from
     }
