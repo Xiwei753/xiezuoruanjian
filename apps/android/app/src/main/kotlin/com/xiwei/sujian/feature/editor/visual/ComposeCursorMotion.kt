@@ -99,6 +99,44 @@ fun buildCursorMotionPath(
         return CursorMotionPath(points = normalizeEndFractions(points))
     }
 
+    // 多 Core intent：遍历每笔 intent 的 cursor，映射中间点到最终布局。
+    // 仅当本事务不是纯插入多 unit（上面已处理）且有多个 intent 时走此路径。
+    if (intents.size > 1) {
+        val points = mutableListOf<CursorMotionPoint>()
+        // 收集有 cursor 的 intents 及其在 chain 中的原始索引
+        val cursorIntents = intents.mapIndexedNotNull { idx, intent ->
+            intent.cursor?.let { idx to it }
+        }
+        val n = cursorIntents.size
+        for ((i, pair) in cursorIntents.withIndex()) {
+            val (intentIdx, cursor) = pair
+            if (i == n - 1) {
+                // 最后一笔：无条件作为终点，用 newLayout 查真实 cursor rect
+                val endOffset = cursor.newEndUtf16.coerceIn(0, newTextLen)
+                val endRect = safeCursorRect(newLayout, endOffset)
+                if (endRect != null) {
+                    points.add(CursorMotionPoint(rect = endRect, endFraction = 1f))
+                }
+                continue
+            }
+            // 中间笔：把 cursor.newEndUtf16 沿后续 offset maps 映射到 Tn 坐标
+            val mappedOffset = ComposeVisualRebase.mapCursorOffsetThroughChain(intents, intentIdx, cursor.newEndUtf16)
+            if (mappedOffset != null) {
+                val mappedOffsetCoerced = mappedOffset.coerceIn(0, newTextLen)
+                val rect = safeCursorRect(newLayout, mappedOffsetCoerced)
+                if (rect != null) {
+                    val endFraction = (i + 1f) / n
+                    points.add(CursorMotionPoint(rect = rect, endFraction = endFraction))
+                }
+            }
+            // 不能映射的中间点不猜，跳过
+        }
+        if (points.isNotEmpty()) {
+            return CursorMotionPath(points = normalizeEndFractions(points))
+        }
+        // 所有中间点都不能映射时，回退到只保留最终目标点
+    }
+
     // 单字符 / 单 unit / Delete / Move / cursor-only：只保留最终目标点。
     // 最终光标位置取最后一笔 intent 的 newEndUtf16，查 newLayout。
     val endOffset = lastCursor.newEndUtf16.coerceIn(0, newTextLen)

@@ -1177,6 +1177,54 @@ internal object ComposeVisualRebase {
     }
 
     /**
+     * #684 评论 5673384335 缺口3：把某笔 intent 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
+     *
+     * 从 `intentIndex + 1` 开始，用每笔 intent 的 `offsetMap.entries` 把 offset 从 T(intentIndex+1)
+     * 映射到 Tn。每一步：在当前 offset 处找包含该 offset 的 entry（offset 在 `[oldStart, oldStart + length)`
+     * 范围内），映射到 `newStart + (offset - oldStart)`。
+     *
+     * - 如果某笔没有 offsetMap（null），跳过该笔（坐标不变）。
+     * - 如果某笔的 offsetMap entries 为空，表示整段删除/替换，无法映射，返回 null。
+     * - 如果 offset 不在任何 entry 里，返回 null（该位置被编辑/删除）。
+     * - 如果成功映射到最终 Tn，返回最终 offset。
+     *
+     * 与 [mapRangesForwardThroughOffsetMap] 类似，但处理单个 offset 而不是 range。
+     */
+    fun mapCursorOffsetThroughChain(
+        chain: List<EditorVisualIntent>,
+        intentIndex: Int,
+        offset: Int,
+    ): Int? {
+        var currentOffset = offset
+        for (j in (intentIndex + 1) until chain.size) {
+            val entries = chain[j].offsetMap?.entries
+            // offsetMap == null 的 Core 契约是"纯 selection/cursor，无正文变化"，
+            // 该阶段坐标不变，直接跳过继续映射后续正文事务。
+            if (entries == null) continue
+            if (entries.isEmpty()) {
+                // 空 entries 表示整段删除/替换，无存活映射，该 offset 无法映射到 Tn
+                return null
+            }
+            // 在当前 offset 处找包含该 offset 的 entry
+            var mapped: Int? = null
+            for (entry in entries) {
+                val oldStart = entry.oldStart
+                val oldEnd = entry.oldStart + entry.length
+                if (currentOffset >= oldStart && currentOffset < oldEnd) {
+                    mapped = entry.newStart + (currentOffset - oldStart)
+                    break
+                }
+            }
+            if (mapped == null) {
+                // offset 不在任何 entry 里，该位置被编辑/删除
+                return null
+            }
+            currentOffset = mapped
+        }
+        return currentOffset
+    }
+
+    /**
      * 把 ranges 沿 offsetMap entries 的 old→new 方向映射。
      * 每个 range 与每个 entry 的 old range [oldStart, oldStart+length) 求交，
      * 交集映射到 new range。不在任何 entry 里的部分丢弃。

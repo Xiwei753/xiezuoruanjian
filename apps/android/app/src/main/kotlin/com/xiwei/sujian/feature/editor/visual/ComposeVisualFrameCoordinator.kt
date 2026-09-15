@@ -199,7 +199,7 @@ class ComposeVisualFrameCoordinator(
         }
 
         // #684 评论 5664636035 Bug2：无旧动画时光标起点应从 chain 第一笔 old cursor 起跑，
-        // 而非最后一笔。firstCursor 用于 cursorStartRect（T0 坐标），lastCursor 用于 cursorEndRect（Tn 坐标）。
+        // 而非最后一笔。firstCursor 用于 cursorMotionPath（T0 坐标），lastCursor 用于 cursorMotionPath（Tn 坐标）。
         val firstCursor = chain.mapNotNull { it.cursor }.firstOrNull()
         val lastCursor = chain.mapNotNull { it.cursor }.lastOrNull()
         val lastIntent = chain.last()
@@ -218,41 +218,12 @@ class ComposeVisualFrameCoordinator(
                 chain = chain,
             )
 
-        // 计算 cursor start/end rect。
+        // 计算 cursor motion path。
         // #684 评论 5672654866：coordinator 不再负责重建"此刻屏幕光标在哪"。
         // 当前 cursor rect 始终留在 overlay 的长生命周期 Animatable 里。
         // coordinator 只根据本事务 old/new layout、intent chain、animation units
         // 生成冻结的 cursorMotionPath。下一笔到来时不再把上一笔 progress 换算成 rect。
-        // cursorStartRect/cursorEndRect 保留作为兼容字段，从 logicalOldCursorRect/cursorEndRect 计算。
         // #684 评论 5664636035 Bug2：无旧动画时光标起点应从 chain 第一笔 old cursor 起跑（T0 坐标）。
-        val cursorStartRect =
-            if (firstCursor != null) {
-                try {
-                    val startOffset =
-                        firstCursor.oldEndUtf16
-                            .coerceIn(0, consumed.layout.result.layoutInput.text.length)
-                    consumed.layout.result.getCursorRect(startOffset)
-                } catch (_: Throwable) {
-                    null
-                }
-            } else {
-                null
-            }
-
-        // #684 评论 5664636035 Bug2：cursorEndRect 用最后一笔 new cursor（Tn 坐标）查 newest 布局。
-        val cursorEndRect =
-            if (lastCursor != null) {
-                try {
-                    val endOffset =
-                        lastCursor.newEndUtf16
-                            .coerceIn(0, newest.layout.result.layoutInput.text.length)
-                    newest.layout.result.getCursorRect(endOffset)
-                } catch (_: Throwable) {
-                    null
-                }
-            } else {
-                null
-            }
 
         // 计算 hidden ranges — 由 overlay 接管的范围。
         // 是否隐藏正文必须与 overlay 是否真的画正文收口成同一个判断：
@@ -440,8 +411,6 @@ class ComposeVisualFrameCoordinator(
                 oldRanges = effectiveOldRanges,
                 newRanges = mergedNewRanges,
                 retainedMoves = retainedMoves,
-                cursorStartRect = cursorStartRect,
-                cursorEndRect = cursorEndRect,
                 cursorMotionPath = cursorMotionPath,
                 startFrame = startFrame,
                 durationMs = effectiveDurationMs,

@@ -122,7 +122,7 @@ class ComposeEditorVisualState(
      * 上一份真正显示过的 layout → 当前真正显示出来的 layout →
      * 中间积累的 Core intent chain → 一个冻结的 [ComposeVisualTransaction]（双向汇合）。
      *
-     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/cursorStartRect/cursorEndRect/startFrame
+     * 新事务生成后，里面的 oldLayout/newLayout/retainedMoves/startFrame
      * 全部不可再被后续 `onTextLayout` 修改。
      */
     fun onAuthoritativeLayout(
