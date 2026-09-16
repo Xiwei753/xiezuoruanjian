@@ -40,6 +40,30 @@ sealed interface CommitResult {
 }
 
 /**
+ * #694 评论 5694645209 问题1：[EditorTextFieldStateBridge.onInputSnapshot] 的明确结果 —
+ * 让视觉层根据 bridge 的真实决定收口，不再让视觉层先于 bridge 决定"候选已提交"。
+ *
+ * - [Composing]：composition 仍活跃，不提交。
+ * - [NoTextChange]：composition 已结束但 text == committedMirror（无变化），不生成 patch。
+ * - [LocalCommitAccepted]：本地 diff 已提交 Core 且被采纳，视觉层可以 finishCompositionCommit。
+ * - [AuthoritativeApplied]：消费了 pending authoritative（Undo/Redo 在 composition 期间到达），
+ *   本次不提交本地 diff，视觉层不应生成候选 local patch。
+ * - [LocalCommitRejected]：本地 diff 提交 Core 被拒绝，已回退到权威正文，
+ *   视觉层不应播放被拒绝的候选动画。
+ */
+sealed interface InputSnapshotOutcome {
+    data object Composing : InputSnapshotOutcome
+
+    data object NoTextChange : InputSnapshotOutcome
+
+    data object LocalCommitAccepted : InputSnapshotOutcome
+
+    data object AuthoritativeApplied : InputSnapshotOutcome
+
+    data object LocalCommitRejected : InputSnapshotOutcome
+}
+
+/**
  * #641 评论1 第2节：让 [TextFieldState] 成为 Android 实时输入状态。
  *
  * 职责只有：
@@ -86,11 +110,14 @@ class EditorTextFieldStateBridge(
      *
      * #641 评论 5458880786 问题3：pending 消费逻辑提取为 [consumePendingAuthoritativeIfAny]，
      * [flushForClose] 也复用，避免切章节/返回时把旧 composition 文本重新 commit 回 Core、覆盖 Undo。
+     *
+     * #694 评论 5694645209 问题1：返回 [InputSnapshotOutcome] —
+     * 让视觉层根据 bridge 的真实决定收口，不再让视觉层先于 bridge 决定"候选已提交"。
      */
-    fun onInputSnapshot(snapshot: EditorInputSnapshot) {
-        if (snapshot.composition != null) return
-        if (consumePendingAuthoritativeIfAny()) return
-        commitIfNeeded(snapshot.text, snapshot.selection)
+    fun onInputSnapshot(snapshot: EditorInputSnapshot): InputSnapshotOutcome {
+        if (snapshot.composition != null) return InputSnapshotOutcome.Composing
+        if (consumePendingAuthoritativeIfAny()) return InputSnapshotOutcome.AuthoritativeApplied
+        return commitIfNeeded(snapshot.text, snapshot.selection)
     }
 
     /**
@@ -132,11 +159,17 @@ class EditorTextFieldStateBridge(
         commitIfNeeded(state.text.toString(), state.selection)
     }
 
+    /**
+     * #694 评论 5694645209 问题1：返回 [InputSnapshotOutcome] —
+     * - text == committedMirror（无变化）-> [NoTextChange]
+     * - [CommitResult.Accepted] -> [LocalCommitAccepted]
+     * - [CommitResult.Rejected] -> 先 [applyAuthoritativeText] 回退到权威正文，再返回 [LocalCommitRejected]
+     */
     private fun commitIfNeeded(
         text: String,
         selection: TextRange,
-    ) {
-        if (text == committedMirror) return
+    ): InputSnapshotOutcome {
+        if (text == committedMirror) return InputSnapshotOutcome.NoTextChange
 
         val edit =
             computeSingleReplace(
@@ -145,13 +178,18 @@ class EditorTextFieldStateBridge(
                 selection = selection,
             )
 
-        when (val result = commitToCore(edit)) {
-            is CommitResult.Accepted -> committedMirror = text
-            is CommitResult.Rejected ->
+        return when (val result = commitToCore(edit)) {
+            is CommitResult.Accepted -> {
+                committedMirror = text
+                InputSnapshotOutcome.LocalCommitAccepted
+            }
+            is CommitResult.Rejected -> {
                 applyAuthoritativeText(
                     result.text,
                     result.selection,
                 )
+                InputSnapshotOutcome.LocalCommitRejected
+            }
         }
     }
 

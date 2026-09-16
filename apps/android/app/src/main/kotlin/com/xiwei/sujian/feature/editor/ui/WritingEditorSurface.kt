@@ -1,10 +1,13 @@
 package com.xiwei.sujian.feature.editor.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
 import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.foundation.text.input.forEachChange
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -24,6 +27,7 @@ import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
 import com.xiwei.sujian.feature.editor.visual.ComposeTextAnimationOverlay
+import com.xiwei.sujian.feature.editor.visual.LocalInputChange
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import androidx.compose.ui.text.TextRange as ComposeTextRange
@@ -149,6 +153,7 @@ fun WritingEditorSurface(
  * 正文编辑器内容 — 提取以降低 [WritingEditorSurface] 的认知复杂度。
  */
 @Composable
+@OptIn(ExperimentalFoundationApi::class)
 private fun WritingEditorContent(params: WritingEditorContentParams) {
     val bridge = params.bridge
     val visualState = params.visualState
@@ -195,6 +200,30 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             }
         }
 
+    // #694 评论第 2 步：给 BasicTextField 加稳定的 InputTransformation —
+    // 只把输入事实塞进 visualState 的普通 tracker，不等 Core，不直接开始动画。
+    // 它不是 Compose State，不在 InputTransformation 里改 StateFlow/mutableStateOf。
+    val visualInputTransformation =
+        remember(visualState) {
+            InputTransformation {
+                val changesSnapshot =
+                    buildList {
+                        changes.forEachChange { range, originalRange ->
+                            add(LocalInputChange(newRange = range, oldRange = originalRange))
+                        }
+                    }
+                if (changesSnapshot.isNotEmpty()) {
+                    visualState.recordLocalInput(
+                        oldText = originalText.toString(),
+                        newText = asCharSequence().toString(),
+                        oldSelection = originalSelection,
+                        newSelection = selection,
+                        changes = changesSnapshot,
+                    )
+                }
+            }
+        }
+
     Box(modifier = modifier) {
         BasicTextField(
             state = bridge.state,
@@ -207,6 +236,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             scrollState = viewportState.scrollState,
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
+            inputTransformation = visualInputTransformation,
             // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 overlay 画。
             // smooth cursor 关闭时始终由系统画，overlay 永远不接管。
             cursorBrush =
@@ -262,6 +292,9 @@ private fun onTextLayoutResult(
         result = result,
         selection = bridge.state.selection,
         scrollY = viewportState.scrollState.value,
+        // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
+        // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
+        compositionActive = bridge.state.composition != null,
     )
     onSurfaceReady()
 }

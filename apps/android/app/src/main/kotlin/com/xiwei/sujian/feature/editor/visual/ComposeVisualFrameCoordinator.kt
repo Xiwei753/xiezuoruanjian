@@ -12,6 +12,14 @@ import uniffi.writer_core.AnimationModeDto
  * #689 评论 5674631257 步骤3：删除动画运行职责。
  * 现在只回答"旧屏幕帧到新屏幕帧改了什么"，不回答"上一笔动画现在跑到哪了"。
  *
+ * #694 评论第 6 步：职责收窄成 Core/external visual coordinator。
+ * 本地输入（TYPING/TYPING_COMMIT/IME_COMPOSITION/PASTE/DELETE）不再从这里进入 —
+ * 它由 [WritingEditorSurface] 的 InputTransformation → [ComposeEditorVisualState.recordLocalInput]
+ * 直接记录，等 [TextLayoutResult] 到达时配对生成 [ComposeVisualPatch]（intent=null）。
+ * 现有 [PendingVisualChain]、[lastConsumed]/[latest]、Core revision、transactionId 保留给
+ * Undo/Redo/Programmatic/Load/Format 这些真正需要 Core 驱动的修改；
+ * 不要再拿它给普通打字和 Backspace 配 TextLayoutResult。
+ *
  * 保留：
  * - [PendingVisualChain]、[lastConsumed]/[latest]、Core intent 与真实 [TextLayoutResult]
  *   的双向汇合、offset map chain、[computeRetainedMoves]。
@@ -116,6 +124,46 @@ class ComposeVisualFrameCoordinator(
         }
 
         return tryBuildPatch()
+    }
+
+    /**
+     * #694 评论 5691696678 问题2：屏幕基线推进入口 —
+     * 本地输入命中或 IME composition 活跃时，真实 layout 已经呈现但不应走 Core visual path
+     * 生成 patch（本地输入有自己的 patch，composition 只推进基线不播放吞吐）。
+     *
+     * 但 [ComposeVisualFrameCoordinator] 的 [lastConsumed] 基线必须跟随真实 layout 推进，
+     * 否则后续 Undo/Redo/Programmatic intent 的 `pending.baseText` 与 `lastConsumed.text`
+     * 对不上，[tryBuildPatch] 一直返回 [FrameUpdate.Empty]。
+     *
+     * 职责：只更新 [latest]/[lastConsumed]，**不**调用 [tryBuildPatch]，**不**生成 Core patch。
+     * - 首次（lastConsumed == null）：设为基线。
+     * - 没有 Core pending（pending == null）：屏幕基线直接跟随真实 layout。
+     * - 有 Core pending：不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest。
+     *
+     * 诊断事件与 [onLayout] 一致 — overlay/诊断仍能观察到 layout 已呈现。
+     */
+    fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
+        val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        latest = presented
+
+        EditorDiagnosticsEvents.editorLayoutPresented(
+            targetId = targetId,
+            layoutTextLength = snapshot.result.layoutInput.text.length,
+        )
+
+        // #694 评论 5692161955 问题3：补并发顺序条件。
+        // 原实现只要 pending != null 就不推进 lastConsumed，导致
+        // "本地输入完成 -> external intent 先到 -> 本地 layout 后到"顺序下卡住。
+        // pending.baseText == presented.text 时推进 lastConsumed 是安全的——
+        // presented 就是 pending 期望的 baseText，推进后 tryBuildPatch 的 baseText 匹配条件仍成立，
+        // 后续 target layout 到达时 patch 能生成。
+        when {
+            lastConsumed == null -> lastConsumed = presented
+            pending == null -> lastConsumed = presented
+            pending?.baseText == presented.text -> lastConsumed = presented
+            // 其他情况（pending != null 且 pending.baseText != presented.text）：
+            // 不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest
+        }
     }
 
     /**

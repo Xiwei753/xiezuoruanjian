@@ -85,9 +85,12 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         val applied = visualState.drainPendingPatchesAtFrame(0L)
 
         // 验证：三笔 patch 都必须被消费
+        // #694 评论第 7 步：同一 VSync 的多笔 patch 应先合成一个屏幕 transition
+        // （ComposeVisualPatchBatch.compose），再只 applyPatch() 一次。
+        // 旧实现逐笔 applyPatch 返回 3 笔；修复后 batch 合成返回 1 笔。
         assertEquals(
-            "问题1: 三笔 patch 都必须被消费，实际只消费了 ${applied.size} 笔",
-            3,
+            "问题1: 三笔 patch 应合成一个 batch transition 被消费，实际 applied.size=${applied.size}",
+            1,
             applied.size,
         )
 

@@ -424,6 +424,13 @@ internal fun rememberChapterSwitchSync(
  *
  * #641 评论 问题3 + 评论 5457777142 问题4：收集 [EditorMotionPolicy] 的 effective 策略
  * 传给 [ComposeEditorVisualState.onVisualIntent]。
+ *
+ * #694 评论第 5 步：按 Core cause 分流 —
+ * - TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE：本地 InputTransformation 已提供
+ *   visual edit，Core 回来的 visual intent 只当 ACK，不再第二次送进 ComposeVisualFrameCoordinator
+ *   （否则同一笔输入播放两次）。
+ * - UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT：仍映射成 [EditorVisualIntent]，走现有 Core visual path。
+ * Core 仍然是文档事务真值，但本地键盘/退格的动画不再等 Core 回声。
  */
 @Composable
 internal fun CollectVisualIntentEvents(
@@ -438,6 +445,9 @@ internal fun CollectVisualIntentEvents(
         viewModel.visualIntentEvents
             .collect { event ->
                 if (event.targetId != targetId) return@collect
+                // #694 评论第 5 步：本地输入 cause 只当 ACK，不再送进 ComposeVisualFrameCoordinator。
+                if (event.visualIntent.isLocalInputCause()) return@collect
+                // UNDO/REDO/PROGRAMMATIC/LOAD/FORMAT 仍走 Core visual path
                 val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
                 visualState.onVisualIntent(editorVisualIntent, currentMotionPolicy)
             }
