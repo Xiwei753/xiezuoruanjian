@@ -156,9 +156,12 @@ ApplicationWindow {
     }
 
     function openSyncDialog() {
-        if (syncBackend) {
-            settingsBackend.load_local_settings();
-        }
+        // Issue #696 评论 5698002089: 不在此处 load_local_settings()。
+        // 打开设置/同步界面只负责开窗；本地主题设置只能由工作区初始化
+        // internal_open_data_root() -> load_local_settings() 或无工作区的
+        // load_app_theme_mode() 加载。UI 打开动作重新加载全局本地设置会触发
+        // settings_changed -> themeController.reload()，导致主题异常切换。
+        // 同步配置刷新由 SettingsDialog.onOpened 的 syncBackendRef.load_sync_config() 负责。
         window.openSettingsDialog();
     }
 
