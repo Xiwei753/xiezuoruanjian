@@ -441,14 +441,16 @@ def rule_visual_motion_pure() -> list[Finding]:
             ["androidx.activity", "android.view", "com.xiwei.sujian.feature.editor.input"],
         )
         findings += scan_forbidden(APP_SRC, sub, COMPOSE_UI_FRAMEWORK)
-        # #641：ComposeEditorVisualState / ComposeTextAnimationOverlay 是 Compose 显示层 —
+        # #641：ComposeEditorVisualState / EditorTextFieldDrawLayer 是 Compose 显示层 —
         # 只消费 TextLayoutResult 做显示，不写正文持久状态。允许 Compose UI 依赖。
         # #641 评论 5457777142 问题2：ComposeVisualFrame 是纯显示数据类，
         # 引用 androidx.compose.ui.geometry.Offset/Rect 和 androidx.compose.ui.text.TextRange，
         # 与 ComposeVisualTransaction 同类，加入豁免。
+        # #698 评论 5697612595：ComposeTextAnimationOverlay 已删除，由 EditorTextFieldDrawLayer
+        # （统一 draw 层）替代，同样只消费 TextLayoutResult 做显示，不写正文持久状态。
         _641_visual_exemptions = {
             "feature/editor/visual/ComposeEditorVisualState.kt",
-            "feature/editor/visual/ComposeTextAnimationOverlay.kt",
+            "feature/editor/visual/EditorTextFieldDrawLayer.kt",
             # #689 评论 5674631257：持续视觉状态重构。ComposeVisualTransaction/
             # ComposeVisualFrame 已删除，由 ComposeVisualPatch（屏幕 diff 数据类）
             # 和 ComposeVisualTimeline（持续视觉状态数据类）替代。二者引用

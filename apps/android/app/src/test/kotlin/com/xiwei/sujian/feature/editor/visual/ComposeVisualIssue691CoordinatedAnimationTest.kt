@@ -933,7 +933,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
      * smooth cursor 开启且没有文字 patch。用 [computeRestingCursorRect] 实时计算静止光标，
      * 验证不同 selection 返回不同 rect（跨行时 top 不同，同行时 left 不同）。
      *
-     * 这验证了 [ComposeTextAnimationOverlay] 中 liveSelection 参数的实际用途 —
+     * 这验证了 [EditorTextFieldDrawLayer] 中 liveSelection 参数的实际用途 —
      * BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
      * 纯 selection 变化不保证重新计算文字布局，restingCursorRect 会停在旧位置。
      *
@@ -1922,10 +1922,10 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             "applyMotionPolicyAtFrame 后 drawsVisualCursor 应为 false",
             state.drawsVisualCursor.value,
         )
-        // hiddenRanges 应被清空
+        // hiddenRanges 应被清空（scene.hiddenRanges 保留，draw 层裁切用）
         assertTrue(
-            "applyMotionPolicyAtFrame 后 hiddenRanges 应为空",
-            state.hiddenRanges.value.isEmpty(),
+            "applyMotionPolicyAtFrame 后 scene.hiddenRanges 应为空",
+            state.visualScene.value.hiddenRanges.isEmpty(),
         )
         // visualScene 应被重置为 Empty
         assertEquals(

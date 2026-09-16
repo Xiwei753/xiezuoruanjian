@@ -10,7 +10,6 @@ import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -126,7 +125,8 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
                 latestPatch.newLayout.result.layoutInput.text.text == "an" &&
                 latestPatch.intent == null
         assertTrue(
-            "outcome 为 Reject 后也不应出现 a->an local patch，pendingPatches=$pendingAfterReject isAnLocalPatch=$isAnLocalPatch\n" +
+            "outcome 为 Reject 后也不应出现 a->an local patch，" +
+                "pendingPatches=$pendingAfterReject isAnLocalPatch=$isAnLocalPatch\n" +
                 "Issue #694 评论 5695660885 问题1：Rejected 后不应保留提前发布的候选 local patch",
             !isAnLocalPatch && pendingAfterReject == 0,
         )

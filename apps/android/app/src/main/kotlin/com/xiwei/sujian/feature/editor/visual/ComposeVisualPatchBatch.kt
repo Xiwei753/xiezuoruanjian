@@ -33,6 +33,10 @@ internal object ComposeVisualPatchBatch {
 
         val first = batch.first()
         val last = batch.last()
+        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
+        // oldLayout = first.oldLayout（第一份真实旧 layout），newLayout = last.newLayout（最后一份真实新 layout）。
+        // 不为 batch 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过，
+        // 虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
         val oldLayout = first.oldLayout
         val newLayout = last.newLayout
         val oldText = oldLayout.result.layoutInput.text.text
@@ -99,6 +103,8 @@ internal object ComposeVisualPatchBatch {
             }
 
         // retainedMoves 只按第一份旧 layout 和最后一份新 layout 算一次
+        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
+        // retainedMoves 只算一次（oldLayout -> newLayout），不为 batch 中间笔虚构中间 layout。
         val retainedMoves =
             if (composedOffsetMap.isNotEmpty()) {
                 ComposeVisualRebase.computeRetainedMovesFromComposedMap(
@@ -194,21 +200,26 @@ internal object ComposeVisualPatchBatch {
         val newCursorRect = safeCursorRectFromBatch(newLayout, newLayout.selection.end)
         return when {
             oldCursorRect == null && newCursorRect == null -> null
-            oldCursorRect == null -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
-            )
-            newCursorRect == null -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
-            )
-            oldCursorRect == newCursorRect -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-            )
-            else -> CursorMotionPath(
-                points = listOf(
-                    CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
-                    CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
-                ),
-            )
+            oldCursorRect == null ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
+                )
+            newCursorRect == null ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
+                )
+            oldCursorRect == newCursorRect ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+                )
+            else ->
+                CursorMotionPath(
+                    points =
+                        listOf(
+                            CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
+                            CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
+                        ),
+                )
         }
     }
 

@@ -63,14 +63,6 @@ class ComposeEditorVisualState(
     val latestLayout: StateFlow<ComposeLayoutSnapshot?> = _latestLayout.asStateFlow()
 
     /**
-     * 当前应由 overlay 接管、BasicTextField 需设透明的 ranges —
-     * 每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
-     * 不从"上一事务 suppressed ranges"继承。
-     */
-    private val _hiddenRanges = MutableStateFlow<List<TextRange>>(emptyList())
-    val hiddenRanges: StateFlow<List<TextRange>> = _hiddenRanges.asStateFlow()
-
-    /**
      * 视觉光标是否由 overlay 绘制 —
      * smooth cursor 开启：编辑器 attach 以后一直为 true（系统光标透明）。
      * smooth cursor 关闭：一直为 false（系统光标正常画）。
@@ -507,6 +499,12 @@ class ComposeEditorVisualState(
             }
 
         // retained reflow 只比较 oldLayout -> newLayout 的真实几何
+        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
+        // chainSize > 1 时只从最后一份真实 oldLayout（= lastPresentedLayout，即 oldLayout 参数）
+        // 到当前真实 newLayout（= snapshot，即 newLayout 参数）做一次 reflow。
+        // offsetMap 用 chain 各笔 changes 合成保留输入顺序（composeLocalChainOffsetMap），
+        // 但不为 chain 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过
+        // （快速输入中间 layout 被跳过），虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
         val retainedMoves =
             ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
 
@@ -587,8 +585,10 @@ class ComposeEditorVisualState(
         // 等 bridge outcome 到达后由 onInputSnapshotResolved 收口（LocalCommitAccepted 调
         // finishCompositionCommit / AuthoritativeApplied/Rejected/NoTextChange 清 state）。
         if (!compositionActive &&
-            (compositionVisualPhase == CompositionVisualPhase.Composing ||
-                compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution)
+            (
+                compositionVisualPhase == CompositionVisualPhase.Composing ||
+                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
+            )
         ) {
             val cursorRectAwaiting = computeCursorRectFromLayout(snapshot)
             _restingCursorRect.update { cursorRectAwaiting }
@@ -599,6 +599,20 @@ class ComposeEditorVisualState(
         // #691：更新静止光标 rect
         val cursorRect = computeCursorRectFromLayout(snapshot)
         _restingCursorRect.update { cursorRect }
+
+        // #698 评论 5697612595：真实 layout 去重 —
+        // 相同正文/几何不能重复推进动画基线，防止 onTextLayout 因非真实变化重复触发形成回路
+        // （动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout ->
+        // VisualState 再消费 layout）。只在 !compositionActive 时检查：composition 活跃时 preedit
+        // 可能正在变化，即使此刻正文/几何与 lastPresentedLayout 相同，也需要进入 composition 分支武装 phase。
+        // 去重分支只更新 _latestLayout（已在上方更新）和 _restingCursorRect（已在上方更新），
+        // 直接 return，不 drain localInputTracker、不发布 patch、不推进 frameCoordinator、不更新 lastPresentedLayout。
+        // "正文+几何相同"定义：text.text 相同 && size 相同 && lineCount 相同。
+        // selection 变化不算几何变化 — 纯 selection 变化时 draw 层用 latestLayout + liveSelection
+        // 实时算光标（computeRestingCursorRect），不依赖 lastPresentedLayout.selection，不需要重新推进基线。
+        if (!compositionActive && hasSameTextAndGeometry(lastPresentedLayout, snapshot)) {
+            return
+        }
 
         // #694 评论第 3 步 + 评论 5691696678 问题1：配对 pending local edit chain 生成 ComposeVisualPatch(intent=null)。
         // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
@@ -675,6 +689,26 @@ class ComposeEditorVisualState(
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
+    }
+
+    /**
+     * #698 评论 5697612595：判断新 snapshot 与上次呈现的 layout 是否"正文+几何相同" —
+     * text.text 相同 && size 相同 && lineCount 相同。
+     * 用于 [onAuthoritativeLayout] 去重，防止 onTextLayout 因非真实变化重复触发形成回路。
+     * selection 变化不算几何变化。
+     *
+     * @param last 上次真正呈现的 layout；null 时返回 false。
+     * @param snapshot 本次权威 layout。
+     * @return true 表示正文+几何相同（可去重，不推进动画基线）。
+     */
+    private fun hasSameTextAndGeometry(
+        last: ComposeLayoutSnapshot?,
+        snapshot: ComposeLayoutSnapshot,
+    ): Boolean {
+        if (last == null) return false
+        return snapshot.result.layoutInput.text.text == last.result.layoutInput.text.text &&
+            snapshot.result.size == last.result.size &&
+            snapshot.result.lineCount == last.result.lineCount
     }
 
     /**
@@ -768,8 +802,10 @@ class ComposeEditorVisualState(
     /**
      * #689 评论 5674631257 步骤7：采样当前视觉场景 — overlay 在每帧 draw 前调用。
      *
-     * 每次 sample 后把 [ComposeVisualScene.hiddenRanges] 同步给 [_hiddenRanges]，
-     * [OutputTransformation] 继续只负责把这些正在由 overlay 画的最终正文 range 设透明。
+     * 每次 sample 后把结果同步给 [_visualScene]。
+     * #698 评论 5697612595：不再把 [ComposeVisualScene.hiddenRanges] 同步给对外的 hiddenRanges StateFlow —
+     * 对外 hiddenRanges 已删除。draw 层（[EditorTextFieldDrawLayer]）直接读 [visualScene].hiddenRanges
+     * 做正文裁切，不再回流给 OutputTransformation。
      *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 当前应绘制的视觉场景。
@@ -777,7 +813,6 @@ class ComposeEditorVisualState(
     fun sampleVisualScene(frameTimeNanos: Long): ComposeVisualScene {
         val scene = visualTimeline.sample(frameTimeNanos)
         _visualScene.update { scene }
-        _hiddenRanges.update { scene.hiddenRanges }
         return scene
     }
 
@@ -895,7 +930,6 @@ class ComposeEditorVisualState(
         pendingPatches.clear()
         _patchVersion.update { 0L }
         _latestLayout.update { null }
-        _hiddenRanges.update { emptyList() }
         _visualScene.update { ComposeVisualScene.Empty }
         _latestPatch.update { null }
         _restingCursorRect.update { null }
@@ -944,9 +978,8 @@ class ComposeEditorVisualState(
         // #691 评论 5679815971 问题1：一次性同步所有 UI 状态，
         // 不要让 setSmoothCursorEnabled() 和 motion policy 走两套生命周期。
         // smooth cursor 所有权跟随 policy.cursorEnabled；
-        // 已发布给 Compose 的旧 visualScene/hiddenRanges 清空，直到下一次 sampleVisualScene() 重建。
+        // 已发布给 Compose 的旧 visualScene 清空，直到下一次 sampleVisualScene() 重建。
         _drawsVisualCursor.update { effective.cursorEnabled }
-        _hiddenRanges.update { emptyList() }
         _visualScene.update { ComposeVisualScene.Empty }
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
         if (pendingPatches.isNotEmpty()) {

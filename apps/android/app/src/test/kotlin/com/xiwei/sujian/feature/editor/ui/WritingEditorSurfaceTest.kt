@@ -10,7 +10,7 @@ import org.junit.Test
  * #641：editorSurfaceMode 纯函数决策测试 —
  * 活动章节用 BasicTextField 作为唯一正文输入/排版/光标，动画只做显示层。
  *
- * - isActivePane=true → EditorHost（BasicTextField + ComposeTextAnimationOverlay）；
+ * - isActivePane=true → EditorHost（BasicTextField + EditorTextFieldDrawLayer）；
  * - isActivePane=false + 匹配 Attaching/Attached/Committing/Cancelling → EditorHost；
  * - isActivePane=false + Idle/Detached/Detaching → Preview。
  */

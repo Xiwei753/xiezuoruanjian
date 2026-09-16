@@ -34,7 +34,7 @@ import java.io.File
  * 3. 完成动画的存活 unit 永远留在 overlay，和 BasicTextField 重画同一份正文。
  * 4. retainedMoves 只会移动"本来就在 timeline 里的字"，普通正文回流时不动画。
  * 5. 一个 active unit 跨过删除洞时整块判死，不按 offset map 切开。
- * 6. ComposeTextAnimationOverlay 混用 System.nanoTime() 和 withFrameNanos 两种时间基准。
+ * 6. EditorTextFieldDrawLayer 混用 System.nanoTime() 和 withFrameNanos 两种时间基准。
  * 7. 旧回归测试被大面积改成 placeholder，覆盖的行为没一起消失。
  */
 @Suppress("StringLiteralDuplication", "MaxLineLength", "FunctionNaming")
@@ -382,7 +382,7 @@ class ComposeVisualTimelineComment5675270164ReproTest {
     // ==================== 缺陷 6 ====================
 
     /**
-     * 缺陷 6：ComposeTextAnimationOverlay 混用 System.nanoTime() 和 withFrameNanos 两种时间基准。
+     * 缺陷 6：EditorTextFieldDrawLayer 混用 System.nanoTime() 和 withFrameNanos 两种时间基准。
      *
      * 循环第 125 行 `while (visualState.hasActiveVisuals(System.nanoTime()))` 拿
      * withFrameNanos 创建的 startedAtNanos 再用 System.nanoTime() 判断结束。
@@ -392,15 +392,18 @@ class ComposeVisualTimelineComment5675270164ReproTest {
      * 期望：全过程只用 frameTimeNanos，循环写成同一个 frame clock。
      *
      * 当前行为：源码第 125 行有 System.nanoTime()。测试在修复前 FAIL。
+     *
+     * #698 评论 5697612595：ComposeTextAnimationOverlay 已删除，绘制链根改后统一 draw 层是
+     * EditorTextFieldDrawLayer，本测试改成读 EditorTextFieldDrawLayer.kt 源文件。
      */
     @Test
     fun defect6_overlayUsesFrameClockOnly_notSystemNanoTime() {
         val sourceFile =
             File(
-                "src/main/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeTextAnimationOverlay.kt",
+                "src/main/kotlin/com/xiwei/sujian/feature/editor/visual/EditorTextFieldDrawLayer.kt",
             )
         assertTrue(
-            "ComposeTextAnimationOverlay.kt 源文件应存在: ${sourceFile.absolutePath}",
+            "EditorTextFieldDrawLayer.kt 源文件应存在: ${sourceFile.absolutePath}",
             sourceFile.exists(),
         )
         val source = sourceFile.readText()
@@ -410,7 +413,7 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 .filter { it.isNotBlank() && !it.trimStart().startsWith("//") && !it.trimStart().startsWith("*") }
                 .joinToString("\n")
         assertFalse(
-            "缺陷6: ComposeTextAnimationOverlay 不应使用 System.nanoTime()（应只用 withFrameNanos 的 frameTimeNanos）\n" +
+            "缺陷6: EditorTextFieldDrawLayer 不应使用 System.nanoTime()（应只用 withFrameNanos 的 frameTimeNanos）\n" +
                 "当前行为：L125 while (visualState.hasActiveVisuals(System.nanoTime()))\n" +
                 "Compose 官方明确 withFrameNanos 的 frameTimeNanos time base 是 implementation-defined\n" +
                 "不保证等于 System.nanoTime()\n" +

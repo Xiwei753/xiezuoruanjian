@@ -28,6 +28,19 @@ import kotlin.math.max
  *
  * 这个类不是 Compose 可观察状态 — 它是纯数据状态机。
  * [ComposeEditorVisualState] 持有它并在每次 sample 后把结果同步给 Compose StateFlow。
+ *
+ * #698 评论 5697612595 边界声明 —
+ * **timeline 只能产出绘制状态（[ComposeVisualScene]），绝不能反向改变 BasicTextField 输出表示。**
+ * 具体而言：
+ * - timeline 不持有 [androidx.compose.foundation.text.input.OutputTransformation] 引用，
+ *   不接触 [androidx.compose.foundation.text.BasicTextField] 的 TextFieldState。
+ * - [sample] 返回的 [ComposeVisualScene.hiddenRanges] 只供 draw 层（[EditorTextFieldDrawLayer]）
+ *   做正文裁切（用背景色填充字形 path 遮住系统正文），不再回流给 OutputTransformation。
+ * - sample() 里 hiddenRanges 推导逻辑：从当前 `targetRange != null` 且仍由 overlay 绘制的 unit 推导，
+ *   不从"上一事务 suppressed ranges"继承，也不从任何 TextField 输出状态读取。
+ * 这条边界是断开"动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout ->
+ * VisualState 再消费 layout"回路的关键 — timeline 产出 hiddenRanges 后单向流给 draw 层，
+ * draw 层用它裁切，不再回流给 OutputTransformation 触发 BasicTextField 二次 layout。
  */
 @Suppress("TooManyFunctions")
 class ComposeVisualTimeline {
