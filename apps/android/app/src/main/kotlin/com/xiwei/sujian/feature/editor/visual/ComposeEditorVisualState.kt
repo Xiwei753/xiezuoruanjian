@@ -279,7 +279,14 @@ class ComposeEditorVisualState(
             }
             InputSnapshotOutcome.LocalCommitAccepted -> {
                 // bridge 已接受本地 commit：视觉层可以 finishCompositionCommit。
-                if (!compositionActive && wasCompositionActiveForSnapshot) {
+                // #694 评论 5696394554：不要把 wasCompositionActiveForSnapshot 当唯一前提。
+                // 只要 phase 是 Composing / AwaitingBridgeResolution，就说明 composition 事实
+                // 已经可能由 layout 路径确认过；Core 接受后应正常 finishCompositionCommit 或
+                // 进入 AcceptedAwaitingFinalLayout。
+                val compositionPhaseActive =
+                    compositionVisualPhase == CompositionVisualPhase.Composing ||
+                        compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
+                if (!compositionActive && (wasCompositionActiveForSnapshot || compositionPhaseActive)) {
                     val latest = _latestLayout.value
                     if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
                         finishCompositionCommit(snapshot.text, latest)
@@ -299,7 +306,15 @@ class ComposeEditorVisualState(
                 // bridge 消费了 pending authoritative 或 Core 拒绝了本地 commit：
                 // 取消本次 composition local visual state，不发布候选 local patch，
                 // 也不把 coordinator 推到候选文本；后续让权威 layout / external intent 正常接管。
-                cancelCompositionLocalVisualState()
+                // #694 评论 5696394554：以 compositionVisualPhase 作为视觉事务是否存在的真值来收口/清理。
+                // wasCompositionActiveForSnapshot 最多保留成辅助状态，不要决定能不能收口。
+                // 只有 phase 处于 composition 相关状态时才 cancel，避免在 Idle 时不必要地重置。
+                if (compositionVisualPhase == CompositionVisualPhase.Composing ||
+                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution ||
+                    compositionVisualPhase == CompositionVisualPhase.AcceptedAwaitingFinalLayout
+                ) {
+                    cancelCompositionLocalVisualState()
+                }
             }
         }
         wasCompositionActiveForSnapshot = compositionActive
@@ -629,6 +644,14 @@ class ComposeEditorVisualState(
             // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
             // 否则 Undo 时 pending.baseText(Core 已提交) != lastConsumed(preedit)，external patch 卡死。
             // lastPresentedLayout 可跟 preedit（供本地输入配对），但 coordinator 基线不动。
+            // #694 评论 5696394554：onAuthoritativeLayout 自己也必须能独立武装 composition phase，
+            // 不能依赖 snapshotFlow — snapshotFlow 会 conflate 中间状态，可能跳过 active emission。
+            // 当 compositionActive == true 且 phase 还是 Idle 时，在覆盖 lastPresentedLayout 之前，
+            // 把当前已提交的 lastPresentedLayout 保存到 compositionBaseLayout，直接进入 Composing phase。
+            if (compositionVisualPhase == CompositionVisualPhase.Idle) {
+                compositionBaseLayout = lastPresentedLayout
+                compositionVisualPhase = CompositionVisualPhase.Composing
+            }
             lastPresentedLayout = snapshot
             wasCompositionActive = true
             return
