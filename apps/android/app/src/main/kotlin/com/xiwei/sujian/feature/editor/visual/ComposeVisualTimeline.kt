@@ -160,6 +160,18 @@ class ComposeVisualTimeline {
             // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
             createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
 
+            // #694 评论 5694645209 问题3：删除时间表收口 —
+            // 所有本 patch 的 deleted ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）
+            // 收集完后，统一调用 rescheduleDeletedGhosts 按 patch.deletedUnits 的顺序给匹配 ghost
+            // 设置各自 [i/n, (i+1)/n] 分段 schedule。这样正在动画的 active unit 被删除时也进入分段 schedule，
+            // 三个 ghost 按 c、b、a 依次淡出，而非在 mapSurvivingUnits 阶段用 toGhost 统一从 now 同时开始。
+            rescheduleDeletedGhosts(
+                ghosting = ghosting,
+                orderedDeletedUnits = patch.deletedUnits,
+                frameTimeNanos = frameTimeNanos,
+                durationNanos = durationNanos,
+            )
+
             // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
             // 注意：retainedMoves 作用于 startedSurviving（已开始 unit 的位置重定向），
             // 不应作用于 pendingSurviving（它们已被重新分段）。
@@ -509,6 +521,61 @@ class ComposeVisualTimeline {
                     alpha = TimedFloat(1f, 0f, ghostStartedAt, ghostDuration),
                     position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
                 )
+        }
+    }
+
+    /**
+     * #694 评论 5694645209 问题3：删除时间表收口入口 —
+     * 所有本 patch 的 deleted ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）
+     * 收集完后统一调用，按 [orderedDeletedUnits] 的顺序给匹配 ghost 设置各自 [i/n, (i+1)/n] 分段 schedule。
+     *
+     * 规则：
+     * - 对 [ghosting] 中每个 ghost，如果它的 range 匹配某个 [orderedDeletedUnits][i]，
+     *   则设置 `startedAt = frameTimeNanos + durationNanos * (i/n)`，
+     *   `duration = durationNanos / n`，alpha.from 保持不变（当前真实 alpha，即 toGhost 时保留的 alphaNow），
+     *   alpha.to = 0f。
+     * - 不是本 patch 显式 deleted unit 的其他 survival-slice ghost
+     *   （即 range 不匹配任何 [orderedDeletedUnits] 的 ghost），
+     *   不套这套 stage schedule — 保持 toGhost 给它们的默认 now+fullDuration。
+     *
+     * @param ghosting 当前所有 ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）。
+     * @param orderedDeletedUnits 本 patch 的 deletedUnits（按顺序）。
+     * @param frameTimeNanos 当前帧时间戳。
+     * @param durationNanos 文字动画时长（有界窗口长度）。
+     */
+    private fun rescheduleDeletedGhosts(
+        ghosting: MutableList<VisualTextUnit>,
+        orderedDeletedUnits: List<TextRange>,
+        frameTimeNanos: Long,
+        durationNanos: Long,
+    ) {
+        val orderedRanges = orderedDeletedUnits.filter { it.start < it.end }
+        val n = orderedRanges.size
+        if (n == 0) return
+        // 为每个 deletedUnit 算它的分段 schedule。
+        // 多个 ghost 可能匹配同一个 range（切片场景），都套同一个 stage schedule。
+        for ((i, range) in orderedRanges.withIndex()) {
+            val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
+            val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
+            val ghostStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
+            val ghostDuration = (durationNanos * (endFraction - startFraction)).toLong()
+            // 在 ghosting 中找 range 匹配的 ghost，统一覆盖 startedAt/duration。
+            // alpha.from 保持不变（当前真实 alpha，即 toGhost 时保留的 alphaNow），alpha.to = 0f。
+            for (j in ghosting.indices) {
+                val ghost = ghosting[j]
+                if (ghost.range == range) {
+                    ghosting[j] =
+                        ghost.copy(
+                            alpha =
+                                TimedFloat(
+                                    from = ghost.alpha.from,
+                                    to = 0f,
+                                    startedAtNanos = ghostStartedAt,
+                                    durationNanos = ghostDuration,
+                                ),
+                        )
+                }
+            }
         }
     }
 

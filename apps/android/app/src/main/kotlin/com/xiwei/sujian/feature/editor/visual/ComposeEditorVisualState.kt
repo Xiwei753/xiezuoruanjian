@@ -5,6 +5,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
+import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -194,34 +195,80 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #694 评论 5693864609 问题2：composition 生命周期由 TextFieldState.composition 驱动，
-     * 不再只依赖 onTextLayout 猜 composition 生命周期。
-     *
+     * #694 评论 5694645209 问题1：根据 bridge 的 [InputSnapshotOutcome] 收口 —
      * 由 [WritingPaneRoute] 的 `SetupInputSnapshotCollector` 在 `snapshotFlow.collect` 中调用，
-     * 在 `bridge.onInputSnapshot` 之前先让本地视觉看到 composition 生命周期边沿：
-     * - composition 刚开始（inactive -> active）：保存当前已提交布局作为 base。
-     * - composition 刚结束（active -> inactive）：用 base -> final 生成 patch。
+     * **在 bridge.onInputSnapshot 之后**，用 bridge 的真实决定收口本地视觉状态。
+     *
+     * - [InputSnapshotOutcome.Composing]：只记录 composition start/base（保存 compositionBaseLayout = lastPresentedLayout）。
+     * - [InputSnapshotOutcome.LocalCommitAccepted]：才允许 [finishCompositionCommit]、发布 local patch、
+     *   推进 local/Core 对齐后的屏幕 baseline。
+     * - [InputSnapshotOutcome.AuthoritativeApplied] / [InputSnapshotOutcome.LocalCommitRejected]：
+     *   取消本次 composition local visual state，清掉本次 preedit 留下的 local tracker/pending commit，
+     *   **不要**发布候选 local patch，也不要把 coordinator 推到候选文本；后续让权威 layout / external intent 正常接管。
+     * - [InputSnapshotOutcome.NoTextChange]：composition 生命周期边沿仍需记录（如 composition 开始时保存 base），
+     *   但不生成 patch。
      *
      * @param snapshot 当前 IME 输入快照（text + selection + composition）。
+     * @param outcome bridge 对本次 snapshot 的处理结果。
      */
-    fun onInputSnapshotObserved(snapshot: EditorInputSnapshot) {
+    fun onInputSnapshotResolved(
+        snapshot: EditorInputSnapshot,
+        outcome: InputSnapshotOutcome,
+    ) {
         val compositionActive = snapshot.composition != null
+        // composition 生命周期边沿：composition 刚开始时保存 base
         if (compositionActive && !wasCompositionActiveForSnapshot) {
-            // composition 刚开始：保存当前已提交布局作为 base
             compositionBaseLayout = lastPresentedLayout
         }
-        if (!compositionActive && wasCompositionActiveForSnapshot) {
-            // composition 刚结束
-            val latest = _latestLayout.value
-            if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
-                // 最终布局已经有了，直接收口
-                finishCompositionCommit(snapshot.text, latest)
-            } else {
-                // final text 对应的新 layout 还没到，记 pending
-                pendingCompositionCommitText = snapshot.text
+        when (outcome) {
+            InputSnapshotOutcome.Composing -> {
+                // composition 仍活跃：只记录 composition start/base（上面已保存），不生成 patch。
+            }
+            InputSnapshotOutcome.NoTextChange -> {
+                // composition 结束但无变化：不生成 patch。
+                // 若 final layout 还没到，不暂存 pendingCompositionCommitText（无变化无需收口）。
+            }
+            InputSnapshotOutcome.LocalCommitAccepted -> {
+                // bridge 已接受本地 commit：视觉层可以 finishCompositionCommit。
+                if (!compositionActive && wasCompositionActiveForSnapshot) {
+                    val latest = _latestLayout.value
+                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
+                        finishCompositionCommit(snapshot.text, latest)
+                    } else {
+                        // final text 对应的新 layout 还没到，记 pending
+                        // #694 评论 5694645209 问题1：只在 LocalCommitAccepted 路径下才设置 pendingCompositionCommitText。
+                        pendingCompositionCommitText = snapshot.text
+                    }
+                }
+            }
+            InputSnapshotOutcome.AuthoritativeApplied,
+            InputSnapshotOutcome.LocalCommitRejected,
+            -> {
+                // bridge 消费了 pending authoritative 或 Core 拒绝了本地 commit：
+                // 取消本次 composition local visual state，不发布候选 local patch，
+                // 也不把 coordinator 推到候选文本；后续让权威 layout / external intent 正常接管。
+                cancelCompositionLocalVisualState()
             }
         }
         wasCompositionActiveForSnapshot = compositionActive
+    }
+
+    /**
+     * #694 评论 5694645209 问题1：取消本次 composition local visual state —
+     * 清空 [compositionBaseLayout]、[pendingCompositionCommitText]，
+     * 重置 [wasCompositionActive]/[wasCompositionActiveForSnapshot]，
+     * 清掉本次 preedit 留下的 local tracker（[localInputTracker].clear()）。
+     *
+     * 不发布候选 local patch，也不把 coordinator 推到候选文本。
+     * 后续让权威 layout / external intent 正常接管。
+     */
+    private fun cancelCompositionLocalVisualState() {
+        compositionBaseLayout = null
+        pendingCompositionCommitText = null
+        wasCompositionActive = false
+        wasCompositionActiveForSnapshot = false
+        // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
+        localInputTracker.clear()
     }
 
     /**

@@ -290,6 +290,10 @@ private fun SetupViewportSnapshot(
  *
  * #694 评论 5693864609 问题2：本地视觉先看到 composition 生命周期，
  * 再由 bridge 把最终正文提交 Core。
+ *
+ * #694 评论 5694645209 问题1：先调 bridge 拿 [InputSnapshotOutcome]，
+ * 再传 visualState.onInputSnapshotResolved —
+ * 不再让视觉层在 bridge 之前把 composition == null 当成"commit 已成功"。
  */
 @Composable
 private fun SetupInputSnapshotCollector(
@@ -304,10 +308,11 @@ private fun SetupInputSnapshotCollector(
                 composition = bridge.state.composition,
             )
         }.collect { snapshot ->
-            // #694 评论 5693864609 问题2：本地视觉先看到 composition 生命周期，
-            // 再由 bridge 把最终正文提交 Core。
-            visualState.onInputSnapshotObserved(snapshot)
-            bridge.onInputSnapshot(snapshot)
+            // #694 评论 5694645209 问题1：先调 bridge 拿 outcome，再传 visualState 收口。
+            // bridge 决定是否存在 pending authoritative / Core 是否接受本地 commit，
+            // 视觉层根据 outcome 决定是否 finishCompositionCommit / 取消本次 composition local visual state。
+            val outcome = bridge.onInputSnapshot(snapshot)
+            visualState.onInputSnapshotResolved(snapshot, outcome)
         }
     }
 }

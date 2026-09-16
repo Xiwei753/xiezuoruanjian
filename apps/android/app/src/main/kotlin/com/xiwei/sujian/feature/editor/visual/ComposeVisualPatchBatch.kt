@@ -1,5 +1,9 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+
 /**
  * #694 评论第 7 步：同一 VSync 的多笔 patch 合成器 —
  * 把同一帧内 pending 的多笔 [ComposeVisualPatch] 合成一个屏幕 transition，
@@ -106,22 +110,16 @@ internal object ComposeVisualPatchBatch {
                 emptyList()
             }
 
-        // #694 评论 5691696678 问题3：cursor path 用最终存活的 ordered units 重新生成，
-        // 不只拿 last.cursorMotionPath — 多字符吐字时光标应依次经过每个字出现后的位置。
+        // #694 评论 5694645209 问题2：cursor path 用专门的 batch cursor path 合成 —
+        // 按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序，
+        // 不再对 batch 纯删除重新走旧 buildCursorPath()（旧逻辑只按 insertedUnits 建点，
+        // 纯删除时 insertedUnits 为空、回退到最终单点，丢失中间阶段 caret）。
         val cursorMotionPath =
-            if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
-                // 无文字动画语义 → 回退到 last.cursorMotionPath
-                last.cursorMotionPath
-            } else {
-                ComposeLocalVisualRebase.buildCursorPath(
-                    oldLayout = oldLayout,
-                    newLayout = newLayout,
-                    oldSelection = first.oldLayout.selection,
-                    newSelection = last.newLayout.selection,
-                    insertedUnits = insertedUnits,
-                    deletedUnits = deletedUnits,
-                ) ?: last.cursorMotionPath
-            }
+            composeBatchCursorPath(
+                batch = batch,
+                insertedUnits = insertedUnits,
+                deletedUnits = deletedUnits,
+            ) ?: last.cursorMotionPath
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
@@ -157,6 +155,103 @@ internal object ComposeVisualPatchBatch {
             motionPolicy = motionPolicy,
             intent = last.intent,
         )
+    }
+
+    /**
+     * #694 评论 5694645209 问题2：batch cursor path 合成 —
+     * 按 [batch] 入队顺序取每笔 `patch.cursorMotionPath?.points`，保留真实 stage caret 顺序，
+     * 不再对 batch 纯删除重新走旧 [ComposeLocalVisualRebase.buildCursorPath]（旧逻辑只按 insertedUnits 建点，
+     * 纯删除时 insertedUnits 为空、回退到最终单点，丢失中间阶段 caret）。
+     *
+     * 规则：
+     * 1. 按 [batch] 入队顺序取每笔 `patch.cursorMotionPath?.points`；
+     * 2. 保留真实 stage caret 顺序；
+     * 3. 相邻相同 rect 去重；
+     * 4. 最后一个点必须收敛到 `batch.last().newLayout.selection` 的最终 cursor rect；
+     * 5. 最后统一重新分配 `endFraction = (i + 1) / n`，与同一有界窗口里的文字 stage 对齐；
+     * 6. 只有取不到任何 stage path 时，再回退现有 [ComposeLocalVisualRebase.buildCursorPath]。
+     *
+     * @return 合成后的 [CursorMotionPath]；batch 为空或取不到任何 stage path 且 buildCursorPath 也失败时返回 null。
+     */
+    @Suppress("CognitiveComplexMethod")
+    private fun composeBatchCursorPath(
+        batch: List<ComposeVisualPatch>,
+        insertedUnits: List<TextRange>,
+        deletedUnits: List<TextRange>,
+    ): CursorMotionPath? {
+        if (batch.isEmpty()) return null
+        val first = batch.first()
+        val last = batch.last()
+        val oldLayout = first.oldLayout
+        val newLayout = last.newLayout
+
+        // 第一步：按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序。
+        val stagePoints = mutableListOf<CursorMotionPoint>()
+        for (patch in batch) {
+            val path = patch.cursorMotionPath ?: continue
+            for (point in path.points) {
+                stagePoints.add(point)
+            }
+        }
+
+        // 第二步：相邻相同 rect 去重。
+        val dedupedPoints = mutableListOf<CursorMotionPoint>()
+        for (point in stagePoints) {
+            if (dedupedPoints.isEmpty() || dedupedPoints.last().rect != point.rect) {
+                dedupedPoints.add(point)
+            }
+        }
+
+        // 第三步：最后一个点必须收敛到 batch.last().newLayout.selection 的最终 cursor rect。
+        val finalCursorRect = safeCursorRectFromBatch(newLayout, last.newLayout.selection.end)
+        if (finalCursorRect != null) {
+            if (dedupedPoints.isEmpty()) {
+                dedupedPoints.add(CursorMotionPoint(rect = finalCursorRect, endFraction = 1f))
+            } else if (dedupedPoints.last().rect != finalCursorRect) {
+                dedupedPoints.add(CursorMotionPoint(rect = finalCursorRect, endFraction = 1f))
+            }
+        }
+
+        // 第四步：只有取不到任何 stage path 时，再回退现有 buildCursorPath()。
+        if (dedupedPoints.isEmpty()) {
+            return ComposeLocalVisualRebase.buildCursorPath(
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                oldSelection = first.oldLayout.selection,
+                newSelection = last.newLayout.selection,
+                insertedUnits = insertedUnits,
+                deletedUnits = deletedUnits,
+            )
+        }
+
+        // 第五步：最后统一重新分配 endFraction = (i + 1) / n，
+        // 与同一有界窗口里的文字 stage 对齐。
+        val n = dedupedPoints.size
+        val normalizedPoints =
+            if (n <= 1) {
+                dedupedPoints.map { it.copy(endFraction = 1f) }
+            } else {
+                dedupedPoints.mapIndexed { i, point ->
+                    point.copy(endFraction = (i + 1f) / n)
+                }
+            }
+        return CursorMotionPath(normalizedPoints)
+    }
+
+    /**
+     * 安全取 cursor rect — offset 越界或 layout 抛异常时返回 null。
+     */
+    private fun safeCursorRectFromBatch(
+        layout: ComposeLayoutSnapshot,
+        offset: Int,
+    ): Rect? {
+        val textLen = layout.result.layoutInput.text.length
+        if (offset < 0 || offset > textLen) return null
+        return try {
+            layout.result.getCursorRect(offset)
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**
