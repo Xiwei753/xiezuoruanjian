@@ -65,6 +65,18 @@ pub enum EditorCommand {
         cause: EditorTransactionCause,
         expected_revision: EditorRevision,
     },
+    /// 原子 IME commit — 先删除 selection，再插入 inserted_text，
+    /// 整个操作只产生一个 revision 推进和一个 UndoEntry。
+    ///
+    /// Qt 对 `QInputMethodEvent` 的定义：先删除当前 selection，再做
+    /// replacement/commit，整个 operation 加入 undo stack。
+    /// 不要把 selection 删除和 replacement 拆成两次 pipeline command。
+    ImeCommit {
+        selection_byte_range: Utf8ByteRange,
+        inserted_text: String,
+        cause: EditorTransactionCause,
+        expected_revision: EditorRevision,
+    },
     BeginComposition {
         replace_range: Utf8ByteRange,
         expected_revision: EditorRevision,

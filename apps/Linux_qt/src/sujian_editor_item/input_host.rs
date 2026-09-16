@@ -65,11 +65,28 @@ impl SujianEditorItem {
     ///
     /// 所有 UTF-16→UTF-8 坐标换算只在 `platform_ime` 调用此方法后做一次，
     /// `editing.rs` 不再二次换算。
+    /// Issue #701 评论 5703179127: 暴露 IME replacement 换算所需的 composition
+    /// session 上下文，供 `platform_ime` 把 Qt 的 replacementStart/
+    /// replacementLength（UTF-16 QChar 偏移）解析成 committed text 的 byte range。
+    ///
+    /// 返回 `(session_replace_start, session_replace_end, committed_text)`：
+    /// - `session_replace_start`/`session_replace_end`：composition session 记录的
+    ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
+    ///   有活跃 session 时用 session 的 replace range；
+    ///   无 session 但有选区时直接返回 `buffer.selection_range()`（Qt 规则：直接
+    ///   commit 也应先删除当前 selection）；
+    ///   无 session 无选区时退化为 `(cursor, cursor)`。
+    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
     pub(crate) fn ime_replacement_context(&self) -> (usize, usize, String) {
-        let (rs, re) = self
-            .pipeline
-            .composition()
-            .session_replace_range(self.buffer.cursor);
+        let (rs, re) = if self.pipeline.composition().composition_session.is_some() {
+            self.pipeline
+                .composition()
+                .session_replace_range(self.buffer.cursor)
+        } else if self.buffer.has_selection() {
+            self.buffer.selection_range()
+        } else {
+            (self.buffer.cursor, self.buffer.cursor)
+        };
         (rs, re, self.buffer.text.clone())
     }
 

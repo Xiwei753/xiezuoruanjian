@@ -48,6 +48,9 @@ impl EditorKernel {
             | EditorCommand::DeleteSurrounding {
                 expected_revision, ..
             }
+            | EditorCommand::ImeCommit {
+                expected_revision, ..
+            }
             | EditorCommand::BeginComposition {
                 expected_revision, ..
             }
@@ -208,6 +211,21 @@ impl EditorKernel {
                 before_byte_range.end().value(),
                 after_byte_range.start().value(),
                 after_byte_range.end().value(),
+                cause,
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ),
+            EditorCommand::ImeCommit {
+                selection_byte_range,
+                inserted_text,
+                cause,
+                ..
+            } => self.apply_ime_commit(
+                selection_byte_range.start().value(),
+                selection_byte_range.end().value(),
+                &inserted_text,
                 cause,
                 base_revision,
                 old_cursor,
@@ -1375,6 +1393,220 @@ impl EditorKernel {
             new_selection,
             visual_intent,
             content_delta,
+        })
+    }
+
+    /// 原子 IME commit：先删除 selection，再插入 inserted_text。
+    ///
+    /// Qt 对 `QInputMethodEvent` 的定义：先删除当前 selection，再做
+    /// replacement/commit，整个 operation 加入 undo stack。
+    /// 本方法在一个 `apply()` 调用内完成两步正文修改：
+    /// - revision 只推进一次；
+    /// - 只 push 一个 `UndoEntry`（可包含两条 `TextEditDelta`）；
+    /// - selection/cursor 一次算完。
+    ///
+    /// 多段 affected range / offset map 按现有 `DeleteSurrounding` 的
+    /// 多编辑事务写法保留，不退化成把中间没改的正文当成一个大 replace。
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn apply_ime_commit(
+        &mut self,
+        sel_start: usize,
+        sel_end: usize,
+        inserted_text: &str,
+        cause: EditorTransactionCause,
+        base_revision: EditorRevision,
+        old_cursor: Utf8ByteOffset,
+        old_selection_anchor: usize,
+        old_selection_head: usize,
+    ) -> EditorEditOutcome {
+        let (sel_min, sel_max) = if sel_start <= sel_end {
+            (sel_start, sel_end)
+        } else {
+            (sel_end, sel_start)
+        };
+
+        if sel_min > self.text.byte_len() || sel_max > self.text.byte_len() {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
+        if !self.text.is_char_boundary(sel_min) || !self.text.is_char_boundary(sel_max) {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
+
+        // Step 1: 删除 selection。
+        let deleted_text = if sel_min < sel_max {
+            self.text.byte_slice(sel_min..sel_max).to_string()
+        } else {
+            String::new()
+        };
+        if !deleted_text.is_empty() {
+            self.text.delete(sel_min..sel_max);
+        }
+
+        self.composition_session = None;
+
+        // Step 2: 在 selection 起点插入 inserted_text。
+        if !inserted_text.is_empty() {
+            self.text.insert(sel_min, inserted_text);
+        }
+        self.revision = self.revision.next();
+
+        // selection 起点作为 anchor，插入后 cursor 在 anchor + inserted_text.len()。
+        let new_cursor_val = sel_min + inserted_text.len();
+        self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
+        self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
+
+        let new_selection = make_selection(new_cursor_val, new_cursor_val);
+
+        // 两条 delta：一条删除 selection，一条插入 text。
+        let mut edits: Vec<TextEditDelta> = Vec::with_capacity(2);
+        if sel_min < sel_max {
+            edits.push(TextEditDelta {
+                old_range: Utf8ByteRange::from_ordered(sel_min, sel_max),
+                new_range: Utf8ByteRange::point(sel_min),
+                deleted_text: deleted_text.clone(),
+                inserted_text: String::new(),
+            });
+        }
+        if !inserted_text.is_empty() {
+            edits.push(TextEditDelta {
+                old_range: Utf8ByteRange::point(sel_min),
+                new_range: Utf8ByteRange::from_start_len(sel_min, inserted_text.len()),
+                deleted_text: String::new(),
+                inserted_text: inserted_text.to_string(),
+            });
+        }
+        // 空操作（无选区 + 空插入）已在上游过滤。
+        if edits.is_empty() {
+            return EditorEditOutcome::NoChange(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
+
+        self.undo_stack.push(UndoEntry {
+            edits: edits.clone(),
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
+        });
+        self.redo_stack.clear();
+
+        let new_revision = self.revision;
+        let old_affected = if sel_min < sel_max {
+            vec![Utf8ByteRange::from_ordered(sel_min, sel_max)]
+        } else {
+            vec![]
+        };
+        let new_affected = if !inserted_text.is_empty() {
+            vec![Utf8ByteRange::from_start_len(sel_min, inserted_text.len())]
+        } else {
+            vec![]
+        };
+
+        // DisplayPatch：合并为一条，deleted_text + inserted_text 反映完整变更。
+        let display_patches = vec![DisplayPatch {
+            base_revision,
+            new_revision,
+            replace_byte_range: Utf8ByteRange::from_ordered(sel_min, sel_max),
+            inserted_text: inserted_text.to_string(),
+            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
+        }];
+
+        let is_loading = cause == EditorTransactionCause::Load;
+        let is_format = cause == EditorTransactionCause::Format;
+
+        // animation_mode：IME commit 与普通 typing 相同逻辑。
+        let diff_text = if !inserted_text.is_empty() {
+            inserted_text
+        } else {
+            &deleted_text
+        };
+        let animation_mode = if !self.animation_enabled || is_loading || is_format {
+            AnimationMode::SystemSuppressed
+        } else {
+            let cluster_count = count_grapheme_clusters(diff_text);
+            let contains_newline = diff_text.contains('\n');
+            let contains_complex = text_contains_complex_grapheme(diff_text);
+            choose_animation_mode(
+                cluster_count,
+                contains_newline,
+                contains_complex,
+                false,
+                is_loading,
+                is_format,
+                false,
+                self.animation_enabled,
+            )
+        };
+
+        let (old_animation_units, new_animation_units) = {
+            let old_slice = if sel_min < sel_max {
+                vec![AnimationTextSlice {
+                    absolute_start: sel_min,
+                    text: &deleted_text,
+                }]
+            } else {
+                vec![]
+            };
+            let new_slice = if !inserted_text.is_empty() {
+                vec![AnimationTextSlice {
+                    absolute_start: sel_min,
+                    text: inserted_text,
+                }]
+            } else {
+                vec![]
+            };
+            compute_animation_units_from_slices(
+                animation_mode,
+                &old_slice,
+                &new_slice,
+                &old_affected,
+                &new_affected,
+            )
+        };
+
+        let visual_intent = EditorVisualIntent {
+            cause,
+            operation_kind: EditorOperationKind::CompositionCommit,
+            old_affected_byte_ranges: old_affected,
+            new_affected_byte_ranges: new_affected,
+            animation_mode,
+            duration_ms: self.animation_duration_ms,
+            coordinated_cursor: CoordinatedCursor {
+                old_offset: old_cursor,
+                new_offset: Utf8ByteOffset::unchecked(new_cursor_val),
+                should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
+            },
+            // 原子 IME commit 从 delta 构造 offset map。
+            offset_map: Some(OffsetMap::from_single_edit(
+                self.text.byte_len() - inserted_text.len() + (sel_max - sel_min),
+                (sel_min, sel_min),
+                inserted_text.len(),
+            )),
+            old_animation_units,
+            new_animation_units,
+        };
+
+        EditorEditOutcome::Applied(EditorEditResult {
+            transaction_id: self.take_transaction_id(),
+            base_revision,
+            new_revision,
+            display_patches,
+            old_selection: make_selection(old_selection_anchor, old_selection_head),
+            new_selection,
+            visual_intent,
+            content_delta: EditorContentDelta::from_texts(inserted_text, &deleted_text),
         })
     }
 }

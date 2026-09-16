@@ -28,6 +28,17 @@ enum EditOp {
         end: usize,
         pipeline_cause: EditorTransactionCause,
     },
+    /// 原子 IME commit — 先删除 selection 再插入 text，整个操作只产生
+    /// 一个 Core revision 推进和一个 UndoEntry。
+    ///
+    /// Qt `QInputMethodEvent` 语义：先删除当前 selection，再做
+    /// replacement/commit，整个 operation 加入 undo stack。
+    ImeCommit {
+        selection_start: usize,
+        selection_end: usize,
+        text: String,
+        pipeline_cause: EditorTransactionCause,
+    },
 }
 
 /// Issue #701 评论 5699573227 第三阶段: IME composition commit 参数。
@@ -291,6 +302,15 @@ impl SujianEditorItem {
                 .pipeline
                 .delete_range(start, end, pipeline_cause)
                 .is_some(),
+            EditOp::ImeCommit {
+                selection_start,
+                selection_end,
+                text,
+                pipeline_cause,
+            } => self
+                .pipeline
+                .ime_commit(selection_start, selection_end, &text, pipeline_cause)
+                .is_some(),
         };
         if !applied {
             return false;
@@ -496,21 +516,15 @@ impl SujianEditorItem {
             None
         };
 
-        // del_start == del_end 时走 Insert（零长度 replace 等价于 insert）；
-        // 否则走 Replace。pipeline_cause 与 visual_cause 一致。
-        let op = if del_start != del_end {
-            EditOp::Replace {
-                start: del_start,
-                end: del_end,
-                text: inserted,
-                pipeline_cause: visual_cause,
-            }
-        } else {
-            EditOp::Insert {
-                cursor: del_start,
-                text: inserted,
-                pipeline_cause: visual_cause,
-            }
+        // Issue #701 评论 5703179127: 使用原子 ImeCommit 命令，先删除 selection
+        // 再插入 text，整个操作只产生一个 Core revision 推进和一个 UndoEntry。
+        // Qt QInputMethodEvent 语义：先删除当前 selection，再做
+        // replacement/commit，整个 operation 加入 undo stack。
+        let op = EditOp::ImeCommit {
+            selection_start: del_start,
+            selection_end: del_end,
+            text: inserted,
+            pipeline_cause: visual_cause,
         };
 
         // Issue #701 评论 5699573227 第三阶段: IME replace+commit 与普通输入/删除
