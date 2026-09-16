@@ -770,6 +770,40 @@ Rectangle {
                                 }
                             }
                         }
+
+                        // Issue #693 评论 5689819383: 光标自动跟随滚动。
+                        // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
+                        // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
+                        // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
+                        // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
+                        // Scene Graph 和 IME 继续使用同一滚动位置。
+                        function ensureCursorVisible() {
+                            const flick = contentItem
+                            if (!flick)
+                                return
+
+                            const margin = Math.max(dt.sp12, sujianEditor.cursor_rect_height * 0.5)
+                            const top = sujianEditor.cursor_rect_y
+                            const bottom = top + sujianEditor.cursor_rect_height
+                            const visibleBottom = availableHeight - margin
+
+                            let nextY = flick.contentY
+                            if (top < margin) {
+                                nextY += top - margin
+                            } else if (bottom > visibleBottom) {
+                                nextY += bottom - visibleBottom
+                            } else {
+                                return
+                            }
+
+                            const maxY = Math.max(0, contentHeight - height)
+                            flick.contentY = Math.max(0, Math.min(maxY, nextY))
+                        }
+
+                        function scheduleEnsureCursorVisible() {
+                            Qt.callLater(ensureCursorVisible)
+                        }
+
                         onContentHeightChanged: clampScroll()
                         onHeightChanged: clampScroll()
                         onEditorIsScrollingChanged: {
@@ -842,6 +876,12 @@ Rectangle {
                     //     节点，不再因 root 为空整帧跳过。
                     SujianEditorItem {
                         id: sujianEditor
+                        // Issue #693 评论 5689819383: SujianEditorItem 是 ScrollView
+                        // 外的固定 overlay，editorScroll.clip 裁不到这个 sibling。
+                        // 自定义 Scene Graph 默认不裁剪，会画到 item 边界外盖住顶栏。
+                        // 打开 clip 把自身绘制和子节点限制在 bounding rect 内。
+                        // 参考 https://doc.qt.io/qt-6/qquickitem.html#clip-prop
+                        clip: true
                         x: editorScroll.x
                         y: editorScroll.y
                         width: editorScroll.availableWidth
@@ -871,6 +911,15 @@ Rectangle {
                         is_loading: editorController.isLoadingChapter
                         is_applying_format: editorController.isApplyingFormat
                         is_applying_settings: editorController.isApplyingSettings
+
+                        // Issue #693 评论 5689819383: 光标自动跟随滚动。
+                        // 只在真正的编辑/selection 变化时调度，不监听 scroll_y 或
+                        // 每次 cursor_rect_changed，避免用户手动滚离光标被立刻拽回。
+                        // Rust 侧先发信号再 update_cursor_visual_position()，故用
+                        // Qt.callLater() 等本轮 caret target 算完再读 cursor_rect_y。
+                        // 同一轮即使排了两次 callLater，第二次看到 caret 已可见会直接返回。
+                        onCursor_position_changed: editorScroll.scheduleEnsureCursorVisible()
+                        onText_changed: editorScroll.scheduleEnsureCursorVisible()
 
                         onWidthChanged: {
                             Qt.callLater(sujianEditor.flush_content_height)
