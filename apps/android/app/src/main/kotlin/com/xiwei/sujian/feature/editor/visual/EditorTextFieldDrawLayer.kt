@@ -6,11 +6,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
@@ -25,32 +27,48 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
- * #641 评论1 第5节 / 问题3 + 评论 5457777142 问题2/问题4：动画 overlay —
- * 只"画"，绝不能再改变 viewport / selection / IME 几何。
+ * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
+ * 统一 draw 层，断开"动画 hiddenRanges -> OutputTransformation 改正文显示 ->
+ * BasicTextField 再 layout -> VisualState 再消费 layout"回路。
  *
- * #689 评论 5674631257 步骤8：把视觉动画从"事务重启"改成"持续时间线"。
+ * #698 评论 5699401353 修复1：本 draw 层真正包住 [BasicTextField]（[content]），
+ * 用 `Modifier.drawWithContent` 在绘制阶段对 [ComposeVisualScene.hiddenRanges] 做
+ * `ClipOp.Difference` 裁切，使 `drawContent()`（BasicTextField 的完整绘制）只在
+ * 非 hidden 区域可见（只在绘制阶段排除动画接管区域，不改 BasicTextField 输出表示），
+ * 然后画动画字（[drawVisualScene]）和视觉光标（[drawVisualCursorRect]）。
  *
- * #691：把光标 position 也并入同一持续视觉时间线。
+ * 不再用"拿主题背景色盖正文"（旧 `clipSystemTextForHiddenRanges` + `drawPath(backgroundColor)`）—
+ * 那会把 selection/search highlight 一起盖掉，背景非纯 surface 时会画出错误底色。
+ * 现在用 `ClipOp.Difference` 只裁切绘制区域，不引入任何颜色，selection/search highlight
+ * 由 BasicTextField 自己画，裁切后自然只在非 hidden 区域可见。
  *
- * 删除：
- * - 独立的 `Animatable<Rect, AnimationVector4D>` 光标位置
- * - `LaunchedEffect(patchVersion)` 驱动的独立 cursor path 动画
- * - `animateCursorPath()` 作为独立位置时间线
- * - `computeRestingCursorRect()` — 静止光标由 visualState.restingCursorRect 提供
+ * 本 draw 层统一三件事，全部使用同一个 [TextLayoutResult]（latestLayout）、
+ * 同一个 scrollY 和同一个 frame clock（由 [LaunchedEffect] 的 [withFrameNanos] 提供）：
  *
- * 改成：
- * - 光标位置从 [ComposeVisualScene.cursorRect] 读取 — 与文字 units 共享同一个 frame clock
- * - 无光标动画时从 visualState.restingCursorRect 读取最终真实位置
- * - 光标闪烁（alpha）在 draw 阶段独立计算，不改变几何位置
+ * 1. **正文裁切**：对 `scene.hiddenRanges` 合并成单个 [Path] 后用
+ *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
+ *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
+ *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
+ * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
+ * 3. **视觉光标**：drawsVisualCursor 时，cursorRect 从 scene.cursorRect
+ *    ?: [computeRestingCursorRect] ?: restingCursorRect 读取，[drawVisualCursorRect] 绘制。
  *
- * 绘制直接读 [ComposeVisualScene.units]。每个 unit 的 alpha、屏幕位置已经由 timeline
- * 按这个 frameTimeNanos 算好，draw 阶段不再二次插值。
+ * BasicTextField 始终画完整真实正文，本 draw 层只在绘制阶段裁切动画接管区域，
+ * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout，断开回路。
  *
+ * @param visualState 编辑器视觉状态。
+ * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
+ * @param textColor 文字颜色 — 从主题 role 注入。
  * @param cursorColor 视觉光标颜色 — 从主题 role 注入。
+ * @param liveSelection 直接从 [TextFieldState.selection] 读取 — 纯 selection 变化时
+ *   onTextLayout 不一定回调，restingCursorRect 可能停在旧位置，需要 live selection 实时算。
+ * @param modifier Compose modifier。
+ * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
+ *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
  */
 @Composable
 @Suppress("LongParameterList")
-fun ComposeTextAnimationOverlay(
+fun EditorTextFieldDrawLayer(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
     textColor: Color,
@@ -60,8 +78,8 @@ fun ComposeTextAnimationOverlay(
      */
     liveSelection: TextRange?,
     modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
-    val hiddenRanges by visualState.hiddenRanges.collectAsStateWithLifecycle()
     val density = LocalDensity.current
 
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
@@ -95,11 +113,42 @@ fun ComposeTextAnimationOverlay(
     Box(
         modifier =
             modifier
-                .drawBehind {
-                    // 1. 动画帧：直接读 visualScene.units。
+                .drawWithContent {
+                    val scene = visualScene
+
+                    // 1. 正文裁切：对 hiddenRanges 做 ClipOp.Difference 裁切，
+                    //    使 drawContent()（BasicTextField 的完整绘制）只在非 hidden 区域可见。
+                    //    #698 评论 5699401353 修复1：不再用 drawPath(backgroundColor) 盖背景色，
+                    //    而是用 clipPath + ClipOp.Difference 只裁切绘制区域 —
+                    //    selection/search highlight 由 BasicTextField 自己画，
+                    //    裁切后自然只在非 hidden 区域可见，不引入任何颜色。
+                    // #698 评论 5700812160：hiddenPath 必须与动画字、视觉光标在同一视口坐标系。
+                    // drawTranslatedRangeText 用 translate.y - scrollY、drawVisualCursorRect 用
+                    // rect.top/bottom - scrollY，唯独裁切 path 没减 scrollY 会导致滚动后裁切位置
+                    // 与动画字错开，出现重影/缺字/局部空白。这里把 scrollY 传进 buildHiddenPath，
+                    // 在合并 path 时带视口偏移把正文坐标换算到当前视口坐标，不改 BasicTextField
+                    // 自己的滚动（不在外层整体 translate(-scrollY) 后再 drawContent()）。
+                    val hiddenPath =
+                        buildHiddenPath(
+                            hiddenRanges = scene.hiddenRanges,
+                            layout = latestLayout,
+                            scrollY = scrollY,
+                        )
+                    if (hiddenPath != null) {
+                        clipPath(
+                            path = hiddenPath,
+                            clipOp = ClipOp.Difference,
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    } else {
+                        // hiddenRanges 为空：直接画完整原正文。
+                        drawContent()
+                    }
+
+                    // 2. 动画帧：直接读 visualScene.units。
                     //    每个 unit 的 alpha、屏幕位置已经由 timeline 按当前帧时间算好，
                     //    draw 阶段不再二次插值。
-                    val scene = visualScene
                     if (scene.units.isNotEmpty()) {
                         drawVisualScene(
                             scene = scene,
@@ -108,7 +157,7 @@ fun ComposeTextAnimationOverlay(
                         )
                     }
 
-                    // 2. 光标：smooth cursor 开启时 overlay 整个会话拥有光标。
+                    // 3. 光标：smooth cursor 开启时本 draw 层整个会话拥有光标。
                     //    #691：光标位置从 scene.cursorRect（timeline 统一采样）读取，
                     //    或从 restingCursorRect（无动画时的最终真实位置）读取。
                     //    不再使用独立的 Animatable<Rect>。
@@ -130,7 +179,57 @@ fun ComposeTextAnimationOverlay(
                         }
                     }
                 },
-    )
+    ) {
+        content()
+    }
+}
+
+/**
+ * #698 评论 5699401353 修复1：把 [hiddenRanges] 合并成单个 [Path] —
+ * 对每个 hiddenRange 用 [TextLayoutResult.getPathForRange] 取 path，
+ * 用 [Path.addPath] 拼接成合并 path，供 `clipPath(clipOp = ClipOp.Difference)` 一次裁切。
+ *
+ * 越界检查（range.end <= result.layoutInput.text.length）和 try/catch 防御异常。
+ * layout 为 null 时返回 null（首帧或章节切换中）。hiddenRanges 为空或全部无效时返回 null。
+ *
+ * #698 评论 5700812160：[scrollY] 把 [TextLayoutResult.getPathForRange] 得到的正文坐标 path
+ * 换算到当前编辑器视口坐标。同一 draw 层里 [drawTranslatedRangeText] 用 `translate.y - scrollY`、
+ * [drawVisualCursorRect] 用 `rect.top/bottom - scrollY`，唯独裁掉 BasicTextField 原字的
+ * hidden path 之前没减 `scrollY`，编辑器向下滚过一段距离后裁切位置（layoutY）与动画字位置
+ * （layoutY - scrollY）错开，会出现重影、缺字或局部空白。这里给 [Path.addPath] 传视口偏移
+ * `Offset(0f, -scrollY)` 统一三者坐标系，不改 BasicTextField 自己的滚动。
+ *
+ * @param hiddenRanges 需要裁切的正文 range 列表。
+ * @param layout 当前正文 layout 快照；null 时返回 null。
+ * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
+ *   用于把正文坐标 path 换算到视口坐标。
+ */
+private fun DrawScope.buildHiddenPath(
+    hiddenRanges: List<TextRange>,
+    layout: ComposeLayoutSnapshot?,
+    scrollY: Int,
+): Path? {
+    if (hiddenRanges.isEmpty() || layout == null) return null
+    val result = layout.result
+    val textLength = result.layoutInput.text.length
+    var combined: Path? = null
+    for (range in hiddenRanges) {
+        if (range.start >= range.end) continue
+        if (range.end > textLength) continue
+        try {
+            val path: Path = result.getPathForRange(range.start, range.end)
+            // #698 评论 5700812160：给 addPath 传视口偏移，把正文坐标 path 换算到当前视口坐标，
+            // 与 drawTranslatedRangeText（translate.y - scrollY）、drawVisualCursorRect
+            // （rect.top/bottom - scrollY）统一坐标系。
+            val viewportOffset = Offset(0f, -scrollY.toFloat())
+            val target = combined ?: Path()
+            target.addPath(path, viewportOffset)
+            combined = target
+        } catch (_: Throwable) {
+            // 越界或几何异常：跳过此 range，不阻断其他绘制。
+        }
+    }
+    return combined
 }
 
 /**
@@ -241,7 +340,7 @@ private fun safePathBounds(
  * BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
  * 纯 selection 变化（鼠标点选、方向键移动）不保证重新计算文字布局，
  * 此时 [ComposeEditorVisualState.restingCursorRect]（只在 onAuthoritativeLayout 里更新）
- * 会停在旧位置。overlay 用本函数 + [ComposeEditorVisualState.latestLayout] + liveSelection
+ * 会停在旧位置。draw 层用本函数 + [ComposeEditorVisualState.latestLayout] + liveSelection
  * 实时算出当前 selection 对应的光标几何。
  *
  * 不重新引入 `Animatable` — 这只是静态几何查询。

@@ -33,6 +33,10 @@ internal object ComposeVisualPatchBatch {
 
         val first = batch.first()
         val last = batch.last()
+        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
+        // oldLayout = first.oldLayout（第一份真实旧 layout），newLayout = last.newLayout（最后一份真实新 layout）。
+        // 不为 batch 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过，
+        // 虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
         val oldLayout = first.oldLayout
         val newLayout = last.newLayout
         val oldText = oldLayout.result.layoutInput.text.text
@@ -99,6 +103,8 @@ internal object ComposeVisualPatchBatch {
             }
 
         // retainedMoves 只按第一份旧 layout 和最后一份新 layout 算一次
+        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
+        // retainedMoves 只算一次（oldLayout -> newLayout），不为 batch 中间笔虚构中间 layout。
         val retainedMoves =
             if (composedOffsetMap.isNotEmpty()) {
                 ComposeVisualRebase.computeRetainedMovesFromComposedMap(
@@ -194,41 +200,47 @@ internal object ComposeVisualPatchBatch {
         val newCursorRect = safeCursorRectFromBatch(newLayout, newLayout.selection.end)
         return when {
             oldCursorRect == null && newCursorRect == null -> null
-            oldCursorRect == null -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
-            )
-            newCursorRect == null -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
-            )
-            oldCursorRect == newCursorRect -> CursorMotionPath(
-                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-            )
-            else -> CursorMotionPath(
-                points = listOf(
-                    CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
-                    CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
-                ),
-            )
+            oldCursorRect == null ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
+                )
+            newCursorRect == null ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
+                )
+            oldCursorRect == newCursorRect ->
+                CursorMotionPath(
+                    points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+                )
+            else ->
+                CursorMotionPath(
+                    points =
+                        listOf(
+                            CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
+                            CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
+                        ),
+                )
         }
     }
 
     /**
-     * #694 评论 5694645209 问题2：batch cursor path 合成 —
-     * 按 [batch] 入队顺序取每笔 `patch.cursorMotionPath?.points`，保留真实 stage caret 顺序，
-     * 不再对 batch 纯删除重新走旧 [ComposeLocalVisualRebase.buildCursorPath]（旧逻辑只按 insertedUnits 建点，
-     * 纯删除时 insertedUnits 为空、回退到最终单点，丢失中间阶段 caret）。
+     * #694 评论 5694645209 问题2 + #698 评论 5699401353 修复2：batch cursor path 合成 —
      *
-     * 规则：
-     * 1. 按 [batch] 入队顺序取每笔 `patch.cursorMotionPath?.points`；
-     * 2. 保留真实 stage caret 顺序；
-     * 3. 相邻相同 rect 去重；
-     * 4. 最后一个点必须收敛到 `batch.last().newLayout.selection` 的最终 cursor rect；
-     * 5. 最后统一重新分配 `endFraction = (i + 1) / n`，与同一有界窗口里的文字 stage 对齐；
-     * 6. 只有取不到任何 stage path 时，再回退现有 [ComposeLocalVisualRebase.buildCursorPath]。
+     * #698 评论 5699401353 修复2：不再无条件拼接每笔 patch 的 stage cursor path。
+     * 快速删除时每笔 patch 的 stage caret 属于中间文本 T1/T2，但真实存在的 layout 只有 T0 和 Tn。
+     * 把 T1 的 offset 放进 Tn 的 newLayout 查 rect 会对应另一个字/另一行。
      *
-     * @return 合成后的 [CursorMotionPath]；batch 为空或取不到任何 stage path 且 buildCursorPath 也失败时返回 null。
+     * 新实现：batch 后统一从 first.oldLayout / last.newLayout 和最终 insertedUnits/deletedUnits
+     * 重建 cursor path — 直接调用 [ComposeLocalVisualRebase.buildCursorPath]，
+     * 不再收集各笔 patch.cursorMotionPath?.points。
+     *
+     * [buildCursorPath] 的光标几何只从真实 T0/Tn layout 取：
+     * - 无文字动画语义 → 单点 snap
+     * - 纯插入：按 insertedUnits.end 从 newLayout 取阶段点
+     * - 删除/混合：回退到最终单点 snap
+     *
+     * @return 合成后的 [CursorMotionPath]；batch 为空或 buildCursorPath 失败时返回 null。
      */
-    @Suppress("CognitiveComplexMethod")
     private fun composeBatchCursorPath(
         batch: List<ComposeVisualPatch>,
         insertedUnits: List<TextRange>,
@@ -239,58 +251,16 @@ internal object ComposeVisualPatchBatch {
         val last = batch.last()
         val oldLayout = first.oldLayout
         val newLayout = last.newLayout
-
-        // 第一步：按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序。
-        val stagePoints = mutableListOf<CursorMotionPoint>()
-        for (patch in batch) {
-            val path = patch.cursorMotionPath ?: continue
-            for (point in path.points) {
-                stagePoints.add(point)
-            }
-        }
-
-        // 第二步：相邻相同 rect 去重。
-        val dedupedPoints = mutableListOf<CursorMotionPoint>()
-        for (point in stagePoints) {
-            if (dedupedPoints.isEmpty() || dedupedPoints.last().rect != point.rect) {
-                dedupedPoints.add(point)
-            }
-        }
-
-        // 第三步：最后一个点必须收敛到 batch.last().newLayout.selection 的最终 cursor rect。
-        val finalCursorRect = safeCursorRectFromBatch(newLayout, last.newLayout.selection.end)
-        if (finalCursorRect != null) {
-            if (dedupedPoints.isEmpty()) {
-                dedupedPoints.add(CursorMotionPoint(rect = finalCursorRect, endFraction = 1f))
-            } else if (dedupedPoints.last().rect != finalCursorRect) {
-                dedupedPoints.add(CursorMotionPoint(rect = finalCursorRect, endFraction = 1f))
-            }
-        }
-
-        // 第四步：只有取不到任何 stage path 时，再回退现有 buildCursorPath()。
-        if (dedupedPoints.isEmpty()) {
-            return ComposeLocalVisualRebase.buildCursorPath(
-                oldLayout = oldLayout,
-                newLayout = newLayout,
-                oldSelection = first.oldLayout.selection,
-                newSelection = last.newLayout.selection,
-                insertedUnits = insertedUnits,
-                deletedUnits = deletedUnits,
-            )
-        }
-
-        // 第五步：最后统一重新分配 endFraction = (i + 1) / n，
-        // 与同一有界窗口里的文字 stage 对齐。
-        val n = dedupedPoints.size
-        val normalizedPoints =
-            if (n <= 1) {
-                dedupedPoints.map { it.copy(endFraction = 1f) }
-            } else {
-                dedupedPoints.mapIndexed { i, point ->
-                    point.copy(endFraction = (i + 1f) / n)
-                }
-            }
-        return CursorMotionPath(normalizedPoints)
+        // #698 评论 5699401353 修复2：batch 后统一从 first.oldLayout / last.newLayout
+        // 和最终 insertedUnits/deletedUnits 重建 cursor path，不收集各笔 stage cursor path。
+        return ComposeLocalVisualRebase.buildCursorPath(
+            oldLayout = oldLayout,
+            newLayout = newLayout,
+            oldSelection = first.oldLayout.selection,
+            newSelection = last.newLayout.selection,
+            insertedUnits = insertedUnits,
+            deletedUnits = deletedUnits,
+        )
     }
 
     /**

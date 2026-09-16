@@ -100,6 +100,12 @@ class LocalInputVisualEditTracker {
      * @param presentedOldText 上一次真正呈现的 layout 正文（T0）。
      * @param finalNewText 本次权威 layout 的正文（Tn）。
      * @return 连续 chain 列表（按入队顺序）；找不到返回 null。
+     *
+     * #698 评论 5697612595 chainSize > 1 reflow 收口 —
+     * 返回的 chain 只包含 [LocalInputVisualEdit]（text/selection/changes），
+     * **不含 layout 对象**。[ComposeEditorVisualState.buildLocalInputPatch] 只用 chain 的
+     * text/changes 算 offset map 和 stage 顺序，不创建中间 layout — 中间笔可能从未真正 layout 过
+     * （快速输入中间 layout 被跳过），虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
      */
     @Suppress("CognitiveComplexMethod")
     fun drainMatchingChain(

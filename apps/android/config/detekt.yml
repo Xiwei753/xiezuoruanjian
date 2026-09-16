@@ -49,7 +49,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
       # --- #641：视觉状态机多阶段 rebase/replace 切分，分支天然密集 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeEditorVisualState.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeTextAnimationOverlay.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/EditorTextFieldDrawLayer.kt"
       # --- 平台安全：Android Keystore API条件分支多 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- 设置界面：多设置项组合条件 ---
@@ -70,6 +70,7 @@ complexity:
       # --- #691：视觉帧协调器/rebase 多阶段切分，复杂度天然超标（预先存在） ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeLocalVisualRebase.kt"
       # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，复杂度天然超标 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   CyclomaticComplexMethod:
@@ -99,7 +100,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/RebasePlanner.kt"
       # --- #641：视觉状态机/overlay 多阶段 rebase/replace 切分，分支天然密集 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeEditorVisualState.kt"
-      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeTextAnimationOverlay.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/EditorTextFieldDrawLayer.kt"
       # --- 平台安全 ---
       - "**/kotlin/com/xiwei/sujian/core/interop/security/AndroidKeystoreSecureStorage.kt"
       # --- 设置界面 ---
@@ -118,6 +119,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeCursorMotion.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualRebase.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeLocalVisualRebase.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualPatchBatch.kt"
       # --- #691 评论 5681258225：视觉时间线 applyPatch 多阶段文字/cursor 合并，圈复杂度天然超标 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LongMethod:
@@ -236,6 +239,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/InsertDeletePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/planner/MoveCrossfadePlanner.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/presentation/EditorViewModel.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue694ReproTest.kt"
       # --- 工作台组件：多面板布局参数 ---
       - "**/kotlin/com/xiwei/sujian/feature/project/ui/ProjectWorkspaceScreen.kt"
       # --- 手机端 ---
