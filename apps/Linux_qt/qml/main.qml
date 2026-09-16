@@ -22,8 +22,12 @@ import Sujian 1.0
 ApplicationWindow {
     id: window
     visible: true
-    width: 1100
-    height: 768
+    // Issue #692: 默认逻辑尺寸 + 当前屏幕可用区域限制。
+    // Screen.desktopAvailableWidth/Height 是 Qt 6 设备无关逻辑尺寸；
+    // 首次显示不超出可用区域，也不根据物理分辨率算窗口大小。
+    // 窗口拖到另一块显示器时由 Qt 自己处理 DPR，不手工重算。
+    width: Math.min(1100, Screen.desktopAvailableWidth > 0 ? Screen.desktopAvailableWidth - 32 : 1100)
+    height: Math.min(768, Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight - 32 : 768)
     title: qsTr("素笺写作")
     color: designTokens.bg
 
@@ -647,7 +651,7 @@ ApplicationWindow {
                     return qsTr("确定要删除吗？");
                 }
                 color: designTokens.textPrimary
-                font.pixelSize: designTokens.body
+                font.pointSize: designTokens.bodyPt
                 font.family: designTokens.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -698,7 +702,7 @@ ApplicationWindow {
                 dt: designTokens
                 text: errorDialog.message
                 color: designTokens.textPrimary
-                font.pixelSize: designTokens.body
+                font.pointSize: designTokens.bodyPt
                 font.family: designTokens.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -764,7 +768,7 @@ ApplicationWindow {
                     return qsTr("新名称");
                 }
                 color: designTokens.textSecondary
-                font.pixelSize: designTokens.label
+                font.pointSize: designTokens.labelPt
                 font.family: designTokens.fontFamily
             }
 

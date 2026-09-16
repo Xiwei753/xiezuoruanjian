@@ -27,7 +27,7 @@ Rectangle {
     readonly property int _sp16: dt.sp16
     readonly property int _sp20: dt.sp20
     readonly property int _sp32: dt.sp32
-    readonly property int _fontMd: dt.fontMd
+    readonly property real _fontMd: dt.fontMdPt
 
     property string title: ""
     default property alias contentData: contentColumn.data
@@ -48,7 +48,7 @@ Rectangle {
             dt: root.dt
             text: root.title
             color: _accent
-            font.pixelSize: _fontMd
+            font.pointSize: _fontMd
             font.weight: Font.Bold
         }
     }

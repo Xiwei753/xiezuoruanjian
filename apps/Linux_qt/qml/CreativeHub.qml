@@ -67,7 +67,7 @@ Rectangle {
                         dt: root.dt
                         text: qsTr("素笺写作")
                         color: dt.primary
-                        font.pixelSize: dt.fontXl
+                        font.pointSize: dt.fontXlPt
                         font.family: dt.fontFamily
                         font.weight: Font.Bold
                     }
@@ -101,7 +101,7 @@ Rectangle {
                                 color: root.currentTab === modelData.idx ?
                                        dt.onPrimaryContainer :
                                        dt.onSurfaceVariant
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
@@ -162,7 +162,7 @@ Rectangle {
                                       return qsTr("同步");
                                   }
                                   color: dt.onSurfaceVariant
-                                  font.pixelSize: dt.caption
+                                  font.pointSize: dt.captionPt
                                   font.family: dt.fontFamily
                                   Layout.alignment: Qt.AlignVCenter
                                   visible: root.width > 700
@@ -193,7 +193,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: qsTr("设置")
                             color: dt.onSurfaceVariant
-                            font.pixelSize: dt.caption
+                            font.pointSize: dt.captionPt
                         }
 
                         MouseArea {
@@ -220,7 +220,7 @@ Rectangle {
                                 dt: root.dt
                                 text: qsTr("切换工作区")
                                 color: dt.onSurfaceVariant
-                                font.pixelSize: dt.caption
+                                font.pointSize: dt.captionPt
                                 font.family: dt.fontFamily
                                 Layout.alignment: Qt.AlignVCenter
                                 visible: true

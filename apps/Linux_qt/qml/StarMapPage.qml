@@ -52,7 +52,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("星图")
                 color: dt.onSurface
-                font.pixelSize: dt.headline
+                font.pointSize: dt.titlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -70,7 +70,7 @@ Rectangle {
                 Layout.alignment: Qt.AlignHCenter
                 text: qsTr("[ 施工中 ]")
                 color: dt.onSurfaceVariant
-                font.pixelSize: dt.headline
+                font.pointSize: dt.titlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -80,7 +80,7 @@ Rectangle {
                 Layout.alignment: Qt.AlignHCenter
                 text: qsTr("星图功能正在施工中，敬请期待")
                 color: dt.onSurfaceVariant
-                font.pixelSize: dt.body
+                font.pointSize: dt.bodyPt
                 font.family: dt.fontFamily
             }
 

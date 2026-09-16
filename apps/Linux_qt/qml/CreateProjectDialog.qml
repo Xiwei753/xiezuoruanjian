@@ -44,7 +44,7 @@ Dialog {
             dt: root.theme
             text: qsTr("新建作品")
             color: theme.textPrimary
-            font.pixelSize: theme.subtitle
+            font.pointSize: theme.subtitlePt
             font.family: theme.fontFamily
             font.weight: Font.DemiBold
         }
@@ -53,7 +53,7 @@ Dialog {
             dt: root.theme
             text: qsTr("请输入作品名称：")
             color: theme.onSurfaceVariant
-            font.pixelSize: theme.body
+            font.pointSize: theme.bodyPt
             font.family: theme.fontFamily
         }
 

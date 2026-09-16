@@ -26,6 +26,6 @@ Text {
                 return resolvedDt.textPrimary;
         }
     }
-    font.pixelSize: resolvedDt.fontMd
+    font.pointSize: resolvedDt.fontMdPt
     wrapMode: Text.WordWrap
 }

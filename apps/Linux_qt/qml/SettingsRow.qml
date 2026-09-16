@@ -49,7 +49,7 @@ Rectangle {
                 dt: root.resolvedDt
                 text: root.title
                 color: resolvedDt.textPrimary
-                font.pixelSize: resolvedDt.body
+                font.pointSize: resolvedDt.bodyPt
                 font.family: resolvedDt.fontFamily
                 wrapMode: Text.Wrap
                 Layout.fillWidth: true
@@ -58,7 +58,7 @@ Rectangle {
                 dt: root.resolvedDt
                 text: root.description
                 color: resolvedDt.textSecondary
-                font.pixelSize: resolvedDt.caption
+                font.pointSize: resolvedDt.captionPt
                 font.family: resolvedDt.fontFamily
                 visible: text.length > 0
                 wrapMode: Text.Wrap

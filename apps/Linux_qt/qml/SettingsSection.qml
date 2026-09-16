@@ -38,7 +38,7 @@ Rectangle {
             dt: root.dt
             text: root.title
             color: dt.textPrimary
-            font.pixelSize: dt.subtitle
+            font.pointSize: dt.subtitlePt
             font.family: dt.fontFamily
             font.weight: Font.DemiBold
             Layout.fillWidth: true

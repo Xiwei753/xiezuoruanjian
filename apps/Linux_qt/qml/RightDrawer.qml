@@ -33,8 +33,8 @@ Rectangle {
     readonly property int _sp8: dt.sp8
     readonly property int _sp16: dt.sp16
     readonly property int _radiusSm: dt.radiusSm
-    readonly property int _fontSm: dt.fontSm
-    readonly property int _fontLg: dt.fontLg
+    readonly property real _fontSm: dt.fontSmPt
+    readonly property real _fontLg: dt.fontLgPt
 
     property var backendRef: null
     property var starMapController: null
@@ -114,7 +114,7 @@ Rectangle {
                                 color: root.currentTab === modelData.idx ?
                                        _accentText :
                                        _textSecondary
-                                font.pixelSize: _fontSm
+                                font.pointSize: _fontSm
                                 font.weight: root.currentTab === modelData.idx ? Font.DemiBold : Font.Normal
                             }
 
@@ -141,7 +141,7 @@ Rectangle {
                             anchors.centerIn: parent
                             text: "\u2715"
                             color: _textMuted
-                            font.pixelSize: _fontSm
+                            font.pointSize: _fontSm
                         }
 
                         MouseArea {
@@ -177,14 +177,14 @@ Rectangle {
                         AppText {
                             text: "\uD83C\uDF0C"
                             dt: root.dt
-                            font.pixelSize: 32
+                            font.pointSize: dt.fontEmojiSmPt
                             Layout.alignment: Qt.AlignHCenter
                         }
                         AppText {
                             text: qsTr("星图正在施工")
                             dt: root.dt
                             color: _textPrimary
-                            font.pixelSize: _fontLg
+                            font.pointSize: _fontLg
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -192,7 +192,7 @@ Rectangle {
                             text: qsTr("星图功能将在后续版本实现")
                             dt: root.dt
                             color: _textMuted
-                            font.pixelSize: _fontSm
+                            font.pointSize: _fontSm
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }
@@ -219,14 +219,14 @@ Rectangle {
                         AppText {
                             text: "\uD83E\uDD16"
                             dt: root.dt
-                            font.pixelSize: 32
+                            font.pointSize: dt.fontEmojiSmPt
                             Layout.alignment: Qt.AlignHCenter
                         }
                         AppText {
                             text: qsTr("AI 助手")
                             dt: root.dt
                             color: _textPrimary
-                            font.pixelSize: _fontLg
+                            font.pointSize: _fontLg
                             font.weight: Font.DemiBold
                             Layout.alignment: Qt.AlignHCenter
                         }
@@ -234,7 +234,7 @@ Rectangle {
                             text: qsTr("AI 功能将在后续版本实现")
                             dt: root.dt
                             color: _textMuted
-                            font.pixelSize: _fontSm
+                            font.pointSize: _fontSm
                             Layout.alignment: Qt.AlignHCenter
                         }
                     }

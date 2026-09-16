@@ -56,7 +56,7 @@ Rectangle {
                     anchors.centerIn: parent
                     text: "\u2B50"
                     dt: root.dt
-                    font.pixelSize: isChild ? 14 : 18
+                    font.pointSize: isChild ? dt.bodyPt : dt.fontXlPt
                 }
             }
 
@@ -68,7 +68,7 @@ Rectangle {
                     dt: root.dt
                     text: starmapData.title || qsTr("未命名星图")
                     color: dt.textPrimary
-                    font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
+                    font.pointSize: root.isChild ? dt.fontSmPt : dt.fontMdPt
                     font.weight: Font.DemiBold
                     Layout.fillWidth: true
                     elide: Text.ElideRight
@@ -85,7 +85,7 @@ Rectangle {
                     color: starmapData.isMainForProject ?
                            dt.accent :
                            dt.textMuted
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
         }
@@ -110,14 +110,14 @@ Rectangle {
                         dt: root.dt
                         text: modelData.value
                         color: dt.textPrimary
-                        font.pixelSize: root.isChild ? dt.fontSm : dt.fontMd
+                        font.pointSize: root.isChild ? dt.fontSmPt : dt.fontMdPt
                         font.weight: Font.Bold
                     }
                     AppText {
                         dt: root.dt
                         text: modelData.label
                         color: dt.textMuted
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                     }
                 }
             }
@@ -145,14 +145,14 @@ Rectangle {
                         dt: root.dt
                         text: "\u25BC"
                         color: dt.accentText
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                         Layout.alignment: Qt.AlignVCenter
                     }
                     AppText {
                         dt: root.dt
                         text: (starmapData.childStarmapCount || 0) + " " + qsTr("子星图")
                         color: dt.accentText
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                         Layout.alignment: Qt.AlignVCenter
                     }
                 }
@@ -173,7 +173,7 @@ Rectangle {
                     return Math.floor(diff / 86400000) + qsTr("天前");
                 }
                 color: dt.textMuted
-                font.pixelSize: dt.fontXs
+                font.pointSize: dt.fontXsPt
                 Layout.alignment: Qt.AlignVCenter
             }
         }

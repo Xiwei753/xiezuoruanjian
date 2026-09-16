@@ -246,13 +246,23 @@ impl CompositionState {
 
 /// 视觉事务上下文 — 传递给布局引擎的渲染参数快照。
 ///
-/// 每次布局重算时由平台端填充当前值。所有尺寸均为物理像素（已乘 dpr）。
-/// `scroll_y` 为文档坐标系中的滚动偏移，不含 viewport 顶部 padding。
+/// 每次布局重算时由平台端填充当前值。所有尺寸均为逻辑像素（device-independent，
+/// Qt 逻辑坐标），不是物理像素。`scroll_y` 为文档坐标系中的滚动偏移，不含 viewport
+/// 顶部 padding。
 ///
-/// 坐标空间约定：
-/// - 所有 x/y 坐标为文档坐标系（不含滚动偏移），布局引擎在渲染时减去 scroll_y
-/// - bounding_width / font_pixel_size / padding / text_indent / line_spacing 均为物理像素
-/// - dpr 用于逻辑像素到物理像素的转换，布局引擎内部统一使用物理像素
+/// 坐标空间约定（Issue #692 评论 5：写作区字号语义在不同 DPI 下不漂）：
+/// - 所有 x/y 坐标为文档逻辑坐标系（不含滚动偏移），布局引擎在渲染时减去 scroll_y
+/// - bounding_width / font_pixel_size / padding / text_indent / line_spacing /
+///   scroll_y / viewport_height 均为逻辑像素
+/// - font_pixel_size 是用户设置字号（来自 settingsBackend.setting_font_size），
+///   以逻辑像素语义解释：渲染时通过 QFont.setPixelSize(fs) 配合
+///   img.setDevicePixelRatio(dpr) 或 painter.scale(dpr, dpr) 转为物理像素。
+///   命名沿用 Qt QFont.setPixelSize 习惯，但语义是逻辑像素，不在此处乘 dpr。
+/// - dpr 只用于底层渲染（QImage 纹理尺寸、img.setDevicePixelRatio、sourceRect
+///   物理坐标、光标像素对齐），不用于上层 UI 尺寸整体缩放。
+/// - 布局几何（line.x/y/height、naturalTextWidth、content_height）保持逻辑坐标；
+///   仅纹理 sourceRect 使用物理像素（srcX * dpr），由 source_rect_to_document_rect
+///   除以 dpr 转回逻辑坐标。
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
     pub is_scrolling: bool,

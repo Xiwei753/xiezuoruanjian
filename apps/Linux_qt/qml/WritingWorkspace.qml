@@ -126,7 +126,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("保存被阻止")
                 color: dt.textPrimary
-                font.pixelSize: dt.subtitle
+                font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -136,7 +136,7 @@ Rectangle {
                 Layout.fillWidth: true
                 text: qsTr("空内容保存被阻止，请输入内容后重试")
                 color: dt.textSecondary
-                font.pixelSize: dt.body
+                font.pointSize: dt.bodyPt
                 font.family: dt.fontFamily
                 wrapMode: Text.Wrap
             }
@@ -266,7 +266,7 @@ Rectangle {
                                     anchors.centerIn: parent
                                     text: "\u2190"
                                     color: dt.textSecondary
-                                    font.pixelSize: dt.fontLg
+                                    font.pointSize: dt.fontLgPt
                                 }
 
                                 MouseArea {
@@ -282,7 +282,7 @@ Rectangle {
                                 dt: root.dt
                                 text: root.projectTitle || qsTr("作品")
                                 color: dt.textPrimary
-                                font.pixelSize: dt.fontMd
+                                font.pointSize: dt.fontMdPt
                                 font.family: dt.fontFamily
                                 font.weight: Font.DemiBold
                                 Layout.fillWidth: true
@@ -341,7 +341,7 @@ Rectangle {
                                                 if (delegateBg.isSelected) return dt.onPrimaryContainer;
                                                 return dt.textPrimary;
                                             }
-                                            font.pixelSize: dt.label
+                                            font.pointSize: dt.labelPt
                                             font.family: dt.fontFamily
                                             font.weight: delegateBg.isSelected ? Font.DemiBold : Font.Normal
                                             Layout.fillWidth: true
@@ -361,7 +361,7 @@ Rectangle {
                                                 anchors.centerIn: parent
                                                 text: "⋯"
                                                 color: dt.textSecondary
-                                                font.pixelSize: dt.fontMd
+                                                font.pointSize: dt.fontMdPt
                                             }
 
                                             MouseArea {
@@ -436,7 +436,7 @@ Rectangle {
                                             anchors.centerIn: parent
                                             text: "+"
                                             color: dt.primary
-                                            font.pixelSize: dt.fontSm
+                                            font.pointSize: dt.fontSmPt
                                             font.weight: Font.Bold
                                         }
 
@@ -469,14 +469,14 @@ Rectangle {
                                 dt: root.dt
                                 text: "+"
                                 color: dt.primary
-                                font.pixelSize: dt.fontMd
+                                font.pointSize: dt.fontMdPt
                                 font.weight: Font.Bold
                             }
                             AppText {
                                 dt: root.dt
                                 text: qsTr("新卷")
                                 color: dt.primary
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                             }
                         }
@@ -513,7 +513,7 @@ Rectangle {
                                 dt: root.dt
                                 text: createVolumeMenuItem.text
                                 color: dt.textPrimary
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -530,7 +530,7 @@ Rectangle {
                                 dt: root.dt
                                 text: createChapterMenuItem.text
                                 color: dt.textPrimary
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -550,7 +550,7 @@ Rectangle {
                                 dt: root.dt
                                 text: renameMenuItem.text
                                 color: dt.textPrimary
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -573,7 +573,7 @@ Rectangle {
                                 dt: root.dt
                                 text: deleteMenuItem.text
                                 color: dt.error
-                                font.pixelSize: dt.label
+                                font.pointSize: dt.labelPt
                                 font.family: dt.fontFamily
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -1010,7 +1010,7 @@ Rectangle {
                         dt: root.dt
                         text: qsTr("请选择或新建章节")
                         color: dt.textSecondary
-                        font.pixelSize: dt.fontLg
+                        font.pointSize: dt.fontLgPt
                         Layout.alignment: Qt.AlignHCenter
                     }
                 }
@@ -1038,7 +1038,7 @@ Rectangle {
                                 anchors.centerIn: parent
                                 text: "\u25C0" // Left arrow to indicate it opens from the right
                                 color: dt.textMuted
-                                font.pixelSize: dt.fontXs
+                                font.pointSize: dt.fontXsPt
                             }
 
                             MouseArea {

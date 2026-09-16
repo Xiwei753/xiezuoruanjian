@@ -58,7 +58,7 @@ ComboBox {
         dt: control.theme
         text: control.displayText
         color: control.enabled ? control.normalTextColor : control.disabledTextColor
-        font.pixelSize: control.theme.label
+        font.pointSize: control.theme.labelPt
         font.family: control.theme.fontFamily
         leftPadding: control.leftPadding
         rightPadding: control.rightPadding
@@ -101,7 +101,7 @@ ComboBox {
             dt: control.theme
             text: modelData
             color: control.highlightedIndex === index ? control.highlightedTextColor : control.normalTextColor
-            font.pixelSize: control.theme.fontMd
+            font.pointSize: control.theme.fontMdPt
             verticalAlignment: Text.AlignVCenter
         }
         background: Rectangle {

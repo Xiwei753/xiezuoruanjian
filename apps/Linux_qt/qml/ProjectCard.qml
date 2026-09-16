@@ -32,9 +32,9 @@ Rectangle {
     readonly property int _sp12: dt.sp12
     readonly property int _sp16: dt.sp16
     readonly property int _sp20: dt.sp20
-    readonly property int _subtitle: dt.subtitle
-    readonly property int _body: dt.body
-    readonly property int _caption: dt.caption
+    readonly property real _subtitle: dt.subtitlePt
+    readonly property real _body: dt.bodyPt
+    readonly property real _caption: dt.captionPt
     readonly property string _fontFamily: dt.fontFamily
     readonly property int _animFast: dt.animFast
 
@@ -117,7 +117,7 @@ Rectangle {
             Layout.topMargin: _sp12
             text: root.title || qsTr("未命名作品")
             color: _textPrimary
-            font.pixelSize: _subtitle
+            font.pointSize: _subtitle
             font.family: _fontFamily
             font.weight: Font.DemiBold
             elide: Text.ElideRight
@@ -138,7 +138,7 @@ Rectangle {
                     dt: root.dt
                     text: root.wordCount >= 10000 ? (root.wordCount / 10000).toFixed(1) + "w" : root.wordCount.toLocaleString()
                     color: _textPrimary
-                    font.pixelSize: _body
+                    font.pointSize: _body
                     font.family: _fontFamily
                     font.weight: Font.Medium
                 }
@@ -146,7 +146,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("总字数")
                     color: _textMuted
-                    font.pixelSize: _caption
+                    font.pointSize: _caption
                     font.family: _fontFamily
                 }
             }
@@ -158,7 +158,7 @@ Rectangle {
                     dt: root.dt
                     text: "+" + (root.todayInput >= 1000 ? (root.todayInput / 1000).toFixed(1) + "k" : root.todayInput.toLocaleString())
                     color: _primary
-                    font.pixelSize: _body
+                    font.pointSize: _body
                     font.family: _fontFamily
                     font.weight: Font.Medium
                 }
@@ -166,7 +166,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("今日")
                     color: _textMuted
-                    font.pixelSize: _caption
+                    font.pointSize: _caption
                     font.family: _fontFamily
                 }
             }
@@ -177,7 +177,7 @@ Rectangle {
                 dt: root.dt
                 text: root.lastEdited || ""
                 color: _textMuted
-                font.pixelSize: _caption
+                font.pointSize: _caption
                 font.family: _fontFamily
                 visible: text !== ""
             }

@@ -38,7 +38,7 @@ Item {
             dt: control.resolvedDt
             text: control.label
             variant: "onSurfaceVariant"
-            font.pixelSize: control.resolvedDt.label
+            font.pointSize: control.resolvedDt.labelPt
             font.weight: Font.Medium
             font.family: control.resolvedDt.fontFamily
             visible: control.label.length > 0
@@ -62,7 +62,7 @@ Item {
                 border.width: inputField.activeFocus ? 2 : 1
                 radius: control.resolvedDt.radiusMd
             }
-            font.pixelSize: control.resolvedDt.body
+            font.pointSize: control.resolvedDt.bodyPt
             font.family: control.resolvedDt.fontFamily
             leftPadding: control.resolvedDt.sp12
             rightPadding: control.resolvedDt.sp12

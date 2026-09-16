@@ -35,7 +35,7 @@ Rectangle {
         AppText {
             dt: root.dt
             text: qsTr("属性")
-            font.pixelSize: 16
+            font.pointSize: dt.fontLgPt
             font.bold: true
             color: dt.textPrimary
             visible: selectedNode !== null || selectedEdge !== null

@@ -37,7 +37,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: "\u2B50"
                 dt: root.dt
-                font.pixelSize: 36
+                font.pointSize: dt.fontEmojiMdPt
             }
         }
 
@@ -45,7 +45,7 @@ Rectangle {
             dt: root.dt
             text: qsTr("星图")
             color: dt.textPrimary
-            font.pixelSize: dt.fontTitle
+            font.pointSize: dt.fontTitlePt
             font.weight: Font.Bold
             Layout.alignment: Qt.AlignHCenter
         }
@@ -54,7 +54,7 @@ Rectangle {
             dt: root.dt
             text: qsTr("构建你的创作宇宙，可视化人物关系与故事脉络")
             color: dt.textSecondary
-            font.pixelSize: dt.fontMd
+            font.pointSize: dt.fontMdPt
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true
             wrapMode: Text.Wrap
@@ -92,7 +92,7 @@ Rectangle {
                             dt: root.dt
                             anchors.centerIn: parent
                             text: modelData.icon
-                            font.pixelSize: 18
+                            font.pointSize: dt.fontXlPt
                         }
                     }
 
@@ -103,14 +103,14 @@ Rectangle {
                             dt: root.dt
                             text: modelData.label
                             color: dt.textPrimary
-                            font.pixelSize: dt.fontMd
+                            font.pointSize: dt.fontMdPt
                             font.weight: Font.Medium
                         }
                         AppText {
                             dt: root.dt
                             text: modelData.desc
                             color: dt.textMuted
-                            font.pixelSize: dt.fontXs
+                            font.pointSize: dt.fontXsPt
                         }
                     }
 
@@ -118,7 +118,7 @@ Rectangle {
                         dt: root.dt
                         text: "\u2192"
                         color: dt.textMuted
-                        font.pixelSize: dt.fontLg
+                        font.pointSize: dt.fontLgPt
                     }
                 }
             }
@@ -129,7 +129,7 @@ Rectangle {
             dt: root.dt
             text: qsTr("完整星图渲染将在后续版本实现")
             color: dt.textMuted
-            font.pixelSize: dt.fontXs
+            font.pointSize: dt.fontXsPt
             Layout.alignment: Qt.AlignHCenter
             Layout.topMargin: dt.sp8
         }

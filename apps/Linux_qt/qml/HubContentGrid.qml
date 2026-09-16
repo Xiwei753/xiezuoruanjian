@@ -65,7 +65,7 @@ Item {
             AppText {
                 dt: root.dt
                 text: root.emptyIcon
-                font.pixelSize: 36
+                font.pointSize: dt.fontEmojiMdPt
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter
             }
@@ -73,7 +73,7 @@ Item {
                 dt: root.dt
                 text: root.emptyTitle
                 color: dt.textPrimary
-                font.pixelSize: dt.fontXl
+                font.pointSize: dt.fontXlPt
                 font.weight: Font.DemiBold
                 anchors.horizontalCenter: parent.horizontalCenter
             }
@@ -81,7 +81,7 @@ Item {
                 dt: root.dt
                 text: root.emptySubtitle
                 color: dt.textSecondary
-                font.pixelSize: dt.fontMd
+                font.pointSize: dt.fontMdPt
                 visible: text.length > 0
                 anchors.horizontalCenter: parent.horizontalCenter
             }

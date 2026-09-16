@@ -23,8 +23,8 @@ Button {
     readonly property color _primaryContainer: dt.primaryContainer
     readonly property color _surfaceVariant: dt.surfaceVariant
     readonly property int _radiusPill: dt.radiusPill
-    readonly property int _fontSm: dt.fontSm
-    readonly property int _label: dt.label
+    readonly property real _fontSm: dt.fontSmPt
+    readonly property real _label: dt.labelPt
     readonly property string _fontFamily: dt.fontFamily
 
     property bool active: false
@@ -32,13 +32,13 @@ Button {
     implicitHeight: 36
     implicitWidth: Math.max(tm.width + 24, 52)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: _fontSm }
+    TextMetrics { id: tm; text: control.text; font.pointSize: _fontSm }
 
     contentItem: AppText {
         dt: control.dt
         text: control.text
         color: control.active ? _onPrimaryContainer : (control.hovered ? _primary : _onSurfaceVariant)
-        font.pixelSize: _label
+        font.pointSize: _label
         font.family: _fontFamily
         font.weight: control.active ? Font.Medium : Font.Normal
         horizontalAlignment: Text.AlignHCenter

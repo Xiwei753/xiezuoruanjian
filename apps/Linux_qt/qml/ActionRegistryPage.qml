@@ -36,7 +36,7 @@ ScrollView {
         AppText {
             dt: root.appTheme
             text: qsTr("Action 调试")
-            font.pixelSize: root.appTheme.fontXl
+            font.pointSize: root.appTheme.fontXlPt
             font.weight: Font.Bold
         }
 
@@ -44,7 +44,7 @@ ScrollView {
             dt: root.appTheme
             variant: "secondary"
             text: qsTr("列出所有已注册的 Action，可执行 Query 类型或查看 Mutation 描述。")
-            font.pixelSize: root.appTheme.fontSm
+            font.pointSize: root.appTheme.fontSmPt
             wrapMode: Text.Wrap
             Layout.fillWidth: true
         }
@@ -71,7 +71,7 @@ ScrollView {
                     dt: root.appTheme
                     text: parent.text
                     color: root.appTheme.textPrimary
-                    font.pixelSize: root.appTheme.fontSm
+                    font.pointSize: root.appTheme.fontSmPt
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -95,7 +95,7 @@ ScrollView {
                     dt: root.appTheme
                     text: parent.text
                     color: root.appTheme.textSecondary
-                    font.pixelSize: root.appTheme.fontSm
+                    font.pointSize: root.appTheme.fontSmPt
                     horizontalAlignment: Text.AlignHCenter
                     verticalAlignment: Text.AlignVCenter
                 }
@@ -130,7 +130,7 @@ ScrollView {
                         AppText {
                             dt: root.appTheme
                             text: modelData.title || modelData.id || ""
-                            font.pixelSize: root.appTheme.fontMd
+                            font.pointSize: root.appTheme.fontMdPt
                             font.weight: Font.DemiBold
                             Layout.fillWidth: true
                         }
@@ -143,7 +143,7 @@ ScrollView {
                                 if (risk === "safeWrite") return qsTr("写入")
                                 return qsTr("只读")
                             }
-                            font.pixelSize: root.appTheme.fontXs
+                            font.pointSize: root.appTheme.fontXsPt
                             color: {
                                 var risk = modelData.riskLevel || ""
                                 if (risk === "dangerous") return root.appTheme.danger
@@ -157,7 +157,7 @@ ScrollView {
                     AppText {
                         dt: root.appTheme
                         text: modelData.id || ""
-                        font.pixelSize: root.appTheme.fontXs
+                        font.pointSize: root.appTheme.fontXsPt
                         variant: "secondary"
                         font.family: "monospace"
                     }
@@ -166,7 +166,7 @@ ScrollView {
                         dt: root.appTheme
                         variant: "secondary"
                         text: modelData.description || ""
-                        font.pixelSize: root.appTheme.fontSm
+                        font.pointSize: root.appTheme.fontSmPt
                         wrapMode: Text.Wrap
                         Layout.fillWidth: true
                     }
@@ -195,7 +195,7 @@ ScrollView {
                                 dt: root.appTheme
                                 text: parent.text
                                 color: root.appTheme.textPrimary
-                                font.pixelSize: root.appTheme.fontSm
+                                font.pointSize: root.appTheme.fontSmPt
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -245,7 +245,7 @@ ScrollView {
                                 dt: root.appTheme
                                 text: parent.text
                                 color: root.appTheme.textPrimary
-                                font.pixelSize: root.appTheme.fontSm
+                                font.pointSize: root.appTheme.fontSmPt
                                 horizontalAlignment: Text.AlignHCenter
                                 verticalAlignment: Text.AlignVCenter
                             }
@@ -263,7 +263,7 @@ ScrollView {
                             text: qsTr("危险操作已阻断")
                             visible: modelData.kind === "mutation" && (modelData.riskLevel === "dangerous" || modelData.riskLevel === "contentWrite")
                             color: root.appTheme.danger
-                            font.pixelSize: root.appTheme.fontSm
+                            font.pointSize: root.appTheme.fontSmPt
                         }
                     }
                 }
@@ -286,7 +286,7 @@ ScrollView {
                 readOnly: true
                 wrapMode: Text.Wrap
                 color: root.appTheme.textPrimary
-                font.pixelSize: root.appTheme.fontSm
+                font.pointSize: root.appTheme.fontSmPt
                 font.family: "monospace"
                 placeholderText: qsTr("执行结果将显示在此处...")
                 background: Rectangle { color: "transparent" }

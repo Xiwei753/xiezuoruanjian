@@ -28,7 +28,7 @@ Rectangle {
     readonly property int _sp6: resolvedDt.sp6
     readonly property int _sp16: resolvedDt.sp16
     readonly property int _radiusPill: resolvedDt.radiusPill
-    readonly property int _caption: resolvedDt.caption
+    readonly property real _caption: resolvedDt.captionPt
     readonly property string _fontFamily: resolvedDt.fontFamily
 
     property string status: "info"
@@ -72,7 +72,7 @@ Rectangle {
             visible: control.text.length > 0
             color: control.contentColor
             verticalAlignment: Text.AlignVCenter
-            font.pixelSize: _caption
+            font.pointSize: _caption
             font.family: _fontFamily
             font.weight: Font.Medium
         }

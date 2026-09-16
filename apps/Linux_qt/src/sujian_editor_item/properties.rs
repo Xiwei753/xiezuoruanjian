@@ -117,6 +117,9 @@ impl SujianEditorItem {
         self.current_font_pixel_size
     }
 
+    /// 设置正文编辑器字号。值为用户设置（settingsBackend.setting_font_size），
+    /// 逻辑像素语义（device-independent），不在此处乘 dpr——渲染时由底层
+    /// QImage.setDevicePixelRatio / painter.scale 处理 DPR（Issue #692 评论 5）。
     pub(crate) fn set_font_pixel_size(&mut self, value: f32) {
         if (self.current_font_pixel_size - value).abs() <= 0.1 {
             return;

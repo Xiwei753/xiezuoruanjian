@@ -278,7 +278,7 @@ Item {
                     dt: root.resolvedDt
                     text: qsTr("同步设置")
                     color: resolvedDt.onBackground
-                    font.pixelSize: resolvedDt.title
+                    font.pointSize: resolvedDt.titlePt
                     font.family: resolvedDt.fontFamily
                     font.weight: Font.Bold
                 }
@@ -286,7 +286,7 @@ Item {
                     dt: root.resolvedDt
                     text: qsTr("配置远端仓库并查看同步状态")
                     color: resolvedDt.onSurfaceVariant
-                    font.pixelSize: resolvedDt.body
+                    font.pointSize: resolvedDt.bodyPt
                     font.family: resolvedDt.fontFamily
                 }
             }
@@ -342,14 +342,14 @@ Item {
                         dt: root.resolvedDt
                         text: qsTr("自动同步")
                         color: resolvedDt.onBackground
-                        font.pixelSize: resolvedDt.body
+                        font.pointSize: resolvedDt.bodyPt
                         font.family: resolvedDt.fontFamily
                     }
                     AppText {
                         dt: root.resolvedDt
                         text: qsTr("启用后按设定间隔自动执行同步")
                         color: resolvedDt.onSurfaceVariant
-                        font.pixelSize: resolvedDt.caption
+                        font.pointSize: resolvedDt.captionPt
                         font.family: resolvedDt.fontFamily
                     }
                 }
@@ -376,14 +376,14 @@ Item {
                         dt: root.resolvedDt
                         text: qsTr("同步间隔")
                         color: resolvedDt.onBackground
-                        font.pixelSize: resolvedDt.body
+                        font.pointSize: resolvedDt.bodyPt
                         font.family: resolvedDt.fontFamily
                     }
                     AppText {
                         dt: root.resolvedDt
                         text: Math.round(syncIntervalSlider.value) + qsTr(" 分钟")
                         color: resolvedDt.onSurfaceVariant
-                        font.pixelSize: resolvedDt.caption
+                        font.pointSize: resolvedDt.captionPt
                         font.family: resolvedDt.fontFamily
                     }
                 }
@@ -525,7 +525,7 @@ Item {
             visible: root.backendRef && !root.backendRef.sync_can_run && root.backendRef.sync_block_reason.length > 0
             text: root.backendRef ? root.backendRef.sync_block_reason : ""
             color: resolvedDt.onSurfaceVariant
-            font.pixelSize: resolvedDt.caption
+            font.pointSize: resolvedDt.captionPt
             font.family: resolvedDt.fontFamily
             Layout.fillWidth: true
         }
@@ -537,7 +537,7 @@ Item {
             visible: root.backendRef && root.backendRef.manual_sync_pending
             text: qsTr("当前同步完成后将再次同步")
             color: resolvedDt.onSurfaceVariant
-            font.pixelSize: resolvedDt.caption
+            font.pointSize: resolvedDt.captionPt
             font.family: resolvedDt.fontFamily
             Layout.fillWidth: true
         }
@@ -550,7 +550,7 @@ Item {
             visible: message.length > 0
             text: syncConfigFeedback.message
             color: isError ? resolvedDt.error : resolvedDt.onSurfaceVariant
-            font.pixelSize: resolvedDt.caption
+            font.pointSize: resolvedDt.captionPt
             font.family: resolvedDt.fontFamily
             Layout.fillWidth: true
         }
@@ -586,7 +586,7 @@ Item {
                     text: ""
                     color: root.isFailureStatus(root.currentSyncStatus) ? resolvedDt.error : resolvedDt.onSurfaceVariant
                     font.family: "monospace"
-                    font.pixelSize: resolvedDt.caption
+                    font.pointSize: resolvedDt.captionPt
                     readOnly: true
                     background: null
                     wrapMode: TextEdit.Wrap
@@ -604,7 +604,7 @@ Item {
                 dt: root.resolvedDt
                 text: qsTr("诊断信息可复制")
                 color: resolvedDt.onSurfaceVariant
-                font.pixelSize: resolvedDt.caption
+                font.pointSize: resolvedDt.captionPt
                 font.family: resolvedDt.fontFamily
             }
 

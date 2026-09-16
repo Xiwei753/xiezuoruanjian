@@ -115,7 +115,7 @@ Rectangle {
                             if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
                             return root.theme.textSecondary;
                         }
-                        font.pixelSize: 14
+                        font.pointSize: root.theme.fontMdPt
                     }
 
                     AppText {
@@ -126,7 +126,7 @@ Rectangle {
                             if (delegateRect.isSelected) return root.theme.onPrimaryContainer;
                             return root.theme.textPrimary;
                         }
-                        font.pixelSize: 14
+                        font.pointSize: root.theme.fontMdPt
                         elide: Text.ElideRight
                     }
                 }
@@ -161,7 +161,7 @@ Rectangle {
         visible: treeModel.count === 0
         text: qsTr("暂无作品")
         color: theme.textMuted
-        font.pixelSize: 14
+        font.pointSize: root.theme.fontMdPt
     }
 
     Menu {
@@ -182,7 +182,7 @@ Rectangle {
                 dt: root.theme
                 text: menuCreateVolume.text
                 color: theme.textPrimary
-                font.pixelSize: theme.label
+                font.pointSize: theme.labelPt
                 font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
@@ -204,7 +204,7 @@ Rectangle {
                 dt: root.theme
                 text: menuCreateChapter.text
                 color: theme.textPrimary
-                font.pixelSize: theme.label
+                font.pointSize: theme.labelPt
                 font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
@@ -228,7 +228,7 @@ Rectangle {
                 dt: root.theme
                 text: menuRename.text
                 color: theme.textPrimary
-                font.pixelSize: theme.label
+                font.pointSize: theme.labelPt
                 font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }
@@ -257,7 +257,7 @@ Rectangle {
                 dt: root.theme
                 text: menuDelete.text
                 color: theme.error
-                font.pixelSize: theme.label
+                font.pointSize: theme.labelPt
                 font.family: theme.fontFamily
                 verticalAlignment: Text.AlignVCenter
             }

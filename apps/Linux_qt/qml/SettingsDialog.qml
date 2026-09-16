@@ -148,7 +148,7 @@ Dialog {
             anchors.fill: parent
             anchors.leftMargin: dt.sp24
             anchors.rightMargin: dt.sp16
-            AppText { dt: root.dt; text: qsTr("设置"); color: dt.textPrimary; font.pixelSize: dt.subtitle; font.family: dt.fontFamily; font.weight: Font.Bold; Layout.fillWidth: true }
+            AppText { dt: root.dt; text: qsTr("设置"); color: dt.textPrimary; font.pointSize: dt.subtitlePt; font.family: dt.fontFamily; font.weight: Font.Bold; Layout.fillWidth: true }
             ToolbarButton { text: qsTr("关闭"); dt: root.dt; onClicked: root.close() }
         }
     }
@@ -559,7 +559,7 @@ Dialog {
                         Layout.fillWidth: true
                         text: qsTr("导出诊断包")
                         color: dt.textSecondary
-                        font.pixelSize: dt.caption
+                        font.pointSize: dt.captionPt
                         font.family: dt.fontFamily
                     }
                     AppButton {
@@ -610,7 +610,7 @@ Dialog {
                     visible: message.length > 0
                     text: diagnosticsFeedback.message
                     color: isError ? dt.error : dt.textSecondary
-                    font.pixelSize: dt.caption
+                    font.pointSize: dt.captionPt
                     font.family: dt.fontFamily
                 }
                 SettingsRow {
@@ -649,7 +649,7 @@ Dialog {
                         visible: message.length > 0
                         text: deviceInfoFeedback.message
                         color: dt.textSecondary
-                        font.pixelSize: dt.caption
+                        font.pointSize: dt.captionPt
                         font.family: dt.fontFamily
                     }
                 }

@@ -48,7 +48,7 @@ Item {
                 Layout.fillWidth: true
                 text: root.currentText
                 color: dt.textPrimary
-                font.pixelSize: dt.label
+                font.pointSize: dt.labelPt
                 font.family: dt.fontFamily
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
@@ -57,7 +57,7 @@ Item {
                 dt: root.dt
                 text: "v"
                 color: dt.textMuted
-                font.pixelSize: dt.fontXs
+                font.pointSize: dt.fontXsPt
                 Layout.preferredWidth: 16
                 horizontalAlignment: Text.AlignHCenter
                 verticalAlignment: Text.AlignVCenter
@@ -109,7 +109,7 @@ Item {
                         anchors.verticalCenter: parent.verticalCenter
                         text: (root.displayModel && root.displayModel.length > index) ? String(root.displayModel[index]) : String(modelData)
                         color: index === root.currentIndex ? dt.onPrimaryContainer : dt.textPrimary
-                        font.pixelSize: dt.label
+                        font.pointSize: dt.labelPt
                         font.family: dt.fontFamily
                     }
 

@@ -90,7 +90,7 @@ Rectangle {
                     dt: root.dt
                     text: "A"
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                     font.weight: Font.Bold
                 }
@@ -98,14 +98,14 @@ Rectangle {
                     dt: root.dt
                     text: Math.round(root.currentFontSize) + "px"
                     color: dt.textPrimary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
                 AppText {
                     dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
 
@@ -138,21 +138,21 @@ Rectangle {
                     dt: root.dt
                     text: "\u2630"
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
                 AppText {
                     dt: root.dt
                     text: Number(root.currentLineSpacing).toFixed(1) + "x"
                     color: dt.textPrimary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
                 AppText {
                     dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
 
@@ -185,7 +185,7 @@ Rectangle {
                     dt: root.dt
                     text: "\u21E5"
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                     font.weight: Font.Bold
                 }
@@ -193,14 +193,14 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("段落")
                     color: dt.textPrimary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
                 AppText {
                     dt: root.dt
                     text: "\u25BE"
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
 
@@ -235,7 +235,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("一键排版")
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
             }
@@ -269,7 +269,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("星图")
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
             }
@@ -301,7 +301,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("统计")
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
             }
@@ -333,7 +333,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("设置")
                     color: dt.textSecondary
-                    font.pixelSize: dt.label
+                    font.pointSize: dt.labelPt
                     font.family: dt.fontFamily
                 }
             }
@@ -354,7 +354,7 @@ Rectangle {
             dt: root.dt
             text: root.saveStatus || ""
             color: dt.textSecondary
-            font.pixelSize: dt.caption
+            font.pointSize: dt.captionPt
             font.family: dt.fontFamily
             visible: text !== ""
         }
@@ -382,7 +382,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("字号")
                 color: dt.textPrimary
-                font.pixelSize: dt.subtitle
+                font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -409,7 +409,7 @@ Rectangle {
                             color: Math.round(root.currentFontSize) === modelData ?
                                    dt.selectedText :
                                    dt.textSecondary
-                            font.pixelSize: dt.label
+                            font.pointSize: dt.labelPt
                             font.family: dt.fontFamily
                             font.weight: Math.round(root.currentFontSize) === modelData ? Font.DemiBold : Font.Normal
                         }
@@ -437,7 +437,7 @@ Rectangle {
                     dt: root.dt
                     text: "10"
                     color: dt.textMuted
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
 
                 AppSlider {
@@ -455,7 +455,7 @@ Rectangle {
                     dt: root.dt
                     text: "72"
                     color: dt.textMuted
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
 
@@ -475,7 +475,7 @@ Rectangle {
                     color: dt.textPrimary
                     selectionColor: dt.primary
                     selectedTextColor: dt.onPrimary
-                    font.pixelSize: dt.body
+                    font.pointSize: dt.bodyPt
                     font.family: dt.fontFamily
                     leftPadding: dt.sp8
                     rightPadding: dt.sp8
@@ -496,7 +496,7 @@ Rectangle {
                     dt: root.dt
                     text: "px"
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontSm
+                    font.pointSize: dt.fontSmPt
                     font.family: dt.fontFamily
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -526,7 +526,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("行距倍数")
                 color: dt.textPrimary
-                font.pixelSize: dt.subtitle
+                font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -553,7 +553,7 @@ Rectangle {
                             color: Math.abs(root.currentLineSpacing - modelData) < 0.01 ?
                                    dt.selectedText :
                                    dt.textSecondary
-                            font.pixelSize: dt.label
+                            font.pointSize: dt.labelPt
                             font.family: dt.fontFamily
                             font.weight: Math.abs(root.currentLineSpacing - modelData) < 0.01 ? Font.DemiBold : Font.Normal
                         }
@@ -581,7 +581,7 @@ Rectangle {
                     dt: root.dt
                     text: "1.0"
                     color: dt.textMuted
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
 
                 AppSlider {
@@ -599,7 +599,7 @@ Rectangle {
                     dt: root.dt
                     text: "3.0"
                     color: dt.textMuted
-                    font.pixelSize: dt.fontXs
+                    font.pointSize: dt.fontXsPt
                 }
             }
 
@@ -607,7 +607,7 @@ Rectangle {
                 dt: root.dt
                 text: Number(root.currentLineSpacing).toFixed(1) + " x"
                 color: dt.textSecondary
-                font.pixelSize: dt.fontSm
+                font.pointSize: dt.fontSmPt
                 Layout.alignment: Qt.AlignHCenter
             }
         }
@@ -635,7 +635,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("段落设置")
                 color: dt.textPrimary
-                font.pixelSize: dt.subtitle
+                font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }
@@ -649,7 +649,7 @@ Rectangle {
                     dt: root.dt
                     text: qsTr("正文宽度")
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontSm
+                    font.pointSize: dt.fontSmPt
                 }
 
                 RowLayout {
@@ -660,7 +660,7 @@ Rectangle {
                         dt: root.dt
                         text: "480"
                         color: dt.textMuted
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                     }
 
                     AppSlider {
@@ -684,7 +684,7 @@ Rectangle {
                         dt: root.dt
                         text: "3840"
                         color: dt.textMuted
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                     }
                 }
 
@@ -692,7 +692,7 @@ Rectangle {
                     dt: root.dt
                     text: Math.round(widthSlider.value) + " px"
                     color: dt.textSecondary
-                    font.pixelSize: dt.fontSm
+                    font.pointSize: dt.fontSmPt
                     Layout.alignment: Qt.AlignHCenter
                 }
             }
@@ -712,13 +712,13 @@ Rectangle {
                         dt: root.dt
                         text: qsTr("首行缩进")
                         color: dt.textPrimary
-                        font.pixelSize: dt.fontMd
+                        font.pointSize: dt.fontMdPt
                     }
                     AppText {
                         dt: root.dt
                         text: qsTr("段落开头缩进两个字符")
                         color: dt.textMuted
-                        font.pixelSize: dt.fontXs
+                        font.pointSize: dt.fontXsPt
                     }
                 }
 

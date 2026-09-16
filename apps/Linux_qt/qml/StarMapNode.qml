@@ -70,7 +70,7 @@ Rectangle {
                 anchors.centerIn: parent
                 text: root.kind
                 color: _onPrimary
-                font.pixelSize: 10
+                font.pointSize: dt.fontXsPt
                 font.bold: true
             }
         }
@@ -81,7 +81,7 @@ Rectangle {
             Layout.fillHeight: true
             text: root.title
             color: _textPrimary
-            font.pixelSize: 12
+            font.pointSize: dt.fontSmPt
             wrapMode: Text.Wrap
             elide: Text.ElideRight
             horizontalAlignment: Text.AlignHCenter

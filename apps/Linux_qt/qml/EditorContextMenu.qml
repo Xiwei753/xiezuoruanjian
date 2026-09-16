@@ -32,7 +32,7 @@ Menu {
             dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pixelSize: dt.label
+            font.pointSize: dt.labelPt
             font.family: dt.fontFamily
             verticalAlignment: Text.AlignVCenter
         }
@@ -51,7 +51,7 @@ Menu {
             dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pixelSize: dt.label
+            font.pointSize: dt.labelPt
             font.family: dt.fontFamily
             verticalAlignment: Text.AlignVCenter
         }
@@ -70,7 +70,7 @@ Menu {
             dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.textPrimary : dt.textMuted
-            font.pixelSize: dt.label
+            font.pointSize: dt.labelPt
             font.family: dt.fontFamily
             verticalAlignment: Text.AlignVCenter
         }
@@ -89,7 +89,7 @@ Menu {
             dt: editorContextMenu.dt
             text: parent.text
             color: parent.enabled ? dt.error : dt.textMuted
-            font.pixelSize: dt.label
+            font.pointSize: dt.labelPt
             font.family: dt.fontFamily
             verticalAlignment: Text.AlignVCenter
         }

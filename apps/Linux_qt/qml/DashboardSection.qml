@@ -36,7 +36,7 @@ Rectangle {
             dt: root.dt
             text: root.title
             color: dt.textSecondary
-            font.pixelSize: dt.fontSm
+            font.pointSize: dt.fontSmPt
             font.weight: Font.DemiBold
         }
 

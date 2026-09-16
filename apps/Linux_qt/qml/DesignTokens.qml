@@ -236,6 +236,8 @@ QtObject {
     property color switchThumb: isDark ? Qt.rgba(0.847, 0.937, 1.000, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
 
     property string fontFamily: "sans-serif"
+    // ── 逻辑像素字号（pixelSize，设备相关）──
+    // 保留供非字体逻辑像素用途；字体应优先使用下面的 *Pt pointSize token。
     property int display: 28
     property int title: 24
     property int subtitle: 18
@@ -249,6 +251,29 @@ QtObject {
     property int fontXl: 18
     property int fontXxl: 22
     property int fontTitle: 26
+
+    // ── High-DPI：字体 pointSize token（设备无关，跟随桌面 logical DPI / 字体缩放）──
+    // Issue #692: Qt 6 High-DPI 模型下 font.pointSize 才是设备无关字号。
+    // 按旧 pixelSize × 0.75 (72/96) 换算并微调，不简单把旧数字原样当 pt。
+    // 旧 px → 新 pt:  28→21  24→18  18→13.5  14→10.5  13→10  12→9
+    //                 11→8.5  12→9  14→10.5  16→12  18→13.5  22→16  26→19
+    property real displayPt: 21       // 28px → 21pt
+    property real titlePt: 18         // 24px → 18pt
+    property real subtitlePt: 13.5    // 18px → 13.5pt
+    property real bodyPt: 10.5        // 14px → 10.5pt
+    property real labelPt: 10         // 13px → 9.75pt ≈ 10pt
+    property real captionPt: 9        // 12px → 9pt
+    property real fontXsPt: 8.5       // 11px → 8.25pt ≈ 8.5pt
+    property real fontSmPt: 9         // 12px → 9pt
+    property real fontMdPt: 10.5      // 14px → 10.5pt
+    property real fontLgPt: 12        // 16px → 12pt
+    property real fontXlPt: 13.5      // 18px → 13.5pt
+    property real fontXxlPt: 16       // 22px → 16.5pt ≈ 16pt
+    property real fontTitlePt: 19     // 26px → 19.5pt ≈ 19pt
+    // 装饰性大字号（emoji / 大图标），旧 32/36/48 px
+    property real fontEmojiSmPt: 24   // 32px → 24pt
+    property real fontEmojiMdPt: 27   // 36px → 27pt
+    property real fontEmojiLgPt: 36   // 48px → 36pt
 
     property color shadowLight: isDark ? Qt.rgba(0, 0, 0, 0.25) : Qt.rgba(0, 0, 0, 0.06)
     property color shadowMedium: isDark ? Qt.rgba(0, 0, 0, 0.4) : Qt.rgba(0, 0, 0, 0.10)

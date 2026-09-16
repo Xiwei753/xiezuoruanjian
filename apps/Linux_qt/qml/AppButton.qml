@@ -29,7 +29,7 @@ Button {
     readonly property color _textDisabled: resolvedDt.textDisabled
     readonly property bool _isDark: resolvedDt.isDark
     readonly property int _inputFieldRadius: resolvedDt.inputFieldRadius
-    readonly property int _label: resolvedDt.label
+    readonly property real _label: resolvedDt.labelPt
     readonly property string _fontFamily: resolvedDt.fontFamily
     readonly property int _animFast: resolvedDt.animFast
 
@@ -62,13 +62,13 @@ Button {
     implicitHeight: small ? 32 : 40
     implicitWidth: Math.max(tm.width + (small ? 20 : 28), small ? 56 : 72)
 
-    TextMetrics { id: tm; text: control.text; font.pixelSize: _label }
+    TextMetrics { id: tm; text: control.text; font.pointSize: _label }
 
     contentItem: AppText {
         dt: control.resolvedDt
         text: control.text
         color: control.contentColor
-        font.pixelSize: _label
+        font.pointSize: _label
         font.weight: Font.Medium
         font.family: _fontFamily
         horizontalAlignment: Text.AlignHCenter

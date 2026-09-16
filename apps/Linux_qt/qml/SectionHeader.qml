@@ -15,6 +15,6 @@ import QtQuick.Controls
 AppText {
     id: control
 
-    font.pixelSize: resolvedDt.fontXl
+    font.pointSize: resolvedDt.fontXlPt
     font.weight: Font.Bold
 }

@@ -28,8 +28,8 @@ Item {
     readonly property int _sp8: dt.sp8
     readonly property int _sp12: dt.sp12
     readonly property int _sp24: dt.sp24
-    readonly property int _title: dt.title
-    readonly property int _body: dt.body
+    readonly property real _title: dt.titlePt
+    readonly property real _body: dt.bodyPt
     readonly property string _fontFamily: dt.fontFamily
 
     property var backendRef: null
@@ -97,7 +97,7 @@ Item {
             dt: root.dt
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("未打开工作区")
-            font.pixelSize: _title
+            font.pointSize: _title
             font.family: _fontFamily
             font.bold: true
         }
@@ -108,7 +108,7 @@ Item {
             variant: "secondary"
             Layout.alignment: Qt.AlignHCenter
             text: qsTr("选择或创建工作区后开始写作")
-            font.pixelSize: _body
+            font.pointSize: _body
             font.family: _fontFamily
             horizontalAlignment: Text.AlignHCenter
             Layout.fillWidth: true

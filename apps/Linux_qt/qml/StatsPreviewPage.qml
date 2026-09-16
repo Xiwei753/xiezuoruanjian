@@ -90,7 +90,7 @@ Rectangle {
                     dt: root.dt
                     text: statsError
                     color: dt.onErrorContainer
-                    font.pixelSize: dt.caption
+                    font.pointSize: dt.captionPt
                 }
             }
 

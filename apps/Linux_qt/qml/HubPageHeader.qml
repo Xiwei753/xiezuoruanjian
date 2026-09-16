@@ -36,7 +36,7 @@ Item {
                 dt: root.resolvedDt
                 text: root.title
                 color: root.resolvedDt.onBackground
-                font.pixelSize: root.resolvedDt.fontTitle
+                font.pointSize: root.resolvedDt.fontTitlePt
                 font.family: root.resolvedDt.fontFamily
                 font.weight: Font.Bold
             }
@@ -45,7 +45,7 @@ Item {
                 dt: root.resolvedDt
                 text: root.subtitle
                 color: root.resolvedDt.textSecondary
-                font.pixelSize: root.resolvedDt.body
+                font.pointSize: root.resolvedDt.bodyPt
                 font.family: root.resolvedDt.fontFamily
                 visible: text.length > 0
             }

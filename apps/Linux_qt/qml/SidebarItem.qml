@@ -24,8 +24,8 @@ Item {
     readonly property int _sp8: dt.sp8
     readonly property int _sp12: dt.sp12
     readonly property int _radiusPill: dt.radiusPill
-    readonly property int _fontMd: dt.fontMd
-    readonly property int _label: dt.label
+    readonly property real _fontMd: dt.fontMdPt
+    readonly property real _label: dt.labelPt
     readonly property string _fontFamily: dt.fontFamily
 
     property string text: ""
@@ -57,7 +57,7 @@ Item {
         AppText {
             text: control.icon
             dt: root.dt
-            font.pixelSize: _fontMd
+            font.pointSize: _fontMd
             Layout.preferredWidth: 20
             horizontalAlignment: Text.AlignHCenter
             visible: !control.compact
@@ -70,7 +70,7 @@ Item {
                 if (control.active) return _onPrimaryContainer
                 return _onSurfaceVariant
             }
-            font.pixelSize: _label
+            font.pointSize: _label
             font.family: _fontFamily
             font.weight: control.active ? Font.Medium : Font.Normal
             Layout.fillWidth: true

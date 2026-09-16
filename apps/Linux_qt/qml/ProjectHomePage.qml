@@ -132,7 +132,7 @@ Rectangle {
                 dt: root.dt
                 text: qsTr("重命名作品")
                 color: dt.onSurface
-                font.pixelSize: dt.subtitle
+                font.pointSize: dt.subtitlePt
                 font.family: dt.fontFamily
                 font.weight: Font.DemiBold
             }

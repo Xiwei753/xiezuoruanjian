@@ -28,8 +28,8 @@ Item {
     readonly property color _textSecondary: resolvedDt.textSecondary
     readonly property int _sp6: resolvedDt.sp6
     readonly property int _sp12: resolvedDt.sp12
-    readonly property int _body: resolvedDt.body
-    readonly property int _caption: resolvedDt.caption
+    readonly property real _body: resolvedDt.bodyPt
+    readonly property real _caption: resolvedDt.captionPt
     readonly property string _fontFamily: resolvedDt.fontFamily
 
     property string label: ""
@@ -61,7 +61,7 @@ Item {
                 Layout.fillWidth: true
                 text: root.label
                 color: _textPrimary
-                font.pixelSize: _body
+                font.pointSize: _body
                 font.family: _fontFamily
                 wrapMode: Text.Wrap
             }
@@ -70,7 +70,7 @@ Item {
                 dt: root.resolvedDt
                 text: root.valueText
                 color: _textSecondary
-                font.pixelSize: _caption
+                font.pointSize: _caption
                 font.family: _fontFamily
                 horizontalAlignment: Text.AlignRight
                 visible: root.valueText.length > 0
@@ -127,7 +127,7 @@ Item {
             Layout.fillWidth: true
             text: root.description
             color: _textSecondary
-            font.pixelSize: _caption
+            font.pointSize: _caption
             font.family: _fontFamily
             wrapMode: Text.Wrap
             visible: root.description.length > 0

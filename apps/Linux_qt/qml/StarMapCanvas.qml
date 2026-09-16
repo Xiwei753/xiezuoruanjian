@@ -412,7 +412,7 @@ Item {
         anchors.centerIn: parent
         text: qsTr("还没有节点，点击新增节点开始构建星图")
         color: _textSecondary
-        font.pixelSize: 16
+        font.pointSize: dt.fontLgPt
         visible: nodesModel.length === 0
     }
 
@@ -433,7 +433,7 @@ Item {
             anchors.centerIn: parent
             text: errorMessage
             color: _onError
-            font.pixelSize: 14
+            font.pointSize: dt.bodyPt
         }
         MouseArea {
             anchors.fill: parent
@@ -535,7 +535,7 @@ Item {
                 dt: canvasArea.dt
                 text: bgMenuItem1.text
                 color: bgMenuItem1.hovered ? _accent : _textPrimary
-                font.pixelSize: 13
+                font.pointSize: dt.labelPt
                 font.bold: true
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
@@ -566,7 +566,7 @@ Item {
                 dt: canvasArea.dt
                 text: nodeMenuItem1.text
                 color: nodeMenuItem1.hovered ? _accent : _textPrimary
-                font.pixelSize: 13
+                font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
@@ -588,7 +588,7 @@ Item {
                 dt: canvasArea.dt
                 text: nodeMenuItem2.text
                 color: nodeMenuItem2.hovered ? _danger : _textPrimary
-                font.pixelSize: 13
+                font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
@@ -622,7 +622,7 @@ Item {
                 dt: canvasArea.dt
                 text: edgeMenuItem1.text
                 color: edgeMenuItem1.hovered ? _accent : _textPrimary
-                font.pixelSize: 13
+                font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
@@ -644,7 +644,7 @@ Item {
                 dt: canvasArea.dt
                 text: edgeMenuItem2.text
                 color: edgeMenuItem2.hovered ? _danger : _textPrimary
-                font.pixelSize: 13
+                font.pointSize: dt.labelPt
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 12
             }
@@ -692,7 +692,7 @@ Item {
                 AppText {
                     dt: canvasArea.dt
                     text: renameDialog.targetType === "node" ? qsTr("修改节点标题") : qsTr("修改连线标签")
-                    font.pixelSize: 16
+                    font.pointSize: dt.fontLgPt
                     font.bold: true
                     color: _textPrimary
                 }
@@ -702,7 +702,7 @@ Item {
                     Layout.fillWidth: true
                     height: 36
                     color: _textPrimary
-                    font.pixelSize: 14
+                    font.pointSize: dt.bodyPt
                     focus: renameDialog.visible
                     text: renameDialog.initialText
 
@@ -729,7 +729,7 @@ Item {
                             dt: canvasArea.dt
                             text: cancelBtn.text
                             color: _textSecondary
-                            font.pixelSize: 13
+                            font.pointSize: dt.labelPt
                         }
                         background: Rectangle {
                             color: cancelBtn.hovered ? _surfaceContainer : "transparent"
@@ -747,7 +747,7 @@ Item {
                             text: confirmBtn.text
                             color: _onPrimary
                             font.bold: true
-                            font.pixelSize: 13
+                            font.pointSize: dt.labelPt
                         }
                         background: Rectangle {
                             color: confirmBtn.hovered ? _accentHover : _accent

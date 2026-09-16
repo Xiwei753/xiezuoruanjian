@@ -26,7 +26,7 @@ Dialog {
     readonly property int _sp16: dt.sp16
     readonly property int _sp24: dt.sp24
     readonly property int _sp48: dt.sp48
-    readonly property int _subtitle: dt.subtitle
+    readonly property real _subtitle: dt.subtitlePt
     readonly property string _fontFamily: dt.fontFamily
 
     property string heading: title
@@ -72,7 +72,7 @@ Dialog {
                 text: root.heading
                 visible: text.length > 0
                 color: _onSurface
-                font.pixelSize: _subtitle
+                font.pointSize: _subtitle
                 font.family: _fontFamily
                 font.weight: Font.DemiBold
             }

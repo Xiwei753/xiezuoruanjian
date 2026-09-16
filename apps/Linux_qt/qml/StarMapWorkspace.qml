@@ -36,14 +36,14 @@ Item {
             AppText {
                 text: "\uD83C\uDF0C"
                 dt: root.dt
-                font.pixelSize: 48
+                font.pointSize: dt.fontEmojiLgPt
                 Layout.alignment: Qt.AlignHCenter
             }
             AppText {
                 text: qsTr("星图正在施工")
                 dt: root.dt
                 color: dt.textPrimary
-                font.pixelSize: dt.title
+                font.pointSize: dt.titlePt
                 font.weight: Font.Bold
                 Layout.alignment: Qt.AlignHCenter
             }
@@ -51,7 +51,7 @@ Item {
                 text: qsTr("星图功能将在后续版本实现，敬请期待")
                 dt: root.dt
                 color: dt.textSecondary
-                font.pixelSize: dt.body
+                font.pointSize: dt.bodyPt
                 Layout.alignment: Qt.AlignHCenter
             }
         }
