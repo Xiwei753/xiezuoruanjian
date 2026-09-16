@@ -29,6 +29,7 @@ Dialog {
     property var workspaceBackendRef: null
     property var syncBackendRef: null
     property var editorBackendRef: null
+    property var themeControllerRef: null
     property var beforeSyncHook: null
     property var dt: theme
     property bool updatingValues: false
@@ -114,7 +115,10 @@ Dialog {
         }
     }
     onOpened: {
-        if (backendRef) backendRef.load_local_settings()
+        // Issue #696 评论 5696993601: 删除 load_local_settings()。
+        // 设置页打开只做 updateValues()，不重新加载全局设置。
+        // 启动时 load_local_settings 已由 internal_open_data_root 完成，
+        // 每开一次窗口重新加载会顺带触发一次主题切换。
         if (syncBackendRef) syncBackendRef.load_sync_config()
         updateValues()
     }
@@ -187,7 +191,16 @@ Dialog {
                         model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
-                            backendRef.setting_appearance_mode = ["system", "light", "dark"][index]
+                            // Issue #696 评论 5696993601: 用户切换主题只走
+                            // ThemeController 这一条入口，不再直接写
+                            // backendRef.setting_appearance_mode。
+                            // set_appearance_mode 内部写 AppBackend 并发
+                            // scheme_changed，然后沿现有保存入口落盘。
+                            if (themeControllerRef) {
+                                themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
+                            } else {
+                                backendRef.setting_appearance_mode = ["system", "light", "dark"][index]
+                            }
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }

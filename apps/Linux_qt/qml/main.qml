@@ -346,6 +346,15 @@ ApplicationWindow {
             appBackend.apply_window_dark_mode(designTokens.isDark);
         }
         appController.restoreWorkspace();
+        // Issue #696 评论 5696993601: 无工作区时 load_app_theme_mode() 已在
+        // try_restore_last_workspace 内部执行完毕，这里发布一次
+        // themeController.reload() 作为无工作区 fallback 路径的主题收口点。
+        // 有工作区时由 onWorkspace_opened 收口，此处不重复触发。
+        Qt.callLater(function() {
+            if (!window.rootHasWorkspace && themeController) {
+                themeController.reload();
+            }
+        });
     }
 
     onActiveChanged: {
@@ -423,9 +432,13 @@ ApplicationWindow {
             appController.refreshState(qsTr("刷新工作区状态失败"));
         }
         function onWorkspace_opened() {
-            // load_local_settings 和 load_sync_config 已由
-            // AppBackend::internal_open_data_root 在 Core 初始化成功后加载，
-            // QML 收到 workspace_opened 后只负责启动 workspace-open 自动同步。
+            // Issue #696 评论 5696993601: 工作区恢复完成、
+            // AppBackend::load_local_settings() 已执行后，立即调用一次
+            // themeController.reload() 发布首次有效 scheme。不再等设置页
+            // onOpened 重新 load_local_settings 触发 settings_changed 才切换。
+            if (themeController) {
+                themeController.reload();
+            }
             workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {
@@ -774,6 +787,7 @@ ApplicationWindow {
             workspaceBackendRef: workspaceBackend
             syncBackendRef: syncBackend
             editorBackendRef: editorBackend
+            themeControllerRef: themeController
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));

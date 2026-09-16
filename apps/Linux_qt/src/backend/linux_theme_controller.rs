@@ -276,13 +276,21 @@ impl LinuxThemeController {
             "theme",
             &[("isDark", is_dark_str)],
         );
+        // Issue #696 评论 5696993601: 只有 appearance_mode == "system" 时，
+        // 系统深浅变化才改变有效 scheme。用户明确选 light/dark 时，系统色彩
+        // 变化不能重新解释用户偏好，也不发 scheme_changed。current_system_is_dark
+        // 仍然更新，以便用户切回 system 模式时用到最新值。
+        let mode = self.snap().appearance_mode.clone();
+        let should_emit = mode == "system";
         if self
             .with_app_mut(|app| {
                 app.current_system_is_dark = val;
             })
             .is_ok()
         {
-            self.scheme_changed();
+            if should_emit {
+                self.scheme_changed();
+            }
         }
     }
 }
