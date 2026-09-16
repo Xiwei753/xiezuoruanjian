@@ -358,6 +358,8 @@ pub struct AppBackend {
     #[allow(dead_code)]
     copy_text_to_clipboard: qt_method!(fn(&mut self, text: QString) -> QString),
     #[allow(dead_code)]
+    available_screen_geometry_json: qt_method!(fn(&self) -> QString),
+    #[allow(dead_code)]
     debug_qml_enabled: qt_property!(bool; READ debug_qml_enabled),
     #[allow(dead_code)]
     debug_module_enabled_qml: qt_method!(fn(&self, module: QString) -> bool),
@@ -785,6 +787,18 @@ impl AppBackend {
 
     fn apply_window_dark_mode(&mut self, _is_dark: bool) {
         // Linux Qt/QML route uses the native Linux window manager theme.
+    }
+
+    /// Issue #692 评论 5692612221: 查询当前窗口所属屏幕的可用几何
+    /// （QScreen::availableGeometry，已扣任务栏/面板等窗口管理器保留区域）。
+    /// 返回紧凑 JSON: {"valid":bool,"x":int,"y":int,"width":int,"height":int}，
+    /// 单位为 Qt 6 设备无关逻辑像素，与 QML 坐标空间一致。
+    /// 供 main.qml applyInitialWindowSize() 做一次性初始尺寸收口，
+    /// 替代旧的 window.screen.width/height - 32 猜边距方案。
+    /// 仅在 GUI 线程调用；纯平台查询，转发到 platform/linux_qt 平台封装层
+    /// （cpp!(unsafe) FFI 边界只允许出现在平台封装目录，见 Rust 安全守卫）。
+    fn available_screen_geometry_json(&self) -> QString {
+        crate::platform::linux_qt::screen_geometry::available_screen_geometry_json()
     }
 
     fn copy_text_to_clipboard(&mut self, text: QString) -> QString {

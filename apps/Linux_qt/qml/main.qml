@@ -22,40 +22,50 @@ import Sujian 1.0
 ApplicationWindow {
     id: window
     visible: true
-    // Issue #692 评论 5692462056: 默认逻辑尺寸 1100×768，窗口真正关联到屏幕后
-    // 用 window.screen.width/height（当前屏幕的完整几何，Qt 6 设备无关逻辑尺寸）
-    // 做一次性初始尺寸收口。不再用 Screen.desktopAvailableWidth/Height，因为那是
-    // 整个虚拟桌面（所有屏幕合起来）的可用尺寸，双屏混合 DPI 时限制等于没限制，
-    // 窗口落在较小屏上仍可能超出当前屏幕可用区域。
-    //
-    // 注：QML 的 window.screen 类型是 QQuickScreenInfo，只暴露 width/height
-    // （当前屏幕完整几何）和 desktopAvailableWidth/Height（虚拟桌面可用），
-    // 不暴露 QScreen::availableGeometry()（扣任务栏后的可用区域）。因此这里用
-    // 当前屏幕完整几何 width/height，扣 32px 边距后做上限收口；不精确扣任务栏，
-    // 但保证窗口不超出当前屏幕，且默认 1100×768 远小于常见屏幕可用区域。
-    // 窗口跨屏后的 DPR / fractional scaling 完全交给 Qt，不手工重算。
+    // Issue #692 评论 5692612221: 默认逻辑尺寸 1100×768，窗口真正关联到屏幕后
+    // 用当前窗口所属屏幕的 QScreen::availableGeometry()（已扣 KDE 面板/任务栏等
+    // 窗口管理器保留区域）做一次性初始尺寸收口。QML 的 window.screen
+    // （QQuickScreenInfo）只暴露 width/height（完整几何）和
+    // desktopAvailableWidth/Height（虚拟桌面可用），都不合适：前者含任务栏，
+    // 后者是所有屏幕合起来的可用尺寸，双屏混合 DPI 时限制等于没限制。
+    // 因此通过 appBackend.available_screen_geometry_json() 桥接 Qt C++
+    // QWindow::screen()->availableGeometry()，拿到当前屏幕扣保留区域后的可用
+    // 尺寸做上限收口。窗口跨屏后的 DPR / fractional scaling 完全交给 Qt，
+    // 不手工重算。
     width: 1100
     height: 768
     title: qsTr("素笺写作")
     color: designTokens.bg
 
-    // ── Issue #692 评论 5692462056: 初始窗口尺寸收口（一次性） ──
-    // 等窗口真正关联到所属屏幕后，按 window.screen.width/height 收口默认尺寸。
+    // ── Issue #692 评论 5692612221: 初始窗口尺寸收口（一次性） ──
+    // 等窗口真正关联到所属屏幕后，按当前屏幕 availableGeometry 收口默认尺寸。
     // initialWindowSizeApplied 之后不再跟随多屏切换强制改窗口大小；窗口跨屏后的
     // DPR / fractional scaling 完全交给 Qt。
     property bool initialWindowSizeApplied: false
 
     function applyInitialWindowSize() {
-        if (initialWindowSizeApplied || !window.screen)
+        if (initialWindowSizeApplied)
+            return
+        if (appBackend === null)
             return
 
-        var sw = window.screen.width
-        var sh = window.screen.height
-        if (sw <= 0 || sh <= 0)
+        var geomJson = appBackend.available_screen_geometry_json()
+        var geom = null
+        try {
+            geom = JSON.parse(geomJson)
+        } catch (e) {
+            geom = null
+        }
+        if (!geom || !geom.valid)
             return
 
-        window.width = Math.min(1100, Math.max(320, sw - 32))
-        window.height = Math.min(768, Math.max(240, sh - 32))
+        var aw = geom.width
+        var ah = geom.height
+        if (aw <= 0 || ah <= 0)
+            return
+
+        window.width = Math.min(1100, Math.max(320, aw))
+        window.height = Math.min(768, Math.max(240, ah))
         initialWindowSizeApplied = true
     }
 

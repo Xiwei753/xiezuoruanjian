@@ -205,6 +205,7 @@ _CPP_UNSAFE_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/editor/scene_graph.rs"),
     Path("apps/Linux_qt/src/main.rs"),
     Path("apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs"),
+    Path("apps/Linux_qt/src/platform/linux_qt/screen_geometry.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/ime_visual.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/input_host.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/properties.rs"),

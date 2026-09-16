@@ -251,7 +251,6 @@ pub(crate) struct RebaseFrame {
     pub visible_fraction: f64,
     /// 采集本帧的时间点。Issue #690 评论 5683759796: 不再作为新单元的 `started_at`，
     /// 仅保留做诊断/连续性断言；新单元 `started_at = None`，等进入 Rendering 再启动。
-    #[allow(dead_code)]
     pub sampled_at: Instant,
     /// 旧单元剩余的播放时长；retarget 后作为新单元的 `duration_ms`。
     pub remaining_duration_ms: u64,

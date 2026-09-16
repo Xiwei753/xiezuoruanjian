@@ -14,6 +14,7 @@
 //! 不再需要独立的适配器层。
 
 pub mod clipboard_focus_adapter;
+pub mod screen_geometry;
 pub mod utf16_converter;
 
 pub use clipboard_focus_adapter::LinuxQtClipboardFocusAdapter;
