@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.ui
 
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.InputTransformation
@@ -44,7 +43,6 @@ data class WritingEditorContentParams(
     val drawsVisualCursor: Boolean,
     val searchHighlights: List<TextRange>,
     val searchHighlightColor: Color,
-    val backgroundColor: Color,
     val modifier: Modifier,
 )
 
@@ -99,13 +97,16 @@ fun editorSurfaceMode(
  * 素笺自己的文字/光标动画只消费系统最终 [TextLayoutResult] 做显示，
  * 不再拥有或修改编辑器几何。
  *
- * #698 评论 5698296237 / 5697612595：编辑器绘制链根改 —
+ * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
  * 不再通过 [OutputTransformation] 把动画 range 设 `Color.Transparent` 改变 BasicTextField 输出表示。
- * BasicTextField 始终画完整真实正文，[EditorTextFieldDrawLayer] 在它之上用背景色遮住正在动画的 range，
- * 再重画动画字。这样 BasicTextField 的 onTextLayout 只因真实正文/几何变化触发，
+ * BasicTextField 始终画完整真实正文，[EditorTextFieldDrawLayer] 真正包住 BasicTextField
+ * （content lambda），用 `drawWithContent` + `rememberGraphicsLayer` 记录 BasicTextField
+ * 的完整绘制，再对 `hiddenRanges` 做 `ClipOp.Difference` 裁切后重画原正文
+ * （只在绘制阶段排除动画接管区域），然后画动画字和视觉光标。
+ * 这样 BasicTextField 的 onTextLayout 只因真实正文/几何变化触发，
  * 不再因 hiddenRanges 变化触发二次 layout，断开
  * "动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout -> VisualState 再消费 layout"
- * 回路。
+ * 回路。不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
  *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
@@ -126,8 +127,6 @@ fun WritingEditorSurface(
     searchHighlights: List<TextRange> = emptyList(),
     searchHighlightColor: Color =
         androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
-    backgroundColor: Color =
-        androidx.compose.material3.MaterialTheme.colorScheme.surface,
     modifier: Modifier = Modifier,
 ) {
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
@@ -146,7 +145,6 @@ fun WritingEditorSurface(
                 drawsVisualCursor = drawsVisualCursor,
                 searchHighlights = searchHighlights,
                 searchHighlightColor = searchHighlightColor,
-                backgroundColor = backgroundColor,
                 modifier = modifier,
             ),
     )
@@ -169,7 +167,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val drawsVisualCursor = params.drawsVisualCursor
     val searchHighlights = params.searchHighlights
     val searchHighlightColor = params.searchHighlightColor
-    val backgroundColor = params.backgroundColor
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
 
@@ -177,7 +174,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
     // #698 评论 5697612595：OutputTransformation 只保留 searchHighlights 部分，
     // 不再把动画 range 设 Color.Transparent — 动画字的遮罩改由 EditorTextFieldDrawLayer
-    // 在 draw 层用背景色填充字形 path 完成，断开 hiddenRanges 回流回路。
+    // 在 draw 层用 ClipOp.Difference 裁切完成，断开 hiddenRanges 回流回路。
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
 
@@ -220,7 +217,23 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             }
         }
 
-    Box(modifier = modifier) {
+    // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
+    // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
+    // 用 drawWithContent + rememberGraphicsLayer 记录 BasicTextField 的完整绘制，
+    // 再对 hiddenRanges 做 ClipOp.Difference 裁切后重画原正文，然后画动画字和视觉光标。
+    // 不再通过 OutputTransformation 改变 BasicTextField 输出表示，断开 hiddenRanges 回流回路。
+    // 不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
+    EditorTextFieldDrawLayer(
+        visualState = visualState,
+        scrollY = viewportState.scrollState.value,
+        textColor = textColor,
+        cursorColor = cursorColor,
+        // #684 评论 5663032418 断点3：直接读 live TextFieldState.selection，
+        // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
+        // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
+        liveSelection = bridge.state.selection,
+        modifier = modifier.fillMaxSize(),
+    ) {
         BasicTextField(
             state = bridge.state,
             modifier =
@@ -253,22 +266,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                     )
                 }
             },
-        )
-
-        // #698 评论 5698296237 / 5697612595：统一 draw 层 —
-        // 正文裁切 + 动画字重画 + 视觉光标，全部使用同一个 latestLayout、scrollY 和 frame clock。
-        // 不再通过 OutputTransformation 改变 BasicTextField 输出表示，断开 hiddenRanges 回流回路。
-        EditorTextFieldDrawLayer(
-            visualState = visualState,
-            scrollY = viewportState.scrollState.value,
-            textColor = textColor,
-            cursorColor = cursorColor,
-            backgroundColor = backgroundColor,
-            // #684 评论 5663032418 断点3：直接读 live TextFieldState.selection，
-            // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
-            // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
-            liveSelection = bridge.state.selection,
-            modifier = Modifier.fillMaxSize(),
         )
     }
 }

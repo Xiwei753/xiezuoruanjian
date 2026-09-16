@@ -600,16 +600,19 @@ class ComposeEditorVisualState(
         val cursorRect = computeCursorRectFromLayout(snapshot)
         _restingCursorRect.update { cursorRect }
 
-        // #698 评论 5697612595：真实 layout 去重 —
+        // #698 评论 5697612595 / 5699401353 修复3：真实 layout 去重 —
         // 相同正文/几何不能重复推进动画基线，防止 onTextLayout 因非真实变化重复触发形成回路
         // （动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout ->
         // VisualState 再消费 layout）。只在 !compositionActive 时检查：composition 活跃时 preedit
         // 可能正在变化，即使此刻正文/几何与 lastPresentedLayout 相同，也需要进入 composition 分支武装 phase。
         // 去重分支只更新 _latestLayout（已在上方更新）和 _restingCursorRect（已在上方更新），
         // 直接 return，不 drain localInputTracker、不发布 patch、不推进 frameCoordinator、不更新 lastPresentedLayout。
-        // "正文+几何相同"定义：text.text 相同 && size 相同 && lineCount 相同。
-        // selection 变化不算几何变化 — 纯 selection 变化时 draw 层用 latestLayout + liveSelection
+        // "正文+几何相同"定义（#698 评论 5699401353 修复3）：text + size + lineCount +
+        // 每行 start/end/top/bottom/left/right/baseline 全部相同（[layoutFingerprint]）。
+        // selection 不纳入 fingerprint — 纯 selection 变化时 draw 层用 latestLayout + liveSelection
         // 实时算光标（computeRestingCursorRect），不依赖 lastPresentedLayout.selection，不需要重新推进基线。
+        // 纯滚动也不触发布局 epoch — scrollY 变化时行几何不变，fingerprint 相同，去重 return，
+        // 不需要重新推进动画基线（纯滚动不需要重新播放动画）。
         if (!compositionActive && hasSameTextAndGeometry(lastPresentedLayout, snapshot)) {
             return
         }
@@ -692,10 +695,26 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #698 评论 5697612595：判断新 snapshot 与上次呈现的 layout 是否"正文+几何相同" —
-     * text.text 相同 && size 相同 && lineCount 相同。
+     * #698 评论 5697612595 / 5699401353 修复3：判断新 snapshot 与上次呈现的 layout 是否"正文+几何相同"。
+     *
+     * 旧实现只有 `text 相同 && size 相同 && lineCount 相同`。同样的 size/lineCount，
+     * 行起止 offset、每行 top/bottom/left/right/baseline 仍可能变化。误判后直接 return，
+     * 让后续动画继续拿旧几何。
+     *
+     * 新实现建立真正的 layout fingerprint（[layoutFingerprint]），至少包括：
+     * - text
+     * - size（width/height）
+     * - lineCount
+     * - 每行 start/end（getLineStart/getLineEnd）
+     * - 每行 top/bottom/left/right（getLineTop/getLineBottom/getLineLeft/getLineRight）
+     * - 每行 baseline（getLineBaseline）
+     *
+     * selection 不纳入 fingerprint — 纯 selection 变化继续走 live selection 光标
+     * （draw 层用 latestLayout + liveSelection 实时算光标），不触发布局 epoch。
+     * 纯滚动也不触发布局 epoch — scrollY 变化时 text/行几何不变，fingerprint 相同，
+     * 去重分支 return，不需要重新推进动画基线（纯滚动不需要重新播放动画）。
+     *
      * 用于 [onAuthoritativeLayout] 去重，防止 onTextLayout 因非真实变化重复触发形成回路。
-     * selection 变化不算几何变化。
      *
      * @param last 上次真正呈现的 layout；null 时返回 false。
      * @param snapshot 本次权威 layout。
@@ -706,9 +725,35 @@ class ComposeEditorVisualState(
         snapshot: ComposeLayoutSnapshot,
     ): Boolean {
         if (last == null) return false
-        return snapshot.result.layoutInput.text.text == last.result.layoutInput.text.text &&
-            snapshot.result.size == last.result.size &&
-            snapshot.result.lineCount == last.result.lineCount
+        return layoutFingerprint(snapshot) == layoutFingerprint(last)
+    }
+
+    /**
+     * #698 评论 5699401353 修复3：真正的 layout fingerprint —
+     * 把 text + size + lineCount + 每行 start/end/top/bottom/left/right/baseline
+     * 全部纳入比较，避免同 size/lineCount 但行几何变化时误判为相同。
+     *
+     * @param snapshot layout 快照。
+     * @return fingerprint 值列表（String/Int/Float 元素，用 List.equals 精确比较）。
+     */
+    private fun layoutFingerprint(snapshot: ComposeLayoutSnapshot): List<Any> {
+        val result = snapshot.result
+        val lineCount = result.lineCount
+        return buildList {
+            add(result.layoutInput.text.text)
+            add(result.size.width)
+            add(result.size.height)
+            add(lineCount)
+            for (i in 0 until lineCount) {
+                add(result.getLineStart(i))
+                add(result.getLineEnd(i))
+                add(result.getLineTop(i))
+                add(result.getLineBottom(i))
+                add(result.getLineLeft(i))
+                add(result.getLineRight(i))
+                add(result.getLineBaseline(i))
+            }
+        }
     }
 
     /**

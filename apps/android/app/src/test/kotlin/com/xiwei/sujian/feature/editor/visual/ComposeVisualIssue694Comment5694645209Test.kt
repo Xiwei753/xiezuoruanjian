@@ -305,14 +305,15 @@ class ComposeVisualIssue694Comment5694645209Test {
 
     /**
      * 问题2 核心回归：3 笔 local Backspace 在同一个 frame drain，
-     * 合成 patch 的 cursorMotionPath 应保留多段阶段点，而非单点。
+     * 合成 patch 的 cursorMotionPath 应从真实 T0/Tn layout 取光标几何，
+     * 不伪造中间阶段 caret（#698 评论 5699401353 修复2）。
      *
      * 场景：abc -> ab -> a -> "" 3 笔 local patch 在同一 VSync 入队。
      *
      * 断言合成 patch：
      * - deletedUnits 顺序仍是 c、b、a
-     * - cursorMotionPath.points 至少保留 3 个阶段点，而不是 1 个最终点
-     * - 各点按删除方向向前移动，最后收敛到 offset 0
+     * - cursorMotionPath 从 T0 真实起点（offset 3 on oldLayout）到 Tn 真实终点（offset 0 on newLayout）
+     * - 不保留中间阶段 caret（T1/T2 的 offset 在真实 layout 中不存在）
      */
     @Test
     fun sameVsyncThreeBackspace_batchCursorPathPreservesStageCarets() {
@@ -400,7 +401,14 @@ class ComposeVisualIssue694Comment5694645209Test {
     }
 
     /**
-     * 验证 batch cursor path 保留多段阶段点：至少 3 个点、最后收敛到 offset 0、endFraction 归一化。
+     * #698 评论 5699401353 修复2：验证 batch cursor path 从真实 T0/Tn layout 取光标几何。
+     *
+     * 旧实现（#694 评论 5694645209）逐笔 patch 的 stage caret 拼接成多段路径，
+     * 但快速删除时每笔 stage caret 属于中间文本 T1/T2，真实存在的 layout 只有 T0 和 Tn。
+     * 把 T1 的 offset 放进 Tn 的 newLayout 查 rect 会对应另一个字/另一行。
+     *
+     * 新实现：batch 后统一从 first.oldLayout / last.newLayout 重建 cursor path —
+     * 删除/混合：只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）。
      */
     private fun assertBatchCursorPathPreservesStageCarets(framePatch: ComposeVisualPatch) {
         val cursorPath = framePatch.cursorMotionPath
@@ -408,21 +416,32 @@ class ComposeVisualIssue694Comment5694645209Test {
             "cursorMotionPath 应非空",
             cursorPath,
         )
+        val points = cursorPath!!.points
         assertTrue(
-            "cursorMotionPath.points 应至少保留 3 个阶段点（c/b/a 删除阶段），实际=${cursorPath?.points?.size}\n" +
-                "Issue #694 评论 5694645209 问题2：batch 纯删除不应把多段光标路径压回单点",
-            (cursorPath?.points?.size ?: 0) >= 3,
+            "cursorMotionPath.points 应有 1-2 个点（oldCursorRect -> newCursorRect），实际=${points.size}\n" +
+                "#698 评论 5699401353 修复2：batch 纯删除不应伪造中间阶段 caret，" +
+                "只从真实 T0/Tn layout 取 oldCursorRect -> newCursorRect",
+            points.size in 1..2,
         )
 
-        // 各点按删除方向向前移动（offset 3 -> 2 -> 1 -> 0），
-        // 最后一个点应收敛到 offset 0 的 cursor rect
-        val points = cursorPath!!.points
+        // 最后一个点应收敛到 offset 0 的 cursor rect（Tn 真实终点）
         val finalCursorRect = framePatch.newLayout.result.getCursorRect(0)
         assertEquals(
-            "最后一个点应收敛到 offset 0 的 cursor rect",
+            "最后一个点应收敛到 offset 0 的 cursor rect（Tn 真实终点）",
             finalCursorRect,
             points.last().rect,
         )
+
+        // 如果有 2 个点，第一个点应是 T0 真实起点（offset 3 on oldLayout）
+        if (points.size == 2) {
+            val oldCursorRect = framePatch.oldLayout.result.getCursorRect(3)
+            assertEquals(
+                "第一个点应是 T0 真实起点（offset 3 on oldLayout），不伪造中间 caret",
+                oldCursorRect,
+                points.first().rect,
+            )
+        }
+
         // endFraction 应归一化：(i+1)/n
         val n = points.size
         for (i in points.indices) {

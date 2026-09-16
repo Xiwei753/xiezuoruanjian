@@ -6,10 +6,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -26,36 +27,44 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
 /**
- * #698 评论 5698296237 / 5697612595：编辑器绘制链根改 —
+ * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
  * 统一 draw 层，断开"动画 hiddenRanges -> OutputTransformation 改正文显示 ->
  * BasicTextField 再 layout -> VisualState 再消费 layout"回路。
+ *
+ * #698 评论 5699401353 修复1：本 draw 层真正包住 [BasicTextField]（[content]），
+ * 用 `Modifier.drawWithContent` 在绘制阶段对 [ComposeVisualScene.hiddenRanges] 做
+ * `ClipOp.Difference` 裁切，使 `drawContent()`（BasicTextField 的完整绘制）只在
+ * 非 hidden 区域可见（只在绘制阶段排除动画接管区域，不改 BasicTextField 输出表示），
+ * 然后画动画字（[drawVisualScene]）和视觉光标（[drawVisualCursorRect]）。
+ *
+ * 不再用"拿主题背景色盖正文"（旧 `clipSystemTextForHiddenRanges` + `drawPath(backgroundColor)`）—
+ * 那会把 selection/search highlight 一起盖掉，背景非纯 surface 时会画出错误底色。
+ * 现在用 `ClipOp.Difference` 只裁切绘制区域，不引入任何颜色，selection/search highlight
+ * 由 BasicTextField 自己画，裁切后自然只在非 hidden 区域可见。
  *
  * 本 draw 层统一三件事，全部使用同一个 [TextLayoutResult]（latestLayout）、
  * 同一个 scrollY 和同一个 frame clock（由 [LaunchedEffect] 的 [withFrameNanos] 提供）：
  *
- * 1. **正文裁切**：读 [ComposeVisualScene.hiddenRanges] 和 latestLayout，
- *    对每个 hiddenRange 用 `getPathForRange` 取 path，用 `drawPath(path, backgroundColor, Fill)`
- *    填充背景色遮住 BasicTextField 已画的系统正文。
- *    不再通过 [OutputTransformation] 把 range 设 `Color.Transparent` 改变 BasicTextField 输出表示，
- *    断开 hiddenRanges 回流回路。
+ * 1. **正文裁切**：对 `scene.hiddenRanges` 合并成单个 [Path] 后用
+ *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
+ *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
+ *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
  * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
  * 3. **视觉光标**：drawsVisualCursor 时，cursorRect 从 scene.cursorRect
  *    ?: [computeRestingCursorRect] ?: restingCursorRect 读取，[drawVisualCursorRect] 绘制。
  *
- * 不再通过 [OutputTransformation] 改变 BasicTextField 输出表示 —
- * BasicTextField 始终画完整真实正文，本 draw 层在它之上用背景色遮住正在动画的 range，
- * 再重画动画字。这样 BasicTextField 的 onTextLayout 只因真实正文/几何变化触发，
- * 不再因 hiddenRanges 变化触发二次 layout，断开回路。
+ * BasicTextField 始终画完整真实正文，本 draw 层只在绘制阶段裁切动画接管区域，
+ * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout，断开回路。
  *
  * @param visualState 编辑器视觉状态。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
  * @param textColor 文字颜色 — 从主题 role 注入。
  * @param cursorColor 视觉光标颜色 — 从主题 role 注入。
- * @param backgroundColor 背景颜色 — 用于正文裁切填充，遮住 BasicTextField 已画的系统正文。
- *   从主题 `MaterialTheme.colorScheme.surface` 注入。
  * @param liveSelection 直接从 [TextFieldState.selection] 读取 — 纯 selection 变化时
  *   onTextLayout 不一定回调，restingCursorRect 可能停在旧位置，需要 live selection 实时算。
  * @param modifier Compose modifier。
+ * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
+ *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
  */
 @Composable
 @Suppress("LongParameterList")
@@ -64,12 +73,12 @@ fun EditorTextFieldDrawLayer(
     scrollY: Int,
     textColor: Color,
     cursorColor: Color,
-    backgroundColor: Color,
     /**
      * #684 评论 5663032418 断点3：live selection — 直接从 [TextFieldState.selection] 读取。
      */
     liveSelection: TextRange?,
     modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
 
@@ -104,19 +113,27 @@ fun EditorTextFieldDrawLayer(
     Box(
         modifier =
             modifier
-                .drawBehind {
+                .drawWithContent {
                     val scene = visualScene
 
-                    // 1. 正文裁切：读 scene.hiddenRanges 和 latestLayout，
-                    //    对每个 hiddenRange 用背景色填充字形 path 遮住 BasicTextField 已画的系统正文。
-                    //    #698 评论 5697612595：不再通过 OutputTransformation 把 range 设 Transparent，
-                    //    而是在 draw 层用背景色遮住 — BasicTextField 始终画完整真实正文，
-                    //    onTextLayout 只因真实正文/几何变化触发，断开 hiddenRanges 回流回路。
-                    clipSystemTextForHiddenRanges(
-                        hiddenRanges = scene.hiddenRanges,
-                        layout = latestLayout,
-                        backgroundColor = backgroundColor,
-                    )
+                    // 1. 正文裁切：对 hiddenRanges 做 ClipOp.Difference 裁切，
+                    //    使 drawContent()（BasicTextField 的完整绘制）只在非 hidden 区域可见。
+                    //    #698 评论 5699401353 修复1：不再用 drawPath(backgroundColor) 盖背景色，
+                    //    而是用 clipPath + ClipOp.Difference 只裁切绘制区域 —
+                    //    selection/search highlight 由 BasicTextField 自己画，
+                    //    裁切后自然只在非 hidden 区域可见，不引入任何颜色。
+                    val hiddenPath = buildHiddenPath(scene.hiddenRanges, latestLayout)
+                    if (hiddenPath != null) {
+                        clipPath(
+                            path = hiddenPath,
+                            clipOp = ClipOp.Difference,
+                        ) {
+                            this@drawWithContent.drawContent()
+                        }
+                    } else {
+                        // hiddenRanges 为空：直接画完整原正文。
+                        drawContent()
+                    }
 
                     // 2. 动画帧：直接读 visualScene.units。
                     //    每个 unit 的 alpha、屏幕位置已经由 timeline 按当前帧时间算好，
@@ -151,39 +168,43 @@ fun EditorTextFieldDrawLayer(
                         }
                     }
                 },
-    )
+    ) {
+        content()
+    }
 }
 
 /**
- * #698 评论 5697612595：正文裁切 —
- * 对每个 hiddenRange，用 [TextLayoutResult.getPathForRange] 取 path，
- * 用 [DrawScope.drawPath] 填充背景色遮住 BasicTextField 已画的系统正文。
+ * #698 评论 5699401353 修复1：把 [hiddenRanges] 合并成单个 [Path] —
+ * 对每个 hiddenRange 用 [TextLayoutResult.getPathForRange] 取 path，
+ * 用 [Path.addPath] 拼接成合并 path，供 `clipPath(clipOp = ClipOp.Difference)` 一次裁切。
  *
  * 越界检查（range.end <= result.layoutInput.text.length）和 try/catch 防御异常。
- * layout 为 null 时跳过（首帧或章节切换中）。
+ * layout 为 null 时返回 null（首帧或章节切换中）。hiddenRanges 为空或全部无效时返回 null。
  */
-private fun DrawScope.clipSystemTextForHiddenRanges(
+private fun DrawScope.buildHiddenPath(
     hiddenRanges: List<TextRange>,
     layout: ComposeLayoutSnapshot?,
-    backgroundColor: Color,
-) {
-    if (hiddenRanges.isEmpty() || layout == null) return
+): Path? {
+    if (hiddenRanges.isEmpty() || layout == null) return null
     val result = layout.result
     val textLength = result.layoutInput.text.length
+    var combined: Path? = null
     for (range in hiddenRanges) {
         if (range.start >= range.end) continue
         if (range.end > textLength) continue
         try {
             val path: Path = result.getPathForRange(range.start, range.end)
-            // drawPath 默认 style = Fill，用背景色填充字形 path 遮住系统正文。
-            drawPath(
-                path = path,
-                color = backgroundColor,
-            )
+            if (combined == null) {
+                combined = Path()
+                combined.addPath(path)
+            } else {
+                combined.addPath(path)
+            }
         } catch (_: Throwable) {
             // 越界或几何异常：跳过此 range，不阻断其他绘制。
         }
     }
+    return combined
 }
 
 /**
