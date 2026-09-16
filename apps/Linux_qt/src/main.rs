@@ -192,6 +192,7 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/AppShadow.qml" as "AppShadow.qml",
     "qml/SectionHeader.qml" as "SectionHeader.qml",
     "qml/SettingsRow.qml" as "SettingsRow.qml",
+    "qml/DesktopWheelScrollHandler.qml" as "DesktopWheelScrollHandler.qml",
     "qml/SidebarItem.qml" as "SidebarItem.qml",
     "qml/WorkspaceTree.qml" as "WorkspaceTree.qml",
     "qml/CreateProjectDialog.qml" as "CreateProjectDialog.qml",

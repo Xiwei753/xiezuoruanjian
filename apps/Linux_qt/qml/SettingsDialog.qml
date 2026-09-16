@@ -710,4 +710,13 @@ Dialog {
             }
         }
     }
+
+    // Issue #695 评论 5693346400: 桌面滚轮事件直译器
+    // 避免设置页回到 Qt Flickable 自己的鼠标 wheel acceleration
+    DesktopWheelScrollHandler {
+        targetFlickable: settingsScroll.contentItem
+        // 设置页没有明确的字体行距，用一个设置行的大致高度作为每格滚动距离
+        lineSpacingPx: 56
+        anchors.fill: settingsScroll
+    }
 }

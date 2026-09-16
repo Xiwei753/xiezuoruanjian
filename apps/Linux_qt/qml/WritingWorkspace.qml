@@ -752,7 +752,10 @@ Rectangle {
 
                     ScrollView {
                         id: editorScroll
-                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                        // Issue #695 评论 5693346400: editorIsScrolling 把
+                        // desktopWheelHandler.active 算进去，这样直接修改 contentY
+                        // 时现有的滚动期间动画暂停逻辑仍然有效。
+                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || desktopWheelHandler.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
                         property bool editorAnimationSuppressed: false
                         anchors.fill: paperBg
                         anchors.margins: dt.sp20
@@ -991,6 +994,19 @@ Rectangle {
                     // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
                     // 不再使用 QML overlay 路线
 
+                    // Issue #695 评论 5693346400: 桌面滚轮事件直译器
+                    // 用 WheelHandler 拦截 wheel 事件并直接修改 contentY，阻止
+                    // Qt 6.10 QQuickFlickable::wheelEvent() 自带的 wheel acceleration。
+                    // 放在 editorScroll/sujianEditor 之后声明（z 更高），wheel 事件
+                    // 先到本组件；不拦截鼠标点击/拖拽（Item 默认不处理鼠标事件）。
+                    DesktopWheelScrollHandler {
+                        id: desktopWheelHandler
+                        targetFlickable: editorScroll.contentItem
+                        // 每格滚动距离 = wheelScrollLines × 当前行高
+                        // 行高 = 字体大小 × 行距倍数
+                        lineSpacingPx: (settingsBackend ? settingsBackend.setting_font_size : 16) * (settingsBackend ? settingsBackend.setting_line_spacing : 1.5)
+                        anchors.fill: editorScroll
+                    }
 
                 }
 
