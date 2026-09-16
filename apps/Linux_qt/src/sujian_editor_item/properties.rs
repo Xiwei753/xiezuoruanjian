@@ -615,9 +615,16 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn emit_content_changed(&mut self) {
-        if self.cursor_ctrl.force_snap_next {
-            self.cursor_ctrl.animation = None;
-        }
+        // Issue #701 评论 5699573227 第三阶段 (F4/F8): 不再在 emit_content_changed 中
+        // 无条件清 cursor_ctrl.animation。正常输入/删除/IME commit 创建事务后，
+        // emit_content_changed 和普通刷新不能再把动画清掉。
+        //
+        // force_snap_next=true 时，update_cursor_visual_position → build_cursor_plan
+        // → apply_plan 会走 CursorTransition::Snap 分支，自动清 animation 并把
+        // visual 跳到 target。属性变化路径（set_plain_text/reload/layout_property_changed
+        // /set_scroll_y 等）已各自显式 `self.cursor_ctrl.animation = None`，不依赖此处。
+        // 因此这里的清动画逻辑是多余的，且会在编辑前残留 force_snap_next=true 时
+        // 误清刚由 record_transaction/handle_composition_commit 创建的光标动画。
         self.pipeline.bump_text_revision();
         // Issue #658 评论 5622829886 问题 1: 把 record_visual_transaction 产生的
         // pending promoted layout 提升为 EditorLayout current，避免后续

@@ -58,6 +58,125 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
     }
 
+    /// Issue #701 评论 5699573227 第三阶段: 统一 composition commit 事务创建入口。
+    ///
+    /// 把 `insert_text_with_cause` 和 `ime_replace_and_insert` 的 composition commit
+    /// 分支收口到这一个 helper，固定做：生成 old/new layout snapshot → 创建
+    /// transaction → cancel_active_composition → handle_composition_commit_or_cancel
+    /// → prepare_transaction_textures → set_previous/current_layout_snapshot。
+    ///
+    /// `pending_preedit_cursor_rect` 只作为 IME commit 动画的 old caret 起点
+    /// （传给 `handle_composition_commit_or_cancel` 的 `old_cursor_rect`），
+    /// **不再**覆盖提交后的 target caret 或 `cursor_ctrl.visual_x/visual_y`。
+    /// 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
+    /// 由 `emit_content_changed` → `update_cursor_visual_position` 统一计算。
+    #[allow(clippy::too_many_arguments)]
+    fn record_composition_commit_transaction(
+        &mut self,
+        old: &EditorSnapshot,
+        new: &EditorSnapshot,
+        cause: EditorTransactionCause,
+        pending_preedit_cursor_rect: Option<CursorRect>,
+        preedit_byte_start: usize,
+        preedit_byte_end: usize,
+        saved_virtual_text: &str,
+        candidate_byte_start: usize,
+        candidate_byte_end: usize,
+        committed_replace_start: usize,
+        committed_replace_end: usize,
+        cancel_reason: &str,
+        summary_tag: &str,
+    ) {
+        let width = self.bounding_width();
+        let composition_range = Some((preedit_byte_start, preedit_byte_end));
+        let old_snapshot = self
+            .pipeline
+            .animation_coordinator()
+            .active_composition_new_snapshot()
+            .cloned()
+            .unwrap_or_else(|| {
+                self.pipeline
+                    .current_layout_snapshot()
+                    .clone()
+                    .unwrap_or_else(|| {
+                        self.build_editor_layout_snapshot(width, false, composition_range)
+                    })
+            });
+
+        let transaction = self.pipeline.engine().create_transaction(
+            &old.text,
+            &new.text,
+            EditorSelection {
+                anchor: EditorCursor::new(&old.text, old.selection_anchor),
+                head: EditorCursor::new(&old.text, old.cursor),
+            },
+            EditorSelection {
+                anchor: EditorCursor::new(&new.text, new.selection_anchor),
+                head: EditorCursor::new(&new.text, new.cursor),
+            },
+            cause,
+        );
+        self.pipeline
+            .animation_coordinator_mut()
+            .cancel_active_composition(cancel_reason);
+
+        // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
+        // 走 promote=true，generation 直接成为 current，不再用完即删。
+        let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
+        let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+            x: c.x,
+            top: c.y,
+            bottom: c.y + c.h,
+            baseline_y: c.y + c.h * 0.8,
+        });
+
+        let visual_text_unchanged =
+            !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
+
+        let key = self
+            .pipeline
+            .animation_coordinator_mut()
+            .handle_composition_commit_or_cancel(
+                &old_snapshot,
+                &new_snapshot,
+                preedit_byte_start,
+                preedit_byte_end,
+                true,
+                visual_text_unchanged,
+                candidate_byte_start,
+                candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
+                pending_preedit_cursor_rect,
+                new_cursor_rect,
+            );
+
+        if let Some(key) = key {
+            self.prepare_transaction_textures(key);
+        }
+        self.pipeline
+            .set_previous_layout_snapshot(Some(old_snapshot));
+        self.pipeline
+            .set_current_layout_snapshot(Some(new_snapshot));
+
+        self.last_event_count = 1;
+        self.last_summary = format!(
+            "cause={:?};changes={};vt={};animate=true",
+            transaction.cause,
+            transaction.changes.len(),
+            summary_tag,
+        )
+        .into();
+        editor_animation_debug_log(&format!(
+            "record_composition_commit_transaction: cancel_reason={}, cause={:?}, changes={}",
+            cancel_reason,
+            transaction.cause,
+            transaction.changes.len(),
+        ));
+
+        self.transaction_created();
+    }
+
     pub(crate) fn insert_text(&mut self, text: QString) {
         self.insert_text_with_cause(text, None);
     }
@@ -126,118 +245,34 @@ impl SujianEditorItem {
         let new = self.buffer.snapshot();
 
         if commit.was_composing && self.current_typing_animation_enabled {
-            let width = self.bounding_width();
-            let old_cursor_rect = commit
-                .pending_preedit_cursor_rect
-                .as_ref()
-                .map(|c| CursorRect {
-                    x: c.x,
-                    top: c.top,
-                    bottom: c.bottom,
-                    baseline_y: c.baseline_y,
-                });
-
-            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
-            let old_snapshot = self
-                .pipeline
-                .animation_coordinator()
-                .active_composition_new_snapshot()
-                .cloned()
-                .unwrap_or_else(|| {
-                    self.pipeline
-                        .current_layout_snapshot()
-                        .clone()
-                        .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, composition_range)
-                        })
-                });
-
-            let transaction = self.pipeline.engine().create_transaction(
-                &old.text,
-                &new.text,
-                EditorSelection {
-                    anchor: EditorCursor::new(&old.text, old.selection_anchor),
-                    head: EditorCursor::new(&old.text, old.cursor),
-                },
-                EditorSelection {
-                    anchor: EditorCursor::new(&new.text, new.selection_anchor),
-                    head: EditorCursor::new(&new.text, new.cursor),
-                },
+            self.record_composition_commit_transaction(
+                &old,
+                &new,
                 cause,
+                commit.pending_preedit_cursor_rect,
+                commit.preedit_byte_start,
+                commit.preedit_byte_end,
+                &commit.saved_virtual_text,
+                commit.candidate_byte_start,
+                commit.candidate_byte_end,
+                commit.committed_replace_start,
+                commit.committed_replace_end,
+                "commit_insert",
+                "composition_commit",
             );
-            self.pipeline
-                .animation_coordinator_mut()
-                .cancel_active_composition("commit_insert");
-
-            // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
-            // 走 promote=true，generation 直接成为 current，不再用完即删。
-            let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
-                x: c.x,
-                top: c.y,
-                bottom: c.y + c.h,
-                baseline_y: c.y + c.h * 0.8,
-            });
-
-            let visual_text_unchanged =
-                !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text;
-
-            let key = self
-                .pipeline
-                .animation_coordinator_mut()
-                .handle_composition_commit_or_cancel(
-                    &old_snapshot,
-                    &new_snapshot,
-                    commit.preedit_byte_start,
-                    commit.preedit_byte_end,
-                    true,
-                    visual_text_unchanged,
-                    commit.candidate_byte_start,
-                    commit.candidate_byte_end,
-                    commit.committed_replace_start,
-                    commit.committed_replace_end,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
-
-            if let Some(key) = key {
-                self.prepare_transaction_textures(key);
-            }
-            self.pipeline
-                .set_previous_layout_snapshot(Some(old_snapshot));
-            self.pipeline
-                .set_current_layout_snapshot(Some(new_snapshot));
-
-            self.last_event_count = 1;
-            self.last_summary = format!(
-                "cause={:?};changes={};vt=composition_commit;animate=true",
-                transaction.cause,
-                transaction.changes.len(),
-            )
-            .into();
-            editor_animation_debug_log(&format!(
-                "insert_text_with_cause: composition commit, cause={:?}, changes={}",
-                transaction.cause,
-                transaction.changes.len(),
-            ));
-
-            self.transaction_created();
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
 
         self.pipeline.finish_composition_commit();
 
-        if let Some(pcr) = commit.pending_preedit_cursor_rect {
-            self.cursor_ctrl.visual_x = pcr.x;
-            self.cursor_ctrl.visual_y = pcr.top;
-            self.cursor_ctrl.force_snap_next = false;
-            editor_animation_debug_log(&format!("[commit] pending_preedit_cursor_rect present cursor_start_source=preedit pcr_x={:.1} pcr_y={:.1}", pcr.x, pcr.top));
-        } else {
-            editor_animation_debug_log(
-                "[commit] pending_preedit_cursor_rect absent cursor_start_source=normal",
-            );
-        }
+        // Issue #701 评论 5699573227 第三阶段 (F2/F7): 不再把
+        // pending_preedit_cursor_rect 反写到 cursor_ctrl.visual_x/visual_y。
+        // pending_preedit_cursor_rect 只作为 IME commit 动画的 old caret 起点
+        // （已传给 record_composition_commit_transaction 的 old_cursor_rect）。
+        // 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
+        // 由 emit_content_changed → update_cursor_visual_position 统一计算。
+        // visual_x/visual_y 只是屏幕动画位置，不与 target 互相反写。
 
         self.emit_content_changed();
     }
@@ -374,106 +409,33 @@ impl SujianEditorItem {
         let new = self.buffer.snapshot();
 
         if commit.was_composing && self.current_typing_animation_enabled {
-            let width = self.bounding_width();
-            let old_cursor_rect = commit
-                .pending_preedit_cursor_rect
-                .as_ref()
-                .map(|c| CursorRect {
-                    x: c.x,
-                    top: c.top,
-                    bottom: c.bottom,
-                    baseline_y: c.baseline_y,
-                });
-
-            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
-            let old_snapshot = self
-                .pipeline
-                .animation_coordinator()
-                .active_composition_new_snapshot()
-                .cloned()
-                .unwrap_or_else(|| {
-                    self.pipeline
-                        .current_layout_snapshot()
-                        .clone()
-                        .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, composition_range)
-                        })
-                });
-
-            let transaction = self.pipeline.engine().create_transaction(
-                &old.text,
-                &new.text,
-                EditorSelection {
-                    anchor: EditorCursor::new(&old.text, old.selection_anchor),
-                    head: EditorCursor::new(&old.text, old.cursor),
-                },
-                EditorSelection {
-                    anchor: EditorCursor::new(&new.text, new.selection_anchor),
-                    head: EditorCursor::new(&new.text, new.cursor),
-                },
+            self.record_composition_commit_transaction(
+                &old,
+                &new,
                 cause,
+                commit.pending_preedit_cursor_rect,
+                commit.preedit_byte_start,
+                commit.preedit_byte_end,
+                &commit.saved_virtual_text,
+                candidate_byte_start,
+                candidate_byte_end,
+                committed_replace_start,
+                committed_replace_end,
+                "commit_replace",
+                "composition_commit_replace",
             );
-            self.pipeline
-                .animation_coordinator_mut()
-                .cancel_active_composition("commit_replace");
-
-            // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
-            // 走 promote=true，generation 直接成为 current，不再用完即删。
-            let composition_range = Some((commit.preedit_byte_start, commit.preedit_byte_end));
-            let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
-            let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
-                x: c.x,
-                top: c.y,
-                bottom: c.y + c.h,
-                baseline_y: c.y + c.h * 0.8,
-            });
-
-            let key = self
-                .pipeline
-                .animation_coordinator_mut()
-                .handle_composition_commit_or_cancel(
-                    &old_snapshot,
-                    &new_snapshot,
-                    commit.preedit_byte_start,
-                    commit.preedit_byte_end,
-                    true,
-                    !commit.saved_virtual_text.is_empty() && commit.saved_virtual_text == new.text,
-                    candidate_byte_start,
-                    candidate_byte_end,
-                    committed_replace_start,
-                    committed_replace_end,
-                    old_cursor_rect,
-                    new_cursor_rect,
-                );
-
-            if let Some(key) = key {
-                self.prepare_transaction_textures(key);
-            }
-            self.pipeline
-                .set_previous_layout_snapshot(Some(old_snapshot));
-            self.pipeline
-                .set_current_layout_snapshot(Some(new_snapshot));
-
-            self.last_event_count = 1;
-            self.last_summary = format!(
-                "cause={:?};changes={};vt=composition_commit_replace;animate=true",
-                transaction.cause,
-                transaction.changes.len(),
-            )
-            .into();
-
-            self.transaction_created();
         } else {
             let _vt = self.record_transaction(old, new, cause, true);
         }
 
         self.pipeline.finish_composition_commit();
 
-        if let Some(pcr) = commit.pending_preedit_cursor_rect {
-            self.cursor_ctrl.visual_x = pcr.x;
-            self.cursor_ctrl.visual_y = pcr.top;
-            self.cursor_ctrl.force_snap_next = false;
-        }
+        // Issue #701 评论 5699573227 第三阶段 (F2/F7): 不再把
+        // pending_preedit_cursor_rect 反写到 cursor_ctrl.visual_x/visual_y。
+        // pending_preedit_cursor_rect 只作为 IME commit 动画的 old caret 起点
+        // （已传给 record_composition_commit_transaction 的 old_cursor_rect）。
+        // 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
+        // 由 emit_content_changed → update_cursor_visual_position 统一计算。
 
         self.emit_content_changed();
     }

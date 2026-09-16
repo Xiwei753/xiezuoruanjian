@@ -30,7 +30,6 @@ use std::time::Instant;
 use writer_core::editor::{CursorRect, EditorAnimationKind, EditorVisualTransaction, OffsetMap};
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
-use super::text_visual_transaction::PreparedVisualUnit;
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
@@ -40,6 +39,7 @@ pub(crate) use super::render_plan::{
     TextAnimationGlyphInfo, TextAnimationPlan,
 };
 use super::static_line_patch::StaticLinePatch;
+use super::text_visual_transaction::PreparedVisualUnit;
 use super::text_visual_transaction::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedTransactionQueue,
     RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
@@ -81,15 +81,6 @@ impl AnimationFrameSample {
     }
 }
 
-/// Issue #679 评论 5657313927 (3c): 按 driver key 取样 Timeline 进度的结果。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum CursorTimelineSample {
-    /// 事务仍处于 Pending / Prepared，Timeline 还没开始走，应保持当前视觉位置。
-    Waiting,
-    /// 事务处于 Rendering / Paused，返回当前 progress（已 clamp 到 [0,1]）。
-    Running(f64),
-}
-
 /// Issue #690 评论 5675007226 步骤 3: 将旧事务的视觉单元当前帧 rebase 到新事务的视觉单元上。
 ///
 /// `RebaseFrame` 由 [`PreparedTextVisualTransaction::collect_rebase_frames`] 逐单元采集：
@@ -102,6 +93,13 @@ fn match_rebase_frames(
 ) {
     let mut consumed_indices: Vec<usize> = Vec::new();
     for frame in rebase_frames {
+        // Issue #701 评论 5699573227: 读取 frame.sampled_at 写入动画诊断日志，
+        // 使该诊断字段在非测试代码中也被消费（否则 clippy 报 dead_code）。
+        // editor_animation_debug_log 仅在设置环境变量时输出，零开销。
+        crate::sujian_editor_item::editor_animation_debug_log(&format!(
+            "rebase frame [{}..{}] sampled_at={:?} remaining={}ms",
+            frame.byte_start, frame.byte_end, frame.sampled_at, frame.remaining_duration_ms
+        ));
         let tier1 = units
             .iter_mut()
             .enumerate()
@@ -139,8 +137,7 @@ fn match_rebase_frames(
                         nu.slice.byte_start >= mbs && nu.slice.byte_end <= mbe.max(mbs + 1)
                     })
                     .min_by_key(|(idx, nu)| {
-                        let candidate_center =
-                            (nu.slice.byte_start + nu.slice.byte_end) as i64 / 2;
+                        let candidate_center = (nu.slice.byte_start + nu.slice.byte_end) as i64 / 2;
                         let abs_dist = (candidate_center - mapped_center).abs();
                         (abs_dist, nu.slice.byte_start, *idx)
                     });
@@ -1176,11 +1173,8 @@ impl LinuxEditorAnimationCoordinator {
                     // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
                     // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
                     let inserted_range_tuple = (range_start, range_end);
-                    let (reveal_slices, reveal_patches) = build_insert_reveal_slices(
-                        key,
-                        new_snapshot,
-                        inserted_range_tuple,
-                    );
+                    let (reveal_slices, reveal_patches) =
+                        build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
                     slices.extend(reveal_slices);
                     static_patches.extend(reveal_patches);
 
@@ -1211,7 +1205,7 @@ impl LinuxEditorAnimationCoordinator {
                         old_cursor_rect.as_ref(),
                         new_cursor_rect.as_ref(),
                         caret_handoff,
-                        u64::from(vt.duration_ms),
+                        vt.duration_ms,
                     );
                     let prepared = PreparedTextVisualTransaction {
                         key,
@@ -1318,7 +1312,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_cursor_rect.as_ref(),
                     new_cursor_rect.as_ref(),
                     caret_handoff,
-                    u64::from(vt.duration_ms),
+                    vt.duration_ms,
                 );
                 let prepared = PreparedTextVisualTransaction {
                     key,
@@ -1396,12 +1390,8 @@ impl LinuxEditorAnimationCoordinator {
             .find_conflicting_transaction(composition_byte_start, composition_byte_end);
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
         let now = Instant::now();
-        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
-            conflicting,
-            "rebased_by_composition_update",
-            now,
-            None,
-        );
+        let (rebase_frames, caret_handoff) =
+            self.take_rebase_frames(conflicting, "rebased_by_composition_update", now, None);
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -1528,12 +1518,8 @@ impl LinuxEditorAnimationCoordinator {
             .find_conflicting_transaction(conflict_start, conflict_end);
         // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
         let now = Instant::now();
-        let (rebase_frames, caret_handoff) = self.take_rebase_frames(
-            conflicting,
-            "rebased_by_composition_commit",
-            now,
-            None,
-        );
+        let (rebase_frames, caret_handoff) =
+            self.take_rebase_frames(conflicting, "rebased_by_composition_commit", now, None);
 
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
@@ -2207,6 +2193,7 @@ impl LinuxEditorAnimationCoordinator {
         selection_preedit_style: super::render_plan::SelectionPreeditStyle,
         frame_now: Instant,
         coordinated_enabled: bool,
+        cursor_animation: Option<&super::rendering::CursorAnimationState>,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2273,10 +2260,14 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #690 评论 5675007226 步骤 2: 协同光标位置从同一 frame_now 计算。
         // 光标严格跟随文字吞吐边界：InsertReveal → 右边界，DeleteConceal → 吞字边界，
         // Reflow/Cursor → old/new 插值。不再用单一 progress 在 old/new rect 之间线性插值。
+        //
+        // Issue #701 评论 5699573227 第三阶段 (F5): 每帧只采样一次 frame state。
+        // 文字层和光标层都使用同一份 `AnimationFrameSample`。无活跃文字事务时，
+        // CursorOnly 光标位置也从 frame_sample 采样，不再在 build_render_plan_full
+        // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
+        let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;
         if coordinated_enabled {
-            if let Some((cx, cy, ch)) =
-                self.compute_coordinated_cursor_position(&frame_sample)
-            {
+            if let Some((cx, cy, ch)) = self.compute_coordinated_cursor_position(&frame_sample) {
                 let suppressed = matches!(
                     self.active_operation_kind(),
                     Some(TextVisualOperationKind::Insert)
@@ -2298,6 +2289,23 @@ impl LinuxEditorAnimationCoordinator {
                     h: ch,
                     opacity,
                 };
+            } else if let Some(anim) = cursor_animation {
+                // 无活跃文字事务但有 CursorOnly 动画：用同一份 frame_sample 采样光标位置。
+                cursor_sample_outcome = self.sample_cursor_only_position(anim, &frame_sample);
+                match cursor_sample_outcome {
+                    super::render_plan::CursorSampleOutcome::Running(p) => {
+                        let eased = super::rendering::ease_out_cubic(p);
+                        cursor_render_state.x =
+                            anim.start_x + (anim.target_x - anim.start_x) * eased;
+                        cursor_render_state.y =
+                            anim.start_y + (anim.target_y - anim.start_y) * eased;
+                    }
+                    super::render_plan::CursorSampleOutcome::Finished => {
+                        cursor_render_state.x = anim.target_x;
+                        cursor_render_state.y = anim.target_y;
+                    }
+                    super::render_plan::CursorSampleOutcome::Idle => {}
+                }
             }
         }
 
@@ -2309,6 +2317,44 @@ impl LinuxEditorAnimationCoordinator {
             cursor_style,
             selection_preedit_style,
             static_patches,
+            cursor_sample_outcome,
+        }
+    }
+
+    /// Issue #701 评论 5699573227 第三阶段 (F5): 用同一份 `AnimationFrameSample`
+    /// 采样 CursorOnly 光标位置。
+    ///
+    /// 当没有活跃文字事务但有 `cursor_ctrl.animation`（CursorOnly）时，从
+    /// `frame_sample` 读取 driver 事务的 progress，按 ease-out-cubic 插值光标位置。
+    /// 文字层和光标层都使用同一份 frame state。
+    fn sample_cursor_only_position(
+        &self,
+        anim: &super::rendering::CursorAnimationState,
+        sample: &AnimationFrameSample,
+    ) -> super::render_plan::CursorSampleOutcome {
+        let tx = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|tx| tx.key == anim.driver_key);
+        match tx {
+            None => super::render_plan::CursorSampleOutcome::Finished,
+            Some(tx) => match tx.state {
+                TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
+                    super::render_plan::CursorSampleOutcome::Idle
+                }
+                TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
+                    let progress = sample.progress(anim.driver_key).clamp(0.0, 1.0);
+                    if progress >= 1.0 {
+                        super::render_plan::CursorSampleOutcome::Finished
+                    } else {
+                        super::render_plan::CursorSampleOutcome::Running(progress)
+                    }
+                }
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => {
+                    super::render_plan::CursorSampleOutcome::Finished
+                }
+            },
         }
     }
 
@@ -2360,9 +2406,7 @@ impl LinuxEditorAnimationCoordinator {
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units
-                    .iter()
-                    .all(|u| u.progress(sample.frame_now) >= 1.0)
+                tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
             };
 
             if all_units_done {
@@ -2370,7 +2414,9 @@ impl LinuxEditorAnimationCoordinator {
                 emit_transaction_diagnostic(tx, "editor.anim.complete", "completed");
                 editor_animation_debug_log(&format!(
                     "anim_complete: key={:?} op={:?} units={}",
-                    tx.key, tx.operation_kind, tx.units.len(),
+                    tx.key,
+                    tx.operation_kind,
+                    tx.units.len(),
                 ));
                 keys_to_complete.push(tx.key);
                 continue;
@@ -2521,32 +2567,6 @@ impl LinuxEditorAnimationCoordinator {
                 let (x, y) = sample_reflow()?;
                 Some((x, y, h))
             }
-        }
-    }
-
-    /// Issue #690 评论 5675007226 步骤 1: 用 `frame_now` 取样 cursor timeline。
-    ///
-    /// 替代原来的 `cursor_timeline_sample()`（内部 `Instant::now()`），
-    /// 确保光标 progress 和文字 progress 来自同一个帧采样时间点。
-    pub(crate) fn cursor_timeline_sample_with_time(
-        &self,
-        key: VisualTransactionKey,
-        frame_now: Instant,
-    ) -> Option<CursorTimelineSample> {
-        let tx = self
-            .prepared_queue
-            .active_transactions()
-            .iter()
-            .find(|tx| tx.key == key)?;
-
-        match tx.state {
-            TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
-                Some(CursorTimelineSample::Waiting)
-            }
-            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => Some(
-                CursorTimelineSample::Running(tx.progress(frame_now).clamp(0.0, 1.0)),
-            ),
-            TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => None,
         }
     }
 
@@ -2729,8 +2749,15 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<RebaseFrame> =
-            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> = vec![rebase_frame(
+            10,
+            30,
+            10.0,
+            100.0,
+            0.3,
+            Some(sid_dup.clone()),
+            0.3,
+        )];
 
         let slices = vec![
             AnimatedSlice::insert_reveal(
@@ -2827,8 +2854,15 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<RebaseFrame> =
-            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> = vec![rebase_frame(
+            10,
+            30,
+            10.0,
+            100.0,
+            0.3,
+            Some(sid_dup.clone()),
+            0.3,
+        )];
 
         let slices = vec![
             AnimatedSlice::insert_reveal(
@@ -3178,8 +3212,15 @@ mod tests {
             format_fingerprint: 500,
         };
 
-        let rebase_frames: Vec<RebaseFrame> =
-            vec![rebase_frame(10, 30, 10.0, 100.0, 0.3, Some(sid_dup.clone()), 0.3)];
+        let rebase_frames: Vec<RebaseFrame> = vec![rebase_frame(
+            10,
+            30,
+            10.0,
+            100.0,
+            0.3,
+            Some(sid_dup.clone()),
+            0.3,
+        )];
 
         let slices = vec![
             AnimatedSlice::insert_reveal(
@@ -3870,12 +3911,7 @@ mod tests {
         };
         // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
         // old cluster [0,3) 是被删除的范围。
-        let slices = build_delete_conceal_slices(
-            key,
-            &old_snapshot,
-            (0, 3),
-            Some(&new_cursor),
-        );
+        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&new_cursor));
         let delete_slices: Vec<_> = slices
             .iter()
             .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -3904,12 +3940,7 @@ mod tests {
         };
         // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
         // old cluster [0,3) 是被删除的范围。
-        let slices = build_delete_conceal_slices(
-            key,
-            &old_snapshot,
-            (0, 3),
-            Some(&new_cursor),
-        );
+        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&new_cursor));
         let delete_slices: Vec<_> = slices
             .iter()
             .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -4228,12 +4259,8 @@ mod tests {
             coord.prepared_queue.is_empty(),
             "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
         );
-        let (no_frames, _) =
-            coord.take_rebase_frames(None, "rebased_by_insert", now, None);
-        assert!(
-            no_frames.is_empty(),
-            "无冲突事务时不产生交棒帧"
-        );
+        let (no_frames, _) = coord.take_rebase_frames(None, "rebased_by_insert", now, None);
+        assert!(no_frames.is_empty(), "无冲突事务时不产生交棒帧");
     }
 
     /// Issue #690 评论 5675007226 步骤 3: 未被新编辑覆盖的单元继续自己的时间线。
@@ -4386,6 +4413,7 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             true,
+            None,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -4435,6 +4463,7 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             false,
+            None,
         );
 
         assert!(
@@ -4510,6 +4539,7 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             true,
+            None,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -4555,6 +4585,7 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             true,
+            None,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -4620,6 +4651,7 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             true,
+            None,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -4644,7 +4676,8 @@ mod tests {
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not_logical_old_caret() {
+    fn issue690_comment5680276931_rebase_reflow_cursor_starts_from_screen_cursor_not_logical_old_caret(
+    ) {
         // 评论 5680276931 指出：take_rebase_frames() 交棒时只采集文字视觉单元，
         // 没有把旧事务这一帧正在屏幕上显示的 coordinated cursor rect 带给新事务。
         // 新事务的 old_cursor_rect 仍来自 pipeline 对旧正文做的权威布局 caret
@@ -4689,7 +4722,11 @@ mod tests {
         // ── rebase 交棒：take_rebase_frames 现在同时采集文字单元和屏幕光标 ──
         let (rebase_frames, sampled_cursor) =
             coord.take_rebase_frames(Some(old_key), "rebased_by_enter", now, None);
-        assert_eq!(rebase_frames.len(), 1, "应采集到一个正在播放的 reflow unit 帧");
+        assert_eq!(
+            rebase_frames.len(),
+            1,
+            "应采集到一个正在播放的 reflow unit 帧"
+        );
         assert!(
             (rebase_frames[0].x - 190.0).abs() < 1e-6,
             "rebase 帧应携带旧 unit 当前屏幕位置 190，got {}",
@@ -4754,13 +4791,11 @@ mod tests {
             SelectionPreeditStyle::default(),
             now,
             true,
+            None,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）
-        assert!(
-            !plan.text_animation.glyphs.is_empty(),
-            "新事务应产出文字帧"
-        );
+        assert!(!plan.text_animation.glyphs.is_empty(), "新事务应产出文字帧");
         let text_x = plan.text_animation.glyphs[0].x;
         assert!(
             (text_x - 190.0).abs() < 1e-6,
@@ -5191,7 +5226,8 @@ mod tests {
         // caret track: from=caret(0), to=caret(200), duration=200ms。
         // 事务创建时 started_at = None（尚未开始）。
         let reflow_unit = PreparedVisualUnit::wrap(reflow_slice(0, 3, 0.0, 100.0), 200);
-        let cursor_visual_track = PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), 200);
+        let cursor_visual_track =
+            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), 200);
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,

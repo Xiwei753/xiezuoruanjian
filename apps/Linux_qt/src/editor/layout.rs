@@ -2497,7 +2497,10 @@ pub fn prepare_paragraph_visual_snapshot(
 
     // Issue #688: 静态布局路径不接收颜色参数；只有 generate_animation_visuals=true 时才使用真实颜色
     let color = if generate_animation_visuals {
-        text_color.map_or_else(|| qmetaobject::QColor::from_name(""), |c| qmetaobject::QColor::from_name(c))
+        text_color.map_or_else(
+            || qmetaobject::QColor::from_name(""),
+            |c| qmetaobject::QColor::from_name(c),
+        )
     } else {
         qmetaobject::QColor::from_name("")
     };
@@ -3194,7 +3197,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-                            text_color,
+            text_color,
             paragraph_idx,
             line_spacing,
             generation,
@@ -3271,7 +3274,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-                            text_color,
+            text_color,
             0,
             line_spacing,
             generation,
@@ -3320,7 +3323,7 @@ fn prepare_document_visual_snapshot_impl(
             available,
             indent,
             dpr,
-                            text_color,
+            text_color,
             paragraph_idx,
             line_spacing,
             generation,

@@ -243,17 +243,25 @@ fn issue690_blink_change_requests_frame_update() {
 fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
     let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
     let body = method_body(&src, "fn update_paint_node(");
+    // Issue #701 评论 5699573227 第三阶段 (F5): CursorOnly 采样统一到
+    // build_render_plan_full 内部，用同一份 AnimationFrameSample。
+    // update_paint_node 通过 cursor_sample_outcome 推进 cursor_ctrl。
     assert!(
-        body.contains("active_text_transaction_key"),
-        "步骤2: update_paint_node 必须判断是否有活跃正文事务"
+        body.contains("build_render_plan_full"),
+        "步骤2: update_paint_node 必须调 build_render_plan_full 统一采样"
     );
     assert!(
-        body.contains("cursor_timeline_sample_with_time"),
-        "步骤2: CursorOnly 位置由 frame_now 采样驱动，不再只靠 blink Timer"
-    );
-    assert!(
-        body.contains("CursorTimelineSample::Running"),
+        body.contains("CursorSampleOutcome::Running"),
         "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y"
+    );
+    assert!(
+        body.contains("cursor_ctrl.animation.as_ref()"),
+        "步骤2: cursor_animation 传给 build_render_plan_full 统一采样"
+    );
+    let coord_src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    assert!(
+        coord_src.contains("sample_cursor_only_position"),
+        "步骤2: 协调器内必须有 sample_cursor_only_position 用 frame_sample 采样"
     );
     println!("[BUGFIX_690_VERIFY] 步骤2 CursorOnly 帧驱动 (FIXED)");
 }

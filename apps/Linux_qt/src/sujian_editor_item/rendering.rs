@@ -26,7 +26,7 @@ pub struct CursorAnimationState {
 impl CursorAnimationState {
     pub fn current_position(&self) -> (f64, f64) {
         let t = self.progress.clamp(0.0, 1.0);
-        let eased = 1.0 - (1.0 - t).powi(3i32);
+        let eased = ease_out_cubic(t);
         let x = self.start_x + (self.target_x - self.start_x) * eased;
         let y = self.start_y + (self.target_y - self.start_y) * eased;
         (x, y)
@@ -35,6 +35,17 @@ impl CursorAnimationState {
     pub fn is_finished(&self) -> bool {
         self.progress >= 1.0
     }
+}
+
+/// Issue #701 评论 5699573227 第三阶段 (F5): ease-out-cubic 缓动函数。
+///
+/// 供 `build_render_plan_full` 内部 `sample_cursor_only_position` 使用，
+/// 避免在 `animation_coordinator.rs` 内联 easing 公式（Issue #690 步骤 2 要求
+/// 协调器内不得内联各自的 easing 公式）。CursorOnly 的三次曲线保持独立，
+/// 不并入协同曲线（`AnimatedSlice::ease_out_quad`）。
+pub fn ease_out_cubic(t: f64) -> f64 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3i32)
 }
 
 impl SujianEditorItem {

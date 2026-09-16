@@ -122,6 +122,22 @@ pub(crate) struct CursorRenderState {
     pub opacity: f64,
 }
 
+/// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
+///
+/// 由 `build_render_plan_full` 内部用同一份 `AnimationFrameSample` 采样，
+/// 供 `update_paint_node` 推进 `cursor_ctrl` 的 visual_x/visual_y。
+/// 文字层和光标层都使用同一份 frame state，消除 GUI tick 与 Scene Graph
+/// 渲染帧之间的采样偏差。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CursorSampleOutcome {
+    /// 无 CursorOnly 动画，或事务处于 Pending/Prepared（保持当前 visual_x/y）。
+    Idle,
+    /// 事务处于 Rendering/Paused，返回 progress（已 clamp 到 [0,1]）。
+    Running(f64),
+    /// 事务已完成或不存在，光标应落到 target。
+    Finished,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct RenderPlan {
     pub text_animation: TextAnimationPlan,
@@ -136,4 +152,6 @@ pub(crate) struct RenderPlan {
     /// 动画期间静态正文层需要隐藏的区域。
     /// 由 active transaction 的 static_patches 提供，包含精确的行级裁剪信息。
     pub static_patches: Vec<StaticLinePatch>,
+    /// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
+    pub cursor_sample_outcome: CursorSampleOutcome,
 }

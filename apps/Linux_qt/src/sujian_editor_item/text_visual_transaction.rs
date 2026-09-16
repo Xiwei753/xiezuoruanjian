@@ -251,6 +251,7 @@ pub(crate) struct RebaseFrame {
     pub visible_fraction: f64,
     /// 采集本帧的时间点。Issue #690 评论 5683759796: 不再作为新单元的 `started_at`，
     /// 仅保留做诊断/连续性断言；新单元 `started_at = None`，等进入 Rendering 再启动。
+    /// Issue #701 评论 5699573227: `match_rebase_frames` 读取此字段写动画诊断日志。
     pub sampled_at: Instant,
     /// 旧单元剩余的播放时长；retarget 后作为新单元的 `duration_ms`。
     pub remaining_duration_ms: u64,
@@ -333,20 +334,6 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
-    /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
-    pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
-        let sampled = self.sampled_rect(now);
-        let remaining = self.remaining_duration_ms(now).max(1);
-        Self {
-            from: sampled,
-            to: new_to,
-            started_at: None,
-            duration_ms: remaining,
-            pause_start: None,
-        }
-    }
-
     /// 首次事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
     /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 事务时长`。
     pub fn new_first(from: CursorRect, to: CursorRect, duration_ms: u64) -> Self {
@@ -374,7 +361,27 @@ impl PreparedCursorVisualTrack {
             (self.started_at.as_mut(), self.pause_start.take())
         {
             let paused_duration = now.duration_since(pause_start);
-            *start = *start + paused_duration;
+            *start += paused_duration;
+        }
+    }
+}
+
+/// Issue #701 评论 5699573227: `rebase_to` 仅在测试中直接调用（生产代码走
+/// `build_cursor_visual_track` 的 handoff 分支，逻辑等价）。放在 `#[cfg(test)]`
+/// impl 块里，避免 clippy 误报 dead_code，也不需要 `#[allow(dead_code)]`。
+#[cfg(test)]
+impl PreparedCursorVisualTrack {
+    /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
+    /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
+    pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
+        let sampled = self.sampled_rect(now);
+        let remaining = self.remaining_duration_ms(now).max(1);
+        Self {
+            from: sampled,
+            to: new_to,
+            started_at: None,
+            duration_ms: remaining,
+            pause_start: None,
         }
     }
 }
