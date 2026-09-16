@@ -523,7 +523,9 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
 
         // 一帧 drain 3 笔
         val applied = state.drainPendingPatchesAtFrame(0L)
-        assertEquals("应 drain 3 笔 patch", 3, applied.size)
+        // #694 评论第 7 步：同一 VSync 的多笔 patch 应先合成一个屏幕 transition，
+        // 再只 applyPatch() 一次。旧实现逐笔 applyPatch 返回 3 笔；修复后 batch 合成返回 1 笔。
+        assertEquals("应 drain 1 笔 batch 合成的 patch", 1, applied.size)
 
         // 断言7：同一 frameTimeNanos drain 多笔 patch 时，cursor 只收敛到最终几何目标，
         // 不创建肉眼不可见的中间几何轨迹（from 直接连到最终 to）。

@@ -396,8 +396,11 @@ internal object ComposeVisualRebase {
     /**
      * #644 评论 #684 + 评论 5662132136 第1项 + 评论 5663032418 断点2：
      * 用合成后的 offset map 计算 retained moves。
+     *
+     * #694 评论第 4 步：internal 可见性 — 供 [ComposeLocalVisualRebase] 复用，
+     * 本地输入不再绕 [EditorVisualIntent] 才能调用。
      */
-    private fun computeRetainedMovesFromComposedMap(
+    internal fun computeRetainedMovesFromComposedMap(
         prev: ComposeLayoutSnapshot,
         curr: ComposeLayoutSnapshot,
         composed: List<VisualOffsetMapEntry>,

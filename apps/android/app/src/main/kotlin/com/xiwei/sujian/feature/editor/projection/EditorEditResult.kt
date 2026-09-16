@@ -55,6 +55,29 @@ data class VisualIntent(
     val oldAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
     val newAnimationUnitRanges: List<Pair<Int, Int>> = emptyList(),
 ) {
+    /**
+     * #694 评论第 5 步：判断本 intent 的 cause 是否为本地输入
+     * （已由 Android InputTransformation 提供 visual edit，Core 回声只当 ACK）。
+     *
+     * TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE → true。
+     * UNDO / REDO / PROGRAMMATIC / LOAD / FORMAT → false（仍走 Core visual path）。
+     */
+    fun isLocalInputCause(): Boolean =
+        when (cause) {
+            EditorTransactionCauseDto.TYPING,
+            EditorTransactionCauseDto.TYPING_COMMIT,
+            EditorTransactionCauseDto.IME_COMPOSITION,
+            EditorTransactionCauseDto.PASTE,
+            EditorTransactionCauseDto.DELETE,
+            -> true
+            EditorTransactionCauseDto.UNDO,
+            EditorTransactionCauseDto.REDO,
+            EditorTransactionCauseDto.PROGRAMMATIC,
+            EditorTransactionCauseDto.LOAD,
+            EditorTransactionCauseDto.FORMAT,
+            -> false
+        }
+
     companion object {
         fun fromDto(dto: EditorVisualIntentDto): VisualIntent =
             VisualIntent(

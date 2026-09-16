@@ -12,6 +12,14 @@ import uniffi.writer_core.AnimationModeDto
  * #689 评论 5674631257 步骤3：删除动画运行职责。
  * 现在只回答"旧屏幕帧到新屏幕帧改了什么"，不回答"上一笔动画现在跑到哪了"。
  *
+ * #694 评论第 6 步：职责收窄成 Core/external visual coordinator。
+ * 本地输入（TYPING/TYPING_COMMIT/IME_COMPOSITION/PASTE/DELETE）不再从这里进入 —
+ * 它由 [WritingEditorSurface] 的 InputTransformation → [ComposeEditorVisualState.recordLocalInput]
+ * 直接记录，等 [TextLayoutResult] 到达时配对生成 [ComposeVisualPatch]（intent=null）。
+ * 现有 [PendingVisualChain]、[lastConsumed]/[latest]、Core revision、transactionId 保留给
+ * Undo/Redo/Programmatic/Load/Format 这些真正需要 Core 驱动的修改；
+ * 不要再拿它给普通打字和 Backspace 配 TextLayoutResult。
+ *
  * 保留：
  * - [PendingVisualChain]、[lastConsumed]/[latest]、Core intent 与真实 [TextLayoutResult]
  *   的双向汇合、offset map chain、[computeRetainedMoves]。

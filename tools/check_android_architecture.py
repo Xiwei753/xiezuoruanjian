@@ -467,6 +467,12 @@ def rule_visual_motion_pure() -> list[Finding]:
             # #684 评论 5672654866：光标路径纯计算/数据类，引用 Rect/TextRange 做光标
             # 路径几何数据，与 ComposeVisualTransaction 同类，不写正文持久状态。
             "feature/editor/visual/ComposeCursorMotion.kt",
+            # #694 评论第 1/4/7 步：本地输入视觉事实 / 本地输入 rebase / 同一 VSync patch
+            # 合成器，引用 TextRange/Rect/TextLayoutResult 做显示数据，与 ComposeVisualPatch/
+            # ComposeVisualRebase 同类，不写正文持久状态。
+            "feature/editor/visual/LocalInputVisualEdit.kt",
+            "feature/editor/visual/ComposeLocalVisualRebase.kt",
+            "feature/editor/visual/ComposeVisualPatchBatch.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

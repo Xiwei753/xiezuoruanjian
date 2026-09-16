@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import uniffi.writer_core.AnimationModeDto
 import kotlin.collections.ArrayDeque
 
 /**
@@ -112,6 +113,24 @@ class ComposeEditorVisualState(
     private var currentMotionPolicy: EditorMotionPolicy? = null
 
     /**
+     * #694 评论第 1/3 步：本地输入视觉事实 tracker —
+     * 普通 [ArrayDeque]，不是 Compose State。记录 InputTransformation 拿到的本地输入，
+     * 等 onAuthoritativeLayout 的新 layout 到达时配对生成 ComposeVisualPatch(intent=null)。
+     */
+    private val localInputTracker = LocalInputVisualEditTracker()
+
+    /**
+     * #694 评论第 3 步：上一次真正呈现的 layout — 本地输入配对时的 oldLayout（T0）。
+     */
+    private var lastPresentedLayout: ComposeLayoutSnapshot? = null
+
+    /**
+     * #694 评论第 3 步：本地输入 patch ID 计数器 —
+     * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
+     */
+    private var nextLocalPatchId: Long = 1_000_000L
+
+    /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
      * @param intent Core 视觉意图。
@@ -126,16 +145,135 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * #694 评论第 1/3 步：本地输入入口 — 只写普通 pending queue（[LocalInputVisualEditTracker]）。
+     *
+     * 由 [WritingEditorSurface] 的 InputTransformation 调用，不等 Core，不启动动画。
+     * 等下一份真实 TextLayoutResult 到达时由 [onAuthoritativeLayout] 配对生成
+     * ComposeVisualPatch(intent=null) 入队。
+     */
+    fun recordLocalInput(
+        oldText: String,
+        newText: String,
+        oldSelection: TextRange,
+        newSelection: TextRange,
+        changes: List<LocalInputChange>,
+    ) {
+        localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
+    }
+
+    /**
+     * #694 评论第 3/4 步：从配对的 [LocalInputVisualEdit] + old/new layout 构造
+     * ComposeVisualPatch(coreTransactionIds = emptyList(), intent = null)。
+     *
+     * 不为了本地输入伪造 Core transaction — [ComposeVisualPatch.intent] 本来就是 nullable。
+     */
+    private fun buildLocalInputPatch(
+        edit: LocalInputVisualEdit,
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+    ): ComposeVisualPatch? {
+        val oldText = edit.oldText
+        val newText = edit.newText
+        // 防御性：配对的 oldText/newText 必须与 layout 一致
+        if (oldText != oldLayout.result.layoutInput.text.text) return null
+        if (newText != newLayout.result.layoutInput.text.text) return null
+        val oldLength = oldText.length
+        val newLength = newText.length
+
+        // 从 LocalInputChange 构造 T0→Tn 的 unchanged offset map
+        val offsetMap = ComposeLocalVisualRebase.buildOffsetMap(edit.changes, oldLength, newLength)
+        // 从最终 composed map 的补集算 deletedUnits/insertedUnits
+        val changedRanges =
+            ComposeLocalVisualRebase.changedRangesFromOffsetMap(offsetMap, oldLength, newLength)
+        val transactionTextKind =
+            when {
+                changedRanges.oldRanges.isEmpty() && changedRanges.newRanges.isEmpty() ->
+                    TextVisualKind.None
+                changedRanges.oldRanges.isEmpty() -> TextVisualKind.Insert
+                changedRanges.newRanges.isEmpty() -> TextVisualKind.Delete
+                else -> TextVisualKind.Move
+            }
+
+        val motionPolicy = (currentMotionPolicy ?: EditorMotionPolicy()).effective()
+        val customTextAnimationEnabled =
+            motionPolicy.textEnabled && transactionTextKind != TextVisualKind.None
+
+        val insertedUnits =
+            if (customTextAnimationEnabled) {
+                when (transactionTextKind) {
+                    TextVisualKind.Insert, TextVisualKind.Move -> changedRanges.newRanges
+                    TextVisualKind.Delete, TextVisualKind.None -> emptyList()
+                }
+            } else {
+                emptyList()
+            }
+
+        val deletedUnits =
+            if (customTextAnimationEnabled) {
+                when (transactionTextKind) {
+                    TextVisualKind.Delete, TextVisualKind.Move -> changedRanges.oldRanges
+                    TextVisualKind.Insert, TextVisualKind.None -> emptyList()
+                }
+            } else {
+                emptyList()
+            }
+
+        // retained reflow 只比较 oldLayout -> newLayout 的真实几何
+        val retainedMoves =
+            ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
+
+        // cursor 从 oldSelection.end -> newSelection.end 构造
+        val cursorMotionPath =
+            ComposeLocalVisualRebase.buildCursorPath(
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                oldSelection = edit.oldSelection,
+                newSelection = edit.newSelection,
+                insertedUnits = insertedUnits,
+                deletedUnits = deletedUnits,
+            )
+
+        nextLocalPatchId++
+        return ComposeVisualPatch(
+            id = nextLocalPatchId,
+            coreTransactionIds = emptyList(),
+            oldLayout = oldLayout,
+            newLayout = newLayout,
+            offsetMap = offsetMap,
+            insertedUnits = insertedUnits,
+            deletedUnits = deletedUnits,
+            retainedMoves = retainedMoves,
+            cursorMotionPath = cursorMotionPath,
+            // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
+            durationMs = 0L,
+            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            motionPolicy = motionPolicy,
+            intent = null,
+        )
+    }
+
+    /**
      * 系统给出权威布局 — 只记录，不修改输入几何。
      *
      * 得到 patch 后不要启动一笔新事务，只把 patch 暂存/发布给 overlay 的时间线入口。
      *
      * #691：同时更新 restingCursorRect — 当没有光标动画时 overlay 从这里读取最终位置。
+     *
+     * #694 评论第 2/3 步：[compositionActive] 表示当前 IME composition 是否活跃
+     * （bridge.state.composition != null）。composition 活跃时只推进布局基线，
+     * 不播放 preedit 的吞吐；composition 结束后的最终输入再配对 [LocalInputVisualEdit]
+     * 生成 ComposeVisualPatch(intent=null) 入队，不等 Core 回声。
+     *
+     * @param result 系统 [BasicTextField] 的 onTextLayout 给出的最终布局结果。
+     * @param selection 当前选区（UTF-16）。
+     * @param scrollY 当前滚动位置（px）。
+     * @param compositionActive 当前 IME composition 是否活跃。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
         selection: TextRange,
         scrollY: Int,
+        compositionActive: Boolean = false,
     ) {
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
         _latestLayout.update { snapshot }
@@ -144,8 +282,40 @@ class ComposeEditorVisualState(
         val cursorRect = computeCursorRectFromLayout(snapshot)
         _restingCursorRect.update { cursorRect }
 
+        // #694 评论第 3 步：配对 pending local edit 生成 ComposeVisualPatch(intent=null)。
+        // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
+        val newText = result.layoutInput.text.text
+        val localEdit = if (!compositionActive) localInputTracker.drainMatching(newText) else null
+        if (localEdit != null) {
+            val oldLayout = lastPresentedLayout
+            if (oldLayout != null) {
+                val localPatch = buildLocalInputPatch(localEdit, oldLayout, snapshot)
+                if (localPatch != null) {
+                    pendingPatches.addLast(localPatch)
+                    _patchVersion.update { it + 1L }
+                    _latestPatch.update { localPatch }
+                    Log.d(
+                        TAG,
+                        "local_patch_published: id=${localPatch.id} " +
+                            "oldLen=${oldLayout.result.layoutInput.text.length} " +
+                            "newLen=${newText.length} drawsVisualCursor=${_drawsVisualCursor.value}",
+                    )
+                }
+            }
+            lastPresentedLayout = snapshot
+            return
+        }
+
+        // composition 活跃时只推进布局基线，不生成 patch（不播放 preedit 的吞吐）
+        if (compositionActive) {
+            lastPresentedLayout = snapshot
+            return
+        }
+
+        // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
+        lastPresentedLayout = snapshot
     }
 
     /**
@@ -190,23 +360,29 @@ class ComposeEditorVisualState(
      * @return 本次帧实际应用的 patch 列表。
      */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
-        val applied = mutableListOf<ComposeVisualPatch>()
+        if (pendingPatches.isEmpty()) return emptyList()
+        // #694 评论第 7 步：同一 VSync 不能逐笔重定向几何。
+        // 一次取完这一帧的 patch，先合成一个屏幕 transition（ComposeVisualPatchBatch.compose），
+        // 再只 visualTimeline.applyPatch() 一次。oldLayout=batch.first().oldLayout,
+        // newLayout=batch.last().newLayout, retainedMoves 只按第一份旧 layout 和最后一份新 layout 算一次。
+        val batch = mutableListOf<ComposeVisualPatch>()
         while (pendingPatches.isNotEmpty()) {
             val raw = pendingPatches.removeFirst()
             // #691 评论 5679242735 修改2：用 currentMotionPolicy 替换 patch 的 motionPolicy
             val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
-            // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
-            val cursorParams = computeCursorParamsForPatch(patch)
-            visualTimeline.applyPatch(
-                patch = patch,
-                frameTimeNanos = frameTimeNanos,
-                cursorFromRect = cursorParams?.fromRect,
-                cursorPath = cursorParams?.points,
-                cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
-            )
-            applied += patch
+            batch.add(patch)
         }
-        return applied
+        val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
+        // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
+        val cursorParams = computeCursorParamsForPatch(framePatch)
+        visualTimeline.applyPatch(
+            patch = framePatch,
+            frameTimeNanos = frameTimeNanos,
+            cursorFromRect = cursorParams?.fromRect,
+            cursorPath = cursorParams?.points,
+            cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
+        )
+        return listOf(framePatch)
     }
 
     /**
@@ -366,6 +542,9 @@ class ComposeEditorVisualState(
         _restingCursorRect.update { null }
         // #691 评论 5679242735 修改2：重置运行时 policy 切换状态
         currentMotionPolicy = null
+        // #694 评论第 3 步：清空本地输入配对状态
+        localInputTracker.clear()
+        lastPresentedLayout = null
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 
