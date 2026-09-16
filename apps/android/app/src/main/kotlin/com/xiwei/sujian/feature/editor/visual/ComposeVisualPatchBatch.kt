@@ -22,6 +22,7 @@ internal object ComposeVisualPatchBatch {
      * @param batch 同一帧待消费的 patch 列表（按入队顺序）。非空。
      * @return 合成后的单笔 [ComposeVisualPatch]；batch 为空返回 null。
      */
+    @Suppress("LongMethod", "CognitiveComplexMethod")
     fun compose(batch: List<ComposeVisualPatch>): ComposeVisualPatch? {
         if (batch.isEmpty()) return null
         if (batch.size == 1) return batch.first()
@@ -56,10 +57,25 @@ internal object ComposeVisualPatchBatch {
         val customTextAnimationEnabled =
             effectivePolicy.textEnabled && !screenSuppressed && transactionTextKind != TextVisualKind.None
 
+        // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
+        // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
+        // 每笔 patch 的 insertedUnits/deletedUnits 沿后续 stage offset map 映射到最终 Tn / 最初 T0。
+        val perStageNewUnits = batch.map { it.insertedUnits }
+        val perStageOldUnits = batch.map { it.deletedUnits }
+        val perStageOffsetMaps = batch.map { it.offsetMap }
+        val composedInserted =
+            ComposeVisualRebase.composeNewUnitsToFinalStages(perStageNewUnits, perStageOffsetMaps)
+        val composedDeleted =
+            ComposeVisualRebase.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
+
         val insertedUnits =
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
-                    TextVisualKind.Insert, TextVisualKind.Move -> changedRanges.newRanges
+                    TextVisualKind.Insert, TextVisualKind.Move -> {
+                        // 优先用合成的 ordered units 保留吐字顺序；
+                        // 若所有 stage 都没 insertedUnits 但净变化有插入，回退到净变化 newRanges。
+                        if (composedInserted.isNotEmpty()) composedInserted else changedRanges.newRanges
+                    }
                     TextVisualKind.Delete, TextVisualKind.None -> emptyList()
                 }
             } else {
@@ -69,7 +85,9 @@ internal object ComposeVisualPatchBatch {
         val deletedUnits =
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
-                    TextVisualKind.Delete, TextVisualKind.Move -> changedRanges.oldRanges
+                    TextVisualKind.Delete, TextVisualKind.Move -> {
+                        if (composedDeleted.isNotEmpty()) composedDeleted else changedRanges.oldRanges
+                    }
                     TextVisualKind.Insert, TextVisualKind.None -> emptyList()
                 }
             } else {
@@ -88,8 +106,22 @@ internal object ComposeVisualPatchBatch {
                 emptyList()
             }
 
-        // cursor 最终几何 target 只取最后 layout（不创建同 timestamp 的多条 position track）
-        val cursorMotionPath = last.cursorMotionPath
+        // #694 评论 5691696678 问题3：cursor path 用最终存活的 ordered units 重新生成，
+        // 不只拿 last.cursorMotionPath — 多字符吐字时光标应依次经过每个字出现后的位置。
+        val cursorMotionPath =
+            if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
+                // 无文字动画语义 → 回退到 last.cursorMotionPath
+                last.cursorMotionPath
+            } else {
+                ComposeLocalVisualRebase.buildCursorPath(
+                    oldLayout = oldLayout,
+                    newLayout = newLayout,
+                    oldSelection = first.oldLayout.selection,
+                    newSelection = last.newLayout.selection,
+                    insertedUnits = insertedUnits,
+                    deletedUnits = deletedUnits,
+                ) ?: last.cursorMotionPath
+            }
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }

@@ -20,6 +20,87 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 @Suppress("TooManyFunctions")
 internal object ComposeLocalVisualRebase {
     /**
+     * #694 评论 5691696678 问题1：把连续本地输入 chain 中每笔 [LocalInputVisualEdit] 的
+     * changes 逐 stage 合成成 T0→Tn 的 unchanged offset map。
+     *
+     * 不同坐标系的 changes 不能直接摊平，必须通过 stage map 逐级合成：
+     * - stage 0: T0→T1（首笔 edit.changes）
+     * - stage 1: T1→T2
+     * - ...
+     * - stage n-1: Tn-1→Tn
+     * - 合成: T0→Tn
+     *
+     * 算法参考 [ComposeVisualPatchBatch.composeBatchOffsetMap] / [composeTwoMaps]，
+     * 这里实现一份同样的合成算法（[ComposeVisualPatchBatch.composeTwoMaps] 是 private，
+     * 不便跨 object 复用；保持本 object 自洽）。
+     *
+     * @param chain 连续本地输入链（按入队顺序，chain[i+1].oldText == chain[i].newText）。
+     * @return 合成后的 T0→Tn offset map entries；空 chain 返回空列表。
+     */
+    fun composeLocalChainOffsetMap(chain: List<LocalInputVisualEdit>): List<VisualOffsetMapEntry> {
+        if (chain.isEmpty()) return emptyList()
+        val first = chain.first()
+        var acc: List<VisualOffsetMapEntry> =
+            if (first.oldText.isNotEmpty()) {
+                listOf(
+                    VisualOffsetMapEntry(
+                        oldStart = 0,
+                        newStart = 0,
+                        length = first.oldText.length,
+                        kind = VisualOffsetMapKind.IDENTITY,
+                    ),
+                )
+            } else {
+                emptyList()
+            }
+        for (edit in chain) {
+            val stage = buildOffsetMap(edit.changes, edit.oldText.length, edit.newText.length)
+            acc = composeTwoMaps(acc, stage)
+            if (acc.isEmpty()) break
+        }
+        return acc
+    }
+
+    /**
+     * 组合两段 offset map（acc: T0→T_i, stage: T_i→T_{i+1}）成 T0→T_{i+1}。
+     * 与 [ComposeVisualPatchBatch.composeTwoMaps] / [ComposeVisualRebase.composeStage] 同算法。
+     */
+    private fun composeTwoMaps(
+        acc: List<VisualOffsetMapEntry>,
+        stage: List<VisualOffsetMapEntry>,
+    ): List<VisualOffsetMapEntry> {
+        if (acc.isEmpty() || stage.isEmpty()) return emptyList()
+        val result = mutableListOf<VisualOffsetMapEntry>()
+        for (a in acc) {
+            val aNewEnd = a.newStart + a.length
+            for (s in stage) {
+                val sOldEnd = s.oldStart + s.length
+                val overlapStart = maxOf(a.newStart, s.oldStart)
+                val overlapEnd = minOf(aNewEnd, sOldEnd)
+                if (overlapStart >= overlapEnd) continue
+                val offsetInAcc = overlapStart - a.newStart
+                val oldStartInitial = a.oldStart + offsetInAcc
+                val newStartFrontier = s.newStart + (overlapStart - s.oldStart)
+                val kind =
+                    if (a.kind == VisualOffsetMapKind.SHIFTED || s.kind == VisualOffsetMapKind.SHIFTED) {
+                        VisualOffsetMapKind.SHIFTED
+                    } else {
+                        VisualOffsetMapKind.IDENTITY
+                    }
+                result.add(
+                    VisualOffsetMapEntry(
+                        oldStart = oldStartInitial,
+                        newStart = newStartFrontier,
+                        length = overlapEnd - overlapStart,
+                        kind = kind,
+                    ),
+                )
+            }
+        }
+        return result
+    }
+
+    /**
      * #694 评论第 4 步：从 [LocalInputChange.oldRange]/[LocalInputChange.newRange]
      * 构造 T0→Tn 的 unchanged offset map。
      *
@@ -100,6 +181,53 @@ internal object ComposeLocalVisualRebase {
         newLength: Int,
     ): ComposeVisualRebase.FrameChangedRanges =
         ComposeVisualRebase.changedRangesFromComposedMap(offsetMap, oldLength, newLength)
+
+    /**
+     * #694 评论 5691696678 问题3：把连续本地输入 chain 中每笔 edit 的 insertedUnits
+     * 逐 stage 合成到最终 Tn 坐标，保留多字符吐字顺序。
+     *
+     * 每笔 edit 的 insertedUnits 从该笔 stage offset map 补集算（per-stage 净变化），
+     * 然后用 [ComposeVisualRebase.composeNewUnitsToFinalStages] 沿后续 stage offset map
+     * 映射到最终 Tn。这样 `"" -> "a" -> "ab" -> "abc"` 的 chain 会得到 3 个 unit
+     * `[0,1), [1,2), [2,3)` 而非单个 `[0,3)`。
+     *
+     * @param chain 连续本地输入链（按入队顺序）。
+     * @return 合成到最终 Tn 坐标的 insertedUnits 列表（去重保序）。
+     */
+    fun composeLocalChainInsertedUnits(chain: List<LocalInputVisualEdit>): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val perStageNewUnits =
+            chain.map { edit ->
+                val stageMap = buildOffsetMap(edit.changes, edit.oldText.length, edit.newText.length)
+                changedRangesFromOffsetMap(stageMap, edit.oldText.length, edit.newText.length).newRanges
+            }
+        val perStageOffsetMaps =
+            chain.map { edit ->
+                buildOffsetMap(edit.changes, edit.oldText.length, edit.newText.length)
+            }
+        return ComposeVisualRebase.composeNewUnitsToFinalStages(perStageNewUnits, perStageOffsetMaps)
+    }
+
+    /**
+     * #694 评论 5691696678 问题3：把连续本地输入 chain 中每笔 edit 的 deletedUnits
+     * 逐 stage 合成回最初 T0 坐标，保留多字符吞字顺序。
+     *
+     * @param chain 连续本地输入链（按入队顺序）。
+     * @return 合成回最初 T0 坐标的 deletedUnits 列表（去重保序）。
+     */
+    fun composeLocalChainDeletedUnits(chain: List<LocalInputVisualEdit>): List<TextRange> {
+        if (chain.isEmpty()) return emptyList()
+        val perStageOldUnits =
+            chain.map { edit ->
+                val stageMap = buildOffsetMap(edit.changes, edit.oldText.length, edit.newText.length)
+                changedRangesFromOffsetMap(stageMap, edit.oldText.length, edit.newText.length).oldRanges
+            }
+        val perStageOffsetMaps =
+            chain.map { edit ->
+                buildOffsetMap(edit.changes, edit.oldText.length, edit.newText.length)
+            }
+        return ComposeVisualRebase.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
+    }
 
     /**
      * #694 评论第 4 步：retained reflow 只比较 oldLayout -> newLayout 的真实几何。

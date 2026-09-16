@@ -162,27 +162,37 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #694 评论第 3/4 步：从配对的 [LocalInputVisualEdit] + old/new layout 构造
-     * ComposeVisualPatch(coreTransactionIds = emptyList(), intent = null)。
+     * #694 评论第 3/4 步 + 评论 5691696678 问题1：从配对的连续 [LocalInputVisualEdit] chain
+     * + old/new layout 构造 ComposeVisualPatch(coreTransactionIds = emptyList(), intent = null)。
      *
      * 不为了本地输入伪造 Core transaction — [ComposeVisualPatch.intent] 本来就是 nullable。
+     *
+     * #694 评论 5691696678 问题1：接收 chain 而非单笔 edit。
+     * - T0 = chain.first().oldText / oldSelection
+     * - Tn = chain.last().newText / newSelection
+     * - offset map 用 [ComposeLocalVisualRebase.composeLocalChainOffsetMap] 逐 stage 合成
+     *   （不同坐标系的 changes 不能直接摊平）。
+     * - 防御性检查：chain.first().oldText == oldLayout.text && chain.last().newText == newLayout.text。
      */
     private fun buildLocalInputPatch(
-        edit: LocalInputVisualEdit,
+        chain: List<LocalInputVisualEdit>,
         oldLayout: ComposeLayoutSnapshot,
         newLayout: ComposeLayoutSnapshot,
     ): ComposeVisualPatch? {
-        val oldText = edit.oldText
-        val newText = edit.newText
-        // 防御性：配对的 oldText/newText 必须与 layout 一致
+        if (chain.isEmpty()) return null
+        val firstEdit = chain.first()
+        val lastEdit = chain.last()
+        val oldText = firstEdit.oldText
+        val newText = lastEdit.newText
+        // 防御性：配对的 chain 首笔 oldText / 末笔 newText 必须与 layout 一致
         if (oldText != oldLayout.result.layoutInput.text.text) return null
         if (newText != newLayout.result.layoutInput.text.text) return null
         val oldLength = oldText.length
         val newLength = newText.length
 
-        // 从 LocalInputChange 构造 T0→Tn 的 unchanged offset map
-        val offsetMap = ComposeLocalVisualRebase.buildOffsetMap(edit.changes, oldLength, newLength)
-        // 从最终 composed map 的补集算 deletedUnits/insertedUnits
+        // 从 chain 各笔的 changes 逐 stage 合成 T0→Tn 的 unchanged offset map
+        val offsetMap = ComposeLocalVisualRebase.composeLocalChainOffsetMap(chain)
+        // 从最终 composed map 的补集算净变化（用于 transactionTextKind 判定）
         val changedRanges =
             ComposeLocalVisualRebase.changedRangesFromOffsetMap(offsetMap, oldLength, newLength)
         val transactionTextKind =
@@ -198,10 +208,21 @@ class ComposeEditorVisualState(
         val customTextAnimationEnabled =
             motionPolicy.textEnabled && transactionTextKind != TextVisualKind.None
 
+        // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
+        // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
+        // 每笔 edit 的 insertedUnits/deletedUnits 从该笔 stage offset map 补集算，
+        // 然后沿后续 stage offset map 映射到最终 Tn / 最初 T0。
+        val composedInserted = ComposeLocalVisualRebase.composeLocalChainInsertedUnits(chain)
+        val composedDeleted = ComposeLocalVisualRebase.composeLocalChainDeletedUnits(chain)
+
         val insertedUnits =
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
-                    TextVisualKind.Insert, TextVisualKind.Move -> changedRanges.newRanges
+                    TextVisualKind.Insert, TextVisualKind.Move -> {
+                        // 优先用合成的 ordered units 保留吐字顺序；
+                        // 若所有 stage 都没 insertedUnits 但净变化有插入，回退到净变化 newRanges。
+                        if (composedInserted.isNotEmpty()) composedInserted else changedRanges.newRanges
+                    }
                     TextVisualKind.Delete, TextVisualKind.None -> emptyList()
                 }
             } else {
@@ -211,7 +232,9 @@ class ComposeEditorVisualState(
         val deletedUnits =
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
-                    TextVisualKind.Delete, TextVisualKind.Move -> changedRanges.oldRanges
+                    TextVisualKind.Delete, TextVisualKind.Move -> {
+                        if (composedDeleted.isNotEmpty()) composedDeleted else changedRanges.oldRanges
+                    }
                     TextVisualKind.Insert, TextVisualKind.None -> emptyList()
                 }
             } else {
@@ -222,13 +245,13 @@ class ComposeEditorVisualState(
         val retainedMoves =
             ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
 
-        // cursor 从 oldSelection.end -> newSelection.end 构造
+        // cursor 从 chain 首笔 oldSelection.end -> 末笔 newSelection.end 构造
         val cursorMotionPath =
             ComposeLocalVisualRebase.buildCursorPath(
                 oldLayout = oldLayout,
                 newLayout = newLayout,
-                oldSelection = edit.oldSelection,
-                newSelection = edit.newSelection,
+                oldSelection = firstEdit.oldSelection,
+                newSelection = lastEdit.newSelection,
                 insertedUnits = insertedUnits,
                 deletedUnits = deletedUnits,
             )
@@ -282,14 +305,22 @@ class ComposeEditorVisualState(
         val cursorRect = computeCursorRectFromLayout(snapshot)
         _restingCursorRect.update { cursorRect }
 
-        // #694 评论第 3 步：配对 pending local edit 生成 ComposeVisualPatch(intent=null)。
+        // #694 评论第 3 步 + 评论 5691696678 问题1：配对 pending local edit chain 生成 ComposeVisualPatch(intent=null)。
         // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
+        // 用 drainMatchingChain 按 lastPresentedLayout.text -> newText 找连续 chain，
+        // 修复快速输入中间 layout 被跳过时旧 drainMatching 只返回最后一笔导致 patch 被丢的问题。
         val newText = result.layoutInput.text.text
-        val localEdit = if (!compositionActive) localInputTracker.drainMatching(newText) else null
-        if (localEdit != null) {
+        val presentedOldText = lastPresentedLayout?.result?.layoutInput?.text?.text ?: ""
+        val localChain =
+            if (!compositionActive) {
+                localInputTracker.drainMatchingChain(presentedOldText, newText)
+            } else {
+                null
+            }
+        if (localChain != null) {
             val oldLayout = lastPresentedLayout
             if (oldLayout != null) {
-                val localPatch = buildLocalInputPatch(localEdit, oldLayout, snapshot)
+                val localPatch = buildLocalInputPatch(localChain, oldLayout, snapshot)
                 if (localPatch != null) {
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
@@ -298,16 +329,24 @@ class ComposeEditorVisualState(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
                             "oldLen=${oldLayout.result.layoutInput.text.length} " +
-                            "newLen=${newText.length} drawsVisualCursor=${_drawsVisualCursor.value}",
+                            "newLen=${newText.length} chainSize=${localChain.size} " +
+                            "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
                 }
             }
+            // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，
+            // 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与
+            // coordinator.lastConsumed.text 对不上，tryBuildPatch 一直返回 Empty。
+            frameCoordinator.observePresentedLayout(snapshot)
             lastPresentedLayout = snapshot
             return
         }
 
         // composition 活跃时只推进布局基线，不生成 patch（不播放 preedit 的吞吐）
         if (compositionActive) {
+            // #694 评论 5691696678 问题2：composition 活跃时也要推进 frameCoordinator 屏幕基线，
+            // 保证 composition 结束后 Core visual path 的基线与真实 layout 一致。
+            frameCoordinator.observePresentedLayout(snapshot)
             lastPresentedLayout = snapshot
             return
         }

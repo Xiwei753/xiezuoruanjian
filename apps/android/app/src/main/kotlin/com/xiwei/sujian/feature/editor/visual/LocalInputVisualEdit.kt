@@ -41,7 +41,7 @@ data class LocalInputVisualEdit(
  *
  * 职责只有：
  * 1. [record] 本次用户输入（由 InputTransformation 调用）；
- * 2. [drainMatching] 等下一份真实 TextLayoutResult 到来时配对消费（由 onAuthoritativeLayout 调用）；
+ * 2. [drainMatchingChain] 等下一份真实 TextLayoutResult 到来时配对消费（由 onAuthoritativeLayout 调用）；
  * 3. [clear] 章节切换/detach 时清空。
  *
  * 不启动协程，不等 Core，不直接开始动画。
@@ -77,28 +77,77 @@ class LocalInputVisualEditTracker {
     }
 
     /**
-     * #694 评论第 3 步：找 newText == [newText] 的 pending local edit / 连续 edit chain。
+     * #694 评论 5691696678 问题1：在 pending 队列里找一条连续本地输入 chain —
+     * 首笔 `oldText == [presentedOldText]`、末笔 `newText == [finalNewText]`，
+     * 且 chain 中后一笔 `oldText == 前一笔 newText`（连续输入链）。
      *
-     * 配对策略：优先找 `edit.newText == newText` 的最新一笔（IME 已上屏的最终正文）。
-     * 找到则从队列移除并返回；否则返回 null（可能是 Core 驱动的修改，无本地输入配对）。
+     * 配对策略（修复快速输入中间 layout 被跳过的丢 patch 问题）：
+     * - 连续快速输入 `"" -> "a" -> "ab" -> "abc"` 会留下多笔 pending；
+     * - 若 Compose 中间两个 layout 没真正呈现，`lastPresentedLayout` 还是 `""`，
+     *   最后只收到 `"abc"` 的 layout；
+     * - 旧实现 `drainMatching("abc")` 只返回最后一笔 `"ab" -> "abc"`，
+     *   `buildLocalInputPatch` 检查 `oldText("ab") != oldLayout.text("")` 直接丢 patch；
+     * - 新实现 `drainMatchingChain("", "abc")` 返回完整 chain
+     *   `[""->"a", "a"->"ab", "ab"->"abc"]`，用首笔 oldText("") 作 T0、末笔 newText("abc") 作 Tn。
      *
-     * 连续快速输入（空串 -> a -> ab -> abc）会留下多笔 pending；
-     * onAuthoritativeLayout 拿到最终 "abc" 的 layout 时，配对 newText == "abc" 的那一笔，
-     * 用其 oldText（空串）作为 T0，跳过中间 "a"/"ab" 的中间态。
+     * 找到后从队列移除该 chain 及其之前所有更旧的 pending（它们已被这条 chain 覆盖），
+     * 返回 chain 列表（按入队顺序）。找不到返回 null（可能是 Core 驱动的修改，无本地输入配对）。
+     *
+     * chain 不要求是整个 pending 队列，只要找到一条满足首尾+连续条件的子链即可；
+     * 多条候选时优先找最长的连续 chain（覆盖最多中间态，T0→Tn 最完整）。
+     * 退化情况：chain 长度为 1（单笔 `oldText == presentedOldText && newText == finalNewText`）。
+     *
+     * @param presentedOldText 上一次真正呈现的 layout 正文（T0）。
+     * @param finalNewText 本次权威 layout 的正文（Tn）。
+     * @return 连续 chain 列表（按入队顺序）；找不到返回 null。
      */
-    fun drainMatching(newText: String): LocalInputVisualEdit? {
-        // 从最新往最旧找 newText 匹配的一笔（最终态配对）。
-        for (i in pending.indices.reversed()) {
-            val edit = pending[i]
-            if (edit.newText == newText) {
-                // 移除该笔及之前所有更旧的 pending（它们已被这一笔的最终态覆盖）。
-                while (pending.size > i) {
-                    pending.removeFirst()
+    @Suppress("CognitiveComplexMethod")
+    fun drainMatchingChain(
+        presentedOldText: String,
+        finalNewText: String,
+    ): List<LocalInputVisualEdit>? {
+        val n = pending.size
+        if (n == 0) return null
+
+        var bestStart = -1
+        var bestEnd = -1 // exclusive
+
+        // 枚举每个可能的起点（首笔 oldText == presentedOldText），向后扩展连续链。
+        for (start in 0 until n) {
+            if (pending[start].oldText != presentedOldText) continue
+            // 从 start 开始扩展连续链：后一笔 oldText == 前一笔 newText。
+            var end = start + 1 // exclusive
+            while (end < n && pending[end].oldText == pending[end - 1].newText) {
+                end++
+            }
+            // [start, end) 是一条连续链，首 oldText == presentedOldText。
+            // 在 [start, end) 中找最后一个 newText == finalNewText 的位置（最长子链）。
+            var lastMatchIdx = -1
+            for (i in start until end) {
+                if (pending[i].newText == finalNewText) {
+                    lastMatchIdx = i
                 }
-                return edit
+            }
+            if (lastMatchIdx != -1) {
+                val chainLen = lastMatchIdx + 1 - start
+                val bestLen = if (bestStart == -1) 0 else bestEnd - bestStart
+                if (chainLen > bestLen) {
+                    bestStart = start
+                    bestEnd = lastMatchIdx + 1
+                }
             }
         }
-        return null
+
+        if (bestStart == -1) return null
+
+        // 收集 chain: pending[bestStart until bestEnd]。
+        val chain = (bestStart until bestEnd).map { pending[it] }
+        // 从队列移除该 chain 及其之前所有更旧的 pending（[0, bestEnd)）。
+        // 它们已被这条 chain 的最终态覆盖，不再需要配对。
+        repeat(bestEnd) {
+            pending.removeFirst()
+        }
+        return chain
     }
 
     /** 是否有 pending 本地输入待配对。 */

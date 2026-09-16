@@ -127,6 +127,40 @@ class ComposeVisualFrameCoordinator(
     }
 
     /**
+     * #694 评论 5691696678 问题2：屏幕基线推进入口 —
+     * 本地输入命中或 IME composition 活跃时，真实 layout 已经呈现但不应走 Core visual path
+     * 生成 patch（本地输入有自己的 patch，composition 只推进基线不播放吞吐）。
+     *
+     * 但 [ComposeVisualFrameCoordinator] 的 [lastConsumed] 基线必须跟随真实 layout 推进，
+     * 否则后续 Undo/Redo/Programmatic intent 的 `pending.baseText` 与 `lastConsumed.text`
+     * 对不上，[tryBuildPatch] 一直返回 [FrameUpdate.Empty]。
+     *
+     * 职责：只更新 [latest]/[lastConsumed]，**不**调用 [tryBuildPatch]，**不**生成 Core patch。
+     * - 首次（lastConsumed == null）：设为基线。
+     * - 没有 Core pending（pending == null）：屏幕基线直接跟随真实 layout。
+     * - 有 Core pending：不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest。
+     *
+     * 诊断事件与 [onLayout] 一致 — overlay/诊断仍能观察到 layout 已呈现。
+     */
+    fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
+        val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        latest = presented
+
+        EditorDiagnosticsEvents.editorLayoutPresented(
+            targetId = targetId,
+            layoutTextLength = snapshot.result.layoutInput.text.length,
+        )
+
+        if (lastConsumed == null) {
+            lastConsumed = presented
+        } else if (pending == null) {
+            // 没有 Core pending 时，屏幕基线直接跟随真实 layout
+            lastConsumed = presented
+        }
+        // 有 pending 时不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest
+    }
+
+    /**
      * 双向合流：当 pending chain 与两份 layout 概念同时满足匹配条件时生成 patch。
      *
      * 匹配条件：

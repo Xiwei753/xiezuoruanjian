@@ -584,16 +584,31 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 newAnimationUnits
-     * 合成到最终 Tn 坐标。
+     * #684 评论 5669048233 Bug2 修复 + #694 评论 5691696678 问题3：通用 stage-map 版本 —
+     * 把每个 stage 的 newUnits 沿后续 stage offset map 映射到最终 Tn 坐标。
+     *
+     * 不依赖 [EditorVisualIntent]，接收纯 [List]<[TextRange]> 和 [List]<[VisualOffsetMapEntry]?>，
+     * 供 [ComposeVisualPatchBatch.compose] 合成本地输入 patch 的 insertedUnits（保留吐字顺序）。
+     *
+     * 算法和 [composeNewAnimationUnitsToFinal] 一致：每笔的 units 沿后续 stage offset map
+     * 映射到最终 Tn（用 [mapRangesForwardThroughOffsetMap]），null offset map 跳过该 stage 映射
+     * （和 `entries == null -> continue` 同语义），空 entries 清空 units。最后 [deduplicateRanges]。
+     *
+     * @param perStageNewUnits 每个 stage 的新动画 units（T_i 坐标）。
+     * @param perStageOffsetMaps 每个 stage 的 offset map（T_i→T_{i+1}）；null 表示该 stage 无 offset map。
+     * @return 合成到最终 Tn 坐标的 units 列表（去重保序）。
      */
-    fun composeNewAnimationUnitsToFinal(chain: List<EditorVisualIntent>): List<TextRange> {
-        if (chain.isEmpty()) return emptyList()
+    fun composeNewUnitsToFinalStages(
+        perStageNewUnits: List<List<TextRange>>,
+        perStageOffsetMaps: List<List<VisualOffsetMapEntry>?>,
+    ): List<TextRange> {
+        val n = perStageNewUnits.size
+        if (n == 0) return emptyList()
         val result = mutableListOf<TextRange>()
-        for (i in chain.indices) {
-            var units: List<TextRange> = chain[i].newAnimationUnits
-            mapForwardLoop@ for (j in (i + 1) until chain.size) {
-                val entries = chain[j].offsetMap?.entries
+        for (i in 0 until n) {
+            var units: List<TextRange> = perStageNewUnits[i]
+            mapForwardLoop@ for (j in (i + 1) until n) {
+                val entries = perStageOffsetMaps[j]
                 if (entries == null) continue@mapForwardLoop
                 if (entries.isEmpty()) {
                     units = emptyList()
@@ -607,16 +622,30 @@ internal object ComposeVisualRebase {
     }
 
     /**
-     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 oldAnimationUnits
-     * 合成回最初 T0 坐标。
+     * #684 评论 5669048233 Bug2 修复 + #694 评论 5691696678 问题3：通用 stage-map 版本 —
+     * 把每个 stage 的 oldUnits 沿前面 stage offset map 映射回最初 T0 坐标。
+     *
+     * 不依赖 [EditorVisualIntent]，供 [ComposeVisualPatchBatch.compose] 合成 deletedUnits。
+     *
+     * 算法和 [composeOldAnimationUnitsToBase] 一致：每笔的 units 沿前面 stage offset map
+     * 映射回最初 T0（用 [mapRangesBackwardThroughOffsetMap]），null offset map 跳过该 stage 映射，
+     * 空 entries 清空 units。最后 [deduplicateRanges]。
+     *
+     * @param perStageOldUnits 每个 stage 的旧动画 units（T_{i+1} 坐标）。
+     * @param perStageOffsetMaps 每个 stage 的 offset map（T_i→T_{i+1}）；null 表示该 stage 无 offset map。
+     * @return 合成回最初 T0 坐标的 units 列表（去重保序）。
      */
-    fun composeOldAnimationUnitsToBase(chain: List<EditorVisualIntent>): List<TextRange> {
-        if (chain.isEmpty()) return emptyList()
+    fun composeOldUnitsToBaseStages(
+        perStageOldUnits: List<List<TextRange>>,
+        perStageOffsetMaps: List<List<VisualOffsetMapEntry>?>,
+    ): List<TextRange> {
+        val n = perStageOldUnits.size
+        if (n == 0) return emptyList()
         val result = mutableListOf<TextRange>()
-        for (i in chain.indices) {
-            var units: List<TextRange> = chain[i].oldAnimationUnits
+        for (i in 0 until n) {
+            var units: List<TextRange> = perStageOldUnits[i]
             mapBackwardLoop@ for (j in (i - 1) downTo 0) {
-                val entries = chain[j].offsetMap?.entries
+                val entries = perStageOffsetMaps[j]
                 if (entries == null) continue@mapBackwardLoop
                 if (entries.isEmpty()) {
                     units = emptyList()
@@ -628,6 +657,32 @@ internal object ComposeVisualRebase {
         }
         return deduplicateRanges(result)
     }
+
+    /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 newAnimationUnits
+     * 合成到最终 Tn 坐标。
+     *
+     * #694 评论 5691696678 问题3：改成调用通用 stage-map 版本 [composeNewUnitsToFinalStages]，
+     * 保持向后兼容。
+     */
+    fun composeNewAnimationUnitsToFinal(chain: List<EditorVisualIntent>): List<TextRange> =
+        composeNewUnitsToFinalStages(
+            perStageNewUnits = chain.map { it.newAnimationUnits },
+            perStageOffsetMaps = chain.map { it.offsetMap?.entries },
+        )
+
+    /**
+     * #684 评论 5669048233 Bug2 修复：把 chain 中每笔 intent 的 oldAnimationUnits
+     * 合成回最初 T0 坐标。
+     *
+     * #694 评论 5691696678 问题3：改成调用通用 stage-map 版本 [composeOldUnitsToBaseStages]，
+     * 保持向后兼容。
+     */
+    fun composeOldAnimationUnitsToBase(chain: List<EditorVisualIntent>): List<TextRange> =
+        composeOldUnitsToBaseStages(
+            perStageOldUnits = chain.map { it.oldAnimationUnits },
+            perStageOffsetMaps = chain.map { it.offsetMap?.entries },
+        )
 
     /**
      * #684 评论 5673811415：把某笔 intent 的 cursor offset 沿后续 offset maps 映射到最终 Tn 坐标。
@@ -715,8 +770,10 @@ internal object ComposeVisualRebase {
 
     /**
      * 把 ranges 沿 offsetMap entries 的 old→new 方向映射。
+     *
+     * #694 评论 5691696678 问题3：internal 可见性 — 供 [composeNewUnitsToFinalStages] 调用。
      */
-    private fun mapRangesForwardThroughOffsetMap(
+    internal fun mapRangesForwardThroughOffsetMap(
         ranges: List<TextRange>,
         entries: List<VisualOffsetMapEntry>,
     ): List<TextRange> {
@@ -739,8 +796,10 @@ internal object ComposeVisualRebase {
 
     /**
      * 把 ranges 沿 offsetMap entries 的 new→old 方向（逆映射）映射。
+     *
+     * #694 评论 5691696678 问题3：internal 可见性 — 供 [composeOldUnitsToBaseStages] 调用。
      */
-    private fun mapRangesBackwardThroughOffsetMap(
+    internal fun mapRangesBackwardThroughOffsetMap(
         ranges: List<TextRange>,
         entries: List<VisualOffsetMapEntry>,
     ): List<TextRange> {
