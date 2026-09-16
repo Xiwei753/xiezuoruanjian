@@ -42,7 +42,7 @@ mod tests {
         suppress_next_ime_commit: bool,
         explicit_clear_count: usize,
         repaint_count: usize,
-        replace_and_insert_calls: Vec<(i32, i32, String)>,
+        ime_replace_commit_calls: Vec<ImeReplaceEvent>,
     }
 
     impl FakeHost {
@@ -104,19 +104,13 @@ mod tests {
             self.inserted.push(text);
         }
 
-        fn input_replace_and_insert(
-            &mut self,
-            replace_start: i32,
-            replace_length: i32,
-            text: String,
-        ) {
-            self.replace_and_insert_calls
-                .push((replace_start, replace_length, text.clone()));
+        fn input_ime_replace_and_commit(&mut self, event: ImeReplaceEvent) {
+            self.ime_replace_commit_calls.push(event.clone());
             if !self.preedit_text.is_empty() {
                 self.preedit_text.clear();
                 self.preedit_cursor = 0;
             }
-            self.inserted.push(text);
+            self.inserted.push(event.inserted_text);
         }
 
         fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
@@ -451,52 +445,58 @@ mod tests {
     #[test]
     fn test_ime_replace_and_commit_basic() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "你好".to_string(), -2, 2);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -2);
-        assert_eq!(*len, 2);
-        assert_eq!(text, "你好");
+        // Issue #701 评论 5699569220: controller 接收归一化的 ImeReplaceEvent，
+        // 携带 UTF-8 byte range（由 platform_ime 解析后填入）。
+        // Issue #701 评论 5702675971: 新签名 (selection_byte_range, replacement_byte_range, inserted_text)。
+        let event = ImeReplaceEvent::new(None, (0, 6), "你好".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.selection_byte_range, None);
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 6));
+        assert_eq!(ev.inserted_text, "你好");
     }
 
     #[test]
     fn test_ime_replace_negative_start() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "新".to_string(), -1, 1);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 1);
-        assert_eq!(text, "新");
+        let event = ImeReplaceEvent::new(None, (0, 3), "新".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.selection_byte_range, None);
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 3));
+        assert_eq!(ev.inserted_text, "新");
     }
 
     #[test]
     fn test_ime_replace_does_not_split_surrogate_pair() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "X".to_string(), -1, 1);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 1);
-        assert_eq!(text, "X");
+        let event = ImeReplaceEvent::new(None, (0, 1), "X".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 1));
+        assert_eq!(ev.inserted_text, "X");
     }
 
     #[test]
     fn test_ime_replace_clamps_to_char_boundary() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "替换".to_string(), 0, 3);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, 0);
-        assert_eq!(*len, 3);
-        assert_eq!(text, "替换");
+        let event = ImeReplaceEvent::new(None, (0, 6), "替换".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 6));
+        assert_eq!(ev.inserted_text, "替换");
     }
 
     #[test]
     fn test_ime_replace_single_undo() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
+        let event = ImeReplaceEvent::new(None, (0, 6), "修正".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
     }
 
     #[test]
@@ -609,12 +609,12 @@ mod tests {
     #[test]
     fn linux_ime_replacement_works() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -2);
-        assert_eq!(*len, 2);
-        assert_eq!(text, "修正");
+        let event = ImeReplaceEvent::new(None, (0, 6), "修正".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 6));
+        assert_eq!(ev.inserted_text, "修正");
     }
 
     #[test]
@@ -722,22 +722,81 @@ mod tests {
     #[test]
     fn test_ime_replace_and_commit_zero_length_nonzero_start() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "你好".to_string(), 3, 0);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, 3);
-        assert_eq!(*len, 0);
-        assert_eq!(text, "你好");
+        let event = ImeReplaceEvent::new(None, (3, 3), "你好".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.replacement_byte_range_after_selection, (3, 3));
+        assert_eq!(ev.inserted_text, "你好");
     }
 
     #[test]
     fn test_ime_replace_and_commit_negative_start_zero_length() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "好".to_string(), -1, 0);
-        assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 0);
-        assert_eq!(text, "好");
+        let event = ImeReplaceEvent::new(None, (0, 0), "好".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.replacement_byte_range_after_selection, (0, 0));
+        assert_eq!(ev.inserted_text, "好");
+    }
+
+    /// Issue #701 评论 5702675971: 空 commit + replacement（纯删除）也应进入事务。
+    #[test]
+    fn test_ime_empty_commit_with_replacement() {
+        let mut host = FakeHost::enabled();
+        // inserted_text 为空但 replacement range (1,3) 非零长度 → has_any_deletion=true，
+        // controller 不 return，event 仍传给 host。
+        let event = ImeReplaceEvent::new(None, (1, 3), String::new());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.selection_byte_range, None);
+        assert_eq!(ev.replacement_byte_range_after_selection, (1, 3));
+        assert!(ev.inserted_text.is_empty());
+        assert!(ev.has_any_deletion());
+    }
+
+    /// Issue #701 评论 5702675971: selection + replacement 两步语义正确传递。
+    #[test]
+    fn test_ime_selection_and_replacement() {
+        let mut host = FakeHost::enabled();
+        let event = ImeReplaceEvent::new(Some((1, 2)), (1, 1), "X".to_string());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.selection_byte_range, Some((1, 2)));
+        assert_eq!(ev.replacement_byte_range_after_selection, (1, 1));
+        assert_eq!(ev.inserted_text, "X");
+    }
+
+    /// Issue #701 评论 5702675971: 既无 selection 删除、又无 replacement 删除、
+    /// 又无插入文本 → 纯 noop，controller 直接 return，不调 host。
+    #[test]
+    fn test_ime_noop_skipped() {
+        let mut host = FakeHost::enabled();
+        let event = ImeReplaceEvent::new(None, (0, 0), String::new());
+        ime_replace_and_commit(&mut host, event);
+        assert!(host.ime_replace_commit_calls.is_empty());
+    }
+
+    /// Issue #701 评论 5702675971: selection 删除也算 deletion，即使
+    /// replacement range 零长度且 inserted 为空，仍进入事务（纯 selection 删除）。
+    #[test]
+    fn test_ime_selection_only_deletion() {
+        let mut host = FakeHost::enabled();
+        let event = ImeReplaceEvent::new(Some((2, 5)), (0, 0), String::new());
+        ime_replace_and_commit(&mut host, event);
+        assert_eq!(host.ime_replace_commit_calls.len(), 1);
+        let ev = &host.ime_replace_commit_calls[0];
+        assert_eq!(ev.selection_byte_range, Some((2, 5)));
+        assert!(ev.has_any_deletion());
+    }
+
+    /// Issue #701 评论 5702675971: ImeReplaceEvent::new 归一化 replacement range。
+    #[test]
+    fn test_ime_replace_event_normalizes_range() {
+        let event = ImeReplaceEvent::new(None, (5, 2), "X".to_string());
+        assert_eq!(event.replacement_byte_range_after_selection, (2, 5));
     }
 }

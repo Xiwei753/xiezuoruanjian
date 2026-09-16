@@ -252,15 +252,12 @@ ApplicationWindow {
     // Design tokens
     DesignTokens {
         id: designTokens
-        // Issue #668 评论 5646458592 问题 2: isDark 直接读 themeController.is_dark，
-        // 不再由 main.qml 用 settingsBackend.resolved_appearance_mode 自算。
-        // themeController 作为主题状态链单一事实来源，appearance_mode + system_is_dark
+        // Issue #701 评论 5699565102: 根 DesignTokens 只传 is_dark 和
+        // resolved_scheme_json，不再传 themePaletteJson / colorSource /
+        // selectedBuiltinThemeId / builtinThemesJson。主题状态统一由
+        // themeController 作为单一事实来源，appearance_mode + system_is_dark
         // 都在 themeController 内部解析，QML 只消费结果。
         isDark: themeController !== null ? themeController.is_dark : false
-        themePaletteJson: settingsBackend !== null ? settingsBackend.resolved_theme_palette_json : ""
-        colorSource: settingsBackend !== null ? settingsBackend.resolved_color_source : "built_in"
-        selectedBuiltinThemeId: settingsBackend !== null ? settingsBackend.setting_selected_builtin_theme_id : ""
-        builtinThemesJson: settingsBackend !== null ? settingsBackend.resolved_builtin_themes_json : "[]"
         resolvedSchemeJson: themeController !== null ? themeController.resolved_scheme_json : ""
     }
 

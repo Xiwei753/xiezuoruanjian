@@ -1,4 +1,5 @@
 use super::*;
+use crate::editor::input::events::ImeReplaceEvent;
 
 // ── IME 输入处理模块 ──
 //
@@ -23,15 +24,25 @@ impl SujianEditorItem {
     /// 确保 composition session 存在。使用 `self.buffer.cursor` 而非
     /// `self.pipeline.cursor()`，因为 buffer 是当前已提交文本的光标位置，
     /// pipeline 可能包含未提交的 preedit 状态。
+    ///
+    /// Issue #701 评论 5702214893: 若开始 composition 时 buffer 已有选区
+    /// （`has_selection()`），用选区范围 `(start, end)` 作为 session 的
+    /// replace range（`new_with_replace_range`），对应 Qt 官方
+    /// `QInputMethodEvent` 语义"先删除当前 selection，再处理 replacement"。
+    /// 无选区时退化为零长度插入 `(cursor, cursor)`（`new`）。
     fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.buffer.cursor;
-            self.pipeline.composition_mut().composition_session = Some(CompositionSession::new(
-                self.pipeline.text_revision(),
-                self.pipeline.visual_revision(),
-                self.buffer.text.clone(),
-                cursor,
-            ));
+            let text_rev = self.pipeline.text_revision();
+            let vis_rev = self.pipeline.visual_revision();
+            let text = self.buffer.text.clone();
+            let session = if self.buffer.has_selection() {
+                let (start, end) = self.buffer.selection_range();
+                CompositionSession::new_with_replace_range(text_rev, vis_rev, text, start, end)
+            } else {
+                CompositionSession::new(text_rev, vis_rev, text, cursor)
+            };
+            self.pipeline.composition_mut().composition_session = Some(session);
         }
     }
 
@@ -41,6 +52,43 @@ impl SujianEditorItem {
         } else {
             (self.buffer.cursor, self.buffer.cursor)
         }
+    }
+
+    /// Issue #701 评论 5699569220: 暴露 IME replacement 换算所需的 composition
+    /// session 上下文，供 `platform_ime` 把 Qt 的 replacementStart/
+    /// replacementLength（UTF-16 QChar 偏移）解析成 committed text 的 byte range。
+    ///
+    /// 返回 `(session_replace_start, session_replace_end, committed_text)`：
+    /// - `session_replace_start`/`session_replace_end`：composition session 记录的
+    ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
+    ///   无活跃 session 时退化为 `(cursor, cursor)`。
+    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
+    ///
+    /// 所有 UTF-16→UTF-8 坐标换算只在 `platform_ime` 调用此方法后做一次，
+    /// `editing.rs` 不再二次换算。
+    /// Issue #701 评论 5703179127: 暴露 IME replacement 换算所需的 composition
+    /// session 上下文，供 `platform_ime` 把 Qt 的 replacementStart/
+    /// replacementLength（UTF-16 QChar 偏移）解析成 committed text 的 byte range。
+    ///
+    /// 返回 `(session_replace_start, session_replace_end, committed_text)`：
+    /// - `session_replace_start`/`session_replace_end`：composition session 记录的
+    ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
+    ///   有活跃 session 时用 session 的 replace range；
+    ///   无 session 但有选区时直接返回 `buffer.selection_range()`（Qt 规则：直接
+    ///   commit 也应先删除当前 selection）；
+    ///   无 session 无选区时退化为 `(cursor, cursor)`。
+    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
+    pub(crate) fn ime_replacement_context(&self) -> (usize, usize, String) {
+        let (rs, re) = if self.pipeline.composition().composition_session.is_some() {
+            self.pipeline
+                .composition()
+                .session_replace_range(self.buffer.cursor)
+        } else if self.buffer.has_selection() {
+            self.buffer.selection_range()
+        } else {
+            (self.buffer.cursor, self.buffer.cursor)
+        };
+        (rs, re, self.buffer.text.clone())
     }
 
     /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
@@ -132,11 +180,13 @@ impl EditorInputHost for SujianEditorItem {
         self.insert_text(text.into());
     }
 
-    /// 替换指定范围并插入文本（IME commit 场景）。
-    /// `replace_start`/`replace_length` 为 UTF-16 code unit 坐标（Qt IME 协议），
-    /// 内部由 `ime_replace_and_insert` 转换为 UTF-8 byte offset 后调用 Core。
-    fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
-        self.ime_replace_and_insert(replace_start, replace_length, text);
+    /// IME commit/replace — 接收 Qt 两步语义的 `ImeReplaceEvent`。
+    ///
+    /// 事件由 `platform_ime` 结合当前 `CompositionSession` 把 Qt 的
+    /// `replacementStart`/`replacementLength`（UTF-16 QChar 偏移）解析后构造。
+    /// 进入此方法后不再携带任何 Qt 坐标，直接委托给 `ime_replace_and_insert`。
+    fn input_ime_replace_and_commit(&mut self, event: ImeReplaceEvent) {
+        self.ime_replace_and_insert(event);
     }
 
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {

@@ -10,11 +10,20 @@
 //! handle_input_method_query() 不再直接读 QML property，
 //! 而是通过 sujian_get_ime_query_data / sujian_ime_query_text_* FFI 函数
 //! 从 SujianEditorItem 内部状态读取，等价于 CursorAnchorAdapter 数据源。
+//!
+//! Issue #701 评论 5699569220: 所有 UTF-16/QChar offset → UTF-8 byte offset/range
+//! 只在此文件（和 utf16_converter.rs）转换一次。`sujian_ime_replace_and_commit`
+//! 结合当前 CompositionSession 把 Qt replacement 解析成最终 committed byte range，
+//! 构造归一化的 `ImeReplaceEvent` 后交给 controller。进入 editor pipeline 后
+//! 禁止继续携带 replacementStart/replacementLength 这种 Qt 坐标。
 
 use super::controller::*;
-use super::events::decode_utf16_ptr;
+use super::events::{decode_utf16_ptr, ImeReplaceEvent};
 use crate::editor::paragraph_index_map::{
     utf16_code_unit_range_to_utf8_byte_range, utf16_code_unit_to_utf8_byte,
+};
+use crate::platform::linux_qt::utf16_converter::{
+    utf16_backward_from_byte, utf16_forward_from_byte,
 };
 use crate::sujian_editor_item::SujianEditorItem;
 use std::ffi::c_void;
@@ -101,11 +110,83 @@ extern "C" fn sujian_ime_replace_and_commit(
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
-    let text = decode_utf16_ptr(text, text_len);
+    let inserted_text = decode_utf16_ptr(text, text_len);
+
+    // Issue #701 评论 5699569220: 在此把 Qt 的 replacementStart/replacementLength
+    // （UTF-16 QChar 偏移，相对 preedit 起点）结合当前 CompositionSession 解析成
+    // committed text 的 UTF-8 byte range。进入 editor pipeline 后不再携带 Qt 坐标。
+    let event = resolve_ime_replace_event(item, inserted_text, replace_start, replace_length);
+
     // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ime_replace_and_commit(item, text, replace_start, replace_length);
+        ime_replace_and_commit(item, event);
     }));
+}
+
+/// 把 Qt `QInputMethodEvent` 的 replacementStart/replacementLength（UTF-16
+/// QChar 偏移，相对 preedit 起点）解析成 Qt 两步语义的 `ImeReplaceEvent`。
+///
+/// Qt 官方语义：先删除当前 selection（committed text 上的 session replace
+/// range），再在删完 selection 后的文本（base_text）上按
+/// replacementStart/replacementLength 做 replacement/commit（replacement 时
+/// 忽略 preedit 区域）。
+///
+/// Issue #701 评论 5702675971: 旧实现把两步硬合成一个连续 committed byte
+/// range，在 selection 与 replacement 不相邻时会误删中间正文。本函数改成
+/// 两步分开的事件模型：
+/// - `selection_byte_range` = `Some((session_replace_start, session_replace_end))`
+///   if `session_replace_start != session_replace_end` else `None`；
+/// - `replacement_byte_range_after_selection` = base_text 坐标的 (del_start, del_end)，
+///   不再映射回 committed text 坐标。
+///
+/// 所有 UTF-16→UTF-8 换算只在此处做一次，`editing.rs` 不再二次换算。
+fn resolve_ime_replace_event(
+    item: &SujianEditorItem,
+    inserted_text: String,
+    replace_start: i32,
+    replace_length: i32,
+) -> ImeReplaceEvent {
+    let (session_replace_start, session_replace_end, committed_text) =
+        item.ime_replacement_context();
+
+    // 第一步 selection 删除：仅当 session replace range 非零长度时存在。
+    let selection_byte_range = if session_replace_start != session_replace_end {
+        Some((session_replace_start, session_replace_end))
+    } else {
+        None
+    };
+
+    // base_text = committed_text 去掉 [session_replace_start, session_replace_end) 段。
+    // Qt replacement 相对 preedit 起点（= session_replace_start in base_text）解释。
+    let mut base_text = String::with_capacity(committed_text.len());
+    base_text.push_str(&committed_text[..session_replace_start]);
+    base_text.push_str(&committed_text[session_replace_end..]);
+
+    let anchor_in_base = session_replace_start;
+
+    // Qt replacementStart 可正可负：正值向前走，负值向后走。
+    let rs_byte = if replace_start < 0 {
+        utf16_backward_from_byte(&base_text, anchor_in_base, (-replace_start) as usize)
+    } else {
+        utf16_forward_from_byte(&base_text, anchor_in_base, replace_start as usize)
+    };
+    // replacementLength 总是非负，从 rs_byte 向前走。
+    let re_byte = if replace_length > 0 {
+        utf16_forward_from_byte(&base_text, rs_byte, replace_length as usize)
+    } else {
+        rs_byte
+    };
+    let (del_start, del_end) = if rs_byte <= re_byte {
+        (rs_byte, re_byte)
+    } else {
+        (re_byte, rs_byte)
+    };
+
+    // Issue #701 评论 5702675971: 不再把 base_text 坐标映射回 committed text 坐标。
+    // (del_start, del_end) 是 base_text 坐标，直接作为第二步 replacement range。
+    // editing.rs 的 EditOp::ImeCommit 顺序执行两步 pipeline edit，
+    // 第二步在删完 selection 后的 pipeline text（= base_text）上做 replacement。
+    ImeReplaceEvent::new(selection_byte_range, (del_start, del_end), inserted_text)
 }
 
 #[no_mangle]

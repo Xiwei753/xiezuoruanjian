@@ -14,15 +14,16 @@ use std::path::PathBuf;
 /// 返回 apps/Linux_qt 根目录。
 fn linux_qt_root() -> PathBuf {
     // CARGO_MANIFEST_DIR 在 apps/Linux_qt 下，指向 apps/Linux_qt
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .expect("CARGO_MANIFEST_DIR must be set by cargo");
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by cargo");
     PathBuf::from(manifest_dir)
 }
 
 /// 读取指定相对路径源文件的完整内容。
 fn read_src(rel: &str) -> String {
     let path = linux_qt_root().join(rel);
-    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -140,7 +141,9 @@ fn issue687_p3_qml_uses_setting_desktop_editor_width() {
     let writing_workspace = read_src("qml/WritingWorkspace.qml");
     let top_toolbar = read_src("qml/TopWritingToolbar.qml");
     // WritingWorkspace.qml 中不应再使用 setting_linux_qt_editor_width
-    let ws_count = writing_workspace.matches("setting_linux_qt_editor_width").count();
+    let ws_count = writing_workspace
+        .matches("setting_linux_qt_editor_width")
+        .count();
     assert_eq!(
         ws_count, 0,
         "问题3修复: WritingWorkspace.qml 不应再使用 setting_linux_qt_editor_width，实际 {} 处",
@@ -154,7 +157,9 @@ fn issue687_p3_qml_uses_setting_desktop_editor_width() {
         tb_count
     );
     // 应使用 setting_desktop_editor_width
-    let ws_desktop = writing_workspace.matches("setting_desktop_editor_width").count();
+    let ws_desktop = writing_workspace
+        .matches("setting_desktop_editor_width")
+        .count();
     assert!(
         ws_desktop >= 3,
         "问题3修复: WritingWorkspace.qml 应至少有 3 处 setting_desktop_editor_width，实际 {} 处",

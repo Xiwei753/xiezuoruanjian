@@ -114,37 +114,10 @@ impl QQuickItem for SujianEditorItem {
             // 直接从 GUI 侧已算好的 cursor_ctrl.visual_x/y/visual_h/visible 和
             // blink opacity 填进 RenderPlan 的 CursorRenderState。
 
-            // Issue #690 评论 5679744253 问题 2: CursorOnly 位置动画也由 Scene Graph
-            // 当前帧驱动，不再只靠 265ms blink Timer（~4Hz）。没有活跃正文事务时，
-            // 用 frame_now 采样并推进 cursor_ctrl.visual_x/y。
-            let has_active_text_tx = self
-                .pipeline
-                .animation_coordinator_mut()
-                .active_text_transaction_key()
-                .is_some();
-            if !has_active_text_tx {
-                let driver_key = self
-                    .cursor_ctrl
-                    .animation
-                    .as_ref()
-                    .map(|a| a.driver_key);
-                if let Some(driver_key) = driver_key {
-                    match self
-                        .pipeline
-                        .animation_coordinator_mut()
-                        .cursor_timeline_sample_with_time(driver_key, frame_now)
-                    {
-                        Some(animation_coordinator::CursorTimelineSample::Waiting) => {}
-                        Some(animation_coordinator::CursorTimelineSample::Running(p)) => {
-                            self.cursor_ctrl.update_animation_progress(p);
-                        }
-                        None => {
-                            self.cursor_ctrl.finish_animation_to_target();
-                        }
-                    }
-                }
-            }
-
+            // Issue #701 评论 5699573227 第三阶段 (F5): 每帧只采样一次 frame state。
+            // 不再在 build_render_plan_full 之外用 cursor_timeline_sample_with_time
+            // 单独推进 cursor_ctrl.visual_x/y。CursorOnly 光标位置采样统一到
+            // build_render_plan_full 内部，用同一份 AnimationFrameSample。
             let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
                 && self
                     .pipeline
@@ -203,7 +176,21 @@ impl QQuickItem for SujianEditorItem {
                     selection_preedit_style,
                     frame_now,
                     self.current_coordinated_text_cursor_animation_enabled,
+                    self.cursor_ctrl.animation.as_ref(),
                 );
+
+            // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
+            // 同一份 frame_sample 采样的结果推进 cursor_ctrl.visual_x/y。
+            // 文字层和光标层都使用同一份 frame state。
+            match render_plan.cursor_sample_outcome {
+                super::render_plan::CursorSampleOutcome::Running(p) => {
+                    self.cursor_ctrl.update_animation_progress(p);
+                }
+                super::render_plan::CursorSampleOutcome::Finished => {
+                    self.cursor_ctrl.finish_animation_to_target();
+                }
+                super::render_plan::CursorSampleOutcome::Idle => {}
+            }
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
@@ -283,10 +270,13 @@ impl QQuickItem for SujianEditorItem {
                 self.scene_dirty = true;
             }
 
+            // Issue #701 评论 5699573227 第三阶段 (F6): 有 active transaction 或光标动画
+            // 未结束就持续请求下一帧，直到文字和光标一起结束。
             if self
                 .pipeline
                 .animation_coordinator_mut()
                 .has_prepared_or_rendering()
+                || self.cursor_ctrl.animation.is_some()
                 || !render_plan.frame_context.keys_to_complete.is_empty()
                 || transaction_set_changed
             {

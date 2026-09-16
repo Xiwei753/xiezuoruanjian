@@ -10,6 +10,12 @@
 //   - 使用 DesignTokens 统一样式
 //   - Section 顺序按 Core settings_presentation 契约：
 //     外观 → 编辑器和动画 → 保存和同步 → AI → 诊断与日志 → 关于
+//   - Issue #701 评论 5702214893: 主题设置（appearance_mode、color_source、
+//     selected_builtin_theme_id、selected_palette_id）的读写统一收口到
+//     themeControllerRef（LinuxThemeController），不再走 backendRef.setting_*
+//     fallback。themeControllerRef 是必需依赖。主题列表数据
+//     （list_builtin_themes_json / list_palette_records_json）仍由
+//     backendRef 提供。字号、行距、动画、保存等非主题设置仍走 backendRef。
 // =============================================================================
 
 import QtQuick
@@ -102,12 +108,34 @@ Dialog {
                 smoothCursorDuration.value = coordDur
             }
         }
-        var mode = backendRef.setting_appearance_mode
+        var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
+        // Issue #701 评论 5702675971: colorSourceCombo / builtinThemeCombo /
+        // paletteRecordCombo 的 currentIndex 收口到 updateValues()，统一从
+        // themeControllerRef 读取。原来这三个 combo 只靠各自
+        // Component.onCompleted 初始化，当设置页用 Loader 加载且关闭后不销毁
+        // 时，重新打开不会再次触发 Component.onCompleted，导致显示旧选择。
+        var src = themeControllerRef ? themeControllerRef.color_source : "built_in"
+        colorSourceCombo.currentIndex = src === "saved_palette" ? 1 : 0
+        var builtinSelId = themeControllerRef ? themeControllerRef.selected_builtin_theme_id : ""
+        var builtinThemes = builtinThemeCombo._themes
+        var builtinFound = -1
+        for (var bi = 0; bi < builtinThemes.length; bi++) {
+            if (builtinThemes[bi].theme_id === builtinSelId) { builtinFound = bi; break }
+        }
+        builtinThemeCombo.currentIndex = builtinFound >= 0 ? builtinFound : 0
+        var paletteSelId = themeControllerRef ? themeControllerRef.selected_palette_id : ""
+        var paletteRecords = paletteRecordCombo._records
+        var paletteFound = -1
+        for (var pi = 0; pi < paletteRecords.length; pi++) {
+            if (paletteRecords[pi].palette_id === paletteSelId) { paletteFound = pi; break }
+        }
+        paletteRecordCombo.currentIndex = paletteFound >= 0 ? paletteFound : 0
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
-        useAndroidTheme.checked = backendRef ? backendRef.setting_color_source === "saved_palette" : false
+        // Issue #701 评论 5699565102: useAndroidTheme 开关已删除
+        // （依赖已删除的 hasThemePalette，且与颜色来源下拉功能重复）。
         updatingValues = false
         if (coordinatedFixed) {
             root.settingsDirty = true
@@ -190,17 +218,13 @@ Dialog {
                         dt: root.dt
                         model: [qsTr("跟随系统"), qsTr("浅色"), qsTr("深色")]
                         onActivated: function(index) {
-                            if (!backendRef || root.updatingValues) return
-                            // Issue #696 评论 5696993601: 用户切换主题只走
-                            // ThemeController 这一条入口，不再直接写
-                            // backendRef.setting_appearance_mode。
-                            // set_appearance_mode 内部写 AppBackend 并发
-                            // scheme_changed，然后沿现有保存入口落盘。
-                            if (themeControllerRef) {
-                                themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
-                            } else {
-                                backendRef.setting_appearance_mode = ["system", "light", "dark"][index]
-                            }
+                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            // Issue #696 评论 5696993601 / #701 评论 5702214893:
+                            // 用户切换主题只走 ThemeController 这一条入口，
+                            // 不再直接写 backendRef.setting_appearance_mode。
+                            // set_appearance_mode 内部写 AppBackend、重建缓存并
+                            // 发 scheme_changed，然后沿现有保存入口落盘。
+                            themeControllerRef.set_appearance_mode(["system", "light", "dark"][index])
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }
@@ -234,30 +258,6 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    visible: root.dt.hasThemePalette
-                    title: qsTr("使用 Android 同步主题色")
-                    description: qsTr("使用从 Android 设备同步的莫奈调色板")
-                    clickable: true
-                    onClicked: {
-                        useAndroidTheme.checked = !useAndroidTheme.checked
-                    }
-                    ModernSwitch {
-                        id: useAndroidTheme
-                        dt: root.dt
-                        checked: true
-                        onToggled: function(v) {
-                            if (v) {
-                                backendRef.setting_color_source = "saved_palette"
-                            } else {
-                                backendRef.setting_color_source = "built_in"
-                            }
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                }
-                SettingsRow {
-                    dt: root.dt
                     title: qsTr("颜色来源")
                     description: qsTr("选择素笺默认主题或已保存的设备配色")
                     ModernComboBox {
@@ -265,21 +265,20 @@ Dialog {
                         dt: root.dt
                         model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
                         onActivated: function(index) {
-                            if (!backendRef || root.updatingValues) return
+                            if (!backendRef || !themeControllerRef || root.updatingValues) return
+                            // Issue #701 评论 5702214893: 颜色来源统一走
+                            // ThemeController，不再直接写
+                            // backendRef.setting_color_source。
                             var source = ["built_in", "saved_palette"][index]
-                            backendRef.setting_color_source = source
+                            themeControllerRef.set_color_source(source)
                             root.settingsDirty = true
                             root.saveAndNotify()
-                        }
-                        Component.onCompleted: {
-                            var src = backendRef ? backendRef.setting_color_source : "built_in"
-                            currentIndex = src === "saved_palette" ? 1 : 0
                         }
                     }
                 }
                 SettingsRow {
                     dt: root.dt
-                    visible: backendRef ? backendRef.setting_color_source === "built_in" : false
+                    visible: themeControllerRef ? themeControllerRef.color_source === "built_in" : false
                     title: qsTr("内置主题")
                     description: qsTr("选择内置主题配色方案")
                     ModernComboBox {
@@ -291,25 +290,22 @@ Dialog {
                         }
                         model: _themes.map(function(t) { return t.name || t.theme_id })
                         onActivated: function(index) {
-                            if (!backendRef || root.updatingValues) return
+                            if (!backendRef || !themeControllerRef || root.updatingValues) return
                             var themeId = _themes[index] ? _themes[index].theme_id : ""
                             if (themeId.length > 0) {
-                                backendRef.setting_selected_builtin_theme_id = themeId
+                                // Issue #701 评论 5702214893: 内置主题统一走
+                                // ThemeController。set_selected_builtin_theme_id
+                                // 内部会同时把 color_source 设为 built_in。
+                                themeControllerRef.set_selected_builtin_theme_id(themeId)
                                 root.settingsDirty = true
                                 root.saveAndNotify()
-                            }
-                        }
-                        Component.onCompleted: {
-                            var selId = backendRef ? backendRef.setting_selected_builtin_theme_id : ""
-                            for (var i = 0; i < _themes.length; i++) {
-                                if (_themes[i].theme_id === selId) { currentIndex = i; break }
                             }
                         }
                     }
                 }
                 SettingsRow {
                     dt: root.dt
-                    visible: backendRef ? backendRef.setting_color_source === "saved_palette" : false
+                    visible: themeControllerRef ? themeControllerRef.color_source === "saved_palette" : false
                     title: qsTr("已保存配色")
                     description: qsTr("选择已保存的设备调色板")
                     ModernComboBox {
@@ -324,18 +320,15 @@ Dialog {
                             return (r.source_platform || "") + " · " + (r.source_device_class || "") + " · " + (r.source_device_id || "") + " · " + d.toLocaleDateString()
                         })
                         onActivated: function(index) {
-                            if (!backendRef || root.updatingValues) return
+                            if (!backendRef || !themeControllerRef || root.updatingValues) return
                             var paletteId = _records[index] ? _records[index].palette_id : ""
                             if (paletteId.length > 0) {
-                                backendRef.setting_selected_palette_id = paletteId
+                                // Issue #701 评论 5702214893: 已保存 palette 统一走
+                                // ThemeController。set_selected_palette_id 内部会
+                                // 同时把 color_source 设为 saved_palette。
+                                themeControllerRef.set_selected_palette_id(paletteId)
                                 root.settingsDirty = true
                                 root.saveAndNotify()
-                            }
-                        }
-                        Component.onCompleted: {
-                            var selId = backendRef ? backendRef.setting_selected_palette_id : ""
-                            for (var i = 0; i < _records.length; i++) {
-                                if (_records[i].palette_id === selId) { currentIndex = i; break }
                             }
                         }
                     }

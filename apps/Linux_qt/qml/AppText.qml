@@ -4,8 +4,9 @@ import QtQuick.Controls
 Text {
     id: control
     property var dt: null
-    DesignTokens { id: fallbackDt }
-    readonly property var resolvedDt: dt || fallbackDt
+    // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
+    // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
+    readonly property var resolvedDt: dt
     property string variant: "primary"
 
     color: {

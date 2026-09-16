@@ -10,7 +10,7 @@ use crate::editor::layout;
 use crate::platform::linux_qt::LinuxQtClipboardFocusAdapter;
 use writer_core::editor::CompositionSession;
 use writer_core::editor::{
-    CursorRect, EditorAnimationKind, EditorCommand, EditorCursor, EditorEditOutcome,
+    CursorRect, DisplayPatch, EditorAnimationKind, EditorCommand, EditorCursor, EditorEditOutcome,
     EditorEditResult, EditorKernel, EditorRevision, EditorSelection, EditorTransactionCause,
     EditorVisualTransaction, PreeditVisualTransaction, Utf8ByteOffset, Utf8ByteRange,
 };
@@ -85,13 +85,28 @@ impl CommittedTextMirror {
     /// 不变量：成功返回后，mirror 的 revision 与 kernel 的 new_revision 一致，
     /// 正文和选区与 kernel 状态同步。
     pub fn apply_edit_result(&mut self, result: &EditorEditResult) -> Result<(), String> {
+        // Issue #701 评论 5704688994 问题 4: 原子 patch batch。
+        // display_patches 是"同一 base revision 的原子 batch"：Core ImeCommit /
+        // DeleteSurrounding 会为多个 delta 生成多条 DisplayPatch，共享同一个
+        // base_revision/new_revision。旧实现循环中每应用一条 patch 就立刻把
+        // self.revision 改成 new_revision，第二条 patch 一定报 revision discontinuity。
+        //
+        // 协议：
+        // 1. 先一次检查 result.base_revision 与 mirror.revision 一致；
+        // 2. 所有 patch 按原始 mirror 文本坐标校验（应用前校验，失败则 self.text 不变）；
+        // 3. 按 replace_byte_range.start 从大到小 stable 排序后应用（前面的编辑不会
+        //    移动后面的坐标）；同起点保持原顺序（防御性，Core 应保证不产生同起点 patch）；
+        // 4. 全部应用完成后只设置一次 self.revision = new_revision。
+        if result.base_revision.value() != self.revision {
+            return Err(format!(
+                "CommittedTextMirror revision discontinuity: expected {}, got {}. Must reload from kernel snapshot.",
+                self.revision, result.base_revision.value()
+            ));
+        }
+
+        // 校验阶段：所有 patch 按原始 mirror 文本坐标检查越界 / char boundary。
+        // 任何一条失败则返回错误，self.text 未被修改，状态一致。
         for patch in &result.display_patches {
-            if patch.base_revision.value() != self.revision {
-                return Err(format!(
-                    "CommittedTextMirror revision discontinuity: expected {}, got {}. Must reload from kernel snapshot.",
-                    self.revision, patch.base_revision.value()
-                ));
-            }
             let range = patch.replace_byte_range.to_std_range();
             let start = range.start;
             let end = range.end;
@@ -107,9 +122,18 @@ impl CommittedTextMirror {
                     start, end
                 ));
             }
-            self.text.replace_range(start..end, &patch.inserted_text);
-            self.revision = patch.new_revision.value();
         }
+
+        // 应用阶段：按 replace_byte_range.start 从大到小 stable 排序后应用。
+        // 右侧修改不影响左侧旧坐标。应用阶段不再校验（校验阶段已完成）。
+        let mut sorted: Vec<&DisplayPatch> = result.display_patches.iter().collect();
+        sorted.sort_by_key(|p| std::cmp::Reverse(p.replace_byte_range.start().value()));
+        for patch in sorted {
+            let range = patch.replace_byte_range.to_std_range();
+            self.text.replace_range(range, &patch.inserted_text);
+        }
+        // 全部 patch 应用完成后只设置一次 revision。
+        self.revision = result.new_revision.value();
         // Issue #683：用 result 的 new anchor/head 更新 mirror，不再从
         // new_selection_byte_range.to_std_range() 反推 anchor=start, head=end
         // （方向会丢失）。display_patches 为空时（如 SetSelection）也要更新
@@ -570,6 +594,52 @@ impl LinuxEditorPipeline {
             ),
             replacement_text: replacement.to_string(),
             original_text: String::new(),
+            cause,
+            expected_revision: EditorRevision::new(self.mirror.revision()),
+        };
+        let outcome = self.kernel.apply(command);
+        self.apply_kernel_outcome(outcome, false)
+    }
+
+    /// 原子 IME commit — Qt `QInputMethodEvent` 两步语义的原子执行：
+    /// 1. 先删除 selection `[selection_byte_start, selection_byte_end)`；
+    /// 2. 再在删完 selection 后的文本（base_text）上删除
+    ///    `[replacement_byte_start, replacement_byte_end)` 并在
+    ///    `replacement_byte_start` 插入 `inserted_text`。
+    ///
+    /// 整个操作只产生一个 revision 推进和一个 UndoEntry。
+    /// 不要把 selection 删除和 replacement 拆成两次 pipeline command。
+    ///
+    /// `replacement_byte_start`/`replacement_byte_end` 是 base_text 坐标
+    /// （删完 selection 后的文本），不是原始 committed text 坐标。
+    pub fn ime_commit(
+        &mut self,
+        selection_byte_start: usize,
+        selection_byte_end: usize,
+        replacement_byte_start: usize,
+        replacement_byte_end: usize,
+        inserted_text: &str,
+        cause: EditorTransactionCause,
+    ) -> Option<EditorEditResult> {
+        let command = EditorCommand::ImeCommit {
+            selection_byte_range: Utf8ByteRange::clamp_rope(
+                self.kernel.rope(),
+                selection_byte_start,
+                selection_byte_end,
+            ),
+            // Issue #701 评论 5704688994 问题 1: replacement_byte_range_after_selection
+            // 是"删完 selection 后的 base_text 坐标"，不是原始 committed text 坐标。
+            // 用原始 rope clamp 会把落在 selection UTF-8 continuation byte 里的
+            // base 偏移压回 0（例：原文 `你abc`，删 `你` 后 base=`abc`，base range
+            // (1,2) 合法，但原始 rope clamp 1/2 落在 `你` 的 continuation byte 里
+            // 被压回 0）。这里只做 start<=end 结构归一化，真正的 char boundary /
+            // 长度校验由 Core apply_ime_commit 按 base_text 坐标完成。
+            // selection_byte_range 仍是原始文本坐标，clamp_rope 正确。
+            replacement_byte_range_after_selection: Utf8ByteRange::from_ordered(
+                replacement_byte_start,
+                replacement_byte_end,
+            ),
+            inserted_text: inserted_text.to_string(),
             cause,
             expected_revision: EditorRevision::new(self.mirror.revision()),
         };

@@ -63,7 +63,9 @@ pub(crate) struct DomainSnapshot {
     pub setting_dynamic_color_enabled: bool,
     pub system_is_dark: bool,
     pub appearance_mode: String,
+    pub color_source: String,
     pub selected_palette_id: String,
+    pub selected_builtin_theme_id: String,
     pub has_selected_chapter: bool,
     pub selected_chapter_exists: bool,
 }
@@ -105,7 +107,9 @@ impl Default for DomainSnapshot {
             setting_dynamic_color_enabled: false,
             system_is_dark: false,
             appearance_mode: "system".to_string(),
+            color_source: "built_in".to_string(),
             selected_palette_id: String::new(),
+            selected_builtin_theme_id: String::new(),
             has_selected_chapter: false,
             selected_chapter_exists: false,
         }

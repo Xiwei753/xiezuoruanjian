@@ -345,7 +345,13 @@ impl Utf8ByteRange {
         }
     }
 
-    pub(crate) fn from_ordered(start: usize, end: usize) -> Self {
+    /// 仅做 start<=end 结构归一化的构造方法，不校验 char boundary / 长度。
+    ///
+    /// 供平台适配器在坐标空间不属于当前 rope 的场景（如 IME commit 的
+    /// `replacement_byte_range_after_selection` 是删完 selection 后的 base_text
+    /// 坐标）做结构归一化；真正的 char boundary / 长度校验由 Core 在
+    /// `apply_ime_commit` 内按 base_text 坐标完成。
+    pub fn from_ordered(start: usize, end: usize) -> Self {
         let (s, e) = if start <= end {
             (start, end)
         } else {

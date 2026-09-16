@@ -537,7 +537,9 @@ impl AppBackend {
         s.setting_dynamic_color_enabled = self.current_setting_dynamic_color_enabled;
         s.system_is_dark = self.current_system_is_dark;
         s.appearance_mode = self.current_setting_appearance_mode.clone();
+        s.color_source = self.current_setting_color_source.clone();
         s.selected_palette_id = self.current_setting_selected_palette_id.clone();
+        s.selected_builtin_theme_id = self.current_setting_selected_builtin_theme_id.clone();
         s.has_selected_chapter = self.selected_chapter_id.is_some();
         s.selected_chapter_exists = {
             if let (Some(api), Some(p), Some(v), Some(c)) = (

@@ -52,16 +52,12 @@ pub struct SettingsBackend {
     setting_selected_palette_id: qt_property!(QString; READ setting_selected_palette_id WRITE set_setting_selected_palette_id NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_selected_builtin_theme_id: qt_property!(QString; READ setting_selected_builtin_theme_id WRITE set_setting_selected_builtin_theme_id NOTIFY settings_changed),
-    #[allow(dead_code)]
-    resolved_theme_palette_json: qt_property!(QString; READ resolved_theme_palette_json NOTIFY theme_data_changed),
-    #[allow(dead_code)]
-    resolved_builtin_themes_json: qt_property!(QString; READ resolved_builtin_themes_json NOTIFY theme_data_changed),
-    #[allow(dead_code)]
-    resolved_palette_records_json: qt_property!(QString; READ resolved_palette_records_json NOTIFY theme_data_changed),
-    #[allow(dead_code)]
-    resolved_appearance_mode: qt_property!(QString; READ resolved_appearance_mode NOTIFY settings_changed),
-    #[allow(dead_code)]
-    resolved_color_source: qt_property!(QString; READ resolved_color_source NOTIFY settings_changed),
+    // Issue #701 评论 5699565102: 删除 resolved_theme_palette_json /
+    // resolved_builtin_themes_json / resolved_palette_records_json /
+    // resolved_appearance_mode / resolved_color_source 这类给运行时 UI
+    // 再解析主题用的重复出口。运行时主题状态统一由 LinuxThemeController
+    // 发布，SettingsBackend 只负责持久化。设置页列出 palette/builtin 选项
+    // 用 list_palette_records_json / list_builtin_themes_json method。
     #[allow(dead_code)]
     setting_typing_animation_enabled: qt_property!(bool; READ setting_typing_animation_enabled WRITE set_setting_typing_animation_enabled NOTIFY settings_changed),
     #[allow(dead_code)]
@@ -424,46 +420,10 @@ impl SettingsBackend {
             self.settings_changed();
         }
     }
-    fn resolved_theme_palette_json(&self) -> QString {
-        self.with_app(|app| {
-            let color_source = app.setting_color_source().to_string();
-            if color_source != "saved_palette" {
-                return "".into();
-            }
-            let palette_id = app.setting_selected_palette_id().to_string();
-            if palette_id.is_empty() {
-                return "".into();
-            }
-            let parts: Vec<&str> = palette_id.splitn(2, ':').collect();
-            if parts.len() != 2 {
-                return "".into();
-            }
-            if let Some(core) = app.core_api() {
-                match core.load_palette_record(parts[0], parts[1]) {
-                    Ok(record) => {
-                        let json = serde_json::to_string(&record).unwrap_or_default();
-                        QString::from(json)
-                    }
-                    Err(_) => "".into(),
-                }
-            } else {
-                "".into()
-            }
-        })
-        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
-    fn resolved_builtin_themes_json(&self) -> QString {
-        self.list_builtin_themes_json()
-    }
-    fn resolved_palette_records_json(&self) -> QString {
-        self.list_palette_records_json()
-    }
-    fn resolved_appearance_mode(&self) -> QString {
-        self.setting_appearance_mode()
-    }
-    fn resolved_color_source(&self) -> QString {
-        self.setting_color_source()
-    }
+    // Issue #701 评论 5699565102: resolved_theme_palette_json /
+    // resolved_builtin_themes_json / resolved_palette_records_json /
+    // resolved_appearance_mode / resolved_color_source 已删除。
+    // 运行时主题解析统一由 LinuxThemeController 负责。
     fn setting_typing_animation_enabled(&self) -> bool {
         self.snap().setting_typing_animation_enabled
     }

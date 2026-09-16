@@ -254,8 +254,7 @@ mod tests {
     #[test]
     fn classifies_delete_newline_slice_line_reflow() {
         // 删除一段含换行的文字，应按 deleted slice 判定为 LineReflowAnimation。
-        let plan =
-            classify_local_visual_plan(vec![slice(0, "abc\ndef")], vec![], true);
+        let plan = classify_local_visual_plan(vec![slice(0, "abc\ndef")], vec![], true);
         assert_eq!(plan.animation_mode, AnimationModeDto::LineReflowAnimation);
     }
 }
