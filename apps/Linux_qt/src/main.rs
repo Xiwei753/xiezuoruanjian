@@ -166,8 +166,6 @@ qmetaobject::qrc!(qml_resources, "/" {
     "qml/WritingWorkspace.qml" as "WritingWorkspace.qml",
     "qml/WritingTreeController.qml" as "WritingTreeController.qml",
     "qml/EditorController.qml" as "EditorController.qml",
-    "qml/EditorWheelScroller.qml" as "EditorWheelScroller.qml",
-    "qml/SmoothWheelScroller.qml" as "SmoothWheelScroller.qml",
     "qml/TopWritingToolbar.qml" as "TopWritingToolbar.qml",
     "qml/EditorContextMenu.qml" as "EditorContextMenu.qml",
     "qml/RightDrawer.qml" as "RightDrawer.qml",

@@ -752,7 +752,7 @@ Rectangle {
 
                     ScrollView {
                         id: editorScroll
-                        readonly property bool editorIsScrolling: editorWheelScroller.active || ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
+                        readonly property bool editorIsScrolling: ScrollBar.vertical.active || (contentItem && ((contentItem.moving !== undefined && contentItem.moving) || (contentItem.flicking !== undefined && contentItem.flicking)))
                         property bool editorAnimationSuppressed: false
                         anchors.fill: paperBg
                         anchors.margins: dt.sp20
@@ -806,6 +806,14 @@ Rectangle {
 
                         onContentHeightChanged: clampScroll()
                         onHeightChanged: clampScroll()
+                        Component.onCompleted: {
+                            // Issue #695: Qt 6.9+ 建议桌面 Flickable 设 acceptedButtons: Qt.NoButton，
+                            // 鼠标按住拖动不当触屏甩动；触屏 flick 不受 mouse-button 限制。
+                            // 让 Qt 原生处理 wheel/scrollbar，ScrollView/Flickable 继续持有 contentY。
+                            if (contentItem) {
+                                contentItem.acceptedButtons = Qt.NoButton;
+                            }
+                        }
                         onEditorIsScrollingChanged: {
                             if (editorIsScrolling) {
                                 scrollAnimationReleaseTimer.stop();
@@ -979,13 +987,6 @@ Rectangle {
 
                     // Animation overlay removed — text animation is now handled in
                     // SujianEditorItem Scene Graph (child[1]) via ActiveVisualTransactionQueue
-
-                    EditorWheelScroller {
-                        id: editorWheelScroller
-                        anchors.fill: editorScroll
-                        scrollView: editorScroll
-                        editorItem: sujianEditor
-                    }
 
                     // 文字动画唯一主路径：Rust Coordinator → Scene Graph (child[1])
                     // 不再使用 QML overlay 路线

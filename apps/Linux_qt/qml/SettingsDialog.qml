@@ -710,11 +710,4 @@ Dialog {
             }
         }
     }
-
-    SmoothWheelScroller {
-        anchors.fill: settingsScroll
-        scrollView: settingsScroll
-        lineHeight: 24
-        fontPixelSize: 14
-    }
 }
