@@ -294,6 +294,115 @@ class ComposeVisualIssue694Comment5696394554ReproTest {
         )
     }
 
+    /**
+     * 测试4：active emission 晚到 —
+     * #694 评论 5696786245：onAuthoritativeLayout(compositionActive=true) 先到武装 phase 并保存 base，
+     * snapshotFlow active emission 随后晚到，不应覆盖 layout 路径已保存的 compositionBaseLayout。
+     *
+     * 复现序列（active emission 晚到，不跳过）：
+     * - base = "a"
+     * - recordLocalInput("a" -> "an")
+     * - onAuthoritativeLayout("an", compositionActive = true) 先到：layout 武装 phase，base 应是 "a"
+     * - onInputSnapshotResolved("an", Composing) 晚到：active flow 不能覆盖 base
+     * - onAuthoritativeLayout("an", compositionActive = false)：composition 结束
+     * - onInputSnapshotResolved("an", LocalCommitAccepted)
+     *
+     * 断言（修复后正确行为）：
+     * - outcome 到达前 pendingPatches == 0
+     * - frameCoordinator.lastConsumed.text 仍为 "a"（coordinator baseline 仍是 a）
+     * - Accepted 后只生成 1 个 local patch
+     * - patch 必须是 a -> an（不能因 base 被覆盖成 an 而丢动画）
+     */
+    @Test
+    fun onTextLayoutBeforeSnapshotFlow_activeEmissionLate_doesNotOverwriteCompositionBase() {
+        val layouts = captureLayouts("a", "an")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5696786245-late-active",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 1. base = "a"：设置基线 lastPresentedLayout = "a"，frameCoordinator.lastConsumed = "a"
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+
+        // 2. InputTransformation 已经 recordLocalInput("a" -> "an")
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "an",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
+        )
+
+        // 3. onAuthoritativeLayout("an", compositionActive = true) 先到 —
+        //    layout 路径武装 phase：compositionBaseLayout = "a"，phase = Composing，lastPresentedLayout = "an"
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0, compositionActive = true)
+
+        // 4. snapshotFlow active emission 晚到：onInputSnapshotResolved("an", Composing) —
+        //    修复前：wasCompositionActiveForSnapshot == false，会执行 compositionBaseLayout = lastPresentedLayout = "an"（覆盖正确 base "a"）
+        //    修复后：phase == Composing != Idle，不覆盖 base，只更新 wasCompositionActiveForSnapshot
+        val snapshotActive =
+            EditorInputSnapshot(
+                text = "an",
+                selection = TextRange(2, 2),
+                composition = TextRange(1, 2),
+            )
+        state.onInputSnapshotResolved(snapshotActive, InputSnapshotOutcome.Composing)
+
+        // 断言1：outcome 到达前 pendingPatches 应仍为空
+        val pendingBeforeOutcome = pendingPatchesSize(state)
+        assertTrue(
+            "outcome 到达前 pendingPatches 应仍为空，实际=$pendingBeforeOutcome\n" +
+                "Issue #694 评论 5696786245：active emission 晚到不应提前发布候选 local patch",
+            pendingBeforeOutcome == 0,
+        )
+
+        // 断言2：frameCoordinator.lastConsumed.text 仍为 "a"（coordinator baseline 仍是 a）
+        val coordinatorText = frameCoordinatorLastConsumedText(state)
+        assertTrue(
+            "frameCoordinator.lastConsumed.text 应仍为 \"a\"，实际=\"$coordinatorText\"\n" +
+                "Issue #694 评论 5696786245：composition 期间不应把 coordinator baseline 推到候选文本",
+            coordinatorText == "a",
+        )
+
+        // 5. onAuthoritativeLayout("an", compositionActive = false) — composition 结束
+        //    phase == Composing，进入 AwaitingBridgeResolution，不发布 patch
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0, compositionActive = false)
+
+        // 6. bridge outcome 到达：LocalCommitAccepted（snapshotEnd.composition = null, text = "an"）
+        //    修复后：compositionBaseLayout 仍是 "a"，finishCompositionCommit 看到 baseText="a" != commitText="an"，生成 a->an patch
+        val snapshotEnd =
+            EditorInputSnapshot(
+                text = "an",
+                selection = TextRange(2, 2),
+                composition = null,
+            )
+        state.onInputSnapshotResolved(snapshotEnd, InputSnapshotOutcome.LocalCommitAccepted)
+
+        // 断言3：Accepted 后只生成 1 个 local patch
+        val pendingAfterAccept = pendingPatchesSize(state)
+        assertEquals(
+            "LocalCommitAccepted 后应只生成 1 个 a->an local patch，实际=$pendingAfterAccept\n" +
+                "Issue #694 评论 5696786245：Accepted 后应正常收口生成最终 local patch",
+            1,
+            pendingAfterAccept,
+        )
+
+        // 断言4：patch 必须是 a -> an，不能因 base 被覆盖成 an 而丢动画
+        val latestPatch = state.latestPatch.value
+        val isAnLocalPatch =
+            latestPatch != null &&
+                latestPatch.oldLayout.result.layoutInput.text.text == "a" &&
+                latestPatch.newLayout.result.layoutInput.text.text == "an" &&
+                latestPatch.intent == null
+        assertTrue(
+            "latestPatch 应为 a->an 且 intent == null，" +
+                "latestPatch=$latestPatch isAnLocalPatch=$isAnLocalPatch\n" +
+                "Issue #694 评论 5696786245：base 不应被覆盖成 preedit，patch 必须是 a->an",
+            isAnLocalPatch,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> {

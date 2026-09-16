@@ -245,7 +245,11 @@ class ComposeEditorVisualState(
     ) {
         val compositionActive = snapshot.composition != null
         // composition 生命周期边沿：composition 刚开始时保存 base
-        if (compositionActive && !wasCompositionActiveForSnapshot) {
+        // #694 评论 5696786245：只有 phase == Idle 时才允许初始化 compositionBaseLayout。
+        // layout 路径（onAuthoritativeLayout）可能已经把 phase 武装成 Composing，
+        // 此时晚到的 snapshotFlow active emission 只能更新 wasCompositionActiveForSnapshot，
+        // 不能用已变成 preedit 的 lastPresentedLayout 覆盖 layout 路径保存的正确 base。
+        if (compositionActive && compositionVisualPhase == CompositionVisualPhase.Idle) {
             compositionBaseLayout = lastPresentedLayout
             // #694 评论 5695660885 问题1：进入 Composing phase，
             // 拦截 onAuthoritativeLayout 在 bridge outcome 到达前提前发布候选 local patch。
