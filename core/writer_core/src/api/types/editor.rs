@@ -830,8 +830,8 @@ impl EditorVisualIntentDto {
 /// 字段语义：
 /// - `animation_mode`：按 Core 规则选择的动画模式
 ///   （0 cluster -> SystemSuppressed；含换行 -> LineReflowAnimation；
-///    复杂 grapheme -> ClusterAnimation；<= 8 cluster -> GlyphAnimation；
-///    > 8 cluster -> RunAnimation）。
+///   复杂 grapheme -> ClusterAnimation；<= 8 cluster -> GlyphAnimation；
+///   > 8 cluster -> RunAnimation）。
 /// - `old_animation_units` / `new_animation_units`：按 `animation_mode` 决定的粒度
 ///   （cluster / run / reflow）生成的动画单元 UTF-8 byte ranges。
 ///
@@ -843,6 +843,18 @@ pub struct LocalVisualPlanDto {
     pub animation_mode: AnimationModeDto,
     pub old_animation_units: Vec<EditorByteRangeDto>,
     pub new_animation_units: Vec<EditorByteRangeDto>,
+}
+
+/// #694 评论 5693077441：affected slice DTO —
+/// 只传本次输入的 affected substring + 它在正文中的绝对 UTF-8 byte 起始偏移。
+/// 不再把整章正文送过 FFI 做视觉分类，避免长章节每笔输入都把整篇正文送过 FFI。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalVisualSliceDto {
+    /// 该段文本在正文中的绝对 UTF-8 byte 起始偏移。
+    pub absolute_start: u32,
+    /// affected range 内的局部文本。
+    pub text: String,
 }
 
 impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {

@@ -239,12 +239,13 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
             newText = emojiFamily,
             oldSelection = TextRange(0, 0),
             newSelection = TextRange(emojiUtf16Length, emojiUtf16Length),
-            changes = listOf(
-                LocalInputChange(
-                    newRange = TextRange(0, emojiUtf16Length),
-                    oldRange = TextRange(0, 0),
+            changes =
+                listOf(
+                    LocalInputChange(
+                        newRange = TextRange(0, emojiUtf16Length),
+                        oldRange = TextRange(0, 0),
+                    ),
                 ),
-            ),
         )
         state.onAuthoritativeLayout(
             layouts[1],

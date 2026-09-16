@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import uniffi.writer_core.AnimationModeDto
 import kotlin.collections.ArrayDeque
 
 /**
@@ -231,24 +230,27 @@ class ComposeEditorVisualState(
         // 不再硬编码 CLUSTER_ANIMATION，不再按 UTF-16 +1 硬切。
         // Core API 不可用时（如 Robolectric 测试环境）回退到 Kotlin fallback
         // （java.text.BreakIterator + chooseAnimationMode 投影）。
-        val corePlan = ComposeLocalVisualRebase.classifyLocalVisualPlanFromCore(
-            oldText = oldText,
-            newText = newText,
-            oldAffectedRanges = changedRanges.oldRanges,
-            newAffectedRanges = changedRanges.newRanges,
-            animationEnabled = customTextAnimationEnabled,
-        )
+        val corePlan =
+            ComposeLocalVisualRebase.classifyLocalVisualPlanFromCore(
+                oldText = oldText,
+                newText = newText,
+                oldAffectedRanges = changedRanges.oldRanges,
+                newAffectedRanges = changedRanges.newRanges,
+                animationEnabled = customTextAnimationEnabled,
+            )
         val planAnimationMode = corePlan.animationMode
-        val planInsertedUnits = if (customTextAnimationEnabled) {
-            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
-        } else {
-            emptyList()
-        }
-        val planDeletedUnits = if (customTextAnimationEnabled) {
-            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
-        } else {
-            emptyList()
-        }
+        val planInsertedUnits =
+            if (customTextAnimationEnabled) {
+                ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
+            } else {
+                emptyList()
+            }
+        val planDeletedUnits =
+            if (customTextAnimationEnabled) {
+                ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
+            } else {
+                emptyList()
+            }
 
         val insertedUnits =
             if (customTextAnimationEnabled) {

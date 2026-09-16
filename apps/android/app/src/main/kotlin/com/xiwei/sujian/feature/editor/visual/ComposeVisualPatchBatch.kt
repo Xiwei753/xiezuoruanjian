@@ -213,7 +213,7 @@ internal object ComposeVisualPatchBatch {
         var suffix = 0
         while (
             suffix < oldLen - prefix && suffix < newLen - prefix &&
-                oldText[oldLen - 1 - suffix] == newText[newLen - 1 - suffix]
+            oldText[oldLen - 1 - suffix] == newText[newLen - 1 - suffix]
         ) {
             suffix++
         }

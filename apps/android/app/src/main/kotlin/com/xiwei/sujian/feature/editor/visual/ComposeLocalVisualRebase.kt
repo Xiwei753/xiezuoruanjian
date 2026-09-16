@@ -8,6 +8,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
+import uniffi.writer_core.LocalVisualSliceDto
 import uniffi.writer_core.classifyLocalVisualPlan
 
 /**
@@ -261,27 +262,48 @@ internal object ComposeLocalVisualRebase {
         newAffectedRanges: List<TextRange>,
         animationEnabled: Boolean,
     ): LocalVisualPlanDto {
-        val oldByteRanges = oldAffectedRanges.map { textRangeToEditorByteRangeDto(oldText, it) }
-        val newByteRanges = newAffectedRanges.map { textRangeToEditorByteRangeDto(newText, it) }
+        // #694 评论 5693077441：只从 changedRanges 截出 affected substring 构造 LocalVisualSliceDto，
+        // 不再把整章 oldText/newText 都跨 UniFFI 复制给 Core。
+        val oldSlices =
+            oldAffectedRanges.mapNotNull { range ->
+                buildLocalVisualSliceDto(oldText, range)
+            }
+        val newSlices =
+            newAffectedRanges.mapNotNull { range ->
+                buildLocalVisualSliceDto(newText, range)
+            }
         return try {
             classifyLocalVisualPlan(
-                oldText = oldText,
-                newText = newText,
-                oldAffectedByteRanges = oldByteRanges,
-                newAffectedByteRanges = newByteRanges,
+                oldSlices = oldSlices,
+                newSlices = newSlices,
                 animationEnabled = animationEnabled,
             )
         } catch (_: Throwable) {
             // Core API 不可用（如 Robolectric 测试环境无法加载原生库），
             // 回退到 Kotlin fallback。
             classifyLocalVisualPlanKotlinFallback(
-                oldText = oldText,
-                newText = newText,
-                oldAffectedRanges = oldAffectedRanges,
-                newAffectedRanges = newAffectedRanges,
+                oldSlices = oldSlices,
+                newSlices = newSlices,
                 animationEnabled = animationEnabled,
             )
         }
+    }
+
+    /**
+     * #694 评论 5693077441：从 [text] 的 [range] 截出 affected substring 构造 [LocalVisualSliceDto]。
+     *
+     * [absoluteStart] 用 UTF-8 byte offset（与 Core 契约一致），[text] 是 UTF-16 substring。
+     * range 越界或空区间时返回 null（由 mapNotNull 过滤）。
+     */
+    private fun buildLocalVisualSliceDto(
+        text: String,
+        range: TextRange,
+    ): LocalVisualSliceDto? {
+        if (range.start !in 0..text.length || range.end !in 0..text.length) return null
+        if (range.start >= range.end) return null
+        val segment = text.substring(range.start, range.end)
+        val absoluteStart = TextOffsetUtils.utf8OffsetForCharIndex(text, range.start).toUInt()
+        return LocalVisualSliceDto(absoluteStart = absoluteStart, text = segment)
     }
 
     /**
@@ -293,27 +315,29 @@ internal object ComposeLocalVisualRebase {
      * 与 `visual_classification.rs::choose_animation_mode` 保持一致。
      */
     private fun classifyLocalVisualPlanKotlinFallback(
-        oldText: String,
-        newText: String,
-        oldAffectedRanges: List<TextRange>,
-        newAffectedRanges: List<TextRange>,
+        oldSlices: List<LocalVisualSliceDto>,
+        newSlices: List<LocalVisualSliceDto>,
         animationEnabled: Boolean,
     ): LocalVisualPlanDto {
-        // 与 composition 分类一致：取较长的文本做 cluster/complex 判定。
-        val changedText = if (newText.length >= oldText.length) newText else oldText
-        val clusters = splitGraphemeClustersKt(changedText)
-        val clusterCount = clusters.size
-        val containsNewline = changedText.contains('\n')
-        val containsComplex = clusters.any { it.length > 1 }
-        val animationMode = chooseAnimationModeKt(
-            clusterCount = clusterCount,
-            containsNewline = containsNewline,
-            containsComplexGrapheme = containsComplex,
-            animationEnabled = animationEnabled,
-        )
-        // 按 animationMode 生成 old/new animation units（UTF-16 TextRange → UTF-8 byte range）
-        val oldUnits = buildAnimationUnitsKt(oldText, oldAffectedRanges, animationMode)
-        val newUnits = buildAnimationUnitsKt(newText, newAffectedRanges, animationMode)
+        // #694 评论 5693077441：用 affected slice 做分类，不再用整章正文。
+        // 与 composition 分类一致：优先用 newSlices（插入侧），空时回退到 oldSlices（删除侧）。
+        val classifySlices = if (newSlices.isNotEmpty()) newSlices else oldSlices
+        val clusterCount = classifySlices.sumOf { slice -> splitGraphemeClustersKt(slice.text).size }
+        val containsNewline = classifySlices.any { it.text.contains('\n') }
+        val containsComplex =
+            classifySlices.any {
+                splitGraphemeClustersKt(it.text).any { cluster -> cluster.length > 1 }
+            }
+        val animationMode =
+            chooseAnimationModeKt(
+                clusterCount = clusterCount,
+                containsNewline = containsNewline,
+                containsComplexGrapheme = containsComplex,
+                animationEnabled = animationEnabled,
+            )
+        // 按 animationMode 生成 old/new animation units（UTF-8 byte ranges）
+        val oldUnits = buildAnimationUnitsKtFromSlices(oldSlices, animationMode)
+        val newUnits = buildAnimationUnitsKtFromSlices(newSlices, animationMode)
         return LocalVisualPlanDto(
             animationMode = animationMode,
             oldAnimationUnits = oldUnits,
@@ -339,9 +363,14 @@ internal object ComposeLocalVisualRebase {
      *
      * 算法：
      * 1. 用 BreakIterator.getCharacterInstance() 得到初步 cluster 边界（UTF-16 偏移）。
-     * 2. 遍历初步 cluster，按 ZWJ 合并：如果当前 cluster 或前一个合并 group 包含 ZWJ，
-     *    就合并到当前合并 group。这样 `👨‍👩‍👧‍👦`（BreakIterator 拆成 7 个 cluster：
-     *    man + ZWJ + woman + ZWJ + girl + ZWJ + boy）会被合并成 1 个 cluster。
+     * 2. 遍历初步 cluster，按 ZWJ 合并：**当前 segment 是 ZWJ，或上一 cluster 以 ZWJ 结尾时
+     *    才合并下一段**。这样 `👨‍👩‍👧‍👦`（BreakIterator 拆成 7 个 cluster：
+     *    man + ZWJ + woman + ZWJ + girl + ZWJ + boy）会被合并成 1 个 cluster，
+     *    而 `👨‍👩‍👧‍👦a` 会合并成 [emoji family] + [a] = 2 个 cluster。
+     *
+     * #694 评论 5693077441 问题2：旧逻辑用"group 曾经包含过 ZWJ"（currentContainsZwj 一旦 true
+     * 永远 true），会把 `👨‍👩‍👧‍👦a` 结尾的 a 合进 emoji family。新逻辑只看当前 group 的
+     * **最后一个** cluster 是否以 ZWJ 结尾，合并完一段后状态重置为当前 segment 的 ZWJ 状态。
      *
      * 此方案不依赖 ICU4J 是否可用，在所有环境（Robolectric、真实设备）下都能正确处理
      * ZWJ emoji family。生产环境优先用 Core API（unicode_segmentation 已正确），
@@ -364,27 +393,30 @@ internal object ComposeLocalVisualRebase {
             end = iterator.next()
         }
         if (rawRanges.isEmpty()) return emptyList()
-        // 2. 按 ZWJ 合并：如果当前 cluster 或前一个合并 group 包含 ZWJ，就合并到当前 group。
+        // 2. #694 评论 5693077441：ZWJ 合并改成"当前 segment 是 ZWJ，或上一 cluster 以 ZWJ 结尾
+        //    时才合并下一段"。不再用"group 曾经包含过 ZWJ"（currentContainsZwj 一旦 true 永远 true），
+        //    否则 👨‍👩‍👧‍👦a 会把结尾的 a 合进 emoji family。
         val zwj = '\u200D'
         val mergedRanges = mutableListOf<TextRange>()
         var currentStart = rawRanges[0].start
         var currentEnd = rawRanges[0].end
-        var currentContainsZwj = text.substring(currentStart, currentEnd).contains(zwj)
+        // lastClusterContainsZwj：当前 group 的最后一个 cluster 是否包含 ZWJ。
+        var lastClusterContainsZwj = text.substring(currentStart, currentEnd).contains(zwj)
         for (i in 1 until rawRanges.size) {
             val range = rawRanges[i]
             val segment = text.substring(range.start, range.end)
             val segmentContainsZwj = segment.contains(zwj)
-            if (currentContainsZwj || segmentContainsZwj) {
+            if (segmentContainsZwj || lastClusterContainsZwj) {
                 // 合并到当前 group
                 currentEnd = range.end
-                currentContainsZwj = currentContainsZwj || segmentContainsZwj
             } else {
                 // 输出当前 group，开始新 group
                 mergedRanges.add(TextRange(currentStart, currentEnd))
                 currentStart = range.start
                 currentEnd = range.end
-                currentContainsZwj = segmentContainsZwj
             }
+            // 更新为当前 segment 的 ZWJ 状态（无论合并与否，最后一个 cluster 都是当前 segment）
+            lastClusterContainsZwj = segmentContainsZwj
         }
         mergedRanges.add(TextRange(currentStart, currentEnd))
         return mergedRanges
@@ -409,50 +441,64 @@ internal object ComposeLocalVisualRebase {
     }
 
     /**
-     * 按 animationMode 生成 animation units（UTF-8 byte ranges）。
-     * GlyphAnimation / ClusterAnimation: 按 grapheme cluster 拆分。
-     * RunAnimation: 按 run 拆分（这里简化为整块，与 Core split_text_into_runs 近似）。
-     * LineReflowAnimation / SnapshotAnimation: 整块 affected range 作为一个单元。
-     * SystemSuppressed: 空。
+     * #694 评论 5693077441：按 animationMode 从 [LocalVisualSliceDto] 生成 animation units（UTF-8 byte ranges）。
+     *
+     * 每个 slice 的 [LocalVisualSliceDto.absoluteStart] 已经是正文 UTF-8 byte offset，
+     * slice 内部用 [splitGraphemeClusterRangesWithZwjMerge] 拆 grapheme cluster，
+     * cluster 在 slice 内的 UTF-16 偏移转成 UTF-8 byte 偏移后叠加到 absoluteStart。
+     *
+     * - GlyphAnimation / ClusterAnimation: 按 grapheme cluster 拆分。
+     * - RunAnimation: 每个 slice 整块作为一个 unit（与 Core split_text_into_runs 近似）。
+     * - LineReflowAnimation / SnapshotAnimation: 每个 slice 整块作为一个单元。
+     * - SystemSuppressed: 空。
      */
-    private fun buildAnimationUnitsKt(
-        text: String,
-        affectedRanges: List<TextRange>,
+    private fun buildAnimationUnitsKtFromSlices(
+        slices: List<LocalVisualSliceDto>,
         animationMode: AnimationModeDto,
-    ): List<EditorByteRangeDto> = when (animationMode) {
-        AnimationModeDto.SYSTEM_SUPPRESSED -> emptyList()
-        AnimationModeDto.LINE_REFLOW_ANIMATION, AnimationModeDto.SNAPSHOT_ANIMATION -> {
-            affectedRanges.map { textRangeToEditorByteRangeDto(text, it) }
-        }
-        AnimationModeDto.GLYPH_ANIMATION, AnimationModeDto.CLUSTER_ANIMATION -> {
-            // 对每个 affected range 内的文本按 grapheme cluster 拆分
-            // #694 评论 5692161955 回归修复：用 splitGraphemeClusterRangesWithZwjMerge
-            // 正确处理 ZWJ emoji family（BreakIterator 不识别 ZWJ sequence）。
-            val result = mutableListOf<EditorByteRangeDto>()
-            for (range in affectedRanges) {
-                if (range.start !in 0..text.length || range.end !in 0..text.length) continue
-                val segment = text.substring(range.start, range.end)
-                val clusterRanges = splitGraphemeClusterRangesWithZwjMerge(segment)
-                for (clusterRange in clusterRanges) {
-                    // cluster 在 segment 内的偏移，转成正文 UTF-16 偏移
-                    val absStartUtf16 = range.start + clusterRange.start
-                    val absEndUtf16 = range.start + clusterRange.end
-                    // 再转成 UTF-8 byte offset
-                    result.add(
-                        EditorByteRangeDto(
-                            start = TextOffsetUtils.utf8OffsetForCharIndex(text, absStartUtf16).toUInt(),
-                            endExclusive = TextOffsetUtils.utf8OffsetForCharIndex(text, absEndUtf16).toUInt(),
-                        ),
+    ): List<EditorByteRangeDto> =
+        when (animationMode) {
+            AnimationModeDto.SYSTEM_SUPPRESSED -> emptyList()
+            AnimationModeDto.LINE_REFLOW_ANIMATION, AnimationModeDto.SNAPSHOT_ANIMATION -> {
+                slices.map { slice ->
+                    val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, slice.text.length)
+                    EditorByteRangeDto(
+                        start = slice.absoluteStart,
+                        endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
                     )
                 }
             }
-            result
+            AnimationModeDto.GLYPH_ANIMATION, AnimationModeDto.CLUSTER_ANIMATION -> {
+                // 对每个 slice 内的文本按 grapheme cluster 拆分
+                // #694 评论 5692161955 回归修复：用 splitGraphemeClusterRangesWithZwjMerge
+                // 正确处理 ZWJ emoji family（BreakIterator 不识别 ZWJ sequence）。
+                val result = mutableListOf<EditorByteRangeDto>()
+                for (slice in slices) {
+                    val clusterRanges = splitGraphemeClusterRangesWithZwjMerge(slice.text)
+                    for (clusterRange in clusterRanges) {
+                        // cluster 在 slice.text 内的 UTF-16 偏移 → UTF-8 byte 偏移
+                        val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, clusterRange.start)
+                        val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, clusterRange.end)
+                        result.add(
+                            EditorByteRangeDto(
+                                start = (slice.absoluteStart.toInt() + utf8Start).toUInt(),
+                                endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
+                            ),
+                        )
+                    }
+                }
+                result
+            }
+            AnimationModeDto.RUN_ANIMATION -> {
+                // RunAnimation: 简化为每个 slice 整块（与 Core split_text_into_runs 的 run 粒度近似）
+                slices.map { slice ->
+                    val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, slice.text.length)
+                    EditorByteRangeDto(
+                        start = slice.absoluteStart,
+                        endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
+                    )
+                }
+            }
         }
-        AnimationModeDto.RUN_ANIMATION -> {
-            // RunAnimation: 简化为整块 affected range（与 Core split_text_into_runs 的 run 粒度近似）
-            affectedRanges.map { textRangeToEditorByteRangeDto(text, it) }
-        }
-    }
 
     /**
      * 把 Core 返回的 UTF-8 byte animation units 转成 Android UTF-16 [TextRange]。
@@ -470,18 +516,6 @@ internal object ComposeLocalVisualRebase {
         }
 
     /**
-     * 把 Android UTF-16 [TextRange] 转成 Core [EditorByteRangeDto]（UTF-8 byte range）。
-     */
-    private fun textRangeToEditorByteRangeDto(
-        text: String,
-        range: TextRange,
-    ): EditorByteRangeDto =
-        EditorByteRangeDto(
-            start = TextOffsetUtils.utf8OffsetForCharIndex(text, range.start).toUInt(),
-            endExclusive = TextOffsetUtils.utf8OffsetForCharIndex(text, range.end).toUInt(),
-        )
-
-    /**
      * #694 评论第 4 步：retained reflow 只比较 oldLayout -> newLayout 的真实几何。
      * 复用 [ComposeVisualRebase.computeRetainedMovesFromComposedMap]。
      *
@@ -492,8 +526,7 @@ internal object ComposeLocalVisualRebase {
         oldLayout: ComposeLayoutSnapshot,
         newLayout: ComposeLayoutSnapshot,
         offsetMap: List<VisualOffsetMapEntry>,
-    ): List<RetainedMove> =
-        ComposeVisualRebase.computeRetainedMovesFromComposedMap(oldLayout, newLayout, offsetMap)
+    ): List<RetainedMove> = ComposeVisualRebase.computeRetainedMovesFromComposedMap(oldLayout, newLayout, offsetMap)
 
     /**
      * #694 评论第 4 步：cursor 从 oldSelection.end -> newSelection.end 构造路径。
