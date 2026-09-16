@@ -132,6 +132,13 @@ extern "C" fn sujian_ime_replace_and_commit(
 /// session replace range），在 base_text 上换算 byte range，再映射回 committed
 /// text 坐标。
 ///
+/// Issue #701 评论 5702214893: session replace range 现在可能来自开始
+/// composition 时的 buffer selection（`ensure_composition_session` 在有选区
+/// 时用 `new_with_replace_range` 创建 session），对应 Qt 官方"先删除当前
+/// selection"语义。这确保最终 `ImeReplaceEvent` 已表达唯一 committed UTF-8
+/// range（先删除 selection + 再 replacement/commit），`editing.rs` 的
+/// `ime_replace_and_insert` 直接用此 byte range 做删除+插入即可。
+///
 /// 所有 UTF-16→UTF-8 换算只在此处做一次，`editing.rs` 不再二次换算。
 fn resolve_ime_replace_event(
     item: &SujianEditorItem,

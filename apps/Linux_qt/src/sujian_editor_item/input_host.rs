@@ -23,15 +23,25 @@ impl SujianEditorItem {
     /// 确保 composition session 存在。使用 `self.buffer.cursor` 而非
     /// `self.pipeline.cursor()`，因为 buffer 是当前已提交文本的光标位置，
     /// pipeline 可能包含未提交的 preedit 状态。
+    ///
+    /// Issue #701 评论 5702214893: 若开始 composition 时 buffer 已有选区
+    /// （`has_selection()`），用选区范围 `(start, end)` 作为 session 的
+    /// replace range（`new_with_replace_range`），对应 Qt 官方
+    /// `QInputMethodEvent` 语义"先删除当前 selection，再处理 replacement"。
+    /// 无选区时退化为零长度插入 `(cursor, cursor)`（`new`）。
     fn ensure_composition_session(&mut self) {
         if self.pipeline.composition().composition_session.is_none() {
             let cursor = self.buffer.cursor;
-            self.pipeline.composition_mut().composition_session = Some(CompositionSession::new(
-                self.pipeline.text_revision(),
-                self.pipeline.visual_revision(),
-                self.buffer.text.clone(),
-                cursor,
-            ));
+            let text_rev = self.pipeline.text_revision();
+            let vis_rev = self.pipeline.visual_revision();
+            let text = self.buffer.text.clone();
+            let session = if self.buffer.has_selection() {
+                let (start, end) = self.buffer.selection_range();
+                CompositionSession::new_with_replace_range(text_rev, vis_rev, text, start, end)
+            } else {
+                CompositionSession::new(text_rev, vis_rev, text, cursor)
+            };
+            self.pipeline.composition_mut().composition_session = Some(session);
         }
     }
 

@@ -13,6 +13,12 @@
 //! - `utf8_to_utf16_offset`：UTF-8 byte offset 落在多字节序列中间时，对齐到该字符的起始位置
 //!
 //! 超出文本长度的 offset 会被 clamp 到文本末尾。
+//!
+//! Issue #701 评论 5702214893: `utf16_forward_from_byte` 在代理对中间时停在
+//! 字符起点而非跨过整个字符。当 `remaining < ch.len_utf16()`（例如 emoji 占
+//! 2 个 UTF-16 code unit，但只走 1 个）时，不推进 `pos`，`break` 停在当前
+//! 字符起点。只有 `remaining >= ch.len_utf16()` 才跨过整个字符。这保证
+//! forward 在代理对中间的 offset 仍对齐到字符边界，与 backward 行为一致。
 
 /// 从 `byte_start` 出发，在 `text` 上向前走 `utf16_count` 个 UTF-16 code unit，
 /// 返回到达的 UTF-8 byte offset。
@@ -35,7 +41,12 @@ pub fn utf16_forward_from_byte(text: &str, byte_start: usize, utf16_count: usize
             break;
         }
         let utf16_len = ch.len_utf16();
-        remaining = remaining.saturating_sub(utf16_len);
+        if remaining < utf16_len {
+            // 走不到整个字符（如 emoji 代理对只走 1 个 code unit），
+            // 停在当前字符起点，不推进 pos。Issue #701 评论 5702214893。
+            break;
+        }
+        remaining -= utf16_len;
         pos += ch.len_utf8();
     }
     pos
@@ -206,8 +217,9 @@ mod tests {
         let text = "a😀b";
         // 😀 是 2 UTF-16 code unit, 4 UTF-8 bytes（byte 1..5）
         // 从 byte 1（😀 起始）走 1 个 UTF-16 code unit：😀 占 2 个 code unit，
-        // 一次跨过整个字符（UTF-8 不能停在代理对中间），到达 byte 5。
-        assert_eq!(utf16_forward_from_byte(text, 1, 1), 5);
+        // 走 1 个不够跨过整个字符，停在 😀 起点 byte 1（不推进 pos）。
+        // Issue #701 评论 5702214893: forward 在代理对中间停在字符起点。
+        assert_eq!(utf16_forward_from_byte(text, 1, 1), 1);
         // 走 2 个 UTF-16 code unit：正好跨过 😀，到达 byte 5。
         assert_eq!(utf16_forward_from_byte(text, 1, 2), 5);
         // 走 3 个 UTF-16 code unit：跨过 😀（2）+ 'b'（1），到达 byte 6。
