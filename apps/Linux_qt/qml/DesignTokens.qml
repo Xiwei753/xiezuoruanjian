@@ -8,34 +8,14 @@ QtObject {
     onIsDarkChanged: {
     }
 
-    property string themePaletteJson: ""
-    property string colorSource: "built_in"
-    property string selectedBuiltinThemeId: ""
-    property string builtinThemesJson: "[]"
+    // Issue #701 评论 5699565102: 运行时颜色只解析 resolvedSchemeJson。
+    // 删除 themePaletteJson / colorSource / selectedBuiltinThemeId /
+    // builtinThemesJson 以及 _themePalette / _selectedBuiltin /
+    // useThemePalette 这套二次选主题逻辑。主题状态统一由
+    // LinuxThemeController 发布到 resolvedSchemeJson，本文件不再自己
+    // 从 palette/builtin 重新选 scheme。只有 controller 尚未给出有效
+    // scheme 时，才使用本文件固定 fallback。
     property string resolvedSchemeJson: ""
-    property var _themePalette: {
-        if (themePaletteJson.length === 0) return null
-        try { return JSON.parse(themePaletteJson) } catch(e) { return null }
-    }
-    property var _builtinThemes: {
-        if (builtinThemesJson.length === 0) return []
-        try { return JSON.parse(builtinThemesJson) } catch(e) { return [] }
-    }
-    property var _selectedBuiltin: {
-        // Issue #677 评论 5653315696: Core DTO 字段名为 snake_case。
-        if (selectedBuiltinThemeId.length === 0) return _builtinThemes.length > 0 ? _builtinThemes[0] : null
-        for (var i = 0; i < _builtinThemes.length; i++) {
-            if (_builtinThemes[i].theme_id === selectedBuiltinThemeId) return _builtinThemes[i]
-        }
-        return _builtinThemes.length > 0 ? _builtinThemes[0] : null
-    }
-    property bool hasThemePalette: {
-        // Issue #677 评论 5653315696: Core DTO 字段名为 snake_case。
-        if (!_themePalette) return false
-        if (_themePalette.light_scheme && _themePalette.dark_scheme) return true
-        return false
-    }
-    property bool useThemePalette: colorSource === "saved_palette" && hasThemePalette
 
     property var _resolvedScheme: {
         if (resolvedSchemeJson.length === 0) return null
@@ -46,28 +26,6 @@ QtObject {
     function _schemeColor(key) {
         if (_hasResolvedScheme) {
             var val = _resolvedScheme[key]
-            if (val && val.length > 0 && val.charAt(0) === '#') {
-                return Qt.rgba(
-                    parseInt(val.substring(1,3), 16) / 255,
-                    parseInt(val.substring(3,5), 16) / 255,
-                    parseInt(val.substring(5,7), 16) / 255,
-                    1
-                )
-            }
-        }
-
-        // Issue #677 评论 5653315696: Core DTO 字段名为 snake_case。
-        var schemeKey = isDark ? "dark_scheme" : "light_scheme"
-        var scheme = null
-
-        if (useThemePalette && _themePalette) {
-            scheme = _themePalette[schemeKey]
-        } else if (_selectedBuiltin) {
-            scheme = _selectedBuiltin[schemeKey]
-        }
-
-        if (scheme) {
-            var val = scheme[key]
             if (val && val.length > 0 && val.charAt(0) === '#') {
                 return Qt.rgba(
                     parseInt(val.substring(1,3), 16) / 255,

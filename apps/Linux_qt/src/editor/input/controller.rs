@@ -2,6 +2,10 @@
 //!
 //! 接收归一化 EditorInputEvent，调用 EditorInputHost 修改正文和生成视觉事务。
 //! 不包含任何平台分支逻辑。动画状态不影响文本正确性。
+//!
+//! Issue #701 评论 5699569220: controller 只分发归一化后的编辑事件，
+//! 不再向 EditorInputHost 传 Qt UTF-16 replacement 参数。IME commit/replace
+//! 的 UTF-16→UTF-8 坐标换算已在 platform_ime 完成。
 
 use super::events::*;
 use crate::sujian_editor_item::PreeditAttribute;
@@ -27,7 +31,18 @@ pub(crate) trait EditorInputHost {
     fn input_delete_backward(&mut self);
     fn input_delete_forward(&mut self);
     fn input_insert_text(&mut self, text: String);
-    fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String);
+    /// 替换指定 UTF-8 byte range 并插入文本（IME commit 场景）。
+    ///
+    /// `replace_byte_start`/`replace_byte_end` 为 committed text 的 UTF-8 byte
+    /// offset（半开区间），由 `platform_ime` 结合当前 `CompositionSession` 把
+    /// Qt 的 replacementStart/replacementLength（UTF-16 QChar 偏移）解析后填入。
+    /// 进入此 trait 方法后不再携带任何 Qt 坐标。
+    fn input_replace_and_insert(
+        &mut self,
+        replace_byte_start: usize,
+        replace_byte_end: usize,
+        text: String,
+    );
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool);
     fn input_move_cursor_vertical(&mut self, down: bool, extend: bool);
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
@@ -175,18 +190,20 @@ pub(crate) fn ime_commit<H: EditorInputHost + ?Sized>(host: &mut H, text: String
 
 pub(crate) fn ime_replace_and_commit<H: EditorInputHost + ?Sized>(
     host: &mut H,
-    text: String,
-    replace_start: i32,
-    replace_length: i32,
+    event: ImeReplaceEvent,
 ) {
-    if !host.input_enabled() || text.is_empty() {
+    if !host.input_enabled() || event.inserted_text.is_empty() {
         return;
     }
     if host.input_take_suppress_next_ime_commit() {
         host.input_clear_preedit();
         return;
     }
-    host.input_replace_and_insert(replace_start, replace_length, text);
+    host.input_replace_and_insert(
+        event.replace_byte_start,
+        event.replace_byte_end,
+        event.inserted_text,
+    );
 }
 
 /// IME preedit 更新。

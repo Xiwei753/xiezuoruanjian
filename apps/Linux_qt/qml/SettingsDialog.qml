@@ -107,7 +107,8 @@ Dialog {
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
-        useAndroidTheme.checked = backendRef ? backendRef.setting_color_source === "saved_palette" : false
+        // Issue #701 评论 5699565102: useAndroidTheme 开关已删除
+        // （依赖已删除的 hasThemePalette，且与颜色来源下拉功能重复）。
         updatingValues = false
         if (coordinatedFixed) {
             root.settingsDirty = true
@@ -234,30 +235,6 @@ Dialog {
                 }
                 SettingsRow {
                     dt: root.dt
-                    visible: root.dt.hasThemePalette
-                    title: qsTr("使用 Android 同步主题色")
-                    description: qsTr("使用从 Android 设备同步的莫奈调色板")
-                    clickable: true
-                    onClicked: {
-                        useAndroidTheme.checked = !useAndroidTheme.checked
-                    }
-                    ModernSwitch {
-                        id: useAndroidTheme
-                        dt: root.dt
-                        checked: true
-                        onToggled: function(v) {
-                            if (v) {
-                                backendRef.setting_color_source = "saved_palette"
-                            } else {
-                                backendRef.setting_color_source = "built_in"
-                            }
-                            root.settingsDirty = true
-                            root.saveAndNotify()
-                        }
-                    }
-                }
-                SettingsRow {
-                    dt: root.dt
                     title: qsTr("颜色来源")
                     description: qsTr("选择素笺默认主题或已保存的设备配色")
                     ModernComboBox {
@@ -266,8 +243,15 @@ Dialog {
                         model: [qsTr("素笺默认"), qsTr("已保存的设备配色")]
                         onActivated: function(index) {
                             if (!backendRef || root.updatingValues) return
+                            // Issue #701 评论 5699565102: 颜色来源统一走
+                            // ThemeController，不再直接写
+                            // backendRef.setting_color_source。
                             var source = ["built_in", "saved_palette"][index]
-                            backendRef.setting_color_source = source
+                            if (themeControllerRef) {
+                                themeControllerRef.set_color_source(source)
+                            } else {
+                                backendRef.setting_color_source = source
+                            }
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }
@@ -294,7 +278,14 @@ Dialog {
                             if (!backendRef || root.updatingValues) return
                             var themeId = _themes[index] ? _themes[index].theme_id : ""
                             if (themeId.length > 0) {
-                                backendRef.setting_selected_builtin_theme_id = themeId
+                                // Issue #701 评论 5699565102: 内置主题统一走
+                                // ThemeController。set_selected_builtin_theme_id
+                                // 内部会同时把 color_source 设为 built_in。
+                                if (themeControllerRef) {
+                                    themeControllerRef.set_selected_builtin_theme_id(themeId)
+                                } else {
+                                    backendRef.setting_selected_builtin_theme_id = themeId
+                                }
                                 root.settingsDirty = true
                                 root.saveAndNotify()
                             }
@@ -327,7 +318,14 @@ Dialog {
                             if (!backendRef || root.updatingValues) return
                             var paletteId = _records[index] ? _records[index].palette_id : ""
                             if (paletteId.length > 0) {
-                                backendRef.setting_selected_palette_id = paletteId
+                                // Issue #701 评论 5699565102: 已保存 palette 统一走
+                                // ThemeController。set_selected_palette_id 内部会
+                                // 同时把 color_source 设为 saved_palette。
+                                if (themeControllerRef) {
+                                    themeControllerRef.set_selected_palette_id(paletteId)
+                                } else {
+                                    backendRef.setting_selected_palette_id = paletteId
+                                }
                                 root.settingsDirty = true
                                 root.saveAndNotify()
                             }

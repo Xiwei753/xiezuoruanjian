@@ -10,11 +10,20 @@
 //! handle_input_method_query() 不再直接读 QML property，
 //! 而是通过 sujian_get_ime_query_data / sujian_ime_query_text_* FFI 函数
 //! 从 SujianEditorItem 内部状态读取，等价于 CursorAnchorAdapter 数据源。
+//!
+//! Issue #701 评论 5699569220: 所有 UTF-16/QChar offset → UTF-8 byte offset/range
+//! 只在此文件（和 utf16_converter.rs）转换一次。`sujian_ime_replace_and_commit`
+//! 结合当前 CompositionSession 把 Qt replacement 解析成最终 committed byte range，
+//! 构造归一化的 `ImeReplaceEvent` 后交给 controller。进入 editor pipeline 后
+//! 禁止继续携带 replacementStart/replacementLength 这种 Qt 坐标。
 
 use super::controller::*;
-use super::events::decode_utf16_ptr;
+use super::events::{decode_utf16_ptr, ImeReplaceEvent};
 use crate::editor::paragraph_index_map::{
     utf16_code_unit_range_to_utf8_byte_range, utf16_code_unit_to_utf8_byte,
+};
+use crate::platform::linux_qt::utf16_converter::{
+    utf16_backward_from_byte, utf16_forward_from_byte,
 };
 use crate::sujian_editor_item::SujianEditorItem;
 use std::ffi::c_void;
@@ -101,11 +110,80 @@ extern "C" fn sujian_ime_replace_and_commit(
     let Some(item) = (unsafe { item_from_ptr(rust_item) }) else {
         return;
     };
-    let text = decode_utf16_ptr(text, text_len);
+    let inserted_text = decode_utf16_ptr(text, text_len);
+
+    // Issue #701 评论 5699569220: 在此把 Qt 的 replacementStart/replacementLength
+    // （UTF-16 QChar 偏移，相对 preedit 起点）结合当前 CompositionSession 解析成
+    // committed text 的 UTF-8 byte range。进入 editor pipeline 后不再携带 Qt 坐标。
+    let event = resolve_ime_replace_event(item, inserted_text, replace_start, replace_length);
+
     // SAFETY: AssertUnwindSafe needed for FFI boundary catch_unwind; the closure only accesses the item through a mutable reference obtained from a null-checked pointer; on panic, the FFI caller discards the item state gracefully.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        ime_replace_and_commit(item, text, replace_start, replace_length);
+        ime_replace_and_commit(item, event);
     }));
+}
+
+/// 把 Qt `QInputMethodEvent` 的 replacementStart/replacementLength（UTF-16
+/// QChar 偏移，相对 preedit 起点）解析成 committed text 的 UTF-8 byte range，
+/// 构造归一化的 `ImeReplaceEvent`。
+///
+/// Qt 官方语义：replacementStart/replacementLength 相对 preedit 起点解释，
+/// replacement 时忽略 preedit 区域。因此先构造 base_text（committed text 去掉
+/// session replace range），在 base_text 上换算 byte range，再映射回 committed
+/// text 坐标。
+///
+/// 所有 UTF-16→UTF-8 换算只在此处做一次，`editing.rs` 不再二次换算。
+fn resolve_ime_replace_event(
+    item: &SujianEditorItem,
+    inserted_text: String,
+    replace_start: i32,
+    replace_length: i32,
+) -> ImeReplaceEvent {
+    let (session_replace_start, session_replace_end, committed_text) =
+        item.ime_replacement_context();
+
+    // base_text = committed_text 去掉 [session_replace_start, session_replace_end) 段。
+    // Qt replacement 相对 preedit 起点（= session_replace_start in base_text）解释。
+    let mut base_text = String::with_capacity(committed_text.len());
+    base_text.push_str(&committed_text[..session_replace_start]);
+    base_text.push_str(&committed_text[session_replace_end..]);
+
+    let anchor_in_base = session_replace_start;
+
+    // Qt replacementStart 可正可负：正值向前走，负值向后走。
+    let rs_byte = if replace_start < 0 {
+        utf16_backward_from_byte(&base_text, anchor_in_base, (-replace_start) as usize)
+    } else {
+        utf16_forward_from_byte(&base_text, anchor_in_base, replace_start as usize)
+    };
+    // replacementLength 总是非负，从 rs_byte 向前走。
+    let re_byte = if replace_length > 0 {
+        utf16_forward_from_byte(&base_text, rs_byte, replace_length as usize)
+    } else {
+        rs_byte
+    };
+    let (del_start, del_end) = if rs_byte <= re_byte {
+        (rs_byte, re_byte)
+    } else {
+        (re_byte, rs_byte)
+    };
+
+    // base_text 坐标 → committed text 坐标：
+    // [0, session_replace_start) 段两者相同；
+    // (session_replace_start, ...) 段 committed text 比 base_text 多 preedit_len 偏移。
+    let preedit_len = session_replace_end - session_replace_start;
+    let committed_del_start = if del_start <= session_replace_start {
+        del_start
+    } else {
+        del_start + preedit_len
+    };
+    let committed_del_end = if del_end <= session_replace_start {
+        del_end
+    } else {
+        del_end + preedit_len
+    };
+
+    ImeReplaceEvent::new(committed_del_start, committed_del_end, inserted_text)
 }
 
 #[no_mangle]

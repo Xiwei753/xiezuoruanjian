@@ -42,7 +42,7 @@ mod tests {
         suppress_next_ime_commit: bool,
         explicit_clear_count: usize,
         repaint_count: usize,
-        replace_and_insert_calls: Vec<(i32, i32, String)>,
+        replace_and_insert_calls: Vec<(usize, usize, String)>,
     }
 
     impl FakeHost {
@@ -106,12 +106,15 @@ mod tests {
 
         fn input_replace_and_insert(
             &mut self,
-            replace_start: i32,
-            replace_length: i32,
+            replace_byte_start: usize,
+            replace_byte_end: usize,
             text: String,
         ) {
-            self.replace_and_insert_calls
-                .push((replace_start, replace_length, text.clone()));
+            self.replace_and_insert_calls.push((
+                replace_byte_start,
+                replace_byte_end,
+                text.clone(),
+            ));
             if !self.preedit_text.is_empty() {
                 self.preedit_text.clear();
                 self.preedit_cursor = 0;
@@ -451,51 +454,58 @@ mod tests {
     #[test]
     fn test_ime_replace_and_commit_basic() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "你好".to_string(), -2, 2);
+        // Issue #701 评论 5699569220: controller 接收归一化的 ImeReplaceEvent，
+        // 携带 UTF-8 byte range（由 platform_ime 解析后填入）。
+        let event = ImeReplaceEvent::new(0, 6, "你好".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -2);
-        assert_eq!(*len, 2);
+        let (start, end, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, 6);
         assert_eq!(text, "你好");
     }
 
     #[test]
     fn test_ime_replace_negative_start() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "新".to_string(), -1, 1);
+        let event = ImeReplaceEvent::new(0, 3, "新".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 1);
+        let (start, end, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, 3);
         assert_eq!(text, "新");
     }
 
     #[test]
     fn test_ime_replace_does_not_split_surrogate_pair() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "X".to_string(), -1, 1);
+        let event = ImeReplaceEvent::new(0, 1, "X".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 1);
+        let (start, end, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, 1);
         assert_eq!(text, "X");
     }
 
     #[test]
     fn test_ime_replace_clamps_to_char_boundary() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "替换".to_string(), 0, 3);
+        let event = ImeReplaceEvent::new(0, 6, "替换".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
+        let (start, end, text) = &host.replace_and_insert_calls[0];
         assert_eq!(*start, 0);
-        assert_eq!(*len, 3);
+        assert_eq!(*end, 6);
         assert_eq!(text, "替换");
     }
 
     #[test]
     fn test_ime_replace_single_undo() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
+        let event = ImeReplaceEvent::new(0, 6, "修正".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
     }
 
@@ -609,11 +619,12 @@ mod tests {
     #[test]
     fn linux_ime_replacement_works() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "修正".to_string(), -2, 2);
+        let event = ImeReplaceEvent::new(0, 6, "修正".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -2);
-        assert_eq!(*len, 2);
+        let (start, end, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, 6);
         assert_eq!(text, "修正");
     }
 
@@ -722,22 +733,24 @@ mod tests {
     #[test]
     fn test_ime_replace_and_commit_zero_length_nonzero_start() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "你好".to_string(), 3, 0);
+        let event = ImeReplaceEvent::new(3, 3, "你好".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
+        let (start, end, text) = &host.replace_and_insert_calls[0];
         assert_eq!(*start, 3);
-        assert_eq!(*len, 0);
+        assert_eq!(*end, 3);
         assert_eq!(text, "你好");
     }
 
     #[test]
     fn test_ime_replace_and_commit_negative_start_zero_length() {
         let mut host = FakeHost::enabled();
-        ime_replace_and_commit(&mut host, "好".to_string(), -1, 0);
+        let event = ImeReplaceEvent::new(0, 0, "好".to_string());
+        ime_replace_and_commit(&mut host, event);
         assert_eq!(host.replace_and_insert_calls.len(), 1);
-        let (start, len, text) = &host.replace_and_insert_calls[0];
-        assert_eq!(*start, -1);
-        assert_eq!(*len, 0);
+        let (start, end, text) = &host.replace_and_insert_calls[0];
+        assert_eq!(*start, 0);
+        assert_eq!(*end, 0);
         assert_eq!(text, "好");
     }
 }

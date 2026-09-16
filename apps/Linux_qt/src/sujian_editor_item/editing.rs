@@ -1,5 +1,58 @@
 use super::*;
 
+/// Issue #701 评论 5699573227 第三阶段: 统一编辑操作描述。
+///
+/// `record_edit_transaction` 内部根据此枚举执行一次 pipeline edit command。
+/// 所有普通输入、删除、IME commit/replace 都收口到这同一个入口，
+/// 不再各自直接调 `pipeline.insert_text` / `pipeline.replace_range` /
+/// `pipeline.delete_range`。
+///
+/// `pipeline_cause` 是传给 Core pipeline 的事务分类（用于 undo/redo 栈语义），
+/// 与 `record_edit_transaction` 的 `visual_cause`（用于视觉事务分类）分离。
+/// 多数场景两者相同，但 `clipboard_paste` 走 `insert_text_with_cause` 时
+/// `pipeline_cause` 仍是 `Typing`/`TypingCommit`，`visual_cause` 是 `Paste`。
+enum EditOp {
+    Insert {
+        cursor: usize,
+        text: String,
+        pipeline_cause: EditorTransactionCause,
+    },
+    Replace {
+        start: usize,
+        end: usize,
+        text: String,
+        pipeline_cause: EditorTransactionCause,
+    },
+    Delete {
+        start: usize,
+        end: usize,
+        pipeline_cause: EditorTransactionCause,
+    },
+}
+
+/// Issue #701 评论 5699573227 第三阶段: IME composition commit 参数。
+///
+/// 仅在 `record_edit_transaction` 处理 composition commit/replace 时提供。
+/// 普通输入/删除传 `None`，走 `record_transaction` 路径。
+/// 带 `Some` 时走 `record_composition_commit_transaction` 路径，处理 preedit
+/// 区间收进、candidate 揭示、committed replace range、pending preedit cursor rect
+/// 作为 old caret 起点等 composition 专属语义。
+///
+/// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`），
+/// 文字显隐/位移和光标位移消费同一个 timeline、同一个 frame progress。
+struct CompositionCommitParams {
+    pending_preedit_cursor_rect: Option<CursorRect>,
+    preedit_byte_start: usize,
+    preedit_byte_end: usize,
+    saved_virtual_text: String,
+    candidate_byte_start: usize,
+    candidate_byte_end: usize,
+    committed_replace_start: usize,
+    committed_replace_end: usize,
+    cancel_reason: &'static str,
+    summary_tag: &'static str,
+}
+
 impl SujianEditorItem {
     pub(crate) fn current_cursor_rect_for_transaction(&self) -> Option<CursorRect> {
         let x = self.cursor_ctrl.visual_x;
@@ -177,6 +230,100 @@ impl SujianEditorItem {
         self.transaction_created();
     }
 
+    /// Issue #701 评论 5699573227 第三阶段: 统一编辑事务入口。
+    ///
+    /// `insert_text_with_cause` / `delete_backward` / `delete_forward` /
+    /// `ime_replace_and_insert` / `delete_selection` 全部收口到这一个 helper。
+    /// 固定做：
+    /// 1. 保存 old text/selection/caret（`self.buffer.snapshot()`）；
+    /// 2. 调一次 pipeline edit command（由 `op` 描述，不再由调用者各自直调）；
+    /// 3. `sync_buffer_from_pipeline` 后读取 new text/selection/caret；
+    /// 4. 生成一对 old/new layout snapshot 并创建一次视觉事务。
+    ///
+    /// - `op$` 不带 composition commit 参数（`composition == None`）时走
+    ///   `record_transaction`，由 `pipeline.record_visual_transaction` 内部
+    ///   排版 old/new 并 `process_transaction`。
+    /// - 带 `CompositionCommitParams` 时走 `record_composition_commit_transaction`，
+    ///   处理 preedit 区间收进、candidate 揭示、committed replace range、
+    ///   `pending_preedit_cursor_rect` 作为 old caret 起点等 composition 专属语义。
+    ///
+    /// 两条路径最终都创建同一种 `TextVisualTransaction`（放入 `prepared_queue`），
+    /// Typing / Delete / TypingCommit / IME commit/replace 都进入同一种
+    /// `VisualTransaction`，文字显隐/位移和光标位移消费同一个 timeline、
+    /// 同一个 frame progress。
+    ///
+    /// 返回 `true` 表示编辑已应用并记录事务；`false` 表示 pipeline edit 未应用
+    /// （如空删除范围），调用者据此决定是否 `emit_content_changed`。
+    /// `insert_text_with_cause` 总是 `emit_content_changed`（保持原行为），
+    /// `delete_backward` / `delete_forward` / `delete_selection` 仅在 `true` 时
+    /// `emit_content_changed`。
+    fn record_edit_transaction(
+        &mut self,
+        op: EditOp,
+        visual_cause: EditorTransactionCause,
+        composition: Option<CompositionCommitParams>,
+    ) -> bool {
+        let old = self.buffer.snapshot();
+
+        let applied = match op {
+            EditOp::Insert {
+                cursor,
+                text,
+                pipeline_cause,
+            } => self
+                .pipeline
+                .insert_text(cursor, &text, pipeline_cause)
+                .is_some(),
+            EditOp::Replace {
+                start,
+                end,
+                text,
+                pipeline_cause,
+            } => self
+                .pipeline
+                .replace_range(start, end, &text, pipeline_cause)
+                .is_some(),
+            EditOp::Delete {
+                start,
+                end,
+                pipeline_cause,
+            } => self
+                .pipeline
+                .delete_range(start, end, pipeline_cause)
+                .is_some(),
+        };
+        if !applied {
+            return false;
+        }
+        self.sync_buffer_from_pipeline();
+        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
+        // adjust_affinity_at_wrap_boundary（会触发 ensure_layout_cached 排版 A，
+        // 与 record_visual_transaction 排版 B 重复）。affinity 调整移到
+        // emit_content_changed 内部 promote 之后（cache hit 不排版）。
+        let new = self.buffer.snapshot();
+
+        if let Some(params) = composition {
+            self.record_composition_commit_transaction(
+                &old,
+                &new,
+                visual_cause,
+                params.pending_preedit_cursor_rect,
+                params.preedit_byte_start,
+                params.preedit_byte_end,
+                &params.saved_virtual_text,
+                params.candidate_byte_start,
+                params.candidate_byte_end,
+                params.committed_replace_start,
+                params.committed_replace_end,
+                params.cancel_reason,
+                params.summary_tag,
+            );
+        } else {
+            let _vt = self.record_transaction(old, new, visual_cause, true);
+        }
+        true
+    }
+
     pub(crate) fn insert_text(&mut self, text: QString) {
         self.insert_text_with_cause(text, None);
     }
@@ -202,67 +349,71 @@ impl SujianEditorItem {
             preedit_byte_end,
         );
 
-        let old = self.buffer.snapshot();
-
-        if commit.was_composing && commit.session_replace_start != commit.session_replace_end {
-            let _ = self.pipeline.replace_range(
-                commit.session_replace_start,
-                commit.session_replace_end,
-                &inserted,
-                EditorTransactionCause::TypingCommit,
-            );
-            self.sync_buffer_from_pipeline();
-        } else {
-            let (sel_start, sel_end) = self.buffer.selection_range();
-            if sel_start != sel_end {
-                let _ = self.pipeline.replace_range(
-                    sel_start,
-                    sel_end,
-                    &inserted,
-                    EditorTransactionCause::Typing,
-                );
-                self.sync_buffer_from_pipeline();
-            } else {
-                let _ = self.pipeline.insert_text(
-                    self.buffer.cursor,
-                    &inserted,
-                    EditorTransactionCause::Typing,
-                );
-                self.sync_buffer_from_pipeline();
-            }
-        }
-        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
-        // adjust_affinity_at_wrap_boundary（会触发 ensure_layout_cached 排版 A，
-        // 与 record_visual_transaction 排版 B 重复）。affinity 调整移到
-        // emit_content_changed 内部 promote 之后（cache hit 不排版）。
-        let cause = explicit_cause.unwrap_or_else(|| {
+        // visual_cause 用于视觉事务分类；pipeline_cause（在 EditOp 内）用于 Core
+        // undo/redo 栈分类。clipboard_paste 走此入口时 visual_cause 是 Paste，
+        // pipeline_cause 仍是 Typing/TypingCommit。
+        let visual_cause = explicit_cause.unwrap_or_else(|| {
             if inserted.chars().count() == 1 {
                 EditorTransactionCause::Typing
             } else {
                 EditorTransactionCause::TypingCommit
             }
         });
-        let new = self.buffer.snapshot();
 
-        if commit.was_composing && self.current_typing_animation_enabled {
-            self.record_composition_commit_transaction(
-                &old,
-                &new,
-                cause,
-                commit.pending_preedit_cursor_rect,
-                commit.preedit_byte_start,
-                commit.preedit_byte_end,
-                &commit.saved_virtual_text,
-                commit.candidate_byte_start,
-                commit.candidate_byte_end,
-                commit.committed_replace_start,
-                commit.committed_replace_end,
-                "commit_insert",
-                "composition_commit",
-            );
+        // composition commit 仅在 was_composing 且动画开启时走 composition 专属路径；
+        // 否则走普通 record_transaction，与普通输入/删除同一种 VisualTransaction。
+        let composition = if commit.was_composing && self.current_typing_animation_enabled {
+            Some(CompositionCommitParams {
+                pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
+                preedit_byte_start: commit.preedit_byte_start,
+                preedit_byte_end: commit.preedit_byte_end,
+                saved_virtual_text: commit.saved_virtual_text.clone(),
+                candidate_byte_start: commit.candidate_byte_start,
+                candidate_byte_end: commit.candidate_byte_end,
+                committed_replace_start: commit.committed_replace_start,
+                committed_replace_end: commit.committed_replace_end,
+                cancel_reason: "commit_insert",
+                summary_tag: "composition_commit",
+            })
         } else {
-            let _vt = self.record_transaction(old, new, cause, true);
-        }
+            None
+        };
+
+        // 构造 EditOp。先读出 buffer 状态和 commit 的 session replace range，
+        // 避免 commit 被 composition 消耗后无法访问。
+        let was_composing_replace =
+            commit.was_composing && commit.session_replace_start != commit.session_replace_end;
+        let session_replace_start = commit.session_replace_start;
+        let session_replace_end = commit.session_replace_end;
+        let cursor = self.buffer.cursor;
+        let (sel_start, sel_end) = self.buffer.selection_range();
+
+        let op = if was_composing_replace {
+            EditOp::Replace {
+                start: session_replace_start,
+                end: session_replace_end,
+                text: inserted,
+                pipeline_cause: EditorTransactionCause::TypingCommit,
+            }
+        } else if sel_start != sel_end {
+            EditOp::Replace {
+                start: sel_start,
+                end: sel_end,
+                text: inserted,
+                pipeline_cause: EditorTransactionCause::Typing,
+            }
+        } else {
+            EditOp::Insert {
+                cursor,
+                text: inserted,
+                pipeline_cause: EditorTransactionCause::Typing,
+            }
+        };
+
+        // Issue #701 评论 5699573227 第三阶段: 普通输入与 IME commit 共用
+        // record_edit_transaction 统一入口。insert_text_with_cause 总是
+        // emit_content_changed（保持原行为，即使 pipeline edit 未应用）。
+        let _applied = self.record_edit_transaction(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
 
@@ -270,17 +421,25 @@ impl SujianEditorItem {
         // pending_preedit_cursor_rect 反写到 cursor_ctrl.visual_x/visual_y。
         // pending_preedit_cursor_rect 只作为 IME commit 动画的 old caret 起点
         // （已传给 record_composition_commit_transaction 的 old_cursor_rect）。
-        // 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret，
+        // 提交后的 target caret 来自 new selection/head 在 new layout 中的 caret,
         // 由 emit_content_changed → update_cursor_visual_position 统一计算。
         // visual_x/visual_y 只是屏幕动画位置，不与 target 互相反写。
 
         self.emit_content_changed();
     }
 
+    /// Issue #701 评论 5699569220: IME replace+commit — 接收已归一化的 UTF-8 byte range。
+    ///
+    /// `replace_byte_start`/`replace_byte_end` 为 committed text 的 UTF-8 byte
+    /// offset（半开区间），由 `platform_ime` 结合当前 `CompositionSession` 把
+    /// Qt 的 replacementStart/replacementLength（UTF-16 QChar 偏移）解析后传入。
+    /// 此函数不再做任何 UTF-16→UTF-8 或 base_text↔virtual_text↔committed_text
+    /// 坐标换算，committed text、virtual text、preedit text 不再在这里互相换锚点。
+    /// 这一阶段只保证最终编辑 range 和新 cursor 正确，不重写 animation coordinator。
     pub(crate) fn ime_replace_and_insert(
         &mut self,
-        replace_start: i32,
-        replace_length: i32,
+        replace_byte_start: usize,
+        replace_byte_end: usize,
         text: String,
     ) {
         if !self.current_editor_enabled {
@@ -299,134 +458,64 @@ impl SujianEditorItem {
             preedit_byte_end,
         );
 
-        let committed_text = self.buffer.text.clone();
+        // 已归一化的 committed text UTF-8 byte range，直接使用。
+        let del_start = replace_byte_start;
+        let del_end = replace_byte_end;
 
-        let base_text = format!(
-            "{}{}",
-            &committed_text[..commit.session_replace_start],
-            &committed_text[commit.session_replace_end..]
-        );
-
-        fn utf16_forward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-            if utf16_count <= 0 {
-                return byte_start;
-            }
-            let mut remaining = utf16_count;
-            let mut pos = byte_start;
-            for ch in text[byte_start..].chars() {
-                if remaining <= 0 {
-                    break;
-                }
-                remaining -= ch.len_utf16() as i32;
-                pos += ch.len_utf8();
-            }
-            pos.min(text.len())
-        }
-
-        fn utf16_backward(text: &str, byte_start: usize, utf16_count: i32) -> usize {
-            if utf16_count <= 0 {
-                return byte_start;
-            }
-            let mut remaining = utf16_count;
-            let mut pos = byte_start;
-            for ch in text[..byte_start].chars().rev() {
-                if remaining <= 0 {
-                    break;
-                }
-                remaining -= ch.len_utf16() as i32;
-                pos -= ch.len_utf8();
-            }
-            pos
-        }
-
-        let anchor_in_base = commit.session_replace_start;
-        let rs_byte = if replace_start < 0 {
-            utf16_backward(&base_text, anchor_in_base, -replace_start)
-        } else if replace_start == 0 {
-            anchor_in_base
-        } else {
-            utf16_forward(&base_text, anchor_in_base, replace_start)
-        };
-        let re_byte = if replace_length > 0 {
-            utf16_forward(&base_text, rs_byte, replace_length)
-        } else {
-            rs_byte
-        };
-        let (del_start, del_end) = if rs_byte <= re_byte {
-            (rs_byte, re_byte)
-        } else {
-            (re_byte, rs_byte)
-        };
-
-        let new_base = format!(
-            "{}{}{}",
-            &base_text[..del_start],
-            inserted,
-            &base_text[del_end..]
-        );
-
-        let cursor_in_new_base = del_start + inserted.len();
-
-        let _new_text = new_base;
-        let _new_cursor = cursor_in_new_base;
-
-        let preedit_len = commit.preedit_byte_end - commit.preedit_byte_start;
-        let qt_replace_start_in_vt = if del_start <= commit.session_replace_start {
-            del_start
-        } else {
-            del_start + preedit_len
-        };
-        let qt_replace_end_in_vt = if del_end <= commit.session_replace_start {
-            del_end
-        } else {
-            del_end + preedit_len
-        };
-
-        let committed_replace_start = qt_replace_start_in_vt;
-        let committed_replace_end = qt_replace_end_in_vt;
-
+        // candidate = 插入文本在新 committed text 中的位置。
         let candidate_byte_start = del_start;
         let candidate_byte_end = del_start + inserted.len();
 
-        let old = self.buffer.snapshot();
+        // committed_replace 传给动画协调器。本阶段不再做 base_text↔virtual_text
+        // 锚点换算；在普通 preedit（零长度 session replace range）场景下
+        // committed text 坐标与 virtual text 坐标一致，setComposingRegion 场景
+        // 的偏差留给后续阶段处理（Linux Qt 不走 setComposingRegion）。
+        let committed_replace_start = del_start;
+        let committed_replace_end = del_end;
 
-        let cause = if inserted.chars().count() == 1 {
+        let visual_cause = if inserted.chars().count() == 1 {
             EditorTransactionCause::Typing
         } else {
             EditorTransactionCause::TypingCommit
         };
-        if del_start != del_end {
-            let _ = self
-                .pipeline
-                .replace_range(del_start, del_end, &inserted, cause);
-        } else {
-            let _ = self.pipeline.insert_text(del_start, &inserted, cause);
-        }
-        self.sync_buffer_from_pipeline();
 
-        // Issue #658 评论 5623746506 问题 1: 不在 record_transaction 之前调
-        // adjust_affinity_at_wrap_boundary。affinity 调整移到 emit_content_changed。
-        let new = self.buffer.snapshot();
-
-        if commit.was_composing && self.current_typing_animation_enabled {
-            self.record_composition_commit_transaction(
-                &old,
-                &new,
-                cause,
-                commit.pending_preedit_cursor_rect,
-                commit.preedit_byte_start,
-                commit.preedit_byte_end,
-                &commit.saved_virtual_text,
+        let composition = if commit.was_composing && self.current_typing_animation_enabled {
+            Some(CompositionCommitParams {
+                pending_preedit_cursor_rect: commit.pending_preedit_cursor_rect.clone(),
+                preedit_byte_start: commit.preedit_byte_start,
+                preedit_byte_end: commit.preedit_byte_end,
+                saved_virtual_text: commit.saved_virtual_text.clone(),
                 candidate_byte_start,
                 candidate_byte_end,
                 committed_replace_start,
                 committed_replace_end,
-                "commit_replace",
-                "composition_commit_replace",
-            );
+                cancel_reason: "commit_replace",
+                summary_tag: "composition_commit_replace",
+            })
         } else {
-            let _vt = self.record_transaction(old, new, cause, true);
-        }
+            None
+        };
+
+        // del_start == del_end 时走 Insert（零长度 replace 等价于 insert）；
+        // 否则走 Replace。pipeline_cause 与 visual_cause 一致。
+        let op = if del_start != del_end {
+            EditOp::Replace {
+                start: del_start,
+                end: del_end,
+                text: inserted,
+                pipeline_cause: visual_cause,
+            }
+        } else {
+            EditOp::Insert {
+                cursor: del_start,
+                text: inserted,
+                pipeline_cause: visual_cause,
+            }
+        };
+
+        // Issue #701 评论 5699573227 第三阶段: IME replace+commit 与普通输入/删除
+        // 共用 record_edit_transaction 统一入口。
+        let _applied = self.record_edit_transaction(op, visual_cause, composition);
 
         self.pipeline.finish_composition_commit();
 
@@ -445,35 +534,26 @@ impl SujianEditorItem {
             return;
         }
         let cursor = self.buffer.cursor;
-        if self.buffer.has_selection() {
-            let (start, end) = self.buffer.selection_range();
-            let old = self.buffer.snapshot();
-            if self
-                .pipeline
-                .delete_range(start, end, EditorTransactionCause::Delete)
-                .is_some()
-            {
-                self.sync_buffer_from_pipeline();
-                // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-                let new = self.buffer.snapshot();
-                let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-                self.emit_content_changed();
+        let (start, end) = if self.buffer.has_selection() {
+            self.buffer.selection_range()
+        } else {
+            // 无选区时删除前一个字符；行首时 prev_char_boundary 返回 None，直接返回。
+            match prev_char_boundary(&self.buffer.text, cursor) {
+                Some(prev) => (prev, cursor),
+                None => return,
             }
-            return;
-        }
-        let Some(prev) = prev_char_boundary(&self.buffer.text, cursor) else {
-            return;
         };
-        let old = self.buffer.snapshot();
-        if self
-            .pipeline
-            .delete_range(prev, cursor, EditorTransactionCause::Delete)
-            .is_some()
-        {
-            self.sync_buffer_from_pipeline();
-            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.buffer.snapshot();
-            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        // Issue #701 评论 5699573227 第三阶段: 普通删除与普通输入/IME commit
+        // 共用 record_edit_transaction 统一入口。跨行删除的 old/new caret 都从
+        // 同一对 snapshot 读取（record_transaction 内部排版 old/new 后取 caret），
+        // 解决删除到上一行时回抽/跳一下。
+        let op = EditOp::Delete {
+            start,
+            end,
+            pipeline_cause: EditorTransactionCause::Delete,
+        };
+        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
             self.emit_content_changed();
         }
     }
@@ -483,35 +563,22 @@ impl SujianEditorItem {
             return;
         }
         let cursor = self.buffer.cursor;
-        if self.buffer.has_selection() {
-            let (start, end) = self.buffer.selection_range();
-            let old = self.buffer.snapshot();
-            if self
-                .pipeline
-                .delete_range(start, end, EditorTransactionCause::Delete)
-                .is_some()
-            {
-                self.sync_buffer_from_pipeline();
-                // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-                let new = self.buffer.snapshot();
-                let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
-                self.emit_content_changed();
+        let (start, end) = if self.buffer.has_selection() {
+            self.buffer.selection_range()
+        } else {
+            // 无选区时删除后一个字符；行末时 next_char_boundary 返回 None，直接返回。
+            match next_char_boundary(&self.buffer.text, cursor) {
+                Some(next) => (cursor, next),
+                None => return,
             }
-            return;
-        }
-        let Some(next) = next_char_boundary(&self.buffer.text, cursor) else {
-            return;
         };
-        let old = self.buffer.snapshot();
-        if self
-            .pipeline
-            .delete_range(cursor, next, EditorTransactionCause::Delete)
-            .is_some()
-        {
-            self.sync_buffer_from_pipeline();
-            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.buffer.snapshot();
-            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        let op = EditOp::Delete {
+            start,
+            end,
+            pipeline_cause: EditorTransactionCause::Delete,
+        };
+        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
             self.emit_content_changed();
         }
     }
@@ -521,16 +588,13 @@ impl SujianEditorItem {
             return;
         }
         let (start, end) = self.buffer.selection_range();
-        let old = self.buffer.snapshot();
-        if self
-            .pipeline
-            .delete_range(start, end, EditorTransactionCause::Delete)
-            .is_some()
-        {
-            self.sync_buffer_from_pipeline();
-            // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
-            let new = self.buffer.snapshot();
-            let _vt = self.record_transaction(old, new, EditorTransactionCause::Delete, true);
+
+        let op = EditOp::Delete {
+            start,
+            end,
+            pipeline_cause: EditorTransactionCause::Delete,
+        };
+        if self.record_edit_transaction(op, EditorTransactionCause::Delete, None) {
             self.emit_content_changed();
         }
     }

@@ -2,6 +2,17 @@ use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
 
+/// Issue #701 评论 5699565102: 运行时主题状态的唯一事实来源。
+///
+/// `appearance_mode`、`system_is_dark`、`is_dark`、`color_source`、当前
+/// builtin/palette id 以及最终 `ThemeColorScheme`（`resolved_scheme_json`）
+/// 全部从同一份 `DomainSnapshot` 读取，不再一个读 snapshot、另一个临时去
+/// `AppBackend` 再算一次。
+///
+/// 切换主题模式、颜色来源、内置主题、已保存 palette 后，只在 setter 里写
+/// AppBackend 设置并发一次 `scheme_changed`；`resolved_scheme_json` 在 QML
+/// 侧通过该信号重新求值。`with_app` 仅用于调用 `core_api()` 加载 palette
+/// record / builtin theme，不再用于读取主题设置本身。
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
@@ -61,50 +72,79 @@ impl LinuxThemeController {
         self.app.snapshot().borrow()
     }
 
+    /// 从同一份 `DomainSnapshot` 一次性解析当前运行时主题状态。
+    ///
+    /// 返回 `(appearance_mode, system_is_dark, is_dark, color_source,
+    /// selected_palette_id, selected_builtin_theme_id)`。所有 QML 只读属性
+    /// （`appearance_mode`、`is_dark`、`color_source` 等）和
+    /// `resolved_scheme_json` 都基于这份快照，避免一个属性读 snapshot、
+    /// 另一个属性临时再 borrow `AppBackend` 造成的双状态机。
+    fn resolve_state(&self) -> ResolvedThemeState {
+        let s = self.snap();
+        let appearance_mode = s.appearance_mode.clone();
+        let system_is_dark = s.system_is_dark;
+        let is_dark = Self::compute_is_dark(&appearance_mode, system_is_dark);
+        let color_source = s.color_source.clone();
+        let selected_palette_id = s.selected_palette_id.clone();
+        let selected_builtin_theme_id = s.selected_builtin_theme_id.clone();
+        ResolvedThemeState {
+            appearance_mode,
+            system_is_dark,
+            is_dark,
+            color_source,
+            selected_palette_id,
+            selected_builtin_theme_id,
+        }
+    }
+
     /// Issue #677 评论 5653315696: 输出的主题 JSON 字段名与 Core DTO 一致，统一使用 snake_case。
     ///
     /// `serde_json::to_string(&s)` 序列化的是 Core 的 `ThemeColorScheme` DTO，其字段名
     /// （`on_surface`、`on_surface_variant`、`surface_container_low` 等）由 serde 派生为
     /// snake_case。本方法不做任何 camelCase 转换，QML 侧（DesignTokens.qml）必须按
     /// snake_case key 读取。这是 Linux_Qt 与 Core 之间唯一的主题 JSON 字段名协议。
+    ///
+    /// Issue #701 评论 5699565102: 主题设置（appearance_mode、color_source、
+    /// selected_palette_id、selected_builtin_theme_id、system_is_dark）全部从
+    /// `resolve_state()` 的同一份快照读取。`with_app` 仅用于调用 `core_api()`
+    /// 加载 palette record / builtin theme 数据。
     fn resolved_scheme_json(&self) -> QString {
-        self.with_app(|app| {
-            let color_source = app.setting_color_source().to_string();
-            let appearance_mode = app.setting_appearance_mode().to_string();
-            let is_dark = Self::compute_is_dark(&appearance_mode, self.system_is_dark());
+        let state = self.resolve_state();
+        let is_dark = state.is_dark;
 
-            let scheme = if color_source == "saved_palette" {
-                let palette_id = app.setting_selected_palette_id().to_string();
-                if !palette_id.is_empty() {
-                    let parts: Vec<&str> = palette_id.splitn(2, ':').collect();
-                    if parts.len() == 2 {
-                        if let Some(core) = app.core_api() {
-                            if let Ok(record) = core.load_palette_record(parts[0], parts[1]) {
-                                let dto: writer_core::api::types::ThemePaletteRecordDto = record;
-                                if is_dark {
-                                    Some(dto.dark_scheme)
-                                } else {
-                                    Some(dto.light_scheme)
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+        let scheme = if state.color_source == "saved_palette" {
+            if !state.selected_palette_id.is_empty() {
+                let parts: Vec<&str> = state.selected_palette_id.splitn(2, ':').collect();
+                if parts.len() == 2 {
+                    self.with_app(|app| {
+                        app.core_api().and_then(|core| {
+                            core.load_palette_record(parts[0], parts[1])
+                                .ok()
+                                .map(|dto| {
+                                    let dto: writer_core::api::types::ThemePaletteRecordDto = dto;
+                                    if is_dark {
+                                        dto.dark_scheme
+                                    } else {
+                                        dto.light_scheme
+                                    }
+                                })
+                        })
+                    })
+                    .unwrap_or(None)
                 } else {
                     None
                 }
             } else {
                 None
-            };
+            }
+        } else {
+            None
+        };
 
-            let scheme = scheme.or_else(|| {
-                let theme_id = app.setting_selected_builtin_theme_id().to_string();
-                if let Some(core) = app.core_api() {
+        let scheme = scheme.or_else(|| {
+            let theme_id = state.selected_builtin_theme_id.clone();
+            self.with_app(|app| {
+                app.core_api().and_then(|core| {
                     let themes = core.list_builtin_themes();
                     let theme = if theme_id.is_empty() {
                         themes.first()
@@ -118,49 +158,42 @@ impl LinuxThemeController {
                             t.light_scheme.clone()
                         }
                     })
-                } else {
-                    None
-                }
-            });
+                })
+            })
+            .unwrap_or(None)
+        });
 
-            match scheme {
-                Some(s) => {
-                    let json = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_string());
-                    QString::from(json)
-                }
-                None => "{}".into(),
+        match scheme {
+            Some(s) => {
+                let json = serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_string());
+                QString::from(json)
             }
-        })
-        .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+            None => "{}".into(),
+        }
     }
 
     fn is_dark(&self) -> bool {
-        let mode = self.snap().appearance_mode.clone();
-        Self::compute_is_dark(&mode, self.system_is_dark())
+        self.resolve_state().is_dark
     }
 
     fn color_source(&self) -> QString {
-        self.with_app(|app| app.setting_color_source())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        QString::from(self.resolve_state().color_source)
     }
 
     fn selected_builtin_theme_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_builtin_theme_id())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        QString::from(self.resolve_state().selected_builtin_theme_id)
     }
 
     fn selected_palette_id(&self) -> QString {
-        self.with_app(|app| app.setting_selected_palette_id())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        QString::from(self.resolve_state().selected_palette_id)
     }
 
     fn appearance_mode(&self) -> QString {
-        self.with_app(|app| app.setting_appearance_mode())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
+        QString::from(self.resolve_state().appearance_mode)
     }
 
     fn system_is_dark(&self) -> bool {
-        self.snap().system_is_dark
+        self.resolve_state().system_is_dark
     }
 
     fn compute_is_dark(mode: &str, sys_dark: bool) -> bool {
@@ -173,15 +206,14 @@ impl LinuxThemeController {
 
     fn reload(&mut self) {
         // 主题解析（应用内部逻辑）→ origin=App。
-        let appearance_mode = self.snap().appearance_mode.clone();
-        let is_dark = self.is_dark();
-        let is_dark_str = if is_dark { "true" } else { "false" };
+        let state = self.resolve_state();
+        let is_dark_str = if state.is_dark { "true" } else { "false" };
         crate::backend::app_backend::record_struct_event(
             writer_diagnostics::DiagnosticOrigin::App,
             "theme.resolve",
             "theme",
             &[
-                ("appearanceMode", &appearance_mode),
+                ("appearanceMode", &state.appearance_mode),
                 ("isDark", is_dark_str),
             ],
         );
@@ -293,4 +325,18 @@ impl LinuxThemeController {
             }
         }
     }
+}
+
+/// 从 `DomainSnapshot` 一次性解析出的运行时主题状态。
+///
+/// `LinuxThemeController` 的所有 QML 只读属性和 `resolved_scheme_json` 都
+/// 基于这同一份状态，避免一个属性读 `DomainSnapshot`、另一个属性临时再
+/// borrow `AppBackend` 造成的双状态机。
+struct ResolvedThemeState {
+    appearance_mode: String,
+    system_is_dark: bool,
+    is_dark: bool,
+    color_source: String,
+    selected_palette_id: String,
+    selected_builtin_theme_id: String,
 }

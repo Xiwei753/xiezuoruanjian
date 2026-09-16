@@ -43,6 +43,26 @@ impl SujianEditorItem {
         }
     }
 
+    /// Issue #701 评论 5699569220: 暴露 IME replacement 换算所需的 composition
+    /// session 上下文，供 `platform_ime` 把 Qt 的 replacementStart/
+    /// replacementLength（UTF-16 QChar 偏移）解析成 committed text 的 byte range。
+    ///
+    /// 返回 `(session_replace_start, session_replace_end, committed_text)`：
+    /// - `session_replace_start`/`session_replace_end`：composition session 记录的
+    ///   preedit 在 committed text 中的 byte range（半开区间，UTF-8）。
+    ///   无活跃 session 时退化为 `(cursor, cursor)`。
+    /// - `committed_text`：当前 committed 正文（= `self.buffer.text`，不含 preedit）。
+    ///
+    /// 所有 UTF-16→UTF-8 坐标换算只在 `platform_ime` 调用此方法后做一次，
+    /// `editing.rs` 不再二次换算。
+    pub(crate) fn ime_replacement_context(&self) -> (usize, usize, String) {
+        let (rs, re) = self
+            .pipeline
+            .composition()
+            .session_replace_range(self.buffer.cursor);
+        (rs, re, self.buffer.text.clone())
+    }
+
     /// 准备 composition 更新数据。`cursor` 为 preedit 内部 UTF-8 byte offset，
     /// 指向 preedit 文本中的光标位置（非 committed 正文坐标）。
     fn prepare_composition_update(
@@ -132,11 +152,19 @@ impl EditorInputHost for SujianEditorItem {
         self.insert_text(text.into());
     }
 
-    /// 替换指定范围并插入文本（IME commit 场景）。
-    /// `replace_start`/`replace_length` 为 UTF-16 code unit 坐标（Qt IME 协议），
-    /// 内部由 `ime_replace_and_insert` 转换为 UTF-8 byte offset 后调用 Core。
-    fn input_replace_and_insert(&mut self, replace_start: i32, replace_length: i32, text: String) {
-        self.ime_replace_and_insert(replace_start, replace_length, text);
+    /// 替换指定 UTF-8 byte range 并插入文本（IME commit 场景）。
+    ///
+    /// `replace_byte_start`/`replace_byte_end` 为 committed text 的 UTF-8 byte
+    /// offset（半开区间），由 `platform_ime` 结合当前 `CompositionSession` 把
+    /// Qt 的 replacementStart/replacementLength（UTF-16 QChar 偏移）解析后传入。
+    /// 进入此方法后不再携带任何 Qt 坐标。
+    fn input_replace_and_insert(
+        &mut self,
+        replace_byte_start: usize,
+        replace_byte_end: usize,
+        text: String,
+    ) {
+        self.ime_replace_and_insert(replace_byte_start, replace_byte_end, text);
     }
 
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
