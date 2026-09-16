@@ -64,7 +64,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     @Test
     fun singleInputTransformationMultipleGraphemes_shouldSplitByGraphemeCluster() {
         val layouts = captureLayouts("", "我们")
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p1")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 设置基线：lastPresentedLayout = ""
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -117,7 +121,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     @Test
     fun singleInputAbc_shouldUseGlyphAnimationNotClusterAnimation() {
         val layouts = captureLayouts("", "abc")
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p2a")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p2a",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -150,7 +158,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     @Test
     fun singleInputAbc_shouldSplitIntoThreeClusterUnits() {
         val layouts = captureLayouts("", "abc")
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p2b")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p2b",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -181,7 +193,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     @Test
     fun singleInputNiHao_shouldSplitIntoTwoClusterUnits() {
         val layouts = captureLayouts("", "你好")
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p2c")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p2c",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -231,7 +247,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         )
 
         val layouts = captureLayouts("", emojiFamily)
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p2d-emoji")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p2d-emoji",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.recordLocalInput(
@@ -300,7 +320,11 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     @Test
     fun compositionPreeditThenUndo_externalPatchShouldNotStall() {
         val layouts = captureLayouts("", "a", "an", "")
-        val state = ComposeEditorVisualState(targetId = "issue694-c5692161955-p3a")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5692161955-p3a",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 1. 基线 ""
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)

@@ -4,6 +4,7 @@ import android.util.Log
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -35,10 +36,13 @@ import kotlin.collections.ArrayDeque
  *
  * @param targetId 当前编辑目标 ID — 用于结构化诊断事件。
  * @param initialDrawsVisualCursor 初始视觉光标状态 — smooth cursor 开启时从 attach 后一直为 true。
+ * @param classifier 本地视觉 plan 分类器 — 生产环境默认 [CoreLocalVisualPlanClassifier] 直接调 Core，
+ *   测试环境（Robolectric）注入 fake 绕过原生库加载。
  */
 class ComposeEditorVisualState(
     private val targetId: String,
     initialDrawsVisualCursor: Boolean = false,
+    private val classifier: LocalVisualPlanClassifier = CoreLocalVisualPlanClassifier,
 ) {
     companion object {
         private const val TAG = "EditorVisualState"
@@ -135,6 +139,24 @@ class ComposeEditorVisualState(
     private var wasCompositionActive: Boolean = false
 
     /**
+     * #694 评论 5693864609 问题2：composition 独立生命周期入口 —
+     * composition 开始时保存的已提交布局（base），composition 结束后用 base -> final 生成 patch。
+     */
+    private var compositionBaseLayout: ComposeLayoutSnapshot? = null
+
+    /**
+     * #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时暂存，
+     * 等下一份 onAuthoritativeLayout 到达时收口。
+     */
+    private var pendingCompositionCommitText: String? = null
+
+    /**
+     * #694 评论 5693864609 问题2：上一次 snapshot 观察时 composition 是否活跃 —
+     * 用于检测 composition active->inactive 边沿。
+     */
+    private var wasCompositionActiveForSnapshot: Boolean = false
+
+    /**
      * #694 评论第 3 步：本地输入 patch ID 计数器 —
      * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
      */
@@ -169,6 +191,70 @@ class ComposeEditorVisualState(
         changes: List<LocalInputChange>,
     ) {
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
+    }
+
+    /**
+     * #694 评论 5693864609 问题2：composition 生命周期由 TextFieldState.composition 驱动，
+     * 不再只依赖 onTextLayout 猜 composition 生命周期。
+     *
+     * 由 [WritingPaneRoute] 的 `SetupInputSnapshotCollector` 在 `snapshotFlow.collect` 中调用，
+     * 在 `bridge.onInputSnapshot` 之前先让本地视觉看到 composition 生命周期边沿：
+     * - composition 刚开始（inactive -> active）：保存当前已提交布局作为 base。
+     * - composition 刚结束（active -> inactive）：用 base -> final 生成 patch。
+     *
+     * @param snapshot 当前 IME 输入快照（text + selection + composition）。
+     */
+    fun onInputSnapshotObserved(snapshot: EditorInputSnapshot) {
+        val compositionActive = snapshot.composition != null
+        if (compositionActive && !wasCompositionActiveForSnapshot) {
+            // composition 刚开始：保存当前已提交布局作为 base
+            compositionBaseLayout = lastPresentedLayout
+        }
+        if (!compositionActive && wasCompositionActiveForSnapshot) {
+            // composition 刚结束
+            val latest = _latestLayout.value
+            if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
+                // 最终布局已经有了，直接收口
+                finishCompositionCommit(snapshot.text, latest)
+            } else {
+                // final text 对应的新 layout 还没到，记 pending
+                pendingCompositionCommitText = snapshot.text
+            }
+        }
+        wasCompositionActiveForSnapshot = compositionActive
+    }
+
+    /**
+     * #694 评论 5693864609 问题2：composition 结束后用 base -> final 生成 patch 并入队。
+     *
+     * @param commitText composition 结束后的最终正文。
+     * @param finalLayout commitText 对应的最终布局。
+     */
+    private fun finishCompositionCommit(
+        commitText: String,
+        finalLayout: ComposeLayoutSnapshot,
+    ) {
+        val baseLayout = compositionBaseLayout
+        if (baseLayout != null && baseLayout.result.layoutInput.text.text != commitText) {
+            // 用 compositionBaseLayout -> finalLayout 生成 patch
+            val baseOldText = baseLayout.result.layoutInput.text.text
+            val localChain = localInputTracker.drainMatchingChain(baseOldText, commitText)
+            if (localChain != null) {
+                val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
+                if (localPatch != null) {
+                    pendingPatches.addLast(localPatch)
+                    _patchVersion.update { it + 1L }
+                    _latestPatch.update { localPatch }
+                }
+            }
+        }
+        // 同步 Core/external baseline
+        frameCoordinator.observePresentedLayout(finalLayout)
+        lastPresentedLayout = finalLayout
+        // 清掉本次 composition 状态
+        compositionBaseLayout = null
+        pendingCompositionCommitText = null
+        wasCompositionActive = false
     }
 
     /**
@@ -225,13 +311,13 @@ class ComposeEditorVisualState(
         val composedInserted = ComposeLocalVisualRebase.composeLocalChainInsertedUnits(chain)
         val composedDeleted = ComposeLocalVisualRebase.composeLocalChainDeletedUnits(chain)
 
-        // #694 评论 5692161955 问题1/2：调用 Core 纯计算 API classify_local_visual_plan
-        // 做视觉分类，得到 animationMode 和按 grapheme cluster 拆分的 animation units。
+        // #694 评论 5692161955 问题1/2：调用注入的 classifier 做视觉分类，
+        // 得到 animationMode 和按 grapheme cluster 拆分的 animation units。
         // 不再硬编码 CLUSTER_ANIMATION，不再按 UTF-16 +1 硬切。
-        // Core API 不可用时（如 Robolectric 测试环境）回退到 Kotlin fallback
-        // （java.text.BreakIterator + chooseAnimationMode 投影）。
+        // #694 评论 5693864609 问题3：通过注入的 [LocalVisualPlanClassifier] 调用，
+        // 生产用 Core，测试用 fake（绕过 Robolectric 原生库加载）。
         val corePlan =
-            ComposeLocalVisualRebase.classifyLocalVisualPlanFromCore(
+            classifier.classify(
                 oldText = oldText,
                 newText = newText,
                 oldAffectedRanges = changedRanges.oldRanges,
@@ -256,13 +342,17 @@ class ComposeEditorVisualState(
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
                     TextVisualKind.Insert, TextVisualKind.Move -> {
-                        // #694 评论 5692161955 问题1：优先用 Core plan 的 grapheme cluster units；
-                        // 其次用合成的 ordered units 保留吐字顺序；
-                        // 最后回退到净变化 newRanges。
-                        when {
-                            planInsertedUnits.isNotEmpty() -> planInsertedUnits
-                            composedInserted.isNotEmpty() -> composedInserted
-                            else -> changedRanges.newRanges
+                        // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
+                        // orderedStageRanges = composedInserted（local chain 的时间顺序）。
+                        val orderedStageRanges = composedInserted
+                        if (planInsertedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
+                            ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planInsertedUnits, orderedStageRanges)
+                        } else if (planInsertedUnits.isNotEmpty()) {
+                            planInsertedUnits
+                        } else if (orderedStageRanges.isNotEmpty()) {
+                            orderedStageRanges
+                        } else {
+                            changedRanges.newRanges
                         }
                     }
                     TextVisualKind.Delete, TextVisualKind.None -> emptyList()
@@ -275,10 +365,17 @@ class ComposeEditorVisualState(
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
                     TextVisualKind.Delete, TextVisualKind.Move -> {
-                        when {
-                            planDeletedUnits.isNotEmpty() -> planDeletedUnits
-                            composedDeleted.isNotEmpty() -> composedDeleted
-                            else -> changedRanges.oldRanges
+                        // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
+                        // orderedStageRanges = composedDeleted（local chain 的时间顺序）。
+                        val orderedStageRanges = composedDeleted
+                        if (planDeletedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
+                            ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planDeletedUnits, orderedStageRanges)
+                        } else if (planDeletedUnits.isNotEmpty()) {
+                            planDeletedUnits
+                        } else if (orderedStageRanges.isNotEmpty()) {
+                            orderedStageRanges
+                        } else {
+                            changedRanges.oldRanges
                         }
                     }
                     TextVisualKind.Insert, TextVisualKind.None -> emptyList()
@@ -291,13 +388,14 @@ class ComposeEditorVisualState(
         val retainedMoves =
             ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
 
-        // cursor 从 chain 首笔 oldSelection.end -> 末笔 newSelection.end 构造
+        // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
+        // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
+        // 保留快速连续删除/插入的中间光标位置。
         val cursorMotionPath =
-            ComposeLocalVisualRebase.buildCursorPath(
+            ComposeLocalVisualRebase.buildLocalChainCursorPath(
+                chain = chain,
                 oldLayout = oldLayout,
                 newLayout = newLayout,
-                oldSelection = firstEdit.oldSelection,
-                newSelection = lastEdit.newSelection,
                 insertedUnits = insertedUnits,
                 deletedUnits = deletedUnits,
             )
@@ -348,6 +446,16 @@ class ComposeEditorVisualState(
     ) {
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
         _latestLayout.update { snapshot }
+
+        // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
+        // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
+        val pending = pendingCompositionCommitText
+        val newTextForPending = result.layoutInput.text.text
+        if (pending != null && newTextForPending == pending && !compositionActive) {
+            pendingCompositionCommitText = null
+            finishCompositionCommit(pending, snapshot)
+            return
+        }
 
         // #691：更新静止光标 rect
         val cursorRect = computeCursorRectFromLayout(snapshot)
@@ -651,6 +759,10 @@ class ComposeEditorVisualState(
         lastPresentedLayout = null
         // #694 评论 5692161955 问题3：重置 composition 过渡同步状态
         wasCompositionActive = false
+        // #694 评论 5693864609 问题2：重置 composition 独立生命周期状态
+        compositionBaseLayout = null
+        pendingCompositionCommitText = null
+        wasCompositionActiveForSnapshot = false
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 

@@ -179,7 +179,7 @@ private fun WritingPaneEditorContent(
 
             SetupViewportSnapshot(targetId, viewportState, coordinator)
 
-            SetupInputSnapshotCollector(bridge)
+            SetupInputSnapshotCollector(bridge, visualState)
 
             SetupCommittedTextCollector(
                 targetId = targetId,
@@ -287,9 +287,15 @@ private fun SetupViewportSnapshot(
 
 /**
  * 设置 input snapshot 收集器 — 提取以降低 [WritingPaneEditorContent] 长度。
+ *
+ * #694 评论 5693864609 问题2：本地视觉先看到 composition 生命周期，
+ * 再由 bridge 把最终正文提交 Core。
  */
 @Composable
-private fun SetupInputSnapshotCollector(bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge) {
+private fun SetupInputSnapshotCollector(
+    bridge: com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge,
+    visualState: ComposeEditorVisualState,
+) {
     androidx.compose.runtime.LaunchedEffect(bridge) {
         androidx.compose.runtime.snapshotFlow {
             com.xiwei.sujian.feature.editor.input.EditorInputSnapshot(
@@ -297,7 +303,12 @@ private fun SetupInputSnapshotCollector(bridge: com.xiwei.sujian.feature.editor.
                 selection = bridge.state.selection,
                 composition = bridge.state.composition,
             )
-        }.collect(bridge::onInputSnapshot)
+        }.collect { snapshot ->
+            // #694 评论 5693864609 问题2：本地视觉先看到 composition 生命周期，
+            // 再由 bridge 把最终正文提交 Core。
+            visualState.onInputSnapshotObserved(snapshot)
+            bridge.onInputSnapshot(snapshot)
+        }
     }
 }
 

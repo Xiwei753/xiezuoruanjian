@@ -45,7 +45,6 @@ namespace writer_core {
     // 不再按 UTF-16 +1 硬切或硬编码 CLUSTER_ANIMATION。
     // 不再把整章正文送过 FFI 做视觉分类，只传本次输入的 affected substring + 绝对 UTF-8 byte 起点。
     // 无 session/revision/事务副作用，纯函数。
-    [Throws=WriterError]
     LocalVisualPlanDto classify_local_visual_plan(
         sequence<LocalVisualSliceDto> old_slices,
         sequence<LocalVisualSliceDto> new_slices,

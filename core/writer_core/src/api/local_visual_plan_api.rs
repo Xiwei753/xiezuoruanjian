@@ -13,7 +13,6 @@
 //! UDL 中已声明函数签名，此处只提供实现，不加 `#[::uniffi::export]` 宏
 //! （UDL scaffolding 已生成绑定，加宏会重复定义符号）。
 
-use crate::api::error::WriterError;
 use crate::api::types::{
     AnimationModeDto, EditorByteRangeDto, LocalVisualPlanDto, LocalVisualSliceDto,
 };
@@ -45,7 +44,7 @@ pub fn classify_local_visual_plan(
     old_slices: Vec<LocalVisualSliceDto>,
     new_slices: Vec<LocalVisualSliceDto>,
     animation_enabled: bool,
-) -> std::result::Result<LocalVisualPlanDto, WriterError> {
+) -> LocalVisualPlanDto {
     // #694 评论 5693077441：用 affected slice 做视觉分类，不再用整章正文。
     // 与现有 apply_insert/apply_delete/apply_replace 语义一致：
     // 优先用 new_slices（insert/replace），为空才看 old_slices（delete）。
@@ -123,7 +122,7 @@ pub fn classify_local_visual_plan(
         &new_affected,
     );
 
-    Ok(LocalVisualPlanDto {
+    LocalVisualPlanDto {
         animation_mode: AnimationModeDto::from(animation_mode),
         old_animation_units: old_units
             .into_iter()
@@ -133,7 +132,7 @@ pub fn classify_local_visual_plan(
             .into_iter()
             .map(EditorByteRangeDto::from)
             .collect(),
-    })
+    }
 }
 
 #[cfg(test)]
@@ -158,7 +157,7 @@ mod tests {
     #[test]
     fn classifies_empty_to_we_two_clusters() {
         // "" -> "我们"（2 个汉字 = 2 个 grapheme cluster）
-        let plan = classify_local_visual_plan(vec![], vec![slice(0, "我们")], true).expect("plan");
+        let plan = classify_local_visual_plan(vec![], vec![slice(0, "我们")], true);
         // 2 cluster <= 8 -> GlyphAnimation
         assert_eq!(plan.animation_mode, AnimationModeDto::GlyphAnimation);
         // 2 个 unit: [0,3) 和 [3,6)
@@ -170,7 +169,7 @@ mod tests {
     #[test]
     fn classifies_empty_to_abc_three_clusters_glyph_animation() {
         // "" -> "abc"（3 cluster <= 8 -> GlyphAnimation）
-        let plan = classify_local_visual_plan(vec![], vec![slice(0, "abc")], true).expect("plan");
+        let plan = classify_local_visual_plan(vec![], vec![slice(0, "abc")], true);
         assert_eq!(plan.animation_mode, AnimationModeDto::GlyphAnimation);
         assert_eq!(plan.new_animation_units.len(), 3);
     }
@@ -179,7 +178,7 @@ mod tests {
     fn classifies_empty_to_emoji_family_one_cluster() {
         // "" -> "👨‍👩‍👧‍👦"（emoji family 是 1 个 grapheme cluster）
         let emoji = "👨‍👩‍👧‍👦";
-        let plan = classify_local_visual_plan(vec![], vec![slice(0, emoji)], true).expect("plan");
+        let plan = classify_local_visual_plan(vec![], vec![slice(0, emoji)], true);
         // 1 cluster，但含复杂 grapheme（ZWJ + emoji）-> ClusterAnimation
         assert_eq!(plan.animation_mode, AnimationModeDto::ClusterAnimation);
         // 1 个 unit（整个 emoji family）
@@ -189,14 +188,14 @@ mod tests {
     #[test]
     fn classifies_zero_clusters_to_system_suppressed() {
         // "" -> ""（0 cluster -> SystemSuppressed）
-        let plan = classify_local_visual_plan(vec![], vec![], true).expect("plan");
+        let plan = classify_local_visual_plan(vec![], vec![], true);
         assert_eq!(plan.animation_mode, AnimationModeDto::SystemSuppressed);
         assert!(plan.new_animation_units.is_empty());
     }
 
     #[test]
     fn classifies_animation_disabled_to_system_suppressed() {
-        let plan = classify_local_visual_plan(vec![], vec![slice(0, "abc")], false).expect("plan");
+        let plan = classify_local_visual_plan(vec![], vec![slice(0, "abc")], false);
         assert_eq!(plan.animation_mode, AnimationModeDto::SystemSuppressed);
         assert!(plan.new_animation_units.is_empty());
     }
@@ -216,8 +215,7 @@ mod tests {
             vec![], // old_slices：本次是纯插入，old 无 affected
             vec![slice(append_start, append_text)],
             true,
-        )
-        .expect("plan");
+        );
         // "我们" = 2 cluster <= 8，不含换行，不含复杂 grapheme -> GlyphAnimation
         assert_eq!(
             plan.animation_mode,
@@ -248,8 +246,7 @@ mod tests {
         // 不应因整章含换行被判成 LineReflowAnimation。
         let long_text = "标题\n\n正文内容已经有很多字了，超过八个 grapheme cluster。";
         let plan =
-            classify_local_visual_plan(vec![], vec![slice(long_text.len() as u32, "我")], true)
-                .expect("plan");
+            classify_local_visual_plan(vec![], vec![slice(long_text.len() as u32, "我")], true);
         assert_eq!(plan.animation_mode, AnimationModeDto::GlyphAnimation);
         assert_eq!(plan.new_animation_units.len(), 1);
     }
@@ -258,7 +255,7 @@ mod tests {
     fn classifies_delete_newline_slice_line_reflow() {
         // 删除一段含换行的文字，应按 deleted slice 判定为 LineReflowAnimation。
         let plan =
-            classify_local_visual_plan(vec![slice(0, "abc\ndef")], vec![], true).expect("plan");
+            classify_local_visual_plan(vec![slice(0, "abc\ndef")], vec![], true);
         assert_eq!(plan.animation_mode, AnimationModeDto::LineReflowAnimation);
     }
 }

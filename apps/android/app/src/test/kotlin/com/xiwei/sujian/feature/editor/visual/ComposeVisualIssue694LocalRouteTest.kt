@@ -49,7 +49,11 @@ class ComposeVisualIssue694LocalRouteTest {
     @Test
     fun skippedIntermediateLayouts_shouldNotDropPatch() {
         val layouts = captureLayouts("", "abc")
-        val state = ComposeEditorVisualState(targetId = "issue694-local-skip")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-local-skip",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 设置基线：lastPresentedLayout = ""
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -107,7 +111,11 @@ class ComposeVisualIssue694LocalRouteTest {
     @Test
     fun fastBackspaceChain_shouldNotDropPatch() {
         val layouts = captureLayouts("abc", "a")
-        val state = ComposeEditorVisualState(targetId = "issue694-local-backspace")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-local-backspace",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 设置基线：lastPresentedLayout = "abc"
         state.onAuthoritativeLayout(layouts[0], TextRange(3, 3), 0)
@@ -161,7 +169,11 @@ class ComposeVisualIssue694LocalRouteTest {
     @Test
     fun localInputThenUndo_coordinatorBaselineAdvanced_undoPatchGenerated() {
         val layouts = captureLayouts("", "a", "")
-        val state = ComposeEditorVisualState(targetId = "issue694-local-undo")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-local-undo",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 设置基线：lastPresentedLayout = ""
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -226,7 +238,11 @@ class ComposeVisualIssue694LocalRouteTest {
     @Test
     fun sameVsyncMultipleLocalPatches_preserveOrderedInsertedUnitsAndCursorPath() {
         val layouts = captureLayouts("", "a", "ab", "abc")
-        val state = ComposeEditorVisualState(targetId = "issue694-local-batch")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-local-batch",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 设置基线
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)

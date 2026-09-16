@@ -471,6 +471,10 @@ class ComposeVisualTimeline {
     /**
      * #689 评论 5675270164 缺陷1：处理删除 unit。
      * 找不到 active unit 时从 patch.oldLayout 建 ghost（alpha 1->0）。
+     *
+     * #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段。
+     * n = deletedRanges.size，unit i 的时间窗口为 [i/n, (i+1)/n]，
+     * 这样快速连续删除多个字时每个 ghost 有自己的时间段，不会全挤在同一帧。
      */
     private fun createDeletedGhosts(
         patch: ComposeVisualPatch,
@@ -480,13 +484,20 @@ class ComposeVisualTimeline {
         ghosting: MutableList<VisualTextUnit>,
     ) {
         val oldTextLength = patch.oldLayout.result.layoutInput.text.length
-        for (range in patch.deletedUnits) {
-            if (range.start >= range.end) continue
-            if (range.end > oldTextLength) continue
+        val deletedRanges = patch.deletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
+        // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
+        // n = deletedRanges.size, unit i: [i/n, (i+1)/n]
+        val n = deletedRanges.size
+        if (n == 0) return
+        for ((i, range) in deletedRanges.withIndex()) {
             // 检查 ghosting 里是否已有覆盖此 range 的 ghost（存活映射阶段已切片处理）
             if (ghosting.any { it.range == range }) continue
             // 检查 sampledUnits 里是否有 active unit 覆盖此 range（已在存活映射阶段处理）
             if (sampledUnits.any { it.targetRange != null && it.range == range }) continue
+            val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
+            val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
+            val ghostStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
+            val ghostDuration = (durationNanos * (endFraction - startFraction)).toLong()
             // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
             val oldPosition = computeUnitPosition(patch.oldLayout, range) ?: continue
             ghosting +=
@@ -495,7 +506,7 @@ class ComposeVisualTimeline {
                     layout = patch.oldLayout,
                     range = range,
                     targetRange = null,
-                    alpha = TimedFloat(1f, 0f, frameTimeNanos, durationNanos),
+                    alpha = TimedFloat(1f, 0f, ghostStartedAt, ghostDuration),
                     position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
                 )
         }

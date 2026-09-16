@@ -58,7 +58,11 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         val oldText = "第一章\n\n这是正文的第一段，已经有不少字了。\n\n第二段也有些内容。"
         val newText = oldText + "我们"
         val layouts = captureLayouts(oldText, newText)
-        val state = ComposeEditorVisualState(targetId = "issue694-c5693077441-p1")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5693077441-p1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(oldText.length, oldText.length), 0)
         state.recordLocalInput(
@@ -99,7 +103,11 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         val oldText = "标题\n\n正文内容已经有很多字了，超过八个 grapheme cluster。"
         val newText = oldText + "我"
         val layouts = captureLayouts(oldText, newText)
-        val state = ComposeEditorVisualState(targetId = "issue694-c5693077441-p2")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5693077441-p2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(oldText.length, oldText.length), 0)
         state.recordLocalInput(
@@ -149,7 +157,11 @@ class ComposeVisualIssue694Comment5693077441ReproTest {
         // 不能把 a 合进 emoji family。
         val emojiFamilyAndChar = "👨‍👩‍👧‍👦a"
         val layouts = captureLayouts("", emojiFamilyAndChar)
-        val state = ComposeEditorVisualState(targetId = "issue694-c5693077441-p3")
+        val state =
+            ComposeEditorVisualState(
+                targetId = "issue694-c5693077441-p3",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.recordLocalInput(

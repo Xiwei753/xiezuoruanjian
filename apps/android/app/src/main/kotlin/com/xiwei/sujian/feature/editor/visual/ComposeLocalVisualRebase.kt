@@ -5,7 +5,6 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import uniffi.writer_core.AnimationModeDto
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
 import uniffi.writer_core.LocalVisualSliceDto
@@ -244,10 +243,9 @@ internal object ComposeLocalVisualRebase {
      * 返回 [LocalVisualPlanDto]（animationMode + old/new animation units，UTF-8 byte ranges），
      * 调用方按需用 [utf16TextRangeForUtf8] 转回 UTF-16。
      *
-     * Core API 失败时（如 Robolectric 测试环境无法加载原生库、byte range 越界），
-     * 回退到 Kotlin fallback（[classifyLocalVisualPlanKotlinFallback]），
-     * 用 `java.text.BreakIterator` 做 grapheme cluster 拆分 + Kotlin `chooseAnimationMode`。
-     * 生产环境优先用 Core API（业务真相在 Core），fallback 只在 Core 不可用时兜底。
+     * #694 评论 5693864609 问题3：删除 Kotlin fallback — Core API 现在是纯函数不再返回 Result，
+     * 不会抛异常。测试环境（Robolectric）通过注入 [LocalVisualPlanClassifier] fake 绕过 Core。
+     * 本方法保留为兼容入口，内部委托给 [CoreLocalVisualPlanClassifier]。
      *
      * @param oldText 旧正文（UTF-16）。
      * @param newText 新正文（UTF-16）。
@@ -261,41 +259,24 @@ internal object ComposeLocalVisualRebase {
         oldAffectedRanges: List<TextRange>,
         newAffectedRanges: List<TextRange>,
         animationEnabled: Boolean,
-    ): LocalVisualPlanDto {
-        // #694 评论 5693077441：只从 changedRanges 截出 affected substring 构造 LocalVisualSliceDto，
-        // 不再把整章 oldText/newText 都跨 UniFFI 复制给 Core。
-        val oldSlices =
-            oldAffectedRanges.mapNotNull { range ->
-                buildLocalVisualSliceDto(oldText, range)
-            }
-        val newSlices =
-            newAffectedRanges.mapNotNull { range ->
-                buildLocalVisualSliceDto(newText, range)
-            }
-        return try {
-            classifyLocalVisualPlan(
-                oldSlices = oldSlices,
-                newSlices = newSlices,
-                animationEnabled = animationEnabled,
-            )
-        } catch (_: Throwable) {
-            // Core API 不可用（如 Robolectric 测试环境无法加载原生库），
-            // 回退到 Kotlin fallback。
-            classifyLocalVisualPlanKotlinFallback(
-                oldSlices = oldSlices,
-                newSlices = newSlices,
-                animationEnabled = animationEnabled,
-            )
-        }
-    }
+    ): LocalVisualPlanDto =
+        CoreLocalVisualPlanClassifier.classify(
+            oldText = oldText,
+            newText = newText,
+            oldAffectedRanges = oldAffectedRanges,
+            newAffectedRanges = newAffectedRanges,
+            animationEnabled = animationEnabled,
+        )
 
     /**
      * #694 评论 5693077441：从 [text] 的 [range] 截出 affected substring 构造 [LocalVisualSliceDto]。
      *
      * [absoluteStart] 用 UTF-8 byte offset（与 Core 契约一致），[text] 是 UTF-16 substring。
      * range 越界或空区间时返回 null（由 mapNotNull 过滤）。
+     *
+     * #694 评论 5693864609 问题3：改成 internal 可见性以便 [CoreLocalVisualPlanClassifier] 访问。
      */
-    private fun buildLocalVisualSliceDto(
+    internal fun buildLocalVisualSliceDto(
         text: String,
         range: TextRange,
     ): LocalVisualSliceDto? {
@@ -305,57 +286,6 @@ internal object ComposeLocalVisualRebase {
         val absoluteStart = TextOffsetUtils.utf8OffsetForCharIndex(text, range.start).toUInt()
         return LocalVisualSliceDto(absoluteStart = absoluteStart, text = segment)
     }
-
-    /**
-     * #694 评论 5692161955：Kotlin fallback — 用 `java.text.BreakIterator` 做 grapheme cluster 拆分。
-     *
-     * 仅在 Core API 不可用时（如 Robolectric 测试环境）使用。
-     * `java.text.BreakIterator.getCharacterInstance()` 是平台 SDK 提供的 Unicode grapheme cluster
-     * 边界实现，不是 Core 业务规则的复制。`chooseAnimationModeKt` 是 Core 规则的投影，
-     * 与 `visual_classification.rs::choose_animation_mode` 保持一致。
-     */
-    private fun classifyLocalVisualPlanKotlinFallback(
-        oldSlices: List<LocalVisualSliceDto>,
-        newSlices: List<LocalVisualSliceDto>,
-        animationEnabled: Boolean,
-    ): LocalVisualPlanDto {
-        // #694 评论 5693077441：用 affected slice 做分类，不再用整章正文。
-        // 与 composition 分类一致：优先用 newSlices（插入侧），空时回退到 oldSlices（删除侧）。
-        val classifySlices = if (newSlices.isNotEmpty()) newSlices else oldSlices
-        val clusterCount = classifySlices.sumOf { slice -> splitGraphemeClustersKt(slice.text).size }
-        val containsNewline = classifySlices.any { it.text.contains('\n') }
-        val containsComplex =
-            classifySlices.any {
-                splitGraphemeClustersKt(it.text).any { cluster -> cluster.length > 1 }
-            }
-        val animationMode =
-            chooseAnimationModeKt(
-                clusterCount = clusterCount,
-                containsNewline = containsNewline,
-                containsComplexGrapheme = containsComplex,
-                animationEnabled = animationEnabled,
-            )
-        // 按 animationMode 生成 old/new animation units（UTF-8 byte ranges）
-        val oldUnits = buildAnimationUnitsKtFromSlices(oldSlices, animationMode)
-        val newUnits = buildAnimationUnitsKtFromSlices(newSlices, animationMode)
-        return LocalVisualPlanDto(
-            animationMode = animationMode,
-            oldAnimationUnits = oldUnits,
-            newAnimationUnits = newUnits,
-        )
-    }
-
-    /**
-     * 用 `java.text.BreakIterator` 把文本按 grapheme cluster 拆分，返回每个 cluster 的字符串。
-     *
-     * #694 评论 5692161955 回归修复：JDK BreakIterator 不识别 ZWJ emoji family 为 1 个 cluster
-     * （使用较旧 Unicode 规则，不支持 UAX #29 extended grapheme cluster 中的 ZWJ sequence）。
-     * 调用 [splitGraphemeClusterRangesWithZwjMerge] 做 ZWJ 后处理合并。
-     */
-    private fun splitGraphemeClustersKt(text: String): List<String> =
-        splitGraphemeClusterRangesWithZwjMerge(text).map { range ->
-            text.substring(range.start, range.end)
-        }
 
     /**
      * #694 评论 5692161955 回归修复：用 `java.text.BreakIterator` 拆分 grapheme cluster，
@@ -373,13 +303,16 @@ internal object ComposeLocalVisualRebase {
      * **最后一个** cluster 是否以 ZWJ 结尾，合并完一段后状态重置为当前 segment 的 ZWJ 状态。
      *
      * 此方案不依赖 ICU4J 是否可用，在所有环境（Robolectric、真实设备）下都能正确处理
-     * ZWJ emoji family。生产环境优先用 Core API（unicode_segmentation 已正确），
-     * 此函数仅在 Core 不可用时（如 Robolectric 测试环境）使用。
+     * ZWJ emoji family。
+     *
+     * #694 评论 5693864609 问题3：改成 internal 可见性供测试 fake classifier 复用
+     * （fake classifier 用 BreakIterator + ZWJ 合并模拟 Core 的 grapheme cluster 拆分）。
+     * 生产环境优先用 Core API（unicode_segmentation 已正确）。
      *
      * @param text 要拆分的文本（UTF-16）。
      * @return cluster 在原文中的 UTF-16 [TextRange] 列表（按顺序，不重叠，覆盖所有字符）。
      */
-    private fun splitGraphemeClusterRangesWithZwjMerge(text: String): List<TextRange> {
+    internal fun splitGraphemeClusterRangesWithZwjMerge(text: String): List<TextRange> {
         if (text.isEmpty()) return emptyList()
         val iterator = java.text.BreakIterator.getCharacterInstance()
         iterator.setText(text)
@@ -421,84 +354,6 @@ internal object ComposeLocalVisualRebase {
         mergedRanges.add(TextRange(currentStart, currentEnd))
         return mergedRanges
     }
-
-    /**
-     * Kotlin 投影 of `visual_classification.rs::choose_animation_mode`。
-     * 与 Core 保持一致：0 cluster -> SystemSuppressed；含换行 -> LineReflowAnimation；
-     * 复杂 grapheme -> ClusterAnimation；<= 8 cluster -> GlyphAnimation；> 8 -> RunAnimation。
-     */
-    private fun chooseAnimationModeKt(
-        clusterCount: Int,
-        containsNewline: Boolean,
-        containsComplexGrapheme: Boolean,
-        animationEnabled: Boolean,
-    ): AnimationModeDto {
-        if (!animationEnabled) return AnimationModeDto.SYSTEM_SUPPRESSED
-        if (clusterCount == 0) return AnimationModeDto.SYSTEM_SUPPRESSED
-        if (containsNewline) return AnimationModeDto.LINE_REFLOW_ANIMATION
-        if (containsComplexGrapheme) return AnimationModeDto.CLUSTER_ANIMATION
-        return if (clusterCount <= 8) AnimationModeDto.GLYPH_ANIMATION else AnimationModeDto.RUN_ANIMATION
-    }
-
-    /**
-     * #694 评论 5693077441：按 animationMode 从 [LocalVisualSliceDto] 生成 animation units（UTF-8 byte ranges）。
-     *
-     * 每个 slice 的 [LocalVisualSliceDto.absoluteStart] 已经是正文 UTF-8 byte offset，
-     * slice 内部用 [splitGraphemeClusterRangesWithZwjMerge] 拆 grapheme cluster，
-     * cluster 在 slice 内的 UTF-16 偏移转成 UTF-8 byte 偏移后叠加到 absoluteStart。
-     *
-     * - GlyphAnimation / ClusterAnimation: 按 grapheme cluster 拆分。
-     * - RunAnimation: 每个 slice 整块作为一个 unit（与 Core split_text_into_runs 近似）。
-     * - LineReflowAnimation / SnapshotAnimation: 每个 slice 整块作为一个单元。
-     * - SystemSuppressed: 空。
-     */
-    private fun buildAnimationUnitsKtFromSlices(
-        slices: List<LocalVisualSliceDto>,
-        animationMode: AnimationModeDto,
-    ): List<EditorByteRangeDto> =
-        when (animationMode) {
-            AnimationModeDto.SYSTEM_SUPPRESSED -> emptyList()
-            AnimationModeDto.LINE_REFLOW_ANIMATION, AnimationModeDto.SNAPSHOT_ANIMATION -> {
-                slices.map { slice ->
-                    val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, slice.text.length)
-                    EditorByteRangeDto(
-                        start = slice.absoluteStart,
-                        endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
-                    )
-                }
-            }
-            AnimationModeDto.GLYPH_ANIMATION, AnimationModeDto.CLUSTER_ANIMATION -> {
-                // 对每个 slice 内的文本按 grapheme cluster 拆分
-                // #694 评论 5692161955 回归修复：用 splitGraphemeClusterRangesWithZwjMerge
-                // 正确处理 ZWJ emoji family（BreakIterator 不识别 ZWJ sequence）。
-                val result = mutableListOf<EditorByteRangeDto>()
-                for (slice in slices) {
-                    val clusterRanges = splitGraphemeClusterRangesWithZwjMerge(slice.text)
-                    for (clusterRange in clusterRanges) {
-                        // cluster 在 slice.text 内的 UTF-16 偏移 → UTF-8 byte 偏移
-                        val utf8Start = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, clusterRange.start)
-                        val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, clusterRange.end)
-                        result.add(
-                            EditorByteRangeDto(
-                                start = (slice.absoluteStart.toInt() + utf8Start).toUInt(),
-                                endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
-                            ),
-                        )
-                    }
-                }
-                result
-            }
-            AnimationModeDto.RUN_ANIMATION -> {
-                // RunAnimation: 简化为每个 slice 整块（与 Core split_text_into_runs 的 run 粒度近似）
-                slices.map { slice ->
-                    val utf8End = TextOffsetUtils.utf8OffsetForCharIndex(slice.text, slice.text.length)
-                    EditorByteRangeDto(
-                        start = slice.absoluteStart,
-                        endExclusive = (slice.absoluteStart.toInt() + utf8End).toUInt(),
-                    )
-                }
-            }
-        }
 
     /**
      * 把 Core 返回的 UTF-8 byte animation units 转成 Android UTF-16 [TextRange]。
@@ -592,4 +447,151 @@ internal object ComposeLocalVisualRebase {
         result: TextLayoutResult,
         range: TextRange,
     ): Rect? = ComposeVisualRebase.safePathBounds(result, range)
+
+    /**
+     * #694 评论 5693864609 问题1：把 Core plan 的细粒度 unit 按 local chain 的 stage range 重新排序。
+     *
+     * 规则：按 [orderedStageRanges] 顺序遍历，每个 stage range 内的 plan unit 保持 Core 自己的粒度顺序；最后去重。
+     * 这样 `abc -> ab -> a` 会得到 `[c, b]`（按删除时间倒序），
+     * 但一次删除一个多 grapheme 选区时仍然保留 Core 的 grapheme/run 切分。
+     *
+     * @param planUnits Core plan 返回的 animation units（UTF-16 [TextRange]，已按 Core 粒度切分）。
+     * @param orderedStageRanges local chain 的时间顺序 stage ranges（每个 stage 一笔删除/插入的 affected range）。
+     * @return 按 stage range 顺序重排后的 plan units；空 plan 或空 stage ranges 时原样返回 planUnits。
+     */
+    fun orderPlanUnitsByStageRanges(
+        planUnits: List<TextRange>,
+        orderedStageRanges: List<TextRange>,
+    ): List<TextRange> {
+        if (planUnits.isEmpty()) return emptyList()
+        if (orderedStageRanges.isEmpty()) return planUnits
+        val result = mutableListOf<TextRange>()
+        val used = mutableSetOf<Int>() // 已使用的 planUnits 索引
+        for (stageRange in orderedStageRanges) {
+            // 找出落在当前 stage range 内的 plan unit（按 Core 粒度顺序）
+            for ((i, planUnit) in planUnits.withIndex()) {
+                if (i in used) continue
+                // plan unit 与 stage range 有交集就归到这个 stage
+                if (planUnit.start < stageRange.end && planUnit.end > stageRange.start) {
+                    result.add(planUnit)
+                    used.add(i)
+                }
+            }
+        }
+        // 没被任何 stage range 覆盖的 plan unit 追加到末尾（保持 Core 顺序）
+        for ((i, planUnit) in planUnits.withIndex()) {
+            if (i !in used) result.add(planUnit)
+        }
+        return result
+    }
+
+    /**
+     * #694 评论 5693864609 问题1：本地 chain 版 cursor path — 对每一笔删除/插入，
+     * 用该笔 [LocalInputVisualEdit.newSelection] 的 end 作为这一阶段的 caret；
+     * 把它映射回 T0 后从 oldLayout 取 rect，按 chain 顺序组成路径；
+     * 最后一个点必须是 newLayout 的最终真实 cursor rect。
+     *
+     * 与 [buildCursorPath] 的区别：[buildCursorPath] 只看最终 insertedUnits 的 end，
+     * 快速连续删除时所有 unit 的 end 都在最终文本上，路径点会重叠。
+     * 本方法用 chain 每笔的 newSelection.end，保留中间阶段的 caret 位置。
+     *
+     * @param chain 连续本地输入链（按入队顺序）。
+     * @param oldLayout T0 时的 layout。
+     * @param newLayout Tn 时的 layout。
+     * @param insertedUnits 已合成的插入 unit（用于判断是否有文字动画语义）。
+     * @param deletedUnits 已合成的删除 unit（用于判断是否有文字动画语义）。
+     * @return 光标运动路径；chain 为空或取不到新光标 rect 时返回 null。
+     */
+    fun buildLocalChainCursorPath(
+        chain: List<LocalInputVisualEdit>,
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+        insertedUnits: List<TextRange>,
+        deletedUnits: List<TextRange>,
+    ): CursorMotionPath? {
+        val lastEdit = chain.lastOrNull() ?: return null
+        val newCursorRect = safeCursorRectFromLayout(newLayout, lastEdit.newSelection.end) ?: return null
+        // 无文字动画语义 → 单点路径 snap 到新光标位置
+        if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
+            return CursorMotionPath(listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)))
+        }
+        val points = mutableListOf<CursorMotionPoint>()
+        // 对每一笔 edit，用该笔 newSelection.end 作为阶段 caret
+        for (edit in chain) {
+            val caretOffset = edit.newSelection.end
+            // 优先从 newLayout 取 rect（如果 offset 在新正文范围内）
+            val rect =
+                safeCursorRectFromLayout(newLayout, caretOffset)
+                    ?: safeCursorRectFromLayout(oldLayout, caretOffset)
+                    ?: continue
+            points.add(CursorMotionPoint(rect = rect, endFraction = 0f))
+        }
+        // 确保最后一个点是最终真实 cursor rect
+        if (points.isEmpty() || points.last().rect != newCursorRect) {
+            points.add(CursorMotionPoint(rect = newCursorRect, endFraction = 1f))
+        }
+        // 归一化 endFraction = (i + 1f) / n，与 timeline unit-wise 分段时序一致
+        val n = points.size
+        if (n > 1) {
+            for (i in points.indices) {
+                points[i] = points[i].copy(endFraction = (i + 1f) / n)
+            }
+        }
+        return CursorMotionPath(points)
+    }
+}
+
+/**
+ * #694 评论 5693864609 问题3：本地视觉 plan 分类器接口 —
+ * 把 Core `classifyLocalVisualPlan` 的调用抽象成可注入的接口，
+ * 生产环境用 [CoreLocalVisualPlanClassifier] 直接调 Core，
+ * 测试环境（Robolectric）注入 fake 绕过原生库加载。
+ *
+ * 设计为 `fun interface` 以便用 lambda 构造 fake。
+ */
+fun interface LocalVisualPlanClassifier {
+    /**
+     * 对一次本地输入的 affected ranges 做视觉分类，返回 [LocalVisualPlanDto]。
+     *
+     * @param oldText 旧正文（UTF-16）。
+     * @param newText 新正文（UTF-16）。
+     * @param oldAffectedRanges 旧正文侧 affected ranges（UTF-16 [TextRange]）。
+     * @param newAffectedRanges 新正文侧 affected ranges（UTF-16 [TextRange]）。
+     * @param animationEnabled 是否启用动画。
+     */
+    fun classify(
+        oldText: String,
+        newText: String,
+        oldAffectedRanges: List<TextRange>,
+        newAffectedRanges: List<TextRange>,
+        animationEnabled: Boolean,
+    ): LocalVisualPlanDto
+}
+
+/**
+ * #694 评论 5693864609 问题3：main 默认实现 — 直接调 Core [classifyLocalVisualPlan]。
+ *
+ * Core API 现在是纯函数（不返回 Result、不抛异常），所以不需要 try-catch fallback。
+ * 测试环境通过注入 fake [LocalVisualPlanClassifier] 绕过 Core 原生库加载。
+ */
+object CoreLocalVisualPlanClassifier : LocalVisualPlanClassifier {
+    override fun classify(
+        oldText: String,
+        newText: String,
+        oldAffectedRanges: List<TextRange>,
+        newAffectedRanges: List<TextRange>,
+        animationEnabled: Boolean,
+    ): LocalVisualPlanDto {
+        // #694 评论 5693077441：只从 changedRanges 截出 affected substring 构造 LocalVisualSliceDto，
+        // 不再把整章 oldText/newText 都跨 UniFFI 复制给 Core。
+        val oldSlices =
+            oldAffectedRanges.mapNotNull { range -> ComposeLocalVisualRebase.buildLocalVisualSliceDto(oldText, range) }
+        val newSlices =
+            newAffectedRanges.mapNotNull { range -> ComposeLocalVisualRebase.buildLocalVisualSliceDto(newText, range) }
+        return classifyLocalVisualPlan(
+            oldSlices = oldSlices,
+            newSlices = newSlices,
+            animationEnabled = animationEnabled,
+        )
+    }
 }
