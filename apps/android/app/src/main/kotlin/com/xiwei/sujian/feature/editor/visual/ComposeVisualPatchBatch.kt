@@ -114,12 +114,35 @@ internal object ComposeVisualPatchBatch {
         // 按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序，
         // 不再对 batch 纯删除重新走旧 buildCursorPath()（旧逻辑只按 insertedUnits 建点，
         // 纯删除时 insertedUnits 为空、回退到最终单点，丢失中间阶段 caret）。
-        val cursorMotionPath =
-            composeBatchCursorPath(
-                batch = batch,
-                insertedUnits = insertedUnits,
-                deletedUnits = deletedUnits,
-            ) ?: last.cursorMotionPath
+        //
+        // #694 评论 5695660885 问题2：batch cursor path 也必须遵守"同一 VSync 只表现最终屏幕差异"。
+        // 同一帧 "" -> "a" -> ""，最终 transactionTextKind == None，insertedUnits/deletedUnits 都空，
+        // 但旧 composeBatchCursorPath 仍收集各笔 stage cursor point 得到 0->1->0 路径，
+        // computeCursorParamsForPatch 把它当 CURSOR_ONLY 用 cursorDurationMillis(80ms) 播放，
+        // 导致光标在文字没变的情况下抽动。
+        val finalTextVisualChanged =
+            transactionTextKind != TextVisualKind.None || retainedMoves.isNotEmpty()
+        val finalSelectionChanged = oldLayout.selection != newLayout.selection
+        val cursorMotionPath: CursorMotionPath? =
+            when {
+                // !finalTextVisualChanged && !finalSelectionChanged：
+                // cursorMotionPath = null，让上层 0ms snap 到最终 cursor，不播放任何 stage path。
+                !finalTextVisualChanged && !finalSelectionChanged -> null
+                // !finalTextVisualChanged && finalSelectionChanged：
+                // 只生成 oldLayout cursor -> newLayout cursor 的最终直达路径，不保留同帧中间 stage。
+                !finalTextVisualChanged && finalSelectionChanged -> {
+                    composeCursorOnlySelectionChangedPath(oldLayout, newLayout)
+                }
+                // 只有最终仍存在真实文字视觉变化时，才用现在的 composeBatchCursorPath()
+                // 保留删除/插入阶段 caret。
+                else -> {
+                    composeBatchCursorPath(
+                        batch = batch,
+                        insertedUnits = insertedUnits,
+                        deletedUnits = deletedUnits,
+                    ) ?: last.cursorMotionPath
+                }
+            }
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
@@ -155,6 +178,38 @@ internal object ComposeVisualPatchBatch {
             motionPolicy = motionPolicy,
             intent = last.intent,
         )
+    }
+
+    /**
+     * #694 评论 5695660885 问题2：净文本变化为 0 但 selection 变了 —
+     * 只生成 oldLayout cursor -> newLayout cursor 的最终直达路径，不保留同帧中间 stage。
+     *
+     * @return [CursorMotionPath]；取不到 cursor rect 时返回 null。
+     */
+    private fun composeCursorOnlySelectionChangedPath(
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+    ): CursorMotionPath? {
+        val oldCursorRect = safeCursorRectFromBatch(oldLayout, oldLayout.selection.end)
+        val newCursorRect = safeCursorRectFromBatch(newLayout, newLayout.selection.end)
+        return when {
+            oldCursorRect == null && newCursorRect == null -> null
+            oldCursorRect == null -> CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
+            )
+            newCursorRect == null -> CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
+            )
+            oldCursorRect == newCursorRect -> CursorMotionPath(
+                points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
+            )
+            else -> CursorMotionPath(
+                points = listOf(
+                    CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
+                    CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
+                ),
+            )
+        }
     }
 
     /**

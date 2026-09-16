@@ -158,6 +158,34 @@ class ComposeEditorVisualState(
     private var wasCompositionActiveForSnapshot: Boolean = false
 
     /**
+     * #694 评论 5695660885 问题1：composition 视觉生命周期状态机 —
+     * 拦截 [onAuthoritativeLayout] 在 bridge outcome 到达前提前发布候选 local patch。
+     *
+     * 真实运行时 [onAuthoritativeLayout]（BasicTextField onTextLayout 回调）和
+     * [onInputSnapshotResolved]（snapshotFlow collector）是两条独立流，
+     * onTextLayout 可能先于 bridge outcome 到达。此时若 [localInputTracker] 非空
+     * （InputTransformation 无条件 recordLocalInput），旧逻辑会 drainMatchingChain
+     * 命中并提前发布候选 local patch。本状态机在 composition 期间/结束后等待 bridge
+     * outcome 期间，阻止 onAuthoritativeLayout 走普通 local-input 分支。
+     *
+     * - [Idle]：无 composition 活动，onAuthoritativeLayout 走正常路径。
+     * - [Composing]：snapshot 看到 composition active，保存了 compositionBaseLayout。
+     *   onAuthoritativeLayout 在此 phase 只缓存 layout/cursor，不发布 patch。
+     * - [AwaitingBridgeResolution]：composition 结束（compositionActive=false）但 bridge
+     *   outcome 尚未到达。onAuthoritativeLayout 在此 phase 只缓存 layout/cursor，不发布 patch。
+     * - [AcceptedAwaitingFinalLayout]：bridge 已 LocalCommitAccepted 但 final layout 还没到，
+     *   等下一份 matching layout 收口。
+     */
+    private enum class CompositionVisualPhase {
+        Idle,
+        Composing,
+        AwaitingBridgeResolution,
+        AcceptedAwaitingFinalLayout,
+    }
+
+    private var compositionVisualPhase: CompositionVisualPhase = CompositionVisualPhase.Idle
+
+    /**
      * #694 评论第 3 步：本地输入 patch ID 计数器 —
      * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
      */
@@ -219,14 +247,35 @@ class ComposeEditorVisualState(
         // composition 生命周期边沿：composition 刚开始时保存 base
         if (compositionActive && !wasCompositionActiveForSnapshot) {
             compositionBaseLayout = lastPresentedLayout
+            // #694 评论 5695660885 问题1：进入 Composing phase，
+            // 拦截 onAuthoritativeLayout 在 bridge outcome 到达前提前发布候选 local patch。
+            compositionVisualPhase = CompositionVisualPhase.Composing
         }
         when (outcome) {
             InputSnapshotOutcome.Composing -> {
                 // composition 仍活跃：只记录 composition start/base（上面已保存），不生成 patch。
+                // phase 已在 composition active 边沿设为 Composing。
             }
             InputSnapshotOutcome.NoTextChange -> {
                 // composition 结束但无变化：不生成 patch。
                 // 若 final layout 还没到，不暂存 pendingCompositionCommitText（无变化无需收口）。
+                // #694 评论 5695660885 问题1：NoTextChange 如果上一状态是 composition
+                // （Composing/AwaitingBridgeResolution），这就是 composition 取消/回到原文。
+                // 必须清 compositionBaseLayout / pendingCompositionCommitText /
+                // localInputTracker / wasCompositionActive。
+                // 如果已经缓存了与 snapshot.text 相同的 final layout，只把它设成
+                // lastPresentedLayout / 同步 coordinator baseline，不要生成 local patch。
+                if (compositionVisualPhase == CompositionVisualPhase.Composing ||
+                    compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
+                ) {
+                    val latest = _latestLayout.value
+                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
+                        // 同步 coordinator baseline，不生成 local patch
+                        frameCoordinator.observePresentedLayout(latest)
+                        lastPresentedLayout = latest
+                    }
+                    cancelCompositionLocalVisualState()
+                }
             }
             InputSnapshotOutcome.LocalCommitAccepted -> {
                 // bridge 已接受本地 commit：视觉层可以 finishCompositionCommit。
@@ -238,6 +287,9 @@ class ComposeEditorVisualState(
                         // final text 对应的新 layout 还没到，记 pending
                         // #694 评论 5694645209 问题1：只在 LocalCommitAccepted 路径下才设置 pendingCompositionCommitText。
                         pendingCompositionCommitText = snapshot.text
+                        // #694 评论 5695660885 问题1：进入 AcceptedAwaitingFinalLayout phase，
+                        // 等下一份 matching layout 收口。
+                        compositionVisualPhase = CompositionVisualPhase.AcceptedAwaitingFinalLayout
                     }
                 }
             }
@@ -267,6 +319,8 @@ class ComposeEditorVisualState(
         pendingCompositionCommitText = null
         wasCompositionActive = false
         wasCompositionActiveForSnapshot = false
+        // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase。
+        compositionVisualPhase = CompositionVisualPhase.Idle
         // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
         localInputTracker.clear()
     }
@@ -302,6 +356,8 @@ class ComposeEditorVisualState(
         compositionBaseLayout = null
         pendingCompositionCommitText = null
         wasCompositionActive = false
+        // #694 评论 5695660885 问题1：composition commit 收口后回到 Idle phase。
+        compositionVisualPhase = CompositionVisualPhase.Idle
     }
 
     /**
@@ -501,6 +557,23 @@ class ComposeEditorVisualState(
         if (pending != null && newTextForPending == pending && !compositionActive) {
             pendingCompositionCommitText = null
             finishCompositionCommit(pending, snapshot)
+            return
+        }
+
+        // #694 评论 5695660885 问题1：composition 视觉生命周期拦截 —
+        // onTextLayout（onAuthoritativeLayout）可能先于 snapshotFlow collector
+        // （onInputSnapshotResolved）到达。若 phase 还是 Composing/AwaitingBridgeResolution，
+        // 说明 bridge outcome 还没到，此时只缓存 latest layout / resting cursor，直接 return；
+        // 不要 drain localInputTracker，不要发布 patch，不要推进 frameCoordinator。
+        // 等 bridge outcome 到达后由 onInputSnapshotResolved 收口（LocalCommitAccepted 调
+        // finishCompositionCommit / AuthoritativeApplied/Rejected/NoTextChange 清 state）。
+        if (!compositionActive &&
+            (compositionVisualPhase == CompositionVisualPhase.Composing ||
+                compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution)
+        ) {
+            val cursorRectAwaiting = computeCursorRectFromLayout(snapshot)
+            _restingCursorRect.update { cursorRectAwaiting }
+            compositionVisualPhase = CompositionVisualPhase.AwaitingBridgeResolution
             return
         }
 
@@ -810,6 +883,8 @@ class ComposeEditorVisualState(
         compositionBaseLayout = null
         pendingCompositionCommitText = null
         wasCompositionActiveForSnapshot = false
+        // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase
+        compositionVisualPhase = CompositionVisualPhase.Idle
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 
