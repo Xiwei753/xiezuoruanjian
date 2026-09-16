@@ -1,7 +1,11 @@
 package com.xiwei.sujian.app.theme
 
+import android.app.WallpaperManager
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -61,6 +65,10 @@ class ThemeController(
 
     fun onSystemDarkModeChanged(isDark: Boolean) {
         store.onSystemDarkModeChanged(isDark)
+    }
+
+    fun onDynamicColorsChanged() {
+        store.onDynamicColorsChanged()
     }
 }
 
@@ -150,6 +158,27 @@ fun rememberThemeController(
     DisposableEffect(configuration) {
         handleThemeControllerConfigurationChanged(context)
         onDispose { }
+    }
+
+    // #698 评论 5697617362：Android 12+ 监听系统壁纸颜色变化，收到变化后只推进
+    // ThemeStore.dynamicColorRevision，不在监听器里直接操作 Compose UI。组件销毁时注销 listener。
+    DisposableEffect(context, controller) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val wallpaperManager = WallpaperManager.getInstance(context)
+            val listener =
+                WallpaperManager.OnColorsChangedListener { _, _ ->
+                    controller.onDynamicColorsChanged()
+                }
+            // addOnColorsChangedListener(callback, handler)：显式传主线程 Handler，
+            // 主题状态更新需在主线程执行以保证 Compose 状态一致。
+            val mainHandler = Handler(Looper.getMainLooper())
+            wallpaperManager.addOnColorsChangedListener(listener, mainHandler)
+            onDispose {
+                wallpaperManager.removeOnColorsChangedListener(listener)
+            }
+        } else {
+            onDispose { }
+        }
     }
 
     return controller

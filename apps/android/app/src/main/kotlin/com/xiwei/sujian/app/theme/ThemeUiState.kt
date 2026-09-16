@@ -18,6 +18,13 @@ data class ThemeUiState(
     val selectedPaletteRecord: ThemePaletteRecord? = null,
     val paletteRecords: List<ThemePaletteRecord> = emptyList(),
     val systemIsDark: Boolean = false,
+    /**
+     * 系统动态色刷新版本号 — Issue #698 评论 5697617362。
+     *
+     * 只用于系统壁纸/相关资源颜色变化时推进，驱动根 [SujianTheme] 重组并重新从系统拿
+     * `dynamic*ColorScheme(context)`。不是用户设置，不写入 Core 配置文件。
+     */
+    val dynamicColorRevision: Long = 0L,
 ) {
     val isDark: Boolean
         get() =

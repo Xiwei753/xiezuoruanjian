@@ -3,6 +3,7 @@ package com.xiwei.sujian.app.theme
 import android.content.Context
 import com.xiwei.sujian.app.theme.model.BuiltinTheme
 import com.xiwei.sujian.app.theme.model.ThemePaletteRecord
+import com.xiwei.sujian.core.designsystem.theme.ColorSource
 import com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents
 import com.xiwei.sujian.core.interop.diagnostics.SystemDiagnosticsEvents
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
@@ -192,6 +193,23 @@ object ThemeStore {
         if (current.isSystem) {
             _uiState.value = current.copy(systemIsDark = isDark)
         }
+    }
+
+    /**
+     * 系统壁纸/相关资源颜色变化回调 — Issue #698 评论 5697617362。
+     *
+     * 只在当前颜色来源为 [ColorSource.ANDROID_DYNAMIC] 时推进 [ThemeUiState.dynamicColorRevision]，
+     * 让根 SujianTheme 重组并重新调用 dynamic*ColorScheme(context) 拿最新系统 palette。
+     * 不重新把 dynamicColorEnabled 做成第二事实；颜色来源仍只认 colorSource。
+     * 不写 Core 配置；revision 是纯内存驱动信号。
+     */
+    fun onDynamicColorsChanged() {
+        val current = _uiState.value
+        if (current.resolvedColorSource != ColorSource.ANDROID_DYNAMIC) return
+        _uiState.value =
+            current.copy(
+                dynamicColorRevision = current.dynamicColorRevision + 1,
+            )
     }
 
     private fun shouldMigrateToDynamicColor(settings: LocalSettings): Boolean =

@@ -172,4 +172,45 @@ object AppDiagnosticsEvents {
     /** 用户选择外观模式（点击 dark/light/system）。origin=User。 */
     fun themeAppearanceSelect(requested: String) =
         DiagnosticsEventsInterop.record(DiagnosticOriginDto.USER, "theme.appearance_select", "requested" to requested)
+
+    // ── 主题 Material 颜色诊断（App：应用内部）──────────────────────
+
+    /**
+     * 最终塞进 MaterialTheme 的颜色低频诊断 — Issue #698 评论 5697617362。
+     *
+     * theme.resolve 只证明设置层选择了什么；本事件记录最终 colorScheme 的关键颜色，
+     * 用于真机判断"设置层正确但 MaterialTheme 还是旧颜色"还是"MaterialTheme 已换但页面写死颜色"。
+     * 调用方（SujianTheme）只在关键 key 变化时记录，保证低频。
+     */
+    fun themeMaterialColors(
+        source: String,
+        isDark: Boolean,
+        colors: ThemeMaterialColorSnapshot,
+        revision: Long,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.APP,
+        "theme.material_colors",
+        "source" to source,
+        "isDark" to isDark,
+        "primary" to colors.primary,
+        "primaryContainer" to colors.primaryContainer,
+        "surface" to colors.surface,
+        "surfaceContainer" to colors.surfaceContainer,
+        "onSurface" to colors.onSurface,
+        "revision" to revision,
+    )
 }
+
+/**
+ * 最终塞进 MaterialTheme 的关键颜色快照 — Issue #698 评论 5697617362 诊断用。
+ *
+ * 只记录关键颜色，用于真机判断 MaterialTheme 是否真的换了颜色。
+ * 构造函数阈值 10，容纳 5 个颜色字段无需 @Suppress。
+ */
+data class ThemeMaterialColorSnapshot(
+    val primary: String,
+    val primaryContainer: String,
+    val surface: String,
+    val surfaceContainer: String,
+    val onSurface: String,
+)

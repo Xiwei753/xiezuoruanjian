@@ -2,8 +2,11 @@ package com.xiwei.sujian.app.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import com.xiwei.sujian.core.designsystem.theme.ColorSource
 import com.xiwei.sujian.core.designsystem.theme.SujianDarkColorScheme
@@ -12,6 +15,8 @@ import com.xiwei.sujian.core.designsystem.theme.SujianShapes
 import com.xiwei.sujian.core.designsystem.theme.SujianTheme
 import com.xiwei.sujian.core.designsystem.theme.SujianTypography
 import com.xiwei.sujian.core.designsystem.theme.hexToColor
+import com.xiwei.sujian.core.interop.diagnostics.AppDiagnosticsEvents
+import com.xiwei.sujian.core.interop.diagnostics.ThemeMaterialColorSnapshot
 
 private fun schemeFromRecord(
     record: com.xiwei.sujian.app.theme.model.ThemePaletteRecord,
@@ -143,21 +148,25 @@ fun SujianTheme(
         }
     val context = LocalContext.current
 
-    val colorScheme =
-        remember(uiState, isDark) {
-            when (uiState.resolvedColorSource) {
-                ColorSource.ANDROID_DYNAMIC -> {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        if (isDark) {
-                            androidx.compose.material3.dynamicDarkColorScheme(context)
-                        } else {
-                            androidx.compose.material3.dynamicLightColorScheme(context)
-                        }
+    val colorScheme: ColorScheme =
+        when (uiState.resolvedColorSource) {
+            ColorSource.ANDROID_DYNAMIC -> {
+                // 动态色不与静态主题共用长期缓存 — Issue #698 评论 5697617362。
+                // 每次重组都按当前 context + 深浅模式直接从系统拿最新 palette。
+                // uiState（含 dynamicColorRevision）变化触发本 Composable 重组，
+                // 壁纸颜色变化后能拿到新颜色。
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    if (isDark) {
+                        androidx.compose.material3.dynamicDarkColorScheme(context)
                     } else {
-                        if (isDark) SujianDarkColorScheme else SujianLightColorScheme
+                        androidx.compose.material3.dynamicLightColorScheme(context)
                     }
+                } else {
+                    if (isDark) SujianDarkColorScheme else SujianLightColorScheme
                 }
-                ColorSource.SAVED_PALETTE -> {
+            }
+            ColorSource.SAVED_PALETTE ->
+                remember(uiState.selectedPaletteRecord, isDark) {
                     val record = uiState.selectedPaletteRecord
                     if (record != null) {
                         schemeFromRecord(record, isDark)
@@ -167,7 +176,8 @@ fun SujianTheme(
                         SujianLightColorScheme
                     }
                 }
-                ColorSource.BUILT_IN -> {
+            ColorSource.BUILT_IN ->
+                remember(uiState.selectedBuiltinTheme, isDark) {
                     val builtin = uiState.selectedBuiltinTheme
                     if (builtin != null) {
                         schemeFromBuiltin(builtin, isDark)
@@ -177,8 +187,38 @@ fun SujianTheme(
                         SujianLightColorScheme
                     }
                 }
-            }
         }
+
+    // 低频颜色诊断 — Issue #698 评论 5697617362。
+    // theme.resolve 只证明设置层选择；本事件记录最终塞进 MaterialTheme 的关键颜色，
+    // 用于真机判断"设置层正确但 MaterialTheme 还是旧颜色"还是"MaterialTheme 已换但页面写死颜色"。
+    // 只在 source/isDark/revision/关键颜色值变化时记录，避免高频噪声。
+    val diagnosticSource = uiState.resolvedColorSource
+    val diagnosticRevision = uiState.dynamicColorRevision
+    LaunchedEffect(
+        diagnosticSource,
+        isDark,
+        diagnosticRevision,
+        colorScheme.primary,
+        colorScheme.primaryContainer,
+        colorScheme.surface,
+        colorScheme.surfaceContainer,
+        colorScheme.onSurface,
+    ) {
+        AppDiagnosticsEvents.themeMaterialColors(
+            source = diagnosticSource.name.lowercase(),
+            isDark = isDark,
+            colors =
+                ThemeMaterialColorSnapshot(
+                    primary = colorToHex(colorScheme.primary),
+                    primaryContainer = colorToHex(colorScheme.primaryContainer),
+                    surface = colorToHex(colorScheme.surface),
+                    surfaceContainer = colorToHex(colorScheme.surfaceContainer),
+                    onSurface = colorToHex(colorScheme.onSurface),
+                ),
+            revision = diagnosticRevision,
+        )
+    }
 
     SujianTheme(
         colorScheme = colorScheme,
@@ -186,4 +226,17 @@ fun SujianTheme(
         shapes = SujianShapes,
         content = content,
     )
+}
+
+private fun colorToHex(color: androidx.compose.ui.graphics.Color): String {
+    val argb = color.toArgb()
+    val alpha = (argb shr 24) and 0xFF
+    val red = (argb shr 16) and 0xFF
+    val green = (argb shr 8) and 0xFF
+    val blue = argb and 0xFF
+    return if (alpha == 255) {
+        String.format("#%02X%02X%02X", red, green, blue)
+    } else {
+        String.format("#%02X%02X%02X%02X", alpha, red, green, blue)
+    }
 }
