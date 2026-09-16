@@ -124,20 +124,20 @@ extern "C" fn sujian_ime_replace_and_commit(
 }
 
 /// 把 Qt `QInputMethodEvent` 的 replacementStart/replacementLength（UTF-16
-/// QChar 偏移，相对 preedit 起点）解析成 committed text 的 UTF-8 byte range，
-/// 构造归一化的 `ImeReplaceEvent`。
+/// QChar 偏移，相对 preedit 起点）解析成 Qt 两步语义的 `ImeReplaceEvent`。
 ///
-/// Qt 官方语义：replacementStart/replacementLength 相对 preedit 起点解释，
-/// replacement 时忽略 preedit 区域。因此先构造 base_text（committed text 去掉
-/// session replace range），在 base_text 上换算 byte range，再映射回 committed
-/// text 坐标。
+/// Qt 官方语义：先删除当前 selection（committed text 上的 session replace
+/// range），再在删完 selection 后的文本（base_text）上按
+/// replacementStart/replacementLength 做 replacement/commit（replacement 时
+/// 忽略 preedit 区域）。
 ///
-/// Issue #701 评论 5702214893: session replace range 现在可能来自开始
-/// composition 时的 buffer selection（`ensure_composition_session` 在有选区
-/// 时用 `new_with_replace_range` 创建 session），对应 Qt 官方"先删除当前
-/// selection"语义。这确保最终 `ImeReplaceEvent` 已表达唯一 committed UTF-8
-/// range（先删除 selection + 再 replacement/commit），`editing.rs` 的
-/// `ime_replace_and_insert` 直接用此 byte range 做删除+插入即可。
+/// Issue #701 评论 5702675971: 旧实现把两步硬合成一个连续 committed byte
+/// range，在 selection 与 replacement 不相邻时会误删中间正文。本函数改成
+/// 两步分开的事件模型：
+/// - `selection_byte_range` = `Some((session_replace_start, session_replace_end))`
+///   if `session_replace_start != session_replace_end` else `None`；
+/// - `replacement_byte_range_after_selection` = base_text 坐标的 (del_start, del_end)，
+///   不再映射回 committed text 坐标。
 ///
 /// 所有 UTF-16→UTF-8 换算只在此处做一次，`editing.rs` 不再二次换算。
 fn resolve_ime_replace_event(
@@ -148,6 +148,13 @@ fn resolve_ime_replace_event(
 ) -> ImeReplaceEvent {
     let (session_replace_start, session_replace_end, committed_text) =
         item.ime_replacement_context();
+
+    // 第一步 selection 删除：仅当 session replace range 非零长度时存在。
+    let selection_byte_range = if session_replace_start != session_replace_end {
+        Some((session_replace_start, session_replace_end))
+    } else {
+        None
+    };
 
     // base_text = committed_text 去掉 [session_replace_start, session_replace_end) 段。
     // Qt replacement 相对 preedit 起点（= session_replace_start in base_text）解释。
@@ -175,22 +182,11 @@ fn resolve_ime_replace_event(
         (re_byte, rs_byte)
     };
 
-    // base_text 坐标 → committed text 坐标：
-    // [0, session_replace_start) 段两者相同；
-    // (session_replace_start, ...) 段 committed text 比 base_text 多 preedit_len 偏移。
-    let preedit_len = session_replace_end - session_replace_start;
-    let committed_del_start = if del_start <= session_replace_start {
-        del_start
-    } else {
-        del_start + preedit_len
-    };
-    let committed_del_end = if del_end <= session_replace_start {
-        del_end
-    } else {
-        del_end + preedit_len
-    };
-
-    ImeReplaceEvent::new(committed_del_start, committed_del_end, inserted_text)
+    // Issue #701 评论 5702675971: 不再把 base_text 坐标映射回 committed text 坐标。
+    // (del_start, del_end) 是 base_text 坐标，直接作为第二步 replacement range。
+    // editing.rs 的 EditOp::ImeCommit 顺序执行两步 pipeline edit，
+    // 第二步在删完 selection 后的 pipeline text（= base_text）上做 replacement。
+    ImeReplaceEvent::new(selection_byte_range, (del_start, del_end), inserted_text)
 }
 
 #[no_mangle]

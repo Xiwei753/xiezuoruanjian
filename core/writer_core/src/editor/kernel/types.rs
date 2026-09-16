@@ -65,14 +65,29 @@ pub enum EditorCommand {
         cause: EditorTransactionCause,
         expected_revision: EditorRevision,
     },
-    /// 原子 IME commit — 先删除 selection，再插入 inserted_text，
+    /// 原子 IME commit — Qt `QInputMethodEvent` 两步语义的原子执行：
+    /// 1. 先删除 selection `[selection_byte_range.start, selection_byte_range.end)`；
+    /// 2. 再在删完 selection 后的文本（base_text）上删除
+    ///    `[replacement_byte_range_after_selection.start,
+    ///    replacement_byte_range_after_selection.end)` 并在
+    ///    `replacement_byte_range_after_selection.start` 插入 `inserted_text`。
+    ///
     /// 整个操作只产生一个 revision 推进和一个 UndoEntry。
     ///
     /// Qt 对 `QInputMethodEvent` 的定义：先删除当前 selection，再做
     /// replacement/commit，整个 operation 加入 undo stack。
     /// 不要把 selection 删除和 replacement 拆成两次 pipeline command。
+    ///
+    /// 坐标空间（全部 UTF-8 byte offset，半开区间）：
+    /// - `selection_byte_range`：第一步删除的 committed text byte range。
+    ///   零长度（start == end）表示无 selection 删除。
+    /// - `replacement_byte_range_after_selection`：第二步在删完 selection 后的
+    ///   文本（base_text）上做 replacement/commit 的 byte range。这是 base_text
+    ///   坐标，不是原始 committed text 坐标。
+    /// - `inserted_text`：第二步插入的 commit 文本。可以为空（纯删除场景）。
     ImeCommit {
         selection_byte_range: Utf8ByteRange,
+        replacement_byte_range_after_selection: Utf8ByteRange,
         inserted_text: String,
         cause: EditorTransactionCause,
         expected_revision: EditorRevision,

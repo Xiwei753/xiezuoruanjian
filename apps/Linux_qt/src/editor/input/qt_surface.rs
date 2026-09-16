@@ -182,11 +182,27 @@ cpp! {{
             QString commit = ime->commitString();
             QString preedit = ime->preeditString();
             if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG") || qEnvironmentVariableIsSet("WRITER_DEBUG")) {
-                qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld, platform=%s",
+                int rs = ime->replacementStart();
+                int rl = ime->replacementLength();
+                int cursorAttrStart = -1, cursorAttrLen = 0;
+                for (const auto& attr : ime->attributes()) {
+                    if (attr.type == QInputMethodEvent::Cursor) {
+                        cursorAttrStart = attr.start;
+                        cursorAttrLen = attr.length;
+                        break;
+                    }
+                }
+                qDebug("[sujian] InputMethodEvent: preedit_len=%lld, commit_len=%lld, replacementStart=%d, replacementLength=%d, cursor_attr_start=%d, cursor_attr_length=%d, platform=%s",
                        static_cast<long long>(preedit.length()), static_cast<long long>(commit.length()),
-                       ime_adapter.platform_name());
+                       rs, rl, cursorAttrStart, cursorAttrLen, ime_adapter.platform_name());
             }
-            if (!commit.isEmpty()) {
+            // Issue #701 评论 5702675971: 空 commit + replacement（纯删除）也要
+            // 走 replace_and_commit。只有既无 commit 又无 replacement 且 preedit
+            // 为空时才 cancel。
+            bool has_commit = !commit.isEmpty();
+            bool has_replacement = ime->replacementLength() > 0;
+            bool has_ime_action = has_commit || has_replacement;
+            if (has_ime_action) {
                 int replace_start = ime->replacementStart();
                 int replace_length = ime->replacementLength();
                 sujian_ime_replace_and_commit(
@@ -245,7 +261,7 @@ cpp! {{
                     attr_count,
                     attr_formats.constData()
                 );
-            } else if (commit.isEmpty()) {
+            } else if (!has_ime_action) {
                 sujian_ime_cancel(rust_item);
                 ime_adapter.ime_composing = false;
             }

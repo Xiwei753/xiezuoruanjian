@@ -1,4 +1,5 @@
 use super::*;
+use crate::editor::input::events::ImeReplaceEvent;
 
 /// Issue #701 评论 5699573227 第三阶段: 统一编辑操作描述。
 ///
@@ -28,15 +29,18 @@ enum EditOp {
         end: usize,
         pipeline_cause: EditorTransactionCause,
     },
-    /// 原子 IME commit — 先删除 selection 再插入 text，整个操作只产生
-    /// 一个 Core revision 推进和一个 UndoEntry。
+    /// Issue #701 评论 5702675971: IME commit 的 Qt 两步语义。
     ///
-    /// Qt `QInputMethodEvent` 语义：先删除当前 selection，再做
-    /// replacement/commit，整个 operation 加入 undo stack。
+    /// 调用一次 Core `ImeCommit` 原子命令（三段语义），在 Core 内部顺序执行两步
+    /// 正文修改，只产生一个 Core revision 推进和一个 UndoEntry：
+    /// 1. 第一步：删 selection（在 committed text 上），
+    ///    `selection_byte_range` 为 `None` 或零长度时跳过（传 (0, 0)）；
+    /// 2. 第二步：在删 selection 后的文本（base_text）上做 replacement/insert，
+    ///    `replacement_byte_range` 是 base_text 坐标。
     ImeCommit {
-        selection_start: usize,
-        selection_end: usize,
-        text: String,
+        selection_byte_range: Option<(usize, usize)>,
+        replacement_byte_range: (usize, usize),
+        inserted_text: String,
         pipeline_cause: EditorTransactionCause,
     },
 }
@@ -303,14 +307,29 @@ impl SujianEditorItem {
                 .delete_range(start, end, pipeline_cause)
                 .is_some(),
             EditOp::ImeCommit {
-                selection_start,
-                selection_end,
-                text,
+                selection_byte_range,
+                replacement_byte_range,
+                inserted_text,
                 pipeline_cause,
-            } => self
-                .pipeline
-                .ime_commit(selection_start, selection_end, &text, pipeline_cause)
-                .is_some(),
+            } => {
+                // Issue #701 评论 5704110106: 调用一次 Core ImeCommit 原子命令
+                // （三段语义），Core 内部顺序执行两步正文修改，只产生一个
+                // revision 推进和一个 UndoEntry。
+                // selection_byte_range 为 None 或零长度时传 (0, 0)（零长度 range，
+                // Core 不会删除）。
+                let (sel_start, sel_end) = selection_byte_range.unwrap_or((0, 0));
+                let (rep_start, rep_end) = replacement_byte_range;
+                self.pipeline
+                    .ime_commit(
+                        sel_start,
+                        sel_end,
+                        rep_start,
+                        rep_end,
+                        &inserted_text,
+                        pipeline_cause,
+                    )
+                    .is_some()
+            }
         };
         if !applied {
             return false;
@@ -448,25 +467,27 @@ impl SujianEditorItem {
         self.emit_content_changed();
     }
 
-    /// Issue #701 评论 5699569220: IME replace+commit — 接收已归一化的 UTF-8 byte range。
+    /// Issue #701 评论 5702675971: IME replace+commit — 接收 Qt 两步语义的
+    /// `ImeReplaceEvent`，携带 `selection_byte_range` 和
+    /// `replacement_byte_range_after_selection`。
     ///
-    /// `replace_byte_start`/`replace_byte_end` 为 committed text 的 UTF-8 byte
-    /// offset（半开区间），由 `platform_ime` 结合当前 `CompositionSession` 把
-    /// Qt 的 replacementStart/replacementLength（UTF-16 QChar 偏移）解析后传入。
+    /// 事件由 `platform_ime` 结合当前 `CompositionSession` 把 Qt 的
+    /// `replacementStart`/`replacementLength`（UTF-16 QChar 偏移）解析后构造。
     /// 此函数不再做任何 UTF-16→UTF-8 或 base_text↔virtual_text↔committed_text
-    /// 坐标换算，committed text、virtual text、preedit text 不再在这里互相换锚点。
-    /// 这一阶段只保证最终编辑 range 和新 cursor 正确，不重写 animation coordinator。
-    pub(crate) fn ime_replace_and_insert(
-        &mut self,
-        replace_byte_start: usize,
-        replace_byte_end: usize,
-        text: String,
-    ) {
+    /// 坐标换算。
+    ///
+    /// `EditOp::ImeCommit` 调用一次 Core `ImeCommit` 原子命令（三段语义），
+    /// Core 内部顺序执行两步正文修改，只产生一个 revision 推进和一个 UndoEntry，
+    /// 只在 `record_edit_transaction` 末尾做一次 `sync_buffer_from_pipeline`
+    /// + 一次 snapshot + 一次视觉事务。
+    pub(crate) fn ime_replace_and_insert(&mut self, event: ImeReplaceEvent) {
         if !self.current_editor_enabled {
             return;
         }
-        let inserted = normalize_plain_text(&text);
-        if inserted.is_empty() {
+        // Issue #701 评论 5702675971: 不再因 inserted_text.is_empty() 直接 return。
+        // 改为：既无删除又无插入时 return。允许"空 commit + replacement"（纯删除）进入事务。
+        let inserted = normalize_plain_text(&event.inserted_text);
+        if !event.has_any_deletion() && inserted.is_empty() {
             return;
         }
 
@@ -478,20 +499,27 @@ impl SujianEditorItem {
             preedit_byte_end,
         );
 
-        // 已归一化的 committed text UTF-8 byte range，直接使用。
-        let del_start = replace_byte_start;
-        let del_end = replace_byte_end;
+        let selection_byte_range = event.selection_byte_range;
+        let (rep_start, rep_end) = event.replacement_byte_range_after_selection;
 
         // candidate = 插入文本在新 committed text 中的位置。
-        let candidate_byte_start = del_start;
-        let candidate_byte_end = del_start + inserted.len();
+        // inserted 在 new text 中的起点 = rep_start（第二步 replacement 的起点）。
+        let candidate_byte_start = rep_start;
+        let candidate_byte_end = rep_start + inserted.len();
 
-        // committed_replace 传给动画协调器。本阶段不再做 base_text↔virtual_text
-        // 锚点换算；在普通 preedit（零长度 session replace range）场景下
-        // committed text 坐标与 virtual text 坐标一致，setComposingRegion 场景
-        // 的偏差留给后续阶段处理（Linux Qt 不走 setComposingRegion）。
-        let committed_replace_start = del_start;
-        let committed_replace_end = del_end;
+        // committed_replace 传给动画协调器：
+        // - 有 selection 时用 selection range（第一步删除的范围）；
+        // - 无 selection 时用 replacement range（第二步的范围）。
+        let committed_replace_start = if let Some((sel_start, _)) = selection_byte_range {
+            sel_start
+        } else {
+            rep_start
+        };
+        let committed_replace_end = if let Some((_, sel_end)) = selection_byte_range {
+            sel_end
+        } else {
+            rep_end
+        };
 
         let visual_cause = if inserted.chars().count() == 1 {
             EditorTransactionCause::Typing
@@ -516,14 +544,12 @@ impl SujianEditorItem {
             None
         };
 
-        // Issue #701 评论 5703179127: 使用原子 ImeCommit 命令，先删除 selection
-        // 再插入 text，整个操作只产生一个 Core revision 推进和一个 UndoEntry。
-        // Qt QInputMethodEvent 语义：先删除当前 selection，再做
-        // replacement/commit，整个 operation 加入 undo stack。
+        // Issue #701 评论 5704110106: 用 Core ImeCommit 原子命令（三段语义），
+        // Core 内部顺序执行两步正文修改，只产生一个 revision 推进和一个 UndoEntry。
         let op = EditOp::ImeCommit {
-            selection_start: del_start,
-            selection_end: del_end,
-            text: inserted,
+            selection_byte_range,
+            replacement_byte_range: (rep_start, rep_end),
+            inserted_text: inserted,
             pipeline_cause: visual_cause,
         };
 

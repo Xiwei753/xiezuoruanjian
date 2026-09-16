@@ -77,41 +77,75 @@ pub(crate) fn decode_utf16_ptr(text: *const u16, text_len: i32) -> String {
     decode_utf16_lossy(slice)
 }
 
-/// 归一化的 IME commit/replace 事件 — 携带 UTF-8 byte range 和插入文本。
+/// 归一化的 IME commit/replace 事件 — Qt `QInputMethodEvent` 两步语义。
 ///
-/// 由 `platform_ime` 结合当前 `CompositionSession` 把 Qt 的 `replacementStart`/
-/// `replacementLength`（UTF-16 QChar 偏移，相对 preedit 起点）解析成 committed
-/// text 的 byte range 后构造。进入 editor pipeline 后不再携带任何 Qt 坐标。
+/// Qt 官方 `QInputMethodEvent` 语义是两步：
+/// 1. 先删除当前 selection（committed text 上的 byte range）；
+/// 2. 再按 `replacementStart`/`replacementLength` 做 replacement/commit，
+///    replacement 时忽略 preedit 区域。
 ///
-/// 坐标空间：
-/// - `replace_byte_start`/`replace_byte_end`：committed text UTF-8 byte offset
-///   （半开区间），由 `platform_ime` 把 base_text 坐标映射回 committed text 坐标
-///   后填入。`replace_byte_start <= replace_byte_end`。
-/// - `inserted_text`：即将插入的 commit 文本（已 UTF-16→UTF-8 解码）。
+/// 旧实现把这两步硬合成一个连续 committed byte range，在 selection 与
+/// replacement 不相邻时会误删中间正文。本结构改成两步分开的事件模型，
+/// `editing.rs` 的 `EditOp::ImeCommit` 顺序执行两步 pipeline edit，
+/// 但只在 `record_edit_transaction` 末尾做一次 `sync_buffer_from_pipeline`
+/// + 一次 snapshot + 一次视觉事务。
 ///
-/// 普通键盘输入仍归一化为 Insert/Delete；IME commit 归一化为 Insert/Replace。
+/// 坐标空间（全部 UTF-8 byte offset，半开区间）：
+/// - `selection_byte_range`：第一步删除的 committed text byte range。
+///   `None` 表示无 selection 删除（session replace range 零长度）。
+/// - `replacement_byte_range_after_selection`：第二步在删完 selection 后的
+///   文本（base_text）上做 replacement/commit 的 byte range。`(start, end)`，
+///   `start <= end`。这是 base_text 坐标，不是 committed text 坐标。
+/// - `inserted_text`：第二步插入的 commit 文本（已 UTF-16→UTF-8 解码）。
+///   可以为空（纯删除场景）。
+///
+/// 普通键盘输入仍归一化为 Insert/Delete；IME commit 归一化为 ImeCommit。
 /// 后续代码不关心"逗号"还是其他字符。
+#[derive(Clone)]
 pub(crate) struct ImeReplaceEvent {
-    pub replace_byte_start: usize,
-    pub replace_byte_end: usize,
+    /// 第一步：删除当前 selection（committed text UTF-8 byte range，半开区间）。
+    /// `None` 表示无 selection 删除。
+    pub selection_byte_range: Option<(usize, usize)>,
+    /// 第二步：在删完 selection 后的文本（base_text）上做 replacement/commit。
+    /// `(start, end)` 是 base_text UTF-8 byte offset（半开区间），`start <= end`。
+    pub replacement_byte_range_after_selection: (usize, usize),
+    /// 插入文本（已 UTF-16→UTF-8 解码）。可以为空（纯删除）。
     pub inserted_text: String,
 }
 
 impl ImeReplaceEvent {
     pub(crate) fn new(
-        replace_byte_start: usize,
-        replace_byte_end: usize,
+        selection_byte_range: Option<(usize, usize)>,
+        replacement_byte_range: (usize, usize),
         inserted_text: String,
     ) -> Self {
-        let (start, end) = if replace_byte_start <= replace_byte_end {
-            (replace_byte_start, replace_byte_end)
+        // 归一化 replacement range 使 start <= end。
+        let (rep_start, rep_end) = replacement_byte_range;
+        let replacement_byte_range_after_selection = if rep_start <= rep_end {
+            (rep_start, rep_end)
         } else {
-            (replace_byte_end, replace_byte_start)
+            (rep_end, rep_start)
         };
         Self {
-            replace_byte_start: start,
-            replace_byte_end: end,
+            selection_byte_range,
+            replacement_byte_range_after_selection,
             inserted_text,
         }
+    }
+
+    /// 返回 true 如果事件包含任何删除操作：
+    /// - selection 删除（`selection_byte_range` 存在且 start != end），或
+    /// - replacement 删除（`replacement_byte_range_after_selection` 的 start != end）。
+    ///
+    /// 用于 controller 判断"既无删除也无插入"的纯 noop 场景（直接 return），
+    /// 但允许"空 commit + replacement"（纯删除）进入事务。
+    pub(crate) fn has_any_deletion(&self) -> bool {
+        if let Some((sel_start, sel_end)) = self.selection_byte_range {
+            if sel_start != sel_end {
+                return true;
+            }
+        }
+        let (rep_start, rep_end) = self.replacement_byte_range_after_selection;
+        rep_start != rep_end
     }
 }

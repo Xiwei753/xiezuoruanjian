@@ -1,4 +1,5 @@
 use super::*;
+use crate::editor::input::events::ImeReplaceEvent;
 
 // ── IME 输入处理模块 ──
 //
@@ -179,19 +180,13 @@ impl EditorInputHost for SujianEditorItem {
         self.insert_text(text.into());
     }
 
-    /// 替换指定 UTF-8 byte range 并插入文本（IME commit 场景）。
+    /// IME commit/replace — 接收 Qt 两步语义的 `ImeReplaceEvent`。
     ///
-    /// `replace_byte_start`/`replace_byte_end` 为 committed text 的 UTF-8 byte
-    /// offset（半开区间），由 `platform_ime` 结合当前 `CompositionSession` 把
-    /// Qt 的 replacementStart/replacementLength（UTF-16 QChar 偏移）解析后传入。
-    /// 进入此方法后不再携带任何 Qt 坐标。
-    fn input_replace_and_insert(
-        &mut self,
-        replace_byte_start: usize,
-        replace_byte_end: usize,
-        text: String,
-    ) {
-        self.ime_replace_and_insert(replace_byte_start, replace_byte_end, text);
+    /// 事件由 `platform_ime` 结合当前 `CompositionSession` 把 Qt 的
+    /// `replacementStart`/`replacementLength`（UTF-16 QChar 偏移）解析后构造。
+    /// 进入此方法后不再携带任何 Qt 坐标，直接委托给 `ime_replace_and_insert`。
+    fn input_ime_replace_and_commit(&mut self, event: ImeReplaceEvent) {
+        self.ime_replace_and_insert(event);
     }
 
     fn input_move_cursor_horizontal(&mut self, forward: bool, extend: bool) {

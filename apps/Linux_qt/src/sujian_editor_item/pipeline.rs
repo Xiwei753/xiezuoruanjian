@@ -577,16 +577,23 @@ impl LinuxEditorPipeline {
         self.apply_kernel_outcome(outcome, false)
     }
 
-    /// 原子 IME commit — 先删除 selection 再插入 text，整个操作只产生
-    /// 一个 revision 推进和一个 UndoEntry。
+    /// 原子 IME commit — Qt `QInputMethodEvent` 两步语义的原子执行：
+    /// 1. 先删除 selection `[selection_byte_start, selection_byte_end)`；
+    /// 2. 再在删完 selection 后的文本（base_text）上删除
+    ///    `[replacement_byte_start, replacement_byte_end)` 并在
+    ///    `replacement_byte_start` 插入 `inserted_text`。
     ///
-    /// Qt `QInputMethodEvent` 语义：先删除当前 selection，再做
-    /// replacement/commit，整个 operation 加入 undo stack。
+    /// 整个操作只产生一个 revision 推进和一个 UndoEntry。
     /// 不要把 selection 删除和 replacement 拆成两次 pipeline command。
+    ///
+    /// `replacement_byte_start`/`replacement_byte_end` 是 base_text 坐标
+    /// （删完 selection 后的文本），不是原始 committed text 坐标。
     pub fn ime_commit(
         &mut self,
         selection_byte_start: usize,
         selection_byte_end: usize,
+        replacement_byte_start: usize,
+        replacement_byte_end: usize,
         inserted_text: &str,
         cause: EditorTransactionCause,
     ) -> Option<EditorEditResult> {
@@ -595,6 +602,11 @@ impl LinuxEditorPipeline {
                 self.kernel.rope(),
                 selection_byte_start,
                 selection_byte_end,
+            ),
+            replacement_byte_range_after_selection: Utf8ByteRange::clamp_rope(
+                self.kernel.rope(),
+                replacement_byte_start,
+                replacement_byte_end,
             ),
             inserted_text: inserted_text.to_string(),
             cause,

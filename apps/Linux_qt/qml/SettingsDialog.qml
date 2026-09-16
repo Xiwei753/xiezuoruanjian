@@ -110,6 +110,27 @@ Dialog {
         }
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
+        // Issue #701 评论 5702675971: colorSourceCombo / builtinThemeCombo /
+        // paletteRecordCombo 的 currentIndex 收口到 updateValues()，统一从
+        // themeControllerRef 读取。原来这三个 combo 只靠各自
+        // Component.onCompleted 初始化，当设置页用 Loader 加载且关闭后不销毁
+        // 时，重新打开不会再次触发 Component.onCompleted，导致显示旧选择。
+        var src = themeControllerRef ? themeControllerRef.color_source : "built_in"
+        colorSourceCombo.currentIndex = src === "saved_palette" ? 1 : 0
+        var builtinSelId = themeControllerRef ? themeControllerRef.selected_builtin_theme_id : ""
+        var builtinThemes = builtinThemeCombo._themes
+        var builtinFound = -1
+        for (var bi = 0; bi < builtinThemes.length; bi++) {
+            if (builtinThemes[bi].theme_id === builtinSelId) { builtinFound = bi; break }
+        }
+        builtinThemeCombo.currentIndex = builtinFound >= 0 ? builtinFound : 0
+        var paletteSelId = themeControllerRef ? themeControllerRef.selected_palette_id : ""
+        var paletteRecords = paletteRecordCombo._records
+        var paletteFound = -1
+        for (var pi = 0; pi < paletteRecords.length; pi++) {
+            if (paletteRecords[pi].palette_id === paletteSelId) { paletteFound = pi; break }
+        }
+        paletteRecordCombo.currentIndex = paletteFound >= 0 ? paletteFound : 0
         diagnosticsEnabled.checked = backendRef.setting_diagnostics_enabled
         diagnosticsVerbose.checked = backendRef.setting_diagnostics_verbose
         diagnosticsVerbose.enabled = backendRef.setting_diagnostics_enabled
@@ -253,10 +274,6 @@ Dialog {
                             root.settingsDirty = true
                             root.saveAndNotify()
                         }
-                        Component.onCompleted: {
-                            var src = themeControllerRef ? themeControllerRef.color_source : "built_in"
-                            currentIndex = src === "saved_palette" ? 1 : 0
-                        }
                     }
                 }
                 SettingsRow {
@@ -282,12 +299,6 @@ Dialog {
                                 themeControllerRef.set_selected_builtin_theme_id(themeId)
                                 root.settingsDirty = true
                                 root.saveAndNotify()
-                            }
-                        }
-                        Component.onCompleted: {
-                            var selId = themeControllerRef ? themeControllerRef.selected_builtin_theme_id : ""
-                            for (var i = 0; i < _themes.length; i++) {
-                                if (_themes[i].theme_id === selId) { currentIndex = i; break }
                             }
                         }
                     }
@@ -318,12 +329,6 @@ Dialog {
                                 themeControllerRef.set_selected_palette_id(paletteId)
                                 root.settingsDirty = true
                                 root.saveAndNotify()
-                            }
-                        }
-                        Component.onCompleted: {
-                            var selId = themeControllerRef ? themeControllerRef.selected_palette_id : ""
-                            for (var i = 0; i < _records.length; i++) {
-                                if (_records[i].palette_id === selId) { currentIndex = i; break }
                             }
                         }
                     }

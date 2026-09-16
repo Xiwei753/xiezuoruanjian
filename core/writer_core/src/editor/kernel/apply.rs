@@ -219,12 +219,15 @@ impl EditorKernel {
             ),
             EditorCommand::ImeCommit {
                 selection_byte_range,
+                replacement_byte_range_after_selection,
                 inserted_text,
                 cause,
                 ..
             } => self.apply_ime_commit(
                 selection_byte_range.start().value(),
                 selection_byte_range.end().value(),
+                replacement_byte_range_after_selection.start().value(),
+                replacement_byte_range_after_selection.end().value(),
                 &inserted_text,
                 cause,
                 base_revision,
@@ -1396,22 +1399,32 @@ impl EditorKernel {
         })
     }
 
-    /// 原子 IME commit：先删除 selection，再插入 inserted_text。
+    /// 原子 IME commit：Qt `QInputMethodEvent` 两步语义的原子执行。
     ///
     /// Qt 对 `QInputMethodEvent` 的定义：先删除当前 selection，再做
     /// replacement/commit，整个 operation 加入 undo stack。
     /// 本方法在一个 `apply()` 调用内完成两步正文修改：
+    /// - Step 1: 删除 selection `[sel_min, sel_max)`（原始 text 坐标）；
+    /// - Step 2: 在删完 selection 后的文本（base_text）上删除
+    ///   `[rep_min, rep_max)` 并在 `rep_min` 插入 `inserted_text`
+    ///   （rep range 是 base_text 坐标）。
     /// - revision 只推进一次；
     /// - 只 push 一个 `UndoEntry`（可包含两条 `TextEditDelta`）；
     /// - selection/cursor 一次算完。
     ///
     /// 多段 affected range / offset map 按现有 `DeleteSurrounding` 的
     /// 多编辑事务写法保留，不退化成把中间没改的正文当成一个大 replace。
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        clippy::cognitive_complexity
+    )]
     fn apply_ime_commit(
         &mut self,
         sel_start: usize,
         sel_end: usize,
+        rep_start: usize,
+        rep_end: usize,
         inserted_text: &str,
         cause: EditorTransactionCause,
         base_revision: EditorRevision,
@@ -1424,8 +1437,16 @@ impl EditorKernel {
         } else {
             (sel_end, sel_start)
         };
+        let (rep_min, rep_max) = if rep_start <= rep_end {
+            (rep_start, rep_end)
+        } else {
+            (rep_end, rep_start)
+        };
 
-        if sel_min > self.text.byte_len() || sel_max > self.text.byte_len() {
+        let old_len = self.text.byte_len();
+
+        // 边界检查 sel（针对原始 text）。
+        if sel_min > old_len || sel_max > old_len {
             return EditorEditOutcome::InvalidOffset(self.noop_result(
                 base_revision,
                 old_cursor,
@@ -1442,50 +1463,102 @@ impl EditorKernel {
             ));
         }
 
-        // Step 1: 删除 selection。
-        let deleted_text = if sel_min < sel_max {
+        // 提前用 base_text 长度检查 rep 越界，避免删除 selection 后才发现 rep 越界。
+        let base_text_len = old_len - (sel_max - sel_min);
+        if rep_min > base_text_len || rep_max > base_text_len {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
+
+        // Step 1: 删除 selection [sel_min, sel_max)，得到 base_text。
+        let deleted_selection_text = if sel_min < sel_max {
             self.text.byte_slice(sel_min..sel_max).to_string()
         } else {
             String::new()
         };
-        if !deleted_text.is_empty() {
+        if sel_min < sel_max {
             self.text.delete(sel_min..sel_max);
         }
+        // 此时 self.text 是 base_text。
+
+        // 边界检查 rep char boundary（针对 base_text）。
+        if !self.text.is_char_boundary(rep_min) || !self.text.is_char_boundary(rep_max) {
+            return EditorEditOutcome::InvalidOffset(self.noop_result(
+                base_revision,
+                old_cursor,
+                old_selection_anchor,
+                old_selection_head,
+            ));
+        }
+
+        // Step 2: 在 base_text 上删除 [rep_min, rep_max) 并在 rep_min 插入 inserted_text。
+        let deleted_replacement_text = if rep_min < rep_max {
+            self.text.byte_slice(rep_min..rep_max).to_string()
+        } else {
+            String::new()
+        };
+        if rep_min < rep_max {
+            self.text.delete(rep_min..rep_max);
+        }
+        if !inserted_text.is_empty() {
+            self.text.insert(rep_min, inserted_text);
+        }
+        // 此时 self.text 是 final_text。
 
         self.composition_session = None;
-
-        // Step 2: 在 selection 起点插入 inserted_text。
-        if !inserted_text.is_empty() {
-            self.text.insert(sel_min, inserted_text);
-        }
         self.revision = self.revision.next();
 
-        // selection 起点作为 anchor，插入后 cursor 在 anchor + inserted_text.len()。
-        let new_cursor_val = sel_min + inserted_text.len();
+        // cursor 在 final_text 中的位置 = rep_min + inserted_text.len()。
+        let new_cursor_val = rep_min + inserted_text.len();
         self.cursor = Utf8ByteOffset::unchecked(new_cursor_val);
         self.selection_anchor = Utf8ByteOffset::unchecked(new_cursor_val);
 
         let new_selection = make_selection(new_cursor_val, new_cursor_val);
 
-        // 两条 delta：一条删除 selection，一条插入 text。
+        // rep range 映射回原始 text 坐标（delta 的 old_range 需要原始坐标）。
+        // selection 删除只影响 selection 之后的偏移：
+        // - 若 rep_pos <= sel_min，rep_pos 在 selection 之前，原始坐标 = rep_pos；
+        // - 若 rep_pos > sel_min，rep_pos 在 selection 之后，原始坐标 = rep_pos + sel_len。
+        let sel_len = sel_max - sel_min;
+        let rep_min_orig = if rep_min <= sel_min {
+            rep_min
+        } else {
+            rep_min + sel_len
+        };
+        let rep_max_orig = if rep_max <= sel_min {
+            rep_max
+        } else {
+            rep_max + sel_len
+        };
+
+        // 构造 delta（按原始坐标 → final_text 坐标）。
         let mut edits: Vec<TextEditDelta> = Vec::with_capacity(2);
+        // selection 删除 delta：old_range = (sel_min, sel_max)，new_range = point(sel_min)。
+        // 简化假设：selection 在 replacement 之前或就是 replacement 的位置
+        //（Qt 常见语义），replacement 不影响 sel_min 在 final_text 中的位置。
         if sel_min < sel_max {
             edits.push(TextEditDelta {
                 old_range: Utf8ByteRange::from_ordered(sel_min, sel_max),
                 new_range: Utf8ByteRange::point(sel_min),
-                deleted_text: deleted_text.clone(),
+                deleted_text: deleted_selection_text.clone(),
                 inserted_text: String::new(),
             });
         }
-        if !inserted_text.is_empty() {
+        // replacement delta：old_range = (rep_min_orig, rep_max_orig)，
+        // new_range = (rep_min, rep_min + inserted_text.len())。
+        if rep_min < rep_max || !inserted_text.is_empty() {
             edits.push(TextEditDelta {
-                old_range: Utf8ByteRange::point(sel_min),
-                new_range: Utf8ByteRange::from_start_len(sel_min, inserted_text.len()),
-                deleted_text: String::new(),
+                old_range: Utf8ByteRange::from_ordered(rep_min_orig, rep_max_orig),
+                new_range: Utf8ByteRange::from_start_len(rep_min, inserted_text.len()),
+                deleted_text: deleted_replacement_text.clone(),
                 inserted_text: inserted_text.to_string(),
             });
         }
-        // 空操作（无选区 + 空插入）已在上游过滤。
+        // 空操作（无选区 + 无 replacement + 空插入）已在上游过滤。
         if edits.is_empty() {
             return EditorEditOutcome::NoChange(self.noop_result(
                 base_revision,
@@ -1503,38 +1576,69 @@ impl EditorKernel {
         self.redo_stack.clear();
 
         let new_revision = self.revision;
-        let old_affected = if sel_min < sel_max {
-            vec![Utf8ByteRange::from_ordered(sel_min, sel_max)]
-        } else {
-            vec![]
-        };
-        let new_affected = if !inserted_text.is_empty() {
-            vec![Utf8ByteRange::from_start_len(sel_min, inserted_text.len())]
+        // old_affected：非零长度的 old_range（删除段）。
+        let mut old_affected: Vec<Utf8ByteRange> = Vec::new();
+        if sel_min < sel_max {
+            old_affected.push(Utf8ByteRange::from_ordered(sel_min, sel_max));
+        }
+        if rep_min < rep_max {
+            old_affected.push(Utf8ByteRange::from_ordered(rep_min_orig, rep_max_orig));
+        }
+        // new_affected：非零长度的 new_range（插入段）。
+        let new_affected: Vec<Utf8ByteRange> = if !inserted_text.is_empty() {
+            vec![Utf8ByteRange::from_start_len(rep_min, inserted_text.len())]
         } else {
             vec![]
         };
 
-        // DisplayPatch：合并为一条，deleted_text + inserted_text 反映完整变更。
-        let display_patches = vec![DisplayPatch {
-            base_revision,
-            new_revision,
-            replace_byte_range: Utf8ByteRange::from_ordered(sel_min, sel_max),
-            inserted_text: inserted_text.to_string(),
-            resulting_selection_byte_range: EditorEditResult::selection_byte_range(new_selection),
-        }];
+        // DisplayPatch：每条 delta 一条局部 DisplayPatch（base 文档坐标）。
+        let display_patches: Vec<DisplayPatch> = edits
+            .iter()
+            .map(|d| DisplayPatch {
+                base_revision,
+                new_revision,
+                replace_byte_range: d.old_range,
+                inserted_text: d.inserted_text.clone(),
+                resulting_selection_byte_range: EditorEditResult::selection_byte_range(
+                    new_selection,
+                ),
+            })
+            .collect();
 
         let is_loading = cause == EditorTransactionCause::Load;
         let is_format = cause == EditorTransactionCause::Format;
 
+        // content_delta / offset_pairs 从 delta 构造。
+        let mut content_delta = EditorContentDelta::default();
+        let mut offset_pairs: Vec<(usize, usize, usize, usize)> = Vec::with_capacity(edits.len());
+        for delta in &edits {
+            content_delta.accumulate(&EditorContentDelta::from_texts(
+                &delta.inserted_text,
+                &delta.deleted_text,
+            ));
+            offset_pairs.push((
+                delta.old_range.start().value(),
+                delta.old_range.end().value(),
+                delta.new_range.start().value(),
+                delta.new_range.end().value(),
+            ));
+        }
+
         // animation_mode：IME commit 与普通 typing 相同逻辑。
-        let diff_text = if !inserted_text.is_empty() {
-            inserted_text
+        // diff_text 优先用 inserted_text，否则用删除文本（selection 优先于 replacement）。
+        let deleted_for_anim = if !deleted_selection_text.is_empty() {
+            &deleted_selection_text
         } else {
-            &deleted_text
+            &deleted_replacement_text
         };
         let animation_mode = if !self.animation_enabled || is_loading || is_format {
             AnimationMode::SystemSuppressed
         } else {
+            let diff_text = if !inserted_text.is_empty() {
+                inserted_text
+            } else {
+                deleted_for_anim
+            };
             let cluster_count = count_grapheme_clusters(diff_text);
             let contains_newline = diff_text.contains('\n');
             let contains_complex = text_contains_complex_grapheme(diff_text);
@@ -1551,17 +1655,22 @@ impl EditorKernel {
         };
 
         let (old_animation_units, new_animation_units) = {
-            let old_slice = if sel_min < sel_max {
-                vec![AnimationTextSlice {
+            let mut old_slice: Vec<AnimationTextSlice> = Vec::new();
+            if !deleted_selection_text.is_empty() {
+                old_slice.push(AnimationTextSlice {
                     absolute_start: sel_min,
-                    text: &deleted_text,
-                }]
-            } else {
-                vec![]
-            };
+                    text: &deleted_selection_text,
+                });
+            }
+            if !deleted_replacement_text.is_empty() {
+                old_slice.push(AnimationTextSlice {
+                    absolute_start: rep_min_orig,
+                    text: &deleted_replacement_text,
+                });
+            }
             let new_slice = if !inserted_text.is_empty() {
                 vec![AnimationTextSlice {
-                    absolute_start: sel_min,
+                    absolute_start: rep_min,
                     text: inserted_text,
                 }]
             } else {
@@ -1589,11 +1698,7 @@ impl EditorKernel {
                 should_animate: self.animation_enabled && old_cursor.value() != new_cursor_val,
             },
             // 原子 IME commit 从 delta 构造 offset map。
-            offset_map: Some(OffsetMap::from_single_edit(
-                self.text.byte_len() - inserted_text.len() + (sel_max - sel_min),
-                (sel_min, sel_min),
-                inserted_text.len(),
-            )),
+            offset_map: Some(OffsetMap::from_edits(old_len, &offset_pairs)),
             old_animation_units,
             new_animation_units,
         };
@@ -1606,7 +1711,7 @@ impl EditorKernel {
             old_selection: make_selection(old_selection_anchor, old_selection_head),
             new_selection,
             visual_intent,
-            content_delta: EditorContentDelta::from_texts(inserted_text, &deleted_text),
+            content_delta,
         })
     }
 }
