@@ -161,6 +161,20 @@ cpp! {{
         clear_all_layout_generations();
     }
 
+    // Issue #693 评论 5690222437: 统一 glyphRuns 提取，显式要求
+    // RetrieveStringIndexes，确保 stringIndexes() 非空，使吞字/吐字事务
+    // (InsertReveal / DeleteConceal / Reflow*) 能拿到 CanonicalClusterSnapshot
+    // 的 cluster。Linux_Qt 最低版本 Qt 6.7，不再保留 Qt < 6.5 旧分支。
+    static QList<QGlyphRun> sujianGlyphRuns(const QTextLine& line) {
+        return line.glyphRuns(
+            -1,
+            -1,
+            QTextLayout::RetrieveGlyphIndexes |
+            QTextLayout::RetrieveGlyphPositions |
+            QTextLayout::RetrieveStringIndexes
+        );
+    }
+
     /// 单行排版结果 — 跨 C++/Rust 边界的数据结构。
     ///
     /// 所有 QChar index 为 UTF-16 code unit offset（与 QTextLayout API 一致），
@@ -437,9 +451,8 @@ cpp! {{
             if (cur_idx == qtextline_idx) {
                 // Use glyphRuns() for accurate glyph positions.
                 // This handles emoji, combining characters, ligatures, etc.
-                const auto glyphRuns = line.glyphRuns();
+                const auto glyphRuns = sujianGlyphRuns(line);
 
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                 // Qt 6.5+: stringIndexes() provides precise glyph→string index mapping
                 for (const auto& run : glyphRuns) {
                     const auto& positions = run.positions();
@@ -500,28 +513,6 @@ cpp! {{
                         g_glyph_buf.push_back(e);
                     }
                 }
-#else
-                // Qt < 6.5: stringIndexes() unavailable, use cursorToX per character
-                int line_start = line.textStart();
-                int line_end = line_start + line.textLength();
-                int range_start = (range_qchar_start > line_start) ? range_qchar_start : line_start;
-                int range_end = (range_qchar_end < line_end) ? range_qchar_end : line_end;
-
-                for (int idx = range_start; idx < range_end; idx++) {
-                    double x = line.cursorToX(idx, QTextLine::Leading);
-                    double x_next = line.cursorToX(idx + 1, QTextLine::Leading);
-                    double w = x_next - x;
-                    if (w < 0) w = -w; // RTL text
-
-                    GlyphEntry e;
-                    e.stringIndex = idx;
-                    e.xPos = x;
-                    e.width = w;
-                    e.glyphIndex = 0;
-                    memset(e.rawFontKey, 0, sizeof(e.rawFontKey));
-                    g_glyph_buf.push_back(e);
-                }
-#endif
 
                 // Sort by string index to ensure consistent ordering
                 std::sort(g_glyph_buf.begin(), g_glyph_buf.end(),
@@ -605,7 +596,7 @@ cpp! {{
             double lineWrap = first ? (paragraph_wrap_w - indent_w) : paragraph_wrap_w;
             line.setLineWidth(lineWrap);
             if (cur_idx == qtextline_idx) {
-                const auto glyphRuns = line.glyphRuns();
+                const auto glyphRuns = sujianGlyphRuns(line);
                 double lineY = line.y();
                 double lineH = line.height();
                 double lineAscent = line.ascent();
@@ -614,9 +605,7 @@ cpp! {{
                 for (const auto& run : glyphRuns) {
                     const auto& positions = run.positions();
                     const auto& glyphIndexes = run.glyphIndexes();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                     const auto& stringIndexes = run.stringIndexes();
-#endif
                     int count = positions.size();
                     if (count == 0) { runIdx++; continue; }
 
@@ -638,11 +627,7 @@ cpp! {{
                     double unionMinX = 1e9, unionMinY = 1e9;
                     double unionMaxX = -1e9, unionMaxY = -1e9;
                     for (int i = 0; i < count; i++) {
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                         int si = (i < stringIndexes.size()) ? stringIndexes[i] : -1;
-#else
-                        int si = -1;
-#endif
                         if (si >= 0) {
                             if (si < strStart) strStart = si;
                             if (si + 1 > strEnd) strEnd = si + 1;
@@ -714,11 +699,7 @@ cpp! {{
                         ge.glyphIndex = (i < glyphIndexes.size()) ? glyphIndexes[i] : 0;
                         ge.positionX = positions[i].x();
                         ge.positionY = positions[i].y();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                         ge.stringIndex = (i < stringIndexes.size()) ? stringIndexes[i] : -1;
-#else
-                        ge.stringIndex = -1;
-#endif
                         ge.advanceWidth = 0.0;
                         if (i + 1 < count) {
                             ge.advanceWidth = positions[i + 1].x() - positions[i].x();
@@ -940,13 +921,11 @@ cpp! {{
         int clusterStartIdx = (int)g_canonical_cluster_buf.size();
 
         // 2. 提取 glyphRuns 和 clusters
-        const auto glyphRuns = line.glyphRuns();
+        const auto glyphRuns = sujianGlyphRuns(line);
         for (const auto& run : glyphRuns) {
             const auto& positions = run.positions();
             const auto& glyphIndexes = run.glyphIndexes();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
             const auto& stringIndexes = run.stringIndexes();
-#endif
             int count = positions.size();
             if (count == 0) continue;
 
@@ -960,11 +939,7 @@ cpp! {{
                 unsigned int gIdx = (gi < glyphIndexes.size()) ? glyphIndexes[gi] : 0;
                 double gx = positions[gi].x();
                 double gy = positions[gi].y();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                 int si = (gi < stringIndexes.size()) ? stringIndexes[gi] : -1;
-#else
-                int si = -1;
-#endif
 
                 CanonicalClusterGlyphEntry ge;
                 ge.glyphIndex = gIdx;
@@ -1188,14 +1163,12 @@ cpp! {{
             int clusterStartIdx = (int)g_canonical_cluster_buf.size();
 
             if (generate_animation_visuals) {
-                const auto glyphRuns = line.glyphRuns();
+                const auto glyphRuns = sujianGlyphRuns(line);
 
             for (const auto& run : glyphRuns) {
                 const auto& positions = run.positions();
                 const auto& glyphIndexes = run.glyphIndexes();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                 const auto& stringIndexes = run.stringIndexes();
-#endif
                 int count = positions.size();
                 if (count == 0) continue;
 
@@ -1209,11 +1182,7 @@ cpp! {{
                     unsigned int gIdx = (gi < glyphIndexes.size()) ? glyphIndexes[gi] : 0;
                     double gx = positions[gi].x();
                     double gy = positions[gi].y();
-#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
                     int si = (gi < stringIndexes.size()) ? stringIndexes[gi] : -1;
-#else
-                    int si = -1;
-#endif
 
                     CanonicalClusterGlyphEntry ge;
                     ge.glyphIndex = gIdx;
