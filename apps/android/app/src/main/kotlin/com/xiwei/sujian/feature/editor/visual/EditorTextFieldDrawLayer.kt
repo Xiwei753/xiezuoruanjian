@@ -122,7 +122,18 @@ fun EditorTextFieldDrawLayer(
                     //    而是用 clipPath + ClipOp.Difference 只裁切绘制区域 —
                     //    selection/search highlight 由 BasicTextField 自己画，
                     //    裁切后自然只在非 hidden 区域可见，不引入任何颜色。
-                    val hiddenPath = buildHiddenPath(scene.hiddenRanges, latestLayout)
+                    // #698 评论 5700812160：hiddenPath 必须与动画字、视觉光标在同一视口坐标系。
+                    // drawTranslatedRangeText 用 translate.y - scrollY、drawVisualCursorRect 用
+                    // rect.top/bottom - scrollY，唯独裁切 path 没减 scrollY 会导致滚动后裁切位置
+                    // 与动画字错开，出现重影/缺字/局部空白。这里把 scrollY 传进 buildHiddenPath，
+                    // 在合并 path 时带视口偏移把正文坐标换算到当前视口坐标，不改 BasicTextField
+                    // 自己的滚动（不在外层整体 translate(-scrollY) 后再 drawContent()）。
+                    val hiddenPath =
+                        buildHiddenPath(
+                            hiddenRanges = scene.hiddenRanges,
+                            layout = latestLayout,
+                            scrollY = scrollY,
+                        )
                     if (hiddenPath != null) {
                         clipPath(
                             path = hiddenPath,
@@ -180,10 +191,23 @@ fun EditorTextFieldDrawLayer(
  *
  * 越界检查（range.end <= result.layoutInput.text.length）和 try/catch 防御异常。
  * layout 为 null 时返回 null（首帧或章节切换中）。hiddenRanges 为空或全部无效时返回 null。
+ *
+ * #698 评论 5700812160：[scrollY] 把 [TextLayoutResult.getPathForRange] 得到的正文坐标 path
+ * 换算到当前编辑器视口坐标。同一 draw 层里 [drawTranslatedRangeText] 用 `translate.y - scrollY`、
+ * [drawVisualCursorRect] 用 `rect.top/bottom - scrollY`，唯独裁掉 BasicTextField 原字的
+ * hidden path 之前没减 `scrollY`，编辑器向下滚过一段距离后裁切位置（layoutY）与动画字位置
+ * （layoutY - scrollY）错开，会出现重影、缺字或局部空白。这里给 [Path.addPath] 传视口偏移
+ * `Offset(0f, -scrollY)` 统一三者坐标系，不改 BasicTextField 自己的滚动。
+ *
+ * @param hiddenRanges 需要裁切的正文 range 列表。
+ * @param layout 当前正文 layout 快照；null 时返回 null。
+ * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
+ *   用于把正文坐标 path 换算到视口坐标。
  */
 private fun DrawScope.buildHiddenPath(
     hiddenRanges: List<TextRange>,
     layout: ComposeLayoutSnapshot?,
+    scrollY: Int,
 ): Path? {
     if (hiddenRanges.isEmpty() || layout == null) return null
     val result = layout.result
@@ -194,12 +218,13 @@ private fun DrawScope.buildHiddenPath(
         if (range.end > textLength) continue
         try {
             val path: Path = result.getPathForRange(range.start, range.end)
-            if (combined == null) {
-                combined = Path()
-                combined.addPath(path)
-            } else {
-                combined.addPath(path)
-            }
+            // #698 评论 5700812160：给 addPath 传视口偏移，把正文坐标 path 换算到当前视口坐标，
+            // 与 drawTranslatedRangeText（translate.y - scrollY）、drawVisualCursorRect
+            // （rect.top/bottom - scrollY）统一坐标系。
+            val viewportOffset = Offset(0f, -scrollY.toFloat())
+            val target = combined ?: Path()
+            target.addPath(path, viewportOffset)
+            combined = target
         } catch (_: Throwable) {
             // 越界或几何异常：跳过此 range，不阻断其他绘制。
         }
