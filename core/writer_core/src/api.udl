@@ -37,6 +37,21 @@ namespace writer_core {
     // 修改 4：暴露 Rust redact 给平台采集阶段先处理文本。
     [Throws=WriterError]
     string redact_diagnostic_text(string text);
+
+    // #694 评论 5692161955：本地输入视觉计划纯计算入口 —
+    // Core 对 (old_text, new_text, old_affected, new_affected) 做视觉分类，
+    // 返回 animation_mode 和 old/new animation units（按 grapheme cluster / run / reflow 粒度）。
+    // Android ComposeLocalVisualRebase / buildLocalInputPatch 复用此 API，
+    // 不再按 UTF-16 +1 硬切或硬编码 CLUSTER_ANIMATION。
+    // 无 session/revision/事务副作用，纯函数。
+    [Throws=WriterError]
+    LocalVisualPlanDto classify_local_visual_plan(
+        string old_text,
+        string new_text,
+        sequence<EditorByteRangeDto> old_affected_byte_ranges,
+        sequence<EditorByteRangeDto> new_affected_byte_ranges,
+        boolean animation_enabled
+    );
 };
 
 dictionary AiActionResponse {
@@ -1784,6 +1799,16 @@ dictionary EditorVisualIntentDto {
 dictionary EditorByteRangeDto {
     u32 start;
     u32 end_exclusive;
+};
+
+// #694 评论 5692161955：本地输入视觉计划 DTO —
+// Core 对 (old_text, new_text, old_affected, new_affected) 的纯计算视觉分类结果。
+// 供 Android ComposeLocalVisualRebase / buildLocalInputPatch 复用，不再硬编码 CLUSTER_ANIMATION
+// 或按 UTF-16 +1 硬切。
+dictionary LocalVisualPlanDto {
+    AnimationModeDto animation_mode;
+    sequence<EditorByteRangeDto> old_animation_units;
+    sequence<EditorByteRangeDto> new_animation_units;
 };
 
 // 动画切片角色 — 与 Core `AnimatedSliceRole` 一一对应。

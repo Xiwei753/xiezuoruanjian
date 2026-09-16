@@ -3,7 +3,12 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import uniffi.writer_core.AnimationModeDto
+import uniffi.writer_core.EditorByteRangeDto
+import uniffi.writer_core.LocalVisualPlanDto
+import uniffi.writer_core.classifyLocalVisualPlan
 
 /**
  * #694 评论第 4 步：本地输入视觉 rebase —
@@ -228,6 +233,253 @@ internal object ComposeLocalVisualRebase {
             }
         return ComposeVisualRebase.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
     }
+
+    /**
+     * #694 评论 5692161955 问题1/2：调用 Core 纯计算 API [classifyLocalVisualPlan] 做视觉分类。
+     *
+     * 把 Android UTF-16 [TextRange] affected ranges 转成 UTF-8 byte ranges 调 Core，
+     * 再把 Core 返回的 UTF-8 byte animation units 转回 UTF-16 [TextRange]。
+     *
+     * 返回 [LocalVisualPlanDto]（animationMode + old/new animation units，UTF-8 byte ranges），
+     * 调用方按需用 [utf16TextRangeForUtf8] 转回 UTF-16。
+     *
+     * Core API 失败时（如 Robolectric 测试环境无法加载原生库、byte range 越界），
+     * 回退到 Kotlin fallback（[classifyLocalVisualPlanKotlinFallback]），
+     * 用 `java.text.BreakIterator` 做 grapheme cluster 拆分 + Kotlin `chooseAnimationMode`。
+     * 生产环境优先用 Core API（业务真相在 Core），fallback 只在 Core 不可用时兜底。
+     *
+     * @param oldText 旧正文（UTF-16）。
+     * @param newText 新正文（UTF-16）。
+     * @param oldAffectedRanges 旧正文侧 affected ranges（UTF-16 [TextRange]）。
+     * @param newAffectedRanges 新正文侧 affected ranges（UTF-16 [TextRange]）。
+     * @param animationEnabled 是否启用动画。
+     */
+    fun classifyLocalVisualPlanFromCore(
+        oldText: String,
+        newText: String,
+        oldAffectedRanges: List<TextRange>,
+        newAffectedRanges: List<TextRange>,
+        animationEnabled: Boolean,
+    ): LocalVisualPlanDto {
+        val oldByteRanges = oldAffectedRanges.map { textRangeToEditorByteRangeDto(oldText, it) }
+        val newByteRanges = newAffectedRanges.map { textRangeToEditorByteRangeDto(newText, it) }
+        return try {
+            classifyLocalVisualPlan(
+                oldText = oldText,
+                newText = newText,
+                oldAffectedByteRanges = oldByteRanges,
+                newAffectedByteRanges = newByteRanges,
+                animationEnabled = animationEnabled,
+            )
+        } catch (_: Throwable) {
+            // Core API 不可用（如 Robolectric 测试环境无法加载原生库），
+            // 回退到 Kotlin fallback。
+            classifyLocalVisualPlanKotlinFallback(
+                oldText = oldText,
+                newText = newText,
+                oldAffectedRanges = oldAffectedRanges,
+                newAffectedRanges = newAffectedRanges,
+                animationEnabled = animationEnabled,
+            )
+        }
+    }
+
+    /**
+     * #694 评论 5692161955：Kotlin fallback — 用 `java.text.BreakIterator` 做 grapheme cluster 拆分。
+     *
+     * 仅在 Core API 不可用时（如 Robolectric 测试环境）使用。
+     * `java.text.BreakIterator.getCharacterInstance()` 是平台 SDK 提供的 Unicode grapheme cluster
+     * 边界实现，不是 Core 业务规则的复制。`chooseAnimationModeKt` 是 Core 规则的投影，
+     * 与 `visual_classification.rs::choose_animation_mode` 保持一致。
+     */
+    private fun classifyLocalVisualPlanKotlinFallback(
+        oldText: String,
+        newText: String,
+        oldAffectedRanges: List<TextRange>,
+        newAffectedRanges: List<TextRange>,
+        animationEnabled: Boolean,
+    ): LocalVisualPlanDto {
+        // 与 composition 分类一致：取较长的文本做 cluster/complex 判定。
+        val changedText = if (newText.length >= oldText.length) newText else oldText
+        val clusters = splitGraphemeClustersKt(changedText)
+        val clusterCount = clusters.size
+        val containsNewline = changedText.contains('\n')
+        val containsComplex = clusters.any { it.length > 1 }
+        val animationMode = chooseAnimationModeKt(
+            clusterCount = clusterCount,
+            containsNewline = containsNewline,
+            containsComplexGrapheme = containsComplex,
+            animationEnabled = animationEnabled,
+        )
+        // 按 animationMode 生成 old/new animation units（UTF-16 TextRange → UTF-8 byte range）
+        val oldUnits = buildAnimationUnitsKt(oldText, oldAffectedRanges, animationMode)
+        val newUnits = buildAnimationUnitsKt(newText, newAffectedRanges, animationMode)
+        return LocalVisualPlanDto(
+            animationMode = animationMode,
+            oldAnimationUnits = oldUnits,
+            newAnimationUnits = newUnits,
+        )
+    }
+
+    /**
+     * 用 `java.text.BreakIterator` 把文本按 grapheme cluster 拆分，返回每个 cluster 的字符串。
+     *
+     * #694 评论 5692161955 回归修复：JDK BreakIterator 不识别 ZWJ emoji family 为 1 个 cluster
+     * （使用较旧 Unicode 规则，不支持 UAX #29 extended grapheme cluster 中的 ZWJ sequence）。
+     * 调用 [splitGraphemeClusterRangesWithZwjMerge] 做 ZWJ 后处理合并。
+     */
+    private fun splitGraphemeClustersKt(text: String): List<String> =
+        splitGraphemeClusterRangesWithZwjMerge(text).map { range ->
+            text.substring(range.start, range.end)
+        }
+
+    /**
+     * #694 评论 5692161955 回归修复：用 `java.text.BreakIterator` 拆分 grapheme cluster，
+     * 再按 ZWJ（U+200D）合并被错误拆开的 emoji family。
+     *
+     * 算法：
+     * 1. 用 BreakIterator.getCharacterInstance() 得到初步 cluster 边界（UTF-16 偏移）。
+     * 2. 遍历初步 cluster，按 ZWJ 合并：如果当前 cluster 或前一个合并 group 包含 ZWJ，
+     *    就合并到当前合并 group。这样 `👨‍👩‍👧‍👦`（BreakIterator 拆成 7 个 cluster：
+     *    man + ZWJ + woman + ZWJ + girl + ZWJ + boy）会被合并成 1 个 cluster。
+     *
+     * 此方案不依赖 ICU4J 是否可用，在所有环境（Robolectric、真实设备）下都能正确处理
+     * ZWJ emoji family。生产环境优先用 Core API（unicode_segmentation 已正确），
+     * 此函数仅在 Core 不可用时（如 Robolectric 测试环境）使用。
+     *
+     * @param text 要拆分的文本（UTF-16）。
+     * @return cluster 在原文中的 UTF-16 [TextRange] 列表（按顺序，不重叠，覆盖所有字符）。
+     */
+    private fun splitGraphemeClusterRangesWithZwjMerge(text: String): List<TextRange> {
+        if (text.isEmpty()) return emptyList()
+        val iterator = java.text.BreakIterator.getCharacterInstance()
+        iterator.setText(text)
+        // 1. 用 BreakIterator 得到初步 cluster 边界
+        val rawRanges = mutableListOf<TextRange>()
+        var start = iterator.first()
+        var end = iterator.next()
+        while (end != java.text.BreakIterator.DONE) {
+            rawRanges.add(TextRange(start, end))
+            start = end
+            end = iterator.next()
+        }
+        if (rawRanges.isEmpty()) return emptyList()
+        // 2. 按 ZWJ 合并：如果当前 cluster 或前一个合并 group 包含 ZWJ，就合并到当前 group。
+        val zwj = '\u200D'
+        val mergedRanges = mutableListOf<TextRange>()
+        var currentStart = rawRanges[0].start
+        var currentEnd = rawRanges[0].end
+        var currentContainsZwj = text.substring(currentStart, currentEnd).contains(zwj)
+        for (i in 1 until rawRanges.size) {
+            val range = rawRanges[i]
+            val segment = text.substring(range.start, range.end)
+            val segmentContainsZwj = segment.contains(zwj)
+            if (currentContainsZwj || segmentContainsZwj) {
+                // 合并到当前 group
+                currentEnd = range.end
+                currentContainsZwj = currentContainsZwj || segmentContainsZwj
+            } else {
+                // 输出当前 group，开始新 group
+                mergedRanges.add(TextRange(currentStart, currentEnd))
+                currentStart = range.start
+                currentEnd = range.end
+                currentContainsZwj = segmentContainsZwj
+            }
+        }
+        mergedRanges.add(TextRange(currentStart, currentEnd))
+        return mergedRanges
+    }
+
+    /**
+     * Kotlin 投影 of `visual_classification.rs::choose_animation_mode`。
+     * 与 Core 保持一致：0 cluster -> SystemSuppressed；含换行 -> LineReflowAnimation；
+     * 复杂 grapheme -> ClusterAnimation；<= 8 cluster -> GlyphAnimation；> 8 -> RunAnimation。
+     */
+    private fun chooseAnimationModeKt(
+        clusterCount: Int,
+        containsNewline: Boolean,
+        containsComplexGrapheme: Boolean,
+        animationEnabled: Boolean,
+    ): AnimationModeDto {
+        if (!animationEnabled) return AnimationModeDto.SYSTEM_SUPPRESSED
+        if (clusterCount == 0) return AnimationModeDto.SYSTEM_SUPPRESSED
+        if (containsNewline) return AnimationModeDto.LINE_REFLOW_ANIMATION
+        if (containsComplexGrapheme) return AnimationModeDto.CLUSTER_ANIMATION
+        return if (clusterCount <= 8) AnimationModeDto.GLYPH_ANIMATION else AnimationModeDto.RUN_ANIMATION
+    }
+
+    /**
+     * 按 animationMode 生成 animation units（UTF-8 byte ranges）。
+     * GlyphAnimation / ClusterAnimation: 按 grapheme cluster 拆分。
+     * RunAnimation: 按 run 拆分（这里简化为整块，与 Core split_text_into_runs 近似）。
+     * LineReflowAnimation / SnapshotAnimation: 整块 affected range 作为一个单元。
+     * SystemSuppressed: 空。
+     */
+    private fun buildAnimationUnitsKt(
+        text: String,
+        affectedRanges: List<TextRange>,
+        animationMode: AnimationModeDto,
+    ): List<EditorByteRangeDto> = when (animationMode) {
+        AnimationModeDto.SYSTEM_SUPPRESSED -> emptyList()
+        AnimationModeDto.LINE_REFLOW_ANIMATION, AnimationModeDto.SNAPSHOT_ANIMATION -> {
+            affectedRanges.map { textRangeToEditorByteRangeDto(text, it) }
+        }
+        AnimationModeDto.GLYPH_ANIMATION, AnimationModeDto.CLUSTER_ANIMATION -> {
+            // 对每个 affected range 内的文本按 grapheme cluster 拆分
+            // #694 评论 5692161955 回归修复：用 splitGraphemeClusterRangesWithZwjMerge
+            // 正确处理 ZWJ emoji family（BreakIterator 不识别 ZWJ sequence）。
+            val result = mutableListOf<EditorByteRangeDto>()
+            for (range in affectedRanges) {
+                if (range.start !in 0..text.length || range.end !in 0..text.length) continue
+                val segment = text.substring(range.start, range.end)
+                val clusterRanges = splitGraphemeClusterRangesWithZwjMerge(segment)
+                for (clusterRange in clusterRanges) {
+                    // cluster 在 segment 内的偏移，转成正文 UTF-16 偏移
+                    val absStartUtf16 = range.start + clusterRange.start
+                    val absEndUtf16 = range.start + clusterRange.end
+                    // 再转成 UTF-8 byte offset
+                    result.add(
+                        EditorByteRangeDto(
+                            start = TextOffsetUtils.utf8OffsetForCharIndex(text, absStartUtf16).toUInt(),
+                            endExclusive = TextOffsetUtils.utf8OffsetForCharIndex(text, absEndUtf16).toUInt(),
+                        ),
+                    )
+                }
+            }
+            result
+        }
+        AnimationModeDto.RUN_ANIMATION -> {
+            // RunAnimation: 简化为整块 affected range（与 Core split_text_into_runs 的 run 粒度近似）
+            affectedRanges.map { textRangeToEditorByteRangeDto(text, it) }
+        }
+    }
+
+    /**
+     * 把 Core 返回的 UTF-8 byte animation units 转成 Android UTF-16 [TextRange]。
+     */
+    fun utf16AnimationUnitsFromPlan(
+        text: String,
+        byteUnits: List<EditorByteRangeDto>,
+    ): List<TextRange> =
+        byteUnits.map { byteRangeDto ->
+            TextOffsetUtils.utf16TextRangeForUtf8(
+                text,
+                byteRangeDto.start.toInt(),
+                byteRangeDto.endExclusive.toInt(),
+            )
+        }
+
+    /**
+     * 把 Android UTF-16 [TextRange] 转成 Core [EditorByteRangeDto]（UTF-8 byte range）。
+     */
+    private fun textRangeToEditorByteRangeDto(
+        text: String,
+        range: TextRange,
+    ): EditorByteRangeDto =
+        EditorByteRangeDto(
+            start = TextOffsetUtils.utf8OffsetForCharIndex(text, range.start).toUInt(),
+            endExclusive = TextOffsetUtils.utf8OffsetForCharIndex(text, range.end).toUInt(),
+        )
 
     /**
      * #694 评论第 4 步：retained reflow 只比较 oldLayout -> newLayout 的真实几何。

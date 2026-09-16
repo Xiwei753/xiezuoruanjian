@@ -125,6 +125,17 @@ class ComposeEditorVisualState(
     private var lastPresentedLayout: ComposeLayoutSnapshot? = null
 
     /**
+     * #694 评论 5692161955 问题3：上一次 composition 是否活跃 —
+     * 用于 composition 从 active->false 时的过渡同步。
+     *
+     * composition 活跃期间 [frameCoordinator] 的 lastConsumed 不推进（不调 observePresentedLayout），
+     * composition 结束时若最终没有生成 local patch，也要把最终已提交 layout 用
+     * [ComposeVisualFrameCoordinator.observePresentedLayout] 同步给 coordinator，
+     * 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
+     */
+    private var wasCompositionActive: Boolean = false
+
+    /**
      * #694 评论第 3 步：本地输入 patch ID 计数器 —
      * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
      */
@@ -215,13 +226,42 @@ class ComposeEditorVisualState(
         val composedInserted = ComposeLocalVisualRebase.composeLocalChainInsertedUnits(chain)
         val composedDeleted = ComposeLocalVisualRebase.composeLocalChainDeletedUnits(chain)
 
+        // #694 评论 5692161955 问题1/2：调用 Core 纯计算 API classify_local_visual_plan
+        // 做视觉分类，得到 animationMode 和按 grapheme cluster 拆分的 animation units。
+        // 不再硬编码 CLUSTER_ANIMATION，不再按 UTF-16 +1 硬切。
+        // Core API 不可用时（如 Robolectric 测试环境）回退到 Kotlin fallback
+        // （java.text.BreakIterator + chooseAnimationMode 投影）。
+        val corePlan = ComposeLocalVisualRebase.classifyLocalVisualPlanFromCore(
+            oldText = oldText,
+            newText = newText,
+            oldAffectedRanges = changedRanges.oldRanges,
+            newAffectedRanges = changedRanges.newRanges,
+            animationEnabled = customTextAnimationEnabled,
+        )
+        val planAnimationMode = corePlan.animationMode
+        val planInsertedUnits = if (customTextAnimationEnabled) {
+            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
+        } else {
+            emptyList()
+        }
+        val planDeletedUnits = if (customTextAnimationEnabled) {
+            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
+        } else {
+            emptyList()
+        }
+
         val insertedUnits =
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
                     TextVisualKind.Insert, TextVisualKind.Move -> {
-                        // 优先用合成的 ordered units 保留吐字顺序；
-                        // 若所有 stage 都没 insertedUnits 但净变化有插入，回退到净变化 newRanges。
-                        if (composedInserted.isNotEmpty()) composedInserted else changedRanges.newRanges
+                        // #694 评论 5692161955 问题1：优先用 Core plan 的 grapheme cluster units；
+                        // 其次用合成的 ordered units 保留吐字顺序；
+                        // 最后回退到净变化 newRanges。
+                        when {
+                            planInsertedUnits.isNotEmpty() -> planInsertedUnits
+                            composedInserted.isNotEmpty() -> composedInserted
+                            else -> changedRanges.newRanges
+                        }
                     }
                     TextVisualKind.Delete, TextVisualKind.None -> emptyList()
                 }
@@ -233,7 +273,11 @@ class ComposeEditorVisualState(
             if (customTextAnimationEnabled) {
                 when (transactionTextKind) {
                     TextVisualKind.Delete, TextVisualKind.Move -> {
-                        if (composedDeleted.isNotEmpty()) composedDeleted else changedRanges.oldRanges
+                        when {
+                            planDeletedUnits.isNotEmpty() -> planDeletedUnits
+                            composedDeleted.isNotEmpty() -> composedDeleted
+                            else -> changedRanges.oldRanges
+                        }
                     }
                     TextVisualKind.Insert, TextVisualKind.None -> emptyList()
                 }
@@ -269,7 +313,9 @@ class ComposeEditorVisualState(
             cursorMotionPath = cursorMotionPath,
             // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
             durationMs = 0L,
-            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            // #694 评论 5692161955 问题2：使用 Core plan 返回的 animationMode，
+            // 不再硬编码 CLUSTER_ANIMATION。
+            animationMode = planAnimationMode,
             motionPolicy = motionPolicy,
             intent = null,
         )
@@ -339,16 +385,33 @@ class ComposeEditorVisualState(
             // coordinator.lastConsumed.text 对不上，tryBuildPatch 一直返回 Empty。
             frameCoordinator.observePresentedLayout(snapshot)
             lastPresentedLayout = snapshot
+            // #694 评论 5692161955 问题3：本地 commit 成功生成 local patch 后，
+            // composition 已结束，重置 wasCompositionActive。
+            wasCompositionActive = false
             return
         }
 
         // composition 活跃时只推进布局基线，不生成 patch（不播放 preedit 的吞吐）
         if (compositionActive) {
-            // #694 评论 5691696678 问题2：composition 活跃时也要推进 frameCoordinator 屏幕基线，
-            // 保证 composition 结束后 Core visual path 的基线与真实 layout 一致。
-            frameCoordinator.observePresentedLayout(snapshot)
+            // #694 评论 5692161955 问题3：composition 活跃分支只更新 lastPresentedLayout，
+            // 不调 frameCoordinator.observePresentedLayout(snapshot)。
+            // 原因：frameCoordinator.lastConsumed 是 Core/external coordinator 的基线，
+            // 必须只跟 Core 已提交正文，不能推到未提交给 Core 的 preedit。
+            // 否则 Undo 时 pending.baseText(Core 已提交) != lastConsumed(preedit)，external patch 卡死。
+            // lastPresentedLayout 可跟 preedit（供本地输入配对），但 coordinator 基线不动。
             lastPresentedLayout = snapshot
+            wasCompositionActive = true
             return
+        }
+
+        // #694 评论 5692161955 问题3：composition 从 active->false 过渡同步。
+        // composition 活跃期间 frameCoordinator.lastConsumed 没有推进，
+        // composition 结束时若最终没有生成 local patch（localChain == null 分支），
+        // 也要把最终已提交 layout 用 observePresentedLayout 同步给 coordinator，
+        // 否则后续 Undo/Redo/Programmatic intent 的 pending.baseText 与 lastConsumed.text 对不上。
+        if (wasCompositionActive) {
+            frameCoordinator.observePresentedLayout(snapshot)
+            wasCompositionActive = false
         }
 
         // Core visual path（Undo/Redo/Programmatic/Load/Format 等真正需要 Core 驱动的修改）
@@ -584,6 +647,8 @@ class ComposeEditorVisualState(
         // #694 评论第 3 步：清空本地输入配对状态
         localInputTracker.clear()
         lastPresentedLayout = null
+        // #694 评论 5692161955 问题3：重置 composition 过渡同步状态
+        wasCompositionActive = false
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 

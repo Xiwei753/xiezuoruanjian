@@ -823,6 +823,28 @@ impl EditorVisualIntentDto {
     }
 }
 
+/// #694 评论 5692161955：本地输入视觉计划 DTO —
+/// Core 对 (old_text, new_text, old_affected, new_affected) 的纯计算视觉分类结果，
+/// 供 Android `ComposeLocalVisualRebase` / `ComposeEditorVisualState.buildLocalInputPatch` 复用。
+///
+/// 字段语义：
+/// - `animation_mode`：按 Core 规则选择的动画模式
+///   （0 cluster -> SystemSuppressed；含换行 -> LineReflowAnimation；
+///    复杂 grapheme -> ClusterAnimation；<= 8 cluster -> GlyphAnimation；
+///    > 8 cluster -> RunAnimation）。
+/// - `old_animation_units` / `new_animation_units`：按 `animation_mode` 决定的粒度
+///   （cluster / run / reflow）生成的动画单元 UTF-8 byte ranges。
+///
+/// 所有 byte range 均为 UTF-8 byte offset 半开区间 `[start, end_exclusive)`。
+/// 平台端使用 UTF-16 时必须先通过 TextIndexMap 转换。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalVisualPlanDto {
+    pub animation_mode: AnimationModeDto,
+    pub old_animation_units: Vec<EditorByteRangeDto>,
+    pub new_animation_units: Vec<EditorByteRangeDto>,
+}
+
 impl From<crate::editor::EditorVisualIntent> for EditorVisualIntentDto {
     fn from(vi: crate::editor::EditorVisualIntent) -> Self {
         Self {

@@ -151,13 +151,19 @@ class ComposeVisualFrameCoordinator(
             layoutTextLength = snapshot.result.layoutInput.text.length,
         )
 
-        if (lastConsumed == null) {
-            lastConsumed = presented
-        } else if (pending == null) {
-            // 没有 Core pending 时，屏幕基线直接跟随真实 layout
-            lastConsumed = presented
+        // #694 评论 5692161955 问题3：补并发顺序条件。
+        // 原实现只要 pending != null 就不推进 lastConsumed，导致
+        // "本地输入完成 -> external intent 先到 -> 本地 layout 后到"顺序下卡住。
+        // pending.baseText == presented.text 时推进 lastConsumed 是安全的——
+        // presented 就是 pending 期望的 baseText，推进后 tryBuildPatch 的 baseText 匹配条件仍成立，
+        // 后续 target layout 到达时 patch 能生成。
+        when {
+            lastConsumed == null -> lastConsumed = presented
+            pending == null -> lastConsumed = presented
+            pending?.baseText == presented.text -> lastConsumed = presented
+            // 其他情况（pending != null 且 pending.baseText != presented.text）：
+            // 不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest
         }
-        // 有 pending 时不推进 lastConsumed（等 tryBuildPatch 匹配后再推进），只更新 latest
     }
 
     /**
