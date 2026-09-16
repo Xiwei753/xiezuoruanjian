@@ -181,11 +181,11 @@ cpp! {{
     /// 传入 Core 前必须转换为 UTF-8 byte offset。
     ///
     /// - `qcharStart/qcharEnd`：该行在段落中的 QChar 范围（半开区间）
-    /// - `width`：行宽（物理像素）
+    /// - `width`：行宽（逻辑像素）
     /// - `xPos`：行在段落中的水平起始位置（首行缩进时 > 0）
     /// - `xEndLeading/xEndTrailing`：行尾位置（含/不含 trailing whitespace）
     /// - `naturalTextWidth`：自然文本宽度（不含对齐拉伸）
-    /// - `ascent/descent`：字体度量（物理像素，用于光标高度计算）
+    /// - `ascent/descent`：字体度量（逻辑像素，用于光标高度计算）
     struct EditorLayoutEntry {
         int qcharStart;
         int qcharEnd;
@@ -206,8 +206,8 @@ cpp! {{
     /// 单个 glyph 信息 — 跨 C++/Rust 边界的数据结构。
     ///
     /// - `stringIndex`：该 glyph 对应字符在源字符串中的 QChar index（UTF-16 code unit offset）
-    /// - `xPos`：glyph 左边缘 x 坐标（物理像素，文档坐标系）
-    /// - `width`：glyph 前进宽度（物理像素）
+    /// - `xPos`：glyph 左边缘 x 坐标（逻辑像素，文档坐标系）
+    /// - `width`：glyph 前进宽度（逻辑像素）
     /// - `glyphIndex`：QGlyphRun 中的实际 glyph 索引（用于 ligature 拆分后的精确定位）
     /// - `rawFontKey`：QRawFont 的字体族名称（用于 font_id 匹配）
     struct GlyphEntry {

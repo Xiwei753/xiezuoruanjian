@@ -22,14 +22,52 @@ import Sujian 1.0
 ApplicationWindow {
     id: window
     visible: true
-    // Issue #692: 默认逻辑尺寸 + 当前屏幕可用区域限制。
-    // Screen.desktopAvailableWidth/Height 是 Qt 6 设备无关逻辑尺寸；
-    // 首次显示不超出可用区域，也不根据物理分辨率算窗口大小。
-    // 窗口拖到另一块显示器时由 Qt 自己处理 DPR，不手工重算。
-    width: Math.min(1100, Screen.desktopAvailableWidth > 0 ? Screen.desktopAvailableWidth - 32 : 1100)
-    height: Math.min(768, Screen.desktopAvailableHeight > 0 ? Screen.desktopAvailableHeight - 32 : 768)
+    // Issue #692 评论 5692462056: 默认逻辑尺寸 1100×768，窗口真正关联到屏幕后
+    // 用 window.screen.width/height（当前屏幕的完整几何，Qt 6 设备无关逻辑尺寸）
+    // 做一次性初始尺寸收口。不再用 Screen.desktopAvailableWidth/Height，因为那是
+    // 整个虚拟桌面（所有屏幕合起来）的可用尺寸，双屏混合 DPI 时限制等于没限制，
+    // 窗口落在较小屏上仍可能超出当前屏幕可用区域。
+    //
+    // 注：QML 的 window.screen 类型是 QQuickScreenInfo，只暴露 width/height
+    // （当前屏幕完整几何）和 desktopAvailableWidth/Height（虚拟桌面可用），
+    // 不暴露 QScreen::availableGeometry()（扣任务栏后的可用区域）。因此这里用
+    // 当前屏幕完整几何 width/height，扣 32px 边距后做上限收口；不精确扣任务栏，
+    // 但保证窗口不超出当前屏幕，且默认 1100×768 远小于常见屏幕可用区域。
+    // 窗口跨屏后的 DPR / fractional scaling 完全交给 Qt，不手工重算。
+    width: 1100
+    height: 768
     title: qsTr("素笺写作")
     color: designTokens.bg
+
+    // ── Issue #692 评论 5692462056: 初始窗口尺寸收口（一次性） ──
+    // 等窗口真正关联到所属屏幕后，按 window.screen.width/height 收口默认尺寸。
+    // initialWindowSizeApplied 之后不再跟随多屏切换强制改窗口大小；窗口跨屏后的
+    // DPR / fractional scaling 完全交给 Qt。
+    property bool initialWindowSizeApplied: false
+
+    function applyInitialWindowSize() {
+        if (initialWindowSizeApplied || !window.screen)
+            return
+
+        var sw = window.screen.width
+        var sh = window.screen.height
+        if (sw <= 0 || sh <= 0)
+            return
+
+        window.width = Math.min(1100, Math.max(320, sw - 32))
+        window.height = Math.min(768, Math.max(240, sh - 32))
+        initialWindowSizeApplied = true
+    }
+
+    onVisibleChanged: {
+        if (visible && !initialWindowSizeApplied)
+            Qt.callLater(applyInitialWindowSize)
+    }
+
+    onScreenChanged: {
+        if (!initialWindowSizeApplied)
+            Qt.callLater(applyInitialWindowSize)
+    }
 
     // ── Material 主题绑定：确保 Qt 原生控件（Dialog/Popup/Menu/TextField 等）跟随深浅色 ──
     Material.theme: designTokens.isDark ? Material.Dark : Material.Light
