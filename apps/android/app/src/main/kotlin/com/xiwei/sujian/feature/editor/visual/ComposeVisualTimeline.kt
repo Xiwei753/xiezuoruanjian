@@ -60,6 +60,13 @@ class ComposeVisualTimeline {
     private var cursorChannel: CursorTrack? = null
 
     /**
+     * #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记 —
+     * applyPatch 时从 patch.motionPolicy.effective() 设置，
+     * sample 时传给 ComposeVisualScene，draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1）。
+     */
+    private var coordinatedSpatialClip: Boolean = false
+
+    /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
      *
      * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
@@ -110,6 +117,10 @@ class ComposeVisualTimeline {
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
         val policy = patch.motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+
+        // #703 评论 5709208101 问题2：记录 coordinated + spatial clip 模式，
+        // sample 时传给 scene，draw 层据此用 clipFraction 覆盖 alpha。
+        coordinatedSpatialClip = policy.textEnabled && policy.cursorEnabled && policy.coordinated
 
         // #703 评论 D：scene redirect — 快速输入/删除采用 scene redirect，不堆积旧动画。
         // 新 edit 到达时，从"当前屏幕真正画到的位置"重定向到新目标。
@@ -788,6 +799,7 @@ class ComposeVisualTimeline {
             hiddenRanges = hiddenRanges,
             cursorRect = sampledCursor,
             unitClipFractions = unitClipFractions,
+            coordinatedSpatialClip = coordinatedSpatialClip,
         )
     }
 
@@ -924,6 +936,8 @@ class ComposeVisualTimeline {
         cursorChannel = null
         // #691 评论 5684993243 / 评论 5685940102：清空已呈现 unit key 集合
         presentedKeys.clear()
+        // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
+        coordinatedSpatialClip = false
     }
 
     /**
@@ -941,6 +955,8 @@ class ComposeVisualTimeline {
         // #691 评论 5684993243 / 评论 5685940102：policy 切换时清空已呈现 unit key 集合，
         // 让后续 drain 用新 policy 重新决定是否创建 track。
         presentedKeys.clear()
+        // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
+        coordinatedSpatialClip = false
     }
 
     // ==================== 统一光标位置（#691） ====================
@@ -1448,12 +1464,18 @@ data class CursorTrack(
  *   key = [VisualTextUnit.key]，value = 可见 fraction。
  *   1f = 完全可见（cursor 已越过整个 glyph），0f = 完全不可见（cursor 还没到 glyph）。
  *   draw 层用此 fraction 裁切 glyph 可见区域，不再纯靠 alpha 决定出现/消失。
+ * @param coordinatedSpatialClip #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记。
+ *   true 表示当前 patch 处于 textEnabled && cursorEnabled && coordinated 模式，
+ *   draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1），
+ *   让整字亮度固定由空间裁切控制，而非 alpha 通道独立控制。
+ *   alpha 通道仍保持 0->1 / 1->0 供非 coordinated 场景和现有测试使用。
  */
 data class ComposeVisualScene(
     val units: List<VisualTextUnit>,
     val hiddenRanges: List<TextRange>,
     val cursorRect: Rect? = null,
     val unitClipFractions: Map<Long, Float> = emptyMap(),
+    val coordinatedSpatialClip: Boolean = false,
 ) {
     companion object {
         /** 空场景。 */

@@ -183,6 +183,9 @@ internal object ComposeVisualPatchBatch {
             animationMode = animationMode,
             motionPolicy = motionPolicy,
             intent = last.intent,
+            // #703 评论 5709208101 问题3：batch 合成时 originCursorRect 从首笔取
+            // （首笔的 origin 是整个 chain 的 T0 caret）。
+            originCursorRect = first.originCursorRect,
         )
     }
 

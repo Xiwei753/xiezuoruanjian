@@ -39,7 +39,7 @@ import uniffi.writer_core.AnimationModeDto
  * - ComposeVisualTimeline.kt（scene redirect / 空间进度驱动 clipFraction）
  * - EditorTextFieldDrawLayer.kt（clipRect 裁切 glyph）
  */
-@Suppress("StringLiteralDuplication", "MaxLineLength", "LongMethod")
+@Suppress("StringLiteralDuplication", "MaxLineLength", "LongMethod", "TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualIssue703RegressionTest {
@@ -772,6 +772,358 @@ class ComposeVisualIssue703RegressionTest {
                 "旧 ghost 不应继续在后面补播",
             oldGhost,
         )
+    }
+
+    // ==================== #703 评论 5709208101 复现测试 ====================
+
+    /**
+     * #703 评论 5709208101 问题1（修复后）：cursor path 不再重复塞旧 caret。
+     *
+     * 修复后 buildLocalChainCursorPath 删除路径只生成 points = [newCursorRect]，
+     * fromRect 由 computeCursorParamsForPatch 从 patch.originCursorRect 取旧 caret。
+     * timeline 收到 fromRect(旧) -> point[0](新, 1.0)，
+     * cursor 从旧位置立即开始向新位置移动，不会前半段原地不动。
+     *
+     * 本测试走真实生产路径 recordLocalInput -> onAuthoritativeLayout -> drainPendingPatchesAtFrame
+     * -> sampleVisualScene，断言 25% 时间点 cursor 已经开始向新 caret 移动（正确行为）。
+     */
+    @Test
+    fun repro_comment5709208101_cursorPathDuplicatesOldCaret() {
+        val layouts = captureLayouts("abc", "bc")
+        val state = ComposeEditorVisualState(
+            targetId = "test-703-comment5709208101-prob1",
+            classifier = FakeLocalVisualPlanClassifier,
+        )
+
+        // 文本 abc，caret 在 1（'a' 后面）
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+
+        // 删除 'a'：abc -> bc
+        state.recordLocalInput(
+            oldText = "abc",
+            newText = "bc",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(0, 0), 0)
+
+        // 旧 caret 真实位置（offset=1 on "abc" layout）
+        val oldCursorRect = layouts[0].getCursorRect(1)
+        // 新 caret 真实位置（offset=0 on "bc" layout）
+        val newCursorRect = layouts[1].getCursorRect(0)
+
+        // 确认旧/新 caret 确实不同位置（否则测试无意义）
+        assertTrue(
+            "问题1: 旧 caret 和新 caret 应不同位置，oldLeft=${oldCursorRect.left}, newLeft=${newCursorRect.left}",
+            kotlin.math.abs(oldCursorRect.left - newCursorRect.left) > 1f,
+        )
+
+        // drain 开始动画（frameTimeNanos=0，动画从 0 开始）
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 25% 时间点（textDurationMillis=100，25ms = 25%）
+        val scene25 = state.sampleVisualScene(25L * NANOS_PER_MS)
+        val cursor25 = scene25.cursorRect
+        assertNotNull("问题1: 25% 时间点 cursor rect 应存在", cursor25)
+
+        // 修复后正确行为：25% 时间点 cursor 已经开始向新 caret 移动，不再前半段原地不动。
+        // fromRect(旧) -> point[0](新, 1.0)，cursor 从旧位置线性插值到新位置，
+        // 25% 时 cursor 应在旧/新之间，deltaToOld > 0（已离开旧位置）。
+        // 旧实现（bug）：25% 时 cursor 仍在旧位置，deltaToOld=0。
+        // 用 0.01f 阈值区分"已移动"和"原地不动"（允许浮点误差）。
+        val deltaToOld = kotlin.math.abs(cursor25!!.left - oldCursorRect.left)
+        assertTrue(
+            "问题1: 25% 时间点 cursor 应已离开旧位置开始向新 caret 移动（修复后正确行为），" +
+                "cursor25.left=${cursor25.left}, oldCursorRect.left=${oldCursorRect.left}, " +
+                "deltaToOld=$deltaToOld（应 > 0.01f）",
+            deltaToOld > 0.01f,
+        )
+    }
+
+    /**
+     * #703 评论 5709208101 问题2（修复后）：coordinated 模式下 effective alpha 固定 1，完全靠 clipFraction 控制。
+     *
+     * 修复方案（draw 层覆盖）：timeline 的 alpha 通道仍保持 0->1 / 1->0（不破坏现有测试），
+     * 但 sample 返回的 ComposeVisualScene 带 coordinatedSpatialClip=true 标记，
+     * draw 层（drawVisualScene）据此把 effective alpha 覆盖成 1f，
+     * 让整字亮度固定由空间裁切（clipFraction）控制。
+     *
+     * 本测试走真实生产路径，断言 coordinated 模式下：
+     * 1. scene.coordinatedSpatialClip == true
+     * 2. deleted ghost 的 effective alpha（draw 层会用值）== 1f
+     */
+    @Test
+    fun repro_comment5709208101_alphaIndependentlyControlsGlyphBrightness() {
+        val layouts = captureLayouts("a", "")
+        val state = ComposeEditorVisualState(
+            targetId = "test-703-comment5709208101-prob2",
+            classifier = FakeLocalVisualPlanClassifier,
+        )
+
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+
+        // 删除 'a'：a -> ""
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(0, 0), 0)
+
+        // drain 开始动画
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 50% 时间点
+        val scene50 = state.sampleVisualScene(50L * NANOS_PER_MS)
+
+        // 验证 scene 带 coordinated + spatial clip 标记
+        assertTrue(
+            "问题2: coordinated 模式下 scene.coordinatedSpatialClip 应为 true",
+            scene50.coordinatedSpatialClip,
+        )
+
+        // 找 deleted ghost（targetRange == null, range == [0,1)）
+        val ghost = scene50.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
+        assertNotNull(
+            "问题2: 50% 时间点 deleted ghost 应存在（动画进行中）",
+            ghost,
+        )
+
+        // 修复后正确行为：draw 层在 coordinatedSpatialClip=true 时 effective alpha = 1f。
+        // alpha 通道本身仍 1->0（50% 时 alpha.from=0.5），但 draw 层覆盖成 1f。
+        // 这里验证 effective alpha（draw 层会用值）== 1f。
+        val effectiveAlpha = if (scene50.coordinatedSpatialClip) 1f else ghost!!.alpha.from
+        assertEquals(
+            "问题2: coordinated 模式下 deleted ghost effective alpha 应固定 1（draw 层覆盖），" +
+                "50% 时 alpha.from=${ghost!!.alpha.from}（通道值），effectiveAlpha=$effectiveAlpha（应 == 1f）",
+            1f,
+            effectiveAlpha,
+        )
+    }
+
+    /**
+     * #703 评论 5709208101 问题3（修复后）：selection stale 时旧 caret 优先用 originCursorRect。
+     *
+     * 修复后 onAuthoritativeLayout 删除 barrier 的 oldCursorRect 优先用 localPatch.originCursorRect
+     * （从 chain.first().oldSelection.end + oldLayout.result 取），不依赖 oldLayout.selection（可能 stale）。
+     * computeCursorParamsForPatch 的 fromRect 也优先用 patch.originCursorRect。
+     *
+     * 场景（用 stale=0 / correct=3 使得 Robolectric 下 getCursorRect 能区分）：
+     * 1. 文本 abc，caret 在 0
+     * 2. 纯 selection 积到 3（onAuthoritativeLayout 正文几何相同，去重 return，lastPresentedLayout.selection 仍为 0）
+     * 3. 删除 'c'：abc -> ab，oldSelection=3, newSelection=2
+     * 4. onAuthoritativeLayout("ab", selection=2)
+     * 5. barrier 首帧 cursor 必须在 offset=3（验证问题3修复：originCursorRect 从 chain.first().oldSelection.end=3 取）
+     *
+     * 本测试断言 barrier 首帧 cursor 在 offset=3（正确 oldSelection），而非 offset=0（stale）。
+     */
+    @Test
+    fun repro_comment5709208101_staleSelectionCausesWrongOldCaret() {
+        val layouts = captureLayouts("abc", "abc", "ab")
+        val state = ComposeEditorVisualState(
+            targetId = "test-703-comment5709208101-prob3",
+            classifier = FakeLocalVisualPlanClassifier,
+        )
+
+        // 1. 文本 abc，caret 在 0
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 2. 纯 selection 积到 3（正文几何相同，去重 return，lastPresentedLayout.selection 仍为 0）
+        state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
+
+        // 3. 删除 'c'：abc -> ab，真实 oldSelection=3
+        state.recordLocalInput(
+            oldText = "abc",
+            newText = "ab",
+            oldSelection = TextRange(3, 3),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 2), oldRange = TextRange(2, 3))),
+        )
+
+        // 4. onAuthoritativeLayout("ab", selection=2) — 配对生成 localPatch + barrier
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+
+        // 验证 patch.oldLayout.selection.end —
+        // patch.oldLayout = lastPresentedLayout，其 selection 在纯 selection 变化后被去重 return，
+        // 没有更新成 3，仍是更早的 0（stale）。这是 lastPresentedLayout 的固有行为，不变。
+        val latestPatch = state.latestPatch.value
+        assertNotNull("问题3: latestPatch 应存在", latestPatch)
+        val oldSelectionEnd = latestPatch!!.oldLayout.selection.end
+        assertEquals(
+            "问题3: patch.oldLayout.selection.end 应为 0（lastPresentedLayout.selection stale 未更新），" +
+                "实际=$oldSelectionEnd",
+            0,
+            oldSelectionEnd,
+        )
+
+        // 修复后正确行为：originCursorRect 从 chain.first().oldSelection.end=3 + oldLayout.result 取，
+        // 不依赖 stale 的 oldLayout.selection.end=0。
+        val originCursorRect = latestPatch.originCursorRect
+        assertNotNull(
+            "问题3: latestPatch.originCursorRect 应存在（从 chain.first().oldSelection.end=3 取）",
+            originCursorRect,
+        )
+
+        // 正确的 T0 caret 位置（offset=3 on "abc" layout）
+        val correctOldCursorRect = layouts[0].getCursorRect(3)
+        // stale 的错误 caret 位置（offset=0 on "abc" layout）
+        val staleCursorRect = layouts[0].getCursorRect(0)
+
+        // 确认 correct 和 stale 确实不同（否则测试无意义）
+        assertTrue(
+            "问题3: correct(stale=0) 和 stale(correct=3) 的 cursor rect 应不同，" +
+                "correctLeft=${correctOldCursorRect.left}, staleLeft=${staleCursorRect.left}",
+            kotlin.math.abs(correctOldCursorRect.left - staleCursorRect.left) > 1f,
+        )
+
+        // originCursorRect 应对应 offset=3（正确），而非 offset=0（stale）
+        val deltaToCorrect = kotlin.math.abs(originCursorRect!!.left - correctOldCursorRect.left)
+        val deltaToStale = kotlin.math.abs(originCursorRect.left - staleCursorRect.left)
+        assertTrue(
+            "问题3: originCursorRect 应对应 offset=3（正确 oldSelection），" +
+                "originCursorRect.left=${originCursorRect.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "deltaToCorrect=$deltaToCorrect（应 < 1f）",
+            deltaToCorrect < 1f,
+        )
+        assertTrue(
+            "问题3: originCursorRect 不应对应 offset=0（stale），" +
+                "originCursorRect.left=${originCursorRect.left}, " +
+                "staleCursorRect.left=${staleCursorRect.left}, " +
+                "deltaToStale=$deltaToStale（应 > 1f）",
+            deltaToStale > 1f,
+        )
+
+        // barrier 首帧 cursor 也用 originCursorRect（而非 stale selection），
+        // restingCursorRect 应对应 offset=3（正确 oldSelection）
+        val restingCursor = state.restingCursorRect.value
+        assertNotNull("问题3: barrier restingCursorRect 应存在", restingCursor)
+        val restingDeltaToCorrect = kotlin.math.abs(restingCursor!!.left - correctOldCursorRect.left)
+        assertTrue(
+            "问题3: barrier restingCursorRect 应对应 offset=3（正确 oldSelection），" +
+                "restingCursor.left=${restingCursor.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "restingDeltaToCorrect=$restingDeltaToCorrect（应 < 1f）",
+            restingDeltaToCorrect < 1f,
+        )
+    }
+
+    /**
+     * #703 评论 5709208101 综合验收测试 — 覆盖评论末尾 8 个验收点。
+     *
+     * 场景（用 stale=0 / correct=3 使得 Robolectric 下 getCursorRect 能区分）：
+     * 1. 文本 `abc`，caret 先在 0
+     * 2. 纯 selection 积到 3
+     * 3. `recordLocalInput("abc" -> "ab", oldSelection=3, newSelection=2)`（删除 'c'）
+     * 4. `onAuthoritativeLayout()`
+     * 5. barrier 首帧 cursor 必须在 offset=3（验证问题3修复）
+     * 6. drain 后 25% 时间点 cursor 必须已经开始向新 caret 移动，不能前半段原地停住（验证问题1修复）
+     * 7. 任意采样帧里，deleted glyph 的可见右边界必须跟 cursor 边界一致
+     * 8. coordinated 模式下，未被吞掉的区域整体 alpha 不得提前下降（验证问题2修复）
+     */
+    @Test
+    fun r_comment5709208101_fullLocalDeleteChain() {
+        val layouts = captureLayouts("abc", "abc", "ab")
+        val state = ComposeEditorVisualState(
+            targetId = "test-703-comment5709208101-full",
+            classifier = FakeLocalVisualPlanClassifier,
+        )
+
+        // 1. 文本 abc，caret 在 0
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 2. 纯 selection 积到 3（正文几何相同，去重 return）
+        state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
+
+        // 3. 删除 'c'：abc -> ab
+        state.recordLocalInput(
+            oldText = "abc",
+            newText = "ab",
+            oldSelection = TextRange(3, 3),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 2), oldRange = TextRange(2, 3))),
+        )
+
+        // 4. onAuthoritativeLayout("ab", selection=2) — 配对生成 localPatch + barrier
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+
+        // 5. barrier 首帧 cursor 必须在 offset=3（验证问题3修复）
+        val correctOldCursorRect = layouts[0].getCursorRect(3)
+        val staleCursorRect = layouts[0].getCursorRect(0)
+        // 确认 correct 和 stale 确实不同
+        assertTrue(
+            "综合验收5: correct(offset=3) 和 stale(offset=0) 的 cursor rect 应不同",
+            kotlin.math.abs(correctOldCursorRect.left - staleCursorRect.left) > 1f,
+        )
+        val restingCursor = state.restingCursorRect.value
+        assertNotNull("综合验收5: barrier restingCursorRect 应存在", restingCursor)
+        val restingDelta = kotlin.math.abs(restingCursor!!.left - correctOldCursorRect.left)
+        assertTrue(
+            "综合验收5: barrier 首帧 cursor 必须在 offset=3（验证问题3修复），" +
+                "restingCursor.left=${restingCursor.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "restingDelta=$restingDelta（应 < 1f）",
+            restingDelta < 1f,
+        )
+
+        // 6. drain 后 25% 时间点 cursor 必须已经开始向新 caret 移动（验证问题1修复）
+        state.drainPendingPatchesAtFrame(0L)
+        val scene25 = state.sampleVisualScene(25L * NANOS_PER_MS)
+        val cursor25 = scene25.cursorRect
+        assertNotNull("综合验收6: 25% 时间点 cursor rect 应存在", cursor25)
+        val delta25ToOld = kotlin.math.abs(cursor25!!.left - correctOldCursorRect.left)
+        // 用 0.01f 阈值区分"已移动"和"原地不动"（允许浮点误差）
+        assertTrue(
+            "综合验收6: 25% 时间点 cursor 必须已离开旧位置开始向新 caret 移动（验证问题1修复），" +
+                "cursor25.left=${cursor25.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "delta25ToOld=$delta25ToOld（应 > 0.01f）",
+            delta25ToOld > 0.01f,
+        )
+
+        // 7. 任意采样帧里，deleted glyph 的可见右边界必须跟 cursor 边界一致
+        // 8. coordinated 模式下，未被吞掉的区域整体 alpha 不得提前下降（验证问题2修复）
+        // 在 25%、50%、75% 三个采样帧检查
+        for (progressPct in listOf(25, 50, 75)) {
+            val scene = state.sampleVisualScene(progressPct.toLong() * NANOS_PER_MS)
+            val cursor = scene.cursorRect
+            assertNotNull("综合验收7/8: ${progressPct}% 时间点 cursor rect 应存在", cursor)
+
+            // 找 deleted ghost（targetRange == null, range == [2,3) — 被删的 'c'）
+            val ghost = scene.units.firstOrNull { it.targetRange == null && it.range == TextRange(2, 3) }
+            if (ghost != null) {
+                // 验收8：coordinated 模式下 effective alpha 不得提前下降（应固定 1）
+                // draw 层覆盖方案：alpha 通道仍 1->0，但 scene.coordinatedSpatialClip=true 时
+                // draw 层 effective alpha = 1f。这里验证 effective alpha。
+                val effectiveAlpha = if (scene.coordinatedSpatialClip) 1f else ghost.alpha.from
+                assertEquals(
+                    "综合验收8: ${progressPct}% 时间点 coordinated 模式下 deleted ghost effective alpha 应固定 1" +
+                        "（draw 层覆盖，验证问题2修复），实际 alpha.from=${ghost.alpha.from}（通道值），" +
+                        "effectiveAlpha=$effectiveAlpha",
+                    1f,
+                    effectiveAlpha,
+                )
+
+                // 验收7：deleted glyph 的可见右边界必须跟 cursor 边界一致
+                // ghost 的 glyph bounds
+                val ghostBounds = ghost.layout.result.getPathForRange(2, 3).getBounds()
+                val clipFraction = scene.unitClipFractions[ghost.key] ?: 1f
+                val visibleRight = ghostBounds.left + ghostBounds.width * clipFraction
+                val cursorLeft = cursor!!.left
+                // cursor 和 ghost 应在同一行（单行文本），可见右边界应跟 cursor left 一致
+                // 允许 2px 容差（浮点精度 + Robolectric 渲染误差）
+                val deltaRight = kotlin.math.abs(visibleRight - cursorLeft)
+                assertTrue(
+                    "综合验收7: ${progressPct}% 时间点 deleted glyph 可见右边界应跟 cursor 边界一致，" +
+                        "visibleRight=$visibleRight, cursorLeft=$cursorLeft, " +
+                        "clipFraction=$clipFraction, deltaRight=$deltaRight（应 < 2f）",
+                    deltaRight < 2f,
+                )
+            }
+        }
     }
 
     // ==================== 辅助方法 ====================

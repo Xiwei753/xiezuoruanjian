@@ -258,7 +258,12 @@ private fun DrawScope.drawVisualScene(
         val result = unit.layout.result
         if (range.end > result.layoutInput.text.length) continue
         // alpha 已由 timeline 算好，直接读 unit.alpha.from（sample 后 from == 当前值）
-        val alpha = unit.alpha.from.coerceIn(0f, 1f)
+        val rawAlpha = unit.alpha.from.coerceIn(0f, 1f)
+        // #703 评论 5709208101 问题2：coordinated + spatial clip 模式下 alpha 固定 1 —
+        // 整字亮度由空间裁切（clipFraction）控制，alpha 通道不再独立控制整字出现/消失。
+        // alpha 通道仍保持 0->1 / 1->0 供非 coordinated 场景和现有测试使用，
+        // 这里只在 draw 层覆盖 effective alpha，不改 timeline 的 alpha 通道语义。
+        val alpha = if (scene.coordinatedSpatialClip) 1f else rawAlpha
         if (alpha <= 0f) continue
         // position 已由 timeline 算好，直接读 unit.position.from（sample 后 from == 当前值）
         val currentPosition = unit.position.from

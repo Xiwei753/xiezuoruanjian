@@ -543,6 +543,20 @@ class ComposeEditorVisualState(
                 deletedUnits = deletedUnits,
             )
 
+        // #703 评论 5709208101 问题3：本地编辑的旧 caret 不要再依赖 lastPresentedLayout.selection。
+        // 优先使用 chain.first().oldSelection.end + oldLayout.result 生成本次 edit 的明确 origin，
+        // 让 barrier 和 timeline 共用这一份 origin。
+        // 纯 selection 变化后 lastPresentedLayout.selection 可能 stale（onAuthoritativeLayout 去重 return 不更新），
+        // 用 chain.first().oldSelection.end 才是真实的 T0 caret。
+        val originCursorRect =
+            try {
+                val originOffset = firstEdit.oldSelection.end
+                    .coerceIn(0, oldLayout.result.layoutInput.text.length)
+                oldLayout.result.getCursorRect(originOffset)
+            } catch (_: Throwable) {
+                null
+            }
+
         nextLocalPatchId++
         return ComposeVisualPatch(
             id = nextLocalPatchId,
@@ -561,6 +575,7 @@ class ComposeEditorVisualState(
             animationMode = planAnimationMode,
             motionPolicy = motionPolicy,
             intent = null,
+            originCursorRect = originCursorRect,
         )
     }
 
@@ -741,8 +756,12 @@ class ComposeEditorVisualState(
                     // 光标先跳到新位置（被删字末尾），下一帧 timeline cursor 动画再从旧位置
                     // 动画到新位置，光标回抽。改成把 _restingCursorRect 改回旧 layout 的 cursor，
                     // 让光标从旧位置开始，下一帧 timeline cursor 动画无缝衔接。
+                    //
+                    // #703 评论 5709208101 问题3：旧 caret 不要用 computeCursorRectFromLayout(oldLayout)
+                    // （oldLayout.selection 可能 stale），优先用 localPatch.originCursorRect
+                    // （从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret）。
                     if (localPatch.deletedUnits.isNotEmpty()) {
-                        val oldCursorRect = computeCursorRectFromLayout(oldLayout)
+                        val oldCursorRect = localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
                         if (oldCursorRect != null) {
                             _restingCursorRect.update { oldCursorRect }
                         }
@@ -1014,7 +1033,15 @@ class ComposeEditorVisualState(
 
         // #691 评论 5679242735 修改3：fromRect = 旧 layout 真实光标位置
         // （取不到回退 path.points.first().rect），points = path.points 完整保留。
-        val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.first().rect
+        //
+        // #703 评论 5709208101 问题3：fromRect 优先用 patch.originCursorRect
+        // （本地编辑从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
+        // 不依赖 patch.oldLayout.selection（纯 selection 变化后可能 stale）。
+        // Core/external 路径 originCursorRect 为 null，回退到 computeCursorRectFromLayout(patch.oldLayout)。
+        val fromRect =
+            patch.originCursorRect
+                ?: computeCursorRectFromLayout(patch.oldLayout)
+                ?: path.points.first().rect
 
         // #691 评论 5686733880：cursor 时长决定逻辑收口到此一处。
         // 只有真正的协同文字事务才用 textDurationMillis，必须同时满足四个条件：
