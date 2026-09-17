@@ -287,3 +287,50 @@ fn dual_timeline_fork_is_eliminated() {
     println!("[BUGFIX_VERIFY]   正文事务活跃时: build_cursor_plan 返回 Snap → apply_plan 清除 animation → cursor_sample_outcome=Coordinated → 不启动 started_at");
     println!("[BUGFIX_VERIFY]   无正文事务时: build_cursor_plan 返回 Tween → apply_plan 创建 CursorAnimationState → cursor_sample_outcome=Idle/Running/Finished → 纯光标 timeline");
 }
+
+// =========================================================================
+// 修复点 5（评论 5708209114）：build_cursor_plan 的正文活跃判断必须覆盖
+// Insert/Delete/CompositionUpdate/CompositionCommitOrCancel，不能来自
+// has_active_insert()（其语义只查 Insert，Delete 路径会漏判）
+// =========================================================================
+
+#[test]
+fn fix5_build_cursor_plan_active_check_covers_all_text_transactions_not_only_insert() {
+    let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
+    assert!(
+        src.contains("pub(crate) fn build_cursor_plan"),
+        "修复点5: build_cursor_plan 必须存在"
+    );
+    // 关键守卫：build_cursor_plan 函数体内 has_active 的赋值不能来自 has_active_insert()。
+    // Delete 路径上若用 has_active_insert() 判断，可能因语义只查 Insert 而返回 false，
+    // 导致 build_cursor_plan 创建纯光标 Tween（CursorAnimationState 独立 timeline），
+    // 与 compute_coordinated_cursor_position 驱动的正文协同光标形成双时间线分叉
+    // （光标先到、文字后消失）——正是 #702 原本最严重的风险点。
+    let plan_start = src
+        .find("pub(crate) fn build_cursor_plan")
+        .expect("build_cursor_plan must exist");
+    let after_plan = &src[plan_start..];
+    let plan_body_end = after_plan
+        .find("\n    pub(crate) fn ")
+        .or_else(|| after_plan.find("\n    pub fn "))
+        .unwrap_or(after_plan.len());
+    let plan_body = &after_plan[..plan_body_end];
+    assert!(
+        !plan_body.contains("let has_active = self.has_active_insert();"),
+        "修复点5: build_cursor_plan 中 has_active 不能来自 has_active_insert()。\
+         has_active_insert() 语义只查 Insert，Delete 路径会漏判导致 has_active=false，\
+         重新引入双时间线分叉（光标先到、文字后消失）。\
+         应改用 has_active_text_transaction() 或 active_text_transaction_key().is_some()。"
+    );
+    assert!(
+        plan_body.contains("has_active_text_transaction")
+            || plan_body.contains("active_text_transaction_key().is_some()"),
+        "修复点5: build_cursor_plan 中 has_active 应来自 has_active_text_transaction() \
+         或 active_text_transaction_key().is_some()，覆盖 Insert/Delete/IME 全部正文事务类型"
+    );
+    assert!(
+        src.contains("fn has_active_text_transaction"),
+        "修复点5: animation_coordinator 应定义 has_active_text_transaction 方法"
+    );
+    println!("[BUGFIX_VERIFY] fix5: build_cursor_plan 正文活跃判断覆盖 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel，不再来自 has_active_insert()");
+}

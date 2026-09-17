@@ -1884,6 +1884,18 @@ impl LinuxEditorAnimationCoordinator {
         self.prepared_queue.has_active_insert()
     }
 
+    /// Issue #702 评论 5708209114: 判断是否存在任意活跃正文视觉事务
+    /// （Insert / Delete / CompositionUpdate / CompositionCommitOrCancel）。
+    ///
+    /// 与 [`has_active_insert`] 的区别：`has_active_insert()` 名字暗示只查 Insert，
+    /// 只保留给"输入时抑制光标闪烁"这种 Insert 专属语义。本方法覆盖所有正文事务类型，
+    /// 供 `build_cursor_plan()` 判断"正文协同是否活跃"——只要存在任意活跃正文事务且
+    /// coordinated_enabled，就不能创建纯光标 Tween，正文光标只由
+    /// `compute_coordinated_cursor_position()` 驱动。
+    pub(crate) fn has_active_text_transaction(&self) -> bool {
+        self.active_text_transaction_key().is_some()
+    }
+
     /// Issue #686 评论 5664857575 领域2：返回当前活动的正文编辑事务（Insert/Delete，
     /// 不含 Cursor）的 key。光标按事务身份绑定，不靠浮点坐标反查。
     ///
@@ -1989,9 +2001,12 @@ impl LinuxEditorAnimationCoordinator {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
 
-        let has_active = self.has_active_insert();
+        let has_active = self.has_active_text_transaction();
         // Issue #679 评论 5657313927: blink_mode 不再固化进 CursorAnimationPlan，
-        // 由 tick_cursor_animation 每帧从 has_active_insert() 实时计算。
+        // 由 tick_cursor_animation 每帧从 has_active_text_transaction() 实时计算。
+        // Issue #702 评论 5708209114: has_active 覆盖所有正文事务类型
+        // （Insert/Delete/CompositionUpdate/CompositionCommitOrCancel），
+        // 不再用 has_active_insert()，避免 Delete 路径漏判导致双时间线分叉。
         let _blink_mode = if coordinated_enabled && has_active {
             CursorBlinkMode::Suppressed
         } else {
