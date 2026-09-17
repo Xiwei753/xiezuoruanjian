@@ -22,6 +22,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
+import com.xiwei.sujian.feature.editor.layout.isIndentedEmptyParagraphCaret
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
@@ -202,7 +203,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     // 只把输入事实塞进 visualState 的普通 tracker，不等 Core，不直接开始动画。
     // 它不是 Compose State，不在 InputTransformation 里改 StateFlow/mutableStateOf。
     val visualInputTransformation =
-        remember(visualState) {
+        remember(visualState, bridge) {
             InputTransformation {
                 val changesSnapshot =
                     buildList {
@@ -217,10 +218,27 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         oldSelection = originalSelection,
                         newSelection = selection,
                         changes = changesSnapshot,
+                        // #706 评论 5718539128 修复2：composition 活跃时不武装普通 local barrier —
+                        // barrier 职责是 committed edit 的原子视觉交接，不冻 IME preedit。
+                        // BasicTextField 的 preedit 正常实时绘制，composition commit 后再做 handoff。
+                        compositionActive = bridge.state.composition != null,
                     )
                 }
             }
         }
+
+    // #706 评论 5718539128 修复3：空段落缩进静态 caret override —
+    // smooth cursor 关闭时，空段落首行缩进位置仍需 draw 层接管（BasicTextField 原生 caret 落 x=0）。
+    // 判断当前 selection 是否在空段落首位且该段落有非零首行缩进，复用 layout 层的缩进修正语义。
+    val latestLayoutForCaret by visualState.latestLayout.collectAsStateWithLifecycle()
+    val liveSelectionForCaret = bridge.state.selection
+    // 用局部变量捕获，使 Kotlin 能对非 null 做 smart cast（委托属性不能 smart cast）。
+    val layoutSnapshot = latestLayoutForCaret
+    val selectionSnapshot = liveSelectionForCaret
+    val needsIndentedEmptyParagraphCaret =
+        layoutSnapshot != null &&
+            selectionSnapshot != null &&
+            layoutSnapshot.isIndentedEmptyParagraphCaret(selectionSnapshot.end)
 
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
@@ -237,6 +255,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
         // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
         liveSelection = bridge.state.selection,
+        // #706 评论 5718539128 修复3：空段落缩进静态 caret override 传给 draw 层。
+        needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -253,8 +273,11 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             inputTransformation = visualInputTransformation,
             // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 draw 层画。
             // smooth cursor 关闭时始终由系统画，draw 层永远不接管。
+            // #706 评论 5718539128 修复3：空段落缩进时也把系统 cursor 设透明 —
+            // BasicTextField 原生 caret 落 x=0（不参与 layout.cursorRect 的缩进修正），
+            // 由 draw 层画 layout.cursorRect(offset) 的缩进位置。
             cursorBrush =
-                if (drawsVisualCursor) {
+                if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
                     SolidColor(Color.Transparent)
                 } else {
                     SolidColor(cursorColor)

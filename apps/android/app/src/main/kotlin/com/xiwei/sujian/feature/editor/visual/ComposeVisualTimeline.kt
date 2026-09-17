@@ -68,6 +68,16 @@ class ComposeVisualTimeline {
     private var coordinatedSpatialClip: Boolean = false
 
     /**
+     * #706 评论 5718539128 修复1：barrier handoff 时保存的可见 clip 基线 —
+     * [redirectFromVisibleScene] 把 barrier.baseScene.unitClipFractions 存到这里，
+     * 下一次 [sample]（handoff 第一帧）用它覆盖 [computeUnitClipFractions] 的结果，
+     * 保证 handoff 第一帧的 fraction 与用户最后真正看到的旧 scene 完全一致，
+     * 不会因 cursor 起点/几何重算导致 coordinated spatial clip 突变。
+     * sample 消费后清空，不跨帧保留。
+     */
+    private var redirectBaseClipFractions: Map<Long, Float> = emptyMap()
+
+    /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
      *
      * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
@@ -779,6 +789,10 @@ class ComposeVisualTimeline {
         cursorChannel = null
         // presentedKeys 保留 — 这些 unit 确实已在可见帧呈现过。
         // coordinatedSpatialClip 由后续 applyPatch 重新设置。
+        // #706 评论 5718539128 修复1：保存当前可见 clip 基线 —
+        // coordinated spatial clip 模式下，handoff 第一帧的 fraction 必须与旧 scene 一致，
+        // 不能因 cursor 起点/几何重算导致吞吐字 fraction 突变。下一次 sample 消费后清空。
+        redirectBaseClipFractions = scene.unitClipFractions
     }
 
     /**
@@ -855,11 +869,26 @@ class ComposeVisualTimeline {
         //   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
         //   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
         // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
-        val unitClipFractions =
+        val computedClipFractions =
             if (sampledCursor != null) {
                 computeUnitClipFractions(sampledUnits, sampledCursor)
             } else {
                 emptyMap()
+            }
+        // #706 评论 5718539128 修复1：barrier handoff 首帧 —
+        // 用 redirectFromVisibleScene 保存的可见 clip 基线覆盖计算结果，
+        // 保证 handoff 第一帧 fraction 与用户最后真正看到的旧 scene 完全一致。
+        // 按 unit key 查找：旧 scene 里有的 unit 用旧 fraction，新插入 unit（key 不在基线里）
+        // 回退到计算结果。消费后清空，不跨帧保留。
+        val unitClipFractions =
+            if (redirectBaseClipFractions.isNotEmpty()) {
+                val base = redirectBaseClipFractions
+                redirectBaseClipFractions = emptyMap()
+                sampledUnits.associate { unit ->
+                    unit.key to (base[unit.key] ?: computedClipFractions[unit.key] ?: 1f)
+                }
+            } else {
+                computedClipFractions
             }
         return ComposeVisualScene(
             units = sampledUnits,

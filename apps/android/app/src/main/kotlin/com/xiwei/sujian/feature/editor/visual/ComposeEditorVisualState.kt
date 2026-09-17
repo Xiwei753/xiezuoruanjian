@@ -235,27 +235,36 @@ class ComposeEditorVisualState(
         oldSelection: TextRange,
         newSelection: TextRange,
         changes: List<LocalInputChange>,
+        compositionActive: Boolean = false,
     ) {
         // #706 评论 5715257924 症状1：barrier 必须在 InputTransformation 这一拍就武装，
         // 并真正保留上一帧。连续快速输入时，如果上一笔 barrier 还没完成，
         // 不要换掉 baseScene/baseLayout，只更新 expectedText/expectedSelection。
-        val current = pendingLocalFrameBarrier
-        pendingLocalFrameBarrier =
-            if (current == null) {
-                ComposeLocalFrameBarrier(
-                    epoch = nextLocalFrameEpoch++,
-                    baseScene = _visualScene.value,
-                    baseLayout = lastPresentedLayout,
-                    expectedText = newText,
-                    expectedSelection = newSelection,
-                )
-            } else {
-                current.copy(
-                    expectedText = newText,
-                    expectedSelection = newSelection,
-                    handoffPatchId = null,
-                )
-            }
+        //
+        // #706 评论 5718539128 修复2：composition 活跃时（IME preedit）不武装普通 local barrier —
+        // barrier 职责是 committed edit 的原子视觉交接，不把 IME composition 本身当成待隐藏的裸正文。
+        // composition 活跃时只记录 localInputTracker，draw 层看不到 barrier，
+        // BasicTextField 的 preedit 正常实时绘制并持续更新稳定帧。
+        // composition 最终 commit 后如果需要播放提交动画，再从用户最后真正看到的前帧做 handoff。
+        if (!compositionActive) {
+            val current = pendingLocalFrameBarrier
+            pendingLocalFrameBarrier =
+                if (current == null) {
+                    ComposeLocalFrameBarrier(
+                        epoch = nextLocalFrameEpoch++,
+                        baseScene = _visualScene.value,
+                        baseLayout = lastPresentedLayout,
+                        expectedText = newText,
+                        expectedSelection = newSelection,
+                    )
+                } else {
+                    current.copy(
+                        expectedText = newText,
+                        expectedSelection = newSelection,
+                        handoffPatchId = null,
+                    )
+                }
+        }
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
@@ -1001,7 +1010,15 @@ class ComposeEditorVisualState(
             )
         }
         // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
-        val cursorParams = computeCursorParamsForPatch(framePatch)
+        // #706 评论 5718539128 修复1：barrier handoff 时，光标起点用 barrier.baseScene.cursorRect
+        // （用户最后真正看到的屏幕光标位置），不从 patch.originCursorRect / oldLayout 猜起点。
+        val fromRectOverride =
+            if (barrier != null && barrier.handoffPatchId != null) {
+                barrier.baseScene.cursorRect
+            } else {
+                null
+            }
+        val cursorParams = computeCursorParamsForPatch(framePatch, fromRectOverride = fromRectOverride)
         visualTimeline.applyPatch(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
@@ -1088,7 +1105,10 @@ class ComposeEditorVisualState(
      * #691 评论 5679242735 修改3：返回完整 path（List<CursorMotionPoint>），
      * 不再只取 path.points.last().rect。多字符一次提交时多段 cursor path 不再被压成一条直线。
      */
-    private fun computeCursorParamsForPatch(patch: ComposeVisualPatch): CursorMotionParams? {
+    private fun computeCursorParamsForPatch(
+        patch: ComposeVisualPatch,
+        fromRectOverride: Rect? = null,
+    ): CursorMotionParams? {
         val motionPolicy = patch.motionPolicy.effective()
         if (!motionPolicy.cursorEnabled) {
             // 光标动画关闭 — 不创建 cursorChannel，使用静态光标
@@ -1113,8 +1133,13 @@ class ComposeEditorVisualState(
         // （本地编辑从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
         // 不依赖 patch.oldLayout.selection（纯 selection 变化后可能 stale）。
         // Core/external 路径 originCursorRect 为 null，回退到 computeCursorRectFromLayout(patch.oldLayout)。
+        //
+        // #706 评论 5718539128 修复1：fromRectOverride 优先级最高 —
+        // barrier handoff 时传 barrier.baseScene.cursorRect（用户最后真正看到的屏幕光标位置），
+        // 不从 patch.originCursorRect / oldLayout 猜起点（旧 layout 可能已 stale 或与屏幕不一致）。
         val fromRect =
-            patch.originCursorRect
+            fromRectOverride
+                ?: patch.originCursorRect
                 ?: computeCursorRectFromLayout(patch.oldLayout)
                 ?: path.points.first().rect
 

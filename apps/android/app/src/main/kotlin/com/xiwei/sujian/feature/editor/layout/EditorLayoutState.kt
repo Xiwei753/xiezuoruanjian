@@ -81,6 +81,34 @@ fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
 fun ComposeLayoutSnapshot.cursorRect(): Rect = cursorRect(selection.end)
 
 /**
+ * #706 评论 5718539128 修复3：空段落首行缩进 caret override 判定 —
+ * 返回 true 当且仅当 [offset] 在空段落首位且该段落有非零首行缩进。
+ *
+ * 用于 smooth cursor 关闭时让 draw 层接管空段落缩进位置的静态 caret：
+ * 关闭平滑光标时 Enter 后空段落走 BasicTextField 原生 raw caret（x=0），
+ * 但 [cursorRect] 已含缩进修正。本函数让 [WritingEditorSurface] 知道何时
+ * 把系统 cursor 设透明并让 draw 层画 [cursorRect] 的缩进位置。
+ *
+ * 判断逻辑与 [cursorRect] 的缩进修正分支完全一致，不引入第二套语义。
+ */
+fun ComposeLayoutSnapshot.isIndentedEmptyParagraphCaret(offset: Int): Boolean {
+    val text = result.layoutInput.text.text
+    val safeOffset = offset.coerceIn(0, text.length)
+
+    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
+    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
+    if (!atParagraphStart || !emptyParagraph) return false
+
+    val textIndent = result.layoutInput.style.textIndent ?: return false
+    val firstLine = textIndent.firstLine
+    if (!firstLine.isSpecified || firstLine.value == 0f) return false
+
+    val density = result.layoutInput.density
+    val firstLinePx = with(density) { firstLine.toPx() }
+    return firstLinePx != 0f
+}
+
+/**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，
  * 不缓存第二份行段。
  */

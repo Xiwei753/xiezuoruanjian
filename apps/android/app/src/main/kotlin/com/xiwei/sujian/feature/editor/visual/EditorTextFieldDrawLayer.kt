@@ -81,6 +81,12 @@ fun EditorTextFieldDrawLayer(
      * #684 评论 5663032418 断点3：live selection — 直接从 [TextFieldState.selection] 读取。
      */
     liveSelection: TextRange?,
+    /**
+     * #706 评论 5718539128 修复3：空段落缩进静态 caret override —
+     * true 时即使 [drawsVisualCursor]=false 也把系统 cursor 设透明并由 draw 层画
+     * [computeRestingCursorRect]（layout.cursorRect(offset)）的缩进位置。
+     */
+    needsIndentedEmptyParagraphCaret: Boolean = false,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -160,6 +166,7 @@ fun EditorTextFieldDrawLayer(
                             cursorColor = cursorColor,
                             liveSelection = liveSelection,
                             restingCursorRect = restingCursorRect,
+                            needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
                             density = density,
                             drawContent = { this@drawWithContent.drawContent() },
                         )
@@ -489,6 +496,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
     cursorColor: Color,
     liveSelection: TextRange?,
     restingCursorRect: Rect?,
+    needsIndentedEmptyParagraphCaret: Boolean = false,
     density: androidx.compose.ui.unit.Density,
     drawContent: () -> Unit,
 ) {
@@ -520,11 +528,23 @@ internal fun DrawScope.drawCurrentEditorFrame(
     }
 
     // 3. 光标
-    if (drawsVisualCursor) {
+    // #706 评论 5718539128 修复3：空段落缩进静态 caret override —
+    // drawsVisualCursor=true：smooth cursor，用 timeline 动画值（scene.cursorRect）优先。
+    // drawsVisualCursor=false && needsIndentedEmptyParagraphCaret=true：
+    //   smooth cursor 关闭但空段落缩进，用 computeRestingCursorRect 静态落位
+    //   （layout.cursorRect(offset) 已含缩进修正），不走 timeline 动画。
+    // 两者都 false：不画（系统 cursor 自己画）。
+    if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
         val cursorRectValue =
-            scene.cursorRect
-                ?: computeRestingCursorRect(latestLayout, liveSelection)
-                ?: restingCursorRect
+            if (drawsVisualCursor) {
+                scene.cursorRect
+                    ?: computeRestingCursorRect(latestLayout, liveSelection)
+                    ?: restingCursorRect
+            } else {
+                // needsIndentedEmptyParagraphCaret && !drawsVisualCursor：
+                // 静态落位，不用 scene.cursorRect（那是动画值）。
+                computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect
+            }
         if (cursorRectValue != null) {
             drawVisualCursorRect(
                 rect = cursorRectValue,
