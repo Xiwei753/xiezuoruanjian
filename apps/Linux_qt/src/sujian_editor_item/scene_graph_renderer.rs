@@ -34,8 +34,16 @@ pub(crate) fn render_frame(
 
     // Layer 0: 静态正文 — QSGTextNode (Qt 6.7+ public API)
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
-    if static_text.needs_relayout {
-        // 正文/字体/宽度变更：重建静态节点
+    //
+    // Issue #702: static_patches/doc_hidden_rects 必须每个动画帧实际参与静态层
+    // 裁剪，而不是只在重排时偶尔生效。当有动画接管区域（plan.static_patches 非空）
+    // 时，即使 needs_relayout=false 也必须 rebuild 静态节点以应用裁剪，确保
+    // InsertReveal 范围由动画层接管、静态层对应区域本帧隐藏，DeleteConceal 时
+    // 被删文字的旧字由动画层按 progress 吞掉。纯滚动帧（无 static_patches）
+    // 仍走轻量 update_scroll_transform。
+    let has_animation_clip = !plan.static_patches.is_empty();
+    if static_text.needs_relayout || has_animation_clip {
+        // 正文/字体/宽度变更 或 动画接管区域存在：重建静态节点（含裁剪）
         if let Some(snapshot) = static_text.layout_snapshot {
             // Issue #658: 按段落分组 VisualLine，每个段落对应一个 cache_idx。
             // cache_idx 直接从 VisualLine.cache_slot 读取（由 layout 阶段按段落出现顺序
@@ -106,7 +114,7 @@ pub(crate) fn render_frame(
             );
         }
     } else {
-        // 滚动帧：只更新 QSGTransformNode 位移矩阵，不重建静态节点。
+        // 纯滚动帧（无动画接管区域）：只更新 QSGTransformNode 位移矩阵，不重建静态节点。
         // 不出现 clear()、QTextLayout、createLine()、addTextLayout()。
         qt_text_node::update_scroll_transform(root_raw, static_text.scroll_y);
     }

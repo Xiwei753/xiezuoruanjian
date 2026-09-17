@@ -3,24 +3,27 @@ import QtQuick
 QtObject {
     id: dt
 
-    property bool isDark: true
+    // Issue #702: 主题完整状态只通过 themeStateJson 一次性发布。
+    // JSON 结构：{"is_dark": bool, "scheme": <ThemeColorScheme object>}。
+    // isDark 和 scheme 都从同一份 JSON 解析，彻底消除 isDark 已是 true
+    // 但 scheme 还是上一套浅色值的中间状态。不再分开绑定 isDark 和
+    // resolvedSchemeJson 两个可能不同步的属性。
+    property string themeStateJson: ""
+
+    property var _themeState: {
+        if (themeStateJson.length === 0) return null
+        try { return JSON.parse(themeStateJson) } catch(e) { return null }
+    }
+
+    // isDark 从同一份 themeStateJson 解析，保证与 scheme 同步。
+    property bool isDark: _themeState !== null && _themeState.is_dark !== undefined ? _themeState.is_dark : true
 
     onIsDarkChanged: {
     }
 
-    // Issue #701 评论 5699565102: 运行时颜色只解析 resolvedSchemeJson。
-    // 删除 themePaletteJson / colorSource / selectedBuiltinThemeId /
-    // builtinThemesJson 以及 _themePalette / _selectedBuiltin /
-    // useThemePalette 这套二次选主题逻辑。主题状态统一由
-    // LinuxThemeController 发布到 resolvedSchemeJson，本文件不再自己
-    // 从 palette/builtin 重新选 scheme。只有 controller 尚未给出有效
-    // scheme 时，才使用本文件固定 fallback。
-    property string resolvedSchemeJson: ""
-
-    property var _resolvedScheme: {
-        if (resolvedSchemeJson.length === 0) return null
-        try { return JSON.parse(resolvedSchemeJson) } catch(e) { return null }
-    }
+    // Issue #702: scheme 直接从 themeStateJson 的 scheme 字段读取，
+    // 与 isDark 来自同一份 JSON，不再有独立 resolvedSchemeJson 属性。
+    property var _resolvedScheme: _themeState !== null ? _themeState.scheme : null
     property bool _hasResolvedScheme: _resolvedScheme !== null && _resolvedScheme.primary !== undefined
 
     function _schemeColor(key) {

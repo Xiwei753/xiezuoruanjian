@@ -182,6 +182,9 @@ impl QQuickItem for SujianEditorItem {
             // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
             // 同一份 frame_sample 采样的结果推进 cursor_ctrl.visual_x/y。
             // 文字层和光标层都使用同一份 frame state。
+            // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。CursorAnimationState
+            // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
+            // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
             match render_plan.cursor_sample_outcome {
                 super::render_plan::CursorSampleOutcome::Running(p) => {
                     self.cursor_ctrl.update_animation_progress(p);
@@ -189,7 +192,14 @@ impl QQuickItem for SujianEditorItem {
                 super::render_plan::CursorSampleOutcome::Finished => {
                     self.cursor_ctrl.finish_animation_to_target();
                 }
-                super::render_plan::CursorSampleOutcome::Idle => {}
+                super::render_plan::CursorSampleOutcome::Idle => {
+                    // Issue #702: 纯光标动画首帧启动 started_at。
+                    if let Some(ref mut anim) = self.cursor_ctrl.animation {
+                        if anim.started_at.is_none() {
+                            anim.started_at = Some(frame_now);
+                        }
+                    }
+                }
             }
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。

@@ -139,6 +139,7 @@ impl CursorController {
                 old_rect,
                 new_rect,
                 driver_key,
+                duration_ms,
             } => {
                 let start_x = old_rect.x;
                 let start_y = old_rect.top;
@@ -165,6 +166,10 @@ impl CursorController {
                             target_x,
                             target_y,
                             progress: 0.0,
+                            // Issue #702: 纯光标移动自己的 timeline。
+                            // rebase 时重置 started_at 为 None，等下一帧 frame_now 启动。
+                            started_at: None,
+                            duration_ms: *duration_ms,
                         });
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
@@ -199,6 +204,10 @@ impl CursorController {
                             target_x,
                             target_y,
                             progress: 0.0,
+                            // Issue #702: 纯光标移动自己的 timeline。
+                            // started_at 留 None，等下一帧 frame_now 启动。
+                            started_at: None,
+                            duration_ms: *duration_ms,
                         });
                     } else {
                         self.visual_x = target_x;

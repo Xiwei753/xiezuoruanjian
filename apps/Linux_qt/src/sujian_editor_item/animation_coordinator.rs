@@ -1346,31 +1346,13 @@ impl LinuxEditorAnimationCoordinator {
                 return Some(key);
             }
             EditorAnimationKind::Cursor => {
-                let key = self.alloc_key();
-                let new_revision = LayoutRevision::next();
-
-                let prepared = PreparedTextVisualTransaction {
-                    key,
-                    state: TextVisualTransactionState::Pending,
-                    operation_kind: TextVisualOperationKind::Cursor,
-                    timeline: TransactionTimeline::new(vt.duration_ms),
-                    units: Vec::new(),
-                    static_patches: Vec::new(),
-                    old_cursor_rect,
-                    new_cursor_rect,
-                    cursor_visual_track: None,
-                    cancel_reason: None,
-                    texture_prepared: false,
-                    old_snapshot: None,
-                    new_snapshot: None,
-                };
-
-                self.layout_revision = new_revision;
-
-                // Issue #690 评论 5675007226 步骤 5: CursorOnly 也走同一条紧凑事件链。
-                emit_transaction_diagnostic(&prepared, "editor.anim.create", "created");
-                self.prepared_queue.enqueue(prepared);
-                return Some(key);
+                // Issue #702: 删除"纯光标移动创建空 Cursor 文字事务"的结构。
+                // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
+                // update_cursor_visual_position → build_cursor_plan → apply_plan
+                // 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
+                // 不再伪装成文字事务（units=空, static_patches=空）。
+                // 此分支不再创建任何事务，返回 None。
+                return None;
             }
         }
         None
@@ -1880,33 +1862,15 @@ impl LinuxEditorAnimationCoordinator {
 
     pub fn handle_cursor_only(
         &mut self,
-        old_cursor_rect: Option<CursorRect>,
-        new_cursor_rect: Option<CursorRect>,
+        _old_cursor_rect: Option<CursorRect>,
+        _new_cursor_rect: Option<CursorRect>,
     ) -> Option<VisualTransactionKey> {
+        // Issue #702: 纯光标移动不再创建空 Cursor 文字事务。
+        // 只分配一个 key 作为 CursorAnimationState 的 driver_key 标识，
+        // 不入 prepared_queue。CursorAnimationState 拥有自己的 timeline
+        // （started_at + duration_ms），由 sample_cursor_only_position
+        // 用 Scene Graph 当前帧 frame_now 推进 from→to 动画。
         let key = self.alloc_key();
-        let new_revision = LayoutRevision::next();
-
-        let prepared = PreparedTextVisualTransaction {
-            key,
-            state: TextVisualTransactionState::Pending,
-            operation_kind: TextVisualOperationKind::Cursor,
-            timeline: TransactionTimeline::new(u64::from(self.cursor_animation_duration_ms)),
-            units: Vec::new(),
-            static_patches: Vec::new(),
-            old_cursor_rect: old_cursor_rect.clone(),
-            new_cursor_rect: new_cursor_rect.clone(),
-            cursor_visual_track: None,
-            cancel_reason: None,
-            texture_prepared: true,
-            old_snapshot: None,
-            new_snapshot: None,
-        };
-
-        self.layout_revision = new_revision;
-        self.prepared_queue.enqueue(prepared);
-        // Issue #679 评论 5657313927 (3a): CursorOnly 没有文字切片也没有纹理准备阶段，
-        // 创建后立即推进到 Prepared，不要让它以 Pending 留在队列里导致光标不移动。
-        self.prepared_queue.mark_prepared(key);
         Some(key)
     }
 
@@ -2026,7 +1990,7 @@ impl LinuxEditorAnimationCoordinator {
         is_selecting: bool,
         is_preediting: bool,
         smooth_cursor_enabled: bool,
-        _smooth_cursor_duration_ms: u32,
+        smooth_cursor_duration_ms: u32,
         coordinated_enabled: bool,
         scroll_y: f64,
         old_scroll_y: f64,
@@ -2067,6 +2031,8 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #679 评论 5657313927: 没有 driver key 时无法构造 Tween（需要 driver_key
         // 字段），fallback 到 Snap。
         let can_tween = driver_key.is_some();
+        // Issue #702: 纯光标移动 Tween 的 duration_ms，供 CursorAnimationState 自己的 timeline。
+        let tween_duration_ms = u64::from(smooth_cursor_duration_ms);
 
         let transition = if !should_be_visible || hard_snap {
             CursorTransition::Snap
@@ -2081,6 +2047,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
                     driver_key: driver_key.unwrap(),
+                    duration_ms: tween_duration_ms,
                 }
             } else {
                 CursorTransition::Snap
@@ -2097,6 +2064,7 @@ impl LinuxEditorAnimationCoordinator {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
                         driver_key: driver_key.unwrap(),
+                        duration_ms: tween_duration_ms,
                     }
                 } else if can_tween {
                     CursorTransition::Tween {
@@ -2113,6 +2081,7 @@ impl LinuxEditorAnimationCoordinator {
                             baseline_y: cursor_y + cursor_h * 0.8,
                         },
                         driver_key: driver_key.unwrap(),
+                        duration_ms: tween_duration_ms,
                     }
                 } else {
                     CursorTransition::Snap
@@ -2131,6 +2100,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
                     driver_key: driver_key.unwrap(),
+                    duration_ms: tween_duration_ms,
                 }
             } else if can_tween {
                 CursorTransition::Tween {
@@ -2147,6 +2117,7 @@ impl LinuxEditorAnimationCoordinator {
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
                     driver_key: driver_key.unwrap(),
+                    duration_ms: tween_duration_ms,
                 }
             } else {
                 CursorTransition::Snap
@@ -2332,13 +2303,17 @@ impl LinuxEditorAnimationCoordinator {
         anim: &super::rendering::CursorAnimationState,
         sample: &AnimationFrameSample,
     ) -> super::render_plan::CursorSampleOutcome {
+        // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。
+        // 先查 driver 事务是否存在；存在则从其 Timeline progress 采样
+        // （输入/删除存在正文视觉事务时，光标跟随文字吞吐边界）。
+        // 不存在则用 CursorAnimationState 自己的 timeline（started_at + duration_ms）
+        // 用 frame_now 推进 from→to 动画（纯方向键/Home/End 等没有正文事务时）。
         let tx = self
             .prepared_queue
             .active_transactions()
             .iter()
             .find(|tx| tx.key == anim.driver_key);
         match tx {
-            None => super::render_plan::CursorSampleOutcome::Finished,
             Some(tx) => match tx.state {
                 TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
                     super::render_plan::CursorSampleOutcome::Idle
@@ -2355,6 +2330,19 @@ impl LinuxEditorAnimationCoordinator {
                     super::render_plan::CursorSampleOutcome::Finished
                 }
             },
+            None => {
+                // Issue #702: driver 事务不存在（纯光标移动）。
+                // 用 CursorAnimationState 自己的 timeline 推进。
+                let (progress, needs_start) = anim.sample_progress(sample.frame_now);
+                if needs_start {
+                    // 首帧：started_at 尚未初始化，返回 Idle 让调用方用 frame_now 启动。
+                    super::render_plan::CursorSampleOutcome::Idle
+                } else if progress >= 1.0 {
+                    super::render_plan::CursorSampleOutcome::Finished
+                } else {
+                    super::render_plan::CursorSampleOutcome::Running(progress)
+                }
+            }
         }
     }
 
@@ -2528,6 +2516,10 @@ impl LinuxEditorAnimationCoordinator {
                 let mut has_conceal_from_right = false;
                 let mut conceal_edge: Option<f64> = None;
                 let mut cursor_y = new_rect.top;
+                // Issue #702: 记录 DeleteConceal unit 的可见进度，供 fallback
+                // 让 caret track 跟随文字 unit 的同一帧基准，而非 caret track
+                // 自己的 timeline，消除"光标先完成、旧字晚消失"的错拍。
+                let mut delete_unit_progress: Option<f64> = None;
 
                 for unit in &tx.units {
                     if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
@@ -2547,6 +2539,12 @@ impl LinuxEditorAnimationCoordinator {
                     } else {
                         has_conceal_from_right = true;
                     }
+                    // 记算 unit 的 progress（与 visible 同一帧基准），供 fallback 使用。
+                    let unit_progress = unit.progress(frame_now);
+                    delete_unit_progress = Some(match delete_unit_progress {
+                        Some(prev) => prev.min(unit_progress),
+                        None => unit_progress,
+                    });
                 }
 
                 if let Some(x) = conceal_edge {
@@ -2556,8 +2554,21 @@ impl LinuxEditorAnimationCoordinator {
                     // 前向 Delete：逻辑光标本来不移动，固定在 new_cursor_rect，
                     // 只让右侧文字向光标方向收掉。
                     Some((new_rect.x, new_rect.top, h))
+                } else if let Some(unit_progress) = delete_unit_progress {
+                    // Issue #702: 有 DeleteConceal unit 但没有可直接当边界的 glyph
+                    // （跨行 reflow 等）。caret track 跟随文字 unit 的可见进度
+                    // （同一帧基准），而非 caret track 自己的 timeline，消除错拍。
+                    if let Some(track) = tx.cursor_visual_track.as_ref() {
+                        let r = track.sampled_rect_at_progress(unit_progress);
+                        Some((r.x, r.top, h))
+                    } else {
+                        let eased = AnimatedSlice::ease_out_quad(unit_progress);
+                        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                        Some((x, y, h))
+                    }
                 } else {
-                    // 没有可直接当边界的 glyph（跨行 reflow 等）：直接 sample caret track。
+                    // 没有 DeleteConceal unit：直接 sample caret track。
                     let (x, y) = sample_reflow()?;
                     Some((x, y, h))
                 }

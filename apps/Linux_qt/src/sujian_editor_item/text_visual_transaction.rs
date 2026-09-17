@@ -322,6 +322,22 @@ impl PreparedCursorVisualTrack {
         }
     }
 
+    /// Issue #702: 用外部传入的 progress（来自文字 unit 的可见进度）采样 caret rect，
+    /// 而非 caret track 自己的 timeline。消除删除事务里 caret track 与 DeleteConceal
+    /// unit 帧基准分叉导致的"光标先完成、旧字晚消失"错拍。
+    pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
+        let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
+        let x = self.from.x + (self.to.x - self.from.x) * eased;
+        let top = self.from.top + (self.to.top - self.from.top) * eased;
+        let h = self.to.bottom - self.to.top;
+        CursorRect {
+            x,
+            top,
+            bottom: top + h,
+            baseline_y: self.to.baseline_y,
+        }
+    }
+
     /// 旧 track 剩余的播放时长：`duration - elapsed`，下溢保护为 0。
     /// `started_at = None`（尚未进入 Rendering）时返回 `duration_ms` 全长。
     pub fn remaining_duration_ms(&self, now: Instant) -> u64 {

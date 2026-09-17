@@ -2,6 +2,7 @@ use crate::editor::layout::CaretAffinity;
 use cpp::cpp;
 use qmetaobject::prelude::*;
 use qmetaobject::QQuickItem;
+use std::time::Instant;
 
 use super::cursor_controller::CursorUpdateResult;
 use super::transaction_key::VisualTransactionKey;
@@ -13,6 +14,10 @@ use super::SujianEditorItem;
 /// 而是消费与文字动画相同的 Timeline progress。
 /// Issue #679 评论 5657313927: 保存 `driver_key` 指向驱动本段光标动画的视觉事务，
 /// `tick_cursor_animation` 按 key 取样 Timeline progress。
+/// Issue #702: 纯光标移动不再伪装成空 Cursor 文字事务。`started_at`/`duration_ms`
+/// 让 CursorAnimationState 拥有自己的 timeline，用 Scene Graph 当前帧的
+/// `frame_now` 推进 from→to 动画。`driver_key` 仅作为标识，不再要求对应
+/// 事务存在于 prepared_queue。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
     pub driver_key: VisualTransactionKey,
@@ -21,6 +26,14 @@ pub struct CursorAnimationState {
     pub target_x: f64,
     pub target_y: f64,
     pub progress: f64,
+    /// Issue #702: 纯光标移动自己的 timeline 起始时间。
+    /// `None` 表示尚未启动（第一帧），由 `sample_cursor_only_position`
+    /// 在首次采样时用 `frame_now` 初始化。
+    pub started_at: Option<Instant>,
+    /// Issue #702: 纯光标移动自己的 timeline 时长（毫秒）。
+    /// 输入/删除存在正文视觉事务时，光标继续消费同一帧进度，
+    /// 此字段仅用于纯方向键/Home/End 等没有正文事务的 from→to 动画。
+    pub duration_ms: u64,
 }
 
 impl CursorAnimationState {
@@ -34,6 +47,22 @@ impl CursorAnimationState {
 
     pub fn is_finished(&self) -> bool {
         self.progress >= 1.0
+    }
+
+    /// Issue #702: 用 Scene Graph 当前帧的 `frame_now` 推进纯光标 from→to 动画。
+    /// 首次调用（`started_at` 为 `None`）时返回 0.0 并通过返回值的第二分量
+    /// `true` 表示尚未启动，调用方负责用 `frame_now` 初始化 `started_at`。
+    pub fn sample_progress(&self, frame_now: Instant) -> (f64, bool) {
+        if self.duration_ms == 0 {
+            return (1.0, false);
+        }
+        let start = match self.started_at {
+            Some(s) => s,
+            None => return (0.0, true),
+        };
+        let elapsed_ms = frame_now.duration_since(start).as_millis() as f64;
+        let p = (elapsed_ms / self.duration_ms as f64).clamp(0.0, 1.0);
+        (p, false)
     }
 }
 

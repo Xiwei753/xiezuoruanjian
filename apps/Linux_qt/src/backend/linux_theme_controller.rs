@@ -21,6 +21,12 @@ use crate::backend::DomainSnapshot;
 pub struct LinuxThemeController {
     #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
+    /// Issue #702: 主题完整状态一次性发布。JSON 结构：
+    /// `{"is_dark": bool, "scheme": <ThemeColorScheme object>}`。
+    /// QML 侧（DesignTokens）只绑定这一个属性，从同一份 JSON 解析
+    /// `is_dark` 和 `scheme`，彻底消除 isDark 与 scheme 不同步的中间状态。
+    #[allow(dead_code)]
+    theme_state_json: qt_property!(QString; READ theme_state_json NOTIFY scheme_changed),
     #[allow(dead_code)]
     resolved_scheme_json: qt_property!(QString; READ resolved_scheme_json NOTIFY scheme_changed),
     #[allow(dead_code)]
@@ -182,6 +188,34 @@ impl LinuxThemeController {
         let state = self.rebuild_resolved_state();
         *self.cached_state.borrow_mut() = Some(state.clone());
         state
+    }
+
+    /// Issue #702: 一次性发布完整主题状态 `{"is_dark": bool, "scheme": <object>}`。
+    ///
+    /// `is_dark` 和 `scheme` 从同一份 `cached_state` 读取并打包进一个 JSON，
+    /// QML 侧只绑定这一个属性，从同一份 JSON 解析两者，彻底消除 isDark 已是
+    /// true 但 scheme 还是上一套浅色值的中间状态。
+    ///
+    /// `scheme` 字段是 Core `ThemeColorScheme` DTO 反序列化后的对象（非字符串），
+    /// 便于 QML 侧直接 `JSON.parse` 后按 key 读取颜色。当 scheme 为空（`"{}"`）
+    /// 时，`scheme` 字段为空对象，QML 侧 fallback 到 isDark 派生的固定深/浅色。
+    fn theme_state_json(&self) -> QString {
+        let state = self.state();
+        // 先把 scheme_json 反序列化成对象，再和 is_dark 一起打包。
+        // scheme_json 是 Core ThemeColorScheme 的 serde JSON 字符串（snake_case key）。
+        let scheme_value: serde_json::Value =
+            serde_json::from_str(&state.scheme_json).unwrap_or(serde_json::Value::Object(
+                serde_json::Map::new(),
+            ));
+        let mut obj = serde_json::Map::new();
+        obj.insert(
+            "is_dark".to_string(),
+            serde_json::Value::Bool(state.is_dark),
+        );
+        obj.insert("scheme".to_string(), scheme_value);
+        let json = serde_json::to_string(&serde_json::Value::Object(obj))
+            .unwrap_or_else(|_| "{\"is_dark\":false,\"scheme\":{}}".to_string());
+        QString::from(json)
     }
 
     /// Issue #677 评论 5653315696: 输出的主题 JSON 字段名与 Core DTO 一致，统一使用 snake_case。

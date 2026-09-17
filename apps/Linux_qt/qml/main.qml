@@ -252,13 +252,13 @@ ApplicationWindow {
     // Design tokens
     DesignTokens {
         id: designTokens
-        // Issue #701 评论 5699565102: 根 DesignTokens 只传 is_dark 和
-        // resolved_scheme_json，不再传 themePaletteJson / colorSource /
-        // selectedBuiltinThemeId / builtinThemesJson。主题状态统一由
-        // themeController 作为单一事实来源，appearance_mode + system_is_dark
-        // 都在 themeController 内部解析，QML 只消费结果。
-        isDark: themeController !== null ? themeController.is_dark : false
-        resolvedSchemeJson: themeController !== null ? themeController.resolved_scheme_json : ""
+        // Issue #702: 根 DesignTokens 只绑定 themeStateJson 这一份完整主题状态。
+        // themeController 把 is_dark 和最终 ThemeColorScheme 打包成
+        // {"is_dark": bool, "scheme": <object>} 一次性发布，QML 侧从同一份
+        // JSON 解析 isDark 和 scheme，彻底消除 isDark 已是 true 但 scheme
+        // 还是上一套浅色值的中间状态。不再分开绑定 is_dark 和
+        // resolved_scheme_json 两个可能不同步的属性。
+        themeStateJson: themeController !== null ? themeController.theme_state_json : ""
     }
 
     Connections {
