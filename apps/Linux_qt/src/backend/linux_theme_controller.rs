@@ -102,6 +102,9 @@ impl LinuxThemeController {
         let appearance_mode = s.appearance_mode.clone();
         let system_is_dark = s.system_is_dark;
         let is_dark = Self::compute_is_dark(&appearance_mode, system_is_dark);
+        // Issue #705: 复现阶段注入的 [BUGFIX_REPRO_TRACE] 诊断 eprintln 已移除。
+        // 主题状态决策点:appearance_mode + system_is_dark -> is_dark,
+        // on_surface/editorText 从同一份 is_dark 派生的 scheme 取值。
         let color_source = s.color_source.clone();
         let selected_palette_id = s.selected_palette_id.clone();
         let selected_builtin_theme_id = s.selected_builtin_theme_id.clone();

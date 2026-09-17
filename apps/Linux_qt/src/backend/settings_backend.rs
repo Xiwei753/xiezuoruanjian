@@ -36,8 +36,8 @@ pub struct SettingsBackend {
     setting_auto_indent_enabled: qt_property!(bool; READ setting_auto_indent_enabled WRITE set_setting_auto_indent_enabled NOTIFY settings_changed),
     #[allow(dead_code)]
     setting_auto_indent_width: qt_property!(f32; READ setting_auto_indent_width WRITE set_setting_auto_indent_width NOTIFY settings_changed),
-    #[allow(dead_code)]
-    setting_theme_mode: qt_property!(QString; READ setting_theme_mode NOTIFY settings_changed),
+    // Issue #705: setting_theme_mode QML 属性已删除。运行时主题状态只通过
+    // LinuxThemeController.theme_state_json 发布,不再有第二套 QML 出口。
     #[allow(dead_code)]
     setting_monet_color: qt_property!(QString; READ setting_monet_color NOTIFY settings_changed),
     #[allow(dead_code)]
@@ -349,10 +349,8 @@ impl SettingsBackend {
             self.settings_changed();
         }
     }
-    fn setting_theme_mode(&self) -> QString {
-        self.with_app(|app| app.setting_theme_mode())
-            .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
-    }
+    // Issue #705: SettingsBackend::setting_theme_mode 已删除。
+    // 运行时主题状态只通过 LinuxThemeController.theme_state_json 发布。
     fn setting_monet_color(&self) -> QString {
         self.with_app(|app| app.setting_monet_color())
             .unwrap_or_else(|_| crate::backend::json_utils::borrow_conflict_error_json().into())
@@ -822,14 +820,9 @@ impl AppBackend {
         self.settings_changed();
     }
 
-    // AppBackend::setting_theme_mode
-    pub(crate) fn setting_theme_mode(&self) -> QString {
-        if self.current_setting_theme_mode.is_empty() {
-            "system".into()
-        } else {
-            self.current_setting_theme_mode.clone().into()
-        }
-    }
+    // Issue #705: AppBackend::setting_theme_mode 已删除。运行时只认
+    // current_setting_appearance_mode。app_state_json 的 themeMode 字段
+    // 改读 current_setting_appearance_mode(诊断日志用)。
 
     pub(crate) fn setting_monet_color(&self) -> QString {
         self.current_setting_monet_color.clone().into()
@@ -940,7 +933,7 @@ impl AppBackend {
     pub(crate) fn load_app_theme_mode(&mut self) {
         // Load theme mode from app_config (when no workspace is open)
         // Default to "system"
-        self.current_setting_theme_mode = "system".to_string();
+        // Issue #705: current_setting_theme_mode 已删除,只认 appearance_mode。
         self.current_setting_monet_color = "".to_string();
         self.current_setting_theme_palette_json = "".to_string();
         self.current_setting_color_source = "built_in".to_string();
@@ -1003,10 +996,8 @@ impl AppBackend {
                     }
                 }
                 if let Ok(local) = core.load_local_settings() {
-                    self.current_setting_theme_mode = local.appearance_mode.clone();
-                    if self.current_setting_theme_mode.is_empty() {
-                        self.current_setting_theme_mode = "system".to_string();
-                    }
+                    // Issue #705: current_setting_theme_mode 已删除。
+                    // 运行时只认 current_setting_appearance_mode。
                     self.current_setting_color_source = local.color_source.clone();
                     self.current_setting_appearance_mode = local.appearance_mode.clone();
                     if self.current_setting_appearance_mode.is_empty() {
@@ -1044,7 +1035,7 @@ impl AppBackend {
                 if self.current_setting_font_size <= 0.0 {
                     self.current_setting_font_size = 16.0;
                 }
-                self.current_setting_theme_mode = "system".to_string();
+                // Issue #705: current_setting_theme_mode 已删除。
             }
 
             self.settings_changed();
@@ -1052,8 +1043,8 @@ impl AppBackend {
                 "settings",
                 "load_local_settings_success",
                 &format!(
-                    "fontSize={}, themeMode={}",
-                    self.current_setting_font_size, self.current_setting_theme_mode
+                    "fontSize={}, appearanceMode={}",
+                    self.current_setting_font_size, self.current_setting_appearance_mode
                 ),
             );
         } else {

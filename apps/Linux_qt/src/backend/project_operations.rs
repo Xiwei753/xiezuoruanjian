@@ -203,7 +203,9 @@ impl AppBackend {
             "tree": tree_json,
             "settings": {
                 "fontSize": self.current_setting_font_size,
-                "themeMode": self.setting_theme_mode().to_string()
+                // Issue #705: themeMode 字段改读 appearance_mode(诊断日志用)。
+                // setting_theme_mode() 方法已删除,运行时只认 appearance_mode。
+                "themeMode": self.current_setting_appearance_mode.clone()
             },
             "sync": {
                 "status": self.current_sync_status
@@ -225,7 +227,8 @@ impl AppBackend {
             "tree": self.build_tree_model_json(),
             "settings": {
                 "fontSize": self.current_setting_font_size,
-                "themeMode": self.setting_theme_mode().to_string()
+                // Issue #705: themeMode 字段改读 appearance_mode(诊断日志用)。
+                "themeMode": self.current_setting_appearance_mode.clone()
             },
             "sync": {
                 "status": self.current_sync_status

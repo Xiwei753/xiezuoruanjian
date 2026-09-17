@@ -165,4 +165,13 @@ pub(crate) struct RenderPlan {
     pub static_patches: Vec<StaticLinePatch>,
     /// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
     pub cursor_sample_outcome: CursorSampleOutcome,
+    /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。
+    ///
+    /// 正文协同动画时,这个 rect 就是同帧文字事务算出的实际光标位置;
+    /// 纯光标动画时,就是该 Tween 本帧位置;Snap 时就是目标位置。
+    /// `qquickitem_impl` 每帧生成 RenderPlan 后,把
+    /// `cursor_ctrl.visual_x/visual_y/visual_h` 同步成此值。下一次
+    /// 输入、删除、鼠标点击创建新事务时,只允许从这个"上一帧真正
+    /// 画出来的位置" rebase。
+    pub drawn_caret_rect: Option<(f64, f64, f64)>,
 }

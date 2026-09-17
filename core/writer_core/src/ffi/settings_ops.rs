@@ -91,8 +91,8 @@ pub unsafe extern "C" fn writer_core_save_local_settings(
             settings.auto_indent_enabled = v;
         }
         if let Some(v) = val.get("theme").and_then(|v| v.as_str()) {
+            // Issue #705: LocalSettings 已删除 theme_mode 字段,只写 appearance_mode。
             settings.appearance_mode = v.to_string();
-            settings.theme_mode = Some(v.to_string());
         }
         if let Some(v) = val.get("appearanceMode").and_then(|v| v.as_str()) {
             settings.appearance_mode = v.to_string();

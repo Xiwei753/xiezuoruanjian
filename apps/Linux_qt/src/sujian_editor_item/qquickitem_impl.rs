@@ -215,6 +215,20 @@ impl QQuickItem for SujianEditorItem {
                 }
             }
 
+            // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
+            // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去
+            // 的 caret rect)。下一次输入、删除、鼠标点击创建新事务时,
+            // 只允许从这个"上一帧真正画出来的位置" rebase。
+            // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
+            // 当前屏幕位置。
+            if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
+                self.cursor_ctrl.visual_x = cx;
+                self.cursor_ctrl.visual_y = cy;
+                if ch > 0.0 {
+                    self.cursor_ctrl.visual_h = ch;
+                }
+            }
+
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。

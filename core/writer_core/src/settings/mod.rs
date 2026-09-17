@@ -43,9 +43,10 @@ pub mod ranges {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
-    #[serde(default)]
-    pub theme_mode: Option<String>,
-    #[serde(default = "default_appearance_mode")]
+    // Issue #705: 运行时只认 appearance_mode(值仅 system/light/dark)。
+    // 旧配置里的 themeMode 字段通过 serde alias 做一次性迁移读入
+    // appearance_mode,迁移完不再参与运行时判断,也不暴露成第二套 QML 状态。
+    #[serde(default = "default_appearance_mode", alias = "themeMode")]
     pub appearance_mode: String,
     #[serde(default = "default_color_source")]
     pub color_source: String,
@@ -198,7 +199,6 @@ impl LocalSettings {
 impl Default for LocalSettings {
     fn default() -> Self {
         Self {
-            theme_mode: Some("system".to_string()),
             appearance_mode: default_appearance_mode(),
             color_source: default_color_source(),
             dynamic_color_enabled: false,

@@ -423,7 +423,8 @@ pub struct AppBackend {
     current_setting_auto_save_delay_ms: u32,
     current_setting_auto_indent_enabled: bool,
     current_setting_auto_indent_width: f32,
-    current_setting_theme_mode: String,
+    // Issue #705: current_setting_theme_mode 已删除。运行时只认
+    // current_setting_appearance_mode,不再有第二套主题状态字段。
     current_setting_monet_color: String,
     current_setting_theme_palette_json: String,
     current_setting_color_source: String,

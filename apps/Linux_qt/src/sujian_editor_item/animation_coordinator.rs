@@ -2273,6 +2273,16 @@ impl LinuxEditorAnimationCoordinator {
             }
         }
 
+        // Issue #705: drawn_caret_rect 是本帧真正绘制出去的 caret rect。
+        // 根据 cursor_sample_outcome 和最终 cursor_render_state 算出。
+        // Coordinated → 协同位置;Running/Finished → cursor_render_state 已更新;
+        // Idle → 当前 visual 位置。
+        let drawn_caret_rect: Option<(f64, f64, f64)> = Some((
+            cursor_render_state.x,
+            cursor_render_state.y,
+            cursor_render_state.h,
+        ));
+
         RenderPlan {
             text_animation,
             selection_preedit,
@@ -2282,6 +2292,7 @@ impl LinuxEditorAnimationCoordinator {
             selection_preedit_style,
             static_patches,
             cursor_sample_outcome,
+            drawn_caret_rect,
         }
     }
 

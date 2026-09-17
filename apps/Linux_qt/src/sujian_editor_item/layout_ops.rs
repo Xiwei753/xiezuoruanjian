@@ -62,6 +62,17 @@ impl SujianEditorItem {
     // 对任意 text 做 snapshot，连续调用会互相清 generation，导致光标 x 塌缩到行首。
     // legacy 路径已删除，正文/动画/IME 各自走独立 generation 的 canonical 排版入口。
 
+    /// Issue #705: 为动画/IME 视觉提取分配独立的布局 generation。
+    ///
+    /// 动画/IME 路径需要独立 generation 写 QTextLayout cache,与静态正文
+    /// render generation 互不干扰。**光标位置计算**(cursorToX/xToCursor/
+    /// hit_test)已改为优先复用 `prepared_frame` 的 layout_snapshot(当前
+    /// render generation),不再走此方法,避免"为了算光标位置再临时排一遍
+    /// 文字"导致下一次事务起点与屏幕这一帧真正画出的光标位置不同。
+    fn allocate_animation_layout_generation(&self) -> u64 {
+        crate::editor::layout::begin_layout_generation()
+    }
+
     /// Issue #658 评论 5623746506 问题 2b: `promote=true` 时不再 clear 临时
     /// generation，而是构造 `PromotedLayout` 存入 `pipeline.pending_promoted_layout`，
     /// 由 `emit_content_changed` 提升为 `EditorLayout` current，避免
@@ -98,7 +109,9 @@ impl SujianEditorItem {
 
         // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
         // 而是分配独立 generation，与静态正文路径互不干扰。
-        let generation = crate::editor::layout::begin_layout_generation();
+        // Issue #705: 光标位置计算已改用 prepared_frame 的 render generation;
+        // 此处的独立 generation 仅供动画/IME 视觉提取使用。
+        let generation = self.allocate_animation_layout_generation();
 
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
@@ -257,7 +270,9 @@ impl SujianEditorItem {
 
         // Issue #658 评论 5620035970 问题 2: 不再 clear_paragraph_layout_cache()，
         // 而是分配独立 generation，与静态正文路径互不干扰。
-        let generation = crate::editor::layout::begin_layout_generation();
+        // Issue #705: 光标位置计算已改用 prepared_frame 的 render generation;
+        // 此处的独立 generation 仅供动画/IME 视觉提取使用。
+        let generation = self.allocate_animation_layout_generation();
 
         // Issue #658 评论 5624570557 问题 3: 基础排版不生成全文动画 QImage，
         // 改为按 composition_range 提取相关行的动画视觉。
@@ -412,8 +427,14 @@ impl SujianEditorItem {
 
     pub(crate) fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
         let width = self.bounding_width();
-        let snapshot = self.layout_snapshot(width);
         let scroll_y = f64::from(self.current_scroll_y);
+        // Issue #705: 优先用 prepared_frame 的 layout_snapshot(当前 render generation),
+        // fallback 到 self.layout_snapshot(width) 仅在 prepared_frame 不存在时。
+        let snapshot = self
+            .prepared_frame
+            .as_ref()
+            .map(|pf| pf.layout_snapshot.clone())
+            .unwrap_or_else(|| self.layout_snapshot(width));
         let (index, affinity) = self.editor_layout.hit_test(&snapshot, x, y, scroll_y);
         editor_debug_log(&format!(
             "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",

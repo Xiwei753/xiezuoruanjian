@@ -69,21 +69,6 @@ struct CompositionCommitParams {
 }
 
 impl SujianEditorItem {
-    pub(crate) fn current_cursor_rect_for_transaction(&self) -> Option<CursorRect> {
-        let x = self.cursor_ctrl.visual_x;
-        let y = self.cursor_ctrl.visual_y;
-        let h = self.cursor_ctrl.visual_h;
-        if h < 0.01 {
-            return None;
-        }
-        Some(CursorRect {
-            x,
-            top: y,
-            bottom: y + h,
-            baseline_y: y + h * 0.8,
-        })
-    }
-
     pub(crate) fn flush_content_height(&mut self) {
         if self.content_height_dirty.get() {
             self.content_height_dirty.set(false);
@@ -713,7 +698,9 @@ impl SujianEditorItem {
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
-        self.cursor_ctrl.force_snap_next = true;
+        // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
+        // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
+        self.snap_cursor_for_pointer_action();
         let _ = self
             .pipeline
             .set_selection(self.buffer.selection_anchor, index);
@@ -728,7 +715,8 @@ impl SujianEditorItem {
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
-        self.cursor_ctrl.force_snap_next = true;
+        // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
+        self.snap_cursor_for_pointer_action();
         if !self.buffer.has_selection() {
             self.select_word_at_impl(index);
         }
@@ -743,13 +731,23 @@ impl SujianEditorItem {
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
-        self.cursor_ctrl.force_snap_next = true;
+        // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
+        self.snap_cursor_for_pointer_action();
         self.select_word_at_impl(index);
         self.bump_visual_revision();
         self.cursor_position_changed();
         self.selection_changed();
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
+    }
+
+    /// Issue #705: 鼠标点击路径统一的光标 snap 辅助方法。
+    ///
+    /// drag_select_at/long_press_at/select_word_at 都走此方法设置
+    /// force_snap_next,不在每个点击方法里自己单独决定光标动画模式。
+    /// 是否 Tween 由统一的光标移动规则(update_cursor_visual_position)决定。
+    fn snap_cursor_for_pointer_action(&mut self) {
+        self.cursor_ctrl.force_snap_next = true;
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {

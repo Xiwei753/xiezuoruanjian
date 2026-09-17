@@ -32,7 +32,9 @@ pub struct LocalSettingsDto {
 impl From<crate::settings::LocalSettings> for LocalSettingsDto {
     fn from(s: crate::settings::LocalSettings) -> Self {
         Self {
-            theme_mode: s.theme_mode,
+            // Issue #705: LocalSettings 已删除运行时 theme_mode 字段。
+            // DTO 保留 theme_mode 供 Android 端兼容,但 Linux_Qt 不再读取。
+            theme_mode: None,
             appearance_mode: s.appearance_mode,
             color_source: s.color_source,
             dynamic_color_enabled: s.dynamic_color_enabled,
@@ -66,7 +68,8 @@ impl From<crate::settings::LocalSettings> for LocalSettingsDto {
 impl From<LocalSettingsDto> for crate::settings::LocalSettings {
     fn from(s: LocalSettingsDto) -> Self {
         crate::settings::LocalSettings {
-            theme_mode: s.theme_mode,
+            // Issue #705: LocalSettings 已删除运行时 theme_mode 字段。
+            // DTO 的 theme_mode 不再写回 LocalSettings(运行时只认 appearance_mode)。
             appearance_mode: s.appearance_mode,
             color_source: s.color_source,
             dynamic_color_enabled: s.dynamic_color_enabled,
