@@ -192,8 +192,21 @@ impl QQuickItem for SujianEditorItem {
                 super::render_plan::CursorSampleOutcome::Finished => {
                     self.cursor_ctrl.finish_animation_to_target();
                 }
+                // Issue #702 评论 5707770318: 正文协同光标帧。
+                // 把 cursor_ctrl.visual_x/visual_y/visual_h 同步为本帧真正画出的位置，
+                // 不启动 CursorAnimationState.started_at（不创建独立 timeline）。
+                // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
+                super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {
+                    self.cursor_ctrl.visual_x = x;
+                    self.cursor_ctrl.visual_y = y;
+                    if h > 0.0 {
+                        self.cursor_ctrl.visual_h = h;
+                    }
+                    self.cursor_ctrl.animation = None;
+                }
                 super::render_plan::CursorSampleOutcome::Idle => {
                     // Issue #702: 纯光标动画首帧启动 started_at。
+                    // 此分支现在只在"没有正文事务且没有 CursorOnly 动画"时到达。
                     if let Some(ref mut anim) = self.cursor_ctrl.animation {
                         if anim.started_at.is_none() {
                             anim.started_at = Some(frame_now);

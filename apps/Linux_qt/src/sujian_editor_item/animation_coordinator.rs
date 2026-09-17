@@ -2020,31 +2020,19 @@ impl LinuxEditorAnimationCoordinator {
         let transition = if !should_be_visible || hard_snap {
             CursorTransition::Snap
         } else if !smooth_cursor_enabled || cross_line_snap {
-            if coordinated_enabled
-                && has_active
-                && old_cursor_rect.is_some()
-                && new_cursor_rect.is_some()
-            {
-                CursorTransition::Tween {
-                    old_rect: old_cursor_rect.clone().unwrap(),
-                    new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: tween_duration_ms,
-                }
-            } else {
-                CursorTransition::Snap
-            }
+            // Issue #702 评论 5707770318: 正文事务活跃时，光标位置只由
+            // compute_coordinated_cursor_position 驱动（正文协同），不应再开
+            // CursorAnimationState 独立 timeline。返回 Snap 让 apply_plan 清除
+            // animation，不创建独立 timeline。只有没有正文事务时才走纯光标 Tween。
+            // 此分支（!smooth_cursor_enabled || cross_line_snap）原本就对非协同
+            // 情况返回 Snap；现在协调情况也返回 Snap，因此统一返回 Snap。
+            CursorTransition::Snap
         } else if let Some(anim) = cursor_animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                if coordinated_enabled
-                    && has_active
-                    && old_cursor_rect.is_some()
-                    && new_cursor_rect.is_some()
-                {
-                    CursorTransition::Tween {
-                        old_rect: old_cursor_rect.clone().unwrap(),
-                        new_rect: new_cursor_rect.clone().unwrap(),
-                        duration_ms: tween_duration_ms,
-                    }
+                // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
+                // 不创建独立 CursorAnimationState timeline。
+                if coordinated_enabled && has_active {
+                    CursorTransition::Snap
                 } else {
                     // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                     // 直接从当前 anim 的 start 位置建 Tween。
@@ -2068,16 +2056,10 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Snap
             }
         } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
-            if coordinated_enabled
-                && has_active
-                && old_cursor_rect.is_some()
-                && new_cursor_rect.is_some()
-            {
-                CursorTransition::Tween {
-                    old_rect: old_cursor_rect.clone().unwrap(),
-                    new_rect: new_cursor_rect.clone().unwrap(),
-                    duration_ms: tween_duration_ms,
-                }
+            // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
+            // 不创建独立 CursorAnimationState timeline。
+            if coordinated_enabled && has_active {
+                CursorTransition::Snap
             } else {
                 // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                 // 直接从当前 visual_x/visual_y 建 Tween。
@@ -2102,6 +2084,10 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         let _ = (is_preediting, old_blink_visible);
+        // Issue #702 评论 5707770318: old_cursor_rect/new_cursor_rect 不再用于
+        // build_cursor_plan 的 Tween 构造（正文协同时返回 Snap，纯光标 Tween 从
+        // anim.start_x/start_y 或 visual_x/visual_y 建）。保留参数以维持调用方契约。
+        let _ = (old_cursor_rect, new_cursor_rect);
 
         CursorAnimationPlan {
             should_be_visible,
@@ -2214,6 +2200,16 @@ impl LinuxEditorAnimationCoordinator {
         let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;
         if coordinated_enabled {
             if let Some((cx, cy, ch)) = self.compute_coordinated_cursor_position(&frame_sample) {
+                // Issue #702 评论 5707770318: 正文协同光标位置已算出，
+                // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
+                // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
+                // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
+                // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
+                cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Coordinated {
+                    x: cx,
+                    y: cy,
+                    h: ch,
+                };
                 let suppressed = matches!(
                     self.active_operation_kind(),
                     Some(TextVisualOperationKind::Insert)
@@ -2251,6 +2247,9 @@ impl LinuxEditorAnimationCoordinator {
                         cursor_render_state.y = anim.target_y;
                     }
                     super::render_plan::CursorSampleOutcome::Idle => {}
+                    // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
+                    // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
+                    super::render_plan::CursorSampleOutcome::Coordinated { .. } => {}
                 }
             }
         }

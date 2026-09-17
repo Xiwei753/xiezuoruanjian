@@ -136,6 +136,17 @@ pub(crate) enum CursorSampleOutcome {
     Running(f64),
     /// 事务已完成或不存在，光标应落到 target。
     Finished,
+    /// Issue #702 评论 5707770318: 正文协同光标帧。
+    ///
+    /// 有活跃正文事务时由 `compute_coordinated_cursor_position()` 计算的
+    /// 本帧光标位置。携带 `(x, y, h)` 三元组，供 `qquickitem_impl` 同步
+    /// `cursor_ctrl.visual_x/visual_y/visual_h` 到屏幕真正画出的位置。
+    ///
+    /// 关键语义：此变体**不走** `CursorAnimationState` 的独立 timeline。
+    /// `qquickitem_impl` 收到 `Coordinated` 时只同步 visual 位置，
+    /// 不启动 `started_at`，并清除残留的纯光标 animation。
+    /// 正文光标只由 `compute_coordinated_cursor_position()` 驱动。
+    Coordinated { x: f64, y: f64, h: f64 },
 }
 
 #[derive(Clone, Debug)]
