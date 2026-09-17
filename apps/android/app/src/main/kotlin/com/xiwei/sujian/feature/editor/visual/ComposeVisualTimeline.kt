@@ -846,8 +846,12 @@ class ComposeVisualTimeline {
         val result = mutableMapOf<Long, Float>()
         for (unit in units) {
             val alphaNow = unit.alpha.from
-            // alpha 已到 0 的 ghost 不需要 clip fraction
-            if (alphaNow <= 0f) continue
+            // #703 评论 5710419102 问题2：coordinated 模式下空间裁切是主导，
+            // 不能用 alpha 决定是否计算 clipFraction。新插入 unit 首帧 alpha=0，
+            // 如果跳过则 unitClipFractions 缺 key，draw 层默认成 1，整字首帧完整出现。
+            // coordinated 模式：所有 scene unit 都计算 clipFraction。
+            // 非 coordinated 模式：保留 alpha<=0 跳过（alpha 仍主导显隐）。
+            if (!coordinatedSpatialClip && alphaNow <= 0f) continue
             // 取 glyph bounds（用 unit 当前 layout + range）
             val bounds = safePathBoundsForUnit(unit) ?: continue
             val glyphLeft = bounds.left

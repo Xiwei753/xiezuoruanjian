@@ -268,8 +268,15 @@ private fun DrawScope.drawVisualScene(
         // position 已由 timeline 算好，直接读 unit.position.from（sample 后 from == 当前值）
         val currentPosition = unit.position.from
         val targetRange = unit.targetRange
-        // #703 评论 B：空间进度驱动吞吐字 — 取 clip fraction
-        val clipFraction = scene.unitClipFractions[unit.key] ?: 1f
+        // #703 评论 5710419102 问题2：coordinated 模式下缺失 clipFraction 不能默认 1，
+        // 否则新插入 unit 首帧会整字出现。insert（targetRange != null）默认 0（不可见），
+        // delete ghost（targetRange == null）默认 1（吞字开始完整可见）。
+        // 非 coordinated 模式沿用 1（alpha 主导显隐）。
+        val clipFraction = scene.unitClipFractions[unit.key] ?: if (scene.coordinatedSpatialClip) {
+            if (targetRange != null) 0f else 1f
+        } else {
+            1f
+        }
         if (clipFraction <= 0f) continue
         if (targetRange != null) {
             // 存活 unit：在新 layout 的真实位置 + timeline 算好的偏移

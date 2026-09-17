@@ -740,32 +740,39 @@ class ComposeEditorVisualState(
                                 position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
                             )
                         }
+                        // #703 评论 5710419102 问题1：删除首帧光标所有权 —
+                        // 把旧 caret 放进 scene.cursorRect，让 draw 层第一优先级使用它。
+                        // draw 层优先级是 scene.cursorRect ?: computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect，
+                        // 删除后 latestLayout/liveSelection 已是新值，computeRestingCursorRect 会先命中新 caret，
+                        // _restingCursorRect 永远不会被读到。所以必须写 scene.cursorRect。
+                        // barrier ghost、hiddenRanges、旧 cursor 必须在同一次 _visualScene.update 里一起发布，形成原子视觉场景。
+                        // 下一帧 drainPendingPatchesAtFrame 后 timeline 的 sample() 会接管 scene.cursorRect。
+                        // _restingCursorRect 保持"无活动动画时的最终静止位置"语义（上方已设成新 layout cursor）。
+                        // 优先用 localPatch.originCursorRect（从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
+                        // 不依赖可能 stale 的 oldLayout.selection。
+                        val barrierCursorRect =
+                            if (localPatch.deletedUnits.isNotEmpty()) {
+                                localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
+                            } else {
+                                null
+                            }
                         val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
                         val unitsChanged = mergedUnits.size != scene.units.size
-                        if (!hiddenChanged && !unitsChanged) {
+                        val cursorChanged = barrierCursorRect != null && barrierCursorRect != scene.cursorRect
+                        if (!hiddenChanged && !unitsChanged && !cursorChanged) {
                             scene
                         } else {
                             scene.copy(
                                 hiddenRanges = mergedHidden,
                                 units = mergedUnits,
+                                cursorRect = barrierCursorRect ?: scene.cursorRect,
                             )
                         }
                     }
-                    // #703 评论 A 缺陷1：删除路径 cursor 不要先跳到新 selection 的 resting cursor。
-                    // 旧实现已在上方把 _restingCursorRect 设成新 layout 的 cursor，删除时会导致
-                    // 光标先跳到新位置（被删字末尾），下一帧 timeline cursor 动画再从旧位置
-                    // 动画到新位置，光标回抽。改成把 _restingCursorRect 改回旧 layout 的 cursor，
-                    // 让光标从旧位置开始，下一帧 timeline cursor 动画无缝衔接。
-                    //
-                    // #703 评论 5709208101 问题3：旧 caret 不要用 computeCursorRectFromLayout(oldLayout)
-                    // （oldLayout.selection 可能 stale），优先用 localPatch.originCursorRect
-                    // （从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret）。
-                    if (localPatch.deletedUnits.isNotEmpty()) {
-                        val oldCursorRect = localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
-                        if (oldCursorRect != null) {
-                            _restingCursorRect.update { oldCursorRect }
-                        }
-                    }
+                    // #703 评论 5710419102 问题1：不再单独改 _restingCursorRect。
+                    // 旧 caret 已通过 scene.cursorRect 发布（draw 层第一优先级）。
+                    // _restingCursorRect 保持上方设置的"新 layout cursor"语义
+                    // （无活动动画时的最终静止位置），不拿它承担 pending delete barrier。
                 }
             }
             // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，

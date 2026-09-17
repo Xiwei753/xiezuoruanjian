@@ -997,17 +997,38 @@ class ComposeVisualIssue703RegressionTest {
             deltaToStale > 1f,
         )
 
-        // barrier 首帧 cursor 也用 originCursorRect（而非 stale selection），
-        // restingCursorRect 应对应 offset=3（正确 oldSelection）
+        // barrier 首帧 cursor 也用 originCursorRect（而非 stale selection）。
+        // #703 评论 5710419102 问题1：核心断言是 visualScene.value.cursorRect == correctOldCursorRect
+        // （scene.cursorRect 原子接管，draw 层第一优先级读它）。
+        // 旧实现（bug）：scene.cursorRect 为 null，draw 层读 computeRestingCursorRect(latestLayout, liveSelection)
+        // 命中新 caret，光标先跳到新位置。
+        val sceneImmediately = state.visualScene.value
+        assertNotNull(
+            "问题3: barrier visualScene.cursorRect 应存在（scene.cursorRect 原子接管）",
+            sceneImmediately.cursorRect,
+        )
+        val sceneCursorDeltaToCorrect =
+            kotlin.math.abs(sceneImmediately.cursorRect!!.left - correctOldCursorRect.left)
+        assertTrue(
+            "问题3: barrier visualScene.cursorRect 应对应 offset=3（正确 oldSelection，scene.cursorRect 原子接管），" +
+                "sceneCursorRect.left=${sceneImmediately.cursorRect.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "sceneCursorDeltaToCorrect=$sceneCursorDeltaToCorrect（应 < 1f）",
+            sceneCursorDeltaToCorrect < 1f,
+        )
+
+        // _restingCursorRect 保持"无活动动画时的最终静止位置"语义（上方已设成新 layout cursor），
+        // 不再承担 pending delete barrier。新 caret = offset=2 on "ab" layout。
+        val newCursorRect = layouts[2].getCursorRect(2)
         val restingCursor = state.restingCursorRect.value
         assertNotNull("问题3: barrier restingCursorRect 应存在", restingCursor)
-        val restingDeltaToCorrect = kotlin.math.abs(restingCursor!!.left - correctOldCursorRect.left)
+        val restingDeltaToNew = kotlin.math.abs(restingCursor!!.left - newCursorRect.left)
         assertTrue(
-            "问题3: barrier restingCursorRect 应对应 offset=3（正确 oldSelection），" +
+            "问题3: barrier restingCursorRect 应对应新 caret（offset=2 on ab layout，最终静止位置语义），" +
                 "restingCursor.left=${restingCursor.left}, " +
-                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
-                "restingDeltaToCorrect=$restingDeltaToCorrect（应 < 1f）",
-            restingDeltaToCorrect < 1f,
+                "newCursorRect.left=${newCursorRect.left}, " +
+                "restingDeltaToNew=$restingDeltaToNew（应 < 1f）",
+            restingDeltaToNew < 1f,
         )
     }
 
@@ -1058,15 +1079,34 @@ class ComposeVisualIssue703RegressionTest {
             "综合验收5: correct(offset=3) 和 stale(offset=0) 的 cursor rect 应不同",
             kotlin.math.abs(correctOldCursorRect.left - staleCursorRect.left) > 1f,
         )
+        // #703 评论 5710419102 问题1：核心断言是 visualScene.value.cursorRect == correctOldCursorRect
+        // （scene.cursorRect 原子接管，draw 层第一优先级读它）。
+        val sceneImmediately = state.visualScene.value
+        assertNotNull(
+            "综合验收5: barrier visualScene.cursorRect 应存在（scene.cursorRect 原子接管）",
+            sceneImmediately.cursorRect,
+        )
+        val sceneCursorDelta =
+            kotlin.math.abs(sceneImmediately.cursorRect!!.left - correctOldCursorRect.left)
+        assertTrue(
+            "综合验收5: barrier 首帧 visualScene.cursorRect 必须在 offset=3（验证问题3修复，scene.cursorRect 原子接管），" +
+                "sceneCursorRect.left=${sceneImmediately.cursorRect.left}, " +
+                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
+                "sceneCursorDelta=$sceneCursorDelta（应 < 1f）",
+            sceneCursorDelta < 1f,
+        )
+        // _restingCursorRect 保持"无活动动画时的最终静止位置"语义（上方已设成新 layout cursor），
+        // 不再承担 pending delete barrier。新 caret = offset=2 on "ab" layout。
+        val newCursorRect = layouts[2].getCursorRect(2)
         val restingCursor = state.restingCursorRect.value
         assertNotNull("综合验收5: barrier restingCursorRect 应存在", restingCursor)
-        val restingDelta = kotlin.math.abs(restingCursor!!.left - correctOldCursorRect.left)
+        val restingDeltaToNew = kotlin.math.abs(restingCursor!!.left - newCursorRect.left)
         assertTrue(
-            "综合验收5: barrier 首帧 cursor 必须在 offset=3（验证问题3修复），" +
+            "综合验收5: barrier restingCursorRect 应对应新 caret（offset=2 on ab layout，最终静止位置语义），" +
                 "restingCursor.left=${restingCursor.left}, " +
-                "correctOldCursorRect.left=${correctOldCursorRect.left}, " +
-                "restingDelta=$restingDelta（应 < 1f）",
-            restingDelta < 1f,
+                "newCursorRect.left=${newCursorRect.left}, " +
+                "restingDeltaToNew=$restingDeltaToNew（应 < 1f）",
+            restingDeltaToNew < 1f,
         )
 
         // 6. drain 后 25% 时间点 cursor 必须已经开始向新 caret 移动（验证问题1修复）
@@ -1123,6 +1163,133 @@ class ComposeVisualIssue703RegressionTest {
                     deltaRight < 2f,
                 )
             }
+        }
+    }
+
+    // ==================== #703 评论 5710419102 吐字首帧 clipFraction 回归 ====================
+
+    /**
+     * #703 评论 5710419102 问题2：coordinated 模式吐字首帧 clipFraction 必须存在且接近 0，
+     * 不能缺失后回退成 1 导致整字首帧完整出现。
+     *
+     * 走真实本地输入链 "" -> "a"：
+     * recordLocalInput -> onAuthoritativeLayout -> drainPendingPatchesAtFrame(0) -> sampleVisualScene(0)
+     *
+     * 验收点：
+     * 1. inserted unit 存在（targetRange != null）
+     * 2. scene.coordinatedSpatialClip == true
+     * 3. scene.unitClipFractions[unit.key] 必须存在（修复前 alpha=0 被跳过导致缺 key）
+     * 4. t=0 时 clipFraction 接近 0（光标在 glyph 左侧，字不可见）
+     * 5. 25%/50%/75% 时可见右边界跟 cursor.left 同步推进
+     * 6. 100% 时 clipFraction 接近 1（完整显示）
+     */
+    @Test
+    fun r_comment5710419102_coordinatedInsertFirstFrameClipFractionExists() {
+        val layouts = captureLayouts("", "a")
+        val state = ComposeEditorVisualState(
+            targetId = "test-703-comment5710419102-prob2",
+            classifier = FakeLocalVisualPlanClassifier,
+        )
+
+        // 初始空文本，caret 在 0
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 本地输入 "" -> "a"
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+
+        // onAuthoritativeLayout 触发本地输入配对 + barrier
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+
+        // drain 开始动画（frameTimeNanos=0，动画从 0 开始）
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 首帧采样（t=0）
+        val scene0 = state.sampleVisualScene(0L)
+        val cursor0 = scene0.cursorRect
+        assertNotNull("问题2: 首帧 cursor rect 应存在", cursor0)
+
+        // 1. 找 inserted unit（targetRange != null）
+        val insertedUnit = scene0.units.firstOrNull { it.targetRange != null }
+        assertNotNull(
+            "问题2: 首帧应存在 inserted unit（targetRange != null）",
+            insertedUnit,
+        )
+
+        // 2. coordinated 模式标记
+        assertTrue(
+            "问题2: coordinated 模式下 scene.coordinatedSpatialClip 应为 true",
+            scene0.coordinatedSpatialClip,
+        )
+
+        // 3. unitClipFractions 必须包含 inserted unit 的 key
+        // 修复前（bug）：computeUnitClipFractions 因 alpha.from<=0 continue 跳过新插入 unit，
+        // unitClipFractions 缺 key，draw 层默认 1，整字首帧完整出现。
+        assertTrue(
+            "问题2: 首帧 unitClipFractions 必须包含 inserted unit 的 key（修复前缺 key 导致整字出现），" +
+                "insertedUnit.key=${insertedUnit!!.key}, " +
+                "unitClipFractions.keys=${scene0.unitClipFractions.keys}",
+            scene0.unitClipFractions.containsKey(insertedUnit.key),
+        )
+
+        // 4. t=0 时 clipFraction 接近 0（光标在 glyph 左侧，字不可见）
+        val clipFraction0 = scene0.unitClipFractions[insertedUnit.key]!!
+        assertTrue(
+            "问题2: 首帧 clipFraction 应接近 0（光标在 glyph 左侧，字不可见），" +
+                "实际 clipFraction0=$clipFraction0（应 < 0.1f）",
+            clipFraction0 < 0.1f,
+        )
+
+        // 5. 25%/50%/75% 时可见右边界跟 cursor.left 同步推进
+        for (progressPct in listOf(25, 50, 75)) {
+            val scene = state.sampleVisualScene(progressPct.toLong() * NANOS_PER_MS)
+            val cursor = scene.cursorRect
+            assertNotNull("问题2: ${progressPct}% 时间点 cursor rect 应存在", cursor)
+
+            val unit = scene.units.firstOrNull { it.targetRange != null }
+            assertNotNull(
+                "问题2: ${progressPct}% 时间点 inserted unit 应存在",
+                unit,
+            )
+
+            // coordinated 模式下 clipFraction 必须存在
+            assertTrue(
+                "问题2: ${progressPct}% 时间点 unitClipFractions 必须包含 inserted unit 的 key",
+                scene.unitClipFractions.containsKey(unit!!.key),
+            )
+            val clipFraction = scene.unitClipFractions[unit.key]!!
+
+            // glyph bounds（用 unit 当前 layout + targetRange）
+            val targetRange = unit.targetRange!!
+            val glyphBounds = unit.layout.result.getPathForRange(targetRange.start, targetRange.end).getBounds()
+            val visibleRight = glyphBounds.left + glyphBounds.width * clipFraction
+            val cursorLeft = cursor!!.left
+            // cursor 和 glyph 应在同一行（单行文本），可见右边界应跟 cursor left 一致
+            // 允许 2px 容差（浮点精度 + Robolectric 渲染误差）
+            val deltaRight = kotlin.math.abs(visibleRight - cursorLeft)
+            assertTrue(
+                "问题2: ${progressPct}% 时间点 inserted glyph 可见右边界应跟 cursor 边界一致，" +
+                    "visibleRight=$visibleRight, cursorLeft=$cursorLeft, " +
+                    "clipFraction=$clipFraction, deltaRight=$deltaRight（应 < 2f）",
+                deltaRight < 2f,
+            )
+        }
+
+        // 6. 100% 时 clipFraction 接近 1（完整显示）
+        val scene100 = state.sampleVisualScene(100L * NANOS_PER_MS)
+        val unit100 = scene100.units.firstOrNull { it.targetRange != null }
+        if (unit100 != null && scene100.unitClipFractions.containsKey(unit100.key)) {
+            val clipFraction100 = scene100.unitClipFractions[unit100.key]!!
+            assertTrue(
+                "问题2: 100% 时间点 clipFraction 应接近 1（完整显示），" +
+                    "实际 clipFraction100=$clipFraction100（应 > 0.9f）",
+                clipFraction100 > 0.9f,
+            )
         }
     }
 
