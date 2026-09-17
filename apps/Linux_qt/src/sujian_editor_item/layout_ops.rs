@@ -414,8 +414,9 @@ impl SujianEditorItem {
         affinity: CaretAffinity,
         scroll_y: f64,
     ) -> CursorLayoutRect {
-        let width = self.bounding_width();
-        let snapshot = self.layout_snapshot(width);
+        // Issue #705 评论 5716410988: 走统一入口,与 hit_test /
+        // index_at_line_x / cursor_line_and_x 同一代 QTextLayout。
+        let snapshot = self.current_render_layout_snapshot();
         self.editor_layout.caret_rect(
             &snapshot,
             cursor_byte,
@@ -426,15 +427,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {
-        let width = self.bounding_width();
         let scroll_y = f64::from(self.current_scroll_y);
-        // Issue #705: 优先用 prepared_frame 的 layout_snapshot(当前 render generation),
-        // fallback 到 self.layout_snapshot(width) 仅在 prepared_frame 不存在时。
-        let snapshot = self
-            .prepared_frame
-            .as_ref()
-            .map(|pf| pf.layout_snapshot.clone())
-            .unwrap_or_else(|| self.layout_snapshot(width));
+        // Issue #705 评论 5716410988: 走统一入口,与 editor_layout_cursor_rect /
+        // index_at_line_x / cursor_line_and_x 同一代 QTextLayout。
+        let snapshot = self.current_render_layout_snapshot();
         let (index, affinity) = self.editor_layout.hit_test(&snapshot, x, y, scroll_y);
         editor_debug_log(&format!(
             "hit_test: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, clamped_index={}, affinity={:?}",
@@ -443,22 +439,37 @@ impl SujianEditorItem {
         (index, affinity)
     }
 
-    pub(crate) fn index_at_line_x(&self, line: &VisualLine, x: f64) -> usize {
-        let Some(snapshot) = self.editor_layout.cache() else {
-            return line.byte_start;
-        };
-        self.editor_layout.index_at_line_x(snapshot, line, x)
+    pub(crate) fn index_at_line_x(&mut self, line: &VisualLine, x: f64) -> usize {
+        // Issue #705 评论 5716410988: 走统一入口,与 editor_layout_cursor_rect /
+        // hit_test / cursor_line_and_x 同一代 QTextLayout。
+        let snapshot = self.current_render_layout_snapshot();
+        self.editor_layout.index_at_line_x(&snapshot, line, x)
     }
 
-    pub(crate) fn cursor_line_and_x(&self, lines: &[VisualLine]) -> Option<(usize, f64)> {
-        let Some(snapshot) = self.editor_layout.cache() else {
-            return None;
-        };
-        debug_assert_eq!(lines.len(), snapshot.lines.len());
-        self.editor_layout.cursor_line_and_x(
-            snapshot,
-            self.buffer.cursor,
-            self.cursor_ctrl.affinity,
-        )
+    pub(crate) fn cursor_line_and_x(&mut self) -> Option<(usize, f64)> {
+        // Issue #705 评论 5716410988: 走统一入口,与 editor_layout_cursor_rect /
+        // hit_test / index_at_line_x 同一代 QTextLayout。
+        // 去掉 lines 参数:snapshot 和 lines 同源,不需要外部传入做 debug_assert。
+        let snapshot = self.current_render_layout_snapshot();
+        self.editor_layout
+            .cursor_line_and_x(&snapshot, self.buffer.cursor, self.cursor_ctrl.affinity)
+    }
+
+    /// Issue #705 评论 5716410988: 光标正向/反向几何的唯一入口。
+    ///
+    /// 正常路径只返回 `prepared_frame.layout_snapshot`(当前 render generation),
+    /// 保证 `editor_layout_cursor_rect` / `hit_test` / `index_at_line_x` /
+    /// `cursor_line_and_x` 都基于同一代 QTextLayout。`prepared_frame` 不存在时
+    /// (首帧、invalidate 后尚未 prepare) fallback 到 `layout_snapshot(width)`,
+    /// 确保有可用几何,不会让光标位置计算走另一代 EditorLayout。
+    ///
+    /// 这样 `cursorToX`、`xToCursor`、正文静态绘制、上下方向键/跨行移动
+    /// 都真的是同一代 QTextLayout。
+    pub(crate) fn current_render_layout_snapshot(&mut self) -> LayoutSnapshot {
+        let width = self.bounding_width();
+        self.prepared_frame
+            .as_ref()
+            .map(|pf| pf.layout_snapshot.clone())
+            .unwrap_or_else(|| self.layout_snapshot(width))
     }
 }

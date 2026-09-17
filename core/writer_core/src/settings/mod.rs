@@ -43,10 +43,13 @@ pub mod ranges {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LocalSettings {
-    // Issue #705: 运行时只认 appearance_mode(值仅 system/light/dark)。
-    // 旧配置里的 themeMode 字段通过 serde alias 做一次性迁移读入
-    // appearance_mode,迁移完不再参与运行时判断,也不暴露成第二套 QML 状态。
-    #[serde(default = "default_appearance_mode", alias = "themeMode")]
+    // Issue #705 评论 5716410988: 运行时只认 appearance_mode(值仅 system/light/dark)。
+    // 旧版本 LocalSettings 同时有 theme_mode 和 appearance_mode 字段,rename_all=camelCase
+    // 后旧文件会同时存在 themeMode 和 appearanceMode 两个 key。serde alias 会把两者都
+    // 映射到 appearance_mode,导致 serde_json::from_str::<LocalSettings>() 报 duplicate
+    // field 错误。因此这里不再用 alias,改在 load_local_settings() 里用原始 JSON 迁移:
+    // 取值顺序 appearanceMode > themeMode > system,读完后写回只保留 appearanceMode。
+    #[serde(default = "default_appearance_mode")]
     pub appearance_mode: String,
     #[serde(default = "default_color_source")]
     pub color_source: String,
@@ -509,9 +512,75 @@ pub fn load_local_settings(config_dir: &Path) -> Result<LocalSettings> {
         return Ok(LocalSettings::default());
     }
     let content = fs::read_to_string(&path)?;
-    let mut settings: LocalSettings = serde_json::from_str(&content)?;
+    // Issue #705 评论 5716410988: 旧版本 LocalSettings 同时有 theme_mode 和 appearance_mode,
+    // rename_all=camelCase 后旧文件同时存在 themeMode 和 appearanceMode。
+    // 不能用 serde alias(会报 duplicate field),改为原始 JSON 迁移:
+    // 取值顺序:有效的 appearanceMode > 旧 themeMode > system 默认。
+    // 读完后写回当前格式,只保留 appearanceMode。
+    let mut root: serde_json::Value = serde_json::from_str(&content)?;
+    let resolved_appearance = resolve_appearance_mode(&root);
+    // 确保只保留 appearanceMode,删除旧 themeMode key(如果存在)
+    if let Some(obj) = root.as_object_mut() {
+        obj.remove("themeMode");
+        obj.remove("theme_mode");
+        obj.insert(
+            "appearanceMode".to_string(),
+            serde_json::Value::String(resolved_appearance.clone()),
+        );
+    }
+    let mut settings: LocalSettings = serde_json::from_value(root)?;
+    // 如果文件是旧格式(只有 themeMode 没有 appearanceMode),写回当前格式
+    // 检测方式:原始 content 包含 themeMode 但不包含 appearanceMode
+    let needs_writeback =
+        content.contains("\"themeMode\"") && !content.contains("\"appearanceMode\"");
     settings.validate();
+    if needs_writeback {
+        // 静默写回,只保留 appearanceMode。写回失败不应阻止读取。
+        let _ = save_local_settings(config_dir, &settings);
+    }
     Ok(settings)
+}
+
+/// Issue #705 评论 5716410988: 解析旧/新配置的 appearance mode。
+/// 取值顺序:有效的 appearanceMode > 旧 themeMode > system。
+fn resolve_appearance_mode(root: &serde_json::Value) -> String {
+    let default = default_appearance_mode();
+    let obj = match root.as_object() {
+        Some(o) => o,
+        None => return default,
+    };
+    // 优先 appearanceMode
+    if let Some(v) = obj.get("appearanceMode") {
+        if let Some(s) = v.as_str() {
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    // 回退到旧 themeMode
+    if let Some(v) = obj.get("themeMode") {
+        if let Some(s) = v.as_str() {
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    // 也检查 snake_case key(以防 rename_all 不生效的极端情况)
+    if let Some(v) = obj.get("appearance_mode") {
+        if let Some(s) = v.as_str() {
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    if let Some(v) = obj.get("theme_mode") {
+        if let Some(s) = v.as_str() {
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+    }
+    default
 }
 
 pub fn save_local_settings(config_dir: &Path, settings: &LocalSettings) -> Result<()> {
@@ -1763,6 +1832,60 @@ mod inline_tests {
             !theme.dark_scheme.on_error.is_empty(),
             "dark on_error should be defined"
         );
+    }
+
+    #[test]
+    fn test_load_local_settings_both_theme_mode_and_appearance_mode() {
+        // Issue #705 评论 5716410988: 旧版本同时写 themeMode 和 appearanceMode,
+        // 不能报 duplicate field,appearanceMode 优先。
+        let temp_dir = tempdir().unwrap();
+        let content = r#"{
+            "themeMode": "dark",
+            "appearanceMode": "light",
+            "editorFontSize": 18.0
+        }"#;
+        std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(
+            loaded.appearance_mode, "light",
+            "appearanceMode should win over themeMode"
+        );
+        assert_eq!(loaded.editor_font_size, 18.0);
+    }
+
+    #[test]
+    fn test_load_local_settings_legacy_theme_mode_only() {
+        // Issue #705 评论 5716410988: 旧文件只有 themeMode,迁移到 appearance_mode。
+        let temp_dir = tempdir().unwrap();
+        let content = r#"{
+            "themeMode": "dark",
+            "editorFontSize": 20.0
+        }"#;
+        std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(
+            loaded.appearance_mode, "dark",
+            "legacy themeMode should migrate to appearance_mode"
+        );
+        assert_eq!(loaded.editor_font_size, 20.0);
+        // 写回后应该只有 appearanceMode
+        let written =
+            std::fs::read_to_string(temp_dir.path().join("settings.local.json")).unwrap();
+        assert!(
+            !written.contains("themeMode"),
+            "writeback should not contain themeMode"
+        );
+        assert!(written.contains("appearanceMode"));
+    }
+
+    #[test]
+    fn test_load_local_settings_neither_key() {
+        // Issue #705: 两个 key 都没有,用默认 system。
+        let temp_dir = tempdir().unwrap();
+        let content = r#"{"editorFontSize": 14.0}"#;
+        std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(loaded.appearance_mode, "system");
     }
 }
 

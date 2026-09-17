@@ -880,9 +880,11 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
-        let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
-        let Some((line_idx, x)) = self.cursor_line_and_x(&lines) else {
+        // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
+        // 与 cursor_line_and_x / index_at_line_x 同源。
+        let snapshot = self.current_render_layout_snapshot();
+        let lines = snapshot.lines.clone();
+        let Some((line_idx, x)) = self.cursor_line_and_x() else {
             return;
         };
         let target_idx = if down {
@@ -914,9 +916,11 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_to_line_edge(&mut self, end: bool, extend: bool) {
-        let width = self.bounding_width();
-        let lines = self.ensure_layout_cached(width).clone();
-        let Some((line_idx, _)) = self.cursor_line_and_x(&lines) else {
+        // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
+        // 与 cursor_line_and_x 同源。
+        let snapshot = self.current_render_layout_snapshot();
+        let lines = snapshot.lines.clone();
+        let Some((line_idx, _)) = self.cursor_line_and_x() else {
             return;
         };
         let line = &lines[line_idx];

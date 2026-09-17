@@ -204,7 +204,12 @@ fn issue705_repro_2a_render_plan_missing_drawn_caret_rect() {
 /// `QTextLayout/QTextLine`。Issue #705 要求鼠标点击命中必须使用当前
 /// render generation 的同一份已排版 layout,不允许临时排一遍文字。
 ///
-/// 当前代码:`layout_ops.rs` 的 `hit_test` 调用 `self.layout_snapshot(width)`。
+/// Issue #705 评论 5716410988 修复后,`hit_test` 走统一入口
+/// `current_render_layout_snapshot()`,该入口优先 `prepared_frame.layout_snapshot`,
+/// fallback `self.layout_snapshot(width)`。本测试同时接受两种实现:
+/// (a) `hit_test` 内联 `prepared_frame` 优先 + `self.layout_snapshot(` fallback;
+/// (b) `hit_test` 调用 `current_render_layout_snapshot`,且该入口本身有
+///     `prepared_frame` 优先 + `self.layout_snapshot(` fallback。
 #[test]
 fn issue705_repro_2b_hit_test_uses_layout_snapshot_not_current_render_generation() {
     let src = read_src("src/sujian_editor_item/layout_ops.rs");
@@ -219,18 +224,43 @@ fn issue705_repro_2b_hit_test_uses_layout_snapshot_not_current_render_generation
     };
     let calls_layout_snapshot = window.contains("self.layout_snapshot(");
     let uses_prepared_frame = window.contains("prepared_frame");
+    let calls_unified_entry = window.contains("current_render_layout_snapshot");
     println!(
-        "[BUGFIX_REPRO_TRACE] 2b hit_test calls layout_snapshot={} uses_prepared_frame={}",
-        calls_layout_snapshot, uses_prepared_frame
+        "[BUGFIX_REPRO_TRACE] 2b hit_test calls layout_snapshot={} uses_prepared_frame={} calls_unified_entry={}",
+        calls_layout_snapshot, uses_prepared_frame, calls_unified_entry
     );
+
+    // 统一入口模式:hit_test 调用 current_render_layout_snapshot,
+    // 且该入口本身有 prepared_frame 优先 + self.layout_snapshot( fallback。
+    let unified_entry_valid = if calls_unified_entry {
+        let entry_marker = "fn current_render_layout_snapshot(&mut self) -> LayoutSnapshot";
+        let entry_pos = src.find(entry_marker).expect(
+            "current_render_layout_snapshot 必须存在 (hit_test 引用了它)"
+        );
+        let entry_window_end = entry_pos + 600;
+        let entry_window = if entry_window_end <= src.len() {
+            &src[entry_pos..entry_window_end]
+        } else {
+            &src[entry_pos..]
+        };
+        let entry_has_prepared = entry_window.contains("prepared_frame");
+        let entry_has_layout_snapshot = entry_window.contains("self.layout_snapshot(");
+        println!(
+            "[BUGFIX_REPRO_TRACE] 2b unified entry has_prepared={} has_layout_snapshot={}",
+            entry_has_prepared, entry_has_layout_snapshot
+        );
+        entry_has_prepared && entry_has_layout_snapshot
+    } else {
+        false
+    };
+
+    // 至少满足一种正确实现模式
+    let inline_mode_valid = calls_layout_snapshot && uses_prepared_frame;
     assert!(
-        calls_layout_snapshot,
-        "前提:hit_test 当前调用 self.layout_snapshot(width)"
-    );
-    assert!(
-        !calls_layout_snapshot || uses_prepared_frame,
-        "Issue #705 复现 2b: hit_test 调用 self.layout_snapshot(width) 临时排版, \
-         而非使用当前 render generation 对应的 prepared_frame.layout_snapshot。 \
+        inline_mode_valid || unified_entry_valid,
+        "Issue #705 复现 2b: hit_test 既没有内联 prepared_frame 优先 + \
+         self.layout_snapshot( fallback,也没有走 current_render_layout_snapshot \
+         统一入口(该入口需有 prepared_frame 优先 + self.layout_snapshot( fallback)。\
          layout_snapshot 在 cache 失效时会 clear_layout_generation + \
          begin_layout_generation 重新排版,鼠标点击命中用的 generation 与 \
          屏幕这一帧真正画出的 generation 可能不同,导致点击命中错位。"
