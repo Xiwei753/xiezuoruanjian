@@ -177,6 +177,7 @@ impl QQuickItem for SujianEditorItem {
                     frame_now,
                     self.current_coordinated_text_cursor_animation_enabled,
                     self.cursor_ctrl.animation.as_ref(),
+                    self.cursor_ctrl.cursor_owner_epoch,
                 );
 
             // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部

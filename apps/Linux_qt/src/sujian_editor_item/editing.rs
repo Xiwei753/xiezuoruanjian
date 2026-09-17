@@ -202,6 +202,7 @@ impl SujianEditorItem {
                 committed_replace_end,
                 pending_preedit_cursor_rect,
                 new_cursor_rect,
+                self.cursor_ctrl.cursor_owner_epoch,
             );
 
         if let Some(key) = key {
@@ -625,6 +626,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_all(&mut self) {
+        // Issue #705 评论 5717380886: 全选是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         let text_len = self.buffer.text.len();
         let _ = self.pipeline.set_selection(0, text_len);
         self.sync_buffer_from_pipeline();
@@ -666,6 +669,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
+        // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
+        self.begin_manual_cursor_move();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #702 评论 5707449688 问题 1: 普通鼠标单击不再无条件 force_snap_next。
@@ -696,6 +702,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
+        // Issue #705 评论 5717380886: 拖选是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
@@ -713,6 +721,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
+        // Issue #705 评论 5717380886: 长按是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
@@ -729,6 +739,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
+        // Issue #705 评论 5717380886: 选词是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
@@ -748,6 +760,24 @@ impl SujianEditorItem {
     /// 是否 Tween 由统一的光标移动规则(update_cursor_visual_position)决定。
     fn snap_cursor_for_pointer_action(&mut self) {
         self.cursor_ctrl.force_snap_next = true;
+    }
+
+    /// Issue #705 评论 5717380886: 标记一次"非正文事务导致的逻辑 cursor 移动"。
+    ///
+    /// 鼠标点击、方向键、Home/End、拖选等路径在方法开头调用本方法，bump
+    /// `cursor_owner_epoch`，使当前所有活动正文事务的 `cursor_owner_epoch`
+    /// 不再等于当前 epoch。之后 `animation_coordinator` 在驱动 coordinated
+    /// caret 前检查到 epoch 不一致，跳过 caret 驱动（文字事务继续播自己的
+    /// glyph/reflow，但不再驱动 caret）。
+    ///
+    /// 普通输入/删除（`insert_text`、`delete_*` 等）**不要**调用本方法，
+    /// 它们创建的正文事务应该继续拥有 coordinated caret。
+    ///
+    /// **不要**在本方法里 `clear_active_text_animations()`，那会把还在正常
+    /// 播放的文字动画一起掐掉。epoch 不一致时文字事务继续播自己的 glyph/reflow，
+    /// 只是不再驱动 caret。
+    fn begin_manual_cursor_move(&mut self) {
+        self.cursor_ctrl.bump_cursor_owner_epoch();
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {
@@ -850,6 +880,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
+        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         let next = if forward {
             next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
         } else {
@@ -880,6 +912,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
+        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x / index_at_line_x 同源。
         let snapshot = self.current_render_layout_snapshot();
@@ -916,6 +950,8 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_to_line_edge(&mut self, end: bool, extend: bool) {
+        // Issue #705 评论 5717380886: Home/End 是非正文事务导致的逻辑 cursor 移动。
+        self.begin_manual_cursor_move();
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x 同源。
         let snapshot = self.current_render_layout_snapshot();

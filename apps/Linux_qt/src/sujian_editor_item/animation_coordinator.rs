@@ -1130,6 +1130,7 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
+        cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         if !typing_animation_enabled
             || is_scrolling
@@ -1220,6 +1221,7 @@ impl LinuxEditorAnimationCoordinator {
                         texture_prepared: false,
                         old_snapshot: Some(old_snapshot.clone()),
                         new_snapshot: Some(new_snapshot.clone()),
+                        cursor_owner_epoch,
                     };
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1327,6 +1329,7 @@ impl LinuxEditorAnimationCoordinator {
                     texture_prepared: false,
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
+                    cursor_owner_epoch,
                 };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1365,6 +1368,7 @@ impl LinuxEditorAnimationCoordinator {
         composition_byte_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+        cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let conflicting = self
             .prepared_queue
@@ -1461,6 +1465,7 @@ impl LinuxEditorAnimationCoordinator {
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
+            cursor_owner_epoch,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1491,6 +1496,7 @@ impl LinuxEditorAnimationCoordinator {
         committed_replace_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+        cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let conflict_start = committed_replace_start.min(preedit_byte_start);
         let conflict_end = committed_replace_end.max(preedit_byte_end);
@@ -1813,6 +1819,7 @@ impl LinuxEditorAnimationCoordinator {
             texture_prepared: false,
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
+            cursor_owner_epoch,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1896,8 +1903,23 @@ impl LinuxEditorAnimationCoordinator {
     /// 供 `build_cursor_plan()` 判断"正文协同是否活跃"——只要存在任意活跃正文事务且
     /// coordinated_enabled，就不能创建纯光标 Tween，正文光标只由
     /// `compute_coordinated_cursor_position()` 驱动。
+    ///
+    /// Issue #705 评论 5717380886: 本方法**不**检查 `cursor_owner_epoch`，保持
+    /// "有没有活动事务"的语义。理由：本方法用于 `build_cursor_plan` 中的
+    /// `_blink_mode` 计算，blink mode 不应因 epoch 变化而改变——文字动画还在播
+    /// 就应该 suppress blink。直接遍历 active_transactions 判断，不调
+    /// `active_text_transaction_key()`（后者现在带 epoch 检查）。
     pub(crate) fn has_active_text_transaction(&self) -> bool {
-        self.active_text_transaction_key().is_some()
+        for tx in self.prepared_queue.active_transactions().iter().rev() {
+            if matches!(
+                tx.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            ) {
+                continue;
+            }
+            return true;
+        }
+        false
     }
 
     /// Issue #686 评论 5664857575 领域2：返回当前活动的正文编辑事务（Insert/Delete，
@@ -1907,6 +1929,13 @@ impl LinuxEditorAnimationCoordinator {
     /// 为 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel）。
     /// Issue #702 评论 5707449688 问题 2: TextVisualOperationKind::Cursor 已删除，
     /// 所有非 Completed/Cancelled 的事务都是正文事务。
+    ///
+    /// Issue #705 评论 5717380886: 本方法**不**检查 `cursor_owner_epoch`，
+    /// 只返回最近一条活动正文事务的 key。epoch 检查由调用方负责
+    /// （`find_cursor_transaction_for_target` / `compute_coordinated_cursor_position`
+    /// 在拿到 key 后检查 `tx.cursor_owner_epoch != current_cursor_epoch`）。
+    /// 保留不带参数的签名是为了让 `has_active_text_transaction` 和结构守卫测试
+    /// 能继续用"有没有活动事务"的语义判断。
     pub(crate) fn active_text_transaction_key(&self) -> Option<VisualTransactionKey> {
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
@@ -1920,16 +1949,51 @@ impl LinuxEditorAnimationCoordinator {
         None
     }
 
+    /// Issue #705 评论 5717380886: 返回当前活动的正文编辑事务的 key，
+    /// 且其 `cursor_owner_epoch == current_cursor_epoch`。
+    ///
+    /// epoch 不一致时返回 None——文字事务继续播自己的 glyph/reflow
+    /// （不清除事务），但不再驱动 caret。
+    ///
+    /// 本方法供 `build_cursor_plan` 内部判断"正文协同是否活跃（epoch 一致）"用。
+    /// `find_cursor_transaction_for_target` / `compute_coordinated_cursor_position`
+    /// 直接调 `active_text_transaction_key()` 后手动检查 epoch，以保留结构守卫测试
+    /// 期望的 `self.active_text_transaction_key()` 调用形式。
+    fn active_text_transaction_key_with_epoch(
+        &self,
+        current_cursor_epoch: u64,
+    ) -> Option<VisualTransactionKey> {
+        for tx in self.prepared_queue.active_transactions().iter().rev() {
+            if matches!(
+                tx.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            ) {
+                continue;
+            }
+            if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            return Some(tx.key);
+        }
+        None
+    }
+
     /// Issue #679 评论 5657313927 (3d): 按当前光标 target 查找对应的事务。
     ///
     /// Issue #686 评论 5664857575 领域2：当存在活动正文事务时，直接返回该事务的 key
     /// 和它的 old/new cursor rect，不靠浮点坐标相等反查。光标按事务身份绑定。
     /// 只有在没有正文事务时才走原来的 CursorOnly 查找逻辑（按 target x/y 匹配）。
+    ///
+    /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。
+    /// 调 `active_text_transaction_key()` 取活动事务后，检查其 `cursor_owner_epoch`
+    /// 是否等于 `current_cursor_epoch`。epoch 不一致时不返回该事务（文字事务继续
+    /// 播自己的 glyph/reflow，但不再驱动 caret）。
     pub(crate) fn find_cursor_transaction_for_target(
         &self,
         target_x: f64,
         target_y: f64,
         _target_h: f64,
+        current_cursor_epoch: u64,
     ) -> Option<(VisualTransactionKey, Option<CursorRect>, Option<CursorRect>)> {
         // 领域2：优先按事务身份绑定——存在活动正文事务时直接返回。
         if let Some(key) = self.active_text_transaction_key() {
@@ -1939,20 +2003,32 @@ impl LinuxEditorAnimationCoordinator {
                 .iter()
                 .find(|t| t.key == key)
             {
-                return Some((
-                    tx.key,
-                    tx.old_cursor_rect.clone(),
-                    tx.new_cursor_rect.clone(),
-                ));
+                // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
+                // epoch 不一致时跳过——文字事务继续播自己的 glyph/reflow，
+                // 但不再驱动 caret。
+                if tx.cursor_owner_epoch != current_cursor_epoch {
+                    // epoch 不一致，fall through 到 CursorOnly 查找逻辑。
+                } else {
+                    return Some((
+                        tx.key,
+                        tx.old_cursor_rect.clone(),
+                        tx.new_cursor_rect.clone(),
+                    ));
+                }
             }
         }
 
-        // 没有正文事务时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
+        // 没有正文事务（或 epoch 不一致）时走 CursorOnly 查找逻辑（按 target x/y 匹配）。
+        // Issue #705 评论 5717380886: CursorOnly 查找也跳过 epoch 不一致的事务，
+        // 因为这些事务的 new_cursor_rect 已不再代表当前 caret 目标。
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
                 tx.state,
                 TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
             ) {
+                continue;
+            }
+            if tx.cursor_owner_epoch != current_cursor_epoch {
                 continue;
             }
             if let Some(ref new_rect) = tx.new_cursor_rect {
@@ -2001,17 +2077,28 @@ impl LinuxEditorAnimationCoordinator {
         old_visual_y: f64,
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
+        cursor_owner_epoch: u64,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
 
-        let has_active = self.has_active_text_transaction();
-        // Issue #679 评论 5657313927: blink_mode 不再固化进 CursorAnimationPlan，
+        // Issue #705 评论 5717380886: 区分两种"有活动正文事务"的判断：
+        // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
+        // - `has_active_for_coordinated`：看 epoch，只有 epoch 一致的事务才驱动
+        //   coordinated caret。epoch 不一致时文字事务继续播自己的 glyph/reflow，
+        //   但不再驱动 caret，纯光标移动可走 Tween。
+        let has_active_for_blink = self.has_active_text_transaction();
+        let has_active_for_coordinated = self
+            .active_text_transaction_key_with_epoch(cursor_owner_epoch)
+            .is_some();
+        // Issue #679 评论 5657313927: blink_mode 不再固化进 CursorAnimationPlan,
         // 由 tick_cursor_animation 每帧从 has_active_text_transaction() 实时计算。
         // Issue #702 评论 5708209114: has_active 覆盖所有正文事务类型
         // （Insert/Delete/CompositionUpdate/CompositionCommitOrCancel），
         // 不再用 has_active_insert()，避免 Delete 路径漏判导致双时间线分叉。
-        let _blink_mode = if coordinated_enabled && has_active {
+        // Issue #705 评论 5717380886: blink 用 has_active_for_blink（不看 epoch），
+        // 文字动画还在播就 suppress blink。
+        let _blink_mode = if coordinated_enabled && has_active_for_blink {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
@@ -2050,7 +2137,9 @@ impl LinuxEditorAnimationCoordinator {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
                 // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
                 // 不创建独立 CursorAnimationState timeline。
-                if coordinated_enabled && has_active {
+                // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
+                // epoch 不一致时纯光标移动可走 Tween。
+                if coordinated_enabled && has_active_for_coordinated {
                     CursorTransition::Snap
                 } else {
                     // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
@@ -2077,7 +2166,9 @@ impl LinuxEditorAnimationCoordinator {
         } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
             // Issue #702 评论 5707770318: 正文事务活跃时返回 Snap，
             // 不创建独立 CursorAnimationState timeline。
-            if coordinated_enabled && has_active {
+            // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
+            // epoch 不一致时纯光标移动可走 Tween。
+            if coordinated_enabled && has_active_for_coordinated {
                 CursorTransition::Snap
             } else {
                 // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
@@ -2145,6 +2236,7 @@ impl LinuxEditorAnimationCoordinator {
         frame_now: Instant,
         coordinated_enabled: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
+        cursor_owner_epoch: u64,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2218,7 +2310,15 @@ impl LinuxEditorAnimationCoordinator {
         // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
         let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;
         if coordinated_enabled {
-            if let Some((cx, cy, ch)) = self.compute_coordinated_cursor_position(&frame_sample) {
+            // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
+            // epoch 不一致时 compute_coordinated_cursor_position 返回 None，
+            // 文字事务继续播自己的 glyph/reflow（不清除事务），但不再驱动 caret，
+            // 改走 CursorOnly/点击位置。
+            // 原调用形式 self.compute_coordinated_cursor_position(&frame_sample)
+            // 现增加 cursor_owner_epoch 参数。
+            if let Some((cx, cy, ch)) =
+                self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
+            {
                 // Issue #702 评论 5707770318: 正文协同光标位置已算出，
                 // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
                 // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
@@ -2418,16 +2518,31 @@ impl LinuxEditorAnimationCoordinator {
     ///   started_at/duration_ms），不再借任何文字 unit 的 progress。
     ///
     /// 返回 `(x, y, h)` 供 `build_render_plan_full` 直接写入 `CursorRenderState`。
+    ///
+    /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。epoch 不一致时
+    /// 返回 None——文字事务继续播自己的 glyph/reflow（不清除事务），但不再驱动 caret。
     fn compute_coordinated_cursor_position(
         &self,
         sample: &AnimationFrameSample,
+        current_cursor_epoch: u64,
     ) -> Option<(f64, f64, f64)> {
+        // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
+        // 调 active_text_transaction_key() 取活动事务后，检查其 cursor_owner_epoch
+        // 是否等于 current_cursor_epoch。epoch 不一致时返回 None，
+        // 文字事务继续播自己的 glyph/reflow，但不再驱动 caret。
         let key = self.active_text_transaction_key()?;
         let tx = self
             .prepared_queue
             .active_transactions()
             .iter()
             .find(|t| t.key == key)?;
+
+        // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
+        // epoch 不一致时返回 None——文字事务继续播自己的 glyph/reflow，
+        // 但不再驱动 caret。
+        if tx.cursor_owner_epoch != current_cursor_epoch {
+            return None;
+        }
 
         let old_rect = tx.old_cursor_rect.as_ref()?;
         let new_rect = tx.new_cursor_rect.as_ref()?;
@@ -3419,6 +3534,7 @@ mod tests {
             12,
             None,
             None,
+            0,
         );
         assert!(key.is_some());
         let tx = coord
@@ -3507,6 +3623,7 @@ mod tests {
             12,
             None,
             None,
+            0,
         );
         assert!(key.is_some());
         let tx = coord
@@ -3589,6 +3706,7 @@ mod tests {
             12,
             None,
             None,
+            0,
         );
         assert!(key.is_some());
         let tx = coord
@@ -3674,6 +3792,7 @@ mod tests {
             10,
             None,
             None,
+            0,
         );
         assert!(key.is_some());
         let tx = coord
@@ -3751,6 +3870,7 @@ mod tests {
             3,
             None,
             None,
+            0,
         );
         assert!(key.is_some());
         let tx = coord
@@ -3821,7 +3941,7 @@ mod tests {
             ],
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key = coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None);
+        let key = coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None, 0);
         assert!(key.is_some());
         let tx = coord
             .prepared_queue
@@ -4099,6 +4219,9 @@ mod tests {
             texture_prepared: true,
             old_snapshot: None,
             new_snapshot: None,
+            // Issue #705 评论 5717380886: 测试辅助函数默认 epoch=0，
+            // 与 CursorController::new() 的初始 epoch 一致。
+            cursor_owner_epoch: 0,
         }
     }
 
@@ -4404,6 +4527,7 @@ mod tests {
             now,
             true,
             None,
+            0,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -4454,6 +4578,7 @@ mod tests {
             now,
             false,
             None,
+            0,
         );
 
         assert!(
@@ -4530,6 +4655,7 @@ mod tests {
             now,
             true,
             None,
+            0,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -4576,6 +4702,7 @@ mod tests {
             now,
             true,
             None,
+            0,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -4642,6 +4769,7 @@ mod tests {
             now,
             true,
             None,
+            0,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -4701,7 +4829,7 @@ mod tests {
         let mut old_sample = AnimationFrameSample::new(now);
         old_sample.set_progress(old_key, 0.5);
         let (cx_old, _, _) = coord
-            .compute_coordinated_cursor_position(&old_sample)
+            .compute_coordinated_cursor_position(&old_sample, 0)
             .expect("旧事务应能算出协同光标");
         assert!(
             (cx_old - 190.0).abs() < 1e-6,
@@ -4782,6 +4910,7 @@ mod tests {
             now,
             true,
             None,
+            0,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）
@@ -4851,7 +4980,7 @@ mod tests {
         let mut sample_b = AnimationFrameSample::new(now);
         sample_b.set_progress(key_b, 0.5);
         let (cx_b, _, _) = coord
-            .compute_coordinated_cursor_position(&sample_b)
+            .compute_coordinated_cursor_position(&sample_b, 0)
             .expect("事务 B 应能算出协同光标");
         assert!(
             (cx_b - expected_screen_cursor).abs() < 1e-6,
@@ -4916,7 +5045,7 @@ mod tests {
         let mut sample_c = AnimationFrameSample::new(now);
         sample_c.set_progress(key_c, 0.2);
         let (cx_c, _, _) = coord
-            .compute_coordinated_cursor_position(&sample_c)
+            .compute_coordinated_cursor_position(&sample_c, 0)
             .expect("事务 C 应能算出协同光标");
 
         // 期望：unit2 还在 progress=0.2，事务未完成，光标不应已到 new_cursor_rect.x=200。
@@ -4969,7 +5098,7 @@ mod tests {
         let mut sample_a = AnimationFrameSample::new(now);
         sample_a.set_progress(key_a, 0.5);
         let (cx_a, _, _) = coord
-            .compute_coordinated_cursor_position(&sample_a)
+            .compute_coordinated_cursor_position(&sample_a, 0)
             .expect("事务 A 应能算出协同光标");
         assert!(
             (cx_a - expected_a).abs() < 1e-6,
@@ -5023,7 +5152,7 @@ mod tests {
         let mut sample_b = AnimationFrameSample::new(now_after_b);
         sample_b.set_progress(key_b, 0.5);
         let (cx_b, _, _) = coord
-            .compute_coordinated_cursor_position(&sample_b)
+            .compute_coordinated_cursor_position(&sample_b, 0)
             .expect("事务 B 应能算出协同光标");
         assert!(
             (cx_b - expected_b).abs() < 1e-6,
@@ -5102,7 +5231,7 @@ mod tests {
         let mut sample_d1 = AnimationFrameSample::new(now);
         sample_d1.set_progress(key_d1, 0.2);
         let (cx_d1, _, _) = coord1
-            .compute_coordinated_cursor_position(&sample_d1)
+            .compute_coordinated_cursor_position(&sample_d1, 0)
             .expect("事务 D1 应能算出协同光标");
 
         assert!(
@@ -5141,7 +5270,7 @@ mod tests {
         let mut sample_d2 = AnimationFrameSample::new(now);
         sample_d2.set_progress(key_d2, 0.2);
         let (cx_d2, _, _) = coord2
-            .compute_coordinated_cursor_position(&sample_d2)
+            .compute_coordinated_cursor_position(&sample_d2, 0)
             .expect("事务 D2 应能算出协同光标");
 
         assert!(
@@ -5232,6 +5361,7 @@ mod tests {
             texture_prepared: false,
             old_snapshot: None,
             new_snapshot: None,
+            cursor_owner_epoch: 0,
         };
         coord.prepared_queue.enqueue(tx);
 
@@ -5488,6 +5618,7 @@ mod tests {
             texture_prepared: false,
             old_snapshot: None,
             new_snapshot: None,
+            cursor_owner_epoch: 0,
         };
         coord.prepared_queue.enqueue(new_tx);
 
@@ -5701,6 +5832,7 @@ mod tests {
             texture_prepared: false,
             old_snapshot: None,
             new_snapshot: None,
+            cursor_owner_epoch: 0,
         }
     }
 

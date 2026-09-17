@@ -435,6 +435,15 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub texture_prepared: bool,
     pub old_snapshot: Option<EditorLayoutSnapshot>,
     pub new_snapshot: Option<EditorLayoutSnapshot>,
+    /// Issue #705 评论 5717380886: 创建本事务时记录的 `cursor_owner_epoch`。
+    ///
+    /// 这笔正文事务只在该 epoch 下拥有 coordinated caret。之后任何非正文事务
+    /// 导致的逻辑 cursor 移动（鼠标点击、方向键、Home/End、拖选等）会 bump
+    /// `CursorController::cursor_owner_epoch`，使本事务的 `cursor_owner_epoch`
+    /// 不再等于当前 epoch，`animation_coordinator` 在驱动 coordinated caret
+    /// 前检查到不一致时跳过 caret 驱动（文字事务继续播自己的 glyph/reflow，
+    /// 但不再驱动 caret）。
+    pub cursor_owner_epoch: u64,
 }
 
 impl PreparedTextVisualTransaction {

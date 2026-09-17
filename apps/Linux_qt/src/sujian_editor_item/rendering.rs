@@ -108,10 +108,18 @@ impl SujianEditorItem {
 
         // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
         // 是否已经有对应的正文/预输入视觉事务。
+        // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
+        // epoch 不一致时 find_cursor_transaction_for_target 不返回该事务，
+        // 文字事务继续播自己的 glyph/reflow，但不再驱动 caret。
         let found_tx = self
             .pipeline
             .animation_coordinator()
-            .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
+            .find_cursor_transaction_for_target(
+                cursor_x,
+                cursor_y,
+                cursor_h,
+                self.cursor_ctrl.cursor_owner_epoch,
+            );
 
         // Issue #686 评论 5664857575 领域2：存在活动正文事务时，光标位置由最新正文事务
         // 的同一条 Timeline 决定。纯光标移动（方向键、Home/End、鼠标点击后的平滑移动）
@@ -125,6 +133,7 @@ impl SujianEditorItem {
         // Issue #679 评论 5657313927 (步骤 4): 调唯一的 build_cursor_plan。
         // Issue #702 评论 5707449688 问题 2: 不再传 driver_key，纯光标 Tween 由
         // CursorAnimationState 自己的 timeline 推进。
+        // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
         let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
             old_cursor_rect,
             new_cursor_rect,
@@ -148,6 +157,7 @@ impl SujianEditorItem {
             self.cursor_ctrl.visual_y,
             self.cursor_ctrl.force_snap_next,
             self.cursor_ctrl.animation.as_ref(),
+            self.cursor_ctrl.cursor_owner_epoch,
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。

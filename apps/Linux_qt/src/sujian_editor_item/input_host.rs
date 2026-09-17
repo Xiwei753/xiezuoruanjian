@@ -280,6 +280,7 @@ impl EditorInputHost for SujianEditorItem {
                         composition_byte_start,
                         old_cursor_rect,
                         new_cursor_rect,
+                        self.cursor_ctrl.cursor_owner_epoch,
                     );
             }
         }
@@ -384,6 +385,7 @@ impl EditorInputHost for SujianEditorItem {
                         data.composition_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {
                 self.update_preedit_visual_state();
@@ -486,6 +488,7 @@ impl EditorInputHost for SujianEditorItem {
                         data.composition_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {
                 self.update_preedit_visual_state();

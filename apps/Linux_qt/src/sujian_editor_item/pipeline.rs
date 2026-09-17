@@ -854,6 +854,7 @@ impl LinuxEditorPipeline {
         new: &EditorSnapshot,
         cause: EditorTransactionCause,
         editor_layout: &crate::editor::layout::EditorLayout,
+        cursor_owner_epoch: u64,
     ) -> Option<EditorVisualTransaction> {
         let transaction = self.engine.create_transaction(
             &old.text,
@@ -1186,6 +1187,7 @@ impl LinuxEditorPipeline {
                     vt.new_cursor_rect.clone(),
                     &old_snap,
                     &new_snap,
+                    cursor_owner_epoch,
                 );
                 if let Some(key) = key {
                     self.prepare_transaction_textures(key);

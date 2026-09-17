@@ -55,6 +55,7 @@ impl SujianEditorItem {
                 &new,
                 cause,
                 &self.editor_layout,
+                self.cursor_ctrl.cursor_owner_epoch,
             );
         }
         // Issue #658 评论 5622188166 问题 1: 动画关闭/滚动抑制时不再走

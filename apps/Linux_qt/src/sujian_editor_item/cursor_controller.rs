@@ -35,6 +35,12 @@ const BLINK_INTERVAL_MS: u64 = 530;
 /// - `current_visual_line_id`：光标所在 visual line 的 ID，用于判断是否跨行移动
 /// - `force_snap_next`：下次更新强制 Snap（跳过 Tween），用于章节加载、滚动恢复等场景
 /// - `blink_reset_requested`：编辑操作后请求重置闪烁（使光标重新可见）
+/// - `cursor_owner_epoch`：光标所有权版本号（Issue #705 评论 5717380886）。
+///   非正文事务导致的逻辑 cursor 移动（鼠标点击、方向键、Home/End、拖选等）
+///   会 bump 此 epoch；`PreparedTextVisualTransaction` 创建时记录当时的 epoch，
+///   `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
+///   是否仍等于当前 epoch。epoch 不一致时，文字事务继续播自己的 glyph/reflow，
+///   但不再驱动 caret（caret 改由纯光标移动 / 鼠标目标驱动）。
 pub struct CursorController {
     pub target_x: f64,
     pub target_y: f64,
@@ -53,6 +59,9 @@ pub struct CursorController {
     pub blink_visible: bool,
     pub blink_last_toggle: Instant,
     pub blink_reset_requested: bool,
+    /// Issue #705 评论 5717380886: 光标所有权版本号。
+    /// 0 表示初始状态；任何非正文事务导致的逻辑 cursor 移动都应 bump。
+    pub cursor_owner_epoch: u64,
 }
 
 impl CursorController {
@@ -75,7 +84,22 @@ impl CursorController {
             blink_visible: true,
             blink_last_toggle: Instant::now(),
             blink_reset_requested: false,
+            cursor_owner_epoch: 0,
         }
+    }
+
+    /// Issue #705 评论 5717380886: bump 光标所有权版本号。
+    ///
+    /// 由 `editing.rs::begin_manual_cursor_move()` 统一调用，标记一次"非正文事务
+    /// 导致的逻辑 cursor 移动"（鼠标点击、方向键、Home/End、拖选等）。之后
+    /// `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
+    /// 是否仍等于当前 epoch，不一致则不驱动 caret（文字事务继续播自己的
+    /// glyph/reflow，但 caret 改由纯光标移动 / 鼠标目标驱动）。
+    ///
+    /// 使用 `wrapping_add` 避免 overflow panic（u64 在实际使用中不可能溢出，
+    /// 但遵守 AGENTS.md "不用 unwrap/expect 代替错误处理" 的安全边界）。
+    pub fn bump_cursor_owner_epoch(&mut self) {
+        self.cursor_owner_epoch = self.cursor_owner_epoch.wrapping_add(1);
     }
 
     pub fn cursor_should_be_visible(&self) -> bool {
