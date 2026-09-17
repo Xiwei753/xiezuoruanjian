@@ -8,6 +8,7 @@ import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -197,6 +198,17 @@ class ComposeEditorVisualState(
     private var nextBarrierUnitKey: Long = 2_000_000L
 
     /**
+     * #706 评论 5715257924 症状1：本地输入帧屏障 —
+     * 用户按键时武装，权威 layout + visual scene 准备好后清。
+     * 活跃期间 draw 层重放上一稳定帧，不裸画 BasicTextField 已更新的正文。
+     * 普通字段，不是 Compose State。
+     */
+    private var pendingLocalFrameBarrier: ComposeLocalFrameBarrier? = null
+
+    /** barrier epoch 计数器。 */
+    private var nextLocalFrameEpoch: Long = 0L
+
+    /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
      * @param intent Core 视觉意图。
@@ -224,8 +236,35 @@ class ComposeEditorVisualState(
         newSelection: TextRange,
         changes: List<LocalInputChange>,
     ) {
+        // #706 评论 5715257924 症状1：barrier 必须在 InputTransformation 这一拍就武装，
+        // 并真正保留上一帧。连续快速输入时，如果上一笔 barrier 还没完成，
+        // 不要换掉 baseScene/baseLayout，只更新 expectedText/expectedSelection。
+        val current = pendingLocalFrameBarrier
+        pendingLocalFrameBarrier =
+            if (current == null) {
+                ComposeLocalFrameBarrier(
+                    epoch = nextLocalFrameEpoch++,
+                    baseScene = _visualScene.value,
+                    baseLayout = lastPresentedLayout,
+                    expectedText = newText,
+                    expectedSelection = newSelection,
+                )
+            } else {
+                current.copy(
+                    expectedText = newText,
+                    expectedSelection = newSelection,
+                    handoffPatchId = null,
+                )
+            }
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
+
+    /**
+     * #706 评论 5715257924 症状1：draw 层查询当前本地帧屏障快照。
+     * 非 null 表示处于本地输入 handoff 期间，draw 层应重放上一稳定帧。
+     * internal 可见性 — [ComposeLocalFrameBarrier] 是 internal 类型。
+     */
+    internal fun localFrameBarrierSnapshot(): ComposeLocalFrameBarrier? = pendingLocalFrameBarrier
 
     /**
      * #694 评论 5694645209 问题1：根据 bridge 的 [InputSnapshotOutcome] 收口 —
@@ -370,6 +409,9 @@ class ComposeEditorVisualState(
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
+                    // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
+                    pendingLocalFrameBarrier =
+                        pendingLocalFrameBarrier?.copy(handoffPatchId = localPatch.id)
                 }
             }
         }
@@ -552,7 +594,7 @@ class ComposeEditorVisualState(
                 val originOffset =
                     firstEdit.oldSelection.end
                         .coerceIn(0, oldLayout.result.layoutInput.text.length)
-                oldLayout.result.getCursorRect(originOffset)
+                oldLayout.cursorRect(originOffset)
             } catch (_: Throwable) {
                 null
             }
@@ -675,6 +717,9 @@ class ComposeEditorVisualState(
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
+                    // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
+                    pendingLocalFrameBarrier =
+                        pendingLocalFrameBarrier?.copy(handoffPatchId = localPatch.id)
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
@@ -945,6 +990,16 @@ class ComposeEditorVisualState(
             batch.add(patch)
         }
         val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
+        // #706 评论 5715257924 症状1：barrier 存在时，用 barrier.baseScene 作为 timeline redirect
+        // 的屏幕起点 — 旧 timeline 即使在后台还有未结束 track，也不能按"已经过去了多少真实时间"
+        // 偷偷向前跑；新 patch 必须从用户最后真正看到的 scene 继续。
+        val barrier = pendingLocalFrameBarrier
+        if (barrier != null && barrier.handoffPatchId != null) {
+            visualTimeline.redirectFromVisibleScene(
+                scene = barrier.baseScene,
+                frameTimeNanos = frameTimeNanos,
+            )
+        }
         // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
         val cursorParams = computeCursorParamsForPatch(framePatch)
         visualTimeline.applyPatch(
@@ -954,6 +1009,14 @@ class ComposeEditorVisualState(
             cursorPath = cursorParams?.points,
             cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
         )
+        // #706 评论 5715257924 症状1：matching layout/local patch 到齐、timeline 从 barrier.baseScene
+        // redirect 到新目标、sample 出同一 frame 的新 scene 后再清 barrier。
+        // 不能先清 barrier，再等下一次 StateFlow/recomposition 才拿到新 scene。
+        if (barrier != null && barrier.handoffPatchId != null) {
+            val scene = visualTimeline.sample(frameTimeNanos)
+            _visualScene.update { scene }
+            pendingLocalFrameBarrier = null
+        }
         return listOf(framePatch)
     }
 
@@ -1102,7 +1165,7 @@ class ComposeEditorVisualState(
         return try {
             val selectionEnd =
                 layout.selection.end.coerceIn(0, layout.result.layoutInput.text.length)
-            layout.result.getCursorRect(selectionEnd)
+            layout.cursorRect(selectionEnd)
         } catch (_: Throwable) {
             null
         }
@@ -1133,6 +1196,8 @@ class ComposeEditorVisualState(
         wasCompositionActiveForSnapshot = false
         // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase
         compositionVisualPhase = CompositionVisualPhase.Idle
+        // #706 评论 5715257924 症状1：清本地帧屏障
+        pendingLocalFrameBarrier = null
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 

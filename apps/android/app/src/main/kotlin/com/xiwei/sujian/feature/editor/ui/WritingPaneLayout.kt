@@ -4,12 +4,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import com.xiwei.sujian.core.designsystem.theme.LocalSujianDimensions
 import com.xiwei.sujian.feature.editor.presentation.EditorUiState
 
 /**
@@ -55,7 +57,15 @@ internal fun WritingPaneLayout(
         // #641：只要 target 有效就必须始终组合 editorContent；
         // showEditor 只控制 loading overlay。编辑器可见性由
         // WritingEditorSurface 管理（OutputTransformation 隐藏动画 range）。
-        editorContent(Modifier.fillMaxSize())
+        // #706 评论 5715257924 症状2：软换行贴最左边 — 给正文内容框自己的水平页边距。
+        // padding 只加给 editorContent，不加到整个外层 Box；这样右下角 WritingStatusOverlay
+        // 仍按自己现有的 dims.space16 放置。
+        val dims = LocalSujianDimensions.current
+        editorContent(
+            Modifier
+                .fillMaxSize()
+                .padding(horizontal = dims.space16),
+        )
 
         if (!showEditor) {
             Box(

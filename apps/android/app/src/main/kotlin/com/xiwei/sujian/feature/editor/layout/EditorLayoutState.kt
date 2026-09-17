@@ -8,6 +8,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.style.ResolvedTextDirection
+import androidx.compose.ui.unit.isSpecified
 import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
 
 /**
@@ -29,8 +31,54 @@ data class ComposeLayoutSnapshot(
 /**
  * #641 评论1 第5节：视觉光标矩形 — 从真实 [TextLayoutResult] 取，
  * 不再由动画层或 View 自行推算。
+ *
+ * #706 评论 5715257924 症状3：统一 caret 几何入口。
+ * 旧实现 `cursorRect() = result.getCursorRect(selection.end)` 对空段落首行缩进不修正，
+ * 导致 Enter 产生空段落时光标落在 x=0 而非缩进后的位置。
+ *
+ * 新增 [cursorRect] 的 offset 版本作为所有自绘/动画光标的唯一事实源：
+ * 普通位置直接返回 Compose 原生 [TextLayoutResult.getCursorRect]；
+ * 只对"逻辑段落开头且该段落当前为空"的 caret 按首行缩进修正 X 坐标，
+ * Y/高度/caret 宽度沿用原始 rect。
  */
-fun ComposeLayoutSnapshot.cursorRect(): Rect = result.getCursorRect(selection.end)
+fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
+    val text = result.layoutInput.text.text
+    val safeOffset = offset.coerceIn(0, text.length)
+    val raw = result.getCursorRect(safeOffset)
+
+    // 只对"逻辑段落开头且该段落当前为空"的 caret 修正首行缩进。
+    // atParagraphStart：offset 在段落首字符处（文档开头或前一个字符是 \n）。
+    // emptyParagraph：offset 所在段落为空（文档末尾或当前字符是 \n）。
+    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
+    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
+    if (!atParagraphStart || !emptyParagraph) return raw
+
+    val textIndent = result.layoutInput.style.textIndent ?: return raw
+    val firstLine = textIndent.firstLine
+    if (!firstLine.isSpecified || firstLine.value == 0f) return raw
+
+    // 把首行缩进 sp 换算成 px，按段落方向加到行起始边。
+    val density = result.layoutInput.density
+    val firstLinePx = with(density) { firstLine.toPx() }
+    if (firstLinePx == 0f) return raw
+
+    val line = result.getLineForOffset(safeOffset)
+    val direction = result.getParagraphDirection(safeOffset)
+    val newLeft =
+        when (direction) {
+            ResolvedTextDirection.Ltr -> result.getLineLeft(line) + firstLinePx
+            ResolvedTextDirection.Rtl -> result.getLineRight(line) - firstLinePx
+            else -> raw.left
+        }
+    return Rect(
+        left = newLeft,
+        top = raw.top,
+        right = newLeft + raw.width,
+        bottom = raw.bottom,
+    )
+}
+
+fun ComposeLayoutSnapshot.cursorRect(): Rect = cursorRect(selection.end)
 
 /**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，

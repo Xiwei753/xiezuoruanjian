@@ -17,14 +17,18 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 
 /**
  * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
@@ -93,6 +97,13 @@ fun EditorTextFieldDrawLayer(
 
     val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
 
+    // #706 评论 5715257924 症状1：本地输入帧屏障 — 稳定帧缓存层。
+    // 没有 local barrier 时，每一帧先把完整最终编辑器画面记录进去，再画这个 layer。
+    // 这里的"完整画面"包括 BasicTextField、hiddenRanges 裁切、visual units 和视觉光标。
+    // barrier 活跃、matching patch 还没完成 handoff 时，不准调用 drawContent()，
+    // 也不准覆盖 stableFrameLayer，只重放上一帧。
+    val stableFrameLayer = rememberGraphicsLayer()
+
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
     // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
     // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos。
@@ -115,69 +126,45 @@ fun EditorTextFieldDrawLayer(
             modifier
                 .drawWithContent {
                     val scene = visualScene
+                    val barrier = visualState.localFrameBarrierSnapshot()
 
-                    // 1. 正文裁切：对 hiddenRanges 做 ClipOp.Difference 裁切，
-                    //    使 drawContent()（BasicTextField 的完整绘制）只在非 hidden 区域可见。
-                    //    #698 评论 5699401353 修复1：不再用 drawPath(backgroundColor) 盖背景色，
-                    //    而是用 clipPath + ClipOp.Difference 只裁切绘制区域 —
-                    //    selection/search highlight 由 BasicTextField 自己画，
-                    //    裁切后自然只在非 hidden 区域可见，不引入任何颜色。
-                    // #698 评论 5700812160：hiddenPath 必须与动画字、视觉光标在同一视口坐标系。
-                    // drawTranslatedRangeText 用 translate.y - scrollY、drawVisualCursorRect 用
-                    // rect.top/bottom - scrollY，唯独裁切 path 没减 scrollY 会导致滚动后裁切位置
-                    // 与动画字错开，出现重影/缺字/局部空白。这里把 scrollY 传进 buildHiddenPath，
-                    // 在合并 path 时带视口偏移把正文坐标换算到当前视口坐标，不改 BasicTextField
-                    // 自己的滚动（不在外层整体 translate(-scrollY) 后再 drawContent()）。
-                    val hiddenPath =
-                        buildHiddenPath(
-                            hiddenRanges = scene.hiddenRanges,
-                            layout = latestLayout,
-                            scrollY = scrollY,
-                        )
-                    if (hiddenPath != null) {
-                        clipPath(
-                            path = hiddenPath,
-                            clipOp = ClipOp.Difference,
-                        ) {
-                            this@drawWithContent.drawContent()
-                        }
-                    } else {
-                        // hiddenRanges 为空：直接画完整原正文。
-                        drawContent()
+                    if (barrier != null) {
+                        // #706 评论 5715257924 症状1：barrier 活跃、matching patch 还没完成
+                        // handoff 时，不准调用 drawContent()，也不准覆盖 stableFrameLayer，
+                        // 只重放上一帧。这样插入时不会先裸出新字，删除时也不会先把旧字抹掉
+                        // 再等 ghost 回来。
+                        drawLayer(stableFrameLayer)
+                        return@drawWithContent
                     }
 
-                    // 2. 动画帧：直接读 visualScene.units。
-                    //    每个 unit 的 alpha、屏幕位置已经由 timeline 按当前帧时间算好，
-                    //    draw 阶段不再二次插值。
-                    if (scene.units.isNotEmpty()) {
-                        drawVisualScene(
+                    // 没有 barrier：先把完整编辑器画面记录进 stableFrameLayer，再画这个 layer。
+                    // 这里把 drawWithContent 里的三段逻辑抽成 drawCurrentEditorFrame：
+                    // 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
+                    // 2. 画 drawVisualScene()
+                    // 3. 画视觉光标
+                    //
+                    // GraphicsLayer.record 需要 density/layoutDirection/size/block 四个参数。
+                    // drawContent() 通过 this@drawWithContent 显式接收者调用 —
+                    // record lambda 的接收者是 DrawScope，不是 ContentDrawScope。
+                    stableFrameLayer.record(
+                        density = this@drawWithContent,
+                        layoutDirection = this@drawWithContent.layoutDirection,
+                        size = IntSize(size.width.toInt(), size.height.toInt()),
+                    ) {
+                        drawCurrentEditorFrame(
                             scene = scene,
+                            latestLayout = latestLayout,
                             scrollY = scrollY,
+                            drawsVisualCursor = drawsVisualCursor,
                             textColor = textColor,
+                            cursorColor = cursorColor,
+                            liveSelection = liveSelection,
+                            restingCursorRect = restingCursorRect,
+                            density = density,
+                            drawContent = { this@drawWithContent.drawContent() },
                         )
                     }
-
-                    // 3. 光标：smooth cursor 开启时本 draw 层整个会话拥有光标。
-                    //    #691：光标位置从 scene.cursorRect（timeline 统一采样）读取，
-                    //    或从 restingCursorRect（无动画时的最终真实位置）读取。
-                    //    不再使用独立的 Animatable<Rect>。
-                    //    #691 评论 5679242735 修改1：纯 selection 变化时 onTextLayout 不一定回调，
-                    //    restingCursorRect 可能停在旧位置。此时用 latestLayout + liveSelection
-                    //    实时计算静止光标；只有拿不到 live selection/layout 时才回退 restingCursorRect。
-                    if (drawsVisualCursor) {
-                        val cursorRectValue =
-                            scene.cursorRect
-                                ?: computeRestingCursorRect(latestLayout, liveSelection)
-                                ?: restingCursorRect
-                        if (cursorRectValue != null) {
-                            drawVisualCursorRect(
-                                rect = cursorRectValue,
-                                scrollY = scrollY,
-                                density = density,
-                                cursorColor = cursorColor,
-                            )
-                        }
-                    }
+                    drawLayer(stableFrameLayer)
                 },
     ) {
         content()
@@ -414,7 +401,7 @@ internal fun computeRestingCursorRect(
     if (layout == null || liveSelection == null) return null
     return try {
         val end = liveSelection.end.coerceIn(0, layout.result.layoutInput.text.length)
-        layout.result.getCursorRect(end)
+        layout.cursorRect(end)
     } catch (_: Throwable) {
         null
     }
@@ -469,6 +456,82 @@ private fun DrawScope.drawTranslatedRangeText(
                     alpha = alpha,
                 )
             }
+        }
+    }
+}
+
+/**
+ * #706 评论 5715257924 症状1：绘制完整编辑器当前帧 —
+ * 把原来 drawWithContent 里的三段逻辑抽成独立函数，供 stableFrameLayer.record() 调用。
+ *
+ * 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
+ * 2. 画 drawVisualScene()
+ * 3. 画视觉光标
+ *
+ * @param scene 当前视觉场景。
+ * @param latestLayout 当前 layout 快照。
+ * @param scrollY 当前滚动位置。
+ * @param drawsVisualCursor 是否绘制视觉光标。
+ * @param textColor 文字颜色。
+ * @param cursorColor 光标颜色。
+ * @param liveSelection 当前 live selection。
+ * @param restingCursorRect 静止光标 rect。
+ * @param density 密度信息。
+ * @param drawContent 绘制 BasicTextField 内容的回调。
+ */
+@Suppress("LongParameterList")
+internal fun DrawScope.drawCurrentEditorFrame(
+    scene: ComposeVisualScene,
+    latestLayout: ComposeLayoutSnapshot?,
+    scrollY: Int,
+    drawsVisualCursor: Boolean,
+    textColor: Color,
+    cursorColor: Color,
+    liveSelection: TextRange?,
+    restingCursorRect: Rect?,
+    density: androidx.compose.ui.unit.Density,
+    drawContent: () -> Unit,
+) {
+    // 1. 正文裁切：对 hiddenRanges 做 ClipOp.Difference 裁切
+    val hiddenPath =
+        buildHiddenPath(
+            hiddenRanges = scene.hiddenRanges,
+            layout = latestLayout,
+            scrollY = scrollY,
+        )
+    if (hiddenPath != null) {
+        clipPath(
+            path = hiddenPath,
+            clipOp = ClipOp.Difference,
+        ) {
+            drawContent()
+        }
+    } else {
+        drawContent()
+    }
+
+    // 2. 动画帧
+    if (scene.units.isNotEmpty()) {
+        drawVisualScene(
+            scene = scene,
+            scrollY = scrollY,
+            textColor = textColor,
+        )
+    }
+
+    // 3. 光标
+    if (drawsVisualCursor) {
+        val cursorRectValue =
+            scene.cursorRect
+                ?: computeRestingCursorRect(latestLayout, liveSelection)
+                ?: restingCursorRect
+        if (cursorRectValue != null) {
+            drawVisualCursorRect(
+                rect = cursorRectValue,
+                scrollY = scrollY,
+                density = density,
+                cursorColor = cursorColor,
+            )
         }
     }
 }

@@ -108,6 +108,11 @@ fun editorSurfaceMode(
  * "动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout -> VisualState 再消费 layout"
  * 回路。不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
  *
+ * #706 评论 5715257924 症状1：EditorTextFieldDrawLayer 现在确实负责上一稳定帧缓存和本地 edit barrier —
+ * 没有 local barrier 时，每帧把完整编辑器画面（BasicTextField + hiddenRanges 裁切 + visual units + 视觉光标）
+ * 记录进 stableFrameLayer；barrier 活跃时只重放上一帧，不调用 drawContent()，不覆盖 stableFrameLayer。
+ * OutputTransformation 继续只做搜索高亮。
+ *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
  *
