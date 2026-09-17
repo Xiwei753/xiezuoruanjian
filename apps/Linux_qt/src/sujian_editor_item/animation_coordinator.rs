@@ -155,7 +155,6 @@ fn operation_kind_label(kind: TextVisualOperationKind) -> &'static str {
     match kind {
         TextVisualOperationKind::Insert => "Insert",
         TextVisualOperationKind::Delete => "Delete",
-        TextVisualOperationKind::Cursor => "Cursor",
         TextVisualOperationKind::CompositionUpdate => "CompositionUpdate",
         TextVisualOperationKind::CompositionCommitOrCancel => "CompositionCommitOrCancel",
     }
@@ -1860,20 +1859,6 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    pub fn handle_cursor_only(
-        &mut self,
-        _old_cursor_rect: Option<CursorRect>,
-        _new_cursor_rect: Option<CursorRect>,
-    ) -> Option<VisualTransactionKey> {
-        // Issue #702: 纯光标移动不再创建空 Cursor 文字事务。
-        // 只分配一个 key 作为 CursorAnimationState 的 driver_key 标识，
-        // 不入 prepared_queue。CursorAnimationState 拥有自己的 timeline
-        // （started_at + duration_ms），由 sample_cursor_only_position
-        // 用 Scene Graph 当前帧 frame_now 推进 from→to 动画。
-        let key = self.alloc_key();
-        Some(key)
-    }
-
     pub fn finish_by_key(&mut self, key: VisualTransactionKey) -> Option<Vec<LineSnapshotId>> {
         self.prepared_queue.complete(key)
     }
@@ -1904,6 +1889,8 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// 从新到旧找最近一条 state 不是 Completed/Cancelled 的正文事务（operation_kind
     /// 为 Insert/Delete/CompositionUpdate/CompositionCommitOrCancel）。
+    /// Issue #702 评论 5707449688 问题 2: TextVisualOperationKind::Cursor 已删除，
+    /// 所有非 Completed/Cancelled 的事务都是正文事务。
     pub(crate) fn active_text_transaction_key(&self) -> Option<VisualTransactionKey> {
         for tx in self.prepared_queue.active_transactions().iter().rev() {
             if matches!(
@@ -1912,9 +1899,7 @@ impl LinuxEditorAnimationCoordinator {
             ) {
                 continue;
             }
-            if tx.operation_kind != TextVisualOperationKind::Cursor {
-                return Some(tx.key);
-            }
+            return Some(tx.key);
         }
         None
     }
@@ -2000,9 +1985,6 @@ impl LinuxEditorAnimationCoordinator {
         old_visual_y: f64,
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
-        // Issue #679 评论 5657313927: Tween 必须带 driver key（从找到的或刚创建的事务获取）。
-        // None 时所有 Tween 路径 fallback 到 Snap。
-        driver_key: Option<VisualTransactionKey>,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
@@ -2028,17 +2010,17 @@ impl LinuxEditorAnimationCoordinator {
         let hard_snap =
             force_snap_next || is_scrolling || is_selecting || !old_visible || scroll_changed;
 
-        // Issue #679 评论 5657313927: 没有 driver key 时无法构造 Tween（需要 driver_key
-        // 字段），fallback 到 Snap。
-        let can_tween = driver_key.is_some();
+        // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
+        // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor
+        // 条件，就直接从当前 visual_x/visual_y 建自己的 Tween，由 CursorAnimationState
+        // 自己的 timeline 推进。
         // Issue #702: 纯光标移动 Tween 的 duration_ms，供 CursorAnimationState 自己的 timeline。
         let tween_duration_ms = u64::from(smooth_cursor_duration_ms);
 
         let transition = if !should_be_visible || hard_snap {
             CursorTransition::Snap
         } else if !smooth_cursor_enabled || cross_line_snap {
-            if can_tween
-                && coordinated_enabled
+            if coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
                 && new_cursor_rect.is_some()
@@ -2046,7 +2028,6 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    driver_key: driver_key.unwrap(),
                     duration_ms: tween_duration_ms,
                 }
             } else {
@@ -2054,8 +2035,7 @@ impl LinuxEditorAnimationCoordinator {
             }
         } else if let Some(anim) = cursor_animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
-                if can_tween
-                    && coordinated_enabled
+                if coordinated_enabled
                     && has_active
                     && old_cursor_rect.is_some()
                     && new_cursor_rect.is_some()
@@ -2063,10 +2043,11 @@ impl LinuxEditorAnimationCoordinator {
                     CursorTransition::Tween {
                         old_rect: old_cursor_rect.clone().unwrap(),
                         new_rect: new_cursor_rect.clone().unwrap(),
-                        driver_key: driver_key.unwrap(),
                         duration_ms: tween_duration_ms,
                     }
-                } else if can_tween {
+                } else {
+                    // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
+                    // 直接从当前 anim 的 start 位置建 Tween。
                     CursorTransition::Tween {
                         old_rect: CursorRect {
                             x: anim.start_x,
@@ -2080,18 +2061,14 @@ impl LinuxEditorAnimationCoordinator {
                             bottom: cursor_y + cursor_h,
                             baseline_y: cursor_y + cursor_h * 0.8,
                         },
-                        driver_key: driver_key.unwrap(),
                         duration_ms: tween_duration_ms,
                     }
-                } else {
-                    CursorTransition::Snap
                 }
             } else {
                 CursorTransition::Snap
             }
         } else if (old_visual_x - cursor_x).abs() > 0.01 || (old_visual_y - cursor_y).abs() > 0.01 {
-            if can_tween
-                && coordinated_enabled
+            if coordinated_enabled
                 && has_active
                 && old_cursor_rect.is_some()
                 && new_cursor_rect.is_some()
@@ -2099,10 +2076,11 @@ impl LinuxEditorAnimationCoordinator {
                 CursorTransition::Tween {
                     old_rect: old_cursor_rect.clone().unwrap(),
                     new_rect: new_cursor_rect.clone().unwrap(),
-                    driver_key: driver_key.unwrap(),
                     duration_ms: tween_duration_ms,
                 }
-            } else if can_tween {
+            } else {
+                // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
+                // 直接从当前 visual_x/visual_y 建 Tween。
                 CursorTransition::Tween {
                     old_rect: CursorRect {
                         x: old_visual_x,
@@ -2116,11 +2094,8 @@ impl LinuxEditorAnimationCoordinator {
                         bottom: cursor_y + cursor_h,
                         baseline_y: cursor_y + cursor_h * 0.8,
                     },
-                    driver_key: driver_key.unwrap(),
                     duration_ms: tween_duration_ms,
                 }
-            } else {
-                CursorTransition::Snap
             }
         } else {
             CursorTransition::Snap
@@ -2298,51 +2273,24 @@ impl LinuxEditorAnimationCoordinator {
     /// 当没有活跃文字事务但有 `cursor_ctrl.animation`（CursorOnly）时，从
     /// `frame_sample` 读取 driver 事务的 progress，按 ease-out-cubic 插值光标位置。
     /// 文字层和光标层都使用同一份 frame state。
+    /// Issue #702 评论 5707449688 问题 2: 不再用 `anim.driver_key` 查事务，
+    /// 直接用 CursorAnimationState 自己的 timeline（started_at + duration_ms）推进。
     fn sample_cursor_only_position(
         &self,
         anim: &super::rendering::CursorAnimationState,
         sample: &AnimationFrameSample,
     ) -> super::render_plan::CursorSampleOutcome {
-        // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。
-        // 先查 driver 事务是否存在；存在则从其 Timeline progress 采样
-        // （输入/删除存在正文视觉事务时，光标跟随文字吞吐边界）。
-        // 不存在则用 CursorAnimationState 自己的 timeline（started_at + duration_ms）
-        // 用 frame_now 推进 from→to 动画（纯方向键/Home/End 等没有正文事务时）。
-        let tx = self
-            .prepared_queue
-            .active_transactions()
-            .iter()
-            .find(|tx| tx.key == anim.driver_key);
-        match tx {
-            Some(tx) => match tx.state {
-                TextVisualTransactionState::Pending | TextVisualTransactionState::Prepared => {
-                    super::render_plan::CursorSampleOutcome::Idle
-                }
-                TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused => {
-                    let progress = sample.progress(anim.driver_key).clamp(0.0, 1.0);
-                    if progress >= 1.0 {
-                        super::render_plan::CursorSampleOutcome::Finished
-                    } else {
-                        super::render_plan::CursorSampleOutcome::Running(progress)
-                    }
-                }
-                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled => {
-                    super::render_plan::CursorSampleOutcome::Finished
-                }
-            },
-            None => {
-                // Issue #702: driver 事务不存在（纯光标移动）。
-                // 用 CursorAnimationState 自己的 timeline 推进。
-                let (progress, needs_start) = anim.sample_progress(sample.frame_now);
-                if needs_start {
-                    // 首帧：started_at 尚未初始化，返回 Idle 让调用方用 frame_now 启动。
-                    super::render_plan::CursorSampleOutcome::Idle
-                } else if progress >= 1.0 {
-                    super::render_plan::CursorSampleOutcome::Finished
-                } else {
-                    super::render_plan::CursorSampleOutcome::Running(progress)
-                }
-            }
+        // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦。
+        // 用 CursorAnimationState 自己的 timeline（started_at + duration_ms）
+        // 用 frame_now 推进 from→to 动画。
+        let (progress, needs_start) = anim.sample_progress(sample.frame_now);
+        if needs_start {
+            // 首帧：started_at 尚未初始化，返回 Idle 让调用方用 frame_now 启动。
+            super::render_plan::CursorSampleOutcome::Idle
+        } else if progress >= 1.0 {
+            super::render_plan::CursorSampleOutcome::Finished
+        } else {
+            super::render_plan::CursorSampleOutcome::Running(progress)
         }
     }
 
@@ -2582,6 +2530,8 @@ impl LinuxEditorAnimationCoordinator {
     }
 
     /// 返回当前最新正文编辑事务的操作类型，用于决定光标 blink mode。
+    /// Issue #702 评论 5707449688 问题 2: TextVisualOperationKind::Cursor 已删除，
+    /// 所有非 Completed/Cancelled 的事务都是正文事务。
     fn active_operation_kind(&self) -> Option<TextVisualOperationKind> {
         self.prepared_queue
             .active_transactions()
@@ -2591,7 +2541,7 @@ impl LinuxEditorAnimationCoordinator {
                 !matches!(
                     t.state,
                     TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
-                ) && t.operation_kind != TextVisualOperationKind::Cursor
+                )
             })
             .map(|t| t.operation_kind)
     }

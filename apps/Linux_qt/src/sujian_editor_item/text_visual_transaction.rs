@@ -21,7 +21,6 @@ pub(crate) enum TextVisualTransactionState {
 pub(crate) enum TextVisualOperationKind {
     Insert,
     Delete,
-    Cursor,
     CompositionUpdate,
     CompositionCommitOrCancel,
 }
@@ -439,10 +438,6 @@ pub(crate) struct PreparedTextVisualTransaction {
 }
 
 impl PreparedTextVisualTransaction {
-    pub fn is_cursor(&self) -> bool {
-        self.operation_kind == TextVisualOperationKind::Cursor
-    }
-
     pub fn is_composition(&self) -> bool {
         matches!(
             self.operation_kind,
@@ -647,9 +642,7 @@ impl PreparedTransactionQueue {
                     && t.state != TextVisualTransactionState::Completed
             })
             .find(|t| {
-                t.overlaps_byte_range(byte_start, byte_end)
-                    || (t.is_cursor() && byte_start == byte_end)
-                    || t.is_composition()
+                t.overlaps_byte_range(byte_start, byte_end) || t.is_composition()
             })
             .map(|t| t.key)
     }

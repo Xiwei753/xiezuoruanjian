@@ -125,17 +125,23 @@ fn issue702_theme_controller_publishes_unified_theme_state_json() {
 #[test]
 fn issue702_text_visual_operation_kind_has_cursor_variant() {
     let src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
-    // TextVisualOperationKind 枚举仍然存在（Insert/Delete/Cursor 变体保留），
-    // 但 Cursor 变体不再用于纯光标移动创建空事务。
+    // Issue #702 评论 5707449688 问题 2 修复: TextVisualOperationKind 枚举保留
+    // Insert/Delete/CompositionUpdate/CompositionCommitOrCancel 变体，
+    // 但 Cursor 变体已删除——纯光标移动彻底和文字事务 key 解耦。
     assert!(
         src.contains("enum TextVisualOperationKind"),
         "Issue #702: TextVisualOperationKind 枚举应存在"
     );
     assert!(
-        src.contains("Cursor") && src.contains("Insert") && src.contains("Delete"),
-        "Issue #702: TextVisualOperationKind 应包含 Cursor/Insert/Delete 变体"
+        src.contains("Insert") && src.contains("Delete"),
+        "Issue #702: TextVisualOperationKind 应包含 Insert/Delete 变体"
     );
-    println!("[BUGFIX_VERIFY] 问题2a: TextVisualOperationKind 枚举保留，Cursor 变体不再用于纯光标移动");
+    // Cursor 变体已删除，纯光标移动不再伪装成文字事务。
+    assert!(
+        !src.contains("Cursor,\n"),
+        "Issue #702 评论 5707449688 问题 2 修复: TextVisualOperationKind 不应再包含 Cursor 变体"
+    );
+    println!("[BUGFIX_VERIFY] 问题2a: TextVisualOperationKind 已删除 Cursor 变体，纯光标移动彻底解耦");
 }
 
 #[test]
@@ -177,41 +183,33 @@ fn issue702_cursor_branch_no_longer_creates_empty_transaction() {
 #[test]
 fn issue702_handle_cursor_only_no_longer_enqueues_prepared_transaction() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    // Issue #702 修复: handle_cursor_only 不再把空事务入 prepared_queue。
-    // 只分配一个 key 作为 CursorAnimationState 的 driver_key 标识。
-    let hc_marker = "pub fn handle_cursor_only";
-    let hc_pos = src
-        .find(hc_marker)
-        .expect("handle_cursor_only 必须存在");
-    // 取 handle_cursor_only 后 1200 字符
-    let window_end = hc_pos + 1200;
-    let window = if window_end <= src.len() {
-        &src[hc_pos..window_end]
-    } else {
-        &src[hc_pos..]
-    };
+    // Issue #702 评论 5707449688 问题 2 修复: handle_cursor_only 已彻底删除。
+    // 纯光标移动不再分配 driver_key，CursorAnimationState 拥有自己的 timeline
+    // （started_at + duration_ms），由 sample_cursor_only_position 用 frame_now 推进。
     assert!(
-        !window.contains("prepared_queue.enqueue"),
-        "Issue #702 修复: handle_cursor_only 不应再 enqueue 空事务到 prepared_queue"
+        !src.contains("pub fn handle_cursor_only"),
+        "Issue #702 评论 5707449688 问题 2 修复: handle_cursor_only 应已彻底删除"
     );
+    // build_cursor_plan 不再接受 driver_key 参数
     assert!(
-        !window.contains("mark_prepared"),
-        "Issue #702 修复: handle_cursor_only 不应再 mark_prepared"
+        !src.contains("driver_key: Option<VisualTransactionKey>"),
+        "Issue #702 评论 5707449688 问题 2 修复: build_cursor_plan 不应再接受 driver_key 参数"
     );
-    println!("[BUGFIX_VERIFY] 问题2a修复: handle_cursor_only 不再入队空事务");
+    println!("[BUGFIX_VERIFY] 问题2a修复: handle_cursor_only 已删除，build_cursor_plan 不再用 driver_key");
 }
 
 #[test]
 fn issue702_cursor_animation_state_has_own_timeline() {
     let src = read_src("src/sujian_editor_item/rendering.rs");
-    // Issue #702 修复: CursorAnimationState 拥有自己的 timeline。
+    // Issue #702 评论 5707449688 问题 2 修复: CursorAnimationState 拥有自己的 timeline，
+    // 不再保存 driver_key，彻底和文字事务 key 解耦。
     assert!(
         src.contains("pub struct CursorAnimationState"),
         "Issue #702: CursorAnimationState 结构体应存在"
     );
     assert!(
-        src.contains("driver_key: VisualTransactionKey"),
-        "Issue #702: CursorAnimationState 应有 driver_key"
+        !src.contains("driver_key: VisualTransactionKey"),
+        "Issue #702 评论 5707449688 问题 2 修复: CursorAnimationState 不应再有 driver_key"
     );
     // 新增 started_at 和 duration_ms 字段，让纯光标移动有自己的 timeline
     assert!(
@@ -231,7 +229,7 @@ fn issue702_cursor_animation_state_has_own_timeline() {
         src.contains("frame_now: Instant"),
         "Issue #702 修复: sample_progress 应接受 frame_now 参数"
     );
-    println!("[BUGFIX_VERIFY] 问题2a修复: CursorAnimationState 拥有自己的 timeline（started_at + duration_ms）");
+    println!("[BUGFIX_VERIFY] 问题2a修复: CursorAnimationState 拥有自己的 timeline（started_at + duration_ms），不再保存 driver_key");
 }
 
 #[test]

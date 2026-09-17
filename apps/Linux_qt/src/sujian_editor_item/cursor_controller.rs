@@ -138,7 +138,6 @@ impl CursorController {
             CursorTransition::Tween {
                 old_rect,
                 new_rect,
-                driver_key,
                 duration_ms,
             } => {
                 let start_x = old_rect.x;
@@ -152,15 +151,15 @@ impl CursorController {
                     // Issue #686 评论 5664857575 领域2：连续 Insert/Delete 的 driver 切换时，
                     // 从 `anim.current_position()` rebase 到最新 target，
                     // 不把视觉光标先落回旧 old_cursor_rect（start_x/start_y 不用于此分支）。
-                    let driver_changed = anim.driver_key != *driver_key;
+                    // Issue #702 评论 5707449688 问题 2: 不再比较 driver_key，
+                    // 纯光标移动只看 target 是否变化决定是否 rebase。
                     let target_changed = (anim.target_x - target_x).abs() > 0.01
                         || (anim.target_y - target_y).abs() > 0.01;
 
-                    if target_changed || driver_changed {
+                    if target_changed {
                         // 从当前视觉位置 rebase，不落回 old_rect。
                         let (cur_x, cur_y) = anim.current_position();
                         self.animation = Some(CursorAnimationState {
-                            driver_key: *driver_key,
                             start_x: cur_x,
                             start_y: cur_y,
                             target_x,
@@ -198,7 +197,6 @@ impl CursorController {
                             (start_x, start_y)
                         };
                         self.animation = Some(CursorAnimationState {
-                            driver_key: *driver_key,
                             start_x: init_x,
                             start_y: init_y,
                             target_x,

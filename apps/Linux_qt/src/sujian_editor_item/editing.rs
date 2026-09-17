@@ -683,7 +683,11 @@ impl SujianEditorItem {
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
         self.cursor_ctrl.affinity = affinity;
-        self.cursor_ctrl.force_snap_next = true;
+        // Issue #702 评论 5707449688 问题 1: 普通鼠标单击不再无条件 force_snap_next。
+        // drag_select_at/long_press_at/select_word_at 仍保留 force_snap_next=true，
+        // 因为它们确实应该立即对齐。普通单击只更新逻辑 cursor/affinity，
+        // 然后让 update_cursor_visual_position() 从当前 visual_x/visual_y rebase
+        // 到新 target，走 Tween 路径。
         editor_debug_log(&format!(
             "click_at: mouse_x={:.1}, mouse_y={:.1}, current_scroll_y={:.1}, hit_index={}, affinity={:?}, extend={}",
             x, y, self.current_scroll_y, index, affinity, extend

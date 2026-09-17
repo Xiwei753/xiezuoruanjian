@@ -5,22 +5,18 @@ use qmetaobject::QQuickItem;
 use std::time::Instant;
 
 use super::cursor_controller::CursorUpdateResult;
-use super::transaction_key::VisualTransactionKey;
 use super::SujianEditorItem;
 
 /// 光标动画状态 — 使用事务 Timeline 的 progress 而非独立时间源。
 ///
 /// Issue #516: 光标不再维护独立 Choreographer/start_time，
 /// 而是消费与文字动画相同的 Timeline progress。
-/// Issue #679 评论 5657313927: 保存 `driver_key` 指向驱动本段光标动画的视觉事务，
-/// `tick_cursor_animation` 按 key 取样 Timeline progress。
-/// Issue #702: 纯光标移动不再伪装成空 Cursor 文字事务。`started_at`/`duration_ms`
+/// Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
+/// `CursorAnimationState` 不再保存 `driver_key`。`started_at`/`duration_ms`
 /// 让 CursorAnimationState 拥有自己的 timeline，用 Scene Graph 当前帧的
-/// `frame_now` 推进 from→to 动画。`driver_key` 仅作为标识，不再要求对应
-/// 事务存在于 prepared_queue。
+/// `frame_now` 推进 from→to 动画。
 #[derive(Clone, Debug)]
 pub struct CursorAnimationState {
-    pub driver_key: VisualTransactionKey,
     pub start_x: f64,
     pub start_y: f64,
     pub target_x: f64,
@@ -112,67 +108,23 @@ impl SujianEditorItem {
 
         // Issue #679 评论 5657313927 (步骤 2): 根据当前 target 查 coordinator 里
         // 是否已经有对应的正文/预输入视觉事务。
-        let mut found_tx = self
+        let found_tx = self
             .pipeline
             .animation_coordinator()
             .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
-        let mut created_cursor_only_key: Option<VisualTransactionKey> = None;
 
         // Issue #686 评论 5664857575 领域2：存在活动正文事务时，光标位置由最新正文事务
-        // 的同一条 Timeline 决定，不再额外创建 CursorOnly。CursorOnly 只用于没有正文事务
-        // 的纯光标移动（方向键、Home/End、鼠标点击后的平滑移动）。
-        let has_active_text_tx = self
-            .pipeline
-            .animation_coordinator()
-            .active_text_transaction_key()
-            .is_some();
+        // 的同一条 Timeline 决定。纯光标移动（方向键、Home/End、鼠标点击后的平滑移动）
+        // 不再创建 CursorOnly 文字事务，由 CursorAnimationState 自己的 timeline 推进。
 
-        // Issue #679 评论 5657313927 (步骤 3): 如果没有事务、当前又确实应该平滑移动
-        // （不是点击强制 snap、不是滚动、不是选择），且 smooth cursor 开启，
-        // 就创建一个 CursorOnly，拿到它的 key。
-        // 注意：handle_cursor_only 是 &mut self，需要先做可变操作。
-        // Issue #679 评论 5658087764 (3): 创建 CursorOnly 前先判断光标是否真的移动了，
-        // 避免创建没有实际位移的事务白白压住 blink/请求动画帧。
-        let needs_cursor_motion = (self.cursor_ctrl.visual_x - cursor_x).abs() > 0.01
-            || (self.cursor_ctrl.visual_y - cursor_y).abs() > 0.01;
-
-        if found_tx.is_none()
-            && !has_active_text_tx
-            && needs_cursor_motion
-            && self.current_smooth_cursor_enabled
-            && !self.cursor_ctrl.force_snap_next
-            && !self.current_is_scrolling
-            && !is_selecting
-            && !is_preediting
-            && self.current_editor_enabled
-        {
-            let old_cursor_rect = self.current_cursor_rect_for_transaction();
-            let new_cursor_rect = Some(writer_core::editor::CursorRect {
-                x: cursor_x,
-                top: cursor_y,
-                bottom: cursor_y + cursor_h,
-                baseline_y: cursor_y + cursor_h * 0.8,
-            });
-            if let Some(key) = self
-                .pipeline
-                .animation_coordinator_mut()
-                .handle_cursor_only(old_cursor_rect, new_cursor_rect)
-            {
-                created_cursor_only_key = Some(key);
-                found_tx = self
-                    .pipeline
-                    .animation_coordinator()
-                    .find_cursor_transaction_for_target(cursor_x, cursor_y, cursor_h);
-            }
-        }
-
-        let (old_cursor_rect, new_cursor_rect, driver_key) = match found_tx {
-            Some((key, old_r, new_r)) => (old_r, new_r, Some(key)),
-            None => (None, None, created_cursor_only_key),
+        let (old_cursor_rect, new_cursor_rect) = match found_tx {
+            Some((_key, old_r, new_r)) => (old_r, new_r),
+            None => (None, None),
         };
 
         // Issue #679 评论 5657313927 (步骤 4): 调唯一的 build_cursor_plan。
-        // Tween 必须带 driver key（从找到的或刚创建的事务获取）。
+        // Issue #702 评论 5707449688 问题 2: 不再传 driver_key，纯光标 Tween 由
+        // CursorAnimationState 自己的 timeline 推进。
         let cursor_plan = self.pipeline.animation_coordinator().build_cursor_plan(
             old_cursor_rect,
             new_cursor_rect,
@@ -196,7 +148,6 @@ impl SujianEditorItem {
             self.cursor_ctrl.visual_y,
             self.cursor_ctrl.force_snap_next,
             self.cursor_ctrl.animation.as_ref(),
-            driver_key,
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。
