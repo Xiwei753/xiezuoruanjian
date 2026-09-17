@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import android.util.Log
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -182,6 +183,18 @@ class ComposeEditorVisualState(
      * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
      */
     private var nextLocalPatchId: Long = 1_000_000L
+
+    /**
+     * #703 评论 A 缺陷1：barrier ghost unit key 计数器 —
+     * 从 2_000_000L 起避免与 [ComposeVisualTimeline] 内部 nextUnitKey（从 1L 起）
+     * 和 [nextLocalPatchId]（从 1_000_000L 起）冲突。
+     *
+     * barrier ghost 是 pending ownership scene 里的临时 unit，
+     * 下一帧 [drainPendingPatchesAtFrame] 后由 timeline 的正式 scene 取代。
+     * key 只需在 barrier 期间唯一，不复用 timeline 的 key 空间，
+     * 避免 drain 后 timeline ghost 与 barrier ghost key 碰撞。
+     */
+    private var nextBarrierUnitKey: Long = 2_000_000L
 
     /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
@@ -505,8 +518,17 @@ class ComposeEditorVisualState(
         // offsetMap 用 chain 各笔 changes 合成保留输入顺序（composeLocalChainOffsetMap），
         // 但不为 chain 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过
         // （快速输入中间 layout 被跳过），虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
-        val retainedMoves =
-            ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
+        // #703 评论 C：本地删除先取消整行 retainedMoves 接管 —
+        // 被删除的 glyph 可以由 visual layer 接管（ghost）；
+        // 后续普通排版回流先交给 BasicTextField 自己；
+        // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
+        // 以后如果确实要做"整行平滑回流"，应单独设计 displacement/reflow layer，
+        // 并保证所有权原子交接，不能和 deleted ghost 混在同一套状态里。
+        // #703 评论 5710977972 缺陷2：本地普通输入/删除都不把整行幸存文字交给 retainedMoves。
+        // 本地 Insert 也直接 retainedMoves = emptyList()。
+        // 一次输入触发自动换行时，幸存文字不应被空间裁切误当"新字"隐藏/吐出。
+        // 以后如果要做整行平滑回流，单独做 reflow/displacement 层。
+        val retainedMoves = emptyList<RetainedMove>()
 
         // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
         // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
@@ -519,6 +541,21 @@ class ComposeEditorVisualState(
                 insertedUnits = insertedUnits,
                 deletedUnits = deletedUnits,
             )
+
+        // #703 评论 5709208101 问题3：本地编辑的旧 caret 不要再依赖 lastPresentedLayout.selection。
+        // 优先使用 chain.first().oldSelection.end + oldLayout.result 生成本次 edit 的明确 origin，
+        // 让 barrier 和 timeline 共用这一份 origin。
+        // 纯 selection 变化后 lastPresentedLayout.selection 可能 stale（onAuthoritativeLayout 去重 return 不更新），
+        // 用 chain.first().oldSelection.end 才是真实的 T0 caret。
+        val originCursorRect =
+            try {
+                val originOffset =
+                    firstEdit.oldSelection.end
+                        .coerceIn(0, oldLayout.result.layoutInput.text.length)
+                oldLayout.result.getCursorRect(originOffset)
+            } catch (_: Throwable) {
+                null
+            }
 
         nextLocalPatchId++
         return ComposeVisualPatch(
@@ -538,6 +575,7 @@ class ComposeEditorVisualState(
             animationMode = planAnimationMode,
             motionPolicy = motionPolicy,
             intent = null,
+            originCursorRect = originCursorRect,
         )
     }
 
@@ -644,6 +682,102 @@ class ComposeEditorVisualState(
                             "newLen=${newText.length} chainSize=${localChain.size} " +
                             "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
+                    // #703 评论 A：editEpoch barrier — 本地输入一发生就建立视觉所有权屏障。
+                    // 在新 layout + visual scene 准备好之前，不能让"已更新后的 BasicTextField 原始正文"
+                    // 裸画一帧。生成 localPatch 入队后同步把 localPatch.insertedUnits merge 到
+                    // _visualScene.hiddenRanges，让 draw 层在同一帧就裁切掉新插入区域。
+                    // 不调 drainPendingPatchesAtFrame — 那会清空 pendingPatches，破坏 #694 批量 drain
+                    // 设计（同一 VSync 多笔输入应积攒到下一帧 withFrameNanos 一次性合成 batch drain）。
+                    // 也不调 sampleVisualScene — 动画进度（alpha/position/clipFraction）应由下一帧
+                    // withFrameNanos 用精确 frameTimeNanos 采样，不用 System.nanoTime() 猜当前帧。
+                    // barrier 只需声明范围所有权（hiddenRanges），动画 unit 由下一帧 sample 产生。
+                    //
+                    // #703 评论 A 缺陷1：删除路径也要建立视觉所有权屏障。
+                    // 旧实现只处理 insertedUnits（加入 hiddenRanges），对 deletedUnits 无任何处理。
+                    // 删除后 BasicTextField 已切到新正文（被删 glyph 不存在），但 deleted ghost 要等
+                    // 下一帧 drainPendingPatchesAtFrame->timeline.applyPatch 才创建，导致
+                    // "先消失/闪一下 -> ghost 再出现 -> 光标移动 -> 最后消失"的裸帧窗口。
+                    //
+                    // 修复：把 barrier 做成 pending ownership scene：
+                    // - inserted range：立即加入 hiddenRanges（保留原逻辑）。
+                    // - deleted range：立即根据 oldLayout + deletedUnits 建立静态 ghost，
+                    //   alpha=1（完整可见）、position=旧位置、targetRange=null，
+                    //   加入 _visualScene.units，让 draw 层在同帧就画出旧字。
+                    // - cursor：改回旧 caret 位置，不要先跳到新 selection 的 resting cursor，
+                    //   避免光标先跳到新位置再被 timeline cursor 动画拉回旧位置（回抽）。
+                    // 下一帧 drain 时 timeline.applyPatch 会创建自己的 ghost（alpha 1->0），
+                    // sample 后用 timeline scene 覆盖 _visualScene，barrier ghost 被取代。
+                    // timeline ghost 在 drain 帧的 alpha=1、位置=旧位置，与 barrier ghost 一致，
+                    // 视觉上无缝衔接，不会再次闪烁。
+                    _visualScene.update { scene ->
+                        val mergedHidden = scene.hiddenRanges.toMutableList()
+                        for (ins in localPatch.insertedUnits) {
+                            if (ins.start < ins.end &&
+                                mergedHidden.none { it.start == ins.start && it.end == ins.end }
+                            ) {
+                                mergedHidden.add(ins)
+                            }
+                        }
+                        // 删除路径 barrier：为 deletedUnits 建立静态 ghost
+                        val mergedUnits = scene.units.toMutableList()
+                        for (del in localPatch.deletedUnits) {
+                            if (del.start >= del.end) continue
+                            // 已有同 range 的 ghost 则跳过
+                            if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
+                            // 从 oldLayout 取旧位置建立静态 ghost
+                            val oldBounds =
+                                ComposeVisualRebase.safePathBounds(
+                                    oldLayout.result, del,
+                                ) ?: continue
+                            val oldPosition = Offset(oldBounds.left, oldBounds.top)
+                            nextBarrierUnitKey++
+                            mergedUnits +=
+                                VisualTextUnit(
+                                    key = nextBarrierUnitKey,
+                                    layout = oldLayout,
+                                    range = del,
+                                    targetRange = null,
+                                    // 完整可见：alpha=1，不动画
+                                    alpha = TimedFloat(1f, 1f, 0L, 0L),
+                                    position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                                    // #703 评论 5710977972 缺陷2：barrier ghost 角色 = DeletedGhost，
+                                    // 由 cursor 从右向左裁切吞掉。
+                                    role = VisualUnitRole.DeletedGhost,
+                                )
+                        }
+                        // #703 评论 5710419102 问题1：删除首帧光标所有权 —
+                        // 把旧 caret 放进 scene.cursorRect，让 draw 层第一优先级使用它。
+                        // draw 层优先级是 scene.cursorRect ?: computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect，
+                        // 删除后 latestLayout/liveSelection 已是新值，computeRestingCursorRect 会先命中新 caret，
+                        // _restingCursorRect 永远不会被读到。所以必须写 scene.cursorRect。
+                        // barrier ghost、hiddenRanges、旧 cursor 必须在同一次 _visualScene.update 里一起发布，形成原子视觉场景。
+                        // 下一帧 drainPendingPatchesAtFrame 后 timeline 的 sample() 会接管 scene.cursorRect。
+                        // _restingCursorRect 保持"无活动动画时的最终静止位置"语义（上方已设成新 layout cursor）。
+                        // 优先用 localPatch.originCursorRect（从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
+                        // 不依赖可能 stale 的 oldLayout.selection。
+                        val barrierCursorRect =
+                            if (localPatch.deletedUnits.isNotEmpty()) {
+                                localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
+                            } else {
+                                null
+                            }
+                        val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
+                        val unitsChanged = mergedUnits.size != scene.units.size
+                        val cursorChanged = barrierCursorRect != null && barrierCursorRect != scene.cursorRect
+                        if (!hiddenChanged && !unitsChanged && !cursorChanged) {
+                            scene
+                        } else {
+                            scene.copy(
+                                hiddenRanges = mergedHidden,
+                                units = mergedUnits,
+                                cursorRect = barrierCursorRect ?: scene.cursorRect,
+                            )
+                        }
+                    }
+                    // #703 评论 5710419102 问题1：不再单独改 _restingCursorRect。
+                    // 旧 caret 已通过 scene.cursorRect 发布（draw 层第一优先级）。
+                    // _restingCursorRect 保持上方设置的"新 layout cursor"语义
+                    // （无活动动画时的最终静止位置），不拿它承担 pending delete barrier。
                 }
             }
             // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，
@@ -911,7 +1045,15 @@ class ComposeEditorVisualState(
 
         // #691 评论 5679242735 修改3：fromRect = 旧 layout 真实光标位置
         // （取不到回退 path.points.first().rect），points = path.points 完整保留。
-        val fromRect = computeCursorRectFromLayout(patch.oldLayout) ?: path.points.first().rect
+        //
+        // #703 评论 5709208101 问题3：fromRect 优先用 patch.originCursorRect
+        // （本地编辑从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
+        // 不依赖 patch.oldLayout.selection（纯 selection 变化后可能 stale）。
+        // Core/external 路径 originCursorRect 为 null，回退到 computeCursorRectFromLayout(patch.oldLayout)。
+        val fromRect =
+            patch.originCursorRect
+                ?: computeCursorRectFromLayout(patch.oldLayout)
+                ?: path.points.first().rect
 
         // #691 评论 5686733880：cursor 时长决定逻辑收口到此一处。
         // 只有真正的协同文字事务才用 textDurationMillis，必须同时满足四个条件：

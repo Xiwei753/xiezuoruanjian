@@ -420,13 +420,14 @@ internal object ComposeLocalVisualRebase {
             }
         }
         if (points.isEmpty()) {
-            // 删除/混合/纯插入但取不到阶段点：
-            // 只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）
-            // oldCursorRect 从 T0 真实起点（oldSelection.end on oldLayout）取
-            val oldCursorRect = safeCursorRectFromLayout(oldLayout, oldSelection.end)
-            if (oldCursorRect != null && oldCursorRect != newCursorRect) {
-                points.add(CursorMotionPoint(rect = oldCursorRect, endFraction = 0f))
-            }
+            // #703 评论 5709208101 问题1：删除/混合/纯插入但取不到阶段点 —
+            // cursor origin 和 target 的职责彻底分开：
+            // - fromRect 只保存旧 caret（由 computeCursorParamsForPatch 从 oldLayout 取，或优先用 patch.originCursorRect）
+            // - CursorMotionPath.points 只保存后续目标点
+            // 删除/混合场景不要再把 oldCursorRect 同时塞进 points，
+            // 否则 timeline 收到 fromRect(旧) -> point[0](旧, 0.5) -> point[1](新, 1.0)，
+            // 因 fromRect == point[0] 前半段光标原地不动。
+            // 本地单字删除应该是：fromRect = oldCaret, points = [newCaret]。
             points.add(CursorMotionPoint(rect = newCursorRect, endFraction = 1f))
         }
         // 归一化 endFraction = (i + 1f) / n，与 timeline unit-wise 分段时序一致
@@ -534,7 +535,6 @@ internal object ComposeLocalVisualRebase {
         deletedUnits: List<TextRange>,
     ): CursorMotionPath? {
         val lastEdit = chain.lastOrNull() ?: return null
-        val firstEdit = chain.first()
         val newCursorRect = safeCursorRectFromLayout(newLayout, lastEdit.newSelection.end) ?: return null
         // 无文字动画语义 → 单点路径 snap 到新光标位置
         if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
@@ -551,13 +551,14 @@ internal object ComposeLocalVisualRebase {
             }
         }
         if (points.isEmpty()) {
-            // 删除/混合/纯插入但取不到阶段点：
-            // 只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）
-            // oldCursorRect 从 T0 真实起点（firstEdit.oldSelection.end on oldLayout）取
-            val oldCursorRect = safeCursorRectFromLayout(oldLayout, firstEdit.oldSelection.end)
-            if (oldCursorRect != null && oldCursorRect != newCursorRect) {
-                points.add(CursorMotionPoint(rect = oldCursorRect, endFraction = 0f))
-            }
+            // #703 评论 5709208101 问题1：删除/混合/纯插入但取不到阶段点 —
+            // cursor origin 和 target 的职责彻底分开：
+            // - fromRect 只保存旧 caret（由 computeCursorParamsForPatch 从 oldLayout 取，或优先用 patch.originCursorRect）
+            // - CursorMotionPath.points 只保存后续目标点
+            // 删除/混合场景不要再把 oldCursorRect 同时塞进 points，
+            // 否则 timeline 收到 fromRect(旧) -> point[0](旧, 0.5) -> point[1](新, 1.0)，
+            // 因 fromRect == point[0] 前半段光标原地不动。
+            // 本地单字删除应该是：fromRect = oldCaret, points = [newCaret]。
             points.add(CursorMotionPoint(rect = newCursorRect, endFraction = 1f))
         }
         // 归一化 endFraction = (i + 1f) / n，与 timeline unit-wise 分段时序一致

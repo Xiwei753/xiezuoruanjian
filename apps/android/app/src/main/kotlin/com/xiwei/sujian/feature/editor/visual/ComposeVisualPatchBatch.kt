@@ -102,19 +102,14 @@ internal object ComposeVisualPatchBatch {
                 emptyList()
             }
 
-        // retainedMoves 只按第一份旧 layout 和最后一份新 layout 算一次
-        // #698 评论 5697612595 chainSize > 1 reflow 收口 —
-        // retainedMoves 只算一次（oldLayout -> newLayout），不为 batch 中间笔虚构中间 layout。
-        val retainedMoves =
-            if (composedOffsetMap.isNotEmpty()) {
-                ComposeVisualRebase.computeRetainedMovesFromComposedMap(
-                    oldLayout,
-                    newLayout,
-                    composedOffsetMap,
-                )
-            } else {
-                emptyList()
-            }
+        // #703 评论 5712256296 缺口1：batch 不再凭几何重算 retainedMoves —
+        // 只合成各 stage patch 已明确携带的显式 retainedMoves。
+        // 旧实现无条件调 computeRetainedMovesFromComposedMap(oldLayout, newLayout, composedOffsetMap)，
+        // 凭最终几何变化重新创造 retainedMoves；但本地输入 patch 的 retainedMoves 本就为空，
+        // batch 不应凭几何发明出非空 retainedMoves 把幸存文字错误交给 overlay 接管。
+        // 各 stage retainedMoves 都为空时结果为空；某 stage 有非空 retainedMoves（未来 Core/external
+        // 路径）时按 stage offset map 映射 oldRange→T0 / newRange→Tn 后合成。
+        val retainedMoves = composeRetainedMovesAcrossStages(batch)
 
         // #694 评论 5694645209 问题2：cursor path 用专门的 batch cursor path 合成 —
         // 按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序，
@@ -183,7 +178,104 @@ internal object ComposeVisualPatchBatch {
             animationMode = animationMode,
             motionPolicy = motionPolicy,
             intent = last.intent,
+            // #703 评论 5709208101 问题3：batch 合成时 originCursorRect 从首笔取
+            // （首笔的 origin 是整个 chain 的 T0 caret）。
+            originCursorRect = first.originCursorRect,
         )
+    }
+
+    /**
+     * #703 评论 5712256296 缺口1：batch 不再凭几何重算 retainedMoves —
+     * 只合成各 stage patch 已明确携带的显式 retainedMoves。
+     *
+     * - 各 stage 的 retainedMoves 都为空时，结果为空（常见本地输入路径：
+     *   [ComposeEditorVisualState.buildLocalInputPatch] 已把本地输入的 retainedMoves 清空）。
+     * - 某些 stage 有非空 retainedMoves（未来 Core/external 路径）时，把各 stage 的显式
+     *   [RetainedMove] 按 stage offset map 映射：oldRange 沿前置 stage offset map 映射回 T0，
+     *   newRange 沿后续 stage offset map 映射到 Tn，再按原配对顺序合成。
+     *
+     * 不再无条件调 [ComposeVisualRebase.computeRetainedMovesFromComposedMap] 凭最终几何
+     * 重新创造 retainedMoves — 那会在本地输入 batch（每笔 retainedMoves 都为空）时凭几何
+     * 发明出非空 retainedMoves，把幸存文字错误交给 overlay 接管。
+     *
+     * 映射模式参考 [ComposeVisualRebase.composeNewUnitsToFinalStages]（newRange 沿后续 stage
+     * 正向映射到 Tn）和 [ComposeVisualRebase.composeOldUnitsToBaseStages]（oldRange 沿前置 stage
+     * 反向映射回 T0）。
+     *
+     * @param batch 同一帧待消费的 patch 列表。
+     * @return 合成后的 retainedMoves 列表。
+     */
+    private fun composeRetainedMovesAcrossStages(batch: List<ComposeVisualPatch>): List<RetainedMove> {
+        if (batch.isEmpty()) return emptyList()
+        // 各 stage 的 retainedMoves 都为空时直接返回空（常见本地输入路径）
+        if (batch.all { it.retainedMoves.isEmpty() }) return emptyList()
+
+        val n = batch.size
+        val perStageOffsetMaps = batch.map { it.offsetMap }
+        val result = mutableListOf<RetainedMove>()
+        for (i in 0 until n) {
+            val moves = batch[i].retainedMoves
+            if (moves.isEmpty()) continue
+            for (move in moves) {
+                val oldRanges = mapRetainedMoveOldRangeToBase(move.oldRange, i, perStageOffsetMaps)
+                val newRanges = mapRetainedMoveNewRangeToFinal(move.newRange, i, perStageOffsetMaps, n)
+                // offset map 保序，映射后按相同索引配对（拆分后一一对应）
+                val minLen = minOf(oldRanges.size, newRanges.size)
+                for (k in 0 until minLen) {
+                    result.add(RetainedMove(oldRange = oldRanges[k], newRange = newRanges[k]))
+                }
+            }
+        }
+        return result
+    }
+
+    /**
+     * 把 stage [stageIndex] 的 retainedMove.oldRange（T_i 坐标）沿前置 stage offset map
+     * 反向映射回 T0。null offset map 跳过该 stage 映射；空 entries 清空结果。
+     *
+     * 算法同 [ComposeVisualRebase.composeOldUnitsToBaseStages] 的单 range 版本。
+     */
+    private fun mapRetainedMoveOldRangeToBase(
+        oldRange: TextRange,
+        stageIndex: Int,
+        perStageOffsetMaps: List<List<VisualOffsetMapEntry>?>,
+    ): List<TextRange> {
+        var ranges = listOf(oldRange)
+        mapBackwardLoop@ for (j in (stageIndex - 1) downTo 0) {
+            val entries = perStageOffsetMaps[j]
+            if (entries == null) continue@mapBackwardLoop
+            if (entries.isEmpty()) {
+                ranges = emptyList()
+                break@mapBackwardLoop
+            }
+            ranges = ComposeVisualRebase.mapRangesBackwardThroughOffsetMap(ranges, entries)
+        }
+        return ranges
+    }
+
+    /**
+     * 把 stage [stageIndex] 的 retainedMove.newRange（T_{i+1} 坐标）沿后续 stage offset map
+     * 正向映射到 Tn。null offset map 跳过该 stage 映射；空 entries 清空结果。
+     *
+     * 算法同 [ComposeVisualRebase.composeNewUnitsToFinalStages] 的单 range 版本。
+     */
+    private fun mapRetainedMoveNewRangeToFinal(
+        newRange: TextRange,
+        stageIndex: Int,
+        perStageOffsetMaps: List<List<VisualOffsetMapEntry>?>,
+        stageCount: Int,
+    ): List<TextRange> {
+        var ranges = listOf(newRange)
+        mapForwardLoop@ for (j in (stageIndex + 1) until stageCount) {
+            val entries = perStageOffsetMaps[j]
+            if (entries == null) continue@mapForwardLoop
+            if (entries.isEmpty()) {
+                ranges = emptyList()
+                break@mapForwardLoop
+            }
+            ranges = ComposeVisualRebase.mapRangesForwardThroughOffsetMap(ranges, entries)
+        }
+        return ranges
     }
 
     /**

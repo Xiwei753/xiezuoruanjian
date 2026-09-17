@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
@@ -52,6 +53,13 @@ data class RetainedMove(
  * @param motionPolicy 动画策略 — effective 后的策略，overlay 据此决定 text/cursor timeline。
  * @param intent 原始 Core intent — 用于 offsetMap==null 时根据 replaceBounds
  *   生成 fallback survival map，防止等长替换时旧 unit 被错认成新 unit。
+ * @param originCursorRect #703 评论 5709208101 问题3：本次编辑的明确 T0 caret rect —
+ *   本地编辑从 `chain.first().oldSelection.end + oldLayout.result.getCursorRect()` 取，
+ *   不依赖 `oldLayout.selection`（纯 selection 变化后 lastPresentedLayout.selection 可能 stale）。
+ *   barrier（onAuthoritativeLayout 删除路径）和 timeline（computeCursorParamsForPatch fromRect）
+ *   共用这一份 origin，避免旧 caret 取错。
+ *   null 表示无明确 origin（Core/external 路径用 oldSelection 参数已明确，或取不到 rect），
+ *   调用方回退到 computeCursorRectFromLayout(patch.oldLayout)。
  */
 data class ComposeVisualPatch(
     val id: Long,
@@ -67,4 +75,5 @@ data class ComposeVisualPatch(
     val animationMode: AnimationModeDto,
     val motionPolicy: EditorMotionPolicy,
     val intent: EditorVisualIntent? = null,
+    val originCursorRect: Rect? = null,
 )

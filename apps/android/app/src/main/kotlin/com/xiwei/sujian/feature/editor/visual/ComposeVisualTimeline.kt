@@ -60,6 +60,13 @@ class ComposeVisualTimeline {
     private var cursorChannel: CursorTrack? = null
 
     /**
+     * #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记 —
+     * applyPatch 时从 patch.motionPolicy.effective() 设置，
+     * sample 时传给 ComposeVisualScene，draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1）。
+     */
+    private var coordinatedSpatialClip: Boolean = false
+
+    /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
      *
      * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
@@ -110,6 +117,53 @@ class ComposeVisualTimeline {
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
         val policy = patch.motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+
+        // #703 评论 5709208101 问题2：记录 coordinated + spatial clip 模式，
+        // sample 时传给 scene，draw 层据此用 clipFraction 覆盖 alpha。
+        coordinatedSpatialClip = policy.textEnabled && policy.cursorEnabled && policy.coordinated
+
+        // #703 评论 D：scene redirect — 快速输入/删除采用 scene redirect，不堆积旧动画。
+        // 新 edit 到达时，从"当前屏幕真正画到的位置"重定向到新目标。
+        // 旧 editEpoch 的延迟 patch、ghost、cursor path、retained move 如果已被新编辑覆盖，
+        // 就必须失效或正确 rebase，不能继续在后面补播。
+        // 具体：旧 ghost 的 range 被新 insertedUnits 完全包含时，移除旧 ghost
+        // （新编辑已在该位置插入新字，旧 ghost 不应继续淡出）。
+        // 旧存活 unit 的 targetRange 被新 deletedUnits 完全包含时，转成 ghost
+        // （新编辑删除了该位置的旧字，旧 unit 不应继续存活）。
+        // 只对"完全包含"转 ghost/移除 — 部分重叠保留原有 rebase/切片逻辑（#689 缺陷5 跨删除洞切存活 slice），
+        // 否则会把跨删除洞的部分存活 unit 也整块转 ghost，破坏切片行为。
+        if (policy.textEnabled) {
+            val newInsertedRanges = patch.insertedUnits
+            val newDeletedRanges = patch.deletedUnits
+            if (newInsertedRanges.isNotEmpty() || newDeletedRanges.isNotEmpty()) {
+                units =
+                    units.mapNotNull { unit ->
+                        if (unit.targetRange == null) {
+                            // ghost：如果 range 被新 insertedUnits 完全包含，移除（新编辑已在该位置插入新字）
+                            if (newInsertedRanges.any { ins ->
+                                    ins.start <= unit.range.start && unit.range.end <= ins.end
+                                }
+                            ) {
+                                presentedKeys.remove(unit.key)
+                                null
+                            } else {
+                                unit
+                            }
+                        } else {
+                            // 存活 unit：如果 targetRange 被新 deletedUnits 完全包含，转 ghost
+                            val fullyDeleted =
+                                newDeletedRanges.firstOrNull { del ->
+                                    del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
+                                }
+                            if (fullyDeleted != null) {
+                                toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                            } else {
+                                unit
+                            }
+                        }
+                    }
+            }
+        }
 
         // #691 评论 5681258225：surviving 列表在 if/else 之前声明，
         // 让 cursor 合并逻辑在 textEnabled=false 时也能访问（此时为空列表）。
@@ -474,6 +528,9 @@ class ComposeVisualTimeline {
                         targetRange = range,
                         alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                         position = TimedOffset(position, position, frameTimeNanos, 0L),
+                        // #703 评论 5710977972 缺陷2：新插入字角色 = Inserted，
+                        // 由 cursor 从左向右裁切吐出。
+                        role = VisualUnitRole.Inserted,
                     ),
                 )
             }
@@ -533,6 +590,9 @@ class ComposeVisualTimeline {
                     targetRange = null,
                     alpha = TimedFloat(1f, 0f, ghostStartedAt, ghostDuration),
                     position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
+                    // #703 评论 5710977972 缺陷2：删除 ghost 角色 = DeletedGhost，
+                    // 由 cursor 从右向左裁切吞掉。
+                    role = VisualUnitRole.DeletedGhost,
                 )
         }
     }
@@ -628,13 +688,20 @@ class ComposeVisualTimeline {
         val unit = surviving[idx]
         val newPosition = computeUnitPosition(newLayout, newRange) ?: return
         val oldPosition = currentOffset(unit.position, frameTimeNanos) ?: newPosition
-        // 只有位置真变了才重定向（删换行时几何没变的文字不产生 position track）
-        if (newPosition != oldPosition) {
-            surviving[idx] =
-                unit.copy(
-                    position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
-                )
-        }
+        // 只有位置真变了才重定向 position 通道（删换行时几何没变的文字不产生 position track）
+        val positionChannel =
+            if (newPosition != oldPosition) {
+                TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos)
+            } else {
+                unit.position
+            }
+        // #703 评论 5712256296 缺口2：被判定为 retained move 的已有 unit，role 必须同步切换为 RetainedMove。
+        // 否则原本 Inserted unit 被重定向后 role 仍是 Inserted，computeUnitClipFractions 仍按 cursor 裁切。
+        surviving[idx] =
+            unit.copy(
+                position = positionChannel,
+                role = VisualUnitRole.RetainedMove,
+            )
     }
 
     private fun createMoveUnitForReflow(
@@ -659,6 +726,9 @@ class ComposeVisualTimeline {
                 targetRange = newRange,
                 alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
                 position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                // #703 评论 5710977972 缺陷2：幸存回流文字角色 = RetainedMove，
+                // 始终完整可见，不进入 spatial clip 裁切。
+                role = VisualUnitRole.RetainedMove,
             )
     }
 
@@ -727,7 +797,168 @@ class ComposeVisualTimeline {
                 .filter { it.start < it.end }
         // #691：采样光标位置 — 与文字使用同一个 frameTimeNanos
         val sampledCursor = sampleCursorRect(frameTimeNanos)
-        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges, cursorRect = sampledCursor)
+        // #703 评论 B：空间进度驱动吞吐字 — 根据 cursor 位置算每个 unit 的可见 fraction。
+        // 不再把 alpha 当作"这个字是否出现"的权威状态。
+        // - 吐字（inserted unit, targetRange != null）：cursor 从 glyph 左侧向右侧移动，
+        //   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+        // - 吞字（deleted ghost, targetRange == null）：
+        //   #703 评论 A 缺陷2 统一边界模型 — fraction = (cursor.left - glyph.left) / glyph.width，
+        //   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
+        //   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
+        // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
+        val unitClipFractions =
+            if (sampledCursor != null) {
+                computeUnitClipFractions(sampledUnits, sampledCursor)
+            } else {
+                emptyMap()
+            }
+        return ComposeVisualScene(
+            units = sampledUnits,
+            hiddenRanges = hiddenRanges,
+            cursorRect = sampledCursor,
+            unitClipFractions = unitClipFractions,
+            coordinatedSpatialClip = coordinatedSpatialClip,
+        )
+    }
+
+    /**
+     * #703 评论 B：空间进度驱动吞吐字 — 根据 cursor 位置算每个 unit 的可见 fraction。
+     *
+     * - 吐字（inserted unit, targetRange != null）：
+     *   cursor 从 glyph 左侧向右侧移动，glyph 可见区域 = [glyph.left, cursor.left]。
+     *   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+     *   cursor.left <= glyph.left → fraction = 0（字不可见）。
+     *   cursor.left >= glyph.right → fraction = 1（字完全可见）。
+     * - 吞字（deleted ghost, targetRange == null）：
+     *   #703 评论 A 缺陷2：统一边界模型 — delete 和 insert 的可见区域都用
+     *   [glyph.left, glyph.left + glyph.width * fraction]，
+     *   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+     *   cursor 从 glyph 右侧向左侧移动：
+     *   cursor.left >= glyph.right → fraction = 1（字仍完全可见，光标还没开始吞）。
+     *   cursor.left <= glyph.left → fraction = 0（字已完全被吞掉）。
+     *   draw 层对 insert 和 delete 都画 [left, left + width * fraction]。
+     *
+     * #703 评论 A 缺陷3：跨行裁切 — 必须先判断 cursor 和 glyph 是否在同一行。
+     * 旧实现只比较 cursorRect.left 和 glyph bounds.left/right，跨行时下一行 glyph
+     * 会被 coerceIn 成 1 提前完整出现。新实现先比较 top/bottom：
+     * - cursor 和 glyph 不同行（cursorBottom <= glyphTop 或 cursorTop >= glyphBottom）：
+     *   insert 分支 fraction = 0（光标还没到这一行，字不可见）。
+     *   delete 分支 fraction = 1（光标还没退到这一行，字仍完整可见）。
+     * - 同行时再按 cursorX 裁切。
+     *
+     * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
+     * draw 层用 fraction 裁切 glyph 可见区域。
+     *
+     * @param units 当前帧的 sampled units（alpha/position 已插值到当前帧）。
+     * @param cursorRect 当前光标 rect。
+     * @return unit key → 可见 fraction（0..1）。
+     */
+    private fun computeUnitClipFractions(
+        units: List<VisualTextUnit>,
+        cursorRect: Rect,
+    ): Map<Long, Float> {
+        if (units.isEmpty()) return emptyMap()
+        val cursorLeft = cursorRect.left
+        val cursorTop = cursorRect.top
+        val cursorBottom = cursorRect.bottom
+        val result = mutableMapOf<Long, Float>()
+        for (unit in units) {
+            val alphaNow = unit.alpha.from
+            // #703 评论 5710419102 问题2：coordinated 模式下空间裁切是主导，
+            // 不能用 alpha 决定是否计算 clipFraction。新插入 unit 首帧 alpha=0，
+            // 如果跳过则 unitClipFractions 缺 key，draw 层默认成 1，整字首帧完整出现。
+            // coordinated 模式：所有 scene unit 都计算 clipFraction。
+            // 非 coordinated 模式：保留 alpha<=0 跳过（alpha 仍主导显隐）。
+            if (!coordinatedSpatialClip && alphaNow <= 0f) continue
+            // 取 glyph bounds（用 unit 当前 layout + range）
+            val bounds = safePathBoundsForUnit(unit) ?: continue
+            val glyphLeft = bounds.left
+            val glyphRight = bounds.right
+            val glyphTop = bounds.top
+            val glyphBottom = bounds.bottom
+            val glyphWidth = glyphRight - glyphLeft
+            // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
+            if (glyphWidth < 0.5f) {
+                result[unit.key] = 1f
+                continue
+            }
+            // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
+            // 不进入 spatial clip 裁切。显式放入 fraction=1 最稳妥，
+            // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
+            if (unit.role == VisualUnitRole.RetainedMove) {
+                result[unit.key] = 1f
+                continue
+            }
+            // #703 评论 5710977972 缺陷1：跨行裁切改为按行序单调状态。
+            // 旧实现只用 sameLine（cursor 和 glyph 的垂直区间是否重叠）无方向判断，
+            // 吐字时光标进入下一行后上一行 inserted unit 变 fraction=0（字消失），
+            // 吞字时光标退回上一行后下一行 ghost 变 fraction=1（字重新出现）。
+            //
+            // 新实现用 layout 的 line index 判断方向（不拿 glyph bounds 的 top/bottom，
+            // glyph 可能只占行一部分）：
+            // - glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
+            // - glyphLineTop = getLineTop(glyphLine), glyphLineBottom = getLineBottom(glyphLine)
+            // - cursorBeforeGlyphLine = cursorBottom <= glyphLineTop（光标在 glyph 行之前/上方）
+            // - cursorAfterGlyphLine = cursorTop >= glyphLineBottom（光标在 glyph 行之后/下方）
+            //
+            // 按行序单调状态：
+            // - Inserted（吐字，光标从左向右移动，字从左向右出现）：
+            //   * cursorAfterGlyphLine（光标已过这一行）→ fraction = 1（字完整可见，已吐完）
+            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+            //   * cursorBeforeGlyphLine（光标还没到这一行）→ fraction = 0（字不可见）
+            // - DeletedGhost（吞字，光标从右向左退，从下方往上退）：
+            //   * cursorBeforeGlyphLine（光标在 ghost 行上方，已退过这一行）→ fraction = 0（字被吞掉）
+            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+            //   * cursorAfterGlyphLine（光标在 ghost 行下方，还没退到这一行）→ fraction = 1（字仍完整可见）
+            val (glyphLineTop, glyphLineBottom) =
+                try {
+                    val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
+                    unit.layout.result.getLineTop(glyphLine) to
+                        unit.layout.result.getLineBottom(glyphLine)
+                } catch (_: Throwable) {
+                    // layout 行信息取不到时 fallback 到旧 sameLine 语义（用 glyph bounds），
+                    // 保证不会因 layout API 异常而整字消失。
+                    glyphTop to glyphBottom
+                }
+            val cursorBeforeGlyphLine = cursorBottom <= glyphLineTop
+            val cursorAfterGlyphLine = cursorTop >= glyphLineBottom
+            val fraction =
+                when (unit.role) {
+                    VisualUnitRole.Inserted -> {
+                        when {
+                            cursorAfterGlyphLine -> 1f
+                            cursorBeforeGlyphLine -> 0f
+                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                        }
+                    }
+                    VisualUnitRole.DeletedGhost -> {
+                        when {
+                            cursorBeforeGlyphLine -> 0f
+                            cursorAfterGlyphLine -> 1f
+                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                        }
+                    }
+                    VisualUnitRole.RetainedMove -> 1f
+                }
+            result[unit.key] = fraction
+        }
+        return result
+    }
+
+    /**
+     * #703 评论 B：安全取 unit 的 glyph bounds —
+     * 用 unit 当前 layout + range 取 path bounds。
+     */
+    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? {
+        val result = unit.layout.result
+        val range = unit.range
+        if (range.start >= range.end) return null
+        if (range.end > result.layoutInput.text.length) return null
+        return try {
+            result.getPathForRange(range.start, range.end).getBounds()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**
@@ -758,6 +989,8 @@ class ComposeVisualTimeline {
         cursorChannel = null
         // #691 评论 5684993243 / 评论 5685940102：清空已呈现 unit key 集合
         presentedKeys.clear()
+        // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
+        coordinatedSpatialClip = false
     }
 
     /**
@@ -775,6 +1008,8 @@ class ComposeVisualTimeline {
         // #691 评论 5684993243 / 评论 5685940102：policy 切换时清空已呈现 unit key 集合，
         // 让后续 drain 用新 policy 重新决定是否创建 track。
         presentedKeys.clear()
+        // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
+        coordinatedSpatialClip = false
     }
 
     // ==================== 统一光标位置（#691） ====================
@@ -904,6 +1139,9 @@ class ComposeVisualTimeline {
             targetRange = null,
             alpha = TimedFloat(alphaNow, 0f, now, durationNanos),
             position = TimedOffset(positionNow, positionNow, now, 0L),
+            // #703 评论 5710977972 缺陷2：active unit 转 ghost，角色 = DeletedGhost，
+            // 由 cursor 从右向左裁切吞掉。
+            role = VisualUnitRole.DeletedGhost,
         )
     }
 
@@ -1202,6 +1440,18 @@ data class TimedOffset(
 )
 
 /**
+ * #703 评论 5710977972 缺陷2：VisualTextUnit 的视觉角色 —
+ * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流），
+ * 不再用 targetRange!=null 间接判断。
+ *
+ * - [Inserted]：本 patch 新插入的字，由 cursor 从左向右裁切吐出。
+ * - [DeletedGhost]：本 patch 删除的 ghost 字，由 cursor 从右向左裁切吞掉。
+ * - [RetainedMove]：幸存回流文字（retainedMoves 创建），始终完整可见，
+ *   不进入 spatial clip 裁切（computeUnitClipFractions 直接给 fraction=1）。
+ */
+enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
+
+/**
  * #689 评论 5674631257 步骤2：单个文字单元的持续视觉状态。
  *
  * @param key 唯一标识 — 快速输入时不重置。
@@ -1212,6 +1462,10 @@ data class TimedOffset(
  *   非 null = 仍存活，overlay 绘制时用此 range。
  * @param alpha 透明度通道 — 互不重置。
  * @param position 位置通道 — 互不重置；位置没变不重建。
+ * @param role #703 评论 5710977972：视觉角色 —
+ *   [VisualUnitRole.Inserted] / [VisualUnitRole.DeletedGhost] / [VisualUnitRole.RetainedMove]。
+ *   默认 [VisualUnitRole.RetainedMove]：普通幸存 copy（data class copy 自动保留原 role）
+ *   不参与吞吐裁切，始终完整可见。
  */
 data class VisualTextUnit(
     val key: Long,
@@ -1220,6 +1474,7 @@ data class VisualTextUnit(
     val targetRange: TextRange?,
     val alpha: TimedFloat,
     val position: TimedOffset,
+    val role: VisualUnitRole = VisualUnitRole.RetainedMove,
 )
 
 /**
@@ -1262,16 +1517,38 @@ data class CursorTrack(
  * #691：新增 [cursorRect] — 光标位置由同一个 timeline / frame clock 采样，
  * 不再由独立的 Animatable<Rect> 维护。
  *
+ * #703 评论 B：新增 [unitClipFractions] — 空间进度驱动吞吐字。
+ * 不再把 alpha 当作"这个字是否出现"的权威状态。
+ * 光标经过哪里，字才出现/消失到哪里。
+ * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
+ *   glyph 可见区域由 cursor X 裁切；光标走到哪里，字吐到哪里。
+ * - 吞字（deleted ghost）：#703 评论 A 缺陷2 统一边界模型 —
+ *   fraction = (cursor.left - glyph.left) / glyph.width，
+ *   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
+ *   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
+ * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
+ *
  * @param units 当前所有文字单元（alpha/position 已插值到当前帧）。
  * @param hiddenRanges 当前应由 overlay 接管、BasicTextField 需设透明的 ranges。
  *   每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
  *   不从"上一事务 suppressed ranges"继承。
  * @param cursorRect 光标当前位置（已插值到当前帧）— null 表示无光标动画且无静止光标。
+ * @param unitClipFractions #703 评论 B：每个 unit 的空间进度可见 fraction（0..1）。
+ *   key = [VisualTextUnit.key]，value = 可见 fraction。
+ *   1f = 完全可见（cursor 已越过整个 glyph），0f = 完全不可见（cursor 还没到 glyph）。
+ *   draw 层用此 fraction 裁切 glyph 可见区域，不再纯靠 alpha 决定出现/消失。
+ * @param coordinatedSpatialClip #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记。
+ *   true 表示当前 patch 处于 textEnabled && cursorEnabled && coordinated 模式，
+ *   draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1），
+ *   让整字亮度固定由空间裁切控制，而非 alpha 通道独立控制。
+ *   alpha 通道仍保持 0->1 / 1->0 供非 coordinated 场景和现有测试使用。
  */
 data class ComposeVisualScene(
     val units: List<VisualTextUnit>,
     val hiddenRanges: List<TextRange>,
     val cursorRect: Rect? = null,
+    val unitClipFractions: Map<Long, Float> = emptyMap(),
+    val coordinatedSpatialClip: Boolean = false,
 ) {
     companion object {
         /** 空场景。 */
