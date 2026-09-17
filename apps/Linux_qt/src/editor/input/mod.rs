@@ -139,6 +139,18 @@ mod tests {
             self.preedit_cursor = 0;
         }
 
+        /// Issue #704: FakeHost 用 `!preedit_text.is_empty()` 近似 is_composing
+        /// （FakeHost 无 composition_session 字段）。只有确实取消过真实
+        /// composition（非空 preedit）时才武装一次 suppress guard。
+        fn input_cancel_preedit_for_escape(&mut self) {
+            let was_composing = !self.preedit_text.is_empty();
+            self.preedit_text.clear();
+            self.preedit_cursor = 0;
+            if was_composing {
+                self.suppress_next_ime_commit = true;
+            }
+        }
+
         fn input_set_preedit(&mut self, text: String, cursor: usize) {
             self.preedit_text = text;
             self.preedit_cursor = cursor;
@@ -798,5 +810,231 @@ mod tests {
     fn test_ime_replace_event_normalizes_range() {
         let event = ImeReplaceEvent::new(None, (5, 2), "X".to_string());
         assert_eq!(event.replacement_byte_range_after_selection, (2, 5));
+    }
+
+    /// Issue #704 复现:ESC 无条件武装 suppress_next_ime_commit,
+    /// 吞掉下一次直接 IME commit(无前置 preedit)。
+    ///
+    /// 场景:用户在没有任何活跃 IME composition/preedit 时按一次 ESC,
+    /// 随后输入法直接发 commit(没有先发新的非空 preedit)。
+    /// 期望:该 commit 应正常插入文本。
+    /// 实际(bug):commit 被 suppress_next_ime_commit 误吞,buffer 为空。
+    #[test]
+    fn issue_704_escape_without_composition_swallows_next_direct_commit() {
+        let mut host = FakeHost::enabled();
+        // 初始状态:无 preedit、无 composition、suppress flag = false
+        assert!(host.preedit_text.is_empty());
+        assert!(!host.suppress_next_ime_commit);
+
+        // 步骤1:在没有任何活跃 composition/preedit 时按 ESC
+        handle_key(&mut host, KEY_ESCAPE, 0);
+
+        // Bug #704:ESC 无条件武装 suppress_next_ime_commit,即使没有活跃 composition。
+        // 期望(修复后):无 composition 时 suppress flag 不应被武装。
+        assert!(
+            !host.suppress_next_ime_commit,
+            "BUG #704: ESC 在无活跃 composition 时不应武装 suppress_next_ime_commit, \
+             但实际被设为 true,会吞掉下一次直接 IME commit"
+        );
+
+        // 步骤2:模拟输入法直接发 commit(没有先发新的非空 preedit)
+        ime_commit(&mut host, "字".to_string());
+
+        // 期望:"字" 应被插入 buffer。
+        // 实际(bug):"字" 被 suppress flag 吞掉,buffer 为空。
+        assert_eq!(
+            host.inserted,
+            vec!["字".to_string()],
+            "BUG #704: 无 composition 时按 ESC 后,直接 IME commit 应正常插入文本, \
+             但被 suppress_next_ime_commit 误吞,buffer 为空"
+        );
+    }
+
+    /// Issue #704 修复验证:存在活跃 composition(preedit 非空)时按 ESC,
+    /// 应取消 preedit 并武装一次 suppress_next_ime_commit,
+    /// 使该 composition 可能迟到的一次 commit 被抑制。
+    #[test]
+    fn issue_704_escape_with_composition_arms_suppress_guard() {
+        let mut host = FakeHost::enabled();
+        // 建立活跃 composition:非空 preedit
+        ime_preedit(&mut host, "拼".to_string(), 3);
+        assert_eq!(host.preedit_text, "拼");
+        assert!(!host.suppress_next_ime_commit);
+
+        // 按 ESC 取消 composition
+        handle_key(&mut host, KEY_ESCAPE, 0);
+
+        // preedit 被清除
+        assert_eq!(host.preedit_text, "");
+        assert_eq!(host.preedit_cursor, 0);
+        // 确实取消过真实 composition → 武装一次 late-commit guard
+        assert!(
+            host.suppress_next_ime_commit,
+            "ESC 取消真实 composition 后应武装一次 suppress_next_ime_commit"
+        );
+
+        // 该 composition 迟到的 commit 应被抑制(仅清 preedit,不插入)
+        ime_commit(&mut host, "拼".to_string());
+        assert!(
+            host.inserted.is_empty(),
+            "迟到 commit 应被 suppress guard 抑制,不插入 buffer"
+        );
+        // guard 被一次性消费后清除
+        assert!(!host.suppress_next_ime_commit);
+
+        // 后续新的直接 commit 应正常插入(guard 已消费)
+        ime_commit(&mut host, "好".to_string());
+        assert_eq!(host.inserted, vec!["好".to_string()]);
+    }
+
+    /// Issue #704 修复验证:新非空 preedit 应清除残留的 suppress guard,
+    /// 防止用户重新开始输入时旧 guard 吞掉新 commit。
+    #[test]
+    fn issue_704_new_nonempty_preedit_clears_suppress_guard() {
+        let mut host = FakeHost::enabled();
+        // 模拟残留 guard(例如刚取消过一次真实 composition)
+        host.suppress_next_ime_commit = true;
+
+        // 用户重新开始输入:发新的非空 preedit
+        ime_preedit(&mut host, "新".to_string(), 3);
+
+        // 新非空 preedit 应清除旧 guard
+        assert!(
+            !host.suppress_next_ime_commit,
+            "新非空 preedit 应清除残留的 suppress_next_ime_commit guard"
+        );
+        assert_eq!(host.preedit_text, "新");
+    }
+
+    // ========================================================================
+    // Issue #704 独立对抗式验证测试(由 result-verify agent 添加)
+    // 这些测试独立于上面的 issue_704_* 测试,直接观测状态机内部状态,
+    // 覆盖任务要求的 6 个验证场景中的对抗式边界条件。
+    // ========================================================================
+
+    /// 场景 4 独立验证:guard 只消费一次,不重复抑制后续 commit。
+    /// 直接构造 suppress=true 状态,连续两次 ime_commit,
+    /// 第一次应被抑制,第二次应正常插入。
+    #[test]
+    fn verify_704_suppress_guard_consumed_exactly_once() {
+        let mut host = FakeHost::enabled();
+        // 初始:无 preedit,guard 已武装(模拟刚取消过真实 composition)
+        host.suppress_next_ime_commit = true;
+        assert!(host.preedit_text.is_empty());
+
+        // 第一次 commit:应被抑制
+        ime_commit(&mut host, "字1".to_string());
+        assert!(
+            host.inserted.is_empty(),
+            "第一次 commit 应被 suppress guard 抑制"
+        );
+        assert!(
+            !host.suppress_next_ime_commit,
+            "guard 应在第一次 commit 后被消费清除"
+        );
+
+        // 第二次 commit:guard 已消费,应正常插入
+        ime_commit(&mut host, "字2".to_string());
+        assert_eq!(
+            host.inserted,
+            vec!["字2".to_string()],
+            "第二次 commit 应正常插入,guard 不应重复抑制"
+        );
+        assert!(!host.suppress_next_ime_commit);
+    }
+
+    /// 对抗式场景:连续两次 ESC(都无 composition)都不武装 guard。
+    /// 防御"第一次 ESC 清状态、第二次 ESC 武装"的潜在 bug。
+    #[test]
+    fn verify_704_double_escape_without_composition_no_guard() {
+        let mut host = FakeHost::enabled();
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(!host.suppress_next_ime_commit);
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(
+            !host.suppress_next_ime_commit,
+            "连续两次无 composition 的 ESC 都不应武装 guard"
+        );
+        // 后续直接 commit 应正常插入
+        ime_commit(&mut host, "字".to_string());
+        assert_eq!(host.inserted, vec!["字".to_string()]);
+    }
+
+    /// 对抗式场景:ESC 取消 composition → 武装 guard → 再 ESC(无 composition)
+    /// 不应重复武装 guard(第二次 ESC 时 preedit 已清,was_composing=false)。
+    /// 然后迟到 commit 被抑制一次,guard 消费清除。
+    #[test]
+    fn verify_704_escape_after_cancel_does_not_rearm_guard() {
+        let mut host = FakeHost::enabled();
+        // 建立活跃 composition
+        ime_preedit(&mut host, "拼".to_string(), 3);
+        // 第一次 ESC:取消 composition,武装 guard
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(host.suppress_next_ime_commit);
+        assert!(host.preedit_text.is_empty());
+        // 第二次 ESC:此时无 composition,不应改变 guard(仍为 true,但不是被重新武装)
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(
+            host.suppress_next_ime_commit,
+            "第二次 ESC 不应清除已武装的 guard(那是 commit 的职责)"
+        );
+        // 迟到 commit 被抑制一次
+        ime_commit(&mut host, "拼".to_string());
+        assert!(host.inserted.is_empty());
+        assert!(!host.suppress_next_ime_commit);
+    }
+
+    /// 对抗式场景:空 commit 不消费 suppress guard(ime_commit 对空 text 提前 return)。
+    /// 验证 guard 不会被空 commit 误消费。
+    #[test]
+    fn verify_704_empty_commit_does_not_consume_guard() {
+        let mut host = FakeHost::enabled();
+        host.suppress_next_ime_commit = true;
+        // 空 commit:ime_commit 提前 return,不消费 guard
+        ime_commit(&mut host, "".to_string());
+        assert!(
+            host.suppress_next_ime_commit,
+            "空 commit 不应消费 suppress guard"
+        );
+        assert!(host.inserted.is_empty());
+        // 后续非空 commit 才消费 guard
+        ime_commit(&mut host, "字".to_string());
+        assert!(host.inserted.is_empty());
+        assert!(!host.suppress_next_ime_commit);
+    }
+
+    /// 对抗式场景:input_disabled 时 ESC 不武装 guard(整体守卫)。
+    #[test]
+    fn verify_704_escape_when_input_disabled_no_guard() {
+        let mut host = FakeHost::default(); // enabled=false
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(!host.suppress_next_ime_commit);
+        assert!(host.preedit_text.is_empty());
+    }
+
+    /// 对抗式场景:有 composition → ESC 武装 guard → 新非空 preedit 清 guard
+    /// → 后续 commit 正常插入(完整用户流程)。
+    #[test]
+    fn verify_704_full_user_flow_cancel_then_reinput() {
+        let mut host = FakeHost::enabled();
+        // 用户输入 "拼"
+        ime_preedit(&mut host, "拼".to_string(), 3);
+        assert!(!host.suppress_next_ime_commit);
+        // 用户按 ESC 取消
+        handle_key(&mut host, KEY_ESCAPE, 0);
+        assert!(host.suppress_next_ime_commit);
+        assert!(host.preedit_text.is_empty());
+        // 用户重新输入 "新"(新非空 preedit 清 guard)
+        ime_preedit(&mut host, "新".to_string(), 3);
+        assert!(!host.suppress_next_ime_commit);
+        assert_eq!(host.preedit_text, "新");
+        // 用户确认 "新"(commit)
+        ime_commit(&mut host, "新".to_string());
+        assert_eq!(
+            host.inserted,
+            vec!["新".to_string()],
+            "重新输入后的 commit 应正常插入,不被旧 guard 吞"
+        );
+        assert!(!host.suppress_next_ime_commit);
     }
 }

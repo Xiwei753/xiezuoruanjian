@@ -16,8 +16,13 @@ use crate::sujian_editor_item::PreeditAttribute;
 /// Qt 对象（QWidget/QQuickItem）只能在主线程使用，后台线程只能发送强类型命令。
 ///
 /// `input_set_suppress_next_ime_commit` / `input_take_suppress_next_ime_commit`
-/// 用于处理 ESC 取消 preedit 后延迟到达的 commit 事件：ESC 设置 suppress 标记，
-/// 后续 commit 检查并消费该标记后仅清除 preedit 而不插入文本。
+/// 用于处理 ESC 取消 preedit 后延迟到达的 commit 事件。
+///
+/// Issue #704: `suppress_next_ime_commit` 的语义已收窄为"刚刚取消过一个真实
+/// composition，允许忽略它可能迟到的一次 commit"。它不再表示"最近按过 ESC"。
+/// 只有 `input_cancel_preedit_for_escape` 在确认当前确实存在活跃
+/// composition/preedit 并真的执行了取消后，才会武装一次该标记。普通 ESC（无
+/// composition）不会武装，避免吞掉下一次直接 IME commit。
 /// 这是一个一次性消费标记（take-and-clear），防止多次 commit 被误抑制。
 pub(crate) trait EditorInputHost {
     fn input_enabled(&self) -> bool;
@@ -48,6 +53,14 @@ pub(crate) trait EditorInputHost {
     fn input_move_cursor_vertical(&mut self, down: bool, extend: bool);
     fn input_move_to_line_edge(&mut self, end: bool, extend: bool);
     fn input_clear_preedit(&mut self);
+    /// Issue #704: 用户按 ESC 请求取消当前输入法组合态。
+    ///
+    /// 实现方必须：先判断当前是否存在活跃 composition / 非空 preedit
+    /// （`is_composing()`），沿用 `input_clear_preedit` 的动画清理逻辑执行取消；
+    /// 仅当确实取消过一次真实 composition 时，才武装一次
+    /// `suppress_next_ime_commit`（用于忽略该 composition 可能迟到的一次 commit）。
+    /// 当前没有 composition 时按 ESC 不能改变下一次 IME commit 的处理结果。
+    fn input_cancel_preedit_for_escape(&mut self);
     fn input_set_preedit(&mut self, text: String, cursor: usize);
     fn input_set_preedit_with_attrs(
         &mut self,
@@ -103,8 +116,10 @@ pub(crate) fn handle_key<H: EditorInputHost + ?Sized>(
 
     match key {
         KEY_ESCAPE => {
-            host.input_clear_preedit();
-            host.input_set_suppress_next_ime_commit(true);
+            // Issue #704: controller 只表达"用户按 ESC 请求取消输入法组合态"，
+            // 由 host 判断当前是否确有活跃 composition 并决定是否武装一次
+            // late-commit guard。不再无条件 input_clear_preedit + 武装 suppress。
+            host.input_cancel_preedit_for_escape();
         }
         KEY_BACKSPACE => host.input_delete_backward(),
         KEY_DELETE => host.input_delete_forward(),

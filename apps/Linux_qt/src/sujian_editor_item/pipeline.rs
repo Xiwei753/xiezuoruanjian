@@ -163,7 +163,13 @@ impl CommittedTextMirror {
 /// 生命周期：preedit 开始 → (多次 updatePreedit) → commit 或 cancel。
 /// composition_session 由 EditorKernel 在 beginComposition 时创建，包含 replace range
 /// 和 virtual text。commit 后 session 被清除，preedit 字段归零。
-/// suppress_next_ime_commit 用于抑制 fcitx5 等输入法在 cancel 后自动发送的冗余 commit。
+///
+/// Issue #704: `suppress_next_ime_commit` 的语义收窄为"刚刚取消过一个真实
+/// composition，允许忽略它可能迟到的一次 commit"。它不再表示"最近按过 ESC"。
+/// 只有 `input_cancel_preedit_for_escape` 在确认当前确实存在活跃
+/// composition/preedit 并真的执行了取消后，才会武装一次该标记。普通 ESC（无
+/// composition）不武装，避免吞掉下一次直接 IME commit。新非空 preedit 也会
+/// 清除该标记（用户重新开始输入）。
 pub(crate) struct CompositionState {
     pub preedit_text: String,
     pub preedit_cursor: usize,
@@ -173,6 +179,10 @@ pub(crate) struct CompositionState {
     pub preedit_visual_transaction: Option<PreeditVisualTransaction>,
     pub preedit_cursor_rect: Option<CursorRect>,
     pub pending_preedit_cursor_rect: Option<CursorRect>,
+    /// Issue #704: "刚刚取消过一个真实 composition，允许忽略它可能迟到的一次
+    /// commit"。仅由 `input_cancel_preedit_for_escape` 在确认存在活跃
+    /// composition 后武装一次；不再表示"最近按过 ESC"。被一次 commit 消费后
+    /// 清除，新非空 preedit 也会清除。
     pub suppress_next_ime_commit: bool,
 }
 

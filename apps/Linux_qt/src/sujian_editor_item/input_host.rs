@@ -287,6 +287,23 @@ impl EditorInputHost for SujianEditorItem {
         self.update_ime_cursor_for_preedit();
     }
 
+    /// Issue #704: 用户按 ESC 请求取消当前输入法组合态。
+    ///
+    /// 先判断当前是否存在活跃 composition / 非空 preedit（`is_composing()`），
+    /// 沿用 `input_clear_preedit` 的动画清理逻辑执行取消；仅当确实取消过一次
+    /// 真实 composition 时，才武装一次 `suppress_next_ime_commit`（用于忽略该
+    /// composition 可能迟到的一次 commit）。当前没有 composition 时按 ESC 不
+    /// 改变下一次 IME commit 的处理结果。
+    fn input_cancel_preedit_for_escape(&mut self) {
+        let was_composing = self.pipeline.composition().is_composing();
+        // 沿用现有动画清理逻辑
+        self.input_clear_preedit();
+        // 只有确实取消过真实 composition 才武装一次 late-commit guard
+        if was_composing {
+            self.pipeline.composition_mut().suppress_next_ime_commit = true;
+        }
+    }
+
     /// 设置预输入文本。`cursor` 为 preedit 内部 UTF-8 byte offset，
     /// 指向 preedit 文本中的光标位置。动画开启时构建新旧快照并触发 composition update 动画。
     fn input_set_preedit(&mut self, text: String, cursor: usize) {
