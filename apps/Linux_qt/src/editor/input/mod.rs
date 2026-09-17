@@ -135,20 +135,29 @@ mod tests {
         }
 
         fn input_clear_preedit(&mut self) {
+            // Issue #704 评论 5711047799: 对齐真实 CompositionState::clear()，
+            // 清除 suppress_next_ime_commit，使状态测试能暴露真实宿主的 guard 生命周期。
             self.preedit_text.clear();
             self.preedit_cursor = 0;
+            self.suppress_next_ime_commit = false;
         }
 
         /// Issue #704: FakeHost 用 `!preedit_text.is_empty()` 近似 is_composing
-        /// （FakeHost 无 composition_session 字段）。只有确实取消过真实
-        /// composition（非空 preedit）时才武装一次 suppress guard。
+        /// （FakeHost 无 composition_session 字段）。对齐真实宿主
+        /// input_host.rs 的生命周期：没有活跃 composition 时直接 return，
+        /// 不调用 input_clear_preedit()，也不碰已有 suppress guard。
+        /// 只有确实取消过真实 composition（非空 preedit）时才调用
+        /// input_clear_preedit() 并武装一次 suppress guard。
         fn input_cancel_preedit_for_escape(&mut self) {
-            let was_composing = !self.preedit_text.is_empty();
-            self.preedit_text.clear();
-            self.preedit_cursor = 0;
-            if was_composing {
-                self.suppress_next_ime_commit = true;
+            // Issue #704 评论 5711047799: 没有 composition 时直接 return，
+            // 不调用 input_clear_preedit()，也不碰已有 guard。
+            if self.preedit_text.is_empty() {
+                return;
             }
+            // 确实存在活跃 composition：调用 input_clear_preedit() 执行取消
+            self.input_clear_preedit();
+            // 取消过真实 composition 后武装一次 late-commit guard
+            self.suppress_next_ime_commit = true;
         }
 
         fn input_set_preedit(&mut self, text: String, cursor: usize) {
