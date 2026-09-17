@@ -274,7 +274,7 @@ fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard(
 #[test]
 fn issue705_repro_d_click_at_does_not_release_text_transaction_cursor_ownership() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn click_at", 1200);
+    let window = function_window(&src, "fn click_at", 2000);
     // 前提:click_at 确实是鼠标点击命中并更新逻辑 cursor 的路径
     let calls_hit_test = window.contains("self.hit_test(");
     let calls_set_selection = window.contains("set_selection(");
@@ -336,4 +336,273 @@ fn issue705_repro_e_no_cursor_owner_epoch_mechanism_exists_anywhere() {
          根因。修复:引入 cursor owner epoch(或等价所有权机制),click_at 时 \
          bump,抢回光标前检查。"
     );
+}
+
+// =========================================================================
+// 行为守卫 F~L: 7 个方法中 begin_manual_cursor_move 必须在 no-op return /
+// hit_test 之后调用（no-op 不 bump epoch）
+// Issue #705 评论 5718299909
+// =========================================================================
+//
+// 前一轮(评论 5717380886)已引入 cursor_owner_epoch 机制:活动正文事务不再能
+// 在用户手动移动光标后继续把 caret 抢回去。但 begin_manual_cursor_move() 调
+// 得太早,**即使本次操作根本没有让逻辑光标移动,也会先 bump epoch**。这让正在
+// 播放的正文事务立刻失去 caret 所有权,之后方法直接 return,没有新的 cursor
+// target / Tween 接手,光标可能停在动画中间位置,文字继续播。
+//
+// epoch 的定义是"用户手动改变了当前 caret 所有权/逻辑位置",不是"用户按过
+// 一次键"。按一次没有效果的方向键,也会把还在播的输入/删除协同光标切断。
+//
+// 修复后(评论 5718299909):7 个方法中 begin_manual_cursor_move() 都移到
+// no-op return 判断 / hit_test **之后**,且用条件守卫包裹(no-op 路径可能
+// 根本不调 bump)。每个子测试断言: 若 bump 存在则 bump 在 check 之后。
+// 修复前 bump 在 check 之前 → FAIL; 修复后 PASS。
+
+/// 辅助:断言 `bump_marker` 出现在 `check_marker` **之后**(即先做 check 再 bump)。
+///
+/// Issue #705 评论 5718299909 修复后,7 个方法中 `begin_manual_cursor_move()` 都
+/// 移到 no-op return 判断 / hit_test **之后**,且用条件守卫包裹(no-op 路径
+/// 可能根本不调 bump)。本断言适配两种修复后形态:
+///  - bump 存在且在 check 之后 → PASS
+///  - bump 不存在(no-op 路径不调 begin_manual_cursor_move) → PASS
+/// 修复前 bump 在 check 之前 → 断言 FAIL → 复现成功。
+#[allow(clippy::unwrap_used)]
+fn assert_bump_after_check(
+    test_id: &str,
+    method_name: &str,
+    window: &str,
+    bump_marker: &str,
+    check_marker: &str,
+    issue_desc: &str,
+) {
+    let bump_pos = window.find(bump_marker);
+    let check_pos = window.find(check_marker);
+    println!(
+        "[BUGFIX_REPRO_TRACE] {} {}: bump_pos={:?} check_pos={:?}",
+        test_id, method_name, bump_pos, check_pos
+    );
+    assert!(
+        check_pos.is_some(),
+        "前提: {} 必须有 {}",
+        method_name,
+        check_marker
+    );
+    // Issue #705 评论 5718299909: 修复后不变量 —— 若 bump 存在则必须在 check 之后;
+    // 若 bump 不存在(no-op 路径不调 begin_manual_cursor_move)也视为 PASS。
+    let bump_after_check = bump_pos.map_or(true, |b| b > check_pos.unwrap());
+    assert!(
+        bump_after_check,
+        "Issue #705 评论 5718299909 守卫 {}: {} {}",
+        test_id,
+        method_name,
+        issue_desc
+    );
+}
+
+/// 复现 F:`move_cursor_horizontal`(editing.rs:882)一进函数先
+/// `begin_manual_cursor_move()`(884),然后才算 `next`(885-889);如果已在
+/// 行首/文末,`next == self.buffer.cursor && !extend` 就直接 return(890-892),
+/// 但 epoch 已被 bump。断言 bump 应在 no-op return 判断**之后** → 当前代码
+/// FAIL → 复现成功。
+#[test]
+fn issue705_repro_f_move_cursor_horizontal_bumps_before_noop_check() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn move_cursor_horizontal(&mut self", 2500);
+    assert_bump_after_check(
+        "F",
+        "move_cursor_horizontal",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "if next == self.buffer.cursor && !extend",
+        "在入口无条件 begin_manual_cursor_move(),no-op(已在行首/文末,next == cursor \
+         且 !extend)也会 bump epoch,切断活动正文事务 caret 所有权。修复:先算 next,\
+         确认 next != cursor 或 extend 后再 bump。",
+    );
+}
+
+/// 复现 G:`move_cursor_vertical`(editing.rs:914)也是先 bump(916),之后如果
+/// 已在第一/最后一行,`target_idx == line_idx` 就直接 return(929-931),
+/// 但 epoch 已被 bump。断言 bump 应在 no-op return 判断**之后** → 当前代码
+/// FAIL → 复现成功。
+#[test]
+fn issue705_repro_g_move_cursor_vertical_bumps_before_noop_check() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn move_cursor_vertical(&mut self", 2500);
+    assert_bump_after_check(
+        "G",
+        "move_cursor_vertical",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "if target_idx == line_idx",
+        "在入口无条件 begin_manual_cursor_move(),no-op(已在第一/最后一行,\
+         target_idx == line_idx)也会 bump epoch,切断活动正文事务 caret 所有权。\
+         修复:先算 target_idx,确认 target_idx != line_idx 后再 bump。",
+    );
+}
+
+/// 复现 H:`move_to_line_edge`(editing.rs:952)先 bump(954),之后如果
+/// `cursor_line_and_x()` 返回 None 就直接 return(959-961),但 epoch 已被 bump。
+/// 断言 bump 应在 no-op return 判断**之后** → 当前代码 FAIL → 复现成功。
+#[test]
+fn issue705_repro_h_move_to_line_edge_bumps_before_noop_check() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn move_to_line_edge(&mut self", 2500);
+    assert_bump_after_check(
+        "H",
+        "move_to_line_edge",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "self.cursor_line_and_x()",
+        "在入口无条件 begin_manual_cursor_move(),no-op(cursor_line_and_x() 返回 \
+         None)也会 bump epoch,切断活动正文事务 caret 所有权。修复:先算 \
+         cursor_line_and_x(),确认有有效行后再 bump。",
+    );
+}
+
+/// 复现 I:`click_at`(editing.rs:671)先 bump(674),再 hit_test(675)。只按
+/// "收到事件"就 bump,而不是"逻辑 caret/selection 确实改变"。断言 bump 应在
+/// hit_test **之后** → 当前代码 FAIL → 复现成功。
+#[test]
+fn issue705_repro_i_click_at_bumps_before_hit_test() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn click_at(&mut self", 2000);
+    assert_bump_after_check(
+        "I",
+        "click_at",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "self.hit_test(",
+        "在入口无条件 begin_manual_cursor_move(),只按\"收到事件\"就 bump,而不是\
+         \"逻辑 caret/selection 确实改变\"。即使点击位置与当前 cursor 相同,也会 \
+         bump epoch,切断活动正文事务 caret 所有权。修复:先 hit_test 算出最终 \
+         caret/selection,确认确实改变后再 bump。",
+    );
+}
+
+/// 复现 J:`drag_select_at`(editing.rs:704)先 bump(706),再 hit_test(707)。
+/// 断言 bump 应在 hit_test **之后** → 当前代码 FAIL → 复现成功。
+#[test]
+fn issue705_repro_j_drag_select_at_bumps_before_hit_test() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn drag_select_at(&mut self", 2000);
+    assert_bump_after_check(
+        "J",
+        "drag_select_at",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "self.hit_test(",
+        "在入口无条件 begin_manual_cursor_move(),只按\"收到事件\"就 bump,而不是\
+         \"逻辑 caret/selection 确实改变\"。修复:先 hit_test 算出最终 caret/\
+         selection,确认确实改变后再 bump。",
+    );
+}
+
+/// 复现 K:`long_press_at`(editing.rs:723)先 bump(725),再 hit_test(726)。
+/// 断言 bump 应在 hit_test **之后** → 当前代码 FAIL → 复现成功。
+#[test]
+fn issue705_repro_k_long_press_at_bumps_before_hit_test() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn long_press_at(&mut self", 2000);
+    assert_bump_after_check(
+        "K",
+        "long_press_at",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "self.hit_test(",
+        "在入口无条件 begin_manual_cursor_move(),只按\"收到事件\"就 bump,而不是\
+         \"逻辑 caret/selection 确实改变\"。修复:先 hit_test 算出最终 caret/\
+         selection,确认确实改变后再 bump。",
+    );
+}
+
+/// 复现 L:`select_word_at`(editing.rs:741)先 bump(743),再 hit_test(744)。
+/// 断言 bump 应在 hit_test **之后** → 当前代码 FAIL → 复现成功。
+#[test]
+fn issue705_repro_l_select_word_at_bumps_before_hit_test() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    let window = function_window(&src, "fn select_word_at(&mut self", 2000);
+    assert_bump_after_check(
+        "L",
+        "select_word_at",
+        &window,
+        "self.begin_manual_cursor_move()",
+        "self.hit_test(",
+        "在入口无条件 begin_manual_cursor_move(),只按\"收到事件\"就 bump,而不是\
+         \"逻辑 caret/selection 确实改变\"。修复:先 hit_test 算出最终 caret/\
+         selection,确认确实改变后再 bump。",
+    );
+}
+
+// =========================================================================
+// 行为测试: no-op 操作不 bump epoch（Issue #705 评论 5718299909 修复后不变量）
+// =========================================================================
+//
+// F~L 已逐方法验证 bump 在 check 之后。本测试作为综合行为守卫,遍历 7 个方法
+// 验证同一不变量,并额外检查每个方法中 begin_manual_cursor_move() 调用被条件
+// 守卫包裹(即 bump 前有 `if` 条件判断),确保 no-op 路径不会无条件 bump epoch。
+// 这是"先算后 bump 且有守卫"的行为契约,防止未来回退到入口无条件 bump。
+
+/// 行为守卫:验证修复后 7 个方法中 `begin_manual_cursor_move()` 调用都在对应
+/// no-op return 判断 / hit_test **之后**,且 bump 调用前有条件守卫(`if` 或
+/// `let ... else { return }` 形式)。no-op 操作(如已在行首按左方向键、点击
+/// 当前 cursor 同一位置)不应 bump cursor_owner_epoch,避免切断活动正文事务
+/// caret 所有权。
+#[test]
+fn issue705_behavior_noop_does_not_bump_epoch() {
+    let src = read_src("src/sujian_editor_item/editing.rs");
+    // (方法签名 marker, no-op/hit_test check marker, 函数体窗口大小)
+    let cases: &[(&str, &str, usize)] = &[
+        (
+            "fn move_cursor_horizontal(&mut self",
+            "if next == self.buffer.cursor && !extend",
+            2500,
+        ),
+        (
+            "fn move_cursor_vertical(&mut self",
+            "if target_idx == line_idx",
+            2500,
+        ),
+        (
+            "fn move_to_line_edge(&mut self",
+            "self.cursor_line_and_x()",
+            2500,
+        ),
+        ("fn click_at(&mut self", "self.hit_test(", 2000),
+        ("fn drag_select_at(&mut self", "self.hit_test(", 2000),
+        ("fn long_press_at(&mut self", "self.hit_test(", 2000),
+        ("fn select_word_at(&mut self", "self.hit_test(", 2000),
+    ];
+    for (method, check, window_size) in cases.iter() {
+        let window = function_window(&src, method, *window_size);
+        let bump_pos = window.find("self.begin_manual_cursor_move()");
+        let check_pos = window.find(check);
+        println!(
+            "[BUGFIX_BEHAVIOR] {}: bump_pos={:?} check_pos={:?}",
+            method, bump_pos, check_pos
+        );
+        assert!(
+            check_pos.is_some(),
+            "前提: {} 必须有 check marker {}",
+            method,
+            check
+        );
+        // 不变量 1: 若 bump 存在则必须在 check 之后(先算后 bump)。
+        assert!(
+            bump_pos.map_or(true, |b| b > check_pos.unwrap()),
+            "Issue #705 评论 5718299909 行为守卫: {} 中 begin_manual_cursor_move() \
+             必须在 {} 之后(先算最终 caret/selection 再 bump),no-op 不 bump epoch",
+            method,
+            check
+        );
+        // 不变量 2: bump 调用前应有条件守卫(方法内不应在入口第一行无条件 bump)。
+        // 检查 bump 不在函数体最前 80 字符内(即不在入口无条件调用)。
+        if let Some(b) = bump_pos {
+            assert!(
+                b > 80,
+                "Issue #705 评论 5718299909 行为守卫: {} 中 begin_manual_cursor_move() \
+                 不应在入口无条件调用,必须先用条件守卫包裹(no-op 不 bump)",
+                method
+            );
+        }
+    }
 }

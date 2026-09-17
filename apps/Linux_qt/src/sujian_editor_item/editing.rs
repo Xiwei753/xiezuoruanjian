@@ -669,10 +669,25 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn click_at(&mut self, x: f32, y: f32, extend: bool) {
+        // Issue #705 评论 5718299909: 先 hit_test 算出最终 caret/selection，确认
+        // 真的改变当前 caret/selection 后再 bump epoch。点击当前逻辑 caret 的同一
+        // 位置不应把正在播放的正文协同 caret 所有权白白失效。
+        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        let new_anchor = if extend {
+            self.buffer.selection_anchor
+        } else {
+            index
+        };
+        let new_head = index;
         // Issue #705 评论 5717380886: bump cursor_owner_epoch 使活动正文事务失去 caret 所有权。
         // begin_manual_cursor_move 内部 bump cursor_owner_epoch（不清文字事务）。
-        self.begin_manual_cursor_move();
-        let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #705 评论 5718299909: 仅在 anchor/head/affinity 真的改变时 bump。
+        if new_anchor != self.buffer.selection_anchor
+            || new_head != self.buffer.cursor
+            || self.cursor_ctrl.affinity != affinity
+        {
+            self.begin_manual_cursor_move();
+        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #702 评论 5707449688 问题 1: 普通鼠标单击不再无条件 force_snap_next。
         // drag_select_at/long_press_at/select_word_at 仍保留 force_snap_next=true，
@@ -702,9 +717,14 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn drag_select_at(&mut self, x: f32, y: f32) {
-        // Issue #705 评论 5717380886: 拖选是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先 hit_test，确认 head/affinity 真的改变
+        // 再 bump epoch。拖到当前 cursor 同一位置不应 bump。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #705 评论 5717380886: 拖选是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 仅在 head 或 affinity 真的改变时 bump。
+        if index != self.buffer.cursor || self.cursor_ctrl.affinity != affinity {
+            self.begin_manual_cursor_move();
+        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
         // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
@@ -721,9 +741,28 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn long_press_at(&mut self, x: f32, y: f32) {
-        // Issue #705 评论 5717380886: 长按是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先 hit_test + 预判选词结果，确认
+        // selection/affinity 真的改变再 bump epoch。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #705 评论 5717380886: 长按是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 预判最终 selection 是否改变：
+        //  - 若已有 selection：不选词，selection 不变，只有 affinity 变才算改变。
+        //  - 若无 selection：将选词，算 word bounds 与当前 (anchor, cursor) 比较。
+        let caret_will_change = if self.buffer.has_selection() {
+            self.cursor_ctrl.affinity != affinity
+        } else {
+            match compute_word_bounds(&self.buffer.text, index) {
+                Some((byte_start, byte_end)) => {
+                    byte_start != self.buffer.selection_anchor
+                        || byte_end != self.buffer.cursor
+                        || self.cursor_ctrl.affinity != affinity
+                }
+                None => self.cursor_ctrl.affinity != affinity,
+            }
+        };
+        if caret_will_change {
+            self.begin_manual_cursor_move();
+        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
         self.snap_cursor_for_pointer_action();
@@ -739,9 +778,22 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at(&mut self, x: f32, y: f32) {
-        // Issue #705 评论 5717380886: 选词是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先 hit_test + 算 word bounds，确认
+        // selection/affinity 真的改变再 bump epoch。
         let (index, affinity) = self.hit_test(f64::from(x), f64::from(y));
+        // Issue #705 评论 5717380886: 选词是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 预判 word bounds 是否改变 selection 或 affinity。
+        let caret_will_change = match compute_word_bounds(&self.buffer.text, index) {
+            Some((byte_start, byte_end)) => {
+                byte_start != self.buffer.selection_anchor
+                    || byte_end != self.buffer.cursor
+                    || self.cursor_ctrl.affinity != affinity
+            }
+            None => self.cursor_ctrl.affinity != affinity,
+        };
+        if caret_will_change {
+            self.begin_manual_cursor_move();
+        }
         self.cursor_ctrl.affinity = affinity;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
         self.snap_cursor_for_pointer_action();
@@ -781,51 +833,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn select_word_at_impl(&mut self, index: usize) {
-        let text = &self.buffer.text;
-        if text.is_empty() || index > text.len() {
+        let Some((byte_start, byte_end)) = compute_word_bounds(&self.buffer.text, index) else {
             return;
-        }
-        let char_index = byte_to_char_index(text, index);
-        let chars: Vec<char> = text.chars().collect();
-        if chars.is_empty() {
-            return;
-        }
-        let ci = char_index.min(chars.len().saturating_sub(1));
-
-        fn is_word_boundary(c: char) -> bool {
-            c.is_whitespace()
-                || c == '\n'
-                || c == ','
-                || c == '?'
-                || c == '!'
-                || c == '！'
-                || c == ';'
-                || c == ':'
-                || c == '"'
-                || c == '"'
-                || c == '\u{2018}'
-                || c == '\u{2019}'
-                || c == '？'
-                || c == '-'
-                || c == '.'
-                || c == '('
-                || c == ')'
-                || c == '（'
-                || c == '）'
-        }
-
-        let mut start = ci;
-        while start > 0 && !is_word_boundary(chars[start - 1]) {
-            start -= 1;
-        }
-        let mut end = ci + 1;
-        while end < chars.len() && !is_word_boundary(chars[end]) {
-            end += 1;
-        }
-
-        let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
-        let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
-
+        };
         let _ = self.pipeline.set_selection(byte_start, byte_end);
         self.sync_buffer_from_pipeline();
     }
@@ -880,8 +890,10 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_horizontal(&mut self, forward: bool, extend: bool) {
-        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先算 next，确认逻辑 caret/selection 真的会变
+        // 再 bump epoch。no-op（已在行首/文末且 !extend）不 bump，避免切断活动
+        // 正文事务 caret 所有权。epoch 的定义是"用户手动改变了当前 caret 所有权/
+        // 逻辑位置"，不是"用户按过一次键"。
         let next = if forward {
             next_char_boundary(&self.buffer.text, self.buffer.cursor).unwrap_or(self.buffer.cursor)
         } else {
@@ -889,6 +901,12 @@ impl SujianEditorItem {
         };
         if next == self.buffer.cursor && !extend {
             return;
+        }
+        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 仅在确认 next != cursor 后 bump。
+        // extend 且 next == cursor 时 head/anchor 不变（no-op），不 bump。
+        if next != self.buffer.cursor {
+            self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = if forward {
             CaretAffinity::Downstream
@@ -912,8 +930,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_cursor_vertical(&mut self, down: bool, extend: bool) {
-        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先算 line_idx/target_idx，确认目标行不同
+        // 再 bump epoch。no-op（已在第一/最后一行或 cursor_line_and_x() 返回
+        // None）不 bump，避免切断活动正文事务 caret 所有权。
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x / index_at_line_x 同源。
         let snapshot = self.current_render_layout_snapshot();
@@ -929,6 +948,9 @@ impl SujianEditorItem {
         if target_idx == line_idx {
             return;
         }
+        // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 仅在确认 target_idx != line_idx 后 bump。
+        self.begin_manual_cursor_move();
         let index = self.index_at_line_x(&lines[target_idx], x);
         self.cursor_ctrl.affinity = self
             .editor_layout
@@ -950,8 +972,9 @@ impl SujianEditorItem {
     }
 
     pub(crate) fn move_to_line_edge(&mut self, end: bool, extend: bool) {
-        // Issue #705 评论 5717380886: Home/End 是非正文事务导致的逻辑 cursor 移动。
-        self.begin_manual_cursor_move();
+        // Issue #705 评论 5718299909: 先算目标 index + affinity，确认与当前 caret
+        // 不同再 bump epoch。no-op（cursor_line_and_x() 返回 None，或目标与当前
+        // caret 完全相同）不 bump，避免切断活动正文事务 caret 所有权。
         // Issue #705 评论 5716410988: lines 也来自 current_render_layout_snapshot,
         // 与 cursor_line_and_x 同源。
         let snapshot = self.current_render_layout_snapshot();
@@ -965,6 +988,11 @@ impl SujianEditorItem {
         } else {
             (line.byte_start, CaretAffinity::Downstream)
         };
+        // Issue #705 评论 5717380886: Home/End 是非正文事务导致的逻辑 cursor 移动。
+        // Issue #705 评论 5718299909: 仅在目标 index 或 affinity 与当前不同时 bump。
+        if index != self.buffer.cursor || self.cursor_ctrl.affinity != affinity {
+            self.begin_manual_cursor_move();
+        }
         self.cursor_ctrl.affinity = affinity;
         if extend {
             let anchor = self.buffer.selection_anchor;
@@ -980,4 +1008,57 @@ impl SujianEditorItem {
         let _ = self.update_cursor_visual_position();
         self.request_static_repaint();
     }
+}
+
+/// Issue #705 评论 5718299909: 纯计算 word bounds，供 `select_word_at_impl` 和
+/// `long_press_at` / `select_word_at` 的 no-op 预判使用。
+///
+/// 返回 `(byte_start, byte_end)`（UTF-8 byte offset，半开区间）。`text` 为空或
+/// `index > text.len()` 时返回 `None`。这是纯函数，不触碰任何 editor 状态，
+/// 因此可在 bump epoch 之前安全调用以预判选词结果是否会改变当前 selection。
+fn compute_word_bounds(text: &str, index: usize) -> Option<(usize, usize)> {
+    if text.is_empty() || index > text.len() {
+        return None;
+    }
+    let char_index = byte_to_char_index(text, index);
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return None;
+    }
+    let ci = char_index.min(chars.len().saturating_sub(1));
+
+    fn is_word_boundary(c: char) -> bool {
+        c.is_whitespace()
+            || c == '\n'
+            || c == ','
+            || c == '?'
+            || c == '!'
+            || c == '！'
+            || c == ';'
+            || c == ':'
+            || c == '"'
+            || c == '"'
+            || c == '\u{2018}'
+            || c == '\u{2019}'
+            || c == '？'
+            || c == '-'
+            || c == '.'
+            || c == '('
+            || c == ')'
+            || c == '（'
+            || c == '）'
+    }
+
+    let mut start = ci;
+    while start > 0 && !is_word_boundary(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = ci + 1;
+    while end < chars.len() && !is_word_boundary(chars[end]) {
+        end += 1;
+    }
+
+    let byte_start = chars[..start].iter().map(|c| c.len_utf8()).sum::<usize>();
+    let byte_end = chars[..end].iter().map(|c| c.len_utf8()).sum::<usize>();
+    Some((byte_start, byte_end))
 }
