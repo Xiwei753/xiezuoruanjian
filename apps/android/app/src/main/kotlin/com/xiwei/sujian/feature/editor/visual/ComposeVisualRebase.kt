@@ -5,6 +5,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 
 /**
  * #644 评论 5467821839 第5节剩余子项：visual rebase 纯计算 —
@@ -322,8 +323,8 @@ internal object ComposeVisualRebase {
         val newText = curr.result.layoutInput.text.text
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
-        val oldCursorRect = prev.result.getCursorRect(oldSelectionEnd)
-        val newCursorRect = curr.result.getCursorRect(newSelectionEnd)
+        val oldCursorRect = prev.cursorRect(oldSelectionEnd)
+        val newCursorRect = curr.cursorRect(newSelectionEnd)
         return VisualCursorSnapshot(
             oldCursorRect = oldCursorRect,
             newCursorRect = newCursorRect,

@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 
 /**
  * #694 评论第 7 步：同一 VSync 的多笔 patch 合成器 —
@@ -365,7 +366,7 @@ internal object ComposeVisualPatchBatch {
         val textLen = layout.result.layoutInput.text.length
         if (offset < 0 || offset > textLen) return null
         return try {
-            layout.result.getCursorRect(offset)
+            layout.cursorRect(offset)
         } catch (_: Throwable) {
             null
         }

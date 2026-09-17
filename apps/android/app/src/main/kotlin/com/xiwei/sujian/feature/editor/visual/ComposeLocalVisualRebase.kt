@@ -5,6 +5,7 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
 import uniffi.writer_core.LocalVisualSliceDto
@@ -450,7 +451,7 @@ internal object ComposeLocalVisualRebase {
         val textLen = layout.result.layoutInput.text.length
         if (offset < 0 || offset > textLen) return null
         return try {
-            layout.result.getCursorRect(offset)
+            layout.cursorRect(offset)
         } catch (_: Throwable) {
             null
         }

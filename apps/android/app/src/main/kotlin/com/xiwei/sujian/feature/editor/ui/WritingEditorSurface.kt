@@ -22,6 +22,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
+import com.xiwei.sujian.feature.editor.layout.isIndentedEmptyParagraphCaret
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
@@ -107,6 +108,11 @@ fun editorSurfaceMode(
  * 不再因 hiddenRanges 变化触发二次 layout，断开
  * "动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout -> VisualState 再消费 layout"
  * 回路。不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
+ *
+ * #706 评论 5715257924 症状1：EditorTextFieldDrawLayer 现在确实负责上一稳定帧缓存和本地 edit barrier —
+ * 没有 local barrier 时，每帧把完整编辑器画面（BasicTextField + hiddenRanges 裁切 + visual units + 视觉光标）
+ * 记录进 stableFrameLayer；barrier 活跃时只重放上一帧，不调用 drawContent()，不覆盖 stableFrameLayer。
+ * OutputTransformation 继续只做搜索高亮。
  *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
@@ -197,7 +203,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     // 只把输入事实塞进 visualState 的普通 tracker，不等 Core，不直接开始动画。
     // 它不是 Compose State，不在 InputTransformation 里改 StateFlow/mutableStateOf。
     val visualInputTransformation =
-        remember(visualState) {
+        remember(visualState, bridge) {
             InputTransformation {
                 val changesSnapshot =
                     buildList {
@@ -212,10 +218,27 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         oldSelection = originalSelection,
                         newSelection = selection,
                         changes = changesSnapshot,
+                        // #706 评论 5718984286 修复：不在 InputTransformation 里读 bridge.state.composition —
+                        // 这里拿到的是本次 InputTransformation 开始前的旧 TextFieldState，
+                        // 判断不了本次新 composition。每次本地文字变更都先武装 barrier，
+                        // 真正 composition 收口由 onAuthoritativeLayout 用本次真实 compositionActive 决定。
                     )
                 }
             }
         }
+
+    // #706 评论 5718539128 修复3：空段落缩进静态 caret override —
+    // smooth cursor 关闭时，空段落首行缩进位置仍需 draw 层接管（BasicTextField 原生 caret 落 x=0）。
+    // 判断当前 selection 是否在空段落首位且该段落有非零首行缩进，复用 layout 层的缩进修正语义。
+    val latestLayoutForCaret by visualState.latestLayout.collectAsStateWithLifecycle()
+    val liveSelectionForCaret = bridge.state.selection
+    // 用局部变量捕获，使 Kotlin 能对非 null 做 smart cast（委托属性不能 smart cast）。
+    val layoutSnapshot = latestLayoutForCaret
+    val selectionSnapshot = liveSelectionForCaret
+    val needsIndentedEmptyParagraphCaret =
+        layoutSnapshot != null &&
+            selectionSnapshot != null &&
+            layoutSnapshot.isIndentedEmptyParagraphCaret(selectionSnapshot.end)
 
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
@@ -232,6 +255,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
         // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
         liveSelection = bridge.state.selection,
+        // #706 评论 5718539128 修复3：空段落缩进静态 caret override 传给 draw 层。
+        needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -248,8 +273,11 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             inputTransformation = visualInputTransformation,
             // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 draw 层画。
             // smooth cursor 关闭时始终由系统画，draw 层永远不接管。
+            // #706 评论 5718539128 修复3：空段落缩进时也把系统 cursor 设透明 —
+            // BasicTextField 原生 caret 落 x=0（不参与 layout.cursorRect 的缩进修正），
+            // 由 draw 层画 layout.cursorRect(offset) 的缩进位置。
             cursorBrush =
-                if (drawsVisualCursor) {
+                if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
                     SolidColor(Color.Transparent)
                 } else {
                     SolidColor(cursorColor)

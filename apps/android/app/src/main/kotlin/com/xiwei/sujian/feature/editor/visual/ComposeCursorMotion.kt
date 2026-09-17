@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 
 /**
  * #684 评论 5672654866：光标运动路径 —
@@ -156,7 +157,7 @@ private fun safeCursorRect(
     offset: Int,
 ): Rect? =
     try {
-        layout.result.getCursorRect(offset)
+        layout.cursorRect(offset)
     } catch (_: Throwable) {
         null
     }

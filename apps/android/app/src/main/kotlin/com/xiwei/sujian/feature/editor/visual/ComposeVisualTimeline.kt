@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
 
@@ -65,6 +66,16 @@ class ComposeVisualTimeline {
      * sample 时传给 ComposeVisualScene，draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1）。
      */
     private var coordinatedSpatialClip: Boolean = false
+
+    /**
+     * #706 评论 5718539128 修复1：barrier handoff 时保存的可见 clip 基线 —
+     * [redirectFromVisibleScene] 把 barrier.baseScene.unitClipFractions 存到这里，
+     * 下一次 [sample]（handoff 第一帧）用它覆盖 [computeUnitClipFractions] 的结果，
+     * 保证 handoff 第一帧的 fraction 与用户最后真正看到的旧 scene 完全一致，
+     * 不会因 cursor 起点/几何重算导致 coordinated spatial clip 突变。
+     * sample 消费后清空，不跨帧保留。
+     */
+    private var redirectBaseClipFractions: Map<Long, Float> = emptyMap()
 
     /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
@@ -733,6 +744,58 @@ class ComposeVisualTimeline {
     }
 
     /**
+     * #706 评论 5715257924 症状1：从可见 scene 重定向 timeline 起点。
+     *
+     * barrier 存在时，旧 timeline 即使在后台还有未结束 track，也不能按"已经过去了多少真实时间"
+     * 偷偷向前跑；新 patch 必须从用户最后真正看到的 scene 继续。
+     *
+     * 把当前可见 unit 的 position/alpha 通道重新作为当前时刻起点（冻结成静态通道），
+     * 并丢掉已经被这次本地 edit 覆盖的旧 track。后面仍走现有 [applyPatch]，
+     * 不要造第二套动画器。
+     *
+     * @param scene 用户最后真正看到的视觉场景（barrier.baseScene）。
+     * @param frameTimeNanos 当前帧时间戳。
+     */
+    fun redirectFromVisibleScene(
+        scene: ComposeVisualScene,
+        frameTimeNanos: Long,
+    ) {
+        // 把 scene.units 里每个 unit 的 alpha/position 通道冻结成静态通道
+        // （from = to = 当前屏幕值，duration = 0），这样 rebaseUnitForPatch 会把它当成
+        // "已完成的静态 unit"，不会按时间偷偷跑。applyPatch 的 mapSurvivingSlice 会保留
+        // alpha 通道不变，repartitionPendingAndInsertedUnits 会把 pending unit 重新分段。
+        units =
+            scene.units.map { unit ->
+                val currentAlpha = unit.alpha.from
+                val currentPosition = unit.position.from
+                unit.copy(
+                    alpha =
+                        TimedFloat(
+                            from = currentAlpha,
+                            to = currentAlpha,
+                            startedAtNanos = frameTimeNanos,
+                            durationNanos = 0L,
+                        ),
+                    position =
+                        TimedOffset(
+                            from = currentPosition,
+                            to = currentPosition,
+                            startedAtNanos = frameTimeNanos,
+                            durationNanos = 0L,
+                        ),
+                )
+            }
+        // cursorChannel 清空 — applyCursorPatch 会用 cursorFromRect 作为新起点。
+        cursorChannel = null
+        // presentedKeys 保留 — 这些 unit 确实已在可见帧呈现过。
+        // coordinatedSpatialClip 由后续 applyPatch 重新设置。
+        // #706 评论 5718539128 修复1：保存当前可见 clip 基线 —
+        // coordinated spatial clip 模式下，handoff 第一帧的 fraction 必须与旧 scene 一致，
+        // 不能因 cursor 起点/几何重算导致吞吐字 fraction 突变。下一次 sample 消费后清空。
+        redirectBaseClipFractions = scene.unitClipFractions
+    }
+
+    /**
      * 采样当前时间线到指定帧时间 — 返回当前应绘制的 [ComposeVisualScene]。
      *
      * #689 评论 5675270164 缺陷3：sample 后做收口 — 持续 timeline 只保存"当前仍需要
@@ -806,11 +869,26 @@ class ComposeVisualTimeline {
         //   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
         //   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
         // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
-        val unitClipFractions =
+        val computedClipFractions =
             if (sampledCursor != null) {
                 computeUnitClipFractions(sampledUnits, sampledCursor)
             } else {
                 emptyMap()
+            }
+        // #706 评论 5718539128 修复1：barrier handoff 首帧 —
+        // 用 redirectFromVisibleScene 保存的可见 clip 基线覆盖计算结果，
+        // 保证 handoff 第一帧 fraction 与用户最后真正看到的旧 scene 完全一致。
+        // 按 unit key 查找：旧 scene 里有的 unit 用旧 fraction，新插入 unit（key 不在基线里）
+        // 回退到计算结果。消费后清空，不跨帧保留。
+        val unitClipFractions =
+            if (redirectBaseClipFractions.isNotEmpty()) {
+                val base = redirectBaseClipFractions
+                redirectBaseClipFractions = emptyMap()
+                sampledUnits.associate { unit ->
+                    unit.key to (base[unit.key] ?: computedClipFractions[unit.key] ?: 1f)
+                }
+            } else {
+                computedClipFractions
             }
         return ComposeVisualScene(
             units = sampledUnits,
@@ -1393,7 +1471,7 @@ class ComposeVisualTimeline {
         offset: Int,
     ): Rect? =
         try {
-            layout.result.getCursorRect(offset)
+            layout.cursorRect(offset)
         } catch (_: Throwable) {
             null
         }
