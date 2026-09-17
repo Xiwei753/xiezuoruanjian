@@ -7,6 +7,8 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
+import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
+import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
@@ -363,6 +365,19 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
             ),
             motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
+
+        // 4.5 bridge outcome: AuthoritativeApplied — Undo 在 composition 期间到达，
+        // IME cancel composition，Core 应用了 Undo。
+        // #694 评论 5695660885：compositionVisualPhase 必须由 onInputSnapshotResolved 收口，
+        // 否则 onAuthoritativeLayout 会因 phase == Composing 进入 AwaitingBridgeResolution 分支直接 return，
+        // Undo patch 永远不会生成。真实运行中 bridge outcome 会在 composition cancel 后到达。
+        val snapshotEnd =
+            EditorInputSnapshot(
+                text = "an",
+                selection = TextRange(2, 2),
+                composition = null,
+            )
+        state.onInputSnapshotResolved(snapshotEnd, InputSnapshotOutcome.AuthoritativeApplied)
 
         // 5. composition 结束，权威正文回到 ""
         state.onAuthoritativeLayout(layouts[3], TextRange(0, 0), 0, compositionActive = false)

@@ -235,36 +235,32 @@ class ComposeEditorVisualState(
         oldSelection: TextRange,
         newSelection: TextRange,
         changes: List<LocalInputChange>,
-        compositionActive: Boolean = false,
     ) {
         // #706 评论 5715257924 症状1：barrier 必须在 InputTransformation 这一拍就武装，
         // 并真正保留上一帧。连续快速输入时，如果上一笔 barrier 还没完成，
         // 不要换掉 baseScene/baseLayout，只更新 expectedText/expectedSelection。
         //
-        // #706 评论 5718539128 修复2：composition 活跃时（IME preedit）不武装普通 local barrier —
-        // barrier 职责是 committed edit 的原子视觉交接，不把 IME composition 本身当成待隐藏的裸正文。
-        // composition 活跃时只记录 localInputTracker，draw 层看不到 barrier，
-        // BasicTextField 的 preedit 正常实时绘制并持续更新稳定帧。
-        // composition 最终 commit 后如果需要播放提交动画，再从用户最后真正看到的前帧做 handoff。
-        if (!compositionActive) {
-            val current = pendingLocalFrameBarrier
-            pendingLocalFrameBarrier =
-                if (current == null) {
-                    ComposeLocalFrameBarrier(
-                        epoch = nextLocalFrameEpoch++,
-                        baseScene = _visualScene.value,
-                        baseLayout = lastPresentedLayout,
-                        expectedText = newText,
-                        expectedSelection = newSelection,
-                    )
-                } else {
-                    current.copy(
-                        expectedText = newText,
-                        expectedSelection = newSelection,
-                        handoffPatchId = null,
-                    )
-                }
-        }
+        // #706 评论 5718984286 修复：每次本地文字变更都先武装 barrier，
+        // 不在这里分 composition / committed — InputTransformation 拿到的 compositionActive
+        // 是旧 TextFieldState，判断不了本次新 composition。真正 composition 收口由
+        // onAuthoritativeLayout 用本次真实 compositionActive 决定（preedit 时清 barrier）。
+        val current = pendingLocalFrameBarrier
+        pendingLocalFrameBarrier =
+            if (current == null) {
+                ComposeLocalFrameBarrier(
+                    epoch = nextLocalFrameEpoch++,
+                    baseScene = _visualScene.value,
+                    baseLayout = lastPresentedLayout,
+                    expectedText = newText,
+                    expectedSelection = newSelection,
+                )
+            } else {
+                current.copy(
+                    expectedText = newText,
+                    expectedSelection = newSelection,
+                    handoffPatchId = null,
+                )
+            }
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
@@ -378,6 +374,25 @@ class ComposeEditorVisualState(
     }
 
     /**
+     * #706 评论 5718984286 修复：配对出 local patch 后绑定到当前 barrier 的防御性封装 —
+     * barrier 应已由 [recordLocalInput] 武装；如果没有，说明生命周期又断了，
+     * 记日志不默默放过（localPatch 仍入队，但 handoff 无 barrier redirect）。
+     *
+     * 抽成 helper 避免在 [finishCompositionCommit] / [onAuthoritativeLayout] 内增加嵌套层数。
+     */
+    private fun bindLocalPatchBarrierHandoff(
+        localPatchId: Long,
+        logTag: String,
+    ) {
+        val barrier = pendingLocalFrameBarrier
+        if (barrier == null) {
+            Log.w(TAG, "$logTag: localPatchId=$localPatchId")
+        } else {
+            pendingLocalFrameBarrier = barrier.copy(handoffPatchId = localPatchId)
+        }
+    }
+
+    /**
      * #694 评论 5694645209 问题1：取消本次 composition local visual state —
      * 清空 [compositionBaseLayout]、[pendingCompositionCommitText]，
      * 重置 [wasCompositionActive]/[wasCompositionActiveForSnapshot]，
@@ -395,6 +410,9 @@ class ComposeEditorVisualState(
         compositionVisualPhase = CompositionVisualPhase.Idle
         // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
         localInputTracker.clear()
+        // #706 评论 5718984286 修复：composition cancel/reject/NoTextChange 后清本地帧屏障 —
+        // 避免第一笔 preedit 误武装的 barrier 一直遗留，draw 层持续重放旧帧直到 editor clear() 才恢复。
+        pendingLocalFrameBarrier = null
     }
 
     /**
@@ -419,8 +437,9 @@ class ComposeEditorVisualState(
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                     // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
-                    pendingLocalFrameBarrier =
-                        pendingLocalFrameBarrier?.copy(handoffPatchId = localPatch.id)
+                    // #706 评论 5718984286 修复：最终 commit 对应的 barrier 应已由 recordLocalInput() 武装；
+                    // 如果没有，说明生命周期又断了，记日志不默默放过（localPatch 仍入队，但 handoff 无 barrier redirect）。
+                    bindLocalPatchBarrierHandoff(localPatch.id, "finish_composition_commit_barrier_missing")
                 }
             }
         }
@@ -656,6 +675,14 @@ class ComposeEditorVisualState(
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
         _latestLayout.update { snapshot }
 
+        // #706 评论 5718984286 修复：用本次真实 compositionActive 收口 barrier —
+        // InputTransformation 里先暂时武装了 barrier，这里拿到本次输入后的真实 composition 状态。
+        // 如果是 IME preedit（compositionActive=true），清掉 barrier，让 BasicTextField 正常实时绘制 preedit；
+        // 如果是 committed edit，保留 barrier，继续等 local patch handoff。
+        if (compositionActive) {
+            pendingLocalFrameBarrier = null
+        }
+
         // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
         // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
         val pending = pendingCompositionCommitText
@@ -727,8 +754,9 @@ class ComposeEditorVisualState(
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                     // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
-                    pendingLocalFrameBarrier =
-                        pendingLocalFrameBarrier?.copy(handoffPatchId = localPatch.id)
+                    // #706 评论 5718984286 修复：committed edit 对应的 barrier 应已由 recordLocalInput() 武装；
+                    // 如果没有，说明生命周期又断了，记日志不默默放过。
+                    bindLocalPatchBarrierHandoff(localPatch.id, "local_patch_barrier_missing")
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +

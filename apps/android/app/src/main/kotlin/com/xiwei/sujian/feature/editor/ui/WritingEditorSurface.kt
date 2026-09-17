@@ -218,10 +218,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         oldSelection = originalSelection,
                         newSelection = selection,
                         changes = changesSnapshot,
-                        // #706 评论 5718539128 修复2：composition 活跃时不武装普通 local barrier —
-                        // barrier 职责是 committed edit 的原子视觉交接，不冻 IME preedit。
-                        // BasicTextField 的 preedit 正常实时绘制，composition commit 后再做 handoff。
-                        compositionActive = bridge.state.composition != null,
+                        // #706 评论 5718984286 修复：不在 InputTransformation 里读 bridge.state.composition —
+                        // 这里拿到的是本次 InputTransformation 开始前的旧 TextFieldState，
+                        // 判断不了本次新 composition。每次本地文字变更都先武装 barrier，
+                        // 真正 composition 收口由 onAuthoritativeLayout 用本次真实 compositionActive 决定。
                     )
                 }
             }
