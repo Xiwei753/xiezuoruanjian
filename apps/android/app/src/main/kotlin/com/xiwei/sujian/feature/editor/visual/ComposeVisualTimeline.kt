@@ -688,13 +688,20 @@ class ComposeVisualTimeline {
         val unit = surviving[idx]
         val newPosition = computeUnitPosition(newLayout, newRange) ?: return
         val oldPosition = currentOffset(unit.position, frameTimeNanos) ?: newPosition
-        // 只有位置真变了才重定向（删换行时几何没变的文字不产生 position track）
-        if (newPosition != oldPosition) {
-            surviving[idx] =
-                unit.copy(
-                    position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
-                )
-        }
+        // 只有位置真变了才重定向 position 通道（删换行时几何没变的文字不产生 position track）
+        val positionChannel =
+            if (newPosition != oldPosition) {
+                TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos)
+            } else {
+                unit.position
+            }
+        // #703 评论 5712256296 缺口2：被判定为 retained move 的已有 unit，role 必须同步切换为 RetainedMove。
+        // 否则原本 Inserted unit 被重定向后 role 仍是 Inserted，computeUnitClipFractions 仍按 cursor 裁切。
+        surviving[idx] =
+            unit.copy(
+                position = positionChannel,
+                role = VisualUnitRole.RetainedMove,
+            )
     }
 
     private fun createMoveUnitForReflow(
