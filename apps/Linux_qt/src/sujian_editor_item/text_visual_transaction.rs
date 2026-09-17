@@ -655,9 +655,17 @@ impl PreparedTransactionQueue {
         &mut self.transactions
     }
 
+    /// Issue #702 评论 5708436497: 只认 `TextVisualOperationKind::Insert`。
+    ///
+    /// 之前这里只判断 state 不是 Completed/Cancelled，没有过滤 `operation_kind`，
+    /// 导致 Delete / CompositionUpdate / CompositionCommitOrCancel 事务也会返回 true，
+    /// 被 `qquickitem_impl.rs` / `editing.rs` / `properties.rs` 里"输入期间抑制 blink"
+    /// 的逻辑错误当成 Insert。现在明确过滤 Insert，让本方法名与实现一致。
+    /// 任意正文事务的判断由 `has_active_text_transaction()` 负责。
     pub fn has_active_insert(&self) -> bool {
         self.transactions.iter().any(|t| {
-            t.state != TextVisualTransactionState::Cancelled
+            t.operation_kind == TextVisualOperationKind::Insert
+                && t.state != TextVisualTransactionState::Cancelled
                 && t.state != TextVisualTransactionState::Completed
         })
     }
