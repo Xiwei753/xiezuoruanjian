@@ -166,6 +166,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/WritingEditorSurface.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/ui/WritingPaneEffects.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualFrameCoordinator.kt"
+      # --- #703：视觉时间线 applyPatch 多阶段文字/cursor 合并，LongMethod 与 CognitiveComplexMethod 排除一致 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
   LargeClass:
     active: true
     threshold: 500
@@ -201,6 +203,8 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue691CoordinatedAnimationTest.kt"
       # --- #691 评论 5681258225：视觉时间线核心类，多阶段动画状态机，行数超 500 ---
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimeline.kt"
+      # --- #703：协同动画回归测试多场景断言，行数超 500 ---
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue703RegressionTest.kt"
   LongParameterList:
     active: true
     functionThreshold: 7
@@ -249,6 +253,7 @@ complexity:
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimelineAdversarialRegressionTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTimelineComment5675270164ReproTest.kt"
       - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualTransactionRestartReproTest.kt"
+      - "**/kotlin/com/xiwei/sujian/feature/editor/visual/ComposeVisualIssue703RegressionTest.kt"
   NestedBlockDepth:
     active: true
     threshold: 4

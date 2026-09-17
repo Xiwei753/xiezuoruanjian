@@ -524,12 +524,11 @@ class ComposeEditorVisualState(
         // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
         // 以后如果确实要做"整行平滑回流"，应单独设计 displacement/reflow layer，
         // 并保证所有权原子交接，不能和 deleted ghost 混在同一套状态里。
-        val retainedMoves =
-            if (transactionTextKind == TextVisualKind.Delete) {
-                emptyList()
-            } else {
-                ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
-            }
+        // #703 评论 5710977972 缺陷2：本地普通输入/删除都不把整行幸存文字交给 retainedMoves。
+        // 本地 Insert 也直接 retainedMoves = emptyList()。
+        // 一次输入触发自动换行时，幸存文字不应被空间裁切误当"新字"隐藏/吐出。
+        // 以后如果要做整行平滑回流，单独做 reflow/displacement 层。
+        val retainedMoves = emptyList<RetainedMove>()
 
         // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
         // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
@@ -550,8 +549,9 @@ class ComposeEditorVisualState(
         // 用 chain.first().oldSelection.end 才是真实的 T0 caret。
         val originCursorRect =
             try {
-                val originOffset = firstEdit.oldSelection.end
-                    .coerceIn(0, oldLayout.result.layoutInput.text.length)
+                val originOffset =
+                    firstEdit.oldSelection.end
+                        .coerceIn(0, oldLayout.result.layoutInput.text.length)
                 oldLayout.result.getCursorRect(originOffset)
             } catch (_: Throwable) {
                 null
@@ -725,20 +725,25 @@ class ComposeEditorVisualState(
                             // 已有同 range 的 ghost 则跳过
                             if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
                             // 从 oldLayout 取旧位置建立静态 ghost
-                            val oldBounds = ComposeVisualRebase.safePathBounds(
-                                oldLayout.result, del,
-                            ) ?: continue
+                            val oldBounds =
+                                ComposeVisualRebase.safePathBounds(
+                                    oldLayout.result, del,
+                                ) ?: continue
                             val oldPosition = Offset(oldBounds.left, oldBounds.top)
                             nextBarrierUnitKey++
-                            mergedUnits += VisualTextUnit(
-                                key = nextBarrierUnitKey,
-                                layout = oldLayout,
-                                range = del,
-                                targetRange = null,
-                                // 完整可见：alpha=1，不动画
-                                alpha = TimedFloat(1f, 1f, 0L, 0L),
-                                position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                            )
+                            mergedUnits +=
+                                VisualTextUnit(
+                                    key = nextBarrierUnitKey,
+                                    layout = oldLayout,
+                                    range = del,
+                                    targetRange = null,
+                                    // 完整可见：alpha=1，不动画
+                                    alpha = TimedFloat(1f, 1f, 0L, 0L),
+                                    position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                                    // #703 评论 5710977972 缺陷2：barrier ghost 角色 = DeletedGhost，
+                                    // 由 cursor 从右向左裁切吞掉。
+                                    role = VisualUnitRole.DeletedGhost,
+                                )
                         }
                         // #703 评论 5710419102 问题1：删除首帧光标所有权 —
                         // 把旧 caret 放进 scene.cursorRect，让 draw 层第一优先级使用它。

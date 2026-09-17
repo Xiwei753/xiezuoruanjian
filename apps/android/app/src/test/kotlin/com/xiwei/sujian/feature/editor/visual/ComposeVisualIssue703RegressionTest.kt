@@ -11,7 +11,6 @@ import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -230,10 +229,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r3_rapidInsert_noAlphaResetOrCursorRetreat() {
         val layouts = captureLayouts("", "a", "ab", "abc")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-r3-rapid-insert",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-r3-rapid-insert",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
 
@@ -273,7 +273,8 @@ class ComposeVisualIssue703RegressionTest {
         // 每步 cursor.left 应 >= 上一步（光标不往回走）
         for (i in 1 until cursorLefts.size) {
             assertTrue(
-                "快速输入: cursor 应单调前进不回抽，step $i cursor.left=${cursorLefts[i]} < step ${i - 1} cursor.left=${cursorLefts[i - 1]}",
+                "快速输入: cursor 应单调前进不回抽，" +
+                    "step $i cursor.left=${cursorLefts[i]} < step ${i - 1} cursor.left=${cursorLefts[i - 1]}",
                 cursorLefts[i] >= cursorLefts[i - 1] - 1f,
             )
         }
@@ -301,10 +302,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r4_rapidDelete_noAnimationTailBuildup() {
         val layouts = captureLayouts("abc", "ab", "a", "")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-r4-rapid-delete",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-r4-rapid-delete",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(3, 3), 0)
 
@@ -358,10 +360,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r5_crossLineDelete_survivingLineNotTakenOverByOverlay() {
         val layouts = captureLayoutsWithWidth(arrayOf("abc\ndef", "abcdef"), 50)
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-r5-cross-line",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-r5-cross-line",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(3, 3), 0)
 
@@ -415,21 +418,27 @@ class ComposeVisualIssue703RegressionTest {
     fun r6_firstLineBoundary_noEntireLineFlicker() {
         // 用窄布局让 "ab\ncd" 跨两行
         val layouts = captureLayoutsWithWidth(arrayOf("ab\ncd", "ab\nc", "ab\n", "ab", "a", ""), 50)
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-r6-first-line",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-r6-first-line",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(5, 5), 0)
 
         // 连续删除：d, 换行, c, 换行, b
         val deleteSequence =
             listOf(
-                Triple("ab\ncd", "ab\nc", TextRange(4, 5)), // 删 d
-                Triple("ab\nc", "ab\n", TextRange(3, 4)), // 删 c
-                Triple("ab\n", "ab", TextRange(2, 3)), // 删换行
-                Triple("ab", "a", TextRange(1, 2)), // 删 b
-                Triple("a", "", TextRange(0, 1)), // 删 a
+                // 删 d
+                Triple("ab\ncd", "ab\nc", TextRange(4, 5)),
+                // 删 c
+                Triple("ab\nc", "ab\n", TextRange(3, 4)),
+                // 删换行
+                Triple("ab\n", "ab", TextRange(2, 3)),
+                // 删 b
+                Triple("ab", "a", TextRange(1, 2)),
+                // 删 a
+                Triple("a", "", TextRange(0, 1)),
             )
 
         for ((i, triple) in deleteSequence.withIndex()) {
@@ -490,7 +499,12 @@ class ComposeVisualIssue703RegressionTest {
                 newLayout = aLayout,
                 insertedUnits = listOf(TextRange(0, 1)),
                 durationMs = 100L,
-                motionPolicy = EditorMotionPolicy(textEnabled = false, cursorEnabled = true, cursorDurationMillis = 80L),
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textEnabled = false,
+                        cursorEnabled = true,
+                        cursorDurationMillis = 80L,
+                    ),
             )
         timelineA.applyPatch(patch = patchA, frameTimeNanos = 0L)
         val sceneA = timelineA.sample(0L)
@@ -515,7 +529,12 @@ class ComposeVisualIssue703RegressionTest {
                 newLayout = aLayout,
                 insertedUnits = listOf(TextRange(0, 1)),
                 durationMs = 100L,
-                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = false, cursorDurationMillis = 80L),
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textDurationMillis = 100L,
+                        cursorEnabled = false,
+                        cursorDurationMillis = 80L,
+                    ),
             )
         // cursorEnabled=false → 不传 cursorPath（模拟 computeCursorParamsForPatch 返回 null）
         timelineB.applyPatch(patch = patchB, frameTimeNanos = 0L)
@@ -528,7 +547,8 @@ class ComposeVisualIssue703RegressionTest {
 
         // 矩阵 C：协同关闭（textEnabled=true, cursorEnabled=true, coordinated=false）
         val timelineC = ComposeVisualTimeline()
-        val cursorPathC = CursorMotionPath(points = listOf(CursorMotionPoint(rect = Rect(7f, 0f, 9f, 14f), endFraction = 1f)))
+        val cursorPathC =
+            CursorMotionPath(points = listOf(CursorMotionPoint(rect = Rect(7f, 0f, 9f, 14f), endFraction = 1f)))
         val patchC =
             makePatch(
                 id = 3L,
@@ -537,7 +557,13 @@ class ComposeVisualIssue703RegressionTest {
                 insertedUnits = listOf(TextRange(0, 1)),
                 cursorMotionPath = cursorPathC,
                 durationMs = 100L,
-                motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, cursorDurationMillis = 80L, coordinated = false),
+                motionPolicy =
+                    EditorMotionPolicy(
+                        textDurationMillis = 100L,
+                        cursorEnabled = true,
+                        cursorDurationMillis = 80L,
+                        coordinated = false,
+                    ),
             )
         timelineC.applyPatch(
             patch = patchC,
@@ -571,10 +597,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r_a_editEpochBarrier_visualSceneImmediatelyTakesOver() {
         val layouts = captureLayouts("", "a")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-a-barrier",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-a-barrier",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
 
@@ -687,10 +714,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r_c_localDelete_retainedMovesEmpty() {
         val layouts = captureLayoutsWithWidth(arrayOf("abc\ndef", "abcdef"), 50)
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-c-retained",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-c-retained",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(3, 3), 0)
 
@@ -790,10 +818,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun repro_comment5709208101_cursorPathDuplicatesOldCaret() {
         val layouts = captureLayouts("abc", "bc")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-comment5709208101-prob1",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-comment5709208101-prob1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 文本 abc，caret 在 1（'a' 后面）
         state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
@@ -856,10 +885,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun repro_comment5709208101_alphaIndependentlyControlsGlyphBrightness() {
         val layouts = captureLayouts("a", "")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-comment5709208101-prob2",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-comment5709208101-prob2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
 
@@ -923,10 +953,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun repro_comment5709208101_staleSelectionCausesWrongOldCaret() {
         val layouts = captureLayouts("abc", "abc", "ab")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-comment5709208101-prob3",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-comment5709208101-prob3",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 1. 文本 abc，caret 在 0
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -1048,10 +1079,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r_comment5709208101_fullLocalDeleteChain() {
         val layouts = captureLayouts("abc", "abc", "ab")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-comment5709208101-full",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-comment5709208101-full",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 1. 文本 abc，caret 在 0
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -1130,7 +1162,7 @@ class ComposeVisualIssue703RegressionTest {
         for (progressPct in listOf(25, 50, 75)) {
             val scene = state.sampleVisualScene(progressPct.toLong() * NANOS_PER_MS)
             val cursor = scene.cursorRect
-            assertNotNull("综合验收7/8: ${progressPct}% 时间点 cursor rect 应存在", cursor)
+            assertNotNull("综合验收7/8: $progressPct% 时间点 cursor rect 应存在", cursor)
 
             // 找 deleted ghost（targetRange == null, range == [2,3) — 被删的 'c'）
             val ghost = scene.units.firstOrNull { it.targetRange == null && it.range == TextRange(2, 3) }
@@ -1140,7 +1172,7 @@ class ComposeVisualIssue703RegressionTest {
                 // draw 层 effective alpha = 1f。这里验证 effective alpha。
                 val effectiveAlpha = if (scene.coordinatedSpatialClip) 1f else ghost.alpha.from
                 assertEquals(
-                    "综合验收8: ${progressPct}% 时间点 coordinated 模式下 deleted ghost effective alpha 应固定 1" +
+                    "综合验收8: $progressPct% 时间点 coordinated 模式下 deleted ghost effective alpha 应固定 1" +
                         "（draw 层覆盖，验证问题2修复），实际 alpha.from=${ghost.alpha.from}（通道值），" +
                         "effectiveAlpha=$effectiveAlpha",
                     1f,
@@ -1157,7 +1189,7 @@ class ComposeVisualIssue703RegressionTest {
                 // 允许 2px 容差（浮点精度 + Robolectric 渲染误差）
                 val deltaRight = kotlin.math.abs(visibleRight - cursorLeft)
                 assertTrue(
-                    "综合验收7: ${progressPct}% 时间点 deleted glyph 可见右边界应跟 cursor 边界一致，" +
+                    "综合验收7: $progressPct% 时间点 deleted glyph 可见右边界应跟 cursor 边界一致，" +
                         "visibleRight=$visibleRight, cursorLeft=$cursorLeft, " +
                         "clipFraction=$clipFraction, deltaRight=$deltaRight（应 < 2f）",
                     deltaRight < 2f,
@@ -1186,10 +1218,11 @@ class ComposeVisualIssue703RegressionTest {
     @Test
     fun r_comment5710419102_coordinatedInsertFirstFrameClipFractionExists() {
         val layouts = captureLayouts("", "a")
-        val state = ComposeEditorVisualState(
-            targetId = "test-703-comment5710419102-prob2",
-            classifier = FakeLocalVisualPlanClassifier,
-        )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-703-comment5710419102-prob2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
 
         // 初始空文本，caret 在 0
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -1249,17 +1282,17 @@ class ComposeVisualIssue703RegressionTest {
         for (progressPct in listOf(25, 50, 75)) {
             val scene = state.sampleVisualScene(progressPct.toLong() * NANOS_PER_MS)
             val cursor = scene.cursorRect
-            assertNotNull("问题2: ${progressPct}% 时间点 cursor rect 应存在", cursor)
+            assertNotNull("问题2: $progressPct% 时间点 cursor rect 应存在", cursor)
 
             val unit = scene.units.firstOrNull { it.targetRange != null }
             assertNotNull(
-                "问题2: ${progressPct}% 时间点 inserted unit 应存在",
+                "问题2: $progressPct% 时间点 inserted unit 应存在",
                 unit,
             )
 
             // coordinated 模式下 clipFraction 必须存在
             assertTrue(
-                "问题2: ${progressPct}% 时间点 unitClipFractions 必须包含 inserted unit 的 key",
+                "问题2: $progressPct% 时间点 unitClipFractions 必须包含 inserted unit 的 key",
                 scene.unitClipFractions.containsKey(unit!!.key),
             )
             val clipFraction = scene.unitClipFractions[unit.key]!!
@@ -1273,7 +1306,7 @@ class ComposeVisualIssue703RegressionTest {
             // 允许 2px 容差（浮点精度 + Robolectric 渲染误差）
             val deltaRight = kotlin.math.abs(visibleRight - cursorLeft)
             assertTrue(
-                "问题2: ${progressPct}% 时间点 inserted glyph 可见右边界应跟 cursor 边界一致，" +
+                "问题2: $progressPct% 时间点 inserted glyph 可见右边界应跟 cursor 边界一致，" +
                     "visibleRight=$visibleRight, cursorLeft=$cursorLeft, " +
                     "clipFraction=$clipFraction, deltaRight=$deltaRight（应 < 2f）",
                 deltaRight < 2f,
@@ -1291,6 +1324,299 @@ class ComposeVisualIssue703RegressionTest {
                 clipFraction100 > 0.9f,
             )
         }
+    }
+
+    // ==================== #703 评论 5710977972 跨行裁切 + retainedMoves 视觉角色复现测试 ====================
+
+    /**
+     * #703 评论 5710977972 缺陷1-A1：跨行吐字 — 光标进入下一行后，上一行已吐出的 inserted unit
+     * 的 clipFraction 必须 >= 0.99（保持可见）。
+     *
+     * 当前 bug：[ComposeVisualTimeline.computeUnitClipFractions] 跨行裁切只有 `sameLine` 无方向判断。
+     * 吐字时光标进入下一行后，上一行 inserted unit 的 `sameLine=false`，inserted 分支返回 `0f`，字消失。
+     *
+     * 场景：从空文本插入 "ab\nc"（'a','b' 第一行 top=0..35，'c' 第二行 top=35..70）。
+     * insertedUnits = [0,1), [1,2)（'a' 和 'b' 在第一行）。
+     * 光标从第一行移动到第二行（cursorDuration=10ms 短，textDuration=1000ms 长）。
+     * 在 20ms 采样：光标已在第二行（cursor 动画完成），unit alpha=0.02（未收口）。
+     * 第一行 'a' [0,1) 的 `sameLine=false`（cursorTop=35 >= glyphBottom=35），
+     * inserted 分支返回 `0f` → 字消失（bug）。
+     *
+     * 期望（修复后）：光标已过第一行（cursorTop >= glyphBottom），第一行字应完整可见，clipFraction >= 0.99。
+     */
+    @Test
+    fun repro_comment5710977972_a1_crossLineInsert_firstLineGlyphDisappears() {
+        // 用硬换行让 "ab\nc" 跨两行：'a','b' 第一行（top=0..35），'c' 第二行（top=35..70）
+        val layouts = captureLayoutsWithWidth(arrayOf("", "ab\nc"), 30)
+        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
+        val newLayout = ComposeLayoutSnapshot(layouts[1], TextRange(4, 4), 0)
+
+        // 确认 "ab\nc" 确实跨两行
+        assertTrue(
+            "A1: 'ab\\nc' 应跨两行，实际 lineCount=${layouts[1].lineCount}",
+            layouts[1].lineCount >= 2,
+        )
+
+        val timeline = ComposeVisualTimeline()
+
+        // 光标终点在第二行（offset 4，'c' 后）
+        val cursorOnSecondLine = layouts[1].getCursorRect(4)
+        assertTrue(
+            "A1: 光标终点应在第二行（top>=35），实际 top=${cursorOnSecondLine.top}",
+            cursorOnSecondLine.top >= 35f,
+        )
+
+        val cursorPath =
+            CursorMotionPath(points = listOf(CursorMotionPoint(rect = cursorOnSecondLine, endFraction = 1f)))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = emptyLayout,
+                newLayout = newLayout,
+                // 'a' 和 'b' 在第一行
+                insertedUnits = listOf(TextRange(0, 1), TextRange(1, 2)),
+                cursorMotionPath = cursorPath,
+                durationMs = 1000L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 1000L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = layouts[0].getCursorRect(0) // 空文本光标在第一行
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            // 光标 10ms 内到第二行
+            cursorDurationNanos = 10L * NANOS_PER_MS,
+        )
+
+        // 在 20ms 采样：光标已在第二行（cursor 动画完成），unit alpha=0.02（未收口）
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+        val cursor = scene.cursorRect
+        assertNotNull("A1: cursor rect 应存在", cursor)
+        assertTrue(
+            "A1: 采样时光标应在第二行（top>=35），实际 top=${cursor!!.top}",
+            cursor.top >= 35f,
+        )
+
+        // 找第一行的 inserted unit 'a' [0,1)
+        val unitA = scene.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        assertNotNull(
+            "A1: 第一行 inserted unit 'a' [0,1) 应存在（alpha 未完成，未收口）",
+            unitA,
+        )
+
+        val clipFractionA = scene.unitClipFractions[unitA!!.key] ?: 1f
+        // 期望：光标已过第一行（cursorTop >= glyphBottom），第一行字应完整可见
+        // bug 下：sameLine=false → inserted 分支 fraction=0 → 字消失
+        assertTrue(
+            "A1 跨行吐字: 光标进入第二行后，第一行已吐出的 'a' clipFraction 应 >= 0.99（保持可见），" +
+                "实际 clipFraction=$clipFractionA（bug 下为 0，字消失）；" +
+                "cursor.top=${cursor.top}",
+            clipFractionA >= 0.99f,
+        )
+    }
+
+    /**
+     * #703 评论 5710977972 缺陷1-A2：跨行快速 Backspace — 光标退回上一行后，下一行已吞掉的
+     * deleted ghost 的 clipFraction 必须 <= 0.01（不能重新出现）。
+     *
+     * 当前 bug：[ComposeVisualTimeline.computeUnitClipFractions] 跨行裁切只有 `sameLine` 无方向判断。
+     * 吞字时光标退回上一行后，下一行 ghost 的 `sameLine=false`，deleted 分支返回 `1f`，字重新出现。
+     *
+     * 场景："a\nb" → "a"（删除换行和 'b'）。ghost 'b' [2,3) 在旧 layout 第二行（top=35..70）。
+     * 光标从第二行（offset 3）退回第一行（offset 1）。cursorDuration=10ms 短，textDuration=1000ms 长。
+     * 在 20ms 采样：光标在第一行（top=0..35），ghost 'b' 的 `sameLine=false`（cursorBottom=35 <= glyphTop=35），
+     * deleted 分支返回 `1f` → 字重新出现（bug）。
+     *
+     * 期望（修复后）：光标已退过第二行（cursorBottom <= glyphTop），下一行 ghost 应被吞掉，clipFraction <= 0.01。
+     */
+    @Test
+    fun repro_comment5710977972_a2_crossLineDelete_nextLineGhostReappears() {
+        val layouts = captureLayoutsWithWidth(arrayOf("a\nb", "a"), 30)
+        val oldLayout = ComposeLayoutSnapshot(layouts[0], TextRange(3, 3), 0)
+        val newLayout = ComposeLayoutSnapshot(layouts[1], TextRange(1, 1), 0)
+
+        // 确认 "a\nb" 跨两行
+        assertTrue(
+            "A2: 'a\\nb' 应跨两行，实际 lineCount=${layouts[0].lineCount}",
+            layouts[0].lineCount >= 2,
+        )
+
+        val timeline = ComposeVisualTimeline()
+
+        // 光标从第二行（offset 3，'b' 后）退到第一行（offset 1，'a' 后）
+        val oldCursorRect = layouts[0].getCursorRect(3) // 第二行
+        val newCursorRect = layouts[1].getCursorRect(1) // 第一行
+        assertTrue(
+            "A2: 旧光标应在第二行（top>=35），实际 top=${oldCursorRect.top}",
+            oldCursorRect.top >= 35f,
+        )
+        assertTrue(
+            "A2: 新光标应在第一行（top<35），实际 top=${newCursorRect.top}",
+            newCursorRect.top < 35f,
+        )
+
+        val cursorPath = CursorMotionPath(points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                // 换行符和 'b'
+                deletedUnits = listOf(TextRange(1, 2), TextRange(2, 3)),
+                cursorMotionPath = cursorPath,
+                durationMs = 1000L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 1000L, cursorEnabled = true, coordinated = true),
+            )
+
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = oldCursorRect,
+            cursorPath = cursorPath.points,
+            cursorDurationNanos = 10L * NANOS_PER_MS,
+        )
+
+        // 在 20ms 采样：光标已在第一行，ghost 'b' 的 alpha 未完成
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+        val cursor = scene.cursorRect
+        assertNotNull("A2: cursor rect 应存在", cursor)
+        assertTrue(
+            "A2: 采样时光标应在第一行（top<35），实际 top=${cursor!!.top}",
+            cursor.top < 35f,
+        )
+
+        // 找下一行的 deleted ghost 'b' [2,3)（targetRange == null, range == [2,3)）
+        val ghostB = scene.units.firstOrNull { it.targetRange == null && it.range == TextRange(2, 3) }
+        assertNotNull(
+            "A2: 下一行 deleted ghost 'b' [2,3) 应存在（alpha 未完成，未收口）",
+            ghostB,
+        )
+
+        val clipFractionB = scene.unitClipFractions[ghostB!!.key] ?: 1f
+        // 期望：光标已退过第二行（cursorBottom <= glyphTop），下一行 ghost 应被吞掉
+        // bug 下：sameLine=false → deleted 分支 fraction=1 → 字重新出现
+        assertTrue(
+            "A2 跨行吞字: 光标退回第一行后，下一行已吞掉的 ghost 'b' clipFraction 应 <= 0.01（不能重新出现），" +
+                "实际 clipFraction=$clipFractionB（bug 下为 1，字重新出现）",
+            clipFractionB <= 0.01f,
+        )
+    }
+
+    /**
+     * #703 评论 5710977972 缺陷2：VisualTextUnit 无视觉角色，retainedMoves 幸存回流文字
+     * 被误当 inserted 吐字裁切。
+     *
+     * [VisualTextUnit] 只有 `targetRange: TextRange?`（null=ghost，非 null=存活）。
+     * [ComposeVisualTimeline.computeUnitClipFractions] 只看 `targetRange != null` 就当 inserted 吐字。
+     * 但 [createMoveUnitForReflow] 创建的幸存回流文字同样 `targetRange != null`。
+     * [ComposeEditorVisualState.buildLocalInputPatch] 只对 Delete 清空 retainedMoves，
+     * Insert 仍会生成 retainedMoves。一次输入触发自动换行时，幸存文字被空间裁切误当"新字"隐藏。
+     *
+     * 场景：Insert 触发换行 — "ab" → "a\nb"（插入换行符，'b' 从第一行移到第二行）。
+     * retainedMoves = [RetainedMove([1,2), [2,3))]，createMoveUnitForReflow 创建 unit:
+     * targetRange=[2,3)（非 null），alpha=1→1，被当成 inserted。
+     * 光标在 offset 2（换行符后，'b' 前，第二行开头 left=0）。
+     * 'b' [2,3) bounds=(0,35,1,70)，sameLine=true，
+     * inserted 分支 fraction = (cursorLeft - glyphLeft) / glyphWidth = (0-0)/1 = 0。
+     * 'b' 不可见（bug）— 幸存回流文字被误当新插入的字裁切。
+     *
+     * 期望（修复后）：retained move 的幸存文字应始终完整可见（clipFraction=1 或不在 unitClipFractions 中）。
+     *
+     * 用 makePatch 直接构造 timeline，精确控制 cursorPath 让光标在 'b' 左侧（offset 2），
+     * 确保 sameLine=true 且 fraction=0 复现 bug。
+     */
+    @Test
+    fun repro_comment5710977972_a3_retainedMoveReflowTextMistakenAsInserted() {
+        val layouts = captureLayoutsWithWidth(arrayOf("ab", "a\nb"), 30)
+        val oldLayout = ComposeLayoutSnapshot(layouts[0], TextRange(1, 1), 0)
+        val newLayout = ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0)
+
+        // 确认 "ab" 一行，"a\nb" 两行
+        assertTrue(
+            "A3: 'ab' 应一行，实际 lineCount=${layouts[0].lineCount}",
+            layouts[0].lineCount == 1,
+        )
+        assertTrue(
+            "A3: 'a\\nb' 应跨两行，实际 lineCount=${layouts[1].lineCount}",
+            layouts[1].lineCount >= 2,
+        )
+
+        // 'b' [2,3) 在 "a\nb" 第二行，确认 glyph width >= 0.5（非零宽）
+        val bBounds = layouts[1].getPathForRange(2, 3).getBounds()
+        assertTrue(
+            "A3: 'b' [2,3) glyph width 应 >= 0.5（非零宽，确保进入 spatial clip 分支），实际 bounds=$bBounds",
+            bBounds.width >= 0.5f,
+        )
+
+        val timeline = ComposeVisualTimeline()
+
+        // 光标在 'b' 左侧（offset 2，换行符后，'b' 前，第二行开头）
+        val cursorBeforeB = layouts[1].getCursorRect(2)
+        assertTrue(
+            "A3: 光标应在第二行（top>=35），实际 top=${cursorBeforeB.top}",
+            cursorBeforeB.top >= 35f,
+        )
+
+        val cursorPath = CursorMotionPath(points = listOf(CursorMotionPoint(rect = cursorBeforeB, endFraction = 1f)))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                // 换行符
+                insertedUnits = listOf(TextRange(1, 2)),
+                retainedMoves =
+                    listOf(
+                        RetainedMove(oldRange = TextRange(1, 2), newRange = TextRange(2, 3)),
+                    ),
+                // 'b' reflow
+                cursorMotionPath = cursorPath,
+                durationMs = 1000L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 1000L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = layouts[0].getCursorRect(1) // offset 1 在 "ab" 中（'a' 后）
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            // 光标 10ms 内到 'b' 左侧
+            cursorDurationNanos = 10L * NANOS_PER_MS,
+        )
+
+        // 在 20ms 采样：光标已在 'b' 左侧（第二行），retained move unit 'b' 的 position 未完成（未收口）
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+        val cursor = scene.cursorRect
+        assertNotNull("A3: cursor rect 应存在", cursor)
+
+        // 找 retained move unit 'b' [2,3)（targetRange != null, alpha=1→1，幸存回流文字）
+        val retainedUnit =
+            scene.units.firstOrNull {
+                it.targetRange == TextRange(2, 3) && it.alpha.from >= 0.99f && it.alpha.to >= 0.99f
+            }
+        assertNotNull(
+            "A3: retained move unit 'b' [2,3) 应存在（alpha 1→1，幸存回流文字，position 未完成未收口），" +
+                "实际 units=" +
+                "${scene.units.map { "tgt=${it.targetRange} rng=${it.range} a=${it.alpha.from}->${it.alpha.to}" }}",
+            retainedUnit,
+        )
+
+        // 期望：retained move 的幸存文字应始终完整可见
+        // - clipFraction=1 或不在 unitClipFractions 中（不进入 spatial clip）
+        // bug 下：被误当 inserted 裁切，clipFraction=0（光标在 'b' 左侧，sameLine=true，fraction=(0-0)/1=0），'b' 消失
+        val clipFraction = scene.unitClipFractions[retainedUnit!!.key] ?: 1f
+        assertTrue(
+            "A3 retainedMoves 幸存回流: 'b' clipFraction 应为 1 或不在 unitClipFractions 中（始终完整可见），" +
+                "实际 clipFraction=$clipFraction（bug 下被误当 inserted 裁切成 0，'b' 消失）；" +
+                "cursor=$cursor",
+            clipFraction >= 0.99f,
+        )
     }
 
     // ==================== 辅助方法 ====================

@@ -136,30 +136,32 @@ class ComposeVisualTimeline {
             val newInsertedRanges = patch.insertedUnits
             val newDeletedRanges = patch.deletedUnits
             if (newInsertedRanges.isNotEmpty() || newDeletedRanges.isNotEmpty()) {
-                units = units.mapNotNull { unit ->
-                    if (unit.targetRange == null) {
-                        // ghost：如果 range 被新 insertedUnits 完全包含，移除（新编辑已在该位置插入新字）
-                        if (newInsertedRanges.any { ins ->
-                                ins.start <= unit.range.start && unit.range.end <= ins.end
+                units =
+                    units.mapNotNull { unit ->
+                        if (unit.targetRange == null) {
+                            // ghost：如果 range 被新 insertedUnits 完全包含，移除（新编辑已在该位置插入新字）
+                            if (newInsertedRanges.any { ins ->
+                                    ins.start <= unit.range.start && unit.range.end <= ins.end
+                                }
+                            ) {
+                                presentedKeys.remove(unit.key)
+                                null
+                            } else {
+                                unit
                             }
-                        ) {
-                            presentedKeys.remove(unit.key)
-                            null
                         } else {
-                            unit
-                        }
-                    } else {
-                        // 存活 unit：如果 targetRange 被新 deletedUnits 完全包含，转 ghost
-                        val fullyDeleted = newDeletedRanges.firstOrNull { del ->
-                            del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
-                        }
-                        if (fullyDeleted != null) {
-                            toGhost(unit, frameTimeNanos, durationNanos, unit.range)
-                        } else {
-                            unit
+                            // 存活 unit：如果 targetRange 被新 deletedUnits 完全包含，转 ghost
+                            val fullyDeleted =
+                                newDeletedRanges.firstOrNull { del ->
+                                    del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
+                                }
+                            if (fullyDeleted != null) {
+                                toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                            } else {
+                                unit
+                            }
                         }
                     }
-                }
             }
         }
 
@@ -526,6 +528,9 @@ class ComposeVisualTimeline {
                         targetRange = range,
                         alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                         position = TimedOffset(position, position, frameTimeNanos, 0L),
+                        // #703 评论 5710977972 缺陷2：新插入字角色 = Inserted，
+                        // 由 cursor 从左向右裁切吐出。
+                        role = VisualUnitRole.Inserted,
                     ),
                 )
             }
@@ -585,6 +590,9 @@ class ComposeVisualTimeline {
                     targetRange = null,
                     alpha = TimedFloat(1f, 0f, ghostStartedAt, ghostDuration),
                     position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
+                    // #703 评论 5710977972 缺陷2：删除 ghost 角色 = DeletedGhost，
+                    // 由 cursor 从右向左裁切吞掉。
+                    role = VisualUnitRole.DeletedGhost,
                 )
         }
     }
@@ -711,6 +719,9 @@ class ComposeVisualTimeline {
                 targetRange = newRange,
                 alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
                 position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                // #703 评论 5710977972 缺陷2：幸存回流文字角色 = RetainedMove，
+                // 始终完整可见，不进入 spatial clip 裁切。
+                role = VisualUnitRole.RetainedMove,
             )
     }
 
@@ -864,32 +875,63 @@ class ComposeVisualTimeline {
                 result[unit.key] = 1f
                 continue
             }
-            // #703 评论 A 缺陷3：跨行裁切 — 先判断 cursor 和 glyph 是否在同一行。
-            // 不同行时不能用全局 cursorX 裁切，否则跨行时下一行 glyph 会提前完整出现。
-            val sameLine = cursorBottom > glyphTop && cursorTop < glyphBottom
+            // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
+            // 不进入 spatial clip 裁切。显式放入 fraction=1 最稳妥，
+            // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
+            if (unit.role == VisualUnitRole.RetainedMove) {
+                result[unit.key] = 1f
+                continue
+            }
+            // #703 评论 5710977972 缺陷1：跨行裁切改为按行序单调状态。
+            // 旧实现只用 sameLine（cursor 和 glyph 的垂直区间是否重叠）无方向判断，
+            // 吐字时光标进入下一行后上一行 inserted unit 变 fraction=0（字消失），
+            // 吞字时光标退回上一行后下一行 ghost 变 fraction=1（字重新出现）。
+            //
+            // 新实现用 layout 的 line index 判断方向（不拿 glyph bounds 的 top/bottom，
+            // glyph 可能只占行一部分）：
+            // - glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
+            // - glyphLineTop = getLineTop(glyphLine), glyphLineBottom = getLineBottom(glyphLine)
+            // - cursorBeforeGlyphLine = cursorBottom <= glyphLineTop（光标在 glyph 行之前/上方）
+            // - cursorAfterGlyphLine = cursorTop >= glyphLineBottom（光标在 glyph 行之后/下方）
+            //
+            // 按行序单调状态：
+            // - Inserted（吐字，光标从左向右移动，字从左向右出现）：
+            //   * cursorAfterGlyphLine（光标已过这一行）→ fraction = 1（字完整可见，已吐完）
+            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+            //   * cursorBeforeGlyphLine（光标还没到这一行）→ fraction = 0（字不可见）
+            // - DeletedGhost（吞字，光标从右向左退，从下方往上退）：
+            //   * cursorBeforeGlyphLine（光标在 ghost 行上方，已退过这一行）→ fraction = 0（字被吞掉）
+            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+            //   * cursorAfterGlyphLine（光标在 ghost 行下方，还没退到这一行）→ fraction = 1（字仍完整可见）
+            val (glyphLineTop, glyphLineBottom) =
+                try {
+                    val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
+                    unit.layout.result.getLineTop(glyphLine) to
+                        unit.layout.result.getLineBottom(glyphLine)
+                } catch (_: Throwable) {
+                    // layout 行信息取不到时 fallback 到旧 sameLine 语义（用 glyph bounds），
+                    // 保证不会因 layout API 异常而整字消失。
+                    glyphTop to glyphBottom
+                }
+            val cursorBeforeGlyphLine = cursorBottom <= glyphLineTop
+            val cursorAfterGlyphLine = cursorTop >= glyphLineBottom
             val fraction =
-                if (unit.targetRange != null) {
-                    // 吐字（inserted unit）
-                    if (!sameLine) {
-                        // 光标和 glyph 不同行：光标还没到这一行，字不可见
-                        0f
-                    } else {
-                        // 同行：cursor 从左向右，可见区域 = [glyphLeft, cursorLeft]
-                        ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                when (unit.role) {
+                    VisualUnitRole.Inserted -> {
+                        when {
+                            cursorAfterGlyphLine -> 1f
+                            cursorBeforeGlyphLine -> 0f
+                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                        }
                     }
-                } else {
-                    // 吞字（deleted ghost）
-                    if (!sameLine) {
-                        // 光标和 glyph 不同行：光标还没退到这一行，字仍完整可见
-                        1f
-                    } else {
-                        // #703 评论 A 缺陷2：统一边界模型 —
-                        // fraction = (cursorLeft - glyphLeft) / glyphWidth
-                        // 开始 cursorLeft=glyphRight → fraction=1（完全可见）
-                        // 结束 cursorLeft=glyphLeft → fraction=0（完全被吞掉）
-                        // draw 层画 [left, left + width * fraction]
-                        ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                    VisualUnitRole.DeletedGhost -> {
+                        when {
+                            cursorBeforeGlyphLine -> 0f
+                            cursorAfterGlyphLine -> 1f
+                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                        }
                     }
+                    VisualUnitRole.RetainedMove -> 1f
                 }
             result[unit.key] = fraction
         }
@@ -1090,6 +1132,9 @@ class ComposeVisualTimeline {
             targetRange = null,
             alpha = TimedFloat(alphaNow, 0f, now, durationNanos),
             position = TimedOffset(positionNow, positionNow, now, 0L),
+            // #703 评论 5710977972 缺陷2：active unit 转 ghost，角色 = DeletedGhost，
+            // 由 cursor 从右向左裁切吞掉。
+            role = VisualUnitRole.DeletedGhost,
         )
     }
 
@@ -1388,6 +1433,18 @@ data class TimedOffset(
 )
 
 /**
+ * #703 评论 5710977972 缺陷2：VisualTextUnit 的视觉角色 —
+ * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流），
+ * 不再用 targetRange!=null 间接判断。
+ *
+ * - [Inserted]：本 patch 新插入的字，由 cursor 从左向右裁切吐出。
+ * - [DeletedGhost]：本 patch 删除的 ghost 字，由 cursor 从右向左裁切吞掉。
+ * - [RetainedMove]：幸存回流文字（retainedMoves 创建），始终完整可见，
+ *   不进入 spatial clip 裁切（computeUnitClipFractions 直接给 fraction=1）。
+ */
+enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
+
+/**
  * #689 评论 5674631257 步骤2：单个文字单元的持续视觉状态。
  *
  * @param key 唯一标识 — 快速输入时不重置。
@@ -1398,6 +1455,10 @@ data class TimedOffset(
  *   非 null = 仍存活，overlay 绘制时用此 range。
  * @param alpha 透明度通道 — 互不重置。
  * @param position 位置通道 — 互不重置；位置没变不重建。
+ * @param role #703 评论 5710977972：视觉角色 —
+ *   [VisualUnitRole.Inserted] / [VisualUnitRole.DeletedGhost] / [VisualUnitRole.RetainedMove]。
+ *   默认 [VisualUnitRole.RetainedMove]：普通幸存 copy（data class copy 自动保留原 role）
+ *   不参与吞吐裁切，始终完整可见。
  */
 data class VisualTextUnit(
     val key: Long,
@@ -1406,6 +1467,7 @@ data class VisualTextUnit(
     val targetRange: TextRange?,
     val alpha: TimedFloat,
     val position: TimedOffset,
+    val role: VisualUnitRole = VisualUnitRole.RetainedMove,
 )
 
 /**

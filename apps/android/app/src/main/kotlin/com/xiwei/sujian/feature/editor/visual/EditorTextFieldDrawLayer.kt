@@ -272,11 +272,12 @@ private fun DrawScope.drawVisualScene(
         // 否则新插入 unit 首帧会整字出现。insert（targetRange != null）默认 0（不可见），
         // delete ghost（targetRange == null）默认 1（吞字开始完整可见）。
         // 非 coordinated 模式沿用 1（alpha 主导显隐）。
-        val clipFraction = scene.unitClipFractions[unit.key] ?: if (scene.coordinatedSpatialClip) {
-            if (targetRange != null) 0f else 1f
-        } else {
-            1f
-        }
+        val clipFraction =
+            scene.unitClipFractions[unit.key] ?: if (scene.coordinatedSpatialClip) {
+                if (targetRange != null) 0f else 1f
+            } else {
+                1f
+            }
         if (clipFraction <= 0f) continue
         if (targetRange != null) {
             // 存活 unit：在新 layout 的真实位置 + timeline 算好的偏移
