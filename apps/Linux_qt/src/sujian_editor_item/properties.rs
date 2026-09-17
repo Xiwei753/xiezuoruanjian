@@ -642,9 +642,16 @@ impl SujianEditorItem {
         // prepared_frame，避免 snapshot 持有已被释放的 generation
         // 被 render thread 消费。后续 request_static_repaint 会重新 prepare。
         // Issue #677 评论 5653944889: 字段从 cached_static_snapshot 改为 prepared_frame。
-        if self.pipeline.has_pending_promoted_layout() {
-            self.prepared_frame = None;
-        }
+        // Issue #705 评论 5716919024 问题 1: 正文 revision 一变化就无条件清
+        // prepared_frame，不能只在"有 pending promoted layout"时才清。普通输入
+        // (打字动画关闭 / 滚动期间抑制动画等没有 promoted layout 的路径)
+        // 也会 bump_text_revision，若此时 prepared_frame 仍是旧正文，
+        // 后续 adjust_affinity_at_wrap_boundary -> update_cursor_visual_position
+        // -> editor_layout_cursor_rect -> current_render_layout_snapshot 会优先
+        // 拿旧 prepared_frame，造成"正文已经变了，光标几何还按上一帧正文算"的错位。
+        // 无条件清后，current_render_layout_snapshot 在正文刚变化、还没 prepare 新
+        // frame 的时间窗口会 fallback 到当前 EditorLayout，不再读旧 frame。
+        self.prepared_frame = None;
         if let Some(promoted) = self.pipeline.take_pending_promoted_layout() {
             self.editor_layout.promote_prepared_layout(
                 promoted,

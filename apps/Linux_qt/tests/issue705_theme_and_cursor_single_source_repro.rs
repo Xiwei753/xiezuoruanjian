@@ -357,3 +357,62 @@ fn issue705_repro_2e_click_path_has_per_method_force_snap_special_branches() {
         force_snap_count
     );
 }
+
+/// 复现 2f: Issue #705 评论 5716919024 问题 1。`emit_content_changed` 必须
+/// 在 `bump_text_revision` 后无条件清 `prepared_frame`,不能只在
+/// `has_pending_promoted_layout` 时清。否则普通输入(打字动画关闭 / 滚动抑制
+/// 动画等没有 promoted layout 的路径)会让 `current_render_layout_snapshot`
+/// 优先拿到旧 `prepared_frame`,造成光标几何按上一帧正文计算。
+///
+/// 当前(未修复)代码:`properties.rs` 的 `emit_content_changed` 用
+/// `if self.pipeline.has_pending_promoted_layout() { self.prepared_frame = None; }`
+/// 作为条件守卫。断言"不应有 has_pending_promoted_layout 条件守卫"在当前代码
+/// 上 FAIL → 复现成功。修复后:无条件 `self.prepared_frame = None;`,
+/// 函数体窗口内不再出现 `has_pending_promoted_layout` → PASS。
+#[test]
+fn issue705_repro_2f_emit_content_changed_clears_prepared_frame_unconditionally() {
+    let src = read_src("src/sujian_editor_item/properties.rs");
+    // 定位 emit_content_changed 函数体窗口
+    let marker = "fn emit_content_changed";
+    let marker_pos = src
+        .find(marker)
+        .expect("emit_content_changed 必须存在");
+    // 取其后约 3000 字符的窗口,覆盖 bump_text_revision、无条件清 prepared_frame
+    // 到 take_pending_promoted_layout / promote_prepared_layout 的完整逻辑。
+    // (函数体约 3955 字符,3000 字符窗口足以覆盖到 self.prepared_frame = None;
+    // 且不超出函数体,不会误判其他函数里的标识符。)
+    // 注意:源码含中文注释,字节切片可能落在 UTF-8 多字节字符中间,
+    // 需要把窗口结束位置回退到最近的字符边界。
+    let target_end = marker_pos + 3000;
+    let window_end = src
+        .char_indices()
+        .take_while(|(i, _)| *i < target_end)
+        .last()
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(src.len())
+        .min(src.len());
+    let window = &src[marker_pos..window_end];
+    let clears_prepared_frame = window.contains("self.prepared_frame = None;");
+    let has_pending_guard = window.contains("has_pending_promoted_layout");
+    println!(
+        "[BUGFIX_REPRO_TRACE] 2f emit_content_changed clears_prepared_frame={} has_pending_promoted_layout_guard={}",
+        clears_prepared_frame, has_pending_guard
+    );
+    assert!(
+        clears_prepared_frame,
+        "Issue #705 复现 2f: emit_content_changed 函数体内没有 \
+         `self.prepared_frame = None;`。正文变化后必须无条件清 prepared_frame, \
+         否则 current_render_layout_snapshot 会优先拿旧 frame。"
+    );
+    assert!(
+        !has_pending_guard,
+        "Issue #705 复现 2f: emit_content_changed 函数体内仍以 \
+         has_pending_promoted_layout 作为清 prepared_frame 的条件守卫。 \
+         普通输入(打字动画关闭 / 滚动抑制动画等没有 promoted layout 的路径) \
+         不会进入该分支,prepared_frame 仍是旧正文,后续 \
+         adjust_affinity_at_wrap_boundary -> update_cursor_visual_position \
+         -> editor_layout_cursor_rect -> current_render_layout_snapshot \
+         会优先拿旧 prepared_frame,造成\"正文已经变了,光标几何还按上一帧正文算\" \
+         的错位。修复:正文 revision 一变化就无条件清 prepared_frame。"
+    );
+}

@@ -175,6 +175,11 @@ fn default_editor_coordinated_text_cursor_animation_enabled() -> bool {
 impl LocalSettings {
     /// 将所有设置项 clamp 到安全范围内。
     pub fn validate(&mut self) {
+        // Issue #705 评论 5716919024: appearance_mode 运行时只允许 system/light/dark,
+        // 非法值归一成 system,避免下游(如 LinuxThemeController)把未知值默默当 system。
+        if !is_valid_appearance_mode(&self.appearance_mode) {
+            self.appearance_mode = default_appearance_mode();
+        }
         self.editor_font_size = self
             .editor_font_size
             .clamp(ranges::FONT_SIZE_MIN, ranges::FONT_SIZE_MAX);
@@ -519,6 +524,14 @@ pub fn load_local_settings(config_dir: &Path) -> Result<LocalSettings> {
     // 读完后写回当前格式,只保留 appearanceMode。
     let mut root: serde_json::Value = serde_json::from_str(&content)?;
     let resolved_appearance = resolve_appearance_mode(&root);
+    // Issue #705 评论 5716919024: 只要旧文件存在 themeMode/theme_mode 旧字段,
+    // 读取成功后就要写回一次,确保磁盘上不再保留第二套旧字段。
+    // 之前用字符串 contains 判断"有 themeMode 且没有 appearanceMode",
+    // 旧文件同时含两个 key 时不会写回,磁盘上 themeMode 会一直留着。
+    let had_legacy_theme_mode = root
+        .as_object()
+        .map(|obj| obj.contains_key("themeMode") || obj.contains_key("theme_mode"))
+        .unwrap_or(false);
     // 确保只保留 appearanceMode,删除旧 themeMode key(如果存在)
     if let Some(obj) = root.as_object_mut() {
         obj.remove("themeMode");
@@ -529,20 +542,23 @@ pub fn load_local_settings(config_dir: &Path) -> Result<LocalSettings> {
         );
     }
     let mut settings: LocalSettings = serde_json::from_value(root)?;
-    // 如果文件是旧格式(只有 themeMode 没有 appearanceMode),写回当前格式
-    // 检测方式:原始 content 包含 themeMode 但不包含 appearanceMode
-    let needs_writeback =
-        content.contains("\"themeMode\"") && !content.contains("\"appearanceMode\"");
     settings.validate();
-    if needs_writeback {
+    if had_legacy_theme_mode {
         // 静默写回,只保留 appearanceMode。写回失败不应阻止读取。
         let _ = save_local_settings(config_dir, &settings);
     }
     Ok(settings)
 }
 
+/// Issue #705 评论 5716919024: appearance_mode 运行时只允许这三个值。
+/// resolve_appearance_mode 取值和 validate 归一都依赖此判定。
+fn is_valid_appearance_mode(s: &str) -> bool {
+    matches!(s, "system" | "light" | "dark")
+}
+
 /// Issue #705 评论 5716410988: 解析旧/新配置的 appearance mode。
 /// 取值顺序:有效的 appearanceMode > 旧 themeMode > system。
+/// Issue #705 评论 5716919024: 只接受 system/light/dark,非法值继续回退下一来源,最终回 system。
 fn resolve_appearance_mode(root: &serde_json::Value) -> String {
     let default = default_appearance_mode();
     let obj = match root.as_object() {
@@ -552,7 +568,7 @@ fn resolve_appearance_mode(root: &serde_json::Value) -> String {
     // 优先 appearanceMode
     if let Some(v) = obj.get("appearanceMode") {
         if let Some(s) = v.as_str() {
-            if !s.is_empty() {
+            if is_valid_appearance_mode(s) {
                 return s.to_string();
             }
         }
@@ -560,7 +576,7 @@ fn resolve_appearance_mode(root: &serde_json::Value) -> String {
     // 回退到旧 themeMode
     if let Some(v) = obj.get("themeMode") {
         if let Some(s) = v.as_str() {
-            if !s.is_empty() {
+            if is_valid_appearance_mode(s) {
                 return s.to_string();
             }
         }
@@ -568,14 +584,14 @@ fn resolve_appearance_mode(root: &serde_json::Value) -> String {
     // 也检查 snake_case key(以防 rename_all 不生效的极端情况)
     if let Some(v) = obj.get("appearance_mode") {
         if let Some(s) = v.as_str() {
-            if !s.is_empty() {
+            if is_valid_appearance_mode(s) {
                 return s.to_string();
             }
         }
     }
     if let Some(v) = obj.get("theme_mode") {
         if let Some(s) = v.as_str() {
-            if !s.is_empty() {
+            if is_valid_appearance_mode(s) {
                 return s.to_string();
             }
         }
@@ -1851,6 +1867,19 @@ mod inline_tests {
             "appearanceMode should win over themeMode"
         );
         assert_eq!(loaded.editor_font_size, 18.0);
+        // Issue #705 评论 5716919024: 读取后重新打开文件,确认 themeMode 已被写回清除。
+        // 之前 needs_writeback 只在"有 themeMode 且没有 appearanceMode"时才写回,
+        // 旧文件同时含两个 key 时磁盘上 themeMode 会一直留着。
+        let written =
+            std::fs::read_to_string(temp_dir.path().join("settings.local.json")).unwrap();
+        assert!(
+            !written.contains("themeMode"),
+            "themeMode + appearanceMode 同时存在时,读取后应写回清除 themeMode"
+        );
+        assert!(
+            written.contains("appearanceMode"),
+            "写回后应保留 appearanceMode"
+        );
     }
 
     #[test]
@@ -1886,6 +1915,56 @@ mod inline_tests {
         std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
         let loaded = load_local_settings(temp_dir.path()).unwrap();
         assert_eq!(loaded.appearance_mode, "system");
+    }
+
+    #[test]
+    fn test_resolve_appearance_mode_rejects_invalid_values() {
+        // Issue #705 评论 5716919024: 非法 appearanceMode 应回退到下一来源或 system。
+        // 之前 resolve_appearance_mode 只判断字符串非空,"Dark"/"foo" 等都会被直接采用。
+        let temp_dir = tempdir().unwrap();
+        let content = r#"{
+            "appearanceMode": "Dark",
+            "editorFontSize": 16.0
+        }"#;
+        std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(
+            loaded.appearance_mode, "system",
+            "非法 appearanceMode 'Dark' 应回退到 system"
+        );
+    }
+
+    #[test]
+    fn test_resolve_appearance_mode_invalid_falls_back_to_theme_mode() {
+        // Issue #705 评论 5716919024: 非法 appearanceMode 应回退到旧 themeMode(如果 themeMode 有效)。
+        let temp_dir = tempdir().unwrap();
+        let content = r#"{
+            "appearanceMode": "foo",
+            "themeMode": "dark",
+            "editorFontSize": 16.0
+        }"#;
+        std::fs::write(temp_dir.path().join("settings.local.json"), content).unwrap();
+        let loaded = load_local_settings(temp_dir.path()).unwrap();
+        assert_eq!(
+            loaded.appearance_mode, "dark",
+            "非法 appearanceMode 'foo' 应回退到有效 themeMode 'dark'"
+        );
+    }
+
+    #[test]
+    fn test_validate_normalizes_invalid_appearance_mode() {
+        // Issue #705 评论 5716919024: validate 应把非法 appearance_mode 归一成 system。
+        let mut settings = LocalSettings::default();
+        settings.appearance_mode = "foo".to_string();
+        settings.validate();
+        assert_eq!(
+            settings.appearance_mode, "system",
+            "validate 应把非法 appearance_mode 归一成 system"
+        );
+        // 合法值不受影响
+        settings.appearance_mode = "dark".to_string();
+        settings.validate();
+        assert_eq!(settings.appearance_mode, "dark");
     }
 }
 

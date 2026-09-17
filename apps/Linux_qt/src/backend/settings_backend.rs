@@ -846,7 +846,13 @@ impl AppBackend {
     }
 
     pub(crate) fn set_setting_appearance_mode(&mut self, val: QString) {
-        self.current_setting_appearance_mode = val.to_string();
+        // Issue #705 评论 5716919024: 运行时只允许 system/light/dark,
+        // 非法值归一成 system,避免 LinuxThemeController 把未知值默默当 system。
+        let s = val.to_string();
+        self.current_setting_appearance_mode = match s.as_str() {
+            "system" | "light" | "dark" => s,
+            _ => "system".to_string(),
+        };
         self.settings_changed();
     }
 
