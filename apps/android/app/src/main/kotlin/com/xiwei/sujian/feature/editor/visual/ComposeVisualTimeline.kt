@@ -772,8 +772,10 @@ class ComposeVisualTimeline {
         // 不再把 alpha 当作"这个字是否出现"的权威状态。
         // - 吐字（inserted unit, targetRange != null）：cursor 从 glyph 左侧向右侧移动，
         //   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
-        // - 吞字（deleted ghost, targetRange == null）：cursor 从 glyph 右侧向左侧移动，
-        //   fraction = (glyph.right - cursor.left) / glyph.width，clamp 0..1。
+        // - 吞字（deleted ghost, targetRange == null）：
+        //   #703 评论 A 缺陷2 统一边界模型 — fraction = (cursor.left - glyph.left) / glyph.width，
+        //   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
+        //   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
         // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
         val unitClipFractions =
             if (sampledCursor != null) {
@@ -798,10 +800,21 @@ class ComposeVisualTimeline {
      *   cursor.left <= glyph.left → fraction = 0（字不可见）。
      *   cursor.left >= glyph.right → fraction = 1（字完全可见）。
      * - 吞字（deleted ghost, targetRange == null）：
-     *   cursor 从 glyph 右侧向左侧移动，glyph 可见区域 = [cursor.left, glyph.right]。
-     *   fraction = (glyph.right - cursor.left) / glyph.width，clamp 0..1。
-     *   cursor.left >= glyph.right → fraction = 0（字已完全被吞掉）。
-     *   cursor.left <= glyph.left → fraction = 1（字仍完全可见）。
+     *   #703 评论 A 缺陷2：统一边界模型 — delete 和 insert 的可见区域都用
+     *   [glyph.left, glyph.left + glyph.width * fraction]，
+     *   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+     *   cursor 从 glyph 右侧向左侧移动：
+     *   cursor.left >= glyph.right → fraction = 1（字仍完全可见，光标还没开始吞）。
+     *   cursor.left <= glyph.left → fraction = 0（字已完全被吞掉）。
+     *   draw 层对 insert 和 delete 都画 [left, left + width * fraction]。
+     *
+     * #703 评论 A 缺陷3：跨行裁切 — 必须先判断 cursor 和 glyph 是否在同一行。
+     * 旧实现只比较 cursorRect.left 和 glyph bounds.left/right，跨行时下一行 glyph
+     * 会被 coerceIn 成 1 提前完整出现。新实现先比较 top/bottom：
+     * - cursor 和 glyph 不同行（cursorBottom <= glyphTop 或 cursorTop >= glyphBottom）：
+     *   insert 分支 fraction = 0（光标还没到这一行，字不可见）。
+     *   delete 分支 fraction = 1（光标还没退到这一行，字仍完整可见）。
+     * - 同行时再按 cursorX 裁切。
      *
      * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
      * draw 层用 fraction 裁切 glyph 可见区域。
@@ -816,6 +829,8 @@ class ComposeVisualTimeline {
     ): Map<Long, Float> {
         if (units.isEmpty()) return emptyMap()
         val cursorLeft = cursorRect.left
+        val cursorTop = cursorRect.top
+        val cursorBottom = cursorRect.bottom
         val result = mutableMapOf<Long, Float>()
         for (unit in units) {
             val alphaNow = unit.alpha.from
@@ -825,19 +840,40 @@ class ComposeVisualTimeline {
             val bounds = safePathBoundsForUnit(unit) ?: continue
             val glyphLeft = bounds.left
             val glyphRight = bounds.right
+            val glyphTop = bounds.top
+            val glyphBottom = bounds.bottom
             val glyphWidth = glyphRight - glyphLeft
             // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
             if (glyphWidth < 0.5f) {
                 result[unit.key] = 1f
                 continue
             }
+            // #703 评论 A 缺陷3：跨行裁切 — 先判断 cursor 和 glyph 是否在同一行。
+            // 不同行时不能用全局 cursorX 裁切，否则跨行时下一行 glyph 会提前完整出现。
+            val sameLine = cursorBottom > glyphTop && cursorTop < glyphBottom
             val fraction =
                 if (unit.targetRange != null) {
-                    // 吐字（inserted unit）：cursor 从左向右，可见区域 = [glyphLeft, cursorLeft]
-                    ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                    // 吐字（inserted unit）
+                    if (!sameLine) {
+                        // 光标和 glyph 不同行：光标还没到这一行，字不可见
+                        0f
+                    } else {
+                        // 同行：cursor 从左向右，可见区域 = [glyphLeft, cursorLeft]
+                        ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                    }
                 } else {
-                    // 吞字（deleted ghost）：cursor 从右向左，可见区域 = [cursorLeft, glyphRight]
-                    ((glyphRight - cursorLeft) / glyphWidth).coerceIn(0f, 1f)
+                    // 吞字（deleted ghost）
+                    if (!sameLine) {
+                        // 光标和 glyph 不同行：光标还没退到这一行，字仍完整可见
+                        1f
+                    } else {
+                        // #703 评论 A 缺陷2：统一边界模型 —
+                        // fraction = (cursorLeft - glyphLeft) / glyphWidth
+                        // 开始 cursorLeft=glyphRight → fraction=1（完全可见）
+                        // 结束 cursorLeft=glyphLeft → fraction=0（完全被吞掉）
+                        // draw 层画 [left, left + width * fraction]
+                        ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                    }
                 }
             result[unit.key] = fraction
         }
@@ -1397,8 +1433,10 @@ data class CursorTrack(
  * 光标经过哪里，字才出现/消失到哪里。
  * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
  *   glyph 可见区域由 cursor X 裁切；光标走到哪里，字吐到哪里。
- * - 吞字（deleted ghost）：cursor 从 glyph 右侧向左侧移动，
- *   光标经过的区域立即隐藏；光标退到哪里，字吞到哪里。
+ * - 吞字（deleted ghost）：#703 评论 A 缺陷2 统一边界模型 —
+ *   fraction = (cursor.left - glyph.left) / glyph.width，
+ *   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
+ *   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
  * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
  *
  * @param units 当前所有文字单元（alpha/position 已插值到当前帧）。

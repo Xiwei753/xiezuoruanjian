@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import android.util.Log
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
@@ -182,6 +183,18 @@ class ComposeEditorVisualState(
      * 从 1_000_000L 起避免与 [ComposeVisualFrameCoordinator] 的 patch id 冲突。
      */
     private var nextLocalPatchId: Long = 1_000_000L
+
+    /**
+     * #703 评论 A 缺陷1：barrier ghost unit key 计数器 —
+     * 从 2_000_000L 起避免与 [ComposeVisualTimeline] 内部 nextUnitKey（从 1L 起）
+     * 和 [nextLocalPatchId]（从 1_000_000L 起）冲突。
+     *
+     * barrier ghost 是 pending ownership scene 里的临时 unit，
+     * 下一帧 [drainPendingPatchesAtFrame] 后由 timeline 的正式 scene 取代。
+     * key 只需在 barrier 期间唯一，不复用 timeline 的 key 空间，
+     * 避免 drain 后 timeline ghost 与 barrier ghost key 碰撞。
+     */
+    private var nextBarrierUnitKey: Long = 2_000_000L
 
     /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
@@ -663,19 +676,75 @@ class ComposeEditorVisualState(
                     // 也不调 sampleVisualScene — 动画进度（alpha/position/clipFraction）应由下一帧
                     // withFrameNanos 用精确 frameTimeNanos 采样，不用 System.nanoTime() 猜当前帧。
                     // barrier 只需声明范围所有权（hiddenRanges），动画 unit 由下一帧 sample 产生。
+                    //
+                    // #703 评论 A 缺陷1：删除路径也要建立视觉所有权屏障。
+                    // 旧实现只处理 insertedUnits（加入 hiddenRanges），对 deletedUnits 无任何处理。
+                    // 删除后 BasicTextField 已切到新正文（被删 glyph 不存在），但 deleted ghost 要等
+                    // 下一帧 drainPendingPatchesAtFrame->timeline.applyPatch 才创建，导致
+                    // "先消失/闪一下 -> ghost 再出现 -> 光标移动 -> 最后消失"的裸帧窗口。
+                    //
+                    // 修复：把 barrier 做成 pending ownership scene：
+                    // - inserted range：立即加入 hiddenRanges（保留原逻辑）。
+                    // - deleted range：立即根据 oldLayout + deletedUnits 建立静态 ghost，
+                    //   alpha=1（完整可见）、position=旧位置、targetRange=null，
+                    //   加入 _visualScene.units，让 draw 层在同帧就画出旧字。
+                    // - cursor：改回旧 caret 位置，不要先跳到新 selection 的 resting cursor，
+                    //   避免光标先跳到新位置再被 timeline cursor 动画拉回旧位置（回抽）。
+                    // 下一帧 drain 时 timeline.applyPatch 会创建自己的 ghost（alpha 1->0），
+                    // sample 后用 timeline scene 覆盖 _visualScene，barrier ghost 被取代。
+                    // timeline ghost 在 drain 帧的 alpha=1、位置=旧位置，与 barrier ghost 一致，
+                    // 视觉上无缝衔接，不会再次闪烁。
                     _visualScene.update { scene ->
-                        val merged = scene.hiddenRanges.toMutableList()
+                        val mergedHidden = scene.hiddenRanges.toMutableList()
                         for (ins in localPatch.insertedUnits) {
                             if (ins.start < ins.end &&
-                                merged.none { it.start == ins.start && it.end == ins.end }
+                                mergedHidden.none { it.start == ins.start && it.end == ins.end }
                             ) {
-                                merged.add(ins)
+                                mergedHidden.add(ins)
                             }
                         }
-                        if (merged.size == scene.hiddenRanges.size) {
+                        // 删除路径 barrier：为 deletedUnits 建立静态 ghost
+                        val mergedUnits = scene.units.toMutableList()
+                        for (del in localPatch.deletedUnits) {
+                            if (del.start >= del.end) continue
+                            // 已有同 range 的 ghost 则跳过
+                            if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
+                            // 从 oldLayout 取旧位置建立静态 ghost
+                            val oldBounds = ComposeVisualRebase.safePathBounds(
+                                oldLayout.result, del,
+                            ) ?: continue
+                            val oldPosition = Offset(oldBounds.left, oldBounds.top)
+                            nextBarrierUnitKey++
+                            mergedUnits += VisualTextUnit(
+                                key = nextBarrierUnitKey,
+                                layout = oldLayout,
+                                range = del,
+                                targetRange = null,
+                                // 完整可见：alpha=1，不动画
+                                alpha = TimedFloat(1f, 1f, 0L, 0L),
+                                position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                            )
+                        }
+                        val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
+                        val unitsChanged = mergedUnits.size != scene.units.size
+                        if (!hiddenChanged && !unitsChanged) {
                             scene
                         } else {
-                            scene.copy(hiddenRanges = merged)
+                            scene.copy(
+                                hiddenRanges = mergedHidden,
+                                units = mergedUnits,
+                            )
+                        }
+                    }
+                    // #703 评论 A 缺陷1：删除路径 cursor 不要先跳到新 selection 的 resting cursor。
+                    // 旧实现已在上方把 _restingCursorRect 设成新 layout 的 cursor，删除时会导致
+                    // 光标先跳到新位置（被删字末尾），下一帧 timeline cursor 动画再从旧位置
+                    // 动画到新位置，光标回抽。改成把 _restingCursorRect 改回旧 layout 的 cursor，
+                    // 让光标从旧位置开始，下一帧 timeline cursor 动画无缝衔接。
+                    if (localPatch.deletedUnits.isNotEmpty()) {
+                        val oldCursorRect = computeCursorRectFromLayout(oldLayout)
+                        if (oldCursorRect != null) {
+                            _restingCursorRect.update { oldCursorRect }
                         }
                     }
                 }

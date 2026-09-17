@@ -241,8 +241,10 @@ private fun DrawScope.buildHiddenPath(
  * 不再纯靠 alpha 决定文字整体出现/消失。
  * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
  *   glyph 可见区域 = [glyph.left, glyph.left + width * fraction]。
- * - 吞字（deleted ghost）：cursor 从 glyph 右侧向左侧移动，
- *   glyph 可见区域 = [glyph.right - width * fraction, glyph.right]。
+ * - 吞字（deleted ghost）：#703 评论 A 缺陷2 统一边界模型 —
+ *   glyph 可见区域 = [glyph.left, glyph.left + width * fraction]（与 inserted 一致）。
+ *   fraction = (cursor.left - glyph.left) / glyph.width，
+ *   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
  * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
  */
 private fun DrawScope.drawVisualScene(
@@ -301,13 +303,18 @@ private fun DrawScope.drawVisualScene(
                     currentPosition.x - sourceBounds.left,
                     currentPosition.y - sourceBounds.top,
                 )
-            // #703 评论 B：吞字 — clipRect = [right - width * fraction, right]
+            // #703 评论 A 缺陷2：统一边界模型 — ghost clipRect 和 inserted unit 一致，
+            // 都是 [left, left + width * fraction]。
+            // 旧实现用 [right - width * fraction, right] 配合旧 fraction=(glyphRight-cursorLeft)/width，
+            // 方向写反导致开始空、结束满（反向吐字）。
+            // 新 fraction=(cursorLeft-glyphLeft)/width：开始 fraction=1（完全可见），
+            // 结束 fraction=0（完全被吞掉），clipRect=[left, left+width*fraction] 正确吞字。
             val clipRect =
                 if (clipFraction < 1f) {
                     Rect(
-                        left = sourceBounds.right - sourceBounds.width * clipFraction,
+                        left = sourceBounds.left,
                         top = sourceBounds.top,
-                        right = sourceBounds.right,
+                        right = sourceBounds.left + sourceBounds.width * clipFraction,
                         bottom = sourceBounds.bottom,
                     )
                 } else {

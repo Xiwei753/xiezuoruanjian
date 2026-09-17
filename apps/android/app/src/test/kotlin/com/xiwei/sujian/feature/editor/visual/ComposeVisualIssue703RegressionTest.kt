@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -126,6 +127,12 @@ class ComposeVisualIssue703RegressionTest {
      * #703 评论 B：吞字 — cursor 退回字形随之被吞掉。
      * ghost unit 的 clipFraction 由 cursor.left 相对 glyph bounds 决定，
      * cursor 已退过的区域 glyph 不完整可见。
+     *
+     * #703 评论 A 缺陷4：旧实现用 if (ghost != null) 包裹断言，ghost 不存在时直接通过。
+     * 新实现改成 assertNotNull(ghost) + 三个时间点明确断言：
+     * - t=0：ghost 必须完整可见（clipFraction >= 0.99）。
+     * - t=50%：可见右边界不越过 cursor。
+     * - t=100%：ghost 完全不可见或从 scene 收口。
      */
     @Test
     fun r2_singleCharDelete_cursorPassedRegionGlyphNotFullyVisible() {
@@ -158,30 +165,53 @@ class ComposeVisualIssue703RegressionTest {
             cursorDurationNanos = 100L * NANOS_PER_MS,
         )
 
-        // 在 50ms 采样（动画中间）
+        // glyph bounds（从 oldLayout 取 'a' 的真实 bounds）
+        val glyphBounds = ComposeVisualRebase.safePathBounds(aLayout.result, TextRange(0, 1))
+        assertNotNull("单字吞字: glyph bounds 应存在", glyphBounds)
+        val glyphLeft = glyphBounds!!.left
+        val glyphWidth = glyphBounds.width
+
+        // t=0：ghost 必须存在且完整可见
+        val scene0 = timeline.sample(0L)
+        val ghost0 = scene0.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
+        assertNotNull("单字吞字 t=0: ghost 应存在（视觉层已接管删除区域）", ghost0)
+        val clipFraction0 = scene0.unitClipFractions[ghost0!!.key] ?: 1f
+        assertTrue(
+            "单字吞字 t=0: ghost 应完整可见（clipFraction>=0.99），实际=$clipFraction0；" +
+                "cursor 在 glyph 右侧，字还没开始被吞",
+            clipFraction0 >= 0.99f,
+        )
+
+        // t=50ms：ghost 仍存在，可见右边界不越过 cursor
         val scene50 = timeline.sample(50L * NANOS_PER_MS)
         val cursor50 = scene50.cursorRect
-        assertNotNull("cursor rect 应存在", cursor50)
+        assertNotNull("单字吞字 t=50%: cursor rect 应存在", cursor50)
+        val ghost50 = scene50.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
+        assertNotNull("单字吞字 t=50%: ghost 应仍存在（动画进行中）", ghost50)
+        val clipFraction50 = scene50.unitClipFractions[ghost50!!.key] ?: 1f
+        assertTrue(
+            "单字吞字 t=50%: clipFraction 应在 [0, 1]，实际=$clipFraction50",
+            clipFraction50 in 0f..1f,
+        )
+        // 统一边界模型：可见右边界 = glyphLeft + glyphWidth * clipFraction
+        val visibleRight = glyphLeft + glyphWidth * clipFraction50
+        assertTrue(
+            "单字吞字 t=50%: 可见右边界($visibleRight) 不应越过 cursor.left(${cursor50!!.left})；" +
+                "clipFraction=$clipFraction50",
+            visibleRight <= cursor50.left + 1f,
+        )
 
-        // 找 ghost unit
-        val ghost = scene50.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
-        if (ghost != null) {
-            val clipFraction = scene50.unitClipFractions[ghost.key] ?: 1f
-            // 空间进度驱动：ghost clipFraction 由 cursor.left 相对 glyph bounds 决定
-            // cursor 在中间（left≈3.5），glyph 在 [0,7)，clipFraction ≈ (7-3.5)/7 ≈ 0.5
-            // 关键不变式：cursor 已退过的区域 glyph 不完整可见
+        // t=100%：ghost 完全不可见或从 scene 收口
+        val scene100 = timeline.sample(100L * NANOS_PER_MS)
+        val ghost100 = scene100.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
+        if (ghost100 != null) {
+            val clipFraction100 = scene100.unitClipFractions[ghost100.key] ?: 1f
             assertTrue(
-                "单字吞字: clipFraction=$clipFraction 应在 [0, 1] 范围内",
-                clipFraction in 0f..1f,
+                "单字吞字 t=100%: ghost 仍存在时 clipFraction 应<=0.01（完全被吞掉），实际=$clipFraction100",
+                clipFraction100 <= 0.01f,
             )
-            // cursor 已往回移动（left < 5），ghost 不应完全可见
-            if (cursor50!!.left < 5f) {
-                assertFalse(
-                    "单字吞字: cursor 已退过（left=${cursor50.left}）但 ghost 仍完全可见（clipFraction=$clipFraction）",
-                    clipFraction >= 0.99f,
-                )
-            }
         }
+        // ghost 已收口（从 scene 移除）或 clipFraction<=0.01 都算正确
     }
 
     // ==================== 3. 快速连续输入 ====================
@@ -191,6 +221,11 @@ class ComposeVisualIssue703RegressionTest {
      *
      * #703 评论 D：scene redirect — 新 edit 到达时从当前屏幕状态重定向到新目标，
      * 旧 editEpoch 的延迟 patch、ghost、cursor path 已被新编辑覆盖时必须失效。
+     *
+     * #703 评论 A 缺陷4：旧实现用 scene.units.isNotEmpty() || scene.hiddenRanges.isNotEmpty() || scene.units.isEmpty()，
+     * units.isNotEmpty() 和 units.isEmpty() 互补使整个表达式恒为 true，断言永远通过。
+     * 新实现改成真正的不变式：每步 drain 后记录 cursor 位置，验证 cursor 单调前进不回抽；
+     * 且每步 drain 后已有 unit 的 alpha 不回到 0（旧字不被重置）。
      */
     @Test
     fun r3_rapidInsert_noAlphaResetOrCursorRetreat() {
@@ -202,7 +237,8 @@ class ComposeVisualIssue703RegressionTest {
 
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
 
-        // 连续输入 a, b, c（模拟 20-40ms 间隔）
+        // 连续输入 a, b, c（模拟 20-40ms 间隔），每步 drain 并记录 cursor 位置
+        val cursorLefts = mutableListOf<Float>()
         for (i in 1..3) {
             val prevText = "abc".substring(0, i - 1)
             val currText = "abc".substring(0, i)
@@ -219,6 +255,11 @@ class ComposeVisualIssue703RegressionTest {
                 EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, cursorDurationMillis = 80L),
             )
             state.onAuthoritativeLayout(layouts[i], TextRange(i, i), 0)
+            // 每步 drain + sample，记录 cursor 位置
+            state.drainPendingPatchesAtFrame(i.toLong() * 20L * NANOS_PER_MS)
+            val sceneStep = state.sampleVisualScene(i.toLong() * 20L * NANOS_PER_MS)
+            val cursorLeft = sceneStep.cursorRect?.left
+            if (cursorLeft != null) cursorLefts.add(cursorLeft)
         }
 
         // 采样最终状态
@@ -228,13 +269,26 @@ class ComposeVisualIssue703RegressionTest {
         // 不变式：最终正文是 "abc"
         assertEquals("快速输入最终: latestLayout 应为 'abc'", "abc", latestText)
 
+        // 不变式：cursor 单调前进不回抽 —
+        // 每步 cursor.left 应 >= 上一步（光标不往回走）
+        for (i in 1 until cursorLefts.size) {
+            assertTrue(
+                "快速输入: cursor 应单调前进不回抽，step $i cursor.left=${cursorLefts[i]} < step ${i - 1} cursor.left=${cursorLefts[i - 1]}",
+                cursorLefts[i] >= cursorLefts[i - 1] - 1f,
+            )
+        }
+
         // 不变式：不出现旧字 alpha 重置 —
-        // 如果有 unit，它们的 alpha 不应全部从 0 开始（旧字不应被重置）
-        // 这里检查 scene 不为空或已稳定（units 为空表示动画已完成）
-        assertTrue(
-            "快速输入: scene 应有效（units=${scene.units.size}, hiddenRanges=${scene.hiddenRanges.size}）",
-            scene.units.isNotEmpty() || scene.hiddenRanges.isNotEmpty() || scene.units.isEmpty(),
-        )
+        // 如果最终 scene 有 unit，它们的 alpha 不应全部从 0 开始（旧字不应被重置）。
+        // 如果 scene 已稳定（units 为空），也通过（动画已完成）。
+        if (scene.units.isNotEmpty()) {
+            val hasProgress = scene.units.any { it.alpha.from > 0f || it.alpha.to >= 1f }
+            assertTrue(
+                "快速输入: 存在 unit 时至少一个应有可见进度（alpha.from>0 或 alpha.to>=1），" +
+                    "不应全部从 0 开始（旧字被重置）；实际 units=${scene.units.map { "alpha=${it.alpha.from}->${it.alpha.to}" }}",
+                hasProgress,
+            )
+        }
     }
 
     // ==================== 4. 快速连续删除 ====================
@@ -709,15 +763,15 @@ class ComposeVisualIssue703RegressionTest {
 
         // #703 评论 D：旧 ghost（range=[0,1)）已被新 inserted（range=[0,1)）覆盖，应被移除
         val oldGhost = scene.units.firstOrNull { it.targetRange == null && it.range == TextRange(0, 1) }
-        // 旧 ghost 应被移除或正在淡出（不应继续在后面补播）
-        // 如果旧 ghost 仍存在，它的 alpha 应已被新编辑覆盖（不应继续淡出）
-        if (oldGhost != null) {
-            // 旧 ghost 可能仍存在但不应继续补播 — 检查它不是从新编辑生成的
-            assertTrue(
-                "scene redirect: 旧 ghost 应被移除或不应继续补播，实际 alpha=${oldGhost.alpha.from}",
-                oldGhost.alpha.from >= 0f,
-            )
-        }
+        // #703 评论 A 缺陷4：旧实现用 if (oldGhost != null) { assertTrue(oldGhost.alpha.from >= 0f) }，
+        // alpha.from >= 0f 几乎永远成立且 ghost 不存在时直接通过，无法卡住"旧 ghost 未移除"的 bug。
+        // 新实现改成 assertNull(oldGhost)，明确断言旧 range 已不再由旧 epoch ghost 占有。
+        assertNull(
+            "scene redirect: 旧 ghost（range=[0,1)）应已被新 inserted 覆盖移除，" +
+                "实际仍存在 oldGhost alpha=${oldGhost?.alpha?.from}；" +
+                "旧 ghost 不应继续在后面补播",
+            oldGhost,
+        )
     }
 
     // ==================== 辅助方法 ====================
