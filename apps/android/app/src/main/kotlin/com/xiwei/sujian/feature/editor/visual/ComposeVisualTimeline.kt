@@ -111,6 +111,47 @@ class ComposeVisualTimeline {
         val policy = patch.motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
+        // #703 评论 D：scene redirect — 快速输入/删除采用 scene redirect，不堆积旧动画。
+        // 新 edit 到达时，从"当前屏幕真正画到的位置"重定向到新目标。
+        // 旧 editEpoch 的延迟 patch、ghost、cursor path、retained move 如果已被新编辑覆盖，
+        // 就必须失效或正确 rebase，不能继续在后面补播。
+        // 具体：旧 ghost 的 range 被新 insertedUnits 完全包含时，移除旧 ghost
+        // （新编辑已在该位置插入新字，旧 ghost 不应继续淡出）。
+        // 旧存活 unit 的 targetRange 被新 deletedUnits 完全包含时，转成 ghost
+        // （新编辑删除了该位置的旧字，旧 unit 不应继续存活）。
+        // 只对"完全包含"转 ghost/移除 — 部分重叠保留原有 rebase/切片逻辑（#689 缺陷5 跨删除洞切存活 slice），
+        // 否则会把跨删除洞的部分存活 unit 也整块转 ghost，破坏切片行为。
+        if (policy.textEnabled) {
+            val newInsertedRanges = patch.insertedUnits
+            val newDeletedRanges = patch.deletedUnits
+            if (newInsertedRanges.isNotEmpty() || newDeletedRanges.isNotEmpty()) {
+                units = units.mapNotNull { unit ->
+                    if (unit.targetRange == null) {
+                        // ghost：如果 range 被新 insertedUnits 完全包含，移除（新编辑已在该位置插入新字）
+                        if (newInsertedRanges.any { ins ->
+                                ins.start <= unit.range.start && unit.range.end <= ins.end
+                            }
+                        ) {
+                            presentedKeys.remove(unit.key)
+                            null
+                        } else {
+                            unit
+                        }
+                    } else {
+                        // 存活 unit：如果 targetRange 被新 deletedUnits 完全包含，转 ghost
+                        val fullyDeleted = newDeletedRanges.firstOrNull { del ->
+                            del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
+                        }
+                        if (fullyDeleted != null) {
+                            toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                        } else {
+                            unit
+                        }
+                    }
+                }
+            }
+        }
+
         // #691 评论 5681258225：surviving 列表在 if/else 之前声明，
         // 让 cursor 合并逻辑在 textEnabled=false 时也能访问（此时为空列表）。
         val surviving = mutableListOf<VisualTextUnit>()
@@ -727,7 +768,96 @@ class ComposeVisualTimeline {
                 .filter { it.start < it.end }
         // #691：采样光标位置 — 与文字使用同一个 frameTimeNanos
         val sampledCursor = sampleCursorRect(frameTimeNanos)
-        return ComposeVisualScene(units = sampledUnits, hiddenRanges = hiddenRanges, cursorRect = sampledCursor)
+        // #703 评论 B：空间进度驱动吞吐字 — 根据 cursor 位置算每个 unit 的可见 fraction。
+        // 不再把 alpha 当作"这个字是否出现"的权威状态。
+        // - 吐字（inserted unit, targetRange != null）：cursor 从 glyph 左侧向右侧移动，
+        //   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+        // - 吞字（deleted ghost, targetRange == null）：cursor 从 glyph 右侧向左侧移动，
+        //   fraction = (glyph.right - cursor.left) / glyph.width，clamp 0..1。
+        // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
+        val unitClipFractions =
+            if (sampledCursor != null) {
+                computeUnitClipFractions(sampledUnits, sampledCursor)
+            } else {
+                emptyMap()
+            }
+        return ComposeVisualScene(
+            units = sampledUnits,
+            hiddenRanges = hiddenRanges,
+            cursorRect = sampledCursor,
+            unitClipFractions = unitClipFractions,
+        )
+    }
+
+    /**
+     * #703 评论 B：空间进度驱动吞吐字 — 根据 cursor 位置算每个 unit 的可见 fraction。
+     *
+     * - 吐字（inserted unit, targetRange != null）：
+     *   cursor 从 glyph 左侧向右侧移动，glyph 可见区域 = [glyph.left, cursor.left]。
+     *   fraction = (cursor.left - glyph.left) / glyph.width，clamp 0..1。
+     *   cursor.left <= glyph.left → fraction = 0（字不可见）。
+     *   cursor.left >= glyph.right → fraction = 1（字完全可见）。
+     * - 吞字（deleted ghost, targetRange == null）：
+     *   cursor 从 glyph 右侧向左侧移动，glyph 可见区域 = [cursor.left, glyph.right]。
+     *   fraction = (glyph.right - cursor.left) / glyph.width，clamp 0..1。
+     *   cursor.left >= glyph.right → fraction = 0（字已完全被吞掉）。
+     *   cursor.left <= glyph.left → fraction = 1（字仍完全可见）。
+     *
+     * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
+     * draw 层用 fraction 裁切 glyph 可见区域。
+     *
+     * @param units 当前帧的 sampled units（alpha/position 已插值到当前帧）。
+     * @param cursorRect 当前光标 rect。
+     * @return unit key → 可见 fraction（0..1）。
+     */
+    private fun computeUnitClipFractions(
+        units: List<VisualTextUnit>,
+        cursorRect: Rect,
+    ): Map<Long, Float> {
+        if (units.isEmpty()) return emptyMap()
+        val cursorLeft = cursorRect.left
+        val result = mutableMapOf<Long, Float>()
+        for (unit in units) {
+            val alphaNow = unit.alpha.from
+            // alpha 已到 0 的 ghost 不需要 clip fraction
+            if (alphaNow <= 0f) continue
+            // 取 glyph bounds（用 unit 当前 layout + range）
+            val bounds = safePathBoundsForUnit(unit) ?: continue
+            val glyphLeft = bounds.left
+            val glyphRight = bounds.right
+            val glyphWidth = glyphRight - glyphLeft
+            // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
+            if (glyphWidth < 0.5f) {
+                result[unit.key] = 1f
+                continue
+            }
+            val fraction =
+                if (unit.targetRange != null) {
+                    // 吐字（inserted unit）：cursor 从左向右，可见区域 = [glyphLeft, cursorLeft]
+                    ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
+                } else {
+                    // 吞字（deleted ghost）：cursor 从右向左，可见区域 = [cursorLeft, glyphRight]
+                    ((glyphRight - cursorLeft) / glyphWidth).coerceIn(0f, 1f)
+                }
+            result[unit.key] = fraction
+        }
+        return result
+    }
+
+    /**
+     * #703 评论 B：安全取 unit 的 glyph bounds —
+     * 用 unit 当前 layout + range 取 path bounds。
+     */
+    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? {
+        val result = unit.layout.result
+        val range = unit.range
+        if (range.start >= range.end) return null
+        if (range.end > result.layoutInput.text.length) return null
+        return try {
+            result.getPathForRange(range.start, range.end).getBounds()
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     /**
@@ -1262,16 +1392,30 @@ data class CursorTrack(
  * #691：新增 [cursorRect] — 光标位置由同一个 timeline / frame clock 采样，
  * 不再由独立的 Animatable<Rect> 维护。
  *
+ * #703 评论 B：新增 [unitClipFractions] — 空间进度驱动吞吐字。
+ * 不再把 alpha 当作"这个字是否出现"的权威状态。
+ * 光标经过哪里，字才出现/消失到哪里。
+ * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
+ *   glyph 可见区域由 cursor X 裁切；光标走到哪里，字吐到哪里。
+ * - 吞字（deleted ghost）：cursor 从 glyph 右侧向左侧移动，
+ *   光标经过的区域立即隐藏；光标退到哪里，字吞到哪里。
+ * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
+ *
  * @param units 当前所有文字单元（alpha/position 已插值到当前帧）。
  * @param hiddenRanges 当前应由 overlay 接管、BasicTextField 需设透明的 ranges。
  *   每一帧直接从当前 [VisualTextUnit.targetRange] != null 且仍由 overlay 绘制的 unit 推导，
  *   不从"上一事务 suppressed ranges"继承。
  * @param cursorRect 光标当前位置（已插值到当前帧）— null 表示无光标动画且无静止光标。
+ * @param unitClipFractions #703 评论 B：每个 unit 的空间进度可见 fraction（0..1）。
+ *   key = [VisualTextUnit.key]，value = 可见 fraction。
+ *   1f = 完全可见（cursor 已越过整个 glyph），0f = 完全不可见（cursor 还没到 glyph）。
+ *   draw 层用此 fraction 裁切 glyph 可见区域，不再纯靠 alpha 决定出现/消失。
  */
 data class ComposeVisualScene(
     val units: List<VisualTextUnit>,
     val hiddenRanges: List<TextRange>,
     val cursorRect: Rect? = null,
+    val unitClipFractions: Map<Long, Float> = emptyMap(),
 ) {
     companion object {
         /** 空场景。 */

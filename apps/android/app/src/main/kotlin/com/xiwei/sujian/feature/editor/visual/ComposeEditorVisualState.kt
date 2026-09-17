@@ -505,8 +505,18 @@ class ComposeEditorVisualState(
         // offsetMap 用 chain 各笔 changes 合成保留输入顺序（composeLocalChainOffsetMap），
         // 但不为 chain 中间笔虚构中间 layout 对象 — 中间笔可能从未真正 layout 过
         // （快速输入中间 layout 被跳过），虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
+        // #703 评论 C：本地删除先取消整行 retainedMoves 接管 —
+        // 被删除的 glyph 可以由 visual layer 接管（ghost）；
+        // 后续普通排版回流先交给 BasicTextField 自己；
+        // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
+        // 以后如果确实要做"整行平滑回流"，应单独设计 displacement/reflow layer，
+        // 并保证所有权原子交接，不能和 deleted ghost 混在同一套状态里。
         val retainedMoves =
-            ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
+            if (transactionTextKind == TextVisualKind.Delete) {
+                emptyList()
+            } else {
+                ComposeLocalVisualRebase.computeRetainedMoves(oldLayout, newLayout, offsetMap)
+            }
 
         // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
         // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
@@ -644,6 +654,30 @@ class ComposeEditorVisualState(
                             "newLen=${newText.length} chainSize=${localChain.size} " +
                             "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
+                    // #703 评论 A：editEpoch barrier — 本地输入一发生就建立视觉所有权屏障。
+                    // 在新 layout + visual scene 准备好之前，不能让"已更新后的 BasicTextField 原始正文"
+                    // 裸画一帧。生成 localPatch 入队后同步把 localPatch.insertedUnits merge 到
+                    // _visualScene.hiddenRanges，让 draw 层在同一帧就裁切掉新插入区域。
+                    // 不调 drainPendingPatchesAtFrame — 那会清空 pendingPatches，破坏 #694 批量 drain
+                    // 设计（同一 VSync 多笔输入应积攒到下一帧 withFrameNanos 一次性合成 batch drain）。
+                    // 也不调 sampleVisualScene — 动画进度（alpha/position/clipFraction）应由下一帧
+                    // withFrameNanos 用精确 frameTimeNanos 采样，不用 System.nanoTime() 猜当前帧。
+                    // barrier 只需声明范围所有权（hiddenRanges），动画 unit 由下一帧 sample 产生。
+                    _visualScene.update { scene ->
+                        val merged = scene.hiddenRanges.toMutableList()
+                        for (ins in localPatch.insertedUnits) {
+                            if (ins.start < ins.end &&
+                                merged.none { it.start == ins.start && it.end == ins.end }
+                            ) {
+                                merged.add(ins)
+                            }
+                        }
+                        if (merged.size == scene.hiddenRanges.size) {
+                            scene
+                        } else {
+                            scene.copy(hiddenRanges = merged)
+                        }
+                    }
                 }
             }
             // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，

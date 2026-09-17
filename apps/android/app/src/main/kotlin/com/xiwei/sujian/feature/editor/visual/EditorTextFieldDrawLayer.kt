@@ -235,6 +235,15 @@ private fun DrawScope.buildHiddenPath(
 /**
  * #689 评论 5674631257 步骤8：绘制持续视觉场景 —
  * 直接读 [ComposeVisualScene.units]，每个 unit 的 alpha、屏幕位置已经由 timeline 算好。
+ *
+ * #703 评论 B：空间进度驱动吞吐字 —
+ * 用 [ComposeVisualScene.unitClipFractions] 裁切 glyph 可见区域。
+ * 不再纯靠 alpha 决定文字整体出现/消失。
+ * - 吐字（inserted unit）：cursor 从 glyph 左侧向右侧移动，
+ *   glyph 可见区域 = [glyph.left, glyph.left + width * fraction]。
+ * - 吞字（deleted ghost）：cursor 从 glyph 右侧向左侧移动，
+ *   glyph 可见区域 = [glyph.right - width * fraction, glyph.right]。
+ * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
  */
 private fun DrawScope.drawVisualScene(
     scene: ComposeVisualScene,
@@ -252,6 +261,9 @@ private fun DrawScope.drawVisualScene(
         // position 已由 timeline 算好，直接读 unit.position.from（sample 后 from == 当前值）
         val currentPosition = unit.position.from
         val targetRange = unit.targetRange
+        // #703 评论 B：空间进度驱动吞吐字 — 取 clip fraction
+        val clipFraction = scene.unitClipFractions[unit.key] ?: 1f
+        if (clipFraction <= 0f) continue
         if (targetRange != null) {
             // 存活 unit：在新 layout 的真实位置 + timeline 算好的偏移
             val targetBounds = safePathBounds(result, targetRange) ?: continue
@@ -260,6 +272,18 @@ private fun DrawScope.drawVisualScene(
                     currentPosition.x - targetBounds.left,
                     currentPosition.y - targetBounds.top,
                 )
+            // #703 评论 B：吐字 — clipRect = [left, left + width * fraction]
+            val clipRect =
+                if (clipFraction < 1f) {
+                    Rect(
+                        left = targetBounds.left,
+                        top = targetBounds.top,
+                        right = targetBounds.left + targetBounds.width * clipFraction,
+                        bottom = targetBounds.bottom,
+                    )
+                } else {
+                    null
+                }
             drawTranslatedRangeText(
                 result = result,
                 range = targetRange,
@@ -267,6 +291,7 @@ private fun DrawScope.drawVisualScene(
                 alpha = alpha,
                 scrollY = scrollY,
                 textColor = textColor,
+                clipRect = clipRect,
             )
         } else {
             // ghost unit：在旧 layout 的真实位置淡出
@@ -276,6 +301,18 @@ private fun DrawScope.drawVisualScene(
                     currentPosition.x - sourceBounds.left,
                     currentPosition.y - sourceBounds.top,
                 )
+            // #703 评论 B：吞字 — clipRect = [right - width * fraction, right]
+            val clipRect =
+                if (clipFraction < 1f) {
+                    Rect(
+                        left = sourceBounds.right - sourceBounds.width * clipFraction,
+                        top = sourceBounds.top,
+                        right = sourceBounds.right,
+                        bottom = sourceBounds.bottom,
+                    )
+                } else {
+                    null
+                }
             drawTranslatedRangeText(
                 result = result,
                 range = range,
@@ -283,6 +320,7 @@ private fun DrawScope.drawVisualScene(
                 alpha = alpha,
                 scrollY = scrollY,
                 textColor = textColor,
+                clipRect = clipRect,
             )
         }
     }
@@ -364,6 +402,10 @@ internal fun computeRestingCursorRect(
 
 /**
  * 按 translate 偏移绘制一段 range 文字。
+ *
+ * #703 评论 B：[clipRect] 用于空间进度驱动吞吐字 —
+ * 非 null 时用 clipPath(clipRect) 裁切 glyph 可见区域，
+ * 使光标经过哪里文字才出现/消失到哪里。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawTranslatedRangeText(
@@ -373,6 +415,7 @@ private fun DrawScope.drawTranslatedRangeText(
     alpha: Float,
     scrollY: Int,
     textColor: Color,
+    clipRect: Rect? = null,
 ) {
     if (range.start >= range.end) return
     if (range.end > result.layoutInput.text.length) return
@@ -384,13 +427,28 @@ private fun DrawScope.drawTranslatedRangeText(
             top = translate.y - scrollY.toFloat(),
         )
     }) {
-        clipPath(path) {
-            drawText(
-                textLayoutResult = result,
-                color = textColor,
-                topLeft = Offset.Zero,
-                alpha = alpha,
-            )
+        // #703 评论 B：空间进度驱动吞吐字 — 用 clipRect 裁切 glyph 可见区域
+        if (clipRect != null) {
+            val clipPath = Path().apply { addRect(clipRect) }
+            clipPath(clipPath) {
+                clipPath(path) {
+                    drawText(
+                        textLayoutResult = result,
+                        color = textColor,
+                        topLeft = Offset.Zero,
+                        alpha = alpha,
+                    )
+                }
+            }
+        } else {
+            clipPath(path) {
+                drawText(
+                    textLayoutResult = result,
+                    color = textColor,
+                    topLeft = Offset.Zero,
+                    alpha = alpha,
+                )
+            }
         }
     }
 }
