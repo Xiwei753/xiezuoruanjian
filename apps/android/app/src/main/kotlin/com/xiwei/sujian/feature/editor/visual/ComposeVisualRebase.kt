@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -350,6 +351,47 @@ internal object ComposeVisualRebase {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    /**
+     * #708 评论 5726837636：子片段屏幕位置计算 —
+     * 当一个 active unit 被切开只删一部分时，ghost 的屏幕位置不能直接用父 unit 左上角，
+     * 要用"slice 自然位置 + 父 unit 当前位移"。
+     *
+     * timeline 的 [ComposeVisualTimeline.toGhost] 和 handoff 的
+     * [ComposeLocalHandoffRebase.toHandoffGhost] 共用此 helper，
+     * 避免两套算法不一致导致 handoff 首帧旧字跳位。
+     *
+     * @param layout 父 unit 的 layout snapshot。
+     * @param parentRange 父 unit 的完整 range。
+     * @param sliceRange 切片 range（ghost 的 range）。
+     * @param parentScreenPosition 父 unit 当前屏幕位置（已含位移）。
+     * @return slice 的屏幕位置；layout 取不到自然位置时返回 null。
+     */
+    fun sliceScreenPosition(
+        layout: ComposeLayoutSnapshot,
+        parentRange: TextRange,
+        sliceRange: TextRange,
+        parentScreenPosition: Offset,
+    ): Offset? {
+        if (sliceRange == parentRange) return parentScreenPosition
+        val parentNatural = unitPositionFromLayout(layout, parentRange) ?: return null
+        val parentDelta =
+            Offset(
+                parentScreenPosition.x - parentNatural.x,
+                parentScreenPosition.y - parentNatural.y,
+            )
+        val sliceNatural = unitPositionFromLayout(layout, sliceRange) ?: return null
+        return Offset(sliceNatural.x + parentDelta.x, sliceNatural.y + parentDelta.y)
+    }
+
+    /** 从 layout 取 range 的左上角位置（内部 helper）。 */
+    private fun unitPositionFromLayout(
+        layout: ComposeLayoutSnapshot,
+        range: TextRange,
+    ): Offset? {
+        val bounds = safePathBounds(layout.result, range) ?: return null
+        return Offset(bounds.left, bounds.top)
     }
 
     /**

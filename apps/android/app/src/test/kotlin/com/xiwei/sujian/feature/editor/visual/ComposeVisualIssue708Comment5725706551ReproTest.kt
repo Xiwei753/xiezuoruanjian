@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -317,11 +318,307 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
     }
 
+    // ==================== 测试 C：deletedUnits 部分被 active ghost 覆盖 ====================
+
+    /**
+     * 测试 C：deletedUnits 只被 active ghost 部分覆盖 —
+     *
+     * #708 评论 5726837636 缺口1：
+     * 旧 bug：`publishLocalHandoffScene()` 用 `ghostedCoverage.any{整段覆盖}` 判断 deletedUnits
+     * 是否已被 ghost 接管。部分覆盖时（deletedUnits=[0,2)，ghostedCoverage=[1,2)），
+     * alreadyGhosted==false，于是为整个 [0,2) 新建 alpha=1 ghost，导致 [1,2) 被画两次
+     * （旧 active 'b' 转 ghost 画一次 + 新建 [0,2) ghost 覆盖 [1,2) 又画一次）。
+     *
+     * 修复后：用 [ComposeVisualRebase.subtractRanges] 算真正差集 —
+     * remainingDeleted = subtractRanges([0,2), [1,2)) = [0,1)，只为 [0,1) 新建 alpha=1 ghost，
+     * [1,2) 由旧 active 'b' 转的 ghost 接管，不重画。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "a"`（插入 'a'），sample 到 alpha=1 完成
+     * 2. 第二笔：`"a" -> "ab"`（追加 'b'），sample 到 'b' alpha 在 0..1
+     * 3. 第三笔：`"ab" -> ""`（删除整个 [0,2)），检查 handoff scene
+     *
+     * 断言：
+     * - 存在 range=[1,2) 的 DeletedGhost（旧 active 'b' 转 ghost），alpha < 1
+     * - 存在 range=[0,1) 的 DeletedGhost，alpha >= 1f（'a' 那份完整可见 ghost）
+     * - 不存在 range=[0,2) 的 DeletedGhost（旧 bug 会为整个 [0,2) 新建）
+     * - range=[1,2) 的 ghost 只有一个（不重影）
+     */
+    @Test
+    fun testC_deletedUnitsPartiallyCovered_onlySupplementDifference() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a", "ab", ""), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5726837636-C",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "a"（插入 'a'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 'a' 动画完成（alpha=1）
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // 第二笔："a" -> "ab"（追加 'b'）
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "ab",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 'b' 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitB = sampledScene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        assertNotNull(
+            "testC: 第二笔后应存在 targetRange=[1,2) 的 unit（'b'）",
+            unitB,
+        )
+        assertTrue(
+            "testC: 'b' 应仍 active（alpha.from 在 0..1 之间），实际 alpha.from=${unitB!!.alpha.from}",
+            unitB.alpha.from > 0f && unitB.alpha.from < 1f,
+        )
+
+        // 第三笔："ab" -> ""（删除整个 [0,2)）
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "",
+            oldSelection = TextRange(2, 2),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 2))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(0, 0), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：存在 range=[1,2) 的 DeletedGhost（旧 active 'b' 转 ghost），alpha < 1
+        val ghostB =
+            handoffScene.units.filter {
+                it.range == TextRange(1, 2) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: 应存在 range=[1,2) 的 DeletedGhost（旧 active 'b' 转 ghost），" +
+                "实际=${ghostB.map { "alpha=${it.alpha.from}" }}" +
+                "（旧 active 'b' 正在动画中，转 ghost 应继承当前可见 alpha < 1）",
+            ghostB.isNotEmpty(),
+        )
+        assertTrue(
+            "testC: range=[1,2) 的 ghost alpha 应 < 1（继承 'b' 当前可见 alpha），" +
+                "实际 alpha.from=${ghostB.first().alpha.from}",
+            ghostB.first().alpha.from < 1f,
+        )
+
+        // 断言2：存在 range=[0,1) 的 DeletedGhost，alpha >= 1f（'a' 那份完整可见 ghost）
+        val ghostA =
+            handoffScene.units.filter {
+                it.range == TextRange(0, 1) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: 应存在 range=[0,1) 的 DeletedGhost（'a' 那份完整可见 ghost），" +
+                "实际=${ghostA.map { "alpha=${it.alpha.from}" }}" +
+                "（修复后：subtractRanges([0,2),[1,2))=[0,1)，为 [0,1) 新建 alpha=1 ghost）",
+            ghostA.isNotEmpty(),
+        )
+        assertTrue(
+            "testC: range=[0,1) 的 ghost alpha 应 >= 1f（'a' 已完成动画，完整可见），" +
+                "实际 alpha.from=${ghostA.first().alpha.from}",
+            ghostA.first().alpha.from >= 1f,
+        )
+
+        // 断言3：不存在 range=[0,2) 的 DeletedGhost（旧 bug 会为整个 [0,2) 新建）
+        val ghostWhole =
+            handoffScene.units.filter {
+                it.range == TextRange(0, 2) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: 不应存在 range=[0,2) 的 DeletedGhost，" +
+                "实际=${ghostWhole.map { "alpha=${it.alpha.from}" }}" +
+                "（旧 bug：alreadyGhosted=false，为整个 [0,2) 新建 alpha=1 ghost → [1,2) 被画两次）",
+            ghostWhole.isEmpty(),
+        )
+
+        // 断言4：range=[1,2) 的 ghost 只有一个（不重影）
+        assertEquals(
+            "testC: range=[1,2) 的 ghost 应只有一个（不重影），实际数量=${ghostB.size}" +
+                "（旧 bug：旧 active 'b' 转 ghost + 新建 [0,2) ghost 覆盖 [1,2) = 两个 ghost 画 [1,2)）",
+            1,
+            ghostB.size,
+        )
+    }
+
+    // ==================== 测试 D：多字符 active unit 删尾部 slice，ghost position 用子片段几何 ====================
+
+    /**
+     * 测试 D：多字符 active unit 只删除尾部 slice，验证 ghost position 用子片段几何 —
+     *
+     * #708 评论 5726837636 缺口2：
+     * 旧 bug：`ComposeLocalHandoffRebase.toHandoffGhost` 直接用父 unit 左上角
+     * （unit.position.from）作为 ghost position，不考虑 slice 在父 unit 内的自然位置。
+     * 当父 unit range=[0,9)="abcdefghi" 只删尾部 [8,9)="i" 时，ghost 的 range=[8,9) 但 position
+     * 被设成父 unit 左上角（'a' 的位置），导致 handoff 首帧 'i' 的 ghost 跳到 'a' 的位置。
+     *
+     * 修复后：用 [ComposeVisualRebase.sliceScreenPosition] 计算 —
+     * ghostRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+     * 不再直接用父左上角。
+     *
+     * **多字符 unit 构造**：插入 9 个字符 "abcdefghi" 触发 RUN_ANIMATION
+     * （FakeLocalVisualPlanClassifier 对 >8 cluster 用 RUN_ANIMATION，整个 slice 作为一个 unit，
+     * 不按 grapheme cluster 拆分），产生一个 targetRange=[0,9) 的多字符 active unit。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符），sample 到 alpha 在 0..1
+     * 2. 记录 active unit 的 parentScreenPosition = unit.position.from
+     * 3. 用 safePathBounds 算 parentNatural（[0,9) 左上角）和 sliceNatural（[8,9) 左上角）
+     * 4. expectedGhostPosition = sliceNatural + (parentScreenPosition - parentNatural)
+     * 5. 第二笔：`"abcdefghi" -> "abcdefgh"`（删尾部 'i'），检查 handoff scene
+     *
+     * 断言：
+     * - 存在 range=[8,9) 的 DeletedGhost
+     * - ghost.position.from == expectedGhostPosition（sliceNatural + parentDelta，容差 0.5f）
+     * - ghost.position.from != parentScreenPosition（不是父左上角）
+     */
+    @Test
+    fun testD_multiCharActiveUnitDeleteTailSlice_ghostPositionUsesSliceGeometry() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", MULTI_CHAR_TEXT, "abcdefgh"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5726837636-D",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到多字符 unit 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitAbc = sampledScene.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testD: 第一笔后应存在 targetRange=[0,9) 的多字符 unit（'abcdefghi'），" +
+                "实际 targetRanges=${sampledScene.units.mapNotNull { it.targetRange }}" +
+                "（>8 cluster 触发 RUN_ANIMATION，整个 slice 作为一个 unit 不拆分）",
+            unitAbc,
+        )
+        assertTrue(
+            "testD: 多字符 unit 应仍 active（alpha.from 在 0..1 之间），实际 alpha.from=${unitAbc!!.alpha.from}",
+            unitAbc.alpha.from > 0f && unitAbc.alpha.from < 1f,
+        )
+
+        // 记录父 unit 当前屏幕位置
+        val parentScreenPosition = unitAbc.position.from
+
+        // 用 safePathBounds 算 parentNatural（[0,9) 左上角）和 sliceNatural（[8,9) 左上角）
+        // active unit 的 layout 就是 layouts[1]（"abcdefghi" 的 layout）
+        val parentBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(0, 9))
+        val sliceBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(8, 9))
+        assertNotNull("testD: parentBounds ([0,9)) 不应为 null", parentBounds)
+        assertNotNull("testD: sliceBounds ([8,9)) 不应为 null", sliceBounds)
+        val parentNatural = Offset(parentBounds!!.left, parentBounds.top)
+        val sliceNatural = Offset(sliceBounds!!.left, sliceBounds.top)
+        // parentDelta = parentScreenPosition - parentNatural
+        val parentDelta =
+            Offset(
+                parentScreenPosition.x - parentNatural.x,
+                parentScreenPosition.y - parentNatural.y,
+            )
+        // expectedGhostPosition = sliceNatural + parentDelta
+        val expectedGhostPosition =
+            Offset(
+                sliceNatural.x + parentDelta.x,
+                sliceNatural.y + parentDelta.y,
+            )
+
+        // 第二笔："abcdefghi" -> "abcdefgh"（删尾部 'i'，删除 [8,9)）
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdefgh",
+            oldSelection = TextRange(9, 9),
+            newSelection = TextRange(8, 8),
+            changes = listOf(LocalInputChange(newRange = TextRange(8, 8), oldRange = TextRange(8, 9))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(8, 8), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：存在 range=[8,9) 的 DeletedGhost
+        val ghostC =
+            handoffScene.units.filter {
+                it.range == TextRange(8, 9) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testD: 应存在 range=[8,9) 的 DeletedGhost（'i' 的 ghost），" +
+                "实际=${ghostC.map { "position=${it.position.from}" }}" +
+                "（'abcdefghi' 的 [8,9) slice 被 rebase 转 ghost）",
+            ghostC.isNotEmpty(),
+        )
+        val ghost = ghostC.first()
+
+        // 断言2：ghost.position.from == expectedGhostPosition（sliceNatural + parentDelta，容差 0.5f）
+        assertEquals(
+            "testD: ghost.position.from.x 应等于 expectedGhostPosition.x（sliceNatural + parentDelta），" +
+                "实际=${ghost.position.from.x}, expected=${expectedGhostPosition.x}," +
+                "parentScreenPosition=$parentScreenPosition, parentNatural=$parentNatural, sliceNatural=$sliceNatural" +
+                "（旧 bug：直接用父左上角 unit.position.from，不考虑 slice 自然位置）",
+            expectedGhostPosition.x,
+            ghost.position.from.x,
+            0.5f,
+        )
+        assertEquals(
+            "testD: ghost.position.from.y 应等于 expectedGhostPosition.y（sliceNatural + parentDelta），" +
+                "实际=${ghost.position.from.y}, expected=${expectedGhostPosition.y}",
+            expectedGhostPosition.y,
+            ghost.position.from.y,
+            0.5f,
+        )
+
+        // 断言3：ghost.position.from != parentScreenPosition（不是父左上角）
+        // slice=[8,9) != parent=[0,9)，sliceNatural != parentNatural，
+        // 所以即使 parentDelta==0，ghost.position = sliceNatural != parentNatural = parentScreenPosition
+        val positionDiffX = kotlin.math.abs(ghost.position.from.x - parentScreenPosition.x)
+        val positionDiffY = kotlin.math.abs(ghost.position.from.y - parentScreenPosition.y)
+        assertTrue(
+            "testD: ghost.position.from 应不等于 parentScreenPosition（不是父左上角），" +
+                "实际=${ghost.position.from}, parentScreenPosition=$parentScreenPosition," +
+                "diffX=$positionDiffX, diffY=$positionDiffY" +
+                "（旧 bug：ghost position 直接用父左上角，'i' 的 ghost 跳到 'a' 的位置）",
+            positionDiffX > 0.5f || positionDiffY > 0.5f,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {
         /** 1 ms = 1_000_000 ns。 */
         const val NANOS_PER_MS: Long = 1_000_000L
+
+        /** 测试 D 用的多字符文本（9 字符触发 RUN_ANIMATION 产生多字符 unit）。 */
+        const val MULTI_CHAR_TEXT: String = "abcdefghi"
     }
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

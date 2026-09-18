@@ -424,16 +424,20 @@ class ComposeEditorVisualState(
                 }
             }
 
-            // #708 评论 5725706551 步骤3：deletedUnits 只补"没有被旧 active unit 接管"的部分 —
+            // #708 评论 5726837636：用 subtractRanges 算真正差集 —
             // ghostedCoverage 是 rebase 阶段已经转成 ghost 的旧正文范围（旧坐标系）。
-            // 只给"没有被 ghostedCoverage 覆盖"的 deletedUnits 新建 alpha=1 的完整 ghost，
-            // 避免同一 glyph 同时出现 Inserted + DeletedGhost 的重影。
-            val ghostedCoverage = rebased.ghostedCoverage
-            for (del in patch.deletedUnits) {
+            // 只给"deletedUnits - ghostedCoverage"的剩余部分新建 alpha=1 的完整 ghost，
+            // 部分覆盖时只补未被接管的 slice，不把已由旧 active unit 接管的部分重画一遍。
+            // 旧实现用 ghostedCoverage.any{整段覆盖} 判断，部分覆盖（如 del=[0,2) 而
+            // ghostedCoverage=[1,2)）时 alreadyGhosted=false，会为整个 [0,2) 新建 alpha=1 ghost，
+            // 导致 [1,2) 被画两次（旧 active unit 转 ghost 画一次 + 新建 ghost 画一次）。
+            val remainingDeleted =
+                ComposeVisualRebase.subtractRanges(
+                    candidates = patch.deletedUnits,
+                    blockers = rebased.ghostedCoverage,
+                )
+            for (del in remainingDeleted) {
                 if (del.start >= del.end) continue
-                // 检查这个 del range 是否已经被 ghostedCoverage 覆盖（旧 active unit 已转 ghost）
-                val alreadyGhosted = ghostedCoverage.any { it.start <= del.start && del.end <= it.end }
-                if (alreadyGhosted) continue
                 // 检查 rebasedUnits 里是否已有覆盖此 range 的 ghost
                 if (rebasedUnits.any { it.targetRange == null && it.range == del }) continue
                 // 从 oldLayout 取旧位置建立静态 ghost

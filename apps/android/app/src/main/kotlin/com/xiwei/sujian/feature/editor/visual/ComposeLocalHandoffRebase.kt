@@ -154,7 +154,18 @@ internal object ComposeLocalHandoffRebase {
         ghostRange: TextRange,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
-        val frozenPosition = TimedOffset(unit.position.from, unit.position.from, 0L, 0L)
+        // #708 评论 5726837636：子片段 ghost 的屏幕位置用 sliceScreenPosition 计算 —
+        // ghostRange == unit.range 时返回 unit.position.from（父当前屏幕位置）；
+        // ghostRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+        // 不再直接用父 unit 左上角，避免 handoff 首帧旧字跳到父 unit 开头位置。
+        val slicePosition =
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = ghostRange,
+                parentScreenPosition = unit.position.from,
+            ) ?: unit.position.from
+        val frozenPosition = TimedOffset(slicePosition, slicePosition, 0L, 0L)
         return unit.copy(
             range = ghostRange,
             targetRange = null,

@@ -1208,17 +1208,18 @@ class ComposeVisualTimeline {
         ghostRange: TextRange = unit.range,
     ): VisualTextUnit {
         val alphaNow = currentAlpha(unit.alpha, now)
+        val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
+        // #708 评论 5726837636：子片段 ghost 屏幕位置用共享 helper sliceScreenPosition 计算 —
+        // ghostRange==unit.range 时返回 parentCurrent；否则 sliceNatural + parentDelta。
+        // 与 ComposeLocalHandoffRebase.toHandoffGhost 共用同一套几何，避免两套算法不一致
+        // 导致 handoff 首帧旧字跳位。
         val positionNow =
-            if (ghostRange == unit.range) {
-                currentOffset(unit.position, now) ?: unit.position.to
-            } else {
-                // 切片 ghost：如果父 unit 正在移动，切片应继承父 unit 当前的屏幕位移量
-                val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
-                val parentNatural = computeUnitPosition(unit.layout, unit.range) ?: parentCurrent
-                val parentDelta = Offset(parentCurrent.x - parentNatural.x, parentCurrent.y - parentNatural.y)
-                val sliceNatural = computeUnitPosition(unit.layout, ghostRange) ?: parentCurrent
-                Offset(sliceNatural.x + parentDelta.x, sliceNatural.y + parentDelta.y)
-            }
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = ghostRange,
+                parentScreenPosition = parentCurrent,
+            ) ?: parentCurrent
         return unit.copy(
             range = ghostRange,
             targetRange = null,
