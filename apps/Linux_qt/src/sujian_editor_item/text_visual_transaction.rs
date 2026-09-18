@@ -750,20 +750,28 @@ impl PreparedTransactionQueue {
     /// 到 current-old 坐标系再判断 overlap。
     ///
     /// 这样"冲突检测"和"当前编辑的 old→new 动画映射"是两件事，不再共用错的 OffsetMap。
+    ///
+    /// Issue #710 评论 5733833897: 返回**全部** active 冲突事务的 key（`Vec`），
+    /// 不再只返回第一个。一次新编辑可能同时撞上多笔旧事务，调用方（`take_rebase_frames`）
+    /// 需要逐笔处理：untouched 的 keep，受影响的 cancel。只返回第一笔会让后面的冲突
+    /// 事务继续留在队列里按旧布局画，导致双层文字/闪烁/删除跨行乱跳。
     pub fn find_conflicting_transaction(
         &self,
         current_old_text: &str,
         byte_start: usize,
         byte_end: usize,
-    ) -> Option<VisualTransactionKey> {
+    ) -> Vec<VisualTransactionKey> {
         self.transactions
             .iter()
             .filter(|t| {
                 t.state != TextVisualTransactionState::Cancelled
                     && t.state != TextVisualTransactionState::Completed
             })
-            .find(|t| t.overlaps_byte_range(byte_start, byte_end, current_old_text) || t.is_composition())
+            .filter(|t| {
+                t.overlaps_byte_range(byte_start, byte_end, current_old_text) || t.is_composition()
+            })
             .map(|t| t.key)
+            .collect()
     }
 
     pub fn active_transactions(&self) -> &[PreparedTextVisualTransaction] {
@@ -936,7 +944,7 @@ mod issue_710_comment_5732160521_repro {
         // 修复后：tx1 的 (0,1) 映射到当前坐标系仍是 (0,1)（a 区域），
         // 查询 (2,3) 是 c 区域，不重叠 → 不冲突。
         assert!(
-            conflict.is_none(),
+            conflict.is_empty(),
             "修复后不应误判冲突：tx1 的 visual_affected_byte_range_new=(0,1) 基于\
              new='ab'，通过 per-tx OffsetMap 映射到当前 'abc' 坐标系仍为 (0,1)（a 区域），\
              查询 raw range=(2,3) 是 c 区域，不重叠。实际返回 {:?}",
@@ -976,10 +984,10 @@ mod issue_710_comment_5732160521_repro {
         // 修复后：tx1 的 (1,2) 映射到当前坐标系为 (0,1)（X 区域），
         // 查询 (0,1) 也是 X 区域，重叠 → 冲突。
         assert!(
-            conflict.is_some(),
+            !conflict.is_empty(),
             "修复后不应漏判冲突：tx1 的 visual_affected_byte_range_new=(1,2) 基于\
              new='aXb'，通过 per-tx OffsetMap 映射到当前 'Xb' 坐标系为 (0,1)（X 区域），\
-             查询 raw range=(0,1) 也是 X 区域，应检测到 tx1 冲突。实际返回 None"
+             查询 raw range=(0,1) 也是 X 区域，应检测到 tx1 冲突。实际返回空 Vec"
         );
     }
 }
@@ -1123,7 +1131,7 @@ mod issue_710_comment_5733109905_repro {
         // 修复后：tx1 的 (1,5) 在 tx2.old 坐标系仍是 (1,5)（tx1.new==tx2.old），
         // 查询 (0,1) 不重叠 → 不冲突。
         assert!(
-            current_conflict.is_none(),
+            current_conflict.is_empty(),
             "修复后应不冲突：tx1 的 visual_affected_byte_range_new=(1,5) 基于 tx1.new='abcde'，\
              per-tx OffsetMap=identity（tx1.new==tx2.old='abcde'），映射后仍 (1,5)，\
              查询 (0,1) 不重叠。实际返回 {:?}",
@@ -1201,14 +1209,14 @@ mod issue_710_comment_5733109905_repro {
         // 修复后：tx1 的 (5,6) 通过 per-tx OffsetMap::build("12345X6789", "12Y345X6789")
         // 映射到 (6,7)，与查询 (6,7) 重叠 → 冲突。
         assert!(
-            current_conflict.is_some(),
+            !current_conflict.is_empty(),
             "修复后应检测到冲突：用 per-tx OffsetMap::build(tx1.new, tx3.old) 把 tx1 的 (5,6) \
              映射到 (6,7)（X 在 '12Y345X6789' 的位置 6），与查询 (6,7) 重叠。\
              实际返回 {:?}",
             current_conflict
         );
         assert!(
-            correct_conflict_for_tx1.is_some(),
+            !correct_conflict_for_tx1.is_empty(),
             "tx1 单独在正确 per-tx offset_map 下应冲突：OffsetMap::build('12345X6789', '12Y345X6789') \
              把 (5,6) 映射到 (6,7)，与查询 (6,7) 重叠。实际返回 {:?}",
             correct_conflict_for_tx1
@@ -1266,7 +1274,7 @@ mod issue_710_comment_5733109905_repro {
 
         // 修复后：映射后的 unit range (3,5) 与查询 (2,3) 不重叠 → 不冲突
         assert!(
-            current_conflict.is_none(),
+            current_conflict.is_empty(),
             "修复后应不冲突：unit 的 (2,4) 通过 per-tx OffsetMap 映射到 (3,5)（当前坐标系），\
              查询 ({},{}) 不重叠。实际返回 {:?}",
             query_start,
