@@ -649,6 +649,10 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         // 正文事务还拥有 caret 时，no-op 不应把 ownership 切断，下一帧仍应 Coordinated。
         // 之前阶段5 的 no-op 测试发生在 epoch 已经 bump、旧事务已失去 ownership 之后，
         // 只能证明"no-op 不继续 bump epoch"，不能证明"no-op 不切断 ownership"。
+        // Issue #707 评论 5725765860: plan_noop 这一帧必须按正式路径回写（apply），
+        // 否则后续 move 仍拿第一次 plan 的 visual 当起点，与生产 update_paint_node
+        // 路径（build 后必 apply）不一致。visual_after_noop_frame 在块外声明，供阶段4 使用。
+        let visual_after_noop_frame;
         {
             let epoch_before_noop = item.cursor_ctrl.cursor_owner_epoch;
             let cursor_before_noop = item.buffer.cursor;
@@ -715,34 +719,64 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                     other
                 ),
             }
+            // Issue #707 评论 5725765860: 把 plan_noop 这一帧按正式路径回写。
+            // 生产 update_paint_node() 每次 build_render_plan_full() 后都会
+            // apply_render_plan_cursor_state，测试必须同样回写，后续 move 才会
+            // 拿"上一帧真正画出来的位置"当 Tween 起点，而非第一次 plan 留下的 visual。
+            let drawn_noop = plan_noop
+                .drawn_caret_rect
+                .expect("plan_noop 必须产出 drawn_caret_rect");
+            item.apply_render_plan_cursor_state(&plan_noop, frame_now_noop);
+            visual_after_noop_frame = (item.cursor_ctrl.visual_x, item.cursor_ctrl.visual_y);
+            let (dnx, dny, _) = drawn_noop;
+            assert!(
+                (visual_after_noop_frame.0 - dnx).abs() < 0.5,
+                "plan_noop 回写后 visual_x 应等于 drawn_caret_rect.x: 实际 {} vs {}",
+                visual_after_noop_frame.0,
+                dnx
+            );
+            assert!(
+                (visual_after_noop_frame.1 - dny).abs() < 0.5,
+                "plan_noop 回写后 visual_y 应等于 drawn_caret_rect.y: 实际 {} vs {}",
+                visual_after_noop_frame.1,
+                dny
+            );
+            println!(
+                "[BEHAVIOR_VERIFY] 阶段3.5 plan_noop 帧回写后 visual=({:.4}, {:.4}) == drawn_caret_rect",
+                visual_after_noop_frame.0,
+                visual_after_noop_frame.1
+            );
         }
 
         // ── 阶段 4: 真实手动移动 bump epoch，旧事务失去 caret 所有权 ──
         let epoch_before_move = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false); // backward
-        // Issue #707 评论 5725462471: 证明下一笔光标动画从上一帧 drawn_caret_rect 起步。
-        // move 前 visual_after_write 已记录（= 上一帧 drawn_caret_rect 回写值）。
-        // 生产 CursorController::apply_plan 的关键保证：有可信 visual position 时，
-        // 新 Tween 的 start_x/start_y 必须取当前 visual_x/visual_y，不能退回 old_rect。
-        // move 后 cursor_ctrl.animation 必须是 Some（Tween），且 start == visual_after_write。
+        // Issue #707 评论 5725462471/5725765860: 证明下一笔光标动画从上一帧
+        // drawn_caret_rect 起步。上一帧 = plan_noop 帧，其 drawn_caret_rect 已按正式
+        // 路径回写为 visual_after_noop_frame。生产 CursorController::apply_plan 的关键
+        // 保证：有可信 visual position 时，新 Tween 的 start_x/start_y 必须取当前
+        // visual_x/visual_y，不能退回 old_rect。move 后 cursor_ctrl.animation 必须是
+        // Some（Tween），且 start == visual_after_noop_frame。
         let anim_after_move = item
             .cursor_ctrl
             .animation
             .as_ref()
             .expect("真实 move 后应创建 Tween 动画（visual != target，smooth cursor 开启）");
+        // Issue #707 评论 5725765860: Tween 起点必须取 plan_noop 帧回写的 visual，
+        // 即上一帧真正画出来的位置（plan_noop.drawn_caret_rect），而非第一次 plan 的 visual。
         assert!(
-            (anim_after_move.start_x - visual_after_write.0).abs() < 0.5,
-            "新 Tween start_x 必须从上一帧 drawn_caret_rect (visual_after_write) 起步: \
-             实际 start_x={:.4} vs visual_after_write.x={:.4}",
+            (anim_after_move.start_x - visual_after_noop_frame.0).abs() < 0.5,
+            "新 Tween start_x 必须从 plan_noop 帧回写的 visual 起步: \
+             实际 start_x={:.4} vs visual_after_noop_frame.x={:.4}",
             anim_after_move.start_x,
-            visual_after_write.0
+            visual_after_noop_frame.0
         );
         assert!(
-            (anim_after_move.start_y - visual_after_write.1).abs() < 0.5,
-            "新 Tween start_y 必须从上一帧 drawn_caret_rect (visual_after_write) 起步: \
-             实际 start_y={:.4} vs visual_after_write.y={:.4}",
+            (anim_after_move.start_y - visual_after_noop_frame.1).abs() < 0.5,
+            "新 Tween start_y 必须从 plan_noop 帧回写的 visual 起步: \
+             实际 start_y={:.4} vs visual_after_noop_frame.y={:.4}",
             anim_after_move.start_y,
-            visual_after_write.1
+            visual_after_noop_frame.1
         );
         // 断言 target 已经变化，避免 no-op / 同位置误通过
         assert!(
@@ -756,7 +790,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             anim_after_move.start_y
         );
         println!(
-            "[BEHAVIOR_VERIFY] 阶段4: move 后 Tween start=({:.4}, {:.4}) == visual_after_write, target=({:.4}, {:.4})",
+            "[BEHAVIOR_VERIFY] 阶段4: move 后 Tween start=({:.4}, {:.4}) == visual_after_noop_frame, target=({:.4}, {:.4})",
             anim_after_move.start_x,
             anim_after_move.start_y,
             anim_after_move.target_x,
