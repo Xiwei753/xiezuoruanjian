@@ -250,43 +250,6 @@ cpp! {{
         return x;
     }
 
-    // Issue #707 评论 5723616999: 反向几何查询 — x 坐标 → QChar cursor offset。
-    // 与 editor_layout_cursor_to_x 对称，用于真实 Qt 行为测试的 round-trip。
-    // 简单版：不传 wrap width，QTextLayout 自动按自然宽度排版（单行）。
-    int editor_layout_x_to_cursor(
-        const QString& paraText, double x,
-        double fs, const QString& ff
-    ) {
-        QFont font(ff);
-        font.setPixelSize(static_cast<int>(fs));
-        QTextLayout layout(paraText, font);
-        QTextOption option;
-        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
-        layout.setTextOption(option);
-        layout.beginLayout();
-        int result = 0;
-        while (true) {
-            QTextLine line = layout.createLine();
-            if (!line.isValid()) break;
-            // Issue #707: setLineWidth 让 QTextLine 有有效长度，xToCursor 才能正确计算。
-            // 用足够大的值让所有文本排在一行，但不用 1e9 避免潜在溢出。
-            line.setLineWidth(100000.0);
-            int line_start = line.textStart();
-            int line_end = line_start + line.textLength();
-            int pos = line.xToCursor(x);
-            if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
-                qDebug("[x_to_cursor_simple] line_start=%d line_end=%d x=%.4f raw_xToCursor=%d line_x=%.4f naturalW=%.4f",
-                    line_start, line_end, x, pos, line.x(), line.naturalTextWidth());
-            }
-            if (pos < line_start) pos = line_start;
-            if (pos > line_end) pos = line_end;
-            result = pos;
-            break;
-        }
-        layout.endLayout();
-        return result;
-    }
-
     double editor_layout_cursor_to_x_on_line(
         const QString& paraText, int cursor_qchar,
         double fs, const QString& ff,
@@ -2423,31 +2386,6 @@ pub fn qtextlayout_cursor_to_x(
     })
 }
 
-/// Issue #707 评论 5723616999: 反向几何查询 — x 坐标 → QChar (UTF-16) cursor offset。
-///
-/// 与 `qtextlayout_cursor_to_x` 对称，内部通过 cpp! FFI 调用 Qt 的
-/// `QTextLine::xToCursor`，用于真实 Qt 行为测试的 cursorToX → xToCursor round-trip。
-///
-/// 返回段落内的 QChar (UTF-16 code unit) offset。调用方可用
-/// `qchar_offset_to_byte_offset` 转换回 UTF-8 byte offset。
-///
-/// SAFETY: 需要 QGuiApplication 已创建（调用 `ensure_qt_application` 后使用）。
-/// GUI thread only; offscreen platform 可用于无显示环境测试。
-pub fn qtextlayout_x_to_cursor(
-    para_text: &str,
-    x: f64,
-    font_size: f64,
-    font_family: &str,
-) -> i32 {
-    let para: QString = para_text.to_string().into();
-    let fs = font_size as f32;
-    let ff: QString = font_family.to_string().into();
-    // SAFETY: 需要 QGuiApplication 已创建；GUI thread only; offscreen platform 可用于测试。
-    cpp!(unsafe [para as "QString", x as "double", fs as "float", ff as "QString"] -> i32 as "int" {
-        return editor_layout_x_to_cursor(para, x, fs, ff);
-    })
-}
-
 /// Issue #707 评论 5723616999: 确保测试进程已创建 QGuiApplication（offscreen platform）。
 ///
 /// Qt GUI 对象（QFont/QTextLayout/QTextLine 等）必须在 QGuiApplication 创建之后使用。
@@ -2477,6 +2415,83 @@ pub fn ensure_qt_application() {
             }
         });
     });
+}
+
+/// Issue #707 评论 5724685300: 固定 Qt 测试线程。
+///
+/// Qt 官方线程规则把创建 QCoreApplication/QGuiApplication 的线程视为 GUI/main
+/// thread，GUI 相关对象应在该线程使用。`ensure_qt_application()` 只保证
+/// QGuiApplication 创建一次，不能保证后续每个 Rust `#[test]` 都在创建
+/// QGuiApplication 的同一线程执行。Rust 测试默认并行跑，会违反 Qt 线程规则。
+///
+/// 本函数建一个专用线程，在该线程内创建 QGuiApplication 并运行通道循环。
+/// 所有需要 Qt 的测试逻辑通过 `run_on_qt_thread(|| { ... })` 发到这同一个
+/// 线程执行，保证 application 创建和所有 Qt 调用都发生在同一线程。
+///
+/// 闭包内构造所有 `!Send` 的对象（如 `AppRef`、`SujianEditorItem`），不跨线程
+/// 传递。如果闭包 panic，通过 `catch_unwind` 捕获并在调用线程 re-panic，
+/// 使测试失败正确传播。
+///
+/// SAFETY: QGuiApplication 在专用线程创建后不 delete，生命周期与线程相同。
+/// offscreen platform 不需要真实显示。所有 Qt 调用都在该线程执行。
+#[cfg(any(test, feature = "test-helpers"))]
+pub fn run_on_qt_thread<F>(f: F)
+where
+    F: FnOnce() + Send + 'static,
+{
+    use std::sync::mpsc::channel;
+    use std::sync::OnceLock;
+
+    struct QtThreadHandle {
+        sender: std::sync::mpsc::Sender<Box<dyn FnOnce() + Send + 'static>>,
+    }
+
+    static QT_THREAD: OnceLock<QtThreadHandle> = OnceLock::new();
+
+    fn qt_thread() -> &'static QtThreadHandle {
+        QT_THREAD.get_or_init(|| {
+            let (sender, receiver) =
+                channel::<Box<dyn FnOnce() + Send + 'static>>();
+            std::thread::Builder::new()
+                .name("qt-test-thread".to_string())
+                .spawn(move || {
+                    // 在这个专用线程内创建 QGuiApplication。
+                    std::env::set_var("QT_QPA_PLATFORM", "offscreen");
+                    // SAFETY: QGuiApplication 在这个专用线程创建，生命周期与线程相同。
+                    // 所有 Qt 调用都通过 run_on_qt_thread 在这个线程执行。
+                    cpp!(unsafe [] {
+                        static int argc = 1;
+                        static char argv0[] = "sujian-test";
+                        static char* argv[] = {argv0, nullptr};
+                        static QGuiApplication* app = nullptr;
+                        if (QGuiApplication::instance() == nullptr && app == nullptr) {
+                            app = new QGuiApplication(argc, argv);
+                        }
+                    });
+                    // 消息循环：接收闭包并执行，panic 不终止线程。
+                    while let Ok(f) = receiver.recv() {
+                        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+                    }
+                })
+                .expect("failed to spawn qt test thread");
+            QtThreadHandle { sender }
+        })
+    }
+
+    let (result_tx, result_rx) = channel();
+    qt_thread()
+        .sender
+        .send(Box::new(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
+            let _ = result_tx.send(result);
+        }))
+        .expect("qt test thread channel send failed");
+    let result = result_rx
+        .recv()
+        .expect("qt test thread channel recv failed");
+    if let Err(panic_payload) = result {
+        std::panic::resume_unwind(panic_payload);
+    }
 }
 
 pub fn debug_line_metrics(

@@ -19,6 +19,10 @@ workspace = true
 [features]
 default = []
 ai = ["writer_core/ai"]
+## Issue #707 评论 5724685300: 测试辅助功能 — 暴露测试专用的内部入口
+## （`run_on_qt_thread`、`open_data_root_for_tests`）给集成测试。
+## 仅在 `cargo test --features test-helpers` 时启用，不影响生产构建。
+test-helpers = []
 
 [dependencies]
 writer_core = { path = "../../core/writer_core", features = ["git-https", "github-api"] }

@@ -45,6 +45,9 @@ pub(crate) mod qt_text_node;
 pub mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
+/// Issue #707 评论 5724685300: 内部状态测试 — 在模块内部直接访问 pub(crate) 字段。
+#[cfg(test)]
+mod runtime_tests;
 pub(crate) mod snapshot_id;
 pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;

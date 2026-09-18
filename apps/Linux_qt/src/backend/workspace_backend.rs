@@ -413,6 +413,18 @@ impl AppBackend {
         workspace_success_json("OK")
     }
 
+    /// Issue #707 评论 5724685300: 测试专用 — 打开 data root 初始化真实 Core 状态。
+    ///
+    /// 委托给 `internal_open_data_root`，用 `#[cfg(test)]` gate 确保只在
+    /// 测试构建中可用。集成测试通过 `AppRef::with_app_mut` 调用此方法
+    /// 初始化真实 Core/AppBackend 状态，使 `core_api()` 返回 `Some`，
+    /// 从而让 `LinuxThemeController::rebuild_resolved_state()` 能加载
+    /// builtin theme 的真实深色/浅色 scheme。
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn open_data_root_for_tests(&mut self, path: &str) -> QString {
+        self.internal_open_data_root(path)
+    }
+
     // AppBackend::create_new_workspace
     pub(crate) fn create_new_workspace(&mut self) -> QString {
         self.debug_log("workspace", "create_new_workspace_clicked", "");
