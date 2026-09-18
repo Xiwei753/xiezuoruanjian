@@ -554,75 +554,89 @@ impl PreparedTextVisualTransaction {
         }
     }
 
-    /// Issue #710 评论 5732160521 问题 3: 冲突检测改为通过 OffsetMap 映射到同一坐标系。
+    /// Issue #710 评论 5733109905: 冲突检测改为 **current-old 坐标系逐事务映射**。
     ///
-    /// `offset_map` 是从**本事务 new 坐标系**到**查询坐标系**的映射
-    ///（即 `OffsetMap::build(&本事务.new_text, &查询坐标系的文本)`）。
-    /// 本事务的 `visual_affected_byte_range_new`（new 坐标系）通过 `offset_map`
-    /// 映射到查询坐标系，再与 `[byte_start, byte_end)` 做 overlap。
+    /// 本事务的 `visual_affected_byte_range_new` / units / static_patches 的 byte range
+    /// 都基于**本事务 new 坐标系**（事务应用后的文本）。查询 range `[byte_start, byte_end)`
+    /// 基于**current-old 坐标系**（当前事务应用前的文本）。
     ///
-    /// 如果 `offset_map` 为 `None`（调用方无法提供映射，如 composition 路径），
-    /// 退化为保守策略：同时检查 old/new 两侧数值重叠（任一侧重叠即判定重叠）。
-    /// 这不完美但比单侧好，且 composition 路径的冲突判断本来就偏保守。
+    /// 要在同一坐标系比较，需要用 `OffsetMap::build(&本事务.new_text, current_old_text)`
+    /// 把本事务 new 坐标系的 range 映射到 current-old 坐标系，再与查询 range 做 overlap。
+    /// 本事务的 new_text 取自 `new_snapshot.virtual_text`。
+    ///
+    /// 如果 `new_snapshot` 为 `None`（无法获取本事务 new_text），退化为保守策略：
+    /// 用 `visual_affected_byte_range_old` 直接和查询 range 做 old 坐标系数值比较
+    ///（假设 old 坐标系 == current-old，这是无 new_text 时的最佳近似），
+    /// units/static_patches 也退化为裸数值比较。任一侧重叠即判定重叠。
     ///
     /// 映射失败（范围跨映射边界）时保守判定为冲突（返回 true），避免漏判。
     pub fn overlaps_byte_range(
         &self,
         byte_start: usize,
         byte_end: usize,
-        offset_map: Option<&writer_core::editor::OffsetMap>,
+        current_old_text: &str,
     ) -> bool {
-        // units / static_patches 的 byte range 是事务 new 坐标系，也需要映射。
-        // 但 units/static_patches 的 byte range 通常很小且与 visual_affected_byte_range_new
-        // 重合，这里先用 visual_affected_byte_range_new 的映射结果作为主判断，
-        // units/static_patches 退化为保守数值比较（它们在事务活跃期间与新事务冲突
-        // 的概率本来就高，保守判定为冲突是安全的）。
-        let units_overlap = self
-            .units
-            .iter()
-            .any(|u| u.slice.byte_end > byte_start && u.slice.byte_start < byte_end)
-            || self
-                .static_patches
-                .iter()
-                .any(|p| p.intersects(byte_start, byte_end));
-        if units_overlap {
-            return true;
-        }
-        // Issue #710 评论 5732160521 问题 3: visual_affected_byte_range 跨 revision 不可比。
-        // 用 offset_map 把本事务 new 侧范围映射到查询坐标系再做 overlap。
-        // 映射失败时保守判定为冲突。
-        if let Some((s, e)) = self.visual_affected_byte_range_new {
-            if let Some(map) = offset_map {
-                match map.map_old_to_new(s) {
-                    Some(ms) => {
-                        // range 映射：用 map_old_range_to_new 严格映射整个范围，
-                        // 失败则保守判定重叠。
-                        if let Some((ms, me)) = map.map_old_range_to_new(s, e) {
-                            return me > byte_start && ms < byte_end;
+        let tx_new_text = self
+            .new_snapshot
+            .as_ref()
+            .map(|s| s.virtual_text.as_str());
+
+        if let Some(tx_new_text) = tx_new_text {
+            // 有 new_text：构造 per-tx offset_map（本事务 new 坐标系 → current-old 坐标系）
+            let offset_map = writer_core::editor::OffsetMap::build(tx_new_text, current_old_text);
+
+            // 映射 units 的 byte range 到 current-old 坐标系再比较
+            for u in &self.units {
+                match offset_map.map_old_range_to_new(u.slice.byte_start, u.slice.byte_end) {
+                    Some((ms, me)) => {
+                        if me > byte_start && ms < byte_end {
+                            return true;
                         }
-                        // 范围跨映射边界，保守判定为冲突
-                        return true;
                     }
-                    None => {
-                        // 起点不在映射范围内。可能是本事务 new 坐标系的范围
-                        // 在查询坐标系中已被删除（位移到不存在）。
-                        // 保守判定为冲突，避免漏判。
-                        return true;
-                    }
-                }
-            } else {
-                // 无 offset_map（composition 路径），退化为保守双侧数值比较
-                if e > byte_start && s < byte_end {
-                    return true;
-                }
-                if let Some((os, oe)) = self.visual_affected_byte_range_old {
-                    if oe > byte_start && os < byte_end {
-                        return true;
-                    }
+                    None => return true, // 映射失败，保守判定为冲突
                 }
             }
+
+            // 映射 static_patches 的 byte range 到 current-old 坐标系再比较
+            for p in &self.static_patches {
+                match offset_map.map_old_range_to_new(p.byte_start, p.byte_end) {
+                    Some((ms, me)) => {
+                        if me > byte_start && ms < byte_end {
+                            return true;
+                        }
+                    }
+                    None => return true, // 映射失败，保守判定为冲突
+                }
+            }
+
+            // 映射 visual_affected_byte_range_new 到 current-old 坐标系再比较
+            if let Some((s, e)) = self.visual_affected_byte_range_new {
+                match offset_map.map_old_range_to_new(s, e) {
+                    Some((ms, me)) => {
+                        if me > byte_start && ms < byte_end {
+                            return true;
+                        }
+                    }
+                    None => return true, // 映射失败，保守判定为冲突
+                }
+            }
+
+            false
+        } else {
+            // new_snapshot 为 None：退化为保守 old 坐标系数值比较
+            if let Some((os, oe)) = self.visual_affected_byte_range_old {
+                if oe > byte_start && os < byte_end {
+                    return true;
+                }
+            }
+            self.units
+                .iter()
+                .any(|u| u.slice.byte_end > byte_start && u.slice.byte_start < byte_end)
+                || self
+                    .static_patches
+                    .iter()
+                    .any(|p| p.intersects(byte_start, byte_end))
         }
-        false
     }
 
     pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {
@@ -724,23 +738,23 @@ impl PreparedTransactionQueue {
         expired
     }
 
-    /// Issue #710 评论 5732160521 问题 3: `find_conflicting_transaction` 接收
-    /// `offset_map`，用于把每个旧事务的 `visual_affected_byte_range_new`
-    ///（旧事务 new 坐标系）映射到当前查询坐标系再做 overlap。
+    /// Issue #710 评论 5733109905: `find_conflicting_transaction` 改为
+    /// **current-old 坐标系逐事务映射**，不再接收共用 `offset_map` 参数。
     ///
-    /// `offset_map` 是从**旧事务 new 坐标系**到**当前查询坐标系**的映射。
-    /// 调用方应传 `OffsetMap::build(&旧事务的new_text, &当前查询坐标系的文本)`。
-    /// 在连续事务场景下，旧事务的 new_text == 新事务的 old_text，所以
-    /// `offset_map = OffsetMap::build(&新事务.old_text, &新事务.new_text)`
-    /// 即可（这是新事务自己的 OffsetMap）。
+    /// `current_old_text` 是当前事务应用前的文本（current-old 坐标系）。
+    /// `[byte_start, byte_end)` 是 current-old 坐标系的查询 range。
     ///
-    /// `offset_map` 为 `None` 时（composition 路径无法提供），退化为保守双侧
-    /// 数值比较。
+    /// 内部对每个 active tx：取 `tx.new_snapshot.virtual_text`（事务自己的 new_text），
+    /// 构造 `OffsetMap::build(&tx.new_text, current_old_text)`（从该旧事务 new 坐标系
+    /// → current-old 坐标系），映射 `visual_affected_byte_range_new` / units / static_patches
+    /// 到 current-old 坐标系再判断 overlap。
+    ///
+    /// 这样"冲突检测"和"当前编辑的 old→new 动画映射"是两件事，不再共用错的 OffsetMap。
     pub fn find_conflicting_transaction(
         &self,
+        current_old_text: &str,
         byte_start: usize,
         byte_end: usize,
-        offset_map: Option<&writer_core::editor::OffsetMap>,
     ) -> Option<VisualTransactionKey> {
         self.transactions
             .iter()
@@ -748,7 +762,7 @@ impl PreparedTransactionQueue {
                 t.state != TextVisualTransactionState::Cancelled
                     && t.state != TextVisualTransactionState::Completed
             })
-            .find(|t| t.overlaps_byte_range(byte_start, byte_end, offset_map) || t.is_composition())
+            .find(|t| t.overlaps_byte_range(byte_start, byte_end, current_old_text) || t.is_composition())
             .map(|t| t.key)
     }
 
@@ -790,15 +804,27 @@ impl PreparedTransactionQueue {
 #[cfg(test)]
 mod issue_710_comment_5732160521_repro {
     use super::*;
-    use writer_core::editor::OffsetMap;
+
+    /// 构造只含 virtual_text 的测试用 EditorLayoutSnapshot。
+    fn make_test_snapshot(virtual_text: &str) -> EditorLayoutSnapshot {
+        EditorLayoutSnapshot {
+            revision: super::super::layout_snapshot::LayoutRevision::next(),
+            line_snapshots: Vec::new(),
+            caret_rect: None,
+            caret_affinity: crate::editor::layout::CaretAffinity::Upstream,
+            virtual_text: virtual_text.to_string(),
+        }
+    }
 
     /// 构造最小化测试事务：只填 key/operation_kind/visual_affected_byte_range_{old,new}，
     /// 其余字段用空/None。state=Pending 保证被 find_conflicting_transaction 遍历。
+    /// Issue #710 评论 5733109905: new_snapshot 需含 virtual_text，供 per-tx offset_map 构造。
     fn make_test_tx(
         transaction_id: u64,
         operation_kind: TextVisualOperationKind,
         visual_affected_byte_range_old: Option<(usize, usize)>,
         visual_affected_byte_range_new: Option<(usize, usize)>,
+        new_virtual_text: &str,
     ) -> PreparedTextVisualTransaction {
         PreparedTextVisualTransaction {
             key: VisualTransactionKey::new(transaction_id, 0),
@@ -813,7 +839,7 @@ mod issue_710_comment_5732160521_repro {
             cancel_reason: None,
             texture_prepared: false,
             old_snapshot: None,
-            new_snapshot: None,
+            new_snapshot: Some(make_test_snapshot(new_virtual_text)),
             cursor_owner_epoch: 0,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
@@ -895,22 +921,24 @@ mod issue_710_comment_5732160521_repro {
             TextVisualOperationKind::Insert,
             Some((0, 0)), // old 侧是插入点
             Some((0, 1)), // new 侧是 inserted_range
+            "ab",         // tx1.new_text
         );
         let mut queue = PreparedTransactionQueue::new();
         queue.enqueue(tx1);
 
-        // OffsetMap 从 tx1 的 new_text="ab" 到当前 "abc"。
-        let offset_map = OffsetMap::build("ab", "abc");
+        // 当前 revision = "abc"，tx1 的 new_text="ab"。
+        // per-tx offset_map = OffsetMap::build("ab", "abc")：公共前缀 "ab"，Identity。
         // 第三笔在当前 revision "abc" 操作 c 区域，raw range = (2, 3)。
+        let current_old_text = "abc";
         let conflict =
-            queue.find_conflicting_transaction(2, 3, Some(&offset_map));
+            queue.find_conflicting_transaction(current_old_text, 2, 3);
 
         // 修复后：tx1 的 (0,1) 映射到当前坐标系仍是 (0,1)（a 区域），
         // 查询 (2,3) 是 c 区域，不重叠 → 不冲突。
         assert!(
             conflict.is_none(),
             "修复后不应误判冲突：tx1 的 visual_affected_byte_range_new=(0,1) 基于\
-             new='ab'，通过 OffsetMap 映射到当前 'abc' 坐标系仍为 (0,1)（a 区域），\
+             new='ab'，通过 per-tx OffsetMap 映射到当前 'abc' 坐标系仍为 (0,1)（a 区域），\
              查询 raw range=(2,3) 是 c 区域，不重叠。实际返回 {:?}",
             conflict
         );
@@ -933,23 +961,317 @@ mod issue_710_comment_5732160521_repro {
             TextVisualOperationKind::Insert,
             Some((1, 1)), // old 侧是插入点
             Some((1, 2)), // new 侧是 inserted_range（X 在 "aXb" 的 1..2）
+            "aXb",        // tx1.new_text
         );
         let mut queue = PreparedTransactionQueue::new();
         queue.enqueue(tx1);
 
-        // OffsetMap 从 tx1 的 new_text="aXb" 到当前 "Xb"（a 被删除）。
-        let offset_map = OffsetMap::build("aXb", "Xb");
+        // 当前 revision = "Xb"（a 被删除），tx1 的 new_text="aXb"。
+        // per-tx offset_map = OffsetMap::build("aXb", "Xb")：公共后缀 "Xb"，Shifted。
         // 第三笔在当前 revision "Xb" 操作 X 区域，raw range = (0, 1)。
+        let current_old_text = "Xb";
         let conflict =
-            queue.find_conflicting_transaction(0, 1, Some(&offset_map));
+            queue.find_conflicting_transaction(current_old_text, 0, 1);
 
         // 修复后：tx1 的 (1,2) 映射到当前坐标系为 (0,1)（X 区域），
         // 查询 (0,1) 也是 X 区域，重叠 → 冲突。
         assert!(
             conflict.is_some(),
             "修复后不应漏判冲突：tx1 的 visual_affected_byte_range_new=(1,2) 基于\
-             new='aXb'，通过 OffsetMap 映射到当前 'Xb' 坐标系为 (0,1)（X 区域），\
+             new='aXb'，通过 per-tx OffsetMap 映射到当前 'Xb' 坐标系为 (0,1)（X 区域），\
              查询 raw range=(0,1) 也是 X 区域，应检测到 tx1 冲突。实际返回 None"
+        );
+    }
+}
+
+// ── Issue #710 评论 5733109905 复现测试 ──
+//
+// 本轮前两条已修复（compute_affected_paragraph_ranges old/new 分离、blink 统一入口），
+// 但第三条"跨 revision 的视觉区域所有权"仍有坐标系错误。这些测试展示当前实现
+// 在三个具体场景下给出错误冲突判定，证明 bug 存在。
+//
+// 复现策略：断言"当前实现行为"与"正确坐标系下的期望行为"不一致，从而证明 bug。
+// 修复后（Phase B）应把这些测试改为断言"正确行为"。
+#[cfg(test)]
+mod issue_710_comment_5733109905_repro {
+    use super::*;
+    use super::super::layout_snapshot::SourceRect;
+
+    /// 构造只含 virtual_text 的测试用 EditorLayoutSnapshot。
+    fn make_test_snapshot(virtual_text: &str) -> EditorLayoutSnapshot {
+        EditorLayoutSnapshot {
+            revision: super::super::layout_snapshot::LayoutRevision::next(),
+            line_snapshots: Vec::new(),
+            caret_rect: None,
+            caret_affinity: crate::editor::layout::CaretAffinity::Upstream,
+            virtual_text: virtual_text.to_string(),
+        }
+    }
+
+    /// 构造最小化测试事务：只填 key/operation_kind/visual_affected_byte_range_{old,new}，
+    /// 其余字段用空/None。state=Pending 保证被 find_conflicting_transaction 遍历。
+    /// Issue #710 评论 5733109905: new_snapshot 需含 virtual_text，供 per-tx offset_map 构造。
+    fn make_test_tx(
+        transaction_id: u64,
+        operation_kind: TextVisualOperationKind,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+        new_virtual_text: &str,
+    ) -> PreparedTextVisualTransaction {
+        PreparedTextVisualTransaction {
+            key: VisualTransactionKey::new(transaction_id, 0),
+            state: TextVisualTransactionState::Pending,
+            operation_kind,
+            timeline: TransactionTimeline::new(100),
+            units: Vec::new(),
+            static_patches: Vec::new(),
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cursor_visual_track: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: Some(make_test_snapshot(new_virtual_text)),
+            cursor_owner_epoch: 0,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        }
+    }
+
+    /// 构造带一个 unit 的测试事务，用于问题 3（units 裸数值比较）复现。
+    /// unit 的 slice.byte_start/byte_end 设为指定值（事务 new 坐标系）。
+    /// Issue #710 评论 5733109905: new_snapshot 需含 virtual_text，供 per-tx offset_map 构造。
+    fn make_test_tx_with_unit(
+        transaction_id: u64,
+        operation_kind: TextVisualOperationKind,
+        unit_byte_start: usize,
+        unit_byte_end: usize,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+        new_virtual_text: &str,
+    ) -> PreparedTextVisualTransaction {
+        let slice = AnimatedSlice::insert_reveal(
+            VisualTransactionKey::new(transaction_id, 0),
+            LineSnapshotId::new(1, 0, 0),
+            SourceRect::zero(),
+            SourceRect::zero(),
+            0.0,
+            0.0,
+            unit_byte_start,
+            unit_byte_end,
+            None,
+        );
+        let unit = PreparedVisualUnit::wrap(slice, 100);
+        PreparedTextVisualTransaction {
+            key: VisualTransactionKey::new(transaction_id, 0),
+            state: TextVisualTransactionState::Pending,
+            operation_kind,
+            timeline: TransactionTimeline::new(100),
+            units: vec![unit],
+            static_patches: Vec::new(),
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cursor_visual_track: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: Some(make_test_snapshot(new_virtual_text)),
+            cursor_owner_epoch: 0,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        }
+    }
+
+    // ── 问题 1: Delete 冲突查询把 old 坐标和 new 坐标直接比较 ──
+    //
+    // 场景：
+    //   tx1 (Insert): old="bcde", new="abcde"（开头插 a）。
+    //     visual_affected_byte_range_new = (1, 5)（"bcde" 在 new="abcde" 的 1..5）。
+    //   tx2 (Delete): old="abcde", new="bcde"，删除开头 a，deleted_range=(0,1)（old 坐标系）。
+    //
+    // 修复后（current-old 坐标系逐事务映射）：
+    //   current_old_text = tx2.old = "abcde"。
+    //   per-tx offset_map = OffsetMap::build(tx1.new, tx2.old) = OffsetMap::build("abcde", "abcde") = identity。
+    //   tx1 的 (1,5) 映射后仍 (1,5)（tx2.old 坐标系）。
+    //   查询 range = (0,1)（tx2.old 坐标系）。(1,5) vs (0,1) → 不重叠 → 不冲突。正确。
+    #[test]
+    fn test_issue710_comment_5733109905_problem1_delete_old_new_coord_mismatch() {
+        // tx1: visual_affected_byte_range_new 基于 tx1.new="abcde"
+        let tx1 = make_test_tx(
+            1,
+            TextVisualOperationKind::Insert,
+            Some((0, 0)), // old 侧是插入点
+            Some((1, 5)), // new 侧是 "bcde" 在 "abcde" 的 1..5
+            "abcde",      // tx1.new_text
+        );
+        let mut queue = PreparedTransactionQueue::new();
+        queue.enqueue(tx1);
+
+        // tx2 (Delete): old="abcde", new="bcde", deleted_range=(0,1)
+        // Delete 路径查询 range = deleted_range = (0, 1)（old 坐标系）
+        let tx2_old_text = "abcde";
+        let rebase_byte_start = 0usize;
+        let rebase_byte_end = 1usize;
+
+        // 修复后：current_old_text = tx2.old，per-tx offset_map = identity
+        let current_conflict = queue.find_conflicting_transaction(
+            tx2_old_text,
+            rebase_byte_start,
+            rebase_byte_end,
+        );
+
+        // 修复后：tx1 的 (1,5) 在 tx2.old 坐标系仍是 (1,5)（tx1.new==tx2.old），
+        // 查询 (0,1) 不重叠 → 不冲突。
+        assert!(
+            current_conflict.is_none(),
+            "修复后应不冲突：tx1 的 visual_affected_byte_range_new=(1,5) 基于 tx1.new='abcde'，\
+             per-tx OffsetMap=identity（tx1.new==tx2.old='abcde'），映射后仍 (1,5)，\
+             查询 (0,1) 不重叠。实际返回 {:?}",
+            current_conflict
+        );
+    }
+
+    // ── 问题 2: 单个 OffsetMap 只对紧邻上一笔事务成立，不能给队列里所有活动事务共用 ──
+    //
+    // 场景：
+    //   初始文档 "123456789"。
+    //   tx1 (Insert): old="123456789", new="12345X6789"（位置 5 插 X，第 2 段）。
+    //     visual_affected_byte_range_new = (5, 6)（X 在 tx1.new 的 5..6）。
+    //   tx2 (Insert): old="12345X6789", new="12Y345X6789"（位置 2 插 Y，第 1 段，不冲突）。
+    //   tx3 (Delete): old="12Y345X6789", new="12Y3456789"，删除 X。
+    //     deleted_range = (6, 7)（X 在 tx3.old 的位置 6）。
+    //
+    // 修复后（current-old 坐标系逐事务映射）：
+    //   current_old_text = tx3.old = "12Y345X6789"。
+    //   对 tx1: per-tx offset_map = OffsetMap::build("12345X6789", "12Y345X6789")
+    //     → 把 tx1 的 (5,6) 映射到 (6,7)（X 在 "12Y345X6789" 的位置 6）
+    //     → (6,7) vs 查询 (6,7) → 重叠 → 冲突。正确。
+    //   对 tx2: per-tx offset_map = OffsetMap::build("12Y345X6789", "12Y345X6789") = identity
+    //     → tx2 的 (2,3) 映射后仍 (2,3) → (2,3) vs (6,7) → 不重叠 → 不冲突。
+    #[test]
+    fn test_issue710_comment_5733109905_problem2_single_offset_map_not_universal() {
+        // tx1: visual_affected_byte_range_new 基于 tx1.new="12345X6789"
+        let tx1 = make_test_tx(
+            1,
+            TextVisualOperationKind::Insert,
+            Some((5, 5)), // old 侧是插入点
+            Some((5, 6)), // new 侧是 X 在 "12345X6789" 的 5..6
+            "12345X6789", // tx1.new_text
+        );
+        // tx2: 在第 1 段插入 Y，不与 tx1 冲突，留在队列
+        let tx2 = make_test_tx(
+            2,
+            TextVisualOperationKind::Insert,
+            Some((2, 2)),
+            Some((2, 3)), // Y 在 "12Y345X6789" 的 2..3
+            "12Y345X6789", // tx2.new_text
+        );
+        let mut queue = PreparedTransactionQueue::new();
+        queue.enqueue(tx1);
+        queue.enqueue(tx2);
+
+        // tx3 (Delete): old="12Y345X6789", new="12Y3456789", deleted_range=(6,7)
+        let tx3_old_text = "12Y345X6789";
+        let rebase_byte_start = 6usize;
+        let rebase_byte_end = 7usize;
+
+        // 修复后：current_old_text = tx3.old，逐事务构造 per-tx offset_map
+        let current_conflict = queue.find_conflicting_transaction(
+            tx3_old_text,
+            rebase_byte_start,
+            rebase_byte_end,
+        );
+
+        // 单独验证 tx1 在正确 per-tx offset_map 下应判定冲突
+        let tx1_alone = make_test_tx(
+            1,
+            TextVisualOperationKind::Insert,
+            Some((5, 5)),
+            Some((5, 6)),
+            "12345X6789",
+        );
+        let mut queue_tx1_only = PreparedTransactionQueue::new();
+        queue_tx1_only.enqueue(tx1_alone);
+        let correct_conflict_for_tx1 = queue_tx1_only.find_conflicting_transaction(
+            tx3_old_text,
+            rebase_byte_start,
+            rebase_byte_end,
+        );
+
+        // 修复后：tx1 的 (5,6) 通过 per-tx OffsetMap::build("12345X6789", "12Y345X6789")
+        // 映射到 (6,7)，与查询 (6,7) 重叠 → 冲突。
+        assert!(
+            current_conflict.is_some(),
+            "修复后应检测到冲突：用 per-tx OffsetMap::build(tx1.new, tx3.old) 把 tx1 的 (5,6) \
+             映射到 (6,7)（X 在 '12Y345X6789' 的位置 6），与查询 (6,7) 重叠。\
+             实际返回 {:?}",
+            current_conflict
+        );
+        assert!(
+            correct_conflict_for_tx1.is_some(),
+            "tx1 单独在正确 per-tx offset_map 下应冲突：OffsetMap::build('12345X6789', '12Y345X6789') \
+             把 (5,6) 映射到 (6,7)，与查询 (6,7) 重叠。实际返回 {:?}",
+            correct_conflict_for_tx1
+        );
+    }
+
+    // ── 问题 3: units/static_patches 明知是旧事务 new 坐标，代码仍先做裸数值 overlap ──
+    //
+    // 场景：
+    //   tx1 (Insert): old="abcdef", new="abXYcdef"（位置 2 插 XY）。
+    //     tx1 有一个 unit，byte range = (2, 4)（XY 在 tx1.new="abXYcdef" 的 2..4，new 坐标系）。
+    //     visual_affected_byte_range_new = (2, 4)。
+    //   之后前面插入 Z，当前文档 = "ZabXYcdef"。tx1.new="abXYcdef" ≠ 当前 "ZabXYcdef"。
+    //   新事务查询 range = (2, 3)（当前坐标系，对应 "b" 区域）。
+    //
+    // 修复后（current-old 坐标系逐事务映射）：
+    //   current_old_text = "ZabXYcdef"。
+    //   per-tx offset_map = OffsetMap::build("abXYcdef", "ZabXYcdef")：Shifted +1。
+    //   unit 的 (2,4) 映射到 (3,5)。查询 (2,3)。(3,5) vs (2,3) → 不重叠 → 不冲突。正确。
+    #[test]
+    fn test_issue710_comment_5733109905_problem3_units_bare_numeric_overlap() {
+        // tx1: 有一个 unit，byte range = (2, 4)（tx1.new 坐标系）
+        let tx1 = make_test_tx_with_unit(
+            1,
+            TextVisualOperationKind::Insert,
+            2, // unit byte_start
+            4, // unit byte_end
+            Some((2, 2)), // visual_affected_byte_range_old
+            Some((2, 4)), // visual_affected_byte_range_new
+            "abXYcdef",   // tx1.new_text
+        );
+        let mut queue = PreparedTransactionQueue::new();
+        queue.enqueue(tx1);
+
+        // 当前文档 = "ZabXYcdef"（前面插了 Z），tx1.new = "abXYcdef"
+        let current_text = "ZabXYcdef";
+        // 新事务查询 range = (2, 3)（当前坐标系，对应 "b" 区域）
+        let query_start = 2usize;
+        let query_end = 3usize;
+
+        // 修复后：unit 的 byte range 也通过 per-tx offset_map 映射到当前坐标系
+        let current_conflict =
+            queue.find_conflicting_transaction(current_text, query_start, query_end);
+
+        // per-tx offset_map = OffsetMap::build("abXYcdef", "ZabXYcdef")：
+        //   prefix=0, suffix=8, entry Shifted old=0,new=1,length=8
+        // 映射 unit (2,4) → (3,5)。查询 (2,3)。(3,5) vs (2,3) → 不重叠。
+        let per_tx_offset_map = writer_core::editor::OffsetMap::build("abXYcdef", current_text);
+        let mapped_unit_range = per_tx_offset_map.map_old_range_to_new(2, 4);
+        assert_eq!(
+            mapped_unit_range,
+            Some((3, 5)),
+            "per-tx offset_map 应把 unit 的 (2,4) 映射到 (3,5)（'ZabXYcdef' 坐标系）"
+        );
+
+        // 修复后：映射后的 unit range (3,5) 与查询 (2,3) 不重叠 → 不冲突
+        assert!(
+            current_conflict.is_none(),
+            "修复后应不冲突：unit 的 (2,4) 通过 per-tx OffsetMap 映射到 (3,5)（当前坐标系），\
+             查询 ({},{}) 不重叠。实际返回 {:?}",
+            query_start,
+            query_end,
+            current_conflict
         );
     }
 }
