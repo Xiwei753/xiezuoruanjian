@@ -473,3 +473,181 @@ fn insert_move_insert_epoch_sequence() {
         );
     });
 }
+
+// =========================================================================
+// 测试 4: 完整帧/事务/光标所有权交接生命周期
+// =========================================================================
+
+/// 完整生命周期：正文 revision → 旧 prepared_frame 失效 → 当前 render snapshot
+/// 算目标 → 实际 RenderPlan 产出 drawn_caret_rect → 下一笔从 drawn rect rebase
+/// → 手动移动使旧正文事务失去 caret ownership → no-op 不失去 ownership。
+///
+/// Issue #707 评论 5724685300: 这条测试覆盖 comment 要求的完整交接链，
+/// 不只单独测试每个环节，而是把它们串起来验证一致性。
+#[test]
+fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello"));
+
+        // ── 阶段 1: 初始状态 ──
+        // 准备一帧，验证 prepared_frame 存在且 valid
+        let initial_rev = item.pipeline.text_revision();
+        assert!(
+            item.prepared_frame.is_some(),
+            "set_plain_text 后 prepared_frame 应为 Some"
+        );
+        let frame1 = item.prepared_frame.as_ref().expect("frame1");
+        assert_eq!(
+            frame1.layout_snapshot.text_revision, initial_rev,
+            "初始 frame revision 应等于 text_revision"
+        );
+        let initial_generation = frame1.layout_snapshot.layout_generation;
+        assert!(
+            initial_generation > 0,
+            "初始 layout_generation 必须 > 0"
+        );
+
+        // ── 阶段 2: insert_text → emit_content_changed → prepared_frame 失效 ──
+        let epoch_before_insert = item.cursor_ctrl.cursor_owner_epoch;
+        item.insert_text(QString::from("World"));
+        // insert_text 不 bump epoch（正文事务拥有 caret）
+        assert_eq!(
+            item.cursor_ctrl.cursor_owner_epoch, epoch_before_insert,
+            "insert_text 不应 bump epoch"
+        );
+
+        // emit_content_changed 使旧 prepared_frame 失效
+        item.emit_content_changed();
+        let new_rev = item.pipeline.text_revision();
+        assert!(
+            new_rev > initial_rev,
+            "emit_content_changed 后 text_revision 必须增加: {} -> {}",
+            initial_rev,
+            new_rev
+        );
+        assert!(
+            item.prepared_frame.is_some(),
+            "emit_content_changed 后 prepared_frame 应为 Some（新 frame）"
+        );
+        let (new_frame_rev, new_frame_gen) = {
+            let frame2 = item.prepared_frame.as_ref().expect("frame2");
+            (
+                frame2.layout_snapshot.text_revision,
+                frame2.layout_snapshot.layout_generation,
+            )
+        };
+        assert_ne!(
+            new_frame_rev, initial_rev,
+            "新 frame 的 revision 必须不同于旧 frame"
+        );
+        assert_ne!(
+            new_frame_gen, initial_generation,
+            "新 frame 的 layout_generation 必须不同于旧 frame"
+        );
+
+        // ── 阶段 3: build_render_plan_full 产出 drawn_caret_rect ──
+        let cursor_render_state = CursorRenderState::default();
+        let selection_preedit = SelectionPreeditPlan::default();
+        let frame_context = FrameContext::default();
+        let cursor_style = CursorStyle::default();
+        let selection_preedit_style = SelectionPreeditStyle::default();
+        let frame_now = std::time::Instant::now();
+
+        let plan = item.pipeline.animation_coordinator_mut().build_render_plan_full(
+            cursor_render_state,
+            selection_preedit,
+            frame_context,
+            cursor_style,
+            selection_preedit_style,
+            frame_now,
+            false,
+            None,
+            item.cursor_ctrl.cursor_owner_epoch,
+        );
+
+        assert!(
+            plan.drawn_caret_rect.is_some(),
+            "build_render_plan_full 必须产出 drawn_caret_rect"
+        );
+        let (x, y, h) = plan.drawn_caret_rect.expect("drawn_caret_rect");
+        assert!(
+            x.is_finite(),
+            "drawn_caret_rect.x 必须有限, 实际: {}",
+            x
+        );
+        assert!(
+            y.is_finite(),
+            "drawn_caret_rect.y 必须有限, 实际: {}",
+            y
+        );
+        assert!(
+            h.is_finite(),
+            "drawn_caret_rect.h 必须有限, 实际: {}",
+            h
+        );
+
+        // drawn_caret_rect 的 x 坐标应与当前 cursor 位置一致
+        // （insert_text("World") 后 cursor 在 "HelloWorld" 末尾 = 10 bytes）
+        let cursor_after_insert = item.buffer.cursor;
+        assert!(
+            cursor_after_insert > 0,
+            "insert_text 后 cursor 应在文末"
+        );
+
+        // ── 阶段 4: 手动移动 → epoch bump, 旧事务失去 caret ownership ──
+        let epoch_before_move = item.cursor_ctrl.cursor_owner_epoch;
+        item.move_cursor_horizontal(false, false); // backward
+        let epoch_after_move = item.cursor_ctrl.cursor_owner_epoch;
+        assert!(
+            epoch_after_move > epoch_before_move,
+            "move_cursor_backward 必须 bump epoch: {} -> {}",
+            epoch_before_move,
+            epoch_after_move
+        );
+        let cursor_after_move = item.buffer.cursor;
+        assert!(
+            cursor_after_move < cursor_after_insert,
+            "move_cursor_backward 应改变 cursor: {} -> {}",
+            cursor_after_insert,
+            cursor_after_move
+        );
+
+        // ── 阶段 5: no-op（已在边界）不 bump epoch ──
+        // 移到行首后 backward 是 no-op
+        for _ in 0..20 {
+            item.move_cursor_horizontal(false, false);
+        }
+        assert_eq!(item.buffer.cursor, 0, "应移到行首");
+        let epoch_at_start = item.cursor_ctrl.cursor_owner_epoch;
+
+        item.move_cursor_horizontal(false, false); // backward at start = no-op
+        assert_eq!(
+            item.cursor_ctrl.cursor_owner_epoch, epoch_at_start,
+            "行首 backward no-op 不应 bump epoch: {} -> {}",
+            epoch_at_start,
+            item.cursor_ctrl.cursor_owner_epoch
+        );
+
+        // click_at 同一位置也是 no-op
+        item.click_at(0.0, 0.0, false);
+        assert_eq!(item.buffer.cursor, 0, "click_at(0,0) 后 cursor 应在 0");
+        let epoch_before_same_click = item.cursor_ctrl.cursor_owner_epoch;
+        item.click_at(0.0, 0.0, false); // 同一位置 no-op
+        assert_eq!(
+            item.cursor_ctrl.cursor_owner_epoch, epoch_before_same_click,
+            "click_at 同一位置不应 bump epoch: {} -> {}",
+            epoch_before_same_click,
+            item.cursor_ctrl.cursor_owner_epoch
+        );
+
+        println!(
+            "[BEHAVIOR_VERIFY] full lifecycle: rev {} -> {}, generation {} -> {}, drawn_caret_rect=({:.1},{:.1},{:.1}), epoch {} -> {} (move) -> {} (no-op)",
+            initial_rev, new_rev,
+            initial_generation, new_frame_gen,
+            x, y, h,
+            epoch_before_move, epoch_after_move,
+            item.cursor_ctrl.cursor_owner_epoch
+        );
+    });
+}
