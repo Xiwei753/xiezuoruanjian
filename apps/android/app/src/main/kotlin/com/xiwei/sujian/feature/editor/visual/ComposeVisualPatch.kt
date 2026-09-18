@@ -45,6 +45,14 @@ data class RetainedMove(
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range —
  *   只给真正发生 oldRect → newRect 位移的存活 unit 新建/重定向 position 通道。
  *   删除换行时几何没变的文字就没有 position track，绝对不会跟着抽一下。
+ * @param reflowMoves #708 评论 5723410606 第四节：独立 reflow 通道 —
+ *   自动换行时幸存文字从 oldBounds 平移到 newBounds，始终全亮。
+ *   与 [retainedMoves] 三种不同所有权：
+ *   - InsertReveal：当前 BasicTextField 里存在，暂时裁掉，再由 overlay 吐出来；
+ *   - DeleteGhost：当前 BasicTextField 里已经不存在，只画旧字 ghost；
+ *   - ReflowMove：字仍存在，但从 oldBounds 平移到 newBounds，始终全亮；
+ *   - Cursor：独立位置轨道，但和以上共用同一个 frame clock。
+ *   默认空列表保持向后兼容。
  * @param cursorMotionPath 光标运动路径 — [ComposeVisualTimeline] 据此把光标 rect 并入统一的
  *   VisualScene / frame clock（cursorChannel），不再用跨 patch 的 Animatable 分段 animateTo。
  *   null 表示无光标动画语义。
@@ -70,6 +78,7 @@ data class ComposeVisualPatch(
     val insertedUnits: List<TextRange>,
     val deletedUnits: List<TextRange>,
     val retainedMoves: List<RetainedMove>,
+    val reflowMoves: List<ComposeReflowMove> = emptyList(),
     val cursorMotionPath: CursorMotionPath?,
     val durationMs: Long,
     val animationMode: AnimationModeDto,

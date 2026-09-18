@@ -17,14 +17,11 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.graphics.layer.drawLayer
-import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
@@ -60,6 +57,13 @@ import com.xiwei.sujian.feature.editor.layout.cursorRect
  * BasicTextField 始终画完整真实正文，本 draw 层只在绘制阶段裁切动画接管区域，
  * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout，断开回路。
  *
+ * #708 评论 5723410606 第一节：删除整屏旧帧缓存（stableFrameLayer + ComposeLocalFrameBarrier）—
+ * 真正的画面状态改成只在 `drawWithContent` 内取 [ComposeEditorVisualState.drawSnapshot]，
+ * 不再在 Composable 主体读 visualScene/restingCursorRect/latestLayout StateFlow，
+ * 动画每帧只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
+ * 每一帧都先画当前 BasicTextField，只对真正由动画接管的 range 做 Difference clip，
+ * 再画局部动画层；不再有"本地输入时整块不 drawContent，只把上一整屏重放"的分支。
+ *
  * @param visualState 编辑器视觉状态。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
  * @param textColor 文字颜色 — 从主题 role 注入。
@@ -92,23 +96,12 @@ fun EditorTextFieldDrawLayer(
 ) {
     val density = LocalDensity.current
 
+    // #708 评论 5723410606 第一节：每帧状态不在 Composable 主体读取 —
+    // visualScene / restingCursorRect / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
+    // patchVersion 继续作为启动帧循环的低频信号；
+    // drawsVisualCursor 是设置项，也可以继续在 Composition 里读。
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
-    val visualScene by visualState.visualScene.collectAsStateWithLifecycle()
-    val restingCursorRect by visualState.restingCursorRect.collectAsStateWithLifecycle()
-    // #691 评论 5679242735 修改1：静止光标需要 live selection + latestLayout 实时计算。
-    // BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
-    // 纯 selection 变化（鼠标点选、方向键移动）不保证重新计算文字布局，
-    // 此时 restingCursorRect（只在 onAuthoritativeLayout 里更新）会停在旧位置。
-    val latestLayout by visualState.latestLayout.collectAsStateWithLifecycle()
-
     val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
-
-    // #706 评论 5715257924 症状1：本地输入帧屏障 — 稳定帧缓存层。
-    // 没有 local barrier 时，每一帧先把完整最终编辑器画面记录进去，再画这个 layer。
-    // 这里的"完整画面"包括 BasicTextField、hiddenRanges 裁切、visual units 和视觉光标。
-    // barrier 活跃、matching patch 还没完成 handoff 时，不准调用 drawContent()，
-    // 也不准覆盖 stableFrameLayer，只重放上一帧。
-    val stableFrameLayer = rememberGraphicsLayer()
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
     // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
@@ -131,47 +124,22 @@ fun EditorTextFieldDrawLayer(
         modifier =
             modifier
                 .drawWithContent {
-                    val scene = visualScene
-                    val barrier = visualState.localFrameBarrierSnapshot()
-
-                    if (barrier != null) {
-                        // #706 评论 5715257924 症状1：barrier 活跃、matching patch 还没完成
-                        // handoff 时，不准调用 drawContent()，也不准覆盖 stableFrameLayer，
-                        // 只重放上一帧。这样插入时不会先裸出新字，删除时也不会先把旧字抹掉
-                        // 再等 ghost 回来。
-                        drawLayer(stableFrameLayer)
-                        return@drawWithContent
-                    }
-
-                    // 没有 barrier：先把完整编辑器画面记录进 stableFrameLayer，再画这个 layer。
-                    // 这里把 drawWithContent 里的三段逻辑抽成 drawCurrentEditorFrame：
-                    // 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
-                    // 2. 画 drawVisualScene()
-                    // 3. 画视觉光标
-                    //
-                    // GraphicsLayer.record 需要 density/layoutDirection/size/block 四个参数。
-                    // drawContent() 通过 this@drawWithContent 显式接收者调用 —
-                    // record lambda 的接收者是 DrawScope，不是 ContentDrawScope。
-                    stableFrameLayer.record(
-                        density = this@drawWithContent,
-                        layoutDirection = this@drawWithContent.layoutDirection,
-                        size = IntSize(size.width.toInt(), size.height.toInt()),
-                    ) {
-                        drawCurrentEditorFrame(
-                            scene = scene,
-                            latestLayout = latestLayout,
-                            scrollY = scrollY,
-                            drawsVisualCursor = drawsVisualCursor,
-                            textColor = textColor,
-                            cursorColor = cursorColor,
-                            liveSelection = liveSelection,
-                            restingCursorRect = restingCursorRect,
-                            needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
-                            density = density,
-                            drawContent = { this@drawWithContent.drawContent() },
-                        )
-                    }
-                    drawLayer(stableFrameLayer)
+                    // #708 评论 5723410606 第一节：真正的画面状态只在 drawWithContent 内取 —
+                    // 动画每帧只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
+                    val snapshot = visualState.drawSnapshot()
+                    drawCurrentEditorFrame(
+                        scene = snapshot.scene,
+                        latestLayout = snapshot.layout,
+                        scrollY = scrollY,
+                        drawsVisualCursor = drawsVisualCursor,
+                        textColor = textColor,
+                        cursorColor = cursorColor,
+                        liveSelection = liveSelection,
+                        restingCursorRect = snapshot.restingCursorRect,
+                        needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
+                        density = density,
+                        drawContent = { this@drawWithContent.drawContent() },
+                    )
                 },
     ) {
         content()
@@ -468,8 +436,9 @@ private fun DrawScope.drawTranslatedRangeText(
 }
 
 /**
- * #706 评论 5715257924 症状1：绘制完整编辑器当前帧 —
- * 把原来 drawWithContent 里的三段逻辑抽成独立函数，供 stableFrameLayer.record() 调用。
+ * #708 评论 5723410606 第一节：绘制完整编辑器当前帧 —
+ * 把 drawWithContent 里的三段逻辑抽成独立函数，直接在 drawWithContent 里调用
+ * （不再经过 stableFrameLayer.record() — 整屏旧帧缓存已删除）。
  *
  * 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
  * 2. 画 drawVisualScene()

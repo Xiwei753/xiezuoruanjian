@@ -61,21 +61,23 @@ class ComposeVisualTimeline {
     private var cursorChannel: CursorTrack? = null
 
     /**
+     * #708 评论 5730173947 修复2：per-unit / per-patch clip track 所有权 —
+     * 每笔 coordinated patch 创建自己的 [CursorTrack] 并分配一个 clipTrackId，
+     * 本 patch 新建/转出的 unit 绑定这个 id。sample 时每个 unit 用自己的 clipTrackId
+     * 查对应 track 算 clip fraction，不再全部读全局最新 cursorChannel。
+     * 历史 ghost 保留自己的 clipTrackId，继续旧吞字进度，不被下一笔光标抢走。
+     * 屏幕视觉光标仍只画最新 cursorChannel；clip 驱动用 per-unit clipTracks。
+     * 历史 track 没有任何 unit 再引用后清掉（sample 末尾 retainAll）。
+     */
+    private val clipTracks = mutableMapOf<Long, CursorTrack>()
+    private var nextClipTrackId: Long = 1L
+
+    /**
      * #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记 —
      * applyPatch 时从 patch.motionPolicy.effective() 设置，
      * sample 时传给 ComposeVisualScene，draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1）。
      */
     private var coordinatedSpatialClip: Boolean = false
-
-    /**
-     * #706 评论 5718539128 修复1：barrier handoff 时保存的可见 clip 基线 —
-     * [redirectFromVisibleScene] 把 barrier.baseScene.unitClipFractions 存到这里，
-     * 下一次 [sample]（handoff 第一帧）用它覆盖 [computeUnitClipFractions] 的结果，
-     * 保证 handoff 第一帧的 fraction 与用户最后真正看到的旧 scene 完全一致，
-     * 不会因 cursor 起点/几何重算导致 coordinated spatial clip 突变。
-     * sample 消费后清空，不跨帧保留。
-     */
-    private var redirectBaseClipFractions: Map<Long, Float> = emptyMap()
 
     /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
@@ -133,6 +135,34 @@ class ComposeVisualTimeline {
         // sample 时传给 scene，draw 层据此用 clipFraction 覆盖 alpha。
         coordinatedSpatialClip = policy.textEnabled && policy.cursorEnabled && policy.coordinated
 
+        // #708 评论 5728951138：当前 patch 已把 active unit 转成 ghost 的范围
+        // （旧正文坐标系，与 patch.deletedUnits 同坐标系）。
+        // reconcileDeletedGhosts 用它做差集，只给"deletedUnits - currentPatchGhostedCoverage"
+        // 的剩余部分建 alpha=1 完整 ghost，避免整段补 ghost 导致已由 active unit 接管的部分被重画一遍（重影）。
+        // 只收集**当前 patch** 产生的 ghost 范围，不收集历史遗留 ghost（targetRange == null 的旧 ghost）—
+        // 历史 ghost 的 range/layout 可能属于更早的正文坐标，不能拿来减当前 patch.deletedUnits。
+        val currentPatchGhostedCoverage = mutableListOf<TextRange>()
+
+        // #708 评论 5729482707 修复2：当前 patch 产生的 ghost 的 unit key 集合 —
+        // reconcileDeletedGhosts 的 schedule 阶段用它做对象身份判断，只给本次 patch 新产生的 ghost
+        // 重排 schedule，不误改历史遗留 ghost（历史 ghost 的 range 可能数字相同但属于旧 layout）。
+        // coverage 用 currentPatchGhostedCoverage（范围差集）；身份用 currentPatchGhostKeys（对象身份）。
+        // 不要用 range 同时承担"范围"和"对象身份"两件事。
+        val currentPatchGhostKeys = mutableSetOf<Long>()
+
+        // #708 评论 5730173947 修复2：本 patch 的 clip track 身份 —
+        // 只在有光标 motion（coordinated spatial clip）时才分配并创建 track。
+        // 本 patch 新建/转出的 Inserted / DeletedGhost 绑定这个 id；
+        // 历史 ghost / surviving slice 保留自己原来的 clipTrackId。
+        // applyCursorPatch 会在 cursorFromRect != null && cursorPath != null && cursorPath.isNotEmpty()
+        // 时被调用（与本条件一致），届时把 track 存进 clipTracks 供 unit 查询。
+        val patchClipTrackId: Long? =
+            if (cursorFromRect != null && cursorPath != null && cursorPath.isNotEmpty()) {
+                nextClipTrackId++
+            } else {
+                null
+            }
+
         // #703 评论 D：scene redirect — 快速输入/删除采用 scene redirect，不堆积旧动画。
         // 新 edit 到达时，从"当前屏幕真正画到的位置"重定向到新目标。
         // 旧 editEpoch 的延迟 patch、ghost、cursor path、retained move 如果已被新编辑覆盖，
@@ -167,7 +197,31 @@ class ComposeVisualTimeline {
                                     del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
                                 }
                             if (fullyDeleted != null) {
-                                toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                                // #708 评论 5729482707 修复1：alpha=0 的 active unit 删除时不能凭空补成 alpha=1 ghost。
+                                // timeline 原则：从当前屏幕真正画到的状态继续。alpha=0 表示当前不可见，
+                                // 删除后正确连续画面是仍不可见（直接消失），不应被 reconcileDeletedGhosts 补成 alpha=1 完整 ghost。
+                                // 改：无论 alpha 是否 > 0，都先记 coverage，让 reconcileDeletedGhosts 不再为这段补 ghost。
+                                // alpha>0 时转 ghost 并记 key（供 schedule 用）；alpha<=0 时不保留 ghost 但 coverage 已记。
+                                val range = unit.targetRange!!
+                                currentPatchGhostedCoverage.add(range)
+                                if (currentAlpha(unit.alpha, frameTimeNanos) > 0f) {
+                                    // #708 评论 5731952690 修复2：fullyDeleted 转 ghost 绑定本 patch clipTrackId —
+                                    // 旧 Inserted unit 的 clipTrackId 指向旧 track（还在向右走），
+                                    // 切到本 patch 新 track 才能继续吞字。
+                                    val ghost =
+                                        toGhost(
+                                            unit,
+                                            frameTimeNanos,
+                                            durationNanos,
+                                            unit.range,
+                                            clipTrackId = patchClipTrackId,
+                                        )
+                                    currentPatchGhostKeys.add(ghost.key)
+                                    ghost
+                                } else {
+                                    presentedKeys.remove(unit.key)
+                                    null
+                                }
                             } else {
                                 unit
                             }
@@ -189,11 +243,14 @@ class ComposeVisualTimeline {
         // 处理"同一 VSync 连续 patch"场景；否则回退到 [isUnitVisibleAndPresented] 通道判断
         // "unit 是否已可见呈现"（覆盖插入 unit alpha 0→1 和 retained reflow unit alpha 1→1），
         // 处理"不同时间 patch 但中间未 sample"场景。
-        val progressByKey =
+        // #708 评论 5728507555：用 mutable map 让 mapSurvivingUnits 在 split 时把
+        // child key 的即时 presented 状态写入，使本笔 applyPatch 后面的 started/pending
+        // 分类能读到 child 的状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+        val effectiveProgressByKey =
             if (policy.textEnabled) {
-                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }
+                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }.toMutableMap()
             } else {
-                emptyMap()
+                mutableMapOf()
             }
 
         if (policy.textEnabled) {
@@ -204,7 +261,18 @@ class ComposeVisualTimeline {
 
             // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
             val ghosting = mutableListOf<VisualTextUnit>()
-            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
+            mapSurvivingUnits(
+                sampledUnits,
+                patch,
+                frameTimeNanos,
+                durationNanos,
+                surviving,
+                ghosting,
+                effectiveProgressByKey,
+                currentPatchGhostedCoverage,
+                currentPatchGhostKeys,
+                patchClipTrackId,
+            )
 
             // 第三步：处理本 patch 新插入的 unit。
             // #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
@@ -221,7 +289,10 @@ class ComposeVisualTimeline {
                 }
                 // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos <= frameTimeNanos。
                 // 同一 VSync、零进度 → 可重新分段；已在之前可见帧产生真实进度 → 从当前状态继续，不归零。
-                if (progressByKey[unit.key] == true) {
+                // #708 评论 5728507555：用 effectiveProgressByKey（mutable）替代旧 progressByKey —
+                // mapSurvivingUnits 在 split 时已把 child key 的 presented 状态写入，
+                // 这里能读到 child 的即时状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+                if (effectiveProgressByKey[unit.key] == true) {
                     startedSurviving.add(unit)
                 } else {
                     pendingSurviving.add(unit)
@@ -233,27 +304,38 @@ class ComposeVisualTimeline {
                     patch,
                     frameTimeNanos,
                     durationNanos,
+                    patchClipTrackId,
                 )
 
-            // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）。
-            createDeletedGhosts(patch, frameTimeNanos, durationNanos, sampledUnits, ghosting)
-
-            // #694 评论 5694645209 问题3：删除时间表收口 —
-            // 所有本 patch 的 deleted ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）
-            // 收集完后，统一调用 rescheduleDeletedGhosts 按 patch.deletedUnits 的顺序给匹配 ghost
-            // 设置各自 [i/n, (i+1)/n] 分段 schedule。这样正在动画的 active unit 被删除时也进入分段 schedule，
-            // 三个 ghost 按 c、b、a 依次淡出，而非在 mapSurvivingUnits 阶段用 toGhost 统一从 now 同时开始。
-            rescheduleDeletedGhosts(
+            // 第四步：处理本 patch 显式删除的 unit（缺陷1 从 oldLayout 建 ghost）+
+            // 删除时间表收口（#694 评论 5694645209 问题3）。
+            // #708 评论 5728951138：把所有权判断和 schedule 收口成 reconcileDeletedGhosts —
+            // 用 subtractRanges(deletedUnits, currentPatchGhostedCoverage) 算剩余范围，
+            // 只给 remaining 建 alpha=1 完整 ghost，避免整段补 ghost 导致重影。
+            // schedule 匹配从 exact-range 改成"range 在父 deletedUnit 内"，
+            // 让部分 slice（如 [1,2) 在 [0,2) 内）也能匹配到父 deletedUnit 的 stage schedule。
+            reconcileDeletedGhosts(
+                sampledUnits = sampledUnits,
                 ghosting = ghosting,
                 orderedDeletedUnits = patch.deletedUnits,
+                currentPatchGhostedCoverage = currentPatchGhostedCoverage,
+                currentPatchGhostKeys = currentPatchGhostKeys,
+                oldLayout = patch.oldLayout,
                 frameTimeNanos = frameTimeNanos,
                 durationNanos = durationNanos,
+                patchClipTrackId = patchClipTrackId,
             )
 
             // 第五步：retainedMoves（缺陷4 临时接管回流文字）。
             // 注意：retainedMoves 作用于 startedSurviving（已开始 unit 的位置重定向），
             // 不应作用于 pendingSurviving（它们已被重新分段）。
             applyRetainedMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
+
+            // #708 评论 5723410606 第四节：独立 reflow 通道 —
+            // reflowMoves 是与 retainedMoves 不同的所有权：字仍存在，但从 oldBounds 平移到 newBounds，
+            // 始终全亮。active 时把 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
+            // 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
+            applyReflowMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
 
             // 合并：已开始存活 + 重新分段（pending + 新插入） + ghost
             units = startedSurviving + repartitioned.allUnits + ghosting
@@ -280,7 +362,8 @@ class ComposeVisualTimeline {
                 cursorPath = cursorPath,
                 cursorDurationNanos = cursorDurationNanos,
                 surviving = surviving,
-                progressByKey = progressByKey,
+                progressByKey = effectiveProgressByKey,
+                patchClipTrackId = patchClipTrackId,
             )
         }
     }
@@ -311,6 +394,7 @@ class ComposeVisualTimeline {
         cursorDurationNanos: Long,
         surviving: List<VisualTextUnit>,
         progressByKey: Map<Long, Boolean>,
+        patchClipTrackId: Long?,
     ) {
         val current = cursorChannel
         val startRect =
@@ -362,20 +446,48 @@ class ComposeVisualTimeline {
         // #691 评论 5686733880：直接使用调用方传入的 cursorDurationNanos。
         // cursor 时长决定只保留在 [ComposeEditorVisualState.computeCursorParamsForPatch] 一处，
         // 这里不再按 policy.coordinated 二次覆盖（避免设置矩阵 D 下 cursor 错误使用 textDurationMillis）。
-        cursorChannel =
+        val track =
             CursorTrack(
                 fromRect = startRect,
                 points = normalizedPoints,
                 startedAtNanos = frameTimeNanos,
                 durationNanos = cursorDurationNanos,
             )
+        cursorChannel = track
+        // #708 评论 5730173947 修复2：把本 patch 的 track 存进 clipTracks，
+        // 供绑定了 patchClipTrackId 的 unit 查询自己的 clip 驱动。
+        // patchClipTrackId 只在有光标 motion 时分配（与 applyPatch 分配条件一致），
+        // 历史 ghost 用自己的旧 clipTrackId 查旧 track，不被本笔光标抢走。
+        if (patchClipTrackId != null) {
+            clipTracks[patchClipTrackId] = track
+        }
     }
 
     /**
      * #689 评论 5675270164 缺陷5：把存活 unit 通过 offsetMap 映射到新正文。
      * 用 splitMappedRangeForward 切片，不整块判死。
+     *
+     * #708 评论 5727808906：split 时分配独立新 key —
+     * 当一个父 unit 被切成 2 个及以上子 unit（surviving slice + ghost slice）时，
+     * 每个子 unit 都分配独立新 key（nextUnitKey++），不再共用父 key。
+     * 只有一个 slice 且代表整个父 unit 时保留 parent key。
+     * 这样 [ComposeVisualScene.unitClipFractions]（Map<Long, Float>，key=unit.key）
+     * 不会同 key 互相覆盖，三段文字各自拿到独立 fraction。
+     * 同时 [presentedKeys] 不会因 `associate` 压缩成最后一个同 key 结果，
+     * `presentedKeys.remove(key)` 不会误删其他活跃 slice 的 presented 身份。
+     *
+     * #708 评论 5727808906：presented 状态不因换 child key 丢失 —
+     * split 发生时（slices.size >= 2）：如果父 unit 已 presented（progressByKey[unit.key] == true），
+     * 把每个 surviving child 的 key 放进 [presentedKeys]，把父 key 从 [presentedKeys] 移除。
+     * 不 split 时（保留 parent key）：presentedKeys 不变（key 没换）。
      */
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
+    @Suppress(
+        "LongMethod",
+        "CyclomaticComplexMethod",
+        "CognitiveComplexMethod",
+        "LongParameterList",
+        "NestedBlockDepth",
+    )
     private fun mapSurvivingUnits(
         sampledUnits: List<VisualTextUnit>,
         patch: ComposeVisualPatch,
@@ -383,6 +495,10 @@ class ComposeVisualTimeline {
         durationNanos: Long,
         surviving: MutableList<VisualTextUnit>,
         ghosting: MutableList<VisualTextUnit>,
+        progressByKey: MutableMap<Long, Boolean>,
+        currentPatchGhostedCoverage: MutableList<TextRange>,
+        currentPatchGhostKeys: MutableSet<Long>,
+        patchClipTrackId: Long?,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
@@ -397,71 +513,175 @@ class ComposeVisualTimeline {
                 continue
             }
             val slices = computeSlices(target, offsetMap, newTextLength, patch.intent)
+            // #708 评论 5727808906：split 时分配独立新 key —
+            // 只有一个 slice 且代表整个父 unit（slice.oldSubRange == unit.range）时保留 parent key；
+            // 2 个及以上子 unit 时每个子 unit 分配独立新 key。
+            val isSplit = slices.size >= 2
+            val parentPresented = progressByKey[unit.key] == true
+            if (isSplit) {
+                // 父 unit 已被 split 成子 unit，父 key 不再活跃，从 presentedKeys 移除
+                presentedKeys.remove(unit.key)
+                // #708 评论 5728507555：split 后父 key 不再活跃，从 effectiveProgressByKey 移除，
+                // 并把每个 child key 的 presented 状态显式写入，让本次 applyPatch 后面的 started/pending
+                // 分类能读到 child 的即时 presented 状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+                progressByKey.remove(unit.key)
+            }
             for (slice in slices) {
+                // 决定本 slice 的 childKey：
+                // - 不 split（单 slice 且代表整个父 unit）→ 保留 parent key
+                // - split（2+ 子 unit）→ 每个子 unit 分配独立新 key
+                val childKey = if (isSplit) nextUnitKey++ else unit.key
+                if (isSplit) {
+                    // #708 评论 5728507555：child 继承父 unit 的 presented 状态，
+                    // 让本次 applyPatch 后面的 started/pending 分类读到正确状态。
+                    progressByKey[childKey] = parentPresented
+                }
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
-                    surviving.add(mapSurvivingSlice(unit, slice.newSubRange, newLayout, frameTimeNanos, durationNanos))
+                    val mappedUnit =
+                        mapSurvivingSlice(
+                            unit = unit,
+                            oldRange = slice.oldSubRange,
+                            mappedRange = slice.newSubRange,
+                            newLayout = newLayout,
+                            frameTimeNanos = frameTimeNanos,
+                            durationNanos = durationNanos,
+                            childKey = childKey,
+                        )
+                    surviving.add(mappedUnit)
+                    // #708 评论 5727808906：split 时父 unit 已 presented → surviving child 也算 presented，
+                    // 避免下一笔 patch 把已可见的 surviving child 判成 pending 重建 alpha 0→1。
+                    // ghost 不需要参与后续 surviving 的 presented 判定。
+                    if (isSplit && parentPresented) {
+                        presentedKeys.add(childKey)
+                    }
                 } else {
                     // 缺陷5 GHOST slice：按 slice.oldSubRange 创建 ghost，alpha 当前值 -> 0
-                    ghosting.add(toGhost(unit, frameTimeNanos, durationNanos, slice.oldSubRange))
+                    // #708 评论 5728951138：记录被当前 patch 转成 ghost 的范围，
+                    // reconcileDeletedGhosts 用它做差集避免整段补 ghost。
+                    // slice.oldSubRange 与 patch.deletedUnits 同坐标系（当前正文坐标）。
+                    // #708 评论 5729482707 修复2：把 ghost.key 加进 currentPatchGhostKeys，
+                    // schedule 阶段用它做对象身份判断，只重排本次 patch 产生的 ghost。
+                    // #708 评论 5730173947 修复3：partial split 的 GHOST slice 基于当前真实可见 fraction 判断 —
+                    // coordinated 模式下真实可见性由 fraction 决定（alpha 被 override 成 1）。
+                    // 一个还没吐出来的 slice（visible fraction=0）转成 DeletedGhost 后，
+                    // 不应因新 cursor 算出 >0 fraction 而"复活"冒出来。
+                    // 先算旧 slice 在当前帧的真实 clip fraction：
+                    // - fraction <= 0：记 coverage 但不创建可见 ghost（直接消失）
+                    // - fraction > 0：ghost 从当前 alpha 继续（toGhost 保留 alphaNow）
+                    // 非 coordinated 模式用 alpha 判断（现有逻辑）。
+                    currentPatchGhostedCoverage.add(slice.oldSubRange)
+                    val shouldCreateGhost =
+                        if (coordinatedSpatialClip) {
+                            // coordinated：先检查 parent 当前可见 fraction —
+                            // parent 还没吐出来（fraction≈0）时，deleted slice 也不应"复活"冒出来。
+                            val parentFraction =
+                                unit.clipTrackId?.let(clipTracks::get)?.let { currentRect(it, frameTimeNanos) }
+                                    ?.let { cursor ->
+                                        ComposeVisualClip.fractionFor(unit, cursor, coordinatedSpatialClip)
+                                    } ?: currentAlpha(unit.alpha, frameTimeNanos)
+                            if (parentFraction <= 0f) {
+                                // parent 不可见：deleted slice 也不可见，不创建 ghost
+                                false
+                            } else {
+                                // parent 可见：用真实 clip fraction 判断
+                                val sliceClipCursor =
+                                    unit.clipTrackId?.let(clipTracks::get)?.let { currentRect(it, frameTimeNanos) }
+                                if (sliceClipCursor != null) {
+                                    val sliceUnit =
+                                        unit.copy(
+                                            range = slice.oldSubRange,
+                                            role = VisualUnitRole.DeletedGhost,
+                                        )
+                                    val sliceFraction =
+                                        ComposeVisualClip.fractionFor(
+                                            sliceUnit,
+                                            sliceClipCursor,
+                                            coordinatedSpatialClip,
+                                        ) ?: 1f
+                                    sliceFraction > 0f
+                                } else {
+                                    currentAlpha(unit.alpha, frameTimeNanos) > 0f
+                                }
+                            }
+                        } else {
+                            currentAlpha(unit.alpha, frameTimeNanos) > 0f
+                        }
+                    if (shouldCreateGhost) {
+                        // #708 评论 5731952690 修复2：partial split GHOST slice 转 ghost 绑定本 patch clipTrackId —
+                        // 和 fullyDeleted 分支同理，切到本 patch 新 track 继续吞字。
+                        val ghost =
+                            toGhost(
+                                unit = unit,
+                                now = frameTimeNanos,
+                                durationNanos = durationNanos,
+                                ghostRange = slice.oldSubRange,
+                                childKey = childKey,
+                                clipTrackId = patchClipTrackId,
+                            )
+                        currentPatchGhostKeys.add(ghost.key)
+                        ghosting.add(ghost)
+                    }
                 }
             }
         }
     }
 
+    // #708 评论 5725706551：切片逻辑已抽取到 ComposeVisualRebase.computeSlices 共享 helper。
     private fun computeSlices(
         target: TextRange,
         offsetMap: List<VisualOffsetMapEntry>?,
         newTextLength: Int,
         intent: EditorVisualIntent? = null,
-    ): List<ComposeVisualRebase.MappedRangeSlice> {
-        val effectiveMap =
-            offsetMap ?: intent?.let { ComposeVisualRebase.entriesForIntent(it) }
-        if (effectiveMap != null) {
-            return ComposeVisualRebase.splitMappedRangeForward(target, effectiveMap)
-        }
-        // 无 offset map 且无 intent 信息：若 target 仍在新正文范围内，保留；否则转 ghost
-        return if (target.end <= newTextLength) {
-            listOf(
-                ComposeVisualRebase.MappedRangeSlice(
-                    oldSubRange = target,
-                    newSubRange = target,
-                    kind = ComposeVisualRebase.MappedRangeSliceKind.SURVIVING,
-                ),
-            )
-        } else {
-            listOf(
-                ComposeVisualRebase.MappedRangeSlice(
-                    oldSubRange = target,
-                    newSubRange = null,
-                    kind = ComposeVisualRebase.MappedRangeSliceKind.GHOST,
-                ),
-            )
-        }
-    }
+    ): List<ComposeVisualRebase.MappedRangeSlice> =
+        ComposeVisualRebase.computeSlices(target, offsetMap, newTextLength, intent)
 
+    // #708 评论 5725706551：与 ComposeLocalHandoffRebase.mapSurvivingSliceToHandoff 对应。
+    // timeline 版本：alpha 通道不变（继续原动画），position 在新位置变化时创建动画通道。
+    // handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
+    // #708 评论 5727808906：显式接收 childKey — split 时由 mapSurvivingUnits 分配独立新 key，
+    // 不 split 时传 unit.key 保留父 key。
+    @Suppress("LongParameterList")
     private fun mapSurvivingSlice(
         unit: VisualTextUnit,
+        oldRange: TextRange,
         mappedRange: TextRange,
         newLayout: ComposeLayoutSnapshot,
         frameTimeNanos: Long,
         durationNanos: Long,
+        childKey: Long,
     ): VisualTextUnit {
         // 存活：alpha 通道不变（继续使用原 startedAtNanos）。
-        // position 通道：只在新 layout 让位置发生变化时重定向。
+        // #708 评论 5727440517：position 通道起点用 sliceScreenPosition 计算 —
+        // oldRange == unit.range 时返回父 unit 当前屏幕位置；
+        // oldRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+        // 不再直接用父 unit 左上角，避免 surviving slice 首帧跳到父 unit 开头位置。
+        val parentCurrent = currentOffset(unit.position, frameTimeNanos) ?: unit.position.to
+        val oldSlicePosition =
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = oldRange,
+                parentScreenPosition = parentCurrent,
+            ) ?: parentCurrent
         val newPosition = computeUnitPosition(newLayout, mappedRange)
-        val oldPosition = currentOffset(unit.position, frameTimeNanos)
         val positionChannel =
-            if (newPosition != null && oldPosition != null && newPosition != oldPosition) {
+            if (newPosition != null && newPosition != oldSlicePosition) {
                 TimedOffset(
-                    from = oldPosition,
+                    from = oldSlicePosition,
                     to = newPosition,
                     startedAtNanos = frameTimeNanos,
                     durationNanos = durationNanos,
                 )
             } else {
-                unit.position
+                TimedOffset(
+                    from = oldSlicePosition,
+                    to = oldSlicePosition,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = 0L,
+                )
             }
         return unit.copy(
+            key = childKey,
             layout = newLayout,
             range = mappedRange,
             targetRange = mappedRange,
@@ -486,6 +706,8 @@ class ComposeVisualTimeline {
      * @param patch 本帧的屏幕 diff。
      * @param frameTimeNanos 当前帧时间戳。
      * @param durationNanos 文字动画时长（有界窗口长度）。
+     * @param patchClipTrackId #708 评论 5730173947 修复2：本 patch 的 clip track 身份 —
+     *   新插入 unit 绑定此 id；pendingSurviving 通过 copy 保留原 clipTrackId（继续旧 track）。
      * @return [RepartitionResult] 包含 allUnits（pendingSurviving 重设 alpha + 新 insertedUnits）
      *   和 repartitionedPending（仅 pendingSurviving 重设 alpha，给 cursor 合并用）。
      */
@@ -494,6 +716,7 @@ class ComposeVisualTimeline {
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
         durationNanos: Long,
+        patchClipTrackId: Long?,
     ): RepartitionResult {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
@@ -542,6 +765,9 @@ class ComposeVisualTimeline {
                         // #703 评论 5710977972 缺陷2：新插入字角色 = Inserted，
                         // 由 cursor 从左向右裁切吐出。
                         role = VisualUnitRole.Inserted,
+                        // #708 评论 5730173947 修复2：新插入 unit 绑定本 patch 的 clipTrackId，
+                        // sample 时用自己的 track 算 clip fraction，不读全局最新 cursorChannel。
+                        clipTrackId = patchClipTrackId,
                     ),
                 )
             }
@@ -562,92 +788,141 @@ class ComposeVisualTimeline {
     )
 
     /**
-     * #689 评论 5675270164 缺陷1：处理删除 unit。
-     * 找不到 active unit 时从 patch.oldLayout 建 ghost（alpha 1->0）。
+     * #708 评论 5728951138：删除 ghost 所有权 + schedule 收口 —
+     * 合并旧 createDeletedGhosts + rescheduleDeletedGhosts，
+     * 把 timeline 的删除所有权收口成和 handoff 一样的"当前 patch 已接管范围 + 剩余范围"。
      *
-     * #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段。
+     * 背景：handoff 的"部分删除差集"已修（#708 评论 5726837636），但 timeline 的
+     * createDeletedGhosts 还在用 exact-match（it.range == range）判断，只认"range 完全相等"。
+     * 这会导致：handoff 首帧不重影，但 timeline drain 下一帧又整段补 ghost 重新重影。
+     *
+     * 对每个 deletedRange：
+     * 1. 用 [ComposeVisualRebase.subtractRanges] 算 remaining = deletedRange - currentPatchGhostedCoverage。
+     *    currentPatchGhostedCoverage 是当前 patch 已把 active unit 转成 ghost 的范围
+     *    （fullyDeleted 分支 + mapSurvivingUnits GHOST slice），这些范围已由 active unit 接管，
+     *    不应再为它们建整段 alpha=1 ghost。
+     * 2. 为 remaining 的每个子范围建 alpha=1 的完整 ghost（从 oldLayout 取旧位置）。
+     * 3. 给属于这个 deletedUnit 的所有 ghost（range 在 deletedRange 内的 ghost，
+     *    包括 active 转的 ghost 和新建的 remaining ghost）设 stage schedule：
+     *    startedAt = frameTimeNanos + durationNanos * (i/n)，duration = durationNanos / n。
+     *    schedule 匹配从旧 exact-range（ghost.range == range）改成"range 在 deletedRange 内"
+     *    （ghost.range.start >= deletedRange.start && ghost.range.end <= deletedRange.end），
+     *    让部分 slice（如 [1,2) 在 [0,2) 内）也能匹配到父 deletedUnit 的 stage schedule。
+     *
+     * #689 评论 5675270164 缺陷1：找不到 active unit 时从 oldLayout 建 ghost（alpha 1->0）。
+     * #694 评论 5693864609 问题1 / 5694645209 问题3：删除 schedule — 有界窗口分段。
      * n = deletedRanges.size，unit i 的时间窗口为 [i/n, (i+1)/n]，
      * 这样快速连续删除多个字时每个 ghost 有自己的时间段，不会全挤在同一帧。
-     */
-    private fun createDeletedGhosts(
-        patch: ComposeVisualPatch,
-        frameTimeNanos: Long,
-        durationNanos: Long,
-        sampledUnits: List<VisualTextUnit>,
-        ghosting: MutableList<VisualTextUnit>,
-    ) {
-        val oldTextLength = patch.oldLayout.result.layoutInput.text.length
-        val deletedRanges = patch.deletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
-        // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
-        // n = deletedRanges.size, unit i: [i/n, (i+1)/n]
-        val n = deletedRanges.size
-        if (n == 0) return
-        for ((i, range) in deletedRanges.withIndex()) {
-            // 检查 ghosting 里是否已有覆盖此 range 的 ghost（存活映射阶段已切片处理）
-            if (ghosting.any { it.range == range }) continue
-            // 检查 sampledUnits 里是否有 active unit 覆盖此 range（已在存活映射阶段处理）
-            if (sampledUnits.any { it.targetRange != null && it.range == range }) continue
-            val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
-            val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
-            val ghostStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
-            val ghostDuration = (durationNanos * (endFraction - startFraction)).toLong()
-            // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
-            val oldPosition = computeUnitPosition(patch.oldLayout, range) ?: continue
-            ghosting +=
-                VisualTextUnit(
-                    key = nextUnitKey++,
-                    layout = patch.oldLayout,
-                    range = range,
-                    targetRange = null,
-                    alpha = TimedFloat(1f, 0f, ghostStartedAt, ghostDuration),
-                    position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
-                    // #703 评论 5710977972 缺陷2：删除 ghost 角色 = DeletedGhost，
-                    // 由 cursor 从右向左裁切吞掉。
-                    role = VisualUnitRole.DeletedGhost,
-                )
-        }
-    }
-
-    /**
-     * #694 评论 5694645209 问题3：删除时间表收口入口 —
      * 所有本 patch 的 deleted ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）
-     * 收集完后统一调用，按 [orderedDeletedUnits] 的顺序给匹配 ghost 设置各自 [i/n, (i+1)/n] 分段 schedule。
-     *
-     * 规则：
-     * - 对 [ghosting] 中每个 ghost，如果它的 range 匹配某个 [orderedDeletedUnits][i]，
-     *   则设置 `startedAt = frameTimeNanos + durationNanos * (i/n)`，
-     *   `duration = durationNanos / n`，alpha.from 保持不变（当前真实 alpha，即 toGhost 时保留的 alphaNow），
-     *   alpha.to = 0f。
-     * - 不是本 patch 显式 deleted unit 的其他 survival-slice ghost
-     *   （即 range 不匹配任何 [orderedDeletedUnits] 的 ghost），
-     *   不套这套 stage schedule — 保持 toGhost 给它们的默认 now+fullDuration。
+     * 统一按 orderedDeletedUnits 的顺序设分段 schedule，正在动画的 active unit 被删除时也进入分段 schedule。
      *
      * @param ghosting 当前所有 ghost（包括从 active unit 转来的，也包括从 oldLayout 新建的）。
      * @param orderedDeletedUnits 本 patch 的 deletedUnits（按顺序）。
+     * @param currentPatchGhostedCoverage 当前 patch 已把 active unit 转成 ghost 的范围
+     *   （旧正文坐标系，与 orderedDeletedUnits 同坐标系）。
+     * @param currentPatchGhostKeys 当前 patch 产生的 ghost 的 unit key 集合 —
+     *   schedule 阶段用它做对象身份判断，只重排本次 patch 的 ghost，不误改历史 ghost。
+     * @param oldLayout 本 patch 的 oldLayout（建 ghost 取旧位置）。
      * @param frameTimeNanos 当前帧时间戳。
      * @param durationNanos 文字动画时长（有界窗口长度）。
+     * @param patchClipTrackId #708 评论 5730173947 修复2：本 patch 的 clip track 身份 —
+     *   remaining 新建 ghost 绑定此 id；历史 ghost 保留自己原来的 clipTrackId。
      */
-    private fun rescheduleDeletedGhosts(
+    @Suppress("LongParameterList")
+    private fun reconcileDeletedGhosts(
+        sampledUnits: List<VisualTextUnit>,
         ghosting: MutableList<VisualTextUnit>,
         orderedDeletedUnits: List<TextRange>,
+        currentPatchGhostedCoverage: List<TextRange>,
+        currentPatchGhostKeys: MutableSet<Long>,
+        oldLayout: ComposeLayoutSnapshot,
         frameTimeNanos: Long,
         durationNanos: Long,
+        patchClipTrackId: Long?,
     ) {
-        val orderedRanges = orderedDeletedUnits.filter { it.start < it.end }
+        val oldTextLength = oldLayout.result.layoutInput.text.length
+        val orderedRanges = orderedDeletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
+        // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
+        // n = orderedRanges.size, unit i: [i/n, (i+1)/n]
         val n = orderedRanges.size
         if (n == 0) return
-        // 为每个 deletedUnit 算它的分段 schedule。
-        // 多个 ghost 可能匹配同一个 range（切片场景），都套同一个 stage schedule。
-        for ((i, range) in orderedRanges.withIndex()) {
+        for ((i, deletedRange) in orderedRanges.withIndex()) {
+            // 1. 算剩余范围：deletedRange - currentPatchGhostedCoverage
+            //    currentPatchGhostedCoverage 里的范围已由 active unit 接管（转成 ghost），
+            //    不应再为它们建整段 alpha=1 ghost，只给剩余部分建 ghost。
+            val remaining =
+                ComposeVisualRebase.subtractRanges(
+                    candidates = listOf(deletedRange),
+                    blockers = currentPatchGhostedCoverage,
+                )
+            // 2. 为 remaining 建 alpha=1 完整 ghost（从 oldLayout 取旧位置）
+            for (del in remaining) {
+                if (del.start >= del.end) continue
+                if (del.end > oldTextLength) continue
+                // #708 评论 5731952690 修复1b：删除 existingGhost 复用逻辑 —
+                // handoff scene 和 ComposeVisualTimeline.units 是两套状态；
+                // sampledUnits 只来自 timeline 自己的 units，不可能包含 publishLocalHandoffScene()
+                // 临时造的 handoff unit。这里找到的 existingGhost 只能是 timeline 历史 ghost，
+                // 会把它加入 currentPatchGhostKeys 然后按本次 schedule 重排，真正本次 ghost 反而不创建。
+                // 当前 patch active->ghost 的范围已经进入 currentPatchGhostedCoverage，
+                // remaining 本来就不会重复覆盖，不需要额外复用历史 ghost。
+                // #708 评论 5730173947 修复1：去重从 range-only 改成 currentPatchGhostKeys 身份判断 —
+                // 旧实现 `ghosting.any { it.targetRange == null && it.range == del }` 只看 range，
+                // 连续 Forward Delete 时历史 ghost（range=[0,1) layout="ab"）会挡住本次 ghost
+                // （range=[0,1) layout="b"）的创建，导致本次 b ghost 根本不创建。
+                // 改：只查 currentPatchGhostKeys 里的 ghost。remaining 已经是
+                // deletedRange - currentPatchGhostedCoverage，本 patch 已接管的范围已被减掉，
+                // 这里只保留防御性身份判断，不误杀历史 ghost 让本次 ghost 无法创建。
+                val alreadyGhosted =
+                    ghosting.any {
+                        it.key in currentPatchGhostKeys &&
+                            it.targetRange == null && it.range == del
+                    }
+                if (alreadyGhosted) continue
+                // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
+                val oldPosition = computeUnitPosition(oldLayout, del) ?: continue
+                val newGhost =
+                    VisualTextUnit(
+                        key = nextUnitKey++,
+                        layout = oldLayout,
+                        range = del,
+                        targetRange = null,
+                        // alpha=1 完整 ghost，schedule 下面统一设
+                        alpha = TimedFloat(1f, 0f, frameTimeNanos, durationNanos),
+                        position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
+                        // #703 评论 5710977972 缺陷2：删除 ghost 角色 = DeletedGhost，
+                        // 由 cursor 从右向左裁切吞掉。
+                        role = VisualUnitRole.DeletedGhost,
+                        // #708 评论 5730173947 修复2：remaining 新建 ghost 绑定本 patch 的 clipTrackId，
+                        // sample 时用自己的 track 算 clip fraction，继续本 patch 的吞字进度。
+                        clipTrackId = patchClipTrackId,
+                    )
+                // #708 评论 5729482707 修复2：remaining 新建 ghost 也属于本次 patch，
+                // 把 key 加进 currentPatchGhostKeys，schedule 阶段才会给它重排 schedule。
+                currentPatchGhostKeys.add(newGhost.key)
+                ghosting += newGhost
+            }
+            // 3. 给属于这个 deletedUnit 的所有 ghost 设 stage schedule
+            //    包括 active 转的 ghost（range 在 deletedRange 内）和新建的 remaining ghost。
+            //    alpha.from 保持不变（当前真实 alpha，即 toGhost 时保留的 alphaNow），
+            //    alpha.to = 0f。
             val startFraction = if (n <= 1) 0f else i.toFloat() / n.toFloat()
             val endFraction = if (n <= 1) 1f else (i + 1).toFloat() / n.toFloat()
             val ghostStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
             val ghostDuration = (durationNanos * (endFraction - startFraction)).toLong()
-            // 在 ghosting 中找 range 匹配的 ghost，统一覆盖 startedAt/duration。
-            // alpha.from 保持不变（当前真实 alpha，即 toGhost 时保留的 alphaNow），alpha.to = 0f。
             for (j in ghosting.indices) {
                 val ghost = ghosting[j]
-                if (ghost.range == range) {
+                // #708 评论 5729482707 修复2：schedule 只处理当前 patch 产生的 ghost，
+                // 不靠 range 判断"是不是本 patch 的 ghost"——历史 ghost 的 range 可能数字相同但属于旧 layout。
+                // 用 currentPatchGhostKeys 做对象身份判断，历史 ghost 保持自己原来的 schedule 不被重置。
+                // #708 评论 5728951138：schedule 匹配从 exact-range（ghost.range == range）
+                // 改成"range 在 deletedRange 内"（ghost.range.start >= deletedRange.start &&
+                // ghost.range.end <= deletedRange.end），让部分 slice（如 [1,2) 在 [0,2) 内）
+                // 也能匹配到父 deletedUnit 的 stage schedule。
+                val isCurrentPatchGhost = ghost.key in currentPatchGhostKeys
+                val isWithinDeletedRange =
+                    ghost.range.start >= deletedRange.start && ghost.range.end <= deletedRange.end
+                if (isCurrentPatchGhost && ghost.targetRange == null && isWithinDeletedRange) {
                     ghosting[j] =
                         ghost.copy(
                             alpha =
@@ -744,55 +1019,87 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * #706 评论 5715257924 症状1：从可见 scene 重定向 timeline 起点。
+     * #708 评论 5723410606 第四节：独立 reflow 通道 —
+     * 把 [ComposeVisualPatch.reflowMoves] 转成 [VisualTextUnit]。
      *
-     * barrier 存在时，旧 timeline 即使在后台还有未结束 track，也不能按"已经过去了多少真实时间"
-     * 偷偷向前跑；新 patch 必须从用户最后真正看到的 scene 继续。
+     * 规则（评论 5723410606 第四节）：
+     * - ReflowMove alpha 永远 1；
+     * - 不参加 cursor spatial clip（computeUnitClipFractions 给 fraction=1）；
+     * - 只做 position old -> new；
+     * - active 时把它的 newRange 放进 hiddenRanges（sample 已统一处理）；
+     * - 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管（sample 收口）。
      *
-     * 把当前可见 unit 的 position/alpha 通道重新作为当前时刻起点（冻结成静态通道），
-     * 并丢掉已经被这次本地 edit 覆盖的旧 track。后面仍走现有 [applyPatch]，
-     * 不要造第二套动画器。
-     *
-     * @param scene 用户最后真正看到的视觉场景（barrier.baseScene）。
-     * @param frameTimeNanos 当前帧时间戳。
+     * 与 [applyRetainedMoves] 的区别：
+     * - reflowMoves 携带 oldBounds/newBounds，不重新查 layout；
+     * - reflowMoves 只对位置真变化的 slice 生成 unit（planner 已过滤）；
+     * - reflowMoves 不复用已有 active unit 的 position 通道 — 它是独立轨道。
      */
-    fun redirectFromVisibleScene(
-        scene: ComposeVisualScene,
+    private fun applyReflowMoves(
+        patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        durationNanos: Long,
+        surviving: MutableList<VisualTextUnit>,
     ) {
-        // 把 scene.units 里每个 unit 的 alpha/position 通道冻结成静态通道
-        // （from = to = 当前屏幕值，duration = 0），这样 rebaseUnitForPatch 会把它当成
-        // "已完成的静态 unit"，不会按时间偷偷跑。applyPatch 的 mapSurvivingSlice 会保留
-        // alpha 通道不变，repartitionPendingAndInsertedUnits 会把 pending unit 重新分段。
-        units =
-            scene.units.map { unit ->
-                val currentAlpha = unit.alpha.from
-                val currentPosition = unit.position.from
-                unit.copy(
-                    alpha =
-                        TimedFloat(
-                            from = currentAlpha,
-                            to = currentAlpha,
-                            startedAtNanos = frameTimeNanos,
-                            durationNanos = 0L,
-                        ),
-                    position =
-                        TimedOffset(
-                            from = currentPosition,
-                            to = currentPosition,
-                            startedAtNanos = frameTimeNanos,
-                            durationNanos = 0L,
-                        ),
-                )
+        if (patch.reflowMoves.isEmpty()) return
+        val newLayout = patch.newLayout
+        for (move in patch.reflowMoves) {
+            val newRange = move.newRange
+            if (newRange.start >= newRange.end) continue
+            if (newRange.end > newLayout.result.layoutInput.text.length) continue
+            // #708 评论 5724568261 缺口3：去重条件过窄修复 —
+            // 旧条件只查 role==ReflowMove：`surviving.any { it.targetRange == newRange && it.role == VisualUnitRole.ReflowMove }`，
+            // 不查 Inserted/RetainedMove。surviving 里已有 role=Inserted 的 unit 时，applyReflowMoves 不跳过，
+            // 又创建第二个 role=ReflowMove，同一段文字被两个 overlay unit 同时画产生重影。
+            //
+            // 修复：用 subtractOverlayOwnedRanges 把 move.newRange 中已被其他 active unit
+            // （targetRange != null 的存活 unit，含 Inserted/RetainedMove/ReflowMove）接管的范围切掉。
+            // 只给没有被其他 active unit 接管的剩余 slice 创建 ReflowMove。
+            // 已有 unit 已经经过 mapSurvivingSlice()，它的位置通道本身会根据新 layout 做 redirect，
+            // 继续让原 unit 完成自己的动画即可。
+            val remainingMoves = subtractOverlayOwnedRanges(move, surviving, patch)
+            for (remaining in remainingMoves) {
+                val nr = remaining.newRange
+                if (nr.start >= nr.end) continue
+                val oldPosition = Offset(remaining.oldBounds.left, remaining.oldBounds.top)
+                val newPosition = Offset(remaining.newBounds.left, remaining.newBounds.top)
+                surviving +=
+                    VisualTextUnit(
+                        key = nextUnitKey++,
+                        layout = newLayout,
+                        range = nr,
+                        targetRange = nr,
+                        // alpha 永远 1：始终全亮
+                        alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
+                        // 只做 position old -> new
+                        position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                        role = VisualUnitRole.ReflowMove,
+                    )
             }
-        // cursorChannel 清空 — applyCursorPatch 会用 cursorFromRect 作为新起点。
-        cursorChannel = null
-        // presentedKeys 保留 — 这些 unit 确实已在可见帧呈现过。
-        // coordinatedSpatialClip 由后续 applyPatch 重新设置。
-        // #706 评论 5718539128 修复1：保存当前可见 clip 基线 —
-        // coordinated spatial clip 模式下，handoff 第一帧的 fraction 必须与旧 scene 一致，
-        // 不能因 cursor 起点/几何重算导致吞吐字 fraction 突变。下一次 sample 消费后清空。
-        redirectBaseClipFractions = scene.unitClipFractions
+        }
+    }
+
+    /**
+     * #708 评论 5725146968：从 [move.newRange] 中减去已被 [surviving] 中 active unit 接管的范围 —
+     *
+     * 使用 [ComposeOverlayOwnership.subtractOwnedRanges] 做真正的差集运算：
+     * - 完全覆盖：返回空 list（不创建 ReflowMove）
+     * - 无重叠：返回原 move
+     * - 部分重叠：返回剩余 slice 的 ReflowMove 列表（每个 slice 的 old/new bounds 从真实 layout 取）
+     *
+     * 不允许同一个 UTF-16 target range 同时被两个 VisualTextUnit 拥有。
+     */
+    private fun subtractOverlayOwnedRanges(
+        move: ComposeReflowMove,
+        surviving: List<VisualTextUnit>,
+        patch: ComposeVisualPatch,
+    ): List<ComposeReflowMove> {
+        val ownedRanges = surviving.mapNotNull { it.targetRange }
+        return ComposeOverlayOwnership.subtractOwnedRanges(
+            move = move,
+            ownedRanges = ownedRanges,
+            oldLayout = patch.oldLayout,
+            newLayout = patch.newLayout,
+        )
     }
 
     /**
@@ -869,32 +1176,28 @@ class ComposeVisualTimeline {
         //   开始 cursor 在 glyph 右侧 fraction=1（完全可见），结束 cursor 在 glyph 左侧 fraction=0（被吞掉）。
         //   #703 评论 A 缺陷3 跨行裁切 — 不同行时 insert fraction=0、delete fraction=1。
         // cursor 为 null 或 glyph 退化为零宽时 fraction = 1f（完全可见，由 alpha 单独决定）。
-        val computedClipFractions =
-            if (sampledCursor != null) {
-                computeUnitClipFractions(sampledUnits, sampledCursor)
-            } else {
-                emptyMap()
-            }
-        // #706 评论 5718539128 修复1：barrier handoff 首帧 —
-        // 用 redirectFromVisibleScene 保存的可见 clip 基线覆盖计算结果，
-        // 保证 handoff 第一帧 fraction 与用户最后真正看到的旧 scene 完全一致。
-        // 按 unit key 查找：旧 scene 里有的 unit 用旧 fraction，新插入 unit（key 不在基线里）
-        // 回退到计算结果。消费后清空，不跨帧保留。
-        val unitClipFractions =
-            if (redirectBaseClipFractions.isNotEmpty()) {
-                val base = redirectBaseClipFractions
-                redirectBaseClipFractions = emptyMap()
-                sampledUnits.associate { unit ->
-                    unit.key to (base[unit.key] ?: computedClipFractions[unit.key] ?: 1f)
-                }
-            } else {
-                computedClipFractions
-            }
+        // #708 评论 5730173947 修复2：per-unit clip track — sampledCursor（全局最新）只用于
+        // scene.cursorRect（屏幕视觉光标）；clip 驱动用 per-unit clipTracks，
+        // 每个 unit 用自己的 clipTrackId 查对应 track 算 clipCursor，不全部读全局最新 cursorChannel。
+        val computedClip = computeUnitClipFractions(sampledUnits, frameTimeNanos)
+        // #708 评论 5730173947 修复2：清理无引用的 clip track —
+        // 没有任何 unit 再引用的 track 清掉，避免泄漏。
+        // units 已是收口后的存活 unit（remainingUnits）。
+        val referencedTrackIds = remainingUnits.mapNotNull { it.clipTrackId }.toSet()
+        clipTracks.keys.retainAll(referencedTrackIds)
+        // #708 评论 5723410606 第二节：删除 barrier handoff 首帧的 redirectBaseClipFractions 覆盖 —
+        // 不再有整屏 barrier redirect，clip fractions 直接用计算结果。
+        val unitClipFractions = computedClip.fractions
+        // #708 评论 5733321056 修复1+2：scene 带 per-unit clip cursor —
+        // handoff rebase 用 parent 自己的 unitClipCursors[parentKey] 算 split child 首帧 fraction，
+        // 不再用全局 scene.cursorRect（可能已切到下一笔的 cursorTrack）。
+        val unitClipCursors = computedClip.cursors
         return ComposeVisualScene(
             units = sampledUnits,
             hiddenRanges = hiddenRanges,
             cursorRect = sampledCursor,
             unitClipFractions = unitClipFractions,
+            unitClipCursors = unitClipCursors,
             coordinatedSpatialClip = coordinatedSpatialClip,
         )
     }
@@ -927,115 +1230,61 @@ class ComposeVisualTimeline {
      * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
      * draw 层用 fraction 裁切 glyph 可见区域。
      *
+     * #708 评论 5730173947 修复2：per-unit clip track —
+     * 每个 unit 用自己的 clipTrackId 查 [clipTracks] 算 clipCursor，
+     * 不再全部读全局最新 cursorChannel。历史 ghost 用自己的旧 track 继续吞字进度，
+     * 不被下一笔光标抢走。无 clipTrackId 或 track 已清的 unit 跳过（不放入 map，draw 层用默认值）。
+     *
+     * #708 评论 5733321056 修复1+2：同时记录每个 unit 这一帧实际使用的 clip cursor —
+     * handoff rebase 用 parent unit 自己的 cursor 算 split child 首帧 fraction，
+     * 不再用全局 scene.cursorRect（可能已切到下一笔的 cursorTrack）。
+     *
      * @param units 当前帧的 sampled units（alpha/position 已插值到当前帧）。
-     * @param cursorRect 当前光标 rect。
-     * @return unit key → 可见 fraction（0..1）。
+     * @param frameTimeNanos 当前帧时间戳 — 用于查 per-unit track 的当前 cursor 位置。
+     * @return [UnitClipResult]：fractions = unit key → 可见 fraction（0..1），
+     *   cursors = unit key → 该 unit 这一帧算 fraction 时所用的 cursor rect。
      */
     private fun computeUnitClipFractions(
         units: List<VisualTextUnit>,
-        cursorRect: Rect,
-    ): Map<Long, Float> {
-        if (units.isEmpty()) return emptyMap()
-        val cursorLeft = cursorRect.left
-        val cursorTop = cursorRect.top
-        val cursorBottom = cursorRect.bottom
-        val result = mutableMapOf<Long, Float>()
+        frameTimeNanos: Long,
+    ): UnitClipResult {
+        if (units.isEmpty()) return UnitClipResult.EMPTY
+        val fractions = mutableMapOf<Long, Float>()
+        // #708 评论 5733321056 修复1+2：同时记录 per-unit clip cursor —
+        // handoff rebase 用 parent 自己的 cursor 算 split child 首帧 fraction。
+        val cursors = mutableMapOf<Long, Rect>()
         for (unit in units) {
-            val alphaNow = unit.alpha.from
-            // #703 评论 5710419102 问题2：coordinated 模式下空间裁切是主导，
-            // 不能用 alpha 决定是否计算 clipFraction。新插入 unit 首帧 alpha=0，
-            // 如果跳过则 unitClipFractions 缺 key，draw 层默认成 1，整字首帧完整出现。
-            // coordinated 模式：所有 scene unit 都计算 clipFraction。
-            // 非 coordinated 模式：保留 alpha<=0 跳过（alpha 仍主导显隐）。
-            if (!coordinatedSpatialClip && alphaNow <= 0f) continue
-            // 取 glyph bounds（用 unit 当前 layout + range）
-            val bounds = safePathBoundsForUnit(unit) ?: continue
-            val glyphLeft = bounds.left
-            val glyphRight = bounds.right
-            val glyphTop = bounds.top
-            val glyphBottom = bounds.bottom
-            val glyphWidth = glyphRight - glyphLeft
-            // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
-            if (glyphWidth < 0.5f) {
-                result[unit.key] = 1f
-                continue
+            // #708 评论 5730173947 修复2：per-unit clip track —
+            // unit 用自己的 clipTrackId 查对应 track 算 clipCursor，
+            // 不再全部读全局最新 cursorChannel。历史 ghost 用自己的旧 track 继续吞字。
+            val clipCursor =
+                unit.clipTrackId?.let(clipTracks::get)?.let { currentRect(it, frameTimeNanos) }
+            if (clipCursor == null) continue // 无 clip 驱动，跳过（不放入 map，draw 层用默认值）
+            // #708 评论 5727808906：抽取共享纯函数 ComposeVisualClip.fractionFor —
+            // timeline 和 handoff rebase 后重建 unitClipFractions 共用同一份计算，
+            // 避免 split 后 child key 查不到 fraction、三段文字共用父块空间进度。
+            val fraction = ComposeVisualClip.fractionFor(unit, clipCursor, coordinatedSpatialClip)
+            if (fraction != null) {
+                fractions[unit.key] = fraction
+                // #708 评论 5733321056 修复1+2：记录这个 unit 实际使用的 clip cursor —
+                // handoff rebase 用 parent 自己的 cursor 算 split child 首帧 fraction，
+                // 与 timeline 用同一 per-unit clipTrackId cursor 算的结果一致。
+                cursors[unit.key] = clipCursor
             }
-            // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
-            // 不进入 spatial clip 裁切。显式放入 fraction=1 最稳妥，
-            // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
-            if (unit.role == VisualUnitRole.RetainedMove) {
-                result[unit.key] = 1f
-                continue
-            }
-            // #703 评论 5710977972 缺陷1：跨行裁切改为按行序单调状态。
-            // 旧实现只用 sameLine（cursor 和 glyph 的垂直区间是否重叠）无方向判断，
-            // 吐字时光标进入下一行后上一行 inserted unit 变 fraction=0（字消失），
-            // 吞字时光标退回上一行后下一行 ghost 变 fraction=1（字重新出现）。
-            //
-            // 新实现用 layout 的 line index 判断方向（不拿 glyph bounds 的 top/bottom，
-            // glyph 可能只占行一部分）：
-            // - glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
-            // - glyphLineTop = getLineTop(glyphLine), glyphLineBottom = getLineBottom(glyphLine)
-            // - cursorBeforeGlyphLine = cursorBottom <= glyphLineTop（光标在 glyph 行之前/上方）
-            // - cursorAfterGlyphLine = cursorTop >= glyphLineBottom（光标在 glyph 行之后/下方）
-            //
-            // 按行序单调状态：
-            // - Inserted（吐字，光标从左向右移动，字从左向右出现）：
-            //   * cursorAfterGlyphLine（光标已过这一行）→ fraction = 1（字完整可见，已吐完）
-            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-            //   * cursorBeforeGlyphLine（光标还没到这一行）→ fraction = 0（字不可见）
-            // - DeletedGhost（吞字，光标从右向左退，从下方往上退）：
-            //   * cursorBeforeGlyphLine（光标在 ghost 行上方，已退过这一行）→ fraction = 0（字被吞掉）
-            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-            //   * cursorAfterGlyphLine（光标在 ghost 行下方，还没退到这一行）→ fraction = 1（字仍完整可见）
-            val (glyphLineTop, glyphLineBottom) =
-                try {
-                    val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
-                    unit.layout.result.getLineTop(glyphLine) to
-                        unit.layout.result.getLineBottom(glyphLine)
-                } catch (_: Throwable) {
-                    // layout 行信息取不到时 fallback 到旧 sameLine 语义（用 glyph bounds），
-                    // 保证不会因 layout API 异常而整字消失。
-                    glyphTop to glyphBottom
-                }
-            val cursorBeforeGlyphLine = cursorBottom <= glyphLineTop
-            val cursorAfterGlyphLine = cursorTop >= glyphLineBottom
-            val fraction =
-                when (unit.role) {
-                    VisualUnitRole.Inserted -> {
-                        when {
-                            cursorAfterGlyphLine -> 1f
-                            cursorBeforeGlyphLine -> 0f
-                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-                        }
-                    }
-                    VisualUnitRole.DeletedGhost -> {
-                        when {
-                            cursorBeforeGlyphLine -> 0f
-                            cursorAfterGlyphLine -> 1f
-                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-                        }
-                    }
-                    VisualUnitRole.RetainedMove -> 1f
-                }
-            result[unit.key] = fraction
         }
-        return result
+        return UnitClipResult(fractions, cursors)
     }
 
     /**
-     * #703 评论 B：安全取 unit 的 glyph bounds —
-     * 用 unit 当前 layout + range 取 path bounds。
+     * #708 评论 5733321056 修复1+2：computeUnitClipFractions 返回值 —
+     * 同时携带 fractions 和 per-unit clip cursors。
      */
-    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? {
-        val result = unit.layout.result
-        val range = unit.range
-        if (range.start >= range.end) return null
-        if (range.end > result.layoutInput.text.length) return null
-        return try {
-            result.getPathForRange(range.start, range.end).getBounds()
-        } catch (_: Throwable) {
-            null
+    private data class UnitClipResult(
+        val fractions: Map<Long, Float>,
+        val cursors: Map<Long, Rect>,
+    ) {
+        companion object {
+            val EMPTY = UnitClipResult(emptyMap(), emptyMap())
         }
     }
 
@@ -1069,6 +1318,9 @@ class ComposeVisualTimeline {
         presentedKeys.clear()
         // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
         coordinatedSpatialClip = false
+        // #708 评论 5730173947 修复2：清空 per-unit clip track 所有权
+        clipTracks.clear()
+        nextClipTrackId = 1L
     }
 
     /**
@@ -1088,6 +1340,9 @@ class ComposeVisualTimeline {
         presentedKeys.clear()
         // #703 评论 5709208101 问题2：重置 coordinated + spatial clip 标记
         coordinatedSpatialClip = false
+        // #708 评论 5730173947 修复2：清空 per-unit clip track 所有权
+        clipTracks.clear()
+        nextClipTrackId = 1L
     }
 
     // ==================== 统一光标位置（#691） ====================
@@ -1183,6 +1438,11 @@ class ComposeVisualTimeline {
     /**
      * #689 评论 5675270164 缺陷2：把 unit 转成 ghost — alpha 从当前值继续到 0。
      *
+     * #708 评论 5725706551：与 [ComposeLocalHandoffRebase.toHandoffGhost] 对应。
+     * timeline 版本（本方法）：alpha 从当前值继续到 0（创建淡出动画通道），
+     * position 固定在当前屏幕位置（考虑切片 ghost 的父 unit 位移）。
+     * handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
+     *
      * 旧实现 `unit.copy(targetRange = null)` 只把 targetRange 设 null，没把 alpha 改成
      * "当前值 -> 0"。如果 unit 原来正在做插入动画（alpha 0->1），快速输入后马上删除，
      * 它会变成 ghost 继续淡入到 1，alpha 到 1 后 hasActiveAnimation 认为完成但 units 里
@@ -1192,27 +1452,38 @@ class ComposeVisualTimeline {
      * @param now 当前帧时间。
      * @param durationNanos ghost 淡出时长。
      * @param ghostRange ghost 的 range；默认 unit.range（整个 unit 变 ghost）。
-     *   切片场景传入 slice.oldSubRange（unit 的一部分变 ghost）。
+     * @param childKey ghost unit 的 key；默认 unit.key。
+     *   #708 评论 5727808906：split 场景由 mapSurvivingUnits 分配独立新 key 传入；
+     *   scene redirect 整块转 ghost（applyPatch 约 160 行 fullyDeleted 分支）保留原 key。
+     * @param clipTrackId #708 评论 5731952690 修复2：ghost 绑定的 clip track 身份 —
+     *   默认 unit.clipTrackId（保留旧 track）。active -> DeletedGhost 时应传本 patch 的
+     *   patchClipTrackId，让 ghost 用本 patch 的新 track 算 clip fraction 继续吞字；
+     *   否则旧 Inserted unit 的 clipTrackId 仍指向旧 track（还在向右走），
+     *   被删除的字会继续变得更可见而不是被吞掉。历史 ghost 不经过 toGhost，保留旧 id。
      */
     private fun toGhost(
         unit: VisualTextUnit,
         now: Long,
         durationNanos: Long,
         ghostRange: TextRange = unit.range,
+        childKey: Long = unit.key,
+        clipTrackId: Long? = unit.clipTrackId,
     ): VisualTextUnit {
         val alphaNow = currentAlpha(unit.alpha, now)
+        val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
+        // #708 评论 5726837636：子片段 ghost 屏幕位置用共享 helper sliceScreenPosition 计算 —
+        // ghostRange==unit.range 时返回 parentCurrent；否则 sliceNatural + parentDelta。
+        // 与 ComposeLocalHandoffRebase.toHandoffGhost 共用同一套几何，避免两套算法不一致
+        // 导致 handoff 首帧旧字跳位。
         val positionNow =
-            if (ghostRange == unit.range) {
-                currentOffset(unit.position, now) ?: unit.position.to
-            } else {
-                // 切片 ghost：如果父 unit 正在移动，切片应继承父 unit 当前的屏幕位移量
-                val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
-                val parentNatural = computeUnitPosition(unit.layout, unit.range) ?: parentCurrent
-                val parentDelta = Offset(parentCurrent.x - parentNatural.x, parentCurrent.y - parentNatural.y)
-                val sliceNatural = computeUnitPosition(unit.layout, ghostRange) ?: parentCurrent
-                Offset(sliceNatural.x + parentDelta.x, sliceNatural.y + parentDelta.y)
-            }
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = ghostRange,
+                parentScreenPosition = parentCurrent,
+            ) ?: parentCurrent
         return unit.copy(
+            key = childKey,
             range = ghostRange,
             targetRange = null,
             alpha = TimedFloat(alphaNow, 0f, now, durationNanos),
@@ -1220,6 +1491,9 @@ class ComposeVisualTimeline {
             // #703 评论 5710977972 缺陷2：active unit 转 ghost，角色 = DeletedGhost，
             // 由 cursor 从右向左裁切吞掉。
             role = VisualUnitRole.DeletedGhost,
+            // #708 评论 5731952690 修复2：显式设 clipTrackId —
+            // active -> DeletedGhost 切换到本 patch clip track，继续本 patch 的吞字进度。
+            clipTrackId = clipTrackId,
         )
     }
 
@@ -1519,15 +1793,20 @@ data class TimedOffset(
 
 /**
  * #703 评论 5710977972 缺陷2：VisualTextUnit 的视觉角色 —
- * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流），
+ * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流）/ reflowMove（独立 reflow），
  * 不再用 targetRange!=null 间接判断。
  *
  * - [Inserted]：本 patch 新插入的字，由 cursor 从左向右裁切吐出。
  * - [DeletedGhost]：本 patch 删除的 ghost 字，由 cursor 从右向左裁切吞掉。
  * - [RetainedMove]：幸存回流文字（retainedMoves 创建），始终完整可见，
  *   不进入 spatial clip 裁切（computeUnitClipFractions 直接给 fraction=1）。
+ * - [ReflowMove]：#708 评论 5723410606 第四节独立 reflow 通道 —
+ *   字仍存在，但从 oldBounds 平移到 newBounds，始终全亮（alpha 永远 1）。
+ *   不参加 cursor spatial clip；只做 position old -> new；
+ *   active 时把它的 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
+ *   完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
  */
-enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
+enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove, ReflowMove }
 
 /**
  * #689 评论 5674631257 步骤2：单个文字单元的持续视觉状态。
@@ -1541,9 +1820,15 @@ enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
  * @param alpha 透明度通道 — 互不重置。
  * @param position 位置通道 — 互不重置；位置没变不重建。
  * @param role #703 评论 5710977972：视觉角色 —
- *   [VisualUnitRole.Inserted] / [VisualUnitRole.DeletedGhost] / [VisualUnitRole.RetainedMove]。
+ *   [VisualUnitRole.Inserted] / [VisualUnitRole.DeletedGhost] / [VisualUnitRole.RetainedMove].
  *   默认 [VisualUnitRole.RetainedMove]：普通幸存 copy（data class copy 自动保留原 role）
  *   不参与吞吐裁切，始终完整可见。
+ * @param clipTrackId #708 评论 5730173947 修复2：本 unit 的 spatial clip 驱动 track 身份 —
+ *   null 表示不参与 per-unit clip（由 alpha 主导或用全局 cursor）。
+ *   同一笔 coordinated patch 新建/转出的 unit 绑定同一个 clipTrackId；
+ *   历史 ghost 保留自己原来的 clipTrackId 继续旧吞字进度，不被下一笔光标抢走。
+ *   surviving slice 和转 ghost 的 unit 通过 unit.copy(...) 自动保留原 clipTrackId（继续旧 track）；
+ *   只有全新创建的 unit（新插入 + reconcileDeletedGhosts remaining ghost）绑定本 patch 的 patchClipTrackId。
  */
 data class VisualTextUnit(
     val key: Long,
@@ -1553,6 +1838,7 @@ data class VisualTextUnit(
     val alpha: TimedFloat,
     val position: TimedOffset,
     val role: VisualUnitRole = VisualUnitRole.RetainedMove,
+    val clipTrackId: Long? = null,
 )
 
 /**
@@ -1615,6 +1901,15 @@ data class CursorTrack(
  *   key = [VisualTextUnit.key]，value = 可见 fraction。
  *   1f = 完全可见（cursor 已越过整个 glyph），0f = 完全不可见（cursor 还没到 glyph）。
  *   draw 层用此 fraction 裁切 glyph 可见区域，不再纯靠 alpha 决定出现/消失。
+ * @param unitClipCursors #708 评论 5733321056 修复1+2：每个 unit 实际使用的 clip driver cursor。
+ *   key = [VisualTextUnit.key]，value = 该 unit 这一帧算 fraction 时所用的 cursor rect
+ *   （来自 unit.clipTrackId 对应的 [ComposeVisualTimeline.clipTracks] 当前帧采样）。
+ *   scene.cursorRect 仍只表示屏幕最新视觉光标（来自最新 cursorChannel），
+ *   不再被 handoff rebase 当作"所有 unit 共用的 clip cursor"。
+ *   handoff rebase 用 parent unit 自己的 unitClipCursors[parentKey] 算 split child 首帧 fraction，
+ *   与 timeline 用同一 per-unit clipTrackId cursor 算的结果一致，避免首帧跳变。
+ *   parent 不在 map 中表示它本来就不是 spatial clip 驱动（无 clipTrackId 或 track 已清），
+ *   rebase 时不要凭空造一个 cursor。
  * @param coordinatedSpatialClip #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记。
  *   true 表示当前 patch 处于 textEnabled && cursorEnabled && coordinated 模式，
  *   draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1），
@@ -1626,6 +1921,7 @@ data class ComposeVisualScene(
     val hiddenRanges: List<TextRange>,
     val cursorRect: Rect? = null,
     val unitClipFractions: Map<Long, Float> = emptyMap(),
+    val unitClipCursors: Map<Long, Rect> = emptyMap(),
     val coordinatedSpatialClip: Boolean = false,
 ) {
     companion object {

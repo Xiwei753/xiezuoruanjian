@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -148,6 +149,52 @@ internal object ComposeVisualRebase {
             newSubRange = null,
             kind = MappedRangeSliceKind.GHOST,
         )
+    }
+
+    /**
+     * #708 评论 5725706551：把旧 unit 的 targetRange 切成 SURVIVING/GHOST slice —
+     * [ComposeVisualTimeline.mapSurvivingUnits] 和 [ComposeLocalHandoffRebase.rebase] 共用的切片逻辑。
+     *
+     * 优先用 [offsetMap]；没有则从 [intent] 用 [entriesForIntent] 生成 fallback survival map；
+     * 都没有则检查 target 是否仍在新正文范围内（[target.end] <= [newTextLength]）：
+     * - 在范围内 → 整段 SURVIVING（range 不变）；
+     * - 超出范围 → 整段 GHOST。
+     *
+     * @param target 旧正文中的 UTF-16 range（T0 坐标）。
+     * @param offsetMap 整条 chain 合成后的 T0→Tn offset map；null 表示没有。
+     * @param newTextLength 新正文长度 — fallback 判断 target 是否仍存活。
+     * @param intent 原始 Core intent — offsetMap==null 时用 replaceBounds 生成 fallback。
+     * @return 切片列表。
+     */
+    internal fun computeSlices(
+        target: TextRange,
+        offsetMap: List<VisualOffsetMapEntry>?,
+        newTextLength: Int,
+        intent: EditorVisualIntent? = null,
+    ): List<MappedRangeSlice> {
+        val effectiveMap =
+            offsetMap ?: intent?.let { entriesForIntent(it) }
+        if (effectiveMap != null) {
+            return splitMappedRangeForward(target, effectiveMap)
+        }
+        // 无 offset map 且无 intent 信息：若 target 仍在新正文范围内，保留；否则转 ghost
+        return if (target.end <= newTextLength) {
+            listOf(
+                MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = target,
+                    kind = MappedRangeSliceKind.SURVIVING,
+                ),
+            )
+        } else {
+            listOf(
+                MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = null,
+                    kind = MappedRangeSliceKind.GHOST,
+                ),
+            )
+        }
     }
 
     /**
@@ -304,6 +351,47 @@ internal object ComposeVisualRebase {
         } catch (_: Throwable) {
             null
         }
+    }
+
+    /**
+     * #708 评论 5726837636：子片段屏幕位置计算 —
+     * 当一个 active unit 被切开只删一部分时，ghost 的屏幕位置不能直接用父 unit 左上角，
+     * 要用"slice 自然位置 + 父 unit 当前位移"。
+     *
+     * timeline 的 [ComposeVisualTimeline.toGhost] 和 handoff 的
+     * [ComposeLocalHandoffRebase.toHandoffGhost] 共用此 helper，
+     * 避免两套算法不一致导致 handoff 首帧旧字跳位。
+     *
+     * @param layout 父 unit 的 layout snapshot。
+     * @param parentRange 父 unit 的完整 range。
+     * @param sliceRange 切片 range（ghost 的 range）。
+     * @param parentScreenPosition 父 unit 当前屏幕位置（已含位移）。
+     * @return slice 的屏幕位置；layout 取不到自然位置时返回 null。
+     */
+    fun sliceScreenPosition(
+        layout: ComposeLayoutSnapshot,
+        parentRange: TextRange,
+        sliceRange: TextRange,
+        parentScreenPosition: Offset,
+    ): Offset? {
+        if (sliceRange == parentRange) return parentScreenPosition
+        val parentNatural = unitPositionFromLayout(layout, parentRange) ?: return null
+        val parentDelta =
+            Offset(
+                parentScreenPosition.x - parentNatural.x,
+                parentScreenPosition.y - parentNatural.y,
+            )
+        val sliceNatural = unitPositionFromLayout(layout, sliceRange) ?: return null
+        return Offset(sliceNatural.x + parentDelta.x, sliceNatural.y + parentDelta.y)
+    }
+
+    /** 从 layout 取 range 的左上角位置（内部 helper）。 */
+    private fun unitPositionFromLayout(
+        layout: ComposeLayoutSnapshot,
+        range: TextRange,
+    ): Offset? {
+        val bounds = safePathBounds(layout.result, range) ?: return null
+        return Offset(bounds.left, bounds.top)
     }
 
     /**
