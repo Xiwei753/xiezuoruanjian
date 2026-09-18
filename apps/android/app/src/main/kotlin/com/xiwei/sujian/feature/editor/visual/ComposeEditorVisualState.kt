@@ -400,7 +400,9 @@ class ComposeEditorVisualState(
             //   - 被删除 slice：从当前可见 alpha/position 转 handoff ghost（不新建 alpha=1 的完整 ghost）；
             //   - 已有 ghost：保持当前状态不变。
             // ghostedCoverage 记录 rebase 阶段已经转成 ghost 的旧正文范围。
-            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch)
+            // #708 评论 5727808906：传入 key allocator — split 时为每个子 unit 分配独立新 key，
+            // 不再共用父 key，避免 unitClipFractions 同 key 互相覆盖。
+            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch) { nextHandoffUnitKey++ }
             val rebasedUnits = rebased.units.toMutableList()
 
             // #708 评论 5725706551 步骤2：hiddenRanges 从 rebase 后所有 targetRange != null 的 unit 重新推导 —
@@ -528,10 +530,44 @@ class ComposeEditorVisualState(
             if (!hiddenChanged && !unitsChanged && !cursorChanged) {
                 scene
             } else {
+                // #708 评论 5727808906：rebase 后重建 unitClipFractions —
+                // 旧实现 scene.copy(units = rebasedUnits) 不改 unitClipFractions，
+                // 旧 parent key 的 fraction 被保留，新 split 出来的 child key 查不到 fraction。
+                // draw 层在 coordinated 模式下缺 key 会默认成 0（inserted 分支）或 1，
+                // 导致 split 后三段文字共用父块空间进度，出现吞字/吐字错位。
+                // 修复：rebase 后对每个 child 用自己的 layout/range/role 单独算 clip fraction，
+                // 不把 parent 的一个 fraction 无脑复制给所有 child。
+                val handoffCursor = handoffCursorRect ?: scene.cursorRect
+                val rebasedClipFractions =
+                    if (handoffCursor != null) {
+                        val clipMap = mutableMapOf<Long, Float>()
+                        for (child in rebasedUnits) {
+                            val fraction =
+                                ComposeVisualClip.fractionFor(
+                                    unit = child,
+                                    cursorRect = handoffCursor,
+                                    coordinatedSpatialClip =
+                                        patch.motionPolicy.effective().textEnabled &&
+                                            patch.motionPolicy.effective().cursorEnabled &&
+                                            patch.motionPolicy.effective().coordinated,
+                                )
+                            if (fraction != null) {
+                                clipMap[child.key] = fraction
+                            }
+                        }
+                        clipMap
+                    } else {
+                        emptyMap()
+                    }
                 scene.copy(
                     hiddenRanges = mergedHidden,
                     units = rebasedUnits,
                     cursorRect = handoffCursorRect ?: scene.cursorRect,
+                    unitClipFractions = rebasedClipFractions,
+                    coordinatedSpatialClip =
+                        patch.motionPolicy.effective().textEnabled &&
+                            patch.motionPolicy.effective().cursorEnabled &&
+                            patch.motionPolicy.effective().coordinated,
                 )
             }
         }

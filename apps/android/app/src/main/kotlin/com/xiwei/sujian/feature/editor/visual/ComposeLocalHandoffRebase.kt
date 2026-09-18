@@ -44,11 +44,17 @@ internal object ComposeLocalHandoffRebase {
      *
      * @param scene 旧 visible scene（上一帧 sample 出来的）。
      * @param patch 本笔 patch（含 offsetMap, oldLayout, newLayout）。
+     * @param nextChildKey split 时为每个子 unit 分配独立新 key 的 allocator。
+     *   #708 评论 5727808906：split 后子 unit 不能共用父 key，否则
+     *   [ComposeVisualScene.unitClipFractions]（Map<Long, Float>，key=unit.key）
+     *   同 key 互相覆盖，三段文字拿同一个 fraction。
+     *   allocator 由调用方 [ComposeEditorVisualState] 提供（nextHandoffUnitKey++）。
      * @return rebased handoff — units 已映射到新坐标系，ghostedCoverage 记录已转 ghost 的旧正文范围。
      */
     fun rebase(
         scene: ComposeVisualScene,
         patch: ComposeVisualPatch,
+        nextChildKey: () -> Long,
     ): RebasedHandoff {
         val newLayout = patch.newLayout
         val newTextLength = newLayout.result.layoutInput.text.length
@@ -64,7 +70,12 @@ internal object ComposeLocalHandoffRebase {
             }
             // 旧 active unit：通过 splitMappedRangeForward 映射到新正文坐标
             val slices = computeSlices(target, patch, newTextLength)
+            // #708 评论 5727808906：split 时分配独立新 key —
+            // 只有一个 slice 且代表整个父 unit 时保留 parent key；
+            // 2 个及以上子 unit 时每个子 unit 分配独立新 key。
+            val isSplit = slices.size >= 2
             for (slice in slices) {
+                val childKey = if (isSplit) nextChildKey() else unit.key
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING &&
                     slice.newSubRange != null
                 ) {
@@ -76,11 +87,12 @@ internal object ComposeLocalHandoffRebase {
                             oldRange = slice.oldSubRange,
                             newRange = slice.newSubRange,
                             newLayout = newLayout,
+                            childKey = childKey,
                         ),
                     )
                 } else {
                     // 被删除 slice：从旧 unit 当前可见 alpha/position 转 handoff ghost
-                    rebasedUnits.add(toHandoffGhost(unit, slice.oldSubRange))
+                    rebasedUnits.add(toHandoffGhost(unit, slice.oldSubRange, childKey))
                     ghostedCoverage.add(slice.oldSubRange)
                 }
             }
@@ -126,6 +138,7 @@ internal object ComposeLocalHandoffRebase {
         oldRange: TextRange,
         newRange: TextRange,
         newLayout: ComposeLayoutSnapshot,
+        childKey: Long,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
         // #708 评论 5727440517：surviving slice 的屏幕位置用 sliceScreenPosition 计算 —
@@ -143,6 +156,7 @@ internal object ComposeLocalHandoffRebase {
             ) ?: unit.position.from
         val frozenPosition = TimedOffset(currentSlicePosition, currentSlicePosition, 0L, 0L)
         return unit.copy(
+            key = childKey,
             layout = newLayout,
             range = newRange,
             targetRange = newRange,
@@ -172,6 +186,7 @@ internal object ComposeLocalHandoffRebase {
     private fun toHandoffGhost(
         unit: VisualTextUnit,
         ghostRange: TextRange,
+        childKey: Long,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
         // #708 评论 5726837636：子片段 ghost 的屏幕位置用 sliceScreenPosition 计算 —
@@ -187,6 +202,7 @@ internal object ComposeLocalHandoffRebase {
             ) ?: unit.position.from
         val frozenPosition = TimedOffset(slicePosition, slicePosition, 0L, 0L)
         return unit.copy(
+            key = childKey,
             range = ghostRange,
             targetRange = null,
             alpha = frozenAlpha,

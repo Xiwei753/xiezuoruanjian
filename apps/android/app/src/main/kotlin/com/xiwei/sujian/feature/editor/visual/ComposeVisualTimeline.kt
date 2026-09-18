@@ -194,7 +194,7 @@ class ComposeVisualTimeline {
 
             // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
             val ghosting = mutableListOf<VisualTextUnit>()
-            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting)
+            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting, progressByKey)
 
             // 第三步：处理本 patch 新插入的 unit。
             // #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
@@ -370,8 +370,28 @@ class ComposeVisualTimeline {
     /**
      * #689 评论 5675270164 缺陷5：把存活 unit 通过 offsetMap 映射到新正文。
      * 用 splitMappedRangeForward 切片，不整块判死。
+     *
+     * #708 评论 5727808906：split 时分配独立新 key —
+     * 当一个父 unit 被切成 2 个及以上子 unit（surviving slice + ghost slice）时，
+     * 每个子 unit 都分配独立新 key（nextUnitKey++），不再共用父 key。
+     * 只有一个 slice 且代表整个父 unit 时保留 parent key。
+     * 这样 [ComposeVisualScene.unitClipFractions]（Map<Long, Float>，key=unit.key）
+     * 不会同 key 互相覆盖，三段文字各自拿到独立 fraction。
+     * 同时 [presentedKeys] 不会因 `associate` 压缩成最后一个同 key 结果，
+     * `presentedKeys.remove(key)` 不会误删其他活跃 slice 的 presented 身份。
+     *
+     * #708 评论 5727808906：presented 状态不因换 child key 丢失 —
+     * split 发生时（slices.size >= 2）：如果父 unit 已 presented（progressByKey[unit.key] == true），
+     * 把每个 surviving child 的 key 放进 [presentedKeys]，把父 key 从 [presentedKeys] 移除。
+     * 不 split 时（保留 parent key）：presentedKeys 不变（key 没换）。
      */
-    @Suppress("LongMethod", "CyclomaticComplexMethod", "CognitiveComplexMethod")
+    @Suppress(
+        "LongMethod",
+        "CyclomaticComplexMethod",
+        "CognitiveComplexMethod",
+        "LongParameterList",
+        "NestedBlockDepth",
+    )
     private fun mapSurvivingUnits(
         sampledUnits: List<VisualTextUnit>,
         patch: ComposeVisualPatch,
@@ -379,6 +399,7 @@ class ComposeVisualTimeline {
         durationNanos: Long,
         surviving: MutableList<VisualTextUnit>,
         ghosting: MutableList<VisualTextUnit>,
+        progressByKey: Map<Long, Boolean>,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
@@ -393,9 +414,22 @@ class ComposeVisualTimeline {
                 continue
             }
             val slices = computeSlices(target, offsetMap, newTextLength, patch.intent)
+            // #708 评论 5727808906：split 时分配独立新 key —
+            // 只有一个 slice 且代表整个父 unit（slice.oldSubRange == unit.range）时保留 parent key；
+            // 2 个及以上子 unit 时每个子 unit 分配独立新 key。
+            val isSplit = slices.size >= 2
+            val parentPresented = progressByKey[unit.key] == true
+            if (isSplit) {
+                // 父 unit 已被 split 成子 unit，父 key 不再活跃，从 presentedKeys 移除
+                presentedKeys.remove(unit.key)
+            }
             for (slice in slices) {
+                // 决定本 slice 的 childKey：
+                // - 不 split（单 slice 且代表整个父 unit）→ 保留 parent key
+                // - split（2+ 子 unit）→ 每个子 unit 分配独立新 key
+                val childKey = if (isSplit) nextUnitKey++ else unit.key
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
-                    surviving.add(
+                    val mappedUnit =
                         mapSurvivingSlice(
                             unit = unit,
                             oldRange = slice.oldSubRange,
@@ -403,11 +437,26 @@ class ComposeVisualTimeline {
                             newLayout = newLayout,
                             frameTimeNanos = frameTimeNanos,
                             durationNanos = durationNanos,
-                        ),
-                    )
+                            childKey = childKey,
+                        )
+                    surviving.add(mappedUnit)
+                    // #708 评论 5727808906：split 时父 unit 已 presented → surviving child 也算 presented，
+                    // 避免下一笔 patch 把已可见的 surviving child 判成 pending 重建 alpha 0→1。
+                    // ghost 不需要参与后续 surviving 的 presented 判定。
+                    if (isSplit && parentPresented) {
+                        presentedKeys.add(childKey)
+                    }
                 } else {
                     // 缺陷5 GHOST slice：按 slice.oldSubRange 创建 ghost，alpha 当前值 -> 0
-                    ghosting.add(toGhost(unit, frameTimeNanos, durationNanos, slice.oldSubRange))
+                    ghosting.add(
+                        toGhost(
+                            unit = unit,
+                            now = frameTimeNanos,
+                            durationNanos = durationNanos,
+                            ghostRange = slice.oldSubRange,
+                            childKey = childKey,
+                        ),
+                    )
                 }
             }
         }
@@ -425,6 +474,9 @@ class ComposeVisualTimeline {
     // #708 评论 5725706551：与 ComposeLocalHandoffRebase.mapSurvivingSliceToHandoff 对应。
     // timeline 版本：alpha 通道不变（继续原动画），position 在新位置变化时创建动画通道。
     // handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
+    // #708 评论 5727808906：显式接收 childKey — split 时由 mapSurvivingUnits 分配独立新 key，
+    // 不 split 时传 unit.key 保留父 key。
+    @Suppress("LongParameterList")
     private fun mapSurvivingSlice(
         unit: VisualTextUnit,
         oldRange: TextRange,
@@ -432,6 +484,7 @@ class ComposeVisualTimeline {
         newLayout: ComposeLayoutSnapshot,
         frameTimeNanos: Long,
         durationNanos: Long,
+        childKey: Long,
     ): VisualTextUnit {
         // 存活：alpha 通道不变（继续使用原 startedAtNanos）。
         // #708 评论 5727440517：position 通道起点用 sliceScreenPosition 计算 —
@@ -464,6 +517,7 @@ class ComposeVisualTimeline {
                 )
             }
         return unit.copy(
+            key = childKey,
             layout = newLayout,
             range = mappedRange,
             targetRange = mappedRange,
@@ -958,112 +1012,17 @@ class ComposeVisualTimeline {
         cursorRect: Rect,
     ): Map<Long, Float> {
         if (units.isEmpty()) return emptyMap()
-        val cursorLeft = cursorRect.left
-        val cursorTop = cursorRect.top
-        val cursorBottom = cursorRect.bottom
         val result = mutableMapOf<Long, Float>()
         for (unit in units) {
-            val alphaNow = unit.alpha.from
-            // #703 评论 5710419102 问题2：coordinated 模式下空间裁切是主导，
-            // 不能用 alpha 决定是否计算 clipFraction。新插入 unit 首帧 alpha=0，
-            // 如果跳过则 unitClipFractions 缺 key，draw 层默认成 1，整字首帧完整出现。
-            // coordinated 模式：所有 scene unit 都计算 clipFraction。
-            // 非 coordinated 模式：保留 alpha<=0 跳过（alpha 仍主导显隐）。
-            if (!coordinatedSpatialClip && alphaNow <= 0f) continue
-            // 取 glyph bounds（用 unit 当前 layout + range）
-            val bounds = safePathBoundsForUnit(unit) ?: continue
-            val glyphLeft = bounds.left
-            val glyphRight = bounds.right
-            val glyphTop = bounds.top
-            val glyphBottom = bounds.bottom
-            val glyphWidth = glyphRight - glyphLeft
-            // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
-            if (glyphWidth < 0.5f) {
-                result[unit.key] = 1f
-                continue
+            // #708 评论 5727808906：抽取共享纯函数 ComposeVisualClip.fractionFor —
+            // timeline 和 handoff rebase 后重建 unitClipFractions 共用同一份计算，
+            // 避免 split 后 child key 查不到 fraction、三段文字共用父块空间进度。
+            val fraction = ComposeVisualClip.fractionFor(unit, cursorRect, coordinatedSpatialClip)
+            if (fraction != null) {
+                result[unit.key] = fraction
             }
-            // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
-            // 不进入 spatial clip 裁切。显式放入 fraction=1 最稳妥，
-            // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
-            // #708 评论 5723410606 第四节：ReflowMove 同样始终完整可见（alpha 永远 1），
-            // 不参加 cursor spatial clip。
-            if (unit.role == VisualUnitRole.RetainedMove ||
-                unit.role == VisualUnitRole.ReflowMove
-            ) {
-                result[unit.key] = 1f
-                continue
-            }
-            // #703 评论 5710977972 缺陷1：跨行裁切改为按行序单调状态。
-            // 旧实现只用 sameLine（cursor 和 glyph 的垂直区间是否重叠）无方向判断，
-            // 吐字时光标进入下一行后上一行 inserted unit 变 fraction=0（字消失），
-            // 吞字时光标退回上一行后下一行 ghost 变 fraction=1（字重新出现）。
-            //
-            // 新实现用 layout 的 line index 判断方向（不拿 glyph bounds 的 top/bottom，
-            // glyph 可能只占行一部分）：
-            // - glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
-            // - glyphLineTop = getLineTop(glyphLine), glyphLineBottom = getLineBottom(glyphLine)
-            // - cursorBeforeGlyphLine = cursorBottom <= glyphLineTop（光标在 glyph 行之前/上方）
-            // - cursorAfterGlyphLine = cursorTop >= glyphLineBottom（光标在 glyph 行之后/下方）
-            //
-            // 按行序单调状态：
-            // - Inserted（吐字，光标从左向右移动，字从左向右出现）：
-            //   * cursorAfterGlyphLine（光标已过这一行）→ fraction = 1（字完整可见，已吐完）
-            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-            //   * cursorBeforeGlyphLine（光标还没到这一行）→ fraction = 0（字不可见）
-            // - DeletedGhost（吞字，光标从右向左退，从下方往上退）：
-            //   * cursorBeforeGlyphLine（光标在 ghost 行上方，已退过这一行）→ fraction = 0（字被吞掉）
-            //   * 同一行 → ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-            //   * cursorAfterGlyphLine（光标在 ghost 行下方，还没退到这一行）→ fraction = 1（字仍完整可见）
-            val (glyphLineTop, glyphLineBottom) =
-                try {
-                    val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
-                    unit.layout.result.getLineTop(glyphLine) to
-                        unit.layout.result.getLineBottom(glyphLine)
-                } catch (_: Throwable) {
-                    // layout 行信息取不到时 fallback 到旧 sameLine 语义（用 glyph bounds），
-                    // 保证不会因 layout API 异常而整字消失。
-                    glyphTop to glyphBottom
-                }
-            val cursorBeforeGlyphLine = cursorBottom <= glyphLineTop
-            val cursorAfterGlyphLine = cursorTop >= glyphLineBottom
-            val fraction =
-                when (unit.role) {
-                    VisualUnitRole.Inserted -> {
-                        when {
-                            cursorAfterGlyphLine -> 1f
-                            cursorBeforeGlyphLine -> 0f
-                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-                        }
-                    }
-                    VisualUnitRole.DeletedGhost -> {
-                        when {
-                            cursorBeforeGlyphLine -> 0f
-                            cursorAfterGlyphLine -> 1f
-                            else -> ((cursorLeft - glyphLeft) / glyphWidth).coerceIn(0f, 1f)
-                        }
-                    }
-                    VisualUnitRole.RetainedMove -> 1f
-                    VisualUnitRole.ReflowMove -> 1f
-                }
-            result[unit.key] = fraction
         }
         return result
-    }
-
-    /**
-     * #703 评论 B：安全取 unit 的 glyph bounds —
-     * 用 unit 当前 layout + range 取 path bounds。
-     */
-    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? {
-        val result = unit.layout.result
-        val range = unit.range
-        if (range.start >= range.end) return null
-        if (range.end > result.layoutInput.text.length) return null
-        return try {
-            result.getPathForRange(range.start, range.end).getBounds()
-        } catch (_: Throwable) {
-            null
-        }
     }
 
     /**
@@ -1224,13 +1183,16 @@ class ComposeVisualTimeline {
      * @param now 当前帧时间。
      * @param durationNanos ghost 淡出时长。
      * @param ghostRange ghost 的 range；默认 unit.range（整个 unit 变 ghost）。
-     *   切片场景传入 slice.oldSubRange（unit 的一部分变 ghost）。
+     * @param childKey ghost unit 的 key；默认 unit.key。
+     *   #708 评论 5727808906：split 场景由 mapSurvivingUnits 分配独立新 key 传入；
+     *   scene redirect 整块转 ghost（applyPatch 约 160 行 fullyDeleted 分支）保留原 key。
      */
     private fun toGhost(
         unit: VisualTextUnit,
         now: Long,
         durationNanos: Long,
         ghostRange: TextRange = unit.range,
+        childKey: Long = unit.key,
     ): VisualTextUnit {
         val alphaNow = currentAlpha(unit.alpha, now)
         val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
@@ -1246,6 +1208,7 @@ class ComposeVisualTimeline {
                 parentScreenPosition = parentCurrent,
             ) ?: parentCurrent
         return unit.copy(
+            key = childKey,
             range = ghostRange,
             targetRange = null,
             alpha = TimedFloat(alphaNow, 0f, now, durationNanos),

@@ -489,6 +489,9 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 引用 TextRange/ComposeLayoutSnapshot 做显示数据，
             # 与 ComposeVisualRebase 同类，不写正文持久状态。
             "feature/editor/visual/ComposeLocalHandoffRebase.kt",
+            # #708 评论 5727808906：抽取的共享 clip fraction 纯计算 helper，
+            # 引用 Rect 做显示数据，与 ComposeVisualRebase 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeVisualClip.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

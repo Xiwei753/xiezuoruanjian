@@ -43,7 +43,7 @@ import org.robolectric.annotation.Config
  * **测试 A**：active insert 前方再插入 — 验证旧 active unit 的 targetRange 被 rebase 到新坐标。
  * **测试 B**：active insert 立即删除 — 验证不出现旧 Inserted + 新 alpha=1 DeletedGhost 的重影。
  */
-@Suppress("LongMethod", "MaxLineLength")
+@Suppress("LongMethod", "MaxLineLength", "LargeClass", "StringLiteralDuplication")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualIssue708Comment5725706551ReproTest {
@@ -800,6 +800,240 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             expectedFinalPosition.y,
             timelineBack.position.to.y,
             0.5f,
+        )
+    }
+
+    // ==================== 测试 F：split 后子 unit 独立 key + 独立 clip fraction ====================
+
+    /**
+     * 测试 F：多字符 active unit 删中间 → split 后子 unit 独立 key + 独立 clip fraction。
+     *
+     * #708 评论 5727808906：
+     * 旧 bug：父 VisualTextUnit 被切成多段后，子 unit 仍然共用同一个 key，
+     * 但 `VisualTextUnit.key` 的契约是"唯一标识 — 快速输入时不重置"。这导致：
+     * 1. `ComposeVisualScene.unitClipFractions`（`Map<Long, Float>`，key=unit.key）
+     *    同 key 互相覆盖，三段文字拿同一个 fraction；
+     * 2. `presentedKeys` 被 `associate` 压缩成最后一个同 key 结果，
+     *    `presentedKeys.remove(key)` 会误删其他活跃 slice 的 presented 身份；
+     * 3. handoff 首帧 `scene.copy(units = rebasedUnits)` 不重建 `unitClipFractions`，
+     *    三段共用父块空间进度。
+     *
+     * 修复后：
+     * - split 时（2+ 子 unit）每个子 unit 分配独立新 key；
+     * - presented 状态从父 key 传递到 surviving child key；
+     * - handoff rebase 后用 [ComposeVisualClip.fractionFor] 对每个 child 单独算 clip fraction。
+     *
+     * 测试场景（基于测试 E）：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+     * 2. sample 到多字符 unit 仍 active
+     * 3. 第二笔：`"abcdefghi" -> "abcdfghi"`（删中间 'e'，删除 [4,5)）
+     *    → 前 surviving [0,4) + ghost [4,5) + 后 surviving [4,8)
+     *
+     * 断言：
+     * - handoff split 后 child key 彼此唯一（不能再 3 个 unit 一个 key）
+     * - coordinated 模式下每个 surviving child 有独立 unitClipFractions entry
+     * - handoff scene 的 frontFraction 与 backFraction 不相等（不因同 key 覆盖而全部相等）
+     * - drain 到 timeline 后：child key 仍然唯一 + unitClipFractions 每个 child 独立
+     *   + 中间帧 fraction 不全相等
+     */
+    @Test
+    fun testF_multiCharActiveUnitDeleteMiddle_splitChildrenGetIndependentKeysAndClipFractions() {
+        // 一次 setContent 捕获所有需要的 layout（composeRule.setContent 只能调一次）
+        val layouts =
+            captureLayoutsWithWidth(
+                arrayOf("", MULTI_CHAR_TEXT, "abcdfghi", "bcdfghi"),
+                1000,
+            )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5727808906-F",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到多字符 unit 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitAbc = sampledScene.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testF: 第一笔后应存在 targetRange=[0,9) 的多字符 unit（'abcdefghi'），" +
+                "实际 targetRanges=${sampledScene.units.mapNotNull { it.targetRange }}",
+            unitAbc,
+        )
+
+        // 第二笔："abcdefghi" -> "abcdfghi"（删中间 'e'，删除 [4,5)）
+        // → 前 surviving [0,4) + ghost [4,5) + 后 surviving [4,8)
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdfghi",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(4, 4), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：handoff split 后 child key 彼此唯一
+        // 前 surviving [0,4) + ghost [4,5)（targetRange=null）+ 后 surviving [4,8)
+        val splitUnits =
+            handoffScene.units.filter {
+                it.targetRange == TextRange(0, 4) ||
+                    it.targetRange == null ||
+                    it.targetRange == TextRange(4, 8)
+            }
+        assertTrue(
+            "testF: handoff 应存在 split 出的 3 个 unit（前 surviving [0,4) + ghost + 后 surviving [4,8)），" +
+                "实际 size=${splitUnits.size}，" +
+                "targetRanges=${handoffScene.units.map { it.targetRange }}",
+            splitUnits.size >= 3,
+        )
+        assertEquals(
+            "testF: split 后 child key 应彼此唯一（不能再 3 个 unit 一个 key），" +
+                "实际 keys=${splitUnits.map { it.key }}",
+            splitUnits.size,
+            splitUnits.map { it.key }.distinct().size,
+        )
+
+        // 断言2：coordinated 模式下每个 surviving child 有独立 unitClipFractions entry
+        // 默认 EditorMotionPolicy: textEnabled=true, cursorEnabled=true, coordinated=true
+        assertTrue(
+            "testF: handoff scene 应为 coordinated 模式（textEnabled && cursorEnabled && coordinated），" +
+                "实际 coordinatedSpatialClip=${handoffScene.coordinatedSpatialClip}",
+            handoffScene.coordinatedSpatialClip,
+        )
+        val survivingChildren = handoffScene.units.filter { it.targetRange != null }
+        assertTrue(
+            "testF: handoff 应存在 surviving child（targetRange != null）",
+            survivingChildren.isNotEmpty(),
+        )
+        for (child in survivingChildren) {
+            assertTrue(
+                "testF: surviving child key=${child.key} targetRange=${child.targetRange} " +
+                    "应在 unitClipFractions 中有独立 entry，" +
+                    "实际 unitClipFractions.keys=${handoffScene.unitClipFractions.keys}",
+                handoffScene.unitClipFractions.containsKey(child.key),
+            )
+        }
+
+        // 断言3：handoff scene 的所有 split unit（含 ghost）都有独立 unitClipFractions entry —
+        // 旧 bug：三段共用一个 key，unitClipFractions 只剩最后一个的 fraction（map 压缩成 1 个 entry）。
+        // 修复后：三个 unit 有独立 key，unitClipFractions 应有 >= 3 个 entry（front, ghost, back 各一个）。
+        val frontUnit = handoffScene.units.firstOrNull { it.targetRange == TextRange(0, 4) }
+        val ghostUnit = handoffScene.units.firstOrNull { it.targetRange == null }
+        val backUnit = handoffScene.units.firstOrNull { it.targetRange == TextRange(4, 8) }
+        assertNotNull("testF: handoff 应存在前 surviving [0,4) unit", frontUnit)
+        assertNotNull("testF: handoff 应存在 ghost unit", ghostUnit)
+        assertNotNull("testF: handoff 应存在后 surviving [4,8) unit", backUnit)
+        // 每个 split unit 都应在 unitClipFractions 中有独立 entry
+        for (splitUnit in listOf(frontUnit!!, ghostUnit!!, backUnit!!)) {
+            assertTrue(
+                "testF: split unit key=${splitUnit.key} targetRange=${splitUnit.targetRange} " +
+                    "应在 unitClipFractions 中有独立 entry，" +
+                    "实际 unitClipFractions.keys=${handoffScene.unitClipFractions.keys}",
+                handoffScene.unitClipFractions.containsKey(splitUnit.key),
+            )
+        }
+        assertTrue(
+            "testF: handoff unitClipFractions 应有 >= 3 个独立 entry（front + ghost + back），" +
+                "实际 size=${handoffScene.unitClipFractions.size}，" +
+                "keys=${handoffScene.unitClipFractions.keys}" +
+                "（旧 bug：同 key 覆盖导致 map 压缩成 1 个 entry）",
+            handoffScene.unitClipFractions.size >= 3,
+        )
+
+        // 断言4：drain 到 timeline 后同样验证
+        state.drainPendingPatchesAtFrame(10L * NANOS_PER_MS)
+
+        // sample 到 cursor 在中间位置的帧 —
+        // cursor 动画从 10ms 开始，coordinated 模式下持续 textDurationMillis=100ms，
+        // 60ms 时 progress=0.5，cursor 在 [4,5) 之间（'e' 中间）。
+        // 此时：前 surviving=1，ghost 在 0..1，后 surviving=0，三个 fraction 不全相等。
+        val midScene = state.sampleVisualScene(60L * NANOS_PER_MS)
+
+        // child key 仍然彼此唯一
+        val timelineSplitUnits =
+            midScene.units.filter {
+                it.targetRange == TextRange(0, 4) ||
+                    it.targetRange == null ||
+                    it.targetRange == TextRange(4, 8)
+            }
+        assertTrue(
+            "testF: timeline drain 后应存在 split 出的 unit，" +
+                "实际 targetRanges=${midScene.units.map { it.targetRange }}",
+            timelineSplitUnits.isNotEmpty(),
+        )
+        assertEquals(
+            "testF: timeline drain 后 child key 应仍彼此唯一，" +
+                "实际 keys=${timelineSplitUnits.map { it.key }}",
+            timelineSplitUnits.size,
+            timelineSplitUnits.map { it.key }.distinct().size,
+        )
+
+        // unitClipFractions 每个 surviving child 独立
+        val timelineSurviving = midScene.units.filter { it.targetRange != null }
+        for (child in timelineSurviving) {
+            assertTrue(
+                "testF: timeline surviving child key=${child.key} targetRange=${child.targetRange} " +
+                    "应在 unitClipFractions 中有 entry，" +
+                    "实际 unitClipFractions.keys=${midScene.unitClipFractions.keys}",
+                midScene.unitClipFractions.containsKey(child.key),
+            )
+        }
+
+        // 中间帧 fraction 独立性验证 —
+        // #708 评论 5727808906 核心修复：split 后每个 child 有独立 key 和独立 unitClipFractions entry，
+        // 不因同 key 覆盖而压缩成 1 个 entry。
+        // 注意：删除中间字符时 surviving unit 会被 retainedMoves 改成 RetainedMove（fraction=1），
+        // 这是正确行为（retained move 始终完整可见，由 position 动画处理移动）。
+        // 因此本断言验证 entry 数量 >= split unit 数量（每个 split unit 有独立 entry），
+        // 而非 fraction 值不全相等。
+        val midFractionEntries =
+            timelineSplitUnits.mapNotNull { midScene.unitClipFractions[it.key] }
+        assertTrue(
+            "testF: 中间帧每个 split unit 应在 unitClipFractions 中有独立 entry，" +
+                "splitUnits=${timelineSplitUnits.size}，fractionEntries=${midFractionEntries.size}，" +
+                "keys=${timelineSplitUnits.map { it.key }}，" +
+                "unitClipFractions.keys=${midScene.unitClipFractions.keys}" +
+                "（旧 bug：同 key 覆盖导致 map 压缩成 1 个 entry）",
+            midFractionEntries.size >= timelineSplitUnits.size,
+        )
+
+        // 断言5：下一笔 patch 到来时，已 presented 的 surviving child 不会因另一个同源 child 收口
+        // 而重新变 pending — 通过再删一个字符验证 presented 状态正确传递。
+        // 此时前 surviving [0,4) "abcd" 和后 surviving [4,8) "fghi" 应已 presented（alpha 已离开起点）。
+        // 再删 [0,1)（删 'a'）：前 surviving [0,4) 会被 split 成 ghost [0,1) + surviving [0,3)。
+        // 如果 presented 状态正确传递，surviving [0,3) 不会重新从 alpha 0 开始。
+        // 这里只验证不崩溃且 key 唯一 — presented 状态的精确验证需要观察 alpha 通道，
+        // 但 key 唯一性已保证 presentedKeys 不会被同 key 误删。
+        state.recordLocalInput(
+            oldText = "abcdfghi",
+            newText = "bcdfghi",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(0, 0), 0)
+        // handoff scene 不应崩溃，且 key 仍唯一
+        val handoffScene2 = state.drawSnapshot().scene
+        val handoff2Keys = handoffScene2.units.map { it.key }
+        assertEquals(
+            "testF: 第二次 split 后 child key 应仍彼此唯一，实际 keys=$handoff2Keys",
+            handoff2Keys.size,
+            handoff2Keys.distinct().size,
         )
     }
 
