@@ -66,6 +66,16 @@ internal object ComposeLocalHandoffRebase {
         // 语义从"child 继承 parent 的旧 fraction"改成"每个 rebase child 的真实首帧 fraction"。
         // ghost 首帧继承这个具体 glyph/slice 上一帧真实可见多少，而不是一刀切 0 或 parent 进度。
         val initialClipFractionsByKey = mutableMapOf<Long, Float>()
+        // #708 评论 5734842845：记录每个 rebase child 的 clip driver cursor ownership —
+        // parent 有 scene.unitClipCursors[parentKey] 时，所有由这个 parent 派生的 child key
+        // 都记录同一份 parent clip cursor；历史 ghost 按原 key 复制旧 cursor；
+        // 非 split、key 不变的 active unit 同样保留；parent 本来没有 clip cursor 时不要造。
+        // publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipCursors，
+        // 不再沿用旧 scene.unitClipCursors — 否则下一次 rebase 处理 child 时
+        // parentOldCursorRect = scene.unitClipCursors[childKey] 返回 null，
+        // computeSliceInitialFraction 走 `if (parentOldCursorRect == null) return parentOldFraction`
+        // 分支，front/ghost/back 全部继承同一个 parentOldFraction。
+        val initialClipCursorsByKey = mutableMapOf<Long, Rect>()
         // #708 评论 5733321056 修复3：不再用全局 scene.cursorRect 独立变量 —
         // 改为在 for (unit in scene.units) 循环内对每个 unit 取 parent 自己的
         // scene.unitClipCursors[unit.key]。scene.cursorRect 只表示屏幕最新视觉光标，
@@ -81,6 +91,10 @@ internal object ComposeLocalHandoffRebase {
                 rebasedUnits.add(unit)
                 scene.unitClipFractions[unit.key]?.let { fraction ->
                     initialClipFractionsByKey[unit.key] = fraction
+                }
+                // #708 评论 5734842845：历史 ghost 沿用旧 clip cursor ownership
+                scene.unitClipCursors[unit.key]?.let { cursor ->
+                    initialClipCursorsByKey[unit.key] = cursor
                 }
                 continue
             }
@@ -106,6 +120,13 @@ internal object ComposeLocalHandoffRebase {
                     parentOldCursorRect = parentOldCursorRect,
                     oldCoordinated = oldCoordinated,
                 )?.let { initialClipFractionsByKey[childKey] = it }
+                // #708 评论 5734842845：记录 child clip cursor ownership —
+                // parent 有 scene.unitClipCursors[parentKey] 时，所有由这个 parent 派生的 child key
+                // （split surviving / split ghost / 非 split key 不变的 active unit）
+                // 都记录同一份 parent clip cursor；parent 本来没有 clip cursor 时不写 entry。
+                // 这样下一次 rebase 处理 child 时 parentOldCursorRect = scene.unitClipCursors[childKey]
+                // 能拿到这份 cursor，computeSliceInitialFraction 走精确算分支而非 fallback。
+                parentOldCursorRect?.let { initialClipCursorsByKey[childKey] = it }
                 processSlice(
                     unit = unit,
                     slice = slice,
@@ -121,6 +142,7 @@ internal object ComposeLocalHandoffRebase {
             units = rebasedUnits,
             ghostedCoverage = ghostedCoverage,
             initialClipFractionsByKey = initialClipFractionsByKey,
+            initialClipCursorsByKey = initialClipCursorsByKey,
         )
     }
 
@@ -471,10 +493,26 @@ internal object ComposeLocalHandoffRebase {
      *     算 slice 自己的旧 fraction（role 保持原 unit.role，不是 DeletedGhost）
      *   publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipFractions，
      *   不再一刀切 ghost=0。key 不在 map 中的 child 表示没有旧 fraction（新插入 unit）。
+     * @param initialClipCursorsByKey #708 评论 5734842845：每个 rebase child 的 clip driver cursor ownership —
+     *   语义为"这个 child 上一帧算 fraction 时所用的 cursor rect"：
+     *   - 历史 ghost：scene.unitClipCursors（沿用旧 cursor）
+     *   - 非 split、key 不变的 active unit：scene.unitClipCursors[unit.key]（沿用旧 cursor）
+     *   - split 派生的 child（surviving 或 ghost）：parent 的 scene.unitClipCursors[parentKey]
+     *     （所有由同一 parent 派生的 child 共享同一份 parent clip cursor）
+     *   - parent 没有 scene.unitClipCursors[parentKey] 时不写 entry —
+     *     表示 parent 本来就不是 spatial clip 驱动，不要凭空造一个 cursor。
+     *   publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipCursors，
+     *   不再沿用旧 scene.unitClipCursors — 旧 parent key 已不在 rebasedUnits 里，
+     *   留下它会让 scene 的 units/fractions/cursors 三份 key 集合不一致，
+     *   且下一次 rebase 处理 child 时 parentOldCursorRect = scene.unitClipCursors[childKey] 返回 null，
+     *   导致 computeSliceInitialFraction 走 `if (parentOldCursorRect == null) return parentOldFraction`
+     *   分支，front/ghost/back 全部继承同一个 parentOldFraction，
+     *   重新出现"split child 直接复制 parent 整体 fraction"的回归。
      */
     data class RebasedHandoff(
         val units: List<VisualTextUnit>,
         val ghostedCoverage: List<TextRange>,
         val initialClipFractionsByKey: Map<Long, Float> = emptyMap(),
+        val initialClipCursorsByKey: Map<Long, Rect> = emptyMap(),
     )
 }

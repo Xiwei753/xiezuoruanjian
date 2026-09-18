@@ -638,6 +638,16 @@ class ComposeEditorVisualState(
                 units = rebasedUnits,
                 cursorRect = handoffCursorRect ?: scene.cursorRect,
                 unitClipFractions = rebasedClipFractions,
+                // #708 评论 5734842845：同步发布 unitClipCursors —
+                // rebase 已为每个 child 算出 clip driver cursor ownership（initialClipCursorsByKey），
+                // publishLocalHandoffScene 必须把它写进 scene，否则下一次 rebase 处理 child 时
+                // parentOldCursorRect = scene.unitClipCursors[childKey] 返回 null，
+                // computeSliceInitialFraction 走 `if (parentOldCursorRect == null) return parentOldFraction`
+                // 分支，front/ghost/back 全部继承同一个 parentOldFraction，
+                // 重新出现"split child 直接复制 parent 整体 fraction"的回归。
+                // 不继续沿用旧 scene.unitClipCursors — 旧 parent key 已不在 rebasedUnits 里，
+                // 留下它既没用又会让 scene 的 units/fractions/cursors 三份 key 集合不一致。
+                unitClipCursors = rebased.initialClipCursorsByKey,
                 coordinatedSpatialClip =
                     patch.motionPolicy.effective().textEnabled &&
                         patch.motionPolicy.effective().cursorEnabled &&

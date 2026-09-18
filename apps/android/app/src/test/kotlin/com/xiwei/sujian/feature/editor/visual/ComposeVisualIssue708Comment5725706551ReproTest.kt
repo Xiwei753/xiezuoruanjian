@@ -2786,6 +2786,209 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
     }
 
+    // ==================== 测试 I7：连续两次 split 中间不 drain，child key 的 cursor ownership 继续存在 ====================
+
+    /**
+     * 测试 I7：连续两次 split 中间不 drain timeline，handoff split 后新 child key 的 cursor ownership
+     * 继续存在，下一次 rebase 处理 child 时 parentOldCursorRect 非 null —
+     *
+     * #708 评论 5734842845：
+     * `publishLocalHandoffScene()` 的 `scene.copy(...)` 只更新 `unitClipFractions`，
+     * 没有更新 `unitClipCursors`。handoff split parent 并给 child 分配新 key C 后，
+     * `unitClipFractions[C]` 已正确写入，但 `unitClipCursors` 仍然只有旧 parent key P。
+     * 第三笔 handoff 再次 split child C 时 `parentOldCursorRect = scene.unitClipCursors[C]` 返回 null，
+     * `computeSliceInitialFraction()` 走 `if (parentOldCursorRect == null) return parentOldFraction`，
+     * front/ghost/back 全部继承同一个 parentOldFraction — "split child 直接复制 parent 整体 fraction" 回归。
+     *
+     * 与 I5 的区别：I5 中间那笔只是尾部追加，parent key 没变，所以没有覆盖
+     * "handoff split 后新 child key 的 cursor ownership 是否继续存在"。
+     *
+     * 测试场景（连续两次 split，中间两笔 handoff 都不要 drain timeline）：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符），drain + sample 到约 50ms
+     * 2. 第二笔 handoff（不 drain）：`"abcdefghi" -> "abcdefgh"`（删尾部 [8,9)），parent split
+     *    成 surviving child C [0,8) + ghost [8,9)
+     * 3. 第三笔 handoff（仍不 drain）：`"abcdefgh" -> "abcdfgh"`（删中间 [4,5)），再次 split child C
+     *
+     * 断言：
+     * - 第一笔 handoff 后 surviving child C 的 key 在 unitClipFractions 中
+     * - 如果 parent 原来有 clip cursor，C 的 key 也必须在 unitClipCursors 中
+     * - 第二笔 handoff 后 front fraction > 0.8（cursor 已越过 front [0,4)）
+     * - 第二笔 handoff 后 back fraction < 0.2（cursor 还没到 back [4,7)）
+     * - front/back 不能都等于第一笔 surviving child 的 parent fraction
+     */
+    @Test
+    fun testI7_consecutiveSplitsWithoutDrain_childCursorOwnershipContinues() {
+        val layouts =
+            captureLayoutsWithWidth(
+                arrayOf("", MULTI_CHAR_TEXT, "abcdefgh", "abcdfgh"),
+                1000,
+            )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5734842845-I7",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，多字符 unit [0,9)，clipTrackId=track1）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 50ms（parent fraction 约 0.5，track1 cursor 在 parent 中间约位置 4.5）
+        val scene50 = state.sampleVisualScene(50L * NANOS_PER_MS)
+        val parentUnit = scene50.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testI7: 前置 — 应存在 [0,9) parent unit",
+            parentUnit,
+        )
+        val parentKey = parentUnit!!.key
+        val parentFraction = scene50.unitClipFractions[parentKey] ?: 0f
+        assertTrue(
+            "testI7: 前置 — 50ms 时 parent fraction 应在 (0.3, 0.7) 之间，实际=$parentFraction",
+            parentFraction > 0.3f && parentFraction < 0.7f,
+        )
+        // 前置 — timeline.sample 已正确写入 unitClipCursors[P]
+        val parentCursorRect = scene50.unitClipCursors[parentKey]
+        assertNotNull(
+            "testI7: 前置 — 50ms 时 scene.unitClipCursors[parentKey] 应非 null" +
+                "（timeline.sample 已正确产出 unitClipCursors）",
+            parentCursorRect,
+        )
+
+        // 第二笔 handoff（不 drain）："abcdefghi" -> "abcdefgh"（删尾部 [8,9)）
+        // offsetMap: old [0,8) → new [0,8) surviving, old [8,9) ghost
+        // parent [0,9) 被 split：surviving child [0,8) key=C, ghost [8,9)
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdefgh",
+            oldSelection = TextRange(9, 9),
+            newSelection = TextRange(8, 8),
+            changes = listOf(LocalInputChange(newRange = TextRange(8, 8), oldRange = TextRange(8, 9))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(8, 8), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val sceneAfterSecond = state.drawSnapshot().scene
+
+        // 找到 surviving child C（targetRange=[0,8)）
+        val childC =
+            sceneAfterSecond.units.firstOrNull { it.targetRange == TextRange(0, 8) }
+        assertNotNull(
+            "testI7: 第二笔 handoff 应存在 targetRange=[0,8) 的 surviving child C，" +
+                "实际 units.targetRanges=${sceneAfterSecond.units.mapNotNull { it.targetRange }}",
+            childC,
+        )
+        val childKeyC = childC!!.key
+
+        // 断言1：surviving child C 的 key 在 unitClipFractions 中（rebase 已正确算出 child fraction）
+        val childFractionC = sceneAfterSecond.unitClipFractions[childKeyC]
+        assertNotNull(
+            "testI7: 第二笔后 unitClipFractions[childKeyC] 应非 null" +
+                "（rebase 已正确算出 child fraction），实际 childKeyC=$childKeyC," +
+                " unitClipFractions=${sceneAfterSecond.unitClipFractions.keys}",
+            childFractionC,
+        )
+
+        // 断言2：如果 parent 原来有 clip cursor，C 的 key 也必须在 unitClipCursors 中
+        // #708 评论 5734842845 修复后：rebase 中 parent 有 scene.unitClipCursors[parentKey] 时
+        // 所有派生 child key 记录同一份 parent clip cursor，publishLocalHandoffScene 同步发布。
+        assertTrue(
+            "testI7: 第二笔后 unitClipCursors 应包含 surviving child C 的 key" +
+                "（parent 原来有 clip cursor，rebase 应记录 child cursor ownership，" +
+                "publishLocalHandoffScene 应同步发布 unitClipCursors），" +
+                "实际 childKeyC=$childKeyC in unitClipCursors=${sceneAfterSecond.unitClipCursors.keys}" +
+                "（旧 bug：publishLocalHandoffScene 没更新 unitClipCursors，只有旧 parent key）",
+            childKeyC in sceneAfterSecond.unitClipCursors,
+        )
+
+        // 第三笔 handoff（仍不 drain）："abcdefgh" -> "abcdfgh"（删中间 [4,5)）
+        // offsetMap: old [0,4) → new [0,4) surviving, old [4,5) ghost,
+        //            old [5,8) → new [4,7) surviving
+        // child C [0,8) 再次 split：front surviving [0,4), ghost [4,5), back surviving [4,7)（new 坐标）
+        state.recordLocalInput(
+            oldText = "abcdefgh",
+            newText = "abcdfgh",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(4, 4), 0)
+
+        // 在 timeline drain 之前检查 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 找到 front surviving [0,4) 和 back surviving [4,7)
+        val frontSurviving =
+            handoffScene.units.firstOrNull { it.targetRange == TextRange(0, 4) }
+        val backSurviving =
+            handoffScene.units.firstOrNull { it.targetRange == TextRange(4, 7) }
+        assertNotNull(
+            "testI7: 第三笔 handoff 应存在 targetRange=[0,4) 的 front surviving，" +
+                "实际 units.targetRanges=${handoffScene.units.mapNotNull { it.targetRange }}",
+            frontSurviving,
+        )
+        assertNotNull(
+            "testI7: 第三笔 handoff 应存在 targetRange=[4,7) 的 back surviving，" +
+                "实际 units.targetRanges=${handoffScene.units.mapNotNull { it.targetRange }}",
+            backSurviving,
+        )
+
+        val frontFraction = handoffScene.unitClipFractions[frontSurviving!!.key]
+        val backFraction = handoffScene.unitClipFractions[backSurviving!!.key]
+
+        // 前置 — front/back fraction 都应非 null（rebase 已写入）
+        assertNotNull(
+            "testI7: 前置 — front surviving fraction 应非 null，" +
+                "实际 key=${frontSurviving.key}, unitClipFractions=${handoffScene.unitClipFractions.keys}",
+            frontFraction,
+        )
+        assertNotNull(
+            "testI7: 前置 — back surviving fraction 应非 null，" +
+                "实际 key=${backSurviving.key}, unitClipFractions=${handoffScene.unitClipFractions.keys}",
+            backFraction,
+        )
+
+        // 断言3：front fraction > 0.8（cursor 已越过 front [0,4)）
+        // 修复后：rebase 处理 C 时 parentOldCursorRect = scene.unitClipCursors[C] 非 null（第二笔已写入），
+        // computeSliceInitialFraction 走精确算分支，front [0,4) 在 cursor 之前 → fraction≈1。
+        // 旧 bug：parentOldCursorRect==null 导致全部继承 parentOldFraction≈0.56。
+        assertTrue(
+            "testI7: 第三笔后 front surviving fraction ($frontFraction) 应 > 0.8" +
+                "（cursor 已越过 front [0,4)，parentOldCursorRect 非 null 走精确算分支）" +
+                "（旧 bug：parentOldCursorRect==null 导致全部继承 parentOldFraction≈$childFractionC）",
+            frontFraction!! > 0.8f,
+        )
+
+        // 断言4：back fraction < 0.2（cursor 还没到 back [4,7)）
+        assertTrue(
+            "testI7: 第三笔后 back surviving fraction ($backFraction) 应 < 0.2" +
+                "（cursor 还没到 back [4,7)，parentOldCursorRect 非 null 走精确算分支）" +
+                "（旧 bug：parentOldCursorRect==null 导致全部继承 parentOldFraction≈$childFractionC）",
+            backFraction!! < 0.2f,
+        )
+
+        // 断言5：front/back 不能都等于第一笔 surviving child 的 parent fraction
+        // 修复后 front≈1 back≈0 都不等于 parentFraction≈0.56。
+        // 旧 bug：front/back 都继承 parentOldFraction，等于 childFractionC。
+        assertTrue(
+            "testI7: front ($frontFraction) 和 back ($backFraction) 不能都等于" +
+                " 第一笔 surviving child C 的 parent fraction ($childFractionC)" +
+                "（parentOldCursorRect 非 null 走精确算分支，front≈1 back≈0 都不等于 parentFraction）" +
+                "（旧 bug：parentOldCursorRect==null 导致 front/back 都继承 parentOldFraction）",
+            kotlin.math.abs(frontFraction - childFractionC!!) > 0.1f ||
+                kotlin.math.abs(backFraction - childFractionC) > 0.1f,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {
