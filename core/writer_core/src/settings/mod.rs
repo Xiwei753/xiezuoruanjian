@@ -756,72 +756,50 @@ fn palettes_base_dir(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join("themes/palettes")
 }
 
-/// Issue #709 评论 5728916561: 判断 hex 颜色是否为深色（亮度低于阈值）。
+/// Issue #709 评论 5729368242: 判断字符串是否为有效 hex 颜色。
 ///
-/// 解析 `#RRGGBB` 格式的 R/G/B 分量，计算相对亮度
-/// `(0.299*R + 0.587*G + 0.114*B) / 255`，低于 0.5 视为深色。
-/// 空字符串或无效格式返回 `false`（不确定时不触发修正）。
-fn is_dark_color(hex: &str) -> bool {
-    let hex = hex.strip_prefix('#').unwrap_or(hex);
-    if hex.len() != 6 {
+/// 接受 `#RRGGBB`（7 字符）或 `#AARRGGBB`（9 字符）格式。
+/// 空字符串或格式错误返回 `false`。
+fn is_valid_hex_color(s: &str) -> bool {
+    if s.is_empty() {
         return false;
     }
-    let r = u32::from_str_radix(&hex[0..2], 16).unwrap_or(0);
-    let g = u32::from_str_radix(&hex[2..4], 16).unwrap_or(0);
-    let b = u32::from_str_radix(&hex[4..6], 16).unwrap_or(0);
-    let luminance = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)) / 255.0;
-    luminance < 0.5
+    let hex = s.strip_prefix('#').unwrap_or(s);
+    let len = hex.len();
+    if len != 6 && len != 8 {
+        return false;
+    }
+    hex.chars().all(|c| c.is_ascii_hexdigit())
 }
 
-/// Issue #709 评论 5728916561: 验证并修正 color scheme 中明显不合理的颜色组合。
+/// Issue #709 评论 5729368242: 验证 `ThemeColorScheme` 的格式/完整性。
 ///
-/// **深色 scheme（`is_dark_scheme == true`）**：
-/// - `on_surface` 为 `#000000` 或空且 `surface` 是深色 → 修正为 `#DFE3E7`
-/// - `on_surface_variant` 为 `#000000` 或空且 `surface_variant` 是深色 → 修正为 `#C1C7CE`
-/// - `on_background` 为 `#000000` 或空且 `background` 是深色 → 修正为 `#DFE3E7`
+/// 检查渲染文本和背景所必需的关键颜色字段是否为非空有效 hex。
+/// **不做颜色亮度猜测或替代**——只做格式/完整性判断。
+/// 缺字段、hex 格式错误 → 返回 `false`（无效记录）。
+fn is_color_scheme_complete(scheme: &ThemeColorScheme) -> bool {
+    is_valid_hex_color(&scheme.primary)
+        && is_valid_hex_color(&scheme.on_primary)
+        && is_valid_hex_color(&scheme.background)
+        && is_valid_hex_color(&scheme.on_background)
+        && is_valid_hex_color(&scheme.surface)
+        && is_valid_hex_color(&scheme.on_surface)
+        && is_valid_hex_color(&scheme.surface_variant)
+        && is_valid_hex_color(&scheme.on_surface_variant)
+}
+
+/// Issue #709 评论 5729368242: 验证 `ThemePaletteRecord` 的格式/完整性。
 ///
-/// **浅色 scheme（`is_dark_scheme == false`）**：
-/// - `on_surface` 为 `#FFFFFF` 或空且 `surface` 是浅色 → 修正为 `#171C1F`
-/// - `on_surface_variant` 为 `#FFFFFF` 或空且 `surface_variant` 是浅色 → 修正为 `#41484D`
-/// - `on_background` 为 `#FFFFFF` 或空且 `background` 是浅色 → 修正为 `#171C1F`
-///
-/// 只修正明显不合理的组合（黑字配深色背景、白字配浅色背景），有效数据不受影响。
-fn sanitize_color_scheme(scheme: &mut ThemeColorScheme, is_dark_scheme: bool) {
-    if is_dark_scheme {
-        // 深色 scheme：前景色不应是黑色或空（配深色背景时不可见）
-        if (scheme.on_surface == "#000000" || scheme.on_surface.is_empty())
-            && is_dark_color(&scheme.surface)
-        {
-            scheme.on_surface = "#DFE3E7".to_string();
-        }
-        if (scheme.on_surface_variant == "#000000" || scheme.on_surface_variant.is_empty())
-            && is_dark_color(&scheme.surface_variant)
-        {
-            scheme.on_surface_variant = "#C1C7CE".to_string();
-        }
-        if (scheme.on_background == "#000000" || scheme.on_background.is_empty())
-            && is_dark_color(&scheme.background)
-        {
-            scheme.on_background = "#DFE3E7".to_string();
-        }
-    } else {
-        // 浅色 scheme：前景色不应是白色或空（配浅色背景时不可见）
-        if (scheme.on_surface == "#FFFFFF" || scheme.on_surface.is_empty())
-            && !is_dark_color(&scheme.surface)
-        {
-            scheme.on_surface = "#171C1F".to_string();
-        }
-        if (scheme.on_surface_variant == "#FFFFFF" || scheme.on_surface_variant.is_empty())
-            && !is_dark_color(&scheme.surface_variant)
-        {
-            scheme.on_surface_variant = "#41484D".to_string();
-        }
-        if (scheme.on_background == "#FFFFFF" || scheme.on_background.is_empty())
-            && !is_dark_color(&scheme.background)
-        {
-            scheme.on_background = "#171C1F".to_string();
-        }
-    }
+/// 检查 `schema_version > 0`、`palette_id` 和 `palette_fingerprint` 非空，
+/// 且 light/dark scheme 都通过 `is_color_scheme_complete`。
+/// **不做颜色亮度猜测或替代**——只做格式/完整性判断。
+/// 无效记录应被 load/list 拒绝，由 LinuxThemeController fallback 到 builtin。
+fn is_palette_record_valid(record: &ThemePaletteRecord) -> bool {
+    record.schema_version > 0
+        && !record.palette_id.is_empty()
+        && !record.palette_fingerprint.is_empty()
+        && is_color_scheme_complete(&record.light_scheme)
+        && is_color_scheme_complete(&record.dark_scheme)
 }
 
 /// Compute a stable fingerprint for a pair of color schemes.
@@ -889,13 +867,16 @@ pub fn load_palette_record(
         .join(device_id)
         .join(format!("{}.json", fingerprint));
     let content = fs::read_to_string(&path)?;
-    let mut record: ThemePaletteRecord = serde_json::from_str(&content)?;
-    // Issue #709 评论 5728916561: 验证并修正 palette record 的颜色值。
-    // 如果 dark_scheme 的前景色是 #000000 或空字符串配深色 surface，
-    // 说明 palette 数据有问题（来自 Android 动态颜色系统的错误数据或
-    // legacy migration 缺失字段），在此修正源头数据而不是在 QML 反色。
-    sanitize_color_scheme(&mut record.light_scheme, false);
-    sanitize_color_scheme(&mut record.dark_scheme, true);
+    let record: ThemePaletteRecord = serde_json::from_str(&content)?;
+    // Issue #709 评论 5729368242: 对 palette 做格式/完整性判断。
+    // 字段缺失、hex 格式错误 → 明确标成无效记录，返回 Err。
+    // 不做颜色亮度猜测或替代——让 LinuxThemeController fallback 到 builtin。
+    if !is_palette_record_valid(&record) {
+        return Err(crate::error::Error::Other(format!(
+            "invalid palette record: device_id={}, fingerprint={} (missing fields or invalid hex)",
+            device_id, fingerprint
+        )));
+    }
     Ok(record)
 }
 
@@ -927,7 +908,12 @@ pub fn list_palette_records(config_dir: &Path) -> Result<Vec<ThemePaletteRecord>
             }
             if let Ok(content) = fs::read_to_string(&path) {
                 if let Ok(record) = serde_json::from_str::<ThemePaletteRecord>(&content) {
-                    records.push(record);
+                    // Issue #709 评论 5729368242: load 和 list 必须消费同一套
+                    // palette 解析/验证结果。无效记录（缺字段、hex 格式错误）
+                    // 在此跳过，与 load_palette_record 行为一致。
+                    if is_palette_record_valid(&record) {
+                        records.push(record);
+                    }
                 }
             }
         }
@@ -977,7 +963,7 @@ pub fn delete_palette_record_with_changes(
     clippy::type_complexity
 )]
 pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
-    let mut light = ThemeColorScheme {
+    let light = ThemeColorScheme {
         primary: palette.light_primary.clone(),
         on_primary: palette.light_on_primary.clone(),
         primary_container: palette.light_primary_container.clone(),
@@ -1027,7 +1013,7 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         on_tertiary_fixed: String::new(),
         on_tertiary_fixed_variant: String::new(),
     };
-    let mut dark = ThemeColorScheme {
+    let dark = ThemeColorScheme {
         primary: palette.dark_primary.clone(),
         on_primary: palette.dark_on_primary.clone(),
         primary_container: palette.dark_primary_container.clone(),
@@ -1077,10 +1063,6 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         on_tertiary_fixed: String::new(),
         on_tertiary_fixed_variant: String::new(),
     };
-    // Issue #709 评论 5728916561: legacy palette 的 dark_* 字段可能为空或 #000000，
-    // 迁移时验证并修正颜色值。
-    sanitize_color_scheme(&mut light, false);
-    sanitize_color_scheme(&mut dark, true);
     let fingerprint = compute_palette_fingerprint(&light, &dark);
     let device_id = if palette.device_id.is_empty() {
         "legacy".to_string()
@@ -1763,10 +1745,24 @@ mod inline_tests {
             variant: "system_selected".to_string(),
             light_scheme: ThemeColorScheme {
                 primary: "#006493".to_string(),
+                on_primary: "#FFFFFF".to_string(),
+                background: "#F6FAFE".to_string(),
+                on_background: "#171C1F".to_string(),
+                surface: "#F6FAFE".to_string(),
+                on_surface: "#171C1F".to_string(),
+                surface_variant: "#DDE3EA".to_string(),
+                on_surface_variant: "#41484D".to_string(),
                 ..ThemeColorScheme::default()
             },
             dark_scheme: ThemeColorScheme {
                 primary: "#87CEFF".to_string(),
+                on_primary: "#00344D".to_string(),
+                background: "#0F1417".to_string(),
+                on_background: "#DFE3E7".to_string(),
+                surface: "#0F1417".to_string(),
+                on_surface: "#DFE3E7".to_string(),
+                surface_variant: "#41484D".to_string(),
+                on_surface_variant: "#C1C7CE".to_string(),
                 ..ThemeColorScheme::default()
             },
         };
@@ -1796,12 +1792,36 @@ mod inline_tests {
     #[test]
     fn test_list_palette_records() {
         let temp_dir = tempdir().unwrap();
+        let valid_light = ThemeColorScheme {
+            primary: "#006493".to_string(),
+            on_primary: "#FFFFFF".to_string(),
+            background: "#F6FAFE".to_string(),
+            on_background: "#171C1F".to_string(),
+            surface: "#F6FAFE".to_string(),
+            on_surface: "#171C1F".to_string(),
+            surface_variant: "#DDE3EA".to_string(),
+            on_surface_variant: "#41484D".to_string(),
+            ..ThemeColorScheme::default()
+        };
+        let valid_dark = ThemeColorScheme {
+            primary: "#87CEFF".to_string(),
+            on_primary: "#00344D".to_string(),
+            background: "#0F1417".to_string(),
+            on_background: "#DFE3E7".to_string(),
+            surface: "#0F1417".to_string(),
+            on_surface: "#DFE3E7".to_string(),
+            surface_variant: "#41484D".to_string(),
+            on_surface_variant: "#C1C7CE".to_string(),
+            ..ThemeColorScheme::default()
+        };
         let r1 = ThemePaletteRecord {
             schema_version: 1,
             palette_id: "dev1:fp1".to_string(),
             palette_fingerprint: "fp1".to_string(),
             source_device_id: "dev1".to_string(),
             captured_at_ms: 2000,
+            light_scheme: valid_light.clone(),
+            dark_scheme: valid_dark.clone(),
             ..ThemePaletteRecord::default()
         };
         let r2 = ThemePaletteRecord {
@@ -1810,6 +1830,8 @@ mod inline_tests {
             palette_fingerprint: "fp2".to_string(),
             source_device_id: "dev2".to_string(),
             captured_at_ms: 1000,
+            light_scheme: valid_light,
+            dark_scheme: valid_dark,
             ..ThemePaletteRecord::default()
         };
         save_palette_record(temp_dir.path(), &r1).unwrap();
@@ -2046,138 +2068,48 @@ mod inline_tests {
         assert_eq!(settings.appearance_mode, "dark");
     }
 
-    // --- Issue #709 评论 5728916561: palette 颜色值验证和修正测试 ---
+    // --- Issue #709 评论 5729368242: palette 格式/完整性验证测试 ---
 
     #[test]
-    fn test_sanitize_dark_scheme_black_on_surface_with_dark_surface() {
-        let mut scheme = ThemeColorScheme {
-            surface: "#0F1417".to_string(),
-            on_surface: "#000000".to_string(),
-            surface_variant: "#41484D".to_string(),
-            on_surface_variant: "#000000".to_string(),
-            background: "#0F1417".to_string(),
-            on_background: "#000000".to_string(),
-            ..Default::default()
-        };
-        sanitize_color_scheme(&mut scheme, true);
-        assert_ne!(
-            scheme.on_surface, "#000000",
-            "dark on_surface=#000000 应被修正"
-        );
-        assert_ne!(
-            scheme.on_surface, "",
-            "dark on_surface 不应为空"
-        );
-        assert_ne!(
-            scheme.on_surface_variant, "#000000",
-            "dark on_surface_variant=#000000 应被修正"
-        );
-        assert_ne!(
-            scheme.on_background, "#000000",
-            "dark on_background=#000000 应被修正"
-        );
+    fn test_is_valid_hex_color() {
+        assert!(is_valid_hex_color("#0F1417"));
+        assert!(is_valid_hex_color("#DFE3E7"));
+        assert!(is_valid_hex_color("#FFFFFF"));
+        assert!(is_valid_hex_color("#000000"));
+        assert!(is_valid_hex_color("#FF8800FF")); // 8 位含 alpha
+        assert!(!is_valid_hex_color(""));
+        assert!(!is_valid_hex_color("#GGG"));
+        assert!(!is_valid_hex_color("#12345")); // 太短
+        assert!(!is_valid_hex_color("#1234567")); // 7 位无效
+        assert!(!is_valid_hex_color("not-a-color"));
     }
 
     #[test]
-    fn test_sanitize_dark_scheme_empty_on_surface_with_dark_surface() {
-        let mut scheme = ThemeColorScheme {
-            surface: "#0F1417".to_string(),
-            on_surface: String::new(),
-            surface_variant: "#41484D".to_string(),
-            on_surface_variant: String::new(),
-            background: "#0F1417".to_string(),
-            on_background: String::new(),
-            ..Default::default()
-        };
-        sanitize_color_scheme(&mut scheme, true);
-        assert!(
-            !scheme.on_surface.is_empty(),
-            "dark 空 on_surface 应被修正"
-        );
-        assert!(
-            !scheme.on_surface_variant.is_empty(),
-            "dark 空 on_surface_variant 应被修正"
-        );
-        assert!(
-            !scheme.on_background.is_empty(),
-            "dark 空 on_background 应被修正"
-        );
+    fn test_is_color_scheme_complete_rejects_empty_fields() {
+        let scheme = ThemeColorScheme::default(); // 全空
+        assert!(!is_color_scheme_complete(&scheme));
     }
 
     #[test]
-    fn test_sanitize_dark_scheme_valid_colors_not_modified() {
-        let mut scheme = ThemeColorScheme {
-            surface: "#0F1417".to_string(),
-            on_surface: "#DFE3E7".to_string(),
-            surface_variant: "#41484D".to_string(),
-            on_surface_variant: "#C1C7CE".to_string(),
-            background: "#0F1417".to_string(),
-            on_background: "#DFE3E7".to_string(),
-            ..Default::default()
-        };
-        let original = scheme.clone();
-        sanitize_color_scheme(&mut scheme, true);
-        assert_eq!(
-            scheme.on_surface, original.on_surface,
-            "有效的 dark on_surface 不应被修改"
-        );
-        assert_eq!(
-            scheme.on_surface_variant, original.on_surface_variant,
-            "有效的 dark on_surface_variant 不应被修改"
-        );
-        assert_eq!(
-            scheme.on_background, original.on_background,
-            "有效的 dark on_background 不应被修改"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_light_scheme_white_on_surface_with_light_surface() {
-        let mut scheme = ThemeColorScheme {
-            surface: "#F6FAFE".to_string(),
-            on_surface: "#FFFFFF".to_string(),
-            surface_variant: "#DDE3EA".to_string(),
-            on_surface_variant: "#FFFFFF".to_string(),
+    fn test_is_color_scheme_complete_accepts_full_scheme() {
+        let scheme = ThemeColorScheme {
+            primary: "#006493".to_string(),
+            on_primary: "#FFFFFF".to_string(),
             background: "#F6FAFE".to_string(),
-            on_background: "#FFFFFF".to_string(),
-            ..Default::default()
-        };
-        sanitize_color_scheme(&mut scheme, false);
-        assert_ne!(
-            scheme.on_surface, "#FFFFFF",
-            "light on_surface=#FFFFFF 配浅色 surface 应被修正"
-        );
-        assert_ne!(
-            scheme.on_surface_variant, "#FFFFFF",
-            "light on_surface_variant=#FFFFFF 应被修正"
-        );
-        assert_ne!(
-            scheme.on_background, "#FFFFFF",
-            "light on_background=#FFFFFF 应被修正"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_light_scheme_valid_colors_not_modified() {
-        let mut scheme = ThemeColorScheme {
+            on_background: "#171C1F".to_string(),
             surface: "#F6FAFE".to_string(),
             on_surface: "#171C1F".to_string(),
             surface_variant: "#DDE3EA".to_string(),
             on_surface_variant: "#41484D".to_string(),
-            background: "#F6FAFE".to_string(),
-            on_background: "#171C1F".to_string(),
             ..Default::default()
         };
-        let original = scheme.clone();
-        sanitize_color_scheme(&mut scheme, false);
-        assert_eq!(
-            scheme.on_surface, original.on_surface,
-            "有效的 light on_surface 不应被修改"
-        );
+        assert!(is_color_scheme_complete(&scheme));
     }
 
     #[test]
-    fn test_load_palette_record_sanitizes_dark_scheme() {
+    fn test_load_palette_record_rejects_invalid_dark_scheme() {
+        // Issue #709 评论 5729368242: 缺字段/无效 hex 的记录应被 load 拒绝，
+        // 而不是在读取时猜颜色。LinuxThemeController 会 fallback 到 builtin。
         let temp_dir = tempdir().unwrap();
         let base = palettes_base_dir(temp_dir.path());
         std::fs::create_dir_all(base.join("device1")).unwrap();
@@ -2192,31 +2124,41 @@ mod inline_tests {
             captured_at_ms: 0,
             variant: String::new(),
             light_scheme: ThemeColorScheme {
+                primary: "#006493".to_string(),
+                on_primary: "#FFFFFF".to_string(),
+                background: "#F6FAFE".to_string(),
+                on_background: "#171C1F".to_string(),
                 surface: "#F6FAFE".to_string(),
                 on_surface: "#171C1F".to_string(),
+                surface_variant: "#DDE3EA".to_string(),
+                on_surface_variant: "#41484D".to_string(),
                 ..Default::default()
             },
             dark_scheme: ThemeColorScheme {
+                primary: "#87CEFF".to_string(),
+                on_primary: "#00344D".to_string(),
+                background: "#0F1417".to_string(),
+                on_background: "#DFE3E7".to_string(),
                 surface: "#0F1417".to_string(),
-                on_surface: "#000000".to_string(), // 问题数据：黑字配深色背景
+                on_surface: String::new(), // 缺字段 → 无效
+                surface_variant: "#41484D".to_string(),
+                on_surface_variant: "#C1C7CE".to_string(),
                 ..Default::default()
             },
         };
         let content = serde_json::to_string_pretty(&record).unwrap();
         std::fs::write(base.join("device1").join("abc.json"), content).unwrap();
-        let loaded = load_palette_record(temp_dir.path(), "device1", "abc").unwrap();
-        assert_ne!(
-            loaded.dark_scheme.on_surface, "#000000",
-            "load_palette_record 应修正 dark on_surface=#000000"
-        );
+        let result = load_palette_record(temp_dir.path(), "device1", "abc");
         assert!(
-            !loaded.dark_scheme.on_surface.is_empty(),
-            "修正后的 on_surface 不应为空"
+            result.is_err(),
+            "缺 on_surface 的 dark_scheme 应被判为无效记录"
         );
     }
 
     #[test]
-    fn test_legacy_palette_to_record_sanitizes_empty_dark_fields() {
+    fn test_legacy_palette_to_record_does_not_invent_missing_colors() {
+        // Issue #709 评论 5729368242: legacy 迁移只做无损字段映射，
+        // 不编造固定 Material 色。缺字段迁移后仍为空，由验证判为无效。
         let palette = ThemePalette {
             source: "android_dynamic_color".to_string(),
             device_id: "device1".to_string(),
@@ -2230,13 +2172,89 @@ mod inline_tests {
         };
         let record = legacy_palette_to_record(&palette);
         assert!(
-            !record.dark_scheme.on_surface.is_empty(),
-            "legacy migration 应修正空的 dark on_surface"
+            record.dark_scheme.on_surface.is_empty(),
+            "legacy 迁移不应编造颜色，缺字段应保持为空"
         );
-        assert_ne!(
-            record.dark_scheme.on_surface, "#000000",
-            "legacy migration 不应产生 #000000"
+        // 该记录应被 is_palette_record_valid 判为无效
+        assert!(
+            !is_palette_record_valid(&record),
+            "缺 dark_on_surface 的记录应被判为无效"
         );
+    }
+
+    #[test]
+    fn test_load_and_list_palette_records_consistent_validation() {
+        // Issue #709 评论 5729368242: load 和 list 必须消费同一套验证。
+        // 无效记录在两条 API 中都不返回。
+        let temp_dir = tempdir().unwrap();
+        let base = palettes_base_dir(temp_dir.path());
+        std::fs::create_dir_all(base.join("device1")).unwrap();
+
+        // 写一个有效记录
+        let valid_record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "device1:valid".to_string(),
+            palette_fingerprint: "valid".to_string(),
+            source: "android_dynamic_color".to_string(),
+            source_device_id: "device1".to_string(),
+            captured_at_ms: 2000,
+            light_scheme: ThemeColorScheme {
+                primary: "#006493".to_string(),
+                on_primary: "#FFFFFF".to_string(),
+                background: "#F6FAFE".to_string(),
+                on_background: "#171C1F".to_string(),
+                surface: "#F6FAFE".to_string(),
+                on_surface: "#171C1F".to_string(),
+                surface_variant: "#DDE3EA".to_string(),
+                on_surface_variant: "#41484D".to_string(),
+                ..Default::default()
+            },
+            dark_scheme: ThemeColorScheme {
+                primary: "#87CEFF".to_string(),
+                on_primary: "#00344D".to_string(),
+                background: "#0F1417".to_string(),
+                on_background: "#DFE3E7".to_string(),
+                surface: "#0F1417".to_string(),
+                on_surface: "#DFE3E7".to_string(),
+                surface_variant: "#41484D".to_string(),
+                on_surface_variant: "#C1C7CE".to_string(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let valid_content = serde_json::to_string_pretty(&valid_record).unwrap();
+        std::fs::write(base.join("device1").join("valid.json"), valid_content).unwrap();
+
+        // 写一个无效记录（dark on_surface 为空）
+        let invalid_record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "device1:invalid".to_string(),
+            palette_fingerprint: "invalid".to_string(),
+            source: "android_dynamic_color".to_string(),
+            source_device_id: "device1".to_string(),
+            captured_at_ms: 1000,
+            dark_scheme: ThemeColorScheme {
+                surface: "#0F1417".to_string(),
+                on_surface: String::new(), // 缺字段 → 无效
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let invalid_content = serde_json::to_string_pretty(&invalid_record).unwrap();
+        std::fs::write(base.join("device1").join("invalid.json"), invalid_content).unwrap();
+
+        // load 无效记录应返回 Err
+        let load_result = load_palette_record(temp_dir.path(), "device1", "invalid");
+        assert!(load_result.is_err(), "load 无效记录应返回 Err");
+
+        // list 应跳过无效记录，只返回有效记录
+        let records = list_palette_records(temp_dir.path()).unwrap();
+        assert_eq!(records.len(), 1, "list 应跳过无效记录，只返回 1 个有效记录");
+        assert_eq!(records[0].palette_fingerprint, "valid");
+
+        // load 有效记录应成功
+        let loaded = load_palette_record(temp_dir.path(), "device1", "valid").unwrap();
+        assert_eq!(loaded.palette_fingerprint, "valid");
     }
 }
 

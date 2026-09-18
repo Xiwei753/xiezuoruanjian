@@ -248,4 +248,14 @@ fn issue709_resolved_state_tracks_scheme_origin() {
         src.contains("\"light_scheme\""),
         "应设置 resolved_scheme_kind = light_scheme"
     );
+    // Issue #709 评论 5729368242: scheme == None 时 resolved_scheme_kind 应为 "none"
+    assert!(
+        src.contains("\"none\""),
+        "scheme == None 时 resolved_scheme_kind 应为 none"
+    );
+    // 确认 resolved_scheme_kind 在 scheme 加载之后才计算（基于 scheme.is_some()）
+    assert!(
+        src.contains("scheme.is_some()"),
+        "resolved_scheme_kind 应基于 scheme.is_some() 判断"
+    );
 }

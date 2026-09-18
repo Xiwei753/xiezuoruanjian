@@ -127,9 +127,6 @@ impl LinuxThemeController {
         // 与 with_app 的 AppBackend borrow 是不同的 RefCell，但显式 drop 更清晰）。
         drop(s);
 
-        // Issue #709 评论 5728916561: 追踪 scheme 实际命中的来源和类型。
-        let scheme_kind = if is_dark { "dark_scheme" } else { "light_scheme" };
-
         // Issue #709 评论 5728916561: 把 saved_palette 和 builtin 两条路径的
         // scheme 加载与 resolved_source 追踪合并为一个 (Option<scheme>, String) 元组，
         // 避免在 fallback 分支中重复代码。
@@ -184,6 +181,19 @@ impl LinuxThemeController {
             }
         };
 
+        // Issue #709 评论 5729368242: 只有 scheme.is_some() 时 resolved_scheme_kind
+        // 才是 dark_scheme/light_scheme；scheme == None 时写 none，
+        // 和 resolved_source=none 对齐。
+        let resolved_scheme_kind = if scheme.is_some() {
+            if is_dark {
+                "dark_scheme"
+            } else {
+                "light_scheme"
+            }
+        } else {
+            "none"
+        };
+
         // Issue #709 评论 issue-body-709: 直接把 Option<ThemeColorSchemeDto> 存进
         // ResolvedThemeState.scheme，不再序列化成 JSON 字符串。theme_state_json()
         // 和 resolved_scheme_json() 从这一份 DTO 序列化，消除
@@ -197,7 +207,7 @@ impl LinuxThemeController {
             selected_builtin_theme_id,
             scheme,
             resolved_source,
-            resolved_scheme_kind: scheme_kind.to_string(),
+            resolved_scheme_kind: resolved_scheme_kind.to_string(),
         }
     }
 
