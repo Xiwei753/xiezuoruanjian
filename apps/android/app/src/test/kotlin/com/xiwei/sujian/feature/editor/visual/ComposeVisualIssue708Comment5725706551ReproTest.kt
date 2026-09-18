@@ -611,6 +611,198 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
     }
 
+    // ==================== 测试 E：surviving slice position 用子片段几何 ====================
+
+    /**
+     * 测试 E：多字符 active unit 删中间字符，surviving slice position 用子片段几何 —
+     *
+     * #708 评论 5727440517：
+     * 旧 bug：`mapSurvivingSliceToHandoff` 和 `mapSurvivingSlice` 直接用父 unit 左上角
+     * （unit.position.from / currentOffset(unit.position, frameTimeNanos)）作为 surviving slice position，
+     * 不考虑 slice 在父 unit 内的自然位置。当父 unit range=[0,9)="abcdefghi" 只删中间 'e' [4,5) 时，
+     * offsetMap 把父 unit 切成：
+     * - old [0,4) → new [0,4)  surviving（前半段 "abcd"）
+     * - old [4,5)              ghost（被删的 "e"）
+     * - old [5,9) → new [4,8)  surviving（后半段 "fghi"）
+     *
+     * 后半段 old [5,9) 原本在父 unit 的后半段，但 handoff/timeline 却给它 position = 父 unit 左上角
+     * （'a' 的位置），导致首帧后半段突然叠到前半段左侧，下一帧又从最左边动画到新位置。
+     *
+     * 修复后：用 [ComposeVisualRebase.sliceScreenPosition] 计算 —
+     * oldRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+     * 不再直接用父左上角。handoff 和 timeline 都用同一套几何。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符），sample 到 alpha 在 0..1
+     * 2. 第二笔：`"abcdefghi" -> "abcdfghi"`（删中间 'e' [4,5)）
+     * 3. 检查 handoff scene 中 surviving slice 的 position
+     * 4. drain 到 timeline 后检查 position.from 仍然正确
+     *
+     * 断言：
+     * - handoff 中后半段 surviving (new [4,8)) 的 position.from 不等于父 unit 左上角
+     * - handoff 中后半段 surviving 的 position.from 等于 old [5,9) natural position + parent delta
+     * - drain 到 timeline 后，同一 frameTime 的 position.from 仍然是这个值
+     * - 最终 position.to 是 newLayout 的 [4,8) 自然位置
+     */
+    @Test
+    fun testE_multiCharActiveUnitDeleteMiddle_survivingSlicePositionUsesSliceGeometry() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", MULTI_CHAR_TEXT, "abcdfghi"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5727440517-E",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到多字符 unit 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitAbc = sampledScene.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testE: 第一笔后应存在 targetRange=[0,9) 的多字符 unit（'abcdefghi'），" +
+                "实际 targetRanges=${sampledScene.units.mapNotNull { it.targetRange }}",
+            unitAbc,
+        )
+        assertTrue(
+            "testE: 多字符 unit 应仍 active（alpha.from 在 0..1 之间），实际 alpha.from=${unitAbc!!.alpha.from}",
+            unitAbc.alpha.from > 0f && unitAbc.alpha.from < 1f,
+        )
+
+        // 记录父 unit 当前屏幕位置（用于后续断言 surviving slice 不等于父左上角）
+        val parentScreenPosition = unitAbc.position.from
+
+        // 用 safePathBounds 算 parentNatural（[0,9) 左上角）和 sliceNatural（[5,9) 左上角）
+        // active unit 的 layout 就是 layouts[1]（"abcdefghi" 的 layout）
+        val parentBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(0, 9))
+        val sliceBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(5, 9))
+        assertNotNull("testE: parentBounds ([0,9)) 不应为 null", parentBounds)
+        assertNotNull("testE: sliceBounds ([5,9)) 不应为 null", sliceBounds)
+        val parentNatural = Offset(parentBounds!!.left, parentBounds.top)
+        val sliceNatural = Offset(sliceBounds!!.left, sliceBounds.top)
+        // parentDelta = parentScreenPosition - parentNatural
+        val parentDelta =
+            Offset(
+                parentScreenPosition.x - parentNatural.x,
+                parentScreenPosition.y - parentNatural.y,
+            )
+        // expectedSurvivingPosition = sliceNatural + parentDelta
+        val expectedSurvivingPosition =
+            Offset(
+                sliceNatural.x + parentDelta.x,
+                sliceNatural.y + parentDelta.y,
+            )
+
+        // 第二笔："abcdefghi" -> "abcdfghi"（删中间 'e'，删除 [4,5)）
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdfghi",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(4, 4), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：存在 targetRange=[4,8) 的 surviving unit（后半段 "fghi" 映射到新坐标）
+        val survivingBack =
+            handoffScene.units.filter { it.targetRange == TextRange(4, 8) }
+        assertTrue(
+            "testE: handoff 应存在 targetRange=[4,8) 的 surviving unit（后半段 'fghi' 映射到新坐标），" +
+                "实际=${survivingBack.map { "targetRange=${it.targetRange}, position=${it.position.from}" }}" +
+                "（offsetMap: old [5,9) → new [4,8)）",
+            survivingBack.isNotEmpty(),
+        )
+
+        // 断言2：surviving 后半段的 position.from 不等于父 unit 左上角
+        val backUnit = survivingBack.first()
+        val backDiffX = kotlin.math.abs(backUnit.position.from.x - parentScreenPosition.x)
+        val backDiffY = kotlin.math.abs(backUnit.position.from.y - parentScreenPosition.y)
+        assertTrue(
+            "testE: surviving 后半段 position.from 应不等于父 unit 左上角（不是父左上角），" +
+                "实际=${backUnit.position.from}, parentScreenPosition=$parentScreenPosition," +
+                "diffX=$backDiffX, diffY=$backDiffY" +
+                "（旧 bug：surviving slice 直接继承父 unit 左上角，后半段叠到前半段左侧）",
+            backDiffX > 0.5f || backDiffY > 0.5f,
+        )
+
+        // 断言3：surviving 后半段的 position.from 等于 old [5,9) natural position + parent delta
+        assertEquals(
+            "testE: surviving 后半段 position.from.x 应等于 expectedSurvivingPosition.x" +
+                "（old [5,9) natural + parent delta），" +
+                "实际=${backUnit.position.from.x}, expected=${expectedSurvivingPosition.x}," +
+                "parentScreenPosition=$parentScreenPosition, parentNatural=$parentNatural, sliceNatural=$sliceNatural",
+            expectedSurvivingPosition.x,
+            backUnit.position.from.x,
+            0.5f,
+        )
+        assertEquals(
+            "testE: surviving 后半段 position.from.y 应等于 expectedSurvivingPosition.y",
+            expectedSurvivingPosition.y,
+            backUnit.position.from.y,
+            0.5f,
+        )
+
+        // 断言4：drain 到 timeline 后，同一 frameTime 的 position.from 仍然是这个值
+        // drain 把 patch 应用到 timeline，timeline 的 mapSurvivingSlice 也用 sliceScreenPosition
+        state.drainPendingPatchesAtFrame(10L * NANOS_PER_MS)
+        val timelineScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val timelineBack =
+            timelineScene.units.firstOrNull { it.targetRange == TextRange(4, 8) }
+        assertNotNull(
+            "testE: timeline drain 后应存在 targetRange=[4,8) 的 surviving unit",
+            timelineBack,
+        )
+        // timeline 版本 position.from 应该也是 sliceScreenPosition 计算的值
+        // 注意：timeline 的 position.from 可能与 handoff 略有不同（因为 timeline 用 currentOffset
+        // 算 parentCurrent，而 handoff 用 unit.position.from），但在同一 frameTime 下应一致
+        assertEquals(
+            "testE: timeline drain 后 surviving 后半段 position.from.x 应仍等于 expectedSurvivingPosition.x" +
+                "（不能重新变回父左上角），实际=${timelineBack!!.position.from.x}," +
+                "expected=${expectedSurvivingPosition.x}",
+            expectedSurvivingPosition.x,
+            timelineBack.position.from.x,
+            0.5f,
+        )
+        assertEquals(
+            "testE: timeline drain 后 surviving 后半段 position.from.y 应仍等于 expectedSurvivingPosition.y",
+            expectedSurvivingPosition.y,
+            timelineBack.position.from.y,
+            0.5f,
+        )
+
+        // 断言5：最终 position.to 是 newLayout 的 [4,8) 自然位置
+        val newLayoutBounds = ComposeVisualRebase.safePathBounds(layouts[2], TextRange(4, 8))
+        assertNotNull("testE: newLayoutBounds ([4,8)) 不应为 null", newLayoutBounds)
+        val expectedFinalPosition = Offset(newLayoutBounds!!.left, newLayoutBounds.top)
+        assertEquals(
+            "testE: surviving 后半段 position.to.x 应等于 newLayout [4,8) 自然位置，" +
+                "实际=${timelineBack.position.to.x}, expected=${expectedFinalPosition.x}",
+            expectedFinalPosition.x,
+            timelineBack.position.to.x,
+            0.5f,
+        )
+        assertEquals(
+            "testE: surviving 后半段 position.to.y 应等于 newLayout [4,8) 自然位置",
+            expectedFinalPosition.y,
+            timelineBack.position.to.y,
+            0.5f,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {

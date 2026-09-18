@@ -69,8 +69,14 @@ internal object ComposeLocalHandoffRebase {
                     slice.newSubRange != null
                 ) {
                     // 存活 slice：targetRange/range 改成 newRange，layout 改成 newLayout
+                    // #708 评论 5727440517：传入 oldSubRange 用于计算 surviving slice 的正确屏幕位置
                     rebasedUnits.add(
-                        mapSurvivingSliceToHandoff(unit, slice.newSubRange, newLayout),
+                        mapSurvivingSliceToHandoff(
+                            unit = unit,
+                            oldRange = slice.oldSubRange,
+                            newRange = slice.newSubRange,
+                            newLayout = newLayout,
+                        ),
                     )
                 } else {
                     // 被删除 slice：从旧 unit 当前可见 alpha/position 转 handoff ghost
@@ -117,11 +123,25 @@ internal object ComposeLocalHandoffRebase {
      */
     private fun mapSurvivingSliceToHandoff(
         unit: VisualTextUnit,
+        oldRange: TextRange,
         newRange: TextRange,
         newLayout: ComposeLayoutSnapshot,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
-        val frozenPosition = TimedOffset(unit.position.from, unit.position.from, 0L, 0L)
+        // #708 评论 5727440517：surviving slice 的屏幕位置用 sliceScreenPosition 计算 —
+        // oldRange == unit.range 时返回 unit.position.from（父当前屏幕位置）；
+        // oldRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+        // 不再直接用父 unit 左上角，避免 surviving 首帧文字跳到父 unit 开头位置。
+        // 注意：算位置必须用 oldRange + unit.layout（旧 layout），保持这一帧用户已看到的旧屏幕位置；
+        // 不能直接用 newRange 的自然位置，否则 surviving 文字会提前跳到最终位置。
+        val currentSlicePosition =
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = oldRange,
+                parentScreenPosition = unit.position.from,
+            ) ?: unit.position.from
+        val frozenPosition = TimedOffset(currentSlicePosition, currentSlicePosition, 0L, 0L)
         return unit.copy(
             layout = newLayout,
             range = newRange,

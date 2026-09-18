@@ -395,7 +395,16 @@ class ComposeVisualTimeline {
             val slices = computeSlices(target, offsetMap, newTextLength, patch.intent)
             for (slice in slices) {
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
-                    surviving.add(mapSurvivingSlice(unit, slice.newSubRange, newLayout, frameTimeNanos, durationNanos))
+                    surviving.add(
+                        mapSurvivingSlice(
+                            unit = unit,
+                            oldRange = slice.oldSubRange,
+                            mappedRange = slice.newSubRange,
+                            newLayout = newLayout,
+                            frameTimeNanos = frameTimeNanos,
+                            durationNanos = durationNanos,
+                        ),
+                    )
                 } else {
                     // 缺陷5 GHOST slice：按 slice.oldSubRange 创建 ghost，alpha 当前值 -> 0
                     ghosting.add(toGhost(unit, frameTimeNanos, durationNanos, slice.oldSubRange))
@@ -418,25 +427,41 @@ class ComposeVisualTimeline {
     // handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
     private fun mapSurvivingSlice(
         unit: VisualTextUnit,
+        oldRange: TextRange,
         mappedRange: TextRange,
         newLayout: ComposeLayoutSnapshot,
         frameTimeNanos: Long,
         durationNanos: Long,
     ): VisualTextUnit {
         // 存活：alpha 通道不变（继续使用原 startedAtNanos）。
-        // position 通道：只在新 layout 让位置发生变化时重定向。
+        // #708 评论 5727440517：position 通道起点用 sliceScreenPosition 计算 —
+        // oldRange == unit.range 时返回父 unit 当前屏幕位置；
+        // oldRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
+        // 不再直接用父 unit 左上角，避免 surviving slice 首帧跳到父 unit 开头位置。
+        val parentCurrent = currentOffset(unit.position, frameTimeNanos) ?: unit.position.to
+        val oldSlicePosition =
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = oldRange,
+                parentScreenPosition = parentCurrent,
+            ) ?: parentCurrent
         val newPosition = computeUnitPosition(newLayout, mappedRange)
-        val oldPosition = currentOffset(unit.position, frameTimeNanos)
         val positionChannel =
-            if (newPosition != null && oldPosition != null && newPosition != oldPosition) {
+            if (newPosition != null && newPosition != oldSlicePosition) {
                 TimedOffset(
-                    from = oldPosition,
+                    from = oldSlicePosition,
                     to = newPosition,
                     startedAtNanos = frameTimeNanos,
                     durationNanos = durationNanos,
                 )
             } else {
-                unit.position
+                TimedOffset(
+                    from = oldSlicePosition,
+                    to = oldSlicePosition,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = 0L,
+                )
             }
         return unit.copy(
             layout = newLayout,
