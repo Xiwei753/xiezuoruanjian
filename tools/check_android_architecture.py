@@ -481,6 +481,10 @@ def rule_visual_motion_pure() -> list[Finding]:
             "feature/editor/visual/ComposeEditorDrawSnapshot.kt",
             "feature/editor/visual/ComposeLocalEditHandoff.kt",
             "feature/editor/visual/ComposeReflowPlanner.kt",
+            # #708 评论 5725146968：overlay ownership 差集 helper，
+            # 引用 TextRange/TextLayoutResult 做显示数据，
+            # 与 ComposeReflowPlanner 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeOverlayOwnership.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

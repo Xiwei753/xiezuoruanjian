@@ -371,7 +371,8 @@ class ComposeEditorVisualState(
      * - Reflow（缺口2）：对每个 [patch.reflowMoves]，把 [ComposeReflowMove.newRange] 加进 hiddenRanges
      *   （BasicTextField 已落到新行的那份字先裁掉），并建一个首帧静止的 ReflowMove unit
      *   （alpha 永远 1，position 停在 oldBounds），下一帧 timeline 正式创建 oldBounds -> newBounds 动画后覆盖。
-     * - Cursor：删除路径把 [patch.originCursorRect]（真实 T0 caret）放进 scene.cursorRect。
+     * - Cursor：所有有光标动画的 patch（cursorEnabled && cursorMotionPath != null）把
+     *   [patch.originCursorRect]（真实 T0 caret）放进 scene.cursorRect，不只是删除路径。
      *
      * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/reflowMoves/originCursorRect）。
      * @param oldLayout T0 布局（建 ghost / reflow oldBounds 来源）。
@@ -391,16 +392,6 @@ class ComposeEditorVisualState(
                     mergedHidden.none { it.start == ins.start && it.end == ins.end }
                 ) {
                     mergedHidden.add(ins)
-                }
-            }
-            // 缺口2：reflow 首帧 — 把 reflowMoves 的 newRange 加进 hiddenRanges，
-            // 让 BasicTextField 已落到新行的那份字先裁掉，由 overlay 从 oldBounds -> newBounds 平移。
-            for (move in patch.reflowMoves) {
-                val nr = move.newRange
-                if (nr.start < nr.end &&
-                    mergedHidden.none { it.start == nr.start && it.end == nr.end }
-                ) {
-                    mergedHidden.add(nr)
                 }
             }
             // 删除路径首帧 ghost：为 deletedUnits 建立静态 ghost
@@ -428,52 +419,76 @@ class ComposeEditorVisualState(
                         role = VisualUnitRole.DeletedGhost,
                     )
             }
-            // 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
+            // #708 评论 5725146968 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
+            // 使用 ComposeOverlayOwnership.subtractOwnedRanges 做真正的差集，
+            // 只给没有被其他 active unit 接管的 slice 建临时 ReflowMove。
+            // 同时把差集后剩余 slice 的 newRange 加进 hiddenRanges，
+            // 让 BasicTextField 已落到新行的那份字先裁掉，由 overlay 从 oldBounds -> newBounds 平移。
             // 首帧静止在旧位置（position from=to=oldPosition），alpha 永远 1。
             // 下一帧 timeline.applyPatch 正式创建 oldBounds -> newBounds 的 ReflowMove 后直接覆盖首帧 scene。
+            val ownedRanges = mergedUnits.mapNotNull { it.targetRange }
             for (move in patch.reflowMoves) {
-                val nr = move.newRange
-                if (nr.start >= nr.end) continue
-                if (nr.end > newLayout.result.layoutInput.text.length) continue
-                // 已有同 newRange 的 ReflowMove 首帧 unit 则跳过
-                if (mergedUnits.any {
-                        it.targetRange == nr && it.role == VisualUnitRole.ReflowMove
-                    }
-                ) {
-                    continue
-                }
-                val oldPosition = Offset(move.oldBounds.left, move.oldBounds.top)
-                nextHandoffUnitKey++
-                mergedUnits +=
-                    VisualTextUnit(
-                        key = nextHandoffUnitKey,
-                        layout = newLayout,
-                        range = nr,
-                        targetRange = nr,
-                        // 首帧静止：alpha 永远 1
-                        alpha = TimedFloat(1f, 1f, 0L, 0L),
-                        // 首帧静止在旧位置
-                        position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                        role = VisualUnitRole.ReflowMove,
+                val remainingSlices =
+                    ComposeOverlayOwnership.subtractOwnedRanges(
+                        move = move,
+                        ownedRanges = ownedRanges,
+                        oldLayout = oldLayout,
+                        newLayout = newLayout,
                     )
+                for (slice in remainingSlices) {
+                    val nr = slice.newRange
+                    if (nr.start >= nr.end) continue
+                    if (nr.end > newLayout.result.layoutInput.text.length) continue
+                    // hiddenRanges：让 BasicTextField 已落到新行的那份字先裁掉
+                    if (mergedHidden.none { it.start == nr.start && it.end == nr.end }) {
+                        mergedHidden.add(nr)
+                    }
+                    // 已有同 newRange 的 ReflowMove 首帧 unit 则跳过
+                    if (mergedUnits.any {
+                            it.targetRange == nr && it.role == VisualUnitRole.ReflowMove
+                        }
+                    ) {
+                        continue
+                    }
+                    val oldPosition = Offset(slice.oldBounds.left, slice.oldBounds.top)
+                    nextHandoffUnitKey++
+                    mergedUnits +=
+                        VisualTextUnit(
+                            key = nextHandoffUnitKey,
+                            layout = newLayout,
+                            range = nr,
+                            targetRange = nr,
+                            // 首帧静止：alpha 永远 1
+                            alpha = TimedFloat(1f, 1f, 0L, 0L),
+                            // 首帧静止在旧位置
+                            position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                            role = VisualUnitRole.ReflowMove,
+                        )
+                }
             }
-            // 删除首帧光标所有权 — 把旧 caret 放进 scene.cursorRect
-            val barrierCursorRect =
-                if (patch.deletedUnits.isNotEmpty()) {
+            // #708 评论 5725146968：首帧光标所有权 —
+            // 不只是删除，所有有光标动画的 patch（cursorEnabled && cursorMotionPath != null）
+            // 都用同一份 T0 caret 作为首帧 scene.cursorRect，
+            // 防止纯插入时首帧 draw 层直接算新光标位置、下一帧 timeline 又用旧位置做起点导致光标回抽。
+            // cursor animation 关闭时（cursorEnabled=false）不抢系统光标，保持 null。
+            val handoffCursorRect =
+                if (patch.motionPolicy.effective().cursorEnabled &&
+                    patch.cursorMotionPath != null
+                ) {
                     patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
                 } else {
                     null
                 }
             val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
             val unitsChanged = mergedUnits.size != scene.units.size
-            val cursorChanged = barrierCursorRect != null && barrierCursorRect != scene.cursorRect
+            val cursorChanged = handoffCursorRect != null && handoffCursorRect != scene.cursorRect
             if (!hiddenChanged && !unitsChanged && !cursorChanged) {
                 scene
             } else {
                 scene.copy(
                     hiddenRanges = mergedHidden,
                     units = mergedUnits,
-                    cursorRect = barrierCursorRect ?: scene.cursorRect,
+                    cursorRect = handoffCursorRect ?: scene.cursorRect,
                 )
             }
         }

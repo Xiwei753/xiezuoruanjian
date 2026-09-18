@@ -777,7 +777,7 @@ class ComposeVisualTimeline {
             // 只给没有被其他 active unit 接管的剩余 slice 创建 ReflowMove。
             // 已有 unit 已经经过 mapSurvivingSlice()，它的位置通道本身会根据新 layout 做 redirect，
             // 继续让原 unit 完成自己的动画即可。
-            val remainingMoves = subtractOverlayOwnedRanges(move, surviving)
+            val remainingMoves = subtractOverlayOwnedRanges(move, surviving, patch)
             for (remaining in remainingMoves) {
                 val nr = remaining.newRange
                 if (nr.start >= nr.end) continue
@@ -800,41 +800,27 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * #708 评论 5724568261 缺口3：从 [move.newRange] 中减去已被 [surviving] 中 active unit 接管的范围 —
+     * #708 评论 5725146968：从 [move.newRange] 中减去已被 [surviving] 中 active unit 接管的范围 —
      *
-     * 解决快速连续输入时同一段文字被两个 overlay unit 同时画的重影问题。
-     *
-     * 规则：
-     * - 收集 [surviving] 中所有 `targetRange != null` 的 unit 的 targetRange（这些是"已被 overlay 接管"的范围）。
-     * - 对 [move.newRange] 做差集运算：从 move.newRange 中减去所有与之重叠的 overlay-owned ranges。
-     * - 如果某个 overlay-owned range 完全覆盖 move.newRange，返回空 list（不创建 ReflowMove）。
-     * - 如果无重叠，返回原 move。
-     * - 部分重叠时，为简化实现并保守避免重影，也跳过（不创建 ReflowMove）—
-     *   ComposeReflowPlanner 已按行边界切细段，大部分情况下要么完全重叠要么不重叠。
+     * 使用 [ComposeOverlayOwnership.subtractOwnedRanges] 做真正的差集运算：
+     * - 完全覆盖：返回空 list（不创建 ReflowMove）
+     * - 无重叠：返回原 move
+     * - 部分重叠：返回剩余 slice 的 ReflowMove 列表（每个 slice 的 old/new bounds 从真实 layout 取）
      *
      * 不允许同一个 UTF-16 target range 同时被两个 VisualTextUnit 拥有。
      */
     private fun subtractOverlayOwnedRanges(
         move: ComposeReflowMove,
         surviving: List<VisualTextUnit>,
+        patch: ComposeVisualPatch,
     ): List<ComposeReflowMove> {
-        val newRange = move.newRange
-        // 收集 surviving 中所有 targetRange != null 的 unit 的 targetRange
-        for (unit in surviving) {
-            val owned = unit.targetRange ?: continue
-            // 完全覆盖：owned 包含 newRange -> 不创建 ReflowMove
-            if (owned.start <= newRange.start && newRange.end <= owned.end) {
-                return emptyList()
-            }
-            // 部分重叠：保守跳过（避免重影）
-            val overlaps =
-                owned.start < newRange.end && newRange.start < owned.end
-            if (overlaps) {
-                return emptyList()
-            }
-        }
-        // 无重叠：返回原 move
-        return listOf(move)
+        val ownedRanges = surviving.mapNotNull { it.targetRange }
+        return ComposeOverlayOwnership.subtractOwnedRanges(
+            move = move,
+            ownedRanges = ownedRanges,
+            oldLayout = patch.oldLayout,
+            newLayout = patch.newLayout,
+        )
     }
 
     /**
