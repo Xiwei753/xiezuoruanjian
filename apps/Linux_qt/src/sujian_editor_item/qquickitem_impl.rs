@@ -62,25 +62,26 @@ impl QQuickItem for SujianEditorItem {
             self.scene_dirty = true;
         }
 
-        // Issue #709 评论 issue-body-709: 检测正文协同事务（has_active_insert）的边沿变化，
-        // 在边沿处重置 blink 状态，避免输入时光标消失。
-        // - false->true（insert 开始）：立即 blink_visible = true（光标从可见状态开始），
-        //   Insert 活跃期间 blink 由 build_cursor_render_state_for_frame 的 Suppressed 模式
-        //   保持 suppressed（opacity 固定为 1）。
-        // - true->false（insert 结束）：重置 blink_last_toggle = frame_now / blink_visible = true，
-        //   重新开始正常 blink，不继承事务开始前碰巧为 false 的旧相位。
-        // 与 build_cursor_render_state_for_frame 用同一个 has_active_insert 判断，保持一致。
-        let cur_has_active_insert = self.pipeline.animation_coordinator().has_active_insert();
-        if cur_has_active_insert != self.prev_has_active_insert {
-            if cur_has_active_insert {
-                // false->true: insert 开始，光标从可见状态开始。
+        // Issue #710 评论 5732160521 问题 2: 检测 blink 抑制状态的边沿变化，
+        // 在边沿处重置 blink 状态，避免输入/光标动画时光标消失。
+        // 统一用 current_cursor_blink_mode() == Suppressed 作为判断，覆盖
+        // CursorOnly Tween 和正文事务两种 suppress 来源。
+        // - false->true（suppressed 开始）：立即 blink_visible = true（光标从可见状态开始），
+        //   suppressed 期间 blink 由 Suppressed 模式保持 opacity 固定为 1。
+        // - true->false（suppressed 结束）：重置 blink_last_toggle = frame_now /
+        //   blink_visible = true，重新开始正常 blink，不继承旧相位。
+        let cur_cursor_blink_suppressed =
+            self.current_cursor_blink_mode() == super::cursor_animation::CursorBlinkMode::Suppressed;
+        if cur_cursor_blink_suppressed != self.prev_cursor_blink_suppressed {
+            if cur_cursor_blink_suppressed {
+                // false->true: suppressed 开始，光标从可见状态开始。
                 self.cursor_ctrl.blink_visible = true;
             } else {
-                // true->false: insert 结束，重新开始正常 blink，不继承旧相位。
+                // true->false: suppressed 结束，重新开始正常 blink，不继承旧相位。
                 self.cursor_ctrl.blink_last_toggle = frame_now;
                 self.cursor_ctrl.blink_visible = true;
             }
-            self.prev_has_active_insert = cur_has_active_insert;
+            self.prev_cursor_blink_suppressed = cur_cursor_blink_suppressed;
         }
 
         let item_ptr = self.get_cpp_object();
@@ -331,17 +332,10 @@ impl SujianEditorItem {
         &self,
     ) -> super::render_plan::CursorRenderState {
         // Issue #679 评论 5657313927 / #701 评论 5699573227 第三阶段 (F5):
-        // 每帧只采样一次 frame state。blink mode 由"是否有活动正文 insert 事务"
-        // 决定：有则压制闪烁（Suppressed），无则正常闪烁（Normal）。
-        // `has_active_insert` 是 `&self` 方法，这里用不可变 `animation_coordinator()`
-        // 访问，避免要求 `&mut self`。
-        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self.pipeline.animation_coordinator().has_active_insert()
-        {
-            super::cursor_animation::CursorBlinkMode::Suppressed
-        } else {
-            super::cursor_animation::CursorBlinkMode::Normal
-        };
+        // 每帧只采样一次 frame state。blink mode 由 current_cursor_blink_mode()
+        // 统一决定（Issue #710 评论 5732160521 问题 2），保证 tick/render/opacity/
+        // 边沿 reset 四处一致。
+        let blink_mode = self.current_cursor_blink_mode();
         super::render_plan::CursorRenderState {
             visible: self.cursor_ctrl.visible,
             x: self.cursor_ctrl.visual_x,

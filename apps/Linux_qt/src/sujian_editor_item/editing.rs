@@ -86,28 +86,15 @@ impl SujianEditorItem {
     /// 的 `frame_now` 驱动，本函数只负责 blink。QML 265ms Timer 不再推进位置，
     /// 避免 CursorOnly 被低频 blink Timer 降成 ~4Hz。
     pub(crate) fn tick_cursor_animation(&mut self) {
-        use animation_coordinator::CursorBlinkMode;
-        // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
-        // 之前只用 has_active_insert() 判断 blink 抑制，只覆盖 Insert 事务，
-        // Delete/Composition 事务期间 blink 会正常闪烁，与正文动画不同帧。
-        // 改为 has_active_text_transaction() 覆盖所有正文事务类型。
-        // 同时，CursorOnly Tween（纯光标移动动画）期间也抑制 blink，
-        // 保证 caret 从 Tween 开始到结束持续可见，Tween 完成后再恢复正常 blink。
-        // 这消除"快速点击时光标动画概率消失"——之前 Tween 期间 blink 可能切到
-        // 隐藏半周期，opacity 为 0，看起来像"这次点击动画没触发"。
-        let has_active_text = self
-            .pipeline
-            .animation_coordinator_mut()
-            .has_active_text_transaction();
-        let has_cursor_only_tween = self.cursor_ctrl.animation.is_some();
-        let blink_mode = if (self.current_coordinated_text_cursor_animation_enabled
-            && has_active_text)
-            || has_cursor_only_tween
-        {
-            CursorBlinkMode::Suppressed
-        } else {
-            CursorBlinkMode::Normal
-        };
+        // Issue #710 评论 5732160521 问题 2: 统一 blink 决策入口。
+        // 之前 tick_cursor_animation / build_cursor_render_state_for_frame /
+        // cursor_blink_opacity / 边沿 reset 各自判断，且条件不一致：
+        // tick 用 has_active_text_transaction() || has_cursor_only_tween，
+        // render/opacity 用 has_active_insert()。快速点击时只有 CursorOnly
+        // Tween（无 Insert），tick 认为 Suppressed（常亮），render 认为 Normal
+        //（正常 blink），opacity 可能为 0 → 光标消失。
+        // 现在统一消费 current_cursor_blink_mode()，保证四处一致。
+        let blink_mode = self.current_cursor_blink_mode();
         // Issue #690 评论 5679744253 问题 2: CursorOnly 位置动画已由 update_paint_node 的
         // frame_now 驱动，本函数只负责 blink。QML 265ms Timer 不再推进位置。
         let blink_changed = self.cursor_ctrl.tick_blink(blink_mode);

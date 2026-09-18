@@ -1157,9 +1157,11 @@ impl LinuxEditorAnimationCoordinator {
                     let range_start = range.start().value();
                     let range_end = range.end().value();
                     let insert_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                    let conflicting = self
-                        .prepared_queue
-                        .find_conflicting_transaction(range_start, range_end);
+                    let conflicting = self.prepared_queue.find_conflicting_transaction(
+                        range_start,
+                        range_end,
+                        Some(&insert_offset_map),
+                    );
                     // 纯插入在 old 文档里就是 range_start 这一个位置点。
                     let now = Instant::now();
                     let (rebase_frames, caret_handoff) = self.take_rebase_frames(
@@ -1212,14 +1214,18 @@ impl LinuxEditorAnimationCoordinator {
                     );
                     // Issue #710 评论 5731145076 症状六: 计算 visual_affected_byte_range。
                     // 用段落边界扩展 inserted_range，确保同一行的连续输入互相 rebase。
-                    let visual_affected_byte_range = {
-                        let (_, _, new_s, new_e) = compute_affected_paragraph_ranges(
+                    // Issue #710 评论 5732160521 问题 1/3: Insert 事务 old 侧是插入点
+                    // (range_start, range_start)，new 侧是 inserted_range。
+                    // 保存 old/new 两侧范围，find_conflicting_transaction 用 new 侧
+                    //（旧事务应用后的文本坐标）通过 OffsetMap 映射到新事务坐标系比较。
+                    let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                        let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
                             &vt.old_text,
                             &vt.new_text,
-                            range_start,
-                            range_end,
+                            (range_start, range_start),
+                            (range_start, range_end),
                         );
-                        Some((new_s, new_e))
+                        (Some((old_s, old_e)), Some((new_s, new_e)))
                     };
                     let prepared = PreparedTextVisualTransaction {
                         key,
@@ -1236,7 +1242,8 @@ impl LinuxEditorAnimationCoordinator {
                         old_snapshot: Some(old_snapshot.clone()),
                         new_snapshot: Some(new_snapshot.clone()),
                         cursor_owner_epoch,
-                        visual_affected_byte_range,
+                        visual_affected_byte_range_old,
+                        visual_affected_byte_range_new,
                     };
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1274,9 +1281,11 @@ impl LinuxEditorAnimationCoordinator {
                 let rebase_byte_start = deleted_ranges.first().map(|(s, _)| *s).unwrap_or(0);
                 let rebase_byte_end = deleted_ranges.last().map(|(_, e)| *e).unwrap_or(0);
                 let delete_offset_map = OffsetMap::build(&vt.old_text, &vt.new_text);
-                let conflicting = self
-                    .prepared_queue
-                    .find_conflicting_transaction(rebase_byte_start, rebase_byte_end);
+                let conflicting = self.prepared_queue.find_conflicting_transaction(
+                    rebase_byte_start,
+                    rebase_byte_end,
+                    Some(&delete_offset_map),
+                );
                 let now = Instant::now();
                 let (rebase_frames, caret_handoff) = self.take_rebase_frames(
                     conflicting,
@@ -1333,14 +1342,18 @@ impl LinuxEditorAnimationCoordinator {
                 // Issue #710 评论 5731145076 症状六: 计算 visual_affected_byte_range。
                 // 用段落边界扩展 deleted_range，确保删除换行符时合并段落的视觉区域
                 // 被正确标记，新事务能检测到视觉区域重叠并 rebase 旧事务。
-                let visual_affected_byte_range = {
-                    let (old_s, old_e, _, _) = compute_affected_paragraph_ranges(
+                // Issue #710 评论 5732160521 问题 1/3: Delete 事务 old 侧是 deleted_range，
+                // new 侧是删除后落点 (rebase_byte_start, rebase_byte_start)。
+                // 保存 old/new 两侧范围，find_conflicting_transaction 用 old 侧
+                //（旧事务应用前的文本坐标）通过 OffsetMap 映射到新事务坐标系比较。
+                let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+                    let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
                         &vt.old_text,
                         &vt.new_text,
-                        rebase_byte_start,
-                        rebase_byte_end,
+                        (rebase_byte_start, rebase_byte_end),
+                        (rebase_byte_start, rebase_byte_start),
                     );
-                    Some((old_s, old_e))
+                    (Some((old_s, old_e)), Some((new_s, new_e)))
                 };
                 let prepared = PreparedTextVisualTransaction {
                     key,
@@ -1357,7 +1370,8 @@ impl LinuxEditorAnimationCoordinator {
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
-                    visual_affected_byte_range,
+                    visual_affected_byte_range_old,
+                    visual_affected_byte_range_new,
                 };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1398,15 +1412,16 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
-        let conflicting = self
-            .prepared_queue
-            .find_conflicting_transaction(composition_byte_start, composition_byte_end);
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+        let conflicting = self.prepared_queue.find_conflicting_transaction(
+            composition_byte_start,
+            composition_byte_end,
+            Some(&offset_map),
+        );
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
         let now = Instant::now();
         let (rebase_frames, caret_handoff) =
             self.take_rebase_frames(conflicting, "rebased_by_composition_update", now, None);
-
-        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
@@ -1494,8 +1509,11 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            // Issue #710 评论 5731145076 症状六: composition update 的 visual affected range。
-            visual_affected_byte_range: Some((composition_byte_start, composition_byte_end)),
+            // Issue #710 评论 5731145076 症状六 / 评论 5732160521 问题 3:
+            // composition update 的 visual affected range。composition 整体替换
+            // preedit 区间，old/new 侧都用 composition_byte_start..end（保守策略）。
+            visual_affected_byte_range_old: Some((composition_byte_start, composition_byte_end)),
+            visual_affected_byte_range_new: Some((composition_byte_start, composition_byte_end)),
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1530,15 +1548,16 @@ impl LinuxEditorAnimationCoordinator {
     ) -> Option<VisualTransactionKey> {
         let conflict_start = committed_replace_start.min(preedit_byte_start);
         let conflict_end = committed_replace_end.max(preedit_byte_end);
-        let conflicting = self
-            .prepared_queue
-            .find_conflicting_transaction(conflict_start, conflict_end);
+        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+        let conflicting = self.prepared_queue.find_conflicting_transaction(
+            conflict_start,
+            conflict_end,
+            Some(&offset_map),
+        );
         // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
         let now = Instant::now();
         let (rebase_frames, caret_handoff) =
             self.take_rebase_frames(conflicting, "rebased_by_composition_commit", now, None);
-
-        let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
 
         let key = self.alloc_key();
         let new_revision = LayoutRevision::next();
@@ -1850,8 +1869,11 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            // Issue #710 评论 5731145076 症状六: composition commit/cancel 的 visual affected range。
-            visual_affected_byte_range: Some((conflict_start, conflict_end)),
+            // Issue #710 评论 5731145076 症状六 / 评论 5732160521 问题 3:
+            // composition commit/cancel 的 visual affected range。整体替换
+            // preedit 区间，old/new 侧都用 conflict_start..end（保守策略）。
+            visual_affected_byte_range_old: Some((conflict_start, conflict_end)),
+            visual_affected_byte_range_new: Some((conflict_start, conflict_end)),
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -4248,7 +4270,8 @@ mod tests {
             // Issue #705 评论 5717380886: 测试辅助函数默认 epoch=0，
             // 与 CursorController::new() 的初始 epoch 一致。
             cursor_owner_epoch: 0,
-            visual_affected_byte_range: None,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
         }
     }
 
@@ -5389,7 +5412,8 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
-            visual_affected_byte_range: None,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
         };
         coord.prepared_queue.enqueue(tx);
 
@@ -5647,7 +5671,8 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
-            visual_affected_byte_range: None,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
         };
         coord.prepared_queue.enqueue(new_tx);
 
@@ -5862,7 +5887,8 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
-            visual_affected_byte_range: None,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
         }
     }
 

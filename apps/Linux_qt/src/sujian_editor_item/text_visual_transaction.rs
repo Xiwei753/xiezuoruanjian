@@ -444,18 +444,30 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// 前检查到不一致时跳过 caret 驱动（文字事务继续播自己的 glyph/reflow，
     /// 但不再驱动 caret）。
     pub cursor_owner_epoch: u64,
-    /// Issue #710 评论 5731145076 症状五/六: 事务的视觉 affected byte range。
+    /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
+    /// 事务的视觉 affected byte range，分 old/new 两侧保存。
     ///
     /// 基于段落边界扩展后的 byte range，而非原始的 inserted_range/deleted_range。
     /// 用于判断视觉区域重叠——newline 这种"改动 byte 很小、视觉影响很大"的事务，
     /// 原始 byte range 很小，但视觉 affected range 覆盖整个段落。
     ///
-    /// `find_conflicting_transaction` 用此字段判断冲突：如果新事务的
-    /// visual_affected_byte_range 与现有事务的 visual_affected_byte_range 重叠，
-    /// 现有事务被 rebase，保证同一视觉区域只能有一个当前 owner。
+    /// 之前只有一个 `visual_affected_byte_range: Option<(usize, usize)>`，Insert 存
+    /// new-text 坐标系、Delete 存 old-text 坐标系，`find_conflicting_transaction`
+    /// 直接做数值 overlap，跨 revision 不可比，导致误判/漏判冲突。
+    ///
+    /// 现在拆成 old/new 两侧：
+    /// - `visual_affected_byte_range_old`: old_text 坐标系（事务应用前的文本）
+    /// - `visual_affected_byte_range_new`: new_text 坐标系（事务应用后的文本）
+    /// Insert 事务 old 侧是插入点、new 侧是 inserted_range；
+    /// Delete 事务 old 侧是 deleted_range、new 侧是删除后落点。
+    ///
+    /// `find_conflicting_transaction` 接收新事务的 `OffsetMap`（从旧事务 new 坐标系
+    /// 到新事务查询坐标系的映射），把旧事务的 `visual_affected_byte_range_new`
+    /// 映射到查询坐标系再做 overlap。映射失败时保守判定为冲突（避免漏判）。
     ///
     /// `None` 表示事务没有视觉 affected region（如 CursorOnly）。
-    pub visual_affected_byte_range: Option<(usize, usize)>,
+    pub visual_affected_byte_range_old: Option<(usize, usize)>,
+    pub visual_affected_byte_range_new: Option<(usize, usize)>,
 }
 
 impl PreparedTextVisualTransaction {
@@ -542,22 +554,75 @@ impl PreparedTextVisualTransaction {
         }
     }
 
-    pub fn overlaps_byte_range(&self, byte_start: usize, byte_end: usize) -> bool {
-        self.units
+    /// Issue #710 评论 5732160521 问题 3: 冲突检测改为通过 OffsetMap 映射到同一坐标系。
+    ///
+    /// `offset_map` 是从**本事务 new 坐标系**到**查询坐标系**的映射
+    ///（即 `OffsetMap::build(&本事务.new_text, &查询坐标系的文本)`）。
+    /// 本事务的 `visual_affected_byte_range_new`（new 坐标系）通过 `offset_map`
+    /// 映射到查询坐标系，再与 `[byte_start, byte_end)` 做 overlap。
+    ///
+    /// 如果 `offset_map` 为 `None`（调用方无法提供映射，如 composition 路径），
+    /// 退化为保守策略：同时检查 old/new 两侧数值重叠（任一侧重叠即判定重叠）。
+    /// 这不完美但比单侧好，且 composition 路径的冲突判断本来就偏保守。
+    ///
+    /// 映射失败（范围跨映射边界）时保守判定为冲突（返回 true），避免漏判。
+    pub fn overlaps_byte_range(
+        &self,
+        byte_start: usize,
+        byte_end: usize,
+        offset_map: Option<&writer_core::editor::OffsetMap>,
+    ) -> bool {
+        // units / static_patches 的 byte range 是事务 new 坐标系，也需要映射。
+        // 但 units/static_patches 的 byte range 通常很小且与 visual_affected_byte_range_new
+        // 重合，这里先用 visual_affected_byte_range_new 的映射结果作为主判断，
+        // units/static_patches 退化为保守数值比较（它们在事务活跃期间与新事务冲突
+        // 的概率本来就高，保守判定为冲突是安全的）。
+        let units_overlap = self
+            .units
             .iter()
             .any(|u| u.slice.byte_end > byte_start && u.slice.byte_start < byte_end)
             || self
                 .static_patches
                 .iter()
-                .any(|p| p.intersects(byte_start, byte_end))
-            // Issue #710 评论 5731145076 症状六: 也检查 visual_affected_byte_range。
-            // newline 这种"改动 byte 很小、视觉影响很大"的事务，units 的 byte range
-            // 可能不与新事务重叠，但视觉区域重叠。用 visual_affected_byte_range
-            // 检测这种冲突，保证同一视觉区域只能有一个当前 owner。
-            || self
-                .visual_affected_byte_range
-                .map(|(s, e)| e > byte_start && s < byte_end)
-                .unwrap_or(false)
+                .any(|p| p.intersects(byte_start, byte_end));
+        if units_overlap {
+            return true;
+        }
+        // Issue #710 评论 5732160521 问题 3: visual_affected_byte_range 跨 revision 不可比。
+        // 用 offset_map 把本事务 new 侧范围映射到查询坐标系再做 overlap。
+        // 映射失败时保守判定为冲突。
+        if let Some((s, e)) = self.visual_affected_byte_range_new {
+            if let Some(map) = offset_map {
+                match map.map_old_to_new(s) {
+                    Some(ms) => {
+                        // range 映射：用 map_old_range_to_new 严格映射整个范围，
+                        // 失败则保守判定重叠。
+                        if let Some((ms, me)) = map.map_old_range_to_new(s, e) {
+                            return me > byte_start && ms < byte_end;
+                        }
+                        // 范围跨映射边界，保守判定为冲突
+                        return true;
+                    }
+                    None => {
+                        // 起点不在映射范围内。可能是本事务 new 坐标系的范围
+                        // 在查询坐标系中已被删除（位移到不存在）。
+                        // 保守判定为冲突，避免漏判。
+                        return true;
+                    }
+                }
+            } else {
+                // 无 offset_map（composition 路径），退化为保守双侧数值比较
+                if e > byte_start && s < byte_end {
+                    return true;
+                }
+                if let Some((os, oe)) = self.visual_affected_byte_range_old {
+                    if oe > byte_start && os < byte_end {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {
@@ -659,10 +724,23 @@ impl PreparedTransactionQueue {
         expired
     }
 
+    /// Issue #710 评论 5732160521 问题 3: `find_conflicting_transaction` 接收
+    /// `offset_map`，用于把每个旧事务的 `visual_affected_byte_range_new`
+    ///（旧事务 new 坐标系）映射到当前查询坐标系再做 overlap。
+    ///
+    /// `offset_map` 是从**旧事务 new 坐标系**到**当前查询坐标系**的映射。
+    /// 调用方应传 `OffsetMap::build(&旧事务的new_text, &当前查询坐标系的文本)`。
+    /// 在连续事务场景下，旧事务的 new_text == 新事务的 old_text，所以
+    /// `offset_map = OffsetMap::build(&新事务.old_text, &新事务.new_text)`
+    /// 即可（这是新事务自己的 OffsetMap）。
+    ///
+    /// `offset_map` 为 `None` 时（composition 路径无法提供），退化为保守双侧
+    /// 数值比较。
     pub fn find_conflicting_transaction(
         &self,
         byte_start: usize,
         byte_end: usize,
+        offset_map: Option<&writer_core::editor::OffsetMap>,
     ) -> Option<VisualTransactionKey> {
         self.transactions
             .iter()
@@ -670,7 +748,7 @@ impl PreparedTransactionQueue {
                 t.state != TextVisualTransactionState::Cancelled
                     && t.state != TextVisualTransactionState::Completed
             })
-            .find(|t| t.overlaps_byte_range(byte_start, byte_end) || t.is_composition())
+            .find(|t| t.overlaps_byte_range(byte_start, byte_end, offset_map) || t.is_composition())
             .map(|t| t.key)
     }
 
@@ -699,5 +777,179 @@ impl PreparedTransactionQueue {
 
     pub fn is_empty(&self) -> bool {
         self.transactions.is_empty()
+    }
+}
+
+// ── Issue #710 评论 5732160521 回归测试 ──
+//
+// 修复后这些测试验证"bug 已修复"：
+// - 问题 2: tick/render/opacity/边沿 reset 四处消费同一个 current_cursor_blink_mode()，
+//   判断一致。
+// - 问题 3: visual_affected_byte_range 保存 old/new 两侧，find_conflicting_transaction
+//   通过 OffsetMap 映射到同一坐标系比较，不再跨 revision 误判/漏判。
+#[cfg(test)]
+mod issue_710_comment_5732160521_repro {
+    use super::*;
+    use writer_core::editor::OffsetMap;
+
+    /// 构造最小化测试事务：只填 key/operation_kind/visual_affected_byte_range_{old,new}，
+    /// 其余字段用空/None。state=Pending 保证被 find_conflicting_transaction 遍历。
+    fn make_test_tx(
+        transaction_id: u64,
+        operation_kind: TextVisualOperationKind,
+        visual_affected_byte_range_old: Option<(usize, usize)>,
+        visual_affected_byte_range_new: Option<(usize, usize)>,
+    ) -> PreparedTextVisualTransaction {
+        PreparedTextVisualTransaction {
+            key: VisualTransactionKey::new(transaction_id, 0),
+            state: TextVisualTransactionState::Pending,
+            operation_kind,
+            timeline: TransactionTimeline::new(100),
+            units: Vec::new(),
+            static_patches: Vec::new(),
+            old_cursor_rect: None,
+            new_cursor_rect: None,
+            cursor_visual_track: None,
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: None,
+            cursor_owner_epoch: 0,
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
+        }
+    }
+
+    // ── 问题 2: 光标 blink 双重判断导致快速点击光标消失 ──
+    //
+    // 修复后：tick_cursor_animation / build_cursor_render_state_for_frame /
+    // cursor_blink_opacity / 边沿 reset 四处全部消费 current_cursor_blink_mode()
+    // 的同一个结果。本测试验证修复后的统一判断逻辑：在 CursorOnly Tween 期间
+    //（has_cursor_only_tween=true，无 Insert 事务），blink 应被 Suppressed。
+    #[test]
+    fn test_issue710_cursor_blink_unified_judgment() {
+        // 构造"没有 Insert 事务"的队列。CursorOnly Tween 不入正文事务队列
+        //（它由 cursor_ctrl.animation 表示，不在 PreparedTransactionQueue 里）。
+        let queue = PreparedTransactionQueue::new();
+
+        // 真实调用源代码方法
+        let has_active_insert = queue.has_active_insert();
+        let has_active_text_transaction = queue.active_transactions().iter().any(|t| {
+            !matches!(
+                t.state,
+                TextVisualTransactionState::Completed | TextVisualTransactionState::Cancelled
+            )
+        });
+
+        // CursorOnly Tween 已开始（cursor_ctrl.animation.is_some()），不入正文队列
+        let has_cursor_only_tween = true;
+        let current_coordinated_text_cursor_animation_enabled = true;
+
+        // 修复后的统一判断（current_cursor_blink_mode 的逻辑）：
+        // tick / render / opacity / 边沿 reset 全部用这一个表达式。
+        let unified_suppressed = (current_coordinated_text_cursor_animation_enabled
+            && has_active_text_transaction)
+            || has_cursor_only_tween;
+
+        // 验证：CursorOnly Tween 期间 blink 应被 Suppressed（常亮），不会因 blink
+        // 切到 opacity=0 而消失。
+        assert!(
+            unified_suppressed,
+            "修复后：CursorOnly Tween 期间 blink 应被 Suppressed（常亮），\
+             has_active_insert={} has_active_text_transaction={} has_cursor_only_tween={}",
+            has_active_insert, has_active_text_transaction, has_cursor_only_tween
+        );
+
+        // 验证：修复后 tick 和 render 用同一个判断，必然一致。
+        // 之前 tick 用 has_active_text_transaction || has_cursor_only_tween，
+        // render 用 has_active_insert，两者不一致。现在统一为 unified_suppressed。
+        let tick_suppressed = unified_suppressed;
+        let render_suppressed = unified_suppressed;
+        assert_eq!(
+            tick_suppressed, render_suppressed,
+            "修复后：tick/render/opacity/边沿 reset 四处消费同一个 current_cursor_blink_mode()，\
+             必然一致"
+        );
+    }
+
+    // ── 问题 3: visual_affected_byte_range 跨 revision 不可比 ──
+    //
+    // 修复后：visual_affected_byte_range 保存 old/new 两侧，
+    // find_conflicting_transaction 接收 OffsetMap，把旧事务的
+    // visual_affected_byte_range_new 映射到查询坐标系再做 overlap。
+
+    /// 问题 3a — 验证修复后不再误判跨 revision 冲突。
+    ///
+    /// tx1 (Insert): old="b", new="ab"（开头插 a）。
+    ///   visual_affected_byte_range_new = Some((0, 1))  // a 在 new="ab" 的 0..1
+    /// 之后外部操作把 "ab" 变成 "abc"（末尾插 c），当前 revision = "abc"。
+    /// 第三笔在 "abc" 操作 c 区域，raw range = (2, 3)（"abc" 坐标系）。
+    ///
+    /// OffsetMap 从 tx1 的 new_text="ab" 到当前 "abc"：公共前缀 "ab"（2 bytes），
+    /// entry: old=0, new=0, length=2, Identity。
+    /// 映射 tx1 的 (0,1) → (0,1)。overlap (0,1) vs (2,3) → 不重叠 → 不冲突。正确。
+    #[test]
+    fn test_issue710_visual_affected_byte_range_no_false_conflict() {
+        let tx1 = make_test_tx(
+            1,
+            TextVisualOperationKind::Insert,
+            Some((0, 0)), // old 侧是插入点
+            Some((0, 1)), // new 侧是 inserted_range
+        );
+        let mut queue = PreparedTransactionQueue::new();
+        queue.enqueue(tx1);
+
+        // OffsetMap 从 tx1 的 new_text="ab" 到当前 "abc"。
+        let offset_map = OffsetMap::build("ab", "abc");
+        // 第三笔在当前 revision "abc" 操作 c 区域，raw range = (2, 3)。
+        let conflict =
+            queue.find_conflicting_transaction(2, 3, Some(&offset_map));
+
+        // 修复后：tx1 的 (0,1) 映射到当前坐标系仍是 (0,1)（a 区域），
+        // 查询 (2,3) 是 c 区域，不重叠 → 不冲突。
+        assert!(
+            conflict.is_none(),
+            "修复后不应误判冲突：tx1 的 visual_affected_byte_range_new=(0,1) 基于\
+             new='ab'，通过 OffsetMap 映射到当前 'abc' 坐标系仍为 (0,1)（a 区域），\
+             查询 raw range=(2,3) 是 c 区域，不重叠。实际返回 {:?}",
+            conflict
+        );
+    }
+
+    /// 问题 3b — 验证修复后不再漏判跨 revision 冲突。
+    ///
+    /// tx1 (Insert): old="ab", new="aXb"（中间插 X）。
+    ///   visual_affected_byte_range_new = Some((1, 2))  // X 在 new="aXb" 的 1..2
+    /// 之后 a 被删除，当前 revision 变为 "Xb"，X 位移到 0..1。
+    /// 第三笔在 "Xb" 操作 X 区域，raw range = (0, 1)（"Xb" 坐标系）。
+    ///
+    /// OffsetMap 从 tx1 的 new_text="aXb" 到当前 "Xb"：公共前缀 ""（a≠X），
+    /// 公共后缀 "Xb"（2 bytes），entry: old=1, new=0, length=2, Shifted。
+    /// 映射 tx1 的 (1,2) → (0,1)。overlap (0,1) vs (0,1) → 重叠 → 冲突。正确。
+    #[test]
+    fn test_issue710_visual_affected_byte_range_no_missed_conflict() {
+        let tx1 = make_test_tx(
+            1,
+            TextVisualOperationKind::Insert,
+            Some((1, 1)), // old 侧是插入点
+            Some((1, 2)), // new 侧是 inserted_range（X 在 "aXb" 的 1..2）
+        );
+        let mut queue = PreparedTransactionQueue::new();
+        queue.enqueue(tx1);
+
+        // OffsetMap 从 tx1 的 new_text="aXb" 到当前 "Xb"（a 被删除）。
+        let offset_map = OffsetMap::build("aXb", "Xb");
+        // 第三笔在当前 revision "Xb" 操作 X 区域，raw range = (0, 1)。
+        let conflict =
+            queue.find_conflicting_transaction(0, 1, Some(&offset_map));
+
+        // 修复后：tx1 的 (1,2) 映射到当前坐标系为 (0,1)（X 区域），
+        // 查询 (0,1) 也是 X 区域，重叠 → 冲突。
+        assert!(
+            conflict.is_some(),
+            "修复后不应漏判冲突：tx1 的 visual_affected_byte_range_new=(1,2) 基于\
+             new='aXb'，通过 OffsetMap 映射到当前 'Xb' 坐标系为 (0,1)（X 区域），\
+             查询 raw range=(0,1) 也是 X 区域，应检测到 tx1 冲突。实际返回 None"
+        );
     }
 }

@@ -479,13 +479,15 @@ pub struct SujianEditorItem {
     /// 供 `tick_cursor_animation()` 在 GUI 线程使用，确保光标和文字 progress
     /// 来自同一个 `frame_now`，不再各自 `Instant::now()`。
     last_frame_now: Option<std::time::Instant>,
-    /// Issue #709 评论 issue-body-709: 上一帧 `has_active_insert` 状态，
-    /// 用于检测正文协同事务的边沿变化（false->true / true->false），
-    /// 在边沿处重置 blink 状态，避免输入时光标消失。
-    /// - false->true（insert 开始）：立即 blink_visible = true（光标从可见状态开始）
-    /// - true->false（insert 结束）：重置 blink_last_toggle = now / blink_visible = true，
-    ///   不继承事务开始前碰巧为 false 的旧相位
-    prev_has_active_insert: bool,
+    /// Issue #710 评论 5732160521 问题 2: 上一帧 `cursor_blink_suppressed` 状态，
+    /// 用于检测 blink 抑制的边沿变化（false->true / true->false），
+    /// 在边沿处重置 blink 状态，避免输入/光标动画时光标消失。
+    /// - false->true（suppressed 开始）：立即 blink_visible = true（光标从可见状态开始）
+    /// - true->false（suppressed 结束）：重置 blink_last_toggle = now / blink_visible = true，
+    ///   不继承 suppressed 开始前碰巧为 false 的旧相位
+    /// 之前只跟踪 has_active_insert（只认 Insert），CursorOnly Tween 的起止不触发边沿重置。
+    /// 现在跟踪 current_cursor_blink_mode() == Suppressed，覆盖 CursorOnly Tween。
+    prev_cursor_blink_suppressed: bool,
 }
 
 impl Default for SujianEditorItem {
@@ -620,7 +622,7 @@ impl Default for SujianEditorItem {
             prepared_frame: None,
             cursor_ctrl: cursor_controller::CursorController::new(),
             last_frame_now: None,
-            prev_has_active_insert: false,
+            prev_cursor_blink_suppressed: false,
         }
     }
 }

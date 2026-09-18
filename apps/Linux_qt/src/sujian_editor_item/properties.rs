@@ -570,15 +570,38 @@ impl SujianEditorItem {
         self.cursor_ctrl.cursor_should_be_visible()
     }
 
-    pub(crate) fn cursor_blink_opacity(&self) -> f32 {
-        use animation_coordinator::CursorBlinkMode;
-        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self.pipeline.animation_coordinator().has_active_insert()
+    /// Issue #710 评论 5732160521 问题 2: 光标 blink 模式的唯一入口。
+    ///
+    /// 之前 `tick_cursor_animation` / `build_cursor_render_state_for_frame` /
+    /// `cursor_blink_opacity` / 边沿 reset 各自判断 blink 是否抑制，且判断条件
+    /// 不一致：tick 用 `has_active_text_transaction() || has_cursor_only_tween`，
+    /// render/opacity 用 `has_active_insert()`。快速鼠标点击时只有 CursorOnly
+    /// Tween（无 Insert 事务），tick 认为 Suppressed（常亮），render 认为 Normal
+    ///（正常 blink），opacity 可能为 0 → 光标消失。
+    ///
+    /// 现在统一为这一个 `&self` 方法，四处消费同一个结果：
+    /// - CursorOnly Tween active（`cursor_ctrl.animation.is_some()`）→ Suppressed
+    /// - 当前 epoch 下正文视觉事务 active（`has_active_text_transaction()`，
+    ///   且 `current_coordinated_text_cursor_animation_enabled`）→ Suppressed
+    /// - idle → Normal
+    pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
+        use super::cursor_animation::CursorBlinkMode;
+        let has_active_text = self
+            .pipeline
+            .animation_coordinator()
+            .has_active_text_transaction();
+        let has_cursor_only_tween = self.cursor_ctrl.animation.is_some();
+        if (self.current_coordinated_text_cursor_animation_enabled && has_active_text)
+            || has_cursor_only_tween
         {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
-        };
+        }
+    }
+
+    pub(crate) fn cursor_blink_opacity(&self) -> f32 {
+        let blink_mode = self.current_cursor_blink_mode();
         self.cursor_ctrl.cursor_blink_opacity(blink_mode) as f32
     }
 

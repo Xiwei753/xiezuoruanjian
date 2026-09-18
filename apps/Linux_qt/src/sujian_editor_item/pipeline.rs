@@ -906,12 +906,33 @@ impl LinuxEditorPipeline {
                 // unchanged material，文字闪烁/光标乱闪。
                 // 现在用 compute_affected_paragraph_ranges 按 old/new text 段落边界扩展，
                 // 确保拆开/合并段落的两边 visual lines 都进入 diff。
+                //
+                // Issue #710 评论 5732160521 问题 1: 不能把同一组 byte 坐标同时套给
+                // old/new text。inserted_range 是新文本坐标、deleted_range 是旧文本坐标，
+                // 不能互换。这里按事务类型分别传 old/new 坐标系：
+                // - Insert: old 侧是插入点 (raw_byte_start, raw_byte_start)，
+                //   new 侧是 inserted_range (raw_byte_start, raw_byte_end)。
+                // - Delete: old 侧是 deleted_range (raw_byte_start, raw_byte_end)，
+                //   new 侧是删除后落点 (raw_byte_start, raw_byte_start)。
+                // - Replace/Cursor: 保守地两侧都用 (raw_byte_start, raw_byte_end)，
+                //   expand_to_paragraph_boundaries 内部会做 char boundary 调整。
+                let (old_edit_range, new_edit_range) = match vt.kind {
+                    writer_core::editor::EditorAnimationKind::Insert => {
+                        ((raw_byte_start, raw_byte_start), (raw_byte_start, raw_byte_end))
+                    }
+                    writer_core::editor::EditorAnimationKind::Delete => {
+                        ((raw_byte_start, raw_byte_end), (raw_byte_start, raw_byte_start))
+                    }
+                    writer_core::editor::EditorAnimationKind::Cursor => {
+                        ((raw_byte_start, raw_byte_end), (raw_byte_start, raw_byte_end))
+                    }
+                };
                 let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
                     layout::compute_affected_paragraph_ranges(
                         &vt.old_text,
                         &vt.new_text,
-                        raw_byte_start,
-                        raw_byte_end,
+                        old_edit_range,
+                        new_edit_range,
                     );
                 // affected_byte_start/end 用于 prepare_document_visual_snapshot_scoped
                 // 和 prepare_affected_paragraphs_visual_snapshot，它们排版 new text，
