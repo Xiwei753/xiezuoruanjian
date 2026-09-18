@@ -1,6 +1,9 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
@@ -186,27 +189,36 @@ class ComposeEditorVisualState(
     private var nextLocalPatchId: Long = 1_000_000L
 
     /**
-     * #703 评论 A 缺陷1：barrier ghost unit key 计数器 —
+     * #708 评论 5723410606 第二节：首帧 ghost unit key 计数器 —
      * 从 2_000_000L 起避免与 [ComposeVisualTimeline] 内部 nextUnitKey（从 1L 起）
      * 和 [nextLocalPatchId]（从 1_000_000L 起）冲突。
-     *
-     * barrier ghost 是 pending ownership scene 里的临时 unit，
-     * 下一帧 [drainPendingPatchesAtFrame] 后由 timeline 的正式 scene 取代。
-     * key 只需在 barrier 期间唯一，不复用 timeline 的 key 空间，
-     * 避免 drain 后 timeline ghost 与 barrier ghost key 碰撞。
+     * 首帧 ghost 是 onAuthoritativeLayout 建立的临时 unit，
+     * 下一帧 drainPendingPatchesAtFrame 后由 timeline 的正式 scene 取代。
      */
-    private var nextBarrierUnitKey: Long = 2_000_000L
+    private var nextHandoffUnitKey: Long = 2_000_000L
 
     /**
-     * #706 评论 5715257924 症状1：本地输入帧屏障 —
-     * 用户按键时武装，权威 layout + visual scene 准备好后清。
-     * 活跃期间 draw 层重放上一稳定帧，不裸画 BasicTextField 已更新的正文。
-     * 普通字段，不是 Compose State。
+     * #708 评论 5723410606 第一节：draw 阶段原子快照 —
+     * 由 [drawSnapshot] 在 drawWithContent 里一次性取走。
+     * 关键：这个 State 只能在 drawWithContent 里读。
+     * 动画每帧更新时，Compose 只重跑 Draw，不重新执行 BasicTextField 的 Composition/Layout。
      */
-    private var pendingLocalFrameBarrier: ComposeLocalFrameBarrier? = null
+    private var drawSnapshotState: ComposeEditorDrawSnapshot by mutableStateOf(ComposeEditorDrawSnapshot())
 
-    /** barrier epoch 计数器。 */
-    private var nextLocalFrameEpoch: Long = 0L
+    /**
+     * #708 评论 5723410606 第二节：本地编辑首帧交接 —
+     * 只保存"这一笔编辑哪些局部区域暂时由 overlay 接管"，不保存上一整屏。
+     * 取代了已删除的 ComposeLocalFrameBarrier。
+     */
+    private var pendingLocalEditHandoff: ComposeLocalEditHandoff? = null
+
+    /**
+     * #708 评论 5723410606 第三节：layout fingerprint 持久状态 —
+     * 把 fingerprint 做成明确 data class，不再 List<Any>。
+     * onAuthoritativeLayout 最前面先算 fingerprint，相同正文+相同几何时直接返回，
+     * 不更新 layout epoch、不调用 frameCoordinator.onLayout/observePresentedLayout、不重新发布相同 TextLayoutResult。
+     */
+    private var lastObservedLayoutFingerprint: LayoutFingerprint? = null
 
     /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
@@ -228,6 +240,11 @@ class ComposeEditorVisualState(
      * 由 [WritingEditorSurface] 的 InputTransformation 调用，不等 Core，不启动动画。
      * 等下一份真实 TextLayoutResult 到达时由 [onAuthoritativeLayout] 配对生成
      * ComposeVisualPatch(intent=null) 入队。
+     *
+     * #708 评论 5723410606 第二节：不再在 InputTransformation 阶段武装整屏 barrier —
+     * 那一刻还没有本次新文字的 TextLayoutResult，冻结画面会把上一整屏当成 baseScene/baseLayout，
+     * 是"整行闪、全工作区闪、旧字残留"的来源。只记录 edit，由 onAuthoritativeLayout 在 layout 阶段
+     * 配对出 local patch 后建立局部 handoff scene。
      */
     fun recordLocalInput(
         oldText: String,
@@ -236,40 +253,14 @@ class ComposeEditorVisualState(
         newSelection: TextRange,
         changes: List<LocalInputChange>,
     ) {
-        // #706 评论 5715257924 症状1：barrier 必须在 InputTransformation 这一拍就武装，
-        // 并真正保留上一帧。连续快速输入时，如果上一笔 barrier 还没完成，
-        // 不要换掉 baseScene/baseLayout，只更新 expectedText/expectedSelection。
-        //
-        // #706 评论 5718984286 修复：每次本地文字变更都先武装 barrier，
-        // 不在这里分 composition / committed — InputTransformation 拿到的 compositionActive
-        // 是旧 TextFieldState，判断不了本次新 composition。真正 composition 收口由
-        // onAuthoritativeLayout 用本次真实 compositionActive 决定（preedit 时清 barrier）。
-        val current = pendingLocalFrameBarrier
-        pendingLocalFrameBarrier =
-            if (current == null) {
-                ComposeLocalFrameBarrier(
-                    epoch = nextLocalFrameEpoch++,
-                    baseScene = _visualScene.value,
-                    baseLayout = lastPresentedLayout,
-                    expectedText = newText,
-                    expectedSelection = newSelection,
-                )
-            } else {
-                current.copy(
-                    expectedText = newText,
-                    expectedSelection = newSelection,
-                    handoffPatchId = null,
-                )
-            }
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
     /**
-     * #706 评论 5715257924 症状1：draw 层查询当前本地帧屏障快照。
-     * 非 null 表示处于本地输入 handoff 期间，draw 层应重放上一稳定帧。
-     * internal 可见性 — [ComposeLocalFrameBarrier] 是 internal 类型。
+     * #708 评论 5723410606 第一节：draw 层在 drawWithContent 里一次性取走 draw 阶段原子快照。
+     * 关键：这个 State 只能在 drawWithContent 里读。
      */
-    internal fun localFrameBarrierSnapshot(): ComposeLocalFrameBarrier? = pendingLocalFrameBarrier
+    internal fun drawSnapshot(): ComposeEditorDrawSnapshot = drawSnapshotState
 
     /**
      * #694 评论 5694645209 问题1：根据 bridge 的 [InputSnapshotOutcome] 收口 —
@@ -374,21 +365,21 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #706 评论 5718984286 修复：配对出 local patch 后绑定到当前 barrier 的防御性封装 —
-     * barrier 应已由 [recordLocalInput] 武装；如果没有，说明生命周期又断了，
-     * 记日志不默默放过（localPatch 仍入队，但 handoff 无 barrier redirect）。
+     * #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff 的防御性封装 —
+     * handoff 应已由 [onAuthoritativeLayout] 建立；如果没有，说明生命周期又断了，
+     * 记日志不默默放过（localPatch 仍入队，但无 handoff redirect）。
      *
      * 抽成 helper 避免在 [finishCompositionCommit] / [onAuthoritativeLayout] 内增加嵌套层数。
      */
-    private fun bindLocalPatchBarrierHandoff(
+    private fun bindLocalPatchHandoff(
         localPatchId: Long,
         logTag: String,
     ) {
-        val barrier = pendingLocalFrameBarrier
-        if (barrier == null) {
+        val handoff = pendingLocalEditHandoff
+        if (handoff == null) {
             Log.w(TAG, "$logTag: localPatchId=$localPatchId")
         } else {
-            pendingLocalFrameBarrier = barrier.copy(handoffPatchId = localPatchId)
+            pendingLocalEditHandoff = handoff.copy(patchId = localPatchId)
         }
     }
 
@@ -410,9 +401,9 @@ class ComposeEditorVisualState(
         compositionVisualPhase = CompositionVisualPhase.Idle
         // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
         localInputTracker.clear()
-        // #706 评论 5718984286 修复：composition cancel/reject/NoTextChange 后清本地帧屏障 —
-        // 避免第一笔 preedit 误武装的 barrier 一直遗留，draw 层持续重放旧帧直到 editor clear() 才恢复。
-        pendingLocalFrameBarrier = null
+        // #708 评论 5723410606 第二节：composition cancel/reject/NoTextChange 后清本地编辑 handoff —
+        // 避免第一笔 preedit 误记录的 handoff 一直遗留。
+        pendingLocalEditHandoff = null
     }
 
     /**
@@ -436,10 +427,8 @@ class ComposeEditorVisualState(
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
-                    // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
-                    // #706 评论 5718984286 修复：最终 commit 对应的 barrier 应已由 recordLocalInput() 武装；
-                    // 如果没有，说明生命周期又断了，记日志不默默放过（localPatch 仍入队，但 handoff 无 barrier redirect）。
-                    bindLocalPatchBarrierHandoff(localPatch.id, "finish_composition_commit_barrier_missing")
+                    // #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff。
+                    bindLocalPatchHandoff(localPatch.id, "finish_composition_commit_handoff_missing")
                 }
             }
         }
@@ -592,13 +581,18 @@ class ComposeEditorVisualState(
         // 被删除的 glyph 可以由 visual layer 接管（ghost）；
         // 后续普通排版回流先交给 BasicTextField 自己；
         // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
-        // 以后如果确实要做"整行平滑回流"，应单独设计 displacement/reflow layer，
-        // 并保证所有权原子交接，不能和 deleted ghost 混在同一套状态里。
-        // #703 评论 5710977972 缺陷2：本地普通输入/删除都不把整行幸存文字交给 retainedMoves。
-        // 本地 Insert 也直接 retainedMoves = emptyList()。
-        // 一次输入触发自动换行时，幸存文字不应被空间裁切误当"新字"隐藏/吐出。
-        // 以后如果要做整行平滑回流，单独做 reflow/displacement 层。
+        // #708 评论 5723410606 第四节：独立 reflow 通道 —
+        // 不再把"整行/整段 path.getBounds()"当一个块移动（retainedMoves），
+        // 改成 ComposeReflowPlanner.plan 按 old/new 行边界切细段，每段在两边都只落在单一视觉行，
+        // 只有位置真的变化才生成 ComposeReflowMove。reflowMoves 是与 retainedMoves 不同的所有权：
+        // 字仍存在，但从 oldBounds 平移到 newBounds，始终全亮。
         val retainedMoves = emptyList<RetainedMove>()
+        val reflowMoves =
+            ComposeReflowPlanner.plan(
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                offsetMap = offsetMap,
+            )
 
         // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
         // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
@@ -637,6 +631,7 @@ class ComposeEditorVisualState(
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
+            reflowMoves = reflowMoves,
             cursorMotionPath = cursorMotionPath,
             // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
             durationMs = 0L,
@@ -673,15 +668,35 @@ class ComposeEditorVisualState(
         compositionActive: Boolean = false,
     ) {
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
-        _latestLayout.update { snapshot }
 
-        // #706 评论 5718984286 修复：用本次真实 compositionActive 收口 barrier —
-        // InputTransformation 里先暂时武装了 barrier，这里拿到本次输入后的真实 composition 状态。
-        // 如果是 IME preedit（compositionActive=true），清掉 barrier，让 BasicTextField 正常实时绘制 preedit；
-        // 如果是 committed edit，保留 barrier，继续等 local patch handoff。
-        if (compositionActive) {
-            pendingLocalFrameBarrier = null
+        // #708 评论 5723410606 第三节：layout 回路真正断开 —
+        // onAuthoritativeLayout 最前面先算 fingerprint。
+        // 相同正文+相同几何时：
+        // - 可以更新纯 selection/caret 的 draw 数据；
+        // - 不更新 layout epoch；
+        // - 不调用 frameCoordinator.onLayout/observePresentedLayout；
+        // - 不重新发布相同 TextLayoutResult；
+        // - 直接返回。
+        // 只有真实 text/line geometry 变化才把新 layout 写进 draw snapshot。
+        // 旧实现先 _latestLayout.update 再 hasSameTextAndGeometry 去重，顺序反了。
+        val fingerprint = layoutFingerprint(snapshot)
+        val fingerprintUnchanged = !compositionActive && fingerprint == lastObservedLayoutFingerprint
+        if (fingerprintUnchanged) {
+            // 纯 selection/caret 变化：只更新 draw snapshot 的 restingCursorRect，
+            // 不更新 layout epoch、不调 frameCoordinator、不重新发布相同 TextLayoutResult。
+            val cursorRect = computeCursorRectFromLayout(snapshot)
+            _restingCursorRect.update { cursorRect }
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    layout = snapshot,
+                    restingCursorRect = cursorRect,
+                )
+            return
         }
+        lastObservedLayoutFingerprint = fingerprint
+
+        // 真实 text/line geometry 变化：把新 layout 写进 _latestLayout 和 draw snapshot
+        _latestLayout.update { snapshot }
 
         // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
         // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
@@ -708,6 +723,11 @@ class ComposeEditorVisualState(
         ) {
             val cursorRectAwaiting = computeCursorRectFromLayout(snapshot)
             _restingCursorRect.update { cursorRectAwaiting }
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    layout = snapshot,
+                    restingCursorRect = cursorRectAwaiting,
+                )
             compositionVisualPhase = CompositionVisualPhase.AwaitingBridgeResolution
             return
         }
@@ -715,23 +735,6 @@ class ComposeEditorVisualState(
         // #691：更新静止光标 rect
         val cursorRect = computeCursorRectFromLayout(snapshot)
         _restingCursorRect.update { cursorRect }
-
-        // #698 评论 5697612595 / 5699401353 修复3：真实 layout 去重 —
-        // 相同正文/几何不能重复推进动画基线，防止 onTextLayout 因非真实变化重复触发形成回路
-        // （动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout ->
-        // VisualState 再消费 layout）。只在 !compositionActive 时检查：composition 活跃时 preedit
-        // 可能正在变化，即使此刻正文/几何与 lastPresentedLayout 相同，也需要进入 composition 分支武装 phase。
-        // 去重分支只更新 _latestLayout（已在上方更新）和 _restingCursorRect（已在上方更新），
-        // 直接 return，不 drain localInputTracker、不发布 patch、不推进 frameCoordinator、不更新 lastPresentedLayout。
-        // "正文+几何相同"定义（#698 评论 5699401353 修复3）：text + size + lineCount +
-        // 每行 start/end/top/bottom/left/right/baseline 全部相同（[layoutFingerprint]）。
-        // selection 不纳入 fingerprint — 纯 selection 变化时 draw 层用 latestLayout + liveSelection
-        // 实时算光标（computeRestingCursorRect），不依赖 lastPresentedLayout.selection，不需要重新推进基线。
-        // 纯滚动也不触发布局 epoch — scrollY 变化时行几何不变，fingerprint 相同，去重 return，
-        // 不需要重新推进动画基线（纯滚动不需要重新播放动画）。
-        if (!compositionActive && hasSameTextAndGeometry(lastPresentedLayout, snapshot)) {
-            return
-        }
 
         // #694 评论第 3 步 + 评论 5691696678 问题1：配对 pending local edit chain 生成 ComposeVisualPatch(intent=null)。
         // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
@@ -753,10 +756,8 @@ class ComposeEditorVisualState(
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
-                    // #706 评论 5715257924 症状1：配对出 local patch 后绑定到当前 barrier。
-                    // #706 评论 5718984286 修复：committed edit 对应的 barrier 应已由 recordLocalInput() 武装；
-                    // 如果没有，说明生命周期又断了，记日志不默默放过。
-                    bindLocalPatchBarrierHandoff(localPatch.id, "local_patch_barrier_missing")
+                    // #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff。
+                    bindLocalPatchHandoff(localPatch.id, "local_patch_handoff_missing")
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
@@ -764,33 +765,13 @@ class ComposeEditorVisualState(
                             "newLen=${newText.length} chainSize=${localChain.size} " +
                             "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
-                    // #703 评论 A：editEpoch barrier — 本地输入一发生就建立视觉所有权屏障。
-                    // 在新 layout + visual scene 准备好之前，不能让"已更新后的 BasicTextField 原始正文"
-                    // 裸画一帧。生成 localPatch 入队后同步把 localPatch.insertedUnits merge 到
-                    // _visualScene.hiddenRanges，让 draw 层在同一帧就裁切掉新插入区域。
-                    // 不调 drainPendingPatchesAtFrame — 那会清空 pendingPatches，破坏 #694 批量 drain
-                    // 设计（同一 VSync 多笔输入应积攒到下一帧 withFrameNanos 一次性合成 batch drain）。
-                    // 也不调 sampleVisualScene — 动画进度（alpha/position/clipFraction）应由下一帧
-                    // withFrameNanos 用精确 frameTimeNanos 采样，不用 System.nanoTime() 猜当前帧。
-                    // barrier 只需声明范围所有权（hiddenRanges），动画 unit 由下一帧 sample 产生。
-                    //
-                    // #703 评论 A 缺陷1：删除路径也要建立视觉所有权屏障。
-                    // 旧实现只处理 insertedUnits（加入 hiddenRanges），对 deletedUnits 无任何处理。
-                    // 删除后 BasicTextField 已切到新正文（被删 glyph 不存在），但 deleted ghost 要等
-                    // 下一帧 drainPendingPatchesAtFrame->timeline.applyPatch 才创建，导致
-                    // "先消失/闪一下 -> ghost 再出现 -> 光标移动 -> 最后消失"的裸帧窗口。
-                    //
-                    // 修复：把 barrier 做成 pending ownership scene：
-                    // - inserted range：立即加入 hiddenRanges（保留原逻辑）。
-                    // - deleted range：立即根据 oldLayout + deletedUnits 建立静态 ghost，
-                    //   alpha=1（完整可见）、position=旧位置、targetRange=null，
-                    //   加入 _visualScene.units，让 draw 层在同帧就画出旧字。
-                    // - cursor：改回旧 caret 位置，不要先跳到新 selection 的 resting cursor，
-                    //   避免光标先跳到新位置再被 timeline cursor 动画拉回旧位置（回抽）。
-                    // 下一帧 drain 时 timeline.applyPatch 会创建自己的 ghost（alpha 1->0），
-                    // sample 后用 timeline scene 覆盖 _visualScene，barrier ghost 被取代。
-                    // timeline ghost 在 drain 帧的 alpha=1、位置=旧位置，与 barrier ghost 一致，
-                    // 视觉上无缝衔接，不会再次闪烁。
+                    // #708 评论 5723410606 第二节：本地 patch 生成以后，同步建立首帧 scene —
+                    // 不再缓存上一整屏，只把"这一笔编辑哪些局部区域暂时由 overlay 接管"放进 scene：
+                    // - Insert：只把 insertedUnits 加进 hiddenRanges；
+                    // - Delete：只从 oldLayout 为 deletedUnits 建 ghost；
+                    // - Cursor：scene.cursorRect 先放真实旧 caret；
+                    // - 其他正文完全由当前 BasicTextField 直接画。
+                    // 下一次 withFrameNanos 再把这个 scene 交给 timeline 继续。
                     _visualScene.update { scene ->
                         val mergedHidden = scene.hiddenRanges.toMutableList()
                         for (ins in localPatch.insertedUnits) {
@@ -800,7 +781,7 @@ class ComposeEditorVisualState(
                                 mergedHidden.add(ins)
                             }
                         }
-                        // 删除路径 barrier：为 deletedUnits 建立静态 ghost
+                        // 删除路径首帧 ghost：为 deletedUnits 建立静态 ghost
                         val mergedUnits = scene.units.toMutableList()
                         for (del in localPatch.deletedUnits) {
                             if (del.start >= del.end) continue
@@ -812,31 +793,20 @@ class ComposeEditorVisualState(
                                     oldLayout.result, del,
                                 ) ?: continue
                             val oldPosition = Offset(oldBounds.left, oldBounds.top)
-                            nextBarrierUnitKey++
+                            nextHandoffUnitKey++
                             mergedUnits +=
                                 VisualTextUnit(
-                                    key = nextBarrierUnitKey,
+                                    key = nextHandoffUnitKey,
                                     layout = oldLayout,
                                     range = del,
                                     targetRange = null,
                                     // 完整可见：alpha=1，不动画
                                     alpha = TimedFloat(1f, 1f, 0L, 0L),
                                     position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                                    // #703 评论 5710977972 缺陷2：barrier ghost 角色 = DeletedGhost，
-                                    // 由 cursor 从右向左裁切吞掉。
                                     role = VisualUnitRole.DeletedGhost,
                                 )
                         }
-                        // #703 评论 5710419102 问题1：删除首帧光标所有权 —
-                        // 把旧 caret 放进 scene.cursorRect，让 draw 层第一优先级使用它。
-                        // draw 层优先级是 scene.cursorRect ?: computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect，
-                        // 删除后 latestLayout/liveSelection 已是新值，computeRestingCursorRect 会先命中新 caret，
-                        // _restingCursorRect 永远不会被读到。所以必须写 scene.cursorRect。
-                        // barrier ghost、hiddenRanges、旧 cursor 必须在同一次 _visualScene.update 里一起发布，形成原子视觉场景。
-                        // 下一帧 drainPendingPatchesAtFrame 后 timeline 的 sample() 会接管 scene.cursorRect。
-                        // _restingCursorRect 保持"无活动动画时的最终静止位置"语义（上方已设成新 layout cursor）。
-                        // 优先用 localPatch.originCursorRect（从 chain.first().oldSelection.end + oldLayout.result 取的真实 T0 caret），
-                        // 不依赖可能 stale 的 oldLayout.selection。
+                        // 删除首帧光标所有权 — 把旧 caret 放进 scene.cursorRect
                         val barrierCursorRect =
                             if (localPatch.deletedUnits.isNotEmpty()) {
                                 localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
@@ -856,10 +826,13 @@ class ComposeEditorVisualState(
                             )
                         }
                     }
-                    // #703 评论 5710419102 问题1：不再单独改 _restingCursorRect。
-                    // 旧 caret 已通过 scene.cursorRect 发布（draw 层第一优先级）。
-                    // _restingCursorRect 保持上方设置的"新 layout cursor"语义
-                    // （无活动动画时的最终静止位置），不拿它承担 pending delete barrier。
+                    // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
+                    drawSnapshotState =
+                        drawSnapshotState.copy(
+                            scene = _visualScene.value,
+                            layout = snapshot,
+                            restingCursorRect = cursorRect,
+                        )
                 }
             }
             // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，
@@ -891,6 +864,11 @@ class ComposeEditorVisualState(
             }
             lastPresentedLayout = snapshot
             wasCompositionActive = true
+            drawSnapshotState =
+                drawSnapshotState.copy(
+                    layout = snapshot,
+                    restingCursorRect = cursorRect,
+                )
             return
         }
 
@@ -908,68 +886,66 @@ class ComposeEditorVisualState(
         val update = frameCoordinator.onLayout(snapshot)
         applyFrameUpdate(update)
         lastPresentedLayout = snapshot
+        // 同步 draw snapshot — Core visual path 也要让 draw 层读到最新 layout/scene
+        drawSnapshotState =
+            drawSnapshotState.copy(
+                scene = _visualScene.value,
+                layout = snapshot,
+                restingCursorRect = cursorRect,
+            )
     }
 
     /**
-     * #698 评论 5697612595 / 5699401353 修复3：判断新 snapshot 与上次呈现的 layout 是否"正文+几何相同"。
-     *
-     * 旧实现只有 `text 相同 && size 相同 && lineCount 相同`。同样的 size/lineCount，
-     * 行起止 offset、每行 top/bottom/left/right/baseline 仍可能变化。误判后直接 return，
-     * 让后续动画继续拿旧几何。
-     *
-     * 新实现建立真正的 layout fingerprint（[layoutFingerprint]），至少包括：
-     * - text
-     * - size（width/height）
-     * - lineCount
-     * - 每行 start/end（getLineStart/getLineEnd）
-     * - 每行 top/bottom/left/right（getLineTop/getLineBottom/getLineLeft/getLineRight）
-     * - 每行 baseline（getLineBaseline）
+     * #708 评论 5723410606 第三节：真正的 layout fingerprint —
+     * 把 fingerprint 做成明确 data class，不再 List<Any>。
+     * 包含 text + size + lineCount + 每行 start/end/top/bottom/left/right/baseline。
      *
      * selection 不纳入 fingerprint — 纯 selection 变化继续走 live selection 光标
      * （draw 层用 latestLayout + liveSelection 实时算光标），不触发布局 epoch。
      * 纯滚动也不触发布局 epoch — scrollY 变化时 text/行几何不变，fingerprint 相同，
      * 去重分支 return，不需要重新推进动画基线（纯滚动不需要重新播放动画）。
-     *
-     * 用于 [onAuthoritativeLayout] 去重，防止 onTextLayout 因非真实变化重复触发形成回路。
-     *
-     * @param last 上次真正呈现的 layout；null 时返回 false。
-     * @param snapshot 本次权威 layout。
-     * @return true 表示正文+几何相同（可去重，不推进动画基线）。
      */
-    private fun hasSameTextAndGeometry(
-        last: ComposeLayoutSnapshot?,
-        snapshot: ComposeLayoutSnapshot,
-    ): Boolean {
-        if (last == null) return false
-        return layoutFingerprint(snapshot) == layoutFingerprint(last)
-    }
+    internal data class LineFingerprint(
+        val start: Int,
+        val end: Int,
+        val top: Float,
+        val bottom: Float,
+        val left: Float,
+        val right: Float,
+        val baseline: Float,
+    )
+
+    internal data class LayoutFingerprint(
+        val text: String,
+        val width: Int,
+        val height: Int,
+        val lines: List<LineFingerprint>,
+    )
 
     /**
-     * #698 评论 5699401353 修复3：真正的 layout fingerprint —
-     * 把 text + size + lineCount + 每行 start/end/top/bottom/left/right/baseline
-     * 全部纳入比较，避免同 size/lineCount 但行几何变化时误判为相同。
-     *
-     * @param snapshot layout 快照。
-     * @return fingerprint 值列表（String/Int/Float 元素，用 List.equals 精确比较）。
+     * 计算 layout 的 fingerprint。相同正文+相同几何时 fingerprint 相等。
      */
-    private fun layoutFingerprint(snapshot: ComposeLayoutSnapshot): List<Any> {
+    private fun layoutFingerprint(snapshot: ComposeLayoutSnapshot): LayoutFingerprint {
         val result = snapshot.result
         val lineCount = result.lineCount
-        return buildList {
-            add(result.layoutInput.text.text)
-            add(result.size.width)
-            add(result.size.height)
-            add(lineCount)
-            for (i in 0 until lineCount) {
-                add(result.getLineStart(i))
-                add(result.getLineEnd(i))
-                add(result.getLineTop(i))
-                add(result.getLineBottom(i))
-                add(result.getLineLeft(i))
-                add(result.getLineRight(i))
-                add(result.getLineBaseline(i))
+        val lines =
+            (0 until lineCount).map { i ->
+                LineFingerprint(
+                    start = result.getLineStart(i),
+                    end = result.getLineEnd(i),
+                    top = result.getLineTop(i),
+                    bottom = result.getLineBottom(i),
+                    left = result.getLineLeft(i),
+                    right = result.getLineRight(i),
+                    baseline = result.getLineBaseline(i),
+                )
             }
-        }
+        return LayoutFingerprint(
+            text = result.layoutInput.text.text,
+            width = result.size.width,
+            height = result.size.height,
+            lines = lines,
+        )
     }
 
     /**
@@ -1027,26 +1003,11 @@ class ComposeEditorVisualState(
             batch.add(patch)
         }
         val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
-        // #706 评论 5715257924 症状1：barrier 存在时，用 barrier.baseScene 作为 timeline redirect
-        // 的屏幕起点 — 旧 timeline 即使在后台还有未结束 track，也不能按"已经过去了多少真实时间"
-        // 偷偷向前跑；新 patch 必须从用户最后真正看到的 scene 继续。
-        val barrier = pendingLocalFrameBarrier
-        if (barrier != null && barrier.handoffPatchId != null) {
-            visualTimeline.redirectFromVisibleScene(
-                scene = barrier.baseScene,
-                frameTimeNanos = frameTimeNanos,
-            )
-        }
-        // #691：光标 motion 与文字在同一个 applyPatch 调用内处理
-        // #706 评论 5718539128 修复1：barrier handoff 时，光标起点用 barrier.baseScene.cursorRect
-        // （用户最后真正看到的屏幕光标位置），不从 patch.originCursorRect / oldLayout 猜起点。
-        val fromRectOverride =
-            if (barrier != null && barrier.handoffPatchId != null) {
-                barrier.baseScene.cursorRect
-            } else {
-                null
-            }
-        val cursorParams = computeCursorParamsForPatch(framePatch, fromRectOverride = fromRectOverride)
+        // #708 评论 5723410606 第二节：不再有整屏 barrier redirect —
+        // 旧 timeline 不再按"已经过去了多少真实时间"偷偷向前跑，也不再从 baseScene 重定向。
+        // 首帧 scene 已由 onAuthoritativeLayout 建立，timeline.applyPatch 直接从当前 timeline 状态继续。
+        // 光标起点用 patch.originCursorRect / oldLayout，不从已删除的 baseScene.cursorRect 猜起点。
+        val cursorParams = computeCursorParamsForPatch(framePatch, fromRectOverride = null)
         visualTimeline.applyPatch(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
@@ -1054,14 +1015,10 @@ class ComposeEditorVisualState(
             cursorPath = cursorParams?.points,
             cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
         )
-        // #706 评论 5715257924 症状1：matching layout/local patch 到齐、timeline 从 barrier.baseScene
-        // redirect 到新目标、sample 出同一 frame 的新 scene 后再清 barrier。
-        // 不能先清 barrier，再等下一次 StateFlow/recomposition 才拿到新 scene。
-        if (barrier != null && barrier.handoffPatchId != null) {
-            val scene = visualTimeline.sample(frameTimeNanos)
-            _visualScene.update { scene }
-            pendingLocalFrameBarrier = null
-        }
+        // #708 评论 5723410606 第二节：配对完成后清 handoff —
+        // 不再有"matching layout/local patch 到齐、timeline 从 barrier.baseScene redirect"的步骤，
+        // timeline.applyPatch 已直接处理，sample 出同一 frame 的新 scene 后清 handoff。
+        pendingLocalEditHandoff = null
         return listOf(framePatch)
     }
 
@@ -1100,6 +1057,9 @@ class ComposeEditorVisualState(
     fun sampleVisualScene(frameTimeNanos: Long): ComposeVisualScene {
         val scene = visualTimeline.sample(frameTimeNanos)
         _visualScene.update { scene }
+        // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene —
+        // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
+        drawSnapshotState = drawSnapshotState.copy(scene = scene)
         return scene
     }
 
@@ -1249,8 +1209,11 @@ class ComposeEditorVisualState(
         wasCompositionActiveForSnapshot = false
         // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase
         compositionVisualPhase = CompositionVisualPhase.Idle
-        // #706 评论 5715257924 症状1：清本地帧屏障
-        pendingLocalFrameBarrier = null
+        // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / handoff / fingerprint
+        drawSnapshotState = ComposeEditorDrawSnapshot()
+        pendingLocalEditHandoff = null
+        lastObservedLayoutFingerprint = null
+        nextHandoffUnitKey = 2_000_000L
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
     }
 
@@ -1286,6 +1249,8 @@ class ComposeEditorVisualState(
         // 已发布给 Compose 的旧 visualScene 清空，直到下一次 sampleVisualScene() 重建。
         _drawsVisualCursor.update { effective.cursorEnabled }
         _visualScene.update { ComposeVisualScene.Empty }
+        // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene
+        drawSnapshotState = drawSnapshotState.copy(scene = ComposeVisualScene.Empty)
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
         if (pendingPatches.isNotEmpty()) {
             val updated = mutableListOf<ComposeVisualPatch>()

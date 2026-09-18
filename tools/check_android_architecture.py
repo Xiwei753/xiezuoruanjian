@@ -475,9 +475,12 @@ def rule_visual_motion_pure() -> list[Finding]:
             "feature/editor/visual/LocalInputVisualEdit.kt",
             "feature/editor/visual/ComposeLocalVisualRebase.kt",
             "feature/editor/visual/ComposeVisualPatchBatch.kt",
-            # #706 评论 5715257924：本地输入帧屏障纯数据类，引用 TextRange 做显示数据，
-            # 与 ComposeLocalVisualRebase 同类，不写正文持久状态。
-            "feature/editor/visual/ComposeLocalFrameBarrier.kt",
+            # #708 评论 5723410606：绘制边界重构新增的纯数据类/计算类，
+            # 引用 Rect/TextRange/TextLayoutResult 做显示数据，
+            # 与 ComposeVisualPatch/ComposeLocalVisualRebase 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeEditorDrawSnapshot.kt",
+            "feature/editor/visual/ComposeLocalEditHandoff.kt",
+            "feature/editor/visual/ComposeReflowPlanner.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

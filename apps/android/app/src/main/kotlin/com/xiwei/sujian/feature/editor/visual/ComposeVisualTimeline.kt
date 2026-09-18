@@ -68,16 +68,6 @@ class ComposeVisualTimeline {
     private var coordinatedSpatialClip: Boolean = false
 
     /**
-     * #706 评论 5718539128 修复1：barrier handoff 时保存的可见 clip 基线 —
-     * [redirectFromVisibleScene] 把 barrier.baseScene.unitClipFractions 存到这里，
-     * 下一次 [sample]（handoff 第一帧）用它覆盖 [computeUnitClipFractions] 的结果，
-     * 保证 handoff 第一帧的 fraction 与用户最后真正看到的旧 scene 完全一致，
-     * 不会因 cursor 起点/几何重算导致 coordinated spatial clip 突变。
-     * sample 消费后清空，不跨帧保留。
-     */
-    private var redirectBaseClipFractions: Map<Long, Float> = emptyMap()
-
-    /**
      * #691 评论 5684993243 / 评论 5685940102：已在前一可见帧真正呈现过的 unit key 集合。
      *
      * 这个事实由 [sample] 推进 — 只有真正采样到一个存活 unit 且该帧它已被 scene 接管并可见时，
@@ -254,6 +244,12 @@ class ComposeVisualTimeline {
             // 注意：retainedMoves 作用于 startedSurviving（已开始 unit 的位置重定向），
             // 不应作用于 pendingSurviving（它们已被重新分段）。
             applyRetainedMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
+
+            // #708 评论 5723410606 第四节：独立 reflow 通道 —
+            // reflowMoves 是与 retainedMoves 不同的所有权：字仍存在，但从 oldBounds 平移到 newBounds，
+            // 始终全亮。active 时把 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
+            // 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
+            applyReflowMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
 
             // 合并：已开始存活 + 重新分段（pending + 新插入） + ghost
             units = startedSurviving + repartitioned.allUnits + ghosting
@@ -744,55 +740,50 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * #706 评论 5715257924 症状1：从可见 scene 重定向 timeline 起点。
+     * #708 评论 5723410606 第四节：独立 reflow 通道 —
+     * 把 [ComposeVisualPatch.reflowMoves] 转成 [VisualTextUnit]。
      *
-     * barrier 存在时，旧 timeline 即使在后台还有未结束 track，也不能按"已经过去了多少真实时间"
-     * 偷偷向前跑；新 patch 必须从用户最后真正看到的 scene 继续。
+     * 规则（评论 5723410606 第四节）：
+     * - ReflowMove alpha 永远 1；
+     * - 不参加 cursor spatial clip（computeUnitClipFractions 给 fraction=1）；
+     * - 只做 position old -> new；
+     * - active 时把它的 newRange 放进 hiddenRanges（sample 已统一处理）；
+     * - 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管（sample 收口）。
      *
-     * 把当前可见 unit 的 position/alpha 通道重新作为当前时刻起点（冻结成静态通道），
-     * 并丢掉已经被这次本地 edit 覆盖的旧 track。后面仍走现有 [applyPatch]，
-     * 不要造第二套动画器。
-     *
-     * @param scene 用户最后真正看到的视觉场景（barrier.baseScene）。
-     * @param frameTimeNanos 当前帧时间戳。
+     * 与 [applyRetainedMoves] 的区别：
+     * - reflowMoves 携带 oldBounds/newBounds，不重新查 layout；
+     * - reflowMoves 只对位置真变化的 slice 生成 unit（planner 已过滤）；
+     * - reflowMoves 不复用已有 active unit 的 position 通道 — 它是独立轨道。
      */
-    fun redirectFromVisibleScene(
-        scene: ComposeVisualScene,
+    private fun applyReflowMoves(
+        patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        durationNanos: Long,
+        surviving: MutableList<VisualTextUnit>,
     ) {
-        // 把 scene.units 里每个 unit 的 alpha/position 通道冻结成静态通道
-        // （from = to = 当前屏幕值，duration = 0），这样 rebaseUnitForPatch 会把它当成
-        // "已完成的静态 unit"，不会按时间偷偷跑。applyPatch 的 mapSurvivingSlice 会保留
-        // alpha 通道不变，repartitionPendingAndInsertedUnits 会把 pending unit 重新分段。
-        units =
-            scene.units.map { unit ->
-                val currentAlpha = unit.alpha.from
-                val currentPosition = unit.position.from
-                unit.copy(
-                    alpha =
-                        TimedFloat(
-                            from = currentAlpha,
-                            to = currentAlpha,
-                            startedAtNanos = frameTimeNanos,
-                            durationNanos = 0L,
-                        ),
-                    position =
-                        TimedOffset(
-                            from = currentPosition,
-                            to = currentPosition,
-                            startedAtNanos = frameTimeNanos,
-                            durationNanos = 0L,
-                        ),
+        if (patch.reflowMoves.isEmpty()) return
+        val newLayout = patch.newLayout
+        for (move in patch.reflowMoves) {
+            val newRange = move.newRange
+            if (newRange.start >= newRange.end) continue
+            if (newRange.end > newLayout.result.layoutInput.text.length) continue
+            // 已有同 newRange 的存活 unit 则跳过（避免重复创建）
+            if (surviving.any { it.targetRange == newRange && it.role == VisualUnitRole.ReflowMove }) continue
+            val oldPosition = Offset(move.oldBounds.left, move.oldBounds.top)
+            val newPosition = Offset(move.newBounds.left, move.newBounds.top)
+            surviving +=
+                VisualTextUnit(
+                    key = nextUnitKey++,
+                    layout = newLayout,
+                    range = newRange,
+                    targetRange = newRange,
+                    // alpha 永远 1：始终全亮
+                    alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
+                    // 只做 position old -> new
+                    position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                    role = VisualUnitRole.ReflowMove,
                 )
-            }
-        // cursorChannel 清空 — applyCursorPatch 会用 cursorFromRect 作为新起点。
-        cursorChannel = null
-        // presentedKeys 保留 — 这些 unit 确实已在可见帧呈现过。
-        // coordinatedSpatialClip 由后续 applyPatch 重新设置。
-        // #706 评论 5718539128 修复1：保存当前可见 clip 基线 —
-        // coordinated spatial clip 模式下，handoff 第一帧的 fraction 必须与旧 scene 一致，
-        // 不能因 cursor 起点/几何重算导致吞吐字 fraction 突变。下一次 sample 消费后清空。
-        redirectBaseClipFractions = scene.unitClipFractions
+        }
     }
 
     /**
@@ -875,21 +866,9 @@ class ComposeVisualTimeline {
             } else {
                 emptyMap()
             }
-        // #706 评论 5718539128 修复1：barrier handoff 首帧 —
-        // 用 redirectFromVisibleScene 保存的可见 clip 基线覆盖计算结果，
-        // 保证 handoff 第一帧 fraction 与用户最后真正看到的旧 scene 完全一致。
-        // 按 unit key 查找：旧 scene 里有的 unit 用旧 fraction，新插入 unit（key 不在基线里）
-        // 回退到计算结果。消费后清空，不跨帧保留。
-        val unitClipFractions =
-            if (redirectBaseClipFractions.isNotEmpty()) {
-                val base = redirectBaseClipFractions
-                redirectBaseClipFractions = emptyMap()
-                sampledUnits.associate { unit ->
-                    unit.key to (base[unit.key] ?: computedClipFractions[unit.key] ?: 1f)
-                }
-            } else {
-                computedClipFractions
-            }
+        // #708 评论 5723410606 第二节：删除 barrier handoff 首帧的 redirectBaseClipFractions 覆盖 —
+        // 不再有整屏 barrier redirect，clip fractions 直接用计算结果。
+        val unitClipFractions = computedClipFractions
         return ComposeVisualScene(
             units = sampledUnits,
             hiddenRanges = hiddenRanges,
@@ -963,7 +942,11 @@ class ComposeVisualTimeline {
             // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
             // 不进入 spatial clip 裁切。显式放入 fraction=1 最稳妥，
             // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
-            if (unit.role == VisualUnitRole.RetainedMove) {
+            // #708 评论 5723410606 第四节：ReflowMove 同样始终完整可见（alpha 永远 1），
+            // 不参加 cursor spatial clip。
+            if (unit.role == VisualUnitRole.RetainedMove ||
+                unit.role == VisualUnitRole.ReflowMove
+            ) {
                 result[unit.key] = 1f
                 continue
             }
@@ -1017,6 +1000,7 @@ class ComposeVisualTimeline {
                         }
                     }
                     VisualUnitRole.RetainedMove -> 1f
+                    VisualUnitRole.ReflowMove -> 1f
                 }
             result[unit.key] = fraction
         }
@@ -1519,15 +1503,20 @@ data class TimedOffset(
 
 /**
  * #703 评论 5710977972 缺陷2：VisualTextUnit 的视觉角色 —
- * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流），
+ * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流）/ reflowMove（独立 reflow），
  * 不再用 targetRange!=null 间接判断。
  *
  * - [Inserted]：本 patch 新插入的字，由 cursor 从左向右裁切吐出。
  * - [DeletedGhost]：本 patch 删除的 ghost 字，由 cursor 从右向左裁切吞掉。
  * - [RetainedMove]：幸存回流文字（retainedMoves 创建），始终完整可见，
  *   不进入 spatial clip 裁切（computeUnitClipFractions 直接给 fraction=1）。
+ * - [ReflowMove]：#708 评论 5723410606 第四节独立 reflow 通道 —
+ *   字仍存在，但从 oldBounds 平移到 newBounds，始终全亮（alpha 永远 1）。
+ *   不参加 cursor spatial clip；只做 position old -> new；
+ *   active 时把它的 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
+ *   完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
  */
-enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
+enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove, ReflowMove }
 
 /**
  * #689 评论 5674631257 步骤2：单个文字单元的持续视觉状态。

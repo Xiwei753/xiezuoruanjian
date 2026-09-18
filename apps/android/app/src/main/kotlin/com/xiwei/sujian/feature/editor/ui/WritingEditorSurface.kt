@@ -19,10 +19,10 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.isSpecified
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
-import com.xiwei.sujian.feature.editor.layout.isIndentedEmptyParagraphCaret
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
 import com.xiwei.sujian.feature.editor.visual.ComposeEditorVisualState
@@ -109,10 +109,10 @@ fun editorSurfaceMode(
  * "动画 hiddenRanges -> OutputTransformation 改正文显示 -> BasicTextField 再 layout -> VisualState 再消费 layout"
  * 回路。不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
  *
- * #706 评论 5715257924 症状1：EditorTextFieldDrawLayer 现在确实负责上一稳定帧缓存和本地 edit barrier —
- * 没有 local barrier 时，每帧把完整编辑器画面（BasicTextField + hiddenRanges 裁切 + visual units + 视觉光标）
- * 记录进 stableFrameLayer；barrier 活跃时只重放上一帧，不调用 drawContent()，不覆盖 stableFrameLayer。
- * OutputTransformation 继续只做搜索高亮。
+ * #708 评论 5723410606 第一节：删除整屏旧帧缓存（stableFrameLayer + ComposeLocalFrameBarrier）—
+ * EditorTextFieldDrawLayer 不再记录上一稳定帧、不再有 local barrier 重放分支。
+ * 每一帧都先画当前 BasicTextField，只对真正由动画接管的 range 做 Difference clip，
+ * 再画局部动画层。OutputTransformation 继续只做搜索高亮。
  *
  * #641 评论 问题4b：[inputEnabled] 是 [EditorViewModel.inputFrozen] 之外的第二层门控 —
  * BasicTextField 的 readOnly = !inputEnabled，章节切换冻结期间禁止 IME 写入 TextFieldState。
@@ -227,18 +227,21 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             }
         }
 
-    // #706 评论 5718539128 修复3：空段落缩进静态 caret override —
-    // smooth cursor 关闭时，空段落首行缩进位置仍需 draw 层接管（BasicTextField 原生 caret 落 x=0）。
-    // 判断当前 selection 是否在空段落首位且该段落有非零首行缩进，复用 layout 层的缩进修正语义。
-    val latestLayoutForCaret by visualState.latestLayout.collectAsStateWithLifecycle()
+    // #708 评论 5723410606 第三节：空段落缩进判定不再订阅 latestLayout —
+    // 空段落缩进判定不需要 TextLayoutResult。直接用：
+    // - bridge.state.text
+    // - bridge.state.selection
+    // - textStyle.textIndent.firstLine
+    // 判断当前位置是不是空段落开头即可。不要让"为了决定 cursorBrush"去订阅 layout StateFlow。
     val liveSelectionForCaret = bridge.state.selection
-    // 用局部变量捕获，使 Kotlin 能对非 null 做 smart cast（委托属性不能 smart cast）。
-    val layoutSnapshot = latestLayoutForCaret
     val selectionSnapshot = liveSelectionForCaret
     val needsIndentedEmptyParagraphCaret =
-        layoutSnapshot != null &&
-            selectionSnapshot != null &&
-            layoutSnapshot.isIndentedEmptyParagraphCaret(selectionSnapshot.end)
+        selectionSnapshot != null &&
+            isIndentedEmptyParagraphCaretFromTextStyle(
+                text = bridge.state.text.toString(),
+                selectionEnd = selectionSnapshot.end,
+                textStyle = textStyle,
+            )
 
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
@@ -341,3 +344,29 @@ fun shouldConfirmEditorAttached(
     bindingState is WindowBindingState.Attached &&
         bindingState.windowId == windowId &&
         bindingState.targetId == targetId
+
+/**
+ * #708 评论 5723410606 第三节：空段落缩进判定 — 不依赖 TextLayoutResult。
+ *
+ * 只用 text + selectionEnd + textStyle.textIndent.firstLine 判断当前位置是不是空段落开头。
+ * 与 [com.xiwei.sujian.feature.editor.layout.isIndentedEmptyParagraphCaret] 的逻辑一致，
+ * 但不要求 TextLayoutResult — 避免为了决定 cursorBrush 去订阅 layout StateFlow。
+ *
+ * @param text 当前正文。
+ * @param selectionEnd 当前 selection.end。
+ * @param textStyle 当前 TextStyle（取 textIndent.firstLine）。
+ * @return true 当且仅当 selectionEnd 在空段落首位且该段落有非零首行缩进。
+ */
+private fun isIndentedEmptyParagraphCaretFromTextStyle(
+    text: String,
+    selectionEnd: Int,
+    textStyle: TextStyle,
+): Boolean {
+    val safeOffset = selectionEnd.coerceIn(0, text.length)
+    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
+    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
+    if (!atParagraphStart || !emptyParagraph) return false
+    val textIndent = textStyle.textIndent ?: return false
+    val firstLine = textIndent.firstLine
+    return firstLine.isSpecified && firstLine.value != 0f
+}
