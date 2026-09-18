@@ -484,37 +484,51 @@ fn insert_move_insert_epoch_sequence() {
 ///
 /// Issue #707 评论 5724685300: 这条测试覆盖 comment 要求的完整交接链，
 /// 不只单独测试每个环节，而是把它们串起来验证一致性。
+/// Issue #707 评论 5725190370: 重写本测试填补最后一个缺口 ——
+/// 1. 用 `build_cursor_render_state_for_frame` 构造真实 `CursorRenderState`
+///    （和 `update_paint_node` 完全一致），不再用 `CursorRenderState::default()`
+///    冒充光标；
+/// 2. `mark_prepared` 把 `insert_text` 创建的事务推进到 `Prepared`，
+///    `build_render_plan_full` 内部再推进到 `Rendering`，
+///    `compute_coordinated_cursor_position` 返回 `Some` 产生 `Coordinated`；
+/// 3. 调正式回写方法 `apply_render_plan_cursor_state` 并断言
+///    `cursor_ctrl.visual_* == drawn_caret_rect`；
+/// 4. `move_cursor_horizontal` bump epoch 但不取消正文事务，
+///    同一活动事务 `build_render_plan_full` 不再产生 `Coordinated`
+///    （`cursor_owner_epoch != current_cursor_epoch` 不匹配）；
+/// 5. no-op（行首 backward / 同位置 click）不 bump epoch。
 #[test]
 fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
         item.set_plain_text(QString::from("Hello"));
 
-        // ── 阶段 1: 初始状态 ──
-        // 准备一帧，验证 prepared_frame 存在且 valid
-        let initial_rev = item.pipeline.text_revision();
+        // ── 阶段 1: 初始 prepared_frame ──
         assert!(
             item.prepared_frame.is_some(),
             "set_plain_text 后 prepared_frame 应为 Some"
         );
-        let frame1 = item.prepared_frame.as_ref().expect("frame1");
-        assert_eq!(
-            frame1.layout_snapshot.text_revision, initial_rev,
-            "初始 frame revision 应等于 text_revision"
-        );
-        let initial_generation = frame1.layout_snapshot.layout_generation;
-        assert!(
-            initial_generation > 0,
-            "初始 layout_generation 必须 > 0"
-        );
+        let initial_rev = item.pipeline.text_revision();
 
-        // ── 阶段 2: insert_text → emit_content_changed → prepared_frame 失效 ──
+        // ── 阶段 2: insert_text 创建活动正文事务（不 bump epoch）──
         let epoch_before_insert = item.cursor_ctrl.cursor_owner_epoch;
         item.insert_text(QString::from("World"));
-        // insert_text 不 bump epoch（正文事务拥有 caret）
         assert_eq!(
             item.cursor_ctrl.cursor_owner_epoch, epoch_before_insert,
-            "insert_text 不应 bump epoch"
+            "insert_text 不应 bump epoch（正文事务拥有 caret）"
+        );
+
+        // 断言确实存在活动正文事务
+        let tx_key = item
+            .pipeline
+            .animation_coordinator_mut()
+            .active_text_transaction_key()
+            .expect("insert_text 后应有活动正文事务");
+        assert!(
+            item.pipeline
+                .animation_coordinator_mut()
+                .has_active_insert(),
+            "insert_text 后应有 active insert 事务"
         );
 
         // emit_content_changed 使旧 prepared_frame 失效
@@ -528,74 +542,89 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         );
         assert!(
             item.prepared_frame.is_some(),
-            "emit_content_changed 后 prepared_frame 应为 Some（新 frame）"
-        );
-        let (new_frame_rev, new_frame_gen) = {
-            let frame2 = item.prepared_frame.as_ref().expect("frame2");
-            (
-                frame2.layout_snapshot.text_revision,
-                frame2.layout_snapshot.layout_generation,
-            )
-        };
-        assert_ne!(
-            new_frame_rev, initial_rev,
-            "新 frame 的 revision 必须不同于旧 frame"
-        );
-        assert_ne!(
-            new_frame_gen, initial_generation,
-            "新 frame 的 layout_generation 必须不同于旧 frame"
+            "emit_content_changed 后 prepared_frame 应为 Some"
         );
 
-        // ── 阶段 3: build_render_plan_full 产出 drawn_caret_rect ──
-        let cursor_render_state = CursorRenderState::default();
-        let selection_preedit = SelectionPreeditPlan::default();
-        let frame_context = FrameContext::default();
-        let cursor_style = CursorStyle::default();
-        let selection_preedit_style = SelectionPreeditStyle::default();
-        let frame_now = std::time::Instant::now();
+        // ── 阶段 3: mark_prepared + build_render_plan_full 得到 Coordinated ──
+        assert!(
+            item.pipeline
+                .animation_coordinator_mut()
+                .prepared_queue
+                .mark_prepared(tx_key),
+            "mark_prepared 应成功推进事务到 Prepared"
+        );
+
+        // 用真实 CursorRenderState（和 update_paint_node 一样），不用 default()
+        let cursor_render_state = item.build_cursor_render_state_for_frame();
+        let selection_preedit = item
+            .prepared_frame
+            .as_ref()
+            .map(|f| f.selection_preedit.clone())
+            .unwrap_or_default();
+        let frame_now = Instant::now();
 
         let plan = item.pipeline.animation_coordinator_mut().build_render_plan_full(
             cursor_render_state,
             selection_preedit,
-            frame_context,
-            cursor_style,
-            selection_preedit_style,
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
             frame_now,
-            false,
-            None,
+            item.current_coordinated_text_cursor_animation_enabled,
+            item.cursor_ctrl.animation.as_ref(),
             item.cursor_ctrl.cursor_owner_epoch,
         );
 
-        assert!(
-            plan.drawn_caret_rect.is_some(),
-            "build_render_plan_full 必须产出 drawn_caret_rect"
-        );
-        let (x, y, h) = plan.drawn_caret_rect.expect("drawn_caret_rect");
-        assert!(
-            x.is_finite(),
-            "drawn_caret_rect.x 必须有限, 实际: {}",
-            x
-        );
-        assert!(
-            y.is_finite(),
-            "drawn_caret_rect.y 必须有限, 实际: {}",
-            y
-        );
-        assert!(
-            h.is_finite(),
-            "drawn_caret_rect.h 必须有限, 实际: {}",
-            h
-        );
+        // 断言得到 Coordinated（证明正文事务此时确实拥有 caret）
+        let drawn = plan
+            .drawn_caret_rect
+            .expect("build_render_plan_full 必须产出 drawn_caret_rect");
+        match plan.cursor_sample_outcome {
+            super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {
+                assert!(
+                    x.is_finite() && y.is_finite() && h.is_finite(),
+                    "Coordinated 位置必须有限: ({}, {}, {})",
+                    x,
+                    y,
+                    h
+                );
+                println!(
+                    "[BEHAVIOR_VERIFY] 阶段3 Coordinated: ({:.4}, {:.4}, {:.4})",
+                    x, y, h
+                );
+            }
+            other => panic!(
+                "epoch 未变时活动正文事务应产生 Coordinated，实际: {:?}",
+                other
+            ),
+        }
 
-        // drawn_caret_rect 的 x 坐标应与当前 cursor 位置一致
-        // （insert_text("World") 后 cursor 在 "HelloWorld" 末尾 = 10 bytes）
-        let cursor_after_insert = item.buffer.cursor;
+        // 调正式回写方法，断言 cursor_ctrl.visual_* == drawn_caret_rect
+        let (dx, dy, dh) = drawn;
+        item.apply_render_plan_cursor_state(&plan, frame_now);
         assert!(
-            cursor_after_insert > 0,
-            "insert_text 后 cursor 应在文末"
+            (item.cursor_ctrl.visual_x - dx).abs() < 0.5,
+            "回写后 visual_x 应等于 drawn_caret_rect.x: 实际 {} vs {}",
+            item.cursor_ctrl.visual_x,
+            dx
         );
+        assert!(
+            (item.cursor_ctrl.visual_y - dy).abs() < 0.5,
+            "回写后 visual_y 应等于 drawn_caret_rect.y: 实际 {} vs {}",
+            item.cursor_ctrl.visual_y,
+            dy
+        );
+        if dh > 0.0 {
+            assert!(
+                (item.cursor_ctrl.visual_h - dh).abs() < 0.5,
+                "回写后 visual_h 应等于 drawn_caret_rect.h: 实际 {} vs {}",
+                item.cursor_ctrl.visual_h,
+                dh
+            );
+        }
+        let visual_after_write = (item.cursor_ctrl.visual_x, item.cursor_ctrl.visual_y);
 
-        // ── 阶段 4: 手动移动 → epoch bump, 旧事务失去 caret ownership ──
+        // ── 阶段 4: 真实手动移动 bump epoch，旧事务失去 caret 所有权 ──
         let epoch_before_move = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false); // backward
         let epoch_after_move = item.cursor_ctrl.cursor_owner_epoch;
@@ -605,49 +634,86 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
             epoch_before_move,
             epoch_after_move
         );
-        let cursor_after_move = item.buffer.cursor;
+
+        // 同一个仍活动的正文事务 build 下一帧
+        let still_active = item
+            .pipeline
+            .animation_coordinator_mut()
+            .active_text_transaction_key()
+            .is_some();
         assert!(
-            cursor_after_move < cursor_after_insert,
-            "move_cursor_backward 应改变 cursor: {} -> {}",
-            cursor_after_insert,
-            cursor_after_move
+            still_active,
+            "move 后正文事务应仍在队列（move 不取消事务）"
         );
 
-        // ── 阶段 5: no-op（已在边界）不 bump epoch ──
-        // 移到行首后 backward 是 no-op
+        let cursor_render_state_2 = item.build_cursor_render_state_for_frame();
+        let selection_preedit_2 = item
+            .prepared_frame
+            .as_ref()
+            .map(|f| f.selection_preedit.clone())
+            .unwrap_or_default();
+        let frame_now_2 = Instant::now();
+        let plan2 = item.pipeline.animation_coordinator_mut().build_render_plan_full(
+            cursor_render_state_2,
+            selection_preedit_2,
+            FrameContext::default(),
+            CursorStyle::default(),
+            SelectionPreeditStyle::default(),
+            frame_now_2,
+            item.current_coordinated_text_cursor_animation_enabled,
+            item.cursor_ctrl.animation.as_ref(),
+            item.cursor_ctrl.cursor_owner_epoch,
+        );
+
+        // 断言这次不能再得到由旧事务产生的 Coordinated
+        match plan2.cursor_sample_outcome {
+            super::render_plan::CursorSampleOutcome::Coordinated { .. } => {
+                panic!("epoch bump 后旧正文事务不应再产生 Coordinated（旧事务失去 caret 所有权）");
+            }
+            other => {
+                println!(
+                    "[BEHAVIOR_VERIFY] 阶段4: epoch bump 后旧事务不再 Coordinated (outcome={:?})",
+                    other
+                );
+            }
+        }
+        let drawn2 = plan2.drawn_caret_rect.expect("plan2 drawn_caret_rect");
+        item.apply_render_plan_cursor_state(&plan2, frame_now_2);
+        println!(
+            "[BEHAVIOR_VERIFY] 阶段4: visual after move=({}, {}), drawn2=({:?})",
+            item.cursor_ctrl.visual_x, item.cursor_ctrl.visual_y, drawn2
+        );
+
+        // ── 阶段 5: no-op 移动不 bump epoch ──
         for _ in 0..20 {
             item.move_cursor_horizontal(false, false);
         }
         assert_eq!(item.buffer.cursor, 0, "应移到行首");
         let epoch_at_start = item.cursor_ctrl.cursor_owner_epoch;
-
-        item.move_cursor_horizontal(false, false); // backward at start = no-op
+        item.move_cursor_horizontal(false, false);
         assert_eq!(
             item.cursor_ctrl.cursor_owner_epoch, epoch_at_start,
-            "行首 backward no-op 不应 bump epoch: {} -> {}",
-            epoch_at_start,
-            item.cursor_ctrl.cursor_owner_epoch
+            "行首 backward no-op 不应 bump epoch"
         );
 
-        // click_at 同一位置也是 no-op
         item.click_at(0.0, 0.0, false);
         assert_eq!(item.buffer.cursor, 0, "click_at(0,0) 后 cursor 应在 0");
         let epoch_before_same_click = item.cursor_ctrl.cursor_owner_epoch;
-        item.click_at(0.0, 0.0, false); // 同一位置 no-op
+        item.click_at(0.0, 0.0, false);
         assert_eq!(
             item.cursor_ctrl.cursor_owner_epoch, epoch_before_same_click,
-            "click_at 同一位置不应 bump epoch: {} -> {}",
-            epoch_before_same_click,
-            item.cursor_ctrl.cursor_owner_epoch
+            "click_at 同一位置不应 bump epoch"
         );
 
         println!(
-            "[BEHAVIOR_VERIFY] full lifecycle: rev {} -> {}, generation {} -> {}, drawn_caret_rect=({:.1},{:.1},{:.1}), epoch {} -> {} (move) -> {} (no-op)",
-            initial_rev, new_rev,
-            initial_generation, new_frame_gen,
-            x, y, h,
-            epoch_before_move, epoch_after_move,
-            item.cursor_ctrl.cursor_owner_epoch
+            "[BEHAVIOR_VERIFY] full lifecycle: rev {} -> {}, epoch {} -> {} (move) -> {} (no-op), visual_after_write=({:.1},{:.1})",
+            initial_rev,
+            new_rev,
+            epoch_before_move,
+            epoch_after_move,
+            item.cursor_ctrl.cursor_owner_epoch,
+            visual_after_write.0,
+            visual_after_write.1
         );
     });
 }

@@ -118,23 +118,9 @@ impl QQuickItem for SujianEditorItem {
             // 不再在 build_render_plan_full 之外用 cursor_timeline_sample_with_time
             // 单独推进 cursor_ctrl.visual_x/y。CursorOnly 光标位置采样统一到
             // build_render_plan_full 内部，用同一份 AnimationFrameSample。
-            let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-                && self
-                    .pipeline
-                    .animation_coordinator_mut()
-                    .has_active_insert()
-            {
-                super::cursor_animation::CursorBlinkMode::Suppressed
-            } else {
-                super::cursor_animation::CursorBlinkMode::Normal
-            };
-            let cursor_render_state = super::render_plan::CursorRenderState {
-                visible: self.cursor_ctrl.visible,
-                x: self.cursor_ctrl.visual_x,
-                y: self.cursor_ctrl.visual_y,
-                h: self.cursor_ctrl.visual_h,
-                opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
-            };
+            // Issue #707 评论 5725190370: CursorRenderState 构造抽成
+            // build_cursor_render_state_for_frame，和 runtime_tests 共用同一份逻辑。
+            let cursor_render_state = self.build_cursor_render_state_for_frame();
 
             // Issue #677 评论 5653944889: render thread 只读 GUI 侧准备好的
             // `PreparedEditorFrame`，不再调用 `build_selection_preedit_plan()` /
@@ -180,56 +166,6 @@ impl QQuickItem for SujianEditorItem {
                     self.cursor_ctrl.cursor_owner_epoch,
                 );
 
-            // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
-            // 同一份 frame_sample 采样的结果推进 cursor_ctrl.visual_x/y。
-            // 文字层和光标层都使用同一份 frame state。
-            // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。CursorAnimationState
-            // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
-            // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
-            match render_plan.cursor_sample_outcome {
-                super::render_plan::CursorSampleOutcome::Running(p) => {
-                    self.cursor_ctrl.update_animation_progress(p);
-                }
-                super::render_plan::CursorSampleOutcome::Finished => {
-                    self.cursor_ctrl.finish_animation_to_target();
-                }
-                // Issue #702 评论 5707770318: 正文协同光标帧。
-                // 把 cursor_ctrl.visual_x/visual_y/visual_h 同步为本帧真正画出的位置，
-                // 不启动 CursorAnimationState.started_at（不创建独立 timeline）。
-                // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
-                super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {
-                    self.cursor_ctrl.visual_x = x;
-                    self.cursor_ctrl.visual_y = y;
-                    if h > 0.0 {
-                        self.cursor_ctrl.visual_h = h;
-                    }
-                    self.cursor_ctrl.animation = None;
-                }
-                super::render_plan::CursorSampleOutcome::Idle => {
-                    // Issue #702: 纯光标动画首帧启动 started_at。
-                    // 此分支现在只在"没有正文事务且没有 CursorOnly 动画"时到达。
-                    if let Some(ref mut anim) = self.cursor_ctrl.animation {
-                        if anim.started_at.is_none() {
-                            anim.started_at = Some(frame_now);
-                        }
-                    }
-                }
-            }
-
-            // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
-            // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去
-            // 的 caret rect)。下一次输入、删除、鼠标点击创建新事务时,
-            // 只允许从这个"上一帧真正画出来的位置" rebase。
-            // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
-            // 当前屏幕位置。
-            if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
-                self.cursor_ctrl.visual_x = cx;
-                self.cursor_ctrl.visual_y = cy;
-                if ch > 0.0 {
-                    self.cursor_ctrl.visual_h = ch;
-                }
-            }
-
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
             // Issue #677 评论 5653944889: 快照和选区/preedit 几何都来自
             // `PreparedEditorFrame`，render thread 不再自行排版。
@@ -256,6 +192,20 @@ impl QQuickItem for SujianEditorItem {
                 &render_plan,
                 self.pipeline.texture_cache(),
             );
+
+            // Issue #707 评论 5725190370: cursor_sample_outcome 更新 + drawn_caret_rect
+            // 回写抽成 apply_render_plan_cursor_state，和 runtime_tests 共用同一份逻辑。
+            // 原内联逻辑（Running/Finished/Coordinated/Idle 4 分支 + Issue #705 回写）
+            // 移到方法定义处，这里只调一次方法。
+            // 放在 render_frame 之后：render_frame 只读 &render_plan 和 &static_text
+            // （持有 prepared_frame 引用），不读 cursor_ctrl；回写只改 cursor_ctrl，
+            // 不影响 render_frame。原内联代码在 render_frame 之前，因 NLL 能区分
+            // cursor_ctrl 和 prepared_frame 字段借用；抽成方法后 &mut self 与
+            // prepared_frame 不可变借用冲突，故移到 render_frame 借用结束之后。
+            // 语义等价：request_frame_update 的 cursor_ctrl.animation 判断在本调用
+            // 之后，看到的仍是回写后的状态。
+            self.apply_render_plan_cursor_state(&render_plan, frame_now);
+
             if !static_rebuild_ok && needs_relayout {
                 self.layout_dirty = true;
                 self.scene_dirty = true;
@@ -343,5 +293,102 @@ impl SujianEditorItem {
     /// 替代内部各自 `Instant::now()`。
     pub(crate) fn tick_text_animations_with_time(&mut self, frame_now: Instant) -> bool {
         self.pipeline.animation_coordinator_mut().tick(frame_now)
+    }
+
+    /// 构造和 `update_paint_node` 完全一致的 `CursorRenderState`。
+    ///
+    /// 从 `cursor_ctrl.visual_x/y/h/visible` 和当前 blink mode 算出 opacity。
+    /// Issue #707 评论 5725190370: 把这段纯状态逻辑从 `update_paint_node` 抽出，
+    /// 供正式渲染路径和 `runtime_tests` 共用，避免测试用 `CursorRenderState::default()`
+    /// 冒充光标导致行为偏离生产路径。
+    pub(crate) fn build_cursor_render_state_for_frame(
+        &self,
+    ) -> super::render_plan::CursorRenderState {
+        // Issue #679 评论 5657313927 / #701 评论 5699573227 第三阶段 (F5):
+        // 每帧只采样一次 frame state。blink mode 由"是否有活动正文 insert 事务"
+        // 决定：有则压制闪烁（Suppressed），无则正常闪烁（Normal）。
+        // `has_active_insert` 是 `&self` 方法，这里用不可变 `animation_coordinator()`
+        // 访问，避免要求 `&mut self`。
+        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
+            && self.pipeline.animation_coordinator().has_active_insert()
+        {
+            super::cursor_animation::CursorBlinkMode::Suppressed
+        } else {
+            super::cursor_animation::CursorBlinkMode::Normal
+        };
+        super::render_plan::CursorRenderState {
+            visible: self.cursor_ctrl.visible,
+            x: self.cursor_ctrl.visual_x,
+            y: self.cursor_ctrl.visual_y,
+            h: self.cursor_ctrl.visual_h,
+            opacity: self.cursor_ctrl.cursor_blink_opacity(blink_mode),
+        }
+    }
+
+    /// Issue #707 评论 5725190370: 把 `update_paint_node` 里"根据 RenderPlan 更新
+    /// `cursor_ctrl`"的纯状态逻辑抽成方法，供正式渲染路径和 `runtime_tests` 共用。
+    ///
+    /// 包含两段逻辑：
+    /// 1. `cursor_sample_outcome` 的 4 分支 match（Running/Finished/Coordinated/Idle）
+    ///    对 `cursor_ctrl` 的更新；
+    /// 2. Issue #705: `drawn_caret_rect` 回写 `cursor_ctrl.visual_x/visual_y/visual_h`。
+    ///
+    /// 抽出后 `update_paint_node` 和测试用同一份回写代码，不再有"测试不调正式回写"
+    /// 的缺口。
+    pub(crate) fn apply_render_plan_cursor_state(
+        &mut self,
+        render_plan: &super::render_plan::RenderPlan,
+        frame_now: std::time::Instant,
+    ) {
+        use super::render_plan::CursorSampleOutcome;
+        // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
+        // 同一份 frame_sample 采样的结果推进 cursor_ctrl.visual_x/y。
+        // 文字层和光标层都使用同一份 frame state。
+        // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。CursorAnimationState
+        // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
+        // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
+        match render_plan.cursor_sample_outcome {
+            CursorSampleOutcome::Running(p) => {
+                self.cursor_ctrl.update_animation_progress(p);
+            }
+            CursorSampleOutcome::Finished => {
+                self.cursor_ctrl.finish_animation_to_target();
+            }
+            // Issue #702 评论 5707770318: 正文协同光标帧。
+            // 把 cursor_ctrl.visual_x/visual_y/visual_h 同步为本帧真正画出的位置，
+            // 不启动 CursorAnimationState.started_at（不创建独立 timeline）。
+            // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
+            CursorSampleOutcome::Coordinated { x, y, h } => {
+                self.cursor_ctrl.visual_x = x;
+                self.cursor_ctrl.visual_y = y;
+                if h > 0.0 {
+                    self.cursor_ctrl.visual_h = h;
+                }
+                self.cursor_ctrl.animation = None;
+            }
+            CursorSampleOutcome::Idle => {
+                // Issue #702: 纯光标动画首帧启动 started_at。
+                // 此分支现在只在"没有正文事务且没有 CursorOnly 动画"时到达。
+                if let Some(ref mut anim) = self.cursor_ctrl.animation {
+                    if anim.started_at.is_none() {
+                        anim.started_at = Some(frame_now);
+                    }
+                }
+            }
+        }
+
+        // Issue #705: 每帧生成 RenderPlan 后,把 cursor_ctrl.visual_x/
+        // visual_y/visual_h 同步成 drawn_caret_rect(本帧真正绘制出去
+        // 的 caret rect)。下一次输入、删除、鼠标点击创建新事务时,
+        // 只允许从这个"上一帧真正画出来的位置" rebase。
+        // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
+        // 当前屏幕位置。
+        if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
+            self.cursor_ctrl.visual_x = cx;
+            self.cursor_ctrl.visual_y = cy;
+            if ch > 0.0 {
+                self.cursor_ctrl.visual_h = ch;
+            }
+        }
     }
 }
