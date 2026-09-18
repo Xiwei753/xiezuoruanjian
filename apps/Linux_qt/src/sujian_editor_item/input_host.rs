@@ -226,6 +226,11 @@ impl EditorInputHost for SujianEditorItem {
             if self.typing_animation_enabled {
                 let (composition_byte_start, composition_byte_end) =
                     self.preedit_byte_range_in_virtual_text();
+                // Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range
+                // （cancel 后 new = committed text，坐标一致），不是 old preedit range。
+                // 在清 session 之前取，清完 session 就取不到了。
+                let (committed_replace_start, committed_replace_end) =
+                    self.pipeline.composition().session_replace_range(self.buffer.cursor);
                 let width = self.bounding_width();
                 let old_cursor_rect = self
                     .pipeline
@@ -270,7 +275,7 @@ impl EditorInputHost for SujianEditorItem {
                 let new_snapshot = self.build_editor_layout_snapshot(
                     width,
                     false,
-                    Some((composition_byte_start, composition_byte_end)),
+                    Some((committed_replace_start, committed_replace_end)),
                 );
 
                 self.pipeline
@@ -287,8 +292,8 @@ impl EditorInputHost for SujianEditorItem {
                         false,
                         composition_byte_start,
                         composition_byte_start,
-                        composition_byte_start,
-                        composition_byte_start,
+                        committed_replace_start,
+                        committed_replace_end,
                         old_cursor_rect,
                         new_cursor_rect,
                         self.cursor_ctrl.cursor_owner_epoch,

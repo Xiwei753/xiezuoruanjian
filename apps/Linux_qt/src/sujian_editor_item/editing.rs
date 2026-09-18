@@ -139,7 +139,11 @@ impl SujianEditorItem {
         summary_tag: &str,
     ) {
         let width = self.bounding_width();
-        let composition_range = Some((preedit_byte_start, preedit_byte_end));
+        // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
+        // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
+        // new_snapshot 只接 new committed text range（candidate 在 new committed text 中的范围）。
+        let old_composition_range = Some((preedit_byte_start, preedit_byte_end));
+        let new_composition_range = Some((candidate_byte_start, candidate_byte_end));
         let old_snapshot = self
             .pipeline
             .animation_coordinator()
@@ -150,7 +154,11 @@ impl SujianEditorItem {
                     .current_layout_snapshot()
                     .clone()
                     .unwrap_or_else(|| {
-                        self.build_editor_layout_snapshot(width, false, composition_range)
+                        self.build_editor_layout_snapshot(
+                            width,
+                            false,
+                            old_composition_range,
+                        )
                     })
             });
 
@@ -172,8 +180,9 @@ impl SujianEditorItem {
             .cancel_active_composition(cancel_reason);
 
         // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
-        // 走 promote=true，generation 直接成为 current，不再用完即删。
-        let new_snapshot = self.build_editor_layout_snapshot(width, true, composition_range);
+        // 走 Promote=true，generation 直接成为 current，不再用完即删。
+        let new_snapshot =
+            self.build_editor_layout_snapshot(width, true, new_composition_range);
         let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
             x: c.x,
             top: c.y,
