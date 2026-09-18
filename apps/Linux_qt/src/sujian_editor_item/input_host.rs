@@ -231,6 +231,26 @@ impl EditorInputHost for SujianEditorItem {
                 // 在清 session 之前取，清完 session 就取不到了。
                 let (committed_replace_start, committed_replace_end) =
                     self.pipeline.composition().session_replace_range(self.buffer.cursor);
+                // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
+                // cancel 的 session_replace_range 可以是零长度 (cursor, cursor)（无 selection 的
+                // 普通 composition ESC），零长度时 build_editor_layout_snapshot 的
+                // `if affected_start < affected_end` 为 false，不生成任何动画视觉资源。
+                // 用 compute_affected_paragraph_ranges 把 raw edit range 扩展到所在段落边界。
+                // old 文本 = session 的 virtual_text（清 session 前取），new 文本 = buffer.text（cancel 恢复原文）。
+                let old_virtual_text = self
+                    .pipeline
+                    .composition()
+                    .composition_session
+                    .as_ref()
+                    .map(|s| s.virtual_text())
+                    .unwrap_or_else(|| self.buffer.text.clone());
+                let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
+                    crate::editor::layout::compute_affected_paragraph_ranges(
+                        &old_virtual_text,
+                        &self.buffer.text,
+                        (composition_byte_start, composition_byte_end),
+                        (committed_replace_start, committed_replace_end),
+                    );
                 let width = self.bounding_width();
                 let old_cursor_rect = self
                     .pipeline
@@ -268,14 +288,14 @@ impl EditorInputHost for SujianEditorItem {
                                 self.build_editor_layout_snapshot(
                                     width,
                                     false,
-                                    Some((composition_byte_start, composition_byte_end)),
+                                    Some((old_affected_start, old_affected_end)),
                                 )
                             })
                     });
                 let new_snapshot = self.build_editor_layout_snapshot(
                     width,
                     false,
-                    Some((committed_replace_start, committed_replace_end)),
+                    Some((new_affected_start, new_affected_end)),
                 );
 
                 self.pipeline

@@ -3,6 +3,12 @@
 //! WHITE_BOX 验证：composition commit/cancel 调用层把 old/new 坐标正确分开。
 //! - commit: new_snapshot 用 candidate range（new committed text 坐标），不用 old preedit range；
 //! - cancel: new_snapshot 和 committed_replace 参数用 session_replace_range，不用 preedit range。
+//!
+//! Issue #710 评论 5735006606 更新: snapshot 的视觉提取范围改为用
+//! compute_affected_paragraph_ranges 扩展段落边界后的 affected range，
+//! 不再直接用 raw edit range。本测试同步更新断言：仍然守卫坐标分离
+//! （old 侧用 preedit/composition 坐标系，new 侧用 candidate/committed_replace
+//! 坐标系），但通过 compute_affected_paragraph_ranges 的调用参数间接验证。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -33,7 +39,7 @@ fn method_body(src: &str, signature: &str) -> String {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 测试 1: commit 的 new_snapshot 用 candidate range，不用 old preedit range
+// 测试 1: commit 的 new_snapshot 用 candidate 坐标系扩展，不用 old preedit 坐标系
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -46,20 +52,39 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
         body.contains("old_composition_range") && body.contains("new_composition_range"),
         "commit: 必须拆分 old_composition_range 和 new_composition_range"
     );
-    // old_composition_range 用 preedit 坐标
+    // Issue #710 评论 5735006606: 必须调用 compute_affected_paragraph_ranges 扩展段落范围
     assert!(
-        body.contains("let old_composition_range = Some((preedit_byte_start, preedit_byte_end));"),
-        "commit: old_composition_range 必须用 preedit_byte_start/end"
+        body.contains("compute_affected_paragraph_ranges("),
+        "commit: 必须调用 compute_affected_paragraph_ranges 扩展段落范围"
     );
-    // new_composition_range 用 candidate 坐标
+    // old 侧 raw edit range 用 preedit 坐标系
     assert!(
-        body.contains("let new_composition_range = Some((candidate_byte_start, candidate_byte_end));"),
-        "commit: new_composition_range 必须用 candidate_byte_start/end"
+        body.contains("(preedit_byte_start, preedit_byte_end),"),
+        "commit: compute_affected_paragraph_ranges 的 old_edit_range 必须用 preedit 坐标"
+    );
+    // new 侧 raw edit range 用 candidate 坐标系
+    assert!(
+        body.contains("(candidate_byte_start, candidate_byte_end),"),
+        "commit: compute_affected_paragraph_ranges 的 new_edit_range 必须用 candidate 坐标"
+    );
+    // old_text 用 saved_virtual_text，new_text 用 &new.text
+    assert!(
+        body.contains("saved_virtual_text,") && body.contains("&new.text,"),
+        "commit: compute_affected_paragraph_ranges 的 old_text=saved_virtual_text, new_text=&new.text"
+    );
+    // old/new composition_range 用扩展后的 affected range
+    assert!(
+        body.contains("let old_composition_range = Some((old_affected_start, old_affected_end));"),
+        "commit: old_composition_range 必须用扩展后的 old_affected range"
+    );
+    assert!(
+        body.contains("let new_composition_range = Some((new_affected_start, new_affected_end));"),
+        "commit: new_composition_range 必须用扩展后的 new_affected range"
     );
     // new_snapshot 用 new_composition_range
     assert!(
         body.contains("build_editor_layout_snapshot(width, true, new_composition_range)"),
-        "commit: new_snapshot 必须用 new_composition_range（candidate 坐标），不能用 old preedit range"
+        "commit: new_snapshot 必须用 new_composition_range（candidate 坐标系扩展），不能用 old preedit range"
     );
     // old_snapshot fallback 用 old_composition_range；new_snapshot 不能用 old_composition_range
     assert!(
@@ -70,11 +95,20 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
         !body.contains("build_editor_layout_snapshot(width, true, old_composition_range)"),
         "commit: new_snapshot 不能用 old_composition_range（那会是 old preedit 坐标系）"
     );
-    println!("[ISSUE710_COMMENT5734666497] commit new_snapshot 用 candidate range (FIXED)");
+    // raw range 不能直接作为 composition_range 传给 build_editor_layout_snapshot
+    assert!(
+        !body.contains("Some((preedit_byte_start, preedit_byte_end))"),
+        "commit: raw preedit range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
+    );
+    assert!(
+        !body.contains("Some((candidate_byte_start, candidate_byte_end))"),
+        "commit: raw candidate range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
+    );
+    println!("[ISSUE710_COMMENT5734666497] commit new_snapshot 用 candidate 坐标系扩展 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// 测试 2: cancel 的 new_snapshot 和 committed_replace 用 session_replace_range
+// 测试 2: cancel 的 new_snapshot 和 committed_replace 用 session_replace_range 坐标系扩展
 // ─────────────────────────────────────────────────────────────────────────
 
 #[test]
@@ -91,20 +125,41 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
         body.contains("committed_replace_start") && body.contains("committed_replace_end"),
         "cancel: 必须有 committed_replace_start/end 变量"
     );
-    // new_snapshot 用 committed_replace range，不用 composition_byte range
+    // Issue #710 评论 5735006606: 必须调用 compute_affected_paragraph_ranges 扩展段落范围
     assert!(
-        body.contains("Some((committed_replace_start, committed_replace_end))"),
-        "cancel: new_snapshot 必须用 committed_replace_start/end，不能用 composition_byte_start/end"
+        body.contains("compute_affected_paragraph_ranges("),
+        "cancel: 必须调用 compute_affected_paragraph_ranges 扩展段落范围"
     );
-    // composition_byte range 只能出现在 old_snapshot fallback 一处，不能出现在 new_snapshot
-    // 用 count==1 守卫：若 new_snapshot 被改回用 composition_byte range，count 会变成 2
-    assert_eq!(
-        body.matches("Some((composition_byte_start, composition_byte_end))").count(),
-        1,
-        "cancel: composition_byte range 只能出现在 old_snapshot fallback 一处，不能出现在 new_snapshot"
+    // old 侧 raw edit range 用 composition_byte 坐标系
+    assert!(
+        body.contains("(composition_byte_start, composition_byte_end),"),
+        "cancel: compute_affected_paragraph_ranges 的 old_edit_range 必须用 composition_byte 坐标"
     );
-    // handle_composition_commit_or_cancel 的 committed_replace 参数用真正的值
-    // 找到 handle_composition_commit_or_cancel 调用块
+    // new 侧 raw edit range 用 committed_replace 坐标系
+    assert!(
+        body.contains("(committed_replace_start, committed_replace_end),"),
+        "cancel: compute_affected_paragraph_ranges 的 new_edit_range 必须用 committed_replace 坐标"
+    );
+    // old/new snapshot 用扩展后的 affected range，不用 raw range
+    assert!(
+        body.contains("Some((old_affected_start, old_affected_end))"),
+        "cancel: old_snapshot fallback 必须用扩展后的 old_affected range"
+    );
+    assert!(
+        body.contains("Some((new_affected_start, new_affected_end))"),
+        "cancel: new_snapshot 必须用扩展后的 new_affected range"
+    );
+    // raw range 不能直接传给 build_editor_layout_snapshot 的 composition_range 参数
+    assert!(
+        !body.contains("Some((composition_byte_start, composition_byte_end))"),
+        "cancel: raw composition_byte range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
+    );
+    assert!(
+        !body.contains("Some((committed_replace_start, committed_replace_end))"),
+        "cancel: raw committed_replace range 不能直接传给 build_editor_layout_snapshot（必须先扩展）"
+    );
+    // handle_composition_commit_or_cancel 的 committed_replace 参数用真正的 raw 值
+    // （coordinator 内部自己做 visual_affected 计算，这里传 raw range 是正确的）
     let call_start = body
         .find("handle_composition_commit_or_cancel(")
         .expect("cancel: 必须调用 handle_composition_commit_or_cancel");
@@ -118,7 +173,7 @@ fn issue710_cancel_new_snapshot_uses_session_replace_range_not_preedit_range() {
             && call_block.contains("committed_replace_end,"),
         "cancel: handle_composition_commit_or_cancel 必须传 committed_replace_start/end 作为 committed_replace 参数"
     );
-    println!("[ISSUE710_COMMENT5734666497] cancel new_snapshot 和 committed_replace 用 session_replace_range (FIXED)");
+    println!("[ISSUE710_COMMENT5734666497] cancel new_snapshot 和 committed_replace 用 session_replace_range 坐标系扩展 (FIXED)");
 }
 
 // ─────────────────────────────────────────────────────────────────────────

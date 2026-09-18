@@ -142,8 +142,21 @@ impl SujianEditorItem {
         // Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系。
         // old_snapshot 只接 old virtualText range（preedit 在 old virtualText 中的范围）；
         // new_snapshot 只接 new committed text range（candidate 在 new committed text 中的范围）。
-        let old_composition_range = Some((preedit_byte_start, preedit_byte_end));
-        let new_composition_range = Some((candidate_byte_start, candidate_byte_end));
+        // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
+        // raw new range 可以是零长度（空 commit + replacement 纯删除时 candidate_byte_start ==
+        // candidate_byte_end），零长度时 build_editor_layout_snapshot 的
+        // `if affected_start < affected_end` 为 false，不生成任何动画视觉资源。
+        // 用 compute_affected_paragraph_ranges 把 raw edit range 扩展到所在段落边界，
+        // 即使 candidate 是 (cursor, cursor)，也会扩成所在段落的非空视觉范围。
+        let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
+            crate::editor::layout::compute_affected_paragraph_ranges(
+                saved_virtual_text,
+                &new.text,
+                (preedit_byte_start, preedit_byte_end),
+                (candidate_byte_start, candidate_byte_end),
+            );
+        let old_composition_range = Some((old_affected_start, old_affected_end));
+        let new_composition_range = Some((new_affected_start, new_affected_end));
         let old_snapshot = self
             .pipeline
             .animation_coordinator()
