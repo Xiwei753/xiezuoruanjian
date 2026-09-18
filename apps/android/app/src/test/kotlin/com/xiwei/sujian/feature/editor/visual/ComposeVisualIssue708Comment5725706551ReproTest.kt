@@ -459,6 +459,62 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             1,
             ghostB.size,
         )
+
+        // #708 评论 5728951138 第 2 节：drain 到 timeline 后验证 timeline 也正确 —
+        // 旧 bug：handoff 首帧不重影，但 timeline createDeletedGhosts 用 exact-match 判断，
+        // drain 下一帧又整段补 [0,2) ghost 导致 [1,2) 被画两遍。
+        // 修复后：reconcileDeletedGhosts 用 subtractRanges 算差集，只给 [0,1) 建 ghost。
+        state.drainPendingPatchesAtFrame(10L * NANOS_PER_MS)
+        val timelineScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+
+        // 断言5（timeline）：存在 range=[1,2) 的 DeletedGhost（旧 active 'b' 转 ghost），alpha < 1
+        val timelineGhostB =
+            timelineScene.units.filter {
+                it.range == TextRange(1, 2) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: timeline 应存在 range=[1,2) 的 DeletedGhost（旧 active 'b' 转 ghost），" +
+                "实际=${timelineGhostB.map { "alpha=${it.alpha.from}" }}" +
+                "（旧 active 'b' 正在动画中，转 ghost 应继承当前可见 alpha < 1）",
+            timelineGhostB.isNotEmpty(),
+        )
+        assertTrue(
+            "testC: timeline range=[1,2) 的 ghost alpha 应 < 1（继承 'b' 当前可见 alpha），" +
+                "实际 alpha.from=${timelineGhostB.first().alpha.from}",
+            timelineGhostB.first().alpha.from < 1f,
+        )
+
+        // 断言6（timeline）：存在 range=[0,1) 的 DeletedGhost（'a' 那份完整可见 ghost）
+        val timelineGhostA =
+            timelineScene.units.filter {
+                it.range == TextRange(0, 1) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: timeline 应存在 range=[0,1) 的 DeletedGhost（'a' 那份完整可见 ghost），" +
+                "实际=${timelineGhostA.map { "alpha=${it.alpha.from}" }}" +
+                "（修复后：reconcileDeletedGhosts 用 subtractRanges([0,2),[1,2))=[0,1)，为 [0,1) 建 ghost）",
+            timelineGhostA.isNotEmpty(),
+        )
+
+        // 断言7（timeline）：不存在 range=[0,2) 的 DeletedGhost（旧 bug 会整段补 [0,2) ghost）
+        val timelineGhostWhole =
+            timelineScene.units.filter {
+                it.range == TextRange(0, 2) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testC: timeline 不应存在 range=[0,2) 的 DeletedGhost，" +
+                "实际=${timelineGhostWhole.map { "alpha=${it.alpha.from}" }}" +
+                "（旧 bug：timeline createDeletedGhosts 用 exact-match，drain 下一帧又整段补 [0,2) ghost）",
+            timelineGhostWhole.isEmpty(),
+        )
+
+        // 断言8（timeline）：range=[1,2) 的 ghost 只有一个（不重影）
+        assertEquals(
+            "testC: timeline range=[1,2) 的 ghost 应只有一个（不重影），实际数量=${timelineGhostB.size}" +
+                "（旧 bug：handoff 首帧不重影，但 timeline drain 下一帧又整段补 [0,2) ghost 导致 [1,2) 被画两遍）",
+            1,
+            timelineGhostB.size,
+        )
     }
 
     // ==================== 测试 D：多字符 active unit 删尾部 slice，ghost position 用子片段几何 ====================
@@ -1112,6 +1168,143 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             "testF: 第二次 split 后 child key 应仍彼此唯一，实际 keys=$handoff2Keys",
             handoff2Keys.size,
             handoff2Keys.distinct().size,
+        )
+    }
+
+    // ==================== 测试 G：等长替换验证 handoff 不用 size 判断 ====================
+
+    /**
+     * 测试 G：等长替换场景，验证 handoff 不用 size 判断 —
+     *
+     * #708 评论 5728951138 第 1 节：
+     * 旧 bug：`publishLocalHandoffScene` 用 `mergedHidden.size != scene.hiddenRanges.size` 等
+     * size 判断 scene 是否变化。等长替换（`"a" -> "b"`）时数量不变，代码直接 `return scene`
+     * 把刚算好的 rebase 全扔了，导致首帧拿旧 scene 画旧字（"旧字闪一帧"）。
+     *
+     * 修复后：删掉 size gate，rebase 后直接构造 `scene.copy(...)`。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "a"`（插入 'a'），sample 到 'a' 仍 active（alpha 在 0..1 之间）
+     * 2. 第二笔：`"a" -> "b"`（等长替换 [0,1) -> [0,1)）
+     * 3. 在 timeline drain 之前检查 handoff scene
+     *
+     * 断言：
+     * - 不应存在 targetRange=[0,1) 且 role=Inserted 且 layout 是旧 "a" layout 的 unit
+     *   （旧 bug 会 return scene 直接用旧 scene，旧 'a' 的 Inserted unit 仍在）
+     * - 应存在 range=[0,1) 且 role=DeletedGhost 的 unit（旧 'a' 转 ghost）
+     * - hiddenRanges 仍应包含 [0,1)（新 'b' 的 [0,1) 应继续被隐藏，等 timeline 吐出来）
+     * - 旧 'a' 的 DeletedGhost alpha 应 < 1（继承当前可见 alpha，不是新建 alpha=1 的完整 ghost）
+     *   （重点：即使 units.size 和 hiddenRanges.size 与上一 scene 相同，也必须发布新内容；
+     *   旧 bug size gate 直接 return scene，旧 'a' 的 Inserted unit 仍在，没有 DeletedGhost）
+     */
+    @Test
+    fun testG_equalLengthReplacement_handoffPublishesNewContent() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a", "b"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5728951138-G",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "a"（插入 'a'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+
+        // onAuthoritativeLayout 配对生成 localPatch，建立首帧 scene（触发 publishLocalHandoffScene）
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+
+        // drainPendingPatchesAtFrame 把 patch 应用到 timeline
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 'a' 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+
+        // 验证 'a' 仍 active：alpha.from 在 0..1 之间
+        val unitA = sampledScene.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        assertNotNull(
+            "testG: 第一笔后应存在 targetRange=[0,1) 的 unit（'a'）",
+            unitA,
+        )
+        assertTrue(
+            "testG: 'a' 应仍 active（alpha.from 在 0..1 之间），实际 alpha.from=${unitA!!.alpha.from}" +
+                "（如果 alpha.from==1f 说明动画已完成，需要用更早的 sample 时间）",
+            unitA.alpha.from > 0f && unitA.alpha.from < 1f,
+        )
+
+        // 第二笔："a" -> "b"（等长替换 [0,1) -> [0,1)）
+        // 选中 a 然后输入 b：oldSelection = TextRange(0,1)（选中 a），newSelection = TextRange(1,1)（光标在 b 后）
+        // changes: oldRange = TextRange(0,1)（旧 a 的范围），newRange = TextRange(0,1)（新 b 的范围）
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "b",
+            oldSelection = TextRange(0, 1),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 1))),
+        )
+
+        // onAuthoritativeLayout 配对生成第二笔 localPatch，建立 handoff scene（触发 publishLocalHandoffScene）
+        state.onAuthoritativeLayout(layouts[2], TextRange(1, 1), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：不应存在 targetRange=[0,1) 且 role=Inserted 且 layout 是旧 "a" layout 的 unit
+        // 旧 bug：size gate 直接 return scene，旧 'a' 的 Inserted unit（targetRange=[0,1), role=Inserted,
+        // layout=旧 "a" layout）仍在 handoff scene 中，首帧拿旧 scene 画旧字 'a'（"旧字闪一帧"）
+        // 修复后：rebase 把旧 'a' 转 DeletedGhost，新 'b' 的 Inserted unit 用新 "b" layout
+        val oldInsertedA =
+            handoffScene.units.filter {
+                it.targetRange == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.Inserted &&
+                    it.layout.result.layoutInput.text.text == "a"
+            }
+        assertTrue(
+            "testG: 不应存在 targetRange=[0,1) 且 role=Inserted 且 layout 是旧 'a' layout 的 unit，" +
+                "实际=${oldInsertedA.map { "key=${it.key}, range=${it.range}, role=${it.role}" }}" +
+                "（旧 bug：size gate 直接 return scene，旧 'a' 的 Inserted unit 仍在，首帧画旧字 'a'）",
+            oldInsertedA.isEmpty(),
+        )
+
+        // 断言2：应存在 range=[0,1) 且 role=DeletedGhost 的 unit（旧 'a' 转 ghost）
+        val ghostA =
+            handoffScene.units.filter {
+                it.range == TextRange(0, 1) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testG: 应存在 range=[0,1) 且 role=DeletedGhost 的 unit（旧 'a' 转 ghost），" +
+                "实际=${handoffScene.units.map { "range=${it.range}, role=${it.role}, targetRange=${it.targetRange}" }}" +
+                "（修复后：rebase 把旧 'a' 转 DeletedGhost，不新建 alpha=1 的完整 ghost）",
+            ghostA.isNotEmpty(),
+        )
+
+        // 断言3：hiddenRanges 仍应包含 [0,1)（新 'b' 的 [0,1) 应继续被隐藏，等 timeline 吐出来）
+        assertTrue(
+            "testG: hiddenRanges 应包含 [0,1)（新 'b' 的 [0,1) 应继续被隐藏，等 timeline 吐出来），" +
+                "实际 hiddenRanges=${handoffScene.hiddenRanges}" +
+                "（insertedUnits 加入 hiddenRanges，让 BasicTextField 先不画新字，由 overlay 吐字）",
+            handoffScene.hiddenRanges.any { it.start == 0 && it.end == 1 },
+        )
+
+        // 断言4：旧 'a' 的 DeletedGhost alpha 应继承当前可见 alpha（< 1），不是新建 alpha=1 的完整 ghost
+        // 重点：即使 units.size 和 hiddenRanges.size 与上一 scene 相同，也必须发布新内容。
+        // 这个通过断言 1-3 间接验证 — 如果 size gate 还在，rebase 结果被扔，断言 1-3 会失败。
+        // 这里再加一个显式断言：handoff scene 的 DeletedGhost alpha 应 < 1（继承当前可见 alpha），
+        // 证明 rebase 正确转 ghost 而不是新建 alpha=1 的完整 ghost。
+        // 旧 bug：size gate 直接 return scene，旧 'a' 的 Inserted unit（alpha=0.1）仍在，
+        // 没有 DeletedGhost。修复后：rebase 把旧 'a' 转 DeletedGhost，alpha 继承当前可见值。
+        assertTrue(
+            "testG: 旧 'a' 的 DeletedGhost alpha 应 < 1（继承当前可见 alpha），" +
+                "实际 alpha.from=${ghostA.first().alpha.from}" +
+                "（修复后：rebase 把旧 'a' 转 ghost，alpha 继承当前可见值，不新建 alpha=1 的完整 ghost）",
+            ghostA.first().alpha.from < 1f,
         )
     }
 

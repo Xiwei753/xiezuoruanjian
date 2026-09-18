@@ -524,52 +524,50 @@ class ComposeEditorVisualState(
                 } else {
                     null
                 }
-            val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
-            val unitsChanged = rebasedUnits.size != scene.units.size
-            val cursorChanged = handoffCursorRect != null && handoffCursorRect != scene.cursorRect
-            if (!hiddenChanged && !unitsChanged && !cursorChanged) {
-                scene
-            } else {
-                // #708 评论 5727808906：rebase 后重建 unitClipFractions —
-                // 旧实现 scene.copy(units = rebasedUnits) 不改 unitClipFractions，
-                // 旧 parent key 的 fraction 被保留，新 split 出来的 child key 查不到 fraction。
-                // draw 层在 coordinated 模式下缺 key 会默认成 0（inserted 分支）或 1，
-                // 导致 split 后三段文字共用父块空间进度，出现吞字/吐字错位。
-                // 修复：rebase 后对每个 child 用自己的 layout/range/role 单独算 clip fraction，
-                // 不把 parent 的一个 fraction 无脑复制给所有 child。
-                val handoffCursor = handoffCursorRect ?: scene.cursorRect
-                val rebasedClipFractions =
-                    if (handoffCursor != null) {
-                        val clipMap = mutableMapOf<Long, Float>()
-                        for (child in rebasedUnits) {
-                            val fraction =
-                                ComposeVisualClip.fractionFor(
-                                    unit = child,
-                                    cursorRect = handoffCursor,
-                                    coordinatedSpatialClip =
-                                        patch.motionPolicy.effective().textEnabled &&
-                                            patch.motionPolicy.effective().cursorEnabled &&
-                                            patch.motionPolicy.effective().coordinated,
-                                )
-                            if (fraction != null) {
-                                clipMap[child.key] = fraction
-                            }
+            // #708 评论 5728951138：rebase 已完成，直接构造最终 scene —
+            // 不用列表 size 判断"变没变"。rebase 最重要的变化（range 坐标、layout、Inserted 转 DeletedGhost、
+            // position/key/role/hiddenRange 内容）都可能在数量完全不变时发生（如等长替换 "a"->"b"）。
+            // 用 size gate 会把刚算好的 rebase 全扔了，首帧拿旧 scene 画旧字，出现"旧字闪一帧"。
+            // StateFlow/data class 自己有结构相等语义；即使最终真完全一样，也没必要用列表长度猜。
+            // #708 评论 5727808906：rebase 后重建 unitClipFractions —
+            // 旧实现 scene.copy(units = rebasedUnits) 不改 unitClipFractions，
+            // 旧 parent key 的 fraction 被保留，新 split 出来的 child key 查不到 fraction。
+            // draw 层在 coordinated 模式下缺 key 会默认成 0（inserted 分支）或 1，
+            // 导致 split 后三段文字共用父块空间进度，出现吞字/吐字错位。
+            // 修复：rebase 后对每个 child 用自己的 layout/range/role 单独算 clip fraction，
+            // 不把 parent 的一个 fraction 无脑复制给所有 child。
+            val handoffCursor = handoffCursorRect ?: scene.cursorRect
+            val rebasedClipFractions =
+                if (handoffCursor != null) {
+                    val clipMap = mutableMapOf<Long, Float>()
+                    for (child in rebasedUnits) {
+                        val fraction =
+                            ComposeVisualClip.fractionFor(
+                                unit = child,
+                                cursorRect = handoffCursor,
+                                coordinatedSpatialClip =
+                                    patch.motionPolicy.effective().textEnabled &&
+                                        patch.motionPolicy.effective().cursorEnabled &&
+                                        patch.motionPolicy.effective().coordinated,
+                            )
+                        if (fraction != null) {
+                            clipMap[child.key] = fraction
                         }
-                        clipMap
-                    } else {
-                        emptyMap()
                     }
-                scene.copy(
-                    hiddenRanges = mergedHidden,
-                    units = rebasedUnits,
-                    cursorRect = handoffCursorRect ?: scene.cursorRect,
-                    unitClipFractions = rebasedClipFractions,
-                    coordinatedSpatialClip =
-                        patch.motionPolicy.effective().textEnabled &&
-                            patch.motionPolicy.effective().cursorEnabled &&
-                            patch.motionPolicy.effective().coordinated,
-                )
-            }
+                    clipMap
+                } else {
+                    emptyMap()
+                }
+            scene.copy(
+                hiddenRanges = mergedHidden,
+                units = rebasedUnits,
+                cursorRect = handoffCursorRect ?: scene.cursorRect,
+                unitClipFractions = rebasedClipFractions,
+                coordinatedSpatialClip =
+                    patch.motionPolicy.effective().textEnabled &&
+                        patch.motionPolicy.effective().cursorEnabled &&
+                        patch.motionPolicy.effective().coordinated,
+            )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
         drawSnapshotState =
