@@ -546,6 +546,34 @@ class ComposeEditorVisualState(
                 if (handoffCursor != null) {
                     val clipMap = mutableMapOf<Long, Float>()
                     for (child in rebasedUnits) {
+                        // #708 评论 5730173947 修复2：handoff 首帧不能对历史 ghost 用新 handoffCursor 重算 —
+                        // 历史 ghost（key 没变，旧 scene.unitClipFractions 已有此 key）沿用旧 fraction，
+                        // 保持上一帧自己的吞字进度，不跳成"按本 patch T0 caret 算出来的 fraction"。
+                        // 本 patch 新 child / 新 ghost（key 变了或新建，旧 scene 查不到）才按本 patch handoffCursor 算。
+                        // 注意：优先查 rebased.oldClipFractionsByKey（split 时 child 继承 parent 的旧 fraction），
+                        // 再查 scene.unitClipFractions（key 没变的历史 ghost）。
+                        val oldFraction = rebased.oldClipFractionsByKey[child.key] ?: scene.unitClipFractions[child.key]
+
+                        // #708 评论 5730173947 修复3：ghost slice 首帧 fraction=0 —
+                        // oldFraction 来自 parent 的旧 fraction（动画进度，如 0.01），
+                        // 不代表"字符已吐完"。ghost slice 不应继承 parent 的 fraction，
+                        // 否则 parent 没吐完的字在删除后会以 parent 的 fraction 冒出来。
+                        // 也不应用 handoffCursor 位置计算 — handoffCursor 是 patch T0 caret
+                        // （在旧正文坐标系），cursor 在 ghost 之后会得到 fraction=1.0。
+                        // ghost slice 在 handoff 首帧始终 fraction=0（不可见），
+                        // timeline 后续帧再用真正 cursor motion 重算。
+                        if (child.targetRange == null) {
+                            clipMap[child.key] = 0f
+                            continue
+                        }
+                        // 存活 slice（有 targetRange）正常沿用旧 fraction
+                        if (oldFraction != null) {
+                            clipMap[child.key] = oldFraction
+                            continue
+                        }
+                        if (handoffCursorRect == null) {
+                            continue
+                        }
                         val fraction =
                             ComposeVisualClip.fractionFor(
                                 unit = child,
@@ -561,7 +589,23 @@ class ComposeEditorVisualState(
                     }
                     clipMap
                 } else {
-                    emptyMap()
+                    // #708 评论 5730173947 修复3：无 cursor motion 时 handoff scene 也要为
+                    // ghost slice 设正确 fraction — 不能默认 1（coordinated 模式下 1=完全可见）。
+                    // 无 cursor 时没有 clip track，用 parent 的旧 fraction 推导：
+                    // - surviving slice：无 parent fraction → 不加 map（timeline 重算，等 cursor 出现）
+                    // - ghost slice：parent fraction null 或0 → ghost fraction = 0（不可见）；
+                    //   parent fraction > 0 → ghost fraction = parent fraction（部分可见）。
+                    // 这确保 partial split 场景中，parent 还没吐出来的部分被删除时不会冒出来。
+                    val clipMap = mutableMapOf<Long, Float>()
+                    for (child in rebasedUnits) {
+                        val oldFraction = rebased.oldClipFractionsByKey[child.key] ?: scene.unitClipFractions[child.key]
+                        if (child.targetRange == null) {
+                            // ghost slice：继承 parent 的旧 fraction，parent 不可见时 ghost 也不可见
+                            clipMap[child.key] = oldFraction ?: 0f
+                        }
+                        // surviving slice：不加 map，timeline 重算
+                    }
+                    clipMap
                 }
             scene.copy(
                 hiddenRanges = mergedHidden,

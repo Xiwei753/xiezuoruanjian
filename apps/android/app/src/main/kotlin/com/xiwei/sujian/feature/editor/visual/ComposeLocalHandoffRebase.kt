@@ -49,7 +49,8 @@ internal object ComposeLocalHandoffRebase {
      *   [ComposeVisualScene.unitClipFractions]（Map<Long, Float>，key=unit.key）
      *   同 key 互相覆盖，三段文字拿同一个 fraction。
      *   allocator 由调用方 [ComposeEditorVisualState] 提供（nextHandoffUnitKey++）。
-     * @return rebased handoff — units 已映射到新坐标系，ghostedCoverage 记录已转 ghost 的旧正文范围。
+     * @return rebased handoff — units 已映射到新坐标系，ghostedCoverage 记录已转 ghost 的旧正文范围，
+     *   oldClipFractionsByKey 记录每个 child key 继承的旧 clip fraction。
      */
     fun rebase(
         scene: ComposeVisualScene,
@@ -60,48 +61,71 @@ internal object ComposeLocalHandoffRebase {
         val newTextLength = newLayout.result.layoutInput.text.length
         val rebasedUnits = mutableListOf<VisualTextUnit>()
         val ghostedCoverage = mutableListOf<TextRange>()
+        val oldClipFractionsByKey = mutableMapOf<Long, Float>()
 
         for (unit in scene.units) {
             val target = unit.targetRange
             if (target == null) {
                 // 已有 ghost：继续保持当前可见状态（保持原有 alpha/position 通道不变）
+                // #708 评论 5730173947 修复2：历史 ghost 沿用旧 clip fraction
                 rebasedUnits.add(unit)
+                scene.unitClipFractions[unit.key]?.let { fraction ->
+                    oldClipFractionsByKey[unit.key] = fraction
+                }
                 continue
             }
             // 旧 active unit：通过 splitMappedRangeForward 映射到新正文坐标
             val slices = computeSlices(target, patch, newTextLength)
-            // #708 评论 5727808906：split 时分配独立新 key —
-            // 只有一个 slice 且代表整个父 unit 时保留 parent key；
-            // 2 个及以上子 unit 时每个子 unit 分配独立新 key。
             val isSplit = slices.size >= 2
+            val parentOldFraction = scene.unitClipFractions[unit.key]
             for (slice in slices) {
                 val childKey = if (isSplit) nextChildKey() else unit.key
-                if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING &&
-                    slice.newSubRange != null
-                ) {
-                    // 存活 slice：targetRange/range 改成 newRange，layout 改成 newLayout
-                    // #708 评论 5727440517：传入 oldSubRange 用于计算 surviving slice 的正确屏幕位置
-                    rebasedUnits.add(
-                        mapSurvivingSliceToHandoff(
-                            unit = unit,
-                            oldRange = slice.oldSubRange,
-                            newRange = slice.newSubRange,
-                            newLayout = newLayout,
-                            childKey = childKey,
-                        ),
-                    )
-                } else {
-                    // 被删除 slice：从旧 unit 当前可见 alpha/position 转 handoff ghost
-                    rebasedUnits.add(toHandoffGhost(unit, slice.oldSubRange, childKey))
-                    ghostedCoverage.add(slice.oldSubRange)
+                if (isSplit) {
+                    // #708 评论 5730173947 修复2/3：split 时 child 继承 parent 的旧 clip fraction，
+                    // 保持上一帧吞字进度，不因换 key 丢失。
+                    // #708 评论 5730173947 修复3：ghost slice 也存 parent fraction（null 时默认0）—
+                    // parent 不可见时 ghost 也不可见（fraction=0），
+                    // 不会因 handoff 用旧 scene.cursorRect 重算而得到非零 fraction。
+                    oldClipFractionsByKey[childKey] = parentOldFraction ?: 0f
                 }
+                processSlice(
+                    unit, slice, childKey, newLayout,
+                    rebasedUnits, ghostedCoverage,
+                )
             }
         }
 
         return RebasedHandoff(
             units = rebasedUnits,
             ghostedCoverage = ghostedCoverage,
+            oldClipFractionsByKey = oldClipFractionsByKey,
         )
+    }
+
+    private fun processSlice(
+        unit: VisualTextUnit,
+        slice: ComposeVisualRebase.MappedRangeSlice,
+        childKey: Long,
+        newLayout: ComposeLayoutSnapshot,
+        rebasedUnits: MutableList<VisualTextUnit>,
+        ghostedCoverage: MutableList<TextRange>,
+    ) {
+        if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING &&
+            slice.newSubRange != null
+        ) {
+            rebasedUnits.add(
+                mapSurvivingSliceToHandoff(
+                    unit = unit,
+                    oldRange = slice.oldSubRange,
+                    newRange = slice.newSubRange,
+                    newLayout = newLayout,
+                    childKey = childKey,
+                ),
+            )
+        } else {
+            rebasedUnits.add(toHandoffGhost(unit, slice.oldSubRange, childKey))
+            ghostedCoverage.add(slice.oldSubRange)
+        }
     }
 
     /**
@@ -218,9 +242,14 @@ internal object ComposeLocalHandoffRebase {
      * @param ghostedCoverage rebase 阶段已经转成 ghost 的旧正文范围（旧坐标系）。
      *   供 [ComposeEditorVisualState.publishLocalHandoffScene] 计算
      *   "deletedUnits - 已由旧 active unit 转 ghost 的范围 = 还需要从 oldLayout 新建完整 ghost 的范围"。
+     * @param oldClipFractionsByKey rebase 后每个 child key 对应的旧 clip fraction —
+     *   split 时 child 是新 key，旧 scene.unitClipFractions 查不到，
+     *   但 handoff 首帧需要继承 parent 的旧 fraction 保持吞字进度。
+     *   key 不在 map 中的 child 表示没有旧 fraction（新插入 unit 或 parent 之前不可见）。
      */
     data class RebasedHandoff(
         val units: List<VisualTextUnit>,
         val ghostedCoverage: List<TextRange>,
+        val oldClipFractionsByKey: Map<Long, Float> = emptyMap(),
     )
 }

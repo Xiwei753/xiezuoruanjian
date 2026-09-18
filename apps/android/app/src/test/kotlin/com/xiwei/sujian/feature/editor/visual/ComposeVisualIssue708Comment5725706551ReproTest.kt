@@ -1671,6 +1671,118 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
     }
 
+    // ==================== 测试 H4：partial split alpha=0 GHOST slice 不复活 ====================
+
+    /**
+     * 测试 H4：partial split 的 alpha=0 GHOST slice 首帧 fraction 必须仍是 0 —
+     *
+     * #708 评论 5730173947 修复3：
+     * 旧 bug：mapSurvivingUnits 的 GHOST slice 无条件创建 ghost。coordinated 模式下 alpha 被
+     * override 成 1，一个还没吐出来的 partial slice（visible fraction=0）转成 DeletedGhost 后，
+     * 按新 cursor 算 fraction 可能 >0，导致"没吐出来的字被删除时反而冒出来"。
+     *
+     * 修复后：先算旧 slice 在当前帧的真实 clip fraction，fraction<=0 时不创建可见 ghost。
+     *
+     * 测试场景：
+     * 1. patch1: "" -> "abcdefghi"（9 字符触发 RUN_ANIMATION 产生多字符 unit [0,9)），coordinated=true
+     * 2. sample 刚开始（如 1ms），parent 当前 visible fraction=0（cursor 还没开始吐字）
+     * 3. patch2: "abcdefghi" -> "abcdfghi"（只删中间 [4,5) 'e'）
+     *    offsetMap 让 parent split：front survivor [0,4) + ghost [4,5) + back survivor
+     * 4. 检查 handoff scene 或 timeline scene
+     *
+     * 断言：
+     * - [4,5) ghost 的首帧可见 fraction 必须仍是 0（不能因转成 DeletedGhost 就按新 cursor 变成 >0）
+     * - 不应出现"没吐出来的 e 被删除时反而冒出来"
+     */
+    @Test
+    fun testH4_partialSplitAlphaZeroGhostSlice_firstFrameFractionZero() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "abcdefghi", "abcdfghi"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5730173947-H4",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "abcdefghi",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 1ms：parent [0,9) 刚开始吐字，visible fraction 接近 0
+        val sceneEarly = state.sampleVisualScene(1L * NANOS_PER_MS)
+        // 前置：确认 parent unit 存在且 fraction 很小（刚吐一点点）
+        val parentUnit = sceneEarly.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testH4: 前置 — 应存在 [0,9) parent unit，实际=${sceneEarly.units.map { unitSummary(it) }}",
+            parentUnit,
+        )
+        val parentFractionEarly = sceneEarly.unitClipFractions[parentUnit!!.key] ?: 0f
+        assertTrue(
+            "testH4: 前置 — 1ms 时 parent fraction 应接近 0（刚开始吐字），实际=$parentFractionEarly",
+            parentFractionEarly < 0.1f,
+        )
+
+        // 第二笔："abcdefghi" -> "abcdfghi"（删中间 [4,5) 'e'）
+        // offsetMap 让 parent split：front survivor [0,4) + ghost [4,5) + back survivor [5,8)
+        state.recordLocalInput(
+            oldText = "abcdefghi",
+            newText = "abcdfghi",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(4, 4), 0)
+
+        // #708 评论 5730173947 修复3：在 drain 之前检查 handoff scene —
+        // handoff scene 由 publishLocalHandoffScene 建立，无 cursor motion 时
+        // ghost slice 的 fraction 应为 0（parent 还没吐出来，deleted slice 不应冒出来）。
+        // drain 之后 timeline 会用 cursor motion 重算 fraction，那是 timeline 行为。
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：[4,5) ghost 的首帧可见 fraction 必须仍是 0
+        // 旧 bug：partial slice 转 DeletedGhost 后按新 cursor 算 fraction >0，没吐出来的 e 冒出来
+        // 修复后：fraction<=0 时不创建可见 ghost，或创建的 ghost fraction 仍是 0
+        val ghostSlice =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(4, 5) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        if (ghostSlice != null) {
+            val ghostFraction = handoffScene.unitClipFractions[ghostSlice.key] ?: 1f
+            assertEquals(
+                "testH4: [4,5) ghost 的首帧可见 fraction 必须仍是 0（没吐出来的 e 不能因删除冒出来），" +
+                    "实际=$ghostFraction" +
+                    "（旧 bug：partial slice 转 DeletedGhost 后按新 cursor 算 fraction >0）",
+                0f,
+                ghostFraction,
+                0.001f,
+            )
+        }
+        // 如果 ghostSlice == null 也 OK（fraction=0 时不创建可见 ghost，直接消失）
+
+        // 断言2：不应存在 [4,5) ghost 且 fraction > 0（不能冒出来）
+        val visibleGhostSlice =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(4, 5) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    (handoffScene.unitClipFractions[it.key] ?: 0f) > 0.01f
+            }
+        assertNull(
+            "testH4: 不应存在 [4,5) 且 fraction>0 的 DeletedGhost（没吐出来的 e 不能冒出来），" +
+                "实际=${visibleGhostSlice?.let { "key=${it.key}, fraction=${handoffScene.unitClipFractions[it.key]}" }}",
+            visibleGhostSlice,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {
