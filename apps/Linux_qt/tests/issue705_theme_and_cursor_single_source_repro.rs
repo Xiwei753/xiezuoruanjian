@@ -1,21 +1,7 @@
-//! Issue #705 复现测试 — 主题状态与当前帧光标几何的事实源未收口。
+//! Issue #705 结构守卫 — 旧字段不能重新出现。
 //!
-//! 本测试为 WHITE_BOX 结构守卫复现:验证当前实现中仍存在 Issue #705 描述的
-//! "重复事实源",从而确定性复现两个子问题:
-//!
-//! 问题 1(主题文字不可见):Core/Qt 设置链同时存在 `theme_mode` 和
-//! `appearance_mode` 两套主题状态事实源。运行时一边认为当前是 dark,
-//! 另一边仍按 system 重新解析,即使 `isDark=true`,`on_surface/editorText`
-//! 仍可能来自错误的一套 scheme,导致深色背景上文字不可见。
-//!
-//! 问题 2(光标几何错位):光标 visual position 与当前 render generation 的
-//! `QTextLine.cursorToX()` 不严格同源,鼠标点击命中可能用临时排版而非
-//! 当前 generation 的 `xToCursor()`,`RenderPlan` 缺少 `drawn_caret_rect`
-//! 字段,下一次事务起点与屏幕这一帧真正画出的光标位置不是严格同一个值。
-//!
-//! 复现语义:每个测试断言 Issue #705 期望的正确结构。当前(未修复)代码
-//! 违反这些断言 → 测试 FAIL → 缺陷复现成功。测试输出携带
-//! `[BUGFIX_REPRO_TRACE]` 诊断行,记录观察到的重复来源/缺失字段。
+//! 本测试只保留"旧字段不能重新出现"的结构守卫。能通过真实行为覆盖的
+//! 测试已迁移到 qt_runtime_theme_cursor.rs 和 qt_runtime_cursor_geometry.rs。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -33,386 +19,57 @@ fn read_src(rel: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
 }
 
-/// 在源码中统计某个模式的出现次数(非重叠)。
-fn count_occurrences(src: &str, needle: &str) -> usize {
-    src.matches(needle).count()
-}
-
 // =========================================================================
-// 问题 1:主题状态第二套事实源 — 深色模式下文字不可见
+// 问题 1: 旧主题字段不能重新出现 — 结构守卫
 // =========================================================================
 
-/// 复现 1a:Core `LocalSettings` 同时存在 `theme_mode` 和 `appearance_mode`
-/// 两个字段。Issue #705 要求运行时只认 `appearance_mode`,`theme_mode`
-/// 只能用于加载旧设置时的一次性迁移,不应继续作为运行时第二套事实源。
-///
-/// 当前代码:`core/writer_core/src/settings/mod.rs` 的 `LocalSettings`
-/// 同时有 `pub theme_mode: Option<String>` 和 `pub appearance_mode: String`。
-/// 断言"不应有运行时 theme_mode 字段"在当前代码上 FAIL → 复现成功。
+/// 守卫 1a: Core `LocalSettings` 运行时不应再持有 `theme_mode` 字段。
+/// `theme_mode` 只能用于加载旧设置时的一次性迁移。
 #[test]
-fn issue705_repro_1a_local_settings_has_runtime_theme_mode_duplicate() {
+fn issue705_guard_1a_local_settings_no_runtime_theme_mode() {
     let src = read_src("../../core/writer_core/src/settings/mod.rs");
-    // Issue #705 期望:LocalSettings 运行时只认 appearance_mode,
-    // theme_mode 不应作为运行时字段继续存在(只能做一次性迁移)。
-    let has_theme_mode_field = src.contains("pub theme_mode: Option<String>");
-    let has_appearance_mode_field = src.contains("pub appearance_mode: String");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 1a local_settings: theme_mode_field={} appearance_mode_field={}",
-        has_theme_mode_field, has_appearance_mode_field
-    );
-    assert!(
-        has_appearance_mode_field,
-        "前提:LocalSettings 必须有 appearance_mode 字段"
-    );
-    // 复现断言:theme_mode 不应作为运行时字段存在。当前代码有 → FAIL → 复现。
-    assert!(
-        !has_theme_mode_field,
-        "Issue #705 复现 1a: LocalSettings 仍同时持有运行时 theme_mode 字段, \
-         与 appearance_mode 形成两套主题状态事实源。运行时一边按 theme_mode \
-         判断 dark,另一边按 appearance_mode 重新解析,即使 isDark=true, \
-         on_surface/editorText 仍可能来自错误的一套 scheme,导致深色背景上 \
-         文字不可见。"
-    );
-}
-
-/// 复现 1b:`SettingsBackend` 仍把 `setting_theme_mode` 暴露成 QML 属性。
-/// Issue #705 要求把现在还能形成第二套主题判断的读取点删掉,不要只是把
-/// 字段留着"暂时不用"。
-///
-/// 当前代码:`apps/Linux_qt/src/backend/settings_backend.rs` 有
-/// `setting_theme_mode: qt_property!(...)`。断言"不应暴露"在当前代码上
-/// FAIL → 复现成功。
-#[test]
-fn issue705_repro_1b_settings_backend_exposes_theme_mode_qml_property() {
-    let src = read_src("src/backend/settings_backend.rs");
-    let exposes_theme_mode = src.contains("setting_theme_mode: qt_property!");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 1b settings_backend exposes setting_theme_mode qml property: {}",
-        exposes_theme_mode
-    );
-    assert!(
-        !exposes_theme_mode,
-        "Issue #705 复现 1b: SettingsBackend 仍把 setting_theme_mode 暴露成 QML 属性, \
-         形成运行时第二套主题判断出口。Issue 要求删掉这类读取点,不要留着\"暂时不用\"。"
-    );
-}
-
-/// 复现 1c:`AppBackend` 持有独立的 `current_setting_theme_mode` 字段,且
-/// `set_setting_appearance_mode` 只更新 `current_setting_appearance_mode`,
-/// 不同步更新 `current_setting_theme_mode`。两套字段可不同步,是主题状态
-/// 分叉的运行时根源。
-///
-/// 当前代码:`app_backend.rs` 有 `current_setting_theme_mode: String` 和
-/// `current_setting_appearance_mode: String` 两个独立字段。
-#[test]
-fn issue705_repro_1c_app_backend_has_independent_theme_mode_field() {
-    let src = read_src("src/backend/app_backend.rs");
-    let has_theme_mode = src.contains("current_setting_theme_mode: String");
-    let has_appearance_mode = src.contains("current_setting_appearance_mode: String");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 1c app_backend: current_setting_theme_mode={} current_setting_appearance_mode={}",
-        has_theme_mode, has_appearance_mode
-    );
-    assert!(
-        has_appearance_mode,
-        "前提:AppBackend 必须有 current_setting_appearance_mode"
-    );
+    let has_theme_mode = src.contains("pub theme_mode: Option<String>");
     assert!(
         !has_theme_mode,
-        "Issue #705 复现 1c: AppBackend 仍持有独立的 current_setting_theme_mode 字段, \
-         与 current_setting_appearance_mode 并存。set_setting_appearance_mode 只更新 \
-         appearance_mode 侧,theme_mode 侧可保留旧值,两套字段不同步即主题状态分叉。"
+        "LocalSettings 不应再持有运行时 theme_mode 字段"
     );
 }
 
-/// 复现 1d:`set_setting_appearance_mode` 不同步更新
-/// `current_setting_theme_mode`。即使两套字段并存,只要 setter 只写一份,
-/// 就存在分叉窗口。Issue #705 要求运行时只认一份。
-///
-/// 当前代码:`app_backend.rs` 有 `current_setting_theme_mode` 字段,且
-/// `set_setting_appearance_mode` 不同步更新它 → 断言 FAIL → 复现。
-/// 修复后:`current_setting_theme_mode` 字段被删除 → 前提不满足 → 跳过(PASS)。
+/// 守卫 1b: SettingsBackend 不应再暴露 `setting_theme_mode` QML 属性。
 #[test]
-fn issue705_repro_1d_set_appearance_mode_does_not_sync_theme_mode() {
+fn issue705_guard_1b_settings_backend_no_theme_mode_property() {
+    let src = read_src("src/backend/settings_backend.rs");
+    let exposes = src.contains("setting_theme_mode: qt_property!");
+    assert!(
+        !exposes,
+        "SettingsBackend 不应再暴露 setting_theme_mode QML 属性"
+    );
+}
+
+/// 守卫 1c: AppBackend 不应再持有独立的 `current_setting_theme_mode` 字段。
+#[test]
+fn issue705_guard_1c_app_backend_no_independent_theme_mode_field() {
     let src = read_src("src/backend/app_backend.rs");
-    // 前提:AppBackend 持有 current_setting_theme_mode 字段
-    let has_theme_mode_field = src.contains("current_setting_theme_mode: String");
-    if !has_theme_mode_field {
-        // 修复后字段已删除,前提不满足,跳过
-        println!(
-            "[BUGFIX_REPRO_TRACE] 1d app_backend current_setting_theme_mode field removed -> skip"
-        );
-        return;
-    }
-    // 字段存在时,set_setting_appearance_mode 应同步更新它(否则两套字段分叉)
-    let setter_src = read_src("src/backend/settings_backend.rs");
-    let setter_marker = "fn set_setting_appearance_mode";
-    let marker_pos = setter_src
-        .find(setter_marker)
-        .expect("set_setting_appearance_mode 必须存在");
-    let window_end = marker_pos + 400;
-    let window = if window_end <= setter_src.len() {
-        &setter_src[marker_pos..window_end]
-    } else {
-        &setter_src[marker_pos..]
-    };
-    let syncs_theme_mode = window.contains("current_setting_theme_mode");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 1d set_setting_appearance_mode syncs current_setting_theme_mode: {}",
-        syncs_theme_mode
-    );
+    let has_theme_mode = src.contains("current_setting_theme_mode: String");
     assert!(
-        syncs_theme_mode,
-        "Issue #705 复现 1d: AppBackend 持有 current_setting_theme_mode 字段,但 \
-         set_setting_appearance_mode 不同步更新它。两套字段在 setter 路径上分叉, \
-         是深色模式下 isDark 与 on_surface/editorText 不同源的运行时根源。"
+        !has_theme_mode,
+        "AppBackend 不应再持有独立的 current_setting_theme_mode 字段"
     );
 }
 
 // =========================================================================
-// 问题 2:光标几何不唯一源 — 光标错位 / 鼠标点击动画时好时坏
+// 问题 2: 旧光标结构不能重新出现 — 结构守卫
 // =========================================================================
 
-/// 复现 2a:`RenderPlan` 缺少 `drawn_caret_rect` 字段。Issue #705 要求
-/// `RenderPlan` 增加明确的"本帧真正绘制出去的 caret rect",例如
-/// `drawn_caret_rect`。`qquickitem_impl.rs` 每帧生成 RenderPlan 后,把
-/// `cursor_ctrl.visual_x/visual_y/visual_h` 同步成 `drawn_caret_rect`。
-/// 下一次输入、删除、鼠标点击创建新事务时,只允许从这个"上一帧真正
-/// 画出来的位置" rebase。
-///
-/// 当前代码:`render_plan.rs` 的 `RenderPlan` 没有 `drawn_caret_rect` 字段。
+/// 守卫 2e: 鼠标点击路径不应有多个 per-method force_snap 分支。
 #[test]
-fn issue705_repro_2a_render_plan_missing_drawn_caret_rect() {
-    let src = read_src("src/sujian_editor_item/render_plan.rs");
-    let has_drawn_caret_rect = src.contains("drawn_caret_rect");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2a render_plan has drawn_caret_rect field: {}",
-        has_drawn_caret_rect
-    );
-    assert!(
-        has_drawn_caret_rect,
-        "Issue #705 复现 2a: RenderPlan 缺少 drawn_caret_rect 字段。 \
-         当前 RenderPlan 只有 cursor: CursorRenderState (从 cursor_ctrl.visual_x/y/h 构造) \
-         和 cursor_sample_outcome,没有明确的\"本帧真正绘制出去的 caret rect\"。 \
-         下一次事务起点无法从上一帧真正画出的位置 rebase,导致光标错位。"
-    );
-}
-
-/// 复现 2b:`hit_test`(鼠标点击命中)调用 `self.layout_snapshot(width)`,
-/// 该方法在 cache 失效时会 `clear_layout_generation` + `begin_layout_generation`
-/// 重新排版,而非使用当前 render generation 对应的同一份已排版
-/// `QTextLayout/QTextLine`。Issue #705 要求鼠标点击命中必须使用当前
-/// render generation 的同一份已排版 layout,不允许临时排一遍文字。
-///
-/// Issue #705 评论 5716410988 修复后,`hit_test` 走统一入口
-/// `current_render_layout_snapshot()`,该入口优先 `prepared_frame.layout_snapshot`,
-/// fallback `self.layout_snapshot(width)`。本测试同时接受两种实现:
-/// (a) `hit_test` 内联 `prepared_frame` 优先 + `self.layout_snapshot(` fallback;
-/// (b) `hit_test` 调用 `current_render_layout_snapshot`,且该入口本身有
-///     `prepared_frame` 优先 + `self.layout_snapshot(` fallback。
-#[test]
-fn issue705_repro_2b_hit_test_uses_layout_snapshot_not_current_render_generation() {
-    let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    // hit_test 实现体
-    let marker = "fn hit_test(&mut self, x: f64, y: f64)";
-    let marker_pos = src.find(marker).expect("hit_test 必须存在");
-    let window_end = marker_pos + 400;
-    let window = if window_end <= src.len() {
-        &src[marker_pos..window_end]
-    } else {
-        &src[marker_pos..]
-    };
-    let calls_layout_snapshot = window.contains("self.layout_snapshot(");
-    let uses_prepared_frame = window.contains("prepared_frame");
-    let calls_unified_entry = window.contains("current_render_layout_snapshot");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2b hit_test calls layout_snapshot={} uses_prepared_frame={} calls_unified_entry={}",
-        calls_layout_snapshot, uses_prepared_frame, calls_unified_entry
-    );
-
-    // 统一入口模式:hit_test 调用 current_render_layout_snapshot,
-    // 且该入口本身有 prepared_frame 优先 + self.layout_snapshot( fallback。
-    let unified_entry_valid = if calls_unified_entry {
-        let entry_marker = "fn current_render_layout_snapshot(&mut self) -> LayoutSnapshot";
-        let entry_pos = src.find(entry_marker).expect(
-            "current_render_layout_snapshot 必须存在 (hit_test 引用了它)"
-        );
-        let entry_window_end = entry_pos + 600;
-        let entry_window = if entry_window_end <= src.len() {
-            &src[entry_pos..entry_window_end]
-        } else {
-            &src[entry_pos..]
-        };
-        let entry_has_prepared = entry_window.contains("prepared_frame");
-        let entry_has_layout_snapshot = entry_window.contains("self.layout_snapshot(");
-        println!(
-            "[BUGFIX_REPRO_TRACE] 2b unified entry has_prepared={} has_layout_snapshot={}",
-            entry_has_prepared, entry_has_layout_snapshot
-        );
-        entry_has_prepared && entry_has_layout_snapshot
-    } else {
-        false
-    };
-
-    // 至少满足一种正确实现模式
-    let inline_mode_valid = calls_layout_snapshot && uses_prepared_frame;
-    assert!(
-        inline_mode_valid || unified_entry_valid,
-        "Issue #705 复现 2b: hit_test 既没有内联 prepared_frame 优先 + \
-         self.layout_snapshot( fallback,也没有走 current_render_layout_snapshot \
-         统一入口(该入口需有 prepared_frame 优先 + self.layout_snapshot( fallback)。\
-         layout_snapshot 在 cache 失效时会 clear_layout_generation + \
-         begin_layout_generation 重新排版,鼠标点击命中用的 generation 与 \
-         屏幕这一帧真正画出的 generation 可能不同,导致点击命中错位。"
-    );
-}
-
-/// 复现 2c:`build_editor_layout_snapshot` 调用 `begin_layout_generation()`
-/// 分配独立 generation 临时排版。Issue #705 要求正文静态绘制、cursorToX()、
-/// xToCursor()、鼠标点击命中都必须使用当前 render generation 对应的同一份
-/// 已排版 layout,不允许为了算光标位置再临时排一遍文字,也不要拿旧
-/// generation 的行数据和新 generation 的正文混用。
-///
-/// 当前代码:`layout_ops.rs` 的 `build_editor_layout_snapshot` 调用
-/// `begin_layout_generation()`。
-#[test]
-fn issue705_repro_2c_build_editor_layout_snapshot_allocs_new_generation() {
-    let src = read_src("src/sujian_editor_item/layout_ops.rs");
-    let marker = "fn build_editor_layout_snapshot";
-    let marker_pos = src
-        .find(marker)
-        .expect("build_editor_layout_snapshot 必须存在");
-    let window_end = marker_pos + 2000;
-    let window = if window_end <= src.len() {
-        &src[marker_pos..window_end]
-    } else {
-        &src[marker_pos..]
-    };
-    let allocs_new_gen = window.contains("begin_layout_generation()");
-    let new_gen_count = count_occurrences(window, "begin_layout_generation()");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2c build_editor_layout_snapshot allocs new generation: {} (count={})",
-        allocs_new_gen, new_gen_count
-    );
-    assert!(
-        !allocs_new_gen,
-        "Issue #705 复现 2c: build_editor_layout_snapshot 调用 begin_layout_generation() \
-         分配独立 generation 临时排版。编辑事务算光标位置用的 generation 与 \
-         当前 render generation 不同,下一次事务的起点和屏幕这一帧真正画出来 \
-         的光标位置不是严格同一个值,导致快速输入、不同宽度字符时光标错位。"
-    );
-}
-
-/// 复现 2d:`qquickitem_impl.rs` 每帧生成 RenderPlan 后,应把
-/// `cursor_ctrl.visual_x/visual_y/visual_h` 同步成 `drawn_caret_rect`
-/// (本帧真正绘制出去的 caret rect)。当前代码只从 `cursor_sample_outcome`
-/// 的 `Coordinated { x, y, h }` 同步,没有从 `drawn_caret_rect` 同步,
-/// 也没有把 `drawn_caret_rect` 作为下一次事务的 rebase 基准。
-///
-/// 当前代码:`qquickitem_impl.rs` 没有 `drawn_caret_rect` 相关同步逻辑。
-#[test]
-fn issue705_repro_2d_qquickitem_impl_does_not_sync_from_drawn_caret_rect() {
-    let src = read_src("src/sujian_editor_item/qquickitem_impl.rs");
-    let references_drawn_caret_rect = src.contains("drawn_caret_rect");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2d qquickitem_impl references drawn_caret_rect: {}",
-        references_drawn_caret_rect
-    );
-    assert!(
-        references_drawn_caret_rect,
-        "Issue #705 复现 2d: qquickitem_impl.rs 没有从 drawn_caret_rect 同步 \
-         cursor_ctrl.visual_x/visual_y/visual_h 的逻辑。当前只从 \
-         cursor_sample_outcome::Coordinated 同步,没有明确的\"本帧真正绘制出去 \
-         的 caret rect\"作为下一次事务 rebase 基准,target_x/target_y 仍可能被 \
-         拿来当当前屏幕位置,导致光标错位。"
-    );
-}
-
-/// 复现 2e:`editing.rs` 的鼠标点击路径 `click_at` 在普通单击时不强制
-/// `force_snap_next`,但 `drag_select_at`/`long_press_at`/`select_word_at`
-/// 仍各自设置 `force_snap_next = true`。Issue #705 要求鼠标点击路径里
-/// 不要自己单独决定光标动画模式,是否 Tween 由统一的光标移动规则决定。
-///
-/// 当前代码:`editing.rs` 的 `drag_select_at`/`long_press_at`/`select_word_at`
-/// 各自设置 `force_snap_next = true`,形成点击路径里的特殊分支。
-#[test]
-fn issue705_repro_2e_click_path_has_per_method_force_snap_special_branches() {
+fn issue705_guard_2e_click_path_no_per_method_force_snap() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    // 统计 click 相关方法里 force_snap_next = true 的出现次数
-    let force_snap_count = count_occurrences(&src, "self.cursor_ctrl.force_snap_next = true;");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2e editing.rs force_snap_next=true count in click paths: {}",
-        force_snap_count
-    );
-    // Issue #705 要求鼠标点击路径里不要自己单独决定光标动画模式。
-    // 当前 drag_select_at/long_press_at/select_word_at 各自 force_snap_next=true,
-    // 形成多个特殊分支。期望:点击路径不应有多个 per-method force_snap 分支。
+    let force_snap_count =
+        src.matches("self.cursor_ctrl.force_snap_next = true;").count();
     assert!(
         force_snap_count <= 1,
-        "Issue #705 复现 2e: editing.rs 鼠标点击路径有 {} 处 \
-         self.cursor_ctrl.force_snap_next = true,形成多个 per-method 特殊分支 \
-         (drag_select_at/long_press_at/select_word_at 各自决定光标动画模式)。 \
-         Issue 要求是否 Tween 由统一的光标移动规则决定,不要在点击代码里自己 \
-         强制 Snap。多个特殊分支导致鼠标点击后的光标动画时好时坏。",
+        "鼠标点击路径不应有多个 per-method force_snap 分支（发现 {} 处）",
         force_snap_count
-    );
-}
-
-/// 复现 2f: Issue #705 评论 5716919024 问题 1。`emit_content_changed` 必须
-/// 在 `bump_text_revision` 后无条件清 `prepared_frame`,不能只在
-/// `has_pending_promoted_layout` 时清。否则普通输入(打字动画关闭 / 滚动抑制
-/// 动画等没有 promoted layout 的路径)会让 `current_render_layout_snapshot`
-/// 优先拿到旧 `prepared_frame`,造成光标几何按上一帧正文计算。
-///
-/// 当前(未修复)代码:`properties.rs` 的 `emit_content_changed` 用
-/// `if self.pipeline.has_pending_promoted_layout() { self.prepared_frame = None; }`
-/// 作为条件守卫。断言"不应有 has_pending_promoted_layout 条件守卫"在当前代码
-/// 上 FAIL → 复现成功。修复后:无条件 `self.prepared_frame = None;`,
-/// 函数体窗口内不再出现 `has_pending_promoted_layout` → PASS。
-#[test]
-fn issue705_repro_2f_emit_content_changed_clears_prepared_frame_unconditionally() {
-    let src = read_src("src/sujian_editor_item/properties.rs");
-    // 定位 emit_content_changed 函数体窗口
-    let marker = "fn emit_content_changed";
-    let marker_pos = src
-        .find(marker)
-        .expect("emit_content_changed 必须存在");
-    // 取其后约 3000 字符的窗口,覆盖 bump_text_revision、无条件清 prepared_frame
-    // 到 take_pending_promoted_layout / promote_prepared_layout 的完整逻辑。
-    // (函数体约 3955 字符,3000 字符窗口足以覆盖到 self.prepared_frame = None;
-    // 且不超出函数体,不会误判其他函数里的标识符。)
-    // 注意:源码含中文注释,字节切片可能落在 UTF-8 多字节字符中间,
-    // 需要把窗口结束位置回退到最近的字符边界。
-    let target_end = marker_pos + 3000;
-    let window_end = src
-        .char_indices()
-        .take_while(|(i, _)| *i < target_end)
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(src.len())
-        .min(src.len());
-    let window = &src[marker_pos..window_end];
-    let clears_prepared_frame = window.contains("self.prepared_frame = None;");
-    let has_pending_guard = window.contains("has_pending_promoted_layout");
-    println!(
-        "[BUGFIX_REPRO_TRACE] 2f emit_content_changed clears_prepared_frame={} has_pending_promoted_layout_guard={}",
-        clears_prepared_frame, has_pending_guard
-    );
-    assert!(
-        clears_prepared_frame,
-        "Issue #705 复现 2f: emit_content_changed 函数体内没有 \
-         `self.prepared_frame = None;`。正文变化后必须无条件清 prepared_frame, \
-         否则 current_render_layout_snapshot 会优先拿旧 frame。"
-    );
-    assert!(
-        !has_pending_guard,
-        "Issue #705 复现 2f: emit_content_changed 函数体内仍以 \
-         has_pending_promoted_layout 作为清 prepared_frame 的条件守卫。 \
-         普通输入(打字动画关闭 / 滚动抑制动画等没有 promoted layout 的路径) \
-         不会进入该分支,prepared_frame 仍是旧正文,后续 \
-         adjust_affinity_at_wrap_boundary -> update_cursor_visual_position \
-         -> editor_layout_cursor_rect -> current_render_layout_snapshot \
-         会优先拿旧 prepared_frame,造成\"正文已经变了,光标几何还按上一帧正文算\" \
-         的错位。修复:正文 revision 一变化就无条件清 prepared_frame。"
     );
 }
