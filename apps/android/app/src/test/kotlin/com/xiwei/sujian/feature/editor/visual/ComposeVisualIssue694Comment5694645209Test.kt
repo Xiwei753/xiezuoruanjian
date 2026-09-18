@@ -15,6 +15,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -463,8 +464,12 @@ class ComposeVisualIssue694Comment5694645209Test {
      * 场景：先让 "abc" 的吐字动画已经开始但没结束（applyPatch 插入 abc，sample 到中间帧），
      * 下一帧快速删除 c -> b -> a。
      *
-     * 断言：在 1/3、2/3 时间点采样，三个 ghost 的 alpha 应按 c、b、a 依次进入淡出，
-     * 不能三个一起下降。
+     * #708 评论 5729482707 修复1 调整：alpha=0 的 unit（c，未开始动画）删除时直接消失，
+     * 不转 ghost 也不补 alpha=1 ghost。alpha>0 的 unit（a 已完成、b 进行中）仍然转 ghost
+     * 并进入分段 schedule。测试核心断言（分段 schedule startedAtNanos 不同）仍然成立。
+     *
+     * 断言：alpha>0 的 ghost（a、b）按分段 schedule 依次进入淡出，不能一起下降。
+     * alpha=0 的 unit（c）不产生 ghost（直接消失）。
      */
     @Test
     fun activeUnitDeleted_rescheduleDeletedGhosts_staggeredFadeOut() {
@@ -488,6 +493,8 @@ class ComposeVisualIssue694Comment5694645209Test {
         )
 
         // 第二步：sample 到中间帧（150ms），吐字动画进行中但未结束
+        // 3 段分段 schedule: a:0~100ms, b:100~200ms, c:200~300ms
+        // 150ms 时: a alpha=1(已完成), b alpha=0.5(进行中), c alpha=0(未开始)
         val midFrame = 150_000_000L
         val midScene = timeline.sample(midFrame)
         // 确认有活动 unit（abc 正在吐字）
@@ -511,46 +518,45 @@ class ComposeVisualIssue694Comment5694645209Test {
             frameTimeNanos = frame1,
         )
 
-        // 第四步：在 1/3、2/3 时间点采样，检查三个 ghost 的 alpha
+        // 第四步：检查 ghost 的分段 schedule
         // 删除分段 schedule：n=3, ghost i 的 startedAt = frame1 + durationNanos * (i/3)
-        // ghost 0 (c): startedAt = frame1, duration = durationNanos/3
+        // ghost 0 (c): startedAt = frame1 — 但 c alpha=0，#708 修复1 后直接消失不转 ghost
         // ghost 1 (b): startedAt = frame1 + durationNanos/3, duration = durationNanos/3
         // ghost 2 (a): startedAt = frame1 + 2*durationNanos/3, duration = durationNanos/3
         val segmentDuration = durationNanos / 3
 
         // 核心断言（在 sample 之前通过反射检查 ghost 的 startedAtNanos）：
-        // 三个 ghost 的 startedAtNanos 应不同（分段 schedule），不能都是 frame1。
+        // alpha>0 的 ghost 的 startedAtNanos 应不同（分段 schedule），不能都是 frame1。
         // sample 会 rebase 所有通道的 startedAtNanos，所以必须在 sample 之前检查。
         val timelineUnits = getTimelineUnits(timeline)
         val ghosts = timelineUnits.filter { it.targetRange == null }
         assertTrue(
-            "applyPatch 后应有 ghost（abc 被删除），实际=${ghosts.size}",
+            "applyPatch 后应有 ghost（a 和 b 被删除），实际=${ghosts.size}",
             ghosts.isNotEmpty(),
         )
         val startedAtSet = ghosts.map { it.alpha.startedAtNanos }.toSet()
         assertTrue(
-            "三个 ghost 的 startedAtNanos 应不同（分段 schedule），实际=${ghosts.map { it.alpha.startedAtNanos }}\n" +
-                "Issue #694 评论 5694645209 问题3：活动 unit 应进入删除分段 schedule，不能三个一起下降",
+            "alpha>0 的 ghost 的 startedAtNanos 应不同（分段 schedule），实际=${ghosts.map { it.alpha.startedAtNanos }}\n" +
+                "Issue #694 评论 5694645209 问题3：活动 unit 应进入删除分段 schedule，不能一起下降",
             startedAtSet.size > 1,
         )
 
         // 验证分段 schedule 的具体值：
         // orderedDeletedUnits = [TextRange(2,3), TextRange(1,2), TextRange(0,1)]
-        // ghost 0 (c, range [2,3)): startedAt = frame1 + 0 = frame1
         // ghost 1 (b, range [1,2)): startedAt = frame1 + segmentDuration
         // ghost 2 (a, range [0,1)): startedAt = frame1 + 2*segmentDuration
         val ghostByRange = ghosts.associateBy { it.range }
         val ghostC = ghostByRange[TextRange(2, 3)]
         val ghostB = ghostByRange[TextRange(1, 2)]
         val ghostA = ghostByRange[TextRange(0, 1)]
-        assertNotNull("应有 range [2,3) 的 ghost (c)", ghostC)
+        // #708 评论 5729482707 修复1：c (alpha=0) 删除时直接消失，不转 ghost
+        assertNull(
+            "不应有 range [2,3) 的 ghost (c) — alpha=0 的 unit 删除后直接消失（#708 修复1），" +
+                "实际=${ghostC?.let { "alpha=${it.alpha.from}" }}",
+            ghostC,
+        )
         assertNotNull("应有 range [1,2) 的 ghost (b)", ghostB)
         assertNotNull("应有 range [0,1) 的 ghost (a)", ghostA)
-        assertEquals(
-            "ghost c (range [2,3)) 的 startedAt 应为 frame1",
-            frame1,
-            ghostC!!.alpha.startedAtNanos,
-        )
         assertEquals(
             "ghost b (range [1,2)) 的 startedAt 应为 frame1 + segmentDuration",
             frame1 + segmentDuration,
@@ -564,9 +570,9 @@ class ComposeVisualIssue694Comment5694645209Test {
 
         // 验证 alpha.from 保持当前真实 alpha（toGhost 时保留的 alphaNow），不重置成 1
         // 在 midFrame 时：
-        // - unit 0 (a, range [0,1)): 已完成 alpha=1，但被 sample 移除，从 oldLayout 建 ghost，alpha.from=1
+        // - unit 0 (a, range [0,1)): 已完成 alpha=1，toGhost 保留 alphaNow=1
         // - unit 1 (b, range [1,2)): 进行中 alpha=0.5，toGhost 保留 alphaNow=0.5
-        // - unit 2 (c, range [2,3)): 未开始 alpha=0，toGhost 保留 alphaNow=0
+        // - unit 2 (c, range [2,3)): 未开始 alpha=0，#708 修复1 后直接消失不转 ghost
         // rescheduleDeletedGhosts 后 alpha.from 保持不变
         assertTrue(
             "ghost b 的 alpha.from 应保持 toGhost 时的 alphaNow（不重置成 1），实际=${ghostB.alpha.from}",

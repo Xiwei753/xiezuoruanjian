@@ -131,6 +131,13 @@ class ComposeVisualTimeline {
         // 历史 ghost 的 range/layout 可能属于更早的正文坐标，不能拿来减当前 patch.deletedUnits。
         val currentPatchGhostedCoverage = mutableListOf<TextRange>()
 
+        // #708 评论 5729482707 修复2：当前 patch 产生的 ghost 的 unit key 集合 —
+        // reconcileDeletedGhosts 的 schedule 阶段用它做对象身份判断，只给本次 patch 新产生的 ghost
+        // 重排 schedule，不误改历史遗留 ghost（历史 ghost 的 range 可能数字相同但属于旧 layout）。
+        // coverage 用 currentPatchGhostedCoverage（范围差集）；身份用 currentPatchGhostKeys（对象身份）。
+        // 不要用 range 同时承担"范围"和"对象身份"两件事。
+        val currentPatchGhostKeys = mutableSetOf<Long>()
+
         // #703 评论 D：scene redirect — 快速输入/删除采用 scene redirect，不堆积旧动画。
         // 新 edit 到达时，从"当前屏幕真正画到的位置"重定向到新目标。
         // 旧 editEpoch 的延迟 patch、ghost、cursor path、retained move 如果已被新编辑覆盖，
@@ -165,17 +172,17 @@ class ComposeVisualTimeline {
                                     del.start <= unit.targetRange!!.start && unit.targetRange!!.end <= del.end
                                 }
                             if (fullyDeleted != null) {
-                                // #708 评论 5728951138：记录被当前 patch 转成 ghost 的范围，
-                                // reconcileDeletedGhosts 用它做差集避免整段补 ghost。
-                                // unit.targetRange 与 patch.deletedUnits 同坐标系（当前正文坐标）。
-                                // #708 评论 5728951138 修复：alpha=0 的 unit 不可见，转成 ghost 会被
-                                // mapSurvivingUnits 丢弃（currentAlpha > 0f 检查），但 coverage 已记录
-                                // 该范围导致 reconcileDeletedGhosts 不再为它建 ghost → ghost 丢失。
-                                // 改：alpha <= 0 时不转 ghost、不记 coverage，直接移除，
-                                // 让 reconcileDeletedGhosts 为它建 alpha=1 完整 ghost（与旧 createDeletedGhosts 一致）。
+                                // #708 评论 5729482707 修复1：alpha=0 的 active unit 删除时不能凭空补成 alpha=1 ghost。
+                                // timeline 原则：从当前屏幕真正画到的状态继续。alpha=0 表示当前不可见，
+                                // 删除后正确连续画面是仍不可见（直接消失），不应被 reconcileDeletedGhosts 补成 alpha=1 完整 ghost。
+                                // 改：无论 alpha 是否 > 0，都先记 coverage，让 reconcileDeletedGhosts 不再为这段补 ghost。
+                                // alpha>0 时转 ghost 并记 key（供 schedule 用）；alpha<=0 时不保留 ghost 但 coverage 已记。
+                                val range = unit.targetRange!!
+                                currentPatchGhostedCoverage.add(range)
                                 if (currentAlpha(unit.alpha, frameTimeNanos) > 0f) {
-                                    currentPatchGhostedCoverage.add(unit.targetRange!!)
-                                    toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                                    val ghost = toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                                    currentPatchGhostKeys.add(ghost.key)
+                                    ghost
                                 } else {
                                     presentedKeys.remove(unit.key)
                                     null
@@ -228,6 +235,7 @@ class ComposeVisualTimeline {
                 ghosting,
                 effectiveProgressByKey,
                 currentPatchGhostedCoverage,
+                currentPatchGhostKeys,
             )
 
             // 第三步：处理本 patch 新插入的 unit。
@@ -273,6 +281,7 @@ class ComposeVisualTimeline {
                 ghosting = ghosting,
                 orderedDeletedUnits = patch.deletedUnits,
                 currentPatchGhostedCoverage = currentPatchGhostedCoverage,
+                currentPatchGhostKeys = currentPatchGhostKeys,
                 oldLayout = patch.oldLayout,
                 frameTimeNanos = frameTimeNanos,
                 durationNanos = durationNanos,
@@ -439,6 +448,7 @@ class ComposeVisualTimeline {
         ghosting: MutableList<VisualTextUnit>,
         progressByKey: MutableMap<Long, Boolean>,
         currentPatchGhostedCoverage: MutableList<TextRange>,
+        currentPatchGhostKeys: MutableSet<Long>,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
@@ -499,16 +509,19 @@ class ComposeVisualTimeline {
                     // #708 评论 5728951138：记录被当前 patch 转成 ghost 的范围，
                     // reconcileDeletedGhosts 用它做差集避免整段补 ghost。
                     // slice.oldSubRange 与 patch.deletedUnits 同坐标系（当前正文坐标）。
+                    // #708 评论 5729482707 修复2：把 ghost.key 加进 currentPatchGhostKeys，
+                    // schedule 阶段用它做对象身份判断，只重排本次 patch 产生的 ghost。
                     currentPatchGhostedCoverage.add(slice.oldSubRange)
-                    ghosting.add(
+                    val ghost =
                         toGhost(
                             unit = unit,
                             now = frameTimeNanos,
                             durationNanos = durationNanos,
                             ghostRange = slice.oldSubRange,
                             childKey = childKey,
-                        ),
-                    )
+                        )
+                    currentPatchGhostKeys.add(ghost.key)
+                    ghosting.add(ghost)
                 }
             }
         }
@@ -702,6 +715,8 @@ class ComposeVisualTimeline {
      * @param orderedDeletedUnits 本 patch 的 deletedUnits（按顺序）。
      * @param currentPatchGhostedCoverage 当前 patch 已把 active unit 转成 ghost 的范围
      *   （旧正文坐标系，与 orderedDeletedUnits 同坐标系）。
+     * @param currentPatchGhostKeys 当前 patch 产生的 ghost 的 unit key 集合 —
+     *   schedule 阶段用它做对象身份判断，只重排本次 patch 的 ghost，不误改历史 ghost。
      * @param oldLayout 本 patch 的 oldLayout（建 ghost 取旧位置）。
      * @param frameTimeNanos 当前帧时间戳。
      * @param durationNanos 文字动画时长（有界窗口长度）。
@@ -711,6 +726,7 @@ class ComposeVisualTimeline {
         ghosting: MutableList<VisualTextUnit>,
         orderedDeletedUnits: List<TextRange>,
         currentPatchGhostedCoverage: List<TextRange>,
+        currentPatchGhostKeys: MutableSet<Long>,
         oldLayout: ComposeLayoutSnapshot,
         frameTimeNanos: Long,
         durationNanos: Long,
@@ -738,7 +754,7 @@ class ComposeVisualTimeline {
                 if (ghosting.any { it.targetRange == null && it.range == del }) continue
                 // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
                 val oldPosition = computeUnitPosition(oldLayout, del) ?: continue
-                ghosting +=
+                val newGhost =
                     VisualTextUnit(
                         key = nextUnitKey++,
                         layout = oldLayout,
@@ -751,6 +767,10 @@ class ComposeVisualTimeline {
                         // 由 cursor 从右向左裁切吞掉。
                         role = VisualUnitRole.DeletedGhost,
                     )
+                // #708 评论 5729482707 修复2：remaining 新建 ghost 也属于本次 patch，
+                // 把 key 加进 currentPatchGhostKeys，schedule 阶段才会给它重排 schedule。
+                currentPatchGhostKeys.add(newGhost.key)
+                ghosting += newGhost
             }
             // 3. 给属于这个 deletedUnit 的所有 ghost 设 stage schedule
             //    包括 active 转的 ghost（range 在 deletedRange 内）和新建的 remaining ghost。
@@ -762,14 +782,17 @@ class ComposeVisualTimeline {
             val ghostDuration = (durationNanos * (endFraction - startFraction)).toLong()
             for (j in ghosting.indices) {
                 val ghost = ghosting[j]
+                // #708 评论 5729482707 修复2：schedule 只处理当前 patch 产生的 ghost，
+                // 不靠 range 判断"是不是本 patch 的 ghost"——历史 ghost 的 range 可能数字相同但属于旧 layout。
+                // 用 currentPatchGhostKeys 做对象身份判断，历史 ghost 保持自己原来的 schedule 不被重置。
                 // #708 评论 5728951138：schedule 匹配从 exact-range（ghost.range == range）
                 // 改成"range 在 deletedRange 内"（ghost.range.start >= deletedRange.start &&
                 // ghost.range.end <= deletedRange.end），让部分 slice（如 [1,2) 在 [0,2) 内）
                 // 也能匹配到父 deletedUnit 的 stage schedule。
-                if (ghost.targetRange == null &&
-                    ghost.range.start >= deletedRange.start &&
-                    ghost.range.end <= deletedRange.end
-                ) {
+                val isCurrentPatchGhost = ghost.key in currentPatchGhostKeys
+                val isWithinDeletedRange =
+                    ghost.range.start >= deletedRange.start && ghost.range.end <= deletedRange.end
+                if (isCurrentPatchGhost && ghost.targetRange == null && isWithinDeletedRange) {
                     ghosting[j] =
                         ghost.copy(
                             alpha =

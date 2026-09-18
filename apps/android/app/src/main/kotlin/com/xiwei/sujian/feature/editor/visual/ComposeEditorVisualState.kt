@@ -198,6 +198,13 @@ class ComposeEditorVisualState(
     private var nextHandoffUnitKey: Long = 2_000_000L
 
     /**
+     * #708 评论 5729482707 修复3：handoff 临时 unit key 唯一 allocator —
+     * 所有 handoff 临时 unit（split child、remaining delete ghost、ReflowMove）统一走此入口，
+     * 不再手写 ++，避免两种自增写法混用导致连续 handoff 撞 key。
+     */
+    private fun allocateHandoffUnitKey(): Long = nextHandoffUnitKey++
+
+    /**
      * #708 评论 5723410606 第一节：draw 阶段原子快照 —
      * 由 [drawSnapshot] 在 drawWithContent 里一次性取走。
      * 关键：这个 State 只能在 drawWithContent 里读。
@@ -402,7 +409,7 @@ class ComposeEditorVisualState(
             // ghostedCoverage 记录 rebase 阶段已经转成 ghost 的旧正文范围。
             // #708 评论 5727808906：传入 key allocator — split 时为每个子 unit 分配独立新 key，
             // 不再共用父 key，避免 unitClipFractions 同 key 互相覆盖。
-            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch) { nextHandoffUnitKey++ }
+            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch) { allocateHandoffUnitKey() }
             val rebasedUnits = rebased.units.toMutableList()
 
             // #708 评论 5725706551 步骤2：hiddenRanges 从 rebase 后所有 targetRange != null 的 unit 重新推导 —
@@ -448,10 +455,9 @@ class ComposeEditorVisualState(
                         oldLayout.result, del,
                     ) ?: continue
                 val oldPosition = Offset(oldBounds.left, oldBounds.top)
-                nextHandoffUnitKey++
                 rebasedUnits +=
                     VisualTextUnit(
-                        key = nextHandoffUnitKey,
+                        key = allocateHandoffUnitKey(),
                         layout = oldLayout,
                         range = del,
                         targetRange = null,
@@ -495,10 +501,9 @@ class ComposeEditorVisualState(
                         continue
                     }
                     val oldPosition = Offset(slice.oldBounds.left, slice.oldBounds.top)
-                    nextHandoffUnitKey++
                     rebasedUnits +=
                         VisualTextUnit(
-                            key = nextHandoffUnitKey,
+                            key = allocateHandoffUnitKey(),
                             layout = newLayout,
                             range = nr,
                             targetRange = nr,

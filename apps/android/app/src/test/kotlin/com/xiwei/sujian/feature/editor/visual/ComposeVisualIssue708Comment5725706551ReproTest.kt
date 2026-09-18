@@ -1308,6 +1308,369 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
     }
 
+    // ==================== 测试 H1：alpha=0 的 active unit 删除时不补 alpha=1 ghost ====================
+
+    /**
+     * 测试 H1：alpha=0 的 active unit 删除时不补 alpha=1 ghost —
+     *
+     * #708 评论 5729482707 修复1：
+     * 旧 bug：fullyDeleted 分支在 alpha<=0 时不记 coverage，导致 reconcileDeletedGhosts
+     * 认为整段没人接管，新建 alpha=1 完整 ghost → 用户还没看到的字在删除那一帧突然完整出现。
+     *
+     * 修复后：无论 alpha 是否 > 0，都先记 coverage，让 reconcileDeletedGhosts 不再为这段补 ghost。
+     * alpha>0 时转 ghost；alpha<=0 时不保留 ghost 但 coverage 已记（直接消失）。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "ab"`（插入 'a' 和 'b'），多字符吐字分段 a:0~50ms b:50~100ms
+     * 2. sample 10ms，确认 b [1,2) alpha == 0（b 的 segment 还没开始）
+     * 3. 第二笔：`"ab" -> "a"`（删 [1,2) 'b'），drain at 10ms
+     * 4. sample 10ms，检查 scene
+     *
+     * 断言：
+     * - 前置条件：10ms 时 b 的 alpha == 0（确认多字符分段生效）
+     * - 不存在 range=[1,2) 且 alpha.from==1f 的 DeletedGhost（旧 bug：reconcile 补 alpha=1 完整 ghost）
+     * - 不存在 range=[1,2) 的 DeletedGhost（alpha=0 的字删除后直接消失，不应有任何 ghost）
+     */
+    @Test
+    fun testH1_alphaZeroActiveUnitDeleted_noAlphaOneGhost() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "ab", "a"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5729482707-H1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "ab"（插入 'a' 和 'b'，2 cluster 用 GLYPH_ANIMATION 拆成 [0,1) 和 [1,2)）
+        // repartitionPendingAndInsertedUnits: n=2, a: startedAt=0 duration=50ms, b: startedAt=50ms duration=50ms
+        state.recordLocalInput(
+            oldText = "",
+            newText = "ab",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 2), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 10ms：a alpha=0.2（10/50），b alpha=0（10 < 50，segment 还没开始）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitB = sampledScene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        assertNotNull(
+            "testH1: 第一笔后应存在 targetRange=[1,2) 的 unit（'b'），" +
+                "实际 targetRanges=${sampledScene.units.mapNotNull { it.targetRange }}",
+            unitB,
+        )
+        // 前置条件：b 的 alpha 在 10ms 时应为 0（segment 从 50ms 开始）
+        assertEquals(
+            "testH1: 前置条件 — 10ms 时 b 的 alpha 应为 0（segment 从 50ms 开始），" +
+                "实际 alpha.from=${unitB!!.alpha.from}, startedAtNanos=${unitB.alpha.startedAtNanos}" +
+                "（如果 alpha > 0 说明多字符分段没生效，需检查 textDurationMillis 和分段逻辑）",
+            0f,
+            unitB.alpha.from,
+            0.001f,
+        )
+
+        // 第二笔："ab" -> "a"（删 [1,2) 'b'），drain at 10ms
+        // b 的 alpha=0，fullyDeleted 分支：修复后记 coverage [1,2)，不转 ghost
+        // reconcileDeletedGhosts: remaining = subtractRanges([1,2), [1,2)) = 空，不建 ghost
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "a",
+            oldSelection = TextRange(2, 2),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(1, 1), oldRange = TextRange(1, 2))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(10L * NANOS_PER_MS)
+
+        val timelineScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+
+        // 断言1：不存在 range=[1,2) 且 alpha.from==1f 的 DeletedGhost
+        // 旧 bug：alpha<=0 时不记 coverage，reconcileDeletedGhosts 为 [1,2) 建 alpha=1 完整 ghost
+        // 修复后：coverage 已记 [1,2)，reconcileDeletedGhosts remaining 为空，不建 ghost
+        val alphaOneGhosts =
+            timelineScene.units.filter {
+                it.range == TextRange(1, 2) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.alpha.from >= 1f
+            }
+        assertTrue(
+            "testH1: 不应存在 range=[1,2) 且 alpha.from>=1f 的 DeletedGhost，" +
+                "实际=${alphaOneGhosts.map { "key=${it.key}, alpha=${it.alpha.from}" }}" +
+                "（旧 bug：alpha=0 的 unit 删除时不记 coverage，reconcile 补 alpha=1 完整 ghost，" +
+                "用户还没看到的字在删除那一帧突然完整出现）",
+            alphaOneGhosts.isEmpty(),
+        )
+
+        // 断言2：不存在 range=[1,2) 的 DeletedGhost（alpha=0 的字删除后直接消失）
+        // 修复后：coverage 已记，不转 ghost 也不建 remainingDeleted ghost
+        val anyGhostsInRange =
+            timelineScene.units.filter {
+                it.range == TextRange(1, 2) && it.role == VisualUnitRole.DeletedGhost
+            }
+        assertTrue(
+            "testH1: 不应存在 range=[1,2) 的 DeletedGhost（alpha=0 的字删除后直接消失），" +
+                "实际=${anyGhostsInRange.map { "key=${it.key}, alpha=${it.alpha.from}" }}" +
+                "（修复后：coverage 已记 [1,2)，不转 ghost 也不建 remainingDeleted ghost）",
+            anyGhostsInRange.isEmpty(),
+        )
+    }
+
+    // ==================== 测试 H2：连续 Forward Delete 历史 ghost schedule 不被重置 ====================
+
+    /**
+     * 测试 H2：连续 Forward Delete 历史 ghost schedule 不被重置 —
+     *
+     * #708 评论 5729482707 修复2：
+     * 旧 bug：reconcileDeletedGhosts 的 schedule 阶段遍历整个 ghosting，只用 range containment 判断。
+     * ghosting 里不只有本次 patch 新产生的 ghost，还包含上一笔仍没消失的历史 ghost。
+     * 历史 ghost 的 range 属于旧 layout 坐标，只拿数字 [start,end) 和当前 deletedRange 比不能说明是同一个字符。
+     * 连续 Forward Delete 会把历史 ghost 重新套一遍新删除 schedule。
+     *
+     * 修复后：schedule 阶段用 currentPatchGhostKeys 做对象身份判断，只处理当前 patch 产生的 ghost，
+     * 历史 ghost 保持自己原来的 schedule 不被重置。
+     *
+     * 测试场景：
+     * 1. 初始 "ab"，sample 到完成
+     * 2. patch1: "ab" -> "b"（删 [0,1) 'a'），drain at 1000ms，sample 1010ms 记录 a ghost 的 startedAtNanos
+     * 3. patch2: "b" -> ""（删 [0,1) 'b'），drain at 1010ms
+     * 4. sample 1010ms，检查 ghosting
+     *
+     * 断言：
+     * - 历史 a ghost（layout text=="ab"）：alpha.startedAtNanos 仍是 patch1 时设的值（1000ms）
+     * - 本次 b ghost（layout text=="b"）：alpha.startedAtNanos 是 patch2 时设的值（1010ms）
+     * - 两者不能因为数字 range 都是 [0,1) 就一起重新排时
+     */
+    @Test
+    fun testH2_consecutiveForwardDelete_historicalGhostScheduleNotReset() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "ab", "b", ""), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5729482707-H2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "ab"（插入 'a' 和 'b'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "ab",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 2), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 a 和 b 都完成（alpha=1）
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // patch1: "ab" -> "b"（删 [0,1) 'a'），drain at 1000ms
+        // a 的 alpha=1，fullyDeleted 转 ghost，reconcileDeletedGhosts schedule: startedAt=1000ms
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "b",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0)
+        state.drainPendingPatchesAtFrame(1000L * NANOS_PER_MS)
+
+        // sample 1010ms：a ghost 仍在动画中（startedAt=1000ms, duration=100ms, 1010ms 时 alpha=0.9）
+        val sceneAfterPatch1 = state.sampleVisualScene(1010L * NANOS_PER_MS)
+        val aGhostAfterPatch1 =
+            sceneAfterPatch1.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "ab"
+            }
+        assertNotNull(
+            "testH2: patch1 后应存在历史 a ghost（range=[0,1), layout='ab'），" +
+                "实际=${sceneAfterPatch1.units.map { unitSummary(it) }}",
+            aGhostAfterPatch1,
+        )
+        // 记录历史 a ghost 的 startedAtNanos（patch1 设的值）
+        val historicalStartedAt = aGhostAfterPatch1!!.alpha.startedAtNanos
+
+        // patch2: "b" -> ""（删 [0,1) 'b'），drain at 1010ms
+        // b 的 alpha=1，fullyDeleted 转 ghost，reconcileDeletedGhosts schedule: startedAt=1010ms
+        // 旧 bug：schedule 阶段遍历整个 ghosting，历史 a ghost 的 range=[0,1) 在 deletedRange=[0,1) 内，
+        //         被重排 startedAt=1010ms
+        // 修复后：历史 a ghost 的 key 不在 currentPatchGhostKeys 里，不被重排，保持 startedAt=1000ms
+        state.recordLocalInput(
+            oldText = "b",
+            newText = "",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(0, 0), 0)
+        state.drainPendingPatchesAtFrame(1010L * NANOS_PER_MS)
+
+        val sceneAfterPatch2 = state.sampleVisualScene(1010L * NANOS_PER_MS)
+
+        // 断言1：历史 a ghost（layout text=="ab"）的 alpha.startedAtNanos 仍是 patch1 时设的值
+        val historicalAGhost =
+            sceneAfterPatch2.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "ab"
+            }
+        assertNotNull(
+            "testH2: patch2 后应仍存在历史 a ghost（range=[0,1), layout='ab'），" +
+                "实际=${sceneAfterPatch2.units.map { unitSummary(it) }}",
+            historicalAGhost,
+        )
+        assertEquals(
+            "testH2: 历史 a ghost 的 alpha.startedAtNanos 应保持 patch1 时设的值（$historicalStartedAt），" +
+                "实际=${historicalAGhost!!.alpha.startedAtNanos}" +
+                "（旧 bug：schedule 阶段用 range 判断，历史 ghost 被重排到 patch2 的 schedule）",
+            historicalStartedAt,
+            historicalAGhost.alpha.startedAtNanos,
+        )
+
+        // 断言2：本次 b ghost（layout text=="b"）的 alpha.startedAtNanos 是 patch2 时设的值
+        val currentBGhost =
+            sceneAfterPatch2.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "b"
+            }
+        assertNotNull(
+            "testH2: patch2 后应存在本次 b ghost（range=[0,1), layout='b'），" +
+                "实际=${sceneAfterPatch2.units.map { unitSummary(it) }}",
+            currentBGhost,
+        )
+        // patch2 drain at 1010ms，schedule: n=1, startedAt=1010ms
+        assertEquals(
+            "testH2: 本次 b ghost 的 alpha.startedAtNanos 应是 patch2 时设的值（1010ms），" +
+                "实际=${currentBGhost!!.alpha.startedAtNanos}",
+            1010L * NANOS_PER_MS,
+            currentBGhost.alpha.startedAtNanos,
+        )
+
+        // 断言3：历史 a ghost 和本次 b ghost 的 key 不同（对象身份不同）
+        assertTrue(
+            "testH2: 历史 a ghost 和本次 b ghost 的 key 应不同，" +
+                "实际 historicalKey=${historicalAGhost.key}, currentKey=${currentBGhost.key}",
+            historicalAGhost.key != currentBGhost.key,
+        )
+    }
+
+    // ==================== 测试 H3：跨两次 handoff key 唯一 ====================
+
+    /**
+     * 测试 H3：跨两次 handoff key 唯一 —
+     *
+     * #708 评论 5729482707 修复3：
+     * 旧 bug：handoff key allocator 混用两种自增写法 —
+     * allocator（post-increment，先返回当前值再 +1）和手工 ++（pre-increment，先 +1 再用新值）。
+     * 两种写法共用同一计数器，会留下已用过但计数器还停在该值的 key，连续 handoff 可能撞 key。
+     *
+     * 修复后：统一 allocateHandoffUnitKey() 入口（post-increment），所有 handoff 临时 unit
+     * （split child、remaining delete ghost、ReflowMove）走同一入口，不再手写 ++。
+     *
+     * 测试场景（跨两次 handoff，中间不 drain timeline）：
+     * 1. 初始 "abcdefghi"（9 字符触发 RUN_ANIMATION 产生多字符 unit [0,9)），drain，sample 到完成
+     * 2. 第一笔 "abcdefghi" -> "abcdefgh"（删尾部 'i' [8,9)），onAuthoritativeLayout 触发 handoff scene 1
+     *    → split: [0,8) surviving + [8,9) ghost，用 allocator 分配 child key
+     * 3. 不 drain timeline
+     * 4. 第二笔 "abcdefgh" -> "abcdefg"（删尾部 'h' [7,8)），onAuthoritativeLayout 触发 handoff scene 2
+     *    → split: [0,7) surviving + [7,8) ghost，用 allocator 分配 child key
+     * 5. 断言 handoff scene 2 的所有 unit key distinct
+     *
+     * 关键：卡的是跨两次 handoff，不是单次 split。中间不 drain timeline，让两笔 handoff scene 累积。
+     * 现有 test F 只检查单次 handoff 内唯一，抓不到自增混用。
+     */
+    @Test
+    fun testH3_crossTwoHandoffs_keyUnique() {
+        val layouts =
+            captureLayoutsWithWidth(
+                arrayOf("", MULTI_CHAR_TEXT, "abcdefgh", "abcdefg"),
+                1000,
+            )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5729482707-H3",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到多字符 unit 完成（alpha=1）
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // 第一笔 handoff："abcdefghi" -> "abcdefgh"（删尾部 'i' [8,9)）
+        // → split: [0,8) surviving + [8,9) ghost，用 allocator 分配 child key
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdefgh",
+            oldSelection = TextRange(9, 9),
+            newSelection = TextRange(8, 8),
+            changes = listOf(LocalInputChange(newRange = TextRange(8, 8), oldRange = TextRange(8, 9))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(8, 8), 0)
+
+        // 不 drain timeline — 让 handoff scene 1 累积
+
+        // 第二笔 handoff："abcdefgh" -> "abcdefg"（删尾部 'h' [7,8)）
+        // → split: [0,7) surviving + [7,8) ghost，用 allocator 分配 child key
+        // handoff scene 2 基于 handoff scene 1 做 rebase，包含 scene 1 的 ghost + scene 2 的 split child
+        state.recordLocalInput(
+            oldText = "abcdefgh",
+            newText = "abcdefg",
+            oldSelection = TextRange(8, 8),
+            newSelection = TextRange(7, 7),
+            changes = listOf(LocalInputChange(newRange = TextRange(7, 7), oldRange = TextRange(7, 8))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(7, 7), 0)
+
+        // 检查 handoff scene 2 — 这是 publishLocalHandoffScene 建立的最新 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 断言1：所有 unit key distinct
+        // 旧 bug：两种自增写法混用导致跨两次 handoff 撞 key
+        // 修复后：统一 allocateHandoffUnitKey() 入口，所有 key 唯一
+        val allKeys = handoffScene.units.map { it.key }
+        assertEquals(
+            "testH3: 跨两次 handoff 后所有 unit key 应彼此唯一，" +
+                "实际 keys=$allKeys, distinct=${allKeys.distinct().size}" +
+                "（旧 bug：allocator post-increment 和手工 pre-increment 混用导致撞 key）",
+            allKeys.size,
+            allKeys.distinct().size,
+        )
+
+        // 断言2：handoff scene 应有多个 unit（split 产生的 surviving + ghost）
+        // 第一次 split: [0,8) + [8,9) ghost，第二次 split: [0,7) + [7,8) ghost + [8,9) ghost
+        assertTrue(
+            "testH3: handoff scene 应有 >= 2 个 unit（split 产生的 surviving + ghost），" +
+                "实际 size=${handoffScene.units.size}, " +
+                "targetRanges=${handoffScene.units.map { it.targetRange }}",
+            handoffScene.units.size >= 2,
+        )
+    }
+
     // ==================== 辅助方法 ====================
 
     private companion object {
@@ -1316,6 +1679,11 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
 
         /** 测试 D 用的多字符文本（9 字符触发 RUN_ANIMATION 产生多字符 unit）。 */
         const val MULTI_CHAR_TEXT: String = "abcdefghi"
+
+        /** 测试 H2 用的 unit 摘要 — 避免单行 lambda 超过 120 字符限制。 */
+        fun unitSummary(unit: VisualTextUnit): String =
+            "range=${unit.range}, role=${unit.role}, " +
+                "text=${unit.layout.result.layoutInput.text.text}"
     }
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)
