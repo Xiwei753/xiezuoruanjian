@@ -126,6 +126,14 @@ impl CursorController {
         let old_visible = self.visible;
         let old_blink_visible = self.blink_visible;
 
+        // Issue #709 评论 issue-body-709: 明确的"刚启动或 rebase 一次光标 Tween"信号。
+        // 旧实现只在 pos_changed == true 时设置 blink_visible/dirty，但新建 Tween 第一帧
+        // visual_x/visual_y 还停在上一帧位置，pos_changed 很可能是 false。如果用户点击
+        // 时正处在 blink 的隐藏半周期，Tween 已开始但 opacity 还是 0，看起来像"这次点击
+        // 动画没触发"。新建或 rebase Tween 本身就是明确的状态变化信号，不依赖坐标是否
+        // 已经移动。
+        let mut started_or_rebased_tween = false;
+
         self.target_x = plan.cursor_x;
         self.target_y = plan.cursor_y;
         self.visual_h = plan.cursor_h;
@@ -196,6 +204,8 @@ impl CursorController {
                         });
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
+                        // Issue #709 评论 issue-body-709: rebase Tween 是明确的状态变化信号。
+                        started_or_rebased_tween = true;
                     } else if anim.is_finished() {
                         self.visual_x = anim.target_x;
                         self.visual_y = anim.target_y;
@@ -231,6 +241,8 @@ impl CursorController {
                             started_at: None,
                             duration_ms: *duration_ms,
                         });
+                        // Issue #709 评论 issue-body-709: 新建 Tween 是明确的状态变化信号。
+                        started_or_rebased_tween = true;
                     } else {
                         self.visual_x = target_x;
                         self.visual_y = target_y;
@@ -250,6 +262,18 @@ impl CursorController {
             self.blink_last_toggle = Instant::now();
         }
 
+        // Issue #709 评论 issue-body-709: 新建或 rebase Tween 是额外的独立触发条件，
+        // 不依赖坐标是否已经移动。第一帧 visual_x/visual_y 还停在上一帧位置，
+        // pos_changed 很可能是 false，但用户确实刚启动了一次光标移动。
+        // 此时必须立即 blink_visible = true / blink_last_toggle = now / dirty = true，
+        // 否则用户点击时正处在 blink 的隐藏半周期，Tween 已开始但 opacity 还是 0，
+        // 看起来像"这次点击动画没触发"。
+        if started_or_rebased_tween {
+            self.blink_visible = true;
+            self.blink_last_toggle = Instant::now();
+            self.dirty = true;
+        }
+
         let blink_changed = old_blink_visible != self.blink_visible;
 
         let position_changed =
@@ -257,7 +281,9 @@ impl CursorController {
 
         CursorUpdateResult {
             ime_needs_update: position_changed,
-            needs_repaint: pos_changed || self.animation.is_some(),
+            // Issue #709 评论 issue-body-709: needs_repaint 必须包含 started_or_rebased_tween，
+            // 即使第一帧坐标没移动也要触发重绘以应用新的 blink 状态。
+            needs_repaint: pos_changed || self.animation.is_some() || started_or_rebased_tween,
             visibility_changed,
             blink_changed,
             visual_position_changed: pos_changed,

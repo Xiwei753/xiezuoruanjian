@@ -6,7 +6,7 @@ use crate::backend::DomainSnapshot;
 /// Issue #701 评论 5702214893: resolved scheme 现在缓存在 controller 内。
 ///
 /// `appearance_mode`、`system_is_dark`、`is_dark`、`color_source`、当前
-/// builtin/palette id 以及最终 `ThemeColorScheme`（`scheme_json`）
+/// builtin/palette id 以及最终 `ThemeColorSchemeDto`（`scheme`）
 /// 全部从同一份 `DomainSnapshot` 一次性解析并缓存到 `cached_state`。
 /// getter（`resolved_scheme_json`/`is_dark`/`color_source` 等）只读缓存，
 /// 不再每次都 borrow `AppBackend` 或 `DomainSnapshot`，彻底消除双状态机。
@@ -16,15 +16,24 @@ use crate::backend::DomainSnapshot;
 /// `scheme_changed`；QML 侧通过该信号重新求值只读属性。`with_app` 仅用于
 /// 调用 `core_api()` 加载 palette record / builtin theme 数据，不再用于
 /// 读取主题设置本身。
+///
+/// Issue #709 评论 issue-body-709: `ResolvedThemeState` 直接保存最终选中的
+/// `ThemeColorSchemeDto`（`scheme: Option<...>`），不再序列化成 JSON 字符串。
+/// `theme_state_json()` 直接序列化这一份完整状态，消除
+/// scheme -> JSON string -> serde_json::Value -> 再包第二层 JSON 的低效路径。
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
     #[allow(dead_code)]
     base: qt_base_class!(trait QObject),
     /// Issue #702: 主题完整状态一次性发布。JSON 结构：
-    /// `{"is_dark": bool, "scheme": <ThemeColorScheme object>}`。
+    /// `{"appearance_mode": str, "system_is_dark": bool, "is_dark": bool,
+    ///   "color_source": str, "selected_builtin_theme_id": str,
+    ///   "selected_palette_id": str, "scheme": <ThemeColorScheme object or null>}`。
     /// QML 侧（DesignTokens）只绑定这一个属性，从同一份 JSON 解析
     /// `is_dark` 和 `scheme`，彻底消除 isDark 与 scheme 不同步的中间状态。
+    /// Issue #709 评论 issue-body-709: scheme 为 null 时 QML 侧 fallback 到
+    /// isDark 派生的固定色。
     #[allow(dead_code)]
     theme_state_json: qt_property!(QString; READ theme_state_json NOTIFY scheme_changed),
     #[allow(dead_code)]
@@ -88,9 +97,9 @@ impl LinuxThemeController {
     }
 
     /// 从同一份 `DomainSnapshot` 一次性解析当前运行时主题状态，并加载最终
-    /// `ThemeColorScheme` 序列化为 `scheme_json`。
+    /// `ThemeColorSchemeDto`。
     ///
-    /// 返回完整的 `ResolvedThemeState`（含 `scheme_json`）。所有 QML 只读属性
+    /// 返回完整的 `ResolvedThemeState`（含 `scheme`）。所有 QML 只读属性
     /// （`appearance_mode`、`is_dark`、`color_source`、`resolved_scheme_json`
     /// 等）都基于这同一份状态，避免一个属性读 snapshot、另一个属性临时再
     /// borrow `AppBackend` 造成的双状态机。
@@ -98,6 +107,10 @@ impl LinuxThemeController {
     /// Issue #701 评论 5702214893: 此方法在 setter 写完设置后调用一次，结果
     /// 缓存到 `cached_state`；getter 通过 `state()` 只读缓存。
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    /// Issue #709 评论 issue-body-709: 直接把 `Option<ThemeColorSchemeDto>` 存进
+    /// `ResolvedThemeState.scheme`，不再序列化成 JSON 字符串。scheme 选择按
+    /// `is_dark` 只选一次 `dark_scheme/light_scheme`，彻底消除 is_dark 已是
+    /// true 但 scheme 还是浅色值的中间状态。
     pub fn rebuild_resolved_state(&self) -> ResolvedThemeState {
         let s = self.snap();
         let appearance_mode = s.appearance_mode.clone();
@@ -165,11 +178,10 @@ impl LinuxThemeController {
             .unwrap_or(None)
         });
 
-        let scheme_json = match scheme {
-            Some(s) => serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_string()),
-            None => "{}".to_string(),
-        };
-
+        // Issue #709 评论 issue-body-709: 直接把 Option<ThemeColorSchemeDto> 存进
+        // ResolvedThemeState.scheme，不再序列化成 JSON 字符串。theme_state_json()
+        // 和 resolved_scheme_json() 从这一份 DTO 序列化，消除
+        // scheme -> JSON string -> serde_json::Value -> 再包第二层 JSON 的低效路径。
         ResolvedThemeState {
             appearance_mode,
             system_is_dark,
@@ -177,7 +189,7 @@ impl LinuxThemeController {
             color_source,
             selected_palette_id,
             selected_builtin_theme_id,
-            scheme_json,
+            scheme,
         }
     }
 
@@ -195,35 +207,66 @@ impl LinuxThemeController {
         state
     }
 
-    /// Issue #702: 一次性发布完整主题状态 `{"is_dark": bool, "scheme": <object>}`。
+    /// Issue #702: 一次性发布完整主题状态。
     ///
     /// `is_dark` 和 `scheme` 从同一份 `cached_state` 读取并打包进一个 JSON，
     /// QML 侧只绑定这一个属性，从同一份 JSON 解析两者，彻底消除 isDark 已是
     /// true 但 scheme 还是上一套浅色值的中间状态。
     ///
     /// `scheme` 字段是 Core `ThemeColorScheme` DTO 反序列化后的对象（非字符串），
-    /// 便于 QML 侧直接 `JSON.parse` 后按 key 读取颜色。当 scheme 为空（`"{}"`）
-    /// 时，`scheme` 字段为空对象，QML 侧 fallback 到 isDark 派生的固定深/浅色。
+    /// 便于 QML 侧直接 `JSON.parse` 后按 key 读取颜色。当 scheme 为空（`None`）
+    /// 时，`scheme` 字段为 null，QML 侧 fallback 到 isDark 派生的固定深/浅色。
     ///
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试（`tests/`）能直接调用，
     /// 验证真实 Qt 行为（dark/light/system 切换、is_dark + scheme 统一体）。
     /// QML 绑定不受影响（`qt_property!` READ 方法签名不变）。
+    ///
+    /// Issue #709 评论 issue-body-709: 直接序列化 `ResolvedThemeState` 这一份
+    /// 完整状态，不再走 `scheme -> JSON string -> serde_json::Value -> 再包
+    /// 第二层 JSON` 的低效路径。输出 JSON 结构包含 appearance_mode,
+    /// system_is_dark, is_dark, color_source, selected_builtin_theme_id,
+    /// selected_palette_id, scheme（ThemeColorSchemeDto 对象或 null）。
     pub fn theme_state_json(&self) -> QString {
         let state = self.state();
-        // 先把 scheme_json 反序列化成对象，再和 is_dark 一起打包。
-        // scheme_json 是 Core ThemeColorScheme 的 serde JSON 字符串（snake_case key）。
-        let scheme_value: serde_json::Value =
-            serde_json::from_str(&state.scheme_json).unwrap_or(serde_json::Value::Object(
-                serde_json::Map::new(),
-            ));
+        // Issue #709 评论 issue-body-709: 用 serde_json::Map 直接构造完整状态
+        // JSON，不再走 scheme_json 反序列化再重新打包的低效路径。
         let mut obj = serde_json::Map::new();
+        obj.insert(
+            "appearance_mode".to_string(),
+            serde_json::Value::String(state.appearance_mode),
+        );
+        obj.insert(
+            "system_is_dark".to_string(),
+            serde_json::Value::Bool(state.system_is_dark),
+        );
         obj.insert(
             "is_dark".to_string(),
             serde_json::Value::Bool(state.is_dark),
         );
+        obj.insert(
+            "color_source".to_string(),
+            serde_json::Value::String(state.color_source),
+        );
+        obj.insert(
+            "selected_builtin_theme_id".to_string(),
+            serde_json::Value::String(state.selected_builtin_theme_id),
+        );
+        obj.insert(
+            "selected_palette_id".to_string(),
+            serde_json::Value::String(state.selected_palette_id),
+        );
+        // scheme 为 None 时序列化为 null，QML 侧 fallback 到 isDark 派生的固定色。
+        let scheme_value = match state.scheme {
+            Some(ref s) => serde_json::to_value(s)
+                .unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        };
         obj.insert("scheme".to_string(), scheme_value);
         let json = serde_json::to_string(&serde_json::Value::Object(obj))
-            .unwrap_or_else(|_| "{\"is_dark\":false,\"scheme\":{}}".to_string());
+            .unwrap_or_else(|_| {
+                "{\"appearance_mode\":\"system\",\"system_is_dark\":false,\"is_dark\":false,\"color_source\":\"built_in\",\"selected_builtin_theme_id\":\"\",\"selected_palette_id\":\"\",\"scheme\":null}"
+                    .to_string()
+            });
         QString::from(json)
     }
 
@@ -235,11 +278,19 @@ impl LinuxThemeController {
     /// snake_case key 读取。这是 Linux_Qt 与 Core 之间唯一的主题 JSON 字段名协议。
     ///
     /// Issue #701 评论 5702214893: scheme 在 `rebuild_resolved_state()` 里一次性
-    /// 解析并缓存到 `cached_state.scheme_json`，此 getter 只读缓存，不再每次
+    /// 解析并缓存到 `cached_state.scheme`，此 getter 只读缓存，不再每次
     /// 都 borrow `AppBackend` 加载 palette/builtin。
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    /// Issue #709 评论 issue-body-709: 从 `state().scheme` 序列化，None 时返回 `"{}"`。
     pub fn resolved_scheme_json(&self) -> QString {
-        QString::from(self.state().scheme_json)
+        let state = self.state();
+        match state.scheme {
+            Some(ref s) => {
+                let json = serde_json::to_string(s).unwrap_or_else(|_| "{}".to_string());
+                QString::from(json)
+            }
+            None => QString::from("{}"),
+        }
     }
 
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
@@ -424,10 +475,14 @@ impl LinuxThemeController {
 /// 基于这同一份状态，避免一个属性读 `DomainSnapshot`、另一个属性临时再
 /// borrow `AppBackend` 造成的双状态机。
 ///
-/// Issue #701 评论 5702214893: `scheme_json` 是最终 resolved scheme 的 JSON
-/// 字符串（Core `ThemeColorScheme` 序列化结果，失败时为 `"{}"`）。整个
-/// `ResolvedThemeState` 在 `rebuild_resolved_state()` 里一次性构造并缓存到
-/// `cached_state`，getter 只读缓存。
+/// Issue #701 评论 5702214893: 整个 `ResolvedThemeState` 在
+/// `rebuild_resolved_state()` 里一次性构造并缓存到 `cached_state`，getter
+/// 只读缓存。
+///
+/// Issue #709 评论 issue-body-709: `scheme_json: String` 改为直接保存最终选中
+/// 的 `ThemeColorSchemeDto`。`theme_state_json()` 直接序列化这一份完整状态，
+/// 不再走 `scheme -> JSON string -> serde_json::Value -> 再包第二层 JSON` 的
+/// 低效路径，且消除 is_dark 已是 true 但 scheme 还是浅色值的中间状态。
 #[derive(Clone)]
 pub struct ResolvedThemeState {
     pub appearance_mode: String,
@@ -436,7 +491,9 @@ pub struct ResolvedThemeState {
     pub color_source: String,
     pub selected_palette_id: String,
     pub selected_builtin_theme_id: String,
-    /// 最终 resolved scheme 的 JSON 字符串（Core `ThemeColorScheme` 序列化
-    /// 结果，失败时为 `"{}"`）。
-    pub scheme_json: String,
+    /// Issue #709 评论 issue-body-709: 最终选中的 ThemeColorSchemeDto（按
+    /// is_dark 一次性选择 dark_scheme/light_scheme）。None 表示没有可用
+    /// scheme（builtin theme 列表为空等），QML 侧 fallback 到 isDark 派生
+    /// 的固定色。
+    pub scheme: Option<writer_core::api::types::ThemeColorSchemeDto>,
 }

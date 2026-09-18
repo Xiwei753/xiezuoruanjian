@@ -40,6 +40,9 @@ Rectangle {
     property var dt: null
     property var backendRef: null
     property var starMapController: null
+    // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，
+    // 使 logRenderColorProbe 能读取 ThemeController runtime state。
+    property var themeController: null
     property var appState: ({})
     property var tree: []
     property string projectTitle: ""
@@ -103,6 +106,9 @@ Rectangle {
         targetEditorItem: sujianEditor
         backendRef: root.backendRef
         dt: root.dt
+        // Issue #709 评论 issue-body-709: 传入 themeController 使
+        // logRenderColorProbe 能读取 runtime state。
+        themeControllerRef: root.themeController
         onEmptySaveBlocked: function(msg) {
             emptySaveDialogText.text = msg;
             emptySaveDialog.open();

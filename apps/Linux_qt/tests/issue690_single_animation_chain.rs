@@ -251,12 +251,17 @@ fn issue690_cursor_only_driven_by_frame_now_not_blink_timer() {
         "步骤2: update_paint_node 必须调 build_render_plan_full 统一采样"
     );
     assert!(
-        body.contains("CursorSampleOutcome::Running"),
-        "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y"
-    );
-    assert!(
         body.contains("cursor_ctrl.animation.as_ref()"),
         "步骤2: cursor_animation 传给 build_render_plan_full 统一采样"
+    );
+    // Issue #707 评论 5725190370: CursorSampleOutcome 的 4 分支 match 已从
+    // update_paint_node 抽到 apply_render_plan_cursor_state 方法，供正式渲染
+    // 路径和 runtime_tests 共用同一份回写代码。源码检查测试随之更新到重构后
+    // 的方法，验证目的不变：CursorOnly 采样到 Running progress 时推进 visual_x/y。
+    let apply_body = method_body(&src, "fn apply_render_plan_cursor_state(");
+    assert!(
+        apply_body.contains("CursorSampleOutcome::Running"),
+        "步骤2: CursorOnly 采样到 Running progress 时推进 visual_x/y (在 apply_render_plan_cursor_state 中)"
     );
     let coord_src = read_src("src/sujian_editor_item/animation_coordinator.rs");
     assert!(

@@ -7,7 +7,7 @@
 //! Issue #707 评论 5724685300 关键修改:
 //! - 不再用空的 `AppRef::default()` 做颜色测试。空 AppBackend 没有 data root，
 //!   `core_api()` 返回 `None`，`rebuild_resolved_state()` 拿不到 builtin theme，
-//!   `scheme_json` 退成 `{}`，只证明 `is_dark` 会变，没证明 scheme 切到深色。
+//!   scheme 退成 None，只证明 `is_dark` 会变，没证明 scheme 切到深色。
 //! - 现在用 `tempfile` 创建临时目录，通过 `open_data_root_for_tests` 初始化
 //!   真实 Core/AppBackend 状态，使 `core_api()` 返回 `Some`，从而加载
 //!   builtin theme 的真实深色/浅色 scheme。
@@ -16,6 +16,10 @@
 //! - light 必须断言对应浅色 scheme（深色文字，如 "#171C1F"）。
 //! - system 从 false -> true 后断言 `scheme` 内容确实变化。
 //! - 不再接受 `scheme == {}` 作为颜色测试通过。
+//!
+//! Issue #709 评论 issue-body-709: `ResolvedThemeState.scheme_json: String` 改为
+//! `scheme: Option<ThemeColorSchemeDto>`。行为守卫 7 直接断言 `state.scheme`
+//! 是 Some 且序列化后非空对象。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -381,21 +385,25 @@ fn qt_theme_rebuild_resolved_state_has_all_seven_fields() {
         let _color_source: &String = &state.color_source;
         let _selected_palette_id: &String = &state.selected_palette_id;
         let _selected_builtin_theme_id: &String = &state.selected_builtin_theme_id;
-        let _scheme_json: &String = &state.scheme_json;
-        // scheme_json 必须是合法 JSON 且非空对象
+        // Issue #709 评论 issue-body-709: scheme 现在是 Option<ThemeColorSchemeDto>，
+        // 不再是 scheme_json: String。直接断言 Some 且非空对象。
+        let scheme = state.scheme
+            .as_ref()
+            .expect("scheme 必须是 Some — core_api 必须已初始化并加载 builtin theme");
+        // scheme 必须能序列化为合法 JSON 对象且非空
         let parsed: serde_json::Value =
-            serde_json::from_str(&state.scheme_json).expect("scheme_json 必须是合法 JSON");
+            serde_json::to_value(scheme).expect("scheme 必须能序列化为 JSON");
         assert!(
             parsed.is_object(),
-            "scheme_json 必须是 JSON 对象"
+            "scheme 必须是 JSON 对象"
         );
         assert!(
             !parsed.as_object().map_or(true, |m| m.is_empty()),
-            "scheme_json 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
+            "scheme 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
         );
         println!(
-            "[BEHAVIOR_VERIFY] ResolvedThemeState 七字段完整: appearance_mode={} is_dark={} scheme_json_len={}",
-            state.appearance_mode, state.is_dark, state.scheme_json.len()
+            "[BEHAVIOR_VERIFY] ResolvedThemeState 七字段完整: appearance_mode={} is_dark={} scheme_is_some={}",
+            state.appearance_mode, state.is_dark, state.scheme.is_some()
         );
     });
 }

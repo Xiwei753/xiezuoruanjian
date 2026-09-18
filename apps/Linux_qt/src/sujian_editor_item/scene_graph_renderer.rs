@@ -41,6 +41,11 @@ pub(crate) fn render_frame(
     // InsertReveal 范围由动画层接管、静态层对应区域本帧隐藏，DeleteConceal 时
     // 被删文字的旧字由动画层按 progress 吞掉。纯滚动帧（无 static_patches）
     // 仍走轻量 update_scroll_transform。
+    //
+    // Issue #709 评论 issue-body-709: 主链 static_patches -> doc_hidden_rects -> clip_rects
+    // 表达的是"静态正文不能画的区域"（被动画层接管的文档区域）。clip_count > 0 时
+    // qt_text_node 不再创建完整正文节点，只按 complement 区间生成 clip+text 节点，
+    // 静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
     let has_animation_clip = !plan.static_patches.is_empty();
     if static_text.needs_relayout || has_animation_clip {
         // 正文/字体/宽度变更 或 动画接管区域存在：重建静态节点（含裁剪）
@@ -120,6 +125,10 @@ pub(crate) fn render_frame(
     }
 
     // Layer 1: 文字动画层（保留：吐字/吞字/重排动画的纹理切片）
+    // Issue #709 评论 issue-body-709: 动画层单独画 InsertReveal / DeleteConceal / ReflowMove，
+    // 不把静态正文重新补回去。静态层在 clip_count > 0 时已通过 complement 区间
+    // 把被动画接管的区域从静态正文里挖掉，动画层只负责画那些被接管的区域。
+    // 两层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
     render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache);
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
@@ -140,8 +149,17 @@ pub(crate) fn render_frame(
 
 /// Issue #658: 从 static_patches 的 doc_hidden_rects 计算精确裁剪区域。
 ///
+/// 主链：`static_patches -> doc_hidden_rects -> clip_rects`。
+///
 /// `doc_hidden_rects` 已通过 `PreparedLineSnapshot::source_rect_to_document_rect()`
 /// 转换为文档逻辑坐标矩形（x/y/w/h），可直接传给 QSGClipNode 使用。
+///
+/// Issue #709 评论 issue-body-709: 这些矩形表达的是"静态正文不能画的区域"，
+/// 即被动画层（InsertReveal / DeleteConceal / ReflowMove）接管的文档区域。
+/// 静态层在 clip_count > 0 时不创建完整正文节点，只按每条 visual line 的
+/// complement 区间（整行可绘制区减去这些 hidden 矩形）生成 QSGClipNode + QSGTextNode。
+/// 动画层单独画 InsertReveal / DeleteConceal / ReflowMove，不把静态正文重新补回去。
+/// 这样静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
 fn compute_clip_rects_from_patches(plan: &RenderPlan) -> Vec<qt_text_node::AnimationClipRect> {
     if plan.static_patches.is_empty() {
         return Vec::new();

@@ -125,36 +125,18 @@ cpp! {{
             }
         }
 
-        // Issue #668 评论 5646458592 问题 1: 创建新的 QSGTextNode，不动旧节点。
-        // 先把新节点构建完整，最后再替换进 staticLayer 并删除旧节点。
-        QSGTextNode *newTextNode = window->createTextNode();
-        if (!newTextNode) return false;
-
+        // Issue #709 评论 issue-body-709: 静态正文与吐字/吞字动画互斥渲染。
+        // 旧实现无论是否有动画裁剪都先创建完整 newTextNode 把整篇正文画出来，
+        // 再额外创建 complement clip 节点。两套都挂到 staticLayer 导致：
+        // - InsertReveal 要隐藏的新字早就在完整 newTextNode 里画出来了
+        // - DeleteConceal 想让旧字慢慢吞掉，但静态正文已经直接画了新的结果
+        // - complement clip 只是多画一份，不会把前面那个完整正文兄弟节点裁掉
+        // 改成两条互斥路径：
+        // - clip_count == 0：创建一个完整正文 QSGTextNode（无动画接管）
+        // - clip_count > 0：不创建完整正文节点，只按每条 visual line 的 complement
+        //   区间生成 QSGClipNode + QSGTextNode，被动画接管的区域真的从静态层消失。
+        QSGTextNode *newTextNode = nullptr;
         QColor textColor(color_q);
-        // Issue #658: setColor() 必须在第一次 addTextLayout() 之前设置。
-        newTextNode->setColor(textColor);
-
-        // Issue #658: 主 textNode — 按段落整段 addTextLayout。
-        // cachedLayout 内部每个 QTextLine 已 setPosition（由 editor_layout_lines 或
-        // editor_prepare_paragraph_visual_snapshot 设置），addTextLayout 的
-        // QPointF(origin_x, y) 偏移段落第一行到文档 (origin_x=padding, y)，
-        // 后续行位置由 layout 内部 position 决定。
-        // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
-        // 与光标/选区/动画的 VisualLine.x = padding + x_off 一致。
-        for (int i = 0; i < para_count; i++) {
-            int cacheIdx = cache_idx_arr[i];
-            double y = para_y_arr[i];
-
-            // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout，
-            // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
-            // Issue #668: 前面已检查所有非空段落 layout 可用，此处 cachedLayout 必非 null。
-            QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
-            if (cachedLayout) {
-                newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
-            }
-        }
-
-        newTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
 
         // Issue #668 评论 5646458592 问题 1: 动画裁剪分支同样按"先构建完整新子树，
         // 再替换"的顺序。先在 newTextNode 之外构建所有 clipNode + clipTextNode，
@@ -167,11 +149,49 @@ cpp! {{
         };
         std::vector<PendingClipNode> pendingClipNodes;
 
+        // Issue #709 评论 issue-body-709: clip_count == 0 分支 — 无动画接管，
+        // 创建一个完整正文 QSGTextNode，按段落整段 addTextLayout。
+        if (clip_count == 0) {
+            newTextNode = window->createTextNode();
+            if (!newTextNode) return false;
+
+            // Issue #658: setColor() 必须在第一次 addTextLayout() 之前设置。
+            newTextNode->setColor(textColor);
+
+            // Issue #658: 主 textNode — 按段落整段 addTextLayout。
+            // cachedLayout 内部每个 QTextLine 已 setPosition（由 editor_layout_lines 或
+            // editor_prepare_paragraph_visual_snapshot 设置），addTextLayout 的
+            // QPointF(origin_x, y) 偏移段落第一行到文档 (origin_x=padding, y)，
+            // 后续行位置由 layout 内部 position 决定。
+            // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
+            // 与光标/选区/动画的 VisualLine.x = padding + x_off 一致。
+            for (int i = 0; i < para_count; i++) {
+                int cacheIdx = cache_idx_arr[i];
+                double y = para_y_arr[i];
+
+                // Issue #658 评论 5620035970 问题 2: 用 (generation, cacheIdx) 查找 layout，
+                // 不再直接索引 g_paragraph_layout_cache，避免与动画/IME 路径互相清空。
+                // Issue #668: 前面已检查所有非空段落 layout 可用，此处 cachedLayout 必非 null。
+                QTextLayout* cachedLayout = get_paragraph_layout(generation, cacheIdx);
+                if (cachedLayout) {
+                    newTextNode->addTextLayout(QPointF(origin_x, y), cachedLayout);
+                }
+            }
+
+            newTextNode->markDirty(QSGNode::DirtyGeometry | QSGNode::DirtyMaterial);
+        }
+
         // Issue #658: 动画裁剪 — 按视觉行使用精确文档 x/y/w/h 裁剪。
         // 不再按段落整段裁（会误裁同行其他文字），不再猜最后段高度（py+30.0）。
         // 对每一视觉行，只处理与该行 y 范围相交的 AnimationClipRect，
         // 计算这一行自己的 x complement，用 QSGTextNode::addTextLayout 的
         // lineStart/lineCount 参数按单独视觉行绘制。
+        // Issue #709 评论 issue-body-709: clip_count > 0 分支不创建完整正文节点，
+        // 只按 complement 区间生成 clip+text 节点。被 InsertReveal / DeleteConceal /
+        // Reflow 接管的区域真的从静态层消失，只让动画层负责。
+        // 没被动画影响的行，complement 就是整行可绘制区 [origin_x, doc_width - origin_x]。
+        // vl_count == 0 时（无视觉行数据）不画任何静态正文，staticLayer 替换为空，
+        // 全部正文交给动画层。
         if (clip_count > 0 && vl_count > 0) {
             struct ClipRect { double x, y, w, h; };
             std::vector<ClipRect> clipRects;
@@ -299,8 +319,12 @@ cpp! {{
             staticLayer->removeChildNode(oldChild);
             delete oldChild;
         }
-        // 挂入新的主 textNode。
-        staticLayer->appendChildNode(newTextNode);
+        // Issue #709 评论 issue-body-709: 挂入新的子树。
+        // - clip_count == 0：挂 newTextNode（完整正文）
+        // - clip_count > 0：挂所有 pendingClipNodes（不挂 newTextNode，它为 null）
+        if (newTextNode) {
+            staticLayer->appendChildNode(newTextNode);
+        }
         // 挂入所有动画裁剪 clipNode（clipTextNode 已作为 clipNode 子节点挂好）。
         for (const auto& pcn : pendingClipNodes) {
             staticLayer->appendChildNode(pcn.clipNode);

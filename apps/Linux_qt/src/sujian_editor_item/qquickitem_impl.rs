@@ -62,6 +62,30 @@ impl QQuickItem for SujianEditorItem {
             self.scene_dirty = true;
         }
 
+        // Issue #709 评论 issue-body-709: 检测正文协同事务（has_active_insert）的边沿变化，
+        // 在边沿处重置 blink 状态，避免输入时光标消失。
+        // - false->true（insert 开始）：立即 blink_visible = true（光标从可见状态开始），
+        //   Insert 活跃期间 blink 由 build_cursor_render_state_for_frame 的 Suppressed 模式
+        //   保持 suppressed（opacity 固定为 1）。
+        // - true->false（insert 结束）：重置 blink_last_toggle = frame_now / blink_visible = true，
+        //   重新开始正常 blink，不继承事务开始前碰巧为 false 的旧相位。
+        // 与 build_cursor_render_state_for_frame 用同一个 has_active_insert 判断，保持一致。
+        let cur_has_active_insert = self
+            .pipeline
+            .animation_coordinator()
+            .has_active_insert();
+        if cur_has_active_insert != self.prev_has_active_insert {
+            if cur_has_active_insert {
+                // false->true: insert 开始，光标从可见状态开始。
+                self.cursor_ctrl.blink_visible = true;
+            } else {
+                // true->false: insert 结束，重新开始正常 blink，不继承旧相位。
+                self.cursor_ctrl.blink_last_toggle = frame_now;
+                self.cursor_ctrl.blink_visible = true;
+            }
+            self.prev_has_active_insert = cur_has_active_insert;
+        }
+
         let item_ptr = self.get_cpp_object();
         let dpr = if !item_ptr.is_null() {
             renderer::sujian_item_dpr(item_ptr)
@@ -301,6 +325,11 @@ impl SujianEditorItem {
     /// Issue #707 评论 5725190370: 把这段纯状态逻辑从 `update_paint_node` 抽出，
     /// 供正式渲染路径和 `runtime_tests` 共用，避免测试用 `CursorRenderState::default()`
     /// 冒充光标导致行为偏离生产路径。
+    ///
+    /// Issue #709 评论 issue-body-709: Insert 活跃期间 blink 保持 suppressed
+    /// （opacity 固定为 1），由 Suppressed 模式负责。事务开始/结束的边沿重置
+    /// （blink_visible = true / blink_last_toggle = now）在 update_paint_node 的
+    /// 边沿检测中处理，确保光标从可见状态开始、事务结束后重新开始正常 blink。
     pub(crate) fn build_cursor_render_state_for_frame(
         &self,
     ) -> super::render_plan::CursorRenderState {

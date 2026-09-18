@@ -232,20 +232,23 @@ ApplicationWindow {
     }
 
     function logThemeDiagnostics(event) {
+        // Issue #709 评论 issue-body-709: 主题诊断只读 ThemeController runtime state
+        // 和 designTokens，不再读旧 appState.settings.themeMode、Qt.styleHints.colorScheme、
+        // systemPaletteIsDark()。这些不再是主题诊断的权威来源。同一条诊断写出
+        // appearance_mode/is_dark/color_source/选中 theme/palette id/最终
+        // primary/surface/on_surface/on_surface_variant/editorText。
         if (backend === null || !backend.log_qml) return;
-        var schemeStr = "<unknown>";
-        if (typeof Qt !== "undefined" && Qt.styleHints && typeof Qt.styleHints.colorScheme !== "undefined") {
-            schemeStr = Qt.styleHints.colorScheme;
-        } else if (typeof Qt !== "undefined" && Qt.application && Qt.application.styleHints && typeof Qt.application.styleHints.colorScheme !== "undefined") {
-            schemeStr = Qt.application.styleHints.colorScheme;
-        }
+        var tc = themeController;
         backend.log_qml("info", "theme", event,
-                        "themeMode=" + (appState.settings ? appState.settings.themeMode : "<unset>")
-                        + " colorScheme=" + schemeStr
-                        + " systemPaletteIsDark=" + window.systemPaletteIsDark()
-                        + " isDark=" + designTokens.isDark
-                        + " textPrimary=" + designTokens.textPrimary
-                        + " textSecondary=" + designTokens.textSecondary
+                        "appearance_mode=" + (tc ? tc.appearance_mode : "<null>")
+                        + " is_dark=" + (tc ? tc.is_dark : "<null>")
+                        + " color_source=" + (tc ? tc.color_source : "<null>")
+                        + " builtin_theme_id=" + (tc ? tc.selected_builtin_theme_id : "<null>")
+                        + " palette_id=" + (tc ? tc.selected_palette_id : "<null>")
+                        + " primary=" + designTokens.primary
+                        + " surface=" + designTokens.surface
+                        + " on_surface=" + designTokens.onSurface
+                        + " on_surface_variant=" + designTokens.onSurfaceVariant
                         + " editorText=" + designTokens.editorText);
     }
 
@@ -577,6 +580,9 @@ ApplicationWindow {
                 dt: designTokens
                 backendRef: editorBackend
                 starMapController: globalStarMapController
+                // Issue #709 评论 issue-body-709: 传入 themeController 使
+                // EditorController.logRenderColorProbe 能读取 runtime state。
+                themeController: themeController
                 appState: window.appState
                 tree: window.appState.tree || []
                 workspaceProjectId: appController.writingProjectId

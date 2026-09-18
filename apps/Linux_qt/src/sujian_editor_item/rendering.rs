@@ -92,6 +92,15 @@ impl SujianEditorItem {
     /// Issue #679 评论 5657313927: 不再手写第二套 CursorAnimationPlan，
     /// 统一调 `AnimationCoordinator::build_cursor_plan()`。
     /// CursorOnly 的创建也统一放到这里：方向键、Home/End、程序化移动全走同一入口。
+    ///
+    /// Issue #709 评论 issue-body-709: 两条时间线互斥：
+    /// - 有正文事务时（found_tx = Some）：光标由正文协同接管，不创建独立 CursorOnly 动画。
+    ///   Insert/Delete 的光标位置由正文事务的同一条 Timeline 决定，
+    ///   build_cursor_plan 收到 (old_cursor_rect, new_cursor_rect) 后走 Coordinated 路径。
+    /// - 无正文事务时（found_tx = None，纯鼠标点击/方向键/Home/End）：走纯光标 Tween，
+    ///   CursorAnimationState 拥有自己的 timeline（started_at + duration_ms），
+    ///   不依赖任何正文事务。
+    /// 两条时间线互斥，不为了修可见性再引入第二套光标动画。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
         let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
@@ -111,6 +120,9 @@ impl SujianEditorItem {
         // Issue #705 评论 5717380886: 传入当前 cursor_owner_epoch。
         // epoch 不一致时 find_cursor_transaction_for_target 不返回该事务，
         // 文字事务继续播自己的 glyph/reflow，但不再驱动 caret。
+        // Issue #709 评论 issue-body-709: found_tx 决定走哪条时间线：
+        // - Some：正文协同光标接管（Insert/Delete），不创建独立 CursorOnly 动画
+        // - None：纯光标 Tween（鼠标点击/方向键/Home/End），CursorAnimationState 自己的 timeline
         let found_tx = self
             .pipeline
             .animation_coordinator()

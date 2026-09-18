@@ -23,6 +23,12 @@ QtObject {
 
     // Issue #702: scheme 直接从 themeStateJson 的 scheme 字段读取，
     // 与 isDark 来自同一份 JSON，不再有独立 resolvedSchemeJson 属性。
+    // Issue #709 评论 issue-body-709: theme_state_json 现在输出完整状态，
+    // 顶层包含 appearance_mode/is_dark/color_source/selected_builtin_theme_id/
+    // selected_palette_id/scheme。scheme 为 null（无可用 scheme）时
+    // _hasResolvedScheme 为 false，fallback 到 isDark 派生的固定深/浅色。
+    // 之前 scheme 为空时是 {}（空对象），现在是 null，_hasResolvedScheme
+    // 逻辑（_resolvedScheme !== null && ...）两种情况都正确 fallback。
     property var _resolvedScheme: _themeState !== null ? _themeState.scheme : null
     property bool _hasResolvedScheme: _resolvedScheme !== null && _resolvedScheme.primary !== undefined
 

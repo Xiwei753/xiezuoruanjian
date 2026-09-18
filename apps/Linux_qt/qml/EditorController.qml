@@ -29,6 +29,9 @@ QtObject {
     property var targetEditorItem: null
     property var backendRef: null
     property var dt: null
+    // Issue #709 评论 issue-body-709: 主题诊断需要读取 ThemeController runtime state
+    //（appearance_mode/is_dark/color_source），由 WritingWorkspace 注入。
+    property var themeControllerRef: null
 
     // Chapter state — single source of truth, updated only after successful load
     property string projectId: ""
@@ -96,22 +99,30 @@ QtObject {
     }
 
     function logRenderColorProbe(reason) {
+        // Issue #709 评论 issue-body-709: 不再读旧 appState.settings.themeMode。
+        // 只读 ThemeController runtime state 和 designTokens。同一条诊断写出
+        // appearance_mode/is_dark/color_source/primary/surface/on_surface/
+        // on_surface_variant，便于定位深色模式文字仍为黑色的问题。
         if (!backendRef || !backendRef.log_qml) return;
-
-        var themeMode = "<unset>";
-        try {
-            themeMode = appState && appState.settings ? appState.settings.themeMode : "<unset>";
-        } catch (e) {
-            themeMode = "<unavailable>";
-        }
-
+        var tc = themeControllerRef ? themeControllerRef : null;
+        var appearanceMode = tc ? tc.appearance_mode : "<null>";
         var isDark = dt ? dt.isDark : "<no-dt>";
+        var colorSource = tc ? tc.color_source : "<null>";
         var editorText = dt ? String(dt.editorText) : "<no-dt>";
         var convertedEditorText = dt ? controller.colorToHex(dt.editorText, dt.textPrimaryHex) : "<no-dt>";
+        var primary = dt ? String(dt.primary) : "<no-dt>";
+        var surface = dt ? String(dt.surface) : "<no-dt>";
+        var onSurface = dt ? String(dt.onSurface) : "<no-dt>";
+        var onSurfaceVariant = dt ? String(dt.onSurfaceVariant) : "<no-dt>";
         backendRef.log_qml("info", "editor", "theme_color_probe",
                            "reason=" + reason
-                           + " themeMode=" + themeMode
-                           + " designTokens.isDark=" + isDark
+                           + " appearance_mode=" + appearanceMode
+                           + " isDark=" + isDark
+                           + " color_source=" + colorSource
+                           + " primary=" + primary
+                           + " surface=" + surface
+                           + " on_surface=" + onSurface
+                           + " on_surface_variant=" + onSurfaceVariant
                            + " designTokens.editorText=" + editorText
                            + " colorToHex(editorText)=" + convertedEditorText);
     }
