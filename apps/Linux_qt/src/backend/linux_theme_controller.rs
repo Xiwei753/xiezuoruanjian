@@ -127,56 +127,62 @@ impl LinuxThemeController {
         // 与 with_app 的 AppBackend borrow 是不同的 RefCell，但显式 drop 更清晰）。
         drop(s);
 
-        let scheme = if color_source == "saved_palette" {
+        // Issue #709 评论 5728916561: 追踪 scheme 实际命中的来源和类型。
+        let scheme_kind = if is_dark { "dark_scheme" } else { "light_scheme" };
+
+        // Issue #709 评论 5728916561: 把 saved_palette 和 builtin 两条路径的
+        // scheme 加载与 resolved_source 追踪合并为一个 (Option<scheme>, String) 元组，
+        // 避免在 fallback 分支中重复代码。
+        let (scheme, resolved_source) = if color_source == "saved_palette" {
             if !selected_palette_id.is_empty() {
                 let parts: Vec<&str> = selected_palette_id.splitn(2, ':').collect();
                 if parts.len() == 2 {
-                    self.with_app(|app| {
-                        app.core_api().and_then(|core| {
-                            core.load_palette_record(parts[0], parts[1])
-                                .ok()
-                                .map(|dto| {
-                                    let dto: writer_core::api::types::ThemePaletteRecordDto = dto;
-                                    if is_dark {
-                                        dto.dark_scheme
-                                    } else {
-                                        dto.light_scheme
-                                    }
-                                })
+                    match self
+                        .with_app(|app| {
+                            app.core_api().and_then(|core| {
+                                core.load_palette_record(parts[0], parts[1])
+                                    .ok()
+                                    .map(|dto| {
+                                        let dto: writer_core::api::types::ThemePaletteRecordDto =
+                                            dto;
+                                        if is_dark {
+                                            dto.dark_scheme
+                                        } else {
+                                            dto.light_scheme
+                                        }
+                                    })
+                            })
                         })
-                    })
-                    .unwrap_or(None)
+                        .unwrap_or(None)
+                    {
+                        Some(s) => (Some(s), "saved_palette".to_string()),
+                        None => match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id)
+                        {
+                            Some(s) => (Some(s), "builtin".to_string()),
+                            None => (None, "none".to_string()),
+                        },
+                    }
                 } else {
-                    None
+                    // palette_id 格式无效，fallback 到 builtin
+                    match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
+                        Some(s) => (Some(s), "builtin".to_string()),
+                        None => (None, "none".to_string()),
+                    }
                 }
             } else {
-                None
+                // palette_id 为空，fallback 到 builtin
+                match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
+                    Some(s) => (Some(s), "builtin".to_string()),
+                    None => (None, "none".to_string()),
+                }
             }
         } else {
-            None
+            // color_source == "built_in"
+            match self.load_builtin_scheme(is_dark, &selected_builtin_theme_id) {
+                Some(s) => (Some(s), "builtin".to_string()),
+                None => (None, "none".to_string()),
+            }
         };
-
-        let scheme = scheme.or_else(|| {
-            let theme_id = selected_builtin_theme_id.clone();
-            self.with_app(|app| {
-                app.core_api().and_then(|core| {
-                    let themes = core.list_builtin_themes();
-                    let theme = if theme_id.is_empty() {
-                        themes.first()
-                    } else {
-                        themes.iter().find(|t| t.theme_id == theme_id)
-                    };
-                    theme.map(|t| {
-                        if is_dark {
-                            t.dark_scheme.clone()
-                        } else {
-                            t.light_scheme.clone()
-                        }
-                    })
-                })
-            })
-            .unwrap_or(None)
-        });
 
         // Issue #709 评论 issue-body-709: 直接把 Option<ThemeColorSchemeDto> 存进
         // ResolvedThemeState.scheme，不再序列化成 JSON 字符串。theme_state_json()
@@ -190,7 +196,38 @@ impl LinuxThemeController {
             selected_palette_id,
             selected_builtin_theme_id,
             scheme,
+            resolved_source,
+            resolved_scheme_kind: scheme_kind.to_string(),
         }
+    }
+
+    /// Issue #709 评论 5728916561: 从 builtin themes 加载 scheme 的辅助方法。
+    ///
+    /// 按 `is_dark` 选择 `dark_scheme`/`light_scheme`。`theme_id` 为空时
+    /// 取第一个 builtin theme。返回 `None` 表示没有可用 builtin theme。
+    fn load_builtin_scheme(
+        &self,
+        is_dark: bool,
+        theme_id: &str,
+    ) -> Option<writer_core::api::types::ThemeColorSchemeDto> {
+        self.with_app(|app| {
+            app.core_api().and_then(|core| {
+                let themes = core.list_builtin_themes();
+                let theme = if theme_id.is_empty() {
+                    themes.first()
+                } else {
+                    themes.iter().find(|t| t.theme_id == theme_id)
+                };
+                theme.map(|t| {
+                    if is_dark {
+                        t.dark_scheme.clone()
+                    } else {
+                        t.light_scheme.clone()
+                    }
+                })
+            })
+        })
+        .unwrap_or(None)
     }
 
     /// 返回缓存的 `ResolvedThemeState`；若缓存为空则重建一次并写入缓存。
@@ -254,6 +291,15 @@ impl LinuxThemeController {
         obj.insert(
             "selected_palette_id".to_string(),
             serde_json::Value::String(state.selected_palette_id),
+        );
+        // Issue #709 评论 5728916561: 输出诊断字段，追踪 scheme 实际命中的来源和类型。
+        obj.insert(
+            "resolved_source".to_string(),
+            serde_json::Value::String(state.resolved_source),
+        );
+        obj.insert(
+            "resolved_scheme_kind".to_string(),
+            serde_json::Value::String(state.resolved_scheme_kind),
         );
         // scheme 为 None 时序列化为 null，QML 侧 fallback 到 isDark 派生的固定色。
         let scheme_value = match state.scheme {
@@ -496,4 +542,11 @@ pub struct ResolvedThemeState {
     /// scheme（builtin theme 列表为空等），QML 侧 fallback 到 isDark 派生
     /// 的固定色。
     pub scheme: Option<writer_core::api::types::ThemeColorSchemeDto>,
+    /// Issue #709 评论 5728916561: 实际命中的来源 — "saved_palette"、"builtin" 或 "none"。
+    /// 区分 color_source（用户设置）和 resolved_source（实际命中）：
+    /// color_source 可能是 "saved_palette" 但 palette_id 无效，最终 fallback 到 builtin。
+    pub resolved_source: String,
+    /// Issue #709 评论 5728916561: 实际选择的 scheme 类型 — "dark_scheme"、"light_scheme" 或 "none"。
+    /// 确认 is_dark=true 时确实选了 dark_scheme，is_dark=false 时确实选了 light_scheme。
+    pub resolved_scheme_kind: String,
 }

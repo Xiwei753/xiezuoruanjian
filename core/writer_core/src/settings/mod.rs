@@ -756,6 +756,74 @@ fn palettes_base_dir(config_dir: &Path) -> std::path::PathBuf {
     config_dir.join("themes/palettes")
 }
 
+/// Issue #709 评论 5728916561: 判断 hex 颜色是否为深色（亮度低于阈值）。
+///
+/// 解析 `#RRGGBB` 格式的 R/G/B 分量，计算相对亮度
+/// `(0.299*R + 0.587*G + 0.114*B) / 255`，低于 0.5 视为深色。
+/// 空字符串或无效格式返回 `false`（不确定时不触发修正）。
+fn is_dark_color(hex: &str) -> bool {
+    let hex = hex.strip_prefix('#').unwrap_or(hex);
+    if hex.len() != 6 {
+        return false;
+    }
+    let r = u32::from_str_radix(&hex[0..2], 16).unwrap_or(0);
+    let g = u32::from_str_radix(&hex[2..4], 16).unwrap_or(0);
+    let b = u32::from_str_radix(&hex[4..6], 16).unwrap_or(0);
+    let luminance = (0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)) / 255.0;
+    luminance < 0.5
+}
+
+/// Issue #709 评论 5728916561: 验证并修正 color scheme 中明显不合理的颜色组合。
+///
+/// **深色 scheme（`is_dark_scheme == true`）**：
+/// - `on_surface` 为 `#000000` 或空且 `surface` 是深色 → 修正为 `#DFE3E7`
+/// - `on_surface_variant` 为 `#000000` 或空且 `surface_variant` 是深色 → 修正为 `#C1C7CE`
+/// - `on_background` 为 `#000000` 或空且 `background` 是深色 → 修正为 `#DFE3E7`
+///
+/// **浅色 scheme（`is_dark_scheme == false`）**：
+/// - `on_surface` 为 `#FFFFFF` 或空且 `surface` 是浅色 → 修正为 `#171C1F`
+/// - `on_surface_variant` 为 `#FFFFFF` 或空且 `surface_variant` 是浅色 → 修正为 `#41484D`
+/// - `on_background` 为 `#FFFFFF` 或空且 `background` 是浅色 → 修正为 `#171C1F`
+///
+/// 只修正明显不合理的组合（黑字配深色背景、白字配浅色背景），有效数据不受影响。
+fn sanitize_color_scheme(scheme: &mut ThemeColorScheme, is_dark_scheme: bool) {
+    if is_dark_scheme {
+        // 深色 scheme：前景色不应是黑色或空（配深色背景时不可见）
+        if (scheme.on_surface == "#000000" || scheme.on_surface.is_empty())
+            && is_dark_color(&scheme.surface)
+        {
+            scheme.on_surface = "#DFE3E7".to_string();
+        }
+        if (scheme.on_surface_variant == "#000000" || scheme.on_surface_variant.is_empty())
+            && is_dark_color(&scheme.surface_variant)
+        {
+            scheme.on_surface_variant = "#C1C7CE".to_string();
+        }
+        if (scheme.on_background == "#000000" || scheme.on_background.is_empty())
+            && is_dark_color(&scheme.background)
+        {
+            scheme.on_background = "#DFE3E7".to_string();
+        }
+    } else {
+        // 浅色 scheme：前景色不应是白色或空（配浅色背景时不可见）
+        if (scheme.on_surface == "#FFFFFF" || scheme.on_surface.is_empty())
+            && !is_dark_color(&scheme.surface)
+        {
+            scheme.on_surface = "#171C1F".to_string();
+        }
+        if (scheme.on_surface_variant == "#FFFFFF" || scheme.on_surface_variant.is_empty())
+            && !is_dark_color(&scheme.surface_variant)
+        {
+            scheme.on_surface_variant = "#41484D".to_string();
+        }
+        if (scheme.on_background == "#FFFFFF" || scheme.on_background.is_empty())
+            && !is_dark_color(&scheme.background)
+        {
+            scheme.on_background = "#171C1F".to_string();
+        }
+    }
+}
+
 /// Compute a stable fingerprint for a pair of color schemes.
 /// Uses SHA-256 on the normalized JSON of light + dark schemes.
 pub fn compute_palette_fingerprint(light: &ThemeColorScheme, dark: &ThemeColorScheme) -> String {
@@ -821,7 +889,14 @@ pub fn load_palette_record(
         .join(device_id)
         .join(format!("{}.json", fingerprint));
     let content = fs::read_to_string(&path)?;
-    Ok(serde_json::from_str(&content)?)
+    let mut record: ThemePaletteRecord = serde_json::from_str(&content)?;
+    // Issue #709 评论 5728916561: 验证并修正 palette record 的颜色值。
+    // 如果 dark_scheme 的前景色是 #000000 或空字符串配深色 surface，
+    // 说明 palette 数据有问题（来自 Android 动态颜色系统的错误数据或
+    // legacy migration 缺失字段），在此修正源头数据而不是在 QML 反色。
+    sanitize_color_scheme(&mut record.light_scheme, false);
+    sanitize_color_scheme(&mut record.dark_scheme, true);
+    Ok(record)
 }
 
 /// List all palette records in the catalog.
@@ -902,7 +977,7 @@ pub fn delete_palette_record_with_changes(
     clippy::type_complexity
 )]
 pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
-    let light = ThemeColorScheme {
+    let mut light = ThemeColorScheme {
         primary: palette.light_primary.clone(),
         on_primary: palette.light_on_primary.clone(),
         primary_container: palette.light_primary_container.clone(),
@@ -952,7 +1027,7 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         on_tertiary_fixed: String::new(),
         on_tertiary_fixed_variant: String::new(),
     };
-    let dark = ThemeColorScheme {
+    let mut dark = ThemeColorScheme {
         primary: palette.dark_primary.clone(),
         on_primary: palette.dark_on_primary.clone(),
         primary_container: palette.dark_primary_container.clone(),
@@ -1002,6 +1077,10 @@ pub fn legacy_palette_to_record(palette: &ThemePalette) -> ThemePaletteRecord {
         on_tertiary_fixed: String::new(),
         on_tertiary_fixed_variant: String::new(),
     };
+    // Issue #709 评论 5728916561: legacy palette 的 dark_* 字段可能为空或 #000000，
+    // 迁移时验证并修正颜色值。
+    sanitize_color_scheme(&mut light, false);
+    sanitize_color_scheme(&mut dark, true);
     let fingerprint = compute_palette_fingerprint(&light, &dark);
     let device_id = if palette.device_id.is_empty() {
         "legacy".to_string()
@@ -1965,6 +2044,199 @@ mod inline_tests {
         settings.appearance_mode = "dark".to_string();
         settings.validate();
         assert_eq!(settings.appearance_mode, "dark");
+    }
+
+    // --- Issue #709 评论 5728916561: palette 颜色值验证和修正测试 ---
+
+    #[test]
+    fn test_sanitize_dark_scheme_black_on_surface_with_dark_surface() {
+        let mut scheme = ThemeColorScheme {
+            surface: "#0F1417".to_string(),
+            on_surface: "#000000".to_string(),
+            surface_variant: "#41484D".to_string(),
+            on_surface_variant: "#000000".to_string(),
+            background: "#0F1417".to_string(),
+            on_background: "#000000".to_string(),
+            ..Default::default()
+        };
+        sanitize_color_scheme(&mut scheme, true);
+        assert_ne!(
+            scheme.on_surface, "#000000",
+            "dark on_surface=#000000 应被修正"
+        );
+        assert_ne!(
+            scheme.on_surface, "",
+            "dark on_surface 不应为空"
+        );
+        assert_ne!(
+            scheme.on_surface_variant, "#000000",
+            "dark on_surface_variant=#000000 应被修正"
+        );
+        assert_ne!(
+            scheme.on_background, "#000000",
+            "dark on_background=#000000 应被修正"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_dark_scheme_empty_on_surface_with_dark_surface() {
+        let mut scheme = ThemeColorScheme {
+            surface: "#0F1417".to_string(),
+            on_surface: String::new(),
+            surface_variant: "#41484D".to_string(),
+            on_surface_variant: String::new(),
+            background: "#0F1417".to_string(),
+            on_background: String::new(),
+            ..Default::default()
+        };
+        sanitize_color_scheme(&mut scheme, true);
+        assert!(
+            !scheme.on_surface.is_empty(),
+            "dark 空 on_surface 应被修正"
+        );
+        assert!(
+            !scheme.on_surface_variant.is_empty(),
+            "dark 空 on_surface_variant 应被修正"
+        );
+        assert!(
+            !scheme.on_background.is_empty(),
+            "dark 空 on_background 应被修正"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_dark_scheme_valid_colors_not_modified() {
+        let mut scheme = ThemeColorScheme {
+            surface: "#0F1417".to_string(),
+            on_surface: "#DFE3E7".to_string(),
+            surface_variant: "#41484D".to_string(),
+            on_surface_variant: "#C1C7CE".to_string(),
+            background: "#0F1417".to_string(),
+            on_background: "#DFE3E7".to_string(),
+            ..Default::default()
+        };
+        let original = scheme.clone();
+        sanitize_color_scheme(&mut scheme, true);
+        assert_eq!(
+            scheme.on_surface, original.on_surface,
+            "有效的 dark on_surface 不应被修改"
+        );
+        assert_eq!(
+            scheme.on_surface_variant, original.on_surface_variant,
+            "有效的 dark on_surface_variant 不应被修改"
+        );
+        assert_eq!(
+            scheme.on_background, original.on_background,
+            "有效的 dark on_background 不应被修改"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_light_scheme_white_on_surface_with_light_surface() {
+        let mut scheme = ThemeColorScheme {
+            surface: "#F6FAFE".to_string(),
+            on_surface: "#FFFFFF".to_string(),
+            surface_variant: "#DDE3EA".to_string(),
+            on_surface_variant: "#FFFFFF".to_string(),
+            background: "#F6FAFE".to_string(),
+            on_background: "#FFFFFF".to_string(),
+            ..Default::default()
+        };
+        sanitize_color_scheme(&mut scheme, false);
+        assert_ne!(
+            scheme.on_surface, "#FFFFFF",
+            "light on_surface=#FFFFFF 配浅色 surface 应被修正"
+        );
+        assert_ne!(
+            scheme.on_surface_variant, "#FFFFFF",
+            "light on_surface_variant=#FFFFFF 应被修正"
+        );
+        assert_ne!(
+            scheme.on_background, "#FFFFFF",
+            "light on_background=#FFFFFF 应被修正"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_light_scheme_valid_colors_not_modified() {
+        let mut scheme = ThemeColorScheme {
+            surface: "#F6FAFE".to_string(),
+            on_surface: "#171C1F".to_string(),
+            surface_variant: "#DDE3EA".to_string(),
+            on_surface_variant: "#41484D".to_string(),
+            background: "#F6FAFE".to_string(),
+            on_background: "#171C1F".to_string(),
+            ..Default::default()
+        };
+        let original = scheme.clone();
+        sanitize_color_scheme(&mut scheme, false);
+        assert_eq!(
+            scheme.on_surface, original.on_surface,
+            "有效的 light on_surface 不应被修改"
+        );
+    }
+
+    #[test]
+    fn test_load_palette_record_sanitizes_dark_scheme() {
+        let temp_dir = tempdir().unwrap();
+        let base = palettes_base_dir(temp_dir.path());
+        std::fs::create_dir_all(base.join("device1")).unwrap();
+        let record = ThemePaletteRecord {
+            schema_version: 1,
+            palette_id: "device1:abc".to_string(),
+            palette_fingerprint: "abc".to_string(),
+            source: "android_dynamic_color".to_string(),
+            source_platform: String::new(),
+            source_device_id: "device1".to_string(),
+            source_device_class: String::new(),
+            captured_at_ms: 0,
+            variant: String::new(),
+            light_scheme: ThemeColorScheme {
+                surface: "#F6FAFE".to_string(),
+                on_surface: "#171C1F".to_string(),
+                ..Default::default()
+            },
+            dark_scheme: ThemeColorScheme {
+                surface: "#0F1417".to_string(),
+                on_surface: "#000000".to_string(), // 问题数据：黑字配深色背景
+                ..Default::default()
+            },
+        };
+        let content = serde_json::to_string_pretty(&record).unwrap();
+        std::fs::write(base.join("device1").join("abc.json"), content).unwrap();
+        let loaded = load_palette_record(temp_dir.path(), "device1", "abc").unwrap();
+        assert_ne!(
+            loaded.dark_scheme.on_surface, "#000000",
+            "load_palette_record 应修正 dark on_surface=#000000"
+        );
+        assert!(
+            !loaded.dark_scheme.on_surface.is_empty(),
+            "修正后的 on_surface 不应为空"
+        );
+    }
+
+    #[test]
+    fn test_legacy_palette_to_record_sanitizes_empty_dark_fields() {
+        let palette = ThemePalette {
+            source: "android_dynamic_color".to_string(),
+            device_id: "device1".to_string(),
+            light_primary: "#006493".to_string(),
+            light_surface: "#F6FAFE".to_string(),
+            light_on_surface: "#171C1F".to_string(),
+            dark_primary: "#87CEFF".to_string(),
+            dark_surface: "#0F1417".to_string(),
+            // dark_on_surface 故意留空 — legacy data 常见情况
+            ..ThemePalette::default()
+        };
+        let record = legacy_palette_to_record(&palette);
+        assert!(
+            !record.dark_scheme.on_surface.is_empty(),
+            "legacy migration 应修正空的 dark on_surface"
+        );
+        assert_ne!(
+            record.dark_scheme.on_surface, "#000000",
+            "legacy migration 不应产生 #000000"
+        );
     }
 }
 

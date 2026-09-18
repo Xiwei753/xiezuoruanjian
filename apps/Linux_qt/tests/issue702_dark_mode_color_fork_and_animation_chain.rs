@@ -200,3 +200,52 @@ fn issue702_qquickitem_impl_starts_cursor_timeline_on_idle() {
         "光标动画存在时应继续 request_frame_update"
     );
 }
+
+// =========================================================================
+// Issue #709 评论 5728916561: 主题状态诊断字段 — resolved_source / resolved_scheme_kind
+// =========================================================================
+
+#[test]
+fn issue709_theme_state_json_includes_resolved_source_and_scheme_kind() {
+    let src = read_src("src/backend/linux_theme_controller.rs");
+    assert!(
+        src.contains("resolved_source"),
+        "ResolvedThemeState 应包含 resolved_source 字段"
+    );
+    assert!(
+        src.contains("resolved_scheme_kind"),
+        "ResolvedThemeState 应包含 resolved_scheme_kind 字段"
+    );
+    assert!(
+        src.contains("\"resolved_source\""),
+        "theme_state_json 应输出 resolved_source"
+    );
+    assert!(
+        src.contains("\"resolved_scheme_kind\""),
+        "theme_state_json 应输出 resolved_scheme_kind"
+    );
+}
+
+#[test]
+fn issue709_resolved_state_tracks_scheme_origin() {
+    let src = read_src("src/backend/linux_theme_controller.rs");
+    // 确认 saved_palette 路径设置 resolved_source = "saved_palette"
+    assert!(
+        src.contains("\"saved_palette\""),
+        "saved_palette 路径应设置 resolved_source"
+    );
+    // 确认 builtin 路径设置 resolved_source = "builtin"
+    assert!(
+        src.contains("\"builtin\""),
+        "builtin 路径应设置 resolved_source"
+    );
+    // 确认 dark_scheme/light_scheme 选择逻辑
+    assert!(
+        src.contains("\"dark_scheme\""),
+        "应设置 resolved_scheme_kind = dark_scheme"
+    );
+    assert!(
+        src.contains("\"light_scheme\""),
+        "应设置 resolved_scheme_kind = light_scheme"
+    );
+}
