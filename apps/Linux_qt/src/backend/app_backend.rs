@@ -225,7 +225,8 @@ fn debug_level_enabled(module: &str, level: DebugLevel) -> bool {
     level <= get_debug_config().level
 }
 
-pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
+/// Issue #707 评论 5723616999: 改 `pub` 让 bin (main.rs) 能访问。
+pub fn debug_log_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Info) {
         println!(
             "[SujianDebug][static][module={}][event={}] {}",
@@ -236,7 +237,8 @@ pub(crate) fn debug_log_static(module: &str, event: &str, message: &str) {
     log::info!(target: module, "{}: {}", event, message);
 }
 
-pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
+/// Issue #707 评论 5723616999: 改 `pub` 让 bin (main.rs) 能访问。
+pub fn debug_warn_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Warn) {
         eprintln!(
             "[SujianDebug][WARN][static][module={}][event={}] {}",
@@ -247,7 +249,8 @@ pub(crate) fn debug_warn_static(module: &str, event: &str, message: &str) {
     log::warn!(target: module, "{}: {}", event, message);
 }
 
-pub(crate) fn debug_error_static(module: &str, event: &str, message: &str) {
+/// Issue #707 评论 5723616999: 改 `pub` 让 bin (main.rs) 能访问。
+pub fn debug_error_static(module: &str, event: &str, message: &str) {
     if debug_level_enabled(module, DebugLevel::Error) {
         eprintln!(
             "[SujianDebug][ERROR][static][module={}][event={}] {}",

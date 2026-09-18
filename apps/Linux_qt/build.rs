@@ -540,7 +540,12 @@ fn main() {
     // ===== 注入编译时环境变量（诊断 manifest 身份信息） =====
     inject_build_env_vars();
 
-    config.build("src/main.rs");
+    // Issue #707 评论 5723616999: bin+lib 模式 — 只 build lib.rs。
+    // lib.rs 声明所有 pub mod（backend/editor/app_main_cpp/...），包含
+    // main.rs 的所有 cpp! 块（移到 app_main_cpp 模块）。main.rs 不再有
+    // cpp! 宏，只调用 lib 的 pub 函数。这样 cpp_build 只需扫描 lib.rs 一次，
+    // 覆盖所有 cpp! 宏，避免两次 build 的 clean_artifacts() 冲突。
+    config.build("src/lib.rs");
 }
 
 /// 注入编译时环境变量，供源码中 `env!("KEY")` 读取。

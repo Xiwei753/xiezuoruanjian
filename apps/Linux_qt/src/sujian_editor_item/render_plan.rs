@@ -149,8 +149,17 @@ pub(crate) enum CursorSampleOutcome {
     Coordinated { x: f64, y: f64, h: f64 },
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct RenderPlan {
+/// Issue #707 评论 5723616999: Default 实现 — Idle 是自然默认值。
+impl Default for CursorSampleOutcome {
+    fn default() -> Self {
+        Self::Idle
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+/// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
+/// 加 `Default` 让集成测试能构造实例验证字段可读写。
+pub struct RenderPlan {
     pub text_animation: TextAnimationPlan,
     pub selection_preedit: SelectionPreeditPlan,
     /// Issue #679 评论 5657313927: 改为纯显示数据 CursorRenderState，

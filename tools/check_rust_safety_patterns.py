@@ -204,6 +204,7 @@ _CPP_UNSAFE_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/editor/renderer.rs"),
     Path("apps/Linux_qt/src/editor/scene_graph.rs"),
     Path("apps/Linux_qt/src/main.rs"),
+    Path("apps/Linux_qt/src/app_main_cpp.rs"),
     Path("apps/Linux_qt/src/platform/linux_qt/clipboard_focus_adapter.rs"),
     Path("apps/Linux_qt/src/platform/linux_qt/screen_geometry.rs"),
     Path("apps/Linux_qt/src/sujian_editor_item/ime_visual.rs"),
@@ -287,6 +288,7 @@ def _is_in_test_context(lines: list[str], index: int) -> bool:
 
 _CRATE_WIDE_ALLOW_ALLOWED_FILES = {
     Path("apps/Linux_qt/src/main.rs"),
+    Path("apps/Linux_qt/src/lib.rs"),
 }
 
 _CFG_ATTR_MULTILINE_PATTERN = re.compile(

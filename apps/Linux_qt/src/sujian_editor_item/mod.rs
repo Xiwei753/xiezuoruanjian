@@ -25,7 +25,8 @@ pub(crate) mod animation_coordinator;
 pub(crate) mod animation_mode;
 pub(crate) mod buffer;
 pub(crate) mod cursor_animation;
-pub(crate) mod cursor_controller;
+/// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `CursorController`。
+pub mod cursor_controller;
 pub(crate) mod editing;
 pub(crate) mod ime_visual;
 pub(crate) mod input_host;
@@ -40,7 +41,8 @@ pub(crate) mod pipeline;
 pub(crate) mod properties;
 pub(crate) mod qquickitem_impl;
 pub(crate) mod qt_text_node;
-pub(crate) mod render_plan;
+/// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `RenderPlan`。
+pub mod render_plan;
 pub(crate) mod rendering;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;

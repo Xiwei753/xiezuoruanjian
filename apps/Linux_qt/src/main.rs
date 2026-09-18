@@ -105,39 +105,19 @@
 #![recursion_limit = "8192"]
 //! Linux_qt 客户端入口：只负责 Qt/QML 启动、资源注册和顶层 Backend 注册。
 
-use cpp::cpp;
 use qmetaobject::log::{install_message_handler, QMessageLogContext, QtMsgType};
 use qmetaobject::prelude::*;
 use qmetaobject::QString;
-use std::ffi::CStr;
-use std::os::raw::c_char;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-mod backend;
-mod editor;
-mod platform;
-mod platform_utils;
-mod starmap_bridge;
-mod sujian_editor_item;
-mod sync_bridge;
-mod writing_bridge;
+use sujian_linux_qt::backend;
+use sujian_linux_qt::sujian_editor_item;
+use sujian_linux_qt::app_main_cpp;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
 use backend::diagnostics;
 use backend::{AppBackend, BackendRuntime};
-
-cpp! {{
-    #include <QCoreApplication>
-    #include <QFileInfo>
-    #include <QGuiApplication>
-    #include <QIcon>
-    #include <QStyleHints>
-    #include <QStringList>
-    #include <QSysInfo>
-    #include <QTranslator>
-    #include <QtGlobal>
-}}
 
 qmetaobject::qrc!(qml_resources, "/" {
     // Pages
@@ -208,25 +188,11 @@ static QML_HUB_HEADER_MISSING: AtomicBool = AtomicBool::new(false);
 static QML_LAST_LOAD_ERROR: OnceLock<Mutex<String>> = OnceLock::new();
 
 fn qt_runtime_version() -> String {
-    let version_ptr = cpp!(unsafe [] -> *const c_char as "const char *" {
-        return qVersion();
-    });
-    if version_ptr.is_null() {
-        return "unknown".to_string();
-    }
-    // SAFETY: version_ptr was returned by Qt's qVersion() which returns a valid C string pointer; null check is above.
-    unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
+    app_main_cpp::qt_runtime_version()
 }
 
 fn qt_build_version() -> String {
-    let version_ptr = cpp!(unsafe [] -> *const c_char as "const char *" {
-        return QT_VERSION_STR;
-    });
-    if version_ptr.is_null() {
-        return "unknown".to_string();
-    }
-    // SAFETY: version_ptr is QT_VERSION_STR macro which is always a valid C string; null check is above.
-    unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
+    app_main_cpp::qt_build_version()
 }
 
 fn fail_if_not_qt6() {
@@ -353,41 +319,11 @@ fn probe_hub_header_resource() {
 }
 
 fn set_application_icon() {
-    cpp!(unsafe [] {
-        QGuiApplication::setWindowIcon(QIcon(":/icons/sujian.svg"));
-    });
+    app_main_cpp::set_application_icon();
 }
 
 fn log_input_method_diagnostics() {
-    let qt_im_module = std::env::var("QT_IM_MODULE").unwrap_or_else(|_| "<unset>".to_string());
-    let xmodifiers = std::env::var("XMODIFIERS").unwrap_or_else(|_| "<unset>".to_string());
-    let xdg_session_type =
-        std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "<unset>".to_string());
-    let qt_library_paths = cpp!(unsafe [] -> QString as "QString" {
-        return QCoreApplication::libraryPaths().join(QStringLiteral(";"));
-    });
-    let fcitx_plugins = cpp!(unsafe [] -> QString as "QString" {
-        QStringList matches;
-        const QString relative = QStringLiteral("/platforminputcontexts/libfcitx5platforminputcontextplugin.so");
-        for (const QString& base : QCoreApplication::libraryPaths()) {
-            const QString candidate = base + relative;
-            if (QFileInfo::exists(candidate)) {
-                matches << candidate;
-            }
-        }
-        return matches.join(QStringLiteral(";"));
-    });
-
-    if std::env::var("SUJIAN_EDITOR_DEBUG").is_ok() {
-        eprintln!(
-            "[QtInputMethodDiagnostics] QT_IM_MODULE={} XMODIFIERS={} XDG_SESSION_TYPE={} qt_library_paths={} fcitx5_qt6_plugins={}",
-            qt_im_module,
-            xmodifiers,
-            xdg_session_type,
-            qt_library_paths,
-            fcitx_plugins
-        );
-    }
+    app_main_cpp::log_input_method_diagnostics();
 }
 
 const QRC_RESOURCE_REVISION: &str = concat!(env!("CARGO_PKG_VERSION"), ":qml_resources_v1");
@@ -419,10 +355,7 @@ impl DesktopRuntimeProfile {
         let qml_import_path = std::env::var("QML2_IMPORT_PATH")
             .or_else(|_| std::env::var("QML_IMPORT_PATH"))
             .unwrap_or_else(|_| "<unset>".to_string());
-        let platform_name = cpp!(unsafe [] -> QString as "QString" {
-            return QGuiApplication::platformName();
-        })
-        .to_string();
+        let platform_name = app_main_cpp::qt_platform_name();
         let input_method_module = std::env::var("QT_IM_MODULE")
             .or_else(|_| std::env::var("QT_IM_MODULES"))
             .unwrap_or_else(|_| "<unset>".to_string());
@@ -490,79 +423,10 @@ fn collect_runtime_info(profile: &DesktopRuntimeProfile) -> diagnostics::Runtime
 
 /// 通过 QSysInfo 和环境变量收集系统信息
 fn collect_system_info() -> diagnostics::SystemInfo {
-    let product_type = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::productType();
-    })
-    .to_string();
-    let product_version = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::productVersion();
-    })
-    .to_string();
-    let pretty_product_name = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::prettyProductName();
-    })
-    .to_string();
-    let kernel_type = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::kernelType();
-    })
-    .to_string();
-    let kernel_version = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::kernelVersion();
-    })
-    .to_string();
-    let current_cpu_arch = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::currentCpuArchitecture();
-    })
-    .to_string();
-    let build_abi = cpp!(unsafe [] -> QString as "QString" {
-        return QSysInfo::buildAbi();
-    })
-    .to_string();
-    let xdg_current_desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
-    let xdg_session_type = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
-
-    diagnostics::SystemInfo {
-        product_type,
-        product_version,
-        pretty_product_name,
-        kernel_type,
-        kernel_version,
-        current_cpu_arch,
-        build_abi,
-        xdg_current_desktop,
-        xdg_session_type,
-    }
+    app_main_cpp::collect_system_info()
 }
 fn install_translator() {
-    // Install QTranslator for i18n support.
-    // Loads the compiled .qm file from the embedded qrc resource.
-    // The .qm file is generated by lrelease from .ts during build.
-    let loaded = cpp!(unsafe [] -> bool as "bool" {
-        QTranslator *translator = new QTranslator(QCoreApplication::instance());
-        // Try loading from qrc embedded resource first
-        bool ok = translator->load(QStringLiteral(":/i18n/zh_CN.qm"));
-        if (!ok) {
-            // Fallback: try from filesystem relative to executable
-            ok = translator->load(QStringLiteral("zh_CN"),
-                                   QCoreApplication::applicationDirPath() + QStringLiteral("/i18n"));
-        }
-        if (ok) {
-            QCoreApplication::installTranslator(translator);
-            return true;
-        } else {
-            delete translator;
-            return false;
-        }
-    });
-    if loaded {
-        debug_log_static("app", "i18n", "QTranslator loaded successfully (zh_CN)");
-    } else {
-        debug_log_static(
-            "app",
-            "i18n",
-            "QTranslator not loaded; running with source strings",
-        );
-    }
+    app_main_cpp::install_translator();
 }
 
 fn main() {
@@ -571,10 +435,10 @@ fn main() {
     if let Ok(services) = std::panic::catch_unwind(writer_platform_linux::create_platform_services)
     {
         if let Some(factory) = services.sync_transport_factory {
-            crate::backend::app_backend::set_linux_sync_transport_factory(factory);
+            sujian_linux_qt::backend::app_backend::set_linux_sync_transport_factory(factory);
         }
         if let Some(secure_storage) = services.secure_storage {
-            crate::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(
+            sujian_linux_qt::backend::app_backend::set_linux_secure_storage(std::sync::Arc::from(
                 secure_storage,
             ));
         }

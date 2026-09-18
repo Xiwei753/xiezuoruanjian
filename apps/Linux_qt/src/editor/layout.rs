@@ -250,6 +250,43 @@ cpp! {{
         return x;
     }
 
+    // Issue #707 评论 5723616999: 反向几何查询 — x 坐标 → QChar cursor offset。
+    // 与 editor_layout_cursor_to_x 对称，用于真实 Qt 行为测试的 round-trip。
+    // 简单版：不传 wrap width，QTextLayout 自动按自然宽度排版（单行）。
+    int editor_layout_x_to_cursor(
+        const QString& paraText, double x,
+        double fs, const QString& ff
+    ) {
+        QFont font(ff);
+        font.setPixelSize(static_cast<int>(fs));
+        QTextLayout layout(paraText, font);
+        QTextOption option;
+        option.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        layout.setTextOption(option);
+        layout.beginLayout();
+        int result = 0;
+        while (true) {
+            QTextLine line = layout.createLine();
+            if (!line.isValid()) break;
+            // Issue #707: setLineWidth 让 QTextLine 有有效长度，xToCursor 才能正确计算。
+            // 用足够大的值让所有文本排在一行，但不用 1e9 避免潜在溢出。
+            line.setLineWidth(100000.0);
+            int line_start = line.textStart();
+            int line_end = line_start + line.textLength();
+            int pos = line.xToCursor(x);
+            if (qEnvironmentVariableIsSet("SUJIAN_EDITOR_DEBUG")) {
+                qDebug("[x_to_cursor_simple] line_start=%d line_end=%d x=%.4f raw_xToCursor=%d line_x=%.4f naturalW=%.4f",
+                    line_start, line_end, x, pos, line.x(), line.naturalTextWidth());
+            }
+            if (pos < line_start) pos = line_start;
+            if (pos > line_end) pos = line_end;
+            result = pos;
+            break;
+        }
+        layout.endLayout();
+        return result;
+    }
+
     double editor_layout_cursor_to_x_on_line(
         const QString& paraText, int cursor_qchar,
         double fs, const QString& ff,
@@ -2384,6 +2421,62 @@ pub fn qtextlayout_cursor_to_x(
     cpp!(unsafe [para as "QString", before as "QString", fs as "float", ff as "QString"] -> f64 as "double" {
         return editor_layout_cursor_to_x(para, fs, ff, before);
     })
+}
+
+/// Issue #707 评论 5723616999: 反向几何查询 — x 坐标 → QChar (UTF-16) cursor offset。
+///
+/// 与 `qtextlayout_cursor_to_x` 对称，内部通过 cpp! FFI 调用 Qt 的
+/// `QTextLine::xToCursor`，用于真实 Qt 行为测试的 cursorToX → xToCursor round-trip。
+///
+/// 返回段落内的 QChar (UTF-16 code unit) offset。调用方可用
+/// `qchar_offset_to_byte_offset` 转换回 UTF-8 byte offset。
+///
+/// SAFETY: 需要 QGuiApplication 已创建（调用 `ensure_qt_application` 后使用）。
+/// GUI thread only; offscreen platform 可用于无显示环境测试。
+pub fn qtextlayout_x_to_cursor(
+    para_text: &str,
+    x: f64,
+    font_size: f64,
+    font_family: &str,
+) -> i32 {
+    let para: QString = para_text.to_string().into();
+    let fs = font_size as f32;
+    let ff: QString = font_family.to_string().into();
+    // SAFETY: 需要 QGuiApplication 已创建；GUI thread only; offscreen platform 可用于测试。
+    cpp!(unsafe [para as "QString", x as "double", fs as "float", ff as "QString"] -> i32 as "int" {
+        return editor_layout_x_to_cursor(para, x, fs, ff);
+    })
+}
+
+/// Issue #707 评论 5723616999: 确保测试进程已创建 QGuiApplication（offscreen platform）。
+///
+/// Qt GUI 对象（QFont/QTextLayout/QTextLine 等）必须在 QGuiApplication 创建之后使用。
+/// 用进程级静态变量保证只创建一次，生命周期与进程相同，不 delete。
+///
+/// 设置 `QT_QPA_PLATFORM=offscreen` 以支持无显示环境（CI/headless）测试。
+/// 多次调用安全：首次调用创建 QGuiApplication，后续调用 no-op。
+/// 用 `std::sync::OnceLock` 保证多线程测试下只创建一次（Rust 测试默认并行）。
+///
+/// SAFETY: QGuiApplication 创建后不 delete，生命周期与进程相同。
+/// offscreen platform 不需要真实显示。静态 C++ 变量保证只创建一次。
+/// GUI thread only; 测试串行运行在 GUI 线程。
+pub fn ensure_qt_application() {
+    static QT_APP_INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    QT_APP_INIT.get_or_init(|| {
+        std::env::set_var("QT_QPA_PLATFORM", "offscreen");
+        // SAFETY: 测试进程级单例 QGuiApplication，创建后不 delete，
+        // 生命周期与进程相同。offscreen platform 不需要真实显示。
+        // OnceLock 保证多线程下只创建一次。
+        cpp!(unsafe [] {
+            static int argc = 1;
+            static char argv0[] = "sujian-test";
+            static char* argv[] = {argv0, nullptr};
+            static QGuiApplication* app = nullptr;
+            if (QGuiApplication::instance() == nullptr && app == nullptr) {
+                app = new QGuiApplication(argc, argv);
+            }
+        });
+    });
 }
 
 pub fn debug_line_metrics(

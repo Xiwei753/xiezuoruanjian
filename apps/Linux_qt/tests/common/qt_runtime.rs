@@ -1,68 +1,22 @@
-//! 共享测试 helper — Linux_qt 集成测试公共基础设施。
+//! 真实 Qt runtime helper — Issue #707 评论 5723616999。
 //!
-//! 提供源码读取、函数窗口定位、模式匹配等 WHITE_BOX 分析辅助。
-//! 所有 Linux_qt 集成测试通过 `#[path = "common/qt_runtime.rs"]` 引入。
+//! 本文件提供真实 Qt 行为测试的公共基础设施：
+//! - `ensure_qt_application()`: 确保测试进程已创建 QGuiApplication（offscreen）。
+//!
+//! 本 helper 不再读取源码字符串。源码字符串守卫 helper 已拆分到
+//! `common/source_guard.rs`，供旧 WHITE_BOX 测试使用。
+//!
+//! 所有 #707 真实行为测试通过 `#[path = "common/qt_runtime.rs"] mod qt_runtime;`
+//! 引入，调用 `ensure_qt_application()` 后再构造生产对象。
 
-use std::path::PathBuf;
-
-pub fn linux_qt_root() -> PathBuf {
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by cargo");
-    PathBuf::from(manifest_dir)
-}
-
-pub fn read_src(rel: &str) -> String {
-    let path = linux_qt_root().join(rel);
-    std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read {}: {}", path.display(), e))
-}
-
-/// 在源码中统计某个模式的出现次数（非重叠）。
-pub fn count_occurrences(src: &str, needle: &str) -> usize {
-    src.matches(needle).count()
-}
-
-/// 从 `src` 中定位 `fn_marker` 并返回从该处起 `window_chars` 字符的函数体窗口。
-/// 窗口结束位置回退到最近的 UTF-8 字符边界。
-pub fn function_window(src: &str, fn_marker: &str, window_chars: usize) -> String {
-    let pos = src
-        .find(fn_marker)
-        .unwrap_or_else(|| panic!("{} 必须存在", fn_marker));
-    let target_end = pos + window_chars;
-    let window_end = src
-        .char_indices()
-        .take_while(|(i, _)| *i < target_end)
-        .last()
-        .map(|(i, c)| i + c.len_utf8())
-        .unwrap_or(src.len())
-        .min(src.len());
-    src[pos..window_end].to_string()
-}
-
-/// 检查窗口内是否出现任何"光标所有权 epoch / 失效"机制标识符。
-pub fn has_cursor_owner_epoch_guard(window: &str) -> bool {
-    let markers = [
-        "cursor_owner_epoch",
-        "owner_epoch",
-        "cursor_ownership",
-        "pointer_owns_cursor",
-        "cursor_owner",
-        "owns_cursor",
-        "cursor_claim",
-        "claim_epoch",
-        "invalidate_cursor_owner",
-        "release_cursor_owner",
-        "renounce_cursor",
-        "cursor_authority",
-        "pointer_generation",
-        "click_generation",
-        "cursor_handoff",
-        "handoff_epoch",
-        "cursor_release",
-        "release_text_transaction_cursor",
-        "drop_cursor_claim",
-        "cursor_claim_invalidated",
-        "pointer_took_cursor",
-    ];
-    markers.iter().any(|m| window.contains(m))
+/// 确保测试进程已创建 QGuiApplication（offscreen platform）。
+///
+/// Qt GUI 对象（QFont/QTextLayout/QTextLine/LinuxThemeController 等）必须在
+/// QGuiApplication 创建之后使用。本函数委托给生产代码
+/// `sujian_linux_qt::editor::layout::ensure_qt_application`，后者用进程级
+/// 静态变量保证只创建一次。
+///
+/// 每条真实 Qt 行为测试应在首行调用此函数。
+pub fn ensure_qt_application() {
+    sujian_linux_qt::editor::layout::ensure_qt_application();
 }

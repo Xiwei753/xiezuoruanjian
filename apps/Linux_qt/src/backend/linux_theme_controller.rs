@@ -97,7 +97,8 @@ impl LinuxThemeController {
     ///
     /// Issue #701 评论 5702214893: 此方法在 setter 写完设置后调用一次，结果
     /// 缓存到 `cached_state`；getter 通过 `state()` 只读缓存。
-    fn rebuild_resolved_state(&self) -> ResolvedThemeState {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn rebuild_resolved_state(&self) -> ResolvedThemeState {
         let s = self.snap();
         let appearance_mode = s.appearance_mode.clone();
         let system_is_dark = s.system_is_dark;
@@ -184,7 +185,8 @@ impl LinuxThemeController {
     ///
     /// 用 `if let` 避免 `unwrap`/`expect`（workspace clippy 禁止
     /// `unwrap_used`/`expect_used`）。
-    fn state(&self) -> ResolvedThemeState {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn state(&self) -> ResolvedThemeState {
         if let Some(ref s) = *self.cached_state.borrow() {
             return s.clone();
         }
@@ -202,7 +204,11 @@ impl LinuxThemeController {
     /// `scheme` 字段是 Core `ThemeColorScheme` DTO 反序列化后的对象（非字符串），
     /// 便于 QML 侧直接 `JSON.parse` 后按 key 读取颜色。当 scheme 为空（`"{}"`）
     /// 时，`scheme` 字段为空对象，QML 侧 fallback 到 isDark 派生的固定深/浅色。
-    fn theme_state_json(&self) -> QString {
+    ///
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试（`tests/`）能直接调用，
+    /// 验证真实 Qt 行为（dark/light/system 切换、is_dark + scheme 统一体）。
+    /// QML 绑定不受影响（`qt_property!` READ 方法签名不变）。
+    pub fn theme_state_json(&self) -> QString {
         let state = self.state();
         // 先把 scheme_json 反序列化成对象，再和 is_dark 一起打包。
         // scheme_json 是 Core ThemeColorScheme 的 serde JSON 字符串（snake_case key）。
@@ -231,35 +237,43 @@ impl LinuxThemeController {
     /// Issue #701 评论 5702214893: scheme 在 `rebuild_resolved_state()` 里一次性
     /// 解析并缓存到 `cached_state.scheme_json`，此 getter 只读缓存，不再每次
     /// 都 borrow `AppBackend` 加载 palette/builtin。
-    fn resolved_scheme_json(&self) -> QString {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn resolved_scheme_json(&self) -> QString {
         QString::from(self.state().scheme_json)
     }
 
-    fn is_dark(&self) -> bool {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn is_dark(&self) -> bool {
         self.state().is_dark
     }
 
-    fn color_source(&self) -> QString {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn color_source(&self) -> QString {
         QString::from(self.state().color_source)
     }
 
-    fn selected_builtin_theme_id(&self) -> QString {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn selected_builtin_theme_id(&self) -> QString {
         QString::from(self.state().selected_builtin_theme_id)
     }
 
-    fn selected_palette_id(&self) -> QString {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn selected_palette_id(&self) -> QString {
         QString::from(self.state().selected_palette_id)
     }
 
-    fn appearance_mode(&self) -> QString {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn appearance_mode(&self) -> QString {
         QString::from(self.state().appearance_mode)
     }
 
-    fn system_is_dark(&self) -> bool {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn system_is_dark(&self) -> bool {
         self.state().system_is_dark
     }
 
-    fn compute_is_dark(mode: &str, sys_dark: bool) -> bool {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn compute_is_dark(mode: &str, sys_dark: bool) -> bool {
         match mode {
             "dark" => true,
             "light" => false,
@@ -267,7 +281,8 @@ impl LinuxThemeController {
         }
     }
 
-    fn reload(&mut self) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn reload(&mut self) {
         // 主题解析（应用内部逻辑）→ origin=App。
         let state = self.rebuild_resolved_state();
         *self.cached_state.borrow_mut() = Some(state.clone());
@@ -284,7 +299,8 @@ impl LinuxThemeController {
         self.scheme_changed();
     }
 
-    fn set_color_source(&mut self, val: QString) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn set_color_source(&mut self, val: QString) {
         let source = val.to_string();
         if source == "saved_palette" {
             let pid = self.snap().selected_palette_id.clone();
@@ -301,7 +317,8 @@ impl LinuxThemeController {
         }
     }
 
-    fn set_appearance_mode(&mut self, val: QString) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn set_appearance_mode(&mut self, val: QString) {
         // 用户选择外观模式（点击 dark/light/system）→ origin=User。
         let mode_str = val.to_string();
         crate::backend::app_backend::record_struct_event(
@@ -319,7 +336,8 @@ impl LinuxThemeController {
         }
     }
 
-    fn set_selected_builtin_theme_id(&mut self, val: QString) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn set_selected_builtin_theme_id(&mut self, val: QString) {
         if self
             .with_app_mut(|app| app.set_setting_selected_builtin_theme_id(val))
             .is_ok()
@@ -339,7 +357,8 @@ impl LinuxThemeController {
         }
     }
 
-    fn set_selected_palette_id(&mut self, val: QString) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn set_selected_palette_id(&mut self, val: QString) {
         let palette_id = val.to_string();
         if !palette_id.is_empty() {
             if self
@@ -367,7 +386,8 @@ impl LinuxThemeController {
         self.scheme_changed();
     }
 
-    fn set_system_is_dark(&mut self, val: bool) {
+    /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
+    pub fn set_system_is_dark(&mut self, val: bool) {
         // 系统主题变化回调 → origin=System。
         let is_dark_str = if val { "true" } else { "false" };
         crate::backend::app_backend::record_struct_event(
@@ -409,14 +429,14 @@ impl LinuxThemeController {
 /// `ResolvedThemeState` 在 `rebuild_resolved_state()` 里一次性构造并缓存到
 /// `cached_state`，getter 只读缓存。
 #[derive(Clone)]
-struct ResolvedThemeState {
-    appearance_mode: String,
-    system_is_dark: bool,
-    is_dark: bool,
-    color_source: String,
-    selected_palette_id: String,
-    selected_builtin_theme_id: String,
+pub struct ResolvedThemeState {
+    pub appearance_mode: String,
+    pub system_is_dark: bool,
+    pub is_dark: bool,
+    pub color_source: String,
+    pub selected_palette_id: String,
+    pub selected_builtin_theme_id: String,
     /// 最终 resolved scheme 的 JSON 字符串（Core `ThemeColorScheme` 序列化
     /// 结果，失败时为 `"{}"`）。
-    scheme_json: String,
+    pub scheme_json: String,
 }

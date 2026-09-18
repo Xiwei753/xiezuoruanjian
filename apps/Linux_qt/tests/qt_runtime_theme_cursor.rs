@@ -1,341 +1,306 @@
-//! Issue #707 — 深色模式真实 Qt 行为测试。
+//! Issue #707 评论 5723616999 — 深色模式真实 Qt 行为测试。
 //!
-//! 本测试验证 `LinuxThemeController` 的运行时行为约束:
-//! - appearance_mode 只接受 "light"/"dark"/"system" 三值
-//! - theme_state_json 是 is_dark + scheme 的统一体
-//! - dark 模式下 scheme.on_surface 不能是黑色（深色背景上文字不可见）
-//! - light 模式下 scheme.on_surface 不能是深色（浅色背景上文字不可见）
-//! - system 模式走 set_system_is_dark 入口，payload 整体切换
+//! 本测试直接构造 `LinuxThemeController` 生产对象，调用其 pub 方法
+//! （`set_appearance_mode`、`set_system_is_dark`、`theme_state_json`、
+//! `rebuild_resolved_state`、`compute_is_dark`），验证运行时行为不变量。
 //!
-//! 本测试为 WHITE_BOX 行为守卫：不读取源码字符串做字段计数，
-//! 而是验证代码结构支持上述运行时行为不变量。
+//! 不再读取源码字符串做字段计数。每条测试先 `ensure_qt_application()`，
+//! 然后操作真实对象，解析真实 JSON 输出。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 #[path = "common/qt_runtime.rs"]
 mod qt_runtime;
 
-use qt_runtime::{function_window, has_cursor_owner_epoch_guard, read_src};
+use qt_runtime::ensure_qt_application;
+use sujian_linux_qt::backend::{AppRef, LinuxThemeController};
+use sujian_linux_qt::backend::linux_theme_controller::ResolvedThemeState;
 
 // =========================================================================
-// 行为守卫 1: appearance_mode 只接受三值
+// 行为守卫 1: dark 模式 → is_dark=true，scheme 是合法 JSON 对象
 // =========================================================================
 
-/// `set_appearance_mode` 的输入值必须限于 "light"/"dark"/"system"。
-/// 验证 `resolve_appearance_mode` 或等价逻辑存在三值校验/回退。
 #[test]
-fn qt_theme_appearance_mode_limited_to_three_values() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    // set_appearance_mode 调用 app.set_setting_appearance_mode，
-    // 后者在 settings_backend.rs 里做校验。
-    let settings_src = read_src("src/backend/settings_backend.rs");
-    // 搜索 AppBackend::set_setting_appearance_mode (三值 match 校验)
-    let set_appearance_fn = "pub(crate) fn set_setting_appearance_mode";
-    let has_setter = settings_src.contains(set_appearance_fn);
-    assert!(has_setter, "AppBackend::set_setting_appearance_mode 必须存在");
-
-    // 校验逻辑: AppBackend::set_setting_appearance_mode 应该有三值 match
-    let marker_pos = settings_src
-        .find(set_appearance_fn)
-        .expect("set_setting_appearance_mode 必须存在");
-    let window_end = marker_pos + 600;
-    let window = if window_end <= settings_src.len() {
-        &settings_src[marker_pos..window_end]
-    } else {
-        &settings_src[marker_pos..]
-    };
-    // 应该有 "light" / "dark" / "system" 三值 match
-    let has_light = window.contains("\"light\"");
-    let has_dark = window.contains("\"dark\"");
-    let has_system = window.contains("\"system\"");
-    assert!(
-        has_light && has_dark && has_system,
-        "set_setting_appearance_mode 必须校验 appearance_mode 为 light/dark/system 三值"
+fn qt_theme_dark_mode_is_dark_true_and_scheme_present() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+    ctrl.set_appearance_mode("dark".into());
+    let json: String = ctrl.theme_state_json().into();
+    let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert_eq!(
+        v["is_dark"].as_bool(),
+        Some(true),
+        "dark 模式下 is_dark 必须为 true"
     );
-    // 应该有非法值回退逻辑（match arm fallback）
-    let has_fallback = window.contains("=> \"system\"") || window.contains("=> s");
+    let scheme = &v["scheme"];
     assert!(
-        has_fallback,
-        "set_setting_appearance_mode 必须有非法值回退到 system 的逻辑"
+        scheme.is_object(),
+        "dark 模式下 scheme 必须是合法 JSON 对象（core_api 未初始化时为空对象 {{}}）"
     );
-    println!("[BEHAVIOR_VERIFY] appearance_mode 三值校验: light={} dark={} system={} fallback={}",
-        has_light, has_dark, has_system, has_fallback);
+    // 如果 scheme 非空（core_api 已初始化），on_surface 必须存在
+    if !scheme.as_object().map_or(true, |m| m.is_empty()) {
+        assert!(
+            scheme["on_surface"].as_str().is_some(),
+            "dark 模式下非空 scheme.on_surface 必须存在且为字符串"
+        );
+    }
+    println!("[BEHAVIOR_VERIFY] dark: is_dark=true, scheme is valid JSON object");
 }
 
 // =========================================================================
-// 行为守卫 2: theme_state_json 是 is_dark + scheme 的统一体
+// 行为守卫 2: light 模式 → is_dark=false，scheme 同步切换
 // =========================================================================
 
-/// `LinuxThemeController` 必须发布 `theme_state_json` 一个属性，
-/// 包含 is_dark 和 scheme，从同一份 cached_state 一次性打包。
 #[test]
-fn qt_theme_state_json_is_unified_payload() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    // theme_state_json getter 必须存在
+fn qt_theme_light_mode_is_dark_false_and_scheme_switched() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+    ctrl.set_appearance_mode("light".into());
+    let json: String = ctrl.theme_state_json().into();
+    let v: serde_json::Value = serde_json::from_str(&json).expect("valid json");
+    assert_eq!(
+        v["is_dark"].as_bool(),
+        Some(false),
+        "light 模式下 is_dark 必须为 false"
+    );
+    let scheme = &v["scheme"];
     assert!(
-        src.contains("fn theme_state_json(&self) -> QString"),
-        "LinuxThemeController 必须有 theme_state_json getter"
+        scheme.is_object(),
+        "light 模式下 scheme 必须是合法 JSON 对象"
     );
-    // theme_state_json 应该从 cached_state/state() 读取
-    let marker = "fn theme_state_json(&self) -> QString";
-    let marker_pos = src.find(marker).expect("theme_state_json getter 必须存在");
-    let window = function_window(&src, marker, 1200);
-    // getter 应该同时包含 is_dark 和 scheme
-    let has_is_dark = window.contains("is_dark");
-    let has_scheme = window.contains("scheme");
-    let uses_cached_state = window.contains("self.state()") || window.contains("cached_state");
-    assert!(
-        has_is_dark && has_scheme,
-        "theme_state_json 必须同时包含 is_dark 和 scheme"
-    );
-    assert!(
-        uses_cached_state,
-        "theme_state_json 必须从 cached_state/state() 一次性读取，不能分别 borrow"
-    );
-    println!(
-        "[BEHAVIOR_VERIFY] theme_state_json 统一体: is_dark={} scheme={} uses_cached_state={}",
-        has_is_dark, has_scheme, uses_cached_state
-    );
+    println!("[BEHAVIOR_VERIFY] light: is_dark=false, scheme is valid JSON object");
 }
 
 // =========================================================================
-// 行为守卫 3: rebuild_resolved_state 从同一份快照一次性解析
+// 行为守卫 3: system 模式 + set_system_is_dark → payload 整体切换
 // =========================================================================
 
-/// `rebuild_resolved_state` 必须从同一份 `DomainSnapshot` 一次性解析
-/// `appearance_mode`、`system_is_dark`、`is_dark`、`scheme`，避免双状态机。
 #[test]
-fn qt_theme_rebuild_resolved_state_uses_single_snapshot() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "fn rebuild_resolved_state(&self) -> ResolvedThemeState";
-    let window = function_window(&src, marker, 3000);
-    // 必须从 self.snap() 获取 DomainSnapshot
-    let uses_snap = window.contains("self.snap()");
-    // 必须调用 compute_is_dark
-    let calls_compute = window.contains("compute_is_dark");
-    // 必须 drop snapshot 后再 borrow AppBackend
-    let drops_before_borrow = window.contains("drop(s)");
-    // 必须返回 ResolvedThemeState
-    let returns_state = window.contains("ResolvedThemeState {");
+fn qt_theme_system_mode_payload_switches_with_system_is_dark() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+    ctrl.set_appearance_mode("system".into());
+
+    // system + sys_dark=false → is_dark=false
+    ctrl.set_system_is_dark(false);
+    let json1: String = ctrl.theme_state_json().into();
+    let v1: serde_json::Value = serde_json::from_str(&json1).expect("valid json");
+    assert_eq!(
+        v1["is_dark"].as_bool(),
+        Some(false),
+        "system + sys_dark=false → is_dark=false"
+    );
+
+    // system + sys_dark=true → is_dark=true
+    ctrl.set_system_is_dark(true);
+    let json2: String = ctrl.theme_state_json().into();
+    let v2: serde_json::Value = serde_json::from_str(&json2).expect("valid json");
+    assert_eq!(
+        v2["is_dark"].as_bool(),
+        Some(true),
+        "system + sys_dark=true → is_dark=true"
+    );
+
+    // scheme 必须随 is_dark 一起变化（同一份 payload，合法 JSON 对象）
     assert!(
-        uses_snap && calls_compute && drops_before_borrow && returns_state,
-        "rebuild_resolved_state 必须: (1) 从 self.snap() 获取 DomainSnapshot, \
-         (2) 调用 compute_is_dark, (3) drop snapshot 后再 borrow AppBackend, \
-         (4) 返回 ResolvedThemeState。缺失任一意味着双状态机或 borrow 冲突。"
+        v1["scheme"].is_object() && v2["scheme"].is_object(),
+        "system 模式下 scheme 必须始终是合法 JSON 对象"
     );
-    println!(
-        "[BEHAVIOR_VERIFY] rebuild_resolved_state 单快照: snap={} compute={} drop={} returns={}",
-        uses_snap, calls_compute, drops_before_borrow, returns_state
-    );
+    println!("[BEHAVIOR_VERIFY] system: payload switches is_dark + scheme together");
 }
 
 // =========================================================================
 // 行为守卫 4: compute_is_dark 三值匹配
 // =========================================================================
 
-/// `compute_is_dark` 必须对 "dark" 返回 true，"light" 返回 false，
-/// "system" 返回 sys_dark。不允许有第四种分支。
 #[test]
 fn qt_theme_compute_is_dark_three_way_match() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "fn compute_is_dark(mode: &str, sys_dark: bool) -> bool";
-    let has_fn = src.contains(marker);
-    assert!(has_fn, "compute_is_dark 必须存在且签名匹配");
-    let window = function_window(&src, marker, 500);
-    // 三值 match: "dark" => true, "light" => false, _ => sys_dark
-    let has_dark_true = window.contains("\"dark\"") && window.contains("true");
-    let has_light_false = window.contains("\"light\"") && window.contains("false");
-    let has_fallback = window.contains("sys_dark");
-    assert!(
-        has_dark_true && has_light_false && has_fallback,
-        "compute_is_dark 必须: dark=>true, light=>false, _=>sys_dark"
+    ensure_qt_application();
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("dark", false),
+        true,
+        "compute_is_dark(dark, _) == true"
     );
-    println!(
-        "[BEHAVIOR_VERIFY] compute_is_dark: dark_true={} light_false={} fallback={}",
-        has_dark_true, has_light_false, has_fallback
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("dark", true),
+        true,
+        "compute_is_dark(dark, _) == true"
     );
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("light", false),
+        false,
+        "compute_is_dark(light, _) == false"
+    );
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("light", true),
+        false,
+        "compute_is_dark(light, _) == false"
+    );
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("system", false),
+        false,
+        "compute_is_dark(system, false) == false"
+    );
+    assert_eq!(
+        LinuxThemeController::compute_is_dark("system", true),
+        true,
+        "compute_is_dark(system, true) == true"
+    );
+    println!("[BEHAVIOR_VERIFY] compute_is_dark: dark=>true, light=>false, system=>sys_dark");
 }
 
 // =========================================================================
-// 行为守卫 5: set_system_is_dark 只在 system 模式下发 scheme_changed
+// 行为守卫 5: theme_state_json 始终是合法 JSON，包含 is_dark 和 scheme
 // =========================================================================
 
-/// `set_system_is_dark` 必须只在 `appearance_mode == "system"` 时
-/// 发出 `scheme_changed` 信号，避免用户选了 light/dark 后系统变化
-/// 重新解释用户偏好。
 #[test]
-fn qt_theme_set_system_is_dark_only_emits_for_system_mode() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "fn set_system_is_dark(&mut self, val: bool)";
-    let window = function_window(&src, marker, 1500);
-    // 必须检查 appearance_mode == "system"
-    let checks_system_mode = window.contains("\"system\"");
-    // 必须有条件发射 scheme_changed
-    let has_conditional_emit = window.contains("should_emit") || window.contains("if mode ==");
-    // 必须始终重建缓存
-    let always_rebuilds = window.contains("rebuild_resolved_state");
-    assert!(
-        checks_system_mode && has_conditional_emit && always_rebuilds,
-        "set_system_is_dark 必须: (1) 检查 appearance_mode == \"system\", \
-         (2) 只在 system 模式下发 scheme_changed, (3) 始终重建缓存"
-    );
-    println!(
-        "[BEHAVIOR_VERIFY] set_system_is_dark: checks_system={} conditional_emit={} always_rebuild={}",
-        checks_system_mode, has_conditional_emit, always_rebuilds
-    );
-}
+fn qt_theme_state_json_always_valid_with_is_dark_and_scheme() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
 
-// =========================================================================
-// 行为守卫 6: set_appearance_mode 先写设置再重建缓存
-// =========================================================================
-
-/// `set_appearance_mode` 必须先写 AppBackend 设置，再重建缓存，
-/// 最后发 scheme_changed。不允许跳过设置写入或缓存重建。
-#[test]
-fn qt_theme_set_appearance_mode_writes_setting_rebuilds_cache() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "fn set_appearance_mode(&mut self, val: QString)";
-    let window = function_window(&src, marker, 1200);
-    // 必须调用 app.set_setting_appearance_mode
-    let writes_setting = window.contains("set_setting_appearance_mode");
-    // 必须重建缓存
-    let rebuilds_cache = window.contains("rebuild_resolved_state");
-    // 必须发 scheme_changed
-    let emits_signal = window.contains("self.scheme_changed()");
-    assert!(
-        writes_setting && rebuilds_cache && emits_signal,
-        "set_appearance_mode 必须: (1) 写 AppBackend 设置, (2) 重建缓存, (3) 发 scheme_changed"
-    );
-    println!(
-        "[BEHAVIOR_VERIFY] set_appearance_mode: writes={} rebuilds={} emits={}",
-        writes_setting, rebuilds_cache, emits_signal
-    );
-}
-
-// =========================================================================
-// 行为守卫 7: ResolvedThemeState 缓存结构
-// =========================================================================
-
-/// `ResolvedThemeState` 必须包含 appearance_mode、system_is_dark、
-/// is_dark、color_source、selected_palette_id、selected_builtin_theme_id、
-/// scheme_json 七个字段，从同一份快照一次性构造。
-#[test]
-fn qt_theme_resolved_state_has_all_seven_fields() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "struct ResolvedThemeState";
-    let has_struct = src.contains(marker);
-    assert!(has_struct, "ResolvedThemeState 结构体必须存在");
-    let window = function_window(&src, marker, 800);
-    let fields = [
-        "appearance_mode:",
-        "system_is_dark:",
-        "is_dark:",
-        "color_source:",
-        "selected_palette_id:",
-        "selected_builtin_theme_id:",
-        "scheme_json:",
-    ];
-    for field in &fields {
+    for mode in &["dark", "light", "system"] {
+        ctrl.set_appearance_mode((*mode).into());
+        let json: String = ctrl.theme_state_json().into();
+        let v: serde_json::Value =
+            serde_json::from_str(&json).unwrap_or_else(|_| panic!("{} 模式下 JSON 合法", mode));
         assert!(
-            window.contains(field),
-            "ResolvedThemeState 缺少字段: {}",
-            field
+            v.get("is_dark").is_some(),
+            "{} 模式下 JSON 必须有 is_dark 顶层 key",
+            mode
+        );
+        assert!(
+            v.get("scheme").is_some(),
+            "{} 模式下 JSON 必须有 scheme 顶层 key",
+            mode
+        );
+        assert!(
+            v["is_dark"].is_boolean(),
+            "{} 模式下 is_dark 必须是 bool",
+            mode
+        );
+        assert!(
+            v["scheme"].is_object(),
+            "{} 模式下 scheme 必须是 object",
+            mode
         );
     }
-    println!("[BEHAVIOR_VERIFY] ResolvedThemeState 七字段完整");
+    println!("[BEHAVIOR_VERIFY] theme_state_json: always valid JSON with is_dark + scheme");
 }
 
 // =========================================================================
-// 行为守卫 8: 主题状态不依赖运行时 theme_mode 第二套判断
+// 行为守卫 6: appearance_mode 非法值回退到 system
 // =========================================================================
 
-/// `LinuxThemeController` 不应有 `theme_mode` 相关字段或判断。
-/// 运行时只认 `appearance_mode`，`theme_mode` 只能用于一次性迁移。
 #[test]
-fn qt_theme_no_runtime_theme_mode_second_source() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    // 不应有 theme_mode 字段
-    let has_theme_mode_field = src.contains("theme_mode:");
-    assert!(
-        !has_theme_mode_field,
-        "LinuxThemeController 不应有 theme_mode 字段，运行时只认 appearance_mode"
+fn qt_theme_appearance_mode_invalid_falls_back_to_system() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+    // 非法值 "purple" 应被 set_setting_appearance_mode 归一为 "system"
+    ctrl.set_appearance_mode("purple".into());
+    let mode: String = ctrl.appearance_mode().into();
+    assert_eq!(
+        mode, "system",
+        "非法 appearance_mode 必须回退到 system，实际: {}",
+        mode
     );
-    // 不应有 setting_theme_mode
-    let has_setting_theme_mode = src.contains("setting_theme_mode");
-    assert!(
-        !has_setting_theme_mode,
-        "LinuxThemeController 不应引用 setting_theme_mode"
-    );
-    println!("[BEHAVIOR_VERIFY] 无运行时 theme_mode 第二套来源");
+    println!("[BEHAVIOR_VERIFY] appearance_mode invalid → fallback to system");
 }
 
 // =========================================================================
-// 行为守卫 9: scheme_json 来自 Core ThemeColorScheme serde 序列化
+// 行为守卫 7: rebuild_resolved_state 返回七字段完整的 ResolvedThemeState
 // =========================================================================
 
-/// `rebuild_resolved_state` 中 scheme_json 必须来自 Core 的
-/// `ThemeColorScheme` serde 序列化（snake_case key），不允许手写 JSON。
 #[test]
-fn qt_theme_scheme_json_from_core_dto_serialization() {
-    let src = read_src("src/backend/linux_theme_controller.rs");
-    let marker = "fn rebuild_resolved_state(&self) -> ResolvedThemeState";
-    let window = function_window(&src, marker, 5000);
-    // 必须用 serde_json::to_string 序列化 scheme
-    let uses_serde = window.contains("serde_json::to_string");
-    // 必须处理 dark/light 两种 scheme 选择
-    let handles_dark_light = window.contains("is_dark") && window.contains("dark_scheme");
-    // 必须有 fallback（scheme 为空时的处理）
-    let has_fallback = window.contains("\"{}\"") || window.contains("None =>");
-    assert!(
-        uses_serde && handles_dark_light && has_fallback,
-        "scheme_json 必须: (1) 用 serde_json::to_string 序列化 Core DTO, \
-         (2) 按 is_dark 选择 dark_scheme/light_scheme, (3) 有 fallback"
-    );
+fn qt_theme_rebuild_resolved_state_has_all_seven_fields() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let ctrl = LinuxThemeController::new(app);
+    let state: ResolvedThemeState = ctrl.rebuild_resolved_state();
+    // 七字段完整 — 通过访问每个字段验证存在性
+    let _appearance_mode: &String = &state.appearance_mode;
+    let _system_is_dark: &bool = &state.system_is_dark;
+    let _is_dark: &bool = &state.is_dark;
+    let _color_source: &String = &state.color_source;
+    let _selected_palette_id: &String = &state.selected_palette_id;
+    let _selected_builtin_theme_id: &String = &state.selected_builtin_theme_id;
+    let _scheme_json: &String = &state.scheme_json;
+    // scheme_json 必须是合法 JSON 或 "{}"
+    let _: serde_json::Value =
+        serde_json::from_str(&state.scheme_json).expect("scheme_json 必须是合法 JSON");
     println!(
-        "[BEHAVIOR_VERIFY] scheme_json from Core DTO: serde={} dark_light={} fallback={}",
-        uses_serde, handles_dark_light, has_fallback
+        "[BEHAVIOR_VERIFY] ResolvedThemeState 七字段完整: appearance_mode={} is_dark={} scheme_json_len={}",
+        state.appearance_mode, state.is_dark, state.scheme_json.len()
     );
 }
 
 // =========================================================================
-// 行为守卫 10: QML 只绑定 themeStateJson 一个属性（完整行为链）
+// 行为守卫 8: dark/light 切换后 is_dark 真实变化（不是缓存陈旧值）
 // =========================================================================
 
-/// main.qml 必须只绑定 themeStateJson ← themeController，
-/// 不再分开绑定 isDark 和 resolvedSchemeJson。
 #[test]
-fn qt_theme_qml_binds_single_theme_state_property() {
-    let src = read_src("qml/main.qml");
-    let binds_theme_state = src.contains("themeStateJson: themeController");
-    let no_separate_is_dark = !src.contains("isDark: themeController");
-    let no_separate_scheme = !src.contains("resolvedSchemeJson: themeController");
-    assert!(
-        binds_theme_state && no_separate_is_dark && no_separate_scheme,
-        "main.qml 必须只绑定 themeStateJson，不应分开绑定 isDark 和 resolvedSchemeJson"
+fn qt_theme_dark_light_switch_is_dark_actually_changes() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+
+    ctrl.set_appearance_mode("dark".into());
+    let dark_is_dark = ctrl.is_dark();
+    assert!(dark_is_dark, "dark → is_dark=true");
+
+    ctrl.set_appearance_mode("light".into());
+    let light_is_dark = ctrl.is_dark();
+    assert!(!light_is_dark, "light → is_dark=false");
+
+    assert_ne!(
+        dark_is_dark, light_is_dark,
+        "dark/light 切换后 is_dark 必须真实变化"
     );
-    println!("[BEHAVIOR_VERIFY] QML 单属性绑定: themeStateJson={} separate_isDark={} separate_scheme={}",
-        binds_theme_state, no_separate_is_dark, no_separate_scheme);
+    println!("[BEHAVIOR_VERIFY] dark/light switch: is_dark actually changes");
 }
 
 // =========================================================================
-// 行为守卫 11: DesignTokens 从同一份 JSON 解析 isDark 和 scheme
+// 行为守卫 9: set_system_is_dark 在非 system 模式下不发 scheme_changed
+//              （通过 is_dark 不变验证 — 用户选了 dark/light 后系统变化不重新解释）
 // =========================================================================
 
-/// DesignTokens.qml 必须从 _themeState（同一份 themeStateJson）同时
-/// 解析 isDark 和 scheme，不允许分开读取。
 #[test]
-fn qt_theme_design_tokens_from_single_json() {
-    let src = read_src("qml/DesignTokens.qml");
-    let has_theme_state = src.contains("_themeState");
-    let reads_is_dark = src.contains("_themeState.is_dark");
-    let reads_scheme = src.contains("_themeState.scheme");
-    let no_resolved_scheme_json = !src.contains("property string resolvedSchemeJson");
+fn qt_theme_set_system_is_dark_does_not_override_user_choice() {
+    ensure_qt_application();
+    let app = AppRef::default();
+    let mut ctrl = LinuxThemeController::new(app);
+    ctrl.reload();
+
+    // 用户明确选 dark
+    ctrl.set_appearance_mode("dark".into());
+    assert!(ctrl.is_dark(), "dark → is_dark=true");
+
+    // 系统变 light — 不应改变用户选的 dark
+    ctrl.set_system_is_dark(false);
     assert!(
-        has_theme_state && reads_is_dark && reads_scheme && no_resolved_scheme_json,
-        "DesignTokens 必须从 _themeState 同一对象读取 isDark 和 scheme，不应有 resolvedSchemeJson"
+        ctrl.is_dark(),
+        "用户选 dark 后，系统变 light 不应改变 is_dark"
     );
-    println!(
-        "[BEHAVIOR_VERIFY] DesignTokens 单 JSON 源: state={} isDark={} scheme={} no_separate={}",
-        has_theme_state, reads_is_dark, reads_scheme, no_resolved_scheme_json
+
+    // 用户明确选 light
+    ctrl.set_appearance_mode("light".into());
+    assert!(!ctrl.is_dark(), "light → is_dark=false");
+
+    // 系统变 dark — 不应改变用户选的 light
+    ctrl.set_system_is_dark(true);
+    assert!(
+        !ctrl.is_dark(),
+        "用户选 light 后，系统变 dark 不应改变 is_dark"
     );
+    println!("[BEHAVIOR_VERIFY] set_system_is_dark does not override user choice");
 }
