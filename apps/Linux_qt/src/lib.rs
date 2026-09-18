@@ -72,6 +72,9 @@
 #![allow(deprecated)]
 #![recursion_limit = "8192"]
 
+/// Issue #707 评论 5723616999: main.rs 的 cpp! 块和调用移到本模块，
+/// 让 build.rs 只 build lib.rs 一次就能覆盖所有 cpp! 宏。
+pub mod app_main_cpp;
 pub mod backend;
 pub mod editor;
 pub mod platform;
@@ -80,6 +83,3 @@ pub mod starmap_bridge;
 pub mod sujian_editor_item;
 pub mod sync_bridge;
 pub mod writing_bridge;
-/// Issue #707 评论 5723616999: main.rs 的 cpp! 块和调用移到本模块，
-/// 让 build.rs 只 build lib.rs 一次就能覆盖所有 cpp! 宏。
-pub mod app_main_cpp;

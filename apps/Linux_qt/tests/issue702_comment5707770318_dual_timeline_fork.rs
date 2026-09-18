@@ -129,7 +129,9 @@ fn fix2_cursor_sample_outcome_has_coordinated_variant() {
         src.contains("Coordinated { x: f64, y: f64, h: f64 }"),
         "修复点2: Coordinated 变体应携带 x/y/h 三元组"
     );
-    println!("[BUGFIX_VERIFY] fix2: CursorSampleOutcome 有 Coordinated 变体，正文协同帧不再落进 Idle");
+    println!(
+        "[BUGFIX_VERIFY] fix2: CursorSampleOutcome 有 Coordinated 变体，正文协同帧不再落进 Idle"
+    );
 }
 
 // =========================================================================
@@ -190,7 +192,8 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
         "修复点4: build_render_plan_full 必须存在"
     );
     // cursor_sample_outcome 初始化为 Idle
-    let init_marker = "let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;";
+    let init_marker =
+        "let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;";
     assert!(
         src.contains(init_marker),
         "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"

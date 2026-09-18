@@ -111,9 +111,9 @@ use qmetaobject::QString;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use sujian_linux_qt::app_main_cpp;
 use sujian_linux_qt::backend;
 use sujian_linux_qt::sujian_editor_item;
-use sujian_linux_qt::app_main_cpp;
 
 use backend::app_backend::{debug_error_static, debug_log_static, debug_warn_static};
 use backend::diagnostics;

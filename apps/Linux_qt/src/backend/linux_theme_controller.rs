@@ -313,8 +313,7 @@ impl LinuxThemeController {
         );
         // scheme 为 None 时序列化为 null，QML 侧 fallback 到 isDark 派生的固定色。
         let scheme_value = match state.scheme {
-            Some(ref s) => serde_json::to_value(s)
-                .unwrap_or(serde_json::Value::Null),
+            Some(ref s) => serde_json::to_value(s).unwrap_or(serde_json::Value::Null),
             None => serde_json::Value::Null,
         };
         obj.insert("scheme".to_string(), scheme_value);

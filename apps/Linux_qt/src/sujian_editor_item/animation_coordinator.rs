@@ -3941,7 +3941,8 @@ mod tests {
             ],
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key = coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None, 0);
+        let key =
+            coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None, 0);
         assert!(key.is_some());
         let tx = coord
             .prepared_queue

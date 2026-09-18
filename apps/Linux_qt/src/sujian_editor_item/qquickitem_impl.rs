@@ -70,10 +70,7 @@ impl QQuickItem for SujianEditorItem {
         // - true->false（insert 结束）：重置 blink_last_toggle = frame_now / blink_visible = true，
         //   重新开始正常 blink，不继承事务开始前碰巧为 false 的旧相位。
         // 与 build_cursor_render_state_for_frame 用同一个 has_active_insert 判断，保持一致。
-        let cur_has_active_insert = self
-            .pipeline
-            .animation_coordinator()
-            .has_active_insert();
+        let cur_has_active_insert = self.pipeline.animation_coordinator().has_active_insert();
         if cur_has_active_insert != self.prev_has_active_insert {
             if cur_has_active_insert {
                 // false->true: insert 开始，光标从可见状态开始。

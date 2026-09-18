@@ -11,7 +11,7 @@ use qmetaobject::QString;
 use std::ffi::CStr;
 use std::os::raw::c_char;
 
-use crate::backend::app_backend::{debug_log_static};
+use crate::backend::app_backend::debug_log_static;
 use crate::backend::diagnostics;
 
 cpp! {{

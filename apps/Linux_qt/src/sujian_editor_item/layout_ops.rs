@@ -451,8 +451,11 @@ impl SujianEditorItem {
         // hit_test / index_at_line_x 同一代 QTextLayout。
         // 去掉 lines 参数:snapshot 和 lines 同源,不需要外部传入做 debug_assert。
         let snapshot = self.current_render_layout_snapshot();
-        self.editor_layout
-            .cursor_line_and_x(&snapshot, self.buffer.cursor, self.cursor_ctrl.affinity)
+        self.editor_layout.cursor_line_and_x(
+            &snapshot,
+            self.buffer.cursor,
+            self.cursor_ctrl.affinity,
+        )
     }
 
     /// Issue #705 评论 5716410988: 光标正向/反向几何的唯一入口。

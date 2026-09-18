@@ -137,11 +137,8 @@ fn qt_cursor_editor_layout_snapshot_roundtrip_all_text_types() {
             offsets.push(text.len());
 
             for byte_off in &offsets {
-                let line_x = layout.cursor_line_and_x(
-                    &snapshot,
-                    *byte_off,
-                    CaretAffinity::Downstream,
-                );
+                let line_x =
+                    layout.cursor_line_and_x(&snapshot, *byte_off, CaretAffinity::Downstream);
                 assert!(
                     line_x.is_some(),
                     "cursor_line_and_x 必须返回 Some: text={:?} byte_off={}",
@@ -166,9 +163,7 @@ fn qt_cursor_editor_layout_snapshot_roundtrip_all_text_types() {
                 );
             }
         }
-        println!(
-            "[BEHAVIOR_VERIFY] EditorLayout::snapshot round-trip: all text types pass"
-        );
+        println!("[BEHAVIOR_VERIFY] EditorLayout::snapshot round-trip: all text types pass");
     });
 }
 
@@ -185,16 +180,15 @@ fn qt_cursor_editor_layout_roundtrip_at_origin() {
         assert!(line_x.is_some(), "cursor_line_and_x(0) 必须返回 Some");
         let (line_idx, x) = line_x.unwrap();
         assert_eq!(line_idx, 0, "cursor=0 在第 0 行");
-        assert!(
-            x.abs() < 0.5,
-            "cursor=0 的 x 应回近 0，实际: {:.4}",
-            x
-        );
+        assert!(x.abs() < 0.5, "cursor=0 的 x 应回近 0，实际: {:.4}", x);
 
         let line = &snapshot.lines[line_idx];
         let back = layout.index_at_line_x(&snapshot, line, x);
         assert_eq!(back, 0, "xToCursor(x=0) 应回 0（行首）");
-        println!("[BEHAVIOR_VERIFY] EditorLayout round-trip at origin: x={:.4} → cursor={}", x, back);
+        println!(
+            "[BEHAVIOR_VERIFY] EditorLayout round-trip at origin: x={:.4} → cursor={}",
+            x, back
+        );
     });
 }
 
@@ -216,7 +210,11 @@ fn qt_cursor_editor_layout_cursor_to_x_monotonic_non_decreasing() {
 
         for off in &offsets {
             let line_x = layout.cursor_line_and_x(&snapshot, *off, CaretAffinity::Downstream);
-            assert!(line_x.is_some(), "cursor_line_and_x 必须返回 Some: off={}", off);
+            assert!(
+                line_x.is_some(),
+                "cursor_line_and_x 必须返回 Some: off={}",
+                off
+            );
             let (_, x) = line_x.unwrap();
             assert!(
                 x >= prev_x - 0.5,
@@ -241,7 +239,8 @@ fn qt_cursor_editor_layout_cursor_to_x_monotonic_non_decreasing() {
 fn qt_cursor_editor_layout_soft_wrap_roundtrip() {
     run_on_qt_thread(|| {
         // 长文本，width 设窄，强制软换行
-        let text = "重复字符超过一行宽度重复字符超过一行宽度重复字符超过一行宽度重复字符超过一行宽度";
+        let text =
+            "重复字符超过一行宽度重复字符超过一行宽度重复字符超过一行宽度重复字符超过一行宽度";
         let mut layout = EditorLayout::default();
         let params = LayoutParams {
             width: 80.0, // 窄宽度，强制多行
@@ -321,10 +320,7 @@ fn qt_cursor_editor_layout_snapshot_and_geometry() {
         let text = "Hello\n世界\nWorld";
         let params = default_params();
         let snapshot = layout.snapshot(text, params, 1).clone();
-        assert!(
-            !snapshot.lines.is_empty(),
-            "snapshot 必须返回至少一行"
-        );
+        assert!(!snapshot.lines.is_empty(), "snapshot 必须返回至少一行");
         // hit_test 在第一行行首
         let (idx, _affinity) = layout.hit_test(&snapshot, 0.0, 0.0, 0.0);
         assert_eq!(idx, 0, "hit_test(0,0) 应回到文档起点");
@@ -339,17 +335,10 @@ fn qt_cursor_editor_layout_snapshot_and_geometry() {
 
         // cursor_line_and_x 在 cursor=0
         let line_x = layout.cursor_line_and_x(&snapshot, 0, CaretAffinity::Downstream);
-        assert!(
-            line_x.is_some(),
-            "cursor_line_and_x(0) 必须返回 Some"
-        );
+        assert!(line_x.is_some(), "cursor_line_and_x(0) 必须返回 Some");
         let (line_id, x) = line_x.unwrap();
         assert_eq!(line_id, 0, "cursor=0 在第 0 行");
-        assert!(
-            x.abs() < 0.5,
-            "cursor=0 的 x 应回近 0，实际: {:.4}",
-            x
-        );
+        assert!(x.abs() < 0.5, "cursor=0 的 x 应回近 0，实际: {:.4}", x);
         println!(
             "[BEHAVIOR_VERIFY] EditorLayout: {} lines, caret h={:.4}",
             snapshot.lines.len(),

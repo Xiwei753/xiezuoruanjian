@@ -650,9 +650,7 @@ impl PreparedTransactionQueue {
                 t.state != TextVisualTransactionState::Cancelled
                     && t.state != TextVisualTransactionState::Completed
             })
-            .find(|t| {
-                t.overlaps_byte_range(byte_start, byte_end) || t.is_composition()
-            })
+            .find(|t| t.overlaps_byte_range(byte_start, byte_end) || t.is_composition())
             .map(|t| t.key)
     }
 

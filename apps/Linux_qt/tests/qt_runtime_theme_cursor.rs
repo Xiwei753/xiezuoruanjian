@@ -27,8 +27,8 @@
 mod qt_runtime;
 
 use qt_runtime::run_on_qt_thread;
-use sujian_linux_qt::backend::{AppRef, LinuxThemeController};
 use sujian_linux_qt::backend::linux_theme_controller::ResolvedThemeState;
+use sujian_linux_qt::backend::{AppRef, LinuxThemeController};
 
 /// 构造一个已打开真实 data root 的 `AppRef`，使 `core_api()` 返回 `Some`。
 ///
@@ -94,10 +94,7 @@ fn qt_theme_dark_mode_is_dark_true_and_real_dark_scheme() {
         let on_surface = scheme["on_surface"]
             .as_str()
             .expect("dark scheme.on_surface 必须存在且为字符串");
-        assert!(
-            !on_surface.is_empty(),
-            "dark scheme.on_surface 不能为空"
-        );
+        assert!(!on_surface.is_empty(), "dark scheme.on_surface 不能为空");
         assert!(
             is_light_color(on_surface),
             "dark scheme.on_surface 必须是浅色文字（深色方案），实际: {}",
@@ -153,10 +150,7 @@ fn qt_theme_light_mode_is_dark_false_and_real_light_scheme() {
         let on_surface = scheme["on_surface"]
             .as_str()
             .expect("light scheme.on_surface 必须存在且为字符串");
-        assert!(
-            !on_surface.is_empty(),
-            "light scheme.on_surface 不能为空"
-        );
+        assert!(!on_surface.is_empty(), "light scheme.on_surface 不能为空");
         assert!(
             is_dark_color(on_surface),
             "light scheme.on_surface 必须是深色文字（浅色方案），实际: {}",
@@ -205,10 +199,7 @@ fn qt_theme_system_mode_payload_switches_with_system_is_dark() {
         let scheme1 = &v1["scheme"];
         assert!(scheme1.is_object(), "system+false scheme 必须是对象");
         let scheme1_obj = scheme1.as_object().expect("scheme1 is object");
-        assert!(
-            !scheme1_obj.is_empty(),
-            "system+false scheme 不能是空对象"
-        );
+        assert!(!scheme1_obj.is_empty(), "system+false scheme 不能是空对象");
         let on_surface1 = scheme1["on_surface"]
             .as_str()
             .expect("system+false scheme.on_surface 必须存在");
@@ -230,10 +221,7 @@ fn qt_theme_system_mode_payload_switches_with_system_is_dark() {
         let scheme2 = &v2["scheme"];
         assert!(scheme2.is_object(), "system+true scheme 必须是对象");
         let scheme2_obj = scheme2.as_object().expect("scheme2 is object");
-        assert!(
-            !scheme2_obj.is_empty(),
-            "system+true scheme 不能是空对象"
-        );
+        assert!(!scheme2_obj.is_empty(), "system+true scheme 不能是空对象");
         let on_surface2 = scheme2["on_surface"]
             .as_str()
             .expect("system+true scheme.on_surface 必须存在");
@@ -342,7 +330,9 @@ fn qt_theme_state_json_always_valid_with_is_dark_and_scheme() {
                 mode
             );
         }
-        println!("[BEHAVIOR_VERIFY] theme_state_json: always valid JSON with is_dark + non-empty scheme");
+        println!(
+            "[BEHAVIOR_VERIFY] theme_state_json: always valid JSON with is_dark + non-empty scheme"
+        );
     });
 }
 
@@ -387,16 +377,14 @@ fn qt_theme_rebuild_resolved_state_has_all_seven_fields() {
         let _selected_builtin_theme_id: &String = &state.selected_builtin_theme_id;
         // Issue #709 评论 issue-body-709: scheme 现在是 Option<ThemeColorSchemeDto>，
         // 不再是 scheme_json: String。直接断言 Some 且非空对象。
-        let scheme = state.scheme
+        let scheme = state
+            .scheme
             .as_ref()
             .expect("scheme 必须是 Some — core_api 必须已初始化并加载 builtin theme");
         // scheme 必须能序列化为合法 JSON 对象且非空
         let parsed: serde_json::Value =
             serde_json::to_value(scheme).expect("scheme 必须能序列化为 JSON");
-        assert!(
-            parsed.is_object(),
-            "scheme 必须是 JSON 对象"
-        );
+        assert!(parsed.is_object(), "scheme 必须是 JSON 对象");
         assert!(
             !parsed.as_object().map_or(true, |m| m.is_empty()),
             "scheme 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"

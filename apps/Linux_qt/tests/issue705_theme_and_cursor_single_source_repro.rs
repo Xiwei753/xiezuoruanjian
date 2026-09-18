@@ -65,8 +65,9 @@ fn issue705_guard_1c_app_backend_no_independent_theme_mode_field() {
 #[test]
 fn issue705_guard_2e_click_path_no_per_method_force_snap() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let force_snap_count =
-        src.matches("self.cursor_ctrl.force_snap_next = true;").count();
+    let force_snap_count = src
+        .matches("self.cursor_ctrl.force_snap_next = true;")
+        .count();
     assert!(
         force_snap_count <= 1,
         "鼠标点击路径不应有多个 per-method force_snap 分支（发现 {} 处）",

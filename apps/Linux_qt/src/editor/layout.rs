@@ -2450,8 +2450,7 @@ where
 
     fn qt_thread() -> &'static QtThreadHandle {
         QT_THREAD.get_or_init(|| {
-            let (sender, receiver) =
-                channel::<Box<dyn FnOnce() + Send + 'static>>();
+            let (sender, receiver) = channel::<Box<dyn FnOnce() + Send + 'static>>();
             std::thread::Builder::new()
                 .name("qt-test-thread".to_string())
                 .spawn(move || {
