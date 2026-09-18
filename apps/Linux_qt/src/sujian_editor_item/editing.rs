@@ -87,11 +87,22 @@ impl SujianEditorItem {
     /// 避免 CursorOnly 被低频 blink Timer 降成 ~4Hz。
     pub(crate) fn tick_cursor_animation(&mut self) {
         use animation_coordinator::CursorBlinkMode;
-        let blink_mode = if self.current_coordinated_text_cursor_animation_enabled
-            && self
-                .pipeline
-                .animation_coordinator_mut()
-                .has_active_insert()
+        // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
+        // 之前只用 has_active_insert() 判断 blink 抑制，只覆盖 Insert 事务，
+        // Delete/Composition 事务期间 blink 会正常闪烁，与正文动画不同帧。
+        // 改为 has_active_text_transaction() 覆盖所有正文事务类型。
+        // 同时，CursorOnly Tween（纯光标移动动画）期间也抑制 blink，
+        // 保证 caret 从 Tween 开始到结束持续可见，Tween 完成后再恢复正常 blink。
+        // 这消除"快速点击时光标动画概率消失"——之前 Tween 期间 blink 可能切到
+        // 隐藏半周期，opacity 为 0，看起来像"这次点击动画没触发"。
+        let has_active_text = self
+            .pipeline
+            .animation_coordinator_mut()
+            .has_active_text_transaction();
+        let has_cursor_only_tween = self.cursor_ctrl.animation.is_some();
+        let blink_mode = if (self.current_coordinated_text_cursor_animation_enabled
+            && has_active_text)
+            || has_cursor_only_tween
         {
             CursorBlinkMode::Suppressed
         } else {

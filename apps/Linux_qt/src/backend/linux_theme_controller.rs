@@ -387,20 +387,61 @@ impl LinuxThemeController {
         }
     }
 
+    /// Issue #710 评论 5731145076: 记录完整 resolved theme 诊断事件。
+    ///
+    /// 每次 appearance/source/builtin/palette/system dark 真正改变 resolved state 后，
+    /// 都记录完整 resolved theme，不要只有 reload() 才记。日志直接写出
+    /// appearance_mode、system_is_dark、is_dark、resolved_source、resolved_scheme_kind、
+    /// theme/palette id、surface、on_surface、on_surface_variant，便于定位深色模式
+    /// 文字仍为黑色等问题。scheme 为 None 时颜色字段写 `<none>`。
+    fn log_resolved_theme(
+        &self,
+        event_name: &str,
+        origin: writer_diagnostics::DiagnosticOrigin,
+        state: &ResolvedThemeState,
+    ) {
+        let is_dark_str = if state.is_dark { "true" } else { "false" };
+        let system_is_dark_str = if state.system_is_dark {
+            "true"
+        } else {
+            "false"
+        };
+        // scheme 为 None 时用 "<none>" 表示颜色字段缺失，便于诊断日志区分
+        // "scheme 未加载" 与 "scheme 加载成功但颜色为空"。
+        let (surface, on_surface, on_surface_variant) = match state.scheme {
+            Some(ref s) => (s.surface.as_str(), s.on_surface.as_str(), s.on_surface_variant.as_str()),
+            None => ("<none>", "<none>", "<none>"),
+        };
+        crate::backend::app_backend::record_struct_event(
+            origin,
+            event_name,
+            "theme",
+            &[
+                ("appearanceMode", &state.appearance_mode),
+                ("systemIsDark", system_is_dark_str),
+                ("isDark", is_dark_str),
+                ("resolvedSource", &state.resolved_source),
+                ("resolvedSchemeKind", &state.resolved_scheme_kind),
+                ("builtinThemeId", &state.selected_builtin_theme_id),
+                ("paletteId", &state.selected_palette_id),
+                ("surface", surface),
+                ("onSurface", on_surface),
+                ("onSurfaceVariant", on_surface_variant),
+            ],
+        );
+    }
+
     /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能直接调用。
     pub fn reload(&mut self) {
         // 主题解析（应用内部逻辑）→ origin=App。
         let state = self.rebuild_resolved_state();
         *self.cached_state.borrow_mut() = Some(state.clone());
-        let is_dark_str = if state.is_dark { "true" } else { "false" };
-        crate::backend::app_backend::record_struct_event(
-            writer_diagnostics::DiagnosticOrigin::App,
+        // Issue #710 评论 5731145076: reload() 记录完整 resolved theme，
+        // 不只记录 appearanceMode 和 isDark。
+        self.log_resolved_theme(
             "theme.resolve",
-            "theme",
-            &[
-                ("appearanceMode", &state.appearance_mode),
-                ("isDark", is_dark_str),
-            ],
+            writer_diagnostics::DiagnosticOrigin::App,
+            &state,
         );
         self.scheme_changed();
     }
@@ -418,7 +459,14 @@ impl LinuxThemeController {
             .with_app_mut(|app| app.set_setting_color_source(val))
             .is_ok()
         {
-            *self.cached_state.borrow_mut() = Some(self.rebuild_resolved_state());
+            let state = self.rebuild_resolved_state();
+            *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #710 评论 5731145076: color source 改变后记录完整 resolved theme。
+            self.log_resolved_theme(
+                "theme.color_source_resolved",
+                writer_diagnostics::DiagnosticOrigin::User,
+                &state,
+            );
             self.scheme_changed();
         }
     }
@@ -437,7 +485,14 @@ impl LinuxThemeController {
             .with_app_mut(|app| app.set_setting_appearance_mode(val))
             .is_ok()
         {
-            *self.cached_state.borrow_mut() = Some(self.rebuild_resolved_state());
+            let state = self.rebuild_resolved_state();
+            *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #710 评论 5731145076: appearance mode 改变后记录完整 resolved theme。
+            self.log_resolved_theme(
+                "theme.appearance_resolved",
+                writer_diagnostics::DiagnosticOrigin::User,
+                &state,
+            );
             self.scheme_changed();
         }
     }
@@ -458,7 +513,14 @@ impl LinuxThemeController {
                     "set_setting_color_source skipped due to borrow conflict",
                 );
             }
-            *self.cached_state.borrow_mut() = Some(self.rebuild_resolved_state());
+            let state = self.rebuild_resolved_state();
+            *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #710 评论 5731145076: builtin theme 改变后记录完整 resolved theme。
+            self.log_resolved_theme(
+                "theme.builtin_theme_resolved",
+                writer_diagnostics::DiagnosticOrigin::User,
+                &state,
+            );
             self.scheme_changed();
         }
     }
@@ -488,7 +550,14 @@ impl LinuxThemeController {
                 );
             }
         }
-        *self.cached_state.borrow_mut() = Some(self.rebuild_resolved_state());
+        let state = self.rebuild_resolved_state();
+        *self.cached_state.borrow_mut() = Some(state.clone());
+        // Issue #710 评论 5731145076: palette 改变后记录完整 resolved theme。
+        self.log_resolved_theme(
+            "theme.palette_resolved",
+            writer_diagnostics::DiagnosticOrigin::User,
+            &state,
+        );
         self.scheme_changed();
     }
 
@@ -516,7 +585,14 @@ impl LinuxThemeController {
         {
             // 始终重建缓存（current_system_is_dark 已写入 AppBackend，下次
             // getter 读取时缓存需反映最新值，即便 mode != "system" 不发信号）。
-            *self.cached_state.borrow_mut() = Some(self.rebuild_resolved_state());
+            let state = self.rebuild_resolved_state();
+            *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #710 评论 5731145076: system_is_dark 改变后记录完整 resolved theme。
+            self.log_resolved_theme(
+                "theme.system_is_dark_resolved",
+                writer_diagnostics::DiagnosticOrigin::System,
+                &state,
+            );
             if should_emit {
                 self.scheme_changed();
             }

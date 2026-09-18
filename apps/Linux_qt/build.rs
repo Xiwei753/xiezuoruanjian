@@ -556,6 +556,11 @@ fn main() {
 /// - RUSTC_VERSION：rustc 版本字符串，失败时 "unknown"
 /// - PACKAGE_TYPE：rpm/deb/AppImage/dev，默认 "dev"
 /// - BUILD_KEY：组合 `${appVersion}-${gitSha}-${packageType}-${buildProfile}` 格式
+///
+/// Issue #710 评论 5731145076: release 构建身份失败保护。
+/// 正式 release 包必须有有效 git sha，否则无法追源码。release 模式下
+/// git_sha 仍为 "unknown" 时直接 panic，不生成无法追源的正式包。
+/// debug 模式允许 "unknown"（本地无 git 环境的 dev 构建场景）。
 fn inject_build_env_vars() {
     println!("cargo:rerun-if-env-changed=SUJIAN_GIT_COMMIT_SHA");
     println!("cargo:rerun-if-env-changed=SUJIAN_PACKAGE_TYPE");
@@ -582,6 +587,18 @@ fn inject_build_env_vars() {
     } else {
         "debug"
     };
+
+    // Issue #710 评论 5731145076: release 构建身份失败保护。
+    // 正式 release 包必须有有效 git sha，否则无法追源码。release 模式下
+    // git_sha 仍为 "unknown" 时直接 panic，不生成无法追源的正式包。
+    // debug 模式允许 "unknown"（本地无 git 环境的 dev 构建场景）。
+    if git_sha == "unknown" && build_profile == "release" {
+        panic!(
+            "正式 release 包必须有有效 git sha，但 git_sha 为 \"unknown\"。\
+             请在 git 仓库内构建，或通过 SUJIAN_GIT_COMMIT_SHA 环境变量显式传入有效 sha。\
+             无法追源码的正式包不允许发布。"
+        );
+    }
 
     let rustc_version = Command::new("rustc")
         .arg("--version")

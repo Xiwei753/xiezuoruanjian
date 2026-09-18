@@ -873,7 +873,7 @@ impl LinuxEditorPipeline {
 
         if ctx.typing_animation_enabled && vt.is_some() && !ctx.is_scrolling {
             if let Some(ref mut vt) = vt {
-                let (affected_byte_start, affected_byte_end) = vt
+                let (raw_byte_start, raw_byte_end) = vt
                     .inserted_range
                     .or(vt.deleted_range)
                     .map(|r| (r.start().value(), r.end().value()))
@@ -897,6 +897,34 @@ impl LinuxEditorPipeline {
                         }
                         (min_b.min(max_b), max_b)
                     });
+
+                // Issue #710 评论 5731145076 症状四/五: 当事务包含 newline（插入 "\n"
+                // 或删除 "\n"）时，affected_byte range 不能只覆盖 "\n" 的 1 byte，
+                // 必须扩展到换行后所有受重排影响的段落边界。
+                // 之前只取 "\n" 的 1 byte range，导致 prepare_affected_paragraphs_visual_snapshot
+                // 只排版 "\n" 所在段落，换行后的行重排依赖 reflow 但 reflow 只处理
+                // unchanged material，文字闪烁/光标乱闪。
+                // 现在用 compute_affected_paragraph_ranges 按 old/new text 段落边界扩展，
+                // 确保拆开/合并段落的两边 visual lines 都进入 diff。
+                let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
+                    layout::compute_affected_paragraph_ranges(
+                        &vt.old_text,
+                        &vt.new_text,
+                        raw_byte_start,
+                        raw_byte_end,
+                    );
+                // affected_byte_start/end 用于 prepare_document_visual_snapshot_scoped
+                // 和 prepare_affected_paragraphs_visual_snapshot，它们排版 new text，
+                // 所以用 new 侧的段落边界。old 侧的段落边界由 compare_old_new_visual_lines
+                // 和 fallback 路径自行处理（compare_old_new_visual_lines 用 inserted_range/
+                // deleted_range 分别在 old/new 坐标系找受影响行）。
+                // 但为了确保 old snapshot 也覆盖完整段落，fallback 路径用 old 侧边界。
+                // 这里取 new 侧边界作为 affected_byte_start/end（用于 new_doc_snapshot 排版），
+                // old 侧边界单独传给 fallback 路径。
+                let affected_byte_start = new_affected_start;
+                let affected_byte_end = new_affected_end;
+                let old_affected_byte_start = old_affected_start;
+                let old_affected_byte_end = old_affected_end;
 
                 // Issue #658 评论 5624570557 问题 1: 从 pipeline 获取 old current prepared layout 句柄，
                 // 不再重新排版 old text。
@@ -960,13 +988,14 @@ impl LinuxEditorPipeline {
                     // 比较 old/new lines 获取受影响的 line_ids（old 侧和 new 侧）
                     // Issue #658 评论 5626628570: compare_old_new_visual_lines 返回 VisualLineDiff，
                     // 把行分成需要重新栅格化的 raster 行和可复用纹理的 reusable_move_pairs。
+                    // Issue #710 评论 5731145076 症状四/五: 传扩展后的段落边界，
+                    // 确保换行前后的行都被标记为 raster。之前只传原始 byte range，
+                    // 对于 "\n" 插入/删除，只覆盖 1 byte，换行前后的行可能被漏掉。
                     let diff = layout::compare_old_new_visual_lines(
                         handle.lines,
                         &new_doc_snapshot.visual_lines,
-                        vt.inserted_range
-                            .map(|r| (r.start().value(), r.end().value())),
-                        vt.deleted_range
-                            .map(|r| (r.start().value(), r.end().value())),
+                        vt.inserted_range.map(|_| (new_affected_start, new_affected_end)),
+                        vt.deleted_range.map(|_| (old_affected_start, old_affected_end)),
                     );
 
                     // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）
@@ -1109,8 +1138,10 @@ impl LinuxEditorPipeline {
                         ctx.bounding_width,
                         ctx.dpr,
                         &ctx.text_color,
-                        affected_byte_start,
-                        affected_byte_end,
+                        // Issue #710 评论 5731145076 症状四/五: fallback 路径排版
+                        // old text，用 old 侧段落边界，确保换行前段落完整排版。
+                        old_affected_byte_start,
+                        old_affected_byte_end,
                         prev_new_snapshot,
                         fallback_old_generation,
                         true,

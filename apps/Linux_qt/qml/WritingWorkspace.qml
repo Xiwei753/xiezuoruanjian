@@ -913,7 +913,11 @@ Rectangle {
                             ? Math.max(0, (settingsBackend.setting_font_size || 16) * settingsBackend.setting_auto_indent_width)
                             : 0
                         padding: dt.sp16
-                        text_color: editorController.colorToHex(dt.editorText, dt.textPrimaryHex)
+                        // Issue #710 评论 5731145076: text_color 只绑定 dt.editorText，
+                        // 去掉 fallback 到 dt.textPrimaryHex 的第二套逻辑。
+                        // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
+                        // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
+                        text_color: editorController.colorToHex(dt.editorText)
                         selection_color: editorController.colorToHex(dt.primary, dt.primaryFallback)
                         selected_text_color: editorController.colorToHex(dt.selectedText, dt.primaryContainerFallback)
                         cursor_color: editorController.colorToHex(dt.primary, dt.primaryFallback)

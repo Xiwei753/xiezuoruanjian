@@ -444,6 +444,18 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// 前检查到不一致时跳过 caret 驱动（文字事务继续播自己的 glyph/reflow，
     /// 但不再驱动 caret）。
     pub cursor_owner_epoch: u64,
+    /// Issue #710 评论 5731145076 症状五/六: 事务的视觉 affected byte range。
+    ///
+    /// 基于段落边界扩展后的 byte range，而非原始的 inserted_range/deleted_range。
+    /// 用于判断视觉区域重叠——newline 这种"改动 byte 很小、视觉影响很大"的事务，
+    /// 原始 byte range 很小，但视觉 affected range 覆盖整个段落。
+    ///
+    /// `find_conflicting_transaction` 用此字段判断冲突：如果新事务的
+    /// visual_affected_byte_range 与现有事务的 visual_affected_byte_range 重叠，
+    /// 现有事务被 rebase，保证同一视觉区域只能有一个当前 owner。
+    ///
+    /// `None` 表示事务没有视觉 affected region（如 CursorOnly）。
+    pub visual_affected_byte_range: Option<(usize, usize)>,
 }
 
 impl PreparedTextVisualTransaction {
@@ -538,6 +550,14 @@ impl PreparedTextVisualTransaction {
                 .static_patches
                 .iter()
                 .any(|p| p.intersects(byte_start, byte_end))
+            // Issue #710 评论 5731145076 症状六: 也检查 visual_affected_byte_range。
+            // newline 这种"改动 byte 很小、视觉影响很大"的事务，units 的 byte range
+            // 可能不与新事务重叠，但视觉区域重叠。用 visual_affected_byte_range
+            // 检测这种冲突，保证同一视觉区域只能有一个当前 owner。
+            || self
+                .visual_affected_byte_range
+                .map(|(s, e)| e > byte_start && s < byte_end)
+                .unwrap_or(false)
     }
 
     pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {

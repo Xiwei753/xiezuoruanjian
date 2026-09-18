@@ -118,7 +118,17 @@ cp "${SCRIPT_DIR}/sujian.spec" "${RPM_TOPDIR}/SPECS/${NAME}.spec"
 # ---------------------------------------------------------------------------
 # RPM staging 排除了 .git，build.rs 无法在 rpmbuild 内获取 git SHA。
 # 在仓库根目录先取 SHA，通过环境变量传给 rpmbuild/Cargo。
-SUJIAN_GIT_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+# Issue #710 评论 5731145076: git sha 不能再正常产出 unknown。
+# 先尝试 git rev-parse，如果失败则报错退出，不 fallback 到 unknown。
+# 无法追源码的正式 RPM 包不允许发布。
+SUJIAN_GIT_COMMIT_SHA="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null)"
+if [ -z "${SUJIAN_GIT_COMMIT_SHA}" ] || [ "${SUJIAN_GIT_COMMIT_SHA}" = "unknown" ]; then
+    echo "错误: 无法从 git 仓库获取有效的 commit SHA。" >&2
+    echo "  仓库根目录: ${REPO_ROOT}" >&2
+    echo "  RPM 正式包必须有有效 git sha 以便追源码，不允许 fallback 到 unknown。" >&2
+    echo "  请确认在 git 仓库内执行此脚本，且 git rev-parse --short HEAD 能成功。" >&2
+    exit 1
+fi
 export SUJIAN_GIT_COMMIT_SHA
 SUJIAN_PACKAGE_TYPE="rpm"
 export SUJIAN_PACKAGE_TYPE

@@ -34,6 +34,9 @@ pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
+// Issue #710 评论 5731145076 症状六: 导入 compute_affected_paragraph_ranges
+// 用于计算事务的 visual_affected_byte_range（基于段落边界扩展）。
+use crate::editor::layout::compute_affected_paragraph_ranges;
 pub(crate) use super::render_plan::{
     CursorRenderState, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange,
     TextAnimationGlyphInfo, TextAnimationPlan,
@@ -1207,6 +1210,17 @@ impl LinuxEditorAnimationCoordinator {
                         caret_handoff,
                         vt.duration_ms,
                     );
+                    // Issue #710 评论 5731145076 症状六: 计算 visual_affected_byte_range。
+                    // 用段落边界扩展 inserted_range，确保同一行的连续输入互相 rebase。
+                    let visual_affected_byte_range = {
+                        let (_, _, new_s, new_e) = compute_affected_paragraph_ranges(
+                            &vt.old_text,
+                            &vt.new_text,
+                            range_start,
+                            range_end,
+                        );
+                        Some((new_s, new_e))
+                    };
                     let prepared = PreparedTextVisualTransaction {
                         key,
                         state: TextVisualTransactionState::Pending,
@@ -1222,6 +1236,7 @@ impl LinuxEditorAnimationCoordinator {
                         old_snapshot: Some(old_snapshot.clone()),
                         new_snapshot: Some(new_snapshot.clone()),
                         cursor_owner_epoch,
+                        visual_affected_byte_range,
                     };
 
                     // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1315,6 +1330,18 @@ impl LinuxEditorAnimationCoordinator {
                     caret_handoff,
                     vt.duration_ms,
                 );
+                // Issue #710 评论 5731145076 症状六: 计算 visual_affected_byte_range。
+                // 用段落边界扩展 deleted_range，确保删除换行符时合并段落的视觉区域
+                // 被正确标记，新事务能检测到视觉区域重叠并 rebase 旧事务。
+                let visual_affected_byte_range = {
+                    let (old_s, old_e, _, _) = compute_affected_paragraph_ranges(
+                        &vt.old_text,
+                        &vt.new_text,
+                        rebase_byte_start,
+                        rebase_byte_end,
+                    );
+                    Some((old_s, old_e))
+                };
                 let prepared = PreparedTextVisualTransaction {
                     key,
                     state: TextVisualTransactionState::Pending,
@@ -1330,6 +1357,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
+                    visual_affected_byte_range,
                 };
 
                 // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1466,6 +1494,8 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
+            // Issue #710 评论 5731145076 症状六: composition update 的 visual affected range。
+            visual_affected_byte_range: Some((composition_byte_start, composition_byte_end)),
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1820,6 +1850,8 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
+            // Issue #710 评论 5731145076 症状六: composition commit/cancel 的 visual affected range。
+            visual_affected_byte_range: Some((conflict_start, conflict_end)),
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -2087,22 +2119,15 @@ impl LinuxEditorAnimationCoordinator {
         // - `has_active_for_coordinated`：看 epoch，只有 epoch 一致的事务才驱动
         //   coordinated caret。epoch 不一致时文字事务继续播自己的 glyph/reflow，
         //   但不再驱动 caret，纯光标移动可走 Tween。
-        let has_active_for_blink = self.has_active_text_transaction();
         let has_active_for_coordinated = self
             .active_text_transaction_key_with_epoch(cursor_owner_epoch)
             .is_some();
-        // Issue #679 评论 5657313927: blink_mode 不再固化进 CursorAnimationPlan,
-        // 由 tick_cursor_animation 每帧从 has_active_text_transaction() 实时计算。
-        // Issue #702 评论 5708209114: has_active 覆盖所有正文事务类型
-        // （Insert/Delete/CompositionUpdate/CompositionCommitOrCancel），
-        // 不再用 has_active_insert()，避免 Delete 路径漏判导致双时间线分叉。
-        // Issue #705 评论 5717380886: blink 用 has_active_for_blink（不看 epoch），
-        // 文字动画还在播就 suppress blink。
-        let _blink_mode = if coordinated_enabled && has_active_for_blink {
-            CursorBlinkMode::Suppressed
-        } else {
-            CursorBlinkMode::Normal
-        };
+        // Issue #710 评论 5731145076 症状二: 统一 blink 决策。
+        // blink_mode 不再在 build_cursor_plan 里计算（之前的 _blink_mode 计算后未使用，
+        // 导致 GUI timer 和 render plan 两套判断分歧）。现在 blink 决策只由
+        // tick_cursor_animation 每帧从 has_active_text_transaction() + CursorOnly Tween
+        // 实时计算，build_cursor_plan 不再参与 blink 决策。
+        // has_active_for_blink 也不再在此计算，避免误导读者以为这里还在做 blink 决策。
 
         let scroll_changed = (old_scroll_y - scroll_y).abs() > 0.01;
 
@@ -4223,6 +4248,7 @@ mod tests {
             // Issue #705 评论 5717380886: 测试辅助函数默认 epoch=0，
             // 与 CursorController::new() 的初始 epoch 一致。
             cursor_owner_epoch: 0,
+            visual_affected_byte_range: None,
         }
     }
 
@@ -5363,6 +5389,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            visual_affected_byte_range: None,
         };
         coord.prepared_queue.enqueue(tx);
 
@@ -5620,6 +5647,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            visual_affected_byte_range: None,
         };
         coord.prepared_queue.enqueue(new_tx);
 
@@ -5834,6 +5862,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            visual_affected_byte_range: None,
         }
     }
 
