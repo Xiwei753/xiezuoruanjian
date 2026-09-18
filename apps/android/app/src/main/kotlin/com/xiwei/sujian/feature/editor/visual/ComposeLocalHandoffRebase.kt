@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 
@@ -50,7 +51,7 @@ internal object ComposeLocalHandoffRebase {
      *   同 key 互相覆盖，三段文字拿同一个 fraction。
      *   allocator 由调用方 [ComposeEditorVisualState] 提供（nextHandoffUnitKey++）。
      * @return rebased handoff — units 已映射到新坐标系，ghostedCoverage 记录已转 ghost 的旧正文范围，
-     *   oldClipFractionsByKey 记录每个 child key 继承的旧 clip fraction。
+     *   initialClipFractionsByKey 记录每个 child 的真实首帧 fraction。
      */
     fun rebase(
         scene: ComposeVisualScene,
@@ -61,16 +62,23 @@ internal object ComposeLocalHandoffRebase {
         val newTextLength = newLayout.result.layoutInput.text.length
         val rebasedUnits = mutableListOf<VisualTextUnit>()
         val ghostedCoverage = mutableListOf<TextRange>()
-        val oldClipFractionsByKey = mutableMapOf<Long, Float>()
+        // #708 评论 5731952690 修复3：改名为 initialClipFractionsByKey —
+        // 语义从"child 继承 parent 的旧 fraction"改成"每个 rebase child 的真实首帧 fraction"。
+        // ghost 首帧继承这个具体 glyph/slice 上一帧真实可见多少，而不是一刀切 0 或 parent 进度。
+        val initialClipFractionsByKey = mutableMapOf<Long, Float>()
+        // #708 评论 5731952690 修复3：算 partial split ghost slice 的真实首帧 fraction 需要
+        // 旧 scene 的 cursorRect 和 coordinatedSpatialClip — 用上一帧光标位置算 slice 自己的可见度。
+        val oldCursorRect = scene.cursorRect
+        val oldCoordinated = scene.coordinatedSpatialClip
 
         for (unit in scene.units) {
             val target = unit.targetRange
             if (target == null) {
                 // 已有 ghost：继续保持当前可见状态（保持原有 alpha/position 通道不变）
-                // #708 评论 5730173947 修复2：历史 ghost 沿用旧 clip fraction
+                // 历史 ghost 沿用旧 clip fraction
                 rebasedUnits.add(unit)
                 scene.unitClipFractions[unit.key]?.let { fraction ->
-                    oldClipFractionsByKey[unit.key] = fraction
+                    initialClipFractionsByKey[unit.key] = fraction
                 }
                 continue
             }
@@ -80,17 +88,24 @@ internal object ComposeLocalHandoffRebase {
             val parentOldFraction = scene.unitClipFractions[unit.key]
             for (slice in slices) {
                 val childKey = if (isSplit) nextChildKey() else unit.key
-                if (isSplit) {
-                    // #708 评论 5730173947 修复2/3：split 时 child 继承 parent 的旧 clip fraction，
-                    // 保持上一帧吞字进度，不因换 key 丢失。
-                    // #708 评论 5730173947 修复3：ghost slice 也存 parent fraction（null 时默认0）—
-                    // parent 不可见时 ghost 也不可见（fraction=0），
-                    // 不会因 handoff 用旧 scene.cursorRect 重算而得到非零 fraction。
-                    oldClipFractionsByKey[childKey] = parentOldFraction ?: 0f
-                }
+                // #708 评论 5731952690 修复3：记录每个 rebase child 的真实首帧 fraction —
+                // 逻辑抽取到 computeSliceInitialFraction helper，降低 rebase() 复杂度。
+                // 返回 null 表示不需要记录（非 split 且 parentOldFraction==null）。
+                computeSliceInitialFraction(
+                    unit = unit,
+                    slice = slice,
+                    isSplit = isSplit,
+                    parentOldFraction = parentOldFraction,
+                    oldCursorRect = oldCursorRect,
+                    oldCoordinated = oldCoordinated,
+                )?.let { initialClipFractionsByKey[childKey] = it }
                 processSlice(
-                    unit, slice, childKey, newLayout,
-                    rebasedUnits, ghostedCoverage,
+                    unit = unit,
+                    slice = slice,
+                    childKey = childKey,
+                    newLayout = newLayout,
+                    rebasedUnits = rebasedUnits,
+                    ghostedCoverage = ghostedCoverage,
                 )
             }
         }
@@ -98,8 +113,112 @@ internal object ComposeLocalHandoffRebase {
         return RebasedHandoff(
             units = rebasedUnits,
             ghostedCoverage = ghostedCoverage,
-            oldClipFractionsByKey = oldClipFractionsByKey,
+            initialClipFractionsByKey = initialClipFractionsByKey,
         )
+    }
+
+    /**
+     * #708 评论 5731952690 修复3：计算 rebase child 的真实首帧 fraction —
+     * 从 rebase() 抽取以降低复杂度。
+     *
+     * 返回值语义：
+     * - null：不需要记录（非 split 且 parentOldFraction==null）
+     * - 非 null：要记录的 fraction
+     *
+     * 四种情况：
+     * - 非 split（整个 unit 变 ghost 或 surviving）：继承 parent 旧 fraction
+     * - split surviving slice：parent 旧 fraction
+     * - split ghost slice 有 cursor：用 fractionFor 精确算，safePathBounds 零宽时用 text-offset heuristic
+     * - split ghost slice 无 cursor：parent 旧 fraction
+     */
+    private fun computeSliceInitialFraction(
+        unit: VisualTextUnit,
+        slice: ComposeVisualRebase.MappedRangeSlice,
+        isSplit: Boolean,
+        parentOldFraction: Float?,
+        oldCursorRect: Rect?,
+        oldCoordinated: Boolean,
+    ): Float? {
+        if (!isSplit) {
+            // 非 split：整个 unit 变 ghost 或 surviving，继承 parent 旧 fraction
+            return parentOldFraction
+        }
+        val isGhostSlice = slice.kind == ComposeVisualRebase.MappedRangeSliceKind.GHOST
+        if (!isGhostSlice || oldCursorRect == null) {
+            // surviving slice 或 ghost slice 无 cursor：parent 旧 fraction
+            return parentOldFraction ?: 0f
+        }
+        return computeGhostSliceFraction(unit, slice, parentOldFraction, oldCursorRect, oldCoordinated)
+    }
+
+    /**
+     * #708 评论 5731952690 修复3：算 split ghost slice 的真实首帧 fraction —
+     * 从 computeSliceInitialFraction 抽取以进一步降低复杂度。
+     *
+     * 两条路径：
+     * 1. safePathBounds 正常 → fractionFor 精确算
+     * 2. safePathBounds 零宽（测试环境 getPathForRange 限制）→ text-offset heuristic fallback
+     */
+    private fun computeGhostSliceFraction(
+        unit: VisualTextUnit,
+        slice: ComposeVisualRebase.MappedRangeSlice,
+        parentOldFraction: Float?,
+        oldCursorRect: Rect,
+        oldCoordinated: Boolean,
+    ): Float {
+        // 构造临时 DeletedGhost slice unit 算 slice 自己在旧 scene 下的真实 fraction。
+        // unit.alpha.from 已是上一帧可见 alpha（scene.units 已 sampled）。
+        // sliceUnit 的 position 必须是 slice 自己的屏幕位置，不是 parent 的 position。
+        val sliceScreenPos =
+            ComposeVisualRebase.sliceScreenPosition(
+                layout = unit.layout,
+                parentRange = unit.range,
+                sliceRange = slice.oldSubRange,
+                parentScreenPosition = unit.position.from,
+            ) ?: unit.position.from
+        val sliceUnit =
+            unit.copy(
+                range = slice.oldSubRange,
+                role = VisualUnitRole.DeletedGhost,
+                position = TimedOffset(sliceScreenPos, sliceScreenPos, 0L, 0L),
+            )
+        val naturalBounds =
+            ComposeVisualRebase.safePathBounds(
+                sliceUnit.layout.result,
+                sliceUnit.range,
+            )
+        val isZeroWidthBounds = naturalBounds == null || naturalBounds.width < 0.5f
+        return if (isZeroWidthBounds) {
+            computeTextOffsetHeuristicFraction(unit, slice, parentOldFraction)
+        } else {
+            ComposeVisualClip.fractionFor(
+                sliceUnit,
+                oldCursorRect,
+                oldCoordinated,
+            ) ?: (parentOldFraction ?: 0f)
+        }
+    }
+
+    /**
+     * #708 评论 5731952690 修复3：text-offset heuristic fallback —
+     * safePathBounds 返回零宽时用 parentOldFraction 估算 cursor 在 parent 中的文本偏移，
+     * 与 slice 的文本范围比较：cursor 在 slice 之前→0，之后→1，中间→线性插值。
+     */
+    private fun computeTextOffsetHeuristicFraction(
+        unit: VisualTextUnit,
+        slice: ComposeVisualRebase.MappedRangeSlice,
+        parentOldFraction: Float?,
+    ): Float {
+        val parentLen = (unit.range.end - unit.range.start).coerceAtLeast(1)
+        val cursorApproxOffset = (parentOldFraction ?: 0f) * parentLen
+        val sliceStart = slice.oldSubRange.start - unit.range.start
+        val sliceEnd = slice.oldSubRange.end - unit.range.start
+        return when {
+            cursorApproxOffset <= sliceStart -> 0f
+            cursorApproxOffset >= sliceEnd -> 1f
+            sliceEnd > sliceStart -> (cursorApproxOffset - sliceStart) / (sliceEnd - sliceStart)
+            else -> 0f
+        }
     }
 
     private fun processSlice(
@@ -242,14 +361,18 @@ internal object ComposeLocalHandoffRebase {
      * @param ghostedCoverage rebase 阶段已经转成 ghost 的旧正文范围（旧坐标系）。
      *   供 [ComposeEditorVisualState.publishLocalHandoffScene] 计算
      *   "deletedUnits - 已由旧 active unit 转 ghost 的范围 = 还需要从 oldLayout 新建完整 ghost 的范围"。
-     * @param oldClipFractionsByKey rebase 后每个 child key 对应的旧 clip fraction —
-     *   split 时 child 是新 key，旧 scene.unitClipFractions 查不到，
-     *   但 handoff 首帧需要继承 parent 的旧 fraction 保持吞字进度。
-     *   key 不在 map 中的 child 表示没有旧 fraction（新插入 unit 或 parent 之前不可见）。
+     * @param initialClipFractionsByKey #708 评论 5731952690 修复3：每个 rebase child 的真实首帧 fraction —
+     *   语义为"这个具体 glyph/slice 上一帧真实可见多少"：
+     *   - 历史 ghost：scene.unitClipFractions（沿用旧 fraction）
+     *   - active unit 转出的 ghost（整个 unit 变 ghost，非 split）：parent 旧 fraction
+     *   - partial split 的 ghost slice：用旧 scene cursorRect + fractionFor 算 slice 自己的旧 fraction
+     *   - surviving slice：parent 旧 fraction
+     *   publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipFractions，
+     *   不再一刀切 ghost=0。key 不在 map 中的 child 表示没有旧 fraction（新插入 unit）。
      */
     data class RebasedHandoff(
         val units: List<VisualTextUnit>,
         val ghostedCoverage: List<TextRange>,
-        val oldClipFractionsByKey: Map<Long, Float> = emptyMap(),
+        val initialClipFractionsByKey: Map<Long, Float> = emptyMap(),
     )
 }

@@ -445,19 +445,31 @@ class ComposeEditorVisualState(
                     candidates = patch.deletedUnits,
                     blockers = rebased.ghostedCoverage,
                 )
+            // #708 评论 5731952690 修复1a：不查所有历史 rebasedUnits 做去重 —
+            // 旧实现 `rebasedUnits.any { it.targetRange == null && it.range == del }` 查所有历史
+            // rebasedUnits，连续 Forward Delete 时历史 a ghost（range=[0,1) layout="ab"）会挡住
+            // 本次 b ghost（range=[0,1) layout="b"）的创建。remainingDeleted 已做过
+            // deletedUnits - ghostedCoverage，防御性去重只查本次 handoff 新建 ghost 的 range 集合，
+            // 不查历史 rebasedUnits。
+            // #708 评论 5731952690 修复3：记录本次 handoff 新建 remaining delete ghost 的 key —
+            // 这些 ghost 从 oldLayout 新建（alpha=1），上一帧在 BasicTextField 完整可见，
+            // T0 fraction 应为 1（完整可见），不闪没。
+            val handoffNewGhostRanges = mutableSetOf<TextRange>()
+            val remainingGhostKeys = mutableSetOf<Long>()
             for (del in remainingDeleted) {
                 if (del.start >= del.end) continue
-                // 检查 rebasedUnits 里是否已有覆盖此 range 的 ghost
-                if (rebasedUnits.any { it.targetRange == null && it.range == del }) continue
+                // 防御性去重：只查本次 handoff 新建的 ghost range，不查历史 rebasedUnits
+                if (del in handoffNewGhostRanges) continue
                 // 从 oldLayout 取旧位置建立静态 ghost
                 val oldBounds =
                     ComposeVisualRebase.safePathBounds(
                         oldLayout.result, del,
                     ) ?: continue
                 val oldPosition = Offset(oldBounds.left, oldBounds.top)
+                val ghostKey = allocateHandoffUnitKey()
                 rebasedUnits +=
                     VisualTextUnit(
-                        key = allocateHandoffUnitKey(),
+                        key = ghostKey,
                         layout = oldLayout,
                         range = del,
                         targetRange = null,
@@ -466,6 +478,8 @@ class ComposeEditorVisualState(
                         position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
                         role = VisualUnitRole.DeletedGhost,
                     )
+                handoffNewGhostRanges.add(del)
+                remainingGhostKeys.add(ghostKey)
             }
 
             // #708 评论 5725146968 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
@@ -546,34 +560,38 @@ class ComposeEditorVisualState(
                 if (handoffCursor != null) {
                     val clipMap = mutableMapOf<Long, Float>()
                     for (child in rebasedUnits) {
-                        // #708 评论 5730173947 修复2：handoff 首帧不能对历史 ghost 用新 handoffCursor 重算 —
-                        // 历史 ghost（key 没变，旧 scene.unitClipFractions 已有此 key）沿用旧 fraction，
-                        // 保持上一帧自己的吞字进度，不跳成"按本 patch T0 caret 算出来的 fraction"。
-                        // 本 patch 新 child / 新 ghost（key 变了或新建，旧 scene 查不到）才按本 patch handoffCursor 算。
-                        // 注意：优先查 rebased.oldClipFractionsByKey（split 时 child 继承 parent 的旧 fraction），
+                        // #708 评论 5731952690 修复3：handoff 首帧继承真实上一帧 slice fraction —
+                        // 不再一刀切 ghost=0。区分四种情况：
+                        // 1. 历史 ghost：保持旧 scene.unitClipFractions（通过 initialClipFractionsByKey 已记录）
+                        // 2. 本 patch 从 active overlay unit 转出的 ghost：继承该具体 slice 的上一帧真实 fraction
+                        //    （initialClipFractionsByKey 已用 fractionFor 算好）
+                        // 3. 本 patch 从 BasicTextField oldLayout 新建的 remaining delete ghost：
+                        //    上一帧完整可见，T0 fraction=1
+                        // 4. surviving slice：正常沿用旧 fraction
+                        // 优先查 initialClipFractionsByKey（rebase 阶段记录的真实首帧 fraction），
                         // 再查 scene.unitClipFractions（key 没变的历史 ghost）。
-                        val oldFraction = rebased.oldClipFractionsByKey[child.key] ?: scene.unitClipFractions[child.key]
+                        val initialFraction =
+                            rebased.initialClipFractionsByKey[child.key]
+                                ?: scene.unitClipFractions[child.key]
 
-                        // #708 评论 5730173947 修复3：ghost slice 首帧 fraction=0 —
-                        // oldFraction 来自 parent 的旧 fraction（动画进度，如 0.01），
-                        // 不代表"字符已吐完"。ghost slice 不应继承 parent 的 fraction，
-                        // 否则 parent 没吐完的字在删除后会以 parent 的 fraction 冒出来。
-                        // 也不应用 handoffCursor 位置计算 — handoffCursor 是 patch T0 caret
-                        // （在旧正文坐标系），cursor 在 ghost 之后会得到 fraction=1.0。
-                        // ghost slice 在 handoff 首帧始终 fraction=0（不可见），
-                        // timeline 后续帧再用真正 cursor motion 重算。
-                        if (child.targetRange == null) {
-                            clipMap[child.key] = 0f
+                        // #708 评论 5731952690 修复3：remaining delete ghost T0 fraction=1 —
+                        // 这些 ghost 从 oldLayout 新建（alpha=1），上一帧在 BasicTextField 完整可见，
+                        // handoff 首帧应保持完整可见（fraction=1），不闪没。
+                        if (child.key in remainingGhostKeys) {
+                            clipMap[child.key] = 1f
                             continue
                         }
-                        // 存活 slice（有 targetRange）正常沿用旧 fraction
-                        if (oldFraction != null) {
-                            clipMap[child.key] = oldFraction
+
+                        // 有旧 fraction 的 child（历史 ghost / rebase child）直接沿用
+                        if (initialFraction != null) {
+                            clipMap[child.key] = initialFraction
                             continue
                         }
+                        // 无旧 fraction 且无 handoffCursorRect：跳过，timeline 重算
                         if (handoffCursorRect == null) {
                             continue
                         }
+                        // 无旧 fraction 的 child（新插入等）：用 handoffCursor 算
                         val fraction =
                             ComposeVisualClip.fractionFor(
                                 unit = child,
@@ -589,19 +607,23 @@ class ComposeEditorVisualState(
                     }
                     clipMap
                 } else {
-                    // #708 评论 5730173947 修复3：无 cursor motion 时 handoff scene 也要为
-                    // ghost slice 设正确 fraction — 不能默认 1（coordinated 模式下 1=完全可见）。
-                    // 无 cursor 时没有 clip track，用 parent 的旧 fraction 推导：
-                    // - surviving slice：无 parent fraction → 不加 map（timeline 重算，等 cursor 出现）
-                    // - ghost slice：parent fraction null 或0 → ghost fraction = 0（不可见）；
-                    //   parent fraction > 0 → ghost fraction = parent fraction（部分可见）。
-                    // 这确保 partial split 场景中，parent 还没吐出来的部分被删除时不会冒出来。
+                    // #708 评论 5731952690 修复3：无 cursor motion 时 handoff scene 用
+                    // initialClipFractionsByKey 推导首帧 fraction —
+                    // - remaining delete ghost：T0 fraction=1（上一帧完整可见）
+                    // - ghost slice：继承真实首帧 fraction，不可见时为 0
+                    // - surviving slice：不加 map（timeline 重算，等 cursor 出现）
                     val clipMap = mutableMapOf<Long, Float>()
                     for (child in rebasedUnits) {
-                        val oldFraction = rebased.oldClipFractionsByKey[child.key] ?: scene.unitClipFractions[child.key]
+                        if (child.key in remainingGhostKeys) {
+                            clipMap[child.key] = 1f
+                            continue
+                        }
+                        val initialFraction =
+                            rebased.initialClipFractionsByKey[child.key]
+                                ?: scene.unitClipFractions[child.key]
                         if (child.targetRange == null) {
-                            // ghost slice：继承 parent 的旧 fraction，parent 不可见时 ghost 也不可见
-                            clipMap[child.key] = oldFraction ?: 0f
+                            // ghost slice：继承真实首帧 fraction，不可见时为 0
+                            clipMap[child.key] = initialFraction ?: 0f
                         }
                         // surviving slice：不加 map，timeline 重算
                     }

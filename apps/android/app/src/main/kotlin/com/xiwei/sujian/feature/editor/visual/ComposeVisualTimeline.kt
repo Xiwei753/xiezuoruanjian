@@ -205,7 +205,17 @@ class ComposeVisualTimeline {
                                 val range = unit.targetRange!!
                                 currentPatchGhostedCoverage.add(range)
                                 if (currentAlpha(unit.alpha, frameTimeNanos) > 0f) {
-                                    val ghost = toGhost(unit, frameTimeNanos, durationNanos, unit.range)
+                                    // #708 评论 5731952690 修复2：fullyDeleted 转 ghost 绑定本 patch clipTrackId —
+                                    // 旧 Inserted unit 的 clipTrackId 指向旧 track（还在向右走），
+                                    // 切到本 patch 新 track 才能继续吞字。
+                                    val ghost =
+                                        toGhost(
+                                            unit,
+                                            frameTimeNanos,
+                                            durationNanos,
+                                            unit.range,
+                                            clipTrackId = patchClipTrackId,
+                                        )
                                     currentPatchGhostKeys.add(ghost.key)
                                     ghost
                                 } else {
@@ -597,6 +607,8 @@ class ComposeVisualTimeline {
                             currentAlpha(unit.alpha, frameTimeNanos) > 0f
                         }
                     if (shouldCreateGhost) {
+                        // #708 评论 5731952690 修复2：partial split GHOST slice 转 ghost 绑定本 patch clipTrackId —
+                        // 和 fullyDeleted 分支同理，切到本 patch 新 track 继续吞字。
                         val ghost =
                             toGhost(
                                 unit = unit,
@@ -604,6 +616,7 @@ class ComposeVisualTimeline {
                                 durationNanos = durationNanos,
                                 ghostRange = slice.oldSubRange,
                                 childKey = childKey,
+                                clipTrackId = patchClipTrackId,
                             )
                         currentPatchGhostKeys.add(ghost.key)
                         ghosting.add(ghost)
@@ -846,19 +859,13 @@ class ComposeVisualTimeline {
             for (del in remaining) {
                 if (del.start >= del.end) continue
                 if (del.end > oldTextLength) continue
-                // #708 评论 5730173947 修复2：先检查 sampledUnits 里是否已有此 range 的 ghost —
-                // handoff 首帧的 ghost 已经正确设置了 clipTrackId 和 fraction，
-                // timeline 接管时应复用，不要新建一个 clipTrackId 不对的 ghost 导致 fraction 算错。
-                val existingGhost =
-                    sampledUnits.firstOrNull {
-                        it.targetRange == null && it.range == del
-                    }
-                if (existingGhost != null) {
-                    // 已有 ghost：复用，保持正确的 clipTrackId 和 alpha
-                    ghosting += existingGhost
-                    currentPatchGhostKeys.add(existingGhost.key)
-                    continue
-                }
+                // #708 评论 5731952690 修复1b：删除 existingGhost 复用逻辑 —
+                // handoff scene 和 ComposeVisualTimeline.units 是两套状态；
+                // sampledUnits 只来自 timeline 自己的 units，不可能包含 publishLocalHandoffScene()
+                // 临时造的 handoff unit。这里找到的 existingGhost 只能是 timeline 历史 ghost，
+                // 会把它加入 currentPatchGhostKeys 然后按本次 schedule 重排，真正本次 ghost 反而不创建。
+                // 当前 patch active->ghost 的范围已经进入 currentPatchGhostedCoverage，
+                // remaining 本来就不会重复覆盖，不需要额外复用历史 ghost。
                 // #708 评论 5730173947 修复1：去重从 range-only 改成 currentPatchGhostKeys 身份判断 —
                 // 旧实现 `ghosting.any { it.targetRange == null && it.range == del }` 只看 range，
                 // 连续 Forward Delete 时历史 ghost（range=[0,1) layout="ab"）会挡住本次 ghost
@@ -866,7 +873,12 @@ class ComposeVisualTimeline {
                 // 改：只查 currentPatchGhostKeys 里的 ghost。remaining 已经是
                 // deletedRange - currentPatchGhostedCoverage，本 patch 已接管的范围已被减掉，
                 // 这里只保留防御性身份判断，不误杀历史 ghost 让本次 ghost 无法创建。
-                if (ghosting.any { it.key in currentPatchGhostKeys && it.targetRange == null && it.range == del }) continue
+                val alreadyGhosted =
+                    ghosting.any {
+                        it.key in currentPatchGhostKeys &&
+                            it.targetRange == null && it.range == del
+                    }
+                if (alreadyGhosted) continue
                 // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
                 val oldPosition = computeUnitPosition(oldLayout, del) ?: continue
                 val newGhost =
@@ -1413,6 +1425,11 @@ class ComposeVisualTimeline {
      * @param childKey ghost unit 的 key；默认 unit.key。
      *   #708 评论 5727808906：split 场景由 mapSurvivingUnits 分配独立新 key 传入；
      *   scene redirect 整块转 ghost（applyPatch 约 160 行 fullyDeleted 分支）保留原 key。
+     * @param clipTrackId #708 评论 5731952690 修复2：ghost 绑定的 clip track 身份 —
+     *   默认 unit.clipTrackId（保留旧 track）。active -> DeletedGhost 时应传本 patch 的
+     *   patchClipTrackId，让 ghost 用本 patch 的新 track 算 clip fraction 继续吞字；
+     *   否则旧 Inserted unit 的 clipTrackId 仍指向旧 track（还在向右走），
+     *   被删除的字会继续变得更可见而不是被吞掉。历史 ghost 不经过 toGhost，保留旧 id。
      */
     private fun toGhost(
         unit: VisualTextUnit,
@@ -1420,6 +1437,7 @@ class ComposeVisualTimeline {
         durationNanos: Long,
         ghostRange: TextRange = unit.range,
         childKey: Long = unit.key,
+        clipTrackId: Long? = unit.clipTrackId,
     ): VisualTextUnit {
         val alphaNow = currentAlpha(unit.alpha, now)
         val parentCurrent = currentOffset(unit.position, now) ?: unit.position.to
@@ -1443,6 +1461,9 @@ class ComposeVisualTimeline {
             // #703 评论 5710977972 缺陷2：active unit 转 ghost，角色 = DeletedGhost，
             // 由 cursor 从右向左裁切吞掉。
             role = VisualUnitRole.DeletedGhost,
+            // #708 评论 5731952690 修复2：显式设 clipTrackId —
+            // active -> DeletedGhost 切换到本 patch clip track，继续本 patch 的吞字进度。
+            clipTrackId = clipTrackId,
         )
     }
 

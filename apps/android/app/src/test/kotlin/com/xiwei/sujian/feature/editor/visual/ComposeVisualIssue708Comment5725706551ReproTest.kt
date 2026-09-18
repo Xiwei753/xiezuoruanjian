@@ -43,7 +43,7 @@ import org.robolectric.annotation.Config
  * **测试 A**：active insert 前方再插入 — 验证旧 active unit 的 targetRange 被 rebase 到新坐标。
  * **测试 B**：active insert 立即删除 — 验证不出现旧 Inserted + 新 alpha=1 DeletedGhost 的重影。
  */
-@Suppress("LongMethod", "MaxLineLength", "LargeClass", "StringLiteralDuplication")
+@Suppress("LongMethod", "MaxLineLength", "LargeClass", "StringLiteralDuplication", "TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualIssue708Comment5725706551ReproTest {
@@ -1780,6 +1780,513 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             "testH4: 不应存在 [4,5) 且 fraction>0 的 DeletedGhost（没吐出来的 e 不能冒出来），" +
                 "实际=${visibleGhostSlice?.let { "key=${it.key}, fraction=${handoffScene.unitClipFractions[it.key]}" }}",
             visibleGhostSlice,
+        )
+    }
+
+    // ==================== 测试 I1：连续 Forward Delete 历史 ghost 不挡本次 ghost（问题1） ====================
+
+    /**
+     * 测试 I1：连续 Forward Delete 历史 ghost 不挡本次 ghost —
+     *
+     * #708 评论 5731952690 修复1a/1b：
+     * 旧 bug 有两处 range-only 历史 ghost 复用：
+     * - 修复1a（handoff）：publishLocalHandoffScene 查所有历史 rebasedUnits（range-only），
+     *   连续 Forward Delete 时历史 a ghost（range=[0,1) layout="ab"）挡住本次 b ghost
+     *   （range=[0,1) layout="b"）的创建。
+     * - 修复1b（timeline）：reconcileDeletedGhosts 的 existingGhost 逻辑查 sampledUnits（range-only），
+     *   找到历史 ghost 后加入 currentPatchGhostKeys，本次 ghost 反而不创建。
+     *
+     * 修复后：handoff 只查本次新建 ghost range 集合做防御性去重；timeline 删除 existingGhost 逻辑。
+     *
+     * 测试场景："" -> "ab" -> "b" -> ""
+     * 断言：第三笔后存在本次 b ghost（layout text=="b"），不被历史 a ghost 挡掉。
+     * 是 H2 的补充验证，重点卡 handoff 和 timeline 两处 range-only 复用都已删除。
+     */
+    @Test
+    fun testI1_consecutiveForwardDelete_historicalGhostDoesNotBlockCurrentGhost() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "ab", "b", ""), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "ab"（插入 'a' 和 'b'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "ab",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 2), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // 第二笔："ab" -> "b"（删 [0,1) 'a'），drain at 1000ms
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "b",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0)
+        state.drainPendingPatchesAtFrame(1000L * NANOS_PER_MS)
+        state.sampleVisualScene(1010L * NANOS_PER_MS)
+
+        // 第三笔："b" -> ""（删 [0,1) 'b'）
+        state.recordLocalInput(
+            oldText = "b",
+            newText = "",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(0, 0), 0)
+
+        // #708 评论 5731952690 修复1a：handoff scene 检查 —
+        // 旧 bug：查所有历史 rebasedUnits（range-only），历史 a ghost 挡住本次 b ghost 创建。
+        // 修复后：只查本次 handoff 新建 ghost 的 range 集合做防御性去重。
+        val handoffScene = state.drawSnapshot().scene
+        val handoffBGhost =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "b"
+            }
+        assertNotNull(
+            "testI1: handoff scene 应存在本次 b ghost（range=[0,1), layout='b'），" +
+                "实际=${handoffScene.units.map { unitSummary(it) }}" +
+                "（旧 bug：历史 a ghost range=[0,1) 挡住本次 b ghost 创建）",
+            handoffBGhost,
+        )
+
+        // #708 评论 5731952690 修复1b：timeline 检查 —
+        // 旧 bug：existingGhost 复用历史 a ghost，加入 currentPatchGhostKeys，本次 b ghost 不创建。
+        // 修复后：删除 existingGhost 逻辑，remaining 已做差集不重复覆盖。
+        state.drainPendingPatchesAtFrame(1010L * NANOS_PER_MS)
+        val timelineScene = state.sampleVisualScene(1010L * NANOS_PER_MS)
+        val timelineBGhost =
+            timelineScene.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "b"
+            }
+        assertNotNull(
+            "testI1: timeline 应存在本次 b ghost（range=[0,1), layout='b'），" +
+                "实际=${timelineScene.units.map { unitSummary(it) }}" +
+                "（旧 bug：existingGhost 复用历史 a ghost，本次 b ghost 不创建）",
+            timelineBGhost,
+        )
+
+        // 历史 a ghost 仍存在（不被误删）
+        val historicalAGhost =
+            timelineScene.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost &&
+                    it.layout.result.layoutInput.text.text == "ab"
+            }
+        assertNotNull(
+            "testI1: timeline 应仍存在历史 a ghost（range=[0,1), layout='ab'），" +
+                "实际=${timelineScene.units.map { unitSummary(it) }}",
+            historicalAGhost,
+        )
+    }
+
+    // ==================== 测试 I2：active -> DeletedGhost 切换到本 patch clip track（问题2） ====================
+
+    /**
+     * 测试 I2：active -> DeletedGhost 切换到本 patch clip track —
+     *
+     * #708 评论 5731952690 修复2：
+     * 旧 bug：toGhost() 没有改 clipTrackId，转出来的 ghost 仍保留旧 Inserted unit 的 clipTrackId。
+     * DeletedGhost 的 fraction 公式仍是 (cursor.left - glyph.left) / width，旧 track 还在向右走，
+     * 被删除的字会继续变得更可见而不是吞掉。
+     *
+     * 修复后：toGhost() 增加 clipTrackId 参数，两个调用点传 patchClipTrackId。
+     * ghost 绑定本 patch 新 track，cursor 从右到左吞字，fraction 最终到 0。
+     *
+     * 测试场景："" -> "a"（插入，sample 到约 0.4 fraction）-> ""（立即删除）
+     * 断言：
+     * - ghost 的 clipTrackId 不等于旧 insert unit 的 clipTrackId
+     * - 删除后 fraction 最终到 0（被吞掉），不是到 1（变得更可见）
+     */
+    @Test
+    fun testI2_activeToDeletedGhost_switchesToPatchClipTrack() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a", ""), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "a"（插入 'a'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到约 40ms（a 的 fraction 约 0.4）
+        val sceneBeforeDelete = state.sampleVisualScene(40L * NANOS_PER_MS)
+        val unitA = sceneBeforeDelete.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        assertNotNull("testI2: 第一笔后应存在 targetRange=[0,1) 的 unit（'a'）", unitA)
+        val oldClipTrackId = unitA!!.clipTrackId
+        val fractionBeforeDelete = sceneBeforeDelete.unitClipFractions[unitA.key] ?: 0f
+        assertTrue(
+            "testI2: 前置 — 40ms 时 a 的 fraction 应在 (0,1) 之间，实际=$fractionBeforeDelete",
+            fractionBeforeDelete > 0f && fractionBeforeDelete < 1f,
+        )
+        assertNotNull(
+            "testI2: 前置 — 旧 insert unit 的 clipTrackId 应非 null（coordinated 模式）",
+            oldClipTrackId,
+        )
+
+        // 第二笔："a" -> ""（删除 'a'），drain at 40ms
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0)
+        state.drainPendingPatchesAtFrame(40L * NANOS_PER_MS)
+
+        // #708 评论 5731952690 修复2：ghost 的 clipTrackId 必须是本 patch 的新 track —
+        // 旧 bug：toGhost 不改 clipTrackId，ghost 保留旧 Inserted unit 的 clipTrackId，
+        // 旧 track 还在向右走，被删除的字会继续变得更可见而不是被吞掉。
+        val sceneAfterDelete = state.sampleVisualScene(40L * NANOS_PER_MS)
+        val ghost =
+            sceneAfterDelete.units.firstOrNull {
+                it.targetRange == null &&
+                    it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull(
+            "testI2: 删除后应存在 range=[0,1) 的 DeletedGhost",
+            ghost,
+        )
+        assertTrue(
+            "testI2: ghost 的 clipTrackId (${ghost!!.clipTrackId}) 应不等于旧 insert unit 的" +
+                " clipTrackId ($oldClipTrackId)" +
+                "（旧 bug：toGhost 不改 clipTrackId，ghost 保留旧 Inserted track，" +
+                "旧 track 向右走字更可见）",
+            ghost.clipTrackId != oldClipTrackId,
+        )
+
+        // 断言2：连续 sample，fraction 最终到 0（被吞掉），不是到 1（变得更可见）
+        val fractions = mutableListOf<Float>()
+        for (tMs in 50..150 step 10) {
+            val scene = state.sampleVisualScene(tMs.toLong() * NANOS_PER_MS)
+            val g =
+                scene.units.firstOrNull {
+                    it.targetRange == null &&
+                        it.range == TextRange(0, 1) &&
+                        it.role == VisualUnitRole.DeletedGhost
+                }
+            if (g != null) {
+                fractions.add(scene.unitClipFractions[g.key] ?: 1f)
+            }
+        }
+        if (fractions.isNotEmpty()) {
+            assertTrue(
+                "testI2: ghost 最终 fraction 应接近 0（被吞掉），实际 fractions=$fractions" +
+                    "（旧 bug：旧 track 向右走，fraction 增到 1，字变得更可见）",
+                fractions.last() <= 0.2f,
+            )
+        }
+    }
+
+    // ==================== 测试 I3：handoff 首帧继承真实上一帧 slice fraction（问题3） ====================
+    //
+    // #708 评论 5731952690 修复3：
+    // 旧 bug：publishLocalHandoffScene 对所有 ghost 一刀切 fraction=0，
+    // 和"历史 ghost 沿用旧 fraction"的注释直接矛盾。
+    //
+    // 修复后：ghost 首帧继承这个具体 glyph/slice 上一帧真实可见多少：
+    // 1. 历史 ghost：保持旧 scene.unitClipFractions
+    // 2. active unit 转出的 ghost：继承该具体 slice 的上一帧真实 fraction
+    // 3. remaining delete ghost：T0 fraction=1（完整可见）
+    // 4. partial split ghost slice：用 fractionFor 算 slice 自己的旧 fraction
+    //
+    // 四个子场景拆成四个独立 @Test 方法以降低复杂度。
+
+    /**
+     * 子场景1：稳定字符删除，handoff ghost fraction 仍为 1（不闪没）。
+     */
+    @Test
+    fun testI3_1_stableCharDelete_handoffGhostFractionOne() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a"), 1000)
+        val layoutEmpty = layouts[0]
+        val layoutA = layouts[1]
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I3-1",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layoutA, TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        // sample 到完成（fraction=1）
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // 删除 'a'
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+
+        val handoffScene = state.drawSnapshot().scene
+        val ghost =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull("testI3-1: 应存在 range=[0,1) 的 DeletedGhost", ghost)
+        val ghostFraction = handoffScene.unitClipFractions[ghost!!.key] ?: 0f
+        assertEquals(
+            "testI3-1: 稳定字符删除后 handoff ghost fraction 应为 1（完整可见，不闪没），" +
+                "实际=$ghostFraction" +
+                "（旧 bug：一刀切 ghost=0，稳定可见的字删除后闪没）",
+            1f,
+            ghostFraction,
+            0.01f,
+        )
+    }
+
+    /**
+     * 子场景2：active insert 吐到约 0.4 后删除，handoff ghost fraction 约 0.4。
+     */
+    @Test
+    fun testI3_2_activeInsertPartialDelete_handoffGhostInheritsFraction() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a"), 1000)
+        val layoutEmpty = layouts[0]
+        val layoutA = layouts[1]
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I3-2",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layoutA, TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        // sample 到 40ms（fraction 约 0.4）
+        val scene40 = state.sampleVisualScene(40L * NANOS_PER_MS)
+        val unitA = scene40.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        assertNotNull("testI3-2: 前置 — 应存在 [0,1) unit", unitA)
+        val fraction40 = scene40.unitClipFractions[unitA!!.key] ?: 0f
+        assertTrue(
+            "testI3-2: 前置 — 40ms 时 fraction 应在 (0.3, 0.5) 之间，实际=$fraction40",
+            fraction40 > 0.3f && fraction40 < 0.5f,
+        )
+
+        // 删除 'a'
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+
+        val handoffScene = state.drawSnapshot().scene
+        val ghost =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull("testI3-2: 应存在 range=[0,1) 的 DeletedGhost", ghost)
+        val ghostFraction = handoffScene.unitClipFractions[ghost!!.key] ?: 0f
+        assertEquals(
+            "testI3-2: handoff ghost fraction 应继承删除前的 fraction ($fraction40)，" +
+                "实际=$ghostFraction" +
+                "（旧 bug：一刀切 ghost=0，正在吐的字删除后 fraction 丢失）",
+            fraction40,
+            ghostFraction,
+            0.15f,
+        )
+    }
+
+    /**
+     * 子场景3：未吐到的 partial slice，handoff ghost fraction 仍为 0。
+     */
+    @Test
+    fun testI3_3_partialSplitNotReached_handoffGhostFractionZero() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "abcdefghi", "abcdfghi"), 1000)
+        val layoutEmpty = layouts[0]
+        val layoutAbcdefghi = layouts[1]
+        val layoutAbcdfghi = layouts[2]
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I3-3",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+        state.recordLocalInput(
+            oldText = "",
+            newText = "abcdefghi",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layoutAbcdefghi, TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        // sample 1ms：parent 刚开始吐字，visible fraction 接近 0
+        val sceneEarly = state.sampleVisualScene(1L * NANOS_PER_MS)
+        val parentUnit = sceneEarly.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull("testI3-3: 前置 — 应存在 [0,9) parent unit", parentUnit)
+        val parentFraction = sceneEarly.unitClipFractions[parentUnit!!.key] ?: 0f
+        assertTrue(
+            "testI3-3: 前置 — 1ms 时 parent fraction 应接近 0，实际=$parentFraction",
+            parentFraction < 0.1f,
+        )
+
+        // 删中间 [4,5) 'e'
+        state.recordLocalInput(
+            oldText = "abcdefghi",
+            newText = "abcdfghi",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layoutAbcdfghi, TextRange(4, 4), 0)
+
+        val handoffScene = state.drawSnapshot().scene
+        // [4,5) ghost 的 fraction 应仍为 0（没吐出来的 e 不能冒出来）
+        val ghostSlice =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(4, 5) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        if (ghostSlice != null) {
+            val ghostFraction = handoffScene.unitClipFractions[ghostSlice.key] ?: 1f
+            assertEquals(
+                "testI3-3: [4,5) ghost fraction 应为 0（没吐出来的 e 不能冒出来），" +
+                    "实际=$ghostFraction",
+                0f,
+                ghostFraction,
+                0.01f,
+            )
+        }
+        // ghostSlice == null 也 OK（fraction=0 时不创建可见 ghost）
+    }
+
+    /**
+     * 子场景4：历史 ghost fraction=x，新 patch handoff 后仍为 x。
+     */
+    @Test
+    fun testI3_4_historicalGhostPreservesFraction() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "ab", "b", "bc"), 1000)
+        val layoutEmpty = layouts[0]
+        val layoutAb = layouts[1]
+        val layoutB = layouts[2]
+        val layoutBc = layouts[3]
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5731952690-I3-4",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+        state.onAuthoritativeLayout(layoutEmpty, TextRange(0, 0), 0)
+        state.recordLocalInput(
+            oldText = "",
+            newText = "ab",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 2), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layoutAb, TextRange(2, 2), 0)
+        state.drainPendingPatchesAtFrame(0L)
+        state.sampleVisualScene(1000L * NANOS_PER_MS)
+
+        // 删 [0,1) a
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "b",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layoutB, TextRange(0, 0), 0)
+        state.drainPendingPatchesAtFrame(1000L * NANOS_PER_MS)
+
+        // sample 1010ms：a ghost fraction=x
+        val scene1010 = state.sampleVisualScene(1010L * NANOS_PER_MS)
+        val aGhost =
+            scene1010.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull("testI3-4: 前置 — 应存在历史 a ghost", aGhost)
+        val historicalFraction = scene1010.unitClipFractions[aGhost!!.key] ?: 0f
+        assertTrue(
+            "testI3-4: 前置 — 历史 a ghost fraction 应在 (0,1) 之间，实际=$historicalFraction",
+            historicalFraction > 0f && historicalFraction < 1f,
+        )
+
+        // 新 patch："b" -> "bc"（插入 c），不删除 a ghost
+        state.recordLocalInput(
+            oldText = "b",
+            newText = "bc",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
+        )
+        state.onAuthoritativeLayout(layoutBc, TextRange(2, 2), 0)
+
+        val handoffScene = state.drawSnapshot().scene
+        // 历史 a ghost 的 fraction 应仍为 x
+        val handoffAGhost =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull(
+            "testI3-4: handoff scene 应仍存在历史 a ghost",
+            handoffAGhost,
+        )
+        val handoffFraction = handoffScene.unitClipFractions[handoffAGhost!!.key] ?: 0f
+        assertEquals(
+            "testI3-4: 历史 a ghost fraction 应保持 $historicalFraction，实际=$handoffFraction" +
+                "（旧 bug：一刀切 ghost=0，历史 ghost fraction 被重置）",
+            historicalFraction,
+            handoffFraction,
+            0.01f,
         )
     }
 
