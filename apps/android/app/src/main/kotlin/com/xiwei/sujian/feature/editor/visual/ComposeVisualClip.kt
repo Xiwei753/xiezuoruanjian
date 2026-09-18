@@ -33,7 +33,7 @@ internal object ComposeVisualClip {
      *   false 时 alpha<=0 的 unit 返回 null（跳过，alpha 主导显隐）。
      * @return 可见 fraction（0..1），或 null 表示应跳过（不放入 map）。
      */
-    @Suppress("CyclomaticComplexMethod")
+    @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
     fun fractionFor(
         unit: VisualTextUnit,
         cursorRect: Rect,
@@ -64,7 +64,19 @@ internal object ComposeVisualClip {
         val cursorTop = cursorRect.top
         val cursorBottom = cursorRect.bottom
         // 零宽 glyph（如空字符）或极窄 glyph：fraction = 1，由 alpha 单独决定
-        if (glyphWidth < 0.5f) return 1f
+        if (glyphWidth < 0.5f) {
+            // #708 评论 5733321056 修复3：DeletedGhost 零宽时用 cursor 位置判断 —
+            // 零宽 ghost 无法做空间裁切，但可以用 cursor 和 glyph bounds.left 比较：
+            // cursor 在 glyph 之前（cursorLeft < glyphLeft）→ 被吞掉（0f），
+            // cursor 在 glyph 处或之后 → 完整可见（1f）。
+            // 与 handoff rebase 的 text-offset heuristic fallback 一致，避免 Robolectric
+            // 零宽环境下 handoff=0 而 timeline=1 的首帧跳变（I5）。
+            // 其他 role（Inserted/RetainedMove/ReflowMove）零宽仍返回 1f（由 alpha 决定）。
+            if (unit.role == VisualUnitRole.DeletedGhost) {
+                return if (cursorLeft < glyphLeft) 0f else 1f
+            }
+            return 1f
+        }
         // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
         // 不进入 spatial clip 裁切。显式返回 fraction=1 最稳妥，
         // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。

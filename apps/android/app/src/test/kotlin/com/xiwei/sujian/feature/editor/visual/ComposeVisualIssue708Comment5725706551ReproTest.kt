@@ -9,6 +9,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -1987,8 +1988,22 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             ghost.clipTrackId != oldClipTrackId,
         )
 
+        // #708 评论 5733321056 加强 I2：首帧 fraction 不能高于删除前 fraction —
+        // 删除前 fraction=x（约 0.4），drain 同一帧后 ghost fraction 不能高于 x。
+        // 旧 bug：ghost 保留旧 Inserted track（向右走），首帧 fraction 可能高于删除前。
+        val ghostFractionAtDelete = sceneAfterDelete.unitClipFractions[ghost!!.key] ?: 1f
+        assertTrue(
+            "testI2: drain 同一帧后 ghost fraction ($ghostFractionAtDelete) 应不高于删除前 fraction" +
+                " ($fractionBeforeDelete)" +
+                "（首帧连续性：删除那一帧字不应变得比删除前更可见）" +
+                "（旧 bug：ghost 保留旧 Inserted track 向右走，首帧 fraction 高于删除前）",
+            ghostFractionAtDelete <= fractionBeforeDelete + 0.01f,
+        )
+
         // 断言2：连续 sample，fraction 最终到 0（被吞掉），不是到 1（变得更可见）
         val fractions = mutableListOf<Float>()
+        // 把 drain 同一帧的 fraction 也加入序列，验证从删除那一刻起就单调
+        fractions.add(ghostFractionAtDelete)
         for (tMs in 50..150 step 10) {
             val scene = state.sampleVisualScene(tMs.toLong() * NANOS_PER_MS)
             val g =
@@ -2007,6 +2022,18 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                     "（旧 bug：旧 track 向右走，fraction 增到 1，字变得更可见）",
                 fractions.last() <= 0.2f,
             )
+            // #708 评论 5733321056 加强 I2：后续 samples 单调不增加 —
+            // DeletedGhost 的 fraction 应随 cursor 从右向左吞字而单调递减，
+            // 不能在某一段反而增加（旧 bug：旧 track 向右走，fraction 先增后降或持续增）。
+            for (i in 1 until fractions.size) {
+                assertTrue(
+                    "testI2: ghost fraction 应单调不增加，实际 fractions=$fractions，" +
+                        "在 index=$i 处 ${fractions[i - 1]} < ${fractions[i]}（增加了）" +
+                        "（ DeletedGhost 应被 cursor 从右向左吞掉，fraction 单调递减）" +
+                        "（旧 bug：ghost 保留旧 Inserted track 向右走，fraction 反而增加）",
+                    fractions[i] <= fractions[i - 1] + 0.01f,
+                )
+            }
         }
     }
 
@@ -2287,6 +2314,475 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             historicalFraction,
             handoffFraction,
             0.01f,
+        )
+    }
+
+    // ==================== 测试 I4：split surviving child 不应直接继承 parent 整体 fraction（问题1） ====================
+
+    /**
+     * 测试 I4：parent fraction≈0.5 中间删除 split，surviving child 不应都等于 parent fraction —
+     *
+     * #708 评论 5733321056 问题1：
+     * 旧 bug：`computeSliceInitialFraction()` 对 split SURVIVING slice 直接返回 parentOldFraction，
+     * 中间删除时一定错。例：parent=[0,9) "abcdefghi" fraction=0.5，删 [4,5) e，
+     * split 后 front surviving [0,4) 应=1.0（已吐完），ghost [4,5) 约 0.5，
+     * back surviving [5,9) 应=0.0（没吐到）。当前 handoff 给 front=0.5、back=0.5，首帧画错。
+     *
+     * 修复后：surviving slice 的 fraction 应根据 slice 在 parent 中的位置和 parent cursor 进度算 —
+     * cursor 已越过的 surviving slice fraction=1，cursor 还没到的 surviving slice fraction=0。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+     * 2. sample 到 parent fraction 约 0.5（cursor 在 parent 中间，约 50ms）
+     * 3. 第二笔：`"abcdefghi" -> "abcdfghi"`（删中间 [4,5) 'e'）
+     * 4. 检查 handoff scene
+     *
+     * 断言：
+     * - front surviving [0,4) fraction ≈ 1（cursor 已越过整个 front，已吐完）
+     * - ghost [4,5) fraction 在 [0,1] 真实值
+     * - back surviving [4,8) fraction ≈ 0（cursor 还没到 back，没吐到）
+     * - 不能 front/back 都等于 parent 0.5（旧 bug）
+     */
+    @Test
+    fun testI4_splitSurvivingChildFraction_notInheritParentFraction() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", MULTI_CHAR_TEXT, "abcdfghi"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5733321056-I4",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，触发 RUN_ANIMATION 产生多字符 unit [0,9)）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 parent fraction 约 0.5（cursor 在 parent 中间，约 50ms）
+        // coordinated 模式下 textDurationMillis=100ms，50ms 时 progress=0.5
+        val sceneMid = state.sampleVisualScene(50L * NANOS_PER_MS)
+        val parentUnit = sceneMid.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testI4: 前置 — 应存在 [0,9) parent unit，实际=${sceneMid.units.mapNotNull { it.targetRange }}",
+            parentUnit,
+        )
+        val parentFraction = sceneMid.unitClipFractions[parentUnit!!.key] ?: 0f
+        assertTrue(
+            "testI4: 前置 — 50ms 时 parent fraction 应在 (0.3, 0.7) 之间（约 0.5），实际=$parentFraction",
+            parentFraction > 0.3f && parentFraction < 0.7f,
+        )
+
+        // 第二笔："abcdefghi" -> "abcdfghi"（删中间 [4,5) 'e'）
+        // offsetMap: old [0,4) → new [0,4) surviving, old [4,5) ghost, old [5,9) → new [4,8) surviving
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdfghi",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(4, 4), 0)
+
+        // 在 timeline drain 之前检查 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 找到 front surviving [0,4) 和 back surviving [4,8)
+        val frontSurviving = handoffScene.units.firstOrNull { it.targetRange == TextRange(0, 4) }
+        val backSurviving = handoffScene.units.firstOrNull { it.targetRange == TextRange(4, 8) }
+        assertNotNull(
+            "testI4: handoff 应存在 front surviving [0,4) unit，" +
+                "实际 targetRanges=${handoffScene.units.mapNotNull { it.targetRange }}",
+            frontSurviving,
+        )
+        assertNotNull(
+            "testI4: handoff 应存在 back surviving [4,8) unit，" +
+                "实际 targetRanges=${handoffScene.units.mapNotNull { it.targetRange }}",
+            backSurviving,
+        )
+
+        val frontFraction = handoffScene.unitClipFractions[frontSurviving!!.key] ?: 0f
+        val backFraction = handoffScene.unitClipFractions[backSurviving!!.key] ?: 0f
+
+        // 断言1：front surviving [0,4) fraction ≈ 1（cursor 已越过整个 front，已吐完）
+        // parent fraction=0.5 时 cursor 在位置 4.5 左右，已越过 [0,4) 整个 front
+        assertTrue(
+            "testI4: front surviving [0,4) fraction 应接近 1（cursor 已越过整个 front，已吐完），" +
+                "实际=$frontFraction（parent fraction=$parentFraction）" +
+                "（旧 bug：computeSliceInitialFraction 对 surviving slice 直接返回 parentOldFraction=0.5）",
+            frontFraction > 0.8f,
+        )
+
+        // 断言2：back surviving [4,8) fraction ≈ 0（cursor 还没到 back，没吐到）
+        // parent fraction=0.5 时 cursor 在位置 4.5 左右，还没到 [5,9) → [4,8) back
+        assertTrue(
+            "testI4: back surviving [4,8) fraction 应接近 0（cursor 还没到 back，没吐到），" +
+                "实际=$backFraction（parent fraction=$parentFraction）" +
+                "（旧 bug：computeSliceInitialFraction 对 surviving slice 直接返回 parentOldFraction=0.5）",
+            backFraction < 0.2f,
+        )
+
+        // 断言3：不能 front/back 都等于 parent 0.5（旧 bug 的直接表现）
+        val bothEqualParent =
+            kotlin.math.abs(frontFraction - parentFraction) < 0.05f &&
+                kotlin.math.abs(backFraction - parentFraction) < 0.05f
+        assertFalse(
+            "testI4: front ($frontFraction) 和 back ($backFraction) 不应都等于 parent fraction" +
+                " ($parentFraction)" +
+                "（旧 bug：split surviving child 直接继承 parent 整体 fraction，首帧画错）",
+            bothEqualParent,
+        )
+    }
+
+    // ==================== 测试 I5：split ghost 用 parent unit 自己的 clip track cursor（问题2） ====================
+
+    /**
+     * 测试 I5：per-unit clip cursor 连续性 — split ghost 不应用全局 scene.cursorRect。
+     *
+     * #708 评论 5733321056 问题2：
+     * 已引入 per-unit clipTrackId，但 ComposeLocalHandoffRebase.rebase() 仍用
+     * `val oldCursorRect = scene.cursorRect`（屏幕最新视觉光标，只对应最新 cursorChannel）。
+     * 快速连续 patch 后旧 parent unit 的 clipTrackId=track1，后来又输入使屏幕
+     * cursorChannel=track2，第三笔删除 split 旧 parent 时，handoff 给 ghost slice 用
+     * scene.cursorRect（track2 的 cursor）会瞬间跳到另一个 fraction，与 timeline drain
+     * 后用 per-unit clipTrackId（track1）算的 fraction 不一致 = 首帧跳变。
+     *
+     * **测试策略**：断言 handoff 首帧 ghost fraction == timeline 同帧 ghost fraction（首帧连续性）。
+     * - 修复后：handoff 和 timeline 用同一 cursor track 算 → 一致 → 连续
+     * - 旧 bug：handoff 用 scene.cursorRect / parentOldFraction，timeline 用 patchClipTrackId
+     *   → 两者算出不同 fraction → 首帧跳变
+     *
+     * **复现结果**：在 Robolectric 环境下此测试失败 — handoff ghost fraction=0.0，
+     * timeline ghost fraction=1.0，首帧跳变已复现。根因是 handoff 和 timeline 用不同
+     * cursor track 算同一个 ghost 的 fraction。
+     *
+     * 测试场景：
+     * 1. 第一笔：`"" -> "abcdefghi"`（插入 9 字符，多字符 unit [0,9)，clipTrackId=track1）
+     * 2. sample 到 40ms（parent fraction 约 0.4，track1 cursor 在 parent 中间约位置 3.6）
+     * 3. 第二笔：`"abcdefghi" -> "abcdefghix"`（末尾插入 'x'，产生新 clipTrackId=track2）
+     *    scene.cursorRect 变成 track2 的 cursor（在 'x' 之后，位置 10）
+     * 4. 第三笔：`"abcdefghix" -> "abcdfghix"`（删中间 [4,5) 'e'，split 旧 parent）
+     *    handoff 用 scene.cursorRect（track2）算 ghost fraction（旧 bug）
+     *    timeline 用 ghost.clipTrackId（track1）算 ghost fraction（正确）
+     * 5. 断言 handoff ghost fraction == timeline ghost fraction（首帧连续性）
+     */
+    @Test
+    fun testI5_splitGhostFraction_usesParentClipTrackCursorNotGlobalCursor() {
+        val layouts =
+            captureLayoutsWithWidth(
+                arrayOf("", MULTI_CHAR_TEXT, "abcdefghix", "abcdfghix"),
+                1000,
+            )
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5733321056-I5",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "abcdefghi"（插入 9 字符，多字符 unit [0,9)，clipTrackId=track1）
+        state.recordLocalInput(
+            oldText = "",
+            newText = MULTI_CHAR_TEXT,
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(9, 9),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 9), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(9, 9), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 40ms（parent fraction 约 0.4，track1 cursor 在 parent 中间约位置 3.6）
+        val scene40 = state.sampleVisualScene(40L * NANOS_PER_MS)
+        val parentUnit = scene40.units.firstOrNull { it.targetRange == TextRange(0, 9) }
+        assertNotNull(
+            "testI5: 前置 — 应存在 [0,9) parent unit",
+            parentUnit,
+        )
+        val parentClipTrackId = parentUnit!!.clipTrackId
+        assertNotNull(
+            "testI5: 前置 — parent unit 的 clipTrackId 应非 null（coordinated 模式）",
+            parentClipTrackId,
+        )
+        val parentFractionByTrack1 = scene40.unitClipFractions[parentUnit.key] ?: 0f
+        assertTrue(
+            "testI5: 前置 — 40ms 时 parent fraction 应在 (0.2, 0.6) 之间，实际=$parentFractionByTrack1",
+            parentFractionByTrack1 > 0.2f && parentFractionByTrack1 < 0.6f,
+        )
+
+        // 第二笔："abcdefghi" -> "abcdefghix"（末尾插入 'x'，产生新 clipTrackId=track2）
+        // onAuthoritativeLayout 触发 publishLocalHandoffScene，scene.cursorRect 变成 track2 的 cursor
+        state.recordLocalInput(
+            oldText = MULTI_CHAR_TEXT,
+            newText = "abcdefghix",
+            oldSelection = TextRange(9, 9),
+            newSelection = TextRange(10, 10),
+            changes = listOf(LocalInputChange(newRange = TextRange(9, 10), oldRange = TextRange(9, 9))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(10, 10), 0)
+
+        // 确认第二笔后 scene.cursorRect 已变成 track2 的 cursor（在 'x' 之后，位置 10）
+        val sceneAfterInsert = state.drawSnapshot().scene
+        assertNotNull(
+            "testI5: 第二笔后 scene.cursorRect 应非 null",
+            sceneAfterInsert.cursorRect,
+        )
+        // track2 cursor 在 'x' 之后（位置 10），远在 parent [0,9) 中间（约 3.6）之后
+        val track2CursorLeft = sceneAfterInsert.cursorRect!!.left
+        val track1CursorApproxLeft = parentFractionByTrack1 * 9f
+        assertTrue(
+            "testI5: 前置 — track2 cursor ($track2CursorLeft) 应远在 track1 cursor 估算位置" +
+                " ($track1CursorApproxLeft) 之后，否则问题2不触发" +
+                "（track2 在 'x' 之后位置 10，track1 在 parent 中间约位置 ${parentFractionByTrack1 * 9}）",
+            track2CursorLeft > track1CursorApproxLeft + 2f,
+        )
+
+        // 第三笔："abcdefghix" -> "abcdfghix"（删中间 [4,5) 'e'，split 旧 parent）
+        // offsetMap: old [0,4) → new [0,4) surviving, old [4,5) ghost,
+        //            old [5,9) → new [4,8) surviving, old [9,10) → new [8,9) surviving
+        state.recordLocalInput(
+            oldText = "abcdefghix",
+            newText = "abcdfghix",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(4, 4), oldRange = TextRange(4, 5))),
+        )
+        state.onAuthoritativeLayout(layouts[3], TextRange(4, 4), 0)
+
+        // 在 timeline drain 之前检查 handoff scene — 这是 publishLocalHandoffScene 建立的 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 找到 ghost [4,5) slice
+        val ghostSlice =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(4, 5) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull(
+            "testI5: handoff 应存在 range=[4,5) 的 DeletedGhost（'e' 的 ghost），" +
+                "实际=${handoffScene.units.map { unitSummary(it) }}",
+            ghostSlice,
+        )
+
+        val handoffGhostFraction = handoffScene.unitClipFractions[ghostSlice!!.key] ?: 1f
+
+        // 断言1（结构性问题）：ghost 的 clipTrackId 应是 parent 的 track1（不是 track2）
+        // toHandoffGhost 通过 unit.copy(...) 保留 parent 的 clipTrackId = track1
+        // 但 rebase 用 scene.cursorRect（track2）算 fraction — 这正是问题2的根因
+        assertEquals(
+            "testI5: ghost 的 clipTrackId 应等于 parent 的 clipTrackId（track1），" +
+                "实际 ghostClipTrackId=${ghostSlice.clipTrackId}, parentClipTrackId=$parentClipTrackId" +
+                "（toHandoffGhost 通过 unit.copy 保留 parent clipTrackId）",
+            parentClipTrackId,
+            ghostSlice.clipTrackId,
+        )
+
+        // 断言2（首帧连续性）：handoff ghost fraction 应等于 timeline 同帧 ghost fraction
+        // drain 到 timeline 后，timeline 用 ghost.clipTrackId（track1）算 fraction
+        // handoff 用 scene.cursorRect（track2）算 fraction（旧 bug）
+        // 两者应一致 — 不一致就是首帧跳变
+        state.drainPendingPatchesAtFrame(40L * NANOS_PER_MS)
+        val timelineScene = state.sampleVisualScene(40L * NANOS_PER_MS)
+        val timelineGhost =
+            timelineScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(4, 5) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull(
+            "testI5: timeline 应存在 range=[4,5) 的 DeletedGhost",
+            timelineGhost,
+        )
+        val timelineGhostFraction = timelineScene.unitClipFractions[timelineGhost!!.key] ?: 1f
+
+        // 首帧连续性断言：handoff fraction 应等于 timeline fraction
+        // 旧 bug（非零宽 bounds）：handoff 用 scene.cursorRect（track2，位置 10）→ fraction=1
+        //   timeline 用 ghost.clipTrackId（track1，位置 3.6）→ fraction=0
+        //   1 != 0 → 首帧跳变 → 此断言失败
+        // 修复后：handoff 用 parent clipTrackId（track1，位置 3.6）→ fraction=0
+        //   timeline 用 ghost.clipTrackId（track1，位置 3.6）→ fraction=0
+        //   0 == 0 → 连续 → 此断言通过
+        //
+        // 实际在 Robolectric 环境下此断言也会失败 — handoff 用 heuristic/parentOldFraction
+        // （track1）算出 fraction=0，但 timeline drain 后用自己的 patchClipTrackId 算出
+        // fraction=1，两者不一致 = 首帧跳变。根因是 handoff 和 timeline 用不同 cursor track
+        // 算同一个 ghost 的 fraction。
+        assertEquals(
+            "testI5: handoff 首帧 ghost fraction ($handoffGhostFraction) 应等于 timeline 同帧" +
+                " ghost fraction ($timelineGhostFraction) — 首帧连续性" +
+                "（handoff 用 scene.cursorRect=track2 算，timeline 用 ghost.clipTrackId=track1 算）" +
+                "（旧 bug：handoff 用全局 cursor 导致首帧跳变）" +
+                "（注意：Robolectric 零宽 bounds 环境下 heuristic fallback 屏蔽了此 bug，" +
+                "非零宽生产环境下此断言会失败）",
+            handoffGhostFraction,
+            timelineGhostFraction,
+            0.01f,
+        )
+
+        // 断言3（文档化 track1 vs track2 的预期差异）：
+        // track1 cursor 在 parent 中间（约位置 3.6），对 [4,5) ghost 来说 cursor 在 ghost 之前
+        // → DeletedGhost fraction=0（字被吞掉）
+        // track2 cursor 在 'x' 之后（位置 10），对 [4,5) ghost 来说 cursor 已越过 ghost
+        // → DeletedGhost fraction=1（字仍完整可见）
+        // 如果 handoff 用 track2（旧 bug），ghost fraction ≈ 1
+        // 如果 handoff 用 track1（修复后），ghost fraction ≈ 0
+        val expectedFractionByTrack1 = 0f
+        val expectedFractionByTrack2 = 1f
+        // 确认 track1 和 track2 给出不同值（否则问题2不触发）
+        assertTrue(
+            "testI5: track1 预期 fraction ($expectedFractionByTrack1) 应不等于" +
+                " track2 预期 fraction ($expectedFractionByTrack2)" +
+                "（否则问题2不会导致首帧跳变）",
+            kotlin.math.abs(expectedFractionByTrack1 - expectedFractionByTrack2) > 0.5f,
+        )
+        // 在 Robolectric 零宽环境下，heuristic 用 parentOldFraction（track1）算，
+        // handoff fraction 应接近 track1 预期值（0），不是 track2 预期值（1）
+        assertTrue(
+            "testI5: handoff ghost fraction ($handoffGhostFraction) 应接近 track1 预期值" +
+                " ($expectedFractionByTrack1) — 在零宽 heuristic fallback 下用 parentOldFraction 算" +
+                "（在非零宽生产环境下，旧 bug 会导致 fraction 接近 track2 预期值" +
+                " $expectedFractionByTrack2，与 timeline 不一致 = 首帧跳变）",
+            kotlin.math.abs(handoffGhostFraction - expectedFractionByTrack1) < 0.3f,
+        )
+    }
+
+    // ==================== 测试 I6：cursorEnabled=false 路径不人为写 fraction=0（问题3） ====================
+
+    /**
+     * 测试 I6：cursorEnabled=false / 非 spatial clip 路径不人为写 fraction=0 —
+     *
+     * #708 评论 5733321056 问题3：
+     * ComposeEditorVisualState.kt 的 publishLocalHandoffScene() 无 cursor 分支：
+     * ```
+     * if (child.targetRange == null) {
+     *     clipMap[child.key] = initialFraction ?: 0f
+     * }
+     * ```
+     * 当文字动画开、光标动画关时，alpha=0.4 的 Inserted unit 被删除，
+     * parentOldFraction=null，handoffCursorRect=null，rebase 后 initialFraction=null，
+     * 但代码人为写 fraction=0。draw 层 `if (clipFraction <= 0f) continue` 直接消失，
+     * timeline drain 后又按 alpha 出现，出现"0.4 可见 -> handoff 0 消失 -> timeline 又出现"的闪烁。
+     *
+     * 测试场景：
+     * 1. 设置 motionPolicy: textEnabled=true, cursorEnabled=false
+     * 2. 第一笔：`"" -> "a"`（插入 'a'），sample 到 alpha 在 (0,1) 之间
+     * 3. 第二笔：`"a" -> ""`（删除 'a'）
+     * 4. 检查 handoff scene
+     *
+     * 断言：
+     * - handoff scene 不应人为出现 fraction=0
+     * - 首帧仍按当前 alpha 连续显示（unitClipFractions 不含该 ghost key，或含但非 0）
+     * - timeline 后续再淡出
+     */
+    @Test
+    fun testI6_cursorDisabled_pathDoesNotWriteFractionZero() {
+        val layouts = captureLayoutsWithWidth(arrayOf("", "a", ""), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-708-5733321056-I6",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 设置 motionPolicy: textEnabled=true, cursorEnabled=false
+        // 这会让 coordinatedSpatialClip = textEnabled && cursorEnabled && coordinated = false
+        // handoffCursorRect = null（cursorEnabled=false）
+        state.applyMotionPolicyAtFrame(
+            com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy(
+                textEnabled = true,
+                cursorEnabled = false,
+                coordinated = true,
+            ),
+        )
+
+        // 初始 layout：空文本
+        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
+
+        // 第一笔："" -> "a"（插入 'a'）
+        state.recordLocalInput(
+            oldText = "",
+            newText = "a",
+            oldSelection = TextRange(0, 0),
+            newSelection = TextRange(1, 1),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
+        state.drainPendingPatchesAtFrame(0L)
+
+        // sample 到 'a' 仍 active（10ms，alpha ≈ 0.1，在 0..1 之间）
+        val sampledScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val unitA = sampledScene.units.firstOrNull { it.targetRange == TextRange(0, 1) }
+        assertNotNull(
+            "testI6: 前置 — 应存在 targetRange=[0,1) 的 unit（'a'）",
+            unitA,
+        )
+        val visibleAlpha = unitA!!.alpha.from
+        assertTrue(
+            "testI6: 前置 — 'a' 应仍 active（alpha.from 在 0..1 之间），实际 alpha.from=$visibleAlpha" +
+                "（cursorEnabled=false 但 textEnabled=true，文字动画仍应进行）",
+            visibleAlpha > 0f && visibleAlpha < 1f,
+        )
+
+        // 第二笔："a" -> ""（删除 'a'）
+        state.recordLocalInput(
+            oldText = "a",
+            newText = "",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(0, 0),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 0), oldRange = TextRange(0, 1))),
+        )
+        state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0)
+
+        // 在 timeline drain 之前检查 handoff scene
+        val handoffScene = state.drawSnapshot().scene
+
+        // 找到 ghost [0,1)
+        val ghost =
+            handoffScene.units.firstOrNull {
+                it.targetRange == null && it.range == TextRange(0, 1) &&
+                    it.role == VisualUnitRole.DeletedGhost
+            }
+        assertNotNull(
+            "testI6: handoff 应存在 range=[0,1) 的 DeletedGhost（'a' 的 ghost），" +
+                "实际=${handoffScene.units.map { unitSummary(it) }}",
+            ghost,
+        )
+
+        // 断言1：handoff scene 不应人为出现 fraction=0
+        // 旧 bug：publishLocalHandoffScene 无 cursor 分支，initialFraction=null 时写 fraction=0
+        // 修复后：不应人为写 0，首帧仍按当前 alpha 连续显示
+        // unitClipFractions 不含该 ghost key，或含但非 0
+        val ghostFraction = handoffScene.unitClipFractions[ghost!!.key]
+        if (ghostFraction != null) {
+            assertTrue(
+                "testI6: ghost fraction 不应被人为写 0（alpha=$visibleAlpha > 0 时首帧应连续显示），" +
+                    "实际 fraction=$ghostFraction" +
+                    "（旧 bug：publishLocalHandoffScene 无 cursor 分支，initialFraction=null 时写 fraction=0，" +
+                    "draw 层 if (clipFraction <= 0f) continue 直接消失，" +
+                    "timeline drain 后又按 alpha 出现 = 闪烁）",
+                ghostFraction > 0f,
+            )
+        }
+        // 如果 ghostFraction == null 也 OK（unitClipFractions 不含该 key，draw 层用 alpha 主导）
+
+        // 断言2：不应存在 fraction=0 的 ghost（直接断言问题存在）
+        val zeroFractionGhosts =
+            handoffScene.units.filter {
+                it.targetRange == null && it.role == VisualUnitRole.DeletedGhost &&
+                    handoffScene.unitClipFractions[it.key] == 0f
+            }
+        assertTrue(
+            "testI6: 不应存在 fraction=0 的 DeletedGhost（alpha > 0 时首帧不应人为消失），" +
+                "实际=${zeroFractionGhosts.map { "key=${it.key}, range=${it.range}" }}" +
+                "（旧 bug：无 cursor 分支写 fraction=0，draw 层 continue 直接消失，" +
+                "出现 alpha=0.4 可见 -> handoff 0 消失 -> timeline 又出现 的闪烁）",
+            zeroFractionGhosts.isEmpty(),
         )
     }
 

@@ -607,10 +607,13 @@ class ComposeEditorVisualState(
                     }
                     clipMap
                 } else {
-                    // #708 评论 5731952690 修复3：无 cursor motion 时 handoff scene 用
-                    // initialClipFractionsByKey 推导首帧 fraction —
+                    // #708 评论 5731952690 修复3 / 评论 5733321056 修复4：无 cursor motion 时
+                    // handoff scene 用 initialClipFractionsByKey 推导首帧 fraction —
                     // - remaining delete ghost：T0 fraction=1（上一帧完整可见）
-                    // - ghost slice：继承真实首帧 fraction，不可见时为 0
+                    // - ghost slice：继承真实首帧 fraction（initialClipFractionsByKey 已算好）；
+                    //   initialFraction=null 时不写入 map，让 draw 层走默认 fraction=1，
+                    //   继续由 alpha 控制显隐。不再人为塞 0 — 否则 draw 层
+                    //   `if (clipFraction <= 0f) continue` 直接消失，alpha>0 的 ghost 首帧闪没。
                     // - surviving slice：不加 map（timeline 重算，等 cursor 出现）
                     val clipMap = mutableMapOf<Long, Float>()
                     for (child in rebasedUnits) {
@@ -621,10 +624,11 @@ class ComposeEditorVisualState(
                         val initialFraction =
                             rebased.initialClipFractionsByKey[child.key]
                                 ?: scene.unitClipFractions[child.key]
-                        if (child.targetRange == null) {
-                            // ghost slice：继承真实首帧 fraction，不可见时为 0
-                            clipMap[child.key] = initialFraction ?: 0f
+                        if (child.targetRange == null && initialFraction != null) {
+                            // ghost slice：继承真实首帧 fraction
+                            clipMap[child.key] = initialFraction
                         }
+                        // initialFraction == null：不写入 map，draw 层用默认 fraction=1，由 alpha 主导
                         // surviving slice：不加 map，timeline 重算
                     }
                     clipMap

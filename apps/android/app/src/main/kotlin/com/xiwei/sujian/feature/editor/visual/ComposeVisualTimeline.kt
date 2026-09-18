@@ -1179,7 +1179,7 @@ class ComposeVisualTimeline {
         // #708 评论 5730173947 修复2：per-unit clip track — sampledCursor（全局最新）只用于
         // scene.cursorRect（屏幕视觉光标）；clip 驱动用 per-unit clipTracks，
         // 每个 unit 用自己的 clipTrackId 查对应 track 算 clipCursor，不全部读全局最新 cursorChannel。
-        val computedClipFractions = computeUnitClipFractions(sampledUnits, frameTimeNanos)
+        val computedClip = computeUnitClipFractions(sampledUnits, frameTimeNanos)
         // #708 评论 5730173947 修复2：清理无引用的 clip track —
         // 没有任何 unit 再引用的 track 清掉，避免泄漏。
         // units 已是收口后的存活 unit（remainingUnits）。
@@ -1187,12 +1187,17 @@ class ComposeVisualTimeline {
         clipTracks.keys.retainAll(referencedTrackIds)
         // #708 评论 5723410606 第二节：删除 barrier handoff 首帧的 redirectBaseClipFractions 覆盖 —
         // 不再有整屏 barrier redirect，clip fractions 直接用计算结果。
-        val unitClipFractions = computedClipFractions
+        val unitClipFractions = computedClip.fractions
+        // #708 评论 5733321056 修复1+2：scene 带 per-unit clip cursor —
+        // handoff rebase 用 parent 自己的 unitClipCursors[parentKey] 算 split child 首帧 fraction，
+        // 不再用全局 scene.cursorRect（可能已切到下一笔的 cursorTrack）。
+        val unitClipCursors = computedClip.cursors
         return ComposeVisualScene(
             units = sampledUnits,
             hiddenRanges = hiddenRanges,
             cursorRect = sampledCursor,
             unitClipFractions = unitClipFractions,
+            unitClipCursors = unitClipCursors,
             coordinatedSpatialClip = coordinatedSpatialClip,
         )
     }
@@ -1230,16 +1235,24 @@ class ComposeVisualTimeline {
      * 不再全部读全局最新 cursorChannel。历史 ghost 用自己的旧 track 继续吞字进度，
      * 不被下一笔光标抢走。无 clipTrackId 或 track 已清的 unit 跳过（不放入 map，draw 层用默认值）。
      *
+     * #708 评论 5733321056 修复1+2：同时记录每个 unit 这一帧实际使用的 clip cursor —
+     * handoff rebase 用 parent unit 自己的 cursor 算 split child 首帧 fraction，
+     * 不再用全局 scene.cursorRect（可能已切到下一笔的 cursorTrack）。
+     *
      * @param units 当前帧的 sampled units（alpha/position 已插值到当前帧）。
      * @param frameTimeNanos 当前帧时间戳 — 用于查 per-unit track 的当前 cursor 位置。
-     * @return unit key → 可见 fraction（0..1）。
+     * @return [UnitClipResult]：fractions = unit key → 可见 fraction（0..1），
+     *   cursors = unit key → 该 unit 这一帧算 fraction 时所用的 cursor rect。
      */
     private fun computeUnitClipFractions(
         units: List<VisualTextUnit>,
         frameTimeNanos: Long,
-    ): Map<Long, Float> {
-        if (units.isEmpty()) return emptyMap()
-        val result = mutableMapOf<Long, Float>()
+    ): UnitClipResult {
+        if (units.isEmpty()) return UnitClipResult.EMPTY
+        val fractions = mutableMapOf<Long, Float>()
+        // #708 评论 5733321056 修复1+2：同时记录 per-unit clip cursor —
+        // handoff rebase 用 parent 自己的 cursor 算 split child 首帧 fraction。
+        val cursors = mutableMapOf<Long, Rect>()
         for (unit in units) {
             // #708 评论 5730173947 修复2：per-unit clip track —
             // unit 用自己的 clipTrackId 查对应 track 算 clipCursor，
@@ -1252,10 +1265,27 @@ class ComposeVisualTimeline {
             // 避免 split 后 child key 查不到 fraction、三段文字共用父块空间进度。
             val fraction = ComposeVisualClip.fractionFor(unit, clipCursor, coordinatedSpatialClip)
             if (fraction != null) {
-                result[unit.key] = fraction
+                fractions[unit.key] = fraction
+                // #708 评论 5733321056 修复1+2：记录这个 unit 实际使用的 clip cursor —
+                // handoff rebase 用 parent 自己的 cursor 算 split child 首帧 fraction，
+                // 与 timeline 用同一 per-unit clipTrackId cursor 算的结果一致。
+                cursors[unit.key] = clipCursor
             }
         }
-        return result
+        return UnitClipResult(fractions, cursors)
+    }
+
+    /**
+     * #708 评论 5733321056 修复1+2：computeUnitClipFractions 返回值 —
+     * 同时携带 fractions 和 per-unit clip cursors。
+     */
+    private data class UnitClipResult(
+        val fractions: Map<Long, Float>,
+        val cursors: Map<Long, Rect>,
+    ) {
+        companion object {
+            val EMPTY = UnitClipResult(emptyMap(), emptyMap())
+        }
     }
 
     /**
@@ -1871,6 +1901,15 @@ data class CursorTrack(
  *   key = [VisualTextUnit.key]，value = 可见 fraction。
  *   1f = 完全可见（cursor 已越过整个 glyph），0f = 完全不可见（cursor 还没到 glyph）。
  *   draw 层用此 fraction 裁切 glyph 可见区域，不再纯靠 alpha 决定出现/消失。
+ * @param unitClipCursors #708 评论 5733321056 修复1+2：每个 unit 实际使用的 clip driver cursor。
+ *   key = [VisualTextUnit.key]，value = 该 unit 这一帧算 fraction 时所用的 cursor rect
+ *   （来自 unit.clipTrackId 对应的 [ComposeVisualTimeline.clipTracks] 当前帧采样）。
+ *   scene.cursorRect 仍只表示屏幕最新视觉光标（来自最新 cursorChannel），
+ *   不再被 handoff rebase 当作"所有 unit 共用的 clip cursor"。
+ *   handoff rebase 用 parent unit 自己的 unitClipCursors[parentKey] 算 split child 首帧 fraction，
+ *   与 timeline 用同一 per-unit clipTrackId cursor 算的结果一致，避免首帧跳变。
+ *   parent 不在 map 中表示它本来就不是 spatial clip 驱动（无 clipTrackId 或 track 已清），
+ *   rebase 时不要凭空造一个 cursor。
  * @param coordinatedSpatialClip #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记。
  *   true 表示当前 patch 处于 textEnabled && cursorEnabled && coordinated 模式，
  *   draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1），
@@ -1882,6 +1921,7 @@ data class ComposeVisualScene(
     val hiddenRanges: List<TextRange>,
     val cursorRect: Rect? = null,
     val unitClipFractions: Map<Long, Float> = emptyMap(),
+    val unitClipCursors: Map<Long, Rect> = emptyMap(),
     val coordinatedSpatialClip: Boolean = false,
 ) {
     companion object {
