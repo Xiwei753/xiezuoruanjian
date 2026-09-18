@@ -497,11 +497,31 @@ fn insert_move_insert_epoch_sequence() {
 ///    同一活动事务 `build_render_plan_full` 不再产生 `Coordinated`
 ///    （`cursor_owner_epoch != current_cursor_epoch` 不匹配）；
 /// 5. no-op（行首 backward / 同位置 click）不 bump epoch。
+/// Issue #707 评论 5725462471: 补上最后两个行为断言 ——
+/// - 阶段 3.5: 正文事务仍拥有 caret 时，no-op（文末 forward）不 bump epoch、
+///   不切断 ownership，下一帧 build 仍 `Coordinated`。之前阶段 5 的 no-op
+///   发生在 epoch 已 bump、旧事务已失去 ownership 之后，只能证明"no-op 不
+///   继续 bump"，不能证明"no-op 不切断"。
+/// - 阶段 4: 真实 move 后 `cursor_ctrl.animation` 的 `start_x/start_y` 必须等于
+///   上一帧 `drawn_caret_rect` 回写的 `visual_x/visual_y`，证明 drawn caret
+///   回写真的被下一笔动画消费，且 target 已变化（非 no-op）。
 #[test]
 fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
     run_on_qt_thread(|| {
         let mut item = SujianEditorItem::default();
         item.set_plain_text(QString::from("Hello"));
+        // Issue #707 评论 5725462471: 设足够大的 viewport_height，使 cursor 在
+        // viewport 内（in_viewport=true），这样 move 后 build_cursor_plan 走 Tween
+        // 而非 Snap（!should_be_visible），animation 才会被创建，才能断言
+        // start_x/start_y == visual_after_write。默认 current_viewport_height=0
+        // 会导致 should_be_visible=false → Snap → animation=None。
+        item.current_viewport_height = 600.0;
+        // Issue #707 评论 5725462471: 先移到文末，使 insert_text 在文末插入，
+        // cursor 落在新文末边界。这样阶段 3.5 可以用 forward no-op 验证
+        // "正文事务拥有 caret 时 no-op 不切断 ownership"（forward no-op 直接
+        // return，不调 update_cursor_visual_position，visual 不变，最稳妥）。
+        // 此时还没有正文事务，bump epoch 无副作用。
+        item.move_to_line_edge(true, false);
 
         // ── 阶段 1: 初始 prepared_frame ──
         assert!(
@@ -624,9 +644,124 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         }
         let visual_after_write = (item.cursor_ctrl.visual_x, item.cursor_ctrl.visual_y);
 
+        // ── 阶段 3.5: no-op 不切断正文事务 caret 所有权 ──
+        // Issue #707 评论 5725462471: 在阶段4 真正 move 之前验证 ——
+        // 正文事务还拥有 caret 时，no-op 不应把 ownership 切断，下一帧仍应 Coordinated。
+        // 之前阶段5 的 no-op 测试发生在 epoch 已经 bump、旧事务已失去 ownership 之后，
+        // 只能证明"no-op 不继续 bump epoch"，不能证明"no-op 不切断 ownership"。
+        {
+            let epoch_before_noop = item.cursor_ctrl.cursor_owner_epoch;
+            let cursor_before_noop = item.buffer.cursor;
+            // cursor 当前在文末（"HelloWorld" 位置 10），forward 是确定的 no-op。
+            // move_cursor_horizontal 内部先算 next，确认 next == cursor 后直接 return，
+            // 不 bump epoch、不调 update_cursor_visual_position，visual 不变。
+            assert_eq!(
+                item.buffer.cursor,
+                item.buffer.text.len(),
+                "no-op 前 cursor 应在文末（setup 已移到文末再 insert）"
+            );
+            item.move_cursor_horizontal(true, false); // forward no-op at end of text
+            assert_eq!(
+                item.buffer.cursor, cursor_before_noop,
+                "文末 forward 应是 no-op，cursor 不变"
+            );
+            assert_eq!(
+                item.cursor_ctrl.cursor_owner_epoch, epoch_before_noop,
+                "no-op 不应 bump epoch（正文事务仍拥有 caret）"
+            );
+            // 确认同一个正文事务仍 active
+            assert!(
+                item.pipeline
+                    .animation_coordinator_mut()
+                    .active_text_transaction_key()
+                    .is_some(),
+                "no-op 后正文事务应仍 active"
+            );
+            // 再用同样的 build_render_plan_full build 一帧，断言仍然是 Coordinated
+            let cursor_render_state_noop = item.build_cursor_render_state_for_frame();
+            let selection_preedit_noop = item
+                .prepared_frame
+                .as_ref()
+                .map(|f| f.selection_preedit.clone())
+                .unwrap_or_default();
+            let frame_now_noop = Instant::now();
+            let plan_noop = item.pipeline.animation_coordinator_mut().build_render_plan_full(
+                cursor_render_state_noop,
+                selection_preedit_noop,
+                FrameContext::default(),
+                CursorStyle::default(),
+                SelectionPreeditStyle::default(),
+                frame_now_noop,
+                item.current_coordinated_text_cursor_animation_enabled,
+                item.cursor_ctrl.animation.as_ref(),
+                item.cursor_ctrl.cursor_owner_epoch,
+            );
+            match plan_noop.cursor_sample_outcome {
+                super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {
+                    assert!(
+                        x.is_finite() && y.is_finite() && h.is_finite(),
+                        "no-op 后正文事务仍应产生 Coordinated: ({}, {}, {})",
+                        x,
+                        y,
+                        h
+                    );
+                    println!(
+                        "[BEHAVIOR_VERIFY] 阶段3.5 no-op 后仍 Coordinated: ({:.4}, {:.4}, {:.4})",
+                        x, y, h
+                    );
+                }
+                other => panic!(
+                    "no-op 不应切断正文事务 caret 所有权，下一帧仍应 Coordinated，实际: {:?}",
+                    other
+                ),
+            }
+        }
+
         // ── 阶段 4: 真实手动移动 bump epoch，旧事务失去 caret 所有权 ──
         let epoch_before_move = item.cursor_ctrl.cursor_owner_epoch;
         item.move_cursor_horizontal(false, false); // backward
+        // Issue #707 评论 5725462471: 证明下一笔光标动画从上一帧 drawn_caret_rect 起步。
+        // move 前 visual_after_write 已记录（= 上一帧 drawn_caret_rect 回写值）。
+        // 生产 CursorController::apply_plan 的关键保证：有可信 visual position 时，
+        // 新 Tween 的 start_x/start_y 必须取当前 visual_x/visual_y，不能退回 old_rect。
+        // move 后 cursor_ctrl.animation 必须是 Some（Tween），且 start == visual_after_write。
+        let anim_after_move = item
+            .cursor_ctrl
+            .animation
+            .as_ref()
+            .expect("真实 move 后应创建 Tween 动画（visual != target，smooth cursor 开启）");
+        assert!(
+            (anim_after_move.start_x - visual_after_write.0).abs() < 0.5,
+            "新 Tween start_x 必须从上一帧 drawn_caret_rect (visual_after_write) 起步: \
+             实际 start_x={:.4} vs visual_after_write.x={:.4}",
+            anim_after_move.start_x,
+            visual_after_write.0
+        );
+        assert!(
+            (anim_after_move.start_y - visual_after_write.1).abs() < 0.5,
+            "新 Tween start_y 必须从上一帧 drawn_caret_rect (visual_after_write) 起步: \
+             实际 start_y={:.4} vs visual_after_write.y={:.4}",
+            anim_after_move.start_y,
+            visual_after_write.1
+        );
+        // 断言 target 已经变化，避免 no-op / 同位置误通过
+        assert!(
+            (anim_after_move.target_x - anim_after_move.start_x).abs() > 0.01
+                || (anim_after_move.target_y - anim_after_move.start_y).abs() > 0.01,
+            "Tween target 必须与 start 不同（真实移动）：\
+             target=({:.4}, {:.4}), start=({:.4}, {:.4})",
+            anim_after_move.target_x,
+            anim_after_move.target_y,
+            anim_after_move.start_x,
+            anim_after_move.start_y
+        );
+        println!(
+            "[BEHAVIOR_VERIFY] 阶段4: move 后 Tween start=({:.4}, {:.4}) == visual_after_write, target=({:.4}, {:.4})",
+            anim_after_move.start_x,
+            anim_after_move.start_y,
+            anim_after_move.target_x,
+            anim_after_move.target_y
+        );
         let epoch_after_move = item.cursor_ctrl.cursor_owner_epoch;
         assert!(
             epoch_after_move > epoch_before_move,
