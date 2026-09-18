@@ -485,6 +485,10 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 引用 TextRange/TextLayoutResult 做显示数据，
             # 与 ComposeReflowPlanner 同类，不写正文持久状态。
             "feature/editor/visual/ComposeOverlayOwnership.kt",
+            # #708 评论 5725706551：本地 handoff scene rebase helper，
+            # 引用 TextRange/ComposeLayoutSnapshot 做显示数据，
+            # 与 ComposeVisualRebase 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeLocalHandoffRebase.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

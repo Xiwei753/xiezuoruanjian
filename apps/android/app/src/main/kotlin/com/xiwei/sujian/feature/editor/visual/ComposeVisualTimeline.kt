@@ -404,37 +404,18 @@ class ComposeVisualTimeline {
         }
     }
 
+    // #708 评论 5725706551：切片逻辑已抽取到 ComposeVisualRebase.computeSlices 共享 helper。
     private fun computeSlices(
         target: TextRange,
         offsetMap: List<VisualOffsetMapEntry>?,
         newTextLength: Int,
         intent: EditorVisualIntent? = null,
-    ): List<ComposeVisualRebase.MappedRangeSlice> {
-        val effectiveMap =
-            offsetMap ?: intent?.let { ComposeVisualRebase.entriesForIntent(it) }
-        if (effectiveMap != null) {
-            return ComposeVisualRebase.splitMappedRangeForward(target, effectiveMap)
-        }
-        // 无 offset map 且无 intent 信息：若 target 仍在新正文范围内，保留；否则转 ghost
-        return if (target.end <= newTextLength) {
-            listOf(
-                ComposeVisualRebase.MappedRangeSlice(
-                    oldSubRange = target,
-                    newSubRange = target,
-                    kind = ComposeVisualRebase.MappedRangeSliceKind.SURVIVING,
-                ),
-            )
-        } else {
-            listOf(
-                ComposeVisualRebase.MappedRangeSlice(
-                    oldSubRange = target,
-                    newSubRange = null,
-                    kind = ComposeVisualRebase.MappedRangeSliceKind.GHOST,
-                ),
-            )
-        }
-    }
+    ): List<ComposeVisualRebase.MappedRangeSlice> =
+        ComposeVisualRebase.computeSlices(target, offsetMap, newTextLength, intent)
 
+    // #708 评论 5725706551：与 ComposeLocalHandoffRebase.mapSurvivingSliceToHandoff 对应。
+    // timeline 版本：alpha 通道不变（继续原动画），position 在新位置变化时创建动画通道。
+    // handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
     private fun mapSurvivingSlice(
         unit: VisualTextUnit,
         mappedRange: TextRange,
@@ -1203,6 +1184,11 @@ class ComposeVisualTimeline {
 
     /**
      * #689 评论 5675270164 缺陷2：把 unit 转成 ghost — alpha 从当前值继续到 0。
+     *
+     * #708 评论 5725706551：与 [ComposeLocalHandoffRebase.toHandoffGhost] 对应。
+     * timeline 版本（本方法）：alpha 从当前值继续到 0（创建淡出动画通道），
+     * position 固定在当前屏幕位置（考虑切片 ghost 的父 unit 位移）。
+     * handoff 版本：alpha/position 都固定在当前可见值，不推进时间。
      *
      * 旧实现 `unit.copy(targetRange = null)` 只把 targetRange 设 null，没把 alpha 改成
      * "当前值 -> 0"。如果 unit 原来正在做插入动画（alpha 0->1），快速输入后马上删除，

@@ -151,6 +151,52 @@ internal object ComposeVisualRebase {
     }
 
     /**
+     * #708 评论 5725706551：把旧 unit 的 targetRange 切成 SURVIVING/GHOST slice —
+     * [ComposeVisualTimeline.mapSurvivingUnits] 和 [ComposeLocalHandoffRebase.rebase] 共用的切片逻辑。
+     *
+     * 优先用 [offsetMap]；没有则从 [intent] 用 [entriesForIntent] 生成 fallback survival map；
+     * 都没有则检查 target 是否仍在新正文范围内（[target.end] <= [newTextLength]）：
+     * - 在范围内 → 整段 SURVIVING（range 不变）；
+     * - 超出范围 → 整段 GHOST。
+     *
+     * @param target 旧正文中的 UTF-16 range（T0 坐标）。
+     * @param offsetMap 整条 chain 合成后的 T0→Tn offset map；null 表示没有。
+     * @param newTextLength 新正文长度 — fallback 判断 target 是否仍存活。
+     * @param intent 原始 Core intent — offsetMap==null 时用 replaceBounds 生成 fallback。
+     * @return 切片列表。
+     */
+    internal fun computeSlices(
+        target: TextRange,
+        offsetMap: List<VisualOffsetMapEntry>?,
+        newTextLength: Int,
+        intent: EditorVisualIntent? = null,
+    ): List<MappedRangeSlice> {
+        val effectiveMap =
+            offsetMap ?: intent?.let { entriesForIntent(it) }
+        if (effectiveMap != null) {
+            return splitMappedRangeForward(target, effectiveMap)
+        }
+        // 无 offset map 且无 intent 信息：若 target 仍在新正文范围内，保留；否则转 ghost
+        return if (target.end <= newTextLength) {
+            listOf(
+                MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = target,
+                    kind = MappedRangeSliceKind.SURVIVING,
+                ),
+            )
+        } else {
+            listOf(
+                MappedRangeSlice(
+                    oldSubRange = target,
+                    newSubRange = null,
+                    kind = MappedRangeSliceKind.GHOST,
+                ),
+            )
+        }
+    }
+
+    /**
      * #689 评论 5675270164 缺陷5：offset-map 切片结果。
      *
      * @param oldSubRange 旧正文中的子区间。

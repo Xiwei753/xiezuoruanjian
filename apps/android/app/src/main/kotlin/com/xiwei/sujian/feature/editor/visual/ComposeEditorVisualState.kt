@@ -365,14 +365,21 @@ class ComposeEditorVisualState(
      * 都调用本方法，把"这一笔编辑哪些局部区域暂时由 overlay 接管"直接写进 [_visualScene] 和
      * [drawSnapshotState]，不再经过一个从未被真正建立的中间 handoff 字段。
      *
-     * 首帧 scene 内容：
-     * - Insert：把 [patch.insertedUnits] 加进 hiddenRanges（BasicTextField 先不画新字，由 overlay 吐字）。
-     * - Delete：从 [oldLayout] 为 [patch.deletedUnits] 建静态 ghost（alpha=1，位置=旧位置）。
-     * - Reflow（缺口2）：对每个 [patch.reflowMoves]，把 [ComposeReflowMove.newRange] 加进 hiddenRanges
-     *   （BasicTextField 已落到新行的那份字先裁掉），并建一个首帧静止的 ReflowMove unit
-     *   （alpha 永远 1，position 停在 oldBounds），下一帧 timeline 正式创建 oldBounds -> newBounds 动画后覆盖。
-     * - Cursor：所有有光标动画的 patch（cursorEnabled && cursorMotionPath != null）把
-     *   [patch.originCursorRect]（真实 T0 caret）放进 scene.cursorRect，不只是删除路径。
+     * #708 评论 5725706551：scene rebase — 不再直接复制旧 hiddenRanges/units（旧坐标系），
+     * 而是调用 [ComposeLocalHandoffRebase.rebase] 把旧 visible scene 映射到新正文坐标系：
+     *
+     * 1. **Scene rebase**：旧 active unit（targetRange != null）通过 offsetMap 映射到新正文坐标；
+     *    存活 slice 改 newRange/newLayout，保持当前屏幕位置；被删除 slice 从当前可见 alpha/position
+     *    转 handoff ghost（不新建 alpha=1 的完整 ghost）。已有 ghost 保持当前状态。
+     * 2. **hiddenRanges 重新推导**：从 rebase 后所有 targetRange != null 的 unit 重新推导
+     *    （不再从旧 hiddenRanges 复制），再加 [patch.insertedUnits] 和 reflow slice 的 newRange。
+     *    这确保 hiddenRanges 和 newLayout 属于同一个坐标系。
+     * 3. **deletedUnits 只补差集**：先收集 rebase 阶段已经转成 ghost 的旧正文范围（ghostedCoverage），
+     *    只给"没有被旧 active unit 接管"的 deletedUnits 新建 alpha=1 的完整 ghost。
+     *    这避免同一 glyph 同时出现 Inserted + DeletedGhost 的重影。
+     * 4. **Reflow**：保持现有差集逻辑（[ComposeOverlayOwnership.subtractOwnedRanges]），
+     *    但 ownedRanges 从 rebase 后的 units 取。
+     * 5. **Cursor**：保持现有首帧光标处理逻辑。
      *
      * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/reflowMoves/originCursorRect）。
      * @param oldLayout T0 布局（建 ghost / reflow oldBounds 来源）。
@@ -386,7 +393,29 @@ class ComposeEditorVisualState(
         restingCursorRect: Rect?,
     ) {
         _visualScene.update { scene ->
-            val mergedHidden = scene.hiddenRanges.toMutableList()
+            // #708 评论 5725706551 步骤1：调用 ComposeLocalHandoffRebase.rebase 做 scene rebase —
+            // 把旧 visible scene（旧正文坐标）映射到新正文坐标系。
+            // 旧 active unit 通过 splitMappedRangeForward 映射到新正文坐标：
+            //   - 存活 slice：targetRange/range 改成 newRange，layout 改成 newLayout，alpha/position 固定在当前可见值；
+            //   - 被删除 slice：从当前可见 alpha/position 转 handoff ghost（不新建 alpha=1 的完整 ghost）；
+            //   - 已有 ghost：保持当前状态不变。
+            // ghostedCoverage 记录 rebase 阶段已经转成 ghost 的旧正文范围。
+            val rebased = ComposeLocalHandoffRebase.rebase(scene, patch)
+            val rebasedUnits = rebased.units.toMutableList()
+
+            // #708 评论 5725706551 步骤2：hiddenRanges 从 rebase 后所有 targetRange != null 的 unit 重新推导 —
+            // 不再从旧 hiddenRanges 复制（旧坐标系），确保 hiddenRanges 和 newLayout 属于同一个坐标系。
+            val mergedHidden = mutableListOf<TextRange>()
+            for (unit in rebasedUnits) {
+                val tr = unit.targetRange
+                if (tr != null && tr.start < tr.end) {
+                    val alreadyHidden = mergedHidden.any { it.start == tr.start && it.end == tr.end }
+                    if (!alreadyHidden) {
+                        mergedHidden.add(tr)
+                    }
+                }
+            }
+            // 加 patch.insertedUnits — BasicTextField 先不画新字，由 overlay 吐字
             for (ins in patch.insertedUnits) {
                 if (ins.start < ins.end &&
                     mergedHidden.none { it.start == ins.start && it.end == ins.end }
@@ -394,12 +423,19 @@ class ComposeEditorVisualState(
                     mergedHidden.add(ins)
                 }
             }
-            // 删除路径首帧 ghost：为 deletedUnits 建立静态 ghost
-            val mergedUnits = scene.units.toMutableList()
+
+            // #708 评论 5725706551 步骤3：deletedUnits 只补"没有被旧 active unit 接管"的部分 —
+            // ghostedCoverage 是 rebase 阶段已经转成 ghost 的旧正文范围（旧坐标系）。
+            // 只给"没有被 ghostedCoverage 覆盖"的 deletedUnits 新建 alpha=1 的完整 ghost，
+            // 避免同一 glyph 同时出现 Inserted + DeletedGhost 的重影。
+            val ghostedCoverage = rebased.ghostedCoverage
             for (del in patch.deletedUnits) {
                 if (del.start >= del.end) continue
-                // 已有同 range 的 ghost 则跳过
-                if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
+                // 检查这个 del range 是否已经被 ghostedCoverage 覆盖（旧 active unit 已转 ghost）
+                val alreadyGhosted = ghostedCoverage.any { it.start <= del.start && del.end <= it.end }
+                if (alreadyGhosted) continue
+                // 检查 rebasedUnits 里是否已有覆盖此 range 的 ghost
+                if (rebasedUnits.any { it.targetRange == null && it.range == del }) continue
                 // 从 oldLayout 取旧位置建立静态 ghost
                 val oldBounds =
                     ComposeVisualRebase.safePathBounds(
@@ -407,7 +443,7 @@ class ComposeEditorVisualState(
                     ) ?: continue
                 val oldPosition = Offset(oldBounds.left, oldBounds.top)
                 nextHandoffUnitKey++
-                mergedUnits +=
+                rebasedUnits +=
                     VisualTextUnit(
                         key = nextHandoffUnitKey,
                         layout = oldLayout,
@@ -419,6 +455,7 @@ class ComposeEditorVisualState(
                         role = VisualUnitRole.DeletedGhost,
                     )
             }
+
             // #708 评论 5725146968 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
             // 使用 ComposeOverlayOwnership.subtractOwnedRanges 做真正的差集，
             // 只给没有被其他 active unit 接管的 slice 建临时 ReflowMove。
@@ -426,7 +463,8 @@ class ComposeEditorVisualState(
             // 让 BasicTextField 已落到新行的那份字先裁掉，由 overlay 从 oldBounds -> newBounds 平移。
             // 首帧静止在旧位置（position from=to=oldPosition），alpha 永远 1。
             // 下一帧 timeline.applyPatch 正式创建 oldBounds -> newBounds 的 ReflowMove 后直接覆盖首帧 scene。
-            val ownedRanges = mergedUnits.mapNotNull { it.targetRange }
+            // #708 评论 5725706551：ownedRanges 从 rebase 后的 units 取（新坐标系）。
+            val ownedRanges = rebasedUnits.mapNotNull { it.targetRange }
             for (move in patch.reflowMoves) {
                 val remainingSlices =
                     ComposeOverlayOwnership.subtractOwnedRanges(
@@ -444,7 +482,7 @@ class ComposeEditorVisualState(
                         mergedHidden.add(nr)
                     }
                     // 已有同 newRange 的 ReflowMove 首帧 unit 则跳过
-                    if (mergedUnits.any {
+                    if (rebasedUnits.any {
                             it.targetRange == nr && it.role == VisualUnitRole.ReflowMove
                         }
                     ) {
@@ -452,7 +490,7 @@ class ComposeEditorVisualState(
                     }
                     val oldPosition = Offset(slice.oldBounds.left, slice.oldBounds.top)
                     nextHandoffUnitKey++
-                    mergedUnits +=
+                    rebasedUnits +=
                         VisualTextUnit(
                             key = nextHandoffUnitKey,
                             layout = newLayout,
@@ -466,6 +504,7 @@ class ComposeEditorVisualState(
                         )
                 }
             }
+
             // #708 评论 5725146968：首帧光标所有权 —
             // 不只是删除，所有有光标动画的 patch（cursorEnabled && cursorMotionPath != null）
             // 都用同一份 T0 caret 作为首帧 scene.cursorRect，
@@ -480,14 +519,14 @@ class ComposeEditorVisualState(
                     null
                 }
             val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
-            val unitsChanged = mergedUnits.size != scene.units.size
+            val unitsChanged = rebasedUnits.size != scene.units.size
             val cursorChanged = handoffCursorRect != null && handoffCursorRect != scene.cursorRect
             if (!hiddenChanged && !unitsChanged && !cursorChanged) {
                 scene
             } else {
                 scene.copy(
                     hiddenRanges = mergedHidden,
-                    units = mergedUnits,
+                    units = rebasedUnits,
                     cursorRect = handoffCursorRect ?: scene.cursorRect,
                 )
             }
