@@ -206,13 +206,6 @@ class ComposeEditorVisualState(
     private var drawSnapshotState: ComposeEditorDrawSnapshot by mutableStateOf(ComposeEditorDrawSnapshot())
 
     /**
-     * #708 评论 5723410606 第二节：本地编辑首帧交接 —
-     * 只保存"这一笔编辑哪些局部区域暂时由 overlay 接管"，不保存上一整屏。
-     * 取代了已删除的 ComposeLocalFrameBarrier。
-     */
-    private var pendingLocalEditHandoff: ComposeLocalEditHandoff? = null
-
-    /**
      * #708 评论 5723410606 第三节：layout fingerprint 持久状态 —
      * 把 fingerprint 做成明确 data class，不再 List<Any>。
      * onAuthoritativeLayout 最前面先算 fingerprint，相同正文+相同几何时直接返回，
@@ -365,22 +358,132 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff 的防御性封装 —
-     * handoff 应已由 [onAuthoritativeLayout] 建立；如果没有，说明生命周期又断了，
-     * 记日志不默默放过（localPatch 仍入队，但无 handoff redirect）。
+     * #708 评论 5724568261 缺口1/缺口2：本地编辑首帧 scene 统一发布入口 —
      *
-     * 抽成 helper 避免在 [finishCompositionCommit] / [onAuthoritativeLayout] 内增加嵌套层数。
+     * 取代已删除的 [ComposeLocalEditHandoff] 死状态 + [bindLocalPatchHandoff] 空绑定。
+     * 两条路径（[onAuthoritativeLayout] 普通本地输入 / [finishCompositionCommit] composition 最终提交）
+     * 都调用本方法，把"这一笔编辑哪些局部区域暂时由 overlay 接管"直接写进 [_visualScene] 和
+     * [drawSnapshotState]，不再经过一个从未被真正建立的中间 handoff 字段。
+     *
+     * 首帧 scene 内容：
+     * - Insert：把 [patch.insertedUnits] 加进 hiddenRanges（BasicTextField 先不画新字，由 overlay 吐字）。
+     * - Delete：从 [oldLayout] 为 [patch.deletedUnits] 建静态 ghost（alpha=1，位置=旧位置）。
+     * - Reflow（缺口2）：对每个 [patch.reflowMoves]，把 [ComposeReflowMove.newRange] 加进 hiddenRanges
+     *   （BasicTextField 已落到新行的那份字先裁掉），并建一个首帧静止的 ReflowMove unit
+     *   （alpha 永远 1，position 停在 oldBounds），下一帧 timeline 正式创建 oldBounds -> newBounds 动画后覆盖。
+     * - Cursor：删除路径把 [patch.originCursorRect]（真实 T0 caret）放进 scene.cursorRect。
+     *
+     * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/reflowMoves/originCursorRect）。
+     * @param oldLayout T0 布局（建 ghost / reflow oldBounds 来源）。
+     * @param newLayout Tn 布局（reflow unit 所属 layout）。
+     * @param restingCursorRect 当前静止光标 rect — 写进 drawSnapshotState.restingCursorRect。
      */
-    private fun bindLocalPatchHandoff(
-        localPatchId: Long,
-        logTag: String,
+    private fun publishLocalHandoffScene(
+        patch: ComposeVisualPatch,
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+        restingCursorRect: Rect?,
     ) {
-        val handoff = pendingLocalEditHandoff
-        if (handoff == null) {
-            Log.w(TAG, "$logTag: localPatchId=$localPatchId")
-        } else {
-            pendingLocalEditHandoff = handoff.copy(patchId = localPatchId)
+        _visualScene.update { scene ->
+            val mergedHidden = scene.hiddenRanges.toMutableList()
+            for (ins in patch.insertedUnits) {
+                if (ins.start < ins.end &&
+                    mergedHidden.none { it.start == ins.start && it.end == ins.end }
+                ) {
+                    mergedHidden.add(ins)
+                }
+            }
+            // 缺口2：reflow 首帧 — 把 reflowMoves 的 newRange 加进 hiddenRanges，
+            // 让 BasicTextField 已落到新行的那份字先裁掉，由 overlay 从 oldBounds -> newBounds 平移。
+            for (move in patch.reflowMoves) {
+                val nr = move.newRange
+                if (nr.start < nr.end &&
+                    mergedHidden.none { it.start == nr.start && it.end == nr.end }
+                ) {
+                    mergedHidden.add(nr)
+                }
+            }
+            // 删除路径首帧 ghost：为 deletedUnits 建立静态 ghost
+            val mergedUnits = scene.units.toMutableList()
+            for (del in patch.deletedUnits) {
+                if (del.start >= del.end) continue
+                // 已有同 range 的 ghost 则跳过
+                if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
+                // 从 oldLayout 取旧位置建立静态 ghost
+                val oldBounds =
+                    ComposeVisualRebase.safePathBounds(
+                        oldLayout.result, del,
+                    ) ?: continue
+                val oldPosition = Offset(oldBounds.left, oldBounds.top)
+                nextHandoffUnitKey++
+                mergedUnits +=
+                    VisualTextUnit(
+                        key = nextHandoffUnitKey,
+                        layout = oldLayout,
+                        range = del,
+                        targetRange = null,
+                        // 完整可见：alpha=1，不动画
+                        alpha = TimedFloat(1f, 1f, 0L, 0L),
+                        position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                        role = VisualUnitRole.DeletedGhost,
+                    )
+            }
+            // 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
+            // 首帧静止在旧位置（position from=to=oldPosition），alpha 永远 1。
+            // 下一帧 timeline.applyPatch 正式创建 oldBounds -> newBounds 的 ReflowMove 后直接覆盖首帧 scene。
+            for (move in patch.reflowMoves) {
+                val nr = move.newRange
+                if (nr.start >= nr.end) continue
+                if (nr.end > newLayout.result.layoutInput.text.length) continue
+                // 已有同 newRange 的 ReflowMove 首帧 unit 则跳过
+                if (mergedUnits.any {
+                        it.targetRange == nr && it.role == VisualUnitRole.ReflowMove
+                    }
+                ) {
+                    continue
+                }
+                val oldPosition = Offset(move.oldBounds.left, move.oldBounds.top)
+                nextHandoffUnitKey++
+                mergedUnits +=
+                    VisualTextUnit(
+                        key = nextHandoffUnitKey,
+                        layout = newLayout,
+                        range = nr,
+                        targetRange = nr,
+                        // 首帧静止：alpha 永远 1
+                        alpha = TimedFloat(1f, 1f, 0L, 0L),
+                        // 首帧静止在旧位置
+                        position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                        role = VisualUnitRole.ReflowMove,
+                    )
+            }
+            // 删除首帧光标所有权 — 把旧 caret 放进 scene.cursorRect
+            val barrierCursorRect =
+                if (patch.deletedUnits.isNotEmpty()) {
+                    patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
+                } else {
+                    null
+                }
+            val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
+            val unitsChanged = mergedUnits.size != scene.units.size
+            val cursorChanged = barrierCursorRect != null && barrierCursorRect != scene.cursorRect
+            if (!hiddenChanged && !unitsChanged && !cursorChanged) {
+                scene
+            } else {
+                scene.copy(
+                    hiddenRanges = mergedHidden,
+                    units = mergedUnits,
+                    cursorRect = barrierCursorRect ?: scene.cursorRect,
+                )
+            }
         }
+        // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
+        drawSnapshotState =
+            drawSnapshotState.copy(
+                scene = _visualScene.value,
+                layout = newLayout,
+                restingCursorRect = restingCursorRect,
+            )
     }
 
     /**
@@ -401,9 +504,6 @@ class ComposeEditorVisualState(
         compositionVisualPhase = CompositionVisualPhase.Idle
         // 清掉本次 preedit 留下的 local tracker — 后续权威 layout 到达时不会配对出 a->an 的 local patch。
         localInputTracker.clear()
-        // #708 评论 5723410606 第二节：composition cancel/reject/NoTextChange 后清本地编辑 handoff —
-        // 避免第一笔 preedit 误记录的 handoff 一直遗留。
-        pendingLocalEditHandoff = null
     }
 
     /**
@@ -424,11 +524,20 @@ class ComposeEditorVisualState(
             if (localChain != null) {
                 val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
                 if (localPatch != null) {
+                    // #708 评论 5724568261 缺口1：composition 最终提交路径也发布局部首帧 scene —
+                    // 不再只做 addLast + patchVersion + bindLocalPatchHandoff（旧 bindLocalPatchHandoff
+                    // 因 pendingLocalEditHandoff 从未被建立只走 Log.w，首帧 scene 从未发布）。
+                    // 现在统一调 publishLocalHandoffScene，让中文 composition commit 后 local timeline
+                    // 立即接管，不出现"最终字先裸画一帧 -> 动画再接手"的窗口。
+                    publishLocalHandoffScene(
+                        patch = localPatch,
+                        oldLayout = baseLayout,
+                        newLayout = finalLayout,
+                        restingCursorRect = computeCursorRectFromLayout(finalLayout),
+                    )
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
-                    // #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff。
-                    bindLocalPatchHandoff(localPatch.id, "finish_composition_commit_handoff_missing")
                 }
             }
         }
@@ -753,11 +862,17 @@ class ComposeEditorVisualState(
             if (oldLayout != null) {
                 val localPatch = buildLocalInputPatch(localChain, oldLayout, snapshot)
                 if (localPatch != null) {
+                    // #708 评论 5724568261 缺口1/缺口2：统一调 publishLocalHandoffScene 发布首帧 scene —
+                    // 不再用从未被建立的 pendingLocalEditHandoff + bindLocalPatchHandoff。
+                    publishLocalHandoffScene(
+                        patch = localPatch,
+                        oldLayout = oldLayout,
+                        newLayout = snapshot,
+                        restingCursorRect = cursorRect,
+                    )
                     pendingPatches.addLast(localPatch)
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
-                    // #708 评论 5723410606 第二节：配对出 local patch 后绑定到当前 handoff。
-                    bindLocalPatchHandoff(localPatch.id, "local_patch_handoff_missing")
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
@@ -765,74 +880,6 @@ class ComposeEditorVisualState(
                             "newLen=${newText.length} chainSize=${localChain.size} " +
                             "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
-                    // #708 评论 5723410606 第二节：本地 patch 生成以后，同步建立首帧 scene —
-                    // 不再缓存上一整屏，只把"这一笔编辑哪些局部区域暂时由 overlay 接管"放进 scene：
-                    // - Insert：只把 insertedUnits 加进 hiddenRanges；
-                    // - Delete：只从 oldLayout 为 deletedUnits 建 ghost；
-                    // - Cursor：scene.cursorRect 先放真实旧 caret；
-                    // - 其他正文完全由当前 BasicTextField 直接画。
-                    // 下一次 withFrameNanos 再把这个 scene 交给 timeline 继续。
-                    _visualScene.update { scene ->
-                        val mergedHidden = scene.hiddenRanges.toMutableList()
-                        for (ins in localPatch.insertedUnits) {
-                            if (ins.start < ins.end &&
-                                mergedHidden.none { it.start == ins.start && it.end == ins.end }
-                            ) {
-                                mergedHidden.add(ins)
-                            }
-                        }
-                        // 删除路径首帧 ghost：为 deletedUnits 建立静态 ghost
-                        val mergedUnits = scene.units.toMutableList()
-                        for (del in localPatch.deletedUnits) {
-                            if (del.start >= del.end) continue
-                            // 已有同 range 的 ghost 则跳过
-                            if (mergedUnits.any { it.targetRange == null && it.range == del }) continue
-                            // 从 oldLayout 取旧位置建立静态 ghost
-                            val oldBounds =
-                                ComposeVisualRebase.safePathBounds(
-                                    oldLayout.result, del,
-                                ) ?: continue
-                            val oldPosition = Offset(oldBounds.left, oldBounds.top)
-                            nextHandoffUnitKey++
-                            mergedUnits +=
-                                VisualTextUnit(
-                                    key = nextHandoffUnitKey,
-                                    layout = oldLayout,
-                                    range = del,
-                                    targetRange = null,
-                                    // 完整可见：alpha=1，不动画
-                                    alpha = TimedFloat(1f, 1f, 0L, 0L),
-                                    position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                                    role = VisualUnitRole.DeletedGhost,
-                                )
-                        }
-                        // 删除首帧光标所有权 — 把旧 caret 放进 scene.cursorRect
-                        val barrierCursorRect =
-                            if (localPatch.deletedUnits.isNotEmpty()) {
-                                localPatch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
-                            } else {
-                                null
-                            }
-                        val hiddenChanged = mergedHidden.size != scene.hiddenRanges.size
-                        val unitsChanged = mergedUnits.size != scene.units.size
-                        val cursorChanged = barrierCursorRect != null && barrierCursorRect != scene.cursorRect
-                        if (!hiddenChanged && !unitsChanged && !cursorChanged) {
-                            scene
-                        } else {
-                            scene.copy(
-                                hiddenRanges = mergedHidden,
-                                units = mergedUnits,
-                                cursorRect = barrierCursorRect ?: scene.cursorRect,
-                            )
-                        }
-                    }
-                    // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
-                    drawSnapshotState =
-                        drawSnapshotState.copy(
-                            scene = _visualScene.value,
-                            layout = snapshot,
-                            restingCursorRect = cursorRect,
-                        )
                 }
             }
             // #694 评论 5691696678 问题2：本地输入命中后推进 frameCoordinator 屏幕基线，
@@ -1018,7 +1065,8 @@ class ComposeEditorVisualState(
         // #708 评论 5723410606 第二节：配对完成后清 handoff —
         // 不再有"matching layout/local patch 到齐、timeline 从 barrier.baseScene redirect"的步骤，
         // timeline.applyPatch 已直接处理，sample 出同一 frame 的新 scene 后清 handoff。
-        pendingLocalEditHandoff = null
+        // #708 评论 5724568261 缺口1：pendingLocalEditHandoff 已删除（死状态），
+        // 首帧 scene 由 publishLocalHandoffScene 直接发布，无需在此清理。
         return listOf(framePatch)
     }
 
@@ -1209,9 +1257,9 @@ class ComposeEditorVisualState(
         wasCompositionActiveForSnapshot = false
         // #694 评论 5695660885 问题1：重置 composition 视觉生命周期 phase
         compositionVisualPhase = CompositionVisualPhase.Idle
-        // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / handoff / fingerprint
+        // #708 评论 5723410606 第一节/第二节/第三节：重置 draw snapshot / fingerprint
+        // （pendingLocalEditHandoff 已删除 — 缺口1 死状态移除）
         drawSnapshotState = ComposeEditorDrawSnapshot()
-        pendingLocalEditHandoff = null
         lastObservedLayoutFingerprint = null
         nextHandoffUnitKey = 2_000_000L
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
