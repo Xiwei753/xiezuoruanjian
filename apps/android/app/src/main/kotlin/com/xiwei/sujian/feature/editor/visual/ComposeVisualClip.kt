@@ -47,11 +47,18 @@ internal object ComposeVisualClip {
         // 非 coordinated 模式：保留 alpha<=0 跳过（alpha 仍主导显隐）。
         if (!coordinatedSpatialClip && alphaNow <= 0f) return null
         // 取 glyph bounds（用 unit 当前 layout + range）
-        val bounds = safePathBoundsForUnit(unit) ?: return null
-        val glyphLeft = bounds.left
-        val glyphRight = bounds.right
-        val glyphTop = bounds.top
-        val glyphBottom = bounds.bottom
+        val natural = safePathBoundsForUnit(unit) ?: return null
+        // #708 评论 5728507555：按当前实际绘制位置算 fraction —
+        // draw 层 translate = currentPosition - natural.left/top，
+        // fraction 使用的几何必须和 draw 层真正 translate 出来的字处于同一坐标系。
+        // 只要 surviving unit 正在从旧位置移动到新位置，natural 是新 layout 最终位置，
+        // unit.position.from 是当前还停在旧位置，两套坐标不一致会导致裁切提前/滞后。
+        val dx = unit.position.from.x - natural.left
+        val dy = unit.position.from.y - natural.top
+        val glyphLeft = natural.left + dx
+        val glyphRight = natural.right + dx
+        val glyphTop = natural.top + dy
+        val glyphBottom = natural.bottom + dy
         val glyphWidth = glyphRight - glyphLeft
         val cursorLeft = cursorRect.left
         val cursorTop = cursorRect.top
@@ -88,8 +95,9 @@ internal object ComposeVisualClip {
         val (glyphLineTop, glyphLineBottom) =
             try {
                 val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
-                unit.layout.result.getLineTop(glyphLine) to
-                    unit.layout.result.getLineBottom(glyphLine)
+                // #708 评论 5728507555：行 top/bottom 也要加 dy，和 glyph bounds 用同一坐标系。
+                (unit.layout.result.getLineTop(glyphLine) + dy) to
+                    (unit.layout.result.getLineBottom(glyphLine) + dy)
             } catch (_: Throwable) {
                 // layout 行信息取不到时 fallback 到旧 sameLine 语义（用 glyph bounds），
                 // 保证不会因 layout API 异常而整字消失。

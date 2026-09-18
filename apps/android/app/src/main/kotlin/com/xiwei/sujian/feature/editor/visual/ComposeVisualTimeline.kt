@@ -179,11 +179,14 @@ class ComposeVisualTimeline {
         // 处理"同一 VSync 连续 patch"场景；否则回退到 [isUnitVisibleAndPresented] 通道判断
         // "unit 是否已可见呈现"（覆盖插入 unit alpha 0→1 和 retained reflow unit alpha 1→1），
         // 处理"不同时间 patch 但中间未 sample"场景。
-        val progressByKey =
+        // #708 评论 5728507555：用 mutable map 让 mapSurvivingUnits 在 split 时把
+        // child key 的即时 presented 状态写入，使本笔 applyPatch 后面的 started/pending
+        // 分类能读到 child 的状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+        val effectiveProgressByKey =
             if (policy.textEnabled) {
-                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }
+                units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }.toMutableMap()
             } else {
-                emptyMap()
+                mutableMapOf()
             }
 
         if (policy.textEnabled) {
@@ -194,7 +197,15 @@ class ComposeVisualTimeline {
 
             // 第二步：把存活 unit 通过 offsetMap 映射到新正文（缺陷5 切片）。
             val ghosting = mutableListOf<VisualTextUnit>()
-            mapSurvivingUnits(sampledUnits, patch, frameTimeNanos, durationNanos, surviving, ghosting, progressByKey)
+            mapSurvivingUnits(
+                sampledUnits,
+                patch,
+                frameTimeNanos,
+                durationNanos,
+                surviving,
+                ghosting,
+                effectiveProgressByKey,
+            )
 
             // 第三步：处理本 patch 新插入的 unit。
             // #691 评论 5682970101：移除 queueTailEndNanos 串行 FIFO，改为 scene redirect 有界窗口。
@@ -211,7 +222,10 @@ class ComposeVisualTimeline {
                 }
                 // #691 评论 5684136311：用 rebase 前原始 unit 的可见进度判断，不用 startedAtNanos <= frameTimeNanos。
                 // 同一 VSync、零进度 → 可重新分段；已在之前可见帧产生真实进度 → 从当前状态继续，不归零。
-                if (progressByKey[unit.key] == true) {
+                // #708 评论 5728507555：用 effectiveProgressByKey（mutable）替代旧 progressByKey —
+                // mapSurvivingUnits 在 split 时已把 child key 的 presented 状态写入，
+                // 这里能读到 child 的即时状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+                if (effectiveProgressByKey[unit.key] == true) {
                     startedSurviving.add(unit)
                 } else {
                     pendingSurviving.add(unit)
@@ -276,7 +290,7 @@ class ComposeVisualTimeline {
                 cursorPath = cursorPath,
                 cursorDurationNanos = cursorDurationNanos,
                 surviving = surviving,
-                progressByKey = progressByKey,
+                progressByKey = effectiveProgressByKey,
             )
         }
     }
@@ -399,7 +413,7 @@ class ComposeVisualTimeline {
         durationNanos: Long,
         surviving: MutableList<VisualTextUnit>,
         ghosting: MutableList<VisualTextUnit>,
-        progressByKey: Map<Long, Boolean>,
+        progressByKey: MutableMap<Long, Boolean>,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
@@ -422,12 +436,21 @@ class ComposeVisualTimeline {
             if (isSplit) {
                 // 父 unit 已被 split 成子 unit，父 key 不再活跃，从 presentedKeys 移除
                 presentedKeys.remove(unit.key)
+                // #708 评论 5728507555：split 后父 key 不再活跃，从 effectiveProgressByKey 移除，
+                // 并把每个 child key 的 presented 状态显式写入，让本次 applyPatch 后面的 started/pending
+                // 分类能读到 child 的即时 presented 状态，不因 child key 是新分配的就判成 pending 重置 alpha。
+                progressByKey.remove(unit.key)
             }
             for (slice in slices) {
                 // 决定本 slice 的 childKey：
                 // - 不 split（单 slice 且代表整个父 unit）→ 保留 parent key
                 // - split（2+ 子 unit）→ 每个子 unit 分配独立新 key
                 val childKey = if (isSplit) nextUnitKey++ else unit.key
+                if (isSplit) {
+                    // #708 评论 5728507555：child 继承父 unit 的 presented 状态，
+                    // 让本次 applyPatch 后面的 started/pending 分类读到正确状态。
+                    progressByKey[childKey] = parentPresented
+                }
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
                     val mappedUnit =
                         mapSurvivingSlice(

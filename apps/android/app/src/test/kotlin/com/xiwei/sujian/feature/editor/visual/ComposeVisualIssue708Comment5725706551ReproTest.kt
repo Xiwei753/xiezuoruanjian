@@ -958,6 +958,37 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         // 断言4：drain 到 timeline 后同样验证
         state.drainPendingPatchesAtFrame(10L * NANOS_PER_MS)
 
+        // #708 评论 5728507555 断言：split 后 presented 状态在当前 applyPatch 里真正传给 child —
+        // parent 在 split 前 alpha.from ≈ 0.1（10ms，duration=100ms），
+        // split 后 drain 同一 frameTime（10ms），surviving child 的 alpha.from 仍然必须是 0.x，
+        // 不能变成 0（旧 bug：child 被判成 pending，alpha 重置 0→1，已显示到一半的文字闪没）。
+        val drainScene = state.sampleVisualScene(10L * NANOS_PER_MS)
+        val drainFrontChild = drainScene.units.firstOrNull { it.targetRange == TextRange(0, 4) }
+        val drainBackChild = drainScene.units.firstOrNull { it.targetRange == TextRange(4, 8) }
+        assertNotNull(
+            "testF: drain 后应存在前 surviving [0,4) child，" +
+                "实际 targetRanges=${drainScene.units.mapNotNull { it.targetRange }}",
+            drainFrontChild,
+        )
+        assertNotNull(
+            "testF: drain 后应存在后 surviving [4,8) child，" +
+                "实际 targetRanges=${drainScene.units.mapNotNull { it.targetRange }}",
+            drainBackChild,
+        )
+        // 两个 surviving child 的 alpha.from 都应 > 0（继承 parent presented 状态，不能重置为 0）
+        assertTrue(
+            "testF: 前 surviving child alpha.from 应 > 0（继承 parent presented 状态，不能重置为 0），" +
+                "实际 alpha.from=${drainFrontChild!!.alpha.from}" +
+                "（旧 bug：child key 不在旧 progressByKey 里，被判成 pending，alpha 重置 0→1）",
+            drainFrontChild.alpha.from > 0f,
+        )
+        assertTrue(
+            "testF: 后 surviving child alpha.from 应 > 0（继承 parent presented 状态，不能重置为 0），" +
+                "实际 alpha.from=${drainBackChild!!.alpha.from}" +
+                "（旧 bug：child key 不在旧 progressByKey 里，被判成 pending，alpha 重置 0→1）",
+            drainBackChild.alpha.from > 0f,
+        )
+
         // sample 到 cursor 在中间位置的帧 —
         // cursor 动画从 10ms 开始，coordinated 模式下持续 textDurationMillis=100ms，
         // 60ms 时 progress=0.5，cursor 在 [4,5) 之间（'e' 中间）。
@@ -997,10 +1028,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         // 中间帧 fraction 独立性验证 —
         // #708 评论 5727808906 核心修复：split 后每个 child 有独立 key 和独立 unitClipFractions entry，
         // 不因同 key 覆盖而压缩成 1 个 entry。
-        // 注意：删除中间字符时 surviving unit 会被 retainedMoves 改成 RetainedMove（fraction=1），
-        // 这是正确行为（retained move 始终完整可见，由 position 动画处理移动）。
-        // 因此本断言验证 entry 数量 >= split unit 数量（每个 split unit 有独立 entry），
-        // 而非 fraction 值不全相等。
+        // #708 评论 5728507555：buildLocalInputPatch() 里本地输入的 retainedMoves 现在明确是空列表，
+        // 已有 active surviving range 被 reflow ownership 扣掉后通常仍保持原来的 Inserted role。
+        // 因此这里直接验证真实 Inserted child 的 fraction，不只检查 map entry 数量。
         val midFractionEntries =
             timelineSplitUnits.mapNotNull { midScene.unitClipFractions[it.key] }
         assertTrue(
@@ -1011,6 +1041,54 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 "（旧 bug：同 key 覆盖导致 map 压缩成 1 个 entry）",
             midFractionEntries.size >= timelineSplitUnits.size,
         )
+
+        // #708 评论 5728507555 断言：fraction 按当前实际绘制位置算，不是按自然位置算 —
+        // surviving child 有位置动画时（old slice 位置 → new natural 位置），
+        // natural bounds 是新 layout 最终位置，unit.position.from 是当前绘制位置。
+        // cursor 在两者之间时，按自然位置算和按当前绘制位置算的 fraction 不同。
+        // 旧 bug：fractionFor 用自然位置，和 draw 层真正 translate 出来的字坐标系不一致。
+        val midBackChild = midScene.units.firstOrNull { it.targetRange == TextRange(4, 8) }
+        assertNotNull(
+            "testF: 60ms 时应存在后 surviving [4,8) child",
+            midBackChild,
+        )
+        val midNaturalBounds = ComposeVisualRebase.safePathBounds(layouts[2], TextRange(4, 8))
+        assertNotNull("testF: midNaturalBounds ([4,8)) 不应为 null", midNaturalBounds)
+        val midNaturalLeft = midNaturalBounds!!.left
+        val midCurrentDrawLeft = midBackChild!!.position.from.x
+        val midPositionDelta = kotlin.math.abs(midCurrentDrawLeft - midNaturalLeft)
+        // 只有存在非零 position delta 时才验证 fraction 值（delta=0 时两种算法一致，无法区分）
+        if (midPositionDelta > 0.5f) {
+            val midCursorLeft = midScene.cursorRect?.left
+            assertNotNull("testF: midScene 应有 cursorRect", midCursorLeft)
+            val midGlyphWidth = midNaturalBounds.width
+            if (midGlyphWidth > 0.5f) {
+                val midActualFraction = midScene.unitClipFractions[midBackChild.key]
+                assertNotNull(
+                    "testF: midBackChild 应在 unitClipFractions 中有 entry，" +
+                        "keys=${midScene.unitClipFractions.keys}",
+                    midActualFraction,
+                )
+                // 按当前绘制位置算的 fraction
+                val fractionByDrawnPos = ((midCursorLeft!! - midCurrentDrawLeft) / midGlyphWidth).coerceIn(0f, 1f)
+                // 按自然位置算的 fraction（旧 bug）
+                val fractionByNaturalPos = ((midCursorLeft - midNaturalLeft) / midGlyphWidth).coerceIn(0f, 1f)
+                // 只有当两种算法给出不同结果时才验证（cursor 在自然位置和当前绘制位置之间）
+                if (kotlin.math.abs(fractionByDrawnPos - fractionByNaturalPos) > 0.01f) {
+                    assertEquals(
+                        "testF: fraction 应按当前绘制位置算（不是自然位置），" +
+                            "actual=$midActualFraction, byDrawnPos=$fractionByDrawnPos, " +
+                            "byNaturalPos=$fractionByNaturalPos, " +
+                            "currentDrawLeft=$midCurrentDrawLeft, naturalLeft=$midNaturalLeft, " +
+                            "cursorLeft=$midCursorLeft, positionDelta=$midPositionDelta" +
+                            "（旧 bug：fractionFor 用自然位置，裁切提前/滞后）",
+                        fractionByDrawnPos,
+                        midActualFraction!!,
+                        0.01f,
+                    )
+                }
+            }
+        }
 
         // 断言5：下一笔 patch 到来时，已 presented 的 surviving child 不会因另一个同源 child 收口
         // 而重新变 pending — 通过再删一个字符验证 presented 状态正确传递。
