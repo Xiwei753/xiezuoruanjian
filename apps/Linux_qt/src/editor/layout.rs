@@ -4557,7 +4557,10 @@ fn expand_to_paragraph_boundaries(text: &str, start: usize, end: usize) -> (usiz
         text.len()
     } else {
         // 在 text[e..] 中找第一个 '\n'，段落结束是它后面（含 '\n'）
-        text[e..].find('\n').map(|p| e + p + 1).unwrap_or(text.len())
+        text[e..]
+            .find('\n')
+            .map(|p| e + p + 1)
+            .unwrap_or(text.len())
     };
     (para_start, para_end)
 }
@@ -4607,8 +4610,16 @@ mod issue_710_comment_5732160521_repro {
         // old 侧 expand_to_paragraph_boundaries("甲", 0, 0) → (0, 3)（"甲"整个段落，3 bytes）
         // new 侧 expand_to_paragraph_boundaries("a甲", 0, 1) → (0, 4)（"a甲"整个段落，4 bytes）
         let (old_s, old_e, new_s, new_e) = result.unwrap();
-        assert_eq!((old_s, old_e), (0, 3), "old 侧插入点 (0,0) 在 \"甲\" 中扩展段落边界应为 (0,3)");
-        assert_eq!((new_s, new_e), (0, 4), "new 侧 (0,1) 在 \"a甲\" 中扩展段落边界应为 (0,4)");
+        assert_eq!(
+            (old_s, old_e),
+            (0, 3),
+            "old 侧插入点 (0,0) 在 \"甲\" 中扩展段落边界应为 (0,3)"
+        );
+        assert_eq!(
+            (new_s, new_e),
+            (0, 4),
+            "new 侧 (0,1) 在 \"a甲\" 中扩展段落边界应为 (0,4)"
+        );
     }
 
     /// 问题 1 — 删除场景不再 panic。
@@ -4645,8 +4656,16 @@ mod issue_710_comment_5732160521_repro {
         // old 侧 expand_to_paragraph_boundaries("a甲", 0, 1) → (0, 4)（"a甲" 整个段落，4 bytes）
         // new 侧 expand_to_paragraph_boundaries("甲", 0, 0) → (0, 3)（"甲" 整个段落，3 bytes）
         let (old_s, old_e, new_s, new_e) = result.unwrap();
-        assert_eq!((old_s, old_e), (0, 4), "old 侧 (0,1) 在 \"a甲\" 中扩展段落边界应为 (0,4)");
-        assert_eq!((new_s, new_e), (0, 3), "new 侧删除后落点 (0,0) 在 \"甲\" 中扩展段落边界应为 (0,3)");
+        assert_eq!(
+            (old_s, old_e),
+            (0, 4),
+            "old 侧 (0,1) 在 \"a甲\" 中扩展段落边界应为 (0,4)"
+        );
+        assert_eq!(
+            (new_s, new_e),
+            (0, 3),
+            "new 侧删除后落点 (0,0) 在 \"甲\" 中扩展段落边界应为 (0,3)"
+        );
     }
 
     /// 问题 1 — 辅助：确认纯 ASCII 场景正常工作（对照测试）。

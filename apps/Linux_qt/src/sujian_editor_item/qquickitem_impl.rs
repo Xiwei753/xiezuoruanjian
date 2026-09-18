@@ -70,8 +70,8 @@ impl QQuickItem for SujianEditorItem {
         //   suppressed 期间 blink 由 Suppressed 模式保持 opacity 固定为 1。
         // - true->false（suppressed 结束）：重置 blink_last_toggle = frame_now /
         //   blink_visible = true，重新开始正常 blink，不继承旧相位。
-        let cur_cursor_blink_suppressed =
-            self.current_cursor_blink_mode() == super::cursor_animation::CursorBlinkMode::Suppressed;
+        let cur_cursor_blink_suppressed = self.current_cursor_blink_mode()
+            == super::cursor_animation::CursorBlinkMode::Suppressed;
         if cur_cursor_blink_suppressed != self.prev_cursor_blink_suppressed {
             if cur_cursor_blink_suppressed {
                 // false->true: suppressed 开始，光标从可见状态开始。

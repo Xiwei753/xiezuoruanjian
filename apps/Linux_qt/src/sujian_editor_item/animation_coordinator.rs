@@ -36,7 +36,6 @@ use super::layout_revision::LayoutRevision;
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
 // Issue #710 评论 5731145076 症状六: 导入 compute_affected_paragraph_ranges
 // 用于计算事务的 visual_affected_byte_range（基于段落边界扩展）。
-use crate::editor::layout::compute_affected_paragraph_ranges;
 pub(crate) use super::render_plan::{
     CursorRenderState, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange,
     TextAnimationGlyphInfo, TextAnimationPlan,
@@ -48,6 +47,7 @@ use super::text_visual_transaction::{
     RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
+use crate::editor::layout::compute_affected_paragraph_ranges;
 
 use crate::sujian_editor_item::editor_animation_debug_log;
 
@@ -197,10 +197,7 @@ fn conflicting_units_are_untouched(
     // 构造 per-tx 映射：旧事务 new 坐标系 → current-old 坐标系。
     // tx.new_snapshot.virtual_text 是该旧事务应用后的文本（旧事务 new 坐标系），
     // current_old_text 是当前事务应用前的文本（current-old 坐标系）。
-    let tx_new_text = tx
-        .new_snapshot
-        .as_ref()
-        .map(|s| s.virtual_text.as_str());
+    let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
     for unit in &tx.units {
         if unit.progress(now) >= 1.0 {
             continue;
@@ -208,7 +205,7 @@ fn conflicting_units_are_untouched(
         playing_units += 1;
         let start = unit.slice.byte_start; // 旧事务 new 坐标系
         let end = unit.slice.byte_end; // 旧事务 new 坐标系
-        // 先映射到 current-old 坐标系，再和 changed_old_ranges 做 overlap 比较。
+                                       // 先映射到 current-old 坐标系，再和 changed_old_ranges 做 overlap 比较。
         let (co_start, co_end) = match tx_new_text {
             Some(tx_new) => {
                 let per_tx_map = OffsetMap::build(tx_new, current_old_text);
@@ -1088,8 +1085,11 @@ impl LinuxEditorAnimationCoordinator {
         let mut all_rebase_frames: Vec<RebaseFrame> = Vec::new();
         // (key, cursor_owner_epoch, handoff) 候选，cancel 之后再从中选 handoff。
         // 这样避免 cancel 后找不到 tx（cancel 调用了 retain 把 tx 从队列移除）。
-        let mut caret_handoff_candidates: Vec<(VisualTransactionKey, u64, Option<RebaseCaretHandoff>)> =
-            Vec::new();
+        let mut caret_handoff_candidates: Vec<(
+            VisualTransactionKey,
+            u64,
+            Option<RebaseCaretHandoff>,
+        )> = Vec::new();
         let mut cancelled_keys: Vec<VisualTransactionKey> = Vec::new();
         for &old_key in conflicting {
             let tx_ref = self
@@ -1103,16 +1103,17 @@ impl LinuxEditorAnimationCoordinator {
             };
             // per-tx 坐标系映射：旧事务 new 坐标系 → current-old 坐标系。
             // 用于把 tx 采集的 rebase frame 的 byte_start/byte_end 映射到 current-old。
-            let tx_new_text = tx
-                .new_snapshot
-                .as_ref()
-                .map(|s| s.virtual_text.as_str());
+            let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
             let per_tx_map = tx_new_text.map(|tx_new| OffsetMap::build(tx_new, current_old_text));
 
             let untouched = match preserve {
-                Some((changed_old_ranges, offset_map)) => {
-                    conflicting_units_are_untouched(tx, changed_old_ranges, offset_map, current_old_text, now)
-                }
+                Some((changed_old_ranges, offset_map)) => conflicting_units_are_untouched(
+                    tx,
+                    changed_old_ranges,
+                    offset_map,
+                    current_old_text,
+                    now,
+                ),
                 None => false,
             };
             if untouched {
@@ -1126,18 +1127,28 @@ impl LinuxEditorAnimationCoordinator {
             // 受影响：采集 rebase frames（frame.byte_start/end 属于该旧事务 new 坐标系）。
             let frames = tx.collect_rebase_frames(now);
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
-            // 映射失败时保留原值（保守），让 match_rebase_frames 的 tier1/tier2 尽力匹配。
+            // 硬约束：进入 match_rebase_frames 的 frame.byte_start/end 必须已经是
+            // current-old 坐标。frame 的原值属于旧事务自己的 new_text revision，
+            // 映射失败后若保留旧数值，相当于把"已知属于旧 revision 的 byte offset"
+            // 伪装成 current-old offset，会污染 tier1/tier2 匹配。
+            // 映射失败的 frame 不进入 all_rebase_frames：其原值属于旧事务 new_text revision，
+            // 不能冒充 current-old offset。旧事务仍 cancel，只是该 frame 放弃 byte-range rebase。
             let mapped_frames: Vec<RebaseFrame> = frames
                 .into_iter()
-                .map(|mut frame| {
+                .filter_map(|mut frame| {
                     if let Some(ref per_tx_map) = per_tx_map {
-                        if let Some((ms, me)) = per_tx_map.map_old_range_to_new(frame.byte_start, frame.byte_end) {
+                        if let Some((ms, me)) =
+                            per_tx_map.map_old_range_to_new(frame.byte_start, frame.byte_end)
+                        {
                             frame.byte_start = ms;
                             frame.byte_end = me;
+                            return Some(frame);
                         }
-                        // 映射失败时保留原值（保守）。
+                        // 映射失败：丢弃该 frame，不进入 byte-range rebase。
+                        return None;
                     }
-                    frame
+                    // 无 per_tx_map（无 new_snapshot）：保留原 frame（退化为数值比较）。
+                    Some(frame)
                 })
                 .collect();
             // 在 cancel 之前采样 caret，构造 RebaseCaretHandoff 候选。
@@ -1487,20 +1498,22 @@ impl LinuxEditorAnimationCoordinator {
         &mut self,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
-        composition_byte_start: usize,
-        composition_byte_end: usize,
+        old_preedit_byte_start: usize,
+        old_preedit_byte_end: usize,
+        new_preedit_byte_start: usize,
+        new_preedit_byte_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
-        // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
-        // composition_byte_start/end 是 old 坐标系，传 &old_snapshot.virtual_text
-        // 作为 current_old_text。offset_map 仍保留用于 rebase。
+        // Issue #710 评论 5734282079: 冲突检测用 current-old 坐标系。
+        // old_preedit_byte_start/end 是 update_preedit 之前的 old virtualText 坐标，
+        // 传 &old_snapshot.virtual_text 作为 current_old_text。offset_map 仍保留用于 rebase。
         let conflicting = self.prepared_queue.find_conflicting_transaction(
             &old_snapshot.virtual_text,
-            composition_byte_start,
-            composition_byte_end,
+            old_preedit_byte_start,
+            old_preedit_byte_end,
         );
         // 预输入文本整体被替换，旧单元必然失效：不做保留判断。
         let now = Instant::now();
@@ -1584,6 +1597,18 @@ impl LinuxEditorAnimationCoordinator {
             caret_handoff,
             unit_duration_ms,
         );
+        // Issue #710 评论 5734282079: composition update 的 visual affected range。
+        // old_preedit_byte_start/end 是 old virtualText 坐标，new_preedit_byte_start/end
+        // 是 new virtualText 坐标。分别从对应 snapshot 扩段落得到 affected range。
+        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                &old_snapshot.virtual_text,
+                &new_snapshot.virtual_text,
+                (old_preedit_byte_start, old_preedit_byte_end),
+                (new_preedit_byte_start, new_preedit_byte_end),
+            );
+            (Some((old_s, old_e)), Some((new_s, new_e)))
+        };
         let prepared = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -1599,11 +1624,8 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            // Issue #710 评论 5731145076 症状六 / 评论 5732160521 问题 3:
-            // composition update 的 visual affected range。composition 整体替换
-            // preedit 区间，old/new 侧都用 composition_byte_start..end（保守策略）。
-            visual_affected_byte_range_old: Some((composition_byte_start, composition_byte_end)),
-            visual_affected_byte_range_new: Some((composition_byte_start, composition_byte_end)),
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -1636,16 +1658,34 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
-        let conflict_start = committed_replace_start.min(preedit_byte_start);
-        let conflict_end = committed_replace_end.max(preedit_byte_end);
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
+        // Issue #710 评论 5734282079: 不再把 committed_replace 坐标和 preedit virtualText 坐标 min/max。
+        // old-side affected range 从 old preedit range（old virtualText 坐标）得到；
+        // new-side: commit 用 candidate_byte_range（new snapshot 坐标），
+        //           cancel 用 committed_replace_range（cancel 后 new = committed，坐标一致）。
+        let (visual_affected_byte_range_old, visual_affected_byte_range_new) = {
+            let new_edit_range = if is_commit {
+                (candidate_byte_start, candidate_byte_end)
+            } else {
+                (committed_replace_start, committed_replace_end)
+            };
+            let (old_s, old_e, new_s, new_e) = compute_affected_paragraph_ranges(
+                &old_snapshot.virtual_text,
+                &new_snapshot.virtual_text,
+                (preedit_byte_start, preedit_byte_end),
+                new_edit_range,
+            );
+            (Some((old_s, old_e)), Some((new_s, new_e)))
+        };
+        let (conflict_old_start, conflict_old_end) =
+            visual_affected_byte_range_old.unwrap_or((preedit_byte_start, preedit_byte_end));
         // Issue #710 评论 5733109905: 冲突检测用 current-old 坐标系。
-        // conflict_start/end 是 old 坐标系，传 &old_snapshot.virtual_text
+        // conflict_old_start/end 是 old 坐标系，传 &old_snapshot.virtual_text
         // 作为 current_old_text。offset_map 仍保留用于 rebase。
         let conflicting = self.prepared_queue.find_conflicting_transaction(
             &old_snapshot.virtual_text,
-            conflict_start,
-            conflict_end,
+            conflict_old_start,
+            conflict_old_end,
         );
         // 预输入提交/取消同样整体替换 preedit 区间，不做保留判断。
         let now = Instant::now();
@@ -1968,11 +2008,12 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
-            // Issue #710 评论 5731145076 症状六 / 评论 5732160521 问题 3:
-            // composition commit/cancel 的 visual affected range。整体替换
-            // preedit 区间，old/new 侧都用 conflict_start..end（保守策略）。
-            visual_affected_byte_range_old: Some((conflict_start, conflict_end)),
-            visual_affected_byte_range_new: Some((conflict_start, conflict_end)),
+            // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
+            // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
+            // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
+            // 扩段落得到。
+            visual_affected_byte_range_old,
+            visual_affected_byte_range_new,
         };
 
         // Issue #690 评论 5675007226 步骤 5: 每笔动画一条紧凑事件进正式诊断包。
@@ -4087,8 +4128,17 @@ mod tests {
             ],
         );
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        let key =
-            coord.handle_composition_update(&old_snapshot, &new_snapshot, 0, 3, None, None, 0);
+        let key = coord.handle_composition_update(
+            &old_snapshot,
+            &new_snapshot,
+            0,
+            3,
+            0,
+            3,
+            None,
+            None,
+            0,
+        );
         assert!(key.is_some());
         let tx = coord
             .prepared_queue
@@ -4514,21 +4564,16 @@ mod tests {
             50,
         ));
 
-        let (frames, _) = coord.take_rebase_frames(
-            &[old_key],
-            "rebased_by_insert",
-            now,
-            None,
-            "abc",
-            0,
-        );
+        let (frames, _) =
+            coord.take_rebase_frames(&[old_key], "rebased_by_insert", now, None, "abc", 0);
         assert_eq!(frames.len(), 1, "旧事务的未播完单元要全部交棒");
         assert!((frames[0].visible_fraction - 0.75).abs() < 1e-6);
         assert!(
             coord.prepared_queue.is_empty(),
             "交棒后旧事务必须取消，snapshot/纹理资源归新事务所有"
         );
-        let (no_frames, _) = coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0);
+        let (no_frames, _) =
+            coord.take_rebase_frames(&[], "rebased_by_insert", now, None, "abc", 0);
         assert!(no_frames.is_empty(), "无冲突事务时不产生交棒帧");
     }
 
@@ -5326,14 +5371,8 @@ mod tests {
         );
 
         // ── 第二次 rebase：take_rebase_frames 采样事务 B 的屏幕光标 ──
-        let (_rebase_frames_b, handoff_b) = coord.take_rebase_frames(
-            &[key_b],
-            "second_rebase",
-            now_after_b,
-            None,
-            "abc",
-            0,
-        );
+        let (_rebase_frames_b, handoff_b) =
+            coord.take_rebase_frames(&[key_b], "second_rebase", now_after_b, None, "abc", 0);
         let handoff_b = handoff_b.expect("第二次 rebase 应采样到事务 B 的屏幕光标");
 
         // 断言：第二次 sampled caret 精确等于第二次 rebase 前
@@ -6333,6 +6372,102 @@ mod tests {
         );
     }
 
+    // ═════════════════════════════════════════════════════════════════════════
+    // Issue #710 评论 5734282079: take_rebase_frames 映射失败的 frame
+    // 不应进入 all_rebase_frames。frame 的原值属于旧事务自己的 new_text revision，
+    // 映射失败后若保留旧数值，相当于把"已知属于旧 revision 的 byte offset"
+    // 伪装成 current-old offset，会污染 match_rebase_frames 的 tier1/tier2 匹配。
+    // ═════════════════════════════════════════════════════════════════════════
+
+    /// Issue #710 评论 5734282079: take_rebase_frames 映射失败的 frame
+    /// 不应进入 all_rebase_frames。
+    ///
+    /// 场景：
+    /// - 旧事务 tx 的 new_snapshot.virtual_text = "abc"（旧事务 new 坐标系）
+    /// - current_old_text = "axyzc"（current-old 坐标系，"bc" 被替换成 "xyz"）
+    /// - tx 的 unit byte range = (1, 3)（"bc" 在旧事务 new 坐标系 "abc" 中）
+    /// - per_tx_map = OffsetMap::build("abc", "axyzc")
+    ///   - entries: [0,0,1] Identity ("a"), [2,4,1] Shifted ("c")
+    ///   - map_old_range_to_new(1, 3) 找不到包含 old_start=1 的 entry
+    ///     （中间的 "bc" 被替换了）→ 返回 None
+    /// - 调用 take_rebase_frames，断言 rebase_frames 为空（映射失败的 frame 被丢弃）
+    /// - 断言旧事务被 cancel（不在 active_transactions 中）
+    #[test]
+    fn issue710_take_rebase_frames_drops_frame_on_mapping_failure() {
+        let now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+
+        // current-old 文本："abc" 中 "bc" 被替换成 "xyz" → "axyzc"
+        let current_old_text = "axyzc";
+        // current-new 文本：与 current-old 相同（本测试只关心 per_tx_map 映射失败，
+        // 不关心 current-old → current-new 映射）
+        let current_new_text = "axyzc";
+        let offset_map = OffsetMap::build(current_old_text, current_new_text);
+        // 编辑范围：覆盖整个 "xyz" 区域 (1, 4)
+        let changed_old_ranges: [(usize, usize); 1] = [(1, 4)];
+
+        // ── tx: unit byte range (1, 3)（"bc" 在旧事务 new 坐标系 "abc" 中）──
+        // tx.new_snapshot.virtual_text = "abc"（旧事务 new 坐标系）
+        // per_tx_map = OffsetMap::build("abc", "axyzc")
+        //   entries: [0,0,1] Identity ("a"), [2,4,1] Shifted ("c")
+        // map_old_range_to_new(1, 3) → None（"bc" 被替换了，找不到包含 1 的 entry）
+        let tx_key = VisualTransactionKey::new(200, 1);
+        let mut tx = rendering_tx(
+            tx_key,
+            TextVisualOperationKind::Insert,
+            vec![elapsed_unit(reveal_slice(1, 3, 100.0, 60.0), 50, 100, now)],
+            caret(100.0),
+            caret(160.0),
+            now,
+            50,
+        );
+        tx.new_snapshot = Some(make_test_snapshot("abc", vec![]));
+        coord.prepared_queue.enqueue(tx);
+
+        // 前置断言：队列里有一笔事务
+        assert_eq!(
+            coord.prepared_queue.active_transactions().len(),
+            1,
+            "前置：队列里应有 tx 一笔事务"
+        );
+
+        // ── 调用 take_rebase_frames 处理冲突事务 ──
+        let conflicting = vec![tx_key];
+        let (rebase_frames, _caret_handoff) = coord.take_rebase_frames(
+            &conflicting,
+            "rebased_by_replace",
+            now,
+            Some((&changed_old_ranges, &offset_map)),
+            current_old_text,
+            0,
+        );
+
+        // ── 断言 1: rebase_frames 为空（映射失败的 frame 被丢弃）──
+        assert!(
+            rebase_frames.is_empty(),
+            "Issue #710 评论 5734282079: per_tx_map 映射失败的 frame 不应进入 \
+             all_rebase_frames。frame 的原值 (1,3) 属于旧事务 new 坐标系 \"abc\"，\
+             在 current-old \"axyzc\" 中 \"bc\" 已被替换成 \"xyz\"，\
+             map_old_range_to_new(1,3) 返回 None，该 frame 必须被丢弃。\
+             实际 rebase_frames 有 {} 个",
+            rebase_frames.len()
+        );
+
+        // ── 断言 2: 旧事务被 cancel（不在 active_transactions 中）──
+        let active = coord.prepared_queue.active_transactions();
+        let tx_still_active = active.iter().any(|t| t.key == tx_key);
+        assert!(
+            !tx_still_active,
+            "Issue #710 评论 5734282079: 映射失败的 frame 虽不进入 byte-range rebase，\
+             但旧事务仍应被 cancel（cancel 逻辑不变）。实际队列里仍有 tx"
+        );
+
+        println!(
+            "[BUGFIX_VERIFY] Issue #710 评论 5734282079: take_rebase_frames 映射失败 \
+             的 frame 被丢弃（不进入 all_rebase_frames），旧事务仍 cancel FIXED"
+        );
+    }
+
     /// Issue #710 评论 5733833897: 验证 `find_conflicting_transaction` 返回全部冲突事务。
     ///
     /// 构造两笔 active 事务，它们的 units byte range 都与查询 range 重叠，
@@ -6386,14 +6521,8 @@ mod tests {
              （2 笔），而非只返回第一个。实际返回 {:?}",
             conflicts
         );
-        assert!(
-            conflicts.contains(&tx1_key),
-            "应包含 tx1_key={:?}", tx1_key
-        );
-        assert!(
-            conflicts.contains(&tx2_key),
-            "应包含 tx2_key={:?}", tx2_key
-        );
+        assert!(conflicts.contains(&tx1_key), "应包含 tx1_key={:?}", tx1_key);
+        assert!(conflicts.contains(&tx2_key), "应包含 tx2_key={:?}", tx2_key);
 
         println!(
             "[BUGFIX_VERIFY] Issue #710 评论 5733833897: find_conflicting_transaction \
@@ -6474,10 +6603,7 @@ mod tests {
         );
 
         // 两笔都应被取消
-        assert!(
-            coord.prepared_queue.is_empty(),
-            "两笔冲突事务都应被取消"
-        );
+        assert!(coord.prepared_queue.is_empty(), "两笔冲突事务都应被取消");
 
         // caret handoff 应来自 tx2（transaction_id=200 更大）
         // tx2 的 caret track: from=200, to=260, started_at=now-50ms, duration=100ms

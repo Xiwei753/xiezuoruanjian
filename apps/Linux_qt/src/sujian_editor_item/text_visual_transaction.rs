@@ -576,10 +576,7 @@ impl PreparedTextVisualTransaction {
         byte_end: usize,
         current_old_text: &str,
     ) -> bool {
-        let tx_new_text = self
-            .new_snapshot
-            .as_ref()
-            .map(|s| s.virtual_text.as_str());
+        let tx_new_text = self.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
 
         if let Some(tx_new_text) = tx_new_text {
             // 有 new_text：构造 per-tx offset_map（本事务 new 坐标系 → current-old 坐标系）
@@ -938,8 +935,7 @@ mod issue_710_comment_5732160521_repro {
         // per-tx offset_map = OffsetMap::build("ab", "abc")：公共前缀 "ab"，Identity。
         // 第三笔在当前 revision "abc" 操作 c 区域，raw range = (2, 3)。
         let current_old_text = "abc";
-        let conflict =
-            queue.find_conflicting_transaction(current_old_text, 2, 3);
+        let conflict = queue.find_conflicting_transaction(current_old_text, 2, 3);
 
         // 修复后：tx1 的 (0,1) 映射到当前坐标系仍是 (0,1)（a 区域），
         // 查询 (2,3) 是 c 区域，不重叠 → 不冲突。
@@ -978,8 +974,7 @@ mod issue_710_comment_5732160521_repro {
         // per-tx offset_map = OffsetMap::build("aXb", "Xb")：公共后缀 "Xb"，Shifted。
         // 第三笔在当前 revision "Xb" 操作 X 区域，raw range = (0, 1)。
         let current_old_text = "Xb";
-        let conflict =
-            queue.find_conflicting_transaction(current_old_text, 0, 1);
+        let conflict = queue.find_conflicting_transaction(current_old_text, 0, 1);
 
         // 修复后：tx1 的 (1,2) 映射到当前坐标系为 (0,1)（X 区域），
         // 查询 (0,1) 也是 X 区域，重叠 → 冲突。
@@ -1002,8 +997,8 @@ mod issue_710_comment_5732160521_repro {
 // 修复后（Phase B）应把这些测试改为断言"正确行为"。
 #[cfg(test)]
 mod issue_710_comment_5733109905_repro {
-    use super::*;
     use super::super::layout_snapshot::SourceRect;
+    use super::*;
 
     /// 构造只含 virtual_text 的测试用 EditorLayoutSnapshot。
     fn make_test_snapshot(virtual_text: &str) -> EditorLayoutSnapshot {
@@ -1122,11 +1117,8 @@ mod issue_710_comment_5733109905_repro {
         let rebase_byte_end = 1usize;
 
         // 修复后：current_old_text = tx2.old，per-tx offset_map = identity
-        let current_conflict = queue.find_conflicting_transaction(
-            tx2_old_text,
-            rebase_byte_start,
-            rebase_byte_end,
-        );
+        let current_conflict =
+            queue.find_conflicting_transaction(tx2_old_text, rebase_byte_start, rebase_byte_end);
 
         // 修复后：tx1 的 (1,5) 在 tx2.old 坐标系仍是 (1,5)（tx1.new==tx2.old），
         // 查询 (0,1) 不重叠 → 不冲突。
@@ -1171,7 +1163,7 @@ mod issue_710_comment_5733109905_repro {
             2,
             TextVisualOperationKind::Insert,
             Some((2, 2)),
-            Some((2, 3)), // Y 在 "12Y345X6789" 的 2..3
+            Some((2, 3)),  // Y 在 "12Y345X6789" 的 2..3
             "12Y345X6789", // tx2.new_text
         );
         let mut queue = PreparedTransactionQueue::new();
@@ -1184,11 +1176,8 @@ mod issue_710_comment_5733109905_repro {
         let rebase_byte_end = 7usize;
 
         // 修复后：current_old_text = tx3.old，逐事务构造 per-tx offset_map
-        let current_conflict = queue.find_conflicting_transaction(
-            tx3_old_text,
-            rebase_byte_start,
-            rebase_byte_end,
-        );
+        let current_conflict =
+            queue.find_conflicting_transaction(tx3_old_text, rebase_byte_start, rebase_byte_end);
 
         // 单独验证 tx1 在正确 per-tx offset_map 下应判定冲突
         let tx1_alone = make_test_tx(
@@ -1242,8 +1231,8 @@ mod issue_710_comment_5733109905_repro {
         let tx1 = make_test_tx_with_unit(
             1,
             TextVisualOperationKind::Insert,
-            2, // unit byte_start
-            4, // unit byte_end
+            2,            // unit byte_start
+            4,            // unit byte_end
             Some((2, 2)), // visual_affected_byte_range_old
             Some((2, 4)), // visual_affected_byte_range_new
             "abXYcdef",   // tx1.new_text

@@ -917,15 +917,18 @@ impl LinuxEditorPipeline {
                 // - Replace/Cursor: 保守地两侧都用 (raw_byte_start, raw_byte_end)，
                 //   expand_to_paragraph_boundaries 内部会做 char boundary 调整。
                 let (old_edit_range, new_edit_range) = match vt.kind {
-                    writer_core::editor::EditorAnimationKind::Insert => {
-                        ((raw_byte_start, raw_byte_start), (raw_byte_start, raw_byte_end))
-                    }
-                    writer_core::editor::EditorAnimationKind::Delete => {
-                        ((raw_byte_start, raw_byte_end), (raw_byte_start, raw_byte_start))
-                    }
-                    writer_core::editor::EditorAnimationKind::Cursor => {
-                        ((raw_byte_start, raw_byte_end), (raw_byte_start, raw_byte_end))
-                    }
+                    writer_core::editor::EditorAnimationKind::Insert => (
+                        (raw_byte_start, raw_byte_start),
+                        (raw_byte_start, raw_byte_end),
+                    ),
+                    writer_core::editor::EditorAnimationKind::Delete => (
+                        (raw_byte_start, raw_byte_end),
+                        (raw_byte_start, raw_byte_start),
+                    ),
+                    writer_core::editor::EditorAnimationKind::Cursor => (
+                        (raw_byte_start, raw_byte_end),
+                        (raw_byte_start, raw_byte_end),
+                    ),
                 };
                 let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) =
                     layout::compute_affected_paragraph_ranges(
@@ -1015,8 +1018,10 @@ impl LinuxEditorPipeline {
                     let diff = layout::compare_old_new_visual_lines(
                         handle.lines,
                         &new_doc_snapshot.visual_lines,
-                        vt.inserted_range.map(|_| (new_affected_start, new_affected_end)),
-                        vt.deleted_range.map(|_| (old_affected_start, old_affected_end)),
+                        vt.inserted_range
+                            .map(|_| (new_affected_start, new_affected_end)),
+                        vt.deleted_range
+                            .map(|_| (old_affected_start, old_affected_end)),
                     );
 
                     // 从已有 old layout 提取 old 动画视觉（只提取需要重新栅格化的行）

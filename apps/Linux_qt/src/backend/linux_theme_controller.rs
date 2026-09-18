@@ -409,7 +409,11 @@ impl LinuxThemeController {
         // scheme 为 None 时用 "<none>" 表示颜色字段缺失，便于诊断日志区分
         // "scheme 未加载" 与 "scheme 加载成功但颜色为空"。
         let (surface, on_surface, on_surface_variant) = match state.scheme {
-            Some(ref s) => (s.surface.as_str(), s.on_surface.as_str(), s.on_surface_variant.as_str()),
+            Some(ref s) => (
+                s.surface.as_str(),
+                s.on_surface.as_str(),
+                s.on_surface_variant.as_str(),
+            ),
             None => ("<none>", "<none>", "<none>"),
         };
         crate::backend::app_backend::record_struct_event(

@@ -106,17 +106,23 @@ impl SujianEditorItem {
             .composition_session
             .as_mut()?;
         let old_preedit = session.preedit_text.clone();
+        // 在 update_preedit 之前取 old virtualText 坐标系的 preedit range。
+        let (old_preedit_byte_start, old_preedit_byte_end) =
+            session.preedit_byte_range_in_virtual_text();
         session.update_preedit(text, cursor);
         let generation = session.last_submitted_generation.value();
-        let (composition_byte_start, composition_byte_end) =
+        // 更新之后取 new virtualText 坐标系的 preedit range。
+        let (new_preedit_byte_start, new_preedit_byte_end) =
             session.preedit_byte_range_in_virtual_text();
         let virtual_text = session.virtual_text();
 
         Some(CompositionUpdateData {
             old_preedit,
             generation,
-            composition_byte_start,
-            composition_byte_end,
+            old_preedit_byte_start,
+            old_preedit_byte_end,
+            new_preedit_byte_start,
+            new_preedit_byte_end,
             virtual_text,
         })
     }
@@ -125,13 +131,18 @@ impl SujianEditorItem {
 /// Composition 更新数据，传递给动画协调器。
 ///
 /// 坐标空间：
-/// - `composition_byte_start`/`composition_byte_end`：virtualText UTF-8 byte offset（半开区间）
+/// - `old_preedit_byte_start`/`old_preedit_byte_end`：update_preedit 之前的 old
+///   virtualText 坐标系 UTF-8 byte offset（半开区间）
+/// - `new_preedit_byte_start`/`new_preedit_byte_end`：update_preedit 之后的 new
+///   virtualText 坐标系 UTF-8 byte offset（半开区间）
 /// - `generation`：composition session 代数，用于过期检测
 struct CompositionUpdateData {
     old_preedit: String,
     generation: u64,
-    composition_byte_start: usize,
-    composition_byte_end: usize,
+    old_preedit_byte_start: usize,
+    old_preedit_byte_end: usize,
+    new_preedit_byte_start: usize,
+    new_preedit_byte_end: usize,
     virtual_text: String,
 }
 
@@ -323,15 +334,19 @@ impl EditorInputHost for SujianEditorItem {
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
-                let composition_range =
-                    Some((data.composition_byte_start, data.composition_byte_end));
+                // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
+                // old_snapshot 用 old range，new_snapshot 用 new range。
+                let old_composition_range =
+                    Some((data.old_preedit_byte_start, data.old_preedit_byte_end));
+                let new_composition_range =
+                    Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
 
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
                         .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, composition_range)
+                            self.build_editor_layout_snapshot(width, false, old_composition_range)
                         })
                 } else {
                     self.pipeline
@@ -346,7 +361,7 @@ impl EditorInputHost for SujianEditorItem {
                                     self.build_editor_layout_snapshot(
                                         width,
                                         false,
-                                        composition_range,
+                                        old_composition_range,
                                     )
                                 })
                         })
@@ -355,7 +370,7 @@ impl EditorInputHost for SujianEditorItem {
                 let new_snapshot = self.build_virtual_layout_snapshot(
                     &data.virtual_text,
                     width,
-                    composition_range,
+                    new_composition_range,
                 );
 
                 let old_cursor_rect = self
@@ -381,8 +396,10 @@ impl EditorInputHost for SujianEditorItem {
                     .handle_composition_update(
                         &old_snapshot,
                         &new_snapshot,
-                        data.composition_byte_start,
-                        data.composition_byte_end,
+                        data.old_preedit_byte_start,
+                        data.old_preedit_byte_end,
+                        data.new_preedit_byte_start,
+                        data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
                         self.cursor_ctrl.cursor_owner_epoch,
@@ -426,15 +443,19 @@ impl EditorInputHost for SujianEditorItem {
         if self.typing_animation_enabled && !text.is_empty() {
             if let Some(data) = self.prepare_composition_update(text, cursor) {
                 let width = self.bounding_width();
-                let composition_range =
-                    Some((data.composition_byte_start, data.composition_byte_end));
+                // Issue #710 评论 5734282079: old/new preedit range 分属不同坐标系，
+                // old_snapshot 用 old range，new_snapshot 用 new range。
+                let old_composition_range =
+                    Some((data.old_preedit_byte_start, data.old_preedit_byte_end));
+                let new_composition_range =
+                    Some((data.new_preedit_byte_start, data.new_preedit_byte_end));
 
                 let old_snapshot = if data.generation <= 1 || data.old_preedit.is_empty() {
                     self.pipeline
                         .current_layout_snapshot()
                         .clone()
                         .unwrap_or_else(|| {
-                            self.build_editor_layout_snapshot(width, false, composition_range)
+                            self.build_editor_layout_snapshot(width, false, old_composition_range)
                         })
                 } else {
                     self.pipeline
@@ -449,7 +470,7 @@ impl EditorInputHost for SujianEditorItem {
                                     self.build_editor_layout_snapshot(
                                         width,
                                         false,
-                                        composition_range,
+                                        old_composition_range,
                                     )
                                 })
                         })
@@ -458,7 +479,7 @@ impl EditorInputHost for SujianEditorItem {
                 let new_snapshot = self.build_virtual_layout_snapshot(
                     &data.virtual_text,
                     width,
-                    composition_range,
+                    new_composition_range,
                 );
 
                 let old_cursor_rect = self
@@ -484,8 +505,10 @@ impl EditorInputHost for SujianEditorItem {
                     .handle_composition_update(
                         &old_snapshot,
                         &new_snapshot,
-                        data.composition_byte_start,
-                        data.composition_byte_end,
+                        data.old_preedit_byte_start,
+                        data.old_preedit_byte_end,
+                        data.new_preedit_byte_start,
+                        data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
                         self.cursor_ctrl.cursor_owner_epoch,
