@@ -290,8 +290,8 @@ fn build_cursor_visual_track(
 /// 视觉起点（`cursor_visual_track.from`）。采样逻辑与 `compute_coordinated_cursor_position`
 /// 的边界选择完全一致，按评论四种场景：
 /// - InsertReveal：取这一帧 reveal 边界（frame.x + frame.w）。
-/// - Backspace DeleteConceal（conceal_from_left）：取这一帧 conceal 边界（frame.x + frame.w）。
-/// - forward Delete（conceal_from_right）：取当前固定 cursor rect（new_rect）。
+/// - Backspace DeleteConceal（conceal_to_left_edge=false）：取这一帧 conceal 边界（frame.x + frame.w）。
+/// - forward Delete（conceal_to_left_edge=true）：取当前固定 cursor rect（new_rect）。
 /// - 纯 reflow（无上述 glyph）：直接 sample `cursor_visual_track`（自带 started_at/duration_ms），
 ///   不再借任何文字 unit 的 progress，也不再回头使用逻辑 `old_cursor_rect`。
 ///
@@ -383,7 +383,7 @@ fn sample_coordinated_cursor_rect_at(
                 }
                 let visible = unit.current_visible_fraction(now);
                 let frame = unit.slice.compute_frame(visible);
-                if unit.slice.conceal_from_left {
+                if unit.slice.conceal_to_left_edge {
                     let edge = frame.x + frame.w;
                     conceal_edge = Some(match conceal_edge {
                         Some(prev) => prev.min(edge),
@@ -530,7 +530,7 @@ fn build_insert_reveal_slices(
 
 /// 按 Core 给出的 deleted_range 从 old_snapshot 显式生成 DeleteConceal 切片。
 ///
-/// 只接 `vt.deleted_range + old_snapshot + new_cursor_rect`。按明确删除范围从
+/// 只接 `vt.deleted_range + old_snapshot + old_cursor_rect`。按明确删除范围从
 /// old snapshot 取纹理，直接生成 `DeleteConceal`。删除后的 canonical new text
 /// 可以立即作为背景，旧字只由 overlay 吞掉，因此不生成 StaticLinePatch。
 ///
@@ -538,7 +538,7 @@ fn build_insert_reveal_slices(
 /// - `key`：事务键。
 /// - `old_snapshot`：旧布局快照。
 /// - `deleted_range`：Core 给出的删除范围 (byte_start, byte_end)。
-/// - `new_cursor_rect`：新光标矩形，用于决定吞字方向（conceal_from_left）。
+/// - `old_cursor_rect`：删除前光标矩形，用于决定吞字方向（conceal_to_left_edge）。
 ///
 /// # 返回
 /// `slices`：DeleteConceal 动画切片。
@@ -546,12 +546,12 @@ fn build_delete_conceal_slices(
     key: VisualTransactionKey,
     old_snapshot: &EditorLayoutSnapshot,
     deleted_range: (usize, usize),
-    new_cursor_rect: Option<&CursorRect>,
+    old_cursor_rect: Option<&CursorRect>,
 ) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
     let (range_start, range_end) = deleted_range;
-    let new_cx = new_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
-    let new_cy = new_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
+    let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
+    let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
     for old_line in &old_snapshot.line_snapshots {
         for old_cluster in &old_line.clusters {
@@ -559,23 +559,23 @@ fn build_delete_conceal_slices(
             if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-                // 按新光标落在被删文字哪一侧决定保留左段还是右段。
-                // 光标靠近右端 → 保留左段（conceal_from_left=true，Backspace 场景）；
-                // 光标靠近左端 → 保留右段（conceal_from_left=false，Delete 键场景）。
+                // 按删除前光标位置（old_cursor_rect）决定收缩方向：
+                // 光标在被删文字右侧 → Backspace → conceal_to_left_edge = false（向右边缘收缩，左段先消失）
+                // 光标在被删文字左侧 → Delete 键 → conceal_to_left_edge = true（向左边缘收缩，右段先消失）
                 let left = old_doc.x;
                 let right = old_doc.x + old_doc.w;
-                let conceal_from_left = (new_cx - right).abs() <= (new_cx - left).abs();
+                let conceal_to_left_edge = (old_cx - left).abs() <= (old_cx - right).abs();
                 slices.push(AnimatedSlice::delete_conceal(
                     key,
                     old_line.id,
                     old_sr,
                     old_doc,
-                    new_cx,
-                    new_cy,
+                    old_cx,
+                    old_cy,
                     old_cluster.byte_start,
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
-                    conceal_from_left,
+                    conceal_to_left_edge,
                 ));
             }
         }
@@ -845,7 +845,7 @@ fn build_cluster_reflow_slices(
 /// 3. 相邻 byte range：`slice[i].byte_end == slice[i+1].byte_start`
 /// 4. 同方向：
 ///    - InsertReveal：`from_document_rect` 的 y 相同（同一行吐字）
-///    - DeleteConceal：`from_document_rect` 的 y 相同（同一行吞字）且 `conceal_from_left` 相同
+///    - DeleteConceal：`from_document_rect` 的 y 相同（同一行吞字）且 `conceal_to_left_edge` 相同
 ///    - ReflowMove：移动向量相同（dx/dy 差值在 0.5 像素以内）
 ///    - ReflowCrossFade：移动向量相同
 ///
@@ -892,9 +892,9 @@ fn can_merge(a: &AnimatedSlice, b: &AnimatedSlice) -> bool {
             (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
         }
         AnimatedSliceKind::DeleteConceal => {
-            // 同一行吞字且同方向：from_document_rect 的 y 相同，conceal_from_left 相同
+            // 同一行吞字且同方向：from_document_rect 的 y 相同，conceal_to_left_edge 相同
             (a.from_document_rect.y - b.from_document_rect.y).abs() < 0.5
-                && a.conceal_from_left == b.conceal_from_left
+                && a.conceal_to_left_edge == b.conceal_to_left_edge
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
             // 移动向量相同：dx = to.x - from.x, dy = to.y - from.y
@@ -922,7 +922,7 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         byte_start: a.byte_start.min(b.byte_start),
         byte_end: a.byte_end.max(b.byte_end),
         shaping_identity: a.shaping_identity.clone(),
-        conceal_from_left: a.conceal_from_left,
+        conceal_to_left_edge: a.conceal_to_left_edge,
         start_fraction: a.start_fraction.min(b.start_fraction),
     }
 }
@@ -1354,7 +1354,7 @@ impl LinuxEditorAnimationCoordinator {
                         key,
                         old_snapshot,
                         (d_start, d_end),
-                        new_cursor_rect.as_ref(),
+                        old_cursor_rect.as_ref(),
                     );
                     slices.extend(conceal_slices);
                 }
@@ -1507,7 +1507,7 @@ impl LinuxEditorAnimationCoordinator {
                 key,
                 old_snapshot,
                 (d_start, d_end),
-                new_cursor_rect.as_ref(),
+                old_cursor_rect.as_ref(),
             );
             slices.extend(conceal_slices);
         }
@@ -1654,7 +1654,7 @@ impl LinuxEditorAnimationCoordinator {
                 key,
                 old_snapshot,
                 cancel_deleted_range,
-                new_cursor_rect.as_ref(),
+                old_cursor_rect.as_ref(),
             );
             slices.extend(conceal_slices);
 
@@ -1704,13 +1704,13 @@ impl LinuxEditorAnimationCoordinator {
                             ) {
                                 let from_doc = old_line.source_rect_to_document_rect(&old_sr);
                                 // Issue #686 评论 5666452462：cancel 时 preedit 文字
-                                // 走 delete_conceal，按 old rect 两侧与新光标距离
-                                // 决定收进方向：靠近右端 → 保留左段（Backspace），
-                                // 靠近左端 → 保留右段（Delete 键）。
+                                // 走 delete_conceal，按 old rect 两侧与旧光标距离
+                                // 决定收进方向：靠近右端 → Backspace → conceal_to_left_edge=false，
+                                // 靠近左端 → Delete 键 → conceal_to_left_edge=true。
                                 let left = from_doc.x;
                                 let right = from_doc.x + from_doc.w;
-                                let conceal_from_left =
-                                    (shrink_x - right).abs() <= (shrink_x - left).abs();
+                                let conceal_to_left_edge =
+                                    (shrink_x - left).abs() <= (shrink_x - right).abs();
                                 slices.push(AnimatedSlice::delete_conceal(
                                     key,
                                     old_line.id,
@@ -1721,7 +1721,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_start,
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
-                                    conceal_from_left,
+                                    conceal_to_left_edge,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -2670,9 +2670,9 @@ impl LinuxEditorAnimationCoordinator {
     ///
     /// 光标严格跟随文字吞吐边界，不再在 old/new cursor rect 之间用 progress 插值：
     /// - InsertReveal：光标 x = 本帧所有 reveal 单元的最右可见边界（frame.x + frame.w）。
-    /// - DeleteConceal (Backspace, conceal_from_left)：光标跟 frame.x + frame.w 往左走，
+    /// - DeleteConceal (Backspace, !conceal_to_left_edge)：光标跟 frame.x + frame.w 往左走，
     ///   旧字正好被光标"吞掉"。
-    /// - DeleteConceal (forward Delete, !conceal_from_left)：逻辑光标不移动，
+    /// - DeleteConceal (forward Delete, conceal_to_left_edge)：逻辑光标不移动，
     ///   固定在 new_cursor_rect.x。
     /// - Reflow / Cursor / Enter：直接 sample `cursor_visual_track`（自带
     ///   started_at/duration_ms），不再借任何文字 unit 的 progress。
@@ -2806,7 +2806,7 @@ impl LinuxEditorAnimationCoordinator {
                     let visible = unit.current_visible_fraction(frame_now);
                     let frame = unit.slice.compute_frame(visible);
 
-                    if unit.slice.conceal_from_left {
+                    if unit.slice.conceal_to_left_edge {
                         let edge = frame.x + frame.w;
                         conceal_edge = Some(match conceal_edge {
                             Some(prev) => prev.min(edge),
@@ -4181,8 +4181,8 @@ mod tests {
 
     /// Issue #686 评论 5667184642：回归测试——吞字方向必须与光标位置匹配。
     ///
-    /// `conceal_from_left = true` 表示保留左段（Backspace，光标在文字右侧）；
-    /// `conceal_from_left = false` 表示保留右段（Delete 键，光标在文字左侧）。
+    /// `conceal_to_left_edge = true` 表示向左边缘收缩（Delete 键，光标在文字左侧）；
+    /// `conceal_to_left_edge = false` 表示向右边缘收缩（Backspace，光标在文字右侧）。
     /// 上一轮把比较式写反了（靠左算成 true），这里锁定正确语义。
     ///
     /// 测试布局：old cluster [0,3) source_rect x=10 w=30，dpr=1 visual_x=0
@@ -4208,8 +4208,8 @@ mod tests {
     fn test_delete_conceal_direction_cursor_near_right_is_backspace() {
         let (old_snapshot, _new_snapshot, _offset_map) = make_delete_direction_snapshots();
         let key = VisualTransactionKey::new(1, 1);
-        // 新光标靠近右端 (x=39, right=40) → Backspace → conceal_from_left=true
-        let new_cursor = CursorRect {
+        // 旧光标靠近右端 (x=39, right=40) → Backspace → conceal_to_left_edge=false
+        let old_cursor = CursorRect {
             x: 39.0,
             top: 0.0,
             bottom: 20.0,
@@ -4217,7 +4217,7 @@ mod tests {
         };
         // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
         // old cluster [0,3) 是被删除的范围。
-        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&new_cursor));
+        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor));
         let delete_slices: Vec<_> = slices
             .iter()
             .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -4228,8 +4228,8 @@ mod tests {
             "deleted range [0,3) should produce exactly one DeleteConceal"
         );
         assert!(
-            delete_slices[0].conceal_from_left,
-            "cursor near right (x=39, right=40) should be Backspace → conceal_from_left=true"
+            !delete_slices[0].conceal_to_left_edge,
+            "cursor near right (x=39, right=40) should be Backspace → conceal_to_left_edge=false"
         );
     }
 
@@ -4237,8 +4237,8 @@ mod tests {
     fn test_delete_conceal_direction_cursor_near_left_is_delete() {
         let (old_snapshot, _new_snapshot, _offset_map) = make_delete_direction_snapshots();
         let key = VisualTransactionKey::new(1, 1);
-        // 新光标靠近左端 (x=11, left=10) → Delete 键 → conceal_from_left=false
-        let new_cursor = CursorRect {
+        // 旧光标靠近左端 (x=11, left=10) → Delete 键 → conceal_to_left_edge=true
+        let old_cursor = CursorRect {
             x: 11.0,
             top: 0.0,
             bottom: 20.0,
@@ -4246,7 +4246,7 @@ mod tests {
         };
         // Issue #687: changed range 由 build_delete_conceal_slices 显式拥有。
         // old cluster [0,3) 是被删除的范围。
-        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&new_cursor));
+        let slices = build_delete_conceal_slices(key, &old_snapshot, (0, 3), Some(&old_cursor));
         let delete_slices: Vec<_> = slices
             .iter()
             .filter(|s| s.kind == AnimatedSliceKind::DeleteConceal)
@@ -4257,8 +4257,8 @@ mod tests {
             "deleted range [0,3) should produce exactly one DeleteConceal"
         );
         assert!(
-            !delete_slices[0].conceal_from_left,
-            "cursor near left (x=11, left=10) should be Delete → conceal_from_left=false"
+            delete_slices[0].conceal_to_left_edge,
+            "cursor near left (x=11, left=10) should be Delete → conceal_to_left_edge=true"
         );
     }
 
@@ -4306,7 +4306,7 @@ mod tests {
         byte_end: usize,
         x: f64,
         w: f64,
-        conceal_from_left: bool,
+        conceal_to_left_edge: bool,
     ) -> AnimatedSlice {
         AnimatedSlice::delete_conceal(
             VisualTransactionKey::new(1, 1),
@@ -4328,7 +4328,7 @@ mod tests {
             byte_start,
             byte_end,
             None,
-            conceal_from_left,
+            conceal_to_left_edge,
         )
     }
 

@@ -440,6 +440,9 @@ pub struct SujianEditorItem {
     current_content_height: f32,
     content_height_dirty: Cell<bool>,
     current_editor_enabled: bool,
+    /// Issue #714: 鼠标拖选状态标志。MouseButtonPress 时置 true，
+    /// MouseButtonRelease 时置 false。用于区分拖选和普通点击。
+    pointer_drag_selecting: bool,
     current_font_pixel_size: f32,
     current_font_family: QString,
     current_line_spacing: f32,
@@ -594,6 +597,7 @@ impl Default for SujianEditorItem {
             current_content_height: 0.0,
             content_height_dirty: Cell::new(false),
             current_editor_enabled: true,
+            pointer_drag_selecting: false,
             current_font_pixel_size: 22.0,
             current_font_family: QString::from("Noto Sans CJK SC"),
             current_line_spacing: 1.5,

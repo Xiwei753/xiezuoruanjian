@@ -1,7 +1,6 @@
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
-use qmetaobject::QColor;
 
 /// Issue #701 评论 5699565102: 运行时主题状态的唯一事实来源。
 /// Issue #701 评论 5702214893: resolved scheme 现在缓存在 controller 内。
@@ -22,6 +21,10 @@ use qmetaobject::QColor;
 /// `ThemeColorSchemeDto`（`scheme: Option<...>`），不再序列化成 JSON 字符串。
 /// `theme_state_json()` 直接序列化这一份完整状态，消除
 /// scheme -> JSON string -> serde_json::Value -> 再包第二层 JSON 的低效路径。
+///
+/// Issue #714: 所有颜色属性改为 `*_hex: QString`，不再暴露 QColor。
+/// QML 侧直接用 "#RRGGBB" 字符串绑定 `color` 属性，形成 QString → QML color
+/// 单一链，消除 QColor 直接暴露导致的深色模式颜色失真。
 #[allow(non_snake_case)] // Qt QML naming convention
 #[derive(QObject, Default)]
 pub struct LinuxThemeController {
@@ -51,81 +54,81 @@ pub struct LinuxThemeController {
     appearance_mode: qt_property!(QString; READ appearance_mode NOTIFY scheme_changed),
     #[allow(dead_code)]
     system_is_dark: qt_property!(bool; READ system_is_dark NOTIFY scheme_changed),
-    // Issue #712: QColor 属性直接从 scheme 读取并返回 QColor，
-    // 不再经过 theme_state_json -> JSON.parse -> JS 字符串 -> Qt.rgba。
-    // JSON 只留给诊断，不再参与真正绘制。
+    // Issue #714: 所有颜色属性改为 QString (hex 格式 "#RRGGBB")，
+    // 不再暴露 QColor，消除深色模式颜色桥失真。
+    // QML 侧 `color` 属性可直接接受 "#RRGGBB" 字符串。
     #[allow(dead_code)]
-    primary: qt_property!(QColor; READ primary_qcolor NOTIFY scheme_changed),
+    primary_hex: qt_property!(QString; READ primary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_primary: qt_property!(QColor; READ on_primary_qcolor NOTIFY scheme_changed),
+    on_primary_hex: qt_property!(QString; READ on_primary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    primary_container: qt_property!(QColor; READ primary_container_qcolor NOTIFY scheme_changed),
+    primary_container_hex: qt_property!(QString; READ primary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_primary_container: qt_property!(QColor; READ on_primary_container_qcolor NOTIFY scheme_changed),
+    on_primary_container_hex: qt_property!(QString; READ on_primary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    secondary: qt_property!(QColor; READ secondary_qcolor NOTIFY scheme_changed),
+    secondary_hex: qt_property!(QString; READ secondary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_secondary: qt_property!(QColor; READ on_secondary_qcolor NOTIFY scheme_changed),
+    on_secondary_hex: qt_property!(QString; READ on_secondary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    secondary_container: qt_property!(QColor; READ secondary_container_qcolor NOTIFY scheme_changed),
+    secondary_container_hex: qt_property!(QString; READ secondary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_secondary_container: qt_property!(QColor; READ on_secondary_container_qcolor NOTIFY scheme_changed),
+    on_secondary_container_hex: qt_property!(QString; READ on_secondary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    tertiary: qt_property!(QColor; READ tertiary_qcolor NOTIFY scheme_changed),
+    tertiary_hex: qt_property!(QString; READ tertiary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_tertiary: qt_property!(QColor; READ on_tertiary_qcolor NOTIFY scheme_changed),
+    on_tertiary_hex: qt_property!(QString; READ on_tertiary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    tertiary_container: qt_property!(QColor; READ tertiary_container_qcolor NOTIFY scheme_changed),
+    tertiary_container_hex: qt_property!(QString; READ tertiary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_tertiary_container: qt_property!(QColor; READ on_tertiary_container_qcolor NOTIFY scheme_changed),
+    on_tertiary_container_hex: qt_property!(QString; READ on_tertiary_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    background: qt_property!(QColor; READ background_qcolor NOTIFY scheme_changed),
+    background_hex: qt_property!(QString; READ background_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_background: qt_property!(QColor; READ on_background_qcolor NOTIFY scheme_changed),
+    on_background_hex: qt_property!(QString; READ on_background_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface: qt_property!(QColor; READ surface_qcolor NOTIFY scheme_changed),
+    surface_hex: qt_property!(QString; READ surface_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_surface: qt_property!(QColor; READ on_surface_qcolor NOTIFY scheme_changed),
+    on_surface_hex: qt_property!(QString; READ on_surface_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_variant: qt_property!(QColor; READ surface_variant_qcolor NOTIFY scheme_changed),
+    surface_variant_hex: qt_property!(QString; READ surface_variant_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_surface_variant: qt_property!(QColor; READ on_surface_variant_qcolor NOTIFY scheme_changed),
+    on_surface_variant_hex: qt_property!(QString; READ on_surface_variant_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_tint: qt_property!(QColor; READ surface_tint_qcolor NOTIFY scheme_changed),
+    surface_tint_hex: qt_property!(QString; READ surface_tint_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_dim: qt_property!(QColor; READ surface_dim_qcolor NOTIFY scheme_changed),
+    surface_dim_hex: qt_property!(QString; READ surface_dim_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_bright: qt_property!(QColor; READ surface_bright_qcolor NOTIFY scheme_changed),
+    surface_bright_hex: qt_property!(QString; READ surface_bright_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_container_lowest: qt_property!(QColor; READ surface_container_lowest_qcolor NOTIFY scheme_changed),
+    surface_container_lowest_hex: qt_property!(QString; READ surface_container_lowest_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_container_low: qt_property!(QColor; READ surface_container_low_qcolor NOTIFY scheme_changed),
+    surface_container_low_hex: qt_property!(QString; READ surface_container_low_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_container: qt_property!(QColor; READ surface_container_qcolor NOTIFY scheme_changed),
+    surface_container_hex: qt_property!(QString; READ surface_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_container_high: qt_property!(QColor; READ surface_container_high_qcolor NOTIFY scheme_changed),
+    surface_container_high_hex: qt_property!(QString; READ surface_container_high_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    surface_container_highest: qt_property!(QColor; READ surface_container_highest_qcolor NOTIFY scheme_changed),
+    surface_container_highest_hex: qt_property!(QString; READ surface_container_highest_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    inverse_surface: qt_property!(QColor; READ inverse_surface_qcolor NOTIFY scheme_changed),
+    inverse_surface_hex: qt_property!(QString; READ inverse_surface_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    inverse_on_surface: qt_property!(QColor; READ inverse_on_surface_qcolor NOTIFY scheme_changed),
+    inverse_on_surface_hex: qt_property!(QString; READ inverse_on_surface_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    inverse_primary: qt_property!(QColor; READ inverse_primary_qcolor NOTIFY scheme_changed),
+    inverse_primary_hex: qt_property!(QString; READ inverse_primary_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    error: qt_property!(QColor; READ error_qcolor NOTIFY scheme_changed),
+    error_hex: qt_property!(QString; READ error_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_error: qt_property!(QColor; READ on_error_qcolor NOTIFY scheme_changed),
+    on_error_hex: qt_property!(QString; READ on_error_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    error_container: qt_property!(QColor; READ error_container_qcolor NOTIFY scheme_changed),
+    error_container_hex: qt_property!(QString; READ error_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    on_error_container: qt_property!(QColor; READ on_error_container_qcolor NOTIFY scheme_changed),
+    on_error_container_hex: qt_property!(QString; READ on_error_container_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    outline: qt_property!(QColor; READ outline_qcolor NOTIFY scheme_changed),
+    outline_hex: qt_property!(QString; READ outline_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    outline_variant: qt_property!(QColor; READ outline_variant_qcolor NOTIFY scheme_changed),
+    outline_variant_hex: qt_property!(QString; READ outline_variant_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
-    scrim: qt_property!(QColor; READ scrim_qcolor NOTIFY scheme_changed),
+    scrim_hex: qt_property!(QString; READ scrim_hex NOTIFY scheme_changed),
     #[allow(dead_code)]
     scheme_changed: qt_signal!(),
     #[allow(dead_code)]
@@ -463,27 +466,36 @@ impl LinuxThemeController {
         }
     }
 
-    // ── Issue #712: QColor getter 方法 ──
+    // ── Issue #714: hex getter 方法 ──
     //
     // 每个 getter 从 `self.state().scheme` 读取对应字段（String 类型，hex 格式
-    // 如 "#RRGGBB"），如果 scheme 为 None 或字段为空，返回 fallback QColor
+    // 如 "#RRGGBB"），如果 scheme 为 None 或字段为空，返回 fallback hex 字符串
     // （根据 is_dark 选择深色/浅色 fallback）。fallback 值与 DesignTokens.qml
     // 中当前的 isDark fallback 值一致。
+    //
+    // 所有属性返回 QString (hex 格式 "#RRGGBB")，QML 侧 `color` 属性直接接受
+    // 该字符串，形成 QString → QML color 单一链。
 
-    /// 解析 "#RRGGBB" 格式的 hex 字符串为 QColor。
-    /// Qt 的 QColor 构造函数原生支持 "#RRGGBB" 格式。
-    fn parse_hex_color(hex: &str) -> QColor {
-        QColor::from_name(hex)
+    /// Issue #714: 将 RGB 浮点值转换为 "#RRGGBB" hex 字符串。
+    fn rgb_f_to_hex(r: f64, g: f64, b: f64) -> String {
+        let r = (r * 255.0).round().clamp(0.0, 255.0) as u8;
+        let g = (g * 255.0).round().clamp(0.0, 255.0) as u8;
+        let b = (b * 255.0).round().clamp(0.0, 255.0) as u8;
+        format!("#{:02X}{:02X}{:02X}", r, g, b)
     }
 
-    /// 辅助函数：从 scheme 读取颜色或返回 is_dark fallback。
-    fn scheme_color_or_fallback(
+    /// Issue #714: 从 scheme 读取 hex 颜色字符串或返回 is_dark fallback hex。
+    ///
+    /// scheme 中的颜色字段本身就是 "#RRGGBB" 格式的 String，直接返回即可。
+    /// 只有 scheme 为 None 或字段为空时，才用 `rgb_f_to_hex` 将 fallback
+    /// 浮点值转换为 hex 字符串。
+    fn scheme_hex_or_fallback(
         &self,
         scheme_field: &str,
         is_dark: bool,
         dark_fallback: (f64, f64, f64),
         light_fallback: (f64, f64, f64),
-    ) -> QColor {
+    ) -> String {
         let state = self.state();
         if let Some(ref scheme) = state.scheme {
             let val = match scheme_field {
@@ -526,7 +538,7 @@ impl LinuxThemeController {
                 _ => "",
             };
             if !val.is_empty() {
-                return Self::parse_hex_color(val);
+                return val.to_string();
             }
         }
         let (r, g, b) = if is_dark {
@@ -534,369 +546,369 @@ impl LinuxThemeController {
         } else {
             light_fallback
         };
-        QColor::from_rgb_f(r, g, b)
+        Self::rgb_f_to_hex(r, g, b)
     }
 
-    pub fn primary_qcolor(&self) -> QColor {
+    pub fn primary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "primary",
             state.is_dark,
             (0.573, 0.800, 1.000),
             (0.000, 0.392, 0.592),
-        )
+        ))
     }
 
-    pub fn on_primary_qcolor(&self) -> QColor {
+    pub fn on_primary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_primary",
             state.is_dark,
             (0.000, 0.200, 0.318),
             (1.000, 1.000, 1.000),
-        )
+        ))
     }
 
-    pub fn primary_container_qcolor(&self) -> QColor {
+    pub fn primary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "primary_container",
             state.is_dark,
             (0.000, 0.294, 0.451),
             (0.800, 0.898, 1.000),
-        )
+        ))
     }
 
-    pub fn on_primary_container_qcolor(&self) -> QColor {
+    pub fn on_primary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_primary_container",
             state.is_dark,
             (0.800, 0.898, 1.000),
             (0.000, 0.118, 0.192),
-        )
+        ))
     }
 
-    pub fn secondary_qcolor(&self) -> QColor {
+    pub fn secondary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "secondary",
             state.is_dark,
             (0.722, 0.784, 0.855),
             (0.318, 0.376, 0.435),
-        )
+        ))
     }
 
-    pub fn on_secondary_qcolor(&self) -> QColor {
+    pub fn on_secondary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_secondary",
             state.is_dark,
             (0.137, 0.196, 0.251),
             (1.000, 1.000, 1.000),
-        )
+        ))
     }
 
-    pub fn secondary_container_qcolor(&self) -> QColor {
+    pub fn secondary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "secondary_container",
             state.is_dark,
             (0.224, 0.282, 0.341),
             (0.831, 0.894, 0.965),
-        )
+        ))
     }
 
-    pub fn on_secondary_container_qcolor(&self) -> QColor {
+    pub fn on_secondary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_secondary_container",
             state.is_dark,
             (0.831, 0.894, 0.965),
             (0.055, 0.114, 0.165),
-        )
+        ))
     }
 
-    pub fn tertiary_qcolor(&self) -> QColor {
+    pub fn tertiary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "tertiary",
             state.is_dark,
             (0.843, 0.749, 1.000),
             (0.427, 0.341, 0.549),
-        )
+        ))
     }
 
-    pub fn on_tertiary_qcolor(&self) -> QColor {
+    pub fn on_tertiary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_tertiary",
             state.is_dark,
             (0.243, 0.165, 0.361),
             (1.000, 1.000, 1.000),
-        )
+        ))
     }
 
-    pub fn tertiary_container_qcolor(&self) -> QColor {
+    pub fn tertiary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "tertiary_container",
             state.is_dark,
             (0.333, 0.251, 0.455),
             (0.945, 0.855, 1.000),
-        )
+        ))
     }
 
-    pub fn on_tertiary_container_qcolor(&self) -> QColor {
+    pub fn on_tertiary_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_tertiary_container",
             state.is_dark,
             (0.945, 0.855, 1.000),
             (0.149, 0.078, 0.278),
-        )
+        ))
     }
 
-    pub fn background_qcolor(&self) -> QColor {
+    pub fn background_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "background",
             state.is_dark,
             (0.102, 0.110, 0.118),
             (0.988, 0.988, 1.000),
-        )
+        ))
     }
 
-    pub fn on_background_qcolor(&self) -> QColor {
+    pub fn on_background_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_background",
             state.is_dark,
             (0.886, 0.890, 0.906),
             (0.094, 0.110, 0.125),
-        )
+        ))
     }
 
-    pub fn surface_qcolor(&self) -> QColor {
+    pub fn surface_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface",
             state.is_dark,
             (0.102, 0.110, 0.118),
             (0.988, 0.988, 1.000),
-        )
+        ))
     }
 
-    pub fn on_surface_qcolor(&self) -> QColor {
+    pub fn on_surface_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_surface",
             state.is_dark,
             (0.886, 0.890, 0.906),
             (0.094, 0.110, 0.125),
-        )
+        ))
     }
 
-    pub fn surface_variant_qcolor(&self) -> QColor {
+    pub fn surface_variant_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_variant",
             state.is_dark,
             (0.259, 0.278, 0.306),
             (0.875, 0.890, 0.922),
-        )
+        ))
     }
 
-    pub fn on_surface_variant_qcolor(&self) -> QColor {
+    pub fn on_surface_variant_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_surface_variant",
             state.is_dark,
             (0.757, 0.776, 0.812),
             (0.259, 0.278, 0.306),
-        )
+        ))
     }
 
-    pub fn surface_tint_qcolor(&self) -> QColor {
+    pub fn surface_tint_hex(&self) -> QString {
         let state = self.state();
         // surface_tint fallback 与 primary 相同（QML 中 `?? primary`）
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_tint",
             state.is_dark,
             (0.573, 0.800, 1.000),
             (0.000, 0.392, 0.592),
-        )
+        ))
     }
 
-    pub fn surface_dim_qcolor(&self) -> QColor {
+    pub fn surface_dim_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_dim",
             state.is_dark,
             (0.071, 0.078, 0.094),
             (0.843, 0.851, 0.875),
-        )
+        ))
     }
 
-    pub fn surface_bright_qcolor(&self) -> QColor {
+    pub fn surface_bright_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_bright",
             state.is_dark,
             (0.220, 0.224, 0.247),
             (0.988, 0.988, 1.000),
-        )
+        ))
     }
 
-    pub fn surface_container_lowest_qcolor(&self) -> QColor {
+    pub fn surface_container_lowest_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_container_lowest",
             state.is_dark,
             (0.059, 0.067, 0.075),
             (1.000, 1.000, 1.000),
-        )
+        ))
     }
 
-    pub fn surface_container_low_qcolor(&self) -> QColor {
+    pub fn surface_container_low_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_container_low",
             state.is_dark,
             (0.122, 0.133, 0.145),
             (0.965, 0.973, 0.984),
-        )
+        ))
     }
 
-    pub fn surface_container_qcolor(&self) -> QColor {
+    pub fn surface_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_container",
             state.is_dark,
             (0.137, 0.153, 0.165),
             (0.941, 0.953, 0.969),
-        )
+        ))
     }
 
-    pub fn surface_container_high_qcolor(&self) -> QColor {
+    pub fn surface_container_high_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_container_high",
             state.is_dark,
             (0.176, 0.192, 0.208),
             (0.918, 0.937, 0.961),
-        )
+        ))
     }
 
-    pub fn surface_container_highest_qcolor(&self) -> QColor {
+    pub fn surface_container_highest_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "surface_container_highest",
             state.is_dark,
             (0.220, 0.235, 0.251),
             (0.894, 0.914, 0.937),
-        )
+        ))
     }
 
-    pub fn inverse_surface_qcolor(&self) -> QColor {
+    pub fn inverse_surface_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "inverse_surface",
             state.is_dark,
             (0.886, 0.886, 0.898),
             (0.184, 0.188, 0.200),
-        )
+        ))
     }
 
-    pub fn inverse_on_surface_qcolor(&self) -> QColor {
+    pub fn inverse_on_surface_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "inverse_on_surface",
             state.is_dark,
             (0.184, 0.188, 0.200),
             (0.945, 0.941, 0.957),
-        )
+        ))
     }
 
-    pub fn inverse_primary_qcolor(&self) -> QColor {
+    pub fn inverse_primary_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "inverse_primary",
             state.is_dark,
             (0.000, 0.392, 0.592),
             (0.573, 0.800, 1.000),
-        )
+        ))
     }
 
-    pub fn error_qcolor(&self) -> QColor {
+    pub fn error_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "error",
             state.is_dark,
             (1.000, 0.706, 0.671),
             (0.729, 0.102, 0.102),
-        )
+        ))
     }
 
-    pub fn on_error_qcolor(&self) -> QColor {
+    pub fn on_error_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_error",
             state.is_dark,
             (0.412, 0.000, 0.020),
             (1.000, 1.000, 1.000),
-        )
+        ))
     }
 
-    pub fn error_container_qcolor(&self) -> QColor {
+    pub fn error_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "error_container",
             state.is_dark,
             (0.576, 0.000, 0.039),
             (1.000, 0.855, 0.839),
-        )
+        ))
     }
 
-    pub fn on_error_container_qcolor(&self) -> QColor {
+    pub fn on_error_container_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "on_error_container",
             state.is_dark,
             (1.000, 0.855, 0.839),
             (0.255, 0.000, 0.008),
-        )
+        ))
     }
 
-    pub fn outline_qcolor(&self) -> QColor {
+    pub fn outline_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "outline",
             state.is_dark,
             (0.549, 0.569, 0.596),
             (0.447, 0.471, 0.494),
-        )
+        ))
     }
 
-    pub fn outline_variant_qcolor(&self) -> QColor {
+    pub fn outline_variant_hex(&self) -> QString {
         let state = self.state();
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "outline_variant",
             state.is_dark,
             (0.259, 0.278, 0.306),
             (0.757, 0.776, 0.812),
-        )
+        ))
     }
 
-    pub fn scrim_qcolor(&self) -> QColor {
+    pub fn scrim_hex(&self) -> QString {
         let state = self.state();
         // scrim fallback 深色和浅色都是黑色
-        self.scheme_color_or_fallback(
+        QString::from(self.scheme_hex_or_fallback(
             "scrim",
             state.is_dark,
             (0.000, 0.000, 0.000),
             (0.000, 0.000, 0.000),
-        )
+        ))
     }
 
     /// Issue #710 评论 5731145076: 记录完整 resolved theme 诊断事件。

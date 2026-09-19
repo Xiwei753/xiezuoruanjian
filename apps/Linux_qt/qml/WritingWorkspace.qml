@@ -917,10 +917,15 @@ Rectangle {
                         // 去掉 fallback 到 dt.textPrimaryHex 的第二套逻辑。
                         // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
                         // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
-                        text_color: editorController.colorToHex(dt.editorText)
-                        selection_color: editorController.colorToHex(dt.primary, dt.primaryFallback)
-                        selected_text_color: editorController.colorToHex(dt.selectedText, dt.primaryContainerFallback)
-                        cursor_color: editorController.colorToHex(dt.primary, dt.primaryFallback)
+                        // Issue #714: 颜色绑定改为 dt.xxx.toString()，
+                        // 不再经过 editorController.colorToHex() 转换。
+                        // DesignTokens 的 color 属性现在直接从 themeController.*_hex
+                        // (QString) 绑定，toString() 得到 "#RRGGBB" 字符串，
+                        // 形成 QString → QML color 单一链。
+                        text_color: dt.editorText.toString()
+                        selection_color: dt.primary.toString()
+                        selected_text_color: dt.selectedText.toString()
+                        cursor_color: dt.primary.toString()
                         smooth_cursor_enabled: settingsBackend ? settingsBackend.setting_smooth_cursor_enabled : true
                         cursor_animation_duration_ms: settingsBackend ? settingsBackend.setting_smooth_cursor_duration_ms : 80
                         typing_animation_enabled: settingsBackend ? settingsBackend.setting_typing_animation_enabled : true
@@ -968,6 +973,9 @@ Rectangle {
 
                         TapHandler {
                             acceptedButtons: Qt.LeftButton
+                            // Issue #714: 限制长按只对触屏/手写笔生效，不对桌面鼠标生效
+                            // 桌面鼠标的长按等同于右键菜单，不需要触发 long_press_at
+                            acceptedDevices: PointerDevice.TouchScreen | PointerDevice.Stylus
                             onLongPressed: {
                                 sujianEditor.long_press_at(point.position.x, point.position.y)
                             }

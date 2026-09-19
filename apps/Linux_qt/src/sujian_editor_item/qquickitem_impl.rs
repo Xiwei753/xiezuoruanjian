@@ -31,16 +31,20 @@ impl QQuickItem for SujianEditorItem {
         let pos = event.position();
         match event.event_type() {
             qmetaobject::QMouseEventType::MouseButtonPress => {
+                self.pointer_drag_selecting = false;
                 self.click_at(pos.x as f32, pos.y as f32, false);
                 let obj_ptr = self.get_cpp_object();
                 input::focus_item(obj_ptr);
             }
             qmetaobject::QMouseEventType::MouseMove => {
                 if is_left_button_pressed(&event) {
+                    self.pointer_drag_selecting = true;
                     self.drag_select_at(pos.x as f32, pos.y as f32);
                 }
             }
-            qmetaobject::QMouseEventType::MouseButtonRelease => {}
+            qmetaobject::QMouseEventType::MouseButtonRelease => {
+                self.pointer_drag_selecting = false;
+            }
             _ => {}
         }
         true

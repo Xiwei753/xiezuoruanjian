@@ -380,6 +380,8 @@ cpp! {{
         item->setFlag(QQuickItem::ItemHasContents, true);
         item->setFlag(QQuickItem::ItemAcceptsInputMethod, true);
         item->setAcceptedMouseButtons(Qt::AllButtons);
+        // Issue #714: 保持鼠标 grab，防止拖选时事件被其他组件抢走
+        item->setKeepMouseGrab(true);
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
         item->setFocusPolicy(Qt::StrongFocus);
 #endif

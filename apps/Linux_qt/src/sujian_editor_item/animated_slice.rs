@@ -26,7 +26,7 @@ pub(crate) enum AnimatedSliceKind {
     /// 对应 Core AnimatedSliceRole::Insert。
     InsertReveal,
     /// 旧文字在删除前位置逐步收进纹理宽度（100% → 0%）。
-    /// 收进方向由 `conceal_from_left` 决定。
+    /// 收进方向由 `conceal_to_left_edge` 决定。
     /// 对应 Core AnimatedSliceRole::Delete。
     DeleteConceal,
     /// old/new shaping identity 相同，复用旧视觉资源做几何移动。
@@ -43,9 +43,9 @@ pub(crate) enum AnimatedSliceKind {
 /// - `source_rect`：`snapshot_id` 对应视觉资源内的裁剪区域（行局部坐标，已乘 DPR）。
 /// - `from_document_rect`/`to_document_rect`：文档坐标，不包含当前滚动偏移。
 /// - `byte_start`/`byte_end`：用于事务冲突判断和静态层隐藏，不参与逐帧排版。
-/// - `conceal_from_left`：仅对 `DeleteConceal` 有效。true 表示从左往右收（保留左段，
-///   Backspace 场景——光标在文字右侧，文字向左消失）；false 表示从右往左收（保留右段，
-///   Delete 键场景——光标在文字左侧，文字向右消失）。
+/// - `conceal_to_left_edge`：仅对 `DeleteConceal` 有效。true 表示向左边缘收缩（保留左段，
+///   右段先消失——Delete 键场景，光标在文字左侧）；false 表示向右边缘收缩（保留右段，
+///   左段先消失——Backspace 场景，光标在文字右侧）。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimatedSlice {
     pub kind: AnimatedSliceKind,
@@ -60,7 +60,7 @@ pub(crate) struct AnimatedSlice {
     pub byte_start: usize,
     pub byte_end: usize,
     pub shaping_identity: Option<ShapingIdentity>,
-    pub conceal_from_left: bool,
+    pub conceal_to_left_edge: bool,
     /// Issue #690 评论 5675007226 步骤 3: 视觉单元的动画起始比例。
     ///
     /// InsertReveal：当前已吐出来的比例（0.0 = 未显示，1.0 = 完全显示）。
@@ -112,7 +112,7 @@ impl AnimatedSlice {
             byte_start,
             byte_end,
             shaping_identity,
-            conceal_from_left: false,
+            conceal_to_left_edge: false,
             start_fraction: 0.0,
         }
     }
@@ -120,7 +120,8 @@ impl AnimatedSlice {
     /// 创建 Delete 吞字切片。
     ///
     /// 文字始终在 `from_document_rect` 位置，动画进度控制可见纹理宽度从 100% → 0%。
-    /// `conceal_from_left` 决定收进方向：true 保留左段（Backspace），false 保留右段（Delete 键）。
+    /// `conceal_to_left_edge` 决定收进方向：true 向左边缘收缩（保留左段，Delete 键），
+    /// false 向右边缘收缩（保留右段，Backspace）。
     /// `cursor_x`/`cursor_y` 保留在签名中以减少调用方改动，但不再用于动画终点。
     pub fn delete_conceal(
         _key: VisualTransactionKey,
@@ -132,7 +133,7 @@ impl AnimatedSlice {
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
-        conceal_from_left: bool,
+        conceal_to_left_edge: bool,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::DeleteConceal,
@@ -147,7 +148,7 @@ impl AnimatedSlice {
             byte_start,
             byte_end,
             shaping_identity,
-            conceal_from_left,
+            conceal_to_left_edge,
             start_fraction: 0.0,
         }
     }
@@ -181,7 +182,7 @@ impl AnimatedSlice {
             byte_start,
             byte_end,
             shaping_identity,
-            conceal_from_left: false,
+            conceal_to_left_edge: false,
             start_fraction: 0.0,
         }
     }
@@ -208,7 +209,7 @@ impl AnimatedSlice {
             byte_start,
             byte_end,
             shaping_identity: None,
-            conceal_from_left: false,
+            conceal_to_left_edge: false,
             start_fraction: 0.0,
         }
     }
@@ -235,7 +236,7 @@ impl AnimatedSlice {
             byte_start,
             byte_end,
             shaping_identity: None,
-            conceal_from_left: false,
+            conceal_to_left_edge: false,
             start_fraction: 0.0,
         }
     }
@@ -304,7 +305,7 @@ impl AnimatedSlice {
             AnimatedSliceKind::DeleteConceal => {
                 let frame_w = self.from_document_rect.w * visible;
                 let frame_h = self.from_document_rect.h;
-                let (frame_x, src_x) = if self.conceal_from_left {
+                let (frame_x, src_x) = if self.conceal_to_left_edge {
                     (self.from_document_rect.x, self.source_rect.x)
                 } else {
                     (
