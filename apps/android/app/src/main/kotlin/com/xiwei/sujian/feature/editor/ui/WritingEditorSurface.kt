@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
+import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.forEachChange
 import androidx.compose.runtime.Composable
@@ -22,6 +23,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.isSpecified
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
+import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
@@ -187,6 +189,13 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val outputTransformation =
         remember {
             OutputTransformation {
+                // Issue #717 评论 5741910919：西文软断行显示投影。
+                // 在长西文单词内部插入 U+200B，让换行算法可以在这些位置断行。
+                // 不改变 TextFieldState 存储的正文（纯显示层）。
+                // 后续 addStyle 用原始 offset 调用，OutputTransformation 内部维护
+                // raw→display offset 映射，会自动平移到 display offset。
+                applySoftBreakInsertion()
+                // searchHighlights 继续用原始 offset 调 addStyle。
                 latestSearchHighlights.value.forEach { range ->
                     if (range.start < range.end && range.end <= length) {
                         addStyle(
@@ -316,6 +325,10 @@ private fun onTextLayoutResult(
     if (restoreY != null) {
         scope.launch { viewportState.scrollState.scrollTo(restoreY) }
     }
+    // Issue #717 评论 5741910919：基于原始正文计算软断行投影，
+    // 传给 onAuthoritativeLayout，让 ComposeLayoutSnapshot 的 cursorRect/lineForOffset/boundingBox
+    // 能把 raw offset 转成 display offset 再调 TextLayoutResult。
+    val projection = EditorSoftBreakProjection.fromRawText(bridge.state.text.toString())
     visualState.onAuthoritativeLayout(
         result = result,
         selection = bridge.state.selection,
@@ -323,6 +336,7 @@ private fun onTextLayoutResult(
         // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
         // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
         compositionActive = bridge.state.composition != null,
+        projection = projection,
     )
     onSurfaceReady()
 }
@@ -369,4 +383,25 @@ private fun isIndentedEmptyParagraphCaretFromTextStyle(
     val textIndent = textStyle.textIndent ?: return false
     val firstLine = textIndent.firstLine
     return firstLine.isSpecified && firstLine.value != 0f
+}
+
+/**
+ * Issue #717 评论 5741910919：在 [TextFieldBuffer] 上应用西文软断行显示投影。
+ *
+ * 基于原始正文计算长西文单词内部的 U+200B 插入点，用 [TextFieldBuffer.replace]
+ * 把每个插入点处的单字符替换为 "U+200B + 原字符"，实现在该字符前插入零宽空格。
+ * 不改变 TextFieldState 存储的正文（纯显示层）。
+ */
+private fun TextFieldBuffer.applySoftBreakInsertion() {
+    val projection = EditorSoftBreakProjection.fromRawText(originalText)
+    for (insertPoint in projection.insertPoints) {
+        if (insertPoint < length) {
+            val originalChar = originalText[insertPoint]
+            replace(
+                insertPoint,
+                insertPoint + 1,
+                "${EditorSoftBreakProjection.ZERO_WIDTH_SPACE}$originalChar",
+            )
+        }
+    }
 }

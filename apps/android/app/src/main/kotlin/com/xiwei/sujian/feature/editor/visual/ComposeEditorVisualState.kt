@@ -12,6 +12,7 @@ import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1009,14 +1010,17 @@ class ComposeEditorVisualState(
      * @param selection 当前选区（UTF-16）。
      * @param scrollY 当前滚动位置（px）。
      * @param compositionActive 当前 IME composition 是否活跃。
+     * @param projection Issue #717 评论 5741910919：西文软断行显示投影，
+     *     把 raw offset 映射到含 U+200B 的 display offset。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
         selection: TextRange,
         scrollY: Int,
         compositionActive: Boolean = false,
+        projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
     ) {
-        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
+        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY, projection)
 
         // #708 评论 5723410606 第三节：layout 回路真正断开 —
         // onAuthoritativeLayout 最前面先算 fingerprint。

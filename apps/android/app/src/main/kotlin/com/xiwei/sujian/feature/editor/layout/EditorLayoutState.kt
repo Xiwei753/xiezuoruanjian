@@ -21,11 +21,17 @@ import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
  * @param result 系统 [BasicTextField] 的 `onTextLayout` 给出的最终布局结果。
  * @param selection 当前选区（UTF-16 offset）。
  * @param scrollY 当前滚动位置（px）。
+ * @param projection Issue #717 评论 5741910919：西文软断行显示投影。
+ *     [result] 是含 U+200B 的 display 文本布局，而外部调用方持有的是 raw 正文 offset；
+ *     [cursorRect]/[lineForOffset]/[boundingBox] 通过 [projection] 把 raw offset
+ *     转成 display offset 再查 [result]。默认 [EditorSoftBreakProjection.identity]
+ *     时 raw 与 display 一致，行为与旧实现相同。
  */
 data class ComposeLayoutSnapshot(
     val result: TextLayoutResult,
     val selection: TextRange,
     val scrollY: Int,
+    val projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
 )
 
 /**
@@ -44,13 +50,17 @@ data class ComposeLayoutSnapshot(
 fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
     val text = result.layoutInput.text.text
     val safeOffset = offset.coerceIn(0, text.length)
-    val raw = result.getCursorRect(safeOffset)
+    // Issue #717 评论 5741910919：raw offset → display offset。
+    // result 是含 U+200B 的 display 文本布局，外部传入的 offset 是 raw 正文 offset，
+    // 需经投影映射到 display offset 再查 TextLayoutResult。
+    val displayOffset = projection.rawToDisplay(safeOffset).coerceIn(0, text.length)
+    val raw = result.getCursorRect(displayOffset)
 
     // 只对"逻辑段落开头且该段落当前为空"的 caret 修正首行缩进。
     // atParagraphStart：offset 在段落首字符处（文档开头或前一个字符是 \n）。
     // emptyParagraph：offset 所在段落为空（文档末尾或当前字符是 \n）。
-    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
-    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
+    val atParagraphStart = displayOffset == 0 || text[displayOffset - 1] == '\n'
+    val emptyParagraph = displayOffset == text.length || text[displayOffset] == '\n'
     if (!atParagraphStart || !emptyParagraph) return raw
 
     val textIndent = result.layoutInput.style.textIndent ?: return raw
@@ -62,8 +72,8 @@ fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
     val firstLinePx = with(density) { firstLine.toPx() }
     if (firstLinePx == 0f) return raw
 
-    val line = result.getLineForOffset(safeOffset)
-    val direction = result.getParagraphDirection(safeOffset)
+    val line = result.getLineForOffset(displayOffset)
+    val direction = result.getParagraphDirection(displayOffset)
     val newLeft =
         when (direction) {
             ResolvedTextDirection.Ltr -> result.getLineLeft(line) + firstLinePx
@@ -94,9 +104,11 @@ fun ComposeLayoutSnapshot.cursorRect(): Rect = cursorRect(selection.end)
 fun ComposeLayoutSnapshot.isIndentedEmptyParagraphCaret(offset: Int): Boolean {
     val text = result.layoutInput.text.text
     val safeOffset = offset.coerceIn(0, text.length)
+    // Issue #717 评论 5741910919：raw offset → display offset，与 cursorRect 保持一致。
+    val displayOffset = projection.rawToDisplay(safeOffset).coerceIn(0, text.length)
 
-    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
-    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
+    val atParagraphStart = displayOffset == 0 || text[displayOffset - 1] == '\n'
+    val emptyParagraph = displayOffset == text.length || text[displayOffset] == '\n'
     if (!atParagraphStart || !emptyParagraph) return false
 
     val textIndent = result.layoutInput.style.textIndent ?: return false
@@ -111,10 +123,21 @@ fun ComposeLayoutSnapshot.isIndentedEmptyParagraphCaret(offset: Int): Boolean {
 /**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，
  * 不缓存第二份行段。
+ *
+ * Issue #717 评论 5741910919：外部传入的 offset 是 raw 正文 offset，
+ * 经 [projection] 映射成 display offset 再查 [result]。
  */
-fun ComposeLayoutSnapshot.lineForOffset(offset: Int): Int = result.getLineForOffset(offset)
+fun ComposeLayoutSnapshot.lineForOffset(offset: Int): Int {
+    val displayOffset =
+        projection.rawToDisplay(offset).coerceIn(0, result.layoutInput.text.text.length)
+    return result.getLineForOffset(displayOffset)
+}
 
-fun ComposeLayoutSnapshot.boundingBox(offset: Int): Rect = result.getBoundingBox(offset)
+fun ComposeLayoutSnapshot.boundingBox(offset: Int): Rect {
+    val displayOffset =
+        projection.rawToDisplay(offset).coerceIn(0, result.layoutInput.text.text.length)
+    return result.getBoundingBox(displayOffset)
+}
 
 /**
  * #644 评论 5462826712 第4节：编辑器视口状态 — 管理滚动/视口。

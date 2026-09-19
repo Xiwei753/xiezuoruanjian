@@ -178,6 +178,20 @@ internal class MirrorPublishStageExecutor(
                 MirrorPublishExecutor.CommittedManifestResolution.FirstPublish -> null
                 MirrorPublishExecutor.CommittedManifestResolution.Stop -> null
             }
+        // Issue #717 评论 5741910919：committed baseline 的私有 manifest 物化必须提前到
+        // manifest transaction 开始之前，否则 handleBackupMissing 读不到旧 manifest。
+        if (baseline != null &&
+            !materializeCommittedBaseline(
+                workspace = workspace,
+                stateStore = stateStore,
+                baseline = baseline,
+                operation = "Publish project $projectId",
+            )
+        ) {
+            logPublishAborted(projectId, "committed baseline materialization failed")
+            workspace.rollback(context.txId)
+            return null
+        }
         val frozenPlan =
             buildFrozenManifestPlan(
                 committedManifest = baseline?.manifest,
