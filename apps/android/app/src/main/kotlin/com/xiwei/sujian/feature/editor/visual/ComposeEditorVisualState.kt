@@ -8,6 +8,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
+import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
@@ -126,6 +127,12 @@ class ComposeEditorVisualState(
      * 由 drainPendingPatchesAtFrame 在文字 patch 处理完毕后消费。
      */
     private var pendingSelectionRedirect: Rect? = null
+
+    /**
+     * #713 评论 5740279418：上一次 sample 的 cursorAnimating 状态 —
+     * 用于检测 cursorAnimating: true -> false 边沿，只记一次 editor.cursor.settled 诊断事件。
+     */
+    private var lastSampledCursorAnimating: Boolean = false
 
     /**
      * #694 评论第 1/3 步：本地输入视觉事实 tracker —
@@ -389,7 +396,22 @@ class ComposeEditorVisualState(
             val targetRect = _latestLayout.value?.cursorRect(snapshot.selection.end)
             if (targetRect != null) {
                 pendingSelectionRedirect = targetRect
+                // #713 评论 5740279418：唤醒帧循环 —
+                // 不更新 patchVersion 时 LaunchedEffect(patchVersion) 不会重启，
+                // draw 层帧循环不会启动，redirect 不会被 drainPendingPatchesAtFrame 消费，
+                // 表现为"位置能变但平滑光标动画消失"。
+                _patchVersion.update { it + 1L }
             }
+        }
+        // #713 评论 5740279418：selection 真正变化时记一次诊断事件
+        if (snapshot.selection != lastResolvedSelection) {
+            EditorDiagnosticsEvents.editorSelectionChanged(
+                oldStart = lastResolvedSelection?.start ?: -1,
+                oldEnd = lastResolvedSelection?.end ?: -1,
+                newStart = snapshot.selection.start,
+                newEnd = snapshot.selection.end,
+                layoutTextLength = _latestLayout.value?.result?.layoutInput?.text?.text?.length ?: -1,
+            )
         }
         lastResolvedSelection = snapshot.selection
         wasCompositionActiveForSnapshot = compositionActive
@@ -516,19 +538,26 @@ class ComposeEditorVisualState(
             // 都用同一份 T0 caret 作为首帧 scene.cursorRect，
             // 防止纯插入时首帧 draw 层直接算新光标位置、下一帧 timeline 又用旧位置做起点导致光标回抽。
             // cursor animation 关闭时（cursorEnabled=false）不抢系统光标，保持 null。
+            //
+            // #713 评论 5740279418：handoff 条件修正 —
+            // 正在动画时（cursorAnimating=true）的 scene.cursorRect 才是用户上一帧真正看到的光标位置，
+            // 下一笔删除到来时必须从这个中间位置继续；现在却在这个时候退回本笔事务自己的旧 caret，
+            // 所以仍然会出现"当前动画位置 -> 旧 T0 -> timeline 下一帧再继续"的前后闪/回抽。
+            // 静止时（cursorAnimating=false）scene.cursorRect 可能是残留旧坐标，
+            // 用 patch.originCursorRect 作为 canonical T0。
             val handoffCursorRect =
                 if (patch.motionPolicy.effective().cursorEnabled &&
                     patch.cursorMotionPath != null
                 ) {
-                    // #713 评论 5739986801：已有 scene.cursorRect 且 cursor 动画已完成时继续用它
-                    // （上一可见帧真实画出的最终位置），不从每一笔事务自己的旧起点重开。
-                    // 但 cursor 动画仍在进行时（cursorAnimating=true），scene.cursorRect 是动画中间位置，
-                    // 不是"上一可见帧真实画到的最终位置"，此时仍用 patch.originCursorRect 作为 handoff 起点。
-                    val sceneCursor = _visualScene.value.cursorRect
-                    val sceneCursorAnimating = _visualScene.value.cursorAnimating
-                    if (sceneCursor != null && !sceneCursorAnimating) {
+                    val sceneCursor = scene.cursorRect
+                    val sceneCursorAnimating = scene.cursorAnimating
+                    if (sceneCursorAnimating && sceneCursor != null) {
+                        // #713 评论 5740279418：动画进行中 — scene.cursorRect 是当前屏幕真实位置
+                        EditorDiagnosticsEvents.editorCursorHandoff("currentScene")
                         sceneCursor
                     } else {
+                        // #713 评论 5740279418：静止状态 — canonical T0
+                        EditorDiagnosticsEvents.editorCursorHandoff("originFallback")
                         patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
                     }
                 } else {
@@ -1209,6 +1238,14 @@ class ComposeEditorVisualState(
                     _visualScene.value.cursorRect
                         ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
                         ?: redirectTarget
+                // #713 评论 5740279418：selection redirect 在帧边界真正拿到 from/to 后记诊断事件
+                EditorDiagnosticsEvents.editorCursorRedirect(
+                    reason = "selection",
+                    fromX = fallbackFromRect.left,
+                    fromY = fallbackFromRect.top,
+                    toX = redirectTarget.left,
+                    toY = redirectTarget.top,
+                )
                 visualTimeline.redirectCursor(
                     frameTimeNanos = frameTimeNanos,
                     fallbackFromRect = fallbackFromRect,
@@ -1258,6 +1295,14 @@ class ComposeEditorVisualState(
                 _visualScene.value.cursorRect
                     ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
                     ?: redirectTarget
+            // #713 评论 5740279418：selection redirect 在帧边界真正拿到 from/to 后记诊断事件
+            EditorDiagnosticsEvents.editorCursorRedirect(
+                reason = "selection",
+                fromX = fallbackFromRect.left,
+                fromY = fallbackFromRect.top,
+                toX = redirectTarget.left,
+                toY = redirectTarget.top,
+            )
             visualTimeline.redirectCursor(
                 frameTimeNanos = frameTimeNanos,
                 fallbackFromRect = fallbackFromRect,
@@ -1270,8 +1315,11 @@ class ComposeEditorVisualState(
 
     /**
      * 是否还有待处理的 patch — overlay 据此决定是否继续推进帧时钟。
+     *
+     * #713 评论 5740279418：pendingSelectionRedirect 也算 pending —
+     * 否则 redirect 到达帧循环边缘时仍可能提前停。
      */
-    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty()
+    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionRedirect != null
 
     /**
      * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里应用 patch 到 timeline。
@@ -1306,6 +1354,19 @@ class ComposeEditorVisualState(
         // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene —
         // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
         drawSnapshotState = drawSnapshotState.copy(scene = scene)
+        // #713 评论 5740279418：检测 cursorAnimating: true -> false 边沿 —
+        // 只记一次 editor.cursor.settled，不逐帧刷。
+        if (lastSampledCursorAnimating && !scene.cursorAnimating) {
+            val settledRect = scene.cursorRect
+            if (settledRect != null) {
+                EditorDiagnosticsEvents.editorCursorSettled(
+                    selectionEnd = lastResolvedSelection?.end ?: -1,
+                    caretX = settledRect.left,
+                    caretY = settledRect.top,
+                )
+            }
+        }
+        lastSampledCursorAnimating = scene.cursorAnimating
         return scene
     }
 
@@ -1464,6 +1525,8 @@ class ComposeEditorVisualState(
         // #713 评论 5739986801：重置纯 selection cursor redirect 状态
         lastResolvedSelection = null
         pendingSelectionRedirect = null
+        // #713 评论 5740279418：重置 cursorAnimating 边沿检测状态
+        lastSampledCursorAnimating = false
     }
 
     /**
