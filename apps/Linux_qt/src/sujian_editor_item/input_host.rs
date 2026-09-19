@@ -229,8 +229,10 @@ impl EditorInputHost for SujianEditorItem {
                 // Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range
                 // （cancel 后 new = committed text，坐标一致），不是 old preedit range。
                 // 在清 session 之前取，清完 session 就取不到了。
-                let (committed_replace_start, committed_replace_end) =
-                    self.pipeline.composition().session_replace_range(self.buffer.cursor);
+                let (committed_replace_start, committed_replace_end) = self
+                    .pipeline
+                    .composition()
+                    .session_replace_range(self.buffer.cursor);
                 // Issue #710 评论 5735006606: snapshot 的视觉提取范围不能直接等于 raw edit range。
                 // cancel 的 session_replace_range 可以是零长度 (cursor, cursor)（无 selection 的
                 // 普通 composition ESC），零长度时 build_editor_layout_snapshot 的
@@ -272,7 +274,7 @@ impl EditorInputHost for SujianEditorItem {
                         x: c.x,
                         top: c.y,
                         bottom: c.y + c.h,
-                        baseline_y: c.y + c.h * 0.8,
+                        baseline_y: c.baseline_y,
                     });
 
                 let old_snapshot = self
@@ -407,13 +409,13 @@ impl EditorInputHost for SujianEditorItem {
                         x: c.x,
                         top: c.y,
                         bottom: c.y + c.h,
-                        baseline_y: c.y + c.h * 0.8,
+                        baseline_y: c.baseline_y,
                     });
                 let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                     x: c.x,
                     top: c.y,
                     bottom: c.y + c.h,
-                    baseline_y: c.y + c.h * 0.8,
+                    baseline_y: c.baseline_y,
                 });
 
                 self.pipeline
@@ -516,13 +518,13 @@ impl EditorInputHost for SujianEditorItem {
                         x: c.x,
                         top: c.y,
                         bottom: c.y + c.h,
-                        baseline_y: c.y + c.h * 0.8,
+                        baseline_y: c.baseline_y,
                     });
                 let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
                     x: c.x,
                     top: c.y,
                     bottom: c.y + c.h,
-                    baseline_y: c.y + c.h * 0.8,
+                    baseline_y: c.baseline_y,
                 });
 
                 self.pipeline

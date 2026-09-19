@@ -27,6 +27,29 @@ use std::time::{Duration, Instant};
 
 const BLINK_INTERVAL_MS: u64 = 530;
 
+/// 光标移动来源 — 决定跨行移动时走 Snap 还是 Tween。
+///
+/// Issue #712: 替代旧的 `cross_line_snap = dy > cursor_h * 3.0` 按距离猜用户意图的规则，
+/// 改为按光标移动来源决定 Snap/Tween：
+/// - `PointerClick` / `KeyboardNavigation`：smooth cursor 开启时允许跨行 Tween
+/// - `DragSelection` / `LayoutChange` / `Scroll`：硬 Snap
+/// - `TextTransaction`：由正文协同光标处理
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CursorMoveSource {
+    /// 鼠标点击：smooth cursor 开启时允许跨行 Tween
+    PointerClick,
+    /// 方向键导航：smooth cursor 开启时允许跨行 Tween
+    KeyboardNavigation,
+    /// 拖选：Snap
+    DragSelection,
+    /// 布局变化（窗口宽度改变等）：Snap
+    LayoutChange,
+    /// 滚动：Snap
+    Scroll,
+    /// 正文事务（输入/删除等）：继续由正文协同光标处理
+    TextTransaction,
+}
+
 /// 光标状态 — 跟踪光标位置、动画和闪烁。
 ///
 /// - `target_x/y`：光标应到达的位置（布局引擎计算结果）
@@ -62,6 +85,9 @@ pub struct CursorController {
     /// Issue #705 评论 5717380886: 光标所有权版本号。
     /// 0 表示初始状态；任何非正文事务导致的逻辑 cursor 移动都应 bump。
     pub cursor_owner_epoch: u64,
+    /// Issue #712: 光标移动来源，决定跨行移动时走 Snap 还是 Tween。
+    /// 默认 LayoutChange（安全默认值，首次出现走 Snap）。
+    pub last_move_source: CursorMoveSource,
 }
 
 impl CursorController {
@@ -85,6 +111,7 @@ impl CursorController {
             blink_last_toggle: Instant::now(),
             blink_reset_requested: false,
             cursor_owner_epoch: 0,
+            last_move_source: CursorMoveSource::LayoutChange,
         }
     }
 

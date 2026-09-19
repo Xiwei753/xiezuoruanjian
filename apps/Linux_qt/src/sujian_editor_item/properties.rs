@@ -36,6 +36,7 @@ impl SujianEditorItem {
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.emit_content_changed();
     }
 
@@ -65,6 +66,7 @@ impl SujianEditorItem {
         self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.emit_content_changed();
     }
 
@@ -268,6 +270,7 @@ impl SujianEditorItem {
         if !value {
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
             self.request_static_repaint();
         }
         self.visual_settings_changed();
@@ -367,6 +370,7 @@ impl SujianEditorItem {
         self.current_viewport_height = value;
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
@@ -384,12 +388,14 @@ impl SujianEditorItem {
             self.pipeline.animation_coordinator_mut().pause_all();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.request_static_repaint();
             return;
         }
         if !value {
             self.pipeline.animation_coordinator_mut().resume_all();
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
@@ -408,10 +414,12 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
             self.request_static_repaint();
             return;
         }
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
@@ -429,10 +437,12 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
             self.request_static_repaint();
             return;
         }
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
@@ -450,10 +460,12 @@ impl SujianEditorItem {
             self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
+            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
             self.request_static_repaint();
             return;
         }
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }
@@ -619,6 +631,7 @@ impl SujianEditorItem {
 
     pub(crate) fn snap_next_cursor_update(&mut self) {
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.update_cursor_visual_position();
         self.request_frame_update();
     }
@@ -630,6 +643,7 @@ impl SujianEditorItem {
         self.pipeline.set_previous_canonical_snapshot(None);
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         self.recalculate_content_height_and_emit();
         self.visual_settings_changed();
         self.request_static_repaint();
@@ -695,6 +709,9 @@ impl SujianEditorItem {
         self.text_changed();
         self.cursor_position_changed();
         self.selection_changed();
+        // Issue #712: 正文事务路径设置 CursorMoveSource::TextTransaction，
+        // 由正文协同光标处理。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::TextTransaction;
         self.update_cursor_visual_position();
         self.request_static_repaint();
     }

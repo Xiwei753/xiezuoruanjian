@@ -167,11 +167,7 @@ impl SujianEditorItem {
                     .current_layout_snapshot()
                     .clone()
                     .unwrap_or_else(|| {
-                        self.build_editor_layout_snapshot(
-                            width,
-                            false,
-                            old_composition_range,
-                        )
+                        self.build_editor_layout_snapshot(width, false, old_composition_range)
                     })
             });
 
@@ -194,13 +190,12 @@ impl SujianEditorItem {
 
         // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
         // 走 Promote=true，generation 直接成为 current，不再用完即删。
-        let new_snapshot =
-            self.build_editor_layout_snapshot(width, true, new_composition_range);
+        let new_snapshot = self.build_editor_layout_snapshot(width, true, new_composition_range);
         let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
             x: c.x,
             top: c.y,
             bottom: c.y + c.h,
-            baseline_y: c.y + c.h * 0.8,
+            baseline_y: c.baseline_y,
         });
 
         let visual_text_unchanged =
@@ -709,6 +704,9 @@ impl SujianEditorItem {
             self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = affinity;
+        // Issue #712: 鼠标点击设置 CursorMoveSource::PointerClick，
+        // 允许 smooth cursor 开启时跨行 Tween。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::PointerClick;
         // Issue #702 评论 5707449688 问题 1: 普通鼠标单击不再无条件 force_snap_next。
         // drag_select_at/long_press_at/select_word_at 仍保留 force_snap_next=true，
         // 因为它们确实应该立即对齐。普通单击只更新逻辑 cursor/affinity，
@@ -746,6 +744,8 @@ impl SujianEditorItem {
             self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = affinity;
+        // Issue #712: 拖选设置 CursorMoveSource::DragSelection，跨行走 Snap。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #705: 鼠标点击路径里不要自己单独决定光标动画模式。
         // 是否 Tween 由统一的光标移动规则决定。drag_select 走统一 snap 辅助方法。
         self.snap_cursor_for_pointer_action();
@@ -784,6 +784,8 @@ impl SujianEditorItem {
             self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = affinity;
+        // Issue #712: 长按设置 CursorMoveSource::DragSelection，跨行走 Snap。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
         self.snap_cursor_for_pointer_action();
         if !self.buffer.has_selection() {
@@ -815,6 +817,8 @@ impl SujianEditorItem {
             self.begin_manual_cursor_move();
         }
         self.cursor_ctrl.affinity = affinity;
+        // Issue #712: 选词设置 CursorMoveSource::DragSelection，跨行走 Snap。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::DragSelection;
         // Issue #705: 统一 snap 辅助方法,不在点击代码里自己强制 Snap。
         self.snap_cursor_for_pointer_action();
         self.select_word_at_impl(index);
@@ -928,6 +932,9 @@ impl SujianEditorItem {
         if next != self.buffer.cursor {
             self.begin_manual_cursor_move();
         }
+        // Issue #712: 方向键水平移动设置 CursorMoveSource::KeyboardNavigation，
+        // 允许 smooth cursor 开启时跨行 Tween。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
         self.cursor_ctrl.affinity = if forward {
             CaretAffinity::Downstream
         } else {
@@ -971,6 +978,9 @@ impl SujianEditorItem {
         // Issue #705 评论 5717380886: 方向键是非正文事务导致的逻辑 cursor 移动。
         // Issue #705 评论 5718299909: 仅在确认 target_idx != line_idx 后 bump。
         self.begin_manual_cursor_move();
+        // Issue #712: 方向键垂直移动设置 CursorMoveSource::KeyboardNavigation，
+        // 允许 smooth cursor 开启时跨行 Tween。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
         let index = self.index_at_line_x(&lines[target_idx], x);
         self.cursor_ctrl.affinity = self
             .editor_layout
@@ -1013,6 +1023,9 @@ impl SujianEditorItem {
         if index != self.buffer.cursor || self.cursor_ctrl.affinity != affinity {
             self.begin_manual_cursor_move();
         }
+        // Issue #712: Home/End 设置 CursorMoveSource::KeyboardNavigation，
+        // 允许 smooth cursor 开启时跨行 Tween。
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::KeyboardNavigation;
         self.cursor_ctrl.affinity = affinity;
         if extend {
             let anchor = self.buffer.selection_anchor;

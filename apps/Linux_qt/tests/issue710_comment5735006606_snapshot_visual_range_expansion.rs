@@ -83,7 +83,9 @@ fn issue710_commit_snapshot_visual_range_expanded_with_correct_texts() {
 
     // old/new composition_range 用扩展后的 affected range
     assert!(
-        body.contains("let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) ="),
+        body.contains(
+            "let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) ="
+        ),
         "commit: 必须解构 compute_affected_paragraph_ranges 的返回值为 old/new affected range"
     );
     assert!(
@@ -165,7 +167,9 @@ fn issue710_cancel_snapshot_visual_range_expanded_with_correct_texts() {
 
     // old/new snapshot 用扩展后的 affected range
     assert!(
-        body.contains("let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) ="),
+        body.contains(
+            "let (old_affected_start, old_affected_end, new_affected_start, new_affected_end) ="
+        ),
         "cancel: 必须解构 compute_affected_paragraph_ranges 的返回值为 old/new affected range"
     );
     assert!(

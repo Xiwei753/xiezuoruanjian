@@ -1397,6 +1397,8 @@ pub struct VisualLine {
 
 /// 光标矩形 — 文档坐标系（不含 scroll offset）。
 /// visible=false 表示光标在可视区域外，平台端不应绘制。
+/// baseline_y 是文字基线 Y 坐标（文档坐标系），从 QTextLine 的真实 ascent/descent
+/// 计算，不使用 `top + h * 0.8` 估算。
 #[derive(Clone, Debug, PartialEq)]
 pub struct CaretRect {
     pub x: f64,
@@ -1404,6 +1406,7 @@ pub struct CaretRect {
     pub h: f64,
     pub visual_line_id: usize,
     pub visible: bool,
+    pub baseline_y: f64,
 }
 
 pub type CursorLayoutRect = CaretRect;
@@ -2274,12 +2277,19 @@ pub fn caret_rect(
         );
     }
 
+    // Issue #712: baseline_y 从 QTextLine 的真实 ascent/descent 计算，
+    // 不使用 `top + h * 0.8` 估算。text_baseline_y 返回文档坐标系 baseline。
+    let baseline_y_doc =
+        text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+    let baseline_y = baseline_y_doc - scroll_y;
+
     CaretRect {
         x: cursor_x,
         y: cursor_y,
         h: cursor_h,
         visual_line_id: line.id,
         visible,
+        baseline_y,
     }
 }
 
@@ -3010,12 +3020,17 @@ impl CanonicalDocumentVisualSnapshot {
         let cursor_y = cursor_y_doc - scroll_y;
         let visible = cursor_y + cursor_h > 0.0 && cursor_y < viewport_h.max(1.0);
 
+        // Issue #712: baseline_y 从 QTextLine 的真实 ascent/descent 计算。
+        let baseline_y_doc = text_baseline_y(line, self.font_size, &self.font_family);
+        let baseline_y = baseline_y_doc - scroll_y;
+
         CaretRect {
             x: cursor_x,
             y: cursor_y,
             h: cursor_h,
             visual_line_id: line.id,
             visible,
+            baseline_y,
         }
     }
 

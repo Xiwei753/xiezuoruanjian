@@ -185,13 +185,17 @@ fn issue710_caller_snapshot_coordinator_coordinate_contract_documented() {
     // editing.rs: commit 路径 old=preedit, new=candidate
     let editing = read_src("src/sujian_editor_item/editing.rs");
     assert!(
-        editing.contains("Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系"),
+        editing.contains(
+            "Issue #710 评论 5734666497: old/new snapshot 的 composition range 分属不同坐标系"
+        ),
         "editing.rs: 必须有坐标系分离的注释说明"
     );
     // input_host.rs: cancel 路径 old=preedit, new=committed_replace
     let input_host = read_src("src/sujian_editor_item/input_host.rs");
     assert!(
-        input_host.contains("Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range"),
+        input_host.contains(
+            "Issue #710 评论 5734666497: cancel 的 new-side 受影响范围是原 session replace range"
+        ),
         "input_host.rs: 必须有 cancel new-side range 的注释说明"
     );
     // 协调器内部已分清 old/new（上一轮已修，这里只做守卫确保不回退）

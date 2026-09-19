@@ -33,8 +33,24 @@ impl log::Log for SharedLogger {
         record_event(event);
     }
 
-    fn enabled(&self, _metadata: &log::Metadata<'_>) -> bool {
-        true
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        let target = metadata.target();
+        let level = metadata.level();
+
+        // 素笺自己的 target 允许所有级别（包括 Debug/Trace）。
+        // 第三方 crate（reqwest、hyper、rustls、tokio 等）默认最多 Info。
+        let is_sujian_target = target.starts_with("writer_core")
+            || target.starts_with("writer_diagnostics")
+            || target.starts_with("linux_qt")
+            || target.starts_with("sujian")
+            || target.starts_with("editor");
+
+        if is_sujian_target {
+            return true;
+        }
+
+        // 第三方及未知 target 默认最多 Info。
+        level <= log::Level::Info
     }
 
     fn flush(&self) {

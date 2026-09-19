@@ -329,7 +329,8 @@ fn sample_coordinated_cursor_rect_at(
     let (cx, cy) = match op {
         TextVisualOperationKind::Insert => {
             let mut rightmost_x: Option<f64> = None;
-            let mut cursor_y = new_rect.top;
+            // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)。
+            let cursor_y = new_rect.top;
             for unit in &tx.units {
                 if unit.slice.kind != AnimatedSliceKind::InsertReveal {
                     continue;
@@ -341,7 +342,8 @@ fn sample_coordinated_cursor_rect_at(
                     Some(prev) => prev.max(edge_x),
                     None => edge_x,
                 });
-                cursor_y = frame.y;
+                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                // 不从 glyph frame.y 取。
             }
             match rightmost_x {
                 Some(x) => (x, cursor_y),
@@ -357,7 +359,8 @@ fn sample_coordinated_cursor_rect_at(
         TextVisualOperationKind::Delete => {
             let mut has_conceal_from_right = false;
             let mut conceal_edge: Option<f64> = None;
-            let mut cursor_y = new_rect.top;
+            // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)。
+            let cursor_y = new_rect.top;
             for unit in &tx.units {
                 if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
                     continue;
@@ -370,7 +373,8 @@ fn sample_coordinated_cursor_rect_at(
                         Some(prev) => prev.min(edge),
                         None => edge,
                     });
-                    cursor_y = frame.y;
+                    // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                    // 不从 glyph frame.y 取。
                 } else {
                     has_conceal_from_right = true;
                 }
@@ -431,19 +435,6 @@ struct ReflowClusterRef {
     cluster_idx: usize,
     byte_start: usize,
     byte_end: usize,
-}
-
-/// Issue #658 评论 5630181473 问题 3: 一个 reflow run — 由 byte range 重叠连边
-/// 形成的 connected component。
-///
-/// 包含至少一个 old cluster 和一个 new cluster。run 内的所有成员共享同一动画：
-/// - 1 old + 1 new + range 完全对应 + shaping 相同 → geometry 变了才 reflow_move
-/// - 1 old + 1 new + shaping 不同 → 一对一 crossfade
-/// - 其他情况（1→N / N→1 / N→M）→ old 每个淡出一次，new 每个淡入一次
-#[derive(Clone, Debug)]
-struct ReflowRun {
-    old: Vec<ReflowClusterRef>,
-    new: Vec<ReflowClusterRef>,
 }
 
 // ── Issue #687: 显式 changed range 拥有函数 ──
@@ -582,12 +573,14 @@ fn build_delete_conceal_slices(
 
 /// 构建 cluster/run 级 reflow 切片和静态行补丁。
 ///
-/// 两阶段算法：
-/// 1. 建关系：遍历所有未 excluded 的 old/new cluster，用 OffsetMap range mapping
-///    变到同一逻辑 byte 坐标，只要逻辑范围有重叠就连边，对二分图求 connected components。
-/// 2. 按 run 分类：每个 component 按 old/new 成员数量和 shaping 一致性决定动画类型。
-///    真正没有任何映射边的 new cluster 才是 insert_reveal；
-///    真正没有任何映射边的 old cluster 才是 delete_conceal。
+/// Issue #712: 两阶段算法——先稳定一对一配对，再处理多对多。
+/// 1. 一对一精确匹配：对每个未 excluded 的 new cluster，用 OffsetMap 映射回 old 坐标，
+///    找 byte range 精确对应的唯一 old cluster。匹配后按 shaping 和 geometry 决定动画类型：
+///    - shaping 相同 + 几何没变 → 不生成任何动画（消除普通输入/删除/Enter 的错误 CrossFade）
+///    - shaping 相同 + 几何变了 → ReflowMove
+///    - shaping 真变了 → 一对 ReflowCrossFade（old 淡出 + new 淡入）
+/// 2. 多对多处理：剩下确实无法唯一对应的 cluster，每个 old 在原位 fade-out，
+///    每个 new 在原位 fade-in。
 ///
 /// # 参数
 /// - `excluded_old_ranges`：已被 insert/delete 动画接管的 old byte range，跳过不处理。
@@ -616,9 +609,8 @@ fn build_cluster_reflow_slices(
     let _ = (old_cursor_rect, new_cursor_rect);
 
     // ── 阶段 1：收集所有未 excluded 的 old/new cluster refs ──
-    // Issue #658 评论 5630181473 问题 3: 被 excluded 的 old cluster 仍保留在
-    // old_refs 中（标记 excluded=true），不参与边构建，但最终在阶段 4 中作为
-    // "纯 old" run 生成 delete_conceal。被 excluded 的 new cluster 直接跳过。
+    // 被 excluded 的 old cluster 保留在 old_refs 中（标记 excluded=true），
+    // 不参与一对一匹配和多对多处理。被 excluded 的 new cluster 直接跳过。
     let mut old_refs: Vec<ReflowClusterRef> = Vec::new();
     let mut old_excluded_flags: Vec<bool> = Vec::new();
     for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
@@ -654,187 +646,120 @@ fn build_cluster_reflow_slices(
         }
     }
 
-    // ── 阶段 2：构建二分图边（byte range 重叠）──
-    // 被 excluded 的 old cluster 不参与连边，最终作为 "纯 old" run 生成 delete_conceal。
-    // Union-Find: 0..old_refs.len() 为 old 节点, old_refs.len().. 为 new 节点
+    // ── 阶段 2：一对一精确匹配 ──
+    // Issue #712: 先稳定一对一配对，消除普通输入/删除/Enter 的错误 CrossFade。
+    // 对每个未 excluded 的 new cluster，用 offset_map 映射回 old 坐标，
+    // 找 byte range 精确对应的唯一 old cluster。
+    // 匹配条件：mapped_old_start == old_cluster.byte_start && mapped_old_end == old_cluster.byte_end
     let n_old = old_refs.len();
     let n_new = new_refs.len();
-    let n = n_old + n_new;
-    let mut parent: Vec<usize> = (0..n).collect();
-
-    fn find(parent: &mut [usize], x: usize) -> usize {
-        if parent[x] != x {
-            parent[x] = find(parent, parent[x]);
-        }
-        parent[x]
-    }
-    fn union(parent: &mut [usize], a: usize, b: usize) {
-        let ra = find(parent, a);
-        let rb = find(parent, b);
-        if ra != rb {
-            parent[ra] = rb;
-        }
-    }
-
-    // 连边条件：old cluster 的 byte range 与 new cluster 的 byte range 有逻辑重叠
-    // 被 excluded 的 old cluster 跳过（不连边）
-    for (oi, oref) in old_refs.iter().enumerate() {
-        if old_excluded_flags[oi] {
-            continue;
-        }
-        for (ni, nref) in new_refs.iter().enumerate() {
-            // 将 new cluster 的 byte range 映射到 old 坐标系
-            let mapped_old_range = offset_map.map_new_range_to_old(nref.byte_start, nref.byte_end);
-
-            let overlaps = if let Some((mos, moe)) = mapped_old_range {
-                // 严格半开区间重叠：[a_start, a_end) ∩ [b_start, b_end) ≠ ∅
-                // 即 a_start < b_end && b_start < a_end。
-                // 共享端点不算重叠（[0,1) 和 [1,2) 只是相邻，不连边）。
-                oref.byte_start < moe && mos < oref.byte_end
-            } else {
-                // new cluster 跨越映射边界 — 逐端点回退检查
-                let start_mapped = offset_map.map_new_to_old(nref.byte_start);
-                let last_byte = if nref.byte_end > 0 {
-                    nref.byte_end - 1
-                } else {
-                    0
-                };
-                let end_mapped = offset_map.map_new_to_old(last_byte);
-                if let (Some(ms), Some(me)) = (start_mapped, end_mapped) {
-                    (ms >= oref.byte_start && ms < oref.byte_end)
-                        || (me >= oref.byte_start && me < oref.byte_end)
-                        || (ms <= oref.byte_start && me >= oref.byte_end)
-                } else {
-                    false
-                }
-            };
-
-            if overlaps {
-                union(&mut parent, oi, n_old + ni);
-            }
-        }
-    }
-
-    // ── 阶段 3：提取 connected components → ReflowRuns ──
-    let mut component_map: std::collections::HashMap<usize, usize> =
-        std::collections::HashMap::new();
-    let mut runs: Vec<ReflowRun> = Vec::new();
-
-    for oi in 0..n_old {
-        let root = find(&mut parent, oi);
-        let comp_idx = *component_map.entry(root).or_insert_with(|| {
-            let idx = runs.len();
-            runs.push(ReflowRun {
-                old: Vec::new(),
-                new: Vec::new(),
-            });
-            idx
-        });
-        runs[comp_idx].old.push(old_refs[oi].clone());
-    }
-    for ni in 0..n_new {
-        let root = find(&mut parent, n_old + ni);
-        let comp_idx = *component_map.entry(root).or_insert_with(|| {
-            let idx = runs.len();
-            runs.push(ReflowRun {
-                old: Vec::new(),
-                new: Vec::new(),
-            });
-            idx
-        });
-        runs[comp_idx].new.push(new_refs[ni].clone());
-    }
-
-    // ── 阶段 4：按 run 分类生成动画切片 ──
-    // 跟踪已被 run 接管的 new cluster，用于生成 StaticLinePatch
+    let mut old_matched: Vec<bool> = vec![false; n_old];
+    let mut new_matched: Vec<bool> = vec![false; n_new];
     let mut run_managed_new_clusters: Vec<(usize, usize, SourceRect)> = Vec::new();
 
-    for run in &runs {
-        if run.old.is_empty() && run.new.is_empty() {
-            continue;
-        }
+    for (ni, nref) in new_refs.iter().enumerate() {
+        // 用 offset_map 将 new cluster 的 byte range 映射回 old 坐标
+        let mapped_old_range = offset_map.map_new_range_to_old(nref.byte_start, nref.byte_end);
 
-        let run_old = &run.old;
-        let run_new = &run.new;
+        // 映射失败（None）的 new cluster 无法一对一匹配，跳过进入多对多处理
+        let (mapped_old_start, mapped_old_end) = match mapped_old_range {
+            Some(r) => r,
+            None => continue,
+        };
 
-        // Issue #687: 纯 new（无 old 对应）和纯 old（无 new 对应）的 run 不再由
-        // reflow 推断 InsertReveal / DeleteConceal。changed range 所有权由
-        // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有。
-        // reflow 只处理 unchanged material（ReflowMove / ReflowCrossFade）。
-        // 纯 new / 纯 old run 理论上不应出现（changed range 已被 excluded），
-        // 若因边界情况出现则直接跳过，不生成切片。
-        if run_old.is_empty() || run_new.is_empty() {
-            continue;
-        }
+        // 查找精确匹配的 old cluster：byte range 完全对应
+        let matching_oi = old_refs
+            .iter()
+            .enumerate()
+            .filter(|(oi, _)| !old_matched[*oi] && !old_excluded_flags[*oi])
+            .find(|(_, oref)| {
+                oref.byte_start == mapped_old_start && oref.byte_end == mapped_old_end
+            })
+            .map(|(oi, _)| oi);
 
-        // 1 old + 1 new：精确匹配
-        if run_old.len() == 1 && run_new.len() == 1 {
-            let oref = &run_old[0];
-            let nref = &run_new[0];
-            let old_line = &old_snapshot.line_snapshots[oref.line_idx];
-            let old_cluster = &old_line.clusters[oref.cluster_idx];
-            let new_line = &new_snapshot.line_snapshots[nref.line_idx];
-            let new_cluster = &new_line.clusters[nref.cluster_idx];
+        // 没找到唯一匹配的 new cluster，跳过进入多对多处理
+        let oi = match matching_oi {
+            Some(idx) => idx,
+            None => continue,
+        };
 
-            let same_shaping = old_cluster
-                .shaping_identity
-                .is_same_shaping(&new_cluster.shaping_identity);
+        let oref = &old_refs[oi];
+        let old_line = &old_snapshot.line_snapshots[oref.line_idx];
+        let old_cluster = &old_line.clusters[oref.cluster_idx];
+        let new_line = &new_snapshot.line_snapshots[nref.line_idx];
+        let new_cluster = &new_line.clusters[nref.cluster_idx];
 
-            let old_sr = old_cluster.source_rect.clone();
-            let new_sr = new_cluster.source_rect.clone();
-            let old_doc = old_line.source_rect_to_document_rect(&old_sr);
-            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+        let same_shaping = old_cluster
+            .shaping_identity
+            .is_same_shaping(&new_cluster.shaping_identity);
 
-            if same_shaping {
-                let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
-                    && (old_doc.y - new_doc.y).abs() < 0.5
-                    && (old_doc.w - new_doc.w).abs() < 0.5
-                    && (old_doc.h - new_doc.h).abs() < 0.5;
-                if !geometry_same {
-                    slices.push(AnimatedSlice::reflow_move(
-                        key,
-                        old_line.id,
-                        old_sr,
-                        old_doc,
-                        new_line.id,
-                        new_sr.clone(),
-                        new_doc,
-                        new_cluster.byte_start,
-                        new_cluster.byte_end,
-                        Some(old_cluster.shaping_identity.clone()),
-                    ));
-                    run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
-                }
-            } else {
-                // shaping 改变：old 淡出 + new 淡入
-                slices.push(AnimatedSlice::reflow_crossfade_old(
+        let old_sr = old_cluster.source_rect.clone();
+        let new_sr = new_cluster.source_rect.clone();
+        let old_doc = old_line.source_rect_to_document_rect(&old_sr);
+        let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+
+        if same_shaping {
+            let geometry_same = (old_doc.x - new_doc.x).abs() < 0.5
+                && (old_doc.y - new_doc.y).abs() < 0.5
+                && (old_doc.w - new_doc.w).abs() < 0.5
+                && (old_doc.h - new_doc.h).abs() < 0.5;
+            if !geometry_same {
+                // 几何变了：只生成 ReflowMove
+                slices.push(AnimatedSlice::reflow_move(
                     key,
                     old_line.id,
                     old_sr,
-                    old_doc.clone(),
-                    new_doc.clone(),
-                    new_cluster.byte_start,
-                    new_cluster.byte_end,
-                ));
-                slices.push(AnimatedSlice::reflow_crossfade_new(
-                    key,
+                    old_doc,
                     new_line.id,
                     new_sr.clone(),
-                    old_doc,
                     new_doc,
                     new_cluster.byte_start,
                     new_cluster.byte_end,
+                    Some(old_cluster.shaping_identity.clone()),
                 ));
                 run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
             }
-            continue;
+            // 几何没变：不生成任何动画（关键改进——消除普通输入/删除/Enter 的错误 CrossFade）
+        } else {
+            // byte identity 对得上但 shaping 真变了：生成一对 ReflowCrossFade
+            slices.push(AnimatedSlice::reflow_crossfade_old(
+                key,
+                old_line.id,
+                old_sr,
+                old_doc.clone(),
+                new_doc.clone(),
+                new_cluster.byte_start,
+                new_cluster.byte_end,
+            ));
+            slices.push(AnimatedSlice::reflow_crossfade_new(
+                key,
+                new_line.id,
+                new_sr.clone(),
+                old_doc,
+                new_doc,
+                new_cluster.byte_start,
+                new_cluster.byte_end,
+            ));
+            run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
         }
 
-        // N→M（多 old ↔ 多 new）：无法可靠一一对应时，每个成员独立动画。
-        // old 每个在自己的 old_doc 原位 fade-out（from == to == old_doc，不移动只淡出）。
-        // new 每个在自己的 new_doc 原位 fade-in（from == to == new_doc，不移动只淡入）。
-        // 不再拿第一个 cluster 当 run 锚点——避免整组文字往一个 cluster 上聚拢。
-        for oref in run_old {
+        // 标记已配对的 old/new cluster，不再参与后续多对多处理
+        old_matched[oi] = true;
+        new_matched[ni] = true;
+    }
+
+    // ── 阶段 3：多对多处理（未配对的 cluster）──
+    // 剩下确实无法唯一对应的 cluster（未配对的 old 和 new），进入多对多处理。
+    // 每个 old 在原位 fade-out，每个 new 在原位 fade-in。
+    let unmatched_old: Vec<usize> = (0..n_old)
+        .filter(|&oi| !old_matched[oi] && !old_excluded_flags[oi])
+        .collect();
+    let unmatched_new: Vec<usize> = (0..n_new).filter(|&ni| !new_matched[ni]).collect();
+
+    // 只有同时存在未配对的 old 和 new 时才生成 CrossFade
+    if !unmatched_old.is_empty() && !unmatched_new.is_empty() {
+        for &oi in &unmatched_old {
+            let oref = &old_refs[oi];
             let old_line = &old_snapshot.line_snapshots[oref.line_idx];
             let old_cluster = &old_line.clusters[oref.cluster_idx];
             let old_sr = old_cluster.source_rect.clone();
@@ -851,7 +776,8 @@ fn build_cluster_reflow_slices(
             ));
         }
 
-        for nref in run_new {
+        for &ni in &unmatched_new {
+            let nref = &new_refs[ni];
             let new_line = &new_snapshot.line_snapshots[nref.line_idx];
             let new_cluster = &new_line.clusters[nref.cluster_idx];
             let new_sr = new_cluster.source_rect.clone();
@@ -2272,6 +2198,7 @@ impl LinuxEditorAnimationCoordinator {
         force_snap_next: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
+        cursor_move_source: super::cursor_controller::CursorMoveSource,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
@@ -2293,9 +2220,18 @@ impl LinuxEditorAnimationCoordinator {
 
         let scroll_changed = (old_scroll_y - scroll_y).abs() > 0.01;
 
-        let dy = (cursor_y - old_visual_y).abs();
-
-        let cross_line_snap = dy > cursor_h * 3.0;
+        // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
+        // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
+        let allow_cross_line_tween = match cursor_move_source {
+            super::cursor_controller::CursorMoveSource::PointerClick
+            | super::cursor_controller::CursorMoveSource::KeyboardNavigation => {
+                smooth_cursor_enabled
+            }
+            super::cursor_controller::CursorMoveSource::DragSelection
+            | super::cursor_controller::CursorMoveSource::LayoutChange
+            | super::cursor_controller::CursorMoveSource::Scroll => false,
+            super::cursor_controller::CursorMoveSource::TextTransaction => false,
+        };
 
         // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
         // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见/滚动变化都硬 Snap，
@@ -2312,13 +2248,13 @@ impl LinuxEditorAnimationCoordinator {
 
         let transition = if !should_be_visible || hard_snap {
             CursorTransition::Snap
-        } else if !smooth_cursor_enabled || cross_line_snap {
+        } else if !smooth_cursor_enabled || !allow_cross_line_tween {
             // Issue #702 评论 5707770318: 正文事务活跃时，光标位置只由
             // compute_coordinated_cursor_position 驱动（正文协同），不应再开
             // CursorAnimationState 独立 timeline。返回 Snap 让 apply_plan 清除
             // animation，不创建独立 timeline。只有没有正文事务时才走纯光标 Tween。
-            // 此分支（!smooth_cursor_enabled || cross_line_snap）原本就对非协同
-            // 情况返回 Snap；现在协调情况也返回 Snap，因此统一返回 Snap。
+            // Issue #712: !allow_cross_line_tween 替代旧的 cross_line_snap，
+            // 按 CursorMoveSource 决定跨行是否允许 Tween。
             CursorTransition::Snap
         } else if let Some(anim) = cursor_animation {
             if (anim.target_x - cursor_x).abs() > 0.01 || (anim.target_y - cursor_y).abs() > 0.01 {
@@ -2331,18 +2267,28 @@ impl LinuxEditorAnimationCoordinator {
                 } else {
                     // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                     // 直接从当前 anim 的 start 位置建 Tween。
+                    // Issue #712: baseline_y 从 canonical caret geometry 获取，
+                    // 不使用 top + h * 0.8 估算。
+                    let new_baseline_y = new_cursor_rect
+                        .as_ref()
+                        .map(|r| r.baseline_y)
+                        .unwrap_or(cursor_y + cursor_h * 0.8);
+                    let old_baseline_y = old_cursor_rect
+                        .as_ref()
+                        .map(|r| r.baseline_y)
+                        .unwrap_or(anim.start_y + cursor_h * 0.8);
                     CursorTransition::Tween {
                         old_rect: CursorRect {
                             x: anim.start_x,
                             top: anim.start_y,
                             bottom: anim.start_y + cursor_h,
-                            baseline_y: anim.start_y + cursor_h * 0.8,
+                            baseline_y: old_baseline_y,
                         },
                         new_rect: CursorRect {
                             x: cursor_x,
                             top: cursor_y,
                             bottom: cursor_y + cursor_h,
-                            baseline_y: cursor_y + cursor_h * 0.8,
+                            baseline_y: new_baseline_y,
                         },
                         duration_ms: tween_duration_ms,
                     }
@@ -2360,18 +2306,28 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                 // 直接从当前 visual_x/visual_y 建 Tween。
+                // Issue #712: baseline_y 从 canonical caret geometry 获取，
+                // 不使用 top + h * 0.8 估算。
+                let new_baseline_y = new_cursor_rect
+                    .as_ref()
+                    .map(|r| r.baseline_y)
+                    .unwrap_or(cursor_y + cursor_h * 0.8);
+                let old_baseline_y = old_cursor_rect
+                    .as_ref()
+                    .map(|r| r.baseline_y)
+                    .unwrap_or(old_visual_y + cursor_h * 0.8);
                 CursorTransition::Tween {
                     old_rect: CursorRect {
                         x: old_visual_x,
                         top: old_visual_y,
                         bottom: old_visual_y + cursor_h,
-                        baseline_y: old_visual_y + cursor_h * 0.8,
+                        baseline_y: old_baseline_y,
                     },
                     new_rect: CursorRect {
                         x: cursor_x,
                         top: cursor_y,
                         bottom: cursor_y + cursor_h,
-                        baseline_y: cursor_y + cursor_h * 0.8,
+                        baseline_y: new_baseline_y,
                     },
                     duration_ms: tween_duration_ms,
                 }
@@ -2381,9 +2337,8 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         let _ = (is_preediting, old_blink_visible);
-        // Issue #702 评论 5707770318: old_cursor_rect/new_cursor_rect 不再用于
-        // build_cursor_plan 的 Tween 构造（正文协同时返回 Snap，纯光标 Tween 从
-        // anim.start_x/start_y 或 visual_x/visual_y 建）。保留参数以维持调用方契约。
+        // Issue #702 评论 5707770318: old_cursor_rect/new_cursor_rect 的 baseline_y
+        // 已用于 Tween 构造（Issue #712），不再整体丢弃。
         let _ = (old_cursor_rect, new_cursor_rect);
 
         CursorAnimationPlan {
@@ -2767,7 +2722,9 @@ impl LinuxEditorAnimationCoordinator {
         match op {
             TextVisualOperationKind::Insert => {
                 let mut rightmost_x: Option<f64> = None;
-                let mut cursor_y = new_rect.top;
+                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
+                let cursor_y = new_rect.top;
                 for unit in &tx.units {
                     if unit.slice.kind != AnimatedSliceKind::InsertReveal {
                         continue;
@@ -2780,7 +2737,8 @@ impl LinuxEditorAnimationCoordinator {
                         Some(prev) => prev.max(edge_x),
                         None => edge_x,
                     });
-                    cursor_y = frame.y;
+                    // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                    // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
                 }
                 match rightmost_x {
                     Some(x) => Some((x, cursor_y, h)),
@@ -2794,7 +2752,9 @@ impl LinuxEditorAnimationCoordinator {
             TextVisualOperationKind::Delete => {
                 let mut has_conceal_from_right = false;
                 let mut conceal_edge: Option<f64> = None;
-                let mut cursor_y = new_rect.top;
+                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
+                let cursor_y = new_rect.top;
                 // Issue #702: 记录 DeleteConceal unit 的可见进度，供 fallback
                 // 让 caret track 跟随文字 unit 的同一帧基准，而非 caret track
                 // 自己的 timeline，消除"光标先完成、旧字晚消失"的错拍。
@@ -2814,7 +2774,8 @@ impl LinuxEditorAnimationCoordinator {
                             Some(prev) => prev.min(edge),
                             None => edge,
                         });
-                        cursor_y = frame.y;
+                        // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
+                        // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
                     } else {
                         has_conceal_from_right = true;
                     }

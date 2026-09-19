@@ -170,6 +170,7 @@ impl SujianEditorItem {
             self.cursor_ctrl.force_snap_next,
             self.cursor_ctrl.animation.as_ref(),
             self.cursor_ctrl.cursor_owner_epoch,
+            self.cursor_ctrl.last_move_source,
         );
 
         // Issue #679 评论 5657313927 (步骤 5): apply_plan。
