@@ -27,13 +27,31 @@ import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
  *     [cursorRect]/[lineForOffset]/[boundingBox] 通过 [projection] 把 raw offset
  *     转成 display offset 再查 [result]。默认 [EditorSoftBreakProjection.identity]
  *     时 raw 与 display 一致，行为与旧实现相同。
+ * @param rawText Issue #717 评论 5742904417 修复1：原始正文（不含 U+200B）。
+ *     用于文本身份/diff/intent 匹配/offset-map 长度；而 [result]+[projection] 用于
+ *     几何/行/path/cursor。visual pipeline 的文本身份判断必须用 [rawText]，
+ *     不能用 `result.layoutInput.text.text`（那是 display 文本，含 U+200B）。
  */
 data class ComposeLayoutSnapshot(
     val result: TextLayoutResult,
     val selection: TextRange,
     val scrollY: Int,
     val projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
+    val rawText: String = "",
 )
+
+/**
+ * Issue #717 评论 5742904417 修复1：effective raw text —
+ *
+ * 生产代码中 [ComposeEditorVisualState.onAuthoritativeLayout] 会显式传入正确的 [rawText]；
+ * 但测试和旧调用方可能不传（默认 ""），此时从 [result.layoutInput.text.text] 推导。
+ * 测试中的 TextLayoutResult 不含 U+200B，result 即 raw，fallback 安全。
+ * 空文档时 result.layoutInput.text.text 也是 ""，与 rawText="" 一致，无歧义。
+ *
+ * visual pipeline 的文本身份判断一律用 [effectiveRawText]，不直接用 [rawText]。
+ */
+val ComposeLayoutSnapshot.effectiveRawText: String
+    get() = if (rawText.isEmpty()) result.layoutInput.text.text else rawText
 
 /**
  * #641 评论1 第5节：视觉光标矩形 — 从真实 [TextLayoutResult] 取，
@@ -176,6 +194,19 @@ fun ComposeLayoutSnapshot.lineForRawOffset(rawOffset: Int): Int {
     val displayOffset =
         projection.rawToDisplay(rawOffset).coerceIn(0, result.layoutInput.text.text.length)
     return result.getLineForOffset(displayOffset)
+}
+
+/**
+ * Issue #717 评论 5742904417 修复2：raw line end for raw offset。
+ *
+ * [TextLayoutResult.getLineEnd] 返回的是 display offset（含 U+200B），
+ * 但 retained move 切片需要 raw offset。本函数先把 rawOffset 映射到 display 查行，
+ * 再把 display lineEnd 映射回 raw offset。
+ */
+fun ComposeLayoutSnapshot.rawLineEndForRawOffset(rawOffset: Int): Int {
+    val line = lineForRawOffset(rawOffset)
+    val displayEnd = result.getLineEnd(line)
+    return projection.displayToRaw(displayEnd)
 }
 
 /**

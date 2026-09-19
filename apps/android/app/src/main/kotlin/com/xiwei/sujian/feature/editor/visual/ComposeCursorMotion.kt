@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
  * #684 评论 5672654866：光标运动路径 —
@@ -81,7 +82,8 @@ fun buildCursorMotionPath(
     val lastCursor = cursors.last()
     if (firstCursor.oldEndUtf16 == lastCursor.newEndUtf16) return null
 
-    val newTextLen = newLayout.result.layoutInput.text.length
+    // Issue #717 评论 5742904417 修复1：newAnimationUnits 是 raw 坐标，边界检查用 rawText 长度。
+    val newTextLen = newLayout.effectiveRawText.length
 
     // 一次提交多个插入 unit：按 newAnimationUnits 顺序取每个 unit 出现后的 caret rect。
     // 仅当本事务是纯插入（oldAnimationUnits 为空）且有多个 newAnimationUnits 时走多段路径，

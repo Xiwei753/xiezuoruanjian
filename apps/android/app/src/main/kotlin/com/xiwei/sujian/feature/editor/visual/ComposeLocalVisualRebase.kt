@@ -6,6 +6,7 @@ import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
 import uniffi.writer_core.LocalVisualSliceDto
@@ -448,7 +449,8 @@ internal object ComposeLocalVisualRebase {
         layout: ComposeLayoutSnapshot,
         offset: Int,
     ): Rect? {
-        val textLen = layout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：offset 是 raw 坐标，边界检查用 rawText 长度。
+        val textLen = layout.effectiveRawText.length
         if (offset < 0 || offset > textLen) return null
         return try {
             layout.cursorRect(offset)

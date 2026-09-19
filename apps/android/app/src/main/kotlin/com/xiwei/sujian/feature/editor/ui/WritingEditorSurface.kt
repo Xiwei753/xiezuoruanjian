@@ -310,7 +310,24 @@ private fun onTextLayoutResult(
 ) {
     // Issue #717 评论 5741910919 / 评论 5742273757 修复4：基于原始正文计算软断行投影，
     // 把同一份 projection 同时传给 viewportState 和 visualState。
-    val projection = EditorSoftBreakProjection.fromRawText(bridge.state.text.toString())
+    // Issue #717 评论 5742904417 修复1：一致性校验 —
+    // 快速输入时 result 可能对应更早的 text，而 bridge.state.text 已经更新。
+    // result 是 display text（含 U+200B），其长度应等于 projection.displayLength。
+    // 若不一致，说明 result 对应的是更早的版本，从 result 的 display text 去掉 U+200B 重算。
+    val liveRawText = bridge.state.text.toString()
+    val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
+    val rawText: String
+    val projection: EditorSoftBreakProjection
+    if (liveProjection.displayLength == result.layoutInput.text.length) {
+        rawText = liveRawText
+        projection = liveProjection
+    } else {
+        // result 对应的是更早的版本，从 result 的 display text 去掉 U+200B 重算
+        rawText =
+            result.layoutInput.text.text
+                .replace(EditorSoftBreakProjection.ZERO_WIDTH_SPACE.toString(), "")
+        projection = EditorSoftBreakProjection.fromRawText(rawText)
+    }
     val restoreY = viewportState.onLayout(result, projection)
     if (restoreY != null) {
         scope.launch { viewportState.scrollState.scrollTo(restoreY) }
@@ -323,6 +340,7 @@ private fun onTextLayoutResult(
         // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
         compositionActive = bridge.state.composition != null,
         projection = projection,
+        rawText = rawText,
     )
     onSurfaceReady()
 }

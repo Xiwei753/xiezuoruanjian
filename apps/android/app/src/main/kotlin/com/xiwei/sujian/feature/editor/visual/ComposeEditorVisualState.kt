@@ -15,6 +15,7 @@ import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -352,7 +353,8 @@ class ComposeEditorVisualState(
                     compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
                 ) {
                     val latest = _latestLayout.value
-                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
+                    // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+                    if (latest != null && latest.effectiveRawText == snapshot.text) {
                         // 同步 coordinator baseline，不生成 local patch
                         frameCoordinator.observePresentedLayout(latest)
                         lastPresentedLayout = latest
@@ -371,7 +373,8 @@ class ComposeEditorVisualState(
                         compositionVisualPhase == CompositionVisualPhase.AwaitingBridgeResolution
                 if (!compositionActive && (wasCompositionActiveForSnapshot || compositionPhaseActive)) {
                     val latest = _latestLayout.value
-                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
+                    // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+                    if (latest != null && latest.effectiveRawText == snapshot.text) {
                         finishCompositionCommit(snapshot.text, latest)
                     } else {
                         // final text 对应的新 layout 还没到，记 pending
@@ -408,7 +411,8 @@ class ComposeEditorVisualState(
         val isPureSelectionChange =
             outcome == InputSnapshotOutcome.NoTextChange &&
                 snapshot.composition == null &&
-                _latestLayout.value?.result?.layoutInput?.text?.text == snapshot.text &&
+                // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+                _latestLayout.value?.effectiveRawText == snapshot.text &&
                 snapshot.selection != lastResolvedSelection
         if (isPureSelectionChange && snapshot.selection.collapsed) {
             val targetRect = _latestLayout.value?.cursorRect(snapshot.selection.end)
@@ -449,7 +453,8 @@ class ComposeEditorVisualState(
                 oldEnd = lastResolvedSelection?.end ?: -1,
                 newStart = snapshot.selection.start,
                 newEnd = snapshot.selection.end,
-                layoutTextLength = _latestLayout.value?.result?.layoutInput?.text?.text?.length ?: -1,
+                // Issue #717 评论 5742904417 修复1：正文长度记 raw 长度。
+                layoutTextLength = _latestLayout.value?.effectiveRawText?.length ?: -1,
             )
         }
         lastResolvedSelection = snapshot.selection
@@ -766,9 +771,10 @@ class ComposeEditorVisualState(
         finalLayout: ComposeLayoutSnapshot,
     ) {
         val baseLayout = compositionBaseLayout
-        if (baseLayout != null && baseLayout.result.layoutInput.text.text != commitText) {
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        if (baseLayout != null && baseLayout.effectiveRawText != commitText) {
             // 用 compositionBaseLayout -> finalLayout 生成 patch
-            val baseOldText = baseLayout.result.layoutInput.text.text
+            val baseOldText = baseLayout.effectiveRawText
             val localChain = localInputTracker.drainMatchingChain(baseOldText, commitText)
             if (localChain != null) {
                 val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
@@ -825,8 +831,9 @@ class ComposeEditorVisualState(
         val oldText = firstEdit.oldText
         val newText = lastEdit.newText
         // 防御性：配对的 chain 首笔 oldText / 末笔 newText 必须与 layout 一致
-        if (oldText != oldLayout.result.layoutInput.text.text) return null
-        if (newText != newLayout.result.layoutInput.text.text) return null
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        if (oldText != oldLayout.effectiveRawText) return null
+        if (newText != newLayout.effectiveRawText) return null
         val oldLength = oldText.length
         val newLength = newText.length
 
@@ -964,9 +971,11 @@ class ComposeEditorVisualState(
         // 用 chain.first().oldSelection.end 才是真实的 T0 caret。
         val originCursorRect =
             try {
+                // Issue #717 评论 5742904417 修复1：oldSelection.end 是 raw 坐标，
+                // 应与 rawText 长度比较。
                 val originOffset =
                     firstEdit.oldSelection.end
-                        .coerceIn(0, oldLayout.result.layoutInput.text.length)
+                        .coerceIn(0, oldLayout.effectiveRawText.length)
                 oldLayout.cursorRect(originOffset)
             } catch (_: Throwable) {
                 null
@@ -1012,6 +1021,8 @@ class ComposeEditorVisualState(
      * @param compositionActive 当前 IME composition 是否活跃。
      * @param projection Issue #717 评论 5741910919：西文软断行显示投影，
      *     把 raw offset 映射到含 U+200B 的 display offset。
+     * @param rawText Issue #717 评论 5742904417 修复1：原始正文（不含 U+200B），
+     *     用于文本身份/diff/intent 匹配。visual pipeline 的文本身份判断必须用 rawText。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
@@ -1019,8 +1030,9 @@ class ComposeEditorVisualState(
         scrollY: Int,
         compositionActive: Boolean = false,
         projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
+        rawText: String = "",
     ) {
-        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY, projection)
+        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY, projection, rawText)
 
         // #708 评论 5723410606 第三节：layout 回路真正断开 —
         // onAuthoritativeLayout 最前面先算 fingerprint。
@@ -1054,7 +1066,8 @@ class ComposeEditorVisualState(
         // #694 评论 5693864609 问题2：composition 结束后 final text 对应的新 layout 还没到时，
         // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
         val pending = pendingCompositionCommitText
-        val newTextForPending = result.layoutInput.text.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val newTextForPending = snapshot.effectiveRawText
         if (pending != null && newTextForPending == pending && !compositionActive) {
             pendingCompositionCommitText = null
             finishCompositionCommit(pending, snapshot)
@@ -1093,8 +1106,9 @@ class ComposeEditorVisualState(
         // composition 活跃时只推进布局基线，不播放 preedit 的吞吐。
         // 用 drainMatchingChain 按 lastPresentedLayout.text -> newText 找连续 chain，
         // 修复快速输入中间 layout 被跳过时旧 drainMatching 只返回最后一笔导致 patch 被丢的问题。
-        val newText = result.layoutInput.text.text
-        val presentedOldText = lastPresentedLayout?.result?.layoutInput?.text?.text ?: ""
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val newText = snapshot.effectiveRawText
+        val presentedOldText = lastPresentedLayout?.effectiveRawText ?: ""
         val localChain =
             if (!compositionActive) {
                 localInputTracker.drainMatchingChain(presentedOldText, newText)
@@ -1120,7 +1134,7 @@ class ComposeEditorVisualState(
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
-                            "oldLen=${oldLayout.result.layoutInput.text.length} " +
+                            "oldLen=${oldLayout.effectiveRawText.length} " +
                             "newLen=${newText.length} chainSize=${localChain.size} " +
                             "drawsVisualCursor=${_drawsVisualCursor.value}",
                     )
@@ -1232,7 +1246,9 @@ class ComposeEditorVisualState(
                 )
             }
         return LayoutFingerprint(
-            text = result.layoutInput.text.text,
+            // Issue #717 评论 5742904417 修复1：fingerprint 用 rawText（不含 U+200B），
+            // 与 visual pipeline 文本身份判断一致。
+            text = snapshot.effectiveRawText,
             width = result.size.width,
             height = result.size.height,
             lines = lines,
@@ -1552,8 +1568,10 @@ class ComposeEditorVisualState(
      */
     private fun computeCursorRectFromLayout(layout: ComposeLayoutSnapshot): Rect? {
         return try {
+            // Issue #717 评论 5742904417 修复1：selection 是 raw 坐标，
+            // 应与 rawText 长度比较。
             val selectionEnd =
-                layout.selection.end.coerceIn(0, layout.result.layoutInput.text.length)
+                layout.selection.end.coerceIn(0, layout.effectiveRawText.length)
             layout.cursorRect(selectionEnd)
         } catch (_: Throwable) {
             null

@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.layout.pathForRawRange
 
 /**
@@ -181,7 +182,8 @@ private fun DrawScope.buildHiddenPath(
     scrollY: Int,
 ): Path? {
     if (hiddenRanges.isEmpty() || layout == null) return null
-    val textLength = layout.result.layoutInput.text.length
+    // Issue #717 评论 5742904417 修复1：hiddenRanges 是 raw 坐标，textLength 用 rawText 长度。
+    val textLength = layout.effectiveRawText.length
     var combined: Path? = null
     for (range in hiddenRanges) {
         if (range.start >= range.end) continue
@@ -230,7 +232,8 @@ private fun DrawScope.drawVisualScene(
         // 通过 snapshot 做 raw→display 映射后再访问 TextLayoutResult。
         val snapshot = unit.layout
         val result = snapshot.result
-        if (range.end > result.layoutInput.text.length) continue
+        // Issue #717 评论 5742904417 修复1：unit.range 是 raw 坐标，边界检查用 rawText 长度。
+        if (range.end > snapshot.effectiveRawText.length) continue
         // alpha 已由 timeline 算好，直接读 unit.alpha.from（sample 后 from == 当前值）
         val rawAlpha = unit.alpha.from.coerceIn(0f, 1f)
         // #703 评论 5709208101 问题2：coordinated + spatial clip 模式下 alpha 固定 1 —
@@ -388,7 +391,9 @@ internal fun computeRestingCursorRect(
 ): Rect? {
     if (layout == null || liveSelection == null) return null
     return try {
-        val end = liveSelection.end.coerceIn(0, layout.result.layoutInput.text.length)
+        // Issue #717 评论 5742904417 修复1：liveSelection.end 是 raw 坐标，
+        // coerceIn 边界用 rawText 长度，cursorRect 内部会做 raw→display 映射。
+        val end = liveSelection.end.coerceIn(0, layout.effectiveRawText.length)
         layout.cursorRect(end)
     } catch (_: Throwable) {
         null

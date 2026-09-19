@@ -2,12 +2,12 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
-import com.xiwei.sujian.feature.editor.layout.lineForRawOffset
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
+import com.xiwei.sujian.feature.editor.layout.rawLineEndForRawOffset
 
 /**
  * #644 评论 5467821839 第5节剩余子项：visual rebase 纯计算 —
@@ -407,8 +407,9 @@ internal object ComposeVisualRebase {
         val cursor = intent?.cursor
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
-        val oldText = prev.result.layoutInput.text.text
-        val newText = curr.result.layoutInput.text.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
         val oldCursorRect = prev.cursorRect(oldSelectionEnd)
@@ -441,8 +442,10 @@ internal object ComposeVisualRebase {
         val newSuffixStart =
             replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
 
-        val oldText = prev.result.layoutInput.text
-        val newText = curr.result.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        // 类型从 AnnotatedString 变 String，String 也是 CharSequence。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
@@ -500,8 +503,9 @@ internal object ComposeVisualRebase {
             val newStart = entry.newStart
             val length = entry.length
             if (length <= 0) continue
-            if (oldStart + length > prev.result.layoutInput.text.length) continue
-            if (newStart + length > curr.result.layoutInput.text.length) continue
+            // Issue #717 评论 5742904417 修复1：边界检查用 rawText 长度。
+            if (oldStart + length > prev.effectiveRawText.length) continue
+            if (newStart + length > curr.effectiveRawText.length) continue
 
             val chunks = splitEntryByVisualLines(prev, curr, oldStart, newStart, length)
             mergeChunksIntoMoves(chunks, moves)
@@ -522,17 +526,19 @@ internal object ComposeVisualRebase {
         newStart: Int,
         length: Int,
     ): List<RetainedMoveChunk> {
-        val prevResult = prevSnapshot.result
-        val currResult = currSnapshot.result
-        val oldText = prevResult.layoutInput.text
-        val newText = currResult.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        // avoidSurrogateCut 接收 CharSequence，String 兼容。
+        val oldText = prevSnapshot.effectiveRawText
+        val newText = currSnapshot.effectiveRawText
         val cutOffsets = sortedSetOf(0, length)
         var scan = 0
         while (scan < length) {
             val oldOffset = oldStart + scan
             if (oldOffset >= oldText.length) break
-            val oldLine = prevSnapshot.lineForRawOffset(oldOffset)
-            val oldLineEnd = prevResult.getLineEnd(oldLine)
+            // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+            // getLineEnd 返回 display offset（含 U+200B），retained move 切片需要 raw offset。
+            // rawLineEndForRawOffset 内部会调 lineForRawOffset 查行。
+            val oldLineEnd = prevSnapshot.rawLineEndForRawOffset(oldOffset)
             val nextCut = oldLineEnd - oldStart
             if (nextCut in (scan + 1)..length) {
                 cutOffsets.add(avoidSurrogateCut(oldText, oldStart, nextCut, length))
@@ -544,8 +550,8 @@ internal object ComposeVisualRebase {
         while (scan < length) {
             val newOffset = newStart + scan
             if (newOffset >= newText.length) break
-            val newLine = currSnapshot.lineForRawOffset(newOffset)
-            val newLineEnd = currResult.getLineEnd(newLine)
+            // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+            val newLineEnd = currSnapshot.rawLineEndForRawOffset(newOffset)
             val nextCut = newLineEnd - newStart
             if (nextCut in (scan + 1)..length) {
                 cutOffsets.add(avoidSurrogateCut(newText, newStart, nextCut, length))
@@ -579,8 +585,12 @@ internal object ComposeVisualRebase {
         return chunks
     }
 
+    /**
+     * Issue #717 评论 5742904417 修复1：签名改成接收 [CharSequence]，
+     * 这样 String（rawText）和 AnnotatedString 都能传入。
+     */
     private fun avoidSurrogateCut(
-        text: AnnotatedString,
+        text: CharSequence,
         base: Int,
         cutOffset: Int,
         maxOffset: Int,
@@ -656,8 +666,9 @@ internal object ComposeVisualRebase {
             replaceBounds?.newEnd
                 ?: (effectiveNewRanges.maxOfOrNull { it.end } ?: 0)
 
-        val oldText = prev.result.layoutInput.text
-        val newText = curr.result.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
@@ -1092,12 +1103,16 @@ internal object ComposeVisualRebase {
 
     /**
      * Retained moves 计算上下文 — 封装循环中不变的参数。
+     *
+     * Issue #717 评论 5742904417 修复1：oldText/newText 类型从 AnnotatedString 改成 CharSequence，
+     * 因为现在传的是 String（rawText），但 ctx.oldText[segEnd-1].isHighSurrogate() 需要 CharSequence 索引，
+     * String 和 AnnotatedString 都支持。
      */
     data class RetainedMovesContext(
         val prev: ComposeLayoutSnapshot,
         val curr: ComposeLayoutSnapshot,
-        val oldText: AnnotatedString,
-        val newText: AnnotatedString,
+        val oldText: CharSequence,
+        val newText: CharSequence,
         val oldTextLen: Int,
         val newTextLen: Int,
         val oldSuffixStart: Int,
@@ -1137,8 +1152,10 @@ internal object ComposeVisualRebase {
         ctx: RetainedMovesContext,
         oldPos: Int,
     ): RetainedMoveSegmentResult {
-        val oldLine = ctx.prev.lineForRawOffset(oldPos)
-        val oldLineEnd = ctx.prev.result.getLineEnd(oldLine)
+        // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+        // getLineEnd 返回 display offset（含 U+200B），retained move 切片需要 raw offset。
+        // ctx.oldTextLen 现在是 rawText.length，oldLineEnd 也是 raw offset，正确。
+        val oldLineEnd = ctx.prev.rawLineEndForRawOffset(oldPos)
         var segEnd = minOf(oldLineEnd, ctx.oldTextLen)
         if (segEnd in 1 until ctx.oldTextLen &&
             ctx.oldText[segEnd - 1].isHighSurrogate() &&

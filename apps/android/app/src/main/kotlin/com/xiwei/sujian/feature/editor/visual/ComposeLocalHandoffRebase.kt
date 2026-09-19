@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
  * #708 评论 5725706551：本地 handoff scene rebase —
@@ -60,7 +61,8 @@ internal object ComposeLocalHandoffRebase {
         nextChildKey: () -> Long,
     ): RebasedHandoff {
         val newLayout = patch.newLayout
-        val newTextLength = newLayout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：targetRange 是 raw 坐标，边界检查用 rawText 长度。
+        val newTextLength = newLayout.effectiveRawText.length
         val rebasedUnits = mutableListOf<VisualTextUnit>()
         val ghostedCoverage = mutableListOf<TextRange>()
         // #708 评论 5731952690 修复3：改名为 initialClipFractionsByKey —

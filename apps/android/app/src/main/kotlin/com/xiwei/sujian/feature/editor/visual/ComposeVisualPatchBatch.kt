@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
  * #694 评论第 7 步：同一 VSync 的多笔 patch 合成器 —
@@ -40,8 +41,9 @@ internal object ComposeVisualPatchBatch {
         // 虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
         val oldLayout = first.oldLayout
         val newLayout = last.newLayout
-        val oldText = oldLayout.result.layoutInput.text.text
-        val newText = newLayout.result.layoutInput.text.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = oldLayout.effectiveRawText
+        val newText = newLayout.effectiveRawText
         val oldLength = oldText.length
         val newLength = newText.length
 
@@ -363,7 +365,8 @@ internal object ComposeVisualPatchBatch {
         layout: ComposeLayoutSnapshot,
         offset: Int,
     ): Rect? {
-        val textLen = layout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：offset 是 raw 坐标，边界检查用 rawText 长度。
+        val textLen = layout.effectiveRawText.length
         if (offset < 0 || offset > textLen) return null
         return try {
             layout.cursorRect(offset)
@@ -405,8 +408,9 @@ internal object ComposeVisualPatchBatch {
      */
     private fun patchOffsetMapOrFallback(patch: ComposeVisualPatch): List<VisualOffsetMapEntry> {
         patch.offsetMap?.let { if (it.isNotEmpty()) return it }
-        val oldText = patch.oldLayout.result.layoutInput.text.text
-        val newText = patch.newLayout.result.layoutInput.text.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = patch.oldLayout.effectiveRawText
+        val newText = patch.newLayout.effectiveRawText
         return buildFallbackOffsetMap(oldText, newText)
     }
 

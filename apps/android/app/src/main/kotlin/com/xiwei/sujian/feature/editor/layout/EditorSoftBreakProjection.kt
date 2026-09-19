@@ -13,6 +13,10 @@ import androidx.compose.ui.text.TextRange
  * 评论 5742273757 修复2：用 [BreakIterator.getCharacterInstance] 取 Unicode 逻辑字符
  * boundary，替代旧的固定6字符分段。word run 识别扩展为包含非 ASCII 拉丁字母和组合附加符号。
  *
+ * Issue #717 评论 5742904417 修复3：去掉西文 6 字符阈值，改用 Unicode script。
+ * 西文 word run 只要有两个 grapheme，就给所有内部 grapheme boundary 断点。
+ * isLatinWordChar 改用 [Character.UnicodeScript.LATIN] 判断 base code point。
+ *
  * 不在 CJK 字符间插入（CJK 本身可任意断行）。不在单词开头/结尾插入（只在内部）。
  *
  * @param rawLength 原始文本长度
@@ -67,13 +71,6 @@ data class EditorSoftBreakProjection(
     companion object {
         const val ZERO_WIDTH_SPACE = '\u200B'
 
-        /**
-         * 评论 5742273757 修复2：降低阈值从 13 到 6 —
-         * 用 ICU BreakIterator 后每个 grapheme boundary 都是合法断点，
-         * 阈值 6 即可覆盖大多数需要内部断行的西文场景。
-         */
-        const val LONG_WORD_THRESHOLD = 6
-
         /** 恒等投影（不插入任何 U+200B）。 */
         fun identity(): EditorSoftBreakProjection = EditorSoftBreakProjection(0, emptyList())
 
@@ -83,22 +80,21 @@ data class EditorSoftBreakProjection(
          * 评论 5742273757 修复2算法：
          * 1. 用 [BreakIterator.getCharacterInstance] 遍历文本，识别"西文 word run"
          *    （连续的拉丁字母/数字/组合符号，不含 CJK、空格、标点）
-         * 2. 对长度 >= [longWordThreshold] 的 word run，在每个 grapheme boundary
+         * 2. 对长度 >= 2 个 grapheme 的 word run，在每个 grapheme boundary
          *    （除了开头和结尾）插入 U+200B
          *
+         * Issue #717 评论 5742904417 修复3：去掉 longWordThreshold 参数，
+         * 西文 word run 只要有两个 grapheme 就断点。
+         *
          * @param raw 原始正文
-         * @param longWordThreshold word run 最小长度阈值，低于此值不插入断点
          */
-        fun fromRawText(
-            raw: CharSequence,
-            longWordThreshold: Int = LONG_WORD_THRESHOLD,
-        ): EditorSoftBreakProjection {
-            if (longWordThreshold <= 0 || raw.isEmpty()) {
+        fun fromRawText(raw: CharSequence): EditorSoftBreakProjection {
+            if (raw.isEmpty()) {
                 return EditorSoftBreakProjection(raw.length, emptyList())
             }
             val insertPoints = mutableListOf<Int>()
             scanWordRuns(raw) { wordStart, wordEnd ->
-                addInsertPointsForWord(insertPoints, raw, wordStart, wordEnd, longWordThreshold)
+                addInsertPointsForWord(insertPoints, raw, wordStart, wordEnd)
             }
             return EditorSoftBreakProjection(raw.length, insertPoints)
         }
@@ -143,18 +139,19 @@ data class EditorSoftBreakProjection(
         /**
          * 对一个西文 word run [wordStart, wordEnd) 计算内部 U+200B 插入点并追加到 [insertPoints]。
          *
-         * 仅当单词长度 >= [longWordThreshold] 时插入；用 [BreakIterator.getCharacterInstance]
+         * Issue #717 评论 5742904417 修复3：去掉 longWordThreshold 检查，
+         * 只要有 >= 2 个 grapheme boundary 就插入。用 [BreakIterator.getCharacterInstance]
          * 在 word run 内部找所有 grapheme boundary（除开头和结尾），每个 boundary 前插入 U+200B。
+         * 如果 word run 只有 1 个 grapheme（wordLen == 1 个 grapheme），
+         * next() 直接到 DONE，不插入，自然正确。
          */
         private fun addInsertPointsForWord(
             insertPoints: MutableList<Int>,
             raw: CharSequence,
             wordStart: Int,
             wordEnd: Int,
-            longWordThreshold: Int,
         ) {
             val wordLen = wordEnd - wordStart
-            if (wordLen < longWordThreshold) return
             val wordIterator = BreakIterator.getCharacterInstance()
             wordIterator.setText(raw.subSequence(wordStart, wordEnd).toString())
             // 跳过开头 boundary（不在单词开头插入）
@@ -171,9 +168,12 @@ data class EditorSoftBreakProjection(
         /**
          * 评论 5742273757 修复2：判断 [start, end) 这段 grapheme 是否属于西文 word run。
          *
+         * Issue #717 评论 5742904417 修复3：改用 [Character.UnicodeScript.LATIN] 判断
+         * base code point 是否属于 LATIN script，数字单独允许，组合符号跟随所属 grapheme。
+         *
          * 包含：
          * - ASCII 字母/数字 (a-z, A-Z, 0-9)
-         * - 非 ASCII 拉丁字母 (é, ñ, ü 等 — U+00C0..U+024F 范围内的拉丁扩展字符)
+         * - Unicode LATIN script 字符（é, ñ, ü, ø, À-ÿ 等所有拉丁扩展）
          * - 组合附加符号 (U+0300..U+036F — combining diacritical marks)
          *
          * 不包含 CJK、空格、标点等。
@@ -187,12 +187,10 @@ data class EditorSoftBreakProjection(
             val c = raw[start]
             // ASCII 字母/数字
             if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') return true
-            // 拉丁扩展-A/B (U+0100..U+024F)：é, ñ, ü, ø 等
-            if (c.code in 0x0100..0x024F) return true
-            // 组合附加符号 (U+0300..U+036F)：combining diacritical marks
+            // 按 Unicode script 判断 base code point 是否属于 LATIN
+            if (Character.UnicodeScript.of(c.code) == Character.UnicodeScript.LATIN) return true
+            // 组合附加符号 (U+0300..U+036F)：combining diacritical marks，跟随所属 grapheme
             if (c.code in 0x0300..0x036F) return true
-            // Latin-1 Supplement 中的字母 (U+00C0..U+00FF)：À-ÿ（含 é, à, ñ 等）
-            if (c.code in 0x00C0..0x00FF && c != '\u00D7' && c != '\u00F7') return true
             return false
         }
     }
