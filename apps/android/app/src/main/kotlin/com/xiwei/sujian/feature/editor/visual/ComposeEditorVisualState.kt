@@ -1021,8 +1021,10 @@ class ComposeEditorVisualState(
      * @param compositionActive 当前 IME composition 是否活跃。
      * @param projection Issue #717 评论 5741910919：西文软断行显示投影，
      *     把 raw offset 映射到含 U+200B 的 display offset。
-     * @param rawText Issue #717 评论 5742904417 修复1：原始正文（不含 U+200B），
+     * @param rawText Issue #717 评论 5742904417 修复1 / 评论 5743443030 修复1：原始正文（不含 U+200B），
      *     用于文本身份/diff/intent 匹配。visual pipeline 的文本身份判断必须用 rawText。
+     *     `null` 表示"没传"（测试/旧调用方 fallback 到 result.layoutInput.text.text），
+     *     非 `null` 表示显式传入真实 raw 正文（含 `""` 真实空正文）。
      */
     fun onAuthoritativeLayout(
         result: TextLayoutResult,
@@ -1030,7 +1032,7 @@ class ComposeEditorVisualState(
         scrollY: Int,
         compositionActive: Boolean = false,
         projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
-        rawText: String = "",
+        rawText: String? = null,
     ) {
         val snapshot = ComposeLayoutSnapshot(result, selection, scrollY, projection, rawText)
 

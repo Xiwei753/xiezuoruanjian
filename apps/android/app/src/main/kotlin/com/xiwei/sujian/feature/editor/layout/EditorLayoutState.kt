@@ -27,31 +27,37 @@ import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
  *     [cursorRect]/[lineForOffset]/[boundingBox] 通过 [projection] 把 raw offset
  *     转成 display offset 再查 [result]。默认 [EditorSoftBreakProjection.identity]
  *     时 raw 与 display 一致，行为与旧实现相同。
- * @param rawText Issue #717 评论 5742904417 修复1：原始正文（不含 U+200B）。
+ * @param rawText Issue #717 评论 5742904417 修复1 / 评论 5743443030 修复1：原始正文（不含 U+200B）。
  *     用于文本身份/diff/intent 匹配/offset-map 长度；而 [result]+[projection] 用于
  *     几何/行/path/cursor。visual pipeline 的文本身份判断必须用 [rawText]，
  *     不能用 `result.layoutInput.text.text`（那是 display 文本，含 U+200B）。
+ *     `null` 表示"没传"（测试/旧调用方），[effectiveRawText] 会 fallback 到
+ *     `result.layoutInput.text.text`；`""` 表示"真实空正文"，直接使用。
  */
 data class ComposeLayoutSnapshot(
     val result: TextLayoutResult,
     val selection: TextRange,
     val scrollY: Int,
     val projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
-    val rawText: String = "",
+    val rawText: String? = null,
 )
 
 /**
- * Issue #717 评论 5742904417 修复1：effective raw text —
+ * Issue #717 评论 5742904417 修复1 / 评论 5743443030 修复1：effective raw text —
  *
  * 生产代码中 [ComposeEditorVisualState.onAuthoritativeLayout] 会显式传入正确的 [rawText]；
- * 但测试和旧调用方可能不传（默认 ""），此时从 [result.layoutInput.text.text] 推导。
+ * 但测试和旧调用方可能不传（默认 `null`），此时从 [result.layoutInput.text.text] 推导。
  * 测试中的 TextLayoutResult 不含 U+200B，result 即 raw，fallback 安全。
- * 空文档时 result.layoutInput.text.text 也是 ""，与 rawText="" 一致，无歧义。
+ *
+ * Issue #717 评论 5743443030 修复1：[rawText] 改成 `String?` 后，
+ * `null` 表示"没传"（fallback 到 result.layoutInput.text.text），
+ * 非 `null`（含 `""`）时直接使用。这样"真实空正文"（rawText=""）和"没传"（rawText=null）
+ * 在类型上区分开，旧实现用 `isEmpty()` 判断会把真实空正文误判成"没传"。
  *
  * visual pipeline 的文本身份判断一律用 [effectiveRawText]，不直接用 [rawText]。
  */
 val ComposeLayoutSnapshot.effectiveRawText: String
-    get() = if (rawText.isEmpty()) result.layoutInput.text.text else rawText
+    get() = rawText ?: result.layoutInput.text.text
 
 /**
  * #641 评论1 第5节：视觉光标矩形 — 从真实 [TextLayoutResult] 取，

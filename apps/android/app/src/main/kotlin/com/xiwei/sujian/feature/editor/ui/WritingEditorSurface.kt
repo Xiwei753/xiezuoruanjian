@@ -22,6 +22,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.isSpecified
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
+import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakLayoutBinding
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
@@ -176,6 +177,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val searchHighlightColor = params.searchHighlightColor
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
+    // Issue #717 评论 5743443030 修复1：OutputTransformation 与 onTextLayout 的同版本绑定 holder。
+    // 普通 holder（非 Compose State），环形缓冲区记录最近若干次 transformation 的绑定。
+    val layoutBinding = remember { EditorSoftBreakLayoutBinding() }
 
     // #644 评论 #684：OutputTransformation 整个编辑器生命周期只创建一次，
     // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
@@ -186,11 +190,12 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
 
     val outputTransformation =
-        remember {
+        remember(layoutBinding) {
             OutputTransformation {
                 applyOutputTransformation(
                     searchHighlights = latestSearchHighlights.value,
                     searchHighlightColor = latestSearchHighlightColor.value,
+                    layoutBinding = layoutBinding,
                 )
             }
         }
@@ -290,6 +295,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         bridge = bridge,
                         scope = scope,
                         onSurfaceReady = onSurfaceReady,
+                        layoutBinding = layoutBinding,
                     )
                 }
             },
@@ -300,6 +306,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
 /**
  * 处理 TextLayoutResult — 提取以降低认知复杂度。
  */
+@Suppress("LongParameterList")
 private fun onTextLayoutResult(
     result: TextLayoutResult,
     viewportState: EditorViewportState,
@@ -307,25 +314,21 @@ private fun onTextLayoutResult(
     bridge: EditorTextFieldStateBridge,
     scope: CoroutineScope,
     onSurfaceReady: () -> Boolean,
+    layoutBinding: EditorSoftBreakLayoutBinding,
 ) {
-    // Issue #717 评论 5741910919 / 评论 5742273757 修复4：基于原始正文计算软断行投影，
-    // 把同一份 projection 同时传给 viewportState 和 visualState。
-    // Issue #717 评论 5742904417 修复1：一致性校验 —
-    // 快速输入时 result 可能对应更早的 text，而 bridge.state.text 已经更新。
-    // result 是 display text（含 U+200B），其长度应等于 projection.displayLength。
-    // 若不一致，说明 result 对应的是更早的版本，从 result 的 display text 去掉 U+200B 重算。
-    val liveRawText = bridge.state.text.toString()
-    val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
+    // Issue #717 评论 5743443030 修复1：按 displayText 内容精确匹配同版本绑定，
+    // 不再靠"长度猜版本"或"把 display 文本反解成 raw"。
+    val displayText = result.layoutInput.text.text
+    val match = layoutBinding.findForDisplayText(displayText)
     val rawText: String
     val projection: EditorSoftBreakProjection
-    if (liveProjection.displayLength == result.layoutInput.text.length) {
-        rawText = liveRawText
-        projection = liveProjection
+    if (match != null) {
+        rawText = match.rawText
+        projection = match.projection
     } else {
-        // result 对应的是更早的版本，从 result 的 display text 去掉 U+200B 重算
-        rawText =
-            result.layoutInput.text.text
-                .replace(EditorSoftBreakProjection.ZERO_WIDTH_SPACE.toString(), "")
+        // Fallback：binding 已被淘汰出环形缓冲区（极端快输入且 onTextLayout 严重滞后）。
+        // 用 live state 作为最后手段。不靠长度猜版本，不反解 display 文本。
+        rawText = bridge.state.text.toString()
         projection = EditorSoftBreakProjection.fromRawText(rawText)
     }
     val restoreY = viewportState.onLayout(result, projection)
@@ -402,8 +405,10 @@ private fun isIndentedEmptyParagraphCaretFromTextStyle(
 private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTransformation(
     searchHighlights: List<TextRange>,
     searchHighlightColor: Color,
+    layoutBinding: EditorSoftBreakLayoutBinding,
 ) {
-    val projection = EditorSoftBreakProjection.fromRawText(originalText)
+    val rawText = originalText.toString()
+    val projection = EditorSoftBreakProjection.fromRawText(rawText)
     // 从后往前插入 U+200B，保证前面的 raw offset 不因 buffer 长度变化而失效。
     // TextFieldBuffer 没有 insert 方法，用 replace(offset, offset, text) 实现插入。
     for (insertPoint in projection.insertPoints.asReversed()) {
@@ -425,4 +430,8 @@ private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTr
             )
         }
     }
+    // Issue #717 评论 5743443030 修复1：记录本次 transformation 的绑定。
+    // 此时 buffer 内容（toString()）就是 transform 后的 displayText（含 U+200B）。
+    // addStyle 不改变文本内容，所以 displayText 在 addStyle 前后一致。
+    layoutBinding.record(rawText = rawText, projection = projection, displayText = toString())
 }

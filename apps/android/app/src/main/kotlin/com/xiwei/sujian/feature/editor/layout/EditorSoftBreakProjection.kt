@@ -17,6 +17,10 @@ import androidx.compose.ui.text.TextRange
  * 西文 word run 只要有两个 grapheme，就给所有内部 grapheme boundary 断点。
  * isLatinWordChar 改用 [Character.UnicodeScript.LATIN] 判断 base code point。
  *
+ * Issue #717 评论 5743443030 修复2：isLatinWordChar 改用 [Character.codePointAt] 按 code point
+ * 判断，覆盖补充平面 Latin Extended-F/G 字符和非 ASCII 数字。scanWordRuns 支持连接符 '、’、_
+ * 在左右均为 Latin/数字 grapheme 时并入 word run（连字符 - 不处理）。
+ *
  * 不在 CJK 字符间插入（CJK 本身可任意断行）。不在单词开头/结尾插入（只在内部）。
  *
  * @param rawLength 原始文本长度
@@ -102,8 +106,12 @@ data class EditorSoftBreakProjection(
         /**
          * 用 [BreakIterator.getCharacterInstance] 遍历文本，识别"西文 word run"
          * （连续的拉丁字母/数字/组合符号），对每个 word run 调用 [onWordRun]。
+         *
+         * Issue #717 评论 5743443030 修复2：支持连接符 '、’、_ 在左右均为 Latin/数字 grapheme
+         * 时并入 word run。先收集所有 grapheme boundary 到列表，再按索引遍历，方便看前一个和
+         * 后一个 grapheme。连字符 - 不处理（本身已有换行机会）。
          */
-        @Suppress("CognitiveComplexMethod")
+        @Suppress("CognitiveComplexMethod", "NestedBlockDepth")
         private inline fun scanWordRuns(
             raw: CharSequence,
             onWordRun: (wordStart: Int, wordEnd: Int) -> Unit,
@@ -111,29 +119,70 @@ data class EditorSoftBreakProjection(
             val charIterator = BreakIterator.getCharacterInstance()
             charIterator.setText(raw.toString())
 
+            // 先收集所有 grapheme boundary 到列表，方便看前一个和后一个 grapheme
+            val boundaries = mutableListOf<Int>()
+            var boundary = charIterator.first()
+            while (boundary != BreakIterator.DONE) {
+                boundaries.add(boundary)
+                boundary = charIterator.next()
+            }
+            if (boundaries.size <= 1) return
+
             var wordStart = -1
             var wordEnd = 0
-            var prevBoundary = charIterator.first()
-            while (prevBoundary != BreakIterator.DONE) {
-                val nextBoundary = charIterator.next()
-                if (nextBoundary == BreakIterator.DONE) {
-                    // 文本结束：收尾当前 word run
-                    if (wordStart >= 0) onWordRun(wordStart, raw.length)
-                    break
-                }
-                // 检查 [prevBoundary, nextBoundary) 这段 grapheme 是否属于西文 word run
-                if (isLatinWordChar(raw, prevBoundary, nextBoundary)) {
-                    if (wordStart < 0) wordStart = prevBoundary
-                    wordEnd = nextBoundary
-                } else {
-                    // 非西文 word 字符：结束当前 word run
-                    if (wordStart >= 0) {
-                        onWordRun(wordStart, wordEnd)
-                        wordStart = -1
+            val lastGraphemeIndex = boundaries.size - 2
+            for (i in 0..lastGraphemeIndex) {
+                val prevBoundary = boundaries[i]
+                val nextBoundary = boundaries[i + 1]
+                when {
+                    isLatinWordChar(raw, prevBoundary, nextBoundary) -> {
+                        if (wordStart < 0) wordStart = prevBoundary
+                        wordEnd = nextBoundary
+                    }
+                    isConnectorChar(raw, prevBoundary, nextBoundary) -> {
+                        // 连接符：若左边有 Latin/数字 run 且下一个 grapheme 是 Latin/数字 → 并入 run
+                        val nextIsLatinWord =
+                            i < lastGraphemeIndex && isLatinWordChar(raw, nextBoundary, boundaries[i + 2])
+                        if (wordStart >= 0 && nextIsLatinWord) {
+                            // 并入 run（连接符本身也算 run 的一部分）
+                            wordEnd = nextBoundary
+                        } else {
+                            // 不并入：结束当前 word run
+                            if (wordStart >= 0) {
+                                onWordRun(wordStart, wordEnd)
+                                wordStart = -1
+                            }
+                        }
+                    }
+                    else -> {
+                        // 非西文 word 字符：结束当前 word run
+                        if (wordStart >= 0) {
+                            onWordRun(wordStart, wordEnd)
+                            wordStart = -1
+                        }
                     }
                 }
-                prevBoundary = nextBoundary
             }
+            // 文本结束：收尾当前 word run
+            if (wordStart >= 0) onWordRun(wordStart, raw.length)
+        }
+
+        /**
+         * Issue #717 评论 5743443030 修复2：判断 [start, end) 这段 grapheme 是否是连接符。
+         *
+         * 连接符：'（U+0027）、’（U+2019 RIGHT SINGLE QUOTATION MARK）、_（U+005F）。
+         * 连字符 - 不处理（本身已有换行机会）。
+         *
+         * 单字符，BMP 内，用 raw[start] 安全。
+         */
+        private fun isConnectorChar(
+            raw: CharSequence,
+            start: Int,
+            end: Int,
+        ): Boolean {
+            if (start >= end || start >= raw.length) return false
+            val c = raw[start]
+            return c == '\'' || c == '\u2019' || c == '_'
         }
 
         /**
@@ -171,12 +220,18 @@ data class EditorSoftBreakProjection(
          * Issue #717 评论 5742904417 修复3：改用 [Character.UnicodeScript.LATIN] 判断
          * base code point 是否属于 LATIN script，数字单独允许，组合符号跟随所属 grapheme。
          *
+         * Issue #717 评论 5743443030 修复2：改用 [Character.codePointAt] 按 code point 判断，
+         * 覆盖补充平面 Latin Extended-F/G 字符（如 𝔸 U+1D538）和非 ASCII 数字（如 𝟏 U+1D7CF）。
+         *
          * 包含：
-         * - ASCII 字母/数字 (a-z, A-Z, 0-9)
-         * - Unicode LATIN script 字符（é, ñ, ü, ø, À-ÿ 等所有拉丁扩展）
+         * - Unicode 数字（[Character.isDigit]，覆盖 ASCII 0-9 和非 ASCII 数字如数学粗体数字）
+         * - Unicode LATIN script 字符（ASCII 字母、é、ñ、ü、ø、À-ÿ 及补充平面 Latin Extended-F/G）
          * - 组合附加符号 (U+0300..U+036F — combining diacritical marks)
          *
          * 不包含 CJK、空格、标点等。
+         *
+         * 注意：ASCII 数字 0-9 的 [Character.UnicodeScript.of] 返回 COMMON 而非 LATIN，
+         * 所以数字必须单独用 [Character.isDigit] 判断，放在 LATIN 判断之前。
          */
         private fun isLatinWordChar(
             raw: CharSequence,
@@ -184,13 +239,14 @@ data class EditorSoftBreakProjection(
             end: Int,
         ): Boolean {
             if (start >= end || start >= raw.length) return false
-            val c = raw[start]
-            // ASCII 字母/数字
-            if (c in 'a'..'z' || c in 'A'..'Z' || c in '0'..'9') return true
+            val codePoint = Character.codePointAt(raw, start)
+            // 数字（覆盖非 ASCII 数字，如数学粗体数字 U+1D7CF）
+            if (Character.isDigit(codePoint)) return true
             // 按 Unicode script 判断 base code point 是否属于 LATIN
-            if (Character.UnicodeScript.of(c.code) == Character.UnicodeScript.LATIN) return true
+            // （覆盖 ASCII 字母和所有拉丁扩展，包括补充平面 Latin Extended-F/G）
+            if (Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.LATIN) return true
             // 组合附加符号 (U+0300..U+036F)：combining diacritical marks，跟随所属 grapheme
-            if (c.code in 0x0300..0x036F) return true
+            if (codePoint in 0x0300..0x036F) return true
             return false
         }
     }
