@@ -8,6 +8,10 @@ QtObject {
     // isDark 和 scheme 都从同一份 JSON 解析，彻底消除 isDark 已是 true
     // 但 scheme 还是上一套浅色值的中间状态。不再分开绑定 isDark 和
     // resolvedSchemeJson 两个可能不同步的属性。
+    //
+    // Issue #712: themeStateJson 现在只用于诊断（isDark 解析）。
+    // 颜色直接绑定 themeController 的 QColor 属性，不再经过
+    // theme_state_json -> JSON.parse -> JS 字符串 -> Qt.rgba。
     property string themeStateJson: ""
 
     property var _themeState: {
@@ -15,78 +19,55 @@ QtObject {
         try { return JSON.parse(themeStateJson) } catch(e) { return null }
     }
 
-    // isDark 从同一份 themeStateJson 解析，保证与 scheme 同步。
-    property bool isDark: _themeState !== null && _themeState.is_dark !== undefined ? _themeState.is_dark : true
+    // Issue #712: isDark 直接从 themeController.is_dark 读取，不再通过 JSON 解析。
+    // themeStateJson 和 _themeState 保留用于诊断输出。
+    property bool isDark: themeController !== null ? themeController.is_dark : true
 
     onIsDarkChanged: {
     }
 
-    // Issue #702: scheme 直接从 themeStateJson 的 scheme 字段读取，
-    // 与 isDark 来自同一份 JSON，不再有独立 resolvedSchemeJson 属性。
-    // Issue #709 评论 issue-body-709: theme_state_json 现在输出完整状态，
-    // 顶层包含 appearance_mode/is_dark/color_source/selected_builtin_theme_id/
-    // selected_palette_id/scheme。scheme 为 null（无可用 scheme）时
-    // _hasResolvedScheme 为 false，fallback 到 isDark 派生的固定深/浅色。
-    // 之前 scheme 为空时是 {}（空对象），现在是 null，_hasResolvedScheme
-    // 逻辑（_resolvedScheme !== null && ...）两种情况都正确 fallback。
-    property var _resolvedScheme: _themeState !== null ? _themeState.scheme : null
-    property bool _hasResolvedScheme: _resolvedScheme !== null && _resolvedScheme.primary !== undefined
+    // Issue #712: 颜色直接绑定 ThemeController 暴露的 QColor 属性。
+    // themeController 是 main.qml 中的根上下文属性。
+    // 当 themeController 为 null 时 fallback 到 isDark 派生的固定深/浅色。
+    // fallback 值与之前 _schemeColor() ?? (isDark ? ...) 的值完全一致。
+    property color primary: themeController !== null ? themeController.primary : (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1))
+    property color onPrimary: themeController !== null ? themeController.on_primary : (isDark ? Qt.rgba(0.000, 0.200, 0.318, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
+    property color primaryContainer: themeController !== null ? themeController.primary_container : (isDark ? Qt.rgba(0.000, 0.294, 0.451, 1) : Qt.rgba(0.800, 0.898, 1.000, 1))
+    property color onPrimaryContainer: themeController !== null ? themeController.on_primary_container : (isDark ? Qt.rgba(0.800, 0.898, 1.000, 1) : Qt.rgba(0.000, 0.118, 0.192, 1))
+    property color secondary: themeController !== null ? themeController.secondary : (isDark ? Qt.rgba(0.722, 0.784, 0.855, 1) : Qt.rgba(0.318, 0.376, 0.435, 1))
+    property color onSecondary: themeController !== null ? themeController.on_secondary : (isDark ? Qt.rgba(0.137, 0.196, 0.251, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
+    property color secondaryContainer: themeController !== null ? themeController.secondary_container : (isDark ? Qt.rgba(0.224, 0.282, 0.341, 1) : Qt.rgba(0.831, 0.894, 0.965, 1))
+    property color onSecondaryContainer: themeController !== null ? themeController.on_secondary_container : (isDark ? Qt.rgba(0.831, 0.894, 0.965, 1) : Qt.rgba(0.055, 0.114, 0.165, 1))
+    property color tertiary: themeController !== null ? themeController.tertiary : (isDark ? Qt.rgba(0.843, 0.749, 1.000, 1) : Qt.rgba(0.427, 0.341, 0.549, 1))
+    property color onTertiary: themeController !== null ? themeController.on_tertiary : (isDark ? Qt.rgba(0.243, 0.165, 0.361, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
+    property color tertiaryContainer: themeController !== null ? themeController.tertiary_container : (isDark ? Qt.rgba(0.333, 0.251, 0.455, 1) : Qt.rgba(0.945, 0.855, 1.000, 1))
+    property color onTertiaryContainer: themeController !== null ? themeController.on_tertiary_container : (isDark ? Qt.rgba(0.945, 0.855, 1.000, 1) : Qt.rgba(0.149, 0.078, 0.278, 1))
+    property color background: themeController !== null ? themeController.background : (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
+    property color onBackground: themeController !== null ? themeController.on_background : (isDark ? Qt.rgba(0.886, 0.890, 0.906, 1) : Qt.rgba(0.094, 0.110, 0.125, 1))
+    property color surface: themeController !== null ? themeController.surface : (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
+    property color onSurface: themeController !== null ? themeController.on_surface : (isDark ? Qt.rgba(0.886, 0.890, 0.906, 1) : Qt.rgba(0.094, 0.110, 0.125, 1))
+    property color surfaceVariant: themeController !== null ? themeController.surface_variant : (isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.875, 0.890, 0.922, 1))
+    property color onSurfaceVariant: themeController !== null ? themeController.on_surface_variant : (isDark ? Qt.rgba(0.757, 0.776, 0.812, 1) : Qt.rgba(0.259, 0.278, 0.306, 1))
+    property color surfaceTint: themeController !== null ? themeController.surface_tint : primary
+    property color surfaceDim: themeController !== null ? themeController.surface_dim : (isDark ? Qt.rgba(0.071, 0.078, 0.094, 1) : Qt.rgba(0.843, 0.851, 0.875, 1))
+    property color surfaceBright: themeController !== null ? themeController.surface_bright : (isDark ? Qt.rgba(0.220, 0.224, 0.247, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
+    property color surfaceContainerLowest: themeController !== null ? themeController.surface_container_lowest : (isDark ? Qt.rgba(0.059, 0.067, 0.075, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
+    property color surfaceContainerLow: themeController !== null ? themeController.surface_container_low : (isDark ? Qt.rgba(0.122, 0.133, 0.145, 1) : Qt.rgba(0.965, 0.973, 0.984, 1))
+    property color surfaceContainer: themeController !== null ? themeController.surface_container : (isDark ? Qt.rgba(0.137, 0.153, 0.165, 1) : Qt.rgba(0.941, 0.953, 0.969, 1))
+    property color surfaceContainerHigh: themeController !== null ? themeController.surface_container_high : (isDark ? Qt.rgba(0.176, 0.192, 0.208, 1) : Qt.rgba(0.918, 0.937, 0.961, 1))
+    property color surfaceContainerHighest: themeController !== null ? themeController.surface_container_highest : (isDark ? Qt.rgba(0.220, 0.235, 0.251, 1) : Qt.rgba(0.894, 0.914, 0.937, 1))
+    property color inverseSurface: themeController !== null ? themeController.inverse_surface : (isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.184, 0.188, 0.200, 1))
+    property color inverseOnSurface: themeController !== null ? themeController.inverse_on_surface : (isDark ? Qt.rgba(0.184, 0.188, 0.200, 1) : Qt.rgba(0.945, 0.941, 0.957, 1))
+    property color inversePrimary: themeController !== null ? themeController.inverse_primary : (isDark ? Qt.rgba(0.000, 0.392, 0.592, 1) : Qt.rgba(0.573, 0.800, 1.000, 1))
+    property color error: themeController !== null ? themeController.error : (isDark ? Qt.rgba(1.000, 0.706, 0.671, 1) : Qt.rgba(0.729, 0.102, 0.102, 1))
+    property color onError: themeController !== null ? themeController.on_error : (isDark ? Qt.rgba(0.412, 0.000, 0.020, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
+    property color errorContainer: themeController !== null ? themeController.error_container : (isDark ? Qt.rgba(0.576, 0.000, 0.039, 1) : Qt.rgba(1.000, 0.855, 0.839, 1))
+    property color onErrorContainer: themeController !== null ? themeController.on_error_container : (isDark ? Qt.rgba(1.000, 0.855, 0.839, 1) : Qt.rgba(0.255, 0.000, 0.008, 1))
+    property color outline: themeController !== null ? themeController.outline : (isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.447, 0.471, 0.494, 1))
+    property color outlineVariant: themeController !== null ? themeController.outline_variant : (isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.757, 0.776, 0.812, 1))
+    property color scrim: themeController !== null ? themeController.scrim : Qt.rgba(0.000, 0.000, 0.000, 1)
 
-    function _schemeColor(key) {
-        if (_hasResolvedScheme) {
-            var val = _resolvedScheme[key]
-            if (val && val.length > 0 && val.charAt(0) === '#') {
-                return Qt.rgba(
-                    parseInt(val.substring(1,3), 16) / 255,
-                    parseInt(val.substring(3,5), 16) / 255,
-                    parseInt(val.substring(5,7), 16) / 255,
-                    1
-                )
-            }
-        }
-        return undefined
-    }
-
-    // Issue #677 评论 5653315696: _schemeColor() 的 key 参数是 Core DTO 的 JSON 字段名，
-    // 统一使用 snake_case（与 Core 的 ThemeColorScheme serde 序列化一致）。
-    // QML 属性名（onSurface、surfaceContainerLow 等）保持 camelCase，符合 QML 惯例。
-    property color primary: _schemeColor("primary") ?? (isDark ? Qt.rgba(0.573, 0.800, 1.000, 1) : Qt.rgba(0.000, 0.392, 0.592, 1))
-    property color onPrimary: _schemeColor("on_primary") ?? (isDark ? Qt.rgba(0.000, 0.200, 0.318, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
-    property color primaryContainer: _schemeColor("primary_container") ?? (isDark ? Qt.rgba(0.000, 0.294, 0.451, 1) : Qt.rgba(0.800, 0.898, 1.000, 1))
-    property color onPrimaryContainer: _schemeColor("on_primary_container") ?? (isDark ? Qt.rgba(0.800, 0.898, 1.000, 1) : Qt.rgba(0.000, 0.118, 0.192, 1))
-    property color secondary: _schemeColor("secondary") ?? (isDark ? Qt.rgba(0.722, 0.784, 0.855, 1) : Qt.rgba(0.318, 0.376, 0.435, 1))
-    property color onSecondary: _schemeColor("on_secondary") ?? (isDark ? Qt.rgba(0.137, 0.196, 0.251, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
-    property color secondaryContainer: _schemeColor("secondary_container") ?? (isDark ? Qt.rgba(0.224, 0.282, 0.341, 1) : Qt.rgba(0.831, 0.894, 0.965, 1))
-    property color onSecondaryContainer: _schemeColor("on_secondary_container") ?? (isDark ? Qt.rgba(0.831, 0.894, 0.965, 1) : Qt.rgba(0.055, 0.114, 0.165, 1))
-    property color tertiary: _schemeColor("tertiary") ?? (isDark ? Qt.rgba(0.843, 0.749, 1.000, 1) : Qt.rgba(0.427, 0.341, 0.549, 1))
-    property color onTertiary: _schemeColor("on_tertiary") ?? (isDark ? Qt.rgba(0.243, 0.165, 0.361, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
-    property color tertiaryContainer: _schemeColor("tertiary_container") ?? (isDark ? Qt.rgba(0.333, 0.251, 0.455, 1) : Qt.rgba(0.945, 0.855, 1.000, 1))
-    property color onTertiaryContainer: _schemeColor("on_tertiary_container") ?? (isDark ? Qt.rgba(0.945, 0.855, 1.000, 1) : Qt.rgba(0.149, 0.078, 0.278, 1))
-    property color background: _schemeColor("background") ?? (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
-    property color onBackground: _schemeColor("on_background") ?? (isDark ? Qt.rgba(0.886, 0.890, 0.906, 1) : Qt.rgba(0.094, 0.110, 0.125, 1))
-    property color surface: _schemeColor("surface") ?? (isDark ? Qt.rgba(0.102, 0.110, 0.118, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
-    property color onSurface: _schemeColor("on_surface") ?? (isDark ? Qt.rgba(0.886, 0.890, 0.906, 1) : Qt.rgba(0.094, 0.110, 0.125, 1))
-    property color surfaceVariant: _schemeColor("surface_variant") ?? (isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.875, 0.890, 0.922, 1))
-    property color onSurfaceVariant: _schemeColor("on_surface_variant") ?? (isDark ? Qt.rgba(0.757, 0.776, 0.812, 1) : Qt.rgba(0.259, 0.278, 0.306, 1))
-    property color surfaceTint: _schemeColor("surface_tint") ?? primary
-    property color surfaceDim: _schemeColor("surface_dim") ?? (isDark ? Qt.rgba(0.071, 0.078, 0.094, 1) : Qt.rgba(0.843, 0.851, 0.875, 1))
-    property color surfaceBright: _schemeColor("surface_bright") ?? (isDark ? Qt.rgba(0.220, 0.224, 0.247, 1) : Qt.rgba(0.988, 0.988, 1.000, 1))
-    property color surfaceContainerLowest: _schemeColor("surface_container_lowest") ?? (isDark ? Qt.rgba(0.059, 0.067, 0.075, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
-    property color surfaceContainerLow: _schemeColor("surface_container_low") ?? (isDark ? Qt.rgba(0.122, 0.133, 0.145, 1) : Qt.rgba(0.965, 0.973, 0.984, 1))
-    property color surfaceContainer: _schemeColor("surface_container") ?? (isDark ? Qt.rgba(0.137, 0.153, 0.165, 1) : Qt.rgba(0.941, 0.953, 0.969, 1))
-    property color surfaceContainerHigh: _schemeColor("surface_container_high") ?? (isDark ? Qt.rgba(0.176, 0.192, 0.208, 1) : Qt.rgba(0.918, 0.937, 0.961, 1))
-    property color surfaceContainerHighest: _schemeColor("surface_container_highest") ?? (isDark ? Qt.rgba(0.220, 0.235, 0.251, 1) : Qt.rgba(0.894, 0.914, 0.937, 1))
-    property color inverseSurface: _schemeColor("inverse_surface") ?? (isDark ? Qt.rgba(0.886, 0.886, 0.898, 1) : Qt.rgba(0.184, 0.188, 0.200, 1))
-    property color inverseOnSurface: _schemeColor("inverse_on_surface") ?? (isDark ? Qt.rgba(0.184, 0.188, 0.200, 1) : Qt.rgba(0.945, 0.941, 0.957, 1))
-    property color inversePrimary: _schemeColor("inverse_primary") ?? (isDark ? Qt.rgba(0.000, 0.392, 0.592, 1) : Qt.rgba(0.573, 0.800, 1.000, 1))
-    property color error: _schemeColor("error") ?? (isDark ? Qt.rgba(1.000, 0.706, 0.671, 1) : Qt.rgba(0.729, 0.102, 0.102, 1))
-    property color onError: _schemeColor("on_error") ?? (isDark ? Qt.rgba(0.412, 0.000, 0.020, 1) : Qt.rgba(1.000, 1.000, 1.000, 1))
-    property color errorContainer: _schemeColor("error_container") ?? (isDark ? Qt.rgba(0.576, 0.000, 0.039, 1) : Qt.rgba(1.000, 0.855, 0.839, 1))
-    property color onErrorContainer: _schemeColor("on_error_container") ?? (isDark ? Qt.rgba(1.000, 0.855, 0.839, 1) : Qt.rgba(0.255, 0.000, 0.008, 1))
-    property color outline: _schemeColor("outline") ?? (isDark ? Qt.rgba(0.549, 0.569, 0.596, 1) : Qt.rgba(0.447, 0.471, 0.494, 1))
-    property color outlineVariant: _schemeColor("outline_variant") ?? (isDark ? Qt.rgba(0.259, 0.278, 0.306, 1) : Qt.rgba(0.757, 0.776, 0.812, 1))
-    property color scrim: _schemeColor("scrim") ?? Qt.rgba(0.000, 0.000, 0.000, 1)
-
+    // 派生色：没有直接对应的 QColor 属性，继续用 isDark 派生
     property color success: isDark ? Qt.rgba(0.561, 0.839, 0.639, 1) : Qt.rgba(0.122, 0.478, 0.271, 1)
     property color onSuccess: isDark ? Qt.rgba(0.000, 0.224, 0.114, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color successContainer: isDark ? Qt.rgba(0.059, 0.353, 0.188, 1) : Qt.rgba(0.725, 0.941, 0.784, 1)
@@ -100,6 +81,7 @@ QtObject {
     property color infoContainer: primaryContainer
     property color onInfoContainer: onPrimaryContainer
 
+    // 组合色：基于绑定后的基础色计算
     property color bg: background
     property color paper: surfaceContainerLow
     property color border: isDark ? Qt.rgba(outline.r, outline.g, outline.b, 0.42) : Qt.rgba(outline.r, outline.g, outline.b, 0.34)

@@ -32,4 +32,8 @@ pub(crate) struct CursorAnimationPlan {
     pub cursor_x: f64,
     pub cursor_y: f64,
     pub cursor_h: f64,
+    /// Issue #712 评论 5739517945: 来自 `CaretRect.baseline_y` 的真实 baseline，
+    /// 替代旧的 `cursor_h * 0.8` 估算。由 `build_cursor_plan()` 从
+    /// `layout_res.baseline_y` 传入，`apply_plan()` 据此维护 `visual_baseline_y`。
+    pub cursor_baseline_y: f64,
 }

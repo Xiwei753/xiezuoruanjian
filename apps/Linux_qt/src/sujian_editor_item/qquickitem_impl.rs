@@ -21,6 +21,7 @@ impl QQuickItem for SujianEditorItem {
         self.invalidate_layout_cache();
         self.recalculate_content_height_and_emit();
         self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
         let _ = self.update_cursor_visual_position();
         // request_static_repaint 会在 GUI 线程预计算 snapshot
         self.request_static_repaint();

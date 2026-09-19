@@ -64,7 +64,9 @@ fn issue710_comment5735006606_build_snapshot_skips_visual_when_zero_length_range
         body.contains("if affected_start < affected_end {"),
         "build_editor_layout_snapshot 必须用 `if affected_start < affected_end` 作为动画视觉提取开关"
     );
-    println!("[ISSUE710_COMMENT5735006606] build_editor_layout_snapshot 动画视觉提取开关保留 (GUARDED)");
+    println!(
+        "[ISSUE710_COMMENT5735006606] build_editor_layout_snapshot 动画视觉提取开关保留 (GUARDED)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -84,7 +86,9 @@ fn issue710_comment5735006606_build_virtual_snapshot_skips_visual_when_zero_leng
         body.contains("if affected_start < affected_end {"),
         "build_virtual_layout_snapshot 必须用 `if affected_start < affected_end` 作为动画视觉提取开关"
     );
-    println!("[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 动画视觉提取开关保留 (GUARDED)");
+    println!(
+        "[ISSUE710_COMMENT5735006606] build_virtual_layout_snapshot 动画视觉提取开关保留 (GUARDED)"
+    );
 }
 
 // ─────────────────────────────────────────────────────────────────────────
