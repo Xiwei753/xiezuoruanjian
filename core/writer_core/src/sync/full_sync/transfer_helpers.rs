@@ -310,7 +310,12 @@ pub(super) fn transfer_live_project(
                         r.status = SyncStatus::PartialConflict;
                         r.conflicts = unresolved_conflicts;
                         r.downloaded_files = outcome.downloaded_files.clone();
-                        r.local_deletes = outcome.remote_delete_paths.clone();
+                        // Issue #716 评论 5743264448 问题 2：retained_conflict 不报告
+                        // 未执行的远端删除。remote_delete_paths 是"调用方应从远端删除的
+                        // 路径"，merge 本身没执行远端删除。只有 CandidateWins 的 generation
+                        // 真正 publish 且 CAS 成功后，才把 content_result.local_deletes
+                        // 合并进最终 PartialConflict。
+                        r.local_deletes = Vec::new();
                         r.remote_deletes = outcome.local_deletes.clone();
                         r.overwritten_files = outcome.overwritten_files.clone();
                         r.ignored_files = outcome.ignored_files.clone();
@@ -433,6 +438,42 @@ pub(super) fn transfer_live_project(
                 remote_record,
             ) {
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins => {
+                    // Issue #716 评论 5743264448 问题 1：CandidateWins 分支在 publish 前必须
+                    // 检查 pending_take_remote_failed。如果没有 unresolved conflict 但
+                    // pending_take_remote_failed 非空，直接返回 RecoverableError，不 publish。
+                    // 原因：pending 路径远端缺失时 staging 里还留着本地旧文件，merged_manifest
+                    // 可能保留本地记录，generation publisher 会把完整 staging 快照上传，
+                    // 可能在"用户要求取远端但远端缺失"的情况下把本地版本重新发布成新 generation。
+                    // 优先级：unresolved conflict > pending_take_remote_failed > 正常 publish。
+                    if retained_conflict.is_none() {
+                        if let Some(outcome) = &merge_outcome_opt {
+                            if !outcome.pending_take_remote_failed.is_empty() {
+                                let mut r = SyncResult::success();
+                                r.status = SyncStatus::RecoverableError(format!(
+                                    "pending_take_remote_failed: {}",
+                                    outcome.pending_take_remote_failed.join(", ")
+                                ));
+                                r.error = Some(format!(
+                                    "pending_take_remote: remote file missing for paths: {}",
+                                    outcome.pending_take_remote_failed.join(", ")
+                                ));
+                                r.downloaded_files = outcome.downloaded_files.clone();
+                                r.local_deletes = Vec::new();
+                                r.remote_deletes = outcome.local_deletes.clone();
+                                r.overwritten_files = outcome.overwritten_files.clone();
+                                r.ignored_files = outcome.ignored_files.clone();
+                                merge_accumulated_local_effects(
+                                    &mut r,
+                                    &accumulated_downloaded_files,
+                                    &accumulated_local_trashed_files,
+                                    &accumulated_overwritten_files,
+                                    &accumulated_ignored_files,
+                                );
+                                return (r, None, None);
+                            }
+                        }
+                    }
+
                     // 只有 candidate 严格赢（或远端无 record）才真正 publish。
                     let gen_remote_prefix = match super::generation::generation_remote_prefix(
                         &planned.target.remote_prefix,
@@ -497,7 +538,26 @@ pub(super) fn transfer_live_project(
                             // Issue #716 评论 5742849844 问题 2：合并累计 local effects，
                             // 保留前几轮 CAS 重试的本地变化。content_result 已包含本轮
                             // local effects 和 publish 后的远端侧动作（local_deletes）。
-                            let mut final_result = retained_conflict.unwrap_or(content_result);
+                            //
+                            // Issue #716 评论 5743264448 问题 2：retained_conflict 的
+                            // local_deletes 已清空（不报告未执行的远端删除）。CAS 成功后
+                            // content_result.local_deletes 是真正已生效的远端删除，需要合并
+                            // 到 retained_conflict。同理 uploaded_files 也是远端侧已生效动作。
+                            let mut final_result = if let Some(mut rc) = retained_conflict {
+                                for f in &content_result.uploaded_files {
+                                    if !rc.uploaded_files.contains(f) {
+                                        rc.uploaded_files.push(f.clone());
+                                    }
+                                }
+                                for f in &content_result.local_deletes {
+                                    if !rc.local_deletes.contains(f) {
+                                        rc.local_deletes.push(f.clone());
+                                    }
+                                }
+                                rc
+                            } else {
+                                content_result
+                            };
                             merge_accumulated_local_effects(
                                 &mut final_result,
                                 &accumulated_downloaded_files,
@@ -509,7 +569,22 @@ pub(super) fn transfer_live_project(
                         }
                         TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
                             *catalog_snapshot = persisted;
-                            let mut final_result = retained_conflict.unwrap_or(content_result);
+                            // 同 Applied：CAS 成功后合并 content_result 远端侧已生效动作。
+                            let mut final_result = if let Some(mut rc) = retained_conflict {
+                                for f in &content_result.uploaded_files {
+                                    if !rc.uploaded_files.contains(f) {
+                                        rc.uploaded_files.push(f.clone());
+                                    }
+                                }
+                                for f in &content_result.local_deletes {
+                                    if !rc.local_deletes.contains(f) {
+                                        rc.local_deletes.push(f.clone());
+                                    }
+                                }
+                                rc
+                            } else {
+                                content_result
+                            };
                             merge_accumulated_local_effects(
                                 &mut final_result,
                                 &accumulated_downloaded_files,

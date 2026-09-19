@@ -1264,3 +1264,216 @@ fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_del
         transfer.targets[0].result.local_deletes
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 场景 12/13 — Issue #716 评论 5743264448 两个漏口复现测试
+// ════════════════════════════════════════════════════════════════════════════
+
+/// 场景 12（Issue #716 评论 5743264448 问题 1）：CandidateWins + pending_take_remote_failed
+/// → publish_count == 0，RecoverableError。
+///
+/// 复现：remote lifecycle 比 candidate 旧（CandidateWins 成立），同时 pending_take_remote
+/// 指向远端不存在的文件。CandidateWins 分支不看 merge_result，直接 publish_generation，
+/// 即使 pending_take_remote_failed 非空也吞掉继续 publish。
+///
+/// 正确行为：没有 unresolved conflict 且 pending_take_remote_failed 非空 → 直接返回
+/// RecoverableError，不进入 CandidateWins publish。
+#[test]
+fn regression_scenario_12_candidate_wins_pending_take_remote_failed_no_publish() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放一个 visible source（chapter 文件存在）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T - 2,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T-1, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    // candidate (T, DEVICE_LOCAL) 严格赢 remote (T-1, DEVICE_REMOTE) → CandidateWins
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T - 1, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging 有 chapter.md（LWW 时间 T > 远端 T-2 → 本地赢，无冲突）
+    let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
+
+    // 关键：设置 pending_take_remote 指向远端 generation 中不存在的文件。
+    // merge 会尝试下载，发现远端缺失 → pending_take_remote_failed 非空。
+    let pending_missing_path = "volumes/v1/chapters/missing.md";
+    let sync_state = writer_core::sync::types::SyncState {
+        device_id: DEVICE_LOCAL.to_string(),
+        pending_take_remote: std::collections::HashSet::from([pending_missing_path.to_string()]),
+        ..Default::default()
+    };
+    write_sync_state(&staging_root, &sync_state);
+
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "CandidateWins + pending_take_remote_failed 不应 publish"
+    );
+
+    let status = &transfer.targets[0].result.status;
+    eprintln!(
+        "场景 12 实际状态: {:?}, downloaded_files: {:?}",
+        status, transfer.targets[0].result.downloaded_files
+    );
+
+    // ── 断言正确行为（Issue #716 评论 5743264448 问题 1）──
+    // 没有 unresolved conflict 且 pending_take_remote_failed 非空 → RecoverableError
+    assert!(
+        matches!(status, SyncStatus::RecoverableError(_)),
+        "CandidateWins + pending_take_remote_failed 应返回 RecoverableError，实际 {:?}",
+        status
+    );
+}
+
+/// 场景 13（Issue #716 评论 5743264448 问题 2）：unresolved conflict + remote_delete_paths
+/// + RemoteWins → PartialConflict，local_deletes 为空。
+///
+/// 复现：同一轮同时产生 unresolved conflict（chapter.md BothChanged）和 remote_delete_paths
+/// （project.json 本地删除墓碑赢远端 upsert）。remote lifecycle 严格赢 → RemoteWins(Upsert)
+/// → 不 publish。retained_conflict 被构造时写了 `r.local_deletes = outcome.remote_delete_paths.clone()`，
+/// 把没执行的远端删除报成 local_deletes。
+///
+/// 正确行为：retained_conflict 的 local_deletes 应为空（merge 没执行远端删除）。
+/// 只有 CandidateWins publish 且 CAS 成功后才合并 content_result.local_deletes。
+#[test]
+fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_deletes_empty() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放 chapter.md（与本地内容不同 → BothChanged 冲突）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
+    // 远端 generation 还放 project.json（Metadata，走 LWW 决胜）
+    let project_json_content = br#"{"name":"test"}"#;
+    write_remote_generation_project_json(
+        &provider_inner,
+        &remote_gen_prefix,
+        project_json_content,
+        T - 5000,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    // 同时间戳 T，DEVICE_REMOTE > DEVICE_LOCAL → remote 严格赢 candidate
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging：chapter 内容与远端不同 → BothChanged 冲突
+    let staging_root =
+        build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
+
+    // 关键：设置 known_files + tombstone，让 snapshot_local_records_read_only 生成 delete 记录。
+    // deleted_at_ms = 8_000 > T-5000 = 5_000 → LWW 本地赢 → LwwLocalWinsDeleteRecord
+    // → remote_delete_paths = ["project.json"]
+    let original_hash = "some_hash_value";
+    let sync_state = writer_core::sync::types::SyncState {
+        device_id: DEVICE_LOCAL.to_string(),
+        known_files: std::collections::HashMap::from([(
+            "project.json".to_string(),
+            original_hash.to_string(),
+        )]),
+        tombstones: vec![writer_core::sync::types::Tombstone {
+            original_path: "project.json".to_string(),
+            trash_path: "app-meta/sync/trash/deleted_project.json".to_string(),
+            deleted_at: 8, // 秒 → deleted_at_ms = 8_000 > T-5000 = 5_000
+            purge_after: i64::MAX,
+            deleted_by: DEVICE_LOCAL.to_string(),
+            original_hash: original_hash.to_string(),
+            kind: "local_delete".to_string(),
+        }],
+        ..Default::default()
+    };
+    write_sync_state(&staging_root, &sync_state);
+
+    // candidate lww_time = T（chapter.md 的 LWW 时间），remote record lww_time = T
+    // 同时间戳，DEVICE_REMOTE > DEVICE_LOCAL → remote 严格赢 → RemoteWins(Upsert) → 不 publish
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "remote Upsert 严格赢时不应 publish"
+    );
+
+    let status = &transfer.targets[0].result.status;
+    eprintln!(
+        "场景 13 实际状态: {:?}, local_deletes: {:?}, remote_deletes: {:?}, conflicts: {}",
+        status,
+        transfer.targets[0].result.local_deletes,
+        transfer.targets[0].result.remote_deletes,
+        transfer.targets[0].result.conflicts.len()
+    );
+
+    // ── 断言正确行为（Issue #716 评论 5743264448 问题 2）──
+    // 有 unresolved conflict + remote_delete_paths + RemoteWins no-publish →
+    // PartialConflict（冲突状态保留），但 local_deletes 必须为空（远端删除未执行）。
+    assert!(
+        matches!(status, SyncStatus::PartialConflict),
+        "有 unresolved conflict + RemoteWins 应返回 PartialConflict，实际 {:?}",
+        status
+    );
+    assert!(
+        !transfer.targets[0].result.conflicts.is_empty(),
+        "冲突列表不应为空，实际 {:?}",
+        transfer.targets[0].result.conflicts
+    );
+    assert!(
+        transfer.targets[0].result.local_deletes.is_empty(),
+        "no-publish 路径 local_deletes 应为空（远端删除未执行），实际 {:?}",
+        transfer.targets[0].result.local_deletes
+    );
+}
