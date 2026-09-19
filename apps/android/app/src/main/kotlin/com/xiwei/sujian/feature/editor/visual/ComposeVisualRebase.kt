@@ -2,11 +2,12 @@ package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
+import com.xiwei.sujian.feature.editor.layout.rawLineEndForRawOffset
 
 /**
  * #644 评论 5467821839 第5节剩余子项：visual rebase 纯计算 —
@@ -339,19 +340,18 @@ internal object ComposeVisualRebase {
         t: Float,
     ): Float = a + (b - a) * t.coerceIn(0f, 1f)
 
-    /** 安全获取 path bounds — range 无效或越界时返回 null。 */
+    /**
+     * 安全获取 path bounds — range 无效或越界时返回 null。
+     *
+     * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
+     * 内部通过 [EditorSoftBreakProjection.toDisplayRange] 把 raw range 映射到 display range
+     * 再调 [TextLayoutResult.getPathForRange]。所有 range 来自正文/visual unit（raw 坐标）
+     * 的调用方都应通过此入口做 raw→display 转换。
+     */
     fun safePathBounds(
-        result: TextLayoutResult,
+        snapshot: ComposeLayoutSnapshot,
         range: TextRange,
-    ): Rect? {
-        if (range.start >= range.end) return null
-        if (range.end > result.layoutInput.text.length) return null
-        return try {
-            result.getPathForRange(range.start, range.end).getBounds()
-        } catch (_: Throwable) {
-            null
-        }
-    }
+    ): Rect? = snapshot.boundsForRawRange(range)
 
     /**
      * #708 评论 5726837636：子片段屏幕位置计算 —
@@ -390,7 +390,7 @@ internal object ComposeVisualRebase {
         layout: ComposeLayoutSnapshot,
         range: TextRange,
     ): Offset? {
-        val bounds = safePathBounds(layout.result, range) ?: return null
+        val bounds = safePathBounds(layout, range) ?: return null
         return Offset(bounds.left, bounds.top)
     }
 
@@ -407,8 +407,9 @@ internal object ComposeVisualRebase {
         val cursor = intent?.cursor
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
-        val oldText = prev.result.layoutInput.text.text
-        val newText = curr.result.layoutInput.text.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
         val oldCursorRect = prev.cursorRect(oldSelectionEnd)
@@ -441,8 +442,10 @@ internal object ComposeVisualRebase {
         val newSuffixStart =
             replaceBounds?.newEnd ?: (intent.newRanges.maxOfOrNull { it.end } ?: 0)
 
-        val oldText = prev.result.layoutInput.text
-        val newText = curr.result.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        // 类型从 AnnotatedString 变 String，String 也是 CharSequence。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
@@ -500,10 +503,11 @@ internal object ComposeVisualRebase {
             val newStart = entry.newStart
             val length = entry.length
             if (length <= 0) continue
-            if (oldStart + length > prev.result.layoutInput.text.length) continue
-            if (newStart + length > curr.result.layoutInput.text.length) continue
+            // Issue #717 评论 5742904417 修复1：边界检查用 rawText 长度。
+            if (oldStart + length > prev.effectiveRawText.length) continue
+            if (newStart + length > curr.effectiveRawText.length) continue
 
-            val chunks = splitEntryByVisualLines(prev.result, curr.result, oldStart, newStart, length)
+            val chunks = splitEntryByVisualLines(prev, curr, oldStart, newStart, length)
             mergeChunksIntoMoves(chunks, moves)
         }
         return moves
@@ -511,23 +515,30 @@ internal object ComposeVisualRebase {
 
     /**
      * #684 评论 5663032418 断点2：把一个合成 entry 按 old/new 两边真实视觉行边界切片。
+     *
+     * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
+     * 内部通过 projection 做 raw→display 映射再调 TextLayoutResult。
      */
     private fun splitEntryByVisualLines(
-        prevResult: TextLayoutResult,
-        currResult: TextLayoutResult,
+        prevSnapshot: ComposeLayoutSnapshot,
+        currSnapshot: ComposeLayoutSnapshot,
         oldStart: Int,
         newStart: Int,
         length: Int,
     ): List<RetainedMoveChunk> {
-        val oldText = prevResult.layoutInput.text
-        val newText = currResult.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        // avoidSurrogateCut 接收 CharSequence，String 兼容。
+        val oldText = prevSnapshot.effectiveRawText
+        val newText = currSnapshot.effectiveRawText
         val cutOffsets = sortedSetOf(0, length)
         var scan = 0
         while (scan < length) {
             val oldOffset = oldStart + scan
             if (oldOffset >= oldText.length) break
-            val oldLine = prevResult.getLineForOffset(oldOffset)
-            val oldLineEnd = prevResult.getLineEnd(oldLine)
+            // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+            // getLineEnd 返回 display offset（含 U+200B），retained move 切片需要 raw offset。
+            // rawLineEndForRawOffset 内部会调 lineForRawOffset 查行。
+            val oldLineEnd = prevSnapshot.rawLineEndForRawOffset(oldOffset)
             val nextCut = oldLineEnd - oldStart
             if (nextCut in (scan + 1)..length) {
                 cutOffsets.add(avoidSurrogateCut(oldText, oldStart, nextCut, length))
@@ -539,8 +550,8 @@ internal object ComposeVisualRebase {
         while (scan < length) {
             val newOffset = newStart + scan
             if (newOffset >= newText.length) break
-            val newLine = currResult.getLineForOffset(newOffset)
-            val newLineEnd = currResult.getLineEnd(newLine)
+            // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+            val newLineEnd = currSnapshot.rawLineEndForRawOffset(newOffset)
             val nextCut = newLineEnd - newStart
             if (nextCut in (scan + 1)..length) {
                 cutOffsets.add(avoidSurrogateCut(newText, newStart, nextCut, length))
@@ -557,8 +568,8 @@ internal object ComposeVisualRebase {
             if (chunkEnd <= chunkStart) continue
             val oldRange = TextRange(oldStart + chunkStart, oldStart + chunkEnd)
             val newRange = TextRange(newStart + chunkStart, newStart + chunkEnd)
-            val oldBounds = safePathBounds(prevResult, oldRange)
-            val newBounds = safePathBounds(currResult, newRange)
+            val oldBounds = safePathBounds(prevSnapshot, oldRange)
+            val newBounds = safePathBounds(currSnapshot, newRange)
             if (oldBounds == null || newBounds == null) continue
             val dx = newBounds.left - oldBounds.left
             val dy = newBounds.top - oldBounds.top
@@ -574,8 +585,12 @@ internal object ComposeVisualRebase {
         return chunks
     }
 
+    /**
+     * Issue #717 评论 5742904417 修复1：签名改成接收 [CharSequence]，
+     * 这样 String（rawText）和 AnnotatedString 都能传入。
+     */
     private fun avoidSurrogateCut(
-        text: AnnotatedString,
+        text: CharSequence,
         base: Int,
         cutOffset: Int,
         maxOffset: Int,
@@ -651,8 +666,9 @@ internal object ComposeVisualRebase {
             replaceBounds?.newEnd
                 ?: (effectiveNewRanges.maxOfOrNull { it.end } ?: 0)
 
-        val oldText = prev.result.layoutInput.text
-        val newText = curr.result.layoutInput.text
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val oldText = prev.effectiveRawText
+        val newText = curr.effectiveRawText
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
@@ -1087,12 +1103,16 @@ internal object ComposeVisualRebase {
 
     /**
      * Retained moves 计算上下文 — 封装循环中不变的参数。
+     *
+     * Issue #717 评论 5742904417 修复1：oldText/newText 类型从 AnnotatedString 改成 CharSequence，
+     * 因为现在传的是 String（rawText），但 ctx.oldText[segEnd-1].isHighSurrogate() 需要 CharSequence 索引，
+     * String 和 AnnotatedString 都支持。
      */
     data class RetainedMovesContext(
         val prev: ComposeLayoutSnapshot,
         val curr: ComposeLayoutSnapshot,
-        val oldText: AnnotatedString,
-        val newText: AnnotatedString,
+        val oldText: CharSequence,
+        val newText: CharSequence,
         val oldTextLen: Int,
         val newTextLen: Int,
         val oldSuffixStart: Int,
@@ -1132,8 +1152,10 @@ internal object ComposeVisualRebase {
         ctx: RetainedMovesContext,
         oldPos: Int,
     ): RetainedMoveSegmentResult {
-        val oldLine = ctx.prev.result.getLineForOffset(oldPos)
-        val oldLineEnd = ctx.prev.result.getLineEnd(oldLine)
+        // Issue #717 评论 5742904417 修复2：lineEnd 转回 raw 坐标。
+        // getLineEnd 返回 display offset（含 U+200B），retained move 切片需要 raw offset。
+        // ctx.oldTextLen 现在是 rawText.length，oldLineEnd 也是 raw offset，正确。
+        val oldLineEnd = ctx.prev.rawLineEndForRawOffset(oldPos)
         var segEnd = minOf(oldLineEnd, ctx.oldTextLen)
         if (segEnd in 1 until ctx.oldTextLen &&
             ctx.oldText[segEnd - 1].isHighSurrogate() &&
@@ -1151,8 +1173,8 @@ internal object ComposeVisualRebase {
         } else {
             val oldRange = TextRange(oldPos, segEnd)
             val newRange = TextRange(newPos, newSegEnd)
-            val oldBounds = safePathBounds(ctx.prev.result, oldRange)
-            val newBounds = safePathBounds(ctx.curr.result, newRange)
+            val oldBounds = safePathBounds(ctx.prev, oldRange)
+            val newBounds = safePathBounds(ctx.curr, newRange)
             RetainedMoveSegmentResult(segEnd, oldBounds, newBounds)
         }
     }

@@ -139,7 +139,10 @@ class ReadableMirrorStateMigration(
             DiagnosticsInterop.w(TAG, "State migration: setManifestUri consolidation to private path failed")
             return Result.FAILURE
         }
-        DiagnosticsInterop.i(TAG, "State migration: successfully migrated committed baseline and consolidated private manifest")
+        DiagnosticsInterop.i(
+            TAG,
+            "State migration: successfully migrated committed baseline and consolidated private manifest",
+        )
         return Result.SUCCESS
     }
 

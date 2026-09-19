@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import android.util.Log
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import uniffi.writer_core.AnimationModeDto
 
@@ -107,11 +108,13 @@ class ComposeVisualFrameCoordinator(
      * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成 patch。
      */
     fun onLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
-        latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B），
+        // 不用 result.layoutInput.text.text（display 文本，含 U+200B）。
+        latest = PresentedLayout(snapshot.effectiveRawText, snapshot)
 
         EditorDiagnosticsEvents.editorLayoutPresented(
             targetId = targetId,
-            layoutTextLength = snapshot.result.layoutInput.text.length,
+            layoutTextLength = snapshot.effectiveRawText.length,
         )
 
         if (lastConsumed == null) {
@@ -143,12 +146,13 @@ class ComposeVisualFrameCoordinator(
      * 诊断事件与 [onLayout] 一致 — overlay/诊断仍能观察到 layout 已呈现。
      */
     fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
-        val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
+        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
+        val presented = PresentedLayout(snapshot.effectiveRawText, snapshot)
         latest = presented
 
         EditorDiagnosticsEvents.editorLayoutPresented(
             targetId = targetId,
-            layoutTextLength = snapshot.result.layoutInput.text.length,
+            layoutTextLength = snapshot.effectiveRawText.length,
         )
 
         // #694 评论 5692161955 问题3：补并发顺序条件。
@@ -192,8 +196,10 @@ class ComposeVisualFrameCoordinator(
         val chain = pendingChain.intents
         val coreTransactionIds = chain.map { it.coreTransactionId }
         val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
-        val oldLength = consumed.layout.result.layoutInput.text.length
-        val newLength = newest.layout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：oldLength/newLength 用 rawText 长度，
+        // 与 pendingChain.baseText/targetText（raw 正文）长度一致。
+        val oldLength = consumed.layout.effectiveRawText.length
+        val newLength = newest.layout.effectiveRawText.length
         val mergedOldRanges: List<androidx.compose.ui.text.TextRange>
         val mergedNewRanges: List<androidx.compose.ui.text.TextRange>
         if (composedOffsetMap != null) {
@@ -337,15 +343,15 @@ class ComposeVisualFrameCoordinator(
             baseRevision = chain.first().baseRevision,
             newRevision = chain.last().newRevision,
             pendingChainSize = chain.size,
-            layoutTextLength = newest.layout.result.layoutInput.text.length,
+            layoutTextLength = newest.layout.effectiveRawText.length,
         )
 
         Log.d(
             TAG,
             "patch_built: id=${patch.id} coreTxnIds=$coreTransactionIds " +
                 "retained=${retainedMoves.size} " +
-                "oldTextLen=${consumed.layout.result.layoutInput.text.length} " +
-                "newTextLen=${newest.layout.result.layoutInput.text.length}",
+                "oldTextLen=${consumed.layout.effectiveRawText.length} " +
+                "newTextLen=${newest.layout.effectiveRawText.length}",
         )
 
         return FrameUpdate.NewPatch(patch)

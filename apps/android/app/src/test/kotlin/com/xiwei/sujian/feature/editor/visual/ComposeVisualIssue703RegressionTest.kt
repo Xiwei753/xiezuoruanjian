@@ -165,7 +165,11 @@ class ComposeVisualIssue703RegressionTest {
         )
 
         // glyph bounds（从 oldLayout 取 'a' 的真实 bounds）
-        val glyphBounds = ComposeVisualRebase.safePathBounds(aLayout.result, TextRange(0, 1))
+        val glyphBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(aLayout.result, TextRange(0, 0), 0),
+                TextRange(0, 1),
+            )
         assertNotNull("单字吞字: glyph bounds 应存在", glyphBounds)
         val glyphLeft = glyphBounds!!.left
         val glyphWidth = glyphBounds.width

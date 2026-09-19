@@ -309,6 +309,19 @@ internal class MirrorPublishExecutor(
                 CommittedManifestResolution.FirstPublish -> null
                 CommittedManifestResolution.Stop -> null // 上面已 return，这里不会走到
             }
+        // Issue #717 评论 5741910919：committed baseline 的私有 manifest 物化必须提前到
+        // manifest transaction 开始之前，否则 handleBackupMissing 读不到旧 manifest。
+        if (baseline != null &&
+            !materializeCommittedBaseline(
+                workspace = workspace,
+                stateStore = stateStore,
+                baseline = baseline,
+                operation = "Delete project $projectId",
+            )
+        ) {
+            DiagnosticsInterop.w(TAG, "Delete project $projectId aborted: committed baseline materialization failed")
+            return null
+        }
         val frozenPlan =
             if (baseline != null) {
                 buildFrozenDeleteManifestPlan(baseline.manifest, projectId)
@@ -545,4 +558,61 @@ internal class MirrorPublishExecutor(
         private const val TAG = "ReadableMirrorPublisher"
         private const val SKIP_NOT_SUPPORTED = "Mirror publish skipped: storage not supported"
     }
+}
+
+/**
+ * Issue #717 评论 5741910919：committed baseline 的私有 manifest 物化前置入口。
+ *
+ * 在新的 manifest transaction **开始之前**调用，确保"baseline 在 state 里、私有 manifest 丢了"
+ * 的设备状态能恢复。做两件事：
+ * 1. workspace.ensureCommittedManifest(baseline.json, baseline.contentHash) — 物化私有 manifest.json
+ * 2. stateStore.setManifestUri(workspace.manifestFile().absolutePath) — URI 收口到私有路径
+ *
+ * hash mismatch / write failed / state 写失败都返回 false，调用方应停止本轮事务。
+ *
+ * 与 [MirrorPublishProjectExecutor.consolidatePrivateManifestFromJournal] 的区别：
+ * - 本函数在 manifest transaction **之前**物化**旧 baseline** manifest；
+ * - consolidate 在 manifest transaction **之后**物化**新** manifest；
+ * 两者不冲突，都需要。
+ */
+private const val MATERIALIZE_LOG_TAG = "ReadableMirrorPublisher"
+
+internal fun materializeCommittedBaseline(
+    workspace: MirrorTransactionWorkspace,
+    stateStore: ReadableMirrorStateStore,
+    baseline: MirrorPublishExecutor.CommittedManifestResolution.Baseline,
+    operation: String,
+): Boolean {
+    val ensureResult =
+        workspace.ensureCommittedManifest(
+            baseline.json.toByteArray(Charsets.UTF_8),
+            baseline.contentHash,
+        )
+    when (ensureResult) {
+        is EnsureCommittedManifestResult.Success -> Unit
+        is EnsureCommittedManifestResult.HashMismatch -> {
+            DiagnosticsInterop.w(
+                MATERIALIZE_LOG_TAG,
+                "$operation: committed baseline private manifest hash mismatch " +
+                    "(existing=${ensureResult.existingHash}, expected=${ensureResult.expectedHash}), stopping",
+            )
+            return false
+        }
+        is EnsureCommittedManifestResult.WriteFailed -> {
+            DiagnosticsInterop.w(
+                MATERIALIZE_LOG_TAG,
+                "$operation: committed baseline private manifest write failed: ${ensureResult.cause?.message}",
+            )
+            return false
+        }
+    }
+    val manifestPath = workspace.manifestFile().absolutePath
+    if (!stateStore.setManifestUri(manifestPath)) {
+        DiagnosticsInterop.w(
+            MATERIALIZE_LOG_TAG,
+            "$operation: setManifestUri consolidation to private path failed, stopping",
+        )
+        return false
+    }
+    return true
 }

@@ -404,6 +404,10 @@ private fun rememberEditorTextStyle(
         fontSize = fontSizeSp,
         lineHeight = lineHeightSp,
         textIndent = textIndent,
+        // Issue #717 评论 5741910919：显式指定 LineBreak.Simple。
+        // 配合 OutputTransformation 在长西文单词内部插入 U+200B，
+        // 让换行算法能在这些零宽空格处断行，避免整词推到下一行留下大块空白。
+        lineBreak = androidx.compose.ui.text.style.LineBreak.Simple,
     )
 }
 

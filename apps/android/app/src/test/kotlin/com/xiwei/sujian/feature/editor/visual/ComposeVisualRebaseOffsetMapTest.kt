@@ -220,8 +220,10 @@ class ComposeVisualRebaseOffsetMapTest {
         // "aa" 从行 1 移到行 0 末尾（dx > 0），"bb" 从行 2 移到行 1（dx = 0），位移不同。
         val displacements =
             moves.map { move ->
-                val oldBounds = ComposeVisualRebase.safePathBounds(oldLayout, move.oldRange)
-                val newBounds = ComposeVisualRebase.safePathBounds(newLayout, move.newRange)
+                val oldSnapshot = ComposeLayoutSnapshot(oldLayout, TextRange(0, 0), 0)
+                val newSnapshot = ComposeLayoutSnapshot(newLayout, TextRange(0, 0), 0)
+                val oldBounds = ComposeVisualRebase.safePathBounds(oldSnapshot, move.oldRange)
+                val newBounds = ComposeVisualRebase.safePathBounds(newSnapshot, move.newRange)
                 requireNotNull(oldBounds) { "oldBounds 不应为 null: ${move.oldRange}" }
                 requireNotNull(newBounds) { "newBounds 不应为 null: ${move.newRange}" }
                 Pair(newBounds.left - oldBounds.left, newBounds.top - oldBounds.top)

@@ -4,7 +4,9 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
 
@@ -536,7 +538,8 @@ class ComposeVisualTimeline {
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
-        val newTextLength = newLayout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：target 是 raw 坐标，边界检查用 rawText 长度。
+        val newTextLength = newLayout.effectiveRawText.length
         for (unit in sampledUnits) {
             val target = unit.targetRange
             if (target == null) {
@@ -753,7 +756,8 @@ class ComposeVisualTimeline {
         patchClipTrackId: Long?,
     ): RepartitionResult {
         val newLayout = patch.newLayout
-        val newTextLength = newLayout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：insertedUnits 是 raw 坐标，边界检查用 rawText 长度。
+        val newTextLength = newLayout.effectiveRawText.length
         val validInsertedRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
 
         // 构建待显示序列：pendingSurviving + 新 insertedRanges，按正文顺序（range.start）排序。
@@ -874,7 +878,8 @@ class ComposeVisualTimeline {
         durationNanos: Long,
         patchClipTrackId: Long?,
     ) {
-        val oldTextLength = oldLayout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：deletedUnits 是 raw 坐标，边界检查用 rawText 长度。
+        val oldTextLength = oldLayout.effectiveRawText.length
         val orderedRanges = orderedDeletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
         // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
         // n = orderedRanges.size, unit i: [i/n, (i+1)/n]
@@ -983,7 +988,8 @@ class ComposeVisualTimeline {
         surviving: MutableList<VisualTextUnit>,
     ) {
         val newLayout = patch.newLayout
-        val newTextLength = newLayout.result.layoutInput.text.length
+        // Issue #717 评论 5742904417 修复1：retainedMoves.newRange 是 raw 坐标，边界检查用 rawText 长度。
+        val newTextLength = newLayout.effectiveRawText.length
         for (move in patch.retainedMoves) {
             val newRange = move.newRange
             if (newRange.start >= newRange.end) continue
@@ -1715,12 +1721,13 @@ class ComposeVisualTimeline {
 
     /**
      * 从 layout 取 unit 的真实位置（左上角）。
+     * Issue #717 评论 5742273757 修复3：range 是 raw 坐标，通过 [boundsForRawRange] 做 raw→display。
      */
     private fun computeUnitPosition(
         layout: ComposeLayoutSnapshot,
         range: TextRange,
     ): Offset? {
-        val bounds = ComposeVisualRebase.safePathBounds(layout.result, range) ?: return null
+        val bounds = layout.boundsForRawRange(range) ?: return null
         return Offset(bounds.left, bounds.top)
     }
 
