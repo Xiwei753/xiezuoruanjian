@@ -28,7 +28,7 @@ QtObject {
     // Target UI bindings
     property var targetEditorItem: null
     property var backendRef: null
-    property var dt: null
+    required property var dt
     // Issue #709 评论 issue-body-709: 主题诊断需要读取 ThemeController runtime state
     //（appearance_mode/is_dark/color_source），由 WritingWorkspace 注入。
     property var themeControllerRef: null

@@ -870,6 +870,33 @@ impl SujianEditorItem {
         }
     }
 
+    /// Issue #715: 章节 Load 的完整视觉状态边界。
+    ///
+    /// 与 `clear_active_text_animations()` 分开——后者只在动画队列非空时才执行
+    /// （`suppress_all()` 返回 true），章节替换时队列已空则整个跳过，仍会遗留
+    /// 上一章的 visual snapshot/cache/layout generation。
+    ///
+    /// 此方法无条件执行，确保切章后下一次真实输入从新章节的 layout/snapshot 起算：
+    /// - suppress_all()：停止所有活动动画
+    /// - 清 texture_cache：丢弃旧章行纹理
+    /// - 清 current/previous layout snapshot：丢弃旧章排版快照
+    /// - 清 previous_canonical_snapshot：丢弃旧章 canonical 快照
+    /// - 清 pending_promoted_layout：丢弃未消费的 promoted layout
+    /// - 清 prepared_frame：丢弃旧帧数据
+    /// - invalidate editor_layout：清旧排版 generation
+    /// - request_scene_rebuild()：触发 Scene Graph 重建
+    pub(crate) fn reset_document_visual_state(&mut self) {
+        self.pipeline.animation_coordinator_mut().suppress_all();
+        self.pipeline.texture_cache_mut().clear();
+        self.pipeline.set_current_layout_snapshot(None);
+        self.pipeline.set_previous_layout_snapshot(None);
+        self.pipeline.set_previous_canonical_snapshot(None);
+        let _ = self.pipeline.take_pending_promoted_layout();
+        self.prepared_frame = None;
+        self.editor_layout.invalidate();
+        self.request_scene_rebuild();
+    }
+
     pub(crate) fn ime_query_text_before_cursor(&self, max_chars: usize) -> String {
         let text = &self.buffer.text;
         let cursor_char = byte_to_char_index(text, self.buffer.cursor);

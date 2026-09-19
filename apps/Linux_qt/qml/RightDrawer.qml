@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    property var dt: null
+    required property var dt
 
     // Elevation shadow support
     property int elevation: 3

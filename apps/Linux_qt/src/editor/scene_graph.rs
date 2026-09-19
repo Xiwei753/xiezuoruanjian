@@ -352,6 +352,7 @@ pub fn update_animation_layer(
     images: *const *const qmetaobject::QImage,
     source_rects: *const f64,
     snapshot_ids: *const u64,
+    scroll_y: f64,
 ) {
     cpp!(unsafe [
         root_raw as "QSGNode*",
@@ -360,7 +361,8 @@ pub fn update_animation_layer(
         glyph_data as "const double*",
         images as "QImage**",
         source_rects as "const double*",
-        snapshot_ids as "const quint64*"
+        snapshot_ids as "const quint64*",
+        scroll_y as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
@@ -372,6 +374,15 @@ pub fn update_animation_layer(
 
         auto *animLayer = dynamic_cast<AnimationLayerNode*>(animNode);
         if (!animLayer) return;
+
+        // Issue #715: 动画层和静态正文层使用相同的 translate(0, -scroll_y) 矩阵，
+        // 动画 glyph 保持文档坐标，由 QSGTransformNode 统一做视口变换。
+        // 之前静态层有滚动矩阵、动画层没有，导致切章继承非零 contentY 后
+        // 事务仍正常完成、动画却画到错误 Y 坐标。
+        QMatrix4x4 animMatrix;
+        animMatrix.translate(0, -static_cast<qreal>(scroll_y));
+        animLayer->setMatrix(animMatrix);
+        animLayer->markDirty(QSGNode::DirtyMatrix);
 
         animLayer->updateTextures(
             item_ptr, glyph_count, glyph_data, images, source_rects, snapshot_ids

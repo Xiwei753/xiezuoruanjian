@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    property var dt: null
+    required property var dt
     property string title: ""
     default property alias contentData: body.data
 

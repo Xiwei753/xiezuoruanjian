@@ -16,7 +16,7 @@ Menu {
     id: editorContextMenu
 
     property var editorItem: null
-    property var dt: null
+    required property var dt
 
     background: Rectangle {
         color: dt.surface

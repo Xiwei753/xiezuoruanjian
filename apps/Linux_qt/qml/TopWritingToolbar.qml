@@ -16,7 +16,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    property var dt: null
+    required property var dt
     property var backendRef: null
     property real currentFontSize: 16
     property real currentLineSpacing: 1.5

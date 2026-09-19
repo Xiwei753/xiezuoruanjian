@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: root
-    property var dt: null
+    required property var dt
     readonly property bool wide: width >= 1120
     readonly property bool medium: width >= 760 && width < 1120
     property int gap: dt.gridGap

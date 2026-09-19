@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
     readonly property int pageMargin: width >= 980 ? dt.pageMarginWide : dt.pageMarginNarrow
     property int maxContentWidth: dt.maxContentWidth
     readonly property int contentWidth: Math.min(Math.max(1, width - pageMargin * 2), maxContentWidth)

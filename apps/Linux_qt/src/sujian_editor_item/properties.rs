@@ -30,10 +30,13 @@ impl SujianEditorItem {
         self.buffer.redo_stack.clear();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
-        self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
+        // Issue #715: 章节 Load 的完整视觉状态边界。
+        // 不再只清 previous_canonical_snapshot（半套处理），而是无条件重置所有视觉状态，
+        // 确保下一次真实输入从新章节的 layout/snapshot 起算。
+        self.reset_document_visual_state();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
@@ -60,10 +63,13 @@ impl SujianEditorItem {
         self.sync_buffer_from_pipeline();
         // Issue #658 评论 5623746506 问题 1: affinity 调整移到 emit_content_changed。
         let new = self.buffer.snapshot();
-        self.pipeline.set_previous_canonical_snapshot(None);
         self.record_transaction(old, new, EditorTransactionCause::Load, false);
         self.pipeline.composition_mut().clear();
         self.clear_active_text_animations();
+        // Issue #715: 章节 Load 的完整视觉状态边界。
+        // 不再只清 previous_canonical_snapshot（半套处理），而是无条件重置所有视觉状态，
+        // 确保下一次真实输入从新章节的 layout/snapshot 起算。
+        self.reset_document_visual_state();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
