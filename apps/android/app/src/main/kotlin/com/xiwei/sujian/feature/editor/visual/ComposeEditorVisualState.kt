@@ -577,23 +577,27 @@ class ComposeEditorVisualState(
             // cursor animation 关闭时（cursorEnabled=false）不抢系统光标，保持 null。
             //
             // #713 评论 5740279418：handoff 条件修正 —
-            // 正在动画时（cursorAnimating=true）的 scene.cursorRect 才是用户上一帧真正看到的光标位置，
+            // 视觉层已接管时（cursorOwnedByVisual=true）的 scene.cursorRect 才是用户上一帧真正看到的光标位置，
             // 下一笔删除到来时必须从这个中间位置继续；现在却在这个时候退回本笔事务自己的旧 caret，
             // 所以仍然会出现"当前动画位置 -> 旧 T0 -> timeline 下一帧再继续"的前后闪/回抽。
-            // 静止时（cursorAnimating=false）scene.cursorRect 可能是残留旧坐标，
+            // 视觉层未接管时 scene.cursorRect 可能是残留旧坐标，
             // 用 patch.originCursorRect 作为 canonical T0。
+            // #713 评论 5740765672：handoff 首帧本身就是 cursorOwnedByVisual=true、cursorAnimating=false。
+            // 同一帧连续两笔编辑时，第二笔 handoff 若仍判 cursorAnimating 会无视第一笔当前正在屏幕上
+            // 占有的 cursorRect，直接改用第二笔 patch.originCursorRect，光标在同一帧 handoff 阶段提前跳一格/一段。
+            // 修复：改判 cursorOwnedByVisual — 它表示视觉层是否已持有当前可见光标，与 timeline 是否启动无关。
             val handoffCursorRect =
                 if (patch.motionPolicy.effective().cursorEnabled &&
                     patch.cursorMotionPath != null
                 ) {
                     val sceneCursor = scene.cursorRect
-                    val sceneCursorAnimating = scene.cursorAnimating
-                    if (sceneCursorAnimating && sceneCursor != null) {
-                        // #713 评论 5740279418：动画进行中 — scene.cursorRect 是当前屏幕真实位置
+                    val sceneCursorOwnedByVisual = scene.cursorOwnedByVisual
+                    if (sceneCursorOwnedByVisual && sceneCursor != null) {
+                        // #713 评论 5740279418 / 5740765672：视觉层已接管 — scene.cursorRect 是当前屏幕真实位置
                         EditorDiagnosticsEvents.editorCursorHandoff("currentScene")
                         sceneCursor
                     } else {
-                        // #713 评论 5740279418：静止状态 — canonical T0
+                        // #713 评论 5740279418 / 5740765672：视觉层未接管 — canonical T0
                         EditorDiagnosticsEvents.editorCursorHandoff("originFallback")
                         patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
                     }
@@ -614,6 +618,8 @@ class ComposeEditorVisualState(
             // 不把 parent 的一个 fraction 无脑复制给所有 child。
             // #713 评论 5740578331：handoffCursorRect 计算处现在 cursorOwnedByVisual 标记视觉所有权，
             // cursorAnimating 只表示 track 是否在动 — 详见 ComposeVisualScene.cursorOwnedByVisual 注释。
+            // #713 评论 5740765672：handoff 选当前屏幕光标的判断条件从 cursorAnimating 改为 cursorOwnedByVisual，
+            // 使同一帧连续两笔编辑在 timeline 启动前第二笔 handoff 能继承第一笔当前屏幕可见 cursorRect。
             val handoffCursor = handoffCursorRect ?: scene.cursorRect
             val rebasedClipFractions =
                 if (handoffCursor != null) {

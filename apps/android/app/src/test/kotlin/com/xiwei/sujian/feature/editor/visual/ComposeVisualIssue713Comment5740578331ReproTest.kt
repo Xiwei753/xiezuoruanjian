@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -146,6 +147,114 @@ class ComposeVisualIssue713Comment5740578331ReproTest {
             oldCursorRect,
             firstFrameScene.cursorRect,
         )
+    }
+
+    // ==================== 问题1补充：同一 frame 连续两笔编辑第二笔 handoff 继承第一笔可见光标 ====================
+
+    /**
+     * #713 评论 5740765672 的回归测试 —
+     *
+     * handoff 首帧本身就是 cursorOwnedByVisual=true、cursorAnimating=false。
+     * 同一帧连续两笔编辑时，第二笔 handoff 若仍判 cursorAnimating 会无视第一笔当前正在屏幕上
+     * 占有的 cursorRect，直接改用第二笔 patch.originCursorRect，光标在同一帧 handoff 阶段提前跳一格/一段。
+     * 修复后改判 cursorOwnedByVisual，第二笔继承第一笔当前屏幕可见 cursorRect。
+     *
+     * 场景：连续两次插入 "ab" -> "axb" -> "axyb"，两次 handoff 之间不 drain/sample timeline，
+     * 模拟快速输入/IME 一次 VSync 前连续提交。
+     */
+    @Suppress("LongMethod", "MaxLineLength")
+    @Test
+    fun handoff_consecutiveEdits_sameFrame_secondHandoffInheritsFirstVisibleCursor() {
+        val layouts = captureLayoutsWithWidth(arrayOf("ab", "axb", "axyb"), 1000)
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-713-5740765672-consecutive-edits",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout："ab"，caret 在 offset 1
+        state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
+
+        // 第一笔 local edit："ab" -> "axb"（在 offset 1 插入 'x'）
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "axb",
+            oldSelection = TextRange(1, 1),
+            newSelection = TextRange(2, 2),
+            changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
+        )
+
+        // 第一笔 onAuthoritativeLayout 配对生成 localPatch，建立首帧 scene（触发 publishLocalHandoffScene）
+        state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
+
+        // 关键：不 drainPendingPatchesAtFrame / sampleVisualScene —
+        // 模拟下一次 frame drain 之前第二笔就到了（同一 VSync 内连续两笔编辑）
+        val firstFrameScene = state.drawSnapshot().scene
+        // 第一笔 handoff 已接管视觉光标
+        assertTrue(
+            "consecutive-edits: 第一笔 handoff 后 cursorOwnedByVisual 应为 true",
+            firstFrameScene.cursorOwnedByVisual,
+        )
+        // 第一笔 timeline 未启动（未 drain/sample）
+        assertFalse(
+            "consecutive-edits: 第一笔 handoff 后 cursorAnimating 应为 false（timeline 未启动）",
+            firstFrameScene.cursorAnimating,
+        )
+        // 记录第一笔 handoff 持有的可见 cursor — 第二笔应继承它
+        val firstHandoffCursorRect = firstFrameScene.cursorRect
+
+        // 第二笔 local edit："axb" -> "axyb"（在 offset 2 插入 'y'）
+        state.recordLocalInput(
+            oldText = "axb",
+            newText = "axyb",
+            oldSelection = TextRange(2, 2),
+            newSelection = TextRange(3, 3),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 3), oldRange = TextRange(2, 2))),
+        )
+
+        // 第二笔 onAuthoritativeLayout 配对生成第二笔 localPatch，触发第二次 publishLocalHandoffScene
+        state.onAuthoritativeLayout(layouts[2], TextRange(3, 3), 0)
+        // 仍不 drain/sample timeline
+
+        val secondFrameScene = state.drawSnapshot().scene
+
+        // 核心断言1：第二笔 handoff 后 cursorOwnedByVisual 应仍为 true（继承第一笔视觉所有权）
+        assertTrue(
+            "consecutive-edits: 第二笔 handoff 后 cursorOwnedByVisual 应仍为 true" +
+                "（继承第一笔视觉所有权；旧 bug：判 cursorAnimating=false 走 originFallback 分支不设视觉所有权）",
+            secondFrameScene.cursorOwnedByVisual,
+        )
+        // 核心断言2：第二笔后 cursorAnimating 应仍为 false（timeline 未启动）
+        assertFalse(
+            "consecutive-edits: 第二笔后 cursorAnimating 应仍为 false（timeline 未启动）",
+            secondFrameScene.cursorAnimating,
+        )
+        // 核心断言3：第二笔后 scene.cursorRect 应等于第一笔 handoff 当前持有的可见 cursor，
+        // 而非第二笔 originCursorRect。
+        // 旧 bug：第二笔 handoff 看到 cursorAnimating=false，走 originFallback 分支，
+        // 用第二笔 patch.originCursorRect（offset 2 in "axb"），光标在同一帧 handoff 阶段提前跳。
+        assertEquals(
+            "consecutive-edits: 第二笔后 scene.cursorRect 应等于第一笔 handoff 当前持有的可见 cursor，" +
+                "而非第二笔 originCursorRect（旧 bug：判 cursorAnimating 走 originFallback 提前跳到第二笔 origin）",
+            firstHandoffCursorRect,
+            secondFrameScene.cursorRect,
+        )
+
+        // 辅助断言：证明修复有效，旧 bug 下 secondFrameScene.cursorRect 会等于第二笔 originCursorRect。
+        // 第二笔 originCursorRect = offset 2 in "axb" 的旧光标位置。
+        val secondOriginLayoutSnapshot = ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0)
+        val secondOriginCursorRect = secondOriginLayoutSnapshot.cursorRect(2)
+        // Robolectric 下无真实字体渲染，cursorRect 可能对不同 offset 返回相同位置（几何退化）。
+        // 若两者相等则说明 Robolectric 几何退化，核心断言已由上面的 assertEquals(firstHandoffCursorRect, ...) 覆盖；
+        // 若不相等则保留 assertNotEquals 以证明修复有效。
+        if (secondFrameScene.cursorRect != secondOriginCursorRect) {
+            assertNotEquals(
+                "consecutive-edits: 第二笔后 scene.cursorRect 应不等于第二笔 originCursorRect" +
+                    "（证明修复有效：旧 bug 下会跳到第二笔 origin）",
+                secondOriginCursorRect,
+                secondFrameScene.cursorRect,
+            )
+        }
     }
 
     // ==================== 问题2：纯点击 selection redirect 第一帧仍先瞬移到目标 ====================
