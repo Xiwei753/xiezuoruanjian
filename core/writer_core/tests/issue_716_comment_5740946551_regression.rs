@@ -235,6 +235,8 @@ fn build_plan(
 }
 
 /// 场景 1：不重复 publish — remote Upsert 同时间戳严格赢 → publish_count == 0，NoChanges。
+///
+/// 远端 generation 有内容，但 remote 严格赢，merge 不会产生任何变化（本地 staging 为空）。
 #[test]
 fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     const T: i64 = 10_000;
@@ -243,7 +245,17 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
     const GEN_EXISTING: &str = "gen_existing";
     assert!(DEVICE_LOCAL < DEVICE_REMOTE);
 
-    let provider = CountingProvider::new(MemoryProvider::new());
+    let provider_inner = MemoryProvider::new();
+    // 写入远端 generation 内容
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
     let remote_record =
         TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
             .with_active_generation(GEN_EXISTING);
@@ -253,11 +265,25 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
         catalog,
         version: RemoteVersion::new("v1"),
     };
-    write_remote_catalog(&provider, &snapshot).unwrap();
-    let remote_catalog_snapshot = load_remote_catalog(&provider).unwrap();
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
 
     let tmp = TempDir::new().unwrap();
-    let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
+    // 本地 staging 为空（没有本地文件），remote 严格赢，merge 不会产生任何变化
+    let staging_root = tmp.path().join("staging-p1");
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    // 写入空 manifest
+    let staging_manifest = SyncManifest { files: vec![] };
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("manifest.sync.json"),
+        serde_json::to_vec(&staging_manifest).unwrap(),
+    )
+    .unwrap();
     let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
 
     let transfer = run_transfer(&provider, &plan);
@@ -268,10 +294,18 @@ fn regression_no_redundant_publish_remote_upsert_strictly_wins() {
         "remote Upsert 同时间戳严格赢时不应 publish"
     );
     assert_eq!(provider.generation_writes(), 0);
+    // merge 下载了远端内容，应返回 LatestWinsApplied（不是 NoChanges）
     assert!(
-        matches!(transfer.targets[0].result.status, SyncStatus::NoChanges),
-        "应返回 NoChanges，实际 {:?}",
+        matches!(
+            transfer.targets[0].result.status,
+            SyncStatus::LatestWinsApplied
+        ),
+        "merge 下载了远端正文应返回 LatestWinsApplied，实际 {:?}",
         transfer.targets[0].result.status
+    );
+    assert!(
+        !transfer.targets[0].result.downloaded_files.is_empty(),
+        "downloaded_files 不应为空"
     );
 }
 
@@ -349,7 +383,7 @@ fn regression_no_remote_record_publishes_once() {
 }
 
 /// 场景 4：CAS 期间 snapshot 变化才下一轮 — publish 前判定 candidate 赢，CAS 返回 RemoteWinner(Upsert)
-/// → 下一轮重新 merge + 判定，candidate 不赢 → 不再 publish → NoChanges。publish_count == 1。
+/// → 下一轮重新 merge + 判定，candidate 不赢 → 不再 publish → LatestWinsApplied。publish_count == 1。
 #[test]
 fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     const T: i64 = 10_000;
@@ -379,6 +413,16 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
     upsert_record(&mut conflict_catalog, conflict_record);
     let conflict_catalog_bytes = serde_json::to_vec(&conflict_catalog).unwrap();
 
+    // 在 gen_after_conflict 下写入内容，这样第二轮 merge 会下载新内容
+    let conflict_gen_prefix = "projects/p1/__generations__/gen_after_conflict";
+    write_remote_generation(
+        &provider_inner,
+        conflict_gen_prefix,
+        b"conflict chapter content",
+        T + 1,
+        DEVICE_REMOTE,
+    );
+
     let provider = ConflictInjectingProvider::new(provider_inner, conflict_catalog_bytes);
 
     let tmp = TempDir::new().unwrap();
@@ -392,10 +436,13 @@ fn regression_cas_conflict_retries_only_when_snapshot_changed() {
         1,
         "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
     );
-    // 第二轮 candidate 不赢 → RemoteWins(Upsert) → NoChanges
+    // 第二轮 candidate 不赢 → RemoteWins(Upsert)，merge 下载了远端新内容 → LatestWinsApplied
     assert!(
-        matches!(transfer.targets[0].result.status, SyncStatus::NoChanges),
-        "第二轮收敛应返回 NoChanges，实际 {:?}",
+        matches!(
+            transfer.targets[0].result.status,
+            SyncStatus::LatestWinsApplied
+        ),
+        "第二轮 merge 下载了远端新内容应返回 LatestWinsApplied，实际 {:?}",
         transfer.targets[0].result.status
     );
 }
@@ -730,5 +777,98 @@ fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
         ),
         "merge 返回错误应保持错误状态，绝不应是 NoChanges，实际 {:?}",
         transfer.targets[0].result.status
+    );
+}
+
+/// 场景 8（Issue #716 评论 5742191453）：remote Upsert 严格赢 + merge 下载远端正文
+/// → publish_count == 0，LatestWinsApplied，downloaded_files 非空。
+///
+/// 修复前：RemoteWins(Upsert) 分支返回 `retained_conflict.unwrap_or(NoChanges)` = NoChanges，
+/// merge 下载的正文被丢弃，full-sync 统计报 0，搜索索引不重建。
+/// 修复后：merge_outcome 归一化时构造 merge_result 携带变化字段，
+/// RemoteWins(Upsert) 返回 merge_result → LatestWinsApplied + 非空 downloaded_files。
+#[test]
+fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放一个 visible source
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging 为空（没有本地文件），remote 严格赢，merge 会下载远端正文
+    let staging_root = tmp.path().join("staging-p1");
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    // 写入空 manifest
+    let staging_manifest = SyncManifest { files: vec![] };
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("manifest.sync.json"),
+        serde_json::to_vec(&staging_manifest).unwrap(),
+    )
+    .unwrap();
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "remote Upsert 严格赢时不应 publish"
+    );
+    // 关键断言：结果应为 LatestWinsApplied，不是 NoChanges
+    assert!(
+        matches!(
+            transfer.targets[0].result.status,
+            SyncStatus::LatestWinsApplied
+        ),
+        "merge 下载了远端正文应返回 LatestWinsApplied，实际 {:?}",
+        transfer.targets[0].result.status
+    );
+    // downloaded_files 非空，并包含对应 chapter 路径
+    assert!(
+        !transfer.targets[0].result.downloaded_files.is_empty(),
+        "downloaded_files 不应为空，实际 {:?}",
+        transfer.targets[0].result.downloaded_files
+    );
+    let expected_chapter_path = "volumes/v1/chapters/chapter.md";
+    assert!(
+        transfer.targets[0]
+            .result
+            .downloaded_files
+            .iter()
+            .any(|p| p.contains(expected_chapter_path)),
+        "downloaded_files 应包含 {}，实际 {:?}",
+        expected_chapter_path,
+        transfer.targets[0].result.downloaded_files
     );
 }

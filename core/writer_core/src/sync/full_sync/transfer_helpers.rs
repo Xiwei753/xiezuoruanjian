@@ -235,7 +235,8 @@ pub(super) fn transfer_live_project(
             // Issue #716 评论 5741695768：merge 结果先收口，再做 publish 前 winner 判定。
             // - Err(e) 立即返回错误，任何 winner 分支都不能吞掉 merge 错误。
             // - Ok(Some((outcome, unresolved_conflicts))) 先更新 retained_conflict，
-            //   保存 outcome 供 CandidateWins 后续 publish 使用。
+            //   保存 outcome 供 CandidateWins 后续 publish 使用；同时构造 merge_result，
+            //   携带 downloaded_files/local_deletes/remote_deletes/overwritten_files/ignored_files。
             // - Ok(None) 表示无需 merge（远端无 visible source），retained_conflict 清掉。
             let merge_outcome_opt: Option<crate::sync::lww::LwwMergeOutcome> = match merge_outcome {
                 Err(e) => return (sync_result_from_error(e), None, None),
@@ -262,6 +263,35 @@ pub(super) fn transfer_live_project(
                     }
                     Some(outcome)
                 }
+            };
+
+            // 构造 merge_result：携带本轮 merge 对本地产生的实际变化，
+            // 供 RemoteWins(Upsert)/AlreadyCurrent 不 publish 时返回。
+            // 规则与 sync/lww/attempt.rs 对齐：
+            // - 有 unresolved conflict → PartialConflict（已在 retained_conflict 中）
+            // - 无冲突但 downloaded_files/local_deletes 任一非空（对本地产生的实际变化）→ LatestWinsApplied
+            // - 真正全空 → NoChanges
+            // 注意：remote_upload_paths/remote_delete_paths 是对远端的操作，不是对本地产生的变化，
+            // 在 RemoteWins 分支中不应影响状态判断。
+            let merge_result: Option<SyncResult> = match &merge_outcome_opt {
+                Some(outcome) => {
+                    // 只考虑对本地产生的实际变化：下载到本地的文件、本地被删除的文件
+                    let has_local_changes =
+                        !outcome.downloaded_files.is_empty() || !outcome.local_deletes.is_empty();
+                    let mut r = SyncResult::success();
+                    r.downloaded_files = outcome.downloaded_files.clone();
+                    r.local_deletes = outcome.remote_delete_paths.clone();
+                    r.remote_deletes = outcome.local_deletes.clone();
+                    r.overwritten_files = outcome.overwritten_files.clone();
+                    r.ignored_files = outcome.ignored_files.clone();
+                    if has_local_changes {
+                        r.status = SyncStatus::LatestWinsApplied;
+                    } else {
+                        r.status = SyncStatus::NoChanges;
+                    }
+                    Some(r)
+                }
+                None => None,
             };
 
             // 2. read_post_transfer_lww → 构造 candidate（winner 身份只来自 merge 后真实 manifest，
@@ -440,11 +470,10 @@ pub(super) fn transfer_live_project(
                         planned.target.remote_prefix,
                         attempt + 1
                     );
-                    return (
-                        retained_conflict.unwrap_or(SyncResult::no_changes()),
-                        None,
-                        None,
-                    );
+                    let result = retained_conflict.unwrap_or_else(|| {
+                        merge_result.clone().unwrap_or(SyncResult::no_changes())
+                    });
+                    return (result, None, None);
                 }
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::RemoteWins(winner) => {
                     // remote 严格赢且 candidate 不赢，这一轮无法靠 publish 改变 winner。
@@ -456,11 +485,10 @@ pub(super) fn transfer_live_project(
                                 attempt + 1
                             );
                             // 直接按最新 remote 收敛，不再 publish。
-                            return (
-                                retained_conflict.unwrap_or(SyncResult::no_changes()),
-                                None,
-                                None,
-                            );
+                            let result = retained_conflict.unwrap_or_else(|| {
+                                merge_result.clone().unwrap_or(SyncResult::no_changes())
+                            });
+                            return (result, None, None);
                         }
                         crate::sync::types::TargetOp::Delete => {
                             log::info!(
