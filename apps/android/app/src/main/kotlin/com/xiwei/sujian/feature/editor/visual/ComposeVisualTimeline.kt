@@ -363,6 +363,39 @@ class ComposeVisualTimeline {
     }
 
     /**
+     * #713 评论 5739986801：纯 selection 光标重定向 —
+     * 只替换屏幕视觉光标的 cursorChannel，不清 units，也不改 clipTracks。
+     *
+     * 用户点击正文、方向键移动等纯 selection 变化时，BasicTextField 已经更新了 selection，
+     * 但 onTextLayout 不一定回调（text 没变）。此时用本方法从当前屏幕光标位置动画到新目标。
+     *
+     * @param frameTimeNanos 当前帧时间戳。
+     * @param fallbackFromRect 没有 cursorChannel 时的 fallback 起点。
+     * @param targetRect 光标新目标位置。
+     * @param durationNanos 光标动画时长。
+     */
+    fun redirectCursor(
+        frameTimeNanos: Long,
+        fallbackFromRect: Rect,
+        targetRect: Rect,
+        durationNanos: Long,
+    ) {
+        val startRect =
+            if (cursorChannel != null) {
+                sampleCursorRect(frameTimeNanos) ?: fallbackFromRect
+            } else {
+                fallbackFromRect
+            }
+        cursorChannel =
+            CursorTrack(
+                fromRect = startRect,
+                points = listOf(CursorMotionPoint(rect = targetRect, endFraction = 1f)),
+                startedAtNanos = frameTimeNanos,
+                durationNanos = durationNanos,
+            )
+    }
+
+    /**
      * #691 评论 5682970101：cursor 从文字 segment 时间表生成。
      *
      * survivingCursorPoints 只取"尚未开始"的 unit（alpha.startedAtNanos > frameTimeNanos），
@@ -1077,6 +1110,12 @@ class ComposeVisualTimeline {
                 .filter { it.start < it.end }
         // #691：采样光标位置 — 与文字使用同一个 frameTimeNanos
         val sampledCursor = sampleCursorRect(frameTimeNanos)
+        // #713 评论 5739986801：cursorAnimating 标记当前 cursor track 是否正在拥有可见位置 —
+        // true：活动动画中，scene.cursorRect 是动画值，draw 层应优先使用它；
+        // false：动画已完成或从未开始，scene.cursorRect 保留最终采样值（不清 cursorChannel），
+        //   但 draw 层应回到 computeRestingCursorRect(latestLayout, liveSelection)，
+        //   因为 scene.cursorRect 此时可能是旧事务的残留坐标，不应覆盖 live selection。
+        val cursorAnimating = hasActiveCursorAnimation(frameTimeNanos)
         // #703 评论 B：空间进度驱动吞吐字 — 根据 cursor 位置算每个 unit 的可见 fraction。
         // 不再把 alpha 当作"这个字是否出现"的权威状态。
         // - 吐字（inserted unit, targetRange != null）：cursor 从 glyph 左侧向右侧移动，
@@ -1109,6 +1148,8 @@ class ComposeVisualTimeline {
             unitClipFractions = unitClipFractions,
             unitClipCursors = unitClipCursors,
             coordinatedSpatialClip = coordinatedSpatialClip,
+            // #713 评论 5739986801：cursorAnimating = 当前 cursor track 是否正在拥有可见位置
+            cursorAnimating = cursorAnimating,
         )
     }
 
@@ -1831,6 +1872,14 @@ data class ComposeVisualScene(
     val unitClipFractions: Map<Long, Float> = emptyMap(),
     val unitClipCursors: Map<Long, Rect> = emptyMap(),
     val coordinatedSpatialClip: Boolean = false,
+    /**
+     * #713 评论 5739986801：当前 cursor track 是否正在拥有可见位置（活动动画中）。
+     *
+     * - true：当前 cursor track 正在动画中，scene.cursorRect 是动画值，应优先于 live selection。
+     * - false：cursor 动画已完成或从未开始，scene.cursorRect 是残留旧坐标，
+     *   不应覆盖 live selection，draw 层应回到 computeRestingCursorRect(latestLayout, liveSelection)。
+     */
+    val cursorAnimating: Boolean = false,
 ) {
     companion object {
         /** 空场景。 */

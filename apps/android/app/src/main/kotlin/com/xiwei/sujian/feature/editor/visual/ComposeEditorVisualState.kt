@@ -114,6 +114,20 @@ class ComposeEditorVisualState(
     private var currentMotionPolicy: EditorMotionPolicy? = null
 
     /**
+     * #713 评论 5739986801：上一次 resolved 的 selection —
+     * 用于检测纯 selection 变化（text 不变、composition 为空、selection 变了）。
+     */
+    private var lastResolvedSelection: TextRange? = null
+
+    /**
+     * #713 评论 5739986801：最新待执行 cursor redirect 目标 —
+     * 只保留最新目标，不排队堆积。
+     * 由 onInputSnapshotResolved 在纯 selection 变化时设置，
+     * 由 drainPendingPatchesAtFrame 在文字 patch 处理完毕后消费。
+     */
+    private var pendingSelectionRedirect: Rect? = null
+
+    /**
      * #694 评论第 1/3 步：本地输入视觉事实 tracker —
      * 普通 [ArrayDeque]，不是 Compose State。记录 InputTransformation 拿到的本地输入，
      * 等 onAuthoritativeLayout 的新 layout 到达时配对生成 ComposeVisualPatch(intent=null)。
@@ -361,6 +375,23 @@ class ComposeEditorVisualState(
                 }
             }
         }
+        // #713 评论 5739986801：纯 selection cursor redirect —
+        // NoTextChange 且 composition 为空且 text 与 latestLayout 一致且 selection 变了时，
+        // 生成一笔 cursor-only redirect，从当前屏幕光标位置动画到新 selection 对应的 caret。
+        // 不直接把 target rect 写进 scene，交给 frame clock 在下一帧从屏幕当前真正画到的
+        // cursor rect 重定向到新目标（通过 pendingSelectionRedirect + drainPendingPatchesAtFrame）。
+        val isPureSelectionChange =
+            outcome == InputSnapshotOutcome.NoTextChange &&
+                snapshot.composition == null &&
+                _latestLayout.value?.result?.layoutInput?.text?.text == snapshot.text &&
+                snapshot.selection != lastResolvedSelection
+        if (isPureSelectionChange && snapshot.selection.collapsed) {
+            val targetRect = _latestLayout.value?.cursorRect(snapshot.selection.end)
+            if (targetRect != null) {
+                pendingSelectionRedirect = targetRect
+            }
+        }
+        lastResolvedSelection = snapshot.selection
         wasCompositionActiveForSnapshot = compositionActive
     }
 
@@ -489,7 +520,17 @@ class ComposeEditorVisualState(
                 if (patch.motionPolicy.effective().cursorEnabled &&
                     patch.cursorMotionPath != null
                 ) {
-                    patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
+                    // #713 评论 5739986801：已有 scene.cursorRect 且 cursor 动画已完成时继续用它
+                    // （上一可见帧真实画出的最终位置），不从每一笔事务自己的旧起点重开。
+                    // 但 cursor 动画仍在进行时（cursorAnimating=true），scene.cursorRect 是动画中间位置，
+                    // 不是"上一可见帧真实画到的最终位置"，此时仍用 patch.originCursorRect 作为 handoff 起点。
+                    val sceneCursor = _visualScene.value.cursorRect
+                    val sceneCursorAnimating = _visualScene.value.cursorAnimating
+                    if (sceneCursor != null && !sceneCursorAnimating) {
+                        sceneCursor
+                    } else {
+                        patch.originCursorRect ?: computeCursorRectFromLayout(oldLayout)
+                    }
                 } else {
                     null
                 }
@@ -1156,7 +1197,27 @@ class ComposeEditorVisualState(
      * @return 本次帧实际应用的 patch 列表。
      */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
-        if (pendingPatches.isEmpty()) return emptyList()
+        if (pendingPatches.isEmpty()) {
+            // #713 评论 5739986801：没有文字 patch 但可能有 pending selection redirect —
+            // 仍需处理 cursor redirect，不能直接返回。
+            val redirectTarget = pendingSelectionRedirect
+            if (redirectTarget != null) {
+                pendingSelectionRedirect = null
+                val policy = currentMotionPolicy ?: EditorMotionPolicy()
+                val durationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+                val fallbackFromRect =
+                    _visualScene.value.cursorRect
+                        ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
+                        ?: redirectTarget
+                visualTimeline.redirectCursor(
+                    frameTimeNanos = frameTimeNanos,
+                    fallbackFromRect = fallbackFromRect,
+                    targetRect = redirectTarget,
+                    durationNanos = durationNanos,
+                )
+            }
+            return emptyList()
+        }
         // #694 评论第 7 步：同一 VSync 不能逐笔重定向几何。
         // 一次取完这一帧的 patch，先合成一个屏幕 transition（ComposeVisualPatchBatch.compose），
         // 再只 visualTimeline.applyPatch() 一次。oldLayout=batch.first().oldLayout,
@@ -1186,6 +1247,24 @@ class ComposeEditorVisualState(
         // timeline.applyPatch 已直接处理，sample 出同一 frame 的新 scene 后清 handoff。
         // #708 评论 5724568261 缺口1：pendingLocalEditHandoff 已删除（死状态），
         // 首帧 scene 由 publishLocalHandoffScene 直接发布，无需在此清理。
+        // #713 评论 5739986801：先处理文字 patch；再处理最新 selection cursor redirect；
+        // selection redirect 最后应用，保证"用户刚点的新位置"不会又被前一笔迟到的文字 patch 抢回去。
+        val redirectTarget = pendingSelectionRedirect
+        if (redirectTarget != null) {
+            pendingSelectionRedirect = null
+            val policy = currentMotionPolicy ?: EditorMotionPolicy()
+            val durationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            val fallbackFromRect =
+                _visualScene.value.cursorRect
+                    ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
+                    ?: redirectTarget
+            visualTimeline.redirectCursor(
+                frameTimeNanos = frameTimeNanos,
+                fallbackFromRect = fallbackFromRect,
+                targetRect = redirectTarget,
+                durationNanos = durationNanos,
+            )
+        }
         return listOf(framePatch)
     }
 
@@ -1382,6 +1461,9 @@ class ComposeEditorVisualState(
         lastObservedLayoutFingerprint = null
         nextHandoffUnitKey = 2_000_000L
         // 光标所有权只由设置/attach 决定，clear 不重置 _drawsVisualCursor。
+        // #713 评论 5739986801：重置纯 selection cursor redirect 状态
+        lastResolvedSelection = null
+        pendingSelectionRedirect = null
     }
 
     /**

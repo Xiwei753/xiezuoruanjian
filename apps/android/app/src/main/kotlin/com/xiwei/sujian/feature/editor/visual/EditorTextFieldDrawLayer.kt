@@ -514,12 +514,15 @@ internal fun DrawScope.drawCurrentEditorFrame(
     if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
         val cursorRectValue =
             if (drawsVisualCursor) {
-                scene.cursorRect
-                    ?: computeRestingCursorRect(latestLayout, liveSelection)
-                    ?: restingCursorRect
+                // #713 评论 5739986801：只有活动 cursor track 才能覆盖 live selection。
+                // cursorAnimating=true 表示当前 cursor track 正在拥有可见位置；
+                // cursorAnimating=false 时 scene.cursorRect 是残留旧坐标，不应覆盖 live selection。
+                if (scene.cursorAnimating) {
+                    scene.cursorRect
+                } else {
+                    computeRestingCursorRect(latestLayout, liveSelection)
+                } ?: restingCursorRect
             } else {
-                // needsIndentedEmptyParagraphCaret && !drawsVisualCursor：
-                // 静态落位，不用 scene.cursorRect（那是动画值）。
                 computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect
             }
         if (cursorRectValue != null) {
