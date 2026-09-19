@@ -70,6 +70,10 @@ pub struct CursorController {
     pub visual_x: f64,
     pub visual_y: f64,
     pub visual_h: f64,
+    /// Issue #712 评论 5739517945: 当前光标 baseline 的视觉位置。
+    /// Snap 时直接取 `plan.cursor_baseline_y`；Tween 时从 old_rect.baseline_y
+    /// 缓动到 new_rect.baseline_y。替代旧的 `cursor_h * 0.8` 估算。
+    pub visual_baseline_y: f64,
     pub visible: bool,
     pub dirty: bool,
     pub affinity: CaretAffinity,
@@ -98,6 +102,7 @@ impl CursorController {
             visual_x: 0.0,
             visual_y: 0.0,
             visual_h: 0.0,
+            visual_baseline_y: 0.0,
             visible: false,
             dirty: false,
             affinity: CaretAffinity::Downstream,
@@ -173,6 +178,7 @@ impl CursorController {
             self.animation = None;
             self.visual_x = plan.cursor_x;
             self.visual_y = plan.cursor_y;
+            self.visual_baseline_y = plan.cursor_baseline_y;
             self.blink_visible = true;
             if old_visible {
                 self.dirty = true;
@@ -192,6 +198,7 @@ impl CursorController {
             CursorTransition::Snap => {
                 self.visual_x = plan.cursor_x;
                 self.visual_y = plan.cursor_y;
+                self.visual_baseline_y = plan.cursor_baseline_y;
                 self.animation = None;
             }
             CursorTransition::Tween {
@@ -231,16 +238,22 @@ impl CursorController {
                         });
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
+                        // Issue #712 评论 5739517945: rebase 时 baseline 从当前视觉
+                        // baseline 继续，目标 baseline 取 new_rect.baseline_y。
+                        self.visual_baseline_y = new_rect.baseline_y;
                         // Issue #709 评论 issue-body-709: rebase Tween 是明确的状态变化信号。
                         started_or_rebased_tween = true;
                     } else if anim.is_finished() {
                         self.visual_x = anim.target_x;
                         self.visual_y = anim.target_y;
+                        self.visual_baseline_y = new_rect.baseline_y;
                         self.animation = None;
                     } else {
                         let (cur_x, cur_y) = anim.current_position();
                         self.visual_x = cur_x;
                         self.visual_y = cur_y;
+                        // Issue #712 评论 5739517945: 动画进行中，baseline 取目标值。
+                        self.visual_baseline_y = new_rect.baseline_y;
                     }
                 } else {
                     // Issue #687: animation == None 分支永远从当前屏幕帧继续。
@@ -268,11 +281,15 @@ impl CursorController {
                             started_at: None,
                             duration_ms: *duration_ms,
                         });
+                        // Issue #712 评论 5739517945: 新建 Tween 时 baseline 从
+                        // old_rect.baseline_y 缓动到 new_rect.baseline_y。
+                        self.visual_baseline_y = old_rect.baseline_y;
                         // Issue #709 评论 issue-body-709: 新建 Tween 是明确的状态变化信号。
                         started_or_rebased_tween = true;
                     } else {
                         self.visual_x = target_x;
                         self.visual_y = target_y;
+                        self.visual_baseline_y = new_rect.baseline_y;
                     }
                 }
             }

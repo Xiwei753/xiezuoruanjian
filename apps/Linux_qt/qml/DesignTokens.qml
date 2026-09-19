@@ -19,8 +19,9 @@ QtObject {
         try { return JSON.parse(themeStateJson) } catch(e) { return null }
     }
 
-    // isDark 从同一份 themeStateJson 解析，保证与 scheme 同步。
-    property bool isDark: _themeState !== null && _themeState.is_dark !== undefined ? _themeState.is_dark : true
+    // Issue #712: isDark 直接从 themeController.is_dark 读取，不再通过 JSON 解析。
+    // themeStateJson 和 _themeState 保留用于诊断输出。
+    property bool isDark: themeController !== null ? themeController.is_dark : true
 
     onIsDarkChanged: {
     }

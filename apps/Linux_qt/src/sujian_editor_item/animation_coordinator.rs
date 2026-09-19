@@ -329,8 +329,16 @@ fn sample_coordinated_cursor_rect_at(
     let (cx, cy) = match op {
         TextVisualOperationKind::Insert => {
             let mut rightmost_x: Option<f64> = None;
-            // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)。
-            let cursor_y = new_rect.top;
+            // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
+            // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
+            let cursor_y = match tx.cursor_visual_track.as_ref() {
+                Some(track) => track.sampled_rect(now).top,
+                None => {
+                    let progress = tx.progress(now);
+                    let eased = AnimatedSlice::ease_out_quad(progress);
+                    old_rect.top + (new_rect.top - old_rect.top) * eased
+                }
+            };
             for unit in &tx.units {
                 if unit.slice.kind != AnimatedSliceKind::InsertReveal {
                     continue;
@@ -359,8 +367,16 @@ fn sample_coordinated_cursor_rect_at(
         TextVisualOperationKind::Delete => {
             let mut has_conceal_from_right = false;
             let mut conceal_edge: Option<f64> = None;
-            // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)。
-            let cursor_y = new_rect.top;
+            // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
+            // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
+            let cursor_y = match tx.cursor_visual_track.as_ref() {
+                Some(track) => track.sampled_rect(now).top,
+                None => {
+                    let progress = tx.progress(now);
+                    let eased = AnimatedSlice::ease_out_quad(progress);
+                    old_rect.top + (new_rect.top - old_rect.top) * eased
+                }
+            };
             for unit in &tx.units {
                 if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
                     continue;
@@ -2199,6 +2215,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
         cursor_move_source: super::cursor_controller::CursorMoveSource,
+        cursor_baseline_y: f64,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
         let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
@@ -2267,16 +2284,16 @@ impl LinuxEditorAnimationCoordinator {
                 } else {
                     // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                     // 直接从当前 anim 的 start 位置建 Tween。
-                    // Issue #712: baseline_y 从 canonical caret geometry 获取，
+                    // Issue #712 评论 5739517945: baseline_y 从 canonical caret geometry 获取，
                     // 不使用 top + h * 0.8 估算。
                     let new_baseline_y = new_cursor_rect
                         .as_ref()
                         .map(|r| r.baseline_y)
-                        .unwrap_or(cursor_y + cursor_h * 0.8);
+                        .unwrap_or(cursor_baseline_y);
                     let old_baseline_y = old_cursor_rect
                         .as_ref()
                         .map(|r| r.baseline_y)
-                        .unwrap_or(anim.start_y + cursor_h * 0.8);
+                        .unwrap_or(cursor_baseline_y);
                     CursorTransition::Tween {
                         old_rect: CursorRect {
                             x: anim.start_x,
@@ -2306,16 +2323,16 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
                 // 直接从当前 visual_x/visual_y 建 Tween。
-                // Issue #712: baseline_y 从 canonical caret geometry 获取，
+                // Issue #712 评论 5739517945: baseline_y 从 canonical caret geometry 获取，
                 // 不使用 top + h * 0.8 估算。
                 let new_baseline_y = new_cursor_rect
                     .as_ref()
                     .map(|r| r.baseline_y)
-                    .unwrap_or(cursor_y + cursor_h * 0.8);
+                    .unwrap_or(cursor_baseline_y);
                 let old_baseline_y = old_cursor_rect
                     .as_ref()
                     .map(|r| r.baseline_y)
-                    .unwrap_or(old_visual_y + cursor_h * 0.8);
+                    .unwrap_or(cursor_baseline_y);
                 CursorTransition::Tween {
                     old_rect: CursorRect {
                         x: old_visual_x,
@@ -2347,6 +2364,7 @@ impl LinuxEditorAnimationCoordinator {
             cursor_x,
             cursor_y,
             cursor_h,
+            cursor_baseline_y,
         }
     }
 
@@ -2722,9 +2740,19 @@ impl LinuxEditorAnimationCoordinator {
         match op {
             TextVisualOperationKind::Insert => {
                 let mut rightmost_x: Option<f64> = None;
-                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
-                let cursor_y = new_rect.top;
+                // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
+                // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
+                let cursor_y = match tx.cursor_visual_track.as_ref() {
+                    Some(track) => {
+                        let r = track.sampled_rect(frame_now);
+                        r.top
+                    }
+                    None => {
+                        let progress = tx.progress(frame_now);
+                        let eased = AnimatedSlice::ease_out_quad(progress);
+                        old_rect.top + (new_rect.top - old_rect.top) * eased
+                    }
+                };
                 for unit in &tx.units {
                     if unit.slice.kind != AnimatedSliceKind::InsertReveal {
                         continue;
@@ -2752,9 +2780,19 @@ impl LinuxEditorAnimationCoordinator {
             TextVisualOperationKind::Delete => {
                 let mut has_conceal_from_right = false;
                 let mut conceal_edge: Option<f64> = None;
-                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
-                let cursor_y = new_rect.top;
+                // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
+                // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
+                let cursor_y = match tx.cursor_visual_track.as_ref() {
+                    Some(track) => {
+                        let r = track.sampled_rect(frame_now);
+                        r.top
+                    }
+                    None => {
+                        let progress = tx.progress(frame_now);
+                        let eased = AnimatedSlice::ease_out_quad(progress);
+                        old_rect.top + (new_rect.top - old_rect.top) * eased
+                    }
+                };
                 // Issue #702: 记录 DeleteConceal unit 的可见进度，供 fallback
                 // 让 caret track 跟随文字 unit 的同一帧基准，而非 caret track
                 // 自己的 timeline，消除"光标先完成、旧字晚消失"的错拍。

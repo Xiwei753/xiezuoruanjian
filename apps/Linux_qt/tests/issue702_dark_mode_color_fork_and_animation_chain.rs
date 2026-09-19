@@ -52,12 +52,16 @@ fn issue702_design_tokens_consumes_single_theme_state_json() {
         "DesignTokens 应从 _themeState 解析"
     );
     assert!(
-        src.contains("_themeState.is_dark"),
-        "isDark 应从 _themeState.is_dark 读取"
+        src.contains("themeController.is_dark"),
+        "isDark 应从 themeController.is_dark 直接读取（Issue #712）"
     );
     assert!(
-        src.contains("_themeState.scheme"),
-        "scheme 应从 _themeState.scheme 读取"
+        !src.contains("_themeState.is_dark"),
+        "isDark 不应再从 _themeState.is_dark 读取（Issue #712）"
+    );
+    assert!(
+        src.contains("_themeState"),
+        "_themeState 应保留用于诊断输出"
     );
     assert!(
         !src.contains("property string resolvedSchemeJson"),
