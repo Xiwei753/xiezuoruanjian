@@ -179,7 +179,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val scope = rememberCoroutineScope()
     // Issue #717 评论 5743443030 修复1：OutputTransformation 与 onTextLayout 的同版本绑定 holder。
     // 普通 holder（非 Compose State），环形缓冲区记录最近若干次 transformation 的绑定。
-    val layoutBinding = remember { EditorSoftBreakLayoutBinding() }
+    // Issue #717 评论 5743988019：layoutBinding 绑定到 bridge 生命周期 — bridge 随 target 切换而变化
+    // （viewModel.bridgeForTarget 按 targetId 返回不同 bridge），切章节时重建，避免旧 bridge 被闭包保留导致跨 target 污染。
+    val layoutBinding = remember(bridge) { EditorSoftBreakLayoutBinding() }
 
     // #644 评论 #684：OutputTransformation 整个编辑器生命周期只创建一次，
     // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
@@ -189,8 +191,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
 
-    // Issue #717 评论 5743745219：bridge 整个编辑器生命周期稳定不变（= params.bridge），
-    // 直接闭包捕获即可，不加入 remember key，保持"OutputTransformation 整个编辑器生命周期只创建一次"。
+    // Issue #717 评论 5743988019：bridge 随 target 切换而变化（viewModel.bridgeForTarget 按 targetId 返回不同 bridge），
+    // layoutBinding 已绑定到 bridge 生命周期，切章节时重建；OutputTransformation 跟随 layoutBinding 重建即可。
     val outputTransformation =
         remember(layoutBinding) {
             OutputTransformation {
@@ -339,16 +341,22 @@ private fun onTextLayoutResult(
             projection = match.projection,
             rawText = match.rawText,
         )
-    } else {
-        // Issue #717 评论 5743745219：binding miss（环形缓冲区淘汰或启动时序例外）。
-        // 不把未知版本的 TextLayoutResult 和 live state 强行拼接。
-        // 只在 identity/raw 完全相等时（displayText == live rawText，说明 projection 是 identity、
-        // display 坐标 == raw 坐标、layout 与 live state 同版本）才允许进入，否则丢弃这份 layout，
-        // 等下一份能匹配的 onTextLayout。BasicTextField 自己仍正常显示。
-        val liveRawText = bridge.state.text.toString()
-        if (displayText == liveRawText) {
-            val identityProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
-            val restoreY = viewportState.onLayout(result, identityProjection)
+        onSurfaceReady()
+        return
+    }
+
+    // Issue #717 评论 5743988019：binding miss（环形缓冲区淘汰或启动时序例外）。
+    // 不把未知版本的 TextLayoutResult 和 live state 强行拼接。
+    // 只有 displayText == liveRawText 且 liveProjection.insertPoints 为空（真正 identity，
+    // 即按当前规则这份 raw 正文不应经过 OutputTransformation）才允许进入 viewport/visual；
+    // insertPoints 非空说明按当前规则这份 raw 正文正常应该经过 OutputTransformation，
+    // 既然 result 里没这些显示断点又没有 Binding 能证明来源，这份 layout 直接丢弃，等下一份匹配的 layout。
+    // BasicTextField 自己仍正常显示。
+    val liveRawText = bridge.state.text.toString()
+    if (displayText == liveRawText) {
+        val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
+        if (liveProjection.insertPoints.isEmpty()) {
+            val restoreY = viewportState.onLayout(result, liveProjection)
             if (restoreY != null) {
                 scope.launch { viewportState.scrollState.scrollTo(restoreY) }
             }
@@ -359,13 +367,14 @@ private fun onTextLayoutResult(
                 // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
                 // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
                 compositionActive = bridge.state.composition != null,
-                projection = identityProjection,
+                projection = liveProjection,
                 rawText = liveRawText,
             )
+            onSurfaceReady()
         }
-        // displayText != liveRawText：这份 layout 不进入素笺 viewport/visual snapshot，直接等待下一份。
     }
-    onSurfaceReady()
+    // displayText != liveRawText 或 liveProjection 非真正 identity：丢弃这份 layout，
+    // 不进入 viewport/visual snapshot，不调用 onSurfaceReady，等下一份匹配的 onTextLayout。
 }
 
 /**
