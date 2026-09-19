@@ -212,6 +212,75 @@ object EditorDiagnosticsEvents {
         "visualTransactionId" to visualTransactionId,
         "coreTransactionIds" to coreTransactionIds.joinToString(","),
     )
+
+    // ── 光标与选区诊断（#713 评论 #5739986801 第 8 项）──────────────
+
+    /**
+     * Selection 变化事件 — 记录选区起止偏移的变化，不逐帧刷日志。
+     */
+    fun editorSelectionChanged(
+        oldStart: Int,
+        oldEnd: Int,
+        newStart: Int,
+        newEnd: Int,
+        layoutTextLength: Int,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.selection.changed",
+        "oldStart" to oldStart,
+        "oldEnd" to oldEnd,
+        "newStart" to newStart,
+        "newEnd" to newEnd,
+        "layoutTextLength" to layoutTextLength,
+    )
+
+    /**
+     * 光标重定向事件 — 记录光标因 selection 或 text_edit 从一处跳到另一处。
+     *
+     * @param reason 重定向原因："selection" 或 "text_edit"。
+     */
+    fun editorCursorRedirect(
+        reason: String,
+        fromX: Float,
+        fromY: Float,
+        toX: Float,
+        toY: Float,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.cursor.redirect",
+        "reason" to reason,
+        "fromX" to fromX,
+        "fromY" to fromY,
+        "toX" to toX,
+        "toY" to toY,
+    )
+
+    /**
+     * Handoff 首帧光标来源 — 记录 handoff 时光标来自 currentScene 还是 originFallback。
+     *
+     * @param source 光标来源："currentScene" 或 "originFallback"。
+     */
+    fun editorCursorHandoff(source: String) =
+        DiagnosticsEventsInterop.record(
+            DiagnosticOriginDto.USER,
+            "editor.cursor.handoff",
+            "source" to source,
+        )
+
+    /**
+     * 光标最终落位 — 记录光标在动画/重定向后的最终位置。
+     */
+    fun editorCursorSettled(
+        selectionEnd: Int,
+        caretX: Float,
+        caretY: Float,
+    ) = DiagnosticsEventsInterop.record(
+        DiagnosticOriginDto.USER,
+        "editor.cursor.settled",
+        "selectionEnd" to selectionEnd,
+        "caretX" to caretX,
+        "caretY" to caretY,
+    )
 }
 
 /**

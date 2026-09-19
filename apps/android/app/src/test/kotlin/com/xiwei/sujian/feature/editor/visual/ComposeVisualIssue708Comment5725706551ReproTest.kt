@@ -2529,20 +2529,25 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(10, 10), 0)
 
-        // 确认第二笔后 scene.cursorRect 已变成 track2 的 cursor（在 'x' 之后，位置 10）
+        // #713 评论 5740279418：handoff 条件反转后，动画进行中时 scene.cursorRect 是
+        // 用户上一帧真正看到的光标位置（动画中间位置，约 track1 cursor 位置），
+        // 不再退回 patch.originCursorRect（旧 T0）。
+        // 旧代码（!cursorAnimating → sceneCursor）在动画中回退 origin，scene.cursorRect 变成
+        // track2 的 cursor（位置 10）；新代码（cursorAnimating → sceneCursor）保持动画中间位置。
         val sceneAfterInsert = state.drawSnapshot().scene
         assertNotNull(
             "testI5: 第二笔后 scene.cursorRect 应非 null",
             sceneAfterInsert.cursorRect,
         )
-        // track2 cursor 在 'x' 之后（位置 10），远在 parent [0,9) 中间（约 3.6）之后
-        val track2CursorLeft = sceneAfterInsert.cursorRect!!.left
+        // 新行为：动画进行中，scene.cursorRect 是动画中间位置（约 track1 cursor 位置）
+        val handoffCursorLeft = sceneAfterInsert.cursorRect!!.left
         val track1CursorApproxLeft = parentFractionByTrack1 * 9f
+        // handoff cursor 应接近 track1 cursor 位置（动画中间位置），不是 track2（位置 10）
         assertTrue(
-            "testI5: 前置 — track2 cursor ($track2CursorLeft) 应远在 track1 cursor 估算位置" +
-                " ($track1CursorApproxLeft) 之后，否则问题2不触发" +
-                "（track2 在 'x' 之后位置 10，track1 在 parent 中间约位置 ${parentFractionByTrack1 * 9}）",
-            track2CursorLeft > track1CursorApproxLeft + 2f,
+            "testI5: 前置 — handoff cursor ($handoffCursorLeft) 应接近 track1 cursor 估算位置" +
+                " ($track1CursorApproxLeft) — #713 评论 5740279418 handoff 条件反转后" +
+                " 动画中用 scene.cursorRect（当前屏幕真实位置），不退回 origin",
+            kotlin.math.abs(handoffCursorLeft - track1CursorApproxLeft) < 2f,
         )
 
         // 第三笔："abcdefghix" -> "abcdfghix"（删中间 [4,5) 'e'，split 旧 parent）
