@@ -37,6 +37,10 @@ internal class MirrorPublishStageExecutor(
     internal data class FrozenPlanContext(
         val frozenPlan: FrozenManifestPlan,
         val currentJournal: PendingMirrorPublish,
+        // Issue #717 评论 5741567193 A 部分：冻结 committed baseline 身份，
+        // 供 ManifestTransactionParams 传递到 resolveManifestOldIdentity。
+        val oldBaselineExists: Boolean,
+        val committedManifestHash: String?,
     )
 
     internal suspend fun preparePublishContext(
@@ -168,15 +172,15 @@ internal class MirrorPublishStageExecutor(
             logPublishAborted(projectId, "committed manifest corrupted or migration failed")
             return null
         }
-        val committedManifest =
+        val baseline: MirrorPublishExecutor.CommittedManifestResolution.Baseline? =
             when (committedManifestResolution) {
-                is MirrorPublishExecutor.CommittedManifestResolution.Baseline -> committedManifestResolution.manifest
+                is MirrorPublishExecutor.CommittedManifestResolution.Baseline -> committedManifestResolution
                 MirrorPublishExecutor.CommittedManifestResolution.FirstPublish -> null
                 MirrorPublishExecutor.CommittedManifestResolution.Stop -> null
             }
         val frozenPlan =
             buildFrozenManifestPlan(
-                committedManifest = committedManifest,
+                committedManifest = baseline?.manifest,
                 targetProjectId = projectId,
                 targetSnapshot = context.snapshot,
                 targetDesiredEntries = stageResult.desiredEntries,
@@ -213,7 +217,12 @@ internal class MirrorPublishStageExecutor(
             workspace.rollback(context.txId)
             return null
         }
-        return FrozenPlanContext(frozenPlan, currentJournal)
+        return FrozenPlanContext(
+            frozenPlan = frozenPlan,
+            currentJournal = currentJournal,
+            oldBaselineExists = baseline != null,
+            committedManifestHash = baseline?.contentHash,
+        )
     }
 
     private fun resolveCommittedManifestForPublish(
@@ -223,7 +232,11 @@ internal class MirrorPublishStageExecutor(
             is CommittedManifestReadResult.NotExists ->
                 MirrorPublishExecutor.CommittedManifestResolution.FirstPublish
             is CommittedManifestReadResult.Found ->
-                MirrorPublishExecutor.CommittedManifestResolution.Baseline(result.manifest)
+                MirrorPublishExecutor.CommittedManifestResolution.Baseline(
+                    manifest = result.manifest,
+                    json = result.json,
+                    contentHash = result.hash,
+                )
             is CommittedManifestReadResult.Corrupted -> {
                 DiagnosticsInterop.w(
                     TAG,
@@ -232,12 +245,17 @@ internal class MirrorPublishStageExecutor(
                 MirrorPublishExecutor.CommittedManifestResolution.Stop
             }
             is CommittedManifestReadResult.NeedsMigration -> {
-                val migration = ReadableMirrorStateMigration(stateStore, storage)
+                // Issue #717 评论 5741567193 A 部分：迁移需要 workspace 来物化私有 manifest。
+                val migration = ReadableMirrorStateMigration(stateStore, storage, workspace)
                 when (migration.migrate()) {
                     ReadableMirrorStateMigration.Result.SUCCESS -> {
                         when (val reread = stateStore.getCommittedManifestStrict()) {
                             is CommittedManifestReadResult.Found ->
-                                MirrorPublishExecutor.CommittedManifestResolution.Baseline(reread.manifest)
+                                MirrorPublishExecutor.CommittedManifestResolution.Baseline(
+                                    manifest = reread.manifest,
+                                    json = reread.json,
+                                    contentHash = reread.hash,
+                                )
                             is CommittedManifestReadResult.NotExists ->
                                 MirrorPublishExecutor.CommittedManifestResolution.FirstPublish
                             is CommittedManifestReadResult.Corrupted -> {

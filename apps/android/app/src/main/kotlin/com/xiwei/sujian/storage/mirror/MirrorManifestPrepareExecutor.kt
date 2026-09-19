@@ -29,6 +29,10 @@ internal class MirrorManifestPrepareExecutor(
         val storage: ReadableMirrorStorage,
         val prebuiltTargetJson: String?,
         val manifestRelativePath: String,
+        // Issue #717 评论 5741567193 A 部分：本次冻结的 committed manifest hash。
+        val committedManifestHash: String? = null,
+        // Issue #717 评论 5741567193 A 部分：old-baseline 存在状态。
+        val oldBaselineExists: Boolean = false,
     )
 
     internal data class ManifestOldIdentity(
@@ -60,41 +64,58 @@ internal class MirrorManifestPrepareExecutor(
     /**
      * 解析旧 manifest 身份。
      *
-     * Issue #667：旧 manifest 在私有目录中，通过 [MirrorTransactionWorkspace.readManifest] 读取。
-     * stateStore 中的 manifestUri 指向私有文件路径。
+     * Issue #717 评论 5741567193 A 部分：正常事务的旧 manifest 身份来源统一收口到
+     * committed baseline + 私有 workspace manifest，不再用
+     * `stateStore.getManifestUri() != null` 推断，也不再 fallback 到公开
+     * `Download/Sujian/_meta/manifest.json`。
+     *
+     * 规则：
+     * - 恢复场景（`journalContext.manifestTargetJson != null`）：继续使用 journal 已冻结的
+     *   `manifestOldRef` / `manifestOldContentHash`，不重新从 state 猜。
+     * - 正常事务 + 无 committed baseline（首次发布）：`oldRef=null, oldContentHash=null`。
+     * - 正常事务 + 有 committed baseline：
+     *   `oldRef=workspace.manifestRef(), oldContentHash=committedManifestHash`。
+     *
+     * 公开 Download 下的旧 manifest 退出正常状态机。最终只保留三份事实：
+     * committed baseline、私有 workspace manifest、pending journal。
      */
     internal fun resolveManifestOldIdentity(ctx: ManifestTransactionContext): ManifestOldIdentity? {
-        val isResumingManifest = ctx.journalContext.manifestTargetJson != null
-        val frozenOldRef: MirrorFileRef? =
-            if (isResumingManifest) {
-                ctx.journalContext.manifestOldRef
-            } else {
-                val initialOldUri = stateStore.getManifestUri()
-                initialOldUri?.let { MirrorFileRef(uri = it, relativePath = ctx.manifestRelativePath) }
+        // Issue #717 评论 5741567193 A 部分：recovery 用 journal。
+        // 只要 journal 冻结了 manifestTargetJson / manifestOldRef / manifestOldContentHash 中的任一个，
+        // 就走恢复分支，继续使用 journal 的值，不重新从 state 猜。
+        val isResumingManifest =
+            ctx.journalContext.manifestTargetJson != null ||
+                ctx.journalContext.manifestOldRef != null ||
+                ctx.journalContext.manifestOldContentHash != null
+        if (isResumingManifest) {
+            // 恢复场景：继续使用 journal 已冻结的 manifestOldRef/manifestOldContentHash。
+            val frozenOldRef = ctx.journalContext.manifestOldRef
+            val frozenOldContentHash = ctx.journalContext.manifestOldContentHash
+            if (frozenOldRef != null && frozenOldContentHash == null) {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "Manifest transaction: journal has manifestOldRef but no manifestOldContentHash, stopping",
+                )
+                return null
             }
-        val manifestOldContentHash =
-            ctx.journalContext.manifestOldContentHash ?: run {
-                // Issue #667：旧 manifest 在私有目录中，用 workspace.readManifest() 读取内容并计算 hash
-                frozenOldRef?.let { ref ->
-                    // 如果 frozenOldRef 的 uri 是私有文件路径，用 workspace.readManifest() 读取
-                    // 否则用 storage.readTextAndHash() 读取（向后兼容旧 manifest 在 Download 中的情况）
-                    val manifestContent = workspace.readManifest()
-                    if (manifestContent != null) {
-                        computeContentHash(manifestContent)
-                    } else {
-                        // 尝试用 storage 读取（向后兼容旧版 manifest 在 Download 中的情况）
-                        ctx.storage.readTextAndHash(ref)?.second
-                    }
-                }
-            }
-        if (frozenOldRef != null && manifestOldContentHash == null) {
+            return ManifestOldIdentity(frozenOldRef, frozenOldContentHash)
+        }
+        // 正常事务：用 committed baseline 推断旧 manifest 身份。
+        if (!ctx.oldBaselineExists) {
+            // 首次发布：无旧 manifest。
+            return ManifestOldIdentity(oldRef = null, oldContentHash = null)
+        }
+        // 有 committed baseline：旧 manifest 身份来自私有 workspace manifest。
+        val oldRef = workspace.manifestRef()
+        val oldContentHash = ctx.committedManifestHash
+        if (oldContentHash == null) {
             DiagnosticsInterop.w(
                 TAG,
-                "Manifest transaction: old manifest exists but content hash is null, stopping before vacate",
+                "Manifest transaction: oldBaselineExists=true but committedManifestHash is null, stopping",
             )
             return null
         }
-        return ManifestOldIdentity(frozenOldRef, manifestOldContentHash)
+        return ManifestOldIdentity(oldRef, oldContentHash)
     }
 
     internal suspend fun prepareManifestTargetAndStage(
@@ -360,6 +381,9 @@ internal class MirrorManifestPrepareExecutor(
 
     /**
      * Issue #667：manifest backup 缺失时，先读取旧 manifest 内容再写入 workspace backup。
+     *
+     * Issue #717 评论 5741567193 A 部分：正常事务只从私有 workspace manifest 读取旧内容，
+     * 不再 fallback 到公开 `Download/Sujian/_meta/manifest.json`。
      */
     private fun handleBackupMissing(
         ctx: ManifestTransactionContext,
@@ -371,23 +395,16 @@ internal class MirrorManifestPrepareExecutor(
             // 没有旧 manifest（首次发布），不需要 backup
             return ManifestBackupOutcome.Proceed(null, stageContext.currentJournal)
         }
-        // Issue #667：从私有目录读取旧 manifest 内容
+        // Issue #717 评论 5741567193 A 部分：只从私有 workspace manifest 读取旧内容。
+        // 公开 Download 下的旧 manifest 退出正常状态机。
         val oldContent = workspace.readManifest()
         if (oldContent == null) {
-            // 尝试用 storage 读取（向后兼容旧版 manifest 在 Download 中的情况）
-            val storageContent = ctx.storage.readTextAndHash(oldRef)
-            if (storageContent == null) {
-                DiagnosticsInterop.w(TAG, "Manifest transaction: cannot read old manifest for backup")
-                deleteStagedIfExists(stageContext.staged)
-                return ManifestBackupOutcome.Aborted
-            }
-            val (content, _) = storageContent
-            val prepared = workspace.prepareBackup(ctx.txId, oldRef, content)
-            if (prepared == null) {
-                deleteStagedIfExists(stageContext.staged)
-                return ManifestBackupOutcome.Aborted
-            }
-            return finalizeBackupMissing(ctx, stageContext, prepared)
+            DiagnosticsInterop.w(
+                TAG,
+                "Manifest transaction: cannot read old manifest from private workspace for backup",
+            )
+            deleteStagedIfExists(stageContext.staged)
+            return ManifestBackupOutcome.Aborted
         }
         val prepared = workspace.prepareBackup(ctx.txId, oldRef, oldContent)
         if (prepared == null) {

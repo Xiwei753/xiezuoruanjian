@@ -295,9 +295,98 @@ class MirrorTransactionWorkspace(
      */
     fun manifestFile(): File = File(mirrorDir, MANIFEST_FILE_NAME)
 
+    // ── Committed manifest 物化（Issue #717 评论 5741567193 A 部分）──
+
+    /**
+     * 确保私有 manifest.json 已物化为指定的 committed 内容。
+     *
+     * Issue #717 评论 5741567193 A 部分：正常 publish/delete 完成后，必须以已校验过的
+     * committed manifest baseline 为旧 manifest 身份来源，不能继续让遗留公开 URI
+     * （`Download/Sujian/_meta/manifest.json`）参与正常事务。
+     *
+     * 规则：
+     * - 私有 `manifest.json` 不存在 → 原子写入 committed json（用 [AtomicFile]）。
+     * - 已存在且 hash 一致 → 直接成功（幂等）。
+     * - 已存在但 hash 不一致 → 返回 [EnsureCommittedManifestResult.HashMismatch]，不静默覆盖。
+     *
+     * @param json committed manifest 的原始 JSON 字节
+     * @param expectedHash committed manifest 的 SHA-256 hash（`sha256:<hex>` 格式，
+     *   与 [computeContentHash] 输出一致）
+     * @return [EnsureCommittedManifestResult.Success] / [HashMismatch] / [WriteFailed]
+     */
+    fun ensureCommittedManifest(
+        json: ByteArray,
+        expectedHash: String,
+    ): EnsureCommittedManifestResult {
+        return try {
+            mirrorDir.mkdirs()
+            val file = manifestFile()
+            if (file.exists()) {
+                val existingContent = file.readText(Charsets.UTF_8)
+                val existingHash = computeContentHash(existingContent)
+                if (existingHash != expectedHash) {
+                    return EnsureCommittedManifestResult.HashMismatch(
+                        existingHash = existingHash,
+                        expectedHash = expectedHash,
+                    )
+                }
+                EnsureCommittedManifestResult.Success
+            } else {
+                val atomicFile = AtomicFile(file)
+                val os = atomicFile.startWrite() as java.io.FileOutputStream
+                try {
+                    os.write(json)
+                    atomicFile.finishWrite(os)
+                    EnsureCommittedManifestResult.Success
+                } catch (e: IOException) {
+                    atomicFile.failWrite(os)
+                    EnsureCommittedManifestResult.WriteFailed(e)
+                }
+            }
+        } catch (e: IOException) {
+            EnsureCommittedManifestResult.WriteFailed(e)
+        } catch (e: Exception) {
+            EnsureCommittedManifestResult.WriteFailed(e)
+        }
+    }
+
+    /**
+     * 返回私有 manifest 的 [MirrorFileRef]（指向 [manifestFile] 的 absolutePath）。
+     *
+     * Issue #717 评论 5741567193 A 部分：正常事务的旧 manifest 身份来源统一收口到
+     * 私有 workspace manifest，不再 fallback 到公开 `Download/Sujian/_meta/manifest.json`。
+     *
+     * @return 指向 `filesDir/sujian/mirror/manifest.json` 的 [MirrorFileRef]，
+     *   relativePath 用 `_meta/manifest.json` 保持与 manifest schema 一致
+     */
+    fun manifestRef(): MirrorFileRef =
+        MirrorFileRef(
+            uri = manifestFile().absolutePath,
+            relativePath = "$META_DIR/$MANIFEST_FILE_NAME",
+        )
+
     companion object {
         private const val STAGING_DIR_NAME = "staging"
         private const val BACKUP_DIR_NAME = "backup"
         private const val MANIFEST_FILE_NAME = "manifest.json"
+        private const val META_DIR = "_meta"
     }
+}
+
+/**
+ * [MirrorTransactionWorkspace.ensureCommittedManifest] 的结果（Issue #717 评论 5741567193 A 部分）。
+ *
+ * - [Success]：私有 manifest 已物化为指定内容（写入或幂等命中）
+ * - [HashMismatch]：私有 manifest 已存在但 hash 不一致，调用方应停止本轮操作，不静默覆盖
+ * - [WriteFailed]：原子写入失败（IO 异常），调用方可重试
+ */
+sealed interface EnsureCommittedManifestResult {
+    data object Success : EnsureCommittedManifestResult
+
+    data class HashMismatch(
+        val existingHash: String,
+        val expectedHash: String,
+    ) : EnsureCommittedManifestResult
+
+    data class WriteFailed(val cause: Throwable? = null) : EnsureCommittedManifestResult
 }

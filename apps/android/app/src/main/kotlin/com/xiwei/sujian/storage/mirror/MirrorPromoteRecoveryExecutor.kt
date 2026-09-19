@@ -420,6 +420,10 @@ internal class MirrorPromoteRecoveryExecutor(
                 items = currentItems,
                 storage = storage,
                 prebuiltTargetJson = manifestJson,
+                // Issue #717 评论 5741567193 A 部分：recovery 用 journal 冻结的
+                // manifestOldRef/manifestOldContentHash，不重新从 state 猜。
+                committedManifestHash = journal.manifestOldContentHash,
+                oldBaselineExists = journal.manifestOldRef != null,
             )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {

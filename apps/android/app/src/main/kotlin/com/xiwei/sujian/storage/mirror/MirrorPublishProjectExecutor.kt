@@ -99,6 +99,10 @@ internal class MirrorPublishProjectExecutor(
                     items = promoteResult.items,
                     storage = context.storage,
                     prebuiltTargetJson = manifestTargetJson,
+                    // Issue #717 评论 5741567193 A 部分：冻结 committed baseline 身份，
+                    // 供 resolveManifestOldIdentity 不再 fallback 到公开 _meta/manifest.json。
+                    committedManifestHash = frozenContext.committedManifestHash,
+                    oldBaselineExists = frozenContext.oldBaselineExists,
                 ),
             )
         if (manifestResult == null) {
@@ -149,6 +153,12 @@ internal class MirrorPublishProjectExecutor(
             )
             return null
         }
+        // Issue #717 评论 5741567193 A 部分：正常 publish 收口——
+        // 拿到 committed baseline 后先确保私有 manifest 已物化，再把 manifestUri 收口到私有路径。
+        // 正常事务只保留三份事实：committed baseline、私有 workspace manifest、pending journal。
+        if (!consolidatePrivateManifestFromJournal(projectId, manifestResult.committedJournal, "Publish")) {
+            return null
+        }
         if (!stateStore.addPublishedProjectId(projectId)) {
             DiagnosticsInterop.w(
                 TAG,
@@ -157,6 +167,61 @@ internal class MirrorPublishProjectExecutor(
             return null
         }
         return currentJournal
+    }
+
+    /**
+     * Issue #717 评论 5741567193 A 部分：正常 publish/delete 收口。
+     *
+     * 拿到 committed baseline 后：
+     * 1. 调用 [MirrorTransactionWorkspace.ensureCommittedManifest] 确保私有 manifest 已物化；
+     * 2. 把 [ReadableMirrorStateStore.setManifestUri] 收口到私有 [MirrorTransactionWorkspace.manifestFile] 路径。
+     *
+     * 不再让遗留公开 URI（`Download/Sujian/_meta/manifest.json`）参与正常事务。
+     */
+    private fun consolidatePrivateManifestFromJournal(
+        projectId: String,
+        committedJournal: PendingMirrorPublish,
+        operation: String,
+    ): Boolean {
+        val json = committedJournal.manifestTargetJson
+        val hash = committedJournal.manifestNewContentHash
+        if (json == null || hash == null) {
+            DiagnosticsInterop.w(
+                TAG,
+                "$operation project $projectId: committed journal missing manifestTargetJson/newContentHash, " +
+                    "cannot consolidate private manifest",
+            )
+            return false
+        }
+        val ensureResult = workspace.ensureCommittedManifest(json.toByteArray(Charsets.UTF_8), hash)
+        when (ensureResult) {
+            is EnsureCommittedManifestResult.Success -> Unit
+            is EnsureCommittedManifestResult.HashMismatch -> {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "$operation project $projectId: private manifest hash mismatch " +
+                        "(existing=${ensureResult.existingHash}, expected=${ensureResult.expectedHash}), " +
+                        "keeping journal for retry",
+                )
+                return false
+            }
+            is EnsureCommittedManifestResult.WriteFailed -> {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "$operation project $projectId: private manifest write failed: ${ensureResult.cause?.message}",
+                )
+                return false
+            }
+        }
+        val manifestPath = workspace.manifestFile().absolutePath
+        if (!stateStore.setManifestUri(manifestPath)) {
+            DiagnosticsInterop.w(
+                TAG,
+                "$operation project $projectId: setManifestUri consolidation failed, keeping journal for retry",
+            )
+            return false
+        }
+        return true
     }
 
     private fun finalizePublishCleanup(

@@ -63,11 +63,25 @@ internal class MirrorPublishExecutor(
      * - [FirstPublish]：state 全空，真正首次发布，committedManifest = null
      * - [Baseline]：找到已提交 manifest 作为 frozen plan 基线
      * - [Stop]：状态损坏或迁移失败，调用方应返回 RetryableFailure 停止本轮发布
+     *
+     * Issue #717 评论 5741567193 A 部分：[Baseline] 同时保留原始 JSON 和 hash，
+     * 让正常 publish/delete 在 pending recovery 完成后能调用
+     * [MirrorTransactionWorkspace.ensureCommittedManifest] 物化私有 manifest，
+     * 并把 stateStore.manifestUri 收口到私有 workspace.manifestFile().absolutePath。
      */
     internal sealed interface CommittedManifestResolution {
         data object FirstPublish : CommittedManifestResolution
 
-        data class Baseline(val manifest: MirrorManifest) : CommittedManifestResolution
+        /**
+         * @property manifest 解析后的 manifest 对象
+         * @property json manifest 的原始 JSON 文本（用于物化私有 workspace manifest）
+         * @property contentHash manifest 的 SHA-256 hash（`sha256:<hex>` 格式）
+         */
+        data class Baseline(
+            val manifest: MirrorManifest,
+            val json: String,
+            val contentHash: String,
+        ) : CommittedManifestResolution
 
         data object Stop : CommittedManifestResolution
     }
@@ -89,7 +103,12 @@ internal class MirrorPublishExecutor(
     internal fun resolveCommittedManifestForPublish(storage: ReadableMirrorStorage): CommittedManifestResolution {
         return when (val result = stateStore.getCommittedManifestStrict()) {
             is CommittedManifestReadResult.NotExists -> CommittedManifestResolution.FirstPublish
-            is CommittedManifestReadResult.Found -> CommittedManifestResolution.Baseline(result.manifest)
+            is CommittedManifestReadResult.Found ->
+                CommittedManifestResolution.Baseline(
+                    manifest = result.manifest,
+                    json = result.json,
+                    contentHash = result.hash,
+                )
             is CommittedManifestReadResult.Corrupted -> {
                 DiagnosticsInterop.w(
                     TAG,
@@ -99,13 +118,17 @@ internal class MirrorPublishExecutor(
             }
             is CommittedManifestReadResult.NeedsMigration -> {
                 // #649 评论 5576949398 问题 4：触发旧 state 迁移
-                val migration = ReadableMirrorStateMigration(stateStore, storage)
+                val migration = ReadableMirrorStateMigration(stateStore, storage, workspace)
                 when (migration.migrate()) {
                     ReadableMirrorStateMigration.Result.SUCCESS -> {
                         // 迁移成功后重新读取
                         when (val reread = stateStore.getCommittedManifestStrict()) {
                             is CommittedManifestReadResult.Found ->
-                                CommittedManifestResolution.Baseline(reread.manifest)
+                                CommittedManifestResolution.Baseline(
+                                    manifest = reread.manifest,
+                                    json = reread.json,
+                                    contentHash = reread.hash,
+                                )
                             is CommittedManifestReadResult.NotExists ->
                                 CommittedManifestResolution.FirstPublish
                             is CommittedManifestReadResult.Corrupted -> {
@@ -227,6 +250,10 @@ internal class MirrorPublishExecutor(
                     items = emptyMap(),
                     storage = storage,
                     prebuiltTargetJson = manifestTargetJson,
+                    // Issue #717 评论 5741567193 A 部分：冻结 committed baseline 身份，
+                    // 供 resolveManifestOldIdentity 不再 fallback 到公开 _meta/manifest.json。
+                    committedManifestHash = preparation.committedManifestHash,
+                    oldBaselineExists = preparation.oldBaselineExists,
                 ),
             )
         if (manifestResult == null) {
@@ -257,6 +284,10 @@ internal class MirrorPublishExecutor(
         val frozenPlan: FrozenManifestPlan?,
         val frozenPlanJson: String?,
         val frozenPlanHash: String?,
+        // Issue #717 评论 5741567193 A 部分：冻结 committed baseline 身份，
+        // 供 ManifestTransactionParams/Context 传递到 resolveManifestOldIdentity。
+        val oldBaselineExists: Boolean,
+        val committedManifestHash: String?,
     )
 
     private fun prepareDeleteFrozenPlan(
@@ -272,22 +303,29 @@ internal class MirrorPublishExecutor(
             )
             return null
         }
-        val committedManifest =
+        val baseline: CommittedManifestResolution.Baseline? =
             when (committedManifestResolution) {
-                is CommittedManifestResolution.Baseline -> committedManifestResolution.manifest
+                is CommittedManifestResolution.Baseline -> committedManifestResolution
                 CommittedManifestResolution.FirstPublish -> null
                 CommittedManifestResolution.Stop -> null // 上面已 return，这里不会走到
             }
         val frozenPlan =
-            if (committedManifest != null) {
-                buildFrozenDeleteManifestPlan(committedManifest, projectId)
+            if (baseline != null) {
+                buildFrozenDeleteManifestPlan(baseline.manifest, projectId)
             } else {
                 // 没有已提交 manifest（首次发布），不需要 frozen plan
                 null
             }
         val frozenPlanJson = frozenPlan?.let { frozenManifestPlanToJson(it) }
         val frozenPlanHash = if (frozenPlanJson != null) computeContentHash(frozenPlanJson) else null
-        return DeletePreparation(removed, frozenPlan, frozenPlanJson, frozenPlanHash)
+        return DeletePreparation(
+            removed = removed,
+            frozenPlan = frozenPlan,
+            frozenPlanJson = frozenPlanJson,
+            frozenPlanHash = frozenPlanHash,
+            oldBaselineExists = baseline != null,
+            committedManifestHash = baseline?.contentHash,
+        )
     }
 
     private fun writeDeletePendingJournal(
@@ -388,6 +426,67 @@ internal class MirrorPublishExecutor(
             DiagnosticsInterop.w(
                 TAG,
                 "Delete project $projectId: persistCommittedBaseline failed, keeping journal for retry",
+            )
+            return false
+        }
+        // Issue #717 评论 5741567193 A 部分：正常 delete 收口——
+        // 拿到 committed baseline 后先确保私有 manifest 已物化，再把 manifestUri 收口到私有路径。
+        // 正常事务只保留三份事实：committed baseline、私有 workspace manifest、pending journal。
+        if (!consolidatePrivateManifestFromJournal(projectId, manifestResult.committedJournal, "Delete")) {
+            return false
+        }
+        return true
+    }
+
+    /**
+     * Issue #717 评论 5741567193 A 部分：正常 publish/delete 收口。
+     *
+     * 拿到 committed baseline 后：
+     * 1. 调用 [MirrorTransactionWorkspace.ensureCommittedManifest] 确保私有 manifest 已物化；
+     * 2. 把 [ReadableMirrorStateStore.setManifestUri] 收口到私有 [MirrorTransactionWorkspace.manifestFile] 路径。
+     *
+     * 不再让遗留公开 URI（`Download/Sujian/_meta/manifest.json`）参与正常事务。
+     */
+    private fun consolidatePrivateManifestFromJournal(
+        projectId: String,
+        committedJournal: PendingMirrorPublish,
+        operation: String,
+    ): Boolean {
+        val json = committedJournal.manifestTargetJson
+        val hash = committedJournal.manifestNewContentHash
+        if (json == null || hash == null) {
+            DiagnosticsInterop.w(
+                TAG,
+                "$operation project $projectId: committed journal missing manifestTargetJson/newContentHash, " +
+                    "cannot consolidate private manifest",
+            )
+            return false
+        }
+        val ensureResult = workspace.ensureCommittedManifest(json.toByteArray(Charsets.UTF_8), hash)
+        when (ensureResult) {
+            is EnsureCommittedManifestResult.Success -> Unit
+            is EnsureCommittedManifestResult.HashMismatch -> {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "$operation project $projectId: private manifest hash mismatch " +
+                        "(existing=${ensureResult.existingHash}, expected=${ensureResult.expectedHash}), " +
+                        "keeping journal for retry",
+                )
+                return false
+            }
+            is EnsureCommittedManifestResult.WriteFailed -> {
+                DiagnosticsInterop.w(
+                    TAG,
+                    "$operation project $projectId: private manifest write failed: ${ensureResult.cause?.message}",
+                )
+                return false
+            }
+        }
+        val manifestPath = workspace.manifestFile().absolutePath
+        if (!stateStore.setManifestUri(manifestPath)) {
+            DiagnosticsInterop.w(
+                TAG,
+                "$operation project $projectId: setManifestUri consolidation failed, keeping journal for retry",
             )
             return false
         }

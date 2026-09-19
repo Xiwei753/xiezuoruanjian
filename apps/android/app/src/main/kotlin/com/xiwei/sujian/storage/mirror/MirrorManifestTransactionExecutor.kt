@@ -29,6 +29,12 @@ internal class MirrorManifestTransactionExecutor(
         val items: Map<ChapterKey, PendingItem>,
         val storage: ReadableMirrorStorage,
         val prebuiltTargetJson: String? = null,
+        // Issue #717 评论 5741567193 A 部分：本次冻结的 committed manifest hash，
+        // 供 resolveManifestOldIdentity 不再 fallback 到公开 _meta/manifest.json。
+        val committedManifestHash: String? = null,
+        // Issue #717 评论 5741567193 A 部分：old-baseline 存在状态。
+        // false 表示首次发布（无旧 manifest）；true 表示有 committed baseline。
+        val oldBaselineExists: Boolean = false,
     )
 
     internal data class ManifestTransactionResult(
@@ -62,6 +68,9 @@ internal class MirrorManifestTransactionExecutor(
                 storage = params.storage,
                 prebuiltTargetJson = params.prebuiltTargetJson,
                 manifestRelativePath = manifestRelativePath,
+                // Issue #717 评论 5741567193 A 部分：传递冻结的 committed baseline 身份。
+                committedManifestHash = params.committedManifestHash,
+                oldBaselineExists = params.oldBaselineExists,
             )
         val oldIdentity = prepareExecutor.resolveManifestOldIdentity(ctx) ?: return null
         val stageContext = prepareExecutor.prepareManifestTargetAndStage(ctx, oldIdentity) ?: return null

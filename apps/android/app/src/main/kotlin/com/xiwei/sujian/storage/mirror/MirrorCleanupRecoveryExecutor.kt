@@ -118,6 +118,10 @@ internal class MirrorCleanupRecoveryExecutor(
                 items = journal.items,
                 storage = storage,
                 prebuiltTargetJson = recoveryManifestTargetJson,
+                // Issue #717 评论 5741567193 A 部分：recovery 用 journal 冻结的
+                // manifestOldRef/manifestOldContentHash，不重新从 state 猜。
+                committedManifestHash = journal.manifestOldContentHash,
+                oldBaselineExists = journal.manifestOldRef != null,
             )
         val manifestResult = publishExecutor.publishManifestWithDesiredTransactional(manifestParams)
         if (manifestResult == null) {

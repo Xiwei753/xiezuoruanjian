@@ -17,6 +17,11 @@ import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
  *    记录的 private state entries 能对上（防止 manifest 与 state 不一致）
  * 5. 用 [ReadableMirrorStateStore.setCommittedManifest] 一次性写入 committed baseline
  *
+ * Issue #717 评论 5741567193 A 部分：迁移成功后同时：
+ * - 写 committed json/hash（[ReadableMirrorStateStore.setCommittedManifest]）
+ * - 写私有 [MirrorTransactionWorkspace.writeManifest]
+ * - 把 [ReadableMirrorStateStore.setManifestUri] 改成私有 [MirrorTransactionWorkspace.manifestFile] 路径
+ *
  * ## 边界
  * - 只负责 mirror runtime state 的版本迁移，不进入普通 publish 逻辑
  * - 不把 Download 正文反向导入 Core
@@ -33,6 +38,7 @@ import com.xiwei.sujian.core.interop.diagnostics.DiagnosticsInterop
 class ReadableMirrorStateMigration(
     private val stateStore: ReadableMirrorStateStore,
     private val storage: ReadableMirrorStorage,
+    private val workspace: MirrorTransactionWorkspace,
 ) {
     /** 迁移结果。 */
     enum class Result {
@@ -77,6 +83,11 @@ class ReadableMirrorStateMigration(
      * 4. 用 mirrorManifestFromJsonStrict 严格解析
      * 5. 校验 manifest chapters 与 stateStore entries 对上
      * 6. 用 stateStore.setCommittedManifest 写入 committed baseline
+     *
+     * Issue #717 评论 5741567193 A 部分：迁移成功后同时：
+     * - 写 committed json/hash（步骤 6）
+     * - 写私有 [MirrorTransactionWorkspace.writeManifest]
+     * - 把 [ReadableMirrorStateStore.setManifestUri] 改成私有 [MirrorTransactionWorkspace.manifestFile] 路径
      */
     private fun migrateFromOldState(): Result {
         val manifestUri = stateStore.getManifestUri()
@@ -110,12 +121,25 @@ class ReadableMirrorStateMigration(
             DiagnosticsInterop.w(TAG, "State migration: manifest vs state entries mismatch")
             return Result.FAILURE
         }
-        // 一次性写入 committed baseline
+        // Issue #717 评论 5741567193 A 部分：一次性写入 committed baseline + 私有 workspace manifest + 收口 manifestUri。
+        // 顺序：先物化私有 manifest 文件，再写 state.json（committed baseline + manifestUri）。
+        // 私有 manifest 写入失败则停止迁移，不写 state.json，保留旧 state 让调用方重试。
+        if (!workspace.writeManifest(manifestJson)) {
+            DiagnosticsInterop.w(TAG, "State migration: workspace.writeManifest failed")
+            return Result.FAILURE
+        }
+        // 写 committed json/hash 到 state.json
         if (!stateStore.setCommittedManifest(manifestJson, computedHash)) {
             DiagnosticsInterop.w(TAG, "State migration: setCommittedManifest failed")
             return Result.FAILURE
         }
-        DiagnosticsInterop.i(TAG, "State migration: successfully migrated committed baseline")
+        // 把 manifestUri 收口到私有 workspace.manifestFile().absolutePath
+        val privateManifestPath = workspace.manifestFile().absolutePath
+        if (!stateStore.setManifestUri(privateManifestPath)) {
+            DiagnosticsInterop.w(TAG, "State migration: setManifestUri consolidation to private path failed")
+            return Result.FAILURE
+        }
+        DiagnosticsInterop.i(TAG, "State migration: successfully migrated committed baseline and consolidated private manifest")
         return Result.SUCCESS
     }
 

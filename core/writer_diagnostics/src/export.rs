@@ -68,7 +68,9 @@ pub fn export_diagnostics(
 
     // 4. 写平台附件。
     // Issue #670 评论 5651816143 修改 4：文本附件写入前统一调用 Rust `redact()` 脱敏。
-    // 对 content 做 UTF-8 解码 → redact → 再编码；非 UTF-8 内容（二进制附件）原样写入。
+    // Issue #717 评论 5741567193：附件脱敏按文件类型分流 —— .json 走结构化
+    // `redact_json`（避免 KV 正则吃掉 JSON 引号），其他 UTF-8 文本走 `redact()`，
+    // 非 UTF-8 原样。
     let mut attachment_names = Vec::new();
     for att in attachments {
         let dest = temp_dir.join(&att.relative_path);
@@ -76,7 +78,7 @@ pub fn export_diagnostics(
             fs::create_dir_all(parent)
                 .map_err(|e| format!("create attachment parent failed: {e}"))?;
         }
-        let redacted_content = redact_attachment_content(&att.content);
+        let redacted_content = redact_attachment_content(&att.content, &att.relative_path);
         fs::write(&dest, &redacted_content)
             .map_err(|e| format!("write attachment {} failed: {e}", att.relative_path))?;
         attachment_names.push(att.relative_path.clone());
@@ -146,16 +148,47 @@ fn write_logs(dest_dir: &Path) -> String {
     }
 }
 
-/// 对附件内容做脱敏 — Issue #670 评论 5651816143 修改 4。
+/// 对附件内容做脱敏 — Issue #670 评论 5651816143 修改 4 / Issue #717 评论 5741567193。
 ///
-/// 文本附件（UTF-8 可解码）走 Rust `redact::redact()` 统一脱敏；
-/// 非 UTF-8 内容（二进制附件，如截图、protobuf）原样返回，不做处理。
-/// 这保证附件脱敏只有一份事实来源（Rust `redact`），不再在 Kotlin 端复制一套规则。
-fn redact_attachment_content(content: &[u8]) -> Vec<u8> {
+/// 按文件类型分流：
+/// - `.json` 后缀（大小写不敏感）：`serde_json::from_slice` → [`redact_json`] →
+///   `to_vec_pretty`，保证脱敏后仍是合法 JSON。解析失败时输出合法的错误 JSON
+///   附件，**不**把坏内容拿去跑文本正则后继续冒充 JSON。
+/// - 其他 UTF-8 文本附件：走 [`redact::redact`]（现有行为，面向自由文本日志）。
+/// - 非 UTF-8（二进制附件，如截图、protobuf）：原样返回。
+///
+/// `relative_path` 用于判断 `.json` 后缀和生成错误 JSON 中的 `original_filename`。
+fn redact_attachment_content(content: &[u8], relative_path: &str) -> Vec<u8> {
+    if relative_path.to_ascii_lowercase().ends_with(".json") {
+        return redact_json_attachment(content, relative_path);
+    }
     match std::str::from_utf8(content) {
         Ok(text) => super::redact::redact(text).into_bytes(),
         Err(_) => content.to_vec(),
     }
+}
+
+/// 对 JSON 附件做结构化脱敏 — Issue #717 评论 5741567193。
+///
+/// 解析成功 → `redact_json` → `to_vec_pretty`；解析失败 → 合法错误 JSON。
+fn redact_json_attachment(content: &[u8], relative_path: &str) -> Vec<u8> {
+    match serde_json::from_slice::<serde_json::Value>(content) {
+        Ok(mut value) => {
+            super::redact::redact_json(&mut value);
+            serde_json::to_vec_pretty(&value).unwrap_or_else(|_| error_attachment_json(relative_path))
+        }
+        Err(_) => error_attachment_json(relative_path),
+    }
+}
+
+/// 生成合法的错误 JSON 附件 — JSON 解析失败时用，确保产出可被 serde_json 解析。
+fn error_attachment_json(relative_path: &str) -> Vec<u8> {
+    let err = serde_json::json!({
+        "error": "diagnostics attachment json parse failed",
+        "original_filename": relative_path,
+    });
+    serde_json::to_vec(&err)
+        .unwrap_or_else(|_| b"{\"error\":\"diagnostics attachment json parse failed\"}".to_vec())
 }
 
 /// 把目录打 zip 包。使用标准 zip crate 的 Deflate 压缩，
@@ -253,7 +286,7 @@ mod tests {
     #[test]
     fn redact_attachment_content_redacts_text() {
         let content = b"token=my-secret-token\nother=safe";
-        let redacted = redact_attachment_content(content);
+        let redacted = redact_attachment_content(content, "logcat.txt");
         let text = std::str::from_utf8(&redacted).unwrap();
         assert!(text.contains("[REDACTED]"), "redacted: {text}");
         assert!(!text.contains("my-secret-token"));
@@ -263,7 +296,7 @@ mod tests {
     #[test]
     fn redact_attachment_content_passes_through_non_utf8() {
         let binary = vec![0u8, 159, 146, 150, 255];
-        let redacted = redact_attachment_content(&binary);
+        let redacted = redact_attachment_content(&binary, "screenshot.png");
         assert_eq!(redacted, binary);
     }
 
@@ -339,6 +372,137 @@ mod tests {
             "zip should contain at least one .log entry"
         );
 
+        super::super::writer::reset_for_test();
+    }
+
+    // ── JSON 附件结构化脱敏测试 — Issue #717 评论 5741567193 ──────────────
+
+    /// 从 zip 中读回指定名称的文件内容。
+    fn read_zip_entry(zip_path: &Path, name: &str) -> Vec<u8> {
+        let zip_file = fs::File::open(zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(zip_file).expect("zip archive should be valid");
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).unwrap();
+            if entry.name() == name {
+                let mut buf = Vec::new();
+                std::io::Read::read_to_end(&mut entry, &mut buf).unwrap();
+                return buf;
+            }
+        }
+        panic!("zip entry {name:?} not found");
+    }
+
+    /// 导出含 `targetId=chapter-body:p:v:c` 的 JSON 附件，读回后必须能被
+    /// serde_json 重新解析，且 targetId 不被破坏（body 在这里是字符串值的一部分）。
+    #[test]
+    fn redact_json_attachment_preserves_structure() {
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        super::super::writer::init(
+            tmp.path().join("log"),
+            "json-struct-test".to_string(),
+            true,
+        );
+        super::super::writer::set_enabled(true);
+        super::super::writer::enqueue(
+            r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
+                .to_string(),
+        );
+        assert!(super::super::writer::flush());
+
+        let out_dir = tmp.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let attachments = vec![PlatformAttachment {
+            relative_path: "editor_snapshot.json".to_string(),
+            content: br#"{"targetId":"chapter-body:p:v:c"}"#.to_vec(),
+        }];
+        let zip_path = export_diagnostics(&out_dir, "test", "json-struct-test", &attachments)
+            .expect("export should succeed");
+
+        let bytes = read_zip_entry(&zip_path, "editor_snapshot.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("redacted json must parse");
+        assert_eq!(
+            value
+                .get("targetId")
+                .and_then(|v| v.as_str()),
+            Some("chapter-body:p:v:c"),
+            "targetId must not be redacted or corrupted",
+        );
+        super::super::writer::reset_for_test();
+    }
+
+    /// JSON 附件中敏感 key 的 value 必须变成 [REDACTED]。
+    #[test]
+    fn redact_json_attachment_redacts_sensitive() {
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        super::super::writer::init(
+            tmp.path().join("log"),
+            "json-redact-test".to_string(),
+            true,
+        );
+        super::super::writer::set_enabled(true);
+        super::super::writer::enqueue(
+            r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
+                .to_string(),
+        );
+        assert!(super::super::writer::flush());
+
+        let out_dir = tmp.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        let attachments = vec![PlatformAttachment {
+            relative_path: "secret.json".to_string(),
+            content: br#"{"token":"secret"}"#.to_vec(),
+        }];
+        let zip_path = export_diagnostics(&out_dir, "test", "json-redact-test", &attachments)
+            .expect("export should succeed");
+
+        let bytes = read_zip_entry(&zip_path, "secret.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("redacted json must parse");
+        assert_eq!(
+            value.get("token").and_then(|v| v.as_str()),
+            Some("[REDACTED]"),
+        );
+        super::super::writer::reset_for_test();
+    }
+
+    /// JSON 附件内容非法时，导出产出一个合法的错误 JSON 附件（能被 serde_json 解析）。
+    #[test]
+    fn redact_json_attachment_parse_failure_emits_valid_json() {
+        let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        super::super::writer::init(
+            tmp.path().join("log"),
+            "json-err-test".to_string(),
+            true,
+        );
+        super::super::writer::set_enabled(true);
+        super::super::writer::enqueue(
+            r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
+                .to_string(),
+        );
+        assert!(super::super::writer::flush());
+
+        let out_dir = tmp.path().join("out");
+        fs::create_dir_all(&out_dir).unwrap();
+        // 非法 JSON：引号被吃掉的真实破坏样本。
+        let broken = br#"{"targetId": "chapter-body=[REDACTED],"#;
+        let attachments = vec![PlatformAttachment {
+            relative_path: "broken.json".to_string(),
+            content: broken.to_vec(),
+        }];
+        let zip_path = export_diagnostics(&out_dir, "test", "json-err-test", &attachments)
+            .expect("export should succeed");
+
+        let bytes = read_zip_entry(&zip_path, "broken.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("error json must be valid JSON");
+        assert!(
+            value.get("error").is_some(),
+            "error json must contain 'error' field, got: {value}",
+        );
         super::super::writer::reset_for_test();
     }
 }

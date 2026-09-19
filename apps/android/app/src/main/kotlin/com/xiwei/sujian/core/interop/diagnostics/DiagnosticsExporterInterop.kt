@@ -143,9 +143,14 @@ object DiagnosticsExporterInterop {
     }
 
     fun getDeviceInfoJson(context: Context): String {
+        // Issue #717 评论 5741567193：不再对 JSON 字符串跑文本正则 redact()。
+        // collectDeviceInfo 只含硬件字段（brand/model/sdkVersion/...），不含敏感
+        // key；对 JSON 跑 KV 正则会把 `chapter-body:...` 里的 `body:` 误认成正文
+        // 键，吃掉引号产出非法 JSON。JSON 脱敏由 Rust redact_json 在附件导出路径
+        // 统一负责；本函数只采集 + Gson 序列化。
         val info = collectDeviceInfo(context)
         val gson = GsonBuilder().setPrettyPrinting().create()
-        return DiagnosticsInterop.redact(gson.toJson(info))
+        return gson.toJson(info)
     }
 
     // ── 附件收集 ──────────────────────────────────────────────────
