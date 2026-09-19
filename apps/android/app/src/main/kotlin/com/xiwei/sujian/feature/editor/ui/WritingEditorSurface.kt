@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.input.InputTransformation
 import androidx.compose.foundation.text.input.OutputTransformation
-import androidx.compose.foundation.text.input.TextFieldBuffer
 import androidx.compose.foundation.text.input.TextFieldLineLimits
 import androidx.compose.foundation.text.input.forEachChange
 import androidx.compose.runtime.Composable
@@ -189,22 +188,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val outputTransformation =
         remember {
             OutputTransformation {
-                // Issue #717 评论 5741910919：西文软断行显示投影。
-                // 在长西文单词内部插入 U+200B，让换行算法可以在这些位置断行。
-                // 不改变 TextFieldState 存储的正文（纯显示层）。
-                // 后续 addStyle 用原始 offset 调用，OutputTransformation 内部维护
-                // raw→display offset 映射，会自动平移到 display offset。
-                applySoftBreakInsertion()
-                // searchHighlights 继续用原始 offset 调 addStyle。
-                latestSearchHighlights.value.forEach { range ->
-                    if (range.start < range.end && range.end <= length) {
-                        addStyle(
-                            SpanStyle(background = latestSearchHighlightColor.value),
-                            range.start,
-                            range.end,
-                        )
-                    }
-                }
+                applyOutputTransformation(
+                    searchHighlights = latestSearchHighlights.value,
+                    searchHighlightColor = latestSearchHighlightColor.value,
+                )
             }
         }
 
@@ -321,14 +308,13 @@ private fun onTextLayoutResult(
     scope: CoroutineScope,
     onSurfaceReady: () -> Boolean,
 ) {
-    val restoreY = viewportState.onLayout(result)
+    // Issue #717 评论 5741910919 / 评论 5742273757 修复4：基于原始正文计算软断行投影，
+    // 把同一份 projection 同时传给 viewportState 和 visualState。
+    val projection = EditorSoftBreakProjection.fromRawText(bridge.state.text.toString())
+    val restoreY = viewportState.onLayout(result, projection)
     if (restoreY != null) {
         scope.launch { viewportState.scrollState.scrollTo(restoreY) }
     }
-    // Issue #717 评论 5741910919：基于原始正文计算软断行投影，
-    // 传给 onAuthoritativeLayout，让 ComposeLayoutSnapshot 的 cursorRect/lineForOffset/boundingBox
-    // 能把 raw offset 转成 display offset 再调 TextLayoutResult。
-    val projection = EditorSoftBreakProjection.fromRawText(bridge.state.text.toString())
     visualState.onAuthoritativeLayout(
         result = result,
         selection = bridge.state.selection,
@@ -386,21 +372,38 @@ private fun isIndentedEmptyParagraphCaretFromTextStyle(
 }
 
 /**
- * Issue #717 评论 5741910919：在 [TextFieldBuffer] 上应用西文软断行显示投影。
+ * Issue #717 评论 5741910919 / 评论 5742273757 修复1+5：OutputTransformation 内容 —
+ * 西文软断行显示投影 + 搜索高亮。
  *
- * 基于原始正文计算长西文单词内部的 U+200B 插入点，用 [TextFieldBuffer.replace]
- * 把每个插入点处的单字符替换为 "U+200B + 原字符"，实现在该字符前插入零宽空格。
+ * 1. 基于原始正文计算软断行投影，从后往前插入 U+200B（修复1：从后往前保证 raw offset 不失效）。
+ * 2. 搜索高亮 range 是 raw 坐标，通过 projection.toDisplayRange 转换成 display 坐标后再 addStyle（修复5）。
+ *
  * 不改变 TextFieldState 存储的正文（纯显示层）。
  */
-private fun TextFieldBuffer.applySoftBreakInsertion() {
+@Suppress("CognitiveComplexMethod")
+private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTransformation(
+    searchHighlights: List<TextRange>,
+    searchHighlightColor: Color,
+) {
     val projection = EditorSoftBreakProjection.fromRawText(originalText)
-    for (insertPoint in projection.insertPoints) {
-        if (insertPoint < length) {
-            val originalChar = originalText[insertPoint]
-            replace(
-                insertPoint,
-                insertPoint + 1,
-                "${EditorSoftBreakProjection.ZERO_WIDTH_SPACE}$originalChar",
+    // 从后往前插入 U+200B，保证前面的 raw offset 不因 buffer 长度变化而失效。
+    // TextFieldBuffer 没有 insert 方法，用 replace(offset, offset, text) 实现插入。
+    for (insertPoint in projection.insertPoints.asReversed()) {
+        if (insertPoint <= length) {
+            replace(insertPoint, insertPoint, EditorSoftBreakProjection.ZERO_WIDTH_SPACE.toString())
+        }
+    }
+    // 搜索高亮 range 是 raw 坐标，通过 projection.toDisplayRange 转换成 display 坐标后再 addStyle。
+    searchHighlights.forEach { range ->
+        val displayRange =
+            projection.toDisplayRange(
+                androidx.compose.ui.text.TextRange(range.start, range.end),
+            )
+        if (displayRange.start < displayRange.end && displayRange.end <= length) {
+            addStyle(
+                SpanStyle(background = searchHighlightColor),
+                displayRange.start,
+                displayRange.end,
             )
         }
     }

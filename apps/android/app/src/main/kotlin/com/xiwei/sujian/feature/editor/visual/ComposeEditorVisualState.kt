@@ -13,6 +13,7 @@ import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -550,10 +551,9 @@ class ComposeEditorVisualState(
                 // 防御性去重：只查本次 handoff 新建的 ghost range，不查历史 rebasedUnits
                 if (del in handoffNewGhostRanges) continue
                 // 从 oldLayout 取旧位置建立静态 ghost
+                // Issue #717 评论 5742273757 修复3：del 是 raw 坐标，通过 snapshot 做 raw→display。
                 val oldBounds =
-                    ComposeVisualRebase.safePathBounds(
-                        oldLayout.result, del,
-                    ) ?: continue
+                    oldLayout.boundsForRawRange(del) ?: continue
                 val oldPosition = Offset(oldBounds.left, oldBounds.top)
                 val ghostKey = allocateHandoffUnitKey()
                 rebasedUnits +=

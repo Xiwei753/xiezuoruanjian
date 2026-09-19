@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
@@ -1715,12 +1716,13 @@ class ComposeVisualTimeline {
 
     /**
      * 从 layout 取 unit 的真实位置（左上角）。
+     * Issue #717 评论 5742273757 修复3：range 是 raw 坐标，通过 [boundsForRawRange] 做 raw→display。
      */
     private fun computeUnitPosition(
         layout: ComposeLayoutSnapshot,
         range: TextRange,
     ): Offset? {
-        val bounds = ComposeVisualRebase.safePathBounds(layout.result, range) ?: return null
+        val bounds = layout.boundsForRawRange(range) ?: return null
         return Offset(bounds.left, bounds.top)
     }
 

@@ -8,6 +8,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -591,8 +592,16 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
 
         // 用 safePathBounds 算 parentNatural（[0,9) 左上角）和 sliceNatural（[8,9) 左上角）
         // active unit 的 layout 就是 layouts[1]（"abcdefghi" 的 layout）
-        val parentBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(0, 9))
-        val sliceBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(8, 9))
+        val parentBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[1], TextRange(0, 0), 0),
+                TextRange(0, 9),
+            )
+        val sliceBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[1], TextRange(0, 0), 0),
+                TextRange(8, 9),
+            )
         assertNotNull("testD: parentBounds ([0,9)) 不应为 null", parentBounds)
         assertNotNull("testD: sliceBounds ([8,9)) 不应为 null", sliceBounds)
         val parentNatural = Offset(parentBounds!!.left, parentBounds.top)
@@ -742,8 +751,16 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
 
         // 用 safePathBounds 算 parentNatural（[0,9) 左上角）和 sliceNatural（[5,9) 左上角）
         // active unit 的 layout 就是 layouts[1]（"abcdefghi" 的 layout）
-        val parentBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(0, 9))
-        val sliceBounds = ComposeVisualRebase.safePathBounds(layouts[1], TextRange(5, 9))
+        val parentBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[1], TextRange(0, 0), 0),
+                TextRange(0, 9),
+            )
+        val sliceBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[1], TextRange(0, 0), 0),
+                TextRange(5, 9),
+            )
         assertNotNull("testE: parentBounds ([0,9)) 不应为 null", parentBounds)
         assertNotNull("testE: sliceBounds ([5,9)) 不应为 null", sliceBounds)
         val parentNatural = Offset(parentBounds!!.left, parentBounds.top)
@@ -842,7 +859,11 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         )
 
         // 断言5：最终 position.to 是 newLayout 的 [4,8) 自然位置
-        val newLayoutBounds = ComposeVisualRebase.safePathBounds(layouts[2], TextRange(4, 8))
+        val newLayoutBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[2], TextRange(0, 0), 0),
+                TextRange(4, 8),
+            )
         assertNotNull("testE: newLayoutBounds ([4,8)) 不应为 null", newLayoutBounds)
         val expectedFinalPosition = Offset(newLayoutBounds!!.left, newLayoutBounds.top)
         assertEquals(
@@ -1109,7 +1130,11 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
             "testF: 60ms 时应存在后 surviving [4,8) child",
             midBackChild,
         )
-        val midNaturalBounds = ComposeVisualRebase.safePathBounds(layouts[2], TextRange(4, 8))
+        val midNaturalBounds =
+            ComposeVisualRebase.safePathBounds(
+                ComposeLayoutSnapshot(layouts[2], TextRange(0, 0), 0),
+                TextRange(4, 8),
+            )
         assertNotNull("testF: midNaturalBounds ([4,8)) 不应为 null", midNaturalBounds)
         val midNaturalLeft = midNaturalBounds!!.left
         val midCurrentDrawLeft = midBackChild!!.position.from.x

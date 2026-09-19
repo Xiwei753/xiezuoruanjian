@@ -1,10 +1,10 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
@@ -458,12 +458,14 @@ internal object ComposeLocalVisualRebase {
     }
 
     /**
-     * 安全获取 path bounds — 复用 [ComposeVisualRebase.safePathBounds]。
+     * 安全获取 path bounds — 复用 [ComposeLayoutSnapshot.boundsForRawRange]。
+     *
+     * Issue #717 评论 5742273757 修复3：通过 snapshot 做 raw→display 映射。
      */
     fun safePathBounds(
-        result: TextLayoutResult,
+        snapshot: ComposeLayoutSnapshot,
         range: TextRange,
-    ): Rect? = ComposeVisualRebase.safePathBounds(result, range)
+    ): Rect? = snapshot.boundsForRawRange(range)
 
     /**
      * #694 评论 5693864609 问题1：把 Core plan 的细粒度 unit 按 local chain 的 stage range 重新排序。

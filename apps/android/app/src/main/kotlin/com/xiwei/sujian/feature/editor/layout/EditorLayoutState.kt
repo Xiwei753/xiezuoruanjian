@@ -6,6 +6,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.ResolvedTextDirection
@@ -140,19 +141,63 @@ fun ComposeLayoutSnapshot.boundingBox(offset: Int): Rect {
 }
 
 /**
+ * Issue #717 评论 5742273757 修复3：raw→display 映射收口入口。
+ *
+ * VisualTextUnit.range / VisualTextUnit.targetRange / ComposeVisualScene.hiddenRanges
+ * 都是正文 raw UTF-16 坐标。在传给 TextLayoutResult 之前必须经过 projection 映射。
+ * 以下三个方法统一收口，所有视觉路径通过 snapshot 做 raw→display，不再逐个地方临时 +offset。
+ *
+ * raw TextRange → display Path。range 来自正文/visual unit（raw 坐标）。
+ */
+fun ComposeLayoutSnapshot.pathForRawRange(rawRange: TextRange): Path {
+    val displayRange = projection.toDisplayRange(rawRange)
+    val textLength = result.layoutInput.text.length
+    return result.getPathForRange(
+        displayRange.start.coerceIn(0, textLength),
+        displayRange.end.coerceIn(0, textLength),
+    )
+}
+
+/** raw TextRange → display Rect?（path bounds）。range 来自正文/visual unit（raw 坐标）。 */
+fun ComposeLayoutSnapshot.boundsForRawRange(rawRange: TextRange): Rect? {
+    val displayRange = projection.toDisplayRange(rawRange)
+    val textLength = result.layoutInput.text.length
+    if (displayRange.start >= displayRange.end) return null
+    if (displayRange.end > textLength) return null
+    return try {
+        result.getPathForRange(displayRange.start, displayRange.end).getBounds()
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+/** raw offset → display line index。offset 来自正文/visual unit（raw 坐标）。 */
+fun ComposeLayoutSnapshot.lineForRawOffset(rawOffset: Int): Int {
+    val displayOffset =
+        projection.rawToDisplay(rawOffset).coerceIn(0, result.layoutInput.text.text.length)
+    return result.getLineForOffset(displayOffset)
+}
+
+/**
  * #644 评论 5462826712 第4节：编辑器视口状态 — 管理滚动/视口。
  *
  * 状态只保存：
  * - [scrollState]：Compose ScrollState
  * - [latestLayout]：最新的 TextLayoutResult
+ * - [latestProjection]：与 [latestLayout] 对应的软断行投影
  * - [pendingAnchor]：待恢复的视口锚点
  * - [restoredForCurrentAnchor]：当前锚点是否已恢复
+ *
+ * Issue #717 评论 5742273757 修复4：保存 projection 做 raw↔display 转换。
+ * snapshotAnchor：display lineStart → projection.displayToRaw() → ViewportAnchor（raw 坐标）
+ * restoreFromAnchor：ViewportAnchor raw → projection.rawToDisplay() → getLineForOffset（display 坐标）
  */
 class EditorViewportState(
     val scrollState: ScrollState,
     initialAnchor: ViewportAnchor?,
 ) {
     private var latestLayout: TextLayoutResult? = null
+    private var latestProjection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity()
     private var pendingAnchor: ViewportAnchor? = initialAnchor
     private var restoredForCurrentAnchor: Boolean = false
 
@@ -160,24 +205,35 @@ class EditorViewportState(
      * #644 评论 5462826712 第4节：系统给出权威布局时调用。
      * 有 pending anchor 时只恢复一次。
      *
+     * Issue #717 评论 5742273757 修复4：接收 projection 参数，保存用于 raw↔display 转换。
+     *
      * @return 需要 scrollTo 的 Y 值；null 表示无需恢复。调用方用 coroutine scope 调 scrollTo。
      */
-    fun onLayout(result: TextLayoutResult): Int? {
+    fun onLayout(
+        result: TextLayoutResult,
+        projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
+    ): Int? {
         latestLayout = result
+        latestProjection = projection
         val anchor = pendingAnchor ?: return null
         if (restoredForCurrentAnchor) return null
         restoredForCurrentAnchor = true
-        return restoreFromAnchor(result, anchor)
+        return restoreFromAnchor(result, anchor, projection)
     }
 
     /**
      * #644 评论 5462826712 第4节：用当前 scrollState + TextLayoutResult 算逻辑锚点。
+     *
+     * Issue #717 评论 5742273757 修复4：display lineStart → projection.displayToRaw() → ViewportAnchor（raw 坐标）。
      */
     fun snapshotAnchor(): ViewportAnchor? {
         val layout = latestLayout ?: return null
+        val projection = latestProjection
         val scrollY = scrollState.value
         val line = layout.getLineForVerticalPosition(scrollY.toFloat())
-        val textOffsetUtf16 = layout.getLineStart(line)
+        val displayLineStart = layout.getLineStart(line)
+        // display offset → raw offset，存入 anchor 的是 raw 坐标
+        val textOffsetUtf16 = projection.displayToRaw(displayLineStart)
         val lineTop = layout.getLineTop(line)
         val lineBottom = layout.getLineBottom(line)
         val fraction =
@@ -195,13 +251,19 @@ class EditorViewportState(
     /**
      * #644 评论 5462826712 第4节：用新 layout 反算滚动位置。
      *
+     * Issue #717 评论 5742273757 修复4：ViewportAnchor raw → projection.rawToDisplay() → getLineForOffset（display 坐标）。
+     *
      * @return 需要 scrollTo 的 Y 值；null 表示 anchor 无效。
      */
     private fun restoreFromAnchor(
         layout: TextLayoutResult,
         anchor: ViewportAnchor,
+        projection: EditorSoftBreakProjection,
     ): Int? {
-        val line = layout.getLineForOffset(anchor.textOffsetUtf16)
+        // raw offset → display offset，再调 getLineForOffset
+        val displayOffset =
+            projection.rawToDisplay(anchor.textOffsetUtf16).coerceIn(0, layout.layoutInput.text.text.length)
+        val line = layout.getLineForOffset(displayOffset)
         val lineTop = layout.getLineTop(line)
         val lineBottom = layout.getLineBottom(line)
         val lineHeight = lineBottom - lineTop

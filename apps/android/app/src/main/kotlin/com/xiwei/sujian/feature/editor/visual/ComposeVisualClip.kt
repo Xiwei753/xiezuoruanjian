@@ -1,6 +1,8 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import com.xiwei.sujian.feature.editor.layout.lineForRawOffset
 
 /**
  * #708 评论 5727808906：抽取的共享 clip fraction 计算 —
@@ -102,7 +104,9 @@ internal object ComposeVisualClip {
         //   * cursorAfterGlyphLine（光标在 ghost 行下方，还没退到这一行）→ fraction = 1（字仍完整可见）
         val (glyphLineTop, glyphLineBottom) =
             try {
-                val glyphLine = unit.layout.result.getLineForOffset(unit.range.start)
+                // Issue #717 评论 5742273757 修复3：unit.range 是 raw 坐标，
+                // 通过 snapshot.lineForRawOffset 做 raw→display 映射。
+                val glyphLine = unit.layout.lineForRawOffset(unit.range.start)
                 // #708 评论 5728507555：行 top/bottom 也要加 dy，和 glyph bounds 用同一坐标系。
                 (unit.layout.result.getLineTop(glyphLine) + dy) to
                     (unit.layout.result.getLineBottom(glyphLine) + dy)
@@ -136,10 +140,11 @@ internal object ComposeVisualClip {
      * #708 评论 5727808906：安全取 unit 的 glyph bounds —
      * 用 unit 当前 layout + range 取 path bounds。
      *
+     * Issue #717 评论 5742273757 修复3：unit.range 是 raw 坐标，
+     * 通过 [boundsForRawRange] 做 raw→display 映射。
+     *
      * 与旧 [ComposeVisualTimeline.safePathBoundsForUnit] 逻辑一致，
      * 抽到本共享 object 供 timeline 和 handoff 共用。
-     * 底层调用 [ComposeVisualRebase.safePathBounds]（已是 internal static）。
      */
-    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? =
-        ComposeVisualRebase.safePathBounds(unit.layout.result, unit.range)
+    private fun safePathBoundsForUnit(unit: VisualTextUnit): Rect? = unit.layout.boundsForRawRange(unit.range)
 }

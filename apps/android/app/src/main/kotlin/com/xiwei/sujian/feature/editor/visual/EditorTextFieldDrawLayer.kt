@@ -18,14 +18,15 @@ import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.layout.pathForRawRange
 
 /**
  * #698 评论 5698296237 / 5697612595 / 5699401353：编辑器绘制链根改 —
@@ -180,14 +181,14 @@ private fun DrawScope.buildHiddenPath(
     scrollY: Int,
 ): Path? {
     if (hiddenRanges.isEmpty() || layout == null) return null
-    val result = layout.result
-    val textLength = result.layoutInput.text.length
+    val textLength = layout.result.layoutInput.text.length
     var combined: Path? = null
     for (range in hiddenRanges) {
         if (range.start >= range.end) continue
-        if (range.end > textLength) continue
+        // Issue #717 评论 5742273757 修复3：hiddenRanges 是 raw 坐标，
+        // 通过 snapshot.pathForRawRange 做 raw→display 映射再取 path。
         try {
-            val path: Path = result.getPathForRange(range.start, range.end)
+            val path: Path = layout.pathForRawRange(range)
             // #698 评论 5700812160：给 addPath 传视口偏移，把正文坐标 path 换算到当前视口坐标，
             // 与 drawTranslatedRangeText（translate.y - scrollY）、drawVisualCursorRect
             // （rect.top/bottom - scrollY）统一坐标系。
@@ -225,7 +226,10 @@ private fun DrawScope.drawVisualScene(
     for (unit in scene.units) {
         val range = unit.range
         if (range.start >= range.end) continue
-        val result = unit.layout.result
+        // Issue #717 评论 5742273757 修复3：unit.range 是 raw 坐标，
+        // 通过 snapshot 做 raw→display 映射后再访问 TextLayoutResult。
+        val snapshot = unit.layout
+        val result = snapshot.result
         if (range.end > result.layoutInput.text.length) continue
         // alpha 已由 timeline 算好，直接读 unit.alpha.from（sample 后 from == 当前值）
         val rawAlpha = unit.alpha.from.coerceIn(0f, 1f)
@@ -251,7 +255,8 @@ private fun DrawScope.drawVisualScene(
         if (clipFraction <= 0f) continue
         if (targetRange != null) {
             // 存活 unit：在新 layout 的真实位置 + timeline 算好的偏移
-            val targetBounds = safePathBounds(result, targetRange) ?: continue
+            // Issue #717 评论 5742273757 修复3：targetRange 是 raw 坐标，通过 snapshot 做 raw→display。
+            val targetBounds = unit.layout.boundsForRawRange(targetRange) ?: continue
             val translate =
                 Offset(
                     currentPosition.x - targetBounds.left,
@@ -270,7 +275,7 @@ private fun DrawScope.drawVisualScene(
                     null
                 }
             drawTranslatedRangeText(
-                result = result,
+                snapshot = unit.layout,
                 range = targetRange,
                 translate = translate,
                 alpha = alpha,
@@ -280,7 +285,8 @@ private fun DrawScope.drawVisualScene(
             )
         } else {
             // ghost unit：在旧 layout 的真实位置淡出
-            val sourceBounds = safePathBounds(result, range) ?: continue
+            // Issue #717 评论 5742273757 修复3：range 是 raw 坐标，通过 snapshot 做 raw→display。
+            val sourceBounds = unit.layout.boundsForRawRange(range) ?: continue
             val translate =
                 Offset(
                     currentPosition.x - sourceBounds.left,
@@ -304,7 +310,7 @@ private fun DrawScope.drawVisualScene(
                     null
                 }
             drawTranslatedRangeText(
-                result = result,
+                snapshot = unit.layout,
                 range = range,
                 translate = translate,
                 alpha = alpha,
@@ -347,19 +353,18 @@ private fun DrawScope.drawVisualCursorRect(
     )
 }
 
-/** 安全获取 path bounds — result 为 null 或 range 无效时返回 null。 */
+/**
+ * 安全获取 path bounds — snapshot 为 null 或 range 无效时返回 null。
+ *
+ * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
+ * 通过 [boundsForRawRange] 做 raw→display 映射。
+ */
 private fun safePathBounds(
-    result: TextLayoutResult?,
+    snapshot: ComposeLayoutSnapshot?,
     range: TextRange,
 ): Rect? {
-    if (result == null) return null
-    if (range.start >= range.end) return null
-    if (range.end > result.layoutInput.text.length) return null
-    return try {
-        result.getPathForRange(range.start, range.end).getBounds()
-    } catch (_: Throwable) {
-        null
-    }
+    if (snapshot == null) return null
+    return snapshot.boundsForRawRange(range)
 }
 
 /**
@@ -396,10 +401,13 @@ internal fun computeRestingCursorRect(
  * #703 评论 B：[clipRect] 用于空间进度驱动吞吐字 —
  * 非 null 时用 clipPath(clipRect) 裁切 glyph 可见区域，
  * 使光标经过哪里文字才出现/消失到哪里。
+ *
+ * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
+ * range 是 raw 坐标，通过 [pathForRawRange] 做 raw→display 映射再取 path。
  */
 @Suppress("LongParameterList")
 private fun DrawScope.drawTranslatedRangeText(
-    result: TextLayoutResult,
+    snapshot: ComposeLayoutSnapshot,
     range: TextRange,
     translate: Offset,
     alpha: Float,
@@ -407,10 +415,10 @@ private fun DrawScope.drawTranslatedRangeText(
     textColor: Color,
     clipRect: Rect? = null,
 ) {
+    val result = snapshot.result
     if (range.start >= range.end) return
-    if (range.end > result.layoutInput.text.length) return
     if (alpha <= 0f) return
-    val path = result.getPathForRange(range.start, range.end)
+    val path = snapshot.pathForRawRange(range)
     withTransform({
         translate(
             left = translate.x,

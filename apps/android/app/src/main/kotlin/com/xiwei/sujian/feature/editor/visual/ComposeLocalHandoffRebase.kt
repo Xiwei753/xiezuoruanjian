@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 
 /**
  * #708 评论 5725706551：本地 handoff scene rebase —
@@ -242,12 +243,9 @@ internal object ComposeLocalHandoffRebase {
                 position = TimedOffset(sliceScreenPos, sliceScreenPos, 0L, 0L),
             )
         val naturalBounds =
-            ComposeVisualRebase.safePathBounds(
-                sliceUnit.layout.result,
-                sliceUnit.range,
-            )
+            sliceUnit.layout.boundsForRawRange(sliceUnit.range)
         val parentBounds =
-            ComposeVisualRebase.safePathBounds(unit.layout.result, unit.range)
+            unit.layout.boundsForRawRange(unit.range)
         // #708 评论 5733321056 修复3：fallback 策略抽取到 chooseSliceFractionBranch —
         // 降低本方法圈复杂度。
         return chooseSliceFractionBranch(
