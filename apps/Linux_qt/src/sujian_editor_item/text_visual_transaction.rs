@@ -319,8 +319,7 @@ impl PreparedCursorVisualTrack {
             bottom: top + h,
             // Issue #712 评论 5739517945 第 2 项: baseline_y 从 from 到 to 插值，
             // 不再直接取 to.baseline_y，消除垂直动画跳终点。
-            baseline_y: self.from.baseline_y
-                + (self.to.baseline_y - self.from.baseline_y) * eased,
+            baseline_y: self.from.baseline_y + (self.to.baseline_y - self.from.baseline_y) * eased,
         }
     }
 
@@ -338,8 +337,7 @@ impl PreparedCursorVisualTrack {
             bottom: top + h,
             // Issue #712 评论 5739517945 第 2 项: baseline_y 从 from 到 to 插值，
             // 不再直接取 to.baseline_y，消除垂直动画跳终点。
-            baseline_y: self.from.baseline_y
-                + (self.to.baseline_y - self.from.baseline_y) * eased,
+            baseline_y: self.from.baseline_y + (self.to.baseline_y - self.from.baseline_y) * eased,
         }
     }
 
