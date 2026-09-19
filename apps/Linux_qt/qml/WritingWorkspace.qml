@@ -37,7 +37,7 @@ import Sujian 1.0
 
 Rectangle {
     id: root
-    property var dt: null
+    required property var dt
     property var backendRef: null
     property var starMapController: null
     // Issue #709 评论 issue-body-709: 传入 themeController 给 EditorController，

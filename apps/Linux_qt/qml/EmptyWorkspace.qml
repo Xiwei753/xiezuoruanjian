@@ -16,7 +16,7 @@ import Qt.labs.platform as Platform
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
 
     readonly property color _bg: dt.bg
     readonly property color _primaryContainer: dt.primaryContainer

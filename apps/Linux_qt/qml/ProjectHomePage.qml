@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    property var dt: null
+    required property var dt
     property var backendRef: null
     property var projectBackendRef: null
     property var appState: ({})

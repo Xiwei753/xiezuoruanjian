@@ -17,7 +17,7 @@ Item {
     implicitHeight: mainCol.implicitHeight + resolvedDt.sp32
     property int lastSyncResultLen: -1
     property double lastSyncStatusLogTime: 0
-    property var dt: null
+    required property var dt
     // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
     // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
     readonly property var resolvedDt: dt

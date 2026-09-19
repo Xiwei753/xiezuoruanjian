@@ -14,7 +14,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
     property string title: ""
     property string subtitle: ""
     property string actionText: ""
