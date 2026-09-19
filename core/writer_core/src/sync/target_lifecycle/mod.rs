@@ -609,6 +609,47 @@ pub fn write_catalog_once(
     })
 }
 
+/// candidate 与远端 record 的 LWW 比较结果（可复用纯函数）。
+///
+/// 供 `apply_lifecycle_record` 和 `full_sync::transfer_live_project` 共用同一份比较逻辑，
+/// 不在 full_sync 里复制第二套比较规则。
+#[derive(Debug, Clone)]
+pub enum LifecycleCandidateComparison {
+    /// candidate 严格赢（时间大，或时间相同 device_id 字典序大）。远端无记录也算 CandidateWins。
+    CandidateWins,
+    /// candidate 与远端 record 完全相等（同 op/同 lww_time/同 device_id/同 target_id/同 remote_prefix/同 active_generation）。
+    AlreadyCurrent,
+    /// 远端严格赢，携带远端真实赢的 record（含 op）。
+    RemoteWins(TargetLifecycleRecord),
+}
+
+/// 纯函数：比较 candidate 与远端 record 的 LWW 关系。
+///
+/// 复用 `lww_record_wins` 和 `records_equal`，包含完全相等判断、时间戳比较和 device_id tie-break。
+/// - `remote_record = None` → `CandidateWins`（远端无记录）；
+/// - candidate 严格赢 → `CandidateWins`；
+/// - 完全相等 → `AlreadyCurrent`；
+/// - 远端严格赢 → `RemoteWins(existing)`。
+///
+/// 本函数不做任何远端 IO，纯比较。`apply_lifecycle_record` 和 `transfer_live_project` 都复用本函数。
+pub fn compare_lifecycle_candidate(
+    candidate: &TargetLifecycleRecord,
+    remote_record: Option<&TargetLifecycleRecord>,
+) -> LifecycleCandidateComparison {
+    match remote_record {
+        None => LifecycleCandidateComparison::CandidateWins,
+        Some(existing) => {
+            if lww_record_wins(candidate, existing) {
+                LifecycleCandidateComparison::CandidateWins
+            } else if records_equal(candidate, existing) {
+                LifecycleCandidateComparison::AlreadyCurrent
+            } else {
+                LifecycleCandidateComparison::RemoteWins(existing.clone())
+            }
+        }
+    }
+}
+
 ///   provider-neutral 原子决策接口。
 ///
 /// 把一条 candidate lifecycle record 通过 CAS 写入远端 catalog。每次 CAS 冲突后：
@@ -638,24 +679,11 @@ pub fn apply_lifecycle_record(
     let current_candidate = candidate.clone();
 
     for attempt in 0..max_retries {
-        // 1. 检查 candidate 与当前 remote record 的 LWW 关系。
+        // 1. 检查 candidate 与当前 remote record 的 LWW 关系（复用纯函数）。
         let remote_record = find_record(&current_snapshot.catalog, &current_candidate.target_id);
-        let candidate_wins = match &remote_record {
-            None => true, // 远端无记录，candidate 胜出
-            Some(existing) => lww_record_wins(&current_candidate, existing),
-        };
-
-        if !candidate_wins {
-            // remote 不输给 candidate — 可能完全相等或严格赢。
-            let Some(existing) = remote_record else {
-                // candidate_wins == false 蕴含 remote_record.is_some()，防御性 Retry。
-                return TargetLifecycleApplyResult::Retry(crate::Error::Io(std::io::Error::other(
-                    "apply_lifecycle_record: invariant violation — candidate_wins=false but remote_record=None",
-                )));
-            };
-            // 完全相等 → AlreadyCurrent；
-            // 远端严格赢 → RemoteWinner { record: existing }（携带真实 op）。
-            if records_equal(&current_candidate, existing) {
+        match compare_lifecycle_candidate(&current_candidate, remote_record) {
+            LifecycleCandidateComparison::CandidateWins => { /* 继续走 merge + CAS */ }
+            LifecycleCandidateComparison::AlreadyCurrent => {
                 log::info!(
                     "[sync] apply_lifecycle_record: AlreadyCurrent target={} — \
                      candidate identical to remote record",
@@ -663,18 +691,20 @@ pub fn apply_lifecycle_record(
                 );
                 return TargetLifecycleApplyResult::AlreadyCurrent(current_snapshot.clone());
             }
-            log::info!(
-                "[sync] apply_lifecycle_record: RemoteWinner target={} \
-                 candidate_time={} remote_time={} remote_op={:?} — aborting write",
-                current_candidate.target_id,
-                record_lww_time(&current_candidate),
-                record_lww_time(existing),
-                existing.op,
-            );
-            return TargetLifecycleApplyResult::RemoteWinner {
-                snapshot: current_snapshot.clone(),
-                record: existing.clone(),
-            };
+            LifecycleCandidateComparison::RemoteWins(existing) => {
+                log::info!(
+                    "[sync] apply_lifecycle_record: RemoteWinner target={} \
+                     candidate_time={} remote_time={} remote_op={:?} — aborting write",
+                    current_candidate.target_id,
+                    record_lww_time(&current_candidate),
+                    record_lww_time(&existing),
+                    existing.op,
+                );
+                return TargetLifecycleApplyResult::RemoteWinner {
+                    snapshot: current_snapshot.clone(),
+                    record: existing,
+                };
+            }
         }
 
         // 2. candidate 仍赢 → merge → write_catalog_once 单次 CAS。

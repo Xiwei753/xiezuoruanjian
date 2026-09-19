@@ -181,6 +181,9 @@ pub(super) fn transfer_live_project(
             //    状态。不用 outcome.conflicts 判断——第二次 merge 会 skip 已在
             //    state.conflicted_files 中的路径，outcome.conflicts 可能为空，
             //    但 staging 的 SyncState 仍保留着未解决冲突。
+            //
+            //    Issue #716 评论 5740946551：merge 仍先做，但 publish 前移到 LWW 判定之后。
+            //    candidate 不赢时直接收敛，不 publish，避免明知 winner 没变仍重复 upload。
             let merge_outcome: crate::error::Result<
                 Option<(
                     crate::sync::lww::LwwMergeOutcome,
@@ -225,77 +228,8 @@ pub(super) fn transfer_live_project(
                 Ok(None)
             })();
 
-            // 2. 构造 generation prefix。
-            let gen_remote_prefix = match super::generation::generation_remote_prefix(
-                &planned.target.remote_prefix,
-                &generation_id,
-            ) {
-                Ok(p) => p,
-                Err(e) => return (sync_result_from_error(e), None, None),
-            };
-            log::info!(
-                "[sync] run_transfer: LiveProject {} (attempt {}) — uploading to generation prefix {}",
-                planned.target.remote_prefix,
-                attempt + 1,
-                gen_remote_prefix
-            );
-
-            // 3. publish generation。
-            //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
-            //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
-            let content_result = match merge_outcome {
-                Ok(Some((outcome, unresolved_conflicts))) => {
-                    // 用当前 staging 的完整未解决冲突状态重建 retained_conflict。
-                    // CAS 重试后冲突仍未解决 → 继续返回 PartialConflict；
-                    // 这一轮确实没有未解决冲突 → 才允许回到 Success。
-                    if !unresolved_conflicts.is_empty() {
-                        let mut r = SyncResult::success();
-                        r.status = SyncStatus::PartialConflict;
-                        r.conflicts = unresolved_conflicts;
-                        r.downloaded_files = outcome.downloaded_files.clone();
-                        r.local_deletes = outcome.remote_delete_paths.clone();
-                        r.remote_deletes = outcome.local_deletes.clone();
-                        r.overwritten_files = outcome.overwritten_files.clone();
-                        r.ignored_files = outcome.ignored_files.clone();
-                        retained_conflict = Some(r);
-                    } else {
-                        retained_conflict = None;
-                    }
-                    super::generation::publish_generation(
-                        provider,
-                        sync_root,
-                        &gen_remote_prefix,
-                        &generation_id,
-                        planned.project_id.as_deref().unwrap_or(""),
-                        planned.target.scope,
-                        &plan.sync_policy,
-                        plan.force_sync,
-                        Some(&outcome),
-                    )
-                }
-                Ok(None) => super::generation::publish_generation(
-                    provider,
-                    sync_root,
-                    &gen_remote_prefix,
-                    &generation_id,
-                    planned.project_id.as_deref().unwrap_or(""),
-                    planned.target.scope,
-                    &plan.sync_policy,
-                    plan.force_sync,
-                    None,
-                ),
-                Err(e) => sync_result_from_error(e),
-            };
-
-            let content_ok = matches!(
-                content_result.status,
-                SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
-            );
-            if !content_ok {
-                return (content_result, None, None);
-            }
-
-            // 4. read_post_transfer_lww → 构造 candidate → CAS。
+            // 2. read_post_transfer_lww → 构造 candidate（winner 身份只来自 merge 后真实 manifest，
+            //    不伪造 lww_time+1 / device_id / 新时间戳）。
             let post_transfer_root = planned
                 .staging_root
                 .as_deref()
@@ -319,40 +253,201 @@ pub(super) fn transfer_live_project(
             )
             .with_active_generation(&generation_id);
 
-            match crate::sync::target_lifecycle::apply_lifecycle_record(
-                provider,
-                catalog_snapshot,
-                candidate,
+            // 3. publish 前用复用函数做 LWW 判定。candidate 不赢直接收敛，不 publish。
+            let remote_record = crate::sync::target_lifecycle::find_record(
+                &catalog_snapshot.catalog,
+                &planned.target.remote_prefix,
+            );
+            match crate::sync::target_lifecycle::compare_lifecycle_candidate(
+                &candidate,
+                remote_record,
             ) {
-                TargetLifecycleApplyResult::Applied(persisted) => {
-                    *catalog_snapshot = persisted;
-                    return (retained_conflict.unwrap_or(content_result), None, None);
+                crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins => {
+                    // 只有 candidate 严格赢（或远端无 record）才真正 publish。
+                    let gen_remote_prefix = match super::generation::generation_remote_prefix(
+                        &planned.target.remote_prefix,
+                        &generation_id,
+                    ) {
+                        Ok(p) => p,
+                        Err(e) => return (sync_result_from_error(e), None, None),
+                    };
+                    log::info!(
+                        "[sync] run_transfer: LiveProject {} (attempt {}) — uploading to generation prefix {}",
+                        planned.target.remote_prefix,
+                        attempt + 1,
+                        gen_remote_prefix
+                    );
+
+                    // publish generation。
+                    //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
+                    //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
+                    let content_result = match merge_outcome {
+                        Ok(Some((outcome, unresolved_conflicts))) => {
+                            // 用当前 staging 的完整未解决冲突状态重建 retained_conflict。
+                            // CAS 重试后冲突仍未解决 → 继续返回 PartialConflict；
+                            // 这一轮确实没有未解决冲突 → 才允许回到 Success。
+                            if !unresolved_conflicts.is_empty() {
+                                let mut r = SyncResult::success();
+                                r.status = SyncStatus::PartialConflict;
+                                r.conflicts = unresolved_conflicts;
+                                r.downloaded_files = outcome.downloaded_files.clone();
+                                r.local_deletes = outcome.remote_delete_paths.clone();
+                                r.remote_deletes = outcome.local_deletes.clone();
+                                r.overwritten_files = outcome.overwritten_files.clone();
+                                r.ignored_files = outcome.ignored_files.clone();
+                                retained_conflict = Some(r);
+                            } else {
+                                retained_conflict = None;
+                            }
+                            super::generation::publish_generation(
+                                provider,
+                                sync_root,
+                                &gen_remote_prefix,
+                                &generation_id,
+                                planned.project_id.as_deref().unwrap_or(""),
+                                planned.target.scope,
+                                &plan.sync_policy,
+                                plan.force_sync,
+                                Some(&outcome),
+                            )
+                        }
+                        Ok(None) => super::generation::publish_generation(
+                            provider,
+                            sync_root,
+                            &gen_remote_prefix,
+                            &generation_id,
+                            planned.project_id.as_deref().unwrap_or(""),
+                            planned.target.scope,
+                            &plan.sync_policy,
+                            plan.force_sync,
+                            None,
+                        ),
+                        Err(e) => sync_result_from_error(e),
+                    };
+
+                    let content_ok = matches!(
+                        content_result.status,
+                        SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
+                    );
+                    if !content_ok {
+                        return (content_result, None, None);
+                    }
+
+                    // 4. CAS apply_lifecycle_record。
+                    match crate::sync::target_lifecycle::apply_lifecycle_record(
+                        provider,
+                        catalog_snapshot,
+                        candidate,
+                    ) {
+                        TargetLifecycleApplyResult::Applied(persisted) => {
+                            *catalog_snapshot = persisted;
+                            return (retained_conflict.unwrap_or(content_result), None, None);
+                        }
+                        TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
+                            *catalog_snapshot = persisted;
+                            return (retained_conflict.unwrap_or(content_result), None, None);
+                        }
+                        TargetLifecycleApplyResult::RemoteWinner {
+                            snapshot: persisted,
+                            record: winner,
+                        } => {
+                            *catalog_snapshot = persisted;
+                            match winner.op {
+                                crate::sync::types::TargetOp::Upsert => {
+                                    log::info!(
+                                        "[sync] run_transfer: LiveProject RemoteWinner(Upsert) {} (attempt {}) — re-merging with latest snapshot",
+                                        planned.target.remote_prefix,
+                                        attempt + 1
+                                    );
+                                    // CAS 期间远端 snapshot 真正变化才下一轮。
+                                    // 旧未引用 generation 留给 generation GC 清理。
+                                    continue;
+                                }
+                                crate::sync::types::TargetOp::Delete => {
+                                    log::info!(
+                                        "[sync] run_transfer: LiveProject RemoteWinner(Delete) {} — cleaning remote + deferring to Commit",
+                                        planned.target.remote_prefix
+                                    );
+                                    let cleanup_result = delete_all_remote_objects(
+                                        provider,
+                                        &planned.target.remote_prefix,
+                                    );
+                                    let cleanup_ok = matches!(
+                                        cleanup_result.status,
+                                        SyncStatus::Success | SyncStatus::NoChanges
+                                    );
+                                    if !cleanup_ok {
+                                        let expected_time =
+                                            crate::sync::target_lifecycle::record_lww_time(&winner);
+                                        let expected_device = &winner.device_id;
+                                        let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
+                                            &plan.app_data_root, &planned.target.remote_prefix,
+                                            planned.project_id.as_deref().unwrap_or(""),
+                                            &format!("LiveProject RemoteWinner(Delete) cleanup failed: {:?}", cleanup_result.status),
+                                            expected_time, expected_device,
+                                        );
+                                        if let Err(e) = record_result {
+                                            return (sync_result_from_error(e), None, None);
+                                        } else {
+                                            return (cleanup_result, None, None);
+                                        }
+                                    } else {
+                                        let action = planned.project_id.as_ref().and_then(|pid| {
+                                            planned.live_lww.as_ref().map(|lww| {
+                                                crate::sync::types::LocalLifecycleCommitAction::DeleteProject {
+                                                    project_id: pid.clone(),
+                                                    expected_local_lww: crate::sync::types::LiveTargetLwwSerde::from_lww(lww),
+                                                }
+                                            })
+                                        });
+                                        return (
+                                            retained_conflict.unwrap_or(content_result),
+                                            None,
+                                            action,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        TargetLifecycleApplyResult::Retry(e) => {
+                            return (sync_result_from_error(e), None, None);
+                        }
+                    }
                 }
-                TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
-                    *catalog_snapshot = persisted;
-                    return (retained_conflict.unwrap_or(content_result), None, None);
+                crate::sync::target_lifecycle::LifecycleCandidateComparison::AlreadyCurrent => {
+                    // candidate 与远端完全相等，不需要 publish。
+                    log::info!(
+                        "[sync] run_transfer: LiveProject AlreadyCurrent {} (attempt {}) — candidate identical to remote record, skipping publish",
+                        planned.target.remote_prefix,
+                        attempt + 1
+                    );
+                    return (
+                        retained_conflict.unwrap_or(SyncResult::no_changes()),
+                        None,
+                        None,
+                    );
                 }
-                TargetLifecycleApplyResult::RemoteWinner {
-                    snapshot: persisted,
-                    record: winner,
-                } => {
-                    *catalog_snapshot = persisted;
+                crate::sync::target_lifecycle::LifecycleCandidateComparison::RemoteWins(winner) => {
+                    // remote 严格赢且 candidate 不赢，这一轮无法靠 publish 改变 winner。
                     match winner.op {
                         crate::sync::types::TargetOp::Upsert => {
                             log::info!(
-                                "[sync] run_transfer: LiveProject RemoteWinner(Upsert) {} (attempt {}) — re-merging with latest snapshot",
+                                "[sync] run_transfer: LiveProject RemoteWins(Upsert) {} (attempt {}) — remote strictly wins, converging without publish",
                                 planned.target.remote_prefix,
                                 attempt + 1
                             );
-                            // 写回最新 snapshot，重新读取 visible generation，
-                            // 对同一个 staging 继续 merge + publish + CAS。
-                            // 旧未引用 generation 留给 generation GC 清理。
-                            continue;
+                            // 直接按最新 remote 收敛，不再 publish。
+                            return (
+                                retained_conflict.unwrap_or(SyncResult::no_changes()),
+                                None,
+                                None,
+                            );
                         }
                         crate::sync::types::TargetOp::Delete => {
                             log::info!(
-                                "[sync] run_transfer: LiveProject RemoteWinner(Delete) {} — cleaning remote + deferring to Commit",
-                                planned.target.remote_prefix
+                                "[sync] run_transfer: LiveProject RemoteWins(Delete) {} (attempt {}) — cleaning remote + deferring to Commit",
+                                planned.target.remote_prefix,
+                                attempt + 1
                             );
                             let cleanup_result =
                                 delete_all_remote_objects(provider, &planned.target.remote_prefix);
@@ -367,7 +462,7 @@ pub(super) fn transfer_live_project(
                                 let record_result = crate::sync::pending_remote_cleanup::record_pending_remote_cleanup(
                                     &plan.app_data_root, &planned.target.remote_prefix,
                                     planned.project_id.as_deref().unwrap_or(""),
-                                    &format!("LiveProject RemoteWinner(Delete) cleanup failed: {:?}", cleanup_result.status),
+                                    &format!("LiveProject RemoteWins(Delete) cleanup failed: {:?}", cleanup_result.status),
                                     expected_time, expected_device,
                                 );
                                 if let Err(e) = record_result {
@@ -384,13 +479,14 @@ pub(super) fn transfer_live_project(
                                         }
                                     })
                                 });
-                                return (retained_conflict.unwrap_or(content_result), None, action);
+                                return (
+                                    retained_conflict.unwrap_or(SyncResult::no_changes()),
+                                    None,
+                                    action,
+                                );
                             }
                         }
                     }
-                }
-                TargetLifecycleApplyResult::Retry(e) => {
-                    return (sync_result_from_error(e), None, None);
                 }
             }
         }
