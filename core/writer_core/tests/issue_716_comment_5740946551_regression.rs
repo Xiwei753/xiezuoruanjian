@@ -7,6 +7,10 @@
 //! 4. CAS 期间 snapshot 变化才下一轮：publish 前判定 candidate 赢，但 CAS 返回 RemoteWinner(Upsert)
 //!    → 下一轮重新 merge + 判定，candidate 不赢 → 不再 publish → 返回 NoChanges。publish_count == 1。
 //! 5. RemoteWinner(Delete) 语义不变：remote record op == Delete 且严格赢 → 清远端对象，不 publish generation。
+//!
+//! Issue #716 评论 5741695768 追加 2 个场景：
+//! 6. remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict → publish_count == 0，PartialConflict，冲突列表非空。
+//! 7. remote Upsert 严格赢 + merge 返回错误 → publish_count == 0，保持错误/RecoverableError，绝不是 NoChanges。
 
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
@@ -445,5 +449,286 @@ fn regression_remote_winner_delete_semantics_unchanged() {
         ),
         "应返回 DeleteProject action，实际 {:?}",
         action
+    );
+}
+
+/// 场景 7 专用：在读取特定路径时返回错误的 provider。
+///
+/// 包装 MemoryProvider，当 `read(path)` 匹配 `fail_read_path` 时返回 `ProviderError::Network`。
+/// 用于测试 merge 读远端 manifest 失败时，merge_outcome 归一化是否立即返回错误，
+/// 而不是被 RemoteWins(Upsert)/AlreadyCurrent 吞成 NoChanges。
+struct FailingReadProvider {
+    inner: MemoryProvider,
+    generation_writes: AtomicUsize,
+    generation_meta_writes: AtomicUsize,
+    fail_read_path: String,
+}
+
+impl FailingReadProvider {
+    fn new(inner: MemoryProvider, fail_read_path: String) -> Self {
+        Self {
+            inner,
+            generation_writes: AtomicUsize::new(0),
+            generation_meta_writes: AtomicUsize::new(0),
+            fail_read_path,
+        }
+    }
+
+    fn publish_count(&self) -> usize {
+        self.generation_meta_writes.load(Ordering::SeqCst) / 2
+    }
+}
+
+impl SyncProvider for FailingReadProvider {
+    fn capabilities(&self) -> SyncCapabilities {
+        self.inner.capabilities()
+    }
+    fn list(&self, prefix: &str) -> Result<Vec<RemoteEntry>, ProviderError> {
+        self.inner.list(prefix)
+    }
+    fn read(&self, path: &str) -> Result<Option<RemoteObject>, ProviderError> {
+        if path == self.fail_read_path {
+            return Err(ProviderError::Network {
+                reason: "injected read failure for scenario 7".to_string(),
+            });
+        }
+        self.inner.read(path)
+    }
+    fn write(
+        &self,
+        path: &str,
+        content: &[u8],
+        precondition: WritePrecondition,
+    ) -> Result<RemoteVersion, ProviderError> {
+        if path.contains(GENERATION_SUBDIR) {
+            self.generation_writes.fetch_add(1, Ordering::SeqCst);
+            if path.ends_with(GENERATION_META_FILENAME) {
+                self.generation_meta_writes.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        self.inner.write(path, content, precondition)
+    }
+    fn delete(&self, path: &str, precondition: DeletePrecondition) -> Result<(), ProviderError> {
+        self.inner.delete(path, precondition)
+    }
+}
+
+/// 构造本地 staging（正文冲突版）：manifest LWW = (lww_time, device_id)，
+/// 有一个 `volumes/v1/chapters/chapter.md` 文件（UserTextDocument 路径）。
+///
+/// 用 `volumes/v1/chapters/chapter.md` 而非 `volumes/v1/chapter.md`，
+/// 因为 `classify_content_path` 对含 `/chapters/` 的 .md 路径返回 `UserTextDocument`，
+/// 走三路比较，双方内容不同时产生 `BothChanged` 冲突。
+fn build_staging_doc_conflict(
+    tmp: &TempDir,
+    lww_time: i64,
+    device_id: &str,
+    chapter_content: &[u8],
+) -> std::path::PathBuf {
+    let staging_root = tmp.path().join("staging-p1");
+    std::fs::create_dir_all(staging_root.join("volumes").join("v1").join("chapters")).unwrap();
+    std::fs::write(
+        staging_root
+            .join("volumes")
+            .join("v1")
+            .join("chapters")
+            .join("chapter.md"),
+        chapter_content,
+    )
+    .unwrap();
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    let staging_manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "volumes/v1/chapters/chapter.md".to_string(),
+            content_hash: format!("{:x}", md5::compute(chapter_content)),
+            updated_at_ms: lww_time,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("manifest.sync.json"),
+        serde_json::to_vec(&staging_manifest).unwrap(),
+    )
+    .unwrap();
+    staging_root
+}
+
+/// 在远端 generation 放一个 visible source（manifest + chapter 文件）。
+///
+/// `gen_prefix` 形如 `projects/p1/__generations__/gen_existing`。
+/// 放完后 merge 能从该 generation 读到远端 manifest 和 chapter。
+fn write_remote_generation(
+    provider: &dyn SyncProvider,
+    gen_prefix: &str,
+    chapter_content: &[u8],
+    lww_time: i64,
+    device_id: &str,
+) {
+    let chapter_path = format!("{}/volumes/v1/chapters/chapter.md", gen_prefix);
+    provider
+        .write(
+            &chapter_path,
+            chapter_content,
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+    let manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "volumes/v1/chapters/chapter.md".to_string(),
+            content_hash: format!("{:x}", md5::compute(chapter_content)),
+            updated_at_ms: lww_time,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    let manifest_path = format!("{}/app-meta/sync/manifest.sync.json", gen_prefix);
+    provider
+        .write(
+            &manifest_path,
+            &serde_json::to_vec(&manifest).unwrap(),
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+}
+
+/// 场景 6（Issue #716 评论 5741695768）：remote Upsert 严格赢 + 本轮 merge 产生 unresolved conflict
+/// → publish_count == 0，PartialConflict，冲突列表非空。
+///
+/// 修复前：merge_outcome 只在 CandidateWins 分支消费，RemoteWins(Upsert) 直接返回
+/// `retained_conflict.unwrap_or(NoChanges)` = NoChanges，冲突被丢失。
+/// 修复后：merge_outcome 在 lifecycle winner 比较前归一化，retained_conflict 先被
+/// 更新为 PartialConflict，RemoteWins(Upsert) 返回 `retained_conflict.unwrap_or(NoChanges)` = PartialConflict。
+#[test]
+fn regression_remote_upsert_wins_with_merge_conflict_preserves_partial_conflict() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放一个 visible source（chapter 内容与本地不同 → BothChanged 冲突）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging：chapter 内容与远端不同 → BothChanged 冲突
+    let staging_root = build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "remote Upsert 严格赢时不应 publish"
+    );
+    assert!(
+        matches!(
+            transfer.targets[0].result.status,
+            SyncStatus::PartialConflict
+        ),
+        "merge 产生冲突 + remote Upsert 严格赢应返回 PartialConflict，实际 {:?}",
+        transfer.targets[0].result.status
+    );
+    assert!(
+        !transfer.targets[0].result.conflicts.is_empty(),
+        "冲突列表不应为空，实际 {:?}",
+        transfer.targets[0].result.conflicts
+    );
+}
+
+/// 场景 7（Issue #716 评论 5741695768）：remote Upsert 严格赢 + merge 返回错误
+/// → publish_count == 0，保持错误/RecoverableError，绝不是 NoChanges。
+///
+/// 修复前：merge_outcome 只在 CandidateWins 分支消费，RemoteWins(Upsert) 直接返回
+/// `retained_conflict.unwrap_or(NoChanges)` = NoChanges，merge 错误被吞掉。
+/// 修复后：merge_outcome 在 lifecycle winner 比较前归一化，Err(e) 立即返回
+/// `sync_result_from_error(e)` → RecoverableError 或 FatalError。
+#[test]
+fn regression_remote_upsert_wins_with_merge_error_preserves_error() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放一个 visible source（manifest + chapter）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    // FailingReadProvider 在读取远端 generation 的 manifest 时返回错误
+    let fail_path = format!("{}/app-meta/sync/manifest.sync.json", remote_gen_prefix);
+    let provider = FailingReadProvider::new(provider_inner, fail_path);
+
+    let tmp = TempDir::new().unwrap();
+    let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "merge 错误应立即返回，不应 publish"
+    );
+    assert!(
+        matches!(
+            transfer.targets[0].result.status,
+            SyncStatus::RecoverableError(_) | SyncStatus::FatalError(_)
+        ),
+        "merge 返回错误应保持错误状态，绝不应是 NoChanges，实际 {:?}",
+        transfer.targets[0].result.status
     );
 }

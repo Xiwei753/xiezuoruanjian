@@ -169,7 +169,10 @@ pub(super) fn transfer_live_project(
 
         // 保留冲突状态：多次 merge 可能产生冲突，最终 CAS 成功后仍要返回 PartialConflict，
         // 不让 CAS 竞争错误覆盖成泛化 RecoverableError。
-        let mut retained_conflict: Option<SyncResult> = None;
+        // Issue #716 评论 5741695768：retained_conflict 在每次循环迭代开始时由
+        // merge_outcome 归一化代码无条件赋值（Err 直接 return，Ok 分支都赋值），
+        // 因此无需初始化。
+        let mut retained_conflict: Option<SyncResult>;
 
         for attempt in 0..MAX_CAS_RETRIES {
             let generation_id = uuid::Uuid::new_v4().to_string();
@@ -228,6 +231,39 @@ pub(super) fn transfer_live_project(
                 Ok(None)
             })();
 
+            // 归一化 merge_outcome：在 lifecycle winner 比较之前统一处理 merge 结果。
+            // Issue #716 评论 5741695768：merge 结果先收口，再做 publish 前 winner 判定。
+            // - Err(e) 立即返回错误，任何 winner 分支都不能吞掉 merge 错误。
+            // - Ok(Some((outcome, unresolved_conflicts))) 先更新 retained_conflict，
+            //   保存 outcome 供 CandidateWins 后续 publish 使用。
+            // - Ok(None) 表示无需 merge（远端无 visible source），retained_conflict 清掉。
+            let merge_outcome_opt: Option<crate::sync::lww::LwwMergeOutcome> = match merge_outcome {
+                Err(e) => return (sync_result_from_error(e), None, None),
+                Ok(None) => {
+                    retained_conflict = None;
+                    None
+                }
+                Ok(Some((outcome, unresolved_conflicts))) => {
+                    // 用当前 staging 的完整未解决冲突状态重建 retained_conflict。
+                    // CAS 重试后冲突仍未解决 → 继续返回 PartialConflict；
+                    // 这一轮确实没有未解决冲突 → 才允许回到 Success。
+                    if !unresolved_conflicts.is_empty() {
+                        let mut r = SyncResult::success();
+                        r.status = SyncStatus::PartialConflict;
+                        r.conflicts = unresolved_conflicts;
+                        r.downloaded_files = outcome.downloaded_files.clone();
+                        r.local_deletes = outcome.remote_delete_paths.clone();
+                        r.remote_deletes = outcome.local_deletes.clone();
+                        r.overwritten_files = outcome.overwritten_files.clone();
+                        r.ignored_files = outcome.ignored_files.clone();
+                        retained_conflict = Some(r);
+                    } else {
+                        retained_conflict = None;
+                    }
+                    Some(outcome)
+                }
+            };
+
             // 2. read_post_transfer_lww → 构造 candidate（winner 身份只来自 merge 后真实 manifest，
             //    不伪造 lww_time+1 / device_id / 新时间戳）。
             let post_transfer_root = planned
@@ -281,37 +317,21 @@ pub(super) fn transfer_live_project(
                     // publish generation。
                     //    冲突时仍 publish + CAS（非冲突文件需同步），但记录 PartialConflict 状态，
                     //    CAS 成功后返回 PartialConflict 而非 Success，确保冲突信息不被丢失。
-                    let content_result = match merge_outcome {
-                        Ok(Some((outcome, unresolved_conflicts))) => {
-                            // 用当前 staging 的完整未解决冲突状态重建 retained_conflict。
-                            // CAS 重试后冲突仍未解决 → 继续返回 PartialConflict；
-                            // 这一轮确实没有未解决冲突 → 才允许回到 Success。
-                            if !unresolved_conflicts.is_empty() {
-                                let mut r = SyncResult::success();
-                                r.status = SyncStatus::PartialConflict;
-                                r.conflicts = unresolved_conflicts;
-                                r.downloaded_files = outcome.downloaded_files.clone();
-                                r.local_deletes = outcome.remote_delete_paths.clone();
-                                r.remote_deletes = outcome.local_deletes.clone();
-                                r.overwritten_files = outcome.overwritten_files.clone();
-                                r.ignored_files = outcome.ignored_files.clone();
-                                retained_conflict = Some(r);
-                            } else {
-                                retained_conflict = None;
-                            }
-                            super::generation::publish_generation(
-                                provider,
-                                sync_root,
-                                &gen_remote_prefix,
-                                &generation_id,
-                                planned.project_id.as_deref().unwrap_or(""),
-                                planned.target.scope,
-                                &plan.sync_policy,
-                                plan.force_sync,
-                                Some(&outcome),
-                            )
-                        }
-                        Ok(None) => super::generation::publish_generation(
+                    //    Issue #716 评论 5741695768：merge_outcome 已在前面归一化，
+                    //    这里只负责根据归一化后的 outcome 决定 publish 参数。
+                    let content_result = match &merge_outcome_opt {
+                        Some(outcome) => super::generation::publish_generation(
+                            provider,
+                            sync_root,
+                            &gen_remote_prefix,
+                            &generation_id,
+                            planned.project_id.as_deref().unwrap_or(""),
+                            planned.target.scope,
+                            &plan.sync_policy,
+                            plan.force_sync,
+                            Some(outcome),
+                        ),
+                        None => super::generation::publish_generation(
                             provider,
                             sync_root,
                             &gen_remote_prefix,
@@ -322,7 +342,6 @@ pub(super) fn transfer_live_project(
                             plan.force_sync,
                             None,
                         ),
-                        Err(e) => sync_result_from_error(e),
                     };
 
                     let content_ok = matches!(
