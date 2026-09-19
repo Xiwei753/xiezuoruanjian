@@ -25,7 +25,9 @@ struct SharedLogger;
 
 impl log::Log for SharedLogger {
     fn log(&self, record: &log::Record<'_>) {
-        if !LOGGER_INSTALLED.load(Ordering::SeqCst) {
+        if !LOGGER_INSTALLED.load(Ordering::SeqCst)
+            || !self.enabled(record.metadata())
+        {
             return;
         }
         let event = DiagnosticEvent::from_log_record(record, DiagnosticOrigin::App);

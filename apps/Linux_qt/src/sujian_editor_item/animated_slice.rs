@@ -44,8 +44,8 @@ pub(crate) enum AnimatedSliceKind {
 /// - `from_document_rect`/`to_document_rect`：文档坐标，不包含当前滚动偏移。
 /// - `byte_start`/`byte_end`：用于事务冲突判断和静态层隐藏，不参与逐帧排版。
 /// - `conceal_to_left_edge`：仅对 `DeleteConceal` 有效。true 表示向左边缘收缩（保留左段，
-///   右段先消失——Delete 键场景，光标在文字左侧）；false 表示向右边缘收缩（保留右段，
-///   左段先消失——Backspace 场景，光标在文字右侧）。
+///   右段先消失——Backspace 场景，光标在文字右侧）；false 表示向右边缘收缩（保留右段，
+///   左段先消失——Delete 键场景，光标在文字左侧）。
 #[derive(Clone, Debug)]
 pub(crate) struct AnimatedSlice {
     pub kind: AnimatedSliceKind,
@@ -120,8 +120,8 @@ impl AnimatedSlice {
     /// 创建 Delete 吞字切片。
     ///
     /// 文字始终在 `from_document_rect` 位置，动画进度控制可见纹理宽度从 100% → 0%。
-    /// `conceal_to_left_edge` 决定收进方向：true 向左边缘收缩（保留左段，Delete 键），
-    /// false 向右边缘收缩（保留右段，Backspace）。
+    /// `conceal_to_left_edge` 决定收进方向：true 向左边缘收缩（保留左段，Backspace），
+    /// false 向右边缘收缩（保留右段，Delete 键）。
     /// `cursor_x`/`cursor_y` 保留在签名中以减少调用方改动，但不再用于动画终点。
     pub fn delete_conceal(
         _key: VisualTransactionKey,
