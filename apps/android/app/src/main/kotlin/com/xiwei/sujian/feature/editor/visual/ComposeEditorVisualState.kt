@@ -121,12 +121,28 @@ class ComposeEditorVisualState(
     private var lastResolvedSelection: TextRange? = null
 
     /**
-     * #713 评论 5739986801：最新待执行 cursor redirect 目标 —
+     * #713 评论 5740578331：待执行的纯 selection cursor redirect —
+     * 保存 fromRect（selection 改变前屏幕真正可见的 cursor）和 targetRect，
+     * 以及视觉所有权已接管标记。
+     * onInputSnapshotResolved 检测到纯 selection 变化时立即建立，
+     * drainPendingPatchesAtFrame 在帧边界消费。
+     */
+    private data class PendingSelectionRedirect(
+        val fromRect: Rect,
+        val targetRect: Rect,
+    )
+
+    /**
+     * #713 评论 5739986801：最新待执行 cursor redirect —
      * 只保留最新目标，不排队堆积。
      * 由 onInputSnapshotResolved 在纯 selection 变化时设置，
      * 由 drainPendingPatchesAtFrame 在文字 patch 处理完毕后消费。
+     *
+     * #713 评论 5740578331：类型从 Rect? 改成 PendingSelectionRedirect? —
+     * 同时保存 fromRect（真实起点）和 targetRect，drain 时用 redirectCursor 返回的
+     * actualStartRect 记诊断事件，保证 fromX/fromY 与屏幕真实起点一致。
      */
-    private var pendingSelectionRedirect: Rect? = null
+    private var pendingSelectionRedirect: PendingSelectionRedirect? = null
 
     /**
      * #713 评论 5740279418：上一次 sample 的 cursorAnimating 状态 —
@@ -395,7 +411,28 @@ class ComposeEditorVisualState(
         if (isPureSelectionChange && snapshot.selection.collapsed) {
             val targetRect = _latestLayout.value?.cursorRect(snapshot.selection.end)
             if (targetRect != null) {
-                pendingSelectionRedirect = targetRect
+                // #713 评论 5740578331：计算 fromRect — selection 改变前屏幕真正可见的 cursor
+                val currentScene = _visualScene.value
+                val fromRect =
+                    if (currentScene.cursorOwnedByVisual && currentScene.cursorRect != null) {
+                        // 视觉层已接管光标（动画中/上一笔 redirect pending）— 用当前屏幕真实位置
+                        currentScene.cursorRect!!
+                    } else {
+                        // 静止状态 — 旧 selection 对应的光标位置
+                        computeRestingCursorRect(_latestLayout.value, lastResolvedSelection) ?: targetRect
+                    }
+                pendingSelectionRedirect = PendingSelectionRedirect(fromRect = fromRect, targetRect = targetRect)
+                // #713 评论 5740578331：立即把 draw snapshot 的 cursor 保持在 fromRect，
+                // 并标记 cursorOwnedByVisual=true — 防止下一帧 drain 之前 draw 层先瞬移到 target。
+                // 旧 bug：pending redirect 期间 cursorAnimating=false，draw 层直接画到新 selection，
+                // 下一帧 redirect 才从旧位置开始，表现为"先瞬移到目标 -> 下一帧回旧位置 -> 再平滑过去"。
+                val ownedScene =
+                    currentScene.copy(
+                        cursorRect = fromRect,
+                        cursorOwnedByVisual = true,
+                    )
+                _visualScene.update { ownedScene }
+                drawSnapshotState = drawSnapshotState.copy(scene = ownedScene)
                 // #713 评论 5740279418：唤醒帧循环 —
                 // 不更新 patchVersion 时 LaunchedEffect(patchVersion) 不会重启，
                 // draw 层帧循环不会启动，redirect 不会被 drainPendingPatchesAtFrame 消费，
@@ -575,6 +612,8 @@ class ComposeEditorVisualState(
             // 导致 split 后三段文字共用父块空间进度，出现吞字/吐字错位。
             // 修复：rebase 后对每个 child 用自己的 layout/range/role 单独算 clip fraction，
             // 不把 parent 的一个 fraction 无脑复制给所有 child。
+            // #713 评论 5740578331：handoffCursorRect 计算处现在 cursorOwnedByVisual 标记视觉所有权，
+            // cursorAnimating 只表示 track 是否在动 — 详见 ComposeVisualScene.cursorOwnedByVisual 注释。
             val handoffCursor = handoffCursorRect ?: scene.cursorRect
             val rebasedClipFractions =
                 if (handoffCursor != null) {
@@ -672,6 +711,12 @@ class ComposeEditorVisualState(
                     patch.motionPolicy.effective().textEnabled &&
                         patch.motionPolicy.effective().cursorEnabled &&
                         patch.motionPolicy.effective().coordinated,
+                // #713 评论 5740578331：handoff 首帧光标所有权 —
+                // handoff 首帧有 cursor motion（handoffCursorRect != null）时视觉层接管光标，
+                // 防止 draw 层在 T0 因 cursorAnimating=false 直接画新位置（先闪一帧再回旧位置动画）。
+                // 或原本就已接管（动画中连续 handoff）— 保持 true 让后续 handoff 继续从屏幕真实位置接。
+                // 无 cursor motion 且原本静止时保持 false，draw 层回 computeRestingCursorRect。
+                cursorOwnedByVisual = handoffCursorRect != null || scene.cursorOwnedByVisual,
             )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
@@ -1229,28 +1274,27 @@ class ComposeEditorVisualState(
         if (pendingPatches.isEmpty()) {
             // #713 评论 5739986801：没有文字 patch 但可能有 pending selection redirect —
             // 仍需处理 cursor redirect，不能直接返回。
-            val redirectTarget = pendingSelectionRedirect
-            if (redirectTarget != null) {
+            val redirect = pendingSelectionRedirect
+            if (redirect != null) {
                 pendingSelectionRedirect = null
                 val policy = currentMotionPolicy ?: EditorMotionPolicy()
                 val durationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
-                val fallbackFromRect =
-                    _visualScene.value.cursorRect
-                        ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
-                        ?: redirectTarget
-                // #713 评论 5740279418：selection redirect 在帧边界真正拿到 from/to 后记诊断事件
+                // #713 评论 5740578331：用 redirectCursor 返回的真实 startRect 记诊断 —
+                // redirectCursor 内部若已有 cursorChannel，真实起点是 sampleCursorRect，
+                // 不是外层算的 fallbackFromRect。快速点击/动画中重定向时两者不同。
+                val actualStartRect =
+                    visualTimeline.redirectCursor(
+                        frameTimeNanos = frameTimeNanos,
+                        fallbackFromRect = redirect.fromRect,
+                        targetRect = redirect.targetRect,
+                        durationNanos = durationNanos,
+                    )
                 EditorDiagnosticsEvents.editorCursorRedirect(
                     reason = "selection",
-                    fromX = fallbackFromRect.left,
-                    fromY = fallbackFromRect.top,
-                    toX = redirectTarget.left,
-                    toY = redirectTarget.top,
-                )
-                visualTimeline.redirectCursor(
-                    frameTimeNanos = frameTimeNanos,
-                    fallbackFromRect = fallbackFromRect,
-                    targetRect = redirectTarget,
-                    durationNanos = durationNanos,
+                    fromX = actualStartRect.left,
+                    fromY = actualStartRect.top,
+                    toX = redirect.targetRect.left,
+                    toY = redirect.targetRect.top,
                 )
             }
             return emptyList()
@@ -1286,28 +1330,27 @@ class ComposeEditorVisualState(
         // 首帧 scene 由 publishLocalHandoffScene 直接发布，无需在此清理。
         // #713 评论 5739986801：先处理文字 patch；再处理最新 selection cursor redirect；
         // selection redirect 最后应用，保证"用户刚点的新位置"不会又被前一笔迟到的文字 patch 抢回去。
-        val redirectTarget = pendingSelectionRedirect
-        if (redirectTarget != null) {
+        val redirect = pendingSelectionRedirect
+        if (redirect != null) {
             pendingSelectionRedirect = null
             val policy = currentMotionPolicy ?: EditorMotionPolicy()
             val durationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
-            val fallbackFromRect =
-                _visualScene.value.cursorRect
-                    ?: computeRestingCursorRect(_latestLayout.value, lastResolvedSelection)
-                    ?: redirectTarget
-            // #713 评论 5740279418：selection redirect 在帧边界真正拿到 from/to 后记诊断事件
+            // #713 评论 5740578331：用 redirectCursor 返回的真实 startRect 记诊断 —
+            // redirectCursor 内部若已有 cursorChannel，真实起点是 sampleCursorRect，
+            // 不是外层算的 fallbackFromRect。快速点击/动画中重定向时两者不同。
+            val actualStartRect =
+                visualTimeline.redirectCursor(
+                    frameTimeNanos = frameTimeNanos,
+                    fallbackFromRect = redirect.fromRect,
+                    targetRect = redirect.targetRect,
+                    durationNanos = durationNanos,
+                )
             EditorDiagnosticsEvents.editorCursorRedirect(
                 reason = "selection",
-                fromX = fallbackFromRect.left,
-                fromY = fallbackFromRect.top,
-                toX = redirectTarget.left,
-                toY = redirectTarget.top,
-            )
-            visualTimeline.redirectCursor(
-                frameTimeNanos = frameTimeNanos,
-                fallbackFromRect = fallbackFromRect,
-                targetRect = redirectTarget,
-                durationNanos = durationNanos,
+                fromX = actualStartRect.left,
+                fromY = actualStartRect.top,
+                toX = redirect.targetRect.left,
+                toY = redirect.targetRect.top,
             )
         }
         return listOf(framePatch)
@@ -1349,15 +1392,31 @@ class ComposeEditorVisualState(
      * @return 当前应绘制的视觉场景。
      */
     fun sampleVisualScene(frameTimeNanos: Long): ComposeVisualScene {
-        val scene = visualTimeline.sample(frameTimeNanos)
+        val rawScene = visualTimeline.sample(frameTimeNanos)
+        // #713 评论 5740578331：pending redirect 期间视觉层已接管光标 —
+        // 保持 fromRect 和 cursorOwnedByVisual=true，不被 timeline sample（可能 cursorAnimating=false）覆盖。
+        // drain 先于 sample 调用，drain 消费 redirect 后 pendingSelectionRedirect=null，
+        // 此时 timeline cursor 动画已启动，rawScene.cursorOwnedByVisual=true，不进此分支。
+        // 此分支覆盖 drain 之前（理论上不会发生，因为 drain 先调用）和 drain 未消费的边界情况。
+        val scene =
+            if (pendingSelectionRedirect != null) {
+                rawScene.copy(
+                    cursorRect = pendingSelectionRedirect!!.fromRect,
+                    cursorOwnedByVisual = true,
+                )
+            } else {
+                rawScene
+            }
         _visualScene.update { scene }
         // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene —
         // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
         drawSnapshotState = drawSnapshotState.copy(scene = scene)
         // #713 评论 5740279418：检测 cursorAnimating: true -> false 边沿 —
         // 只记一次 editor.cursor.settled，不逐帧刷。
-        if (lastSampledCursorAnimating && !scene.cursorAnimating) {
-            val settledRect = scene.cursorRect
+        // cursorAnimating 边沿检测基于 rawScene（timeline 自身动画状态），
+        // 不是 scene（可能被 pending redirect 改成 fromRect）。
+        if (lastSampledCursorAnimating && !rawScene.cursorAnimating) {
+            val settledRect = rawScene.cursorRect
             if (settledRect != null) {
                 EditorDiagnosticsEvents.editorCursorSettled(
                     selectionEnd = lastResolvedSelection?.end ?: -1,
@@ -1366,7 +1425,7 @@ class ComposeEditorVisualState(
                 )
             }
         }
-        lastSampledCursorAnimating = scene.cursorAnimating
+        lastSampledCursorAnimating = rawScene.cursorAnimating
         return scene
     }
 

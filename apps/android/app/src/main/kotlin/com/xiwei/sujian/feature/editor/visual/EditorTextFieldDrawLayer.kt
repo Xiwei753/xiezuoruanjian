@@ -514,10 +514,16 @@ internal fun DrawScope.drawCurrentEditorFrame(
     if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
         val cursorRectValue =
             if (drawsVisualCursor) {
-                // #713 评论 5739986801：只有活动 cursor track 才能覆盖 live selection。
-                // cursorAnimating=true 表示当前 cursor track 正在拥有可见位置；
-                // cursorAnimating=false 时 scene.cursorRect 是残留旧坐标，不应覆盖 live selection。
-                if (scene.cursorAnimating) {
+                // #713 评论 5740578331：用 cursorOwnedByVisual 决定光标来源 —
+                // cursorOwnedByVisual=true 表示视觉层已接管光标（handoff 首帧 / selection redirect 已排队 / timeline 正在跑），
+                // draw 层画 scene.cursorRect；
+                // cursorOwnedByVisual=false 时动画真正结束且无 pending handoff/redirect，
+                // draw 层回 computeRestingCursorRect(latestLayout, liveSelection)。
+                // cursorAnimating 只表示 track 是否在动，不再决定光标来源 —
+                // 旧 bug：cursorAnimating=false 时 handoff 首帧 T0 / pending redirect 期间 draw 层
+                // 直接忽略 scene.cursorRect 先画新位置，下一帧 timeline 启动又从旧位置动画，
+                // 表现为"新位置先闪一帧 -> 回旧位置 -> 再动画到新位置"。
+                if (scene.cursorOwnedByVisual) {
                     scene.cursorRect
                 } else {
                     computeRestingCursorRect(latestLayout, liveSelection)
