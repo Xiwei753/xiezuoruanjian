@@ -2,9 +2,12 @@
 
 package com.xiwei.sujian.feature.editor.layout
 
+import androidx.compose.ui.text.TextRange
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -16,6 +19,9 @@ import org.robolectric.annotation.Config
  * 覆盖：精确内容匹配、同长度不同内容不误匹配、多次 record 取最新、
  * 环形缓冲区淘汰、空 displayText、未 record 时 find 返回 null、
  * U+200B 在 rawText 中不被误删。
+ *
+ * Issue #717 评论 5743745219：补充覆盖 rawSelection / compositionActive 随 Match 正确带回，
+ * 以及不同 record 的 rawSelection 不会串版本。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
@@ -25,13 +31,22 @@ class EditorSoftBreakLayoutBindingTest {
         val holder = EditorSoftBreakLayoutBinding()
         val projection = EditorSoftBreakProjection.fromRawText("abc")
         val displayText = "a\u200Bb\u200Bc"
+        val rawSelection = TextRange(1, 2)
 
-        holder.record(rawText = "abc", projection = projection, displayText = displayText)
+        holder.record(
+            rawText = "abc",
+            projection = projection,
+            displayText = displayText,
+            rawSelection = rawSelection,
+            compositionActive = false,
+        )
 
         val match = holder.findForDisplayText(displayText)
         assertNotNull(match)
         assertEquals("abc", match!!.rawText)
         assertEquals(projection, match.projection)
+        assertEquals(rawSelection, match.rawSelection)
+        assertFalse(match.compositionActive)
     }
 
     @Test
@@ -39,7 +54,13 @@ class EditorSoftBreakLayoutBindingTest {
         val holder = EditorSoftBreakLayoutBinding()
         val projection = EditorSoftBreakProjection.fromRawText("abcdef")
 
-        holder.record(rawText = "abcdef", projection = projection, displayText = "abcdef")
+        holder.record(
+            rawText = "abcdef",
+            projection = projection,
+            displayText = "abcdef",
+            rawSelection = TextRange(0, 0),
+            compositionActive = false,
+        )
 
         // "abcxef" 长度相同但内容不同，不应误匹配
         val match = holder.findForDisplayText("abcxef")
@@ -52,8 +73,20 @@ class EditorSoftBreakLayoutBindingTest {
         val p1 = EditorSoftBreakProjection.identity()
         val p2 = EditorSoftBreakProjection.fromRawText("v2text")
 
-        holder.record(rawText = "v1", projection = p1, displayText = "d1")
-        holder.record(rawText = "v2", projection = p2, displayText = "d2")
+        holder.record(
+            rawText = "v1",
+            projection = p1,
+            displayText = "d1",
+            rawSelection = TextRange(0, 1),
+            compositionActive = false,
+        )
+        holder.record(
+            rawText = "v2",
+            projection = p2,
+            displayText = "d2",
+            rawSelection = TextRange(1, 2),
+            compositionActive = true,
+        )
 
         val matchD2 = holder.findForDisplayText("d2")
         assertNotNull(matchD2)
@@ -73,7 +106,13 @@ class EditorSoftBreakLayoutBindingTest {
 
         // CAPACITY = 16，record 17 次，最早的（displayText="d0"）被淘汰
         for (i in 0..16) {
-            holder.record(rawText = "raw$i", projection = projection, displayText = "d$i")
+            holder.record(
+                rawText = "raw$i",
+                projection = projection,
+                displayText = "d$i",
+                rawSelection = TextRange(i, i),
+                compositionActive = false,
+            )
         }
 
         // 最早的第 0 条已被淘汰
@@ -95,7 +134,13 @@ class EditorSoftBreakLayoutBindingTest {
         val holder = EditorSoftBreakLayoutBinding()
         val identity = EditorSoftBreakProjection.identity()
 
-        holder.record(rawText = "", projection = identity, displayText = "")
+        holder.record(
+            rawText = "",
+            projection = identity,
+            displayText = "",
+            rawSelection = TextRange(0, 0),
+            compositionActive = false,
+        )
 
         val match = holder.findForDisplayText("")
         assertNotNull(match)
@@ -118,12 +163,78 @@ class EditorSoftBreakLayoutBindingTest {
         val projection = EditorSoftBreakProjection.fromRawText(rawText)
         val displayText = "a\u200Bb\u200Bb"
 
-        holder.record(rawText = rawText, projection = projection, displayText = displayText)
+        holder.record(
+            rawText = rawText,
+            projection = projection,
+            displayText = displayText,
+            rawSelection = TextRange(0, 3),
+            compositionActive = false,
+        )
 
         val match = holder.findForDisplayText(displayText)
         assertNotNull(match)
         // rawText 保留了用户原文的 U+200B，没有被误删
         assertEquals("a\u200Bb", match!!.rawText)
         assertEquals(projection, match.projection)
+    }
+
+    @Test
+    fun record_andFindForDisplayText_carriesRawSelectionAndComposition() {
+        val holder = EditorSoftBreakLayoutBinding()
+        val projection = EditorSoftBreakProjection.fromRawText("hello")
+        val displayText = "h\u200Be\u200Bl\u200Bl\u200Bo"
+        val rawSelection = TextRange(2, 4)
+
+        holder.record(
+            rawText = "hello",
+            projection = projection,
+            displayText = displayText,
+            rawSelection = rawSelection,
+            compositionActive = true,
+        )
+
+        val match = holder.findForDisplayText(displayText)
+        assertNotNull(match)
+        // Issue #717 评论 5743745219：rawSelection / compositionActive 必须随 Match 正确带回
+        assertEquals(rawSelection, match!!.rawSelection)
+        assertTrue(match.compositionActive)
+        assertEquals("hello", match.rawText)
+        assertEquals(projection, match.projection)
+    }
+
+    @Test
+    fun findForDisplayText_differentRecords_keepDistinctRawSelection() {
+        val holder = EditorSoftBreakLayoutBinding()
+        val projection = EditorSoftBreakProjection.identity()
+
+        // 两次 record 用不同的 rawSelection / compositionActive，displayText 也不同
+        val selection1 = TextRange(0, 1)
+        val selection2 = TextRange(3, 5)
+        holder.record(
+            rawText = "rawA",
+            projection = projection,
+            displayText = "dispA",
+            rawSelection = selection1,
+            compositionActive = false,
+        )
+        holder.record(
+            rawText = "rawB",
+            projection = projection,
+            displayText = "dispB",
+            rawSelection = selection2,
+            compositionActive = true,
+        )
+
+        val matchA = holder.findForDisplayText("dispA")
+        assertNotNull(matchA)
+        assertEquals(selection1, matchA!!.rawSelection)
+        assertFalse(matchA.compositionActive)
+        assertEquals("rawA", matchA.rawText)
+
+        val matchB = holder.findForDisplayText("dispB")
+        assertNotNull(matchB)
+        assertEquals(selection2, matchB!!.rawSelection)
+        assertTrue(matchB.compositionActive)
+        assertEquals("rawB", matchB.rawText)
     }
 }

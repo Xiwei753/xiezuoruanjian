@@ -189,6 +189,8 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
 
+    // Issue #717 评论 5743745219：bridge 整个编辑器生命周期稳定不变（= params.bridge），
+    // 直接闭包捕获即可，不加入 remember key，保持"OutputTransformation 整个编辑器生命周期只创建一次"。
     val outputTransformation =
         remember(layoutBinding) {
             OutputTransformation {
@@ -196,6 +198,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                     searchHighlights = latestSearchHighlights.value,
                     searchHighlightColor = latestSearchHighlightColor.value,
                     layoutBinding = layoutBinding,
+                    bridge = bridge,
                 )
             }
         }
@@ -316,35 +319,52 @@ private fun onTextLayoutResult(
     onSurfaceReady: () -> Boolean,
     layoutBinding: EditorSoftBreakLayoutBinding,
 ) {
-    // Issue #717 评论 5743443030 修复1：按 displayText 内容精确匹配同版本绑定，
+    // Issue #717 评论 5743443030 修复1 / 评论 5743745219：按 displayText 内容精确匹配同版本绑定，
     // 不再靠"长度猜版本"或"把 display 文本反解成 raw"。
+    // 匹配成功时 rawText / projection / rawSelection / compositionActive 整体来自同一次 buffer 变化；
+    // miss 时不把未知版本的 TextLayoutResult 和 live state 强行拼接。
     val displayText = result.layoutInput.text.text
     val match = layoutBinding.findForDisplayText(displayText)
-    val rawText: String
-    val projection: EditorSoftBreakProjection
     if (match != null) {
-        rawText = match.rawText
-        projection = match.projection
+        // 匹配到同版本 Binding：rawText / projection / rawSelection / compositionActive 整体进入 viewport + visual pipeline。
+        val restoreY = viewportState.onLayout(result, match.projection)
+        if (restoreY != null) {
+            scope.launch { viewportState.scrollState.scrollTo(restoreY) }
+        }
+        visualState.onAuthoritativeLayout(
+            result = result,
+            selection = match.rawSelection,
+            scrollY = viewportState.scrollState.value,
+            compositionActive = match.compositionActive,
+            projection = match.projection,
+            rawText = match.rawText,
+        )
     } else {
-        // Fallback：binding 已被淘汰出环形缓冲区（极端快输入且 onTextLayout 严重滞后）。
-        // 用 live state 作为最后手段。不靠长度猜版本，不反解 display 文本。
-        rawText = bridge.state.text.toString()
-        projection = EditorSoftBreakProjection.fromRawText(rawText)
+        // Issue #717 评论 5743745219：binding miss（环形缓冲区淘汰或启动时序例外）。
+        // 不把未知版本的 TextLayoutResult 和 live state 强行拼接。
+        // 只在 identity/raw 完全相等时（displayText == live rawText，说明 projection 是 identity、
+        // display 坐标 == raw 坐标、layout 与 live state 同版本）才允许进入，否则丢弃这份 layout，
+        // 等下一份能匹配的 onTextLayout。BasicTextField 自己仍正常显示。
+        val liveRawText = bridge.state.text.toString()
+        if (displayText == liveRawText) {
+            val identityProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
+            val restoreY = viewportState.onLayout(result, identityProjection)
+            if (restoreY != null) {
+                scope.launch { viewportState.scrollState.scrollTo(restoreY) }
+            }
+            visualState.onAuthoritativeLayout(
+                result = result,
+                selection = bridge.state.selection,
+                scrollY = viewportState.scrollState.value,
+                // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
+                // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
+                compositionActive = bridge.state.composition != null,
+                projection = identityProjection,
+                rawText = liveRawText,
+            )
+        }
+        // displayText != liveRawText：这份 layout 不进入素笺 viewport/visual snapshot，直接等待下一份。
     }
-    val restoreY = viewportState.onLayout(result, projection)
-    if (restoreY != null) {
-        scope.launch { viewportState.scrollState.scrollTo(restoreY) }
-    }
-    visualState.onAuthoritativeLayout(
-        result = result,
-        selection = bridge.state.selection,
-        scrollY = viewportState.scrollState.value,
-        // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
-        // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
-        compositionActive = bridge.state.composition != null,
-        projection = projection,
-        rawText = rawText,
-    )
     onSurfaceReady()
 }
 
@@ -406,6 +426,7 @@ private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTr
     searchHighlights: List<TextRange>,
     searchHighlightColor: Color,
     layoutBinding: EditorSoftBreakLayoutBinding,
+    bridge: EditorTextFieldStateBridge,
 ) {
     val rawText = originalText.toString()
     val projection = EditorSoftBreakProjection.fromRawText(rawText)
@@ -430,8 +451,17 @@ private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTr
             )
         }
     }
-    // Issue #717 评论 5743443030 修复1：记录本次 transformation 的绑定。
+    // Issue #717 评论 5743443030 修复1 / 评论 5743745219：记录本次 transformation 的完整同版本输入快照。
     // 此时 buffer 内容（toString()）就是 transform 后的 displayText（含 U+200B）。
     // addStyle 不改变文本内容，所以 displayText 在 addStyle 前后一致。
-    layoutBinding.record(rawText = rawText, projection = projection, displayText = toString())
+    // originalSelection 是 TextFieldBuffer 公开属性（androidx.compose.ui.text.TextRange），
+    // 即这次 buffer 变化前的原始 selection；bridge.state.composition 是当下 TextFieldState 的 composition。
+    // 二者与 rawText / projection / displayText 严格来自同一次 buffer 变化。
+    layoutBinding.record(
+        rawText = rawText,
+        projection = projection,
+        displayText = toString(),
+        rawSelection = originalSelection,
+        compositionActive = bridge.state.composition != null,
+    )
 }
