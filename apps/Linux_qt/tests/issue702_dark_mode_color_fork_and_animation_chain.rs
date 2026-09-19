@@ -188,13 +188,21 @@ fn issue702_render_plan_has_static_patches() {
 #[test]
 fn issue702_scene_graph_rebuilds_on_animation_clip() {
     let src = read_src("src/sujian_editor_item/scene_graph_renderer.rs");
+    // Issue #714 评论 5740007764: 静态层不再因 static_patches 非空而在每个动画帧
+    // 重建，只在 needs_relayout=true（正文/layout/颜色变化或活动事务集合变化）时
+    // 重建一次。动画 progress 变化帧走轻量 update_scroll_transform，避免 100ms
+    // 动画期间每帧销毁/重建静态 QSGTextNode 产生闪烁。
     assert!(
-        src.contains("has_animation_clip"),
-        "应有 has_animation_clip 判断"
+        !src.contains("has_animation_clip"),
+        "Issue #714 评论 5740007764: 应删除 has_animation_clip 每帧重建条件"
     );
     assert!(
-        src.contains("needs_relayout || has_animation_clip"),
-        "需要在 needs_relayout 或 has_animation_clip 时重建"
+        !src.contains("needs_relayout || has_animation_clip"),
+        "Issue #714 评论 5740007764: 不应再保留 needs_relayout || has_animation_clip 旧条件"
+    );
+    assert!(
+        src.contains("if static_text.needs_relayout {"),
+        "应只在 needs_relayout 时重建静态节点"
     );
     assert!(
         src.contains("compute_clip_rects_from_patches"),
