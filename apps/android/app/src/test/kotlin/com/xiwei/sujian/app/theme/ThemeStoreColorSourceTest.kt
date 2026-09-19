@@ -2,6 +2,7 @@ package com.xiwei.sujian.app.theme
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import com.xiwei.sujian.core.designsystem.theme.ColorSource
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
@@ -174,6 +175,26 @@ class ThemeStoreColorSourceTest {
         assertTrue(
             "colorSource=built_in 时 shouldMigrateToDynamicColor 应返回 true",
             shouldMigrate(LocalSettings(colorSource = BUILTIN)),
+        )
+    }
+
+    @Test
+    fun controller_init_resolvesLocalSettingsBeforeFirstObserve() {
+        // #711 评论 5738908285：ThemeController 构造完成时 init 块已同步 initialize + reload，
+        // 构造完成后（未额外调用 reload）uiState 必须已是真实本地设置规范化后的结果。
+        // 证明 init 块已同步解析：连原始 colorSource 字段都已规范化为 android_dynamic，
+        // 不只是 resolvedColorSource。
+        val controller = ThemeController(settingsRepository, themeRepository)
+
+        assertEquals(
+            "构造完成后 resolvedColorSource 必须已是 android_dynamic",
+            ColorSource.ANDROID_DYNAMIC,
+            controller.uiState.value.resolvedColorSource,
+        )
+        assertEquals(
+            "构造完成后原始 colorSource 字段必须已规范化为 android_dynamic",
+            ANDROID_DYNAMIC,
+            controller.uiState.value.colorSource,
         )
     }
 

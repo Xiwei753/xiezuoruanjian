@@ -22,6 +22,15 @@ class ThemeController(
 ) {
     private val store: ThemeStore = ThemeStore
 
+    init {
+        // #711 评论 5738908285：控制器创建阶段同步解析真实主题。
+        // rememberThemeController() 返回前必须完成首次 initialize + reload，
+        // 保证 SujianApp 收集 uiState 画首帧时已是真实本地设置，
+        // 不再先画出 ThemeUiState() 默认 built_in 再切换。
+        store.initialize(themeRepository, settingsRepository)
+        store.reload()
+    }
+
     val uiState: StateFlow<ThemeUiState>
         get() = store.uiState
 
@@ -120,11 +129,6 @@ fun rememberThemeController(
 ): ThemeController {
     val controller = remember { ThemeController(settingsRepository, themeRepository) }
 
-    DisposableEffect(Unit) {
-        ThemeStore.initialize(themeRepository, settingsRepository)
-        onDispose { }
-    }
-
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer =
@@ -147,11 +151,6 @@ fun rememberThemeController(
         com.xiwei.sujian.feature.settings.data.CoreSettingsEvents.themeCatalogChanged.collect {
             controller.reload()
         }
-    }
-
-    DisposableEffect(Unit) {
-        controller.reload()
-        onDispose { }
     }
 
     val configuration = context.resources?.configuration

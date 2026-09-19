@@ -136,7 +136,7 @@ private fun schemeFromBuiltin(
 
 @Composable
 fun SujianTheme(
-    uiState: ThemeUiState = ThemeUiState(),
+    uiState: ThemeUiState,
     content: @Composable () -> Unit,
 ) {
     val systemDark = isSystemInDarkTheme()

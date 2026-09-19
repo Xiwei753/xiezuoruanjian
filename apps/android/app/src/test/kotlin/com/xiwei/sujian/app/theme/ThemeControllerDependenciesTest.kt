@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.test.core.app.ApplicationProvider
+import com.xiwei.sujian.core.designsystem.theme.ColorSource
 import com.xiwei.sujian.core.interop.app.AppServiceBridge
 import com.xiwei.sujian.core.interop.app.WriterAppServiceHolder
 import com.xiwei.sujian.feature.settings.data.SettingsRepository
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.fail
 import org.junit.Before
@@ -32,6 +34,9 @@ import org.robolectric.annotation.GraphicsMode
  * #618 三：同步状态不再参与主题刷新（旧代码的 Synced 分支与无条件 reload
  * 动作相同，是重复解析；`onSyncCompleted` 别名与 `syncStatusRepository`
  * 注入一并删除），ON_RESUME 只触发一次从注入仓库的完整主题解析。
+ *
+ * #711 评论 5738908285 — 控制器创建阶段同步 initialize + reload，首帧 uiState 必须直接是
+ * 真实本地设置，不允许先观察到 built_in 默认值再切换。
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -94,6 +99,48 @@ class ThemeControllerDependenciesTest {
         assertEquals(
             settingsRepository.getLocalSettings().appearanceMode,
             uiState.appearanceMode,
+        )
+    }
+
+    @Test
+    fun controller_initialUiStateIsAlreadyResolvedFromLocalSettings() {
+        // #711 评论 5738908285：ThemeController 构造完成时 init 块已同步 initialize + reload，
+        // uiState 必须直接是真实本地设置规范化后的结果，而不是 ThemeUiState() 默认 built_in。
+        // Robolectric SDK 34 下默认 built_in + 空选择经 reload 规范化为 android_dynamic。
+        val controller = ThemeController(settingsRepository, themeRepository)
+
+        assertEquals(
+            "构造完成后 resolvedColorSource 必须已是 android_dynamic",
+            ColorSource.ANDROID_DYNAMIC,
+            controller.uiState.value.resolvedColorSource,
+        )
+        assertNotEquals(
+            "首帧 uiState 不得是未初始化的 ThemeUiState() 默认值",
+            ThemeUiState(),
+            controller.uiState.value,
+        )
+    }
+
+    @Test
+    fun rememberThemeController_firstObservedUiStateIsNotDefaultBuiltin() {
+        // #711 评论 5738908285：组合返回的控制器首帧已是真实设置，
+        // ThemeStore.uiState 在组合完成后必须直接是 android_dynamic，不先观察 built_in 默认值。
+        var controller: ThemeController? = null
+        composeRule.setContent {
+            controller =
+                rememberThemeController(
+                    context = LocalContext.current,
+                    settingsRepository = settingsRepository,
+                    themeRepository = themeRepository,
+                )
+        }
+        composeRule.waitForIdle()
+
+        assertNotNull("必须返回 ThemeController 实例", controller)
+        assertEquals(
+            "组合完成后 ThemeStore.uiState 必须已是 android_dynamic",
+            ColorSource.ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.resolvedColorSource,
         )
     }
 }

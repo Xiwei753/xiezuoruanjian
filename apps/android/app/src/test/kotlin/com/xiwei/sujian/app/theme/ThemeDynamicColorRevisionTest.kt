@@ -69,6 +69,49 @@ class ThemeDynamicColorRevisionTest {
 
         ThemeStore.onDynamicColorsChanged()
         assertEquals("第二次推进后 revision 应为 2", 2L, ThemeStore.uiState.value.dynamicColorRevision)
+
+        // #711 评论 5738908285：推进 revision 只刷新动态 scheme，不改变 colorSource。
+        assertEquals(
+            "推进 revision 后 colorSource 仍应为 android_dynamic",
+            ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.colorSource,
+        )
+        assertEquals(
+            "推进 revision 后 resolvedColorSource 仍应为 ANDROID_DYNAMIC",
+            ColorSource.ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.resolvedColorSource,
+        )
+    }
+
+    @Test
+    fun onDynamicColorsChanged_preservesColorSource() {
+        // #711 评论 5738908285：壁纸颜色变化只推进 dynamicColorRevision 让主题树重组
+        // 重新拿 dynamic*ColorScheme(context)，不改变 colorSource 事实。
+        ThemeStore.reload()
+        assertEquals(
+            "reload 后应为 android_dynamic",
+            ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.colorSource,
+        )
+        assertEquals(
+            "reload 后 resolvedColorSource 应为 ANDROID_DYNAMIC",
+            ColorSource.ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.resolvedColorSource,
+        )
+
+        ThemeStore.onDynamicColorsChanged()
+        ThemeStore.onDynamicColorsChanged()
+
+        assertEquals(
+            "两次推进 revision 后 colorSource 仍应为 android_dynamic",
+            ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.colorSource,
+        )
+        assertEquals(
+            "两次推进 revision 后 resolvedColorSource 仍应为 ANDROID_DYNAMIC",
+            ColorSource.ANDROID_DYNAMIC,
+            ThemeStore.uiState.value.resolvedColorSource,
+        )
     }
 
     @Test
@@ -111,5 +154,9 @@ class ThemeDynamicColorRevisionTest {
             0L,
             ThemeStore.uiState.value.dynamicColorRevision,
         )
+    }
+
+    companion object {
+        private const val ANDROID_DYNAMIC = "android_dynamic"
     }
 }

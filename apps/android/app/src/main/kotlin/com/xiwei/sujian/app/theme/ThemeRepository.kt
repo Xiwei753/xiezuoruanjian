@@ -148,9 +148,12 @@ class ThemeRepository(
                 )
 
             when (val saveResult = settingsBridge.savePaletteRecord(record)) {
-                is BridgeResult.Error -> warn(
-                    "Failed to save palette record (rejected by Core validation, likely semantic invalid e.g. unreadable foreground/background contrast): ${saveResult.fullEnvelope}",
-                )
+                is BridgeResult.Error ->
+                    warn(
+                        "Failed to save palette record (rejected by Core validation, " +
+                            "likely semantic invalid e.g. unreadable foreground/background contrast): " +
+                            "${saveResult.fullEnvelope}",
+                    )
                 BridgeResult.NotLoaded -> warn("Native library not loaded, cannot save palette record")
                 is BridgeResult.Success -> {}
             }

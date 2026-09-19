@@ -27,6 +27,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xiwei.sujian.R
 import com.xiwei.sujian.app.theme.SujianTheme
+import com.xiwei.sujian.app.theme.ThemeUiState
 import com.xiwei.sujian.core.designsystem.component.SujianOutlinedButton
 import com.xiwei.sujian.core.diagnostics.JankStatsController
 import com.xiwei.sujian.core.platform.storage.AndroidPrivateDataRoot
@@ -61,8 +62,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         if (LegacyStorageMigrationGate.legacyGitWorkspaceExists(this)) {
             // 旧结构待迁移：不创建私有根，只显示迁移入口。
+            // 迁移完成前 Core 未初始化，迁移屏幕用基础主题（ThemeUiState()）即可；
+            // 正常 UI 路径经 SujianApp → rememberThemeController → ThemeController.init 同步解析真实主题。
             setContent {
-                SujianTheme {
+                SujianTheme(uiState = ThemeUiState()) {
                     LegacyStorageMigrationScreen(
                         onMigrationSucceeded = { proceedWithUi() },
                     )

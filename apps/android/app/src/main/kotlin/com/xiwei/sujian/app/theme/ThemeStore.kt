@@ -16,6 +16,9 @@ object ThemeStore {
     private const val COLOR_SOURCE_BUILT_IN = "built_in"
     private const val COLOR_SOURCE_ANDROID_DYNAMIC = "android_dynamic"
 
+    // #711 评论 5738908285：这份默认 ThemeUiState()（colorSource=built_in）只给测试直接访问 ThemeStore 用。
+    // 生产 UI 经 ThemeController.init 同步 initialize + reload，在控制器返回前 _uiState 已被真实 LocalSettings 覆盖，
+    // 永远观察不到这个默认值。不要把"未初始化"伪装成 built_in 让首帧画出来。
     private val _uiState = MutableStateFlow(ThemeUiState())
     val uiState: StateFlow<ThemeUiState> = _uiState.asStateFlow()
 
