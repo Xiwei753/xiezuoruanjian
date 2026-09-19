@@ -136,7 +136,9 @@ pub(crate) fn render_frame(
     // 不把静态正文重新补回去。静态层在 clip_count > 0 时已通过 complement 区间
     // 把被动画接管的区域从静态正文里挖掉，动画层只负责画那些被接管的区域。
     // 两层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
-    render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache);
+    // Issue #715: 传 scroll_y 给动画层，让 AnimationLayerNode 设置和静态层一样的
+    // translate(0, -scroll_y) 矩阵。动画 glyph 继续保留文档坐标，不在 Rust 侧逐个减 scroll_y。
+    render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache, static_text.scroll_y);
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
     // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。
@@ -197,6 +199,7 @@ fn render_text_animation_layer(
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
     texture_cache: &TextureCache,
+    scroll_y: f64,
 ) {
     // Issue #658 评论 5630650436: 空动画帧也进入 update_animation_layer，让 AnimationLayerNode
     // 自己把 node 和 texture 一次清干净。不要在这里提前 return，否则
@@ -255,6 +258,7 @@ fn render_text_animation_layer(
             image_ptrs_ptr,
             source_rects_ptr,
             snapshot_ids_ptr,
+            scroll_y,
         );
     } else {
         scene_graph::clear_animation_layer(root_raw, item_ptr);

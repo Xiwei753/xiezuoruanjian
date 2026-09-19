@@ -14,9 +14,11 @@ import QtQuick.Controls
 
 Button {
     id: control
-    property var dt: null
+    required property var dt
     // Issue #701 评论 5699565102: 删除内部 fallbackDt。组件必须消费调用方
     // 传入的根 dt；漏传就是调用错误，不偷偷生成独立主题。
+    // Issue #715: 改为 required property，不再允许组件先以 null 创建、
+    // 随后才补主题。
     readonly property var resolvedDt: dt
 
     readonly property color _primary: resolvedDt.primary

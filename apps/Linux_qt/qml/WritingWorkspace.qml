@@ -191,6 +191,12 @@ Rectangle {
             editorController.chapterId = d.chapterId || cId;
             editorController.chapterTitle = d.title || cTitle || "";
             sujianEditor.snap_next_cursor_update();
+            // Issue #715: 切章后明确把新章节视口设为顶部。
+            // 旧章节的 contentY 不应继承到新章节，否则动画层会画到错误 Y 坐标。
+            // contentY -> scroll_y 绑定会同步给 Rust，确保两层使用同一滚动坐标。
+            if (editorScroll.contentItem) {
+                editorScroll.contentItem.contentY = 0;
+            }
             root.requestEditorFocus();
         }
     }

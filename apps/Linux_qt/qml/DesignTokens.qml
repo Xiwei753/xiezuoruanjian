@@ -9,10 +9,10 @@ QtObject {
     // 但 scheme 还是上一套浅色值的中间状态。不再分开绑定 isDark 和
     // resolvedSchemeJson 两个可能不同步的属性。
     //
-    // Issue #712: themeStateJson 现在只用于诊断（isDark 解析）。
-    // Issue #714: 颜色绑定改为 themeController.xxx_hex (QString)，
-    // QML `color` 属性直接接受 "#RRGGBB" 字符串，形成 QString → QML color
-    // 单一链，消除 QColor 直接暴露导致的深色模式颜色失真。
+    // Issue #715: 颜色绑定改为从 _themeState.scheme (snake_case) 读取，
+    // 不再直接读 themeController.xxx_hex。scheme 为 null 时使用 isDark
+    // 派生的固定 fallback hex 字符串。所有颜色和 isDark 都从同一个
+    // _themeState 对象派生，确保原子快照消费。
     property string themeStateJson: ""
 
     property var _themeState: {
@@ -20,55 +20,62 @@ QtObject {
         try { return JSON.parse(themeStateJson) } catch(e) { return null }
     }
 
-    // Issue #712: isDark 直接从 themeController.is_dark 读取，不再通过 JSON 解析。
-    // themeStateJson 和 _themeState 保留用于诊断输出。
-    property bool isDark: themeController !== null ? themeController.is_dark : true
+    // Issue #715: isDark 从 _themeState.is_dark 读取，不再直接读 themeController.is_dark。
+    property bool isDark: _themeState !== null ? _themeState.is_dark : true
 
-    onIsDarkChanged: {
+    // Issue #715: scheme 对象从 _themeState.scheme 获取（snake_case 字段名）。
+    // scheme 为 null 时所有颜色使用 isDark 派生的固定 fallback。
+    readonly property var _scheme: _themeState !== null ? _themeState.scheme : null
+
+    // 辅助函数：从 scheme 读取颜色，scheme 为 null 时返回 isDark fallback hex
+    function _color(schemeField, darkFallback, lightFallback) {
+        if (_scheme !== null && _scheme[schemeField] !== undefined && _scheme[schemeField] !== "") {
+            return _scheme[schemeField]
+        }
+        return isDark ? darkFallback : lightFallback
     }
 
-    // Issue #714: 颜色绑定改为 themeController.xxx_hex (QString)。
-    // themeController 是 main.qml 中的根上下文属性。
-    // 当 themeController 为 null 时 fallback 到 isDark 派生的固定深/浅色 hex。
-    // QML `color` 属性直接接受 "#RRGGBB" 字符串，不再经过 QColor 桥。
-    property color primary: themeController !== null ? themeController.primary_hex : (isDark ? "#92CCFF" : "#006497")
-    property color onPrimary: themeController !== null ? themeController.on_primary_hex : (isDark ? "#003351" : "#FFFFFF")
-    property color primaryContainer: themeController !== null ? themeController.primary_container_hex : (isDark ? "#004B73" : "#CCE5FF")
-    property color onPrimaryContainer: themeController !== null ? themeController.on_primary_container_hex : (isDark ? "#CCE5FF" : "#001E31")
-    property color secondary: themeController !== null ? themeController.secondary_hex : (isDark ? "#B8C8DA" : "#51606F")
-    property color onSecondary: themeController !== null ? themeController.on_secondary_hex : (isDark ? "#233240" : "#FFFFFF")
-    property color secondaryContainer: themeController !== null ? themeController.secondary_container_hex : (isDark ? "#394857" : "#D4E4F6")
-    property color onSecondaryContainer: themeController !== null ? themeController.on_secondary_container_hex : (isDark ? "#D4E4F6" : "#0E1D2A")
-    property color tertiary: themeController !== null ? themeController.tertiary_hex : (isDark ? "#D7BFFF" : "#6D578C")
-    property color onTertiary: themeController !== null ? themeController.on_tertiary_hex : (isDark ? "#3E2A5C" : "#FFFFFF")
-    property color tertiaryContainer: themeController !== null ? themeController.tertiary_container_hex : (isDark ? "#554074" : "#F1DAFF")
-    property color onTertiaryContainer: themeController !== null ? themeController.on_tertiary_container_hex : (isDark ? "#F1DAFF" : "#261447")
-    property color background: themeController !== null ? themeController.background_hex : (isDark ? "#1A1C1E" : "#FCFCFF")
-    property color onBackground: themeController !== null ? themeController.on_background_hex : (isDark ? "#E2E3E7" : "#181C20")
-    property color surface: themeController !== null ? themeController.surface_hex : (isDark ? "#1A1C1E" : "#FCFCFF")
-    property color onSurface: themeController !== null ? themeController.on_surface_hex : (isDark ? "#E2E3E7" : "#181C20")
-    property color surfaceVariant: themeController !== null ? themeController.surface_variant_hex : (isDark ? "#42474E" : "#DFE3EB")
-    property color onSurfaceVariant: themeController !== null ? themeController.on_surface_variant_hex : (isDark ? "#C1C6CF" : "#42474E")
-    property color surfaceTint: themeController !== null ? themeController.surface_tint_hex : (isDark ? "#92CCFF" : "#006497")
-    property color surfaceDim: themeController !== null ? themeController.surface_dim_hex : (isDark ? "#121418" : "#D7D9DF")
-    property color surfaceBright: themeController !== null ? themeController.surface_bright_hex : (isDark ? "#38393F" : "#FCFCFF")
-    property color surfaceContainerLowest: themeController !== null ? themeController.surface_container_lowest_hex : (isDark ? "#0F1113" : "#FFFFFF")
-    property color surfaceContainerLow: themeController !== null ? themeController.surface_container_low_hex : (isDark ? "#1F2225" : "#F6F8FB")
-    property color surfaceContainer: themeController !== null ? themeController.surface_container_hex : (isDark ? "#23272A" : "#F0F3F7")
-    property color surfaceContainerHigh: themeController !== null ? themeController.surface_container_high_hex : (isDark ? "#2D3135" : "#EAEFF5")
-    property color surfaceContainerHighest: themeController !== null ? themeController.surface_container_highest_hex : (isDark ? "#383C40" : "#E4E9EF")
-    property color inverseSurface: themeController !== null ? themeController.inverse_surface_hex : (isDark ? "#E2E2E5" : "#2F3033")
-    property color inverseOnSurface: themeController !== null ? themeController.inverse_on_surface_hex : (isDark ? "#2F3033" : "#F1F0F4")
-    property color inversePrimary: themeController !== null ? themeController.inverse_primary_hex : (isDark ? "#006497" : "#92CCFF")
-    property color error: themeController !== null ? themeController.error_hex : (isDark ? "#FFB4AB" : "#BA1A1A")
-    property color onError: themeController !== null ? themeController.on_error_hex : (isDark ? "#690005" : "#FFFFFF")
-    property color errorContainer: themeController !== null ? themeController.error_container_hex : (isDark ? "#93000A" : "#FFDAD6")
-    property color onErrorContainer: themeController !== null ? themeController.on_error_container_hex : (isDark ? "#FFDAD6" : "#410002")
-    property color outline: themeController !== null ? themeController.outline_hex : (isDark ? "#8C9198" : "#72787E")
-    property color outlineVariant: themeController !== null ? themeController.outline_variant_hex : (isDark ? "#42474E" : "#C1C6CF")
-    property color scrim: themeController !== null ? themeController.scrim_hex : "#000000"
+    // Issue #715: 所有颜色从 _themeState.scheme (snake_case) 读取，
+    // scheme 为 null 时 fallback 到 isDark 派生的固定深/浅色 hex。
+    property color primary: _color("primary", "#92CCFF", "#006497")
+    property color onPrimary: _color("on_primary", "#003351", "#FFFFFF")
+    property color primaryContainer: _color("primary_container", "#004B73", "#CCE5FF")
+    property color onPrimaryContainer: _color("on_primary_container", "#CCE5FF", "#001E31")
+    property color secondary: _color("secondary", "#B8C8DA", "#51606F")
+    property color onSecondary: _color("on_secondary", "#233240", "#FFFFFF")
+    property color secondaryContainer: _color("secondary_container", "#394857", "#D4E4F6")
+    property color onSecondaryContainer: _color("on_secondary_container", "#D4E4F6", "#0E1D2A")
+    property color tertiary: _color("tertiary", "#D7BFFF", "#6D578C")
+    property color onTertiary: _color("on_tertiary", "#3E2A5C", "#FFFFFF")
+    property color tertiaryContainer: _color("tertiary_container", "#554074", "#F1DAFF")
+    property color onTertiaryContainer: _color("on_tertiary_container", "#F1DAFF", "#261447")
+    property color background: _color("background", "#1A1C1E", "#FCFCFF")
+    property color onBackground: _color("on_background", "#E2E3E7", "#181C20")
+    property color surface: _color("surface", "#1A1C1E", "#FCFCFF")
+    property color onSurface: _color("on_surface", "#E2E3E7", "#181C20")
+    property color surfaceVariant: _color("surface_variant", "#42474E", "#DFE3EB")
+    property color onSurfaceVariant: _color("on_surface_variant", "#C1C6CF", "#42474E")
+    property color surfaceTint: _color("surface_tint", "#92CCFF", "#006497")
+    property color surfaceDim: _color("surface_dim", "#121418", "#D7D9DF")
+    property color surfaceBright: _color("surface_bright", "#38393F", "#FCFCFF")
+    property color surfaceContainerLowest: _color("surface_container_lowest", "#0F1113", "#FFFFFF")
+    property color surfaceContainerLow: _color("surface_container_low", "#1F2225", "#F6F8FB")
+    property color surfaceContainer: _color("surface_container", "#23272A", "#F0F3F7")
+    property color surfaceContainerHigh: _color("surface_container_high", "#2D3135", "#EAEFF5")
+    property color surfaceContainerHighest: _color("surface_container_highest", "#383C40", "#E4E9EF")
+    property color inverseSurface: _color("inverse_surface", "#E2E2E5", "#2F3033")
+    property color inverseOnSurface: _color("inverse_on_surface", "#2F3033", "#F1F0F4")
+    property color inversePrimary: _color("inverse_primary", "#006497", "#92CCFF")
+    property color error: _color("error", "#FFB4AB", "#BA1A1A")
+    property color onError: _color("on_error", "#690005", "#FFFFFF")
+    property color errorContainer: _color("error_container", "#93000A", "#FFDAD6")
+    property color onErrorContainer: _color("on_error_container", "#FFDAD6", "#410002")
+    property color outline: _color("outline", "#8C9198", "#72787E")
+    property color outlineVariant: _color("outline_variant", "#42474E", "#C1C6CF")
+    property color scrim: _color("scrim", "#000000", "#000000")
 
-    // 派生色：没有直接对应的 hex 属性，继续用 isDark 派生
+    // 派生色：没有直接对应的 scheme 字段，继续用 isDark 派生
+    // Issue #715: isDark 本身从 _themeState.is_dark 读取
     property color success: isDark ? Qt.rgba(0.561, 0.839, 0.639, 1) : Qt.rgba(0.122, 0.478, 0.271, 1)
     property color onSuccess: isDark ? Qt.rgba(0.000, 0.224, 0.114, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color successContainer: isDark ? Qt.rgba(0.059, 0.353, 0.188, 1) : Qt.rgba(0.725, 0.941, 0.784, 1)

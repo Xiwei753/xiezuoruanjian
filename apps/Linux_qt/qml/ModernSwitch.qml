@@ -13,7 +13,7 @@ import QtQuick
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
 
     readonly property color _primary: dt.primary
     readonly property color _onPrimary: dt.onPrimary

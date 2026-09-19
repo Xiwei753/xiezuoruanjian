@@ -13,7 +13,7 @@ import QtQuick
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
     property var model: null
     property Component delegate: null
     property int minCardWidth: 280

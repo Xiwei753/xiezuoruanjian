@@ -15,7 +15,7 @@ import QtQuick.Controls
 Button {
     id: control
     flat: true
-    property var dt: null
+    required property var dt
 
     readonly property color _primary: dt.primary
     readonly property color _onPrimaryContainer: dt.onPrimaryContainer

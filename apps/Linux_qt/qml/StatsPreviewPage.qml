@@ -71,10 +71,13 @@ Rectangle {
     HubPageFrame {
         anchors.fill: parent
         dt: root.dt
-        headerData: [ HubPageHeader { anchors.fill: parent; dt: root.dt; title: qsTr("统计"); subtitle: qsTr("追踪你的写作节奏与习惯") } ]
+        headerData: [ HubPageHeader { dt: root.dt; title: qsTr("统计"); subtitle: qsTr("追踪你的写作节奏与习惯") } ]
 
+        // Issue #715: 去掉 anchors.fill: parent，改用 Layout 属性。
+        // Qt Quick Layouts 不允许父 Layout 管理 child 几何时再混用 anchors。
         ColumnLayout {
-            anchors.fill: parent
+            Layout.fillWidth: true
+            Layout.fillHeight: true
             spacing: 0
 
             // 错误提示

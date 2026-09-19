@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Item {
     id: control
-    property var dt: null
+    required property var dt
 
     readonly property color _primaryContainer: dt.primaryContainer
     readonly property color _onPrimaryContainer: dt.onPrimaryContainer

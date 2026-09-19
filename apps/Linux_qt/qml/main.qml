@@ -267,7 +267,6 @@ ApplicationWindow {
     Connections {
         target: designTokens
         function onIsDarkChanged() {
-            window.logThemeDiagnostics("is_dark_changed");
             // Issue #668 评论 5646458592 问题 2: 删除 effective isDark 反写
             // themeController.set_system_is_dark 的逻辑。isDark 现在直接读
             // themeController.is_dark，反写会形成循环依赖。system_is_dark
@@ -277,8 +276,10 @@ ApplicationWindow {
                 appBackend.apply_window_dark_mode(designTokens.isDark);
             }
         }
-        function onEditorTextChanged() {
-            window.logThemeDiagnostics("editor_text_changed");
+        // Issue #715: 主题诊断改为监听 themeStateJson 变化，
+        // 在完整快照更新后记录一次最终状态，不再挂在 isDark 中间字段上。
+        function onThemeStateJsonChanged() {
+            window.logThemeDiagnostics("theme_state_json_changed");
         }
     }
 

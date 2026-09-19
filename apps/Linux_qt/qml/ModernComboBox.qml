@@ -15,7 +15,7 @@ import QtQuick.Layouts
 
 Item {
     id: root
-    property var dt: null
+    required property var dt
     property var model: []
     property var displayModel: null
     property int currentIndex: 0
