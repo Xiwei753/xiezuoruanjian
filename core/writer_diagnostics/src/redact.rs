@@ -242,12 +242,14 @@ pub fn redact_json(value: &mut serde_json::Value) {
             // 先收集 key 列表，避免在循环中一边读 key 一边 get_mut 借用冲突。
             let keys: Vec<String> = map.keys().cloned().collect();
             for key in keys {
-                if is_sensitive_key(&key) {
-                    if let Some(v) = map.get_mut(&key) {
+                match (is_sensitive_key(&key), map.get_mut(&key)) {
+                    (true, Some(v)) => {
                         *v = serde_json::Value::String("[REDACTED]".to_string());
                     }
-                } else if let Some(v) = map.get_mut(&key) {
-                    redact_json(v);
+                    (false, Some(v)) => {
+                        redact_json(v);
+                    }
+                    _ => {}
                 }
             }
         }
