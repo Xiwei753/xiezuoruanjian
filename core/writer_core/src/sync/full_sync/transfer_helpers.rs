@@ -136,6 +136,50 @@ pub(super) fn run_single_target(
 
 // ── Per-kind transfer functions ──
 
+/// 合并累计的 local merge effects 到最终结果。
+///
+/// Issue #716 评论 5742849844 问题 2：CAS 重试时，前几轮的本地变化
+/// （downloaded_files/local_trashed/overwritten/ignored）不能被后续
+/// NoOp 轮次丢弃。任何 attempt 发生过真实本地变化，最终成功类结果
+/// 不能再降回 `NoChanges`。
+///
+/// 只合并本地效果（downloaded/remote_deletes=本地trashed/overwritten/ignored），
+/// 不碰 `local_deletes`（远端侧动作），避免覆盖 publish 路径已正确设置的远端删除。
+fn merge_accumulated_local_effects(
+    result: &mut SyncResult,
+    downloaded: &[String],
+    trashed: &[String],
+    overwritten: &[String],
+    ignored: &[String],
+) {
+    use crate::sync::SyncStatus;
+    for f in downloaded {
+        if !result.downloaded_files.contains(f) {
+            result.downloaded_files.push(f.clone());
+        }
+    }
+    for f in trashed {
+        if !result.remote_deletes.contains(f) {
+            result.remote_deletes.push(f.clone());
+        }
+    }
+    for f in overwritten {
+        if !result.overwritten_files.contains(f) {
+            result.overwritten_files.push(f.clone());
+        }
+    }
+    for f in ignored {
+        if !result.ignored_files.contains(f) {
+            result.ignored_files.push(f.clone());
+        }
+    }
+    // 如果累计有本地变化，状态不能降回 NoChanges。
+    let has_accumulated_changes = !downloaded.is_empty() || !trashed.is_empty();
+    if has_accumulated_changes && matches!(result.status, SyncStatus::NoChanges) {
+        result.status = SyncStatus::LatestWinsApplied;
+    }
+}
+
 #[allow(
     clippy::excessive_nesting,
     clippy::too_many_lines,
@@ -173,6 +217,19 @@ pub(super) fn transfer_live_project(
         // merge_outcome 归一化代码无条件赋值（Err 直接 return，Ok 分支都赋值），
         // 因此无需初始化。
         let mut retained_conflict: Option<SyncResult>;
+
+        // 累计 local merge effects（跨 CAS 重试轮次）。
+        // Issue #716 评论 5742849844 问题 2：merge_result 是循环内临时变量，
+        // CAS 重试 continue 时前几轮的本地变化会丢失。这里在循环外累计
+        // 每轮 merge 对本地产生的实际变化，在各终点合并到最终结果。
+        // - accumulated_downloaded_files: 已下载到本地的远端文件
+        // - accumulated_local_trashed_files: 本地已移到 trash 的文件（outcome.local_deletes）
+        // - accumulated_overwritten_files: 本地被覆盖的文件
+        // - accumulated_ignored_files: 本地被跳过的文件
+        let mut accumulated_downloaded_files: Vec<String> = Vec::new();
+        let mut accumulated_local_trashed_files: Vec<String> = Vec::new();
+        let mut accumulated_overwritten_files: Vec<String> = Vec::new();
+        let mut accumulated_ignored_files: Vec<String> = Vec::new();
 
         for attempt in 0..MAX_CAS_RETRIES {
             let generation_id = uuid::Uuid::new_v4().to_string();
@@ -269,10 +326,19 @@ pub(super) fn transfer_live_project(
             // 供 RemoteWins(Upsert)/AlreadyCurrent 不 publish 时返回。
             // 规则与 sync/lww/attempt.rs 对齐：
             // - 有 unresolved conflict → PartialConflict（已在 retained_conflict 中）
+            // - 有 pending_take_remote_failed → RecoverableError（Issue #716 评论 5742849844 问题 1）
             // - 无冲突但 downloaded_files/local_deletes 任一非空（对本地产生的实际变化）→ LatestWinsApplied
             // - 真正全空 → NoChanges
             // 注意：remote_upload_paths/remote_delete_paths 是对远端的操作，不是对本地产生的变化，
             // 在 RemoteWins 分支中不应影响状态判断。
+            //
+            // Issue #716 评论 5742849844 问题 3：no-publish 路径不报告未执行的远端删除。
+            // local_deletes 语义是"本地已删除的文件"，merge 阶段没有执行远端删除
+            // （remote_delete_paths 是"调用方应从远端删除的路径"，merge 本身没执行）。
+            // no-publish 路径既没有 delete_remote_files()，也没有发布新 generation，
+            // 这些远端删除实际上没有发生，不应报告为 local_deletes。
+            // outcome.local_deletes 是"远端发起的删除已在本地 move_to_trash"，
+            // 那是 remote_deletes 语义，在下面 r.remote_deletes 赋值。
             let merge_result: Option<SyncResult> = match &merge_outcome_opt {
                 Some(outcome) => {
                     // 只考虑对本地产生的实际变化：下载到本地的文件、本地被删除的文件
@@ -280,11 +346,24 @@ pub(super) fn transfer_live_project(
                         !outcome.downloaded_files.is_empty() || !outcome.local_deletes.is_empty();
                     let mut r = SyncResult::success();
                     r.downloaded_files = outcome.downloaded_files.clone();
-                    r.local_deletes = outcome.remote_delete_paths.clone();
+                    // 问题 3 修复：no-publish 路径不报告未执行的远端删除。
+                    r.local_deletes = Vec::new();
                     r.remote_deletes = outcome.local_deletes.clone();
                     r.overwritten_files = outcome.overwritten_files.clone();
                     r.ignored_files = outcome.ignored_files.clone();
-                    if has_local_changes {
+                    // 问题 1 修复：pending_take_remote_failed 非空 → RecoverableError。
+                    // 与 sync/lww/attempt.rs 第 70-78 行对齐：用户要求以远端为准，
+                    // 但对应远端文件缺失，必须留到下一轮重试，不能吞成成功。
+                    if !outcome.pending_take_remote_failed.is_empty() {
+                        r.status = SyncStatus::RecoverableError(format!(
+                            "pending_take_remote_failed: {}",
+                            outcome.pending_take_remote_failed.join(", ")
+                        ));
+                        r.error = Some(format!(
+                            "pending_take_remote: remote file missing for paths: {}",
+                            outcome.pending_take_remote_failed.join(", ")
+                        ));
+                    } else if has_local_changes {
                         r.status = SyncStatus::LatestWinsApplied;
                     } else {
                         r.status = SyncStatus::NoChanges;
@@ -293,6 +372,31 @@ pub(super) fn transfer_live_project(
                 }
                 None => None,
             };
+
+            // 累计本轮 merge 的 local effects（去重）。
+            // Issue #716 评论 5742849844 问题 2：CAS 重试时前几轮的本地变化不能丢失。
+            if let Some(outcome) = &merge_outcome_opt {
+                for f in &outcome.downloaded_files {
+                    if !accumulated_downloaded_files.contains(f) {
+                        accumulated_downloaded_files.push(f.clone());
+                    }
+                }
+                for f in &outcome.local_deletes {
+                    if !accumulated_local_trashed_files.contains(f) {
+                        accumulated_local_trashed_files.push(f.clone());
+                    }
+                }
+                for f in &outcome.overwritten_files {
+                    if !accumulated_overwritten_files.contains(f) {
+                        accumulated_overwritten_files.push(f.clone());
+                    }
+                }
+                for f in &outcome.ignored_files {
+                    if !accumulated_ignored_files.contains(f) {
+                        accumulated_ignored_files.push(f.clone());
+                    }
+                }
+            }
 
             // 2. read_post_transfer_lww → 构造 candidate（winner 身份只来自 merge 后真实 manifest，
             //    不伪造 lww_time+1 / device_id / 新时间戳）。
@@ -390,11 +494,30 @@ pub(super) fn transfer_live_project(
                     ) {
                         TargetLifecycleApplyResult::Applied(persisted) => {
                             *catalog_snapshot = persisted;
-                            return (retained_conflict.unwrap_or(content_result), None, None);
+                            // Issue #716 评论 5742849844 问题 2：合并累计 local effects，
+                            // 保留前几轮 CAS 重试的本地变化。content_result 已包含本轮
+                            // local effects 和 publish 后的远端侧动作（local_deletes）。
+                            let mut final_result = retained_conflict.unwrap_or(content_result);
+                            merge_accumulated_local_effects(
+                                &mut final_result,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (final_result, None, None);
                         }
                         TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
                             *catalog_snapshot = persisted;
-                            return (retained_conflict.unwrap_or(content_result), None, None);
+                            let mut final_result = retained_conflict.unwrap_or(content_result);
+                            merge_accumulated_local_effects(
+                                &mut final_result,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (final_result, None, None);
                         }
                         TargetLifecycleApplyResult::RemoteWinner {
                             snapshot: persisted,
@@ -449,11 +572,16 @@ pub(super) fn transfer_live_project(
                                                 }
                                             })
                                         });
-                                        return (
-                                            retained_conflict.unwrap_or(content_result),
-                                            None,
-                                            action,
+                                        let mut final_result =
+                                            retained_conflict.unwrap_or(content_result);
+                                        merge_accumulated_local_effects(
+                                            &mut final_result,
+                                            &accumulated_downloaded_files,
+                                            &accumulated_local_trashed_files,
+                                            &accumulated_overwritten_files,
+                                            &accumulated_ignored_files,
                                         );
+                                        return (final_result, None, action);
                                     }
                                 }
                             }
@@ -470,9 +598,17 @@ pub(super) fn transfer_live_project(
                         planned.target.remote_prefix,
                         attempt + 1
                     );
-                    let result = retained_conflict.unwrap_or_else(|| {
+                    let mut result = retained_conflict.unwrap_or_else(|| {
                         merge_result.clone().unwrap_or(SyncResult::no_changes())
                     });
+                    // Issue #716 评论 5742849844 问题 2：合并累计 local effects。
+                    merge_accumulated_local_effects(
+                        &mut result,
+                        &accumulated_downloaded_files,
+                        &accumulated_local_trashed_files,
+                        &accumulated_overwritten_files,
+                        &accumulated_ignored_files,
+                    );
                     return (result, None, None);
                 }
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::RemoteWins(winner) => {
@@ -485,9 +621,17 @@ pub(super) fn transfer_live_project(
                                 attempt + 1
                             );
                             // 直接按最新 remote 收敛，不再 publish。
-                            let result = retained_conflict.unwrap_or_else(|| {
+                            let mut result = retained_conflict.unwrap_or_else(|| {
                                 merge_result.clone().unwrap_or(SyncResult::no_changes())
                             });
+                            // Issue #716 评论 5742849844 问题 2：合并累计 local effects。
+                            merge_accumulated_local_effects(
+                                &mut result,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
                             return (result, None, None);
                         }
                         crate::sync::types::TargetOp::Delete => {
@@ -526,11 +670,16 @@ pub(super) fn transfer_live_project(
                                         }
                                     })
                                 });
-                                return (
-                                    retained_conflict.unwrap_or(SyncResult::no_changes()),
-                                    None,
-                                    action,
+                                let mut final_result =
+                                    retained_conflict.unwrap_or(SyncResult::no_changes());
+                                merge_accumulated_local_effects(
+                                    &mut final_result,
+                                    &accumulated_downloaded_files,
+                                    &accumulated_local_trashed_files,
+                                    &accumulated_overwritten_files,
+                                    &accumulated_ignored_files,
                                 );
+                                return (final_result, None, action);
                             }
                         }
                     }

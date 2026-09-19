@@ -872,3 +872,395 @@ fn remote_upsert_wins_with_downloaded_files_returns_latest_wins_applied() {
         transfer.targets[0].result.downloaded_files
     );
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// 场景 9/10/11 — Issue #716 评论 5742849844 三个问题复现测试
+//
+// 这三个测试断言当前 buggy 行为（测试会失败证明 bug 存在），不是验证正确行为。
+// 修复后这些测试应改为断言正确行为，或删除并由新的正确行为测试替代。
+// ════════════════════════════════════════════════════════════════════════════
+
+/// 在 staging root 下写入 sync_state.json（旧格式，load_sync_state 会自动迁移）。
+///
+/// 用于测试中预设 `pending_take_remote` / `known_files` / `tombstones` 等 SyncState 字段。
+fn write_sync_state(staging_root: &std::path::Path, state: &writer_core::sync::types::SyncState) {
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("sync_state.json"),
+        serde_json::to_vec(state).unwrap(),
+    )
+    .unwrap();
+}
+
+/// 在远端 generation 写入一个 project.json 文件（Metadata，走 LWW 决胜）。
+///
+/// 与 `write_remote_generation`（写 chapter.md）对应，这里写 `project.json`
+/// 用于构造 LwwLocalWinsDeleteRecord 场景。
+fn write_remote_generation_project_json(
+    provider: &dyn SyncProvider,
+    gen_prefix: &str,
+    project_json_content: &[u8],
+    lww_time: i64,
+    device_id: &str,
+) {
+    let project_json_path = format!("{}/project.json", gen_prefix);
+    provider
+        .write(
+            &project_json_path,
+            project_json_content,
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+    let manifest = SyncManifest {
+        files: vec![ManifestFileRecord {
+            path: "project.json".to_string(),
+            content_hash: format!("{:x}", md5::compute(project_json_content)),
+            updated_at_ms: lww_time,
+            deleted_at_ms: None,
+            device_id: device_id.to_string(),
+            op: "upsert".to_string(),
+            schema_version: 1,
+        }],
+    };
+    let manifest_path = format!("{}/app-meta/sync/manifest.sync.json", gen_prefix);
+    provider
+        .write(
+            &manifest_path,
+            &serde_json::to_vec(&manifest).unwrap(),
+            WritePrecondition::Unconditional,
+        )
+        .unwrap();
+}
+
+/// 场景 9（Issue #716 评论 5742849844 问题 1）：pending_take_remote_failed 被吞成成功。
+///
+/// 复现：remote Upsert 严格赢，`pending_take_remote` 指向远端不存在的文件，
+/// publish_count == 0。`attempt.rs` 对 `pending_take_remote_failed` 非空有明确语义：
+/// 返回 `RecoverableError`。但 `transfer_helpers.rs` 的 `merge_result` 完全没看
+/// `pending_take_remote_failed`，在 RemoteWins(Upsert) 不 publish 路径里返回
+/// `LatestWinsApplied`（因为同时下载了远端 generation 的 chapter.md）。
+///
+/// 当前 buggy 行为：返回 `LatestWinsApplied`（吞掉 pending_take_remote_failed）。
+/// 正确行为：返回 `RecoverableError`。
+#[test]
+fn regression_scenario_9_pending_take_remote_failed_swallowed_as_success() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放一个 visible source（chapter 文件存在）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    write_remote_generation(
+        &provider_inner,
+        &remote_gen_prefix,
+        b"remote chapter content",
+        T,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(T, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging 为空（没有本地文件），remote 严格赢
+    let staging_root = tmp.path().join("staging-p1");
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    let staging_manifest = SyncManifest { files: vec![] };
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("manifest.sync.json"),
+        serde_json::to_vec(&staging_manifest).unwrap(),
+    )
+    .unwrap();
+
+    // 关键：设置 pending_take_remote 指向远端 generation 中不存在的文件。
+    // merge 会尝试下载，发现远端缺失 → pending_take_remote_failed 非空。
+    // 但 merge_result 没看 pending_take_remote_failed，会吞成成功。
+    let pending_missing_path = "volumes/v1/chapters/missing.md";
+    let sync_state = writer_core::sync::types::SyncState {
+        device_id: DEVICE_LOCAL.to_string(),
+        pending_take_remote: std::collections::HashSet::from([pending_missing_path.to_string()]),
+        ..Default::default()
+    };
+    write_sync_state(&staging_root, &sync_state);
+
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "remote Upsert 严格赢时不应 publish"
+    );
+
+    let status = &transfer.targets[0].result.status;
+    eprintln!(
+        "场景 9 实际状态: {:?}, downloaded_files: {:?}",
+        status, transfer.targets[0].result.downloaded_files
+    );
+
+    // ── 断言正确行为（Issue #716 评论 5742849844 问题 1 已修复）──
+    // pending_take_remote_failed 非空时必须返回 RecoverableError，
+    // 不能吞成 LatestWinsApplied/NoChanges。
+    assert!(
+        matches!(status, SyncStatus::RecoverableError(_)),
+        "pending_take_remote_failed 非空时应返回 RecoverableError，实际 {:?}",
+        status
+    );
+    assert!(
+        !transfer.targets[0].result.downloaded_files.is_empty(),
+        "merge 仍应下载远端 generation 的 chapter.md，downloaded_files 不应为空，实际 {:?}",
+        transfer.targets[0].result.downloaded_files
+    );
+}
+
+/// 场景 10（Issue #716 评论 5742849844 问题 2）：CAS 重试丢掉前一轮本地变化。
+///
+/// 复现：第一轮 merge 下载远端文件 → publish 1 次 → CAS 注入新的 remote generation → continue。
+/// 第二轮 generation 与当前 staging 内容相同，merge NoOp，remote lifecycle 仍严格赢。
+/// 最终应 publish_count == 1，状态 LatestWinsApplied，保留第一轮的 downloaded_files。
+/// 但当前 buggy 代码只看第二轮 merge_result（NoChanges），第一轮的 downloaded_files 消失。
+///
+/// 当前 buggy 行为：返回 NoChanges，downloaded_files 为空。
+/// 正确行为：返回 LatestWinsApplied，downloaded_files 保留第一轮的下载，publish_count == 1。
+#[test]
+fn regression_scenario_10_cas_retry_drops_first_round_local_changes() {
+    const T: i64 = 10_000;
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let provider_inner = MemoryProvider::new();
+
+    // 初始 remote catalog: Upsert(T-1, DEVICE_REMOTE) → candidate (T, DEVICE_LOCAL) 严格赢
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T - 1, DEVICE_REMOTE)
+            .with_active_generation("gen_existing");
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    // 远端 gen_existing 放一个 chapter 文件（内容与本地不同 → 第一轮 merge 下载）
+    let remote_gen_prefix = "projects/p1/__generations__/gen_existing";
+    write_remote_generation(
+        &provider_inner,
+        remote_gen_prefix,
+        b"remote chapter content",
+        T - 2,
+        DEVICE_REMOTE,
+    );
+
+    // 注入冲突时写入的 catalog: Upsert(T+1, DEVICE_REMOTE) → 严格赢 candidate (T, DEVICE_LOCAL)
+    let conflict_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", T + 1, DEVICE_REMOTE)
+            .with_active_generation("gen_after_conflict");
+    let mut conflict_catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut conflict_catalog, conflict_record);
+    let conflict_catalog_bytes = serde_json::to_vec(&conflict_catalog).unwrap();
+
+    // gen_after_conflict 放相同内容的 chapter（与第一轮下载后 staging 内容相同 → 第二轮 merge NoOp）
+    let conflict_gen_prefix = "projects/p1/__generations__/gen_after_conflict";
+    write_remote_generation(
+        &provider_inner,
+        conflict_gen_prefix,
+        b"remote chapter content",
+        T - 2,
+        DEVICE_REMOTE,
+    );
+
+    let provider = ConflictInjectingProvider::new(provider_inner, conflict_catalog_bytes);
+
+    let tmp = TempDir::new().unwrap();
+    // 本地 staging 有 chapter.md（内容 "chapter content"，时间戳 T）
+    // 远端 gen_existing 有 volumes/v1/chapters/chapter.md（内容 "remote chapter content"，时间戳 T-2）
+    // 第一轮 merge 下载远端 chapter → downloaded_files 非空
+    let staging_root = build_staging(&tmp, T, DEVICE_LOCAL);
+    let plan = build_plan(&tmp, staging_root, T, DEVICE_LOCAL, remote_catalog_snapshot);
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        1,
+        "第一轮 candidate 赢 publish 1 次，第二轮 candidate 不赢不 publish，总计 1 次"
+    );
+
+    let status = &transfer.targets[0].result.status;
+    eprintln!(
+        "场景 10 实际状态: {:?}, downloaded_files: {:?}",
+        status, transfer.targets[0].result.downloaded_files
+    );
+
+    // ── 断言正确行为（Issue #716 评论 5742849844 问题 2 已修复）──
+    // CAS 重试不应丢失前一轮的本地变化。最终状态应为 LatestWinsApplied，
+    // downloaded_files 保留第一轮的下载。
+    assert!(
+        matches!(status, SyncStatus::LatestWinsApplied),
+        "CAS 重试后应返回 LatestWinsApplied（保留第一轮本地变化），实际 {:?}",
+        status
+    );
+    assert!(
+        !transfer.targets[0].result.downloaded_files.is_empty(),
+        "downloaded_files 应保留第一轮的下载（非空），实际 {:?}",
+        transfer.targets[0].result.downloaded_files
+    );
+}
+
+/// 场景 11（Issue #716 评论 5742849844 问题 3）：no-publish 路径 local_deletes 报告未执行的远端删除。
+///
+/// 复现：本地有 project.json 的 delete tombstone（LWW 本地赢），远端 generation 有 project.json
+/// 的 upsert 记录。merge 产生 LwwLocalWinsDeleteRecord → remote_delete_paths 非空。
+/// 但整体 lifecycle remote 严格赢 → RemoteWins(Upsert) → 不 publish。
+/// `transfer_helpers.rs` 在 no-publish 路径写了 `r.local_deletes = outcome.remote_delete_paths.clone()`，
+/// 把没执行的远端删除报成 local_deletes。
+///
+/// 当前 buggy 行为：local_deletes 非空（报告了未执行的远端删除）。
+/// 正确行为：local_deletes 应为空（remote_delete_paths 是远端操作，merge 没执行本地删除）。
+///
+/// 时间戳设计（避免 30 天 delete 墓碑清理）：
+/// - `now_ms`：当前毫秒时间戳
+/// - `T_SMALL = now_ms - 200000`：远端 generation project.json upsert 时间戳
+/// - `deleted_at = (now_ms - 100000) / 1000`（秒）→ `deleted_at_ms ≈ now_ms - 100000`
+///   - `deleted_at_ms > T_SMALL` → LWW 本地赢 → LwwLocalWinsDeleteRecord
+///   - `deleted_at_ms > purge_time`（30 天前）→ delete 记录不被清理
+/// - `T_BIG = now_ms + 1000000`：remote catalog lww_time → remote 严格赢 candidate
+#[test]
+fn regression_scenario_11_no_publish_local_deletes_reports_unexecuted_remote_deletes() {
+    const DEVICE_REMOTE: &str = "device_remote";
+    const DEVICE_LOCAL: &str = "device_local";
+    const GEN_EXISTING: &str = "gen_existing";
+    assert!(DEVICE_LOCAL < DEVICE_REMOTE);
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let t_small = now_ms - 200_000; // 远端 upsert 时间戳
+    let deleted_at_secs = (now_ms - 100_000) / 1000; // 秒 → deleted_at_ms ≈ now_ms - 100000
+    let t_big = now_ms + 1_000_000; // remote catalog lww_time
+
+    let provider_inner = MemoryProvider::new();
+
+    // 远端 generation 放 project.json（Metadata，走 LWW 决胜）
+    let remote_gen_prefix = format!("projects/p1/__generations__/{}", GEN_EXISTING);
+    let project_json_content = br#"{"name":"test"}"#;
+    write_remote_generation_project_json(
+        &provider_inner,
+        &remote_gen_prefix,
+        project_json_content,
+        t_small,
+        DEVICE_REMOTE,
+    );
+
+    // remote catalog: Upsert(t_big, DEVICE_REMOTE), active_generation=GEN_EXISTING
+    // t_big > deleted_at_ms > t_small → remote lifecycle 严格赢 candidate
+    let remote_record =
+        TargetLifecycleRecord::upsert("projects/p1", "projects/p1", t_big, DEVICE_REMOTE)
+            .with_active_generation(GEN_EXISTING);
+    let mut catalog = TargetLifecycleCatalog::default();
+    upsert_record(&mut catalog, remote_record);
+    let snapshot = RemoteTargetCatalogSnapshot {
+        catalog,
+        version: RemoteVersion::new("v1"),
+    };
+    write_remote_catalog(&provider_inner, &snapshot).unwrap();
+    let remote_catalog_snapshot = load_remote_catalog(&provider_inner).unwrap();
+
+    let provider = CountingProvider::new(provider_inner);
+
+    let tmp = TempDir::new().unwrap();
+    let staging_root = tmp.path().join("staging-p1");
+    std::fs::create_dir_all(staging_root.join("app-meta").join("sync")).unwrap();
+    // 本地 staging manifest 为空（project.json 不在磁盘上）
+    let staging_manifest = SyncManifest { files: vec![] };
+    std::fs::write(
+        staging_root
+            .join("app-meta")
+            .join("sync")
+            .join("manifest.sync.json"),
+        serde_json::to_vec(&staging_manifest).unwrap(),
+    )
+    .unwrap();
+
+    // 关键：设置 known_files + tombstone，让 snapshot_local_records_read_only 生成 delete 记录。
+    // deleted_at_ms = deleted_at_secs * 1000 ≈ now_ms - 100000 > t_small → LWW 本地赢
+    // → LwwLocalWinsDeleteRecord → remote_delete_paths = ["project.json"]
+    let original_hash = "some_hash_value";
+    let sync_state = writer_core::sync::types::SyncState {
+        device_id: DEVICE_LOCAL.to_string(),
+        known_files: std::collections::HashMap::from([(
+            "project.json".to_string(),
+            original_hash.to_string(),
+        )]),
+        tombstones: vec![writer_core::sync::types::Tombstone {
+            original_path: "project.json".to_string(),
+            trash_path: "app-meta/sync/trash/deleted_project.json".to_string(),
+            deleted_at: deleted_at_secs,
+            purge_after: i64::MAX,
+            deleted_by: DEVICE_LOCAL.to_string(),
+            original_hash: original_hash.to_string(),
+            kind: "local_delete".to_string(),
+        }],
+        ..Default::default()
+    };
+    write_sync_state(&staging_root, &sync_state);
+
+    // candidate lww_time ≈ now_ms - 100000（delete 记录），remote record lww_time = t_big
+    // candidate < remote → remote 严格赢 → RemoteWins(Upsert) → 不 publish
+    let candidate_lww_time = deleted_at_secs * 1000;
+    let plan = build_plan(
+        &tmp,
+        staging_root,
+        candidate_lww_time,
+        DEVICE_LOCAL,
+        remote_catalog_snapshot,
+    );
+
+    let transfer = run_transfer(&provider, &plan);
+    assert_eq!(transfer.targets.len(), 1);
+    assert_eq!(
+        provider.publish_count(),
+        0,
+        "remote Upsert 严格赢时不应 publish"
+    );
+
+    let status = &transfer.targets[0].result.status;
+    eprintln!(
+        "场景 11 实际状态: {:?}, local_deletes: {:?}, remote_deletes: {:?}",
+        status, transfer.targets[0].result.local_deletes, transfer.targets[0].result.remote_deletes
+    );
+
+    // ── 断言正确行为（Issue #716 评论 5742849844 问题 3 已修复）──
+    // no-publish 路径没有执行远端删除（既没 delete_remote_files，也没发布新 generation），
+    // local_deletes 应为空。remote_delete_paths 是"调用方应从远端删除的路径"，
+    // merge 本身没执行，不应报告为 local_deletes。
+    assert!(
+        transfer.targets[0].result.local_deletes.is_empty(),
+        "no-publish 路径 local_deletes 应为空（未执行远端删除），实际 {:?}",
+        transfer.targets[0].result.local_deletes
+    );
+}
