@@ -480,11 +480,6 @@ def rule_visual_motion_pure() -> list[Finding]:
             # 与 ComposeVisualPatch/ComposeLocalVisualRebase 同类，不写正文持久状态。
             "feature/editor/visual/ComposeEditorDrawSnapshot.kt",
             "feature/editor/visual/ComposeLocalEditHandoff.kt",
-            "feature/editor/visual/ComposeReflowPlanner.kt",
-            # #708 评论 5725146968：overlay ownership 差集 helper，
-            # 引用 TextRange/TextLayoutResult 做显示数据，
-            # 与 ComposeReflowPlanner 同类，不写正文持久状态。
-            "feature/editor/visual/ComposeOverlayOwnership.kt",
             # #708 评论 5725706551：本地 handoff scene rebase helper，
             # 引用 TextRange/ComposeLayoutSnapshot 做显示数据，
             # 与 ComposeVisualRebase 同类，不写正文持久状态。

@@ -9,8 +9,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -20,7 +18,7 @@ import org.robolectric.annotation.Config
 import uniffi.writer_core.AnimationModeDto
 
 /**
- * #708 评论 5724568261 三个缺口的暴露测试 —
+ * #708 评论 5724568261 缺口1 的暴露测试 —
  *
  * 缺口1：[ComposeEditorVisualState] 的 `pendingLocalEditHandoff` 实际从来没有被建立。
  * - `pendingLocalEditHandoff` 初始化是 null
@@ -30,20 +28,10 @@ import uniffi.writer_core.AnimationModeDto
  * - `finishCompositionCommit()` 只做 `pendingPatches.addLast(localPatch); _patchVersion.update; bindLocalPatchHandoff(...)`，
  *   **没有发布局部首帧 scene，也没有同步 drawSnapshot**
  *
- * 缺口2：自动换行的 ReflowMove 没进入首帧 handoff。
- * - timeline 里会把 ReflowMove 的 newRange 放进 hiddenRanges，再从 oldBounds -> newBounds 平移
- * - 但 `onAuthoritativeLayout()` 建首帧 scene 时完全没处理 `localPatch.reflowMoves`
- * - 当首帧只做 insert->隐藏新字、delete->画旧字ghost、cursor->放旧caret 时，
- *   BasicTextField 已经使用 newLayout，所以自动换行后幸存文字会先直接出现在新行
- *
- * 缺口3：快速连续输入时，同一段字可能同时存在"旧 active unit + 新 ReflowMove"，会重复绘制。
- * - `applyReflowMoves()` 的去重条件只有
- *   `if (surviving.any { it.targetRange == newRange && it.role == VisualUnitRole.ReflowMove }) continue`
- * - 这不够：surviving 里可能已有一个 role=Inserted 的 unit，applyReflowMoves() 因为它不是 ReflowMove 不会跳过，
- *   又创建第二个 role=ReflowMove
- * - 同一段文字被两个 overlay unit 同时画，产生重影、闪字
- *
- * 当前代码下三个暴露断言都应 **FAIL**（证明 bug 存在）。
+ * #711 评论 5738906634：删除 ReflowMove 路线后，原缺口2/缺口3（自动换行必须创建 ReflowMove /
+ * 部分重叠 ReflowMove 去重）已不再适用 — 幸存正文不再由 overlay 接管。
+ * 本文件保留缺口1 测试，并新增 `reflow_surviving_text_not_in_hiddenRanges` 断言：
+ * 输入触发软换行时，幸存正文不进入 hiddenRanges，直接由 BasicTextField 画最终位置。
  */
 @Suppress("LongMethod", "MaxLineLength")
 @RunWith(RobolectricTestRunner::class)
@@ -144,57 +132,48 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         )
     }
 
-    // ==================== 缺口2：ReflowMove 没进入首帧 handoff ====================
+    // ==================== #711：ReflowMove 路线删除后的新语义断言 ====================
 
     /**
-     * 缺口2：onAuthoritativeLayout 建首帧 scene 时没处理 localPatch.reflowMoves。
+     * #711 评论 5738906634：删除 ReflowMove 路线后 —
+     * 输入触发软换行时，幸存正文不进入 hiddenRanges，直接由 BasicTextField 画最终位置。
      *
-     * buildLocalInputPatch 会通过 ComposeReflowPlanner.plan 产生 reflowMoves（行 590-595），
-     * 但 onAuthoritativeLayout 建首帧 scene 时（行 775-828）只处理：
-     * - insertedUnits -> 加进 hiddenRanges
-     * - deletedUnits -> 建 ghost
-     * - cursor -> 放旧 caret
-     * 完全没有处理 localPatch.reflowMoves。
+     * 场景："ab" -> "a\nb"（在 offset 1 插入换行符，'b' 被挤到第二行 = 软换行）。
+     * - 文本 offset："a\nb" 中 'a'=[0,1)，'\n'=[1,2)，'b'=[2,3)。
+     * - '\n' [1,2) 是新插入字符（changes.newRange=[1,2)），应进 hiddenRanges 由动画层吐字。
+     * - 'b' [2,3) 是幸存正文（没被插入、没被删除，只是因为软换行从第一行移到第二行）。
+     * - 旧 ReflowMove 路线会把幸存正文 'b' 的 newRange 加进 hiddenRanges，让 BasicTextField 裁掉，
+     *   再由 overlay 从 oldBounds 平移到 newBounds，导致闪烁/软换行失配。
+     * - 删除 ReflowMove 路线后，'b' 不应进 hiddenRanges，直接由 BasicTextField 画最终位置。
      *
-     * 暴露断言：onAuthoritativeLayout 触发自动换行（产生非空 reflowMoves）后，
-     * 首帧 scene（drawSnapshotState.scene）应包含 ReflowMove 相关条目
-     *（ReflowMove role 的 unit 或 reflow 相关的 hiddenRanges）。
-     * 当前 bug：首帧 scene 完全没有处理 reflowMoves，不包含任何 ReflowMove 相关条目。
+     * 暴露断言：
+     * 1. 新插入的换行符 '\n' [1,2) 应在 hiddenRanges 中（新插入字符由动画层吐字）；
+     * 2. 幸存正文 'b' [2,3) 不应在 hiddenRanges 中（直接由 BasicTextField 画最终位置）。
      */
     @Test
-    fun repro_comment5724568261_gap2_reflowMovesNotInFirstFrameHandoff() {
-        // 用窄宽度 30px："ab" 一行；"a\nb" 跨两行（'b' 从第一行移到第二行，触发 reflow）
+    fun reflow_surviving_text_not_in_hiddenRanges() {
+        // 用窄宽度 30px："ab" 一行；"a\nb" 跨两行（'b' 从第一行移到第二行，触发软换行）
         val layouts = captureLayoutsWithWidth(arrayOf("ab", "a\nb"), 30)
         val state =
             ComposeEditorVisualState(
-                targetId = "test-708-5724568261-gap2",
+                targetId = "test-711-5724568261-reflow",
                 classifier = FakeLocalVisualPlanClassifier,
             )
 
-        // 确认 "ab" 一行，"a\nb" 跨两行（确保 reflow 场景成立）
+        // 确认 "ab" 一行，"a\nb" 跨两行（确保软换行场景成立）
         assertTrue(
-            "gap2: 'ab' 应一行，实际 lineCount=${layouts[0].lineCount}",
+            "reflow: 'ab' 应一行，实际 lineCount=${layouts[0].lineCount}",
             layouts[0].lineCount == 1,
         )
         assertTrue(
-            "gap2: 'a\\nb' 应跨两行，实际 lineCount=${layouts[1].lineCount}",
+            "reflow: 'a\\nb' 应跨两行，实际 lineCount=${layouts[1].lineCount}",
             layouts[1].lineCount >= 2,
-        )
-
-        // 确认 'b' [1,2) 在 "ab" 和 "a\nb" 中位置不同（确保 reflow 触发）
-        val bPosInAb = layouts[0].getPathForRange(1, 2).getBounds()
-        val bPosInNewlineB = layouts[1].getPathForRange(1, 2).getBounds()
-        assertTrue(
-            "gap2: 'b' [1,2) 在 'ab' 和 'a\\nb' 中位置应不同（确保 reflow 触发），" +
-                "ab bounds=$bPosInAb, newlineB bounds=$bPosInNewlineB",
-            kotlin.math.abs(bPosInAb.top - bPosInNewlineB.top) > 1f ||
-                kotlin.math.abs(bPosInAb.left - bPosInNewlineB.left) > 1f,
         )
 
         // 初始 layout："ab"
         state.onAuthoritativeLayout(layouts[0], TextRange(1, 1), 0)
 
-        // 本地输入: "ab" -> "a\nb"（在 offset 1 插入换行符，'b' 被挤到第二行 = reflow）
+        // 本地输入: "ab" -> "a\nb"（在 offset 1 插入换行符，'b' 被挤到第二行 = 软换行）
         state.recordLocalInput(
             oldText = "ab",
             newText = "a\nb",
@@ -202,173 +181,33 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
             newSelection = TextRange(2, 2),
             changes = listOf(LocalInputChange(newRange = TextRange(1, 2), oldRange = TextRange(1, 1))),
         )
-        // onAuthoritativeLayout 配对生成 localPatch（含非空 reflowMoves），建立首帧 scene
+        // onAuthoritativeLayout 配对生成 localPatch，建立首帧 scene
         state.onAuthoritativeLayout(layouts[1], TextRange(2, 2), 0)
 
-        // drawSnapshot() 是 internal fun，返回 drawSnapshotState（onAuthoritativeLayout 在行 830-835 同步了 drawSnapshotState）
         val firstFrameScene = state.drawSnapshot().scene
 
-        // 反射读取 pendingPatches 确认 localPatch 已入队且 reflowMoves 非空
-        val pendingPatchesField = ComposeEditorVisualState::class.java.getDeclaredField("pendingPatches")
-        pendingPatchesField.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val pendingPatches = pendingPatchesField.get(state) as ArrayDeque<ComposeVisualPatch>
+        // 换行符 '\n' 的 newRange 是 [1,2)（新插入字符）。
+        // 新插入字符应进 hiddenRanges，由动画层吐字。
+        val newlineNewRange = TextRange(1, 2)
+        val newlineInHiddenRanges =
+            firstFrameScene.hiddenRanges.any { it.start == newlineNewRange.start && it.end == newlineNewRange.end }
         assertTrue(
-            "gap2: onAuthoritativeLayout 后应有一笔 localPatch 入队，实际 size=${pendingPatches.size}",
-            pendingPatches.size == 1,
+            "reflow: 新插入的换行符 '\\n' [1,2) 应在 hiddenRanges 中（新插入字符由动画层吐字），" +
+                "实际 hiddenRanges=${firstFrameScene.hiddenRanges}",
+            newlineInHiddenRanges,
         )
-        val localPatch = pendingPatches.first()
+
+        // 'b' 的 newRange 是 [2,3)（在 "a\nb" 中 'b' 在 offset 2-3，因为 '\n' 占了 offset 1）。
+        // 幸存正文不应进 hiddenRanges，直接由 BasicTextField 画最终位置。
+        val bNewRange = TextRange(2, 3)
+        val bInHiddenRanges =
+            firstFrameScene.hiddenRanges.any { it.start == bNewRange.start && it.end == bNewRange.end }
         assertTrue(
-            "gap2: localPatch.reflowMoves 应非空（'b' 从第一行 reflow 到第二行），" +
-                "实际 reflowMoves=${localPatch.reflowMoves}" +
-                "（如果为空说明 ComposeReflowPlanner.plan 未生成 reflow，测试场景需调整）",
-            localPatch.reflowMoves.isNotEmpty(),
-        )
-
-        // 暴露断言：首帧 scene 应包含 ReflowMove 相关条目。
-        // 评论描述：onAuthoritativeLayout 建首帧 scene 时应处理 localPatch.reflowMoves，
-        // 把 ReflowMove 的 newRange 放进 hiddenRanges 或建立 ReflowMove role 的 unit，
-        // 让 BasicTextField 的新位置暂时不重复画，由 overlay 从 oldBounds -> newBounds 平移。
-        // 当前 bug：首帧 scene 完全没有处理 reflowMoves。
-        val reflowMoveUnitCount =
-            firstFrameScene.units.count { it.role == VisualUnitRole.ReflowMove }
-        val hasReflowInHiddenRanges =
-            localPatch.reflowMoves.any { move ->
-                firstFrameScene.hiddenRanges.any { it.start == move.newRange.start && it.end == move.newRange.end }
-            }
-        assertTrue(
-            "gap2: 首帧 scene 应包含 ReflowMove 相关条目（ReflowMove role 的 unit 或 reflow 的 hiddenRanges），" +
-                "实际 reflowMoveUnitCount=$reflowMoveUnitCount, hasReflowInHiddenRanges=$hasReflowInHiddenRanges" +
-                "（当前 bug：onAuthoritativeLayout 建首帧 scene 时只处理 insertedUnits/deletedUnits/cursor，" +
-                "完全没处理 localPatch.reflowMoves，自动换行后幸存文字会先直接出现在新行）",
-            reflowMoveUnitCount > 0 || hasReflowInHiddenRanges,
-        )
-    }
-
-    // ==================== 缺口3：applyReflowMoves 去重不足 ====================
-
-    /**
-     * 缺口3：applyReflowMoves 去重条件过窄。
-     *
-     * 用 [ComposeVisualTimeline] 直接操作。
-     *
-     * 场景（用窄宽度 30px 让换行触发几何位移）：
-     * - 第一笔：插入 patch，oldLayout="" newLayout="ab"，insertedUnits=[TextRange(1,2)]（'b'）。
-     *   创建 Inserted role 的 unit，targetRange=[1,2)，position='b' 在 "ab" 第一行。
-     * - 在 20ms 时 apply 第二笔（unit 还 active，alpha=0.02 未收口）。
-     * - 第二笔：带非空 reflowMoves 的 patch，oldLayout="ab" newLayout="\nb"，
-     *   reflowMoves=[ComposeReflowMove(oldRange=[1,2), newRange=[1,2), oldBounds, newBounds)]。
-     *   newRange=[1,2) 命中第一笔 unit 的 targetRange=[1,2)。
-     *
-     * applyReflowMoves 的去重条件（行 771）：
-     * `if (surviving.any { it.targetRange == newRange && it.role == VisualUnitRole.ReflowMove }) continue`
-     * 只查 role==ReflowMove，不查 Inserted。
-     * surviving 里已有 role=Inserted 的 unit（targetRange=[1,2)），applyReflowMoves 不跳过，
-     * 又创建第二个 role=ReflowMove（targetRange=[1,2)）。
-     *
-     * 暴露断言：`assertEquals(1, sameRangeUnitCount)` — 当前代码下应 **FAIL**（有 2 个 unit）。
-     */
-    @Test
-    fun repro_comment5724568261_gap3_applyReflowMovesDedupInsufficient() {
-        // 用窄宽度 30px："ab" 一行（'b' 在 [1,2) 第一行）；"\nb" 跨两行（'b' 在 [1,2) 第二行）
-        val layouts = captureLayoutsWithWidth(arrayOf("", "ab", "\nb"), 30)
-        val emptyLayout = ComposeLayoutSnapshot(layouts[0], TextRange(0, 0), 0)
-        val abLayout = ComposeLayoutSnapshot(layouts[1], TextRange(2, 2), 0)
-        val newlineBLayout = ComposeLayoutSnapshot(layouts[2], TextRange(2, 2), 0)
-
-        // 确认 "ab" 一行，"\nb" 跨两行（确保几何位移场景成立）
-        assertTrue(
-            "gap3: 'ab' 应一行，实际 lineCount=${layouts[1].lineCount}",
-            layouts[1].lineCount == 1,
-        )
-        assertTrue(
-            "gap3: '\\nb' 应跨两行，实际 lineCount=${layouts[2].lineCount}",
-            layouts[2].lineCount >= 2,
-        )
-
-        // 确认 'b' [1,2) 在 "ab" 和 "\nb" 中位置不同（确保 reflow 触发）
-        val bPosInAb = layouts[1].getPathForRange(1, 2).getBounds()
-        val bPosInNewlineB = layouts[2].getPathForRange(1, 2).getBounds()
-        assertTrue(
-            "gap3: 'b' [1,2) 在 'ab' 和 '\\nb' 中位置应不同（确保 reflow 触发），" +
-                "ab bounds=$bPosInAb, newlineB bounds=$bPosInNewlineB",
-            kotlin.math.abs(bPosInAb.top - bPosInNewlineB.top) > 1f ||
-                kotlin.math.abs(bPosInAb.left - bPosInNewlineB.left) > 1f,
-        )
-
-        val timeline = ComposeVisualTimeline()
-        val motionPolicy =
-            EditorMotionPolicy(
-                textDurationMillis = 1000L,
-                cursorEnabled = true,
-                coordinated = true,
-            )
-
-        // 第一笔：插入 'b'，创建 Inserted role 的 unit，targetRange=[1,2)
-        val patch1 =
-            makePatch(
-                id = 1L,
-                oldLayout = emptyLayout,
-                newLayout = abLayout,
-                insertedUnits = listOf(TextRange(1, 2)),
-                durationMs = 1000L,
-                motionPolicy = motionPolicy,
-            )
-        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L)
-
-        // 确认第一笔创建了 Inserted role 的 unit
-        val sceneAfter1 = timeline.sample(0L)
-        val unitAfter1 = sceneAfter1.units.firstOrNull { it.targetRange == TextRange(1, 2) }
-        assertNotNull(
-            "gap3: 第一笔 applyPatch 后应存在 targetRange=[1,2) 的 unit",
-            unitAfter1,
-        )
-        assertEquals(
-            "gap3: 第一笔创建的 unit role 应为 Inserted",
-            VisualUnitRole.Inserted,
-            unitAfter1!!.role,
-        )
-
-        // 在 20ms 时 apply 第二笔（unit 还 active，alpha=0.02 未收口）
-        // 第二笔：reflowMoves 命中 unit（newRange=[1,2)），newLayout="\nb" 让 [1,2) 位置变化
-        val reflowMove =
-            ComposeReflowMove(
-                oldRange = TextRange(1, 2),
-                newRange = TextRange(1, 2),
-                oldBounds = bPosInAb,
-                newBounds = bPosInNewlineB,
-            )
-        val patch2 =
-            makePatch(
-                id = 2L,
-                oldLayout = abLayout,
-                newLayout = newlineBLayout,
-                reflowMoves = listOf(reflowMove),
-                durationMs = 1000L,
-                motionPolicy = motionPolicy,
-            )
-        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS)
-
-        // 采样检查 surviving units
-        val scene = timeline.sample(20L * NANOS_PER_MS)
-
-        // 找所有 targetRange=[1,2) 的 surviving unit
-        val sameRangeUnits = scene.units.filter { it.targetRange == TextRange(1, 2) }
-
-        // 暴露断言：同一段文字 [1,2) 应只有一个 overlay unit。
-        // applyReflowMoves 的去重条件应覆盖 surviving 中所有可能已存在的同 targetRange unit
-        // （包括 Inserted/RetainedMove role），避免同一段文字被两个 overlay unit 同时画。
-        // 当前 bug：去重条件只查 role==ReflowMove 不查 Inserted，
-        // surviving 里已有 role=Inserted 的 unit 时又创建第二个 role=ReflowMove，
-        // 同一段文字被两个 overlay unit 同时画产生重影、闪字。
-        val sameRangeUnitCount = sameRangeUnits.size
-        assertEquals(
-            "gap3: 同一段文字 [1,2) 应只有一个 overlay unit（去重应覆盖所有 role），" +
-                "实际 sameRangeUnitCount=$sameRangeUnitCount, roles=${sameRangeUnits.map { it.role }}" +
-                "（当前 bug：applyReflowMoves 去重条件只查 role==ReflowMove 不查 Inserted，" +
-                "surviving 里已有 Inserted unit 时又创建 ReflowMove unit，产生重影）",
-            1,
-            sameRangeUnitCount,
+            "reflow: 软换行后幸存正文 'b' [2,3) 不应进 hiddenRanges，" +
+                "实际 hiddenRanges=${firstFrameScene.hiddenRanges}" +
+                "（旧 ReflowMove 路线会把幸存正文 newRange 加进 hiddenRanges 让 BasicTextField 裁掉，" +
+                "导致闪烁/软换行失配；删除 ReflowMove 路线后应直接由 BasicTextField 画最终位置）",
+            !bInHiddenRanges,
         )
     }
 
@@ -388,7 +227,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         insertedUnits: List<TextRange> = emptyList(),
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
-        reflowMoves: List<ComposeReflowMove> = emptyList(),
         cursorMotionPath: CursorMotionPath? = null,
         durationMs: Long = 100L,
         motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
@@ -402,7 +240,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            reflowMoves = reflowMoves,
             cursorMotionPath = cursorMotionPath,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,

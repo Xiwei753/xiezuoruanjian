@@ -23,7 +23,7 @@ internal object ComposeVisualClip {
      * - `!coordinatedSpatialClip && alpha <= 0` → return null（跳过，alpha 主导显隐）
      * - glyph bounds 取不到 → return null
      * - 零宽 glyph → return 1f（由 alpha 单独决定）
-     * - RetainedMove / ReflowMove → return 1f（始终完整可见，不参与 spatial clip）
+     * - RetainedMove → return 1f（始终完整可见，不参与 spatial clip）
      * - Inserted / DeletedGhost → 跨行裁切 + 同行裁切，return fraction
      *
      * @param unit 要计算 fraction 的 unit（alpha/position 已插值到当前帧）。
@@ -71,7 +71,7 @@ internal object ComposeVisualClip {
             // cursor 在 glyph 处或之后 → 完整可见（1f）。
             // 与 handoff rebase 的 text-offset heuristic fallback 一致，避免 Robolectric
             // 零宽环境下 handoff=0 而 timeline=1 的首帧跳变（I5）。
-            // 其他 role（Inserted/RetainedMove/ReflowMove）零宽仍返回 1f（由 alpha 决定）。
+            // 其他 role（Inserted/RetainedMove）零宽仍返回 1f（由 alpha 决定）。
             if (unit.role == VisualUnitRole.DeletedGhost) {
                 return if (cursorLeft < glyphLeft) 0f else 1f
             }
@@ -80,11 +80,7 @@ internal object ComposeVisualClip {
         // #703 评论 5710977972 缺陷2：RetainedMove（幸存回流文字）始终完整可见，
         // 不进入 spatial clip 裁切。显式返回 fraction=1 最稳妥，
         // 避免 draw 层 coordinated 模式下缺失 key 默认成 0（inserted 分支）。
-        // #708 评论 5723410606 第四节：ReflowMove 同样始终完整可见（alpha 永远 1），
-        // 不参加 cursor spatial clip。
-        if (unit.role == VisualUnitRole.RetainedMove ||
-            unit.role == VisualUnitRole.ReflowMove
-        ) {
+        if (unit.role == VisualUnitRole.RetainedMove) {
             return 1f
         }
         // #703 评论 5710977972 缺陷1：跨行裁切改为按行序单调状态。
@@ -133,7 +129,6 @@ internal object ComposeVisualClip {
                 }
             }
             VisualUnitRole.RetainedMove -> 1f
-            VisualUnitRole.ReflowMove -> 1f
         }
     }
 

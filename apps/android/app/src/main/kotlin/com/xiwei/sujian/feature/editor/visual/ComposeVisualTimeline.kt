@@ -331,12 +331,6 @@ class ComposeVisualTimeline {
             // 不应作用于 pendingSurviving（它们已被重新分段）。
             applyRetainedMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
 
-            // #708 评论 5723410606 第四节：独立 reflow 通道 —
-            // reflowMoves 是与 retainedMoves 不同的所有权：字仍存在，但从 oldBounds 平移到 newBounds，
-            // 始终全亮。active 时把 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
-            // 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
-            applyReflowMoves(patch, frameTimeNanos, durationNanos, startedSurviving)
-
             // 合并：已开始存活 + 重新分段（pending + 新插入） + ghost
             units = startedSurviving + repartitioned.allUnits + ghosting
             // surviving 列表对外暴露给 cursor 合并逻辑：只含 startedSurviving + repartitionedPending
@@ -1016,90 +1010,6 @@ class ComposeVisualTimeline {
                 // 始终完整可见，不进入 spatial clip 裁切。
                 role = VisualUnitRole.RetainedMove,
             )
-    }
-
-    /**
-     * #708 评论 5723410606 第四节：独立 reflow 通道 —
-     * 把 [ComposeVisualPatch.reflowMoves] 转成 [VisualTextUnit]。
-     *
-     * 规则（评论 5723410606 第四节）：
-     * - ReflowMove alpha 永远 1；
-     * - 不参加 cursor spatial clip（computeUnitClipFractions 给 fraction=1）；
-     * - 只做 position old -> new；
-     * - active 时把它的 newRange 放进 hiddenRanges（sample 已统一处理）；
-     * - 完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管（sample 收口）。
-     *
-     * 与 [applyRetainedMoves] 的区别：
-     * - reflowMoves 携带 oldBounds/newBounds，不重新查 layout；
-     * - reflowMoves 只对位置真变化的 slice 生成 unit（planner 已过滤）；
-     * - reflowMoves 不复用已有 active unit 的 position 通道 — 它是独立轨道。
-     */
-    private fun applyReflowMoves(
-        patch: ComposeVisualPatch,
-        frameTimeNanos: Long,
-        durationNanos: Long,
-        surviving: MutableList<VisualTextUnit>,
-    ) {
-        if (patch.reflowMoves.isEmpty()) return
-        val newLayout = patch.newLayout
-        for (move in patch.reflowMoves) {
-            val newRange = move.newRange
-            if (newRange.start >= newRange.end) continue
-            if (newRange.end > newLayout.result.layoutInput.text.length) continue
-            // #708 评论 5724568261 缺口3：去重条件过窄修复 —
-            // 旧条件只查 role==ReflowMove：`surviving.any { it.targetRange == newRange && it.role == VisualUnitRole.ReflowMove }`，
-            // 不查 Inserted/RetainedMove。surviving 里已有 role=Inserted 的 unit 时，applyReflowMoves 不跳过，
-            // 又创建第二个 role=ReflowMove，同一段文字被两个 overlay unit 同时画产生重影。
-            //
-            // 修复：用 subtractOverlayOwnedRanges 把 move.newRange 中已被其他 active unit
-            // （targetRange != null 的存活 unit，含 Inserted/RetainedMove/ReflowMove）接管的范围切掉。
-            // 只给没有被其他 active unit 接管的剩余 slice 创建 ReflowMove。
-            // 已有 unit 已经经过 mapSurvivingSlice()，它的位置通道本身会根据新 layout 做 redirect，
-            // 继续让原 unit 完成自己的动画即可。
-            val remainingMoves = subtractOverlayOwnedRanges(move, surviving, patch)
-            for (remaining in remainingMoves) {
-                val nr = remaining.newRange
-                if (nr.start >= nr.end) continue
-                val oldPosition = Offset(remaining.oldBounds.left, remaining.oldBounds.top)
-                val newPosition = Offset(remaining.newBounds.left, remaining.newBounds.top)
-                surviving +=
-                    VisualTextUnit(
-                        key = nextUnitKey++,
-                        layout = newLayout,
-                        range = nr,
-                        targetRange = nr,
-                        // alpha 永远 1：始终全亮
-                        alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
-                        // 只做 position old -> new
-                        position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
-                        role = VisualUnitRole.ReflowMove,
-                    )
-            }
-        }
-    }
-
-    /**
-     * #708 评论 5725146968：从 [move.newRange] 中减去已被 [surviving] 中 active unit 接管的范围 —
-     *
-     * 使用 [ComposeOverlayOwnership.subtractOwnedRanges] 做真正的差集运算：
-     * - 完全覆盖：返回空 list（不创建 ReflowMove）
-     * - 无重叠：返回原 move
-     * - 部分重叠：返回剩余 slice 的 ReflowMove 列表（每个 slice 的 old/new bounds 从真实 layout 取）
-     *
-     * 不允许同一个 UTF-16 target range 同时被两个 VisualTextUnit 拥有。
-     */
-    private fun subtractOverlayOwnedRanges(
-        move: ComposeReflowMove,
-        surviving: List<VisualTextUnit>,
-        patch: ComposeVisualPatch,
-    ): List<ComposeReflowMove> {
-        val ownedRanges = surviving.mapNotNull { it.targetRange }
-        return ComposeOverlayOwnership.subtractOwnedRanges(
-            move = move,
-            ownedRanges = ownedRanges,
-            oldLayout = patch.oldLayout,
-            newLayout = patch.newLayout,
-        )
     }
 
     /**
@@ -1793,20 +1703,18 @@ data class TimedOffset(
 
 /**
  * #703 评论 5710977972 缺陷2：VisualTextUnit 的视觉角色 —
- * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流）/ reflowMove（独立 reflow），
+ * 区分 inserted（吐字）/ deletedGhost（吞字）/ retainedMove（幸存回流），
  * 不再用 targetRange!=null 间接判断。
  *
  * - [Inserted]：本 patch 新插入的字，由 cursor 从左向右裁切吐出。
  * - [DeletedGhost]：本 patch 删除的 ghost 字，由 cursor 从右向左裁切吞掉。
  * - [RetainedMove]：幸存回流文字（retainedMoves 创建），始终完整可见，
  *   不进入 spatial clip 裁切（computeUnitClipFractions 直接给 fraction=1）。
- * - [ReflowMove]：#708 评论 5723410606 第四节独立 reflow 通道 —
- *   字仍存在，但从 oldBounds 平移到 newBounds，始终全亮（alpha 永远 1）。
- *   不参加 cursor spatial clip；只做 position old -> new；
- *   active 时把它的 newRange 放进 hiddenRanges，让 BasicTextField 的新位置暂时不重复画；
- *   完成后直接从 timeline 删除，下一帧由 BasicTextField 新位置接管。
+ *
+ * #711 评论 5738906634：删除 ReflowMove 路线 —
+ * 软换行幸存正文不再由 overlay 接管，直接让 BasicTextField 画最终位置。
  */
-enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove, ReflowMove }
+enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
 
 /**
  * #689 评论 5674631257 步骤2：单个文字单元的持续视觉状态。

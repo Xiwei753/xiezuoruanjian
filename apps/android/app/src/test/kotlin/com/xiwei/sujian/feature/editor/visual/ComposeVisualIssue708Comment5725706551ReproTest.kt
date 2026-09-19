@@ -1578,7 +1578,7 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
      * 两种写法共用同一计数器，会留下已用过但计数器还停在该值的 key，连续 handoff 可能撞 key。
      *
      * 修复后：统一 allocateHandoffUnitKey() 入口（post-increment），所有 handoff 临时 unit
-     * （split child、remaining delete ghost、ReflowMove）走同一入口，不再手写 ++。
+     * （split child、remaining delete ghost）走同一入口，不再手写 ++。
      *
      * 测试场景（跨两次 handoff，中间不 drain timeline）：
      * 1. 初始 "abcdefghi"（9 字符触发 RUN_ANIMATION 产生多字符 unit [0,9)），drain，sample 到完成

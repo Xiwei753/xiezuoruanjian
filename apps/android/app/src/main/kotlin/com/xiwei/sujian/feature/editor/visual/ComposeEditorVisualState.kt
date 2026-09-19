@@ -199,7 +199,7 @@ class ComposeEditorVisualState(
 
     /**
      * #708 评论 5729482707 修复3：handoff 临时 unit key 唯一 allocator —
-     * 所有 handoff 临时 unit（split child、remaining delete ghost、ReflowMove）统一走此入口，
+     * 所有 handoff 临时 unit（split child、remaining delete ghost）统一走此入口，
      * 不再手写 ++，避免两种自增写法混用导致连续 handoff 撞 key。
      */
     private fun allocateHandoffUnitKey(): Long = nextHandoffUnitKey++
@@ -379,18 +379,16 @@ class ComposeEditorVisualState(
      *    存活 slice 改 newRange/newLayout，保持当前屏幕位置；被删除 slice 从当前可见 alpha/position
      *    转 handoff ghost（不新建 alpha=1 的完整 ghost）。已有 ghost 保持当前状态。
      * 2. **hiddenRanges 重新推导**：从 rebase 后所有 targetRange != null 的 unit 重新推导
-     *    （不再从旧 hiddenRanges 复制），再加 [patch.insertedUnits] 和 reflow slice 的 newRange。
+     *    （不再从旧 hiddenRanges 复制），再加 [patch.insertedUnits] 的 newRange。
      *    这确保 hiddenRanges 和 newLayout 属于同一个坐标系。
      * 3. **deletedUnits 只补差集**：先收集 rebase 阶段已经转成 ghost 的旧正文范围（ghostedCoverage），
      *    只给"没有被旧 active unit 接管"的 deletedUnits 新建 alpha=1 的完整 ghost。
      *    这避免同一 glyph 同时出现 Inserted + DeletedGhost 的重影。
-     * 4. **Reflow**：保持现有差集逻辑（[ComposeOverlayOwnership.subtractOwnedRanges]），
-     *    但 ownedRanges 从 rebase 后的 units 取。
-     * 5. **Cursor**：保持现有首帧光标处理逻辑。
+     * 4. **Cursor**：保持现有首帧光标处理逻辑。
      *
-     * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/reflowMoves/originCursorRect）。
-     * @param oldLayout T0 布局（建 ghost / reflow oldBounds 来源）。
-     * @param newLayout Tn 布局（reflow unit 所属 layout）。
+     * @param patch 本笔 local patch（含 insertedUnits/deletedUnits/retainedMoves/originCursorRect）。
+     * @param oldLayout T0 布局（建 ghost 来源）。
+     * @param newLayout Tn 布局（unit 所属 layout）。
      * @param restingCursorRect 当前静止光标 rect — 写进 drawSnapshotState.restingCursorRect。
      */
     private fun publishLocalHandoffScene(
@@ -480,54 +478,6 @@ class ComposeEditorVisualState(
                     )
                 handoffNewGhostRanges.add(del)
                 remainingGhostKeys.add(ghostKey)
-            }
-
-            // #708 评论 5725146968 缺口2：reflow 首帧 — 为每个 reflowMove 建一个首帧静止的 ReflowMove unit。
-            // 使用 ComposeOverlayOwnership.subtractOwnedRanges 做真正的差集，
-            // 只给没有被其他 active unit 接管的 slice 建临时 ReflowMove。
-            // 同时把差集后剩余 slice 的 newRange 加进 hiddenRanges，
-            // 让 BasicTextField 已落到新行的那份字先裁掉，由 overlay 从 oldBounds -> newBounds 平移。
-            // 首帧静止在旧位置（position from=to=oldPosition），alpha 永远 1。
-            // 下一帧 timeline.applyPatch 正式创建 oldBounds -> newBounds 的 ReflowMove 后直接覆盖首帧 scene。
-            // #708 评论 5725706551：ownedRanges 从 rebase 后的 units 取（新坐标系）。
-            val ownedRanges = rebasedUnits.mapNotNull { it.targetRange }
-            for (move in patch.reflowMoves) {
-                val remainingSlices =
-                    ComposeOverlayOwnership.subtractOwnedRanges(
-                        move = move,
-                        ownedRanges = ownedRanges,
-                        oldLayout = oldLayout,
-                        newLayout = newLayout,
-                    )
-                for (slice in remainingSlices) {
-                    val nr = slice.newRange
-                    if (nr.start >= nr.end) continue
-                    if (nr.end > newLayout.result.layoutInput.text.length) continue
-                    // hiddenRanges：让 BasicTextField 已落到新行的那份字先裁掉
-                    if (mergedHidden.none { it.start == nr.start && it.end == nr.end }) {
-                        mergedHidden.add(nr)
-                    }
-                    // 已有同 newRange 的 ReflowMove 首帧 unit 则跳过
-                    if (rebasedUnits.any {
-                            it.targetRange == nr && it.role == VisualUnitRole.ReflowMove
-                        }
-                    ) {
-                        continue
-                    }
-                    val oldPosition = Offset(slice.oldBounds.left, slice.oldBounds.top)
-                    rebasedUnits +=
-                        VisualTextUnit(
-                            key = allocateHandoffUnitKey(),
-                            layout = newLayout,
-                            range = nr,
-                            targetRange = nr,
-                            // 首帧静止：alpha 永远 1
-                            alpha = TimedFloat(1f, 1f, 0L, 0L),
-                            // 首帧静止在旧位置
-                            position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
-                            role = VisualUnitRole.ReflowMove,
-                        )
-                }
             }
 
             // #708 评论 5725146968：首帧光标所有权 —
@@ -867,18 +817,11 @@ class ComposeEditorVisualState(
         // 被删除的 glyph 可以由 visual layer 接管（ghost）；
         // 后续普通排版回流先交给 BasicTextField 自己；
         // 不要因为一次 Backspace 就把整行幸存文字全部切到 overlay。
-        // #708 评论 5723410606 第四节：独立 reflow 通道 —
-        // 不再把"整行/整段 path.getBounds()"当一个块移动（retainedMoves），
-        // 改成 ComposeReflowPlanner.plan 按 old/new 行边界切细段，每段在两边都只落在单一视觉行，
-        // 只有位置真的变化才生成 ComposeReflowMove。reflowMoves 是与 retainedMoves 不同的所有权：
-        // 字仍存在，但从 oldBounds 平移到 newBounds，始终全亮。
+        // #711 评论 5738906634：删除 ReflowMove 路线 —
+        // 软换行几何已由 BasicTextField + TextLayoutResult 给出，不再自建第二套幸存文字位移系统。
+        // 没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
+        // 直接让 BasicTextField 画最终位置。
         val retainedMoves = emptyList<RetainedMove>()
-        val reflowMoves =
-            ComposeReflowPlanner.plan(
-                oldLayout = oldLayout,
-                newLayout = newLayout,
-                offsetMap = offsetMap,
-            )
 
         // #694 评论 5693864609 问题1：cursor path 改用 buildLocalChainCursorPath —
         // 对每一笔 edit 用该笔 newSelection.end 作为阶段 caret，
@@ -917,7 +860,6 @@ class ComposeEditorVisualState(
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            reflowMoves = reflowMoves,
             cursorMotionPath = cursorMotionPath,
             // 本地输入时长由 motionPolicy 决定（timeline 用 policy.textDurationMillis）
             durationMs = 0L,

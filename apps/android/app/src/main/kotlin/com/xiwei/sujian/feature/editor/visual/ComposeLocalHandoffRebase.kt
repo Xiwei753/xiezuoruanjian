@@ -190,7 +190,7 @@ internal object ComposeLocalHandoffRebase {
         // 旧实现对 surviving slice 直接返回 parentOldFraction，front/back 都拿到 parent 整体进度。
         // 现在统一用 slice.oldSubRange + sliceScreenPosition + parentOldCursorRect + fractionFor
         // 算 slice 自己在 parent cursor 下的真实可见度。
-        // surviving slice 的 role 保持原 unit.role（Inserted / RetainedMove / ReflowMove），
+        // surviving slice 的 role 保持原 unit.role（Inserted / RetainedMove），
         // 不是 DeletedGhost — 这样 fractionFor 走 insert/retained 分支，符合"cursor 越过 = 已吐完"语义。
         // ghost slice 的 role 改 DeletedGhost，走 delete 分支。
         return computeSliceFractionWithParentCursor(
@@ -232,7 +232,7 @@ internal object ComposeLocalHandoffRebase {
                 sliceRange = slice.oldSubRange,
                 parentScreenPosition = unit.position.from,
             ) ?: unit.position.from
-        // #708 评论 5733321056 修复3：surviving slice 保持原 role（Inserted / RetainedMove / ReflowMove），
+        // #708 评论 5733321056 修复3：surviving slice 保持原 role（Inserted / RetainedMove），
         // ghost slice 改 DeletedGhost — fractionFor 据此走 insert/delete 分支。
         val sliceRole = if (isGhostSlice) VisualUnitRole.DeletedGhost else unit.role
         val sliceUnit =

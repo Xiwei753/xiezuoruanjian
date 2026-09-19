@@ -50,6 +50,11 @@ import com.xiwei.sujian.feature.editor.layout.cursorRect
  *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
  *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
  *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
+ *    **语义收死（#711 评论 5738906634）**：hiddenRanges 只能表示
+ *    "这一帧确实由动画层接管的字符"（新插入正在吐字、被删除的旧字 ghost），
+ *    不能表示"位置变了所以想自己重画的幸存正文"。
+ *    没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
+ *    直接让 BasicTextField 画最终位置。
  * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
  * 3. **视觉光标**：drawsVisualCursor 时，cursorRect 从 scene.cursorRect
  *    ?: [computeRestingCursorRect] ?: restingCursorRect 读取，[drawVisualCursorRect] 绘制。
@@ -162,6 +167,9 @@ fun EditorTextFieldDrawLayer(
  * `Offset(0f, -scrollY)` 统一三者坐标系，不改 BasicTextField 自己的滚动。
  *
  * @param hiddenRanges 需要裁切的正文 range 列表。
+ *   **语义收死（#711 评论 5738906634）**：只能表示"这一帧确实由动画层接管的字符"
+ *   （新插入正在吐字、被删除的旧字 ghost），不能表示"位置变了所以想自己重画的幸存正文"。
+ *   没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges。
  * @param layout 当前正文 layout 快照；null 时返回 null。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value，
  *   用于把正文坐标 path 换算到视口坐标。

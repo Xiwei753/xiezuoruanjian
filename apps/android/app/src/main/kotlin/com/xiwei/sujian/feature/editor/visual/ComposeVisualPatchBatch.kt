@@ -112,14 +112,6 @@ internal object ComposeVisualPatchBatch {
         // 路径）时按 stage offset map 映射 oldRange→T0 / newRange→Tn 后合成。
         val retainedMoves = composeRetainedMovesAcrossStages(batch)
 
-        // #708 评论 5723410606 第四节：reflow 合批 —
-        // 同一 VSync 多笔本地输入合批时，reflow 用 batch.first().oldLayout
-        // -> composed offsetMap -> batch.last().newLayout 只算一次最终屏幕位移。
-        // 不要拿不存在的中间 layout 猜位置。
-        // 各 stage reflowMoves 都为空时结果为空；某 stage 有非空 reflowMoves（已由
-        // ComposeReflowPlanner.plan 算好）时按 stage offset map 映射后合成。
-        val reflowMoves = composeReflowMovesAcrossStages(batch, composedOffsetMap, oldLayout, newLayout)
-
         // #694 评论 5694645209 问题2：cursor path 用专门的 batch cursor path 合成 —
         // 按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序，
         // 不再对 batch 纯删除重新走旧 buildCursorPath()（旧逻辑只按 insertedUnits 建点，
@@ -182,7 +174,6 @@ internal object ComposeVisualPatchBatch {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            reflowMoves = reflowMoves,
             cursorMotionPath = cursorMotionPath,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
@@ -191,44 +182,6 @@ internal object ComposeVisualPatchBatch {
             // #703 评论 5709208101 问题3：batch 合成时 originCursorRect 从首笔取
             // （首笔的 origin 是整个 chain 的 T0 caret）。
             originCursorRect = first.originCursorRect,
-        )
-    }
-
-    /**
-     * #708 评论 5723410606 第四节：reflow 合批 —
-     * 同一 VSync 多笔本地输入合批时，reflow 用 batch.first().oldLayout
-     * -> composed offsetMap -> batch.last().newLayout 只算一次最终屏幕位移。
-     *
-     * - 各 stage 的 reflowMoves 都为空时，结果为空（常见本地输入路径：
-     *   ComposeReflowPlanner.plan 已过滤位置真变化的 slice，无变化时为空）。
-     * - 某些 stage 有非空 reflowMoves 时，按 stage offset map 映射 oldRange→T0 / newRange→Tn 后合成。
-     * - 如果 batch 只有一笔且已有 reflowMoves，直接复用（避免重复计算）。
-     *
-     * @param batch 同一帧待消费的 patch 列表。
-     * @param composedOffsetMap batch 合成后的 T0→Tn offset map。
-     * @param oldLayout batch.first().oldLayout（第一份真实旧 layout）。
-     * @param newLayout batch.last().newLayout（最后一份真实新 layout）。
-     * @return 合成后的 reflowMoves 列表。
-     */
-    private fun composeReflowMovesAcrossStages(
-        batch: List<ComposeVisualPatch>,
-        composedOffsetMap: List<VisualOffsetMapEntry>,
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-    ): List<ComposeReflowMove> {
-        if (batch.isEmpty()) return emptyList()
-        // 各 stage 的 reflowMoves 都为空时直接返回空
-        if (batch.all { it.reflowMoves.isEmpty() }) return emptyList()
-        // batch 只有一笔：直接复用已有的 reflowMoves
-        if (batch.size == 1) return batch.first().reflowMoves
-        // 多笔：用 batch.first().oldLayout -> composed offsetMap -> batch.last().newLayout
-        // 只算一次最终屏幕位移，不拿不存在的中间 layout 猜位置。
-        // 各 stage 的 reflowMoves 已由 ComposeReflowPlanner.plan 算好（基于该 stage 的 oldLayout/newLayout），
-        // 这里统一用 composed offsetMap 重新规划，确保最终屏幕位移一致。
-        return ComposeReflowPlanner.plan(
-            oldLayout = oldLayout,
-            newLayout = newLayout,
-            offsetMap = composedOffsetMap,
         )
     }
 
