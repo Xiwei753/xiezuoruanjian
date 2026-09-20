@@ -34,26 +34,26 @@ import com.xiwei.sujian.feature.editor.layout.pathForRawRange
  * 用 `Modifier.drawWithContent` 在绘制阶段对 [ComposeVisualScene.hiddenRanges] 做
  * `ClipOp.Difference` 裁切，使 `drawContent()`（BasicTextField 的完整绘制）只在
  * 非 hidden 区域可见（只在绘制阶段排除动画接管区域，不改 BasicTextField 输出表示），
-  * 然后画动画字（[drawVisualScene]）。
+ * 然后画动画字（[drawVisualScene]）。
  *
  * 不再用"拿主题背景色盖正文"（旧 `clipSystemTextForHiddenRanges` + `drawPath(backgroundColor)`）—
  * 那会把 selection/search highlight 一起盖掉，背景非纯 surface 时会画出错误底色。
  * 现在用 `ClipOp.Difference` 只裁切绘制区域，不引入任何颜色，selection/search highlight
  * 由 BasicTextField 自己画，裁切后自然只在非 hidden 区域可见。
  *
-  * 本 draw 层只做两件事，全部使用同一个 [TextLayoutResult]（latestLayout）、
-  * 同一个 scrollY 和同一个 frame clock（由 [LaunchedEffect] 的 [withFrameNanos] 提供）：
-  *
-  * 1. **正文裁切**：对 `scene.hiddenRanges` 合并成单个 [Path] 后用
-  *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
-  *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
-  *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
-  *    **语义收死（#711 评论 5738906634）**：hiddenRanges 只能表示
-  *    "这一帧确实由动画层接管的字符"（新插入正在吐字、被删除的旧字 ghost），
-  *    不能表示"位置变了所以想自己重画的幸存正文"。
-  *    没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
-  *    直接让 BasicTextField 画最终位置。
-  * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
+ * 本 draw 层只做两件事，全部使用同一个 [TextLayoutResult]（latestLayout）、
+ * 同一个 scrollY 和同一个 frame clock（由 [LaunchedEffect] 的 [withFrameNanos] 提供）：
+ *
+ * 1. **正文裁切**：对 `scene.hiddenRanges` 合并成单个 [Path] 后用
+ *    `clipPath(path, clipOp = ClipOp.Difference)` 包住 `drawContent()`，
+ *    使 BasicTextField 的完整绘制只在非 hidden 区域可见。
+ *    hiddenRanges 为空时直接 `drawContent()` 画完整原正文。
+ *    **语义收死（#711 评论 5738906634）**：hiddenRanges 只能表示
+ *    "这一帧确实由动画层接管的字符"（新插入正在吐字、被删除的旧字 ghost），
+ *    不能表示"位置变了所以想自己重画的幸存正文"。
+ *    没被插入、没被删除、只是因为系统软换行换了位置的正文，永远不进 hiddenRanges，
+ *    直接让 BasicTextField 画最终位置。
+ * 2. **动画字重画**：[drawVisualScene] — 从原 [ComposeTextAnimationOverlay] 搬来，逻辑不变。
  *
  * BasicTextField 始终画完整真实正文，本 draw 层只在绘制阶段裁切动画接管区域，
  * onTextLayout 只因真实正文/几何变化触发，不再因 hiddenRanges 变化触发二次 layout，断开回路。
@@ -65,12 +65,12 @@ import com.xiwei.sujian.feature.editor.layout.pathForRawRange
  * 每一帧都先画当前 BasicTextField，只对真正由动画接管的 range 做 Difference clip，
  * 再画局部动画层；不再有"本地输入时整块不 drawContent，只把上一整屏重放"的分支。
  *
-  * @param visualState 编辑器视觉状态。
-  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
-  * @param textColor 文字颜色 — 从主题 role 注入。
-  * @param modifier Compose modifier。
-  * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
-  *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
+ * @param visualState 编辑器视觉状态。
+ * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
+ * @param textColor 文字颜色 — 从主题 role 注入。
+ * @param modifier Compose modifier。
+ * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
+ *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
  */
 @Composable
 @Suppress("LongParameterList")
