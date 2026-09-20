@@ -9,8 +9,6 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextRange
-import androidx.compose.ui.text.style.ResolvedTextDirection
-import androidx.compose.ui.unit.isSpecified
 import com.xiwei.sujian.feature.editor.projection.ViewportAnchor
 
 /**
@@ -64,86 +62,34 @@ val ComposeLayoutSnapshot.effectiveRawText: String
  * 不再由动画层或 View 自行推算。
  *
  * #706 评论 5715257924 症状3：统一 caret 几何入口。
- * 旧实现 `cursorRect() = result.getCursorRect(selection.end)` 对空段落首行缩进不修正，
- * 导致 Enter 产生空段落时光标落在 x=0 而非缩进后的位置。
  *
- * 新增 [cursorRect] 的 offset 版本作为所有自绘/动画光标的唯一事实源：
- * 普通位置直接返回 Compose 原生 [TextLayoutResult.getCursorRect]；
- * 只对"逻辑段落开头且该段落当前为空"的 caret 按首行缩进修正 X 坐标，
- * Y/高度/caret 宽度沿用原始 rect。
+ * Issue #723 评论 5748592923：caret 专用 raw→display 映射。
+ * 旧实现 `cursorRect() = result.getCursorRect(selection.end)` 对空段落首行缩进不修正，
+ * 后来加了"空段落时手工给 caret 加首行缩进 X"的 caret-only 特判分支，导致只挪光标不挪手柄。
+ * 现在该特判已删除：空段落的缩进进入显示布局本身（OutputTransformation + projection），
+ * 正文、系统选区手柄、自绘动画光标都消费同一份 transformed TextLayoutResult。
+ *
+ * 同时 caret 的 raw→display 映射改走 caret 专用入口 [EditorSoftBreakProjection.rawToDisplayCaret]，
+ * 显式选择 [EditorSoftBreakProjection.CaretAffinity]。由本地输入产生的 collapsed caret
+ * 使用 [CaretAffinity.Start]，与 AndroidX 文本编辑后的 wedge affinity 一致。
+ * 正常文字 range/path 的投影继续走 [EditorSoftBreakProjection.rawToDisplay]（range 映射），
+ * 不把"文字区间映射"和"光标落在哪一侧"混成一个函数。
+ *
+ * @param affinity collapsed caret 在软断行插入点处的 affinity。默认 [CaretAffinity.Start]，
+ *   与本地输入产生的 collapsed caret 一致。
  */
-fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
+fun ComposeLayoutSnapshot.cursorRect(
+    offset: Int,
+    affinity: EditorSoftBreakProjection.CaretAffinity = EditorSoftBreakProjection.CaretAffinity.Start,
+): Rect {
     val text = result.layoutInput.text.text
     val safeOffset = offset.coerceIn(0, text.length)
-    // Issue #717 评论 5741910919：raw offset → display offset。
-    // result 是含 U+200B 的 display 文本布局，外部传入的 offset 是 raw 正文 offset，
-    // 需经投影映射到 display offset 再查 TextLayoutResult。
-    val displayOffset = projection.rawToDisplay(safeOffset).coerceIn(0, text.length)
-    val raw = result.getCursorRect(displayOffset)
-
-    // 只对"逻辑段落开头且该段落当前为空"的 caret 修正首行缩进。
-    // atParagraphStart：offset 在段落首字符处（文档开头或前一个字符是 \n）。
-    // emptyParagraph：offset 所在段落为空（文档末尾或当前字符是 \n）。
-    val atParagraphStart = displayOffset == 0 || text[displayOffset - 1] == '\n'
-    val emptyParagraph = displayOffset == text.length || text[displayOffset] == '\n'
-    if (!atParagraphStart || !emptyParagraph) return raw
-
-    val textIndent = result.layoutInput.style.textIndent ?: return raw
-    val firstLine = textIndent.firstLine
-    if (!firstLine.isSpecified || firstLine.value == 0f) return raw
-
-    // 把首行缩进 sp 换算成 px，按段落方向加到行起始边。
-    val density = result.layoutInput.density
-    val firstLinePx = with(density) { firstLine.toPx() }
-    if (firstLinePx == 0f) return raw
-
-    val line = result.getLineForOffset(displayOffset)
-    val direction = result.getParagraphDirection(displayOffset)
-    val newLeft =
-        when (direction) {
-            ResolvedTextDirection.Ltr -> result.getLineLeft(line) + firstLinePx
-            ResolvedTextDirection.Rtl -> result.getLineRight(line) - firstLinePx
-            else -> raw.left
-        }
-    return Rect(
-        left = newLeft,
-        top = raw.top,
-        right = newLeft + raw.width,
-        bottom = raw.bottom,
-    )
+    // Issue #723 评论 5748592923：caret 专用 raw→display 映射，显式选择 affinity。
+    val displayOffset = projection.rawToDisplayCaret(safeOffset, affinity).coerceIn(0, text.length)
+    return result.getCursorRect(displayOffset)
 }
 
 fun ComposeLayoutSnapshot.cursorRect(): Rect = cursorRect(selection.end)
-
-/**
- * #706 评论 5718539128 修复3：空段落首行缩进 caret override 判定 —
- * 返回 true 当且仅当 [offset] 在空段落首位且该段落有非零首行缩进。
- *
- * 用于 smooth cursor 关闭时让 draw 层接管空段落缩进位置的静态 caret：
- * 关闭平滑光标时 Enter 后空段落走 BasicTextField 原生 raw caret（x=0），
- * 但 [cursorRect] 已含缩进修正。本函数让 [WritingEditorSurface] 知道何时
- * 把系统 cursor 设透明并让 draw 层画 [cursorRect] 的缩进位置。
- *
- * 判断逻辑与 [cursorRect] 的缩进修正分支完全一致，不引入第二套语义。
- */
-fun ComposeLayoutSnapshot.isIndentedEmptyParagraphCaret(offset: Int): Boolean {
-    val text = result.layoutInput.text.text
-    val safeOffset = offset.coerceIn(0, text.length)
-    // Issue #717 评论 5741910919：raw offset → display offset，与 cursorRect 保持一致。
-    val displayOffset = projection.rawToDisplay(safeOffset).coerceIn(0, text.length)
-
-    val atParagraphStart = displayOffset == 0 || text[displayOffset - 1] == '\n'
-    val emptyParagraph = displayOffset == text.length || text[displayOffset] == '\n'
-    if (!atParagraphStart || !emptyParagraph) return false
-
-    val textIndent = result.layoutInput.style.textIndent ?: return false
-    val firstLine = textIndent.firstLine
-    if (!firstLine.isSpecified || firstLine.value == 0f) return false
-
-    val density = result.layoutInput.density
-    val firstLinePx = with(density) { firstLine.toPx() }
-    return firstLinePx != 0f
-}
 
 /**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，

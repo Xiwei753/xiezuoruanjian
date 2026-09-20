@@ -75,13 +75,20 @@ class SettingsViewModelTest {
         // stateIn(Eagerly) 在 ViewModel 创建时即开始推进上游；挂收集器只为断言投影值。
         val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.Main)
         val appearanceValues = mutableListOf<AppearanceSectionState>()
+        val editorValues = mutableListOf<EditorSectionState>()
         val laboratoryValues = mutableListOf<LaboratorySectionState>()
         val syncValues = mutableListOf<SyncSectionState>()
         scope.launch { vm.appearanceState.collect { appearanceValues += it } }
+        scope.launch { vm.editorState.collect { editorValues += it } }
         scope.launch { vm.laboratoryState.collect { laboratoryValues += it } }
         scope.launch { vm.syncState.collect { syncValues += it } }
         awaitUntil(
-            predicate = { appearanceValues.isNotEmpty() && laboratoryValues.isNotEmpty() && syncValues.isNotEmpty() },
+            predicate = {
+                appearanceValues.isNotEmpty() &&
+                    editorValues.isNotEmpty() &&
+                    laboratoryValues.isNotEmpty() &&
+                    syncValues.isNotEmpty()
+            },
             message = "collectors must attach and receive initial values",
         )
         vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(experimentalFullscreenMode = true) })
@@ -93,7 +100,8 @@ class SettingsViewModelTest {
         )
         // 各分类 state 立即反映对应字段的新值。
         assertTrue(laboratoryValues.last().immersiveFullscreen)
-        assertEquals(20f, appearanceValues.last().fontSize, 0.01f)
+        // Issue #723 评论 5748592923：字号已移回写作区设置，反映在 editorState 而非 appearanceState。
+        assertEquals(20f, editorValues.last().fontSize, 0.01f)
         assertTrue(syncValues.last().syncConfig.enabled == true)
         // 无关字段不受影响：外观主题模式仍是默认 system。
         assertEquals("system", appearanceValues.last().appearanceMode)

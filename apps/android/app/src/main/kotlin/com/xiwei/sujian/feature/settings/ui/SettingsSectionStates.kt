@@ -13,25 +13,31 @@ import com.xiwei.sujian.feature.sync.data.model.SyncSecrets
 // 目的：设置根节点与所有已组合分类不再订阅整份 SettingsUiState；切换实验室开关时
 // 只有 laboratoryState 发新值，外观/编辑器/同步等分类不跟着重组。
 
-/** 外观分类真正读取的字段（含编辑器字号，列表头部值也显示字号）。 */
+/** 外观分类真正读取的字段。
+ *
+ * Issue #723 评论 5748592923：字号/行距移回写作区设置，外观分类不再持有
+ * fontSize/lineSpacing。外观页只保留主题模式与颜色来源。 */
 data class AppearanceSectionState(
     val appearanceMode: String,
     val colorSource: String,
     val dynamicColorEnabled: Boolean,
-    val fontSize: Float,
-    val lineSpacing: Float,
 )
 
-/** 编辑器分类真正读取的字段（含字号 — 列表头部当前值也显示字号，
- * #618 六 复审：改主题颜色时不再让编辑器分类订阅整份外观状态）。 */
+/** 编辑器分类真正读取的字段（含字号、行距、协同动画开关 —
+ * #618 六 复审：改主题颜色时不再让编辑器分类订阅整份外观状态）。
+ *
+ * Issue #723 评论 5748592923：EditorSectionState 增加 lineSpacing 与
+ * coordinatedAnimationEnabled，字号/行距入口回到写作区设置。 */
 data class EditorSectionState(
     val fontSize: Float,
+    val lineSpacing: Float,
     val autoIndentEnabled: Boolean,
     val autoIndentWidth: Float,
     val typingAnimationEnabled: Boolean,
     val typingAnimationDurationMs: Int,
     val smoothCursorEnabled: Boolean,
     val smoothCursorDurationMs: Int,
+    val coordinatedAnimationEnabled: Boolean,
 )
 
 /** 保存分类真正读取的字段。 */

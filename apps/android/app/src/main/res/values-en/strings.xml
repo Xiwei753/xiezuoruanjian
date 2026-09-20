@@ -30,6 +30,10 @@
     <string name="pref_editor_typing_animation_duration">Typing Animation Duration (ms)</string>
     <string name="pref_editor_smooth_cursor_duration">Smooth Cursor Duration (ms)</string>
 
+    <!-- Issue #723 评论 5748592923：协同动画（吞字/吐字）统一控制 -->
+    <string name="pref_editor_coordinated_animation">Coordinated Animation (swallow/spit)</string>
+    <string name="pref_editor_coordinated_animation_duration">Coordinated Animation Duration (ms)</string>
+
     <string name="pref_category_save">Save Settings</string>
     <string name="pref_auto_save">Auto Save</string>
     <string name="pref_auto_save_delay">Auto Save Delay (ms)</string>

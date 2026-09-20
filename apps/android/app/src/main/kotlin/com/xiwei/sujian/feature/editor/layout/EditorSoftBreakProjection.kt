@@ -32,12 +32,74 @@ data class EditorSoftBreakProjection(
 ) {
     val displayLength: Int get() = rawLength + insertPoints.size
 
-    /** raw offset → display offset。identity 快速路径：insertPoints 为空直接返回。 */
+    /**
+     * Issue #723 评论 5748592923：caret affinity — collapsed caret 在软断行插入点处
+     * 落在 U+200B 的哪一侧。
+     *
+     * - [Start]：caret 落在 U+200B 之前（wedge Start）。本地输入产生的 collapsed caret
+     *   使用 Start，与 AndroidX 文本编辑后的 wedge affinity 一致。
+     * - [End]：caret 落在 U+200B 之后（wedge End）。
+     */
+    enum class CaretAffinity {
+        Start,
+        End,
+    }
+
+    /**
+     * raw offset → display offset（range 映射，wedge End 语义）。
+     *
+     * Issue #723 评论 5748592923：本函数继续用于正常文字 range/path 的投影
+     * （[toDisplayRange] / [pathForRawRange] 等），不把"文字区间映射"和"光标落在哪一侧"
+     * 混成一个函数。caret 专用映射走 [wedgeStart] / [wedgeEnd] / [rawToDisplayCaret]。
+     *
+     * identity 快速路径：insertPoints 为空直接返回。
+     */
     fun rawToDisplay(rawOffset: Int): Int {
         if (insertPoints.isEmpty()) return rawOffset
         val safe = rawOffset.coerceIn(0, rawLength)
         return safe + countInsertsUpTo(safe)
     }
+
+    /**
+     * Issue #723 评论 5748592923：caret 专用 wedge Start 映射。
+     *
+     * `wedgeStart(rawOffset) = rawOffset + count(insertPoint < rawOffset)`。
+     * caret 落在 U+200B 之前。本地输入产生的 collapsed caret 使用 Start affinity。
+     */
+    fun wedgeStart(rawOffset: Int): Int {
+        if (insertPoints.isEmpty()) return rawOffset
+        val safe = rawOffset.coerceIn(0, rawLength)
+        return safe + countInsertsBefore(safe)
+    }
+
+    /**
+     * Issue #723 评论 5748592923：caret 专用 wedge End 映射。
+     *
+     * `wedgeEnd(rawOffset) = rawOffset + count(insertPoint <= rawOffset)`。
+     * caret 落在 U+200B 之后。
+     */
+    fun wedgeEnd(rawOffset: Int): Int {
+        if (insertPoints.isEmpty()) return rawOffset
+        val safe = rawOffset.coerceIn(0, rawLength)
+        return safe + countInsertsUpTo(safe)
+    }
+
+    /**
+     * Issue #723 评论 5748592923：caret 专用 raw→display 映射，显式选择 affinity。
+     *
+     * 由本地输入产生的 collapsed caret 使用 [CaretAffinity.Start]，
+     * 与 AndroidX 文本编辑后的 wedge affinity 一致。
+     * 纯点击/拖动选择如果 caret 正好落在 display wedge 上，不要自己猜 AndroidX 私有的
+     * selection affinity；此时让 BasicTextField 的系统 caret/handle 持有最终静止位置。
+     */
+    fun rawToDisplayCaret(
+        rawOffset: Int,
+        affinity: CaretAffinity,
+    ): Int =
+        when (affinity) {
+            CaretAffinity.Start -> wedgeStart(rawOffset)
+            CaretAffinity.End -> wedgeEnd(rawOffset)
+        }
 
     /** display offset → raw offset。identity 快速路径。 */
     fun displayToRaw(displayOffset: Int): Int {
@@ -57,17 +119,29 @@ data class EditorSoftBreakProjection(
      * 评论 5742273757 修复3：raw TextRange → display TextRange。
      *
      * 凡是 range 来自正文/visual unit（raw 坐标），传给 TextLayoutResult 之前都必须经过此映射。
+     * range 映射走 wedge End 语义（[rawToDisplay]），与 caret 专用映射区分开。
      */
     fun toDisplayRange(rawRange: TextRange): TextRange =
         TextRange(rawToDisplay(rawRange.start), rawToDisplay(rawRange.end))
 
-    /** 二分搜索 insertPoints 中 <= rawOffset 的数量。 */
+    /** 二分搜索 insertPoints 中 <= rawOffset 的数量（wedge End 计数）。 */
     private fun countInsertsUpTo(rawOffset: Int): Int {
         var lo = 0
         var hi = insertPoints.size
         while (lo < hi) {
             val mid = (lo + hi) / 2
             if (insertPoints[mid] <= rawOffset) lo = mid + 1 else hi = mid
+        }
+        return lo
+    }
+
+    /** 二分搜索 insertPoints 中 < rawOffset 的数量（wedge Start 计数）。 */
+    private fun countInsertsBefore(rawOffset: Int): Int {
+        var lo = 0
+        var hi = insertPoints.size
+        while (lo < hi) {
+            val mid = (lo + hi) / 2
+            if (insertPoints[mid] < rawOffset) lo = mid + 1 else hi = mid
         }
         return lo
     }
@@ -90,17 +164,67 @@ data class EditorSoftBreakProjection(
          * Issue #717 评论 5742904417 修复3：去掉 longWordThreshold 参数，
          * 西文 word run 只要有两个 grapheme 就断点。
          *
+         * Issue #723 评论 5748592923：当 [autoIndentEnabled] 为 true 时，对真正的空段落
+         * 在 display 文本里放一个不写回正文的零宽占位符（U+200B），让该空段落成为真实可排版的一行，
+         * TextIndent 自己决定行首几何。这个占位也纳入同一份 projection/offset 映射，
+         * 不在 draw 层额外 +X。默认 false 保持原行为（只做软断行投影）。
+         *
          * @param raw 原始正文
+         * @param autoIndentEnabled 是否启用自动首行缩进。true 时空段落插入零宽占位符。
          */
-        fun fromRawText(raw: CharSequence): EditorSoftBreakProjection {
+        fun fromRawText(
+            raw: CharSequence,
+            autoIndentEnabled: Boolean = false,
+        ): EditorSoftBreakProjection {
             if (raw.isEmpty()) {
-                return EditorSoftBreakProjection(raw.length, emptyList())
+                // 空文档：autoIndentEnabled 时在 offset 0 放一个占位符让 TextIndent 生效。
+                return if (autoIndentEnabled) {
+                    EditorSoftBreakProjection(raw.length, listOf(0))
+                } else {
+                    EditorSoftBreakProjection(raw.length, emptyList())
+                }
             }
             val insertPoints = mutableListOf<Int>()
             scanWordRuns(raw) { wordStart, wordEnd ->
                 addInsertPointsForWord(insertPoints, raw, wordStart, wordEnd)
             }
+            if (autoIndentEnabled) {
+                addEmptyParagraphPlaceholders(insertPoints, raw)
+            }
             return EditorSoftBreakProjection(raw.length, insertPoints)
+        }
+
+        /**
+         * Issue #723 评论 5748592923：对真正的空段落在其开头添加 U+200B 占位符插入点。
+         *
+         * 空段落：段落开头处紧接着是 \n 或段落开头 == raw.length（文档末尾空段落）。
+         * 段落由 \n 分隔；段落开头是 offset 0 或 \n 之后的第一个 offset。
+         * 文档末尾的空段落只在 raw 以 \n 结尾时才存在。
+         *
+         * @param insertPoints 输出列表，追加空段落占位符插入点（可能与软断行插入点交错）。
+         * @param raw 原始正文（非空）。
+         */
+        private fun addEmptyParagraphPlaceholders(
+            insertPoints: MutableList<Int>,
+            raw: CharSequence,
+        ) {
+            var i = 0
+            while (i < raw.length) {
+                // i 是段落开头
+                if (raw[i] == '\n') {
+                    // 空段落：段落开头紧接着是 \n
+                    insertPoints.add(i)
+                }
+                // 跳到下一个 \n（含），然后 +1 到下一个段落开头
+                while (i < raw.length && raw[i] != '\n') i++
+                i++ // 跳过 \n 到下一个段落开头
+            }
+            // 文档末尾的空段落：raw 以 \n 结尾时，最后一个 \n 之后是空段落
+            if (raw.isNotEmpty() && raw[raw.length - 1] == '\n') {
+                insertPoints.add(raw.length)
+            }
+            // 保持有序（软断行插入点与空段落插入点可能交错）
+            insertPoints.sort()
         }
 
         /**

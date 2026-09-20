@@ -48,8 +48,6 @@ class SettingsViewModel(
                     appearanceMode = state.settings.appearanceMode,
                     colorSource = state.settings.colorSource,
                     dynamicColorEnabled = state.settings.dynamicColorEnabled,
-                    fontSize = state.fontSize,
-                    lineSpacing = state.settings.editorLineSpacingMultiplier,
                 )
             }
             .distinctUntilChanged()
@@ -60,8 +58,6 @@ class SettingsViewModel(
                     _uiState.value.settings.appearanceMode,
                     _uiState.value.settings.colorSource,
                     _uiState.value.settings.dynamicColorEnabled,
-                    _uiState.value.fontSize,
-                    _uiState.value.settings.editorLineSpacingMultiplier,
                 ),
             )
 
@@ -70,12 +66,14 @@ class SettingsViewModel(
             .map { state ->
                 EditorSectionState(
                     fontSize = state.fontSize,
+                    lineSpacing = state.settings.editorLineSpacingMultiplier,
                     autoIndentEnabled = state.settings.autoIndentEnabled,
                     autoIndentWidth = state.settings.autoIndentWidth,
                     typingAnimationEnabled = state.settings.editorTypingAnimationEnabled,
                     typingAnimationDurationMs = state.settings.editorTypingAnimationDurationMs,
                     smoothCursorEnabled = state.settings.editorSmoothCursorEnabled,
                     smoothCursorDurationMs = state.settings.editorSmoothCursorDurationMs,
+                    coordinatedAnimationEnabled = state.settings.editorCoordinatedTextCursorAnimationEnabled,
                 )
             }
             .distinctUntilChanged()
@@ -84,12 +82,14 @@ class SettingsViewModel(
                 SharingStarted.Eagerly,
                 EditorSectionState(
                     _uiState.value.fontSize,
+                    _uiState.value.settings.editorLineSpacingMultiplier,
                     _uiState.value.settings.autoIndentEnabled,
                     _uiState.value.settings.autoIndentWidth,
                     _uiState.value.settings.editorTypingAnimationEnabled,
                     _uiState.value.settings.editorTypingAnimationDurationMs,
                     _uiState.value.settings.editorSmoothCursorEnabled,
                     _uiState.value.settings.editorSmoothCursorDurationMs,
+                    _uiState.value.settings.editorCoordinatedTextCursorAnimationEnabled,
                 ),
             )
 
@@ -245,6 +245,12 @@ class SettingsViewModel(
         rowFlow(_uiState.value.settings.editorSmoothCursorEnabled) { it.settings.editorSmoothCursorEnabled }
     val smoothCursorDurationRow =
         rowFlow(_uiState.value.settings.editorSmoothCursorDurationMs) { it.settings.editorSmoothCursorDurationMs }
+
+    // Issue #723 评论 5748592923：协同动画（吞字/吐字）开关行级 flow。
+    val coordinatedAnimationRow =
+        rowFlow(_uiState.value.settings.editorCoordinatedTextCursorAnimationEnabled) {
+            it.settings.editorCoordinatedTextCursorAnimationEnabled
+        }
 
     // ── Save 行级 ──
     val autoSaveRow =

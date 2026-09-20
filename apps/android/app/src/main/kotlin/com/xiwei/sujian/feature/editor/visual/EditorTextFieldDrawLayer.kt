@@ -92,12 +92,6 @@ fun EditorTextFieldDrawLayer(
      * #684 评论 5663032418 断点3：live selection — 直接从 [TextFieldState.selection] 读取。
      */
     liveSelection: TextRange?,
-    /**
-     * #706 评论 5718539128 修复3：空段落缩进静态 caret override —
-     * true 时即使 [drawsVisualCursor]=false 也把系统 cursor 设透明并由 draw 层画
-     * [computeRestingCursorRect]（layout.cursorRect(offset)）的缩进位置。
-     */
-    needsIndentedEmptyParagraphCaret: Boolean = false,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -143,7 +137,6 @@ fun EditorTextFieldDrawLayer(
                         cursorColor = cursorColor,
                         liveSelection = liveSelection,
                         restingCursorRect = snapshot.restingCursorRect,
-                        needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
                         density = density,
                         drawContent = { this@drawWithContent.drawContent() },
                     )
@@ -486,7 +479,6 @@ internal fun DrawScope.drawCurrentEditorFrame(
     cursorColor: Color,
     liveSelection: TextRange?,
     restingCursorRect: Rect?,
-    needsIndentedEmptyParagraphCaret: Boolean = false,
     density: androidx.compose.ui.unit.Density,
     drawContent: () -> Unit,
 ) {
@@ -518,32 +510,27 @@ internal fun DrawScope.drawCurrentEditorFrame(
     }
 
     // 3. 光标
-    // #706 评论 5718539128 修复3：空段落缩进静态 caret override —
+    // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
+    // 不再有 needsIndentedEmptyParagraphCaret 静态 caret override。
     // drawsVisualCursor=true：smooth cursor，用 timeline 动画值（scene.cursorRect）优先。
-    // drawsVisualCursor=false && needsIndentedEmptyParagraphCaret=true：
-    //   smooth cursor 关闭但空段落缩进，用 computeRestingCursorRect 静态落位
-    //   （layout.cursorRect(offset) 已含缩进修正），不走 timeline 动画。
-    // 两者都 false：不画（系统 cursor 自己画）。
-    if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
+    // drawsVisualCursor=false：不画（系统 cursor 自己画）。
+    // 自绘 caret 只在动画事务真正持有 cursor 时透明掉系统 caret，动画完成立即交还。
+    if (drawsVisualCursor) {
         val cursorRectValue =
-            if (drawsVisualCursor) {
-                // #713 评论 5740578331：用 cursorOwnedByVisual 决定光标来源 —
-                // cursorOwnedByVisual=true 表示视觉层已接管光标（handoff 首帧 / selection redirect 已排队 / timeline 正在跑），
-                // draw 层画 scene.cursorRect；
-                // cursorOwnedByVisual=false 时动画真正结束且无 pending handoff/redirect，
-                // draw 层回 computeRestingCursorRect(latestLayout, liveSelection)。
-                // cursorAnimating 只表示 track 是否在动，不再决定光标来源 —
-                // 旧 bug：cursorAnimating=false 时 handoff 首帧 T0 / pending redirect 期间 draw 层
-                // 直接忽略 scene.cursorRect 先画新位置，下一帧 timeline 启动又从旧位置动画，
-                // 表现为"新位置先闪一帧 -> 回旧位置 -> 再动画到新位置"。
-                if (scene.cursorOwnedByVisual) {
-                    scene.cursorRect
-                } else {
-                    computeRestingCursorRect(latestLayout, liveSelection)
-                } ?: restingCursorRect
+            // #713 评论 5740578331：用 cursorOwnedByVisual 决定光标来源 —
+            // cursorOwnedByVisual=true 表示视觉层已接管光标（handoff 首帧 / selection redirect 已排队 / timeline 正在跑），
+            // draw 层画 scene.cursorRect；
+            // cursorOwnedByVisual=false 时动画真正结束且无 pending handoff/redirect，
+            // draw 层回 computeRestingCursorRect(latestLayout, liveSelection)。
+            // cursorAnimating 只表示 track 是否在动，不再决定光标来源 —
+            // 旧 bug：cursorAnimating=false 时 handoff 首帧 T0 / pending redirect 期间 draw 层
+            // 直接忽略 scene.cursorRect 先画新位置，下一帧 timeline 启动又从旧位置动画，
+            // 表现为"新位置先闪一帧 -> 回旧位置 -> 再动画到新位置"。
+            if (scene.cursorOwnedByVisual) {
+                scene.cursorRect
             } else {
-                computeRestingCursorRect(latestLayout, liveSelection) ?: restingCursorRect
-            }
+                computeRestingCursorRect(latestLayout, liveSelection)
+            } ?: restingCursorRect
         if (cursorRectValue != null) {
             drawVisualCursorRect(
                 rect = cursorRectValue,

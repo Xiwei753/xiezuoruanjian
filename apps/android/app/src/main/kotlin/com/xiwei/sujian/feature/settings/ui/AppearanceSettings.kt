@@ -3,22 +3,19 @@ package com.xiwei.sujian.feature.settings.ui
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.R
 import com.xiwei.sujian.core.designsystem.component.SujianDropdownMenu
-import com.xiwei.sujian.core.designsystem.component.SujianSlider
-import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
 
 /**
  * #633 评论 5379618506：外观设置 — 一个逻辑字段组 = 一张 High 内卡。
  *
+ * Issue #723 评论 5748592923：字号/行距移回写作区设置（EditorSettings），
+ * 外观页只保留主题模式与颜色来源。
+ *
  * 主题分组: 标题 + 主题模式 + 颜色来源（一张 SettingsInnerCard）
- * 字体与排版分组: 标题 + 字号 + 行距（一张 SettingsInnerCard）
  */
 @Composable
 fun AppearanceSettingsContent(vm: SettingsViewModel) {
@@ -93,40 +90,6 @@ fun AppearanceSettingsContent(vm: SettingsViewModel) {
                     )
                 }
             },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
-
-    val currentFontSize by vm.fontSizeRow.collectAsStateWithLifecycle()
-    var fontSize by rememberSaveable(currentFontSize) { mutableFloatStateOf(currentFontSize) }
-    val spacing by vm.lineSpacingRow.collectAsStateWithLifecycle()
-    var lineSpacing by rememberSaveable(spacing) { mutableFloatStateOf(spacing) }
-
-    SettingsInnerCard {
-        SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_font_layout))
-        SujianSlider(
-            title = stringResource(id = R.string.pref_font_size),
-            value = fontSize,
-            onValueChange = { fontSize = it },
-            onValueChangeFinished = { vm.handleIntent(SettingsIntent.UpdateFontSize(fontSize)) },
-            valueRange = 12f..72f,
-            steps = 59,
-            valueLabel = "${fontSize.toInt()}sp",
-            semanticId = SujianSemanticIds.SettingsFontSize,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        SujianSlider(
-            title = stringResource(id = R.string.pref_line_spacing),
-            value = lineSpacing,
-            onValueChange = { lineSpacing = it },
-            onValueChangeFinished = {
-                vm.handleIntent(
-                    SettingsIntent.UpdateLocal { it.copy(editorLineSpacingMultiplier = lineSpacing) },
-                )
-            },
-            valueRange = 1f..3f,
-            steps = 19,
-            valueLabel = String.format(java.util.Locale.ROOT, "%.1fx", lineSpacing),
             modifier = Modifier.fillMaxWidth(),
         )
     }

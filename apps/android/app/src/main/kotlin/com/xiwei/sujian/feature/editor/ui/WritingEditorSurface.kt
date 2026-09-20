@@ -188,8 +188,16 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     // #698 评论 5697612595：OutputTransformation 只保留 searchHighlights 部分，
     // 不再把动画 range 设 Color.Transparent — 动画字的遮罩改由 EditorTextFieldDrawLayer
     // 在 draw 层用 ClipOp.Difference 裁切完成，断开 hiddenRanges 回流回路。
+    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身 — OutputTransformation
+    // 在启用首行缩进时对空段落插入零宽占位符，让 TextIndent 自己决定行首几何。
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
+    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身 — OutputTransformation
+    // 在启用首行缩进时对空段落插入零宽占位符，让 TextIndent 自己决定行首几何。
+    val latestAutoIndentEnabled =
+        rememberUpdatedState(
+            textStyle.textIndent?.firstLine?.let { it.isSpecified && it.value != 0f } == true,
+        )
 
     // Issue #717 评论 5743988019：bridge 随 target 切换而变化（viewModel.bridgeForTarget 按 targetId 返回不同 bridge），
     // layoutBinding 已绑定到 bridge 生命周期，切章节时重建；OutputTransformation 跟随 layoutBinding 重建即可。
@@ -201,6 +209,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                     searchHighlightColor = latestSearchHighlightColor.value,
                     layoutBinding = layoutBinding,
                     bridge = bridge,
+                    autoIndentEnabled = latestAutoIndentEnabled.value,
                 )
             }
         }
@@ -234,20 +243,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         }
 
     // #708 评论 5723410606 第三节：空段落缩进判定不再订阅 latestLayout —
-    // 空段落缩进判定不需要 TextLayoutResult。直接用：
-    // - bridge.state.text
-    // - bridge.state.selection
-    // - textStyle.textIndent.firstLine
-    // 判断当前位置是不是空段落开头即可。不要让"为了决定 cursorBrush"去订阅 layout StateFlow。
-    val liveSelectionForCaret = bridge.state.selection
-    val selectionSnapshot = liveSelectionForCaret
-    val needsIndentedEmptyParagraphCaret =
-        selectionSnapshot != null &&
-            isIndentedEmptyParagraphCaretFromTextStyle(
-                text = bridge.state.text.toString(),
-                selectionEnd = selectionSnapshot.end,
-                textStyle = textStyle,
-            )
+    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身（OutputTransformation +
+    // projection 零宽占位符），不再需要 caret-only 特判。系统 caret 与自绘 caret
+    // 消费同一份 transformed TextLayoutResult，不再把系统 caret 透明掉。
 
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
@@ -264,8 +262,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
         // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
         liveSelection = bridge.state.selection,
-        // #706 评论 5718539128 修复3：空段落缩进静态 caret override 传给 draw 层。
-        needsIndentedEmptyParagraphCaret = needsIndentedEmptyParagraphCaret,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -282,11 +278,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             inputTransformation = visualInputTransformation,
             // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 draw 层画。
             // smooth cursor 关闭时始终由系统画，draw 层永远不接管。
-            // #706 评论 5718539128 修复3：空段落缩进时也把系统 cursor 设透明 —
-            // BasicTextField 原生 caret 落 x=0（不参与 layout.cursorRect 的缩进修正），
-            // 由 draw 层画 layout.cursorRect(offset) 的缩进位置。
+            // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
+            // 不再用 needsIndentedEmptyParagraphCaret 把系统 cursor 设透明。
             cursorBrush =
-                if (drawsVisualCursor || needsIndentedEmptyParagraphCaret) {
+                if (drawsVisualCursor) {
                     SolidColor(Color.Transparent)
                 } else {
                     SolidColor(cursorColor)
@@ -301,6 +296,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         scope = scope,
                         onSurfaceReady = onSurfaceReady,
                         layoutBinding = layoutBinding,
+                        autoIndentEnabled = latestAutoIndentEnabled.value,
                     )
                 }
             },
@@ -320,6 +316,7 @@ private fun onTextLayoutResult(
     scope: CoroutineScope,
     onSurfaceReady: () -> Boolean,
     layoutBinding: EditorSoftBreakLayoutBinding,
+    autoIndentEnabled: Boolean,
 ) {
     // Issue #717 评论 5743443030 修复1 / 评论 5743745219：按 displayText 内容精确匹配同版本绑定，
     // 不再靠"长度猜版本"或"把 display 文本反解成 raw"。
@@ -354,7 +351,7 @@ private fun onTextLayoutResult(
     // BasicTextField 自己仍正常显示。
     val liveRawText = bridge.state.text.toString()
     if (displayText == liveRawText) {
-        val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText)
+        val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText, autoIndentEnabled)
         if (liveProjection.insertPoints.isEmpty()) {
             val restoreY = viewportState.onLayout(result, liveProjection)
             if (restoreY != null) {
@@ -396,37 +393,14 @@ fun shouldConfirmEditorAttached(
         bindingState.targetId == targetId
 
 /**
- * #708 评论 5723410606 第三节：空段落缩进判定 — 不依赖 TextLayoutResult。
- *
- * 只用 text + selectionEnd + textStyle.textIndent.firstLine 判断当前位置是不是空段落开头。
- * 与 [com.xiwei.sujian.feature.editor.layout.isIndentedEmptyParagraphCaret] 的逻辑一致，
- * 但不要求 TextLayoutResult — 避免为了决定 cursorBrush 去订阅 layout StateFlow。
- *
- * @param text 当前正文。
- * @param selectionEnd 当前 selection.end。
- * @param textStyle 当前 TextStyle（取 textIndent.firstLine）。
- * @return true 当且仅当 selectionEnd 在空段落首位且该段落有非零首行缩进。
- */
-private fun isIndentedEmptyParagraphCaretFromTextStyle(
-    text: String,
-    selectionEnd: Int,
-    textStyle: TextStyle,
-): Boolean {
-    val safeOffset = selectionEnd.coerceIn(0, text.length)
-    val atParagraphStart = safeOffset == 0 || text[safeOffset - 1] == '\n'
-    val emptyParagraph = safeOffset == text.length || text[safeOffset] == '\n'
-    if (!atParagraphStart || !emptyParagraph) return false
-    val textIndent = textStyle.textIndent ?: return false
-    val firstLine = textIndent.firstLine
-    return firstLine.isSpecified && firstLine.value != 0f
-}
-
-/**
  * Issue #717 评论 5741910919 / 评论 5742273757 修复1+5：OutputTransformation 内容 —
- * 西文软断行显示投影 + 搜索高亮。
+ * 西文软断行显示投影 + 搜索高亮 + 空段落零宽占位符。
  *
  * 1. 基于原始正文计算软断行投影，从后往前插入 U+200B（修复1：从后往前保证 raw offset 不失效）。
  * 2. 搜索高亮 range 是 raw 坐标，通过 projection.toDisplayRange 转换成 display 坐标后再 addStyle（修复5）。
+ * 3. Issue #723 评论 5748592923：启用首行缩进时，对真正的空段落也插入 U+200B 占位符，
+ *    让该空段落成为真实可排版的一行，TextIndent 自己决定行首几何。
+ *    这个占位也纳入同一份 projection/offset 映射，不在 draw 层额外 +X。
  *
  * 不改变 TextFieldState 存储的正文（纯显示层）。
  */
@@ -436,9 +410,10 @@ private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTr
     searchHighlightColor: Color,
     layoutBinding: EditorSoftBreakLayoutBinding,
     bridge: EditorTextFieldStateBridge,
+    autoIndentEnabled: Boolean,
 ) {
     val rawText = originalText.toString()
-    val projection = EditorSoftBreakProjection.fromRawText(rawText)
+    val projection = EditorSoftBreakProjection.fromRawText(rawText, autoIndentEnabled)
     // 从后往前插入 U+200B，保证前面的 raw offset 不因 buffer 长度变化而失效。
     // TextFieldBuffer 没有 insert 方法，用 replace(offset, offset, text) 实现插入。
     for (insertPoint in projection.insertPoints.asReversed()) {
