@@ -413,7 +413,6 @@ impl EditorKernel {
                 false,
                 is_loading,
                 is_format,
-                false,
                 self.animation_enabled,
             )
         };
@@ -561,7 +560,6 @@ impl EditorKernel {
                 false,
                 is_loading,
                 is_format,
-                false,
                 self.animation_enabled,
             )
         };
@@ -719,7 +717,6 @@ impl EditorKernel {
                 false,
                 is_loading,
                 is_format,
-                false,
                 self.animation_enabled,
             )
         };
@@ -866,7 +863,6 @@ impl EditorKernel {
                 cluster_count,
                 contains_newline,
                 contains_complex,
-                false,
                 false,
                 false,
                 false,
@@ -1106,7 +1102,6 @@ impl EditorKernel {
                 cluster_count,
                 contains_newline,
                 contains_complex,
-                false,
                 false,
                 false,
                 false,
@@ -1775,7 +1770,6 @@ impl EditorKernel {
                 false,
                 is_loading,
                 is_format,
-                false,
                 self.animation_enabled,
             )
         };

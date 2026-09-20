@@ -358,7 +358,10 @@ mod tests {
             obj.get("targetId").and_then(|v| v.as_str()),
             Some("chapter-body:p:v:c"),
         );
-        assert_eq!(obj.get("layoutTextLength").and_then(|v| v.as_i64()), Some(46));
+        assert_eq!(
+            obj.get("layoutTextLength").and_then(|v| v.as_i64()),
+            Some(46)
+        );
     }
 
     /// content / token 命中敏感 key，value 整体替换成 [REDACTED]。
@@ -369,14 +372,21 @@ mod tests {
             serde_json::from_str(input).expect("input must be valid JSON");
         redact_json(&mut value);
         let obj = value.as_object().expect("top level must be object");
-        assert_eq!(obj.get("content").and_then(|v| v.as_str()), Some("[REDACTED]"));
-        assert_eq!(obj.get("token").and_then(|v| v.as_str()), Some("[REDACTED]"));
+        assert_eq!(
+            obj.get("content").and_then(|v| v.as_str()),
+            Some("[REDACTED]")
+        );
+        assert_eq!(
+            obj.get("token").and_then(|v| v.as_str()),
+            Some("[REDACTED]")
+        );
     }
 
     /// 嵌套 Object / Array 中的敏感字段也要递归脱敏。
     #[test]
     fn redact_json_handles_nested() {
-        let input = r#"{"outer":{"token":"secret","safe":"keep"},"arr":[{"password":"p","note":"n"}]}"#;
+        let input =
+            r#"{"outer":{"token":"secret","safe":"keep"},"arr":[{"password":"p","note":"n"}]}"#;
         let mut value: serde_json::Value =
             serde_json::from_str(input).expect("input must be valid JSON");
         redact_json(&mut value);
@@ -384,7 +394,10 @@ mod tests {
             .get("outer")
             .and_then(|v| v.as_object())
             .expect("outer must be object");
-        assert_eq!(outer.get("token").and_then(|v| v.as_str()), Some("[REDACTED]"));
+        assert_eq!(
+            outer.get("token").and_then(|v| v.as_str()),
+            Some("[REDACTED]")
+        );
         assert_eq!(outer.get("safe").and_then(|v| v.as_str()), Some("keep"));
         let arr = value
             .get("arr")
@@ -412,10 +425,16 @@ mod tests {
         let reparsed: serde_json::Value =
             serde_json::from_str(&out).expect("redacted must reparse");
         let obj = reparsed.as_object().expect("top level must be object");
-        let note = obj.get("note").and_then(|v| v.as_str()).expect("note present");
+        let note = obj
+            .get("note")
+            .and_then(|v| v.as_str())
+            .expect("note present");
         assert!(note.contains("[REDACTED]"), "note: {note}");
         assert!(!note.contains("abc123secret"));
-        let pat = obj.get("pat").and_then(|v| v.as_str()).expect("pat present");
+        let pat = obj
+            .get("pat")
+            .and_then(|v| v.as_str())
+            .expect("pat present");
         assert!(pat.contains("[REDACTED]"), "pat: {pat}");
     }
 

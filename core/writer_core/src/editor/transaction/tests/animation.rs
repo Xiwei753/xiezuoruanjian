@@ -630,99 +630,92 @@ fn glyph_rect_has_baseline_y() {
 #[test]
 fn choose_animation_mode_typing_returns_glyph_animation() {
     // 1–8 个普通 cluster → GlyphAnimation
-    let mode = choose_animation_mode(5, false, false, false, false, false, false, true);
+    let mode = choose_animation_mode(5, false, false, false, false, false, true);
     assert_eq!(mode, AnimationMode::GlyphAnimation);
 
-    let mode1 = choose_animation_mode(1, false, false, false, false, false, false, true);
+    let mode1 = choose_animation_mode(1, false, false, false, false, false, true);
     assert_eq!(mode1, AnimationMode::GlyphAnimation);
 
-    let mode8 = choose_animation_mode(8, false, false, false, false, false, false, true);
+    let mode8 = choose_animation_mode(8, false, false, false, false, false, true);
     assert_eq!(mode8, AnimationMode::GlyphAnimation);
 }
 
 #[test]
 fn choose_animation_mode_complex_grapheme_returns_cluster_animation() {
     // emoji → ClusterAnimation
-    let mode = choose_animation_mode(1, false, true, false, false, false, false, true);
+    let mode = choose_animation_mode(1, false, true, false, false, false, true);
     assert_eq!(mode, AnimationMode::ClusterAnimation);
 }
 
 #[test]
 fn choose_animation_mode_zwj_returns_cluster_animation() {
     // ZWJ emoji → ClusterAnimation (contains_complex_grapheme=true)
-    let mode = choose_animation_mode(3, false, true, false, false, false, false, true);
+    let mode = choose_animation_mode(3, false, true, false, false, false, true);
     assert_eq!(mode, AnimationMode::ClusterAnimation);
 }
 
 #[test]
 fn choose_animation_mode_newline_returns_line_reflow() {
     // 换行 → LineReflowAnimation
-    let mode = choose_animation_mode(1, true, false, false, false, false, false, true);
+    let mode = choose_animation_mode(1, true, false, false, false, false, true);
     assert_eq!(mode, AnimationMode::LineReflowAnimation);
 }
 
 #[test]
 fn choose_animation_mode_many_clusters_returns_run_animation() {
     // 9–40 个 cluster → RunAnimation
-    let mode9 = choose_animation_mode(9, false, false, false, false, false, false, true);
+    let mode9 = choose_animation_mode(9, false, false, false, false, false, true);
     assert_eq!(mode9, AnimationMode::RunAnimation);
 
-    let mode40 = choose_animation_mode(40, false, false, false, false, false, false, true);
+    let mode40 = choose_animation_mode(40, false, false, false, false, false, true);
     assert_eq!(mode40, AnimationMode::RunAnimation);
 
-    let mode20 = choose_animation_mode(20, false, false, false, false, false, false, true);
+    let mode20 = choose_animation_mode(20, false, false, false, false, false, true);
     assert_eq!(mode20, AnimationMode::RunAnimation);
 }
 
 #[test]
 fn choose_animation_mode_extreme_many_clusters_returns_run() {
     // >40 个 cluster → RunAnimation (SnapshotAnimation is unavailable)
-    let mode = choose_animation_mode(41, false, false, false, false, false, false, true);
+    let mode = choose_animation_mode(41, false, false, false, false, false, true);
     assert_eq!(mode, AnimationMode::RunAnimation);
 
-    let mode100 = choose_animation_mode(100, false, false, false, false, false, false, true);
+    let mode100 = choose_animation_mode(100, false, false, false, false, false, true);
     assert_eq!(mode100, AnimationMode::RunAnimation);
 }
 
 #[test]
 fn choose_animation_mode_scrolling_returns_system_suppressed() {
     // 滚动 → SystemSuppressed
-    let mode = choose_animation_mode(5, false, false, true, false, false, false, true);
+    let mode = choose_animation_mode(5, false, false, true, false, false, true);
     assert_eq!(mode, AnimationMode::SystemSuppressed);
 }
 
 #[test]
 fn choose_animation_mode_disabled_returns_system_suppressed() {
     // 动画关闭 → SystemSuppressed
-    let mode = choose_animation_mode(5, false, false, false, false, false, false, false);
+    let mode = choose_animation_mode(5, false, false, false, false, false, false);
     assert_eq!(mode, AnimationMode::SystemSuppressed);
 }
 
 #[test]
 fn choose_animation_mode_loading_returns_system_suppressed() {
     // 加载 → SystemSuppressed
-    let mode = choose_animation_mode(5, false, false, false, true, false, false, true);
+    let mode = choose_animation_mode(5, false, false, false, true, false, true);
     assert_eq!(mode, AnimationMode::SystemSuppressed);
 }
 
 #[test]
 fn choose_animation_mode_format_returns_system_suppressed() {
     // 格式化 → SystemSuppressed
-    let mode = choose_animation_mode(5, false, false, false, false, true, false, true);
-    assert_eq!(mode, AnimationMode::SystemSuppressed);
-}
-
-#[test]
-fn choose_animation_mode_settings_returns_system_suppressed() {
-    // 设置变化 → SystemSuppressed
-    let mode = choose_animation_mode(5, false, false, false, false, false, true, true);
+    let mode = choose_animation_mode(5, false, false, false, false, true, true);
     assert_eq!(mode, AnimationMode::SystemSuppressed);
 }
 
 #[test]
 fn choose_animation_mode_empty_returns_system_suppressed() {
     // 0 cluster → SystemSuppressed
-    let mode = choose_animation_mode(0, false, false, false, false, false, false, true);
+    let mode = choose_animation_mode(0, false, false, false, false, false, true);
     assert_eq!(mode, AnimationMode::SystemSuppressed);
 }
 

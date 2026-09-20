@@ -138,7 +138,13 @@ pub(crate) fn render_frame(
     // 两层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
     // Issue #715: 传 scroll_y 给动画层，让 AnimationLayerNode 设置和静态层一样的
     // translate(0, -scroll_y) 矩阵。动画 glyph 继续保留文档坐标，不在 Rust 侧逐个减 scroll_y。
-    render_text_animation_layer(root_raw, item_ptr, plan, _texture_cache, static_text.scroll_y);
+    render_text_animation_layer(
+        root_raw,
+        item_ptr,
+        plan,
+        _texture_cache,
+        static_text.scroll_y,
+    );
     // Layer 2: 选区/预输入背景
     // Issue #677 评论 5654174714: scroll_y 作为每帧轻量状态传给 renderer，
     // selection/preedit 几何保持文档坐标，由 renderer 在绘制时做视口换算。

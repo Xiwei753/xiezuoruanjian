@@ -1411,8 +1411,7 @@ fn regression_scenario_13_conflict_plus_remote_delete_paths_no_publish_local_del
 
     let tmp = TempDir::new().unwrap();
     // 本地 staging：chapter 内容与远端不同 → BothChanged 冲突
-    let staging_root =
-        build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
+    let staging_root = build_staging_doc_conflict(&tmp, T, DEVICE_LOCAL, b"local chapter content");
 
     // 关键：设置 known_files + tombstone，让 snapshot_local_records_read_only 生成 delete 记录。
     // deleted_at_ms = 8_000 > T-5000 = 5_000 → LWW 本地赢 → LwwLocalWinsDeleteRecord

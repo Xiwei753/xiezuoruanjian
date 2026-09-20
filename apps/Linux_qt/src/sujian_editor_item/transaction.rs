@@ -13,7 +13,6 @@ impl SujianEditorItem {
             is_scrolling: self.current_is_scrolling,
             is_loading: self.current_is_loading,
             is_applying_format: self.current_is_applying_format,
-            is_applying_settings: self.current_is_applying_settings,
             bounding_width: self.bounding_width(),
             font_pixel_size: f64::from(self.current_font_pixel_size),
             font_family: self.current_font_family.to_string(),

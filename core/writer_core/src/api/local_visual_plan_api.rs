@@ -74,7 +74,6 @@ pub fn classify_local_visual_plan(
         false,
         false,
         false,
-        false,
         animation_enabled,
     );
 

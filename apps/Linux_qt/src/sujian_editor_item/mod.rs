@@ -300,8 +300,6 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     is_applying_format: qt_property!(bool; READ is_applying_format WRITE set_is_applying_format NOTIFY visual_settings_changed),
     #[allow(dead_code)]
-    is_applying_settings: qt_property!(bool; READ is_applying_settings WRITE set_is_applying_settings NOTIFY visual_settings_changed),
-    #[allow(dead_code)]
     cursor_rect_x: qt_property!(f32; READ cursor_rect_x NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
     cursor_rect_y: qt_property!(f32; READ cursor_rect_y NOTIFY cursor_rect_changed),
@@ -462,7 +460,6 @@ pub struct SujianEditorItem {
     current_is_scrolling: bool,
     current_is_loading: bool,
     current_is_applying_format: bool,
-    current_is_applying_settings: bool,
     last_summary: QString,
     last_event_count: u32,
     editor_layout: EditorLayout,
@@ -523,7 +520,6 @@ impl Default for SujianEditorItem {
             is_scrolling: Default::default(),
             is_loading: Default::default(),
             is_applying_format: Default::default(),
-            is_applying_settings: Default::default(),
             cursor_rect_x: Default::default(),
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
@@ -617,7 +613,6 @@ impl Default for SujianEditorItem {
             current_is_scrolling: false,
             current_is_loading: false,
             current_is_applying_format: false,
-            current_is_applying_settings: false,
             last_summary: Default::default(),
             last_event_count: 0,
             editor_layout: EditorLayout::default(),

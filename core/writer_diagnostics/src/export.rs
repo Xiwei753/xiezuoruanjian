@@ -175,7 +175,8 @@ fn redact_json_attachment(content: &[u8], relative_path: &str) -> Vec<u8> {
     match serde_json::from_slice::<serde_json::Value>(content) {
         Ok(mut value) => {
             super::redact::redact_json(&mut value);
-            serde_json::to_vec_pretty(&value).unwrap_or_else(|_| error_attachment_json(relative_path))
+            serde_json::to_vec_pretty(&value)
+                .unwrap_or_else(|_| error_attachment_json(relative_path))
         }
         Err(_) => error_attachment_json(relative_path),
     }
@@ -398,11 +399,7 @@ mod tests {
     fn redact_json_attachment_preserves_structure() {
         let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        super::super::writer::init(
-            tmp.path().join("log"),
-            "json-struct-test".to_string(),
-            true,
-        );
+        super::super::writer::init(tmp.path().join("log"), "json-struct-test".to_string(), true);
         super::super::writer::set_enabled(true);
         super::super::writer::enqueue(
             r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
@@ -423,9 +420,7 @@ mod tests {
         let value: serde_json::Value =
             serde_json::from_slice(&bytes).expect("redacted json must parse");
         assert_eq!(
-            value
-                .get("targetId")
-                .and_then(|v| v.as_str()),
+            value.get("targetId").and_then(|v| v.as_str()),
             Some("chapter-body:p:v:c"),
             "targetId must not be redacted or corrupted",
         );
@@ -437,11 +432,7 @@ mod tests {
     fn redact_json_attachment_redacts_sensitive() {
         let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        super::super::writer::init(
-            tmp.path().join("log"),
-            "json-redact-test".to_string(),
-            true,
-        );
+        super::super::writer::init(tmp.path().join("log"), "json-redact-test".to_string(), true);
         super::super::writer::set_enabled(true);
         super::super::writer::enqueue(
             r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#
@@ -473,11 +464,7 @@ mod tests {
     fn redact_json_attachment_parse_failure_emits_valid_json() {
         let _lock = crate::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        super::super::writer::init(
-            tmp.path().join("log"),
-            "json-err-test".to_string(),
-            true,
-        );
+        super::super::writer::init(tmp.path().join("log"), "json-err-test".to_string(), true);
         super::super::writer::set_enabled(true);
         super::super::writer::enqueue(
             r#"{"ts":0,"seq":1,"level":"INFO","origin":"app","event":"test","target":"t","session":"s"}"#

@@ -166,7 +166,6 @@ impl EditorEngine {
             false,
             is_loading,
             is_applying_format,
-            false,
             true,
         );
         let (cluster_rects, cluster_runs) = match change {

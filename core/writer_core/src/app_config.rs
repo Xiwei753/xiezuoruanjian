@@ -155,7 +155,15 @@ pub fn clear_last_workspace_path() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
     use writer_platform_api::FileConfigStore;
+
+    /// 全局 config store 是进程级单例，多个测试并行设置会互相覆盖。
+    /// 用互斥锁串行化所有使用全局 store 的测试，避免竞争条件。
+    static GLOBAL_STORE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    fn global_store_lock() -> &'static Mutex<()> {
+        GLOBAL_STORE_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     fn with_test_store<R, F: FnOnce(&FileConfigStore) -> R>(f: F) -> R {
         let dir = tempfile::tempdir().expect("无法创建临时目录");
@@ -373,6 +381,7 @@ mod tests {
 
     #[test]
     fn test_last_workspace_path_roundtrip() {
+        let _lock = global_store_lock().lock().unwrap();
         let dir = tempfile::tempdir().expect("无法创建临时目录");
         let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
         set_default_config_store(store);
@@ -398,6 +407,7 @@ mod tests {
 
     #[test]
     fn test_save_last_workspace_path_empty_string_is_none() {
+        let _lock = global_store_lock().lock().unwrap();
         let dir = tempfile::tempdir().expect("无法创建临时目录");
         let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
         set_default_config_store(store);
@@ -412,6 +422,7 @@ mod tests {
 
     #[test]
     fn test_last_workspace_path_preserves_navigation_state() {
+        let _lock = global_store_lock().lock().unwrap();
         let dir = tempfile::tempdir().expect("无法创建临时目录");
         let store = Box::new(FileConfigStore::new(dir.path().to_path_buf()));
         set_default_config_store(store);

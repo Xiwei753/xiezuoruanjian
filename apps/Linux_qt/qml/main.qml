@@ -255,6 +255,9 @@ ApplicationWindow {
     // Design tokens
     DesignTokens {
         id: designTokens
+        // Issue #721: 颜色直接读 themeController.*_hex，不再从 themeStateJson 解析。
+        // themeController 由 main.qml 注入；themeStateJson 保留做诊断（onThemeStateJsonChanged 打日志）。
+        themeController: themeController
         // Issue #702: 根 DesignTokens 只绑定 themeStateJson 这一份完整主题状态。
         // themeController 把 is_dark 和最终 ThemeColorScheme 打包成
         // {"is_dark": bool, "scheme": <object>} 一次性发布，QML 侧从同一份

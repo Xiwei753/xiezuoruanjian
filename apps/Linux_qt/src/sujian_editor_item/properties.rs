@@ -453,29 +453,6 @@ impl SujianEditorItem {
         self.request_static_repaint();
     }
 
-    pub(crate) fn is_applying_settings(&self) -> bool {
-        self.current_is_applying_settings
-    }
-
-    pub(crate) fn set_is_applying_settings(&mut self, value: bool) {
-        if self.current_is_applying_settings == value {
-            return;
-        }
-        self.current_is_applying_settings = value;
-        if value {
-            self.clear_active_text_animations();
-            self.cursor_ctrl.animation = None;
-            self.cursor_ctrl.force_snap_next = true;
-            self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
-            self.request_static_repaint();
-            return;
-        }
-        self.cursor_ctrl.force_snap_next = true;
-        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
-        self.update_cursor_visual_position();
-        self.request_static_repaint();
-    }
-
     pub(crate) fn last_transaction_summary(&self) -> QString {
         self.last_summary.clone()
     }

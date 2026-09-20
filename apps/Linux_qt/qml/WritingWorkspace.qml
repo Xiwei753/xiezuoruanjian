@@ -942,7 +942,11 @@ Rectangle {
                         is_scrolling: editorScroll.editorAnimationSuppressed
                         is_loading: editorController.isLoadingChapter
                         is_applying_format: editorController.isApplyingFormat
-                        is_applying_settings: editorController.isApplyingSettings
+                        // Issue #721: 不再把保存 guard (settingsSaveGuardActive) 传成
+                        // 编辑器视觉抑制状态。主题切换不再触发 applyCurrentSettings()，
+                        // 正文/选区/光标颜色已通过 text_color/selection_color/
+                        // selected_text_color/cursor_color 绑定自动下发，Rust 侧各自
+                        // 走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
 
                         // Issue #693 评论 5689819383: 光标自动跟随滚动。
                         // 只在真正的编辑/selection 变化时调度，不监听 scroll_y 或
@@ -1130,12 +1134,11 @@ Rectangle {
         }
     }
 
-    Connections {
-        target: root.dt
-        function onIsDarkChanged() {
-            editorController.applyCurrentSettings();
-        }
-    }
+    // Issue #721: 删除 onIsDarkChanged -> applyCurrentSettings() 连接。
+    // 主题切换不需要进入 applyCurrentSettings()——正文/选区/光标颜色已通过
+    // text_color/selection_color/selected_text_color/cursor_color 绑定自动下发，
+    // Rust 侧各自走 color_only_changed() -> request_scene_rebuild()，不会清空动画。
+    // 上面 settingsBackend.onSettings_changed 仍保留，它只保护保存，不控制编辑器动画。
 
     Connections {
         target: editorController

@@ -1153,19 +1153,13 @@ impl LinuxEditorAnimationCoordinator {
         is_scrolling: bool,
         is_loading: bool,
         is_applying_format: bool,
-        is_applying_settings: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
-        if !typing_animation_enabled
-            || is_scrolling
-            || is_loading
-            || is_applying_format
-            || is_applying_settings
-        {
+        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
             return None;
         }
 

@@ -143,7 +143,6 @@ fn compute_composition_animation_mode(
         false,
         false,
         false,
-        false,
         animation_enabled,
     )
 }
@@ -197,15 +196,9 @@ pub fn choose_animation_mode(
     is_scrolling: bool,
     is_loading: bool,
     is_applying_format: bool,
-    is_applying_settings: bool,
     animation_enabled: bool,
 ) -> AnimationMode {
-    if !animation_enabled
-        || is_scrolling
-        || is_loading
-        || is_applying_format
-        || is_applying_settings
-    {
+    if !animation_enabled || is_scrolling || is_loading || is_applying_format {
         return AnimationMode::SystemSuppressed;
     }
     if cluster_count == 0 {

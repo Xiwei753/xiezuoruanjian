@@ -43,7 +43,9 @@ QtObject {
     // Internal state
     property bool isLoadingChapter: false
     property bool isApplyingFormat: false
-    property bool isApplyingSettings: false
+    // Issue #721: 改名为 settingsSaveGuardActive，收窄语义为纯保存 guard。
+    // 不再传成 SujianEditorItem.is_applying_settings 的编辑器视觉抑制状态。
+    property bool settingsSaveGuardActive: false
     property bool pendingAutoSaveAfterGuard: false
     property bool explicitEmptySavePending: false
     property double lastPotentialExplicitClearAtMs: 0
@@ -69,7 +71,7 @@ QtObject {
         interval: 300
         repeat: false
         onTriggered: {
-            controller.isApplyingSettings = false;
+            controller.settingsSaveGuardActive = false;
             if (!controller.pendingAutoSaveAfterGuard) return;
             controller.pendingAutoSaveAfterGuard = false;
             if (!settingsBackend || !settingsBackend.setting_auto_save_enabled) return;
@@ -195,7 +197,7 @@ QtObject {
     }
 
     function saveGuardActive() {
-        return isLoadingChapter || isApplyingFormat || isApplyingSettings;
+        return isLoadingChapter || isApplyingFormat || settingsSaveGuardActive;
     }
 
     function hasRecentExplicitClearCandidate() {
@@ -366,7 +368,10 @@ QtObject {
     }
 
     function applyCurrentSettings() {
-        isApplyingSettings = true;
+        // Issue #721: applyCurrentSettings() 只启动/刷新保存 guard，
+        // 不再影响编辑器渲染。主题切换走 text_color/selection_color 等
+        // 绑定自动下发，不进入此函数。
+        settingsSaveGuardActive = true;
         if (autoSaveTimer.running) {
             pendingAutoSaveAfterGuard = true;
             autoSaveTimer.stop();
