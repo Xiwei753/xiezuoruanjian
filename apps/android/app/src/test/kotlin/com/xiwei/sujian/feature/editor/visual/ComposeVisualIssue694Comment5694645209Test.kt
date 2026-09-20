@@ -343,7 +343,8 @@ class ComposeVisualIssue694Comment5694645209Test {
 
         val framePatch = applied[0]
         assertBatchDeletePatchBasics(framePatch)
-        assertBatchCursorPathPreservesStageCarets(framePatch)
+        // Issue #725 评论 5750735497：cursorMotionPath 已删除（停止自绘屏幕 caret），
+        // assertBatchCursorPathPreservesStageCarets 断言不再适用，已移除。
     }
 
     /**
@@ -400,63 +401,6 @@ class ComposeVisualIssue694Comment5694645209Test {
             framePatch.newLayout.result.layoutInput.text.text,
         )
     }
-
-    /**
-     * #698 评论 5699401353 修复2：验证 batch cursor path 从真实 T0/Tn layout 取光标几何。
-     *
-     * 旧实现（#694 评论 5694645209）逐笔 patch 的 stage caret 拼接成多段路径，
-     * 但快速删除时每笔 stage caret 属于中间文本 T1/T2，真实存在的 layout 只有 T0 和 Tn。
-     * 把 T1 的 offset 放进 Tn 的 newLayout 查 rect 会对应另一个字/另一行。
-     *
-     * 新实现：batch 后统一从 first.oldLayout / last.newLayout 重建 cursor path —
-     * 删除/混合：只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）。
-     */
-    private fun assertBatchCursorPathPreservesStageCarets(framePatch: ComposeVisualPatch) {
-        val cursorPath = framePatch.cursorMotionPath
-        assertNotNull(
-            "cursorMotionPath 应非空",
-            cursorPath,
-        )
-        val points = cursorPath!!.points
-        assertTrue(
-            "cursorMotionPath.points 应有 1-2 个点（oldCursorRect -> newCursorRect），实际=${points.size}\n" +
-                "#698 评论 5699401353 修复2：batch 纯删除不应伪造中间阶段 caret，" +
-                "只从真实 T0/Tn layout 取 oldCursorRect -> newCursorRect",
-            points.size in 1..2,
-        )
-
-        // 最后一个点应收敛到 offset 0 的 cursor rect（Tn 真实终点）
-        val finalCursorRect = framePatch.newLayout.result.getCursorRect(0)
-        assertEquals(
-            "最后一个点应收敛到 offset 0 的 cursor rect（Tn 真实终点）",
-            finalCursorRect,
-            points.last().rect,
-        )
-
-        // 如果有 2 个点，第一个点应是 T0 真实起点（offset 3 on oldLayout）
-        if (points.size == 2) {
-            val oldCursorRect = framePatch.oldLayout.result.getCursorRect(3)
-            assertEquals(
-                "第一个点应是 T0 真实起点（offset 3 on oldLayout），不伪造中间 caret",
-                oldCursorRect,
-                points.first().rect,
-            )
-        }
-
-        // endFraction 应归一化：(i+1)/n
-        val n = points.size
-        for (i in points.indices) {
-            val expectedFraction = (i + 1f) / n
-            assertEquals(
-                "points[$i].endFraction 应为 (i+1)/n = $expectedFraction",
-                expectedFraction,
-                points[i].endFraction,
-                0.001f,
-            )
-        }
-    }
-
-    // ==================== 问题3：ghost 分段 schedule 测试 ====================
 
     /**
      * 问题3 核心回归："刚吐出来马上删"时，活动 unit 应进入新的删除分段 schedule。
@@ -640,7 +584,6 @@ class ComposeVisualIssue694Comment5694645209Test {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = emptyList(),
-            cursorMotionPath = null,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
             motionPolicy = policy,
@@ -667,7 +610,6 @@ class ComposeVisualIssue694Comment5694645209Test {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = emptyList(),
-            cursorMotionPath = null,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
             motionPolicy = policy,

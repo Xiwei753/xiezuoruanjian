@@ -33,24 +33,12 @@ data class EditorSoftBreakProjection(
     val displayLength: Int get() = rawLength + insertPoints.size
 
     /**
-     * Issue #723 评论 5748592923：caret affinity — collapsed caret 在软断行插入点处
-     * 落在 U+200B 的哪一侧。
-     *
-     * - [Start]：caret 落在 U+200B 之前（wedge Start）。本地输入产生的 collapsed caret
-     *   使用 Start，与 AndroidX 文本编辑后的 wedge affinity 一致。
-     * - [End]：caret 落在 U+200B 之后（wedge End）。
-     */
-    enum class CaretAffinity {
-        Start,
-        End,
-    }
-
-    /**
      * raw offset → display offset（range 映射，wedge End 语义）。
      *
-     * Issue #723 评论 5748592923：本函数继续用于正常文字 range/path 的投影
-     * （[toDisplayRange] / [pathForRawRange] 等），不把"文字区间映射"和"光标落在哪一侧"
-     * 混成一个函数。caret 专用映射走 [wedgeStart] / [wedgeEnd] / [rawToDisplayCaret]。
+     * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，本函数是 raw→display 的唯一映射入口，
+     * 供 [toDisplayRange] / [pathForRawRange] / [cursorRect] 等统一使用。
+     * caret 在 U+200B wedge 的哪一侧只由 BasicTextField 自己决定，
+     * 应用层不再维护 CaretAffinity / wedgeStart / wedgeEnd / rawToDisplayCaret。
      *
      * identity 快速路径：insertPoints 为空直接返回。
      */
@@ -59,47 +47,6 @@ data class EditorSoftBreakProjection(
         val safe = rawOffset.coerceIn(0, rawLength)
         return safe + countInsertsUpTo(safe)
     }
-
-    /**
-     * Issue #723 评论 5748592923：caret 专用 wedge Start 映射。
-     *
-     * `wedgeStart(rawOffset) = rawOffset + count(insertPoint < rawOffset)`。
-     * caret 落在 U+200B 之前。本地输入产生的 collapsed caret 使用 Start affinity。
-     */
-    fun wedgeStart(rawOffset: Int): Int {
-        if (insertPoints.isEmpty()) return rawOffset
-        val safe = rawOffset.coerceIn(0, rawLength)
-        return safe + countInsertsBefore(safe)
-    }
-
-    /**
-     * Issue #723 评论 5748592923：caret 专用 wedge End 映射。
-     *
-     * `wedgeEnd(rawOffset) = rawOffset + count(insertPoint <= rawOffset)`。
-     * caret 落在 U+200B 之后。
-     */
-    fun wedgeEnd(rawOffset: Int): Int {
-        if (insertPoints.isEmpty()) return rawOffset
-        val safe = rawOffset.coerceIn(0, rawLength)
-        return safe + countInsertsUpTo(safe)
-    }
-
-    /**
-     * Issue #723 评论 5748592923：caret 专用 raw→display 映射，显式选择 affinity。
-     *
-     * 由本地输入产生的 collapsed caret 使用 [CaretAffinity.Start]，
-     * 与 AndroidX 文本编辑后的 wedge affinity 一致。
-     * 纯点击/拖动选择如果 caret 正好落在 display wedge 上，不要自己猜 AndroidX 私有的
-     * selection affinity；此时让 BasicTextField 的系统 caret/handle 持有最终静止位置。
-     */
-    fun rawToDisplayCaret(
-        rawOffset: Int,
-        affinity: CaretAffinity,
-    ): Int =
-        when (affinity) {
-            CaretAffinity.Start -> wedgeStart(rawOffset)
-            CaretAffinity.End -> wedgeEnd(rawOffset)
-        }
 
     /** display offset → raw offset。identity 快速路径。 */
     fun displayToRaw(displayOffset: Int): Int {
@@ -131,17 +78,6 @@ data class EditorSoftBreakProjection(
         while (lo < hi) {
             val mid = (lo + hi) / 2
             if (insertPoints[mid] <= rawOffset) lo = mid + 1 else hi = mid
-        }
-        return lo
-    }
-
-    /** 二分搜索 insertPoints 中 < rawOffset 的数量（wedge Start 计数）。 */
-    private fun countInsertsBefore(rawOffset: Int): Int {
-        var lo = 0
-        var hi = insertPoints.size
-        while (lo < hi) {
-            val mid = (lo + hi) / 2
-            if (insertPoints[mid] < rawOffset) lo = mid + 1 else hi = mid
         }
         return lo
     }

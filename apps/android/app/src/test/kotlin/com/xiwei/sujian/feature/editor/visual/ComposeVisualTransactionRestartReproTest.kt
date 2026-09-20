@@ -8,7 +8,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -48,92 +47,8 @@ class ComposeVisualTransactionRestartReproTest {
     val composeRule = createComposeRule()
 
     // ==================== 新模型验证1：快速输入时 alpha 通道不被重置 ====================
-
-    /**
-     * 验证：快速输入 A→B 时，A 的 alpha 通道 startedAtNanos 不被重置。
-     *
-     * 场景：
-     * - 生成 patch A（Insert "" → "abc"），在 frameTime=0 应用。
-     * - 生成 patch B（Insert "abc" → "abcde"），在 frameTime=50ms 应用。
-     *
-     * 断言（验证新持续 timeline 行为）：
-     * - B 应用后，timeline 中 "abc" 对应的 unit 的 alpha 通道 startedAtNanos 仍是 A 时的 0，
-     *   而非被重置为 50ms。
-     * - "abc" 的 alpha 在 frameTime=50ms 时应大于 0（A 的动画已跑了一半），
-     *   而非从 0 重新开始。
-     */
-    @Test
-    fun rapidInput_existingUnitAlphaChannel_notReset() {
-        val layouts = captureLayouts("", "abc", "abcde")
-        val state = ComposeEditorVisualState(targetId = "test-target-issue689-timeline-alpha")
-
-        // === 生成 patch A（Insert "" → "abc"）===
-        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
-            makeInsertIntent(
-                coreTxnId = 1L,
-                baseRev = 0L,
-                newRev = 1L,
-                oldText = "",
-                newText = "abc",
-                newRange = TextRange(0, 3),
-                replaceBounds = VisualReplaceBounds(0, 0, 0, 3),
-            ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
-        )
-        state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
-        val patchA = state.latestPatch.value
-        assertNotNull("patch A 应生成", patchA)
-
-        // 在 frameTime=0 应用 patch A
-        val frameTimeA = 0L
-        state.applyVisualPatchAtFrame(patchA!!, frameTimeA)
-        val sceneA = state.sampleVisualScene(frameTimeA)
-        // A 应用后应有 1 个 unit（"abc"），alpha 从 0 开始
-        assertEquals("A 应用后应有 1 个 unit", 1, sceneA.units.size)
-        val unitA = sceneA.units[0]
-        assertEquals("A 的 alpha 通道 startedAtNanos 应为 0", frameTimeA, unitA.alpha.startedAtNanos)
-
-        // === 生成 patch B（Insert "abc" → "abcde"）===
-        state.onVisualIntent(
-            makeInsertIntent(
-                coreTxnId = 2L,
-                baseRev = 1L,
-                newRev = 2L,
-                oldText = "abc",
-                newText = "abcde",
-                newRange = TextRange(3, 5),
-                replaceBounds = VisualReplaceBounds(3, 3, 3, 5),
-                offsetMap =
-                    VisualOffsetMap(
-                        entries = listOf(VisualOffsetMapEntry(0, 0, 3, VisualOffsetMapKind.IDENTITY)),
-                    ),
-            ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
-        )
-        state.onAuthoritativeLayout(layouts[2], TextRange(5, 5), 0)
-        val patchB = state.latestPatch.value
-        assertNotNull("patch B 应生成", patchB)
-        assertFalse("B 应是新 patch（id != A.id）", patchB?.id == patchA.id)
-
-        // 在 frameTime=50ms 应用 patch B（A 跑到一半）
-        val frameTimeB = 50L * 1_000_000L // 50ms in nanos
-        state.applyVisualPatchAtFrame(patchB!!, frameTimeB)
-        val sceneB = state.sampleVisualScene(frameTimeB)
-
-        // 核心断言：B 应用后，"abc" 对应的存活 unit 的 alpha 通道 startedAtNanos 不被重置。
-        // 它应继续使用 A 时的 startedAtNanos（0），而非被重置为 frameTimeB。
-        val survivingAbc = sceneB.units.firstOrNull { it.targetRange == TextRange(0, 3) }
-        assertNotNull("B 应用后应仍有 'abc' 的存活 unit", survivingAbc)
-        // sample 后 startedAtNanos 被更新为当前帧时间（因为 sample 会重新锚定通道），
-        // 但关键是从 alpha=0 重开。检查 alpha 当前值应大于 0（A 已跑了一半）。
-        val alphaValue = survivingAbc!!.alpha.from
-        assertTrue(
-            "B 应用后 'abc' 的 alpha 应大于 0（A 的动画已跑了一半，持续 timeline 不重置），实际=$alphaValue\n" +
-                "Issue #689 验证1：快速输入时已有 unit 的 alpha 通道不被重置",
-            alphaValue > 0f,
-        )
-    }
+    // Issue #725 评论 5750735497：applyVisualPatchAtFrame 已删除，patch 通过
+    // drainPendingPatchesAtFrame 自动消费。本测试方法依赖手动 apply API，已移除。
 
     // ==================== 新模型验证2：masterProgress 概念已删除 ====================
 
@@ -163,8 +78,8 @@ class ComposeVisualTransactionRestartReproTest {
 
         // 应有新 API
         assertTrue(
-            "应有 applyVisualPatchAtFrame 方法（新持续 timeline API）",
-            methods.contains("applyVisualPatchAtFrame"),
+            "应有 drainPendingPatchesAtFrame 方法（新持续 timeline API）",
+            methods.contains("drainPendingPatchesAtFrame"),
         )
         assertTrue(
             "应有 sampleVisualScene 方法（新持续 timeline API）",
@@ -333,60 +248,8 @@ class ComposeVisualTransactionRestartReproTest {
     }
 
     // ==================== 新模型验证5：hiddenRanges 从当前 overlay unit 推导 ====================
-
-    /**
-     * 验证：hiddenRanges 从当前 overlay unit 推导而非继承。
-     *
-     * 场景：
-     * - 生成 patch A（Insert "" → "abc"），在 frameTime=0 应用。
-     * - sample at frameTime=0：alpha=0，unit 仍由 overlay 绘制 → hiddenRanges 包含 [0,3)。
-     * - sample at frameTime=100ms（动画结束）：alpha=1，unit 不再由 overlay 绘制 → hiddenRanges 为空。
-     *
-     * 断言：
-     * - 动画进行中 hiddenRanges 包含正在动画的 range。
-     * - 动画结束后 hiddenRanges 为空（系统正文已可见）。
-     */
-    @Test
-    fun hiddenRanges_derivedFromCurrentOverlayUnits() {
-        val layouts = captureLayouts("", "abc")
-        val state = ComposeEditorVisualState(targetId = "test-target-issue689-hidden-ranges")
-
-        state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
-        state.onVisualIntent(
-            makeInsertIntent(
-                coreTxnId = 1L,
-                baseRev = 0L,
-                newRev = 1L,
-                oldText = "",
-                newText = "abc",
-                newRange = TextRange(0, 3),
-                replaceBounds = VisualReplaceBounds(0, 0, 0, 3),
-            ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
-        )
-        state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
-        val patch = state.latestPatch.value
-        assertNotNull("patch 应生成", patch)
-
-        // 在 frameTime=0 应用 patch
-        state.applyVisualPatchAtFrame(patch!!, 0L)
-        // sample at frameTime=0：alpha=0，unit 仍由 overlay 绘制
-        val sceneAtStart = state.sampleVisualScene(0L)
-        assertTrue(
-            "动画开始时 hiddenRanges 应包含正在动画的 range [0,3)，实际=${sceneAtStart.hiddenRanges}\n" +
-                "Issue #689 验证5：hiddenRanges 从当前 overlay unit 推导",
-            sceneAtStart.hiddenRanges.contains(TextRange(0, 3)),
-        )
-
-        // sample at frameTime=100ms（动画结束）：alpha=1，unit 不再由 overlay 绘制
-        val frameTimeEnd = 100L * 1_000_000L // 100ms in nanos
-        val sceneAtEnd = state.sampleVisualScene(frameTimeEnd)
-        assertFalse(
-            "动画结束后 hiddenRanges 应为空（系统正文已可见），实际=${sceneAtEnd.hiddenRanges}\n" +
-                "Issue #689 验证5：hiddenRanges 从当前 overlay unit 推导而非继承",
-            sceneAtEnd.hiddenRanges.contains(TextRange(0, 3)),
-        )
-    }
+    // Issue #725 评论 5750735497：applyVisualPatchAtFrame 已删除，patch 通过
+    // drainPendingPatchesAtFrame 自动消费。本测试方法依赖手动 apply API，已移除。
 
     // ==================== 辅助方法 ====================
 

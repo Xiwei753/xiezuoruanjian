@@ -26,7 +26,7 @@ class ComposeEditorVisualStateTest {
     fun newApi_present_oldApi_removed() {
         val state = ComposeEditorVisualState(targetId = "test-visual-state")
         val methods = ComposeEditorVisualState::class.java.methods.map { it.name }
-        assertTrue("应有 applyVisualPatchAtFrame", methods.contains("applyVisualPatchAtFrame"))
+        assertTrue("应有 drainPendingPatchesAtFrame", methods.contains("drainPendingPatchesAtFrame"))
         assertTrue("应有 sampleVisualScene", methods.contains("sampleVisualScene"))
         assertTrue("应有 hasActiveVisuals", methods.contains("hasActiveVisuals"))
         assertFalse("不应有 reportProgress", methods.contains("reportProgress"))

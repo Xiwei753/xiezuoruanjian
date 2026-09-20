@@ -1,9 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
@@ -114,47 +111,16 @@ internal object ComposeVisualPatchBatch {
         // 路径）时按 stage offset map 映射 oldRange→T0 / newRange→Tn 后合成。
         val retainedMoves = composeRetainedMovesAcrossStages(batch)
 
-        // #694 评论 5694645209 问题2：cursor path 用专门的 batch cursor path 合成 —
-        // 按 batch 入队顺序取每笔 patch.cursorMotionPath?.points，保留真实 stage caret 顺序，
-        // 不再对 batch 纯删除重新走旧 buildCursorPath()（旧逻辑只按 insertedUnits 建点，
-        // 纯删除时 insertedUnits 为空、回退到最终单点，丢失中间阶段 caret）。
-        //
-        // #694 评论 5695660885 问题2：batch cursor path 也必须遵守"同一 VSync 只表现最终屏幕差异"。
-        // 同一帧 "" -> "a" -> ""，最终 transactionTextKind == None，insertedUnits/deletedUnits 都空，
-        // 但旧 composeBatchCursorPath 仍收集各笔 stage cursor point 得到 0->1->0 路径，
-        // computeCursorParamsForPatch 把它当 CURSOR_ONLY 用 cursorDurationMillis(80ms) 播放，
-        // 导致光标在文字没变的情况下抽动。
-        val finalTextVisualChanged =
-            transactionTextKind != TextVisualKind.None || retainedMoves.isNotEmpty()
-        val finalSelectionChanged = oldLayout.selection != newLayout.selection
-        val cursorMotionPath: CursorMotionPath? =
-            when {
-                // !finalTextVisualChanged && !finalSelectionChanged：
-                // cursorMotionPath = null，让上层 0ms snap 到最终 cursor，不播放任何 stage path。
-                !finalTextVisualChanged && !finalSelectionChanged -> null
-                // !finalTextVisualChanged && finalSelectionChanged：
-                // 只生成 oldLayout cursor -> newLayout cursor 的最终直达路径，不保留同帧中间 stage。
-                !finalTextVisualChanged && finalSelectionChanged -> {
-                    composeCursorOnlySelectionChangedPath(oldLayout, newLayout)
-                }
-                // 只有最终仍存在真实文字视觉变化时，才用现在的 composeBatchCursorPath()
-                // 保留删除/插入阶段 caret。
-                else -> {
-                    composeBatchCursorPath(
-                        batch = batch,
-                        insertedUnits = insertedUnits,
-                        deletedUnits = deletedUnits,
-                    ) ?: last.cursorMotionPath
-                }
-            }
+        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+        // batch 不再合成 cursorMotionPath / originCursorRect。
+        // 文字吞吐动画由 ComposeTextRevealTrack 纯文字时间线驱动。
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
 
         // 无 overlay 工作时不按 durationMs 假装 active
-        val hasCursorMotion = cursorMotionPath != null
         val effectiveDurationMs =
-            if (!customTextAnimationEnabled && !hasCursorMotion) {
+            if (!customTextAnimationEnabled) {
                 0L
             } else {
                 last.durationMs
@@ -176,14 +142,10 @@ internal object ComposeVisualPatchBatch {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            cursorMotionPath = cursorMotionPath,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
             motionPolicy = motionPolicy,
             intent = last.intent,
-            // #703 评论 5709208101 问题3：batch 合成时 originCursorRect 从首笔取
-            // （首笔的 origin 是整个 chain 的 T0 caret）。
-            originCursorRect = first.originCursorRect,
         )
     }
 
@@ -279,100 +241,6 @@ internal object ComposeVisualPatchBatch {
             ranges = ComposeVisualRebase.mapRangesForwardThroughOffsetMap(ranges, entries)
         }
         return ranges
-    }
-
-    /**
-     * #694 评论 5695660885 问题2：净文本变化为 0 但 selection 变了 —
-     * 只生成 oldLayout cursor -> newLayout cursor 的最终直达路径，不保留同帧中间 stage。
-     *
-     * @return [CursorMotionPath]；取不到 cursor rect 时返回 null。
-     */
-    private fun composeCursorOnlySelectionChangedPath(
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-    ): CursorMotionPath? {
-        val oldCursorRect = safeCursorRectFromBatch(oldLayout, oldLayout.selection.end)
-        val newCursorRect = safeCursorRectFromBatch(newLayout, newLayout.selection.end)
-        return when {
-            oldCursorRect == null && newCursorRect == null -> null
-            oldCursorRect == null ->
-                CursorMotionPath(
-                    points = listOf(CursorMotionPoint(rect = newCursorRect!!, endFraction = 1f)),
-                )
-            newCursorRect == null ->
-                CursorMotionPath(
-                    points = listOf(CursorMotionPoint(rect = oldCursorRect, endFraction = 1f)),
-                )
-            oldCursorRect == newCursorRect ->
-                CursorMotionPath(
-                    points = listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)),
-                )
-            else ->
-                CursorMotionPath(
-                    points =
-                        listOf(
-                            CursorMotionPoint(rect = oldCursorRect, endFraction = 0f),
-                            CursorMotionPoint(rect = newCursorRect, endFraction = 1f),
-                        ),
-                )
-        }
-    }
-
-    /**
-     * #694 评论 5694645209 问题2 + #698 评论 5699401353 修复2：batch cursor path 合成 —
-     *
-     * #698 评论 5699401353 修复2：不再无条件拼接每笔 patch 的 stage cursor path。
-     * 快速删除时每笔 patch 的 stage caret 属于中间文本 T1/T2，但真实存在的 layout 只有 T0 和 Tn。
-     * 把 T1 的 offset 放进 Tn 的 newLayout 查 rect 会对应另一个字/另一行。
-     *
-     * 新实现：batch 后统一从 first.oldLayout / last.newLayout 和最终 insertedUnits/deletedUnits
-     * 重建 cursor path — 直接调用 [ComposeLocalVisualRebase.buildCursorPath]，
-     * 不再收集各笔 patch.cursorMotionPath?.points。
-     *
-     * [buildCursorPath] 的光标几何只从真实 T0/Tn layout 取：
-     * - 无文字动画语义 → 单点 snap
-     * - 纯插入：按 insertedUnits.end 从 newLayout 取阶段点
-     * - 删除/混合：回退到最终单点 snap
-     *
-     * @return 合成后的 [CursorMotionPath]；batch 为空或 buildCursorPath 失败时返回 null。
-     */
-    private fun composeBatchCursorPath(
-        batch: List<ComposeVisualPatch>,
-        insertedUnits: List<TextRange>,
-        deletedUnits: List<TextRange>,
-    ): CursorMotionPath? {
-        if (batch.isEmpty()) return null
-        val first = batch.first()
-        val last = batch.last()
-        val oldLayout = first.oldLayout
-        val newLayout = last.newLayout
-        // #698 评论 5699401353 修复2：batch 后统一从 first.oldLayout / last.newLayout
-        // 和最终 insertedUnits/deletedUnits 重建 cursor path，不收集各笔 stage cursor path。
-        return ComposeLocalVisualRebase.buildCursorPath(
-            oldLayout = oldLayout,
-            newLayout = newLayout,
-            oldSelection = first.oldLayout.selection,
-            newSelection = last.newLayout.selection,
-            insertedUnits = insertedUnits,
-            deletedUnits = deletedUnits,
-        )
-    }
-
-    /**
-     * 安全取 cursor rect — offset 越界或 layout 抛异常时返回 null。
-     */
-    private fun safeCursorRectFromBatch(
-        layout: ComposeLayoutSnapshot,
-        offset: Int,
-    ): Rect? {
-        // Issue #717 评论 5742904417 修复1：offset 是 raw 坐标，边界检查用 rawText 长度。
-        val textLen = layout.effectiveRawText.length
-        if (offset < 0 || offset > textLen) return null
-        return try {
-            layout.cursorRect(offset)
-        } catch (_: Throwable) {
-            null
-        }
     }
 
     /**

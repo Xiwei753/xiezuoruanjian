@@ -9,7 +9,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -20,12 +19,9 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.layout.pathForRawRange
 
@@ -87,27 +83,19 @@ fun EditorTextFieldDrawLayer(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
     textColor: Color,
-    cursorColor: Color,
-    /**
-     * #684 评论 5663032418 断点3：live selection — 直接从 [TextFieldState.selection] 读取。
-     */
-    liveSelection: TextRange?,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
     val density = LocalDensity.current
 
     // #708 评论 5723410606 第一节：每帧状态不在 Composable 主体读取 —
-    // visualScene / restingCursorRect / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
-    // patchVersion 继续作为启动帧循环的低频信号；
-    // drawsVisualCursor 是设置项，也可以继续在 Composition 里读。
-    val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
+    // visualScene / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
+    // patchVersion 继续作为启动帧循环的低频信号。
     val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
     // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
     // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos。
-    // #691：cursor 动画也并入 timeline，不再需要第二个 LaunchedEffect。
     LaunchedEffect(patchVersion) {
         if (patchVersion <= 0L) return@LaunchedEffect
         while (true) {
@@ -132,11 +120,7 @@ fun EditorTextFieldDrawLayer(
                         scene = snapshot.scene,
                         latestLayout = snapshot.layout,
                         scrollY = scrollY,
-                        drawsVisualCursor = drawsVisualCursor,
                         textColor = textColor,
-                        cursorColor = cursorColor,
-                        liveSelection = liveSelection,
-                        restingCursorRect = snapshot.restingCursorRect,
                         density = density,
                         drawContent = { this@drawWithContent.drawContent() },
                     )
@@ -318,37 +302,6 @@ private fun DrawScope.drawVisualScene(
     }
 }
 
-/** 视觉光标宽度（dp）。 */
-private val VisualCursorWidthDp: Dp = 2.dp
-
-/**
- * #684 评论 5672654866 + #691：视觉光标绘制 —
- * 接收单个 [rect]，不再在 draw 阶段第二次插值。
- * 光标位置由 timeline 统一采样，不再使用独立的 Animatable。
- */
-private fun DrawScope.drawVisualCursorRect(
-    rect: Rect,
-    scrollY: Int,
-    density: androidx.compose.ui.unit.Density,
-    cursorColor: Color,
-) {
-    val cursorWidth = density.run { VisualCursorWidthDp.toPx() }
-    val cursorLeft = rect.left - cursorWidth / 2
-    val cursorRight = cursorLeft + maxOf(cursorWidth, rect.width)
-
-    val cursorTop = rect.top - scrollY.toFloat()
-    val cursorBottom = rect.bottom - scrollY.toFloat()
-
-    if (cursorBottom <= 0f || cursorTop >= size.height) return
-    if (cursorRight <= 0f || cursorLeft >= size.width) return
-
-    drawRect(
-        color = cursorColor,
-        topLeft = Offset(cursorLeft, cursorTop),
-        size = Size(cursorRight - cursorLeft, cursorBottom - cursorTop),
-    )
-}
-
 /**
  * 安全获取 path bounds — snapshot 为 null 或 range 无效时返回 null。
  *
@@ -361,36 +314,6 @@ private fun safePathBounds(
 ): Rect? {
     if (snapshot == null) return null
     return snapshot.boundsForRawRange(range)
-}
-
-/**
- * #691 评论 5679242735 修改1：纯函数 — 从 layout + liveSelection 实时计算静止光标 rect。
- *
- * BasicTextField.onTextLayout 只在"新的 text layout 被计算时"才回调，
- * 纯 selection 变化（鼠标点选、方向键移动）不保证重新计算文字布局，
- * 此时 [ComposeEditorVisualState.restingCursorRect]（只在 onAuthoritativeLayout 里更新）
- * 会停在旧位置。draw 层用本函数 + [ComposeEditorVisualState.latestLayout] + liveSelection
- * 实时算出当前 selection 对应的光标几何。
- *
- * 不重新引入 `Animatable` — 这只是静态几何查询。
- *
- * @param layout 最新 layout 快照；null 时返回 null。
- * @param liveSelection 当前 live selection；null 时返回 null。
- * @return 当前 selection.end 对应的光标 rect；越界或异常时返回 null。
- */
-internal fun computeRestingCursorRect(
-    layout: ComposeLayoutSnapshot?,
-    liveSelection: TextRange?,
-): Rect? {
-    if (layout == null || liveSelection == null) return null
-    return try {
-        // Issue #717 评论 5742904417 修复1：liveSelection.end 是 raw 坐标，
-        // coerceIn 边界用 rawText 长度，cursorRect 内部会做 raw→display 映射。
-        val end = liveSelection.end.coerceIn(0, layout.effectiveRawText.length)
-        layout.cursorRect(end)
-    } catch (_: Throwable) {
-        null
-    }
 }
 
 /**
@@ -474,11 +397,7 @@ internal fun DrawScope.drawCurrentEditorFrame(
     scene: ComposeVisualScene,
     latestLayout: ComposeLayoutSnapshot?,
     scrollY: Int,
-    drawsVisualCursor: Boolean,
     textColor: Color,
-    cursorColor: Color,
-    liveSelection: TextRange?,
-    restingCursorRect: Rect?,
     density: androidx.compose.ui.unit.Density,
     drawContent: () -> Unit,
 ) {
@@ -509,24 +428,6 @@ internal fun DrawScope.drawCurrentEditorFrame(
         )
     }
 
-    // 3. 光标
-    // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
-    // 不再有 needsIndentedEmptyParagraphCaret 静态 caret override。
-    // Issue #723 评论 5749023316 缺口1：自绘 caret 只在 smooth cursor 开启（drawsVisualCursor）
-    // 且当前 visual 真正持有 caret（scene.cursorOwnedByVisual）时才画。
-    // ownership=false 时（动画结束/纯点击/拖动）直接交给 BasicTextField 系统 caret 自己画，
-    // 不再画 computeRestingCursorRect——系统 caret 与选区手柄同源，避免"手柄一处、自绘光标另一处"。
-    // drawsVisualCursor 仍作为"smooth cursor 是否开启"的总开关，
-    // scene.cursorOwnedByVisual 决定"这一帧是否由 visual 持有"。
-    if (drawsVisualCursor && scene.cursorOwnedByVisual) {
-        val cursorRectValue = scene.cursorRect ?: restingCursorRect
-        if (cursorRectValue != null) {
-            drawVisualCursorRect(
-                rect = cursorRectValue,
-                scrollY = scrollY,
-                density = density,
-                cursorColor = cursorColor,
-            )
-        }
-    }
+    // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+    // 屏幕光标始终由 BasicTextField 自己画，draw 层不再画视觉光标。
 }

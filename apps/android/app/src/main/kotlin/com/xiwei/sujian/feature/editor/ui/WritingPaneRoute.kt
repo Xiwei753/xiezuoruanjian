@@ -167,7 +167,6 @@ private fun WritingPaneEditorContent(
                 remember(targetId) {
                     ComposeEditorVisualState(
                         targetId = targetId,
-                        initialDrawsVisualCursor = uiState.settings.smoothCursorEnabled,
                     )
                 }
 

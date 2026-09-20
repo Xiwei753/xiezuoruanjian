@@ -22,15 +22,15 @@ import com.xiwei.sujian.core.designsystem.testing.SujianSemanticIds
  *   直接复用现有保存入口（vm.fontSizeRow + SettingsIntent.UpdateFontSize，
  *   vm.lineSpacingRow + UpdateLocal { copy(editorLineSpacingMultiplier = ...) }）。
  * - 增加"协同动画（吞字/吐字）"开关，绑定 editorCoordinatedTextCursorAnimationEnabled。
- *   协同关闭时显示独立控件（输入动效 + 输入时长 + 光标平滑 + 光标时长）；
- *   协同开启时隐藏四个独立控件，只显示一个"协同动画时长"，
+ *   协同关闭时显示独立控件（输入动效 + 输入时长）；
+ *   协同开启时隐藏独立控件，只显示一个"协同动画时长"，
  *   直接写 editorTypingAnimationDurationMs（EditorMotionPolicy 在 coordinated=true 时
  *   本来就是用 textDurationMillis 驱动整条文字+光标 timeline）。
- *   从关闭切到开启时，同时把 editorTypingAnimationEnabled 和 editorSmoothCursorEnabled
- *   归一为 true，避免旧 false 值暗中把协同链拆掉。
+ *   从关闭切到开启时，同时把 editorTypingAnimationEnabled 归一为 true，
+ *   避免旧 false 值暗中把协同链拆掉。
  *
  * 自动缩进分组: 开关 + 宽度（一张 SettingsInnerCard）
- * 编辑器行为分组: 标题 + 打字动画开关 + 打字动画时长 + 光标平滑开关 + 光标平滑时长（一张 SettingsInnerCard）
+ * 编辑器行为分组: 标题 + 打字动画开关 + 打字动画时长（一张 SettingsInnerCard）
  *
  * 8dp 间距由 [SettingsExpandedShell] 的 spacedBy 统一产生。
  * 每张内卡内部各自 collect 自己需要的 row-level StateFlow。
@@ -107,11 +107,6 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
     var typingDuration by rememberSaveable(typingAnimationDuration.toFloat()) {
         mutableFloatStateOf(typingAnimationDuration.toFloat())
     }
-    val smoothCursorChecked by vm.smoothCursorRow.collectAsStateWithLifecycle()
-    val smoothCursorDuration by vm.smoothCursorDurationRow.collectAsStateWithLifecycle()
-    var cursorDuration by rememberSaveable(smoothCursorDuration.toFloat()) {
-        mutableFloatStateOf(smoothCursorDuration.toFloat())
-    }
 
     SettingsInnerCard {
         SettingsFieldGroupTitle(title = stringResource(id = R.string.pref_category_editor_behavior))
@@ -120,15 +115,14 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             checked = coordinatedAnimationChecked,
             onCheckedChange = { c ->
                 // Issue #723 评论 5748592923：从关闭切到开启时，同时把
-                // editorTypingAnimationEnabled 和 editorSmoothCursorEnabled 归一为 true，
-                // 否则把两个开关藏掉以后，旧的 false 值仍会暗中把协同链拆掉。
+                // editorTypingAnimationEnabled 归一为 true，
+                // 否则把开关藏掉以后，旧的 false 值仍会暗中把协同链拆掉。
                 if (c) {
                     vm.handleIntent(
                         SettingsIntent.UpdateLocal {
                             it.copy(
                                 editorCoordinatedTextCursorAnimationEnabled = true,
                                 editorTypingAnimationEnabled = true,
-                                editorSmoothCursorEnabled = true,
                             )
                         },
                     )
@@ -162,7 +156,7 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                 modifier = Modifier.fillMaxWidth(),
             )
         } else {
-            // 协同关闭：显示独立控件（输入动效 + 输入时长 + 光标平滑 + 光标时长）。
+            // 协同关闭：显示独立控件（输入动效 + 输入时长）。
             SujianSwitchRow(
                 title = stringResource(id = R.string.pref_editor_typing_animation),
                 checked = typingAnimationChecked,
@@ -186,30 +180,6 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
                 steps = 96,
                 valueLabel = "${typingDuration.toInt()}ms",
                 enabled = typingAnimationChecked,
-                modifier = Modifier.fillMaxWidth(),
-            )
-            SujianSwitchRow(
-                title = stringResource(id = R.string.pref_editor_smooth_cursor),
-                checked = smoothCursorChecked,
-                onCheckedChange = { c ->
-                    vm.handleIntent(SettingsIntent.UpdateLocal { it.copy(editorSmoothCursorEnabled = c) })
-                },
-            )
-            SujianSlider(
-                title = stringResource(id = R.string.pref_editor_smooth_cursor_duration),
-                value = cursorDuration,
-                onValueChange = { cursorDuration = it },
-                onValueChangeFinished = {
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal {
-                            it.copy(editorSmoothCursorDurationMs = cursorDuration.toInt())
-                        },
-                    )
-                },
-                valueRange = 30f..1000f,
-                steps = 96,
-                valueLabel = "${cursorDuration.toInt()}ms",
-                enabled = smoothCursorChecked,
                 modifier = Modifier.fillMaxWidth(),
             )
         }

@@ -481,6 +481,9 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
     /**
      * 通过反射访问 ComposeEditorVisualState 的 private pendingPatches 队列，
      * 查找包含指定 coreTransactionId 的 patch。
+     *
+     * Issue #723 评论 5750100004：pendingPatches 元素类型从 ComposeVisualPatch
+     * 改为 PendingPatch（携带 sequence），需要通过反射读 .patch 字段。
      */
     private fun findPatchWithCoreTxnId(
         state: ComposeEditorVisualState,
@@ -489,10 +492,15 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
         val field = ComposeEditorVisualState::class.java.getDeclaredField("pendingPatches")
         field.isAccessible = true
         @Suppress("UNCHECKED_CAST")
-        val deque = field.get(state) as kotlin.collections.ArrayDeque<ComposeVisualPatch>
-        // 先在 pendingPatches 队列里找
-        for (patch in deque) {
-            if (patch.coreTransactionIds.contains(coreTxnId)) return patch
+        val deque = field.get(state) as kotlin.collections.ArrayDeque<*>
+        // 先在 pendingPatches 队列里找 — 元素是 PendingPatch，需要反射读 .patch
+        for (item in deque) {
+            val patchField = item?.javaClass?.getDeclaredField("patch")
+            if (patchField != null) {
+                patchField.isAccessible = true
+                val patch = patchField.get(item) as ComposeVisualPatch
+                if (patch.coreTransactionIds.contains(coreTxnId)) return patch
+            }
         }
         // 再看 latestPatch（可能已被 drain 或就是最新）
         val latest = state.latestPatch.value

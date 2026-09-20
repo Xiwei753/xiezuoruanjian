@@ -9,8 +9,6 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
-import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -500,101 +498,9 @@ class ComposeVisualIssue720ReflowOwnershipTest {
      * #717 之后 TextLayoutResult 已经是 display 坐标，不再允许只靠 raw-layout 测试证明换行链正确。
      * 本测试用 [snapshotFromRawText] 生成含 projection 的 [ComposeLayoutSnapshot]。
      *
-     * 场景与 [ComposeVisualIssue703RegressionTest.repro_comment5710977972_a3_retainedMoveReflowTextMistakenAsInserted]
-     * 一致：Insert 触发换行 — "ab" → "a\nb"，retainedMoves 幸存回流文字 'b' 不应被误当 inserted 裁切。
-     */
-    @Test
-    fun repro_comment5710977972_a3_retainedMoveReflowTextMistakenAsInserted_projectionVersion() {
-        val snaps = snapshotsFromRawTexts(listOf("ab", "a\nb"), maxWidth = 30)
-        val oldLayout = snaps[0].copy(selection = TextRange(1, 1))
-        val newLayout = snaps[1].copy(selection = TextRange(2, 2))
-
-        // 确认 "ab" 一行，"a\nb" 两行
-        assertTrue(
-            "A3-proj: 'ab' 应一行，实际 lineCount=${oldLayout.result.lineCount}",
-            oldLayout.result.lineCount == 1,
-        )
-        assertTrue(
-            "A3-proj: 'a\\nb' 应跨两行，实际 lineCount=${newLayout.result.lineCount}",
-            newLayout.result.lineCount >= 2,
-        )
-
-        // 'b' [2,3) 在 "a\nb" 第二行，确认 glyph width >= 0.5（非零宽）
-        // projection 版本用 boundsForRawRange（projection-aware）
-        val bBounds = newLayout.boundsForRawRange(TextRange(2, 3))
-        assertNotNull("A3-proj: 'b' [2,3) bounds 应非 null", bBounds)
-        assertTrue(
-            "A3-proj: 'b' [2,3) glyph width 应 >= 0.5（非零宽），实际 bounds=$bBounds",
-            bBounds!!.width >= 0.5f,
-        )
-
-        val timeline = ComposeVisualTimeline()
-
-        // 光标在 'b' 左侧（offset 2，换行符后，'b' 前，第二行开头）
-        // projection 版本用 cursorRect（projection-aware）
-        val cursorBeforeB = newLayout.cursorRect(2)
-        assertTrue(
-            "A3-proj: 光标应在第二行（top>=35），实际 top=${cursorBeforeB.top}",
-            cursorBeforeB.top >= 35f,
-        )
-
-        val cursorPath = CursorMotionPath(points = listOf(CursorMotionPoint(rect = cursorBeforeB, endFraction = 1f)))
-
-        val patch =
-            makePatch(
-                id = 1L,
-                oldLayout = oldLayout,
-                newLayout = newLayout,
-                // 换行符
-                insertedUnits = listOf(TextRange(1, 2)),
-                retainedMoves =
-                    listOf(
-                        RetainedMove(oldRange = TextRange(1, 2), newRange = TextRange(2, 3)),
-                    ),
-                // 'b' reflow
-                cursorMotionPath = cursorPath,
-                durationMs = 1000L,
-                motionPolicy = EditorMotionPolicy(textDurationMillis = 1000L, cursorEnabled = true, coordinated = true),
-            )
-
-        val fromRect = oldLayout.cursorRect(1) // offset 1 在 "ab" 中（'a' 后）
-        timeline.applyPatch(
-            patch = patch,
-            frameTimeNanos = 0L,
-            cursorFromRect = fromRect,
-            cursorPath = cursorPath.points,
-            // 光标 10ms 内到 'b' 左侧
-            cursorDurationNanos = 10L * NANOS_PER_MS,
-        )
-
-        // 在 20ms 采样：光标已在 'b' 左侧（第二行），retained move unit 'b' 的 position 未完成（未收口）
-        val scene = timeline.sample(20L * NANOS_PER_MS)
-        val cursor = scene.cursorRect
-        assertNotNull("A3-proj: cursor rect 应存在", cursor)
-
-        // 找 retained move unit 'b' [2,3)（targetRange != null, alpha=1→1，幸存回流文字）
-        val retainedUnit =
-            scene.units.firstOrNull {
-                it.targetRange == TextRange(2, 3) && it.alpha.from >= 0.99f && it.alpha.to >= 0.99f
-            }
-        assertNotNull(
-            "A3-proj: retained move unit 'b' [2,3) 应存在（alpha 1→1，幸存回流文字），" +
-                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
-            retainedUnit,
-        )
-
-        // 期望：retained move 的幸存文字应始终完整可见
-        val clipFraction = scene.unitClipFractions[retainedUnit!!.key] ?: 1f
-        assertTrue(
-            "A3-proj retainedMoves 幸存回流: 'b' clipFraction 应为 1 或不在 unitClipFractions 中（始终完整可见），" +
-                "实际 clipFraction=$clipFraction；cursor=$cursor",
-            clipFraction >= 0.99f,
-        )
-    }
-
-    // ==================== projection 版本：#689 deleteNewline ====================
-
-    /**
+     * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，CursorMotionPath / cursorFromRect /
+     * cursorPath / cursorDurationNanos / scene.cursorRect 已删除，本测试方法已移除。
+     *
      * [ComposeVisualTransactionRestartReproTest.deleteNewline_geometryUnchangedUnit_noPositionTrack]
      * 的 projection 版本 — 用 [snapshotFromRawText] 生成含 projection 的 layout。
      *
@@ -769,7 +675,6 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         insertedUnits: List<TextRange> = emptyList(),
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
-        cursorMotionPath: CursorMotionPath? = null,
         durationMs: Long = 100L,
         motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
     ): ComposeVisualPatch =
@@ -782,7 +687,6 @@ class ComposeVisualIssue720ReflowOwnershipTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            cursorMotionPath = cursorMotionPath,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = motionPolicy,

@@ -216,8 +216,6 @@ class ComposeVisualFrameCoordinator(
             mergedNewRanges = chain.flatMap { it.newRanges }
         }
 
-        val firstCursor = chain.mapNotNull { it.cursor }.firstOrNull()
-        val lastCursor = chain.mapNotNull { it.cursor }.lastOrNull()
         val lastIntent = chain.last()
 
         val screenSuppressed =
@@ -246,13 +244,6 @@ class ComposeVisualFrameCoordinator(
             customAnimationEnabled && transactionTextKind != TextVisualKind.None
 
         val textAnimationActive = customTextAnimationEnabled
-        val cursorAnimationActive =
-            !screenSuppressed &&
-                chainMotionPolicy.cursorEnabled &&
-                firstCursor != null &&
-                lastCursor != null &&
-                chain.any { it.cursor?.animate == true } &&
-                firstCursor.oldEndUtf16 != lastCursor.newEndUtf16
 
         // insertedUnits / deletedUnits — Core 给出的 animation units 在 coordinator 构建 patch 时
         // 直接变成 insertedUnits / deletedUnits；真正运行到哪由 timeline 的每个 unit 自己保存时间。
@@ -287,23 +278,14 @@ class ComposeVisualFrameCoordinator(
                 emptyList()
             }
 
-        // 构建 cursor motion path。
-        val cursorMotionPath =
-            if (cursorAnimationActive) {
-                buildCursorMotionPath(
-                    oldLayout = consumed.layout,
-                    newLayout = newest.layout,
-                    intents = chain,
-                    oldAnimationUnits = composedOldAnimationUnits,
-                    newAnimationUnits = newAnimationUnits,
-                )
-            } else {
-                null
-            }
+        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+        // 不再构建 cursorMotionPath，patch 不携带任何光标运动信息。
+        // 文字吞吐动画由 ComposeTextRevealTrack 纯文字时间线驱动，
+        // 屏幕光标始终由 BasicTextField 自己画。
 
         // #684 评论 5666730754：无 overlay 工作的事务不按 durationMs 假装 active。
         val effectiveDurationMs =
-            if (!textAnimationActive && !cursorAnimationActive) {
+            if (!textAnimationActive) {
                 0L
             } else {
                 lastIntent.durationMs
@@ -320,7 +302,6 @@ class ComposeVisualFrameCoordinator(
                 insertedUnits = insertedUnits,
                 deletedUnits = deletedUnits,
                 retainedMoves = retainedMoves,
-                cursorMotionPath = cursorMotionPath,
                 durationMs = effectiveDurationMs,
                 animationMode =
                     if (screenSuppressed) {

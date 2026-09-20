@@ -503,7 +503,6 @@ class ComposeVisualTimelineComment5675270164ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            cursorMotionPath = null,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs),

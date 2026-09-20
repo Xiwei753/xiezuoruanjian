@@ -45,8 +45,6 @@ suspend fun EditorViewModel.loadEditorSettingsSnapshot(): EditorSettingsState {
         autoIndentWidth = settings.autoIndentWidth,
         typingAnimationEnabled = settings.editorTypingAnimationEnabled,
         typingAnimationDurationMs = settings.editorTypingAnimationDurationMs.toLong(),
-        smoothCursorEnabled = settings.editorSmoothCursorEnabled,
-        smoothCursorDurationMs = settings.editorSmoothCursorDurationMs.toLong(),
         coordinatedTextCursorAnimationEnabled = settings.editorCoordinatedTextCursorAnimationEnabled,
         reduceMotion = isSystemReduceMotionEnabled(),
         autoSaveEnabled = settings.autoSaveEnabled,

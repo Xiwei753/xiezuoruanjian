@@ -38,8 +38,6 @@ class SettingsEditorAffectsTest {
         assertTrue(base.hasDifferentEditorFrom(LocalSettings(autoIndentWidth = 4.0f)))
         assertTrue(base.hasDifferentEditorFrom(LocalSettings(editorTypingAnimationEnabled = false)))
         assertTrue(base.hasDifferentEditorFrom(LocalSettings(editorTypingAnimationDurationMs = 200)))
-        assertTrue(base.hasDifferentEditorFrom(LocalSettings(editorSmoothCursorEnabled = false)))
-        assertTrue(base.hasDifferentEditorFrom(LocalSettings(editorSmoothCursorDurationMs = 120)))
         assertTrue(base.hasDifferentEditorFrom(LocalSettings(editorCoordinatedTextCursorAnimationEnabled = false)))
         assertTrue(base.hasDifferentEditorFrom(LocalSettings(useSelfRenderEditorOnAndroid = false)))
     }

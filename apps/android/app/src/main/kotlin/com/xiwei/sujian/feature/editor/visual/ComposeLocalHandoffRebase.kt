@@ -1,9 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
@@ -70,21 +68,9 @@ internal object ComposeLocalHandoffRebase {
         // 语义从"child 继承 parent 的旧 fraction"改成"每个 rebase child 的真实首帧 fraction"。
         // ghost 首帧继承这个具体 glyph/slice 上一帧真实可见多少，而不是一刀切 0 或 parent 进度。
         val initialClipFractionsByKey = mutableMapOf<Long, Float>()
-        // #708 评论 5734842845：记录每个 rebase child 的 clip driver cursor ownership —
-        // parent 有 scene.unitClipCursors[parentKey] 时，所有由这个 parent 派生的 child key
-        // 都记录同一份 parent clip cursor；历史 ghost 按原 key 复制旧 cursor；
-        // 非 split、key 不变的 active unit 同样保留；parent 本来没有 clip cursor 时不要造。
-        // publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipCursors，
-        // 不再沿用旧 scene.unitClipCursors — 否则下一次 rebase 处理 child 时
-        // parentOldCursorRect = scene.unitClipCursors[childKey] 返回 null，
-        // computeSliceInitialFraction 走 `if (parentOldCursorRect == null) return parentOldFraction`
-        // 分支，front/ghost/back 全部继承同一个 parentOldFraction。
-        val initialClipCursorsByKey = mutableMapOf<Long, Rect>()
-        // #708 评论 5733321056 修复3：不再用全局 scene.cursorRect 独立变量 —
-        // 改为在 for (unit in scene.units) 循环内对每个 unit 取 parent 自己的
-        // scene.unitClipCursors[unit.key]。scene.cursorRect 只表示屏幕最新视觉光标，
-        // 可能已切到下一笔的 cursorTrack，用它算 split child 首帧 fraction 会与
-        // timeline 用 per-unit clipTrackId 算的结果不一致 = 首帧跳变。
+        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+        // 不再记录 initialClipCursorsByKey，clipFraction 改由 alpha 通道直接驱动。
+        // split child 继承 parent 旧 fraction，不再用 cursor 位置算精确 fraction。
         val oldCoordinated = scene.coordinatedSpatialClip
 
         for (unit in scene.units) {
@@ -96,21 +82,12 @@ internal object ComposeLocalHandoffRebase {
                 scene.unitClipFractions[unit.key]?.let { fraction ->
                     initialClipFractionsByKey[unit.key] = fraction
                 }
-                // #708 评论 5734842845：历史 ghost 沿用旧 clip cursor ownership
-                scene.unitClipCursors[unit.key]?.let { cursor ->
-                    initialClipCursorsByKey[unit.key] = cursor
-                }
                 continue
             }
             // 旧 active unit：通过 splitMappedRangeForward 映射到新正文坐标
             val slices = computeSlices(target, patch, newTextLength)
             val isSplit = slices.size >= 2
             val parentOldFraction = scene.unitClipFractions[unit.key]
-            // #708 评论 5733321056 修复3：parent unit 自己的 clip cursor —
-            // 从 scene.unitClipCursors 取（由 timeline.computeUnitClipFractions 记录）。
-            // parent 不在 map 中表示它本来就不是 spatial clip 驱动（无 clipTrackId 或 track 已清），
-            // 不要凭空造一个 cursor。
-            val parentOldCursorRect = scene.unitClipCursors[unit.key]
             for (slice in slices) {
                 // Issue #720 评论 5747339452：本地 patch + surviving slice 自然几何变化 →
                 // handoff 首帧就释放给 BasicTextField，不加入 rebasedUnits、不写 fraction/cursor map、不进入 mergedHidden。
@@ -142,16 +119,8 @@ internal object ComposeLocalHandoffRebase {
                     slice = slice,
                     isSplit = isSplit,
                     parentOldFraction = parentOldFraction,
-                    parentOldCursorRect = parentOldCursorRect,
                     oldCoordinated = oldCoordinated,
                 )?.let { initialClipFractionsByKey[childKey] = it }
-                // #708 评论 5734842845：记录 child clip cursor ownership —
-                // parent 有 scene.unitClipCursors[parentKey] 时，所有由这个 parent 派生的 child key
-                // （split surviving / split ghost / 非 split key 不变的 active unit）
-                // 都记录同一份 parent clip cursor；parent 本来没有 clip cursor 时不写 entry。
-                // 这样下一次 rebase 处理 child 时 parentOldCursorRect = scene.unitClipCursors[childKey]
-                // 能拿到这份 cursor，computeSliceInitialFraction 走精确算分支而非 fallback。
-                parentOldCursorRect?.let { initialClipCursorsByKey[childKey] = it }
                 processSlice(
                     unit = unit,
                     slice = slice,
@@ -167,7 +136,6 @@ internal object ComposeLocalHandoffRebase {
             units = rebasedUnits,
             ghostedCoverage = ghostedCoverage,
             initialClipFractionsByKey = initialClipFractionsByKey,
-            initialClipCursorsByKey = initialClipCursorsByKey,
         )
     }
 
@@ -175,193 +143,21 @@ internal object ComposeLocalHandoffRebase {
      * #708 评论 5731952690 修复3 / 评论 5733321056 修复3：计算 rebase child 的真实首帧 fraction —
      * 从 rebase() 抽取以降低复杂度。
      *
+     * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，不再用 cursor 位置算精确 split fraction —
+     * split child 直接继承 parent 旧 fraction，clipFraction 改由 alpha 通道驱动。
+     *
      * 返回值语义：
      * - null：不需要记录（非 split 且 parentOldFraction==null）
      * - 非 null：要记录的 fraction
-     *
-     * 四种情况：
-     * - 非 split（整个 unit 变 ghost 或 surviving）：继承 parent 旧 fraction
-     * - split surviving slice：用 slice.oldSubRange + sliceScreenPosition + parentOldCursorRect
-     *   + fractionFor 算自己真实首帧 fraction（role 保持原 unit.role，不是 DeletedGhost）。
-     *   旧实现直接返回 parentOldFraction，导致 front/back surviving 都拿到 parent 整体进度，
-     *   首帧画错（cursor 已越过 front 但 front fraction=0.5）。
-     * - split ghost slice 有 parent cursor：用 fractionFor 精确算，
-     *   safePathBounds 零宽时用 text-offset heuristic fallback。
-     * - split ghost slice 无 parent cursor：parent 旧 fraction
-     *
-     * #708 评论 5733321056 修复3：parentOldCursorRect 从 scene.unitClipCursors[unit.key] 取，
-     * 不再用全局 scene.cursorRect — parent 没有 unitClipCursor 时表示它本来就不是 spatial clip 驱动，
-     * 不要凭空造一个。
      */
     private fun computeSliceInitialFraction(
         unit: VisualTextUnit,
         slice: ComposeVisualRebase.MappedRangeSlice,
         isSplit: Boolean,
         parentOldFraction: Float?,
-        parentOldCursorRect: Rect?,
         oldCoordinated: Boolean,
     ): Float? {
-        if (!isSplit) {
-            // 非 split：整个 unit 变 ghost 或 surviving，继承 parent 旧 fraction
-            return parentOldFraction
-        }
-        val isGhostSlice = slice.kind == ComposeVisualRebase.MappedRangeSliceKind.GHOST
-        if (parentOldCursorRect == null) {
-            // parent 没有 unitClipCursor — 它本来就不是 spatial clip 驱动，
-            // 不要凭空造一个 cursor。继承 parent 旧 fraction（可能为 null）。
-            return parentOldFraction
-        }
-        // #708 评论 5733321056 修复3：split surviving slice 也用 fractionFor 算 —
-        // 旧实现对 surviving slice 直接返回 parentOldFraction，front/back 都拿到 parent 整体进度。
-        // 现在统一用 slice.oldSubRange + sliceScreenPosition + parentOldCursorRect + fractionFor
-        // 算 slice 自己在 parent cursor 下的真实可见度。
-        // surviving slice 的 role 保持原 unit.role（Inserted / RetainedMove），
-        // 不是 DeletedGhost — 这样 fractionFor 走 insert/retained 分支，符合"cursor 越过 = 已吐完"语义。
-        // ghost slice 的 role 改 DeletedGhost，走 delete 分支。
-        return computeSliceFractionWithParentCursor(
-            unit = unit,
-            slice = slice,
-            isGhostSlice = isGhostSlice,
-            parentOldFraction = parentOldFraction,
-            parentOldCursorRect = parentOldCursorRect,
-            oldCoordinated = oldCoordinated,
-        )
-    }
-
-    /**
-     * #708 评论 5733321056 修复3：用 parent 自己的 unitClipCursor + fractionFor 算 split slice
-     * （surviving 或 ghost）的真实首帧 fraction — 从 computeSliceInitialFraction 抽取以降低复杂度。
-     *
-     * 两条路径：
-     * 1. safePathBounds 正常 → fractionFor 精确算
-     * 2. safePathBounds 零宽（测试环境 getPathForRange 限制）→ text-offset heuristic fallback
-     *
-     * surviving slice 的 role 保持原 unit.role（不是 DeletedGhost）；
-     * ghost slice 的 role 改 DeletedGhost。
-     */
-    private fun computeSliceFractionWithParentCursor(
-        unit: VisualTextUnit,
-        slice: ComposeVisualRebase.MappedRangeSlice,
-        isGhostSlice: Boolean,
-        parentOldFraction: Float?,
-        parentOldCursorRect: Rect,
-        oldCoordinated: Boolean,
-    ): Float {
-        // 构造临时 slice unit 算 slice 自己在旧 scene 下的真实 fraction。
-        // unit.alpha.from 已是上一帧可见 alpha（scene.units 已 sampled）。
-        // sliceUnit 的 position 必须是 slice 自己的屏幕位置，不是 parent 的 position。
-        val sliceScreenPos =
-            ComposeVisualRebase.sliceScreenPosition(
-                layout = unit.layout,
-                parentRange = unit.range,
-                sliceRange = slice.oldSubRange,
-                parentScreenPosition = unit.position.from,
-            ) ?: unit.position.from
-        // #708 评论 5733321056 修复3：surviving slice 保持原 role（Inserted / RetainedMove），
-        // ghost slice 改 DeletedGhost — fractionFor 据此走 insert/delete 分支。
-        val sliceRole = if (isGhostSlice) VisualUnitRole.DeletedGhost else unit.role
-        val sliceUnit =
-            unit.copy(
-                range = slice.oldSubRange,
-                role = sliceRole,
-                position = TimedOffset(sliceScreenPos, sliceScreenPos, 0L, 0L),
-            )
-        val naturalBounds =
-            sliceUnit.layout.boundsForRawRange(sliceUnit.range)
-        val parentBounds =
-            unit.layout.boundsForRawRange(unit.range)
-        // #708 评论 5733321056 修复3：fallback 策略抽取到 chooseSliceFractionBranch —
-        // 降低本方法圈复杂度。
-        return chooseSliceFractionBranch(
-            sliceUnit = sliceUnit,
-            unit = unit,
-            slice = slice,
-            isGhostSlice = isGhostSlice,
-            naturalBounds = naturalBounds,
-            parentWidth = parentBounds?.width ?: 0f,
-            parentOldFraction = parentOldFraction,
-            parentOldCursorRect = parentOldCursorRect,
-            oldCoordinated = oldCoordinated,
-        )
-    }
-
-    /**
-     * #708 评论 5733321056 修复3：slice fraction fallback 策略 —
-     * 从 computeSliceFractionWithParentCursor 抽取以降低圈复杂度。
-     *
-     * 三条路径：
-     * 1. 零宽 glyph + ghost slice：用 fractionFor 算（零宽 DeletedGhost 用 cursor 位置判断），
-     *    与 timeline 的 fractionFor 零宽逻辑一致，避免首帧跳变。
-     * 2. 零宽/不精确 bounds + surviving slice：走 text-offset heuristic fallback
-     *    （基于文本偏移，不依赖 getPathForRange 几何精度）。
-     * 3. 精确非零宽：走 fractionFor 精确算。
-     *
-     * 不精确 bounds：slice 是 parent 真子区间但 naturalBounds.width 接近 parent width，
-     * Robolectric getPathForRange 对子 range 可能返回整个 parent 的 bounds。
-     */
-    @Suppress("CyclomaticComplexMethod", "LongParameterList")
-    private fun chooseSliceFractionBranch(
-        sliceUnit: VisualTextUnit,
-        unit: VisualTextUnit,
-        slice: ComposeVisualRebase.MappedRangeSlice,
-        isGhostSlice: Boolean,
-        naturalBounds: Rect?,
-        parentWidth: Float,
-        parentOldFraction: Float?,
-        parentOldCursorRect: Rect,
-        oldCoordinated: Boolean,
-    ): Float {
-        val isZeroWidthBounds = naturalBounds == null || naturalBounds.width < 0.5f
-        val isImpreciseBounds =
-            slice.oldSubRange != unit.range &&
-                naturalBounds != null &&
-                parentWidth > 0.5f &&
-                naturalBounds.width >= parentWidth * 0.9f
-        val useHeuristic = !isGhostSlice && (isZeroWidthBounds || isImpreciseBounds)
-        return when {
-            isZeroWidthBounds && isGhostSlice -> {
-                // ghost slice 零宽：用 fractionFor 算（零宽 DeletedGhost 用 cursor 位置判断），
-                // 与 timeline 的 fractionFor 零宽逻辑一致。
-                fractionForOrFallback(sliceUnit, parentOldCursorRect, oldCoordinated, parentOldFraction)
-            }
-            useHeuristic -> {
-                // surviving slice 零宽/不精确：走 text-offset heuristic fallback
-                computeTextOffsetHeuristicFraction(unit, slice, parentOldFraction)
-            }
-            else -> {
-                fractionForOrFallback(sliceUnit, parentOldCursorRect, oldCoordinated, parentOldFraction)
-            }
-        }
-    }
-
-    /** fractionFor 算不出的 fallback — 抽取以降低 chooseSliceFractionBranch 圈复杂度。 */
-    private fun fractionForOrFallback(
-        sliceUnit: VisualTextUnit,
-        cursorRect: Rect,
-        coordinated: Boolean,
-        fallback: Float?,
-    ): Float = ComposeVisualClip.fractionFor(sliceUnit, cursorRect, coordinated) ?: (fallback ?: 0f)
-
-    /**
-     * #708 评论 5731952690 修复3：text-offset heuristic fallback —
-     * safePathBounds 返回零宽时用 parentOldFraction 估算 cursor 在 parent 中的文本偏移，
-     * 与 slice 的文本范围比较：cursor 在 slice 之前→0，之后→1，中间→线性插值。
-     */
-    private fun computeTextOffsetHeuristicFraction(
-        unit: VisualTextUnit,
-        slice: ComposeVisualRebase.MappedRangeSlice,
-        parentOldFraction: Float?,
-    ): Float {
-        val parentLen = (unit.range.end - unit.range.start).coerceAtLeast(1)
-        val cursorApproxOffset = (parentOldFraction ?: 0f) * parentLen
-        val sliceStart = slice.oldSubRange.start - unit.range.start
-        val sliceEnd = slice.oldSubRange.end - unit.range.start
-        return when {
-            cursorApproxOffset <= sliceStart -> 0f
-            cursorApproxOffset >= sliceEnd -> 1f
-            sliceEnd > sliceStart -> (cursorApproxOffset - sliceStart) / (sliceEnd - sliceStart)
-            else -> 0f
-        }
+        return parentOldFraction
     }
 
     private fun processSlice(
@@ -515,26 +311,10 @@ internal object ComposeLocalHandoffRebase {
      *     算 slice 自己的旧 fraction（role 保持原 unit.role，不是 DeletedGhost）
      *   publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipFractions，
      *   不再一刀切 ghost=0。key 不在 map 中的 child 表示没有旧 fraction（新插入 unit）。
-     * @param initialClipCursorsByKey #708 评论 5734842845：每个 rebase child 的 clip driver cursor ownership —
-     *   语义为"这个 child 上一帧算 fraction 时所用的 cursor rect"：
-     *   - 历史 ghost：scene.unitClipCursors（沿用旧 cursor）
-     *   - 非 split、key 不变的 active unit：scene.unitClipCursors[unit.key]（沿用旧 cursor）
-     *   - split 派生的 child（surviving 或 ghost）：parent 的 scene.unitClipCursors[parentKey]
-     *     （所有由同一 parent 派生的 child 共享同一份 parent clip cursor）
-     *   - parent 没有 scene.unitClipCursors[parentKey] 时不写 entry —
-     *     表示 parent 本来就不是 spatial clip 驱动，不要凭空造一个 cursor。
-     *   publishLocalHandoffScene 用此 map 设 handoff 首帧 unitClipCursors，
-     *   不再沿用旧 scene.unitClipCursors — 旧 parent key 已不在 rebasedUnits 里，
-     *   留下它会让 scene 的 units/fractions/cursors 三份 key 集合不一致，
-     *   且下一次 rebase 处理 child 时 parentOldCursorRect = scene.unitClipCursors[childKey] 返回 null，
-     *   导致 computeSliceInitialFraction 走 `if (parentOldCursorRect == null) return parentOldFraction`
-     *   分支，front/ghost/back 全部继承同一个 parentOldFraction，
-     *   重新出现"split child 直接复制 parent 整体 fraction"的回归。
      */
     data class RebasedHandoff(
         val units: List<VisualTextUnit>,
         val ghostedCoverage: List<TextRange>,
         val initialClipFractionsByKey: Map<Long, Float> = emptyMap(),
-        val initialClipCursorsByKey: Map<Long, Rect> = emptyMap(),
     )
 }

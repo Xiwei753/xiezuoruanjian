@@ -309,7 +309,6 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            cursorMotionPath = null,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs),

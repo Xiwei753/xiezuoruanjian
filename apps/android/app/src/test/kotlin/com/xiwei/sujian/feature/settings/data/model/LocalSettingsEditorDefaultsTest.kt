@@ -22,14 +22,6 @@ class LocalSettingsEditorDefaultsTest {
     }
 
     @Test
-    fun smoothCursorEnabledDefaultsToTrue() {
-        assertTrue(
-            "LocalSettings.editorSmoothCursorEnabled default must be true (Core default)",
-            LocalSettings().editorSmoothCursorEnabled,
-        )
-    }
-
-    @Test
     fun coordinatedTextCursorAnimationEnabledDefaultsToTrue() {
         assertTrue(
             "LocalSettings.editorCoordinatedTextCursorAnimationEnabled default must be true (Core default)",
@@ -43,15 +35,6 @@ class LocalSettingsEditorDefaultsTest {
             "Core default_editor_typing_animation_duration_ms = 100",
             100,
             LocalSettings().editorTypingAnimationDurationMs,
-        )
-    }
-
-    @Test
-    fun smoothCursorDurationDefaultsToCoreValue() {
-        assertEquals(
-            "Core default_editor_smooth_cursor_duration_ms = 80",
-            80,
-            LocalSettings().editorSmoothCursorDurationMs,
         )
     }
 }

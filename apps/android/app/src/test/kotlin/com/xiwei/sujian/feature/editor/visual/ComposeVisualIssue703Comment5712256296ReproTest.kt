@@ -304,7 +304,6 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
         insertedUnits: List<TextRange> = emptyList(),
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
-        cursorMotionPath: CursorMotionPath? = null,
         durationMs: Long = 100L,
         motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
     ): ComposeVisualPatch =
@@ -317,7 +316,6 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
-            cursorMotionPath = cursorMotionPath,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = motionPolicy,

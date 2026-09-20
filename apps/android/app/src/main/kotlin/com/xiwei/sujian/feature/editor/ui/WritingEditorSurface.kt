@@ -20,7 +20,6 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.isSpecified
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakLayoutBinding
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
@@ -43,8 +42,6 @@ data class WritingEditorContentParams(
     val cursorColor: Color,
     val inputEnabled: Boolean,
     val onSurfaceReady: () -> Boolean,
-    val drawsVisualCursor: Boolean,
-    val cursorOwnedByVisual: Boolean,
     val searchHighlights: List<TextRange>,
     val searchHighlightColor: Color,
     val modifier: Modifier,
@@ -138,11 +135,6 @@ fun WritingEditorSurface(
         androidx.compose.material3.MaterialTheme.colorScheme.secondaryContainer,
     modifier: Modifier = Modifier,
 ) {
-    val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
-    // Issue #723 评论 5749023316 缺口1：当前是否真的由 visual timeline 持有 caret。
-    // 只在 ownership 边沿更新（StateFlow distinctUntilChanged），不每帧驱动 Compose 重组。
-    val cursorOwnedByVisual by visualState.cursorOwnedByVisual.collectAsStateWithLifecycle()
-
     WritingEditorContent(
         params =
             WritingEditorContentParams(
@@ -154,8 +146,6 @@ fun WritingEditorSurface(
                 cursorColor = cursorColor,
                 inputEnabled = inputEnabled,
                 onSurfaceReady = onSurfaceReady,
-                drawsVisualCursor = drawsVisualCursor,
-                cursorOwnedByVisual = cursorOwnedByVisual,
                 searchHighlights = searchHighlights,
                 searchHighlightColor = searchHighlightColor,
                 modifier = modifier,
@@ -177,8 +167,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val cursorColor = params.cursorColor
     val inputEnabled = params.inputEnabled
     val onSurfaceReady = params.onSurfaceReady
-    val drawsVisualCursor = params.drawsVisualCursor
-    val cursorOwnedByVisual = params.cursorOwnedByVisual
     val searchHighlights = params.searchHighlights
     val searchHighlightColor = params.searchHighlightColor
     val modifier = params.modifier
@@ -263,11 +251,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
         visualState = visualState,
         scrollY = viewportState.scrollState.value,
         textColor = textColor,
-        cursorColor = cursorColor,
-        // #684 评论 5663032418 断点3：直接读 live TextFieldState.selection，
-        // 不再依赖 latestLayout.selection（只在 onTextLayout 时更新，纯 selection 变化会过期）。
-        // TextFieldState.selection 本身是 Compose 可观察状态，selection 变化会驱动 recomposition。
-        liveSelection = bridge.state.selection,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -282,20 +265,9 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
             inputTransformation = visualInputTransformation,
-            // #644 评论 #684：smooth cursor 开启时系统光标一直透明，始终由 draw 层画。
-            // smooth cursor 关闭时始终由系统画，draw 层永远不接管。
-            // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
-            // 不再用 needsIndentedEmptyParagraphCaret 把系统 cursor 设透明。
-            // Issue #723 评论 5749023316 缺口1：只有 smooth cursor 开启（drawsVisualCursor）
-            // 且当前 visual 真正持有 caret（cursorOwnedByVisual）时才透明掉系统 caret；
-            // 动画结束/纯点击/拖动时 cursorOwnedByVisual=false → 系统 caret 正常显示，
-            // draw 层不自绘，手柄与光标同源。
-            cursorBrush =
-                if (drawsVisualCursor && cursorOwnedByVisual) {
-                    SolidColor(Color.Transparent)
-                } else {
-                    SolidColor(cursorColor)
-                },
+            // Issue #725 评论 5750735497：始终由 BasicTextField 系统绘制 caret，
+            // 不再自绘屏幕光标、不再透明掉系统 caret。
+            cursorBrush = SolidColor(cursorColor),
             onTextLayout = { getResult ->
                 getResult()?.let { result ->
                     onTextLayoutResult(

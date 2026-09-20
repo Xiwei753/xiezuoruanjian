@@ -121,9 +121,7 @@ internal fun LocalSettingsDto.toModel() =
         autoIndentEnabled = autoIndentEnabled,
         autoIndentWidth = autoIndentWidth,
         editorTypingAnimationEnabled = editorTypingAnimationEnabled,
-        editorSmoothCursorEnabled = editorSmoothCursorEnabled,
         editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toInt(),
-        editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toInt(),
         aiEnabled = aiEnabled,
         statsDeviceId = statsDeviceId,
         desktopSidebarWidth = desktopSidebarWidth,
@@ -152,9 +150,11 @@ internal fun LocalSettings.toDto() =
         autoIndentEnabled = autoIndentEnabled,
         autoIndentWidth = autoIndentWidth,
         editorTypingAnimationEnabled = editorTypingAnimationEnabled,
-        editorSmoothCursorEnabled = editorSmoothCursorEnabled,
         editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toULong(),
-        editorSmoothCursorDurationMs = editorSmoothCursorDurationMs.toULong(),
+        // Issue #725：自绘 caret 已删除，smooth cursor 设置不再暴露 UI。
+        // Core 端字段保留作为唯一事实来源，Android 端保存时传默认值保持 DTO 完整。
+        editorSmoothCursorEnabled = true,
+        editorSmoothCursorDurationMs = 80.toULong(),
         aiEnabled = aiEnabled,
         statsDeviceId = statsDeviceId,
         desktopSidebarWidth = desktopSidebarWidth,

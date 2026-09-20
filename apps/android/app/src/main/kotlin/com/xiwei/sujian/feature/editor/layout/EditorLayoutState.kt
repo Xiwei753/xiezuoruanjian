@@ -63,29 +63,19 @@ val ComposeLayoutSnapshot.effectiveRawText: String
  *
  * #706 评论 5715257924 症状3：统一 caret 几何入口。
  *
- * Issue #723 评论 5748592923：caret 专用 raw→display 映射。
- * 旧实现 `cursorRect() = result.getCursorRect(selection.end)` 对空段落首行缩进不修正，
- * 后来加了"空段落时手工给 caret 加首行缩进 X"的 caret-only 特判分支，导致只挪光标不挪手柄。
- * 现在该特判已删除：空段落的缩进进入显示布局本身（OutputTransformation + projection），
- * 正文、系统选区手柄、自绘动画光标都消费同一份 transformed TextLayoutResult。
+ * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，本函数只供"查询光标几何"使用
+ * （如视口锚点、诊断），屏幕 caret 始终由 BasicTextField 自己画。
  *
- * 同时 caret 的 raw→display 映射改走 caret 专用入口 [EditorSoftBreakProjection.rawToDisplayCaret]，
- * 显式选择 [EditorSoftBreakProjection.CaretAffinity]。由本地输入产生的 collapsed caret
- * 使用 [CaretAffinity.Start]，与 AndroidX 文本编辑后的 wedge affinity 一致。
- * 正常文字 range/path 的投影继续走 [EditorSoftBreakProjection.rawToDisplay]（range 映射），
- * 不把"文字区间映射"和"光标落在哪一侧"混成一个函数。
+ * 空段落首行缩进已进入显示布局本身（OutputTransformation + projection 零宽占位符），
+ * 不再有 caret-only 特判分支。正文、系统选区手柄都消费同一份 transformed TextLayoutResult。
  *
- * @param affinity collapsed caret 在软断行插入点处的 affinity。默认 [CaretAffinity.Start]，
- *   与本地输入产生的 collapsed caret 一致。
+ * raw→display 映射统一走 [EditorSoftBreakProjection.rawToDisplay]（range 映射），
+ * 不再区分 wedge Start / wedge End affinity — caret 在 U+200B 的哪一侧只由 BasicTextField 决定。
  */
-fun ComposeLayoutSnapshot.cursorRect(
-    offset: Int,
-    affinity: EditorSoftBreakProjection.CaretAffinity = EditorSoftBreakProjection.CaretAffinity.Start,
-): Rect {
+fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
     val text = result.layoutInput.text.text
     val safeOffset = offset.coerceIn(0, text.length)
-    // Issue #723 评论 5748592923：caret 专用 raw→display 映射，显式选择 affinity。
-    val displayOffset = projection.rawToDisplayCaret(safeOffset, affinity).coerceIn(0, text.length)
+    val displayOffset = projection.rawToDisplay(safeOffset).coerceIn(0, text.length)
     return result.getCursorRect(displayOffset)
 }
 

@@ -71,8 +71,6 @@ class SettingsViewModel(
                     autoIndentWidth = state.settings.autoIndentWidth,
                     typingAnimationEnabled = state.settings.editorTypingAnimationEnabled,
                     typingAnimationDurationMs = state.settings.editorTypingAnimationDurationMs,
-                    smoothCursorEnabled = state.settings.editorSmoothCursorEnabled,
-                    smoothCursorDurationMs = state.settings.editorSmoothCursorDurationMs,
                     coordinatedAnimationEnabled = state.settings.editorCoordinatedTextCursorAnimationEnabled,
                 )
             }
@@ -87,8 +85,6 @@ class SettingsViewModel(
                     _uiState.value.settings.autoIndentWidth,
                     _uiState.value.settings.editorTypingAnimationEnabled,
                     _uiState.value.settings.editorTypingAnimationDurationMs,
-                    _uiState.value.settings.editorSmoothCursorEnabled,
-                    _uiState.value.settings.editorSmoothCursorDurationMs,
                     _uiState.value.settings.editorCoordinatedTextCursorAnimationEnabled,
                 ),
             )
@@ -241,10 +237,6 @@ class SettingsViewModel(
         rowFlow(_uiState.value.settings.editorTypingAnimationEnabled) { it.settings.editorTypingAnimationEnabled }
     val typingAnimationDurationRow =
         rowFlow(_uiState.value.settings.editorTypingAnimationDurationMs) { it.settings.editorTypingAnimationDurationMs }
-    val smoothCursorRow =
-        rowFlow(_uiState.value.settings.editorSmoothCursorEnabled) { it.settings.editorSmoothCursorEnabled }
-    val smoothCursorDurationRow =
-        rowFlow(_uiState.value.settings.editorSmoothCursorDurationMs) { it.settings.editorSmoothCursorDurationMs }
 
     // Issue #723 评论 5748592923：协同动画（吞字/吐字）开关行级 flow。
     val coordinatedAnimationRow =
@@ -548,7 +540,7 @@ internal fun LocalSettings.hasDifferentThemeFrom(other: LocalSettings): Boolean 
         selectedPaletteId != other.selectedPaletteId
 
 // #630 评论二：本地设置中真正影响正文运行时的字段集合 — 字号 fallback、行距、
-// 首行缩进开关/宽度、文字动画开关/时长、光标动画开关/时长、协同动画、Android 自渲染
+// 首行缩进开关/宽度、文字动画开关/时长、协同动画、Android 自绘
 // 编辑器开关。自动保存、AI、诊断、沉浸式全屏、主题颜色变化都不算 editor change，
 // 不触发编辑器重读设置。提取为 internal 顶层函数便于单测正反验证。
 internal fun LocalSettings.hasDifferentEditorFrom(other: LocalSettings): Boolean =
@@ -558,7 +550,5 @@ internal fun LocalSettings.hasDifferentEditorFrom(other: LocalSettings): Boolean
         autoIndentWidth != other.autoIndentWidth ||
         editorTypingAnimationEnabled != other.editorTypingAnimationEnabled ||
         editorTypingAnimationDurationMs != other.editorTypingAnimationDurationMs ||
-        editorSmoothCursorEnabled != other.editorSmoothCursorEnabled ||
-        editorSmoothCursorDurationMs != other.editorSmoothCursorDurationMs ||
         editorCoordinatedTextCursorAnimationEnabled != other.editorCoordinatedTextCursorAnimationEnabled ||
         useSelfRenderEditorOnAndroid != other.useSelfRenderEditorOnAndroid

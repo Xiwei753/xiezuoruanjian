@@ -384,27 +384,8 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
             framePatch.deletedUnits.isEmpty(),
         )
 
-        // 断言2：cursorMotionPath == null 或最终单点 snap（duration=0）
-        // 当前代码有竞态：composeBatchCursorPath 收集两笔 patch 的 stage cursor point，
-        // 得到 0 -> 1 -> 0 的路径（2 个不同 rect 的点），computeCursorParamsForPatch 用 cursorDurationMillis 播放
-        val cursorPath = framePatch.cursorMotionPath
-        val pointCount = cursorPath?.points?.size ?: 0
-        assertTrue(
-            "cursorMotionPath 应为 null 或单点 snap，实际有 $pointCount 个点\n" +
-                "Issue #694 评论 5695660885 问题2：净变化为 0 时光标不应产生 0->1->0 的抽动路径",
-            cursorPath == null || pointCount <= 1,
-        )
-
-        // 断言3：若 cursorMotionPath 非空，其所有点应收敛到同一 rect（最终 snap）
-        // 即不应有 0 -> 1 -> 0 的来回跑动
-        if (cursorPath != null && cursorPath.points.isNotEmpty()) {
-            val rects = cursorPath.points.map { it.rect }.toSet()
-            assertTrue(
-                "cursorMotionPath 所有点应收敛到同一 rect（最终 snap），实际有 ${rects.size} 个不同 rect\n" +
-                    "Issue #694 评论 5695660885 问题2：净变化为 0 时光标不应来回跑动",
-                rects.size == 1,
-            )
-        }
+        // Issue #725 评论 5750735497：cursorMotionPath 已删除（停止自绘屏幕 caret），
+        // 断言2/3（cursorMotionPath == null 或单点 snap）不再适用，已移除。
 
         // 断言4：timeline 不应产生有持续时长的 cursor track（CURSOR_ONLY 不应用 cursorDurationMillis 播放）
         // 通过检查 framePatch 的有效时长：净变化为 0 时 cursor duration 应为 0
@@ -458,27 +439,8 @@ class ComposeVisualIssue694Comment5695660885ReproTest {
     }
 
     /**
-     * 通过反射访问 ComposeEditorVisualState 的 private visualTimeline 的 cursorChannel durationNanos。
-     * 用于检查 timeline 是否产生了有持续时长的 cursor track。
+     * Issue #725 评论 5750735497：cursorChannel 已删除（停止自绘屏幕 caret）。
+     * 本方法改为直接返回 0L — cursorChannel 不存在意味着不可能有持续时长的 cursor track。
      */
-    private fun cursorChannelDurationNanos(state: ComposeEditorVisualState): Long {
-        val timelineField = ComposeEditorVisualState::class.java.getDeclaredField("visualTimeline")
-        timelineField.isAccessible = true
-        val timeline = timelineField.get(state) as ComposeVisualTimeline
-        return try {
-            val cursorChannelField = ComposeVisualTimeline::class.java.getDeclaredField("cursorChannel")
-            cursorChannelField.isAccessible = true
-            val cursorChannel = cursorChannelField.get(timeline)
-            if (cursorChannel == null) return 0L
-            // cursorChannel 可能是 CursorChannel 类型，取其 durationNanos
-            val durationField = cursorChannel.javaClass.getDeclaredField("durationNanos")
-            durationField.isAccessible = true
-            durationField.getLong(cursorChannel)
-        } catch (_: NoSuchFieldException) {
-            // cursorChannel 字段不存在或结构不同 — 返回 -1 表示无法检查
-            -1L
-        } catch (_: Throwable) {
-            -1L
-        }
-    }
+    private fun cursorChannelDurationNanos(state: ComposeEditorVisualState): Long = 0L
 }

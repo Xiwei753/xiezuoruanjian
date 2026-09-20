@@ -35,8 +35,6 @@ data class EditorSectionState(
     val autoIndentWidth: Float,
     val typingAnimationEnabled: Boolean,
     val typingAnimationDurationMs: Int,
-    val smoothCursorEnabled: Boolean,
-    val smoothCursorDurationMs: Int,
     val coordinatedAnimationEnabled: Boolean,
 )
 

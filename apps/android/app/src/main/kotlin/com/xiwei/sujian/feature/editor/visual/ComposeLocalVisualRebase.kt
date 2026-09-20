@@ -5,8 +5,6 @@ import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.input.TextOffsetUtils
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.cursorRect
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import uniffi.writer_core.EditorByteRangeDto
 import uniffi.writer_core.LocalVisualPlanDto
 import uniffi.writer_core.LocalVisualSliceDto
@@ -386,80 +384,6 @@ internal object ComposeLocalVisualRebase {
     ): List<RetainedMove> = ComposeVisualRebase.computeRetainedMovesFromComposedMap(oldLayout, newLayout, offsetMap)
 
     /**
-     * #694 评论第 4 步 + #698 评论 5699401353 修复2：cursor path 构造。
-     *
-     * #698 评论 5699401353 修复2：光标几何只从真实 T0/Tn layout 取，不伪造中间几何。
-     *
-     * - 无文字动画语义 → 单点路径 snap 到新光标位置
-     * - 纯插入且有 insertedUnits：按 insertedUnits.end 顺序从 newLayout 取阶段点
-     *   （这些 offset 确实存在于最终文本 Tn）
-     * - 删除/混合：只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）
-     * - 归一化 endFraction
-     *
-     * @return 光标运动路径；取不到新光标 rect 时返回 null。
-     */
-    fun buildCursorPath(
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-        oldSelection: TextRange,
-        newSelection: TextRange,
-        insertedUnits: List<TextRange>,
-        deletedUnits: List<TextRange>,
-    ): CursorMotionPath? {
-        val newCursorRect = safeCursorRectFromLayout(newLayout, newSelection.end) ?: return null
-        // 无文字动画语义 → 单点路径 snap 到新光标位置。
-        if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
-            return CursorMotionPath(listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)))
-        }
-        val isPureInsert = insertedUnits.isNotEmpty() && deletedUnits.isEmpty()
-        val points = mutableListOf<CursorMotionPoint>()
-        if (isPureInsert) {
-            // 纯插入：按 insertedUnits.end 顺序从 newLayout 取阶段点
-            // （这些 offset 确实存在于最终文本 Tn，不伪造中间 caret）
-            for (unit in insertedUnits) {
-                val rect = safeCursorRectFromLayout(newLayout, unit.end) ?: continue
-                points.add(CursorMotionPoint(rect = rect, endFraction = 0f))
-            }
-        }
-        if (points.isEmpty()) {
-            // #703 评论 5709208101 问题1：删除/混合/纯插入但取不到阶段点 —
-            // cursor origin 和 target 的职责彻底分开：
-            // - fromRect 只保存旧 caret（由 computeCursorParamsForPatch 从 oldLayout 取，或优先用 patch.originCursorRect）
-            // - CursorMotionPath.points 只保存后续目标点
-            // 删除/混合场景不要再把 oldCursorRect 同时塞进 points，
-            // 否则 timeline 收到 fromRect(旧) -> point[0](旧, 0.5) -> point[1](新, 1.0)，
-            // 因 fromRect == point[0] 前半段光标原地不动。
-            // 本地单字删除应该是：fromRect = oldCaret, points = [newCaret]。
-            points.add(CursorMotionPoint(rect = newCursorRect, endFraction = 1f))
-        }
-        // 归一化 endFraction = (i + 1f) / n，与 timeline unit-wise 分段时序一致
-        val n = points.size
-        if (n > 1) {
-            for (i in points.indices) {
-                points[i] = points[i].copy(endFraction = (i + 1f) / n)
-            }
-        }
-        return CursorMotionPath(points)
-    }
-
-    /**
-     * 安全获取光标 rect — offset 越界或 layout 抛异常时返回 null。
-     */
-    private fun safeCursorRectFromLayout(
-        layout: ComposeLayoutSnapshot,
-        offset: Int,
-    ): Rect? {
-        // Issue #717 评论 5742904417 修复1：offset 是 raw 坐标，边界检查用 rawText 长度。
-        val textLen = layout.effectiveRawText.length
-        if (offset < 0 || offset > textLen) return null
-        return try {
-            layout.cursorRect(offset)
-        } catch (_: Throwable) {
-            null
-        }
-    }
-
-    /**
      * 安全获取 path bounds — 复用 [ComposeLayoutSnapshot.boundsForRawRange]。
      *
      * Issue #717 评论 5742273757 修复3：通过 snapshot 做 raw→display 映射。
@@ -504,76 +428,6 @@ internal object ComposeLocalVisualRebase {
             if (i !in used) result.add(planUnit)
         }
         return result
-    }
-
-    /**
-     * #694 评论 5693864609 问题1：本地 chain 版 cursor path。
-     *
-     * #698 评论 5699401353 修复2：光标几何只从真实 T0/Tn layout 取，不伪造中间几何。
-     *
-     * 旧实现逐 edit.newSelection 去 newLayout/oldLayout 查 rect。快速删除时每笔
-     * edit.newSelection 属于中间文本 T1/T2，但真实存在的 layout 只有 T0 和 Tn。
-     * 把 T1 的 offset 放进 Tn 的 newLayout 查 rect 会对应另一个字/另一行。
-     *
-     * 新实现：
-     * - chain 的输入顺序只用于 insertedUnits/deletedUnits 的时间顺序
-     * - 光标几何只从真实 layout 取：T0 的真实起点（firstEdit.oldSelection.end on oldLayout）
-     *   -> Tn 的真实终点（lastEdit.newSelection.end on newLayout）
-     * - 无文字动画语义 → 单点路径 snap 到新光标
-     * - 纯插入且有 insertedUnits：按 insertedUnits.end 顺序从 newLayout 取阶段点
-     *   （这些 offset 确实存在于最终文本 Tn）
-     * - 删除/混合：只生成 oldCursorRect -> newCursorRect 两点路径（不构造中间 caret）
-     * - 归一化 endFraction
-     *
-     * @param chain 连续本地输入链（按入队顺序）。
-     * @param oldLayout T0 时的 layout。
-     * @param newLayout Tn 时的 layout。
-     * @param insertedUnits 已合成的插入 unit（用于判断是否有文字动画语义 + 纯插入阶段点）。
-     * @param deletedUnits 已合成的删除 unit（用于判断是否有文字动画语义）。
-     * @return 光标运动路径；chain 为空或取不到新光标 rect 时返回 null。
-     */
-    fun buildLocalChainCursorPath(
-        chain: List<LocalInputVisualEdit>,
-        oldLayout: ComposeLayoutSnapshot,
-        newLayout: ComposeLayoutSnapshot,
-        insertedUnits: List<TextRange>,
-        deletedUnits: List<TextRange>,
-    ): CursorMotionPath? {
-        val lastEdit = chain.lastOrNull() ?: return null
-        val newCursorRect = safeCursorRectFromLayout(newLayout, lastEdit.newSelection.end) ?: return null
-        // 无文字动画语义 → 单点路径 snap 到新光标位置
-        if (insertedUnits.isEmpty() && deletedUnits.isEmpty()) {
-            return CursorMotionPath(listOf(CursorMotionPoint(rect = newCursorRect, endFraction = 1f)))
-        }
-        val isPureInsert = insertedUnits.isNotEmpty() && deletedUnits.isEmpty()
-        val points = mutableListOf<CursorMotionPoint>()
-        if (isPureInsert) {
-            // 纯插入：按 insertedUnits.end 顺序从 newLayout 取阶段点
-            // （这些 offset 确实存在于最终文本 Tn，不伪造中间 caret）
-            for (unit in insertedUnits) {
-                val rect = safeCursorRectFromLayout(newLayout, unit.end) ?: continue
-                points.add(CursorMotionPoint(rect = rect, endFraction = 0f))
-            }
-        }
-        if (points.isEmpty()) {
-            // #703 评论 5709208101 问题1：删除/混合/纯插入但取不到阶段点 —
-            // cursor origin 和 target 的职责彻底分开：
-            // - fromRect 只保存旧 caret（由 computeCursorParamsForPatch 从 oldLayout 取，或优先用 patch.originCursorRect）
-            // - CursorMotionPath.points 只保存后续目标点
-            // 删除/混合场景不要再把 oldCursorRect 同时塞进 points，
-            // 否则 timeline 收到 fromRect(旧) -> point[0](旧, 0.5) -> point[1](新, 1.0)，
-            // 因 fromRect == point[0] 前半段光标原地不动。
-            // 本地单字删除应该是：fromRect = oldCaret, points = [newCaret]。
-            points.add(CursorMotionPoint(rect = newCursorRect, endFraction = 1f))
-        }
-        // 归一化 endFraction = (i + 1f) / n，与 timeline unit-wise 分段时序一致
-        val n = points.size
-        if (n > 1) {
-            for (i in points.indices) {
-                points[i] = points[i].copy(endFraction = (i + 1f) / n)
-            }
-        }
-        return CursorMotionPath(points)
     }
 }
 

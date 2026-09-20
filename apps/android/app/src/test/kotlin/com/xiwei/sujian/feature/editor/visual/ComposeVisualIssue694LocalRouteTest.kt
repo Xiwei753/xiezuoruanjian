@@ -299,16 +299,6 @@ class ComposeVisualIssue694LocalRouteTest {
         assertEquals(TextRange(0, 1), framePatch.insertedUnits[0])
         assertEquals(TextRange(1, 2), framePatch.insertedUnits[1])
         assertEquals(TextRange(2, 3), framePatch.insertedUnits[2])
-
-        assertNotNull(
-            "cursorMotionPath 应非空",
-            framePatch.cursorMotionPath,
-        )
-        assertTrue(
-            "cursorMotionPath 应有多个点（不只 1 个），实际=${framePatch.cursorMotionPath?.points?.size}\n" +
-                "Issue #694 评论 5691696678 问题3：cursor path 不应只拿 last.cursorMotionPath",
-            (framePatch.cursorMotionPath?.points?.size ?: 0) > 1,
-        )
     }
 
     // ==================== 辅助方法 ====================

@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
@@ -32,6 +31,10 @@ data class RetainedMove(
  * cursorAnimationActive / masterProgress` 这些事务状态 —
  * 持续 timeline 下每个文字单元自己保存时间。
  *
+ * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，patch 不再携带
+ * `cursorMotionPath` / `originCursorRect` — 屏幕光标始终由 BasicTextField 自己画，
+ * 文字吞吐动画改由纯文字时间线（[ComposeTextRevealTrack]）驱动。
+ *
  * @param id patch ID — 单调递增，overlay 据此判断是否需要推进 timeline。
  * @param coreTransactionIds Core 事务 ID 列表 — 一笔 patch 可能对应多笔 Core 事务。
  * @param oldLayout 旧布局快照 — 上一帧真正呈现过的 [ComposeLayoutSnapshot]。
@@ -45,21 +48,11 @@ data class RetainedMove(
  * @param retainedMoves 被挤到下一行的"保留文字"的 old/new range —
  *   只给真正发生 oldRect → newRect 位移的存活 unit 新建/重定向 position 通道。
  *   删除换行时几何没变的文字就没有 position track，绝对不会跟着抽一下。
- * @param cursorMotionPath 光标运动路径 — [ComposeVisualTimeline] 据此把光标 rect 并入统一的
- *   VisualScene / frame clock（cursorChannel），不再用跨 patch 的 Animatable 分段 animateTo。
- *   null 表示无光标动画语义。
  * @param durationMs 动画时长（ms）— Core 建议，timeline 据此设置通道 durationNanos。
  * @param animationMode Core 动画模式 — SYSTEM_SUPPRESSED 时 timeline 不新建文字通道。
- * @param motionPolicy 动画策略 — effective 后的策略，overlay 据此决定 text/cursor timeline。
+ * @param motionPolicy 动画策略 — effective 后的策略，overlay 据此决定 text timeline。
  * @param intent 原始 Core intent — 用于 offsetMap==null 时根据 replaceBounds
  *   生成 fallback survival map，防止等长替换时旧 unit 被错认成新 unit。
- * @param originCursorRect #703 评论 5709208101 问题3：本次编辑的明确 T0 caret rect —
- *   本地编辑从 `chain.first().oldSelection.end + oldLayout.result.getCursorRect()` 取，
- *   不依赖 `oldLayout.selection`（纯 selection 变化后 lastPresentedLayout.selection 可能 stale）。
- *   barrier（onAuthoritativeLayout 删除路径）和 timeline（computeCursorParamsForPatch fromRect）
- *   共用这一份 origin，避免旧 caret 取错。
- *   null 表示无明确 origin（Core/external 路径用 oldSelection 参数已明确，或取不到 rect），
- *   调用方回退到 computeCursorRectFromLayout(patch.oldLayout)。
  */
 data class ComposeVisualPatch(
     val id: Long,
@@ -70,10 +63,8 @@ data class ComposeVisualPatch(
     val insertedUnits: List<TextRange>,
     val deletedUnits: List<TextRange>,
     val retainedMoves: List<RetainedMove>,
-    val cursorMotionPath: CursorMotionPath?,
     val durationMs: Long,
     val animationMode: AnimationModeDto,
     val motionPolicy: EditorMotionPolicy,
     val intent: EditorVisualIntent? = null,
-    val originCursorRect: Rect? = null,
 )

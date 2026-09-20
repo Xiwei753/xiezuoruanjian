@@ -26,7 +26,7 @@ class ComposeVisualActiveOwnershipReproTest {
         val methods = ComposeEditorVisualState::class.java.methods.map { it.name }
         assertFalse("旧 reportProgress 应已删除", methods.contains("reportProgress"))
         assertFalse("旧 finishTransaction 应已删除", methods.contains("finishTransaction"))
-        assertTrue("新 applyVisualPatchAtFrame 应存在", methods.contains("applyVisualPatchAtFrame"))
+        assertTrue("新 drainPendingPatchesAtFrame 应存在", methods.contains("drainPendingPatchesAtFrame"))
         assertTrue("新 sampleVisualScene 应存在", methods.contains("sampleVisualScene"))
         assertTrue("新 hasActiveVisuals 应存在", methods.contains("hasActiveVisuals"))
     }
