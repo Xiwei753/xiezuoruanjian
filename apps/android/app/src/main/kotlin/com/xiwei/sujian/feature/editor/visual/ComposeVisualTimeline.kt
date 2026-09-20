@@ -1334,6 +1334,25 @@ class ComposeVisualTimeline {
         nextClipTrackId = 1L
     }
 
+    /**
+     * Issue #723 评论 5749321927：只释放"屏幕视觉 caret"所有权 —
+     *
+     * 用户开始自己点 wedge 或拖成非 collapsed selection 以后，BasicTextField 的系统
+     * caret/handle 应立即接管，旧的自绘 cursor 动画不能下一帧重新抢回来。
+     *
+     * 本方法只清 [cursorChannel]（屏幕视觉光标 track），**不清** [clipTracks]（吞字/吐字
+     * 的文字空间进度继续跑），**不动** [units]（文字 alpha/position 动画继续）。
+     *
+     * 与 [settleForPolicyChange] / [clear] 的区别：那两个方法会清 units/clipTracks，
+     * 会误伤仍在跑的文字动画；本方法只交还 caret，文字动画可以继续到自然结束。
+     *
+     * 调用后 [sample] 会产出 cursorAnimating=false / cursorOwnedByVisual=false，
+     * draw 层回到 computeRestingCursorRect(latestLayout, liveSelection)。
+     */
+    fun releaseVisualCursorOwnership() {
+        cursorChannel = null
+    }
+
     // ==================== 统一光标位置（#691） ====================
 
     /**

@@ -446,7 +446,7 @@ class ComposeEditorVisualState(
                 // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
                 _latestLayout.value?.effectiveRawText == snapshot.text &&
                 snapshot.selection != lastResolvedSelection
-        if (isPureSelectionChange && snapshot.selection.collapsed) {
+        if (isPureSelectionChange) {
             val layout = _latestLayout.value
             // Issue #723 评论 5749023316 缺口1：纯点击/拖动如果 raw offset 正好命中
             // projection wedge（wedgeStart != wedgeEnd），不创建自绘 target rect，
@@ -457,7 +457,9 @@ class ComposeEditorVisualState(
                 layout != null &&
                     layout.projection.wedgeStart(rawEnd) != layout.projection.wedgeEnd(rawEnd)
             val targetRect = layout?.cursorRect(rawEnd)
-            if (targetRect != null && !hitsWedge) {
+            if (snapshot.selection.collapsed && targetRect != null && !hitsWedge) {
+                // 分支3：collapsed 且不命中 wedge — 走现在的平滑 selection redirect，
+                // 视觉层接管 caret，从当前屏幕光标位置动画到新 selection 对应的 caret。
                 // #713 评论 5740578331：计算 fromRect — selection 改变前屏幕真正可见的 cursor
                 val currentScene = _visualScene.value
                 val fromRect =
@@ -487,6 +489,14 @@ class ComposeEditorVisualState(
                 // draw 层帧循环不会启动，redirect 不会被 drainPendingPatchesAtFrame 消费，
                 // 表现为"位置能变但平滑光标动画消失"。
                 _patchVersion.update { it + 1L }
+            } else {
+                // Issue #723 评论 5749321927：分支1+2 —
+                // 非 collapsed selection（拖动选区）或 collapsed 且命中 wedge —
+                // 只是"不创建新自绘 redirect"不够，必须主动交还旧的自绘 caret 所有权，
+                // 否则旧 cursorChannel / pendingSelectionRedirect 残留，下一帧 sampleVisualScene
+                // 又从旧 cursor track 产出 cursorOwnedByVisual=true，系统 caret 仍被透明，
+                // 旧 redirect 还能把自绘光标拉回旧位置（"跳过≠交还"）。
+                releaseVisualCursorOwnership()
             }
         }
         // #713 评论 5740279418：selection 真正变化时记一次诊断事件
@@ -1446,6 +1456,28 @@ class ComposeEditorVisualState(
      * 否则 redirect 到达帧循环边缘时仍可能提前停。
      */
     fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionRedirect != null
+
+    /**
+     * Issue #723 评论 5749321927：交还旧的自绘 caret 所有权 —
+     *
+     * 在 [onInputSnapshotResolved] 的"跳过建新 redirect"分支（hitsWedge=true 点击 wedge，
+     * 或 selection.collapsed=false 拖动选区）中调用，把"跳过"变成"交还"：
+     * - 清 [pendingSelectionRedirect]（防止 [sampleVisualScene] 强制接管 / [drainPendingPatchesAtFrame] 消费旧 redirect）；
+     * - 调用 [ComposeVisualTimeline.releaseVisualCursorOwnership] 清 cursorChannel
+     *   （防止下一帧 sample 产出 cursorOwnedByVisual=true；不清 clipTracks/units，文字动画继续）；
+     * - 把 [_visualScene].cursorOwnedByVisual / [_cursorOwnedByVisual] 设回 false
+     *   （交还系统 caret，WritingEditorSurface 不再透明系统 caret）；
+     * - 同步 [drawSnapshotState]（draw 层下一帧直接读到 cursorOwnedByVisual=false）。
+     */
+    private fun releaseVisualCursorOwnership() {
+        pendingSelectionRedirect = null
+        visualTimeline.releaseVisualCursorOwnership()
+        val releasedScene = _visualScene.value.copy(cursorOwnedByVisual = false)
+        _visualScene.update { releasedScene }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
+        _cursorOwnedByVisual.value = false
+        drawSnapshotState = drawSnapshotState.copy(scene = releasedScene)
+    }
 
     /**
      * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里应用 patch 到 timeline。
