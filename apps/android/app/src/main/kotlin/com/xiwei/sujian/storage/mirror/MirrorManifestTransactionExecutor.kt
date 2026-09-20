@@ -91,7 +91,9 @@ internal class MirrorManifestTransactionExecutor(
     /**
      * Issue #667：manifest promote 到私有目录。
      *
-     * 从 workspace staging 读取 manifest 内容，用 [MirrorTransactionWorkspace.writeManifest] 原子写入。
+     * Issue #726 评论 5750735839：promote 时私有目录中 manifest 存在且 `hash == oldHash`
+     * 是**正常更新中间状态**（prepare 阶段 `handleBackupFoundNeedsVacate` 不 vacate
+     * private manifest），不是异常。`handlePromoteManifestFound` 据此做三态判断。
      */
     private fun promoteManifestStaged(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
@@ -101,30 +103,63 @@ internal class MirrorManifestTransactionExecutor(
         // Issue #667：检查私有目录中是否已有 manifest（恢复场景）
         val currentContent = workspace.readManifest()
         if (currentContent != null) {
-            return handlePromoteManifestFound(ctx, backupOutcome, currentContent)
+            return handlePromoteManifestFound(ctx, stageContext, backupOutcome, currentContent)
         }
-        return handlePromoteManifestMissing(ctx, stageContext.staged, backupOutcome)
+        return handlePromoteManifestMissing(ctx, stageContext, backupOutcome)
     }
 
     /**
-     * 私有目录中已有 manifest — 校验是否是目标新 manifest。
+     * 私有目录中已有 manifest — 三态判断（Issue #726 评论 5750735839）。
+     *
+     * 1. `currentHash == newContentHash`：已 promote，幂等恢复（setManifestUri / commit），
+     *    返回 [ManifestPromoteOutcome.Completed]。
+     * 2. `currentHash == oldContentHash`：正常更新中间状态（prepare 不 vacate private
+     *    manifest），走 [atomicPromoteManifest] 原子覆盖，返回
+     *    [ManifestPromoteOutcome.Proceed]。
+     * 3. `currentHash` 同时不等于 `oldContentHash` 和 `newContentHash`：真正的 unknown
+     *    state，保留 journal 并 [ManifestPromoteOutcome.Aborted]。
      */
     private fun handlePromoteManifestFound(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
+        stageContext: MirrorManifestPrepareExecutor.ManifestStageContext,
         backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
         currentContent: String,
     ): ManifestPromoteOutcome {
-        var currentJournal = backupOutcome.currentJournal
-        val desiredNewHash = currentJournal.manifestNewContentHash
-        if (desiredNewHash == null) {
-            DiagnosticsInterop.w(TAG, "Manifest transaction: manifest exists but no expected hash, keeping journal")
-            return ManifestPromoteOutcome.Aborted
-        }
+        val newHash = stageContext.newContentHash
+        val oldHash = stageContext.oldContentHash
         val currentHash = computeContentHash(currentContent)
-        if (currentHash != desiredNewHash) {
-            DiagnosticsInterop.w(TAG, "Manifest transaction: manifest hash mismatch, state unknown, keeping journal")
-            return ManifestPromoteOutcome.Aborted
+        // 状态 1：currentHash == newHash → 幂等恢复
+        if (currentHash == newHash) {
+            return completeIdempotentRecovery(ctx, backupOutcome)
         }
+        // 状态 2：currentHash == oldHash → 正常更新中间状态，atomic promote
+        if (oldHash != null && currentHash == oldHash) {
+            DiagnosticsInterop.i(
+                TAG,
+                "Manifest transaction: currentHash == oldHash (normal mid-state), performing atomic promote",
+            )
+            return atomicPromoteManifest(ctx, stageContext, backupOutcome)
+        }
+        // 状态 3：currentHash 既非 oldHash 也非 newHash → 真正 unknown state
+        DiagnosticsInterop.w(
+            TAG,
+            "Manifest transaction: manifest hash is neither oldHash nor newHash, state unknown, keeping journal",
+        )
+        return ManifestPromoteOutcome.Aborted
+    }
+
+    /**
+     * 幂等恢复路径：`currentHash == newHash`，setManifestUri + commit，返回
+     * [ManifestPromoteOutcome.Completed]。
+     *
+     * 从原 `handlePromoteManifestFound` 的 `currentHash == desiredNewHash` 分支提取，
+     * 行为不变：setManifestUri 指向私有文件路径，写 `MANIFEST_COMMITTED` journal。
+     */
+    private fun completeIdempotentRecovery(
+        ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
+        backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
+    ): ManifestPromoteOutcome {
+        var currentJournal = backupOutcome.currentJournal
         // 私有目录中已是新 manifest → setManifestUri 指向私有文件路径
         val manifestPath = workspace.manifestFile().absolutePath
         if (!stateStore.setManifestUri(manifestPath)) {
@@ -145,15 +180,39 @@ internal class MirrorManifestTransactionExecutor(
     }
 
     /**
-     * 私有目录中没有 manifest — 从 workspace staging 读取内容并写入。
+     * 私有目录中没有 manifest — 走共享的 [atomicPromoteManifest] 路径。
+     *
+     * Issue #726 评论 5750735839：与 `handlePromoteManifestFound` 的
+     * `currentHash == oldHash` 分支共用 [atomicPromoteManifest]，避免两套 promote 语义。
      */
     private fun handlePromoteManifestMissing(
         ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
-        staged: StagedMirrorRef?,
+        stageContext: MirrorManifestPrepareExecutor.ManifestStageContext,
+        backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
+    ): ManifestPromoteOutcome = atomicPromoteManifest(ctx, stageContext, backupOutcome)
+
+    /**
+     * Issue #726 评论 5750735839：共享的原子 promote manifest 函数。
+     *
+     * 从 staged ref（没有时用 journal 的 `manifestTargetJson`）读取目标 JSON，
+     * 用 [MirrorTransactionWorkspace.writeManifest] 原子覆盖私有 `manifest.json`，
+     * 重新读取并校验 `hash == newContentHash`，写 `MANIFEST_PROMOTED` journal
+     * （设置 `manifestNewRef`），返回 [ManifestPromoteOutcome.Proceed]。
+     *
+     * 失败时从 backup 恢复并返回 [ManifestPromoteOutcome.Aborted]。
+     *
+     * 被 [handlePromoteManifestMissing]（manifest 缺失）和
+     * [handlePromoteManifestFound] 的 `currentHash == oldHash` 分支共用，
+     * 避免两套 promote 语义。
+     */
+    private fun atomicPromoteManifest(
+        ctx: MirrorManifestPrepareExecutor.ManifestTransactionContext,
+        stageContext: MirrorManifestPrepareExecutor.ManifestStageContext,
         backupOutcome: MirrorManifestPrepareExecutor.ManifestBackupOutcome.Proceed,
     ): ManifestPromoteOutcome {
         var currentJournal = backupOutcome.currentJournal
-        // Issue #667：从 workspace staging 读取 manifest 内容
+        val staged = stageContext.staged
+        // 1. 读取目标 manifest JSON：优先 staged ref，其次 journal 的 manifestTargetJson
         val manifestContent =
             if (staged != null) {
                 workspace.readStaged(staged)
@@ -163,27 +222,36 @@ internal class MirrorManifestTransactionExecutor(
             }
         if (manifestContent == null) {
             // 无法获取 manifest 内容，尝试从 backup 恢复
-            backupOutcome.backupRef?.let { backupRef ->
-                val backupContent = workspace.readBackup(backupRef)
-                if (backupContent != null) {
-                    workspace.writeManifest(backupContent)
-                }
-            }
+            restoreManifestFromBackup(backupOutcome.backupRef)
             prepareExecutor.deleteStagedIfExists(staged)
             return ManifestPromoteOutcome.Aborted
         }
-        // Issue #667：原子写入 manifest 到私有目录
+        // 2. 原子写入 manifest 到私有目录
         if (!workspace.writeManifest(manifestContent)) {
             // 写入失败，尝试从 backup 恢复
-            backupOutcome.backupRef?.let { backupRef ->
-                val backupContent = workspace.readBackup(backupRef)
-                if (backupContent != null) {
-                    workspace.writeManifest(backupContent)
-                }
-            }
+            restoreManifestFromBackup(backupOutcome.backupRef)
             prepareExecutor.deleteStagedIfExists(staged)
             return ManifestPromoteOutcome.Aborted
         }
+        // 3. Issue #726 评论 5750735839：原子覆盖后重新读取并校验 hash == newContentHash
+        val writtenContent = workspace.readManifest()
+        if (writtenContent == null) {
+            DiagnosticsInterop.w(TAG, "Manifest transaction: atomic write succeeded but re-read returned null")
+            restoreManifestFromBackup(backupOutcome.backupRef)
+            prepareExecutor.deleteStagedIfExists(staged)
+            return ManifestPromoteOutcome.Aborted
+        }
+        val writtenHash = computeContentHash(writtenContent)
+        if (writtenHash != stageContext.newContentHash) {
+            DiagnosticsInterop.w(
+                TAG,
+                "Manifest transaction: atomic write hash verification failed, restoring from backup",
+            )
+            restoreManifestFromBackup(backupOutcome.backupRef)
+            prepareExecutor.deleteStagedIfExists(staged)
+            return ManifestPromoteOutcome.Aborted
+        }
+        // 4. 写 MANIFEST_PROMOTED journal（设置 manifestNewRef）
         val manifestPath = workspace.manifestFile().absolutePath
         val newRef = MirrorFileRef(uri = manifestPath, relativePath = ctx.manifestRelativePath)
         currentJournal =
@@ -194,15 +262,22 @@ internal class MirrorManifestTransactionExecutor(
         if (!journalWriter.persistPendingJournal(currentJournal)) {
             // journal 写入失败，回滚 manifest
             workspace.deleteManifest()
-            backupOutcome.backupRef?.let { backupRef ->
-                val backupContent = workspace.readBackup(backupRef)
-                if (backupContent != null) {
-                    workspace.writeManifest(backupContent)
-                }
-            }
+            restoreManifestFromBackup(backupOutcome.backupRef)
             return ManifestPromoteOutcome.Aborted
         }
         return ManifestPromoteOutcome.Proceed(newRef, currentJournal)
+    }
+
+    /**
+     * 从 backup 恢复 manifest 内容到私有目录（promote 失败时的回滚辅助）。
+     */
+    private fun restoreManifestFromBackup(backupRef: MirrorFileRef?) {
+        backupRef?.let { ref ->
+            val backupContent = workspace.readBackup(ref)
+            if (backupContent != null) {
+                workspace.writeManifest(backupContent)
+            }
+        }
     }
 
     /**
