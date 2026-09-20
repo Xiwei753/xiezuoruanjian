@@ -143,11 +143,13 @@ internal object ComposeLocalHandoffRebase {
      * #708 评论 5731952690 修复3 / 评论 5733321056 修复3：计算 rebase child 的真实首帧 fraction —
      * 从 rebase() 抽取以降低复杂度。
      *
-     * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，不再用 cursor 位置算精确 split fraction —
-     * split child 直接继承 parent 旧 fraction，clipFraction 改由 alpha 通道驱动。
+     * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，不再用 cursor 位置算精确 split fraction。
+     * Issue #725 评论 5752025711：parent 被 split 时，把 parent 的纯文字 reveal 进度投影到每个
+     * child 自己的区间（child 在 reveal 边界之前→1，之后→0，边界落在 child 内→局部 fraction），
+     * 不再让所有 split child 机械继承同一个 parent fraction。
      *
      * 返回值语义：
-     * - null：不需要记录（非 split 且 parentOldFraction==null）
+     * - null：不需要记录（parentOldFraction==null）
      * - 非 null：要记录的 fraction
      */
     private fun computeSliceInitialFraction(
@@ -157,7 +159,32 @@ internal object ComposeLocalHandoffRebase {
         parentOldFraction: Float?,
         oldCoordinated: Boolean,
     ): Float? {
-        return parentOldFraction
+        if (parentOldFraction == null) {
+            return null
+        }
+        // Issue #725 评论 5752025711：parent unit 被 split 时，不再让所有 child
+        // 机械继承同一个 parent fraction。把 parent 的纯文字 reveal 进度投影到每个
+        // child 自己的区间（按 slice.oldSubRange 在 unit.range 中的相对位置）：
+        // - child 完全位于 parent reveal 边界之前 → 已完整显示 → fraction=1
+        // - child 完全位于边界之后 → 尚未显示 → fraction=0
+        // - reveal 边界落在 child 内 → 换算成 child 局部 0..1 fraction
+        // 不读取屏幕 caret，继续用纯文字模型。
+        val parentRange = unit.range
+        val parentLength = parentRange.end - parentRange.start
+        if (parentLength <= 0) {
+            return parentOldFraction
+        }
+        val revealBoundary = parentRange.start + parentOldFraction * parentLength
+        val childRange = slice.oldSubRange
+        val childLength = childRange.end - childRange.start
+        if (childLength <= 0) {
+            return parentOldFraction
+        }
+        return when {
+            childRange.end <= revealBoundary -> 1f
+            childRange.start >= revealBoundary -> 0f
+            else -> (revealBoundary - childRange.start) / childLength
+        }
     }
 
     private fun processSlice(
