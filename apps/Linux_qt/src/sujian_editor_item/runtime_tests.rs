@@ -909,3 +909,183 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
         );
     });
 }
+
+// =========================================================================
+// 测试: Issue #724 评论 5752572618 — auto-follow anchor 时序
+// =========================================================================
+
+/// Issue #724 评论 5752572618 测试 A: 到达 target 时 anchor 不立即清，
+/// 而是 `release_after_frame = true`。
+///
+/// 旧实现（tuple `Option<(f64, f64, f64)>`）在 `update_cursor_visual_position`
+/// 检测到 `|current_scroll - target| < 1.0` 时立即 `current_auto_follow_anchor = None`，
+/// 导致 `build_render_plan_full` 看不到 anchor，无法覆盖 `cursor_render_state.y/h`
+/// 画锚定帧。新实现（`CaretViewportAnchor` + `release_after_frame`）只置
+/// `release_after_frame = true`，anchor 仍为 `Some`，本帧仍能画锚定帧。
+#[test]
+fn auto_follow_anchor_releases_after_frame_not_immediately() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello世界"));
+
+        // 初始 scroll_y = 0.0（SujianEditorItem::default）。选 target = 100.0，
+        // 与当前 scroll 差距远大于 set_scroll_y 的 0.5 早退阈值和 anchor 的 1.0 到达阈值。
+        let anchor_y = 200.0_f64;
+        let anchor_h = 24.0_f64;
+        let target_scroll_y = 100.0_f64;
+
+        // 阶段 1: 建立 anchor — release_after_frame 必须为 false
+        item.set_auto_follow_anchor_with_target(anchor_y, anchor_h, target_scroll_y);
+        let anchor_after_set = item
+            .current_auto_follow_anchor
+            .expect("set_auto_follow_anchor_with_target 后 anchor 必须为 Some");
+        assert!(
+            !anchor_after_set.release_after_frame,
+            "建立 anchor 后 release_after_frame 必须为 false，实际: {:?}",
+            anchor_after_set
+        );
+        assert_eq!(
+            anchor_after_set.y, anchor_y,
+            "anchor.y 应等于传入的 anchor_y"
+        );
+        assert_eq!(
+            anchor_after_set.h, anchor_h,
+            "anchor.h 应等于传入的 anchor_h"
+        );
+        assert_eq!(
+            anchor_after_set.target_scroll_y, target_scroll_y,
+            "anchor.target_scroll_y 应等于传入的 target_scroll_y"
+        );
+
+        // 阶段 2: 模拟 QML contentY 到达 target — set_scroll_y(target) 触发
+        // update_cursor_visual_position，检测 |current_scroll - target| < 1.0。
+        // 旧实现会在此处清 None；新实现只置 release_after_frame = true。
+        item.set_scroll_y(target_scroll_y as f32);
+        let anchor_after_scroll = item
+            .current_auto_follow_anchor
+            .as_ref()
+            .expect("set_scroll_y(target) 后 anchor 必须仍为 Some（不再立即清）");
+        assert!(
+            anchor_after_scroll.release_after_frame,
+            "到达 target 后 release_after_frame 必须为 true，实际: {:?}",
+            anchor_after_scroll
+        );
+        assert_eq!(
+            anchor_after_scroll.y, anchor_y,
+            "到达 target 后 anchor.y 应保持不变"
+        );
+        assert_eq!(
+            anchor_after_scroll.h, anchor_h,
+            "到达 target 后 anchor.h 应保持不变"
+        );
+
+        println!(
+            "[BEHAVIOR_VERIFY] Issue #724 评论 5752572618 测试 A: \
+             到达 target 后 anchor 仍为 Some 且 release_after_frame=true \
+             (y={}, h={}, target={}, release_after_frame={})",
+            anchor_after_scroll.y,
+            anchor_after_scroll.h,
+            anchor_after_scroll.target_scroll_y,
+            anchor_after_scroll.release_after_frame
+        );
+    });
+}
+
+/// Issue #724 评论 5752572618 测试 B: `build_render_plan_full` 在
+/// `release_after_frame=true` 时仍收到 anchor 的 `(y, h)`，本帧画出锚定帧。
+///
+/// 这是修复的核心时序保证：anchor 到达 target 后的**这一帧**仍要用 anchor 的
+/// `(y, h)` 覆盖 `cursor_render_state.y/h`，让用户看到"正文滚、caret 留原屏幕
+/// 位置一帧"。旧实现在绘制前就清了 anchor，`build_render_plan_full` 收到 `None`，
+/// 画的是新位置的 caret，锚定帧丢失。新实现把清除推迟到画完一帧之后
+/// （`update_paint_node` 在 `apply_render_plan_cursor_state` 之后）。
+#[test]
+fn build_render_plan_full_uses_anchor_when_release_after_frame_true() {
+    run_on_qt_thread(|| {
+        let mut item = SujianEditorItem::default();
+        item.set_plain_text(QString::from("Hello世界"));
+
+        let anchor_y = 200.0_f64;
+        let anchor_h = 24.0_f64;
+        let target_scroll_y = 100.0_f64;
+
+        // 建立 anchor 并让 scroll 到达 target（此时 release_after_frame=true）
+        item.set_auto_follow_anchor_with_target(anchor_y, anchor_h, target_scroll_y);
+        item.set_scroll_y(target_scroll_y as f32);
+        let anchor_before_build = item
+            .current_auto_follow_anchor
+            .as_ref()
+            .expect("到达 target 后 anchor 必须仍为 Some");
+        assert!(
+            anchor_before_build.release_after_frame,
+            "前置条件: release_after_frame 必须为 true"
+        );
+
+        // 用生产路径一致的 CursorRenderState 调 build_render_plan_full，
+        // 传入 self.current_auto_follow_anchor.map(|a| (a.y, a.h)) —
+        // 与 update_paint_node 第 195 行一致。
+        let cursor_render_state = item.build_cursor_render_state_for_frame();
+        let selection_preedit = item
+            .prepared_frame
+            .as_ref()
+            .map(|f| f.selection_preedit.clone())
+            .unwrap_or_default();
+        let frame_now = Instant::now();
+        let plan = item
+            .pipeline
+            .animation_coordinator_mut()
+            .build_render_plan_full(
+                cursor_render_state,
+                selection_preedit,
+                FrameContext::default(),
+                CursorStyle::default(),
+                SelectionPreeditStyle::default(),
+                frame_now,
+                item.current_coordinated_text_cursor_animation_enabled,
+                item.cursor_ctrl.animation.as_ref(),
+                item.cursor_ctrl.cursor_owner_epoch,
+                f64::from(item.current_scroll_y),
+                item.current_auto_follow_anchor.map(|a| (a.y, a.h)),
+            );
+
+        // drawn_caret_rect 的 y/h 必须等于 anchor 的 y/h —
+        // 证明本帧仍画锚定帧，而不是新位置的 caret。
+        let (drawn_x, drawn_y, drawn_h) = plan
+            .drawn_caret_rect
+            .expect("build_render_plan_full 必须产出 drawn_caret_rect");
+        assert!(
+            (drawn_y - anchor_y).abs() < 0.01,
+            "drawn_caret_rect.y 应等于 anchor.y={:.4}（本帧仍画锚定帧），实际: {:.4}",
+            anchor_y,
+            drawn_y
+        );
+        assert!(
+            (drawn_h - anchor_h).abs() < 0.01,
+            "drawn_caret_rect.h 应等于 anchor.h={:.4}（本帧仍画锚定帧），实际: {:.4}",
+            anchor_h,
+            drawn_h
+        );
+
+        // 模拟 update_paint_node 画完一帧后的清 anchor 逻辑：
+        // apply_render_plan_cursor_state 之后，若 release_after_frame 则清 None。
+        item.apply_render_plan_cursor_state(&plan, frame_now);
+        if let Some(ref anchor) = item.current_auto_follow_anchor {
+            if anchor.release_after_frame {
+                item.current_auto_follow_anchor = None;
+            }
+        }
+        assert!(
+            item.current_auto_follow_anchor.is_none(),
+            "画完一帧后（release_after_frame=true）anchor 必须被清为 None，\
+             下一帧回到正常 coordinated caret，实际: {:?}",
+            item.current_auto_follow_anchor
+        );
+
+        println!(
+            "[BEHAVIOR_VERIFY] Issue #724 评论 5752572618 测试 B: \
+             release_after_frame=true 时本帧 drawn_caret_rect=({:.4}, {:.4}, {:.4}) \
+             等于 anchor (y={}, h={})，画完后 anchor 清为 None",
+            drawn_x, drawn_y, drawn_h, anchor_y, anchor_h
+        );
+    });
+}

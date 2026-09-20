@@ -410,13 +410,17 @@ impl SujianEditorItem {
         }
     }
 
-    /// Issue #724 评论 5751573705 问题2: 设置自动跟随滚动锚点（带 target_scroll_y）。
+    /// Issue #724 评论 5751573705 问题2 / 评论 5752572618: 设置自动跟随滚动锚点
+    /// （带 target_scroll_y）。
     ///
     /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把上一帧真正画出的 caret viewport y/h
     /// 和当前滚动目标值传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
     /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动
     /// contentY 变化把 caret 一起拖走。
-    /// 当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点，
+    ///
+    /// Issue #724 评论 5752572618: 到达 target 时**不在此处清除锚点**，只置
+    /// `release_after_frame = true`，本帧 `build_render_plan_full` 仍用 anchor 画
+    /// 锚定帧，画完后由 `update_paint_node` 清除并请求下一帧。
     /// 不再由 80ms Timer 决定生命周期。
     pub(crate) fn set_auto_follow_anchor_with_target(
         &mut self,
@@ -425,10 +429,16 @@ impl SujianEditorItem {
         target_scroll_y: f64,
     ) {
         let h = anchor_h.max(0.0);
-        if self.current_auto_follow_anchor == Some((anchor_y, h, target_scroll_y)) {
+        let new_anchor = CaretViewportAnchor {
+            y: anchor_y,
+            h,
+            target_scroll_y,
+            release_after_frame: false,
+        };
+        if self.current_auto_follow_anchor == Some(new_anchor) {
             return;
         }
-        self.current_auto_follow_anchor = Some((anchor_y, h, target_scroll_y));
+        self.current_auto_follow_anchor = Some(new_anchor);
         // 锚点变化后立刻用新锚点重算 caret viewport 坐标，不等待下一帧。
         self.update_cursor_visual_position();
         self.request_frame_update();

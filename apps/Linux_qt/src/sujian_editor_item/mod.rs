@@ -242,6 +242,30 @@ pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     false
 }
 
+/// Issue #724 评论 5752572618: auto-follow anchor 的 viewport 锚点状态。
+///
+/// 把原来的 tuple `Option<(f64, f64, f64)>` 收成结构体，新增 `release_after_frame`
+/// 标志，拆分"到达目标"和"删除 anchor"两个状态：
+/// - 建立 anchor（`set_auto_follow_anchor_with_target`）：`release_after_frame = false`
+/// - 到达 target（`update_cursor_visual_position` 检测 `|current_scroll - target| < 1.0`）：
+///   只置 `release_after_frame = true`，**不清 None**，本帧 `build_render_plan_full`
+///   仍收到 anchor 的 `(y, h)` 画锚定帧
+/// - 画完一帧后（`update_paint_node` 在 `apply_render_plan_cursor_state` 之后）：
+///   若 `release_after_frame` 为 true，清 `current_auto_follow_anchor = None` 并
+///   `request_frame_update()` 请求下一帧
+/// - 下一帧：anchor 不存在 → 回到正常 coordinated caret
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct CaretViewportAnchor {
+    /// 滚动前上一帧真正画出的 caret viewport y。
+    pub y: f64,
+    /// 滚动前上一帧真正画出的 caret viewport h。
+    pub h: f64,
+    /// 滚动目标值（QML 侧 `flick.contentY` 最终要到达的值）。
+    pub target_scroll_y: f64,
+    /// 到达 target 后置 true，本帧仍用 anchor 画锚定帧，画完后清 None 请求下一帧。
+    pub release_after_frame: bool,
+}
+
 #[derive(QObject)]
 pub struct SujianEditorItem {
     #[allow(dead_code)]
@@ -473,16 +497,26 @@ pub struct SujianEditorItem {
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
-    /// Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间的 caret viewport 锚点。
+    /// Issue #724 评论 5751268664 缺口2 / 评论 5752572618: 自动跟随滚动期间的
+    /// caret viewport 锚点。
     ///
-    /// `Some((anchor_y, anchor_h, target_scroll_y))` 表示自动跟随滚动期间应使用的
-    /// caret viewport y/h 和滚动目标值。`update_cursor_visual_position` 用 anchor_y/h
-    /// 替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动 contentY 变化把 caret
-    /// 一起拖走。当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点，
-    /// 不再由 80ms Timer 决定生命周期。
-    /// QML 侧 `begin_auto_follow_scroll()` 调 `set_auto_follow_anchor_with_target(y, h, target_y)`，
+    /// `Some(anchor)` 表示自动跟随滚动期间应使用的 caret viewport y/h 和滚动目标值。
+    /// `update_cursor_visual_position` 用 anchor.y/h 替代 `current_scroll_y` 算
+    /// caret viewport 坐标，避免滚动 contentY 变化把 caret 一起拖走。
+    ///
+    /// Issue #724 评论 5752572618: 拆分"到达目标"和"删除 anchor"两个状态：
+    /// - 当 `current_scroll_y` 到达 `target_scroll_y` 时只置
+    ///   `anchor.release_after_frame = true`，**不清 None**，本帧
+    ///   `build_render_plan_full` 仍收到 anchor 的 `(y, h)` 画锚定帧
+    /// - 画完一帧后由 `update_paint_node` 检查 `release_after_frame`，若为 true
+    ///   则清 `current_auto_follow_anchor = None` 并 `request_frame_update()`
+    ///   请求下一帧；下一帧 anchor 不存在 → 回到正常 coordinated caret
+    /// - 不再由 80ms Timer 决定生命周期。
+    ///
+    /// QML 侧 `begin_auto_follow_scroll()` 调
+    /// `set_auto_follow_anchor_with_target(y, h, target_y)`，
     /// `end_auto_follow_scroll()` 调 `clear_auto_follow_anchor()`。
-    current_auto_follow_anchor: Option<(f64, f64, f64)>,
+    current_auto_follow_anchor: Option<CaretViewportAnchor>,
     current_is_loading: bool,
     current_is_applying_format: bool,
     last_summary: QString,
