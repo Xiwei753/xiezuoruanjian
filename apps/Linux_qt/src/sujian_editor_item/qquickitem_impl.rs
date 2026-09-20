@@ -191,6 +191,7 @@ impl QQuickItem for SujianEditorItem {
                     self.current_coordinated_text_cursor_animation_enabled,
                     self.cursor_ctrl.animation.as_ref(),
                     self.cursor_ctrl.cursor_owner_epoch,
+                    scroll_y,
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。

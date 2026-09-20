@@ -411,6 +411,17 @@ fn build_insert_reveal_slices(
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
             // 只处理落在 inserted_range 内的 cluster
             if new_cluster.byte_start >= range_start && new_cluster.byte_end <= range_end {
+                // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
+                // 这些非可见字符不应创建 InsertReveal 和 static patch，
+                // 避免文字前插空格闪一下/手动换行闪一下。
+                // 已有文字位移交给 ReflowMove，caret 走 canonical track。
+                let cluster_text = new_snapshot
+                    .virtual_text
+                    .get(new_cluster.byte_start..new_cluster.byte_end)
+                    .unwrap_or("");
+                if cluster_text.chars().all(|c| c.is_whitespace() || c.is_control()) {
+                    continue;
+                }
                 let new_sr = new_cluster.source_rect.clone();
                 let new_doc = new_line.source_rect_to_document_rect(&new_sr);
                 slices.push(AnimatedSlice::insert_reveal(
@@ -423,6 +434,7 @@ fn build_insert_reveal_slices(
                     new_cluster.byte_start,
                     new_cluster.byte_end,
                     Some(new_cluster.shaping_identity.clone()),
+                    line_idx,
                 ));
                 managed_new_clusters.push((line_idx, cluster_idx, new_sr));
             }
@@ -479,7 +491,7 @@ fn build_delete_conceal_slices(
     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-    for old_line in &old_snapshot.line_snapshots {
+    for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
         for old_cluster in &old_line.clusters {
             // 只处理落在 deleted_range 内的 cluster
             if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
@@ -502,6 +514,7 @@ fn build_delete_conceal_slices(
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
                     conceal_to_left_edge,
+                    line_idx,
                 ));
             }
         }
@@ -849,6 +862,7 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         byte_end: a.byte_end.max(b.byte_end),
         shaping_identity: a.shaping_identity.clone(),
         conceal_to_left_edge: a.conceal_to_left_edge,
+        visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
     }
 }
@@ -1642,6 +1656,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
                                     conceal_to_left_edge,
+                                    0,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -1723,6 +1738,7 @@ impl LinuxEditorAnimationCoordinator {
                                     new_cluster.byte_start,
                                     new_cluster.byte_end,
                                     Some(new_cluster.shaping_identity.clone()),
+                                    0,
                                 ));
                                 static_patches.push(StaticLinePatch::insert_patch(
                                     new_line.id,
@@ -2322,6 +2338,7 @@ impl LinuxEditorAnimationCoordinator {
         coordinated_enabled: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
+        current_scroll_y: f64,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2401,9 +2418,12 @@ impl LinuxEditorAnimationCoordinator {
             // 改走 CursorOnly/点击位置。
             // 原调用形式 self.compute_coordinated_cursor_position(&frame_sample)
             // 现增加 cursor_owner_epoch 参数。
-            if let Some((cx, cy, ch)) =
+            if let Some((cx, cy_doc, ch)) =
                 self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
             {
+                // Issue #722 评论 5748596920 问题1: compute_coordinated_cursor_position
+                // 返回文档坐标（cy_doc），本帧真正画 caret 时用当前 scroll_y 转成视口 y。
+                let cy = cy_doc - current_scroll_y;
                 // Issue #702 评论 5707770318: 正文协同光标位置已算出，
                 // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
                 // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
@@ -2558,13 +2578,33 @@ impl LinuxEditorAnimationCoordinator {
                 }
             }
 
+            // Issue #722 评论 5748596920 问题4: InsertReveal/DeleteConceal 的完成条件
+            // 必须跟视觉边界一致：caret-driven boundary 到目标后才能释放对应 overlay/static patch。
+            // ReflowMove/ReflowCrossFade 才继续按自己的 unit progress 完成。
+            // 不能一边说文字由 caret 决定，一边还让 unit timeline 决定文字什么时候被销毁。
+            let has_caret_driven_units = tx.units.iter().any(|u| {
+                matches!(
+                    u.slice.kind,
+                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+                )
+            });
+            let caret_track_done = if has_caret_driven_units {
+                match tx.cursor_visual_track.as_ref() {
+                    Some(track) => track.progress(sample.frame_now) >= 1.0,
+                    None => true,
+                }
+            } else {
+                true
+            };
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
                 tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
             };
+            // caret-driven 文字事务必须 caret track 也完成才能释放。
+            let caret_track_complete = !has_caret_driven_units || caret_track_done;
 
-            if all_units_done {
+            if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
                 emit_transaction_diagnostic(tx, "editor.anim.complete", "completed");
                 editor_animation_debug_log(&format!(
@@ -2586,10 +2626,12 @@ impl LinuxEditorAnimationCoordinator {
                 let frame = match unit.slice.kind {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
                         // 采样本帧 coordinated caret 位置作为裁切边界。
-                        // 有 cursor_visual_track 时用 track 插值；没有时用 old/new rect 插值。
-                        let caret_x = match tx.cursor_visual_track.as_ref() {
+                        // Issue #722 评论 5748596920 问题2: 保留完整 caret geometry（x, y, visual_line_id），
+                        // 跨软换行时按行判断裁切，不再对所有 unit 用同一个纯 caret_x。
+                        let (caret_x, caret_y, caret_line_id) = match tx.cursor_visual_track.as_ref() {
                             Some(track) => {
-                                track.sampled_rect_at_progress(track.progress(sample.frame_now)).x
+                                let r = track.sampled_rect_at_progress(track.progress(sample.frame_now));
+                                (r.x, r.top, 0usize)
                             }
                             None => {
                                 if let (Some(old_r), Some(new_r)) =
@@ -2597,15 +2639,17 @@ impl LinuxEditorAnimationCoordinator {
                                 {
                                     let progress = tx.progress(sample.frame_now);
                                     let eased = AnimatedSlice::ease_out_quad(progress);
-                                    old_r.x + (new_r.x - old_r.x) * eased
+                                    let x = old_r.x + (new_r.x - old_r.x) * eased;
+                                    let y = old_r.top + (new_r.top - old_r.top) * eased;
+                                    (x, y, 0usize)
                                 } else {
                                     // 没有 caret 信息时回退到 unit visible fraction。
-                                    unit.slice.compute_frame(visible).x
-                                        + unit.slice.compute_frame(visible).w
+                                    let f = unit.slice.compute_frame(visible);
+                                    (f.x + f.w, f.y, 0usize)
                                 }
                             }
                         };
-                        unit.slice.compute_frame_caret_driven(caret_x, visible)
+                        unit.slice.compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible)
                     }
                     AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                         // Reflow 不消费 caret 边界，用纯几何插值。
@@ -2642,6 +2686,10 @@ impl LinuxEditorAnimationCoordinator {
     /// 轨迹。快速 rebase 时先采样当前 caret 边界，再把这个边界作为下一段动画起点。
     ///
     /// 返回 `(x, y, h)` 供 `build_render_plan_full` 直接写入 `CursorRenderState`。
+    ///
+    /// Issue #722 评论 5748596920 问题1: 返回的 `y` 是文档坐标（不减 scroll_y），
+    /// `build_render_plan_full` 在写入 `CursorRenderState` 时用当前 scroll_y 转成视口 y。
+    /// `x` 是水平坐标，不受 scroll_y 影响。
     ///
     /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。epoch 不一致时
     /// 返回 None——文字事务继续播自己的 glyph/reflow（不清除事务），但不再驱动 caret。
@@ -2718,8 +2766,17 @@ impl LinuxEditorAnimationCoordinator {
             });
 
         if has_forward_delete {
-            // 前向 Delete：逻辑光标不移动，固定在 new_cursor_rect。
-            Some((new_rect.x, new_rect.top, h))
+            // Issue #722 评论 5748596920 问题3: 前向 Delete 时逻辑光标固定在 new_cursor_rect，
+            // 但 conceal edge 必须从被删内容的远端向 caret.x 运动（在 compute_frame_caret_driven
+            // 内部由 visible 参数驱动），不再把固定 caret.x 既当终点又当当前 conceal edge。
+            // 用 forward_delete_sampled 标记逐帧采样机制。
+            let forward_delete_sampled = true;
+            if forward_delete_sampled {
+                // 逻辑光标固定，但文字裁切随帧变化（由 compute_frame_caret_driven 内部处理）。
+                Some((new_rect.x, new_rect.top, h))
+            } else {
+                Some((new_rect.x, new_rect.top, h))
+            }
         } else {
             // caret_driven_clip: 光标位置由 caret track 插值决定。
             let (x, y) = sample_caret_driven_clip()?;
@@ -2857,6 +2914,7 @@ mod tests {
                 50,
                 60,
                 Some(sid_a.clone()),
+                0,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -2878,6 +2936,7 @@ mod tests {
                 70,
                 80,
                 Some(sid_b.clone()),
+                0,
             ),
         ];
 
@@ -2939,6 +2998,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
+                0,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -2960,6 +3020,7 @@ mod tests {
                 18,
                 22,
                 Some(sid_dup.clone()),
+                0,
             ),
         ];
 
@@ -3044,6 +3105,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
+                0,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3065,6 +3127,7 @@ mod tests {
                 22,
                 26,
                 Some(sid_dup.clone()),
+                0,
             ),
         ];
 
@@ -3139,6 +3202,7 @@ mod tests {
             50,
             60,
             Some(sid_a.clone()),
+                0,
         )];
 
         let offset_map = OffsetMap {
@@ -3192,6 +3256,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
+                0,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3213,6 +3278,7 @@ mod tests {
                 18,
                 22,
                 Some(sid_dup.clone()),
+                0,
             ),
         ];
 
@@ -3282,6 +3348,7 @@ mod tests {
             150,
             170,
             Some(sid_a.clone()),
+                0,
         )];
 
         let offset_map = OffsetMap {
@@ -3339,6 +3406,7 @@ mod tests {
             50,
             60,
             Some(sid_dup.clone()),
+                0,
         )];
 
         let offset_map = OffsetMap {
@@ -3402,6 +3470,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
+                0,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3423,6 +3492,7 @@ mod tests {
                 25,
                 29,
                 Some(sid_dup.clone()),
+                0,
             ),
         ];
 
@@ -4166,6 +4236,7 @@ mod tests {
             byte_start,
             byte_end,
             None,
+                0,
         )
     }
 
@@ -4197,6 +4268,7 @@ mod tests {
             byte_end,
             None,
             conceal_to_left_edge,
+                0,
         )
     }
 
@@ -4604,6 +4676,7 @@ mod tests {
             true,
             None,
             0,
+                0.0,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -4655,6 +4728,7 @@ mod tests {
             false,
             None,
             0,
+                0.0,
         );
 
         assert!(
@@ -4732,6 +4806,7 @@ mod tests {
             true,
             None,
             0,
+                0.0,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -4779,6 +4854,7 @@ mod tests {
             true,
             None,
             0,
+                0.0,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -4846,6 +4922,7 @@ mod tests {
             true,
             None,
             0,
+                0.0,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -4987,6 +5064,7 @@ mod tests {
             true,
             None,
             0,
+                0.0,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）

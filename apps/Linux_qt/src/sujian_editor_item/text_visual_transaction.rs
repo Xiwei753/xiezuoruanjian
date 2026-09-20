@@ -1082,6 +1082,7 @@ mod issue_710_comment_5733109905_repro {
             unit_byte_start,
             unit_byte_end,
             None,
+            0,
         );
         let unit = PreparedVisualUnit::wrap(slice, 100);
         PreparedTextVisualTransaction {

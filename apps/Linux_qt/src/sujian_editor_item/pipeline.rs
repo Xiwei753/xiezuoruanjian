@@ -962,18 +962,16 @@ impl LinuxEditorPipeline {
                 // （cursor_x_from_canonical 在 cursor_x_map 为空时退化为 line.x 行首，
                 // 导致正文光标在行中间时打一字后协同光标动画起点从行首开始）。
                 // 只有有 old_prepared_handle 的路径才从 cache 算；fallback 路径仍用
-                // old_doc_snapshot.cursor_rect()（fallback 的 prepare_affected_paragraphs_visual_snapshot
+                // old_doc_snapshot.cursor_rect_doc()（fallback 的 prepare_affected_paragraphs_visual_snapshot
                 // 会真正排版并生成 cursor_x_map）。
                 let old_cursor_byte = vt.old_selection.head.index.value();
                 let old_caret_from_cache: Option<layout::CaretRect> =
                     if old_prepared_handle.is_some() {
                         editor_layout.cache().map(|snap| {
-                            editor_layout.caret_rect(
+                            editor_layout.caret_rect_doc(
                                 snap,
                                 old_cursor_byte,
                                 layout::CaretAffinity::Downstream,
-                                ctx.scroll_y,
-                                ctx.viewport_height,
                             )
                         })
                     } else {
@@ -1174,31 +1172,25 @@ impl LinuxEditorPipeline {
                 };
 
                 let old_caret = old_caret_from_cache.unwrap_or_else(|| {
-                    old_doc_snapshot.cursor_rect(
+                    old_doc_snapshot.cursor_rect_doc(
                         vt.old_selection.head.index.value(),
                         layout::CaretAffinity::Downstream,
-                        ctx.scroll_y,
-                        ctx.viewport_height,
                     )
                 });
-                let new_caret = new_doc_snapshot.cursor_rect(
+                let new_caret = new_doc_snapshot.cursor_rect_doc(
                     vt.new_selection.head.index.value(),
                     layout::CaretAffinity::Downstream,
-                    ctx.scroll_y,
-                    ctx.viewport_height,
                 );
 
                 vt.old_cursor_rect = Some(make_cursor_rect_from_caret_doc(
                     &old_caret,
                     &old_doc_snapshot,
                     &ctx.font_family,
-                    ctx.scroll_y,
                 ));
                 vt.new_cursor_rect = Some(make_cursor_rect_from_caret_doc(
                     &new_caret,
                     &new_doc_snapshot,
                     &ctx.font_family,
-                    ctx.scroll_y,
                 ));
 
                 // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
@@ -1296,14 +1288,16 @@ fn make_cursor_rect_from_caret_doc(
     caret: &layout::CursorLayoutRect,
     doc_snapshot: &layout::CanonicalDocumentVisualSnapshot,
     font_family: &str,
-    scroll_y: f64,
 ) -> CursorRect {
     let line = doc_snapshot
         .visual_lines
         .iter()
         .find(|l| l.id == caret.visual_line_id);
+    // Issue #722 评论 5748596920 问题1: caret track 保存文档坐标（不减 scroll_y），
+    // 与 AnimatedSlice/StaticPatch 文档坐标系一致。scene graph 在渲染时按当前
+    // scroll_y 做 viewport transform。
     let baseline_y = match line {
-        Some(l) => layout::text_baseline_y(l, doc_snapshot.font_size, font_family) - scroll_y,
+        Some(l) => layout::text_baseline_y(l, doc_snapshot.font_size, font_family),
         None => caret.y + caret.h * 0.8,
     };
     CursorRect {

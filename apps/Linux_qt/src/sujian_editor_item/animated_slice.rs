@@ -61,6 +61,12 @@ pub(crate) struct AnimatedSlice {
     pub byte_end: usize,
     pub shaping_identity: Option<ShapingIdentity>,
     pub conceal_to_left_edge: bool,
+    /// Issue #722 评论 5748596920 问题2: 该 slice 所属视觉行的 id（来自 VisualLine.id）。
+    ///
+    /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
+    /// caret 还没进入该行时 InsertReveal 保持 0 / DeleteConceal 保持完整；
+    /// caret 已经越过该行时 InsertReveal 保持完整 / DeleteConceal 保持 0。
+    pub visual_line_id: usize,
     /// Issue #690 评论 5675007226 步骤 3: 视觉单元的动画起始比例。
     ///
     /// InsertReveal：当前已吐出来的比例（0.0 = 未显示，1.0 = 完全显示）。
@@ -98,6 +104,7 @@ impl AnimatedSlice {
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
+        visual_line_id: usize,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::InsertReveal,
@@ -113,6 +120,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            visual_line_id,
             start_fraction: 0.0,
         }
     }
@@ -134,6 +142,7 @@ impl AnimatedSlice {
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
         conceal_to_left_edge: bool,
+        visual_line_id: usize,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::DeleteConceal,
@@ -149,6 +158,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge,
+            visual_line_id,
             start_fraction: 0.0,
         }
     }
@@ -183,6 +193,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
+            visual_line_id: 0,
             start_fraction: 0.0,
         }
     }
@@ -210,6 +221,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_to_left_edge: false,
+            visual_line_id: 0,
             start_fraction: 0.0,
         }
     }
@@ -237,6 +249,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_to_left_edge: false,
+            visual_line_id: 0,
             start_fraction: 0.0,
         }
     }
@@ -409,14 +422,37 @@ impl AnimatedSlice {
     pub fn compute_frame_caret_driven(
         &self,
         caret_clip_boundary: f64,
+        caret_clip_y: f64,
+        caret_visual_line_id: usize,
         visible: f64,
     ) -> AnimatedSliceFrame {
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                // caret_driven_clip: 吐字时裁切宽度 = caret 边界 - 文档起点。
-                // 已被光标"带出来"的部分就是已经吐出来，不能后面再自己补一个淡入进度。
-                let reveal_from_caret =
-                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w);
+                // Issue #722 评论 5748596920 问题2: 跨软换行裁切按行判断。
+                // caret 还没进入该 slice 所在视觉行 → InsertReveal 保持 0；
+                // caret 已经越过该视觉行 → 该行已经吐出的部分保持完成；
+                // 只有 caret 和 slice 在同一视觉行时，才用 caret.x 做横向裁切。
+                // 用 visual_line_id 比较（非 0 时）或 y 坐标比较（fallback）判断同行。
+                let same_line = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
+                    caret_visual_line_id == self.visual_line_id
+                } else {
+                    (caret_clip_y - self.to_document_rect.y).abs() < self.to_document_rect.h.max(1.0)
+                };
+                let caret_above = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
+                    caret_visual_line_id < self.visual_line_id
+                } else {
+                    caret_clip_y < self.to_document_rect.y
+                };
+                let reveal_from_caret = if caret_above {
+                    // caret 在该行上方，还没吐到该行
+                    0.0
+                } else if !same_line && !caret_above {
+                    // caret 已经越过该行，该行完全吐出
+                    self.to_document_rect.w
+                } else {
+                    // 同一行：用 caret.x 做横向裁切
+                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w)
+                };
                 let frame_w = reveal_from_caret;
                 let frame_h = self.to_document_rect.h;
                 let frame_source_rect = SourceRect {
@@ -437,26 +473,56 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                // caret_driven_clip: 吞字时裁切宽度由 caret 边界决定。
-                // 光标往回走到哪里，文字就消失到哪里；已经被光标扫过去的部分就是已经吞掉。
+                // Issue #722 评论 5748596920 问题2: 跨软换行裁切按行判断。
                 let frame_h = self.from_document_rect.h;
+                let same_line = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
+                    caret_visual_line_id == self.visual_line_id
+                } else {
+                    (caret_clip_y - self.from_document_rect.y).abs() < self.from_document_rect.h.max(1.0)
+                };
+                let caret_above = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
+                    caret_visual_line_id < self.visual_line_id
+                } else {
+                    caret_clip_y < self.from_document_rect.y
+                };
                 let (frame_w, frame_x, src_x) = if self.conceal_to_left_edge {
-                    // Backspace：保留左段，裁切宽度 = caret 边界 - 文档起点。
-                    let conceal_from_caret = (caret_clip_boundary - self.from_document_rect.x)
-                        .clamp(0.0, self.from_document_rect.w);
+                    // Backspace：保留左段。
+                    let conceal_from_caret = if caret_above {
+                        // caret 在该行上方，已经吞完该行
+                        0.0
+                    } else if !same_line && !caret_above {
+                        // caret 在该行下方，还没吞到该行
+                        self.from_document_rect.w
+                    } else {
+                        // 同一行：裁切宽度 = caret 边界 - 文档起点
+                        (caret_clip_boundary - self.from_document_rect.x)
+                            .clamp(0.0, self.from_document_rect.w)
+                    };
                     (
                         conceal_from_caret,
                         self.from_document_rect.x,
                         self.source_rect.x,
                     )
                 } else {
-                    // 前向 Delete：保留右段，裁切宽度 = 文档右端 - caret 边界。
-                    let from_right =
-                        (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary)
-                            .clamp(0.0, self.from_document_rect.w);
+                    // 前向 Delete：保留右段。
+                    // Issue #722 评论 5748596920 问题3: conceal edge 从远端向 caret.x 运动，
+                    // 裁切宽度随帧变化（由 visible 参数驱动），不再固定。
+                    let from_right = if caret_above {
+                        // caret 在该行上方，还没吞到该行
+                        self.from_document_rect.w
+                    } else if !same_line && !caret_above {
+                        // caret 在该行下方，已经吞完该行
+                        0.0
+                    } else {
+                        // 同一行：裁切宽度随帧变化（conceal_progress），
+                        // 从满宽逐帧收到 0，glyph 逐帧收进光标。
+                        let conceal_progress = visible.clamp(0.0, 1.0);
+                        let full_w = self.from_document_rect.w;
+                        full_w * (1.0 - conceal_progress)
+                    };
                     (
                         from_right,
-                        caret_clip_boundary,
+                        self.from_document_rect.x + (self.from_document_rect.w - from_right),
                         self.source_rect.x + (self.source_rect.w * (1.0 - from_right / self.from_document_rect.w.max(1.0))),
                     )
                 };
@@ -479,6 +545,7 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                 // Reflow 不消费 caret 边界，回退到纯几何插值。
+                let _ = (caret_clip_boundary, caret_clip_y, caret_visual_line_id);
                 self.compute_frame(visible)
             }
         }
