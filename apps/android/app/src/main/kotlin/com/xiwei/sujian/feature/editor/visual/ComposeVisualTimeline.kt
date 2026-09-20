@@ -499,12 +499,34 @@ class ComposeVisualTimeline {
                     durationNanos = 0L,
                 )
             }
+        // 计算 parent 当前 reveal fraction，用于 split 时投影到 child
+        val parentRevealNow = currentAlpha(unit.reveal, frameTimeNanos)
+        val revealChannel =
+            if (oldRange != unit.range) {
+                // split：把 parent reveal 进度投影到 child 局部区间
+                val localFraction = computeRevealFractionForChild(
+                    parentRange = unit.range,
+                    parentRevealFraction = parentRevealNow,
+                    childRange = oldRange,
+                )
+                // 从局部 fraction 继续到 1，剩余时长与 parent 一致
+                val remaining = remainingDurationNanos(unit.reveal, frameTimeNanos)
+                TimedFloat(localFraction, 1f, frameTimeNanos, remaining)
+            } else {
+                // 不 split：保持原 reveal 通道不变
+                unit.reveal.copy(
+                    from = parentRevealNow,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = remainingDurationNanos(unit.reveal, frameTimeNanos),
+                )
+            }
         return unit.copy(
             key = childKey,
             layout = newLayout,
             range = mappedRange,
             targetRange = mappedRange,
             position = positionChannel,
+            reveal = revealChannel,
         )
     }
 
@@ -563,10 +585,11 @@ class ComposeVisualTimeline {
             val unitStartedAt = frameTimeNanos + (durationNanos * startFraction).toLong()
             val unitDuration = (durationNanos * (endFraction - startFraction)).toLong()
             if (existingUnit != null) {
-                // pendingSurviving：copy 并重设 alpha 通道，layout/range/position 保持
+                // pendingSurviving：copy 并重设 alpha/reveal 通道，layout/range/position 保持
                 val repartitioned =
                     existingUnit.copy(
                         alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
+                        reveal = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                     )
                 allUnits.add(repartitioned)
                 repartitionedPending.add(repartitioned)
@@ -581,8 +604,9 @@ class ComposeVisualTimeline {
                         targetRange = range,
                         alpha = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                         position = TimedOffset(position, position, frameTimeNanos, 0L),
+                        reveal = TimedFloat(0f, 1f, unitStartedAt, unitDuration),
                         // #703 评论 5710977972 缺陷2：新插入字角色 = Inserted，
-                        // 由 alpha 通道从 0→1 驱动吐字。
+                        // 由 reveal 通道从 0→1 驱动吐字。
                         role = VisualUnitRole.Inserted,
                     ),
                 )
@@ -693,7 +717,7 @@ class ComposeVisualTimeline {
                             it.targetRange == null && it.range == del
                     }
                 if (alreadyGhosted) continue
-                // 缺陷1：从 oldLayout 建 ghost（alpha 1->0）
+                // 缺陷1：从 oldLayout 建 ghost（alpha 1->0，reveal 1->0）
                 val oldPosition = computeUnitPosition(oldLayout, del) ?: continue
                 val newGhost =
                     VisualTextUnit(
@@ -704,8 +728,9 @@ class ComposeVisualTimeline {
                         // alpha=1 完整 ghost，schedule 下面统一设
                         alpha = TimedFloat(1f, 0f, frameTimeNanos, durationNanos),
                         position = TimedOffset(oldPosition, oldPosition, frameTimeNanos, 0L),
+                        reveal = TimedFloat(1f, 0f, frameTimeNanos, durationNanos),
                         // #703 评论 5710977972 缺陷2：删除 ghost 角色 = DeletedGhost，
-                        // 由 alpha 通道从 1→0 驱动吞字。
+                        // 由 reveal 通道从 1→0 驱动吞字。
                         role = VisualUnitRole.DeletedGhost,
                     )
                 // #708 评论 5729482707 修复2：remaining 新建 ghost 也属于本次 patch，
@@ -824,6 +849,7 @@ class ComposeVisualTimeline {
                 targetRange = newRange,
                 alpha = TimedFloat(1f, 1f, frameTimeNanos, 0L),
                 position = TimedOffset(oldPosition, newPosition, frameTimeNanos, durationNanos),
+                reveal = TimedFloat(1f, 1f, frameTimeNanos, 0L),
                 // #703 评论 5710977972 缺陷2：幸存回流文字角色 = RetainedMove，
                 // 始终完整可见，不进入 spatial clip 裁切。
                 role = VisualUnitRole.RetainedMove,
@@ -912,16 +938,16 @@ class ComposeVisualTimeline {
 
     /**
      * #703 评论 B / Issue #725 评论 5750735497：空间进度驱动吞吐字 —
-     * clipFraction 直接由 unit 的 alpha 通道驱动，不再由屏幕光标位置算。
+     * clipFraction 直接由 unit 的 reveal 通道驱动，不再由屏幕光标位置算。
      *
-     * - Inserted unit（alpha 0→1）：clipFraction = currentAlpha，字从左向右吐出。
-     * - DeletedGhost（alpha 1→0）：clipFraction = currentAlpha，字从右向左被吞掉。
+     * - Inserted unit（reveal 0→1）：clipFraction = currentReveal，字从左向右吐出。
+     * - DeletedGhost（reveal 1→0）：clipFraction = currentReveal，字从右向左被吞掉。
      * - RetainedMove：clipFraction = 1f（始终完整可见，不参与裁切）。
      *
-     * alpha 通道本身已由 repartitionPendingAndInsertedUnits 按正文顺序均匀分段，
-     * 保留了"沿输入顺序吐字/吞字"的效果。
+     * reveal 通道独立后，split 时每个 child 有自己的 reveal 通道，
+     * 不再共享 parent 的 alpha 通道，避免 parent fraction 和 child 局部 fraction 互相打架。
      *
-     * @param units 当前帧的 sampled units（alpha/position 已插值到当前帧）。
+     * @param units 当前帧的 sampled units（alpha/position/reveal 已插值到当前帧）。
      * @param frameTimeNanos 当前帧时间戳。
      * @return unit key → 可见 fraction（0..1）。
      */
@@ -938,7 +964,7 @@ class ComposeVisualTimeline {
                         // Issue #725 评论 5750735497：clipFraction 由纯文字时间线
                         // [ComposeTextRevealTrack] 驱动（从 unit 的 reveal 通道采样），
                         // 不再由屏幕光标位置算，也不会复制 AndroidX 的 caret 状态机。
-                        ComposeTextRevealTrack(clipFraction = unit.alpha)
+                        ComposeTextRevealTrack(clipFraction = unit.reveal)
                             .sampleFraction(frameTimeNanos)
                             .coerceIn(0f, 1f)
                     VisualUnitRole.RetainedMove -> 1f
@@ -954,12 +980,13 @@ class ComposeVisualTimeline {
      * #691：同时检查文字 units 和光标 cursorChannel 的活动状态。
      *
      * @param frameTimeNanos 当前帧时间戳。
-     * @return true 表示还有 unit 的 alpha 或 position 通道未完成，或光标动画未完成。
+     * @return true 表示还有 unit 的 alpha、position 或 reveal 通道未完成，或光标动画未完成。
      */
     fun hasActiveAnimation(frameTimeNanos: Long): Boolean {
         return units.any { unit ->
             !isAlphaFinished(unit.alpha, frameTimeNanos) ||
-                !isPositionFinished(unit.position, frameTimeNanos)
+                !isPositionFinished(unit.position, frameTimeNanos) ||
+                !isAlphaFinished(unit.reveal, frameTimeNanos)
         }
     }
 
@@ -1036,12 +1063,30 @@ class ComposeVisualTimeline {
                 sliceRange = ghostRange,
                 parentScreenPosition = parentCurrent,
             ) ?: parentCurrent
+        // 计算 parent 当前 reveal fraction，用于 split 时投影到 ghost child
+        val parentRevealNow = currentAlpha(unit.reveal, now)
+        val revealChannel =
+            if (ghostRange != unit.range) {
+                // split：把 parent reveal 进度投影到 ghost child 局部区间
+                val localFraction = computeRevealFractionForChild(
+                    parentRange = unit.range,
+                    parentRevealFraction = parentRevealNow,
+                    childRange = ghostRange,
+                )
+                // 从局部 fraction 继续到 0（ghost 吞字），剩余时长与 parent 一致
+                val remaining = remainingDurationNanos(unit.reveal, now)
+                TimedFloat(localFraction, 0f, now, remaining)
+            } else {
+                // 不 split：从当前值继续到 0
+                TimedFloat(parentRevealNow, 0f, now, durationNanos)
+            }
         return unit.copy(
             key = childKey,
             range = ghostRange,
             targetRange = null,
             alpha = TimedFloat(alphaNow, 0f, now, durationNanos),
             position = TimedOffset(positionNow, positionNow, now, 0L),
+            reveal = revealChannel,
             // #703 评论 5710977972 缺陷2：active unit 转 ghost，角色 = DeletedGhost，
             // 由 alpha 通道从当前值继续到 0 驱动吞字。
             role = VisualUnitRole.DeletedGhost,
@@ -1049,8 +1094,8 @@ class ComposeVisualTimeline {
     }
 
     /**
-     * 采样单个 unit 到指定帧时间 — 返回 alpha/position 已插值后的 unit。
-     * 采样后的 unit 的 alpha/position 通道表示"此刻屏幕真实画到的状态"。
+     * 采样单个 unit 到指定帧时间 — 返回 alpha/position/reveal 已插值后的 unit。
+     * 采样后的 unit 的通道表示"此刻屏幕真实画到的状态"。
      */
     private fun sampleUnit(
         unit: VisualTextUnit,
@@ -1071,12 +1116,19 @@ class ComposeVisualTimeline {
                     startedAtNanos = frameTimeNanos,
                     durationNanos = remainingDurationNanos(unit.position, frameTimeNanos),
                 ),
+            reveal =
+                unit.reveal.copy(
+                    from = currentAlpha(unit.reveal, frameTimeNanos),
+                    to = unit.reveal.to,
+                    startedAtNanos = frameTimeNanos,
+                    durationNanos = remainingDurationNanos(unit.reveal, frameTimeNanos),
+                ),
         )
     }
 
     /**
      * #691 评论 5680711648 修复1：applyPatch 专用 rebase —
-     * 把 unit 的 alpha/position 通道 rebase 到 [frameTimeNanos]，
+     * 把 unit 的 alpha/position/reveal 通道 rebase 到 [frameTimeNanos]，
      * 但**尚未开始的通道必须原样保留未来起点**。
      *
      * 与 [sampleUnit] 的关键区别：
@@ -1087,7 +1139,7 @@ class ComposeVisualTimeline {
      * - [rebaseUnitForPatch] 用于 [applyPatch] 准备 surviving unit：尚未开始的通道
      *   原样保留（startedAtNanos 不变），这样下一笔 patch 不会让未来 unit 提前启动。
      *
-     * alpha rebase 规则：
+     * alpha/reveal rebase 规则：
      * - now < channel.startedAtNanos：原样保留（尚未开始）
      * - now >= channel.startedAtNanos + channel.durationNanos：塌缩到 (to, to, now, 0)（已完成）
      * - 否则：from=currentAlpha(now), to=channel.to, startedAtNanos=now,
@@ -1102,6 +1154,7 @@ class ComposeVisualTimeline {
         unit.copy(
             alpha = rebaseTimedFloat(unit.alpha, frameTimeNanos),
             position = rebaseTimedOffset(unit.position, frameTimeNanos),
+            reveal = rebaseTimedFloat(unit.reveal, frameTimeNanos),
         )
 
     /**
@@ -1306,6 +1359,32 @@ class ComposeVisualTimeline {
 }
 
 /**
+ * 把 parent reveal 进度投影到 child 局部区间 —
+ * parent 被 split 时不再让所有 child 机械继承同一个 parent fraction。
+ *
+ * @param parentRange parent unit 的完整 range
+ * @param parentRevealFraction parent 当前 reveal fraction（0..1）
+ * @param childRange child 的 slice.oldSubRange
+ * @return child 局部的 reveal fraction（0..1）
+ */
+fun computeRevealFractionForChild(
+    parentRange: TextRange,
+    parentRevealFraction: Float,
+    childRange: TextRange,
+): Float {
+    val parentLength = parentRange.end - parentRange.start
+    if (parentLength <= 0) return parentRevealFraction
+    val revealBoundary = parentRange.start + parentRevealFraction * parentLength
+    val childLength = childRange.end - childRange.start
+    if (childLength <= 0) return parentRevealFraction
+    return when {
+        childRange.end <= revealBoundary -> 1f
+        childRange.start >= revealBoundary -> 0f
+        else -> (revealBoundary - childRange.start) / childLength
+    }
+}
+
+/**
  * #689 评论 5674631257 步骤2：带时间戳的 float 通道 —
  * 从 [from] 到 [to]，从 [startedAtNanos] 开始，持续 [durationNanos]。
  *
@@ -1350,12 +1429,13 @@ enum class VisualUnitRole { Inserted, DeletedGhost, RetainedMove }
  * @param key 唯一标识 — 快速输入时不重置。
  * @param layout 当前所属 layout 快照。
  * @param range 在 [layout] 中的 UTF-16 range。
- * @param targetRange 在当前 new text 中的目标 range —
+ * @param targetRange 在当前 new text 中的 target range —
  *   null = ghost unit（只属于旧画面，最终应消失）；
  *   非 null = 仍存活，overlay 绘制时用此 range。
- * @param alpha 透明度通道 — 互不重置。Issue #725：alpha 通道同时驱动 clipFraction，
- *   不再由屏幕光标位置算 fraction。
+ * @param alpha 透明度通道 — 互不重置。用于非 coordinated 场景的边缘柔化。
  * @param position 位置通道 — 互不重置；位置没变不重建。
+ * @param reveal 独立的 reveal 通道 — 专用于吐字/吞字的空间裁切进度。
+ *   不再从 alpha 通道采样 clipFraction，避免 split 时 parent 和 child 互相打架。
  * @param role #703 评论 5710977972：视觉角色 —
  *   [VisualUnitRole.Inserted] / [VisualUnitRole.DeletedGhost] / [VisualUnitRole.RetainedMove].
  *   默认 [VisualUnitRole.RetainedMove]：普通幸存 copy（data class copy 自动保留原 role）
@@ -1368,6 +1448,7 @@ data class VisualTextUnit(
     val targetRange: TextRange?,
     val alpha: TimedFloat,
     val position: TimedOffset,
+    val reveal: TimedFloat,
     val role: VisualUnitRole = VisualUnitRole.RetainedMove,
 )
 

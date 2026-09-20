@@ -520,9 +520,10 @@ class ComposeEditorVisualState(
                         layout = oldLayout,
                         range = del,
                         targetRange = null,
-                        // 完整可见：alpha=1，不动画
+                        // 完整可见：alpha=1，reveal=1，不动画
                         alpha = TimedFloat(1f, 1f, 0L, 0L),
                         position = TimedOffset(oldPosition, oldPosition, 0L, 0L),
+                        reveal = TimedFloat(1f, 1f, 0L, 0L),
                         role = VisualUnitRole.DeletedGhost,
                     )
                 handoffNewGhostRanges.add(del)

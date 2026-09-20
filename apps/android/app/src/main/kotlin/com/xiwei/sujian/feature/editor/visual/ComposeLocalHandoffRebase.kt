@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
+import com.xiwei.sujian.feature.editor.visual.computeRevealFractionForChild
 
 /**
  * #708 评论 5725706551：本地 handoff scene rebase —
@@ -169,22 +170,11 @@ internal object ComposeLocalHandoffRebase {
         // - child 完全位于边界之后 → 尚未显示 → fraction=0
         // - reveal 边界落在 child 内 → 换算成 child 局部 0..1 fraction
         // 不读取屏幕 caret，继续用纯文字模型。
-        val parentRange = unit.range
-        val parentLength = parentRange.end - parentRange.start
-        if (parentLength <= 0) {
-            return parentOldFraction
-        }
-        val revealBoundary = parentRange.start + parentOldFraction * parentLength
-        val childRange = slice.oldSubRange
-        val childLength = childRange.end - childRange.start
-        if (childLength <= 0) {
-            return parentOldFraction
-        }
-        return when {
-            childRange.end <= revealBoundary -> 1f
-            childRange.start >= revealBoundary -> 0f
-            else -> (revealBoundary - childRange.start) / childLength
-        }
+        return computeRevealFractionForChild(
+            parentRange = unit.range,
+            parentRevealFraction = parentOldFraction,
+            childRange = slice.oldSubRange,
+        )
     }
 
     private fun processSlice(
@@ -229,16 +219,17 @@ internal object ComposeLocalHandoffRebase {
     /**
      * 存活 slice → handoff unit —
      * targetRange/range 改成 newRange，layout 改成 newLayout，
-     * alpha/position 固定在当前可见值（不瞬移、不推进时间）。
+     * alpha/position/reveal 固定在当前可见值（不瞬移、不推进时间）。
      *
      * **与 [ComposeVisualTimeline.mapSurvivingSlice] 的对应关系**（#708 评论 5725706551）：
-     * - timeline 版本：alpha 通道不变（继续原动画），position 通道在新位置变化时创建
+     * - timeline 版本：alpha/reveal 通道不变（继续原动画），position 通道在新位置变化时创建
      *   TimedOffset(from=oldPosition, to=newPosition, startedAtNanos=frameTimeNanos, durationNanos)。
-     * - handoff 版本（本方法）：alpha/position 都固定在当前可见值（TimedFloat(from, from, 0, 0)），
+     * - handoff 版本（本方法）：alpha/position/reveal 都固定在当前可见值（TimedFloat(from, from, 0, 0)），
      *   不推进时间，等 timeline 接管后再创建动画通道。
      *
-     * 旧 scene 的 units 已经 sampled 过，alpha.from = 当前可见 alpha，position.from = 当前屏幕位置。
-     * handoff 把 alpha/position 固定在当前值（TimedFloat(from, from, 0, 0)），
+     * 旧 scene 的 units 已经 sampled 过，alpha.from = 当前可见 alpha，position.from = 当前屏幕位置，
+     * reveal.from = 当前可见 reveal。
+     * handoff 把 alpha/position/reveal 固定在当前值（TimedFloat(from, from, 0, 0)），
      * draw 层 sample 时得到 from = 当前可见值，保持连续性。
      * 如果新布局位置变化，后面的正式 timeline 再负责 position redirect。
      */
@@ -250,6 +241,7 @@ internal object ComposeLocalHandoffRebase {
         childKey: Long,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
+        val frozenReveal = TimedFloat(unit.reveal.from, unit.reveal.from, 0L, 0L)
         // #708 评论 5727440517：surviving slice 的屏幕位置用 sliceScreenPosition 计算 —
         // oldRange == unit.range 时返回 unit.position.from（父当前屏幕位置）；
         // oldRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
@@ -271,18 +263,19 @@ internal object ComposeLocalHandoffRebase {
             targetRange = newRange,
             alpha = frozenAlpha,
             position = frozenPosition,
+            reveal = frozenReveal,
         )
     }
 
     /**
      * 被删除 slice → handoff ghost —
-     * 从旧 unit 当前可见 alpha/position 转 ghost（不新建 alpha=1 的完整 ghost）。
+     * 从旧 unit 当前可见 alpha/position/reveal 转 ghost（不新建 alpha=1 的完整 ghost）。
      *
      * **与 [ComposeVisualTimeline.toGhost] 的对应关系**（#708 评论 5725706551）：
-     * - timeline 版本：alpha 从当前值继续到 0（TimedFloat(alphaNow, 0f, now, durationNanos)），
+     * - timeline 版本：alpha/reveal 从当前值继续到 0（TimedFloat(now, 0f, now, durationNanos)），
      *   position 固定在当前屏幕位置（考虑切片 ghost 的父 unit 位移）。
-     * - handoff 版本（本方法）：alpha/position 都固定在当前可见值（TimedFloat(from, from, 0, 0)），
-     *   不推进时间，等 timeline 接管后再创建 alpha → 0 的淡出通道。
+     * - handoff 版本（本方法）：alpha/position/reveal 都固定在当前可见值（TimedFloat(from, from, 0, 0)），
+     *   不推进时间，等 timeline 接管后再创建 alpha → 0 / reveal → 0 的淡出通道。
      *
      * 关键约束（#708 评论 5725706551）：
      * handoff ghost 继承当前可见 alpha — 不能新建 alpha=1 的完整 ghost 来替代正在动画中的 unit。
@@ -290,7 +283,7 @@ internal object ComposeLocalHandoffRebase {
      * 而不是新建 alpha=1 的完整 ghost。否则会出现"旧字残留 + 新字同时画"的重影。
      *
      * targetRange = null，role = DeletedGhost。
-     * alpha/position 固定在当前可见值，等 timeline 接管后再创建 alpha → 0 的淡出通道。
+     * alpha/position/reveal 固定在当前可见值，等 timeline 接管后再创建淡出通道。
      */
     private fun toHandoffGhost(
         unit: VisualTextUnit,
@@ -298,6 +291,7 @@ internal object ComposeLocalHandoffRebase {
         childKey: Long,
     ): VisualTextUnit {
         val frozenAlpha = TimedFloat(unit.alpha.from, unit.alpha.from, 0L, 0L)
+        val frozenReveal = TimedFloat(unit.reveal.from, unit.reveal.from, 0L, 0L)
         // #708 评论 5726837636：子片段 ghost 的屏幕位置用 sliceScreenPosition 计算 —
         // ghostRange == unit.range 时返回 unit.position.from（父当前屏幕位置）；
         // ghostRange 是父 unit 真子区间时用"slice 自然位置 + 父 unit 当前位移"，
@@ -316,6 +310,7 @@ internal object ComposeLocalHandoffRebase {
             targetRange = null,
             alpha = frozenAlpha,
             position = frozenPosition,
+            reveal = frozenReveal,
             role = VisualUnitRole.DeletedGhost,
         )
     }
