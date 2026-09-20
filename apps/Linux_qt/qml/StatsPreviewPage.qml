@@ -134,7 +134,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: deviceStats.length > 0 ? deviceStats.slice(0, 4) : [{ device_name: qsTr("暂无数据"), typed_chars: 0 }]
-                            delegate: AppText { dt: root.dt; text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt.textSecondary }
+                            delegate: AppText { required property var modelData; dt: root.dt; text: (modelData.device_name || qsTr("未知设备")) + "  " + formatNum(modelData.typed_chars || 0); color: dt.textSecondary }
                         }
                     }
                 }
@@ -151,7 +151,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: projectStats.length > 0 ? projectStats.slice(0, 5) : [{ project_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: AppText { dt: root.dt; text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
+                            delegate: AppText { required property int index; required property var modelData; dt: root.dt; text: (index + 1) + ". " + (modelData.project_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
                         }
                     }
 
@@ -161,7 +161,7 @@ Rectangle {
                         Layout.fillWidth: true
                         Repeater {
                             model: chapterStats.length > 0 ? chapterStats.slice(0, 5) : [{ chapter_title: qsTr("暂无数据"), human_typed_chars: 0 }]
-                            delegate: AppText { dt: root.dt; text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
+                            delegate: AppText { required property int index; required property var modelData; dt: root.dt; text: (index + 1) + ". " + (modelData.chapter_title || qsTr("未命名")) + "  " + formatNum(modelData.human_typed_chars || 0); color: dt.textPrimary }
                         }
                     }
                 }
