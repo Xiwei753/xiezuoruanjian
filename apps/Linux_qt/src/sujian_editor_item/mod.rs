@@ -295,11 +295,13 @@ pub struct SujianEditorItem {
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
-    /// Issue #724 评论 5751268664 缺口2: 自动跟随滚动锚点 setter/clearer。
-    /// QML 侧 begin_auto_follow_scroll() 调 set_auto_follow_anchor(y, h)，
-    /// end_auto_follow_scroll() 调 clear_auto_follow_anchor()。
+    /// Issue #724 评论 5751573705 问题2: 自动跟随滚动锚点 setter（带 target_scroll_y）。
+    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把当前 caret viewport y/h
+    /// 和滚动目标值传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
+    /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标。
+    /// 当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点。
     #[allow(dead_code)]
-    set_auto_follow_anchor: qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64)),
+    set_auto_follow_anchor_with_target: qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64, target_scroll_y: f64)),
     #[allow(dead_code)]
     clear_auto_follow_anchor: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
@@ -314,6 +316,12 @@ pub struct SujianEditorItem {
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
+    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport y/h，
+    /// 供 QML auto-follow anchor 取锚点。
+    #[allow(dead_code)]
+    visual_cursor_rect_y: qt_property!(f32; READ visual_cursor_rect_y NOTIFY cursor_rect_changed),
+    #[allow(dead_code)]
+    visual_cursor_rect_height: qt_property!(f32; READ visual_cursor_rect_height NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
@@ -467,12 +475,14 @@ pub struct SujianEditorItem {
     current_is_scrolling: bool,
     /// Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间的 caret viewport 锚点。
     ///
-    /// `Some((anchor_y, anchor_h))` 表示自动跟随滚动期间应使用的 caret viewport y/h，
-    /// `update_cursor_visual_position` 用此值替代 `current_scroll_y` 算 caret viewport 坐标，
-    /// 避免滚动 contentY 变化把 caret 一起拖走。QML 侧 `begin_auto_follow_scroll()` 调
-    /// `set_auto_follow_anchor(y, h)` 设置锚点，`end_auto_follow_scroll()` 调
-    /// `clear_auto_follow_anchor()` 释放锚点。
-    current_auto_follow_anchor: Option<(f64, f64)>,
+    /// `Some((anchor_y, anchor_h, target_scroll_y))` 表示自动跟随滚动期间应使用的
+    /// caret viewport y/h 和滚动目标值。`update_cursor_visual_position` 用 anchor_y/h
+    /// 替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动 contentY 变化把 caret
+    /// 一起拖走。当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点，
+    /// 不再由 80ms Timer 决定生命周期。
+    /// QML 侧 `begin_auto_follow_scroll()` 调 `set_auto_follow_anchor_with_target(y, h, target_y)`，
+    /// `end_auto_follow_scroll()` 调 `clear_auto_follow_anchor()`。
+    current_auto_follow_anchor: Option<(f64, f64, f64)>,
     current_is_loading: bool,
     current_is_applying_format: bool,
     last_summary: QString,
@@ -539,6 +549,8 @@ impl Default for SujianEditorItem {
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
+            visual_cursor_rect_y: Default::default(),
+            visual_cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
             cursor_blink_visible: Default::default(),
             cursor_should_be_visible: Default::default(),
@@ -590,7 +602,7 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
-            set_auto_follow_anchor: Default::default(),
+            set_auto_follow_anchor_with_target: Default::default(),
             clear_auto_follow_anchor: Default::default(),
             register_text_target_qml: Default::default(),
             register_secret_target_qml: Default::default(),

@@ -653,7 +653,11 @@ fn build_insert_reveal_slices(
                 continue;
             }
             // Issue #724 评论 5751268664 缺口1: Inside 用整个 source_rect，
-            // Partial 用 clipped_source_rect + clipped_byte_range。
+            // Partial 用精确 glyph 几何 + clipped_byte_range。
+            // 不再用 UTF-8 byte 比例猜视觉宽度——字节长度不是 glyph 宽度，
+            // 中文 UTF-8 3 字节/拉丁 1 字节/ligature/组合字符/fallback font/
+            // 比例字体/RTL 都不能按 byte ratio 对应到 source rect 的 x/w。
+            // Partial 的精确 source rect 从 QTextLayout 侧取（支持 split ligature）。
             let (new_sr, slice_byte_start, slice_byte_end) = match relation {
                 ClusterInsertRelation::Inside => (
                     new_cluster.source_rect.clone(),
@@ -661,10 +665,24 @@ fn build_insert_reveal_slices(
                     new_cluster.byte_end,
                 ),
                 ClusterInsertRelation::Partial {
-                    clipped_source_rect,
                     clipped_byte_start,
                     clipped_byte_end,
-                } => (clipped_source_rect, clipped_byte_start, clipped_byte_end),
+                } => {
+                    // Issue #724 评论 5751573705 问题1: 从 QTextLayout 取精确 glyph 几何。
+                    // 失败时（layout 缺失/范围越界）回退到完整 cluster source_rect，
+                    // 至少保证视觉不崩——宁可多画一帧旧邻字，也不猜错位置。
+                    let precise_sr = new_line.get_precise_glyph_rect_for_byte_range(
+                        new_snapshot.revision.0,
+                        &new_snapshot.virtual_text,
+                        clipped_byte_start,
+                        clipped_byte_end,
+                    );
+                    if let Some(sr) = precise_sr {
+                        (sr, clipped_byte_start, clipped_byte_end)
+                    } else {
+                        (new_cluster.source_rect.clone(), clipped_byte_start, clipped_byte_end)
+                    }
+                }
             };
             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
             slices.push(AnimatedSlice::insert_reveal(
@@ -3916,6 +3934,8 @@ mod tests {
             visual_line_id: 0,
             visual_line_top: 0.0,
             visual_line_bottom: 20.0,
+            cache_slot: 0,
+            qtextline_idx: 0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,

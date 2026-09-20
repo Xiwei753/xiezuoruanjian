@@ -3,68 +3,70 @@ import QtQuick
 QtObject {
     id: dt
 
-    // Issue #724 评论 5751268664 缺口3: DesignTokens 真正只消费 theme_state_json。
+    // Issue #724 评论 5751573705 问题3: DesignTokens 真正原子替换。
     //
-    // 旧实现（Issue #721）让每个颜色属性独立 binding 到 themeControllerRef.*_hex，
-    // themeStateJson 只做诊断。这导致 themeStateJsonChanged 与独立颜色 binding 可能不同步，
-    // 同一帧内 isDark 已切到 dark 但 scheme 还是上一套浅色值的中间状态仍可能出现。
+    // 旧实现让每个颜色属性独立 binding 到 themeControllerRef.*_hex，
+    // applyThemeState() 逐个写 property，导致同一帧内 isDark 已切到 dark 但 scheme
+    // 还是上一套浅色值的混合中间态仍可能出现。
     //
-    // 新实现：所有颜色属性初始值为 fallback，onThemeStateJsonChanged 一次性解析
-    // theme_state_json JSON，从同一份不可分割快照更新 isDark 和全部颜色属性。
-    // 不再让每个颜色属性独立 binding 到 themeControllerRef.*_hex。
-    // 条件 reload（reload_from_backend_if_changed）保留在 Rust 侧，不影响此处原子发布。
+    // 新实现：
+    // - `resolvedTheme` 是完整的 theme 对象，所有派生 token 只读此对象。
+    // - applyThemeState() 一次性构建新 theme 对象并整体替换 resolvedTheme，
+    //   QML 引擎在下一帧统一更新所有绑定，不在帧内暴露混合中间态。
+    // - 派生色（success/warning/info 等）继续从 resolvedTheme 派生。
+    // - 组合色（bg/paper/border/editorText 等）继续从 resolvedTheme 派生。
+
+    /// theme_state_json 字符串（来自 Rust 侧）。
     property string themeStateJson: ""
 
     property var themeControllerRef: null
 
-    // Issue #724 评论 5751268664 缺口3: isDark 初始值为 true（fallback），
-    // 由 applyThemeState() 一次性更新，不再独立 binding 到 themeControllerRef.is_dark。
-    property bool isDark: true
+    /// 完整的 resolved theme 对象。所有派生 token 只读此属性。
+    /// 结构：{ is_dark: bool, scheme: { primary, on_primary, ... } | null }
+    /// scheme 为 null 时用 isDark 派生固定 fallback。
+    property var resolvedTheme: ({
+        is_dark: true,
+        scheme: null,
+        primary: "#92CCFF",
+        on_primary: "#003351",
+        primary_container: "#004B73",
+        on_primary_container: "#CCE5FF",
+        secondary: "#B8C8DA",
+        on_secondary: "#233240",
+        secondary_container: "#394857",
+        on_secondary_container: "#D4E4F6",
+        tertiary: "#D7BFFF",
+        on_tertiary: "#3E2A5C",
+        tertiary_container: "#554074",
+        on_tertiary_container: "#F1DAFF",
+        background: "#1A1C1E",
+        on_background: "#E2E3E7",
+        surface: "#1A1C1E",
+        on_surface: "#E2E3E7",
+        surface_variant: "#42474E",
+        on_surface_variant: "#C1C6CF",
+        surface_tint: "#92CCFF",
+        surface_dim: "#121418",
+        surface_bright: "#38393F",
+        surface_container_lowest: "#0F1113",
+        surface_container_low: "#1F2225",
+        surface_container: "#23272A",
+        surface_container_high: "#2D3135",
+        surface_container_highest: "#383C40",
+        inverse_surface: "#E2E2E5",
+        inverse_on_surface: "#2F3033",
+        inverse_primary: "#006497",
+        error: "#FFB4AB",
+        on_error: "#690005",
+        error_container: "#93000A",
+        on_error_container: "#FFDAD6",
+        outline: "#8C9198",
+        outline_variant: "#42474E",
+        scrim: "#000000",
+    })
 
-    // Issue #724 评论 5751268664 缺口3: 所有颜色属性初始值为深色 fallback，
-    // 由 applyThemeState() 一次性更新，不再独立 binding 到 themeControllerRef.*_hex。
-    property color primary: "#92CCFF"
-    property color onPrimary: "#003351"
-    property color primaryContainer: "#004B73"
-    property color onPrimaryContainer: "#CCE5FF"
-    property color secondary: "#B8C8DA"
-    property color onSecondary: "#233240"
-    property color secondaryContainer: "#394857"
-    property color onSecondaryContainer: "#D4E4F6"
-    property color tertiary: "#D7BFFF"
-    property color onTertiary: "#3E2A5C"
-    property color tertiaryContainer: "#554074"
-    property color onTertiaryContainer: "#F1DAFF"
-    property color background: "#1A1C1E"
-    property color onBackground: "#E2E3E7"
-    property color surface: "#1A1C1E"
-    property color onSurface: "#E2E3E7"
-    property color surfaceVariant: "#42474E"
-    property color onSurfaceVariant: "#C1C6CF"
-    property color surfaceTint: "#92CCFF"
-    property color surfaceDim: "#121418"
-    property color surfaceBright: "#38393F"
-    property color surfaceContainerLowest: "#0F1113"
-    property color surfaceContainerLow: "#1F2225"
-    property color surfaceContainer: "#23272A"
-    property color surfaceContainerHigh: "#2D3135"
-    property color surfaceContainerHighest: "#383C40"
-    property color inverseSurface: "#E2E2E5"
-    property color inverseOnSurface: "#2F3033"
-    property color inversePrimary: "#006497"
-    property color error: "#FFB4AB"
-    property color onError: "#690005"
-    property color errorContainer: "#93000A"
-    property color onErrorContainer: "#FFDAD6"
-    property color outline: "#8C9198"
-    property color outlineVariant: "#42474E"
-    property color scrim: "#000000"
-
-    // Issue #724 评论 5751268664 缺口3: 从 theme_state_json 一次性解析并更新所有颜色。
-    // theme_state_json 结构：{"is_dark": bool, "scheme": {primary, on_primary, ...} | null}
-    // scheme 为 null 时用 isDark 派生的固定 fallback。
-    // 所有颜色属性在此函数内一次性赋值，QML 引擎在下一帧统一更新所有绑定，
-    // 不在帧内暴露 light/dark 混合中间状态。
+    /// 从 theme_state_json 一次性构建 resolved theme 对象。
+    /// 不再逐个写 property——整体替换 resolvedTheme 后 QML 统一更新所有绑定。
     function applyThemeState(jsonStr) {
         if (!jsonStr || jsonStr.length === 0) {
             // 空状态：保持 fallback（初始深色值）
@@ -81,8 +83,8 @@ QtObject {
             return
         }
         var dark = !!parsed.is_dark
-        isDark = dark
         var scheme = (parsed.scheme && typeof parsed.scheme === "object") ? parsed.scheme : null
+
         // 辅助：从 scheme 取 hex 字符串，空则用 isDark fallback
         function hex(field, darkVal, lightVal) {
             if (scheme && scheme[field] && typeof scheme[field] === "string" && scheme[field].length > 0) {
@@ -90,58 +92,94 @@ QtObject {
             }
             return dark ? darkVal : lightVal
         }
-        primary = hex("primary", "#92CCFF", "#006497")
-        onPrimary = hex("on_primary", "#003351", "#FFFFFF")
-        primaryContainer = hex("primary_container", "#004B73", "#CCE5FF")
-        onPrimaryContainer = hex("on_primary_container", "#CCE5FF", "#001E31")
-        secondary = hex("secondary", "#B8C8DA", "#51606F")
-        onSecondary = hex("on_secondary", "#233240", "#FFFFFF")
-        secondaryContainer = hex("secondary_container", "#394857", "#D4E4F6")
-        onSecondaryContainer = hex("on_secondary_container", "#D4E4F6", "#0E1D2A")
-        tertiary = hex("tertiary", "#D7BFFF", "#6D578C")
-        onTertiary = hex("on_tertiary", "#3E2A5C", "#FFFFFF")
-        tertiaryContainer = hex("tertiary_container", "#554074", "#F1DAFF")
-        onTertiaryContainer = hex("on_tertiary_container", "#F1DAFF", "#261447")
-        background = hex("background", "#1A1C1E", "#FCFCFF")
-        onBackground = hex("on_background", "#E2E3E7", "#181C20")
-        surface = hex("surface", "#1A1C1E", "#FCFCFF")
-        onSurface = hex("on_surface", "#E2E3E7", "#181C20")
-        surfaceVariant = hex("surface_variant", "#42474E", "#DFE3EB")
-        onSurfaceVariant = hex("on_surface_variant", "#C1C6CF", "#42474E")
-        surfaceTint = hex("surface_tint", "#92CCFF", "#006497")
-        surfaceDim = hex("surface_dim", "#121418", "#D7D9DF")
-        surfaceBright = hex("surface_bright", "#38393F", "#FCFCFF")
-        surfaceContainerLowest = hex("surface_container_lowest", "#0F1113", "#FFFFFF")
-        surfaceContainerLow = hex("surface_container_low", "#1F2225", "#F6F8FB")
-        surfaceContainer = hex("surface_container", "#23272A", "#F0F3F7")
-        surfaceContainerHigh = hex("surface_container_high", "#2D3135", "#EAEFF5")
-        surfaceContainerHighest = hex("surface_container_highest", "#383C40", "#E4E9EF")
-        inverseSurface = hex("inverse_surface", "#E2E2E5", "#2F3033")
-        inverseOnSurface = hex("inverse_on_surface", "#2F3033", "#F1F0F4")
-        inversePrimary = hex("inverse_primary", "#006497", "#92CCFF")
-        error = hex("error", "#FFB4AB", "#BA1A1A")
-        onError = hex("on_error", "#690005", "#FFFFFF")
-        errorContainer = hex("error_container", "#93000A", "#FFDAD6")
-        onErrorContainer = hex("on_error_container", "#FFDAD6", "#410002")
-        outline = hex("outline", "#8C9198", "#72787E")
-        outlineVariant = hex("outline_variant", "#42474E", "#C1C6CF")
-        scrim = hex("scrim", "#000000", "#000000")
+
+        // 一次性构建完整 theme 对象，然后整体替换 resolvedTheme。
+        // QML 引擎在下一帧统一更新所有绑定，不在帧内暴露混合中间态。
+        var next = {
+            is_dark: dark,
+            scheme: scheme,
+            primary: hex("primary", "#92CCFF", "#006497"),
+            on_primary: hex("on_primary", "#003351", "#FFFFFF"),
+            primary_container: hex("primary_container", "#004B73", "#CCE5FF"),
+            on_primary_container: hex("on_primary_container", "#CCE5FF", "#001E31"),
+            secondary: hex("secondary", "#B8C8DA", "#51606F"),
+            on_secondary: hex("on_secondary", "#233240", "#FFFFFF"),
+            secondary_container: hex("secondary_container", "#394857", "#D4E4F6"),
+            on_secondary_container: hex("on_secondary_container", "#D4E4F6", "#0E1D2A"),
+            tertiary: hex("tertiary", "#D7BFFF", "#6D578C"),
+            on_tertiary: hex("on_tertiary", "#3E2A5C", "#FFFFFF"),
+            tertiary_container: hex("tertiary_container", "#554074", "#F1DAFF"),
+            on_tertiary_container: hex("on_tertiary_container", "#F1DAFF", "#261447"),
+            background: hex("background", "#1A1C1E", "#FCFCFF"),
+            on_background: hex("on_background", "#E2E3E7", "#181C20"),
+            surface: hex("surface", "#1A1C1E", "#FCFCFF"),
+            on_surface: hex("on_surface", "#E2E3E7", "#181C20"),
+            surface_variant: hex("surface_variant", "#42474E", "#DFE3EB"),
+            on_surface_variant: hex("on_surface_variant", "#C1C6CF", "#42474E"),
+            surface_tint: hex("surface_tint", "#92CCFF", "#006497"),
+            surface_dim: hex("surface_dim", "#121418", "#D7D9DF"),
+            surface_bright: hex("surface_bright", "#38393F", "#FCFCFF"),
+            surface_container_lowest: hex("surface_container_lowest", "#0F1113", "#FFFFFF"),
+            surface_container_low: hex("surface_container_low", "#1F2225", "#F6F8FB"),
+            surface_container: hex("surface_container", "#23272A", "#F0F3F7"),
+            surface_container_high: hex("surface_container_high", "#2D3135", "#EAEFF5"),
+            surface_container_highest: hex("surface_container_highest", "#383C40", "#E4E9EF"),
+            inverse_surface: hex("inverse_surface", "#E2E2E5", "#2F3033"),
+            inverse_on_surface: hex("inverse_on_surface", "#2F3033", "#F1F0F4"),
+            inverse_primary: hex("inverse_primary", "#006497", "#92CCFF"),
+            error: hex("error", "#FFB4AB", "#BA1A1A"),
+            on_error: hex("on_error", "#690005", "#FFFFFF"),
+            error_container: hex("error_container", "#93000A", "#FFDAD6"),
+            on_error_container: hex("on_error_container", "#FFDAD6", "#410002"),
+            outline: hex("outline", "#8C9198", "#72787E"),
+            outline_variant: hex("outline_variant", "#42474E", "#C1C6CF"),
+            scrim: hex("scrim", "#000000", "#000000"),
+        }
+        resolvedTheme = next
     }
 
-    // Issue #724 评论 5751268664 缺口3: themeStateJson 变化时一次性解析并更新所有颜色。
-    // 这是唯一的颜色更新入口，不再有独立 binding 到 themeControllerRef.*_hex。
-    onThemeStateJsonChanged: applyThemeState(themeStateJson)
-
-    // Issue #724 评论 5751268664 缺口3: themeControllerRef 设置时也触发一次解析，
-    // 覆盖 main.qml 中 themeControllerRef 先于 themeStateJson 绑定的初始化顺序。
-    onThemeControllerRefChanged: applyThemeState(themeStateJson)
-
-    // Issue #724 评论 5751268664 缺口3: Component.onCompleted 时应用一次当前状态，
-    // 确保初始颜色来自 theme_state_json 而非硬编码 fallback。
-    Component.onCompleted: applyThemeState(themeStateJson)
+    // Issue #724 评论 5751573705 问题3: 所有派生 token 只读 resolvedTheme，
+    // 不再独立 binding 到 themeControllerRef.*_hex。
+    // applyThemeState() 整体替换 resolvedTheme 后 QML 统一更新。
+    property bool isDark: resolvedTheme.is_dark
+    property color primary: resolvedTheme.primary
+    property color onPrimary: resolvedTheme.on_primary
+    property color primaryContainer: resolvedTheme.primary_container
+    property color onPrimaryContainer: resolvedTheme.on_primary_container
+    property color secondary: resolvedTheme.secondary
+    property color onSecondary: resolvedTheme.on_secondary
+    property color secondaryContainer: resolvedTheme.secondary_container
+    property color onSecondaryContainer: resolvedTheme.on_secondary_container
+    property color tertiary: resolvedTheme.tertiary
+    property color onTertiary: resolvedTheme.on_tertiary
+    property color tertiaryContainer: resolvedTheme.tertiary_container
+    property color onTertiaryContainer: resolvedTheme.on_tertiary_container
+    property color background: resolvedTheme.background
+    property color onBackground: resolvedTheme.on_background
+    property color surface: resolvedTheme.surface
+    property color onSurface: resolvedTheme.on_surface
+    property color surfaceVariant: resolvedTheme.surface_variant
+    property color onSurfaceVariant: resolvedTheme.on_surface_variant
+    property color surfaceTint: resolvedTheme.surface_tint
+    property color surfaceDim: resolvedTheme.surface_dim
+    property color surfaceBright: resolvedTheme.surface_bright
+    property color surfaceContainerLowest: resolvedTheme.surface_container_lowest
+    property color surfaceContainerLow: resolvedTheme.surface_container_low
+    property color surfaceContainer: resolvedTheme.surface_container
+    property color surfaceContainerHigh: resolvedTheme.surface_container_high
+    property color surfaceContainerHighest: resolvedTheme.surface_container_highest
+    property color inverseSurface: resolvedTheme.inverse_surface
+    property color inverseOnSurface: resolvedTheme.inverse_on_surface
+    property color inversePrimary: resolvedTheme.inverse_primary
+    property color error: resolvedTheme.error
+    property color onError: resolvedTheme.on_error
+    property color errorContainer: resolvedTheme.error_container
+    property color onErrorContainer: resolvedTheme.on_error_container
+    property color outline: resolvedTheme.outline
+    property color outlineVariant: resolvedTheme.outline_variant
+    property color scrim: resolvedTheme.scrim
 
     // 派生色：没有直接对应的 scheme 字段，继续用 isDark 派生
-    // Issue #721: isDark 直接读 themeController.is_dark
     property color success: isDark ? Qt.rgba(0.561, 0.839, 0.639, 1) : Qt.rgba(0.122, 0.478, 0.271, 1)
     property color onSuccess: isDark ? Qt.rgba(0.000, 0.224, 0.114, 1) : Qt.rgba(1.000, 1.000, 1.000, 1)
     property color successContainer: isDark ? Qt.rgba(0.059, 0.353, 0.188, 1) : Qt.rgba(0.725, 0.941, 0.784, 1)
@@ -304,4 +342,16 @@ QtObject {
 
     property int animFast: 120
     property int animNormal: 200
+
+    // Issue #724 评论 5751573705 问题3: themeStateJson 变化时一次性解析并整体替换 resolvedTheme。
+    // 这是唯一的颜色更新入口，不再有独立 binding 到 themeControllerRef.*_hex。
+    onThemeStateJsonChanged: applyThemeState(themeStateJson)
+
+    // Issue #724 评论 5751573705 问题3: themeControllerRef 设置时也触发一次解析，
+    // 覆盖 main.qml 中 themeControllerRef 先于 themeStateJson 绑定的初始化顺序。
+    onThemeControllerRefChanged: applyThemeState(themeStateJson)
+
+    // Issue #724 评论 5751573705 问题3: Component.onCompleted 时应用一次当前状态，
+    // 确保初始颜色来自 theme_state_json 而非硬编码 fallback。
+    Component.onCompleted: applyThemeState(themeStateJson)
 }

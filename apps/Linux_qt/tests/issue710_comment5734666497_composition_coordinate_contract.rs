@@ -88,7 +88,7 @@ fn issue710_commit_new_snapshot_uses_candidate_range_not_preedit_range() {
     );
     // old_snapshot fallback 用 old_composition_range；new_snapshot 不能用 old_composition_range
     assert!(
-        body.contains("old_composition_range,"),
+        body.contains("old_composition_range)"),
         "commit: old_snapshot fallback 必须用 old_composition_range"
     );
     assert!(

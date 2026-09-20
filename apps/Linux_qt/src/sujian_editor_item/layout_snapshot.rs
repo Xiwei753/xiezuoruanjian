@@ -6,7 +6,19 @@
 pub(crate) use super::layout_revision::LayoutRevision;
 pub(crate) use super::snapshot_id::LineSnapshotId;
 use crate::editor::layout::{CaretAffinity, CaretRect, LayoutSnapshot};
+use cpp::cpp;
 use qmetaobject::QImage;
+
+// Issue #724 评论 5751573705 问题1: C++ 侧头文件 + 外部函数声明。
+// 每个 cpp! 块独立编译，此处必须在本文件内 include 头文件和声明 extern。
+// get_glyph_range_rect 在 qt_text_node.rs 的 cpp! 块中定义，此处 extern 声明。
+cpp! {{
+    #include <QtGui/QTextLayout>
+    extern QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
+    bool get_glyph_range_rect(uint64_t generation, int cacheSlot, int qtextlineIdx,
+                              int qcharStart, int qcharEnd,
+                              double* outX, double* outY, double* outW, double* outH);
+}}
 
 /// 一次平台排版后的不可变 glyph cluster 视觉快照。
 ///
@@ -96,6 +108,12 @@ pub(crate) struct PreparedLineSnapshot {
     /// Issue #722 评论 5750218208: 真实视觉行 bottom（= `VisualLine.y + VisualLine.height`，
     /// 文档坐标）。空行也有正确高度，不依赖 cluster。
     pub visual_line_bottom: f64,
+    /// Issue #724 评论 5751573705 问题1: 该视觉行所属段落在 C++ 缓存中的槽位，
+    /// 用于从 QTextLayout 获取精确 glyph 几何。
+    pub cache_slot: i32,
+    /// Issue #724 评论 5751573705 问题1: 该视觉行在 QTextLayout 中的行索引，
+    /// 配合 cache_slot 定位 QTextLine。
+    pub qtextline_idx: i32,
 }
 
 /// Issue #724 评论 5751268664 缺口1: cluster 相对 inserted 子范围的位置分类。
@@ -105,34 +123,35 @@ pub(crate) struct PreparedLineSnapshot {
 ///
 /// `Partial`：cluster 部分落在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
 /// 只把属于 inserted 的子片段交给 InsertReveal，旧邻字部分保持原样不进入静态层隐藏。
-/// `clipped_source_rect` 是按字节比例横向裁剪后的 source rect，`clipped_byte_start/end`
-/// 是属于 inserted 的子片段字节范围。
+/// `clipped_byte_start/end` 是属于 inserted 的子片段字节范围。
+/// `clipped_source_rect` 不在 Rust 侧用 UTF-8 byte 比例猜测——字节长度不是 glyph 宽度，
+/// 中文 UTF-8 3 字节/拉丁 1 字节/ligature/组合字符/fallback font/比例字体/RTL
+/// 都不能按 byte ratio 对应到 source rect 的 x/w。
+/// Partial 的精确 source rect 由调用方通过 `get_precise_glyph_rect_for_byte_range`
+/// 从 QTextLayout 侧获取（支持 split ligature 的实际 glyph 几何）。
 #[derive(Clone, Debug)]
 pub(crate) enum ClusterInsertRelation {
     /// cluster 完全在 inserted 范围内。
     Inside,
-    /// cluster 部分在 inserted 范围内。`clipped_source_rect` 是裁剪后的 source rect，
-    /// `clipped_byte_start/end` 是属于 inserted 的子片段字节范围。
+    /// cluster 部分在 inserted 范围内。`clipped_byte_start/end` 是属于 inserted 的
+    /// 子片段字节范围。精确 `clipped_source_rect` 由调用方从 QTextLayout 获取。
     Partial {
-        clipped_source_rect: SourceRect,
         clipped_byte_start: usize,
         clipped_byte_end: usize,
     },
 }
 
 impl LineClusterSnapshot {
-    /// Issue #724 评论 5751268664 缺口1: 判断 cluster 相对 inserted 子范围的位置，
-    /// 并对 Partial 情况按字节比例横向裁剪 source_rect。
+    /// Issue #724 评论 5751268664 缺口1: 判断 cluster 相对 inserted 子范围的位置。
     ///
-    /// 裁剪策略：cluster 的字节范围 `[byte_start, byte_end)` 与 inserted 范围
-    /// `[ins_start, ins_end)` 求交集 `[clip_start, clip_end)`。按交集在 cluster
-    /// 字节范围内的比例横向裁剪 source_rect 的 x/w：
-    /// - `left_ratio = (clip_start - byte_start) / cluster_len`
-    /// - `right_ratio = (clip_end - byte_start) / cluster_len`
-    /// - `clipped.x = source_rect.x + source_rect.w * left_ratio`
-    /// - `clipped.w = source_rect.w * (right_ratio - left_ratio)`
+    /// 返回 `Inside`（完全在 inserted 内）或 `Partial`（部分重叠）。
+    /// `Partial` 只携带 `clipped_byte_start/end` 字节范围，**不**再自己计算
+    /// `clipped_source_rect`——字节长度不是 glyph 宽度，中文 UTF-8 3 字节、
+    /// 拉丁 1 字节、ligature、组合字符、fallback font、比例字体、RTL 都不能按
+    /// byte ratio 对应到 source rect 的 x/w。
+    /// 精确的 source rect 由调用方通过 `get_precise_glyph_rect_for_byte_range`
+    /// 从 QTextLayout 侧获取（支持 split ligature 的实际 glyph 几何）。
     ///
-    /// y/h 保持不变（cluster 在垂直方向上不可分割，ligature 不会跨行）。
     /// cluster_len 为 0 时退化为 Inside（保护性 fallback）。
     pub(crate) fn relate_to_inserted_range(
         &self,
@@ -148,26 +167,13 @@ impl LineClusterSnapshot {
         if self.byte_start >= ins_start && self.byte_end <= ins_end || cluster_len == 0 {
             return Some(ClusterInsertRelation::Inside);
         }
-        // 部分重叠：计算交集并按字节比例横向裁剪 source_rect。
+        // 部分重叠：只返回字节范围，精确 source rect 由调用方从 QTextLayout 获取。
         let clip_start = self.byte_start.max(ins_start);
         let clip_end = self.byte_end.min(ins_end);
         if clip_end <= clip_start {
             return None;
         }
-        let left_ratio = (clip_start - self.byte_start) as f64 / cluster_len as f64;
-        let right_ratio = (clip_end - self.byte_start) as f64 / cluster_len as f64;
-        let left_ratio = left_ratio.clamp(0.0, 1.0);
-        let right_ratio = right_ratio.clamp(0.0, 1.0);
-        let clipped_x = self.source_rect.x + self.source_rect.w * left_ratio;
-        let clipped_w = self.source_rect.w * (right_ratio - left_ratio);
-        let clipped_source_rect = SourceRect {
-            x: clipped_x,
-            y: self.source_rect.y,
-            w: clipped_w,
-            h: self.source_rect.h,
-        };
         Some(ClusterInsertRelation::Partial {
-            clipped_source_rect,
             clipped_byte_start: clip_start,
             clipped_byte_end: clip_end,
         })
@@ -208,6 +214,76 @@ impl PreparedLineSnapshot {
         } else {
             None
         }
+    }
+
+    /// Issue #724 评论 5751573705 问题1: 从 QTextLayout 获取精确 glyph 几何。
+    ///
+    /// 给定文档字节范围 `[byte_start, byte_end)`，通过 C++/Qt QTextLayout
+    /// 获取该子范围的精确视觉矩形（支持 split ligature / 实际 glyph 几何），
+    /// 不再用 UTF-8 byte 比例猜视觉宽度。
+    ///
+    /// 参数 `generation` 来自 `EditorLayoutSnapshot.revision.0`，
+    /// `full_text` 用于把 UTF-8 byte 偏移转换为 QChar 偏移。
+    /// 返回行视觉资源局部坐标的 source rect（已乘 DPR），失败时返回 `None`。
+    pub(crate) fn get_precise_glyph_rect_for_byte_range(
+        &self,
+        generation: u64,
+        full_text: &str,
+        byte_start: usize,
+        byte_end: usize,
+    ) -> Option<SourceRect> {
+        use crate::editor::paragraph_index_map::utf8_byte_to_utf16_code_unit;
+        // 字节范围必须在本文本行内；超出时不查 QTextLayout。
+        if byte_start < self.byte_start || byte_end > self.byte_end || byte_end <= byte_start {
+            return None;
+        }
+        let qchar_start = utf8_byte_to_utf16_code_unit(full_text, byte_start);
+        let qchar_end = utf8_byte_to_utf16_code_unit(full_text, byte_end);
+        if qchar_end <= qchar_start {
+            return None;
+        }
+        let cache_slot = self.cache_slot;
+        let qtextline_idx = self.qtextline_idx;
+        // 调用 C++ 侧：从 g_paragraph_layout_cache 取 QTextLayout，
+        // 用 QTextLine::cursorToX 取精确左/右边缘，写到四个 f64 输出参数。
+        let mut rx = 0.0f64;
+        let mut ry = 0.0f64;
+        let mut rw = 0.0f64;
+        let mut rh = 0.0f64;
+        cpp!(unsafe [
+            generation as "uint64_t",
+            cache_slot as "int",
+            qtextline_idx as "int",
+            qchar_start as "int64_t",
+            qchar_end as "int64_t",
+            mut rx as "double*",
+            mut ry as "double*",
+            mut rw as "double*",
+            mut rh as "double*"
+        ] {
+            QTextLayout* layout = get_paragraph_layout(generation, cache_slot);
+            if (!layout || qtextline_idx < 0 || qtextline_idx >= layout->lineCount())
+                return;
+            QTextLine line = layout->lineAt(qtextline_idx);
+            if (qchar_start < line.textStart() || qchar_end > line.textStart() + line.textLength())
+                return;
+            qreal left = line.cursorToX(qchar_start);
+            qreal right = line.cursorToX(qchar_end);
+            if (right <= left) return;
+            *rx = line.x() + left;
+            *ry = line.y();
+            *rw = right - left;
+            *rh = line.height();
+        });
+        if rw <= 0.0 || rh <= 0.0 {
+            return None;
+        }
+        Some(SourceRect {
+            x: rx,
+            y: ry,
+            w: rw,
+            h: rh,
+        })
     }
 
     /// 将行局部物理像素 source_rect 转换为文档逻辑坐标。
@@ -386,16 +462,11 @@ mod tests {
         let c = make_cluster(0, 10, 0.0, 100.0);
         match c.relate_to_inserted_range(5, 15) {
             Some(ClusterInsertRelation::Partial {
-                clipped_source_rect,
                 clipped_byte_start,
                 clipped_byte_end,
             }) => {
                 assert_eq!(clipped_byte_start, 5);
                 assert_eq!(clipped_byte_end, 10);
-                // left_ratio = 0.5, right_ratio = 1.0
-                assert!((clipped_source_rect.x - 50.0).abs() < 0.001);
-                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
-                assert!((clipped_source_rect.h - 20.0).abs() < 0.001);
             }
             other => panic!("expected Partial, got {:?}", other),
         }
@@ -407,15 +478,11 @@ mod tests {
         let c = make_cluster(5, 15, 50.0, 100.0);
         match c.relate_to_inserted_range(0, 10) {
             Some(ClusterInsertRelation::Partial {
-                clipped_source_rect,
                 clipped_byte_start,
                 clipped_byte_end,
             }) => {
                 assert_eq!(clipped_byte_start, 5);
                 assert_eq!(clipped_byte_end, 10);
-                // left_ratio = 0.0, right_ratio = 0.5
-                assert!((clipped_source_rect.x - 50.0).abs() < 0.001);
-                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
             }
             other => panic!("expected Partial, got {:?}", other),
         }
@@ -427,15 +494,11 @@ mod tests {
         let c = make_cluster(0, 20, 0.0, 100.0);
         match c.relate_to_inserted_range(5, 15) {
             Some(ClusterInsertRelation::Partial {
-                clipped_source_rect,
                 clipped_byte_start,
                 clipped_byte_end,
             }) => {
                 assert_eq!(clipped_byte_start, 5);
                 assert_eq!(clipped_byte_end, 15);
-                // left_ratio = 0.25, right_ratio = 0.75
-                assert!((clipped_source_rect.x - 25.0).abs() < 0.001);
-                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
             }
             other => panic!("expected Partial, got {:?}", other),
         }

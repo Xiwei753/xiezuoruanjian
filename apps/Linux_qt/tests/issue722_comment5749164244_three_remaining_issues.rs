@@ -149,8 +149,9 @@ fn issue1_prepared_cursor_visual_track_saves_line_ids() {
 #[test]
 fn issue1_build_slices_pass_some_line_idx() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let insert_window = function_window(&src, "fn build_insert_reveal_slices", 3000);
-    let delete_window = function_window(&src, "fn build_delete_conceal_slices", 3000);
+    // 函数体较大，取 8000 字符确保覆盖完整调用
+    let insert_window = function_window(&src, "fn build_insert_reveal_slices", 8000);
+    let delete_window = function_window(&src, "fn build_delete_conceal_slices", 8000);
     // 修复后：传 Some(new_line.visual_line_id) / Some(old_line.visual_line_id)
     assert!(
         insert_window.contains("Some(new_line.visual_line_id)"),

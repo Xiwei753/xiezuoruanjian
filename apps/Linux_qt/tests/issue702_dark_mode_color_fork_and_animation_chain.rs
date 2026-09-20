@@ -47,25 +47,27 @@ fn issue702_design_tokens_consumes_single_theme_state_json() {
         src.contains("themeStateJson"),
         "DesignTokens 应有 themeStateJson 属性"
     );
+    // Issue #724 评论 5751573705 问题3: 改为 applyThemeState 函数原子替换 resolvedTheme，
+    // 不再用 _themeState 中间变量逐个写属性。
     assert!(
-        src.contains("_themeState"),
-        "DesignTokens 应从 _themeState 解析"
+        src.contains("applyThemeState"),
+        "DesignTokens 应用 applyThemeState 函数原子替换 resolvedTheme"
     );
+    // Issue #702: isDark 从 resolvedTheme.is_dark 读取，
+    // resolvedTheme 从 themeStateJson 解析（包含 is_dark 和 scheme），
+    // 不再分开绑定 is_dark 和 resolved_scheme_json 两个可能不同步的属性。
     assert!(
-        src.contains("themeController.is_dark"),
-        "isDark 应从 themeController.is_dark 直接读取（Issue #712）"
-    );
-    assert!(
-        !src.contains("_themeState.is_dark"),
-        "isDark 不应再从 _themeState.is_dark 读取（Issue #712）"
-    );
-    assert!(
-        src.contains("_themeState"),
-        "_themeState 应保留用于诊断输出"
+        src.contains("property bool isDark: resolvedTheme.is_dark"),
+        "isDark 应从 resolvedTheme.is_dark 读取（themeStateJson 包含 is_dark 和 scheme）"
     );
     assert!(
         !src.contains("property string resolvedSchemeJson"),
         "DesignTokens 不应再有独立的 resolvedSchemeJson 属性"
+    );
+    // resolvedTheme 整体替换后，所有派生 token 只读 resolvedTheme
+    assert!(
+        src.contains("resolvedTheme"),
+        "resolvedTheme 应作为单一事实源"
     );
 }
 

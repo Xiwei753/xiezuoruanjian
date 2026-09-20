@@ -407,18 +407,25 @@ impl SujianEditorItem {
         }
     }
 
-    /// Issue #724 评论 5751268664 缺口2: 设置自动跟随滚动锚点。
+    /// Issue #724 评论 5751573705 问题2: 设置自动跟随滚动锚点（带 target_scroll_y）。
     ///
-    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把当前 caret viewport y/h
-    /// 作为锚点传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
+    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把上一帧真正画出的 caret viewport y/h
+    /// 和当前滚动目标值传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
     /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动
     /// contentY 变化把 caret 一起拖走。
-    pub(crate) fn set_auto_follow_anchor(&mut self, anchor_y: f64, anchor_h: f64) {
+    /// 当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点，
+    /// 不再由 80ms Timer 决定生命周期。
+    pub(crate) fn set_auto_follow_anchor_with_target(
+        &mut self,
+        anchor_y: f64,
+        anchor_h: f64,
+        target_scroll_y: f64,
+    ) {
         let h = anchor_h.max(0.0);
-        if self.current_auto_follow_anchor == Some((anchor_y, h)) {
+        if self.current_auto_follow_anchor == Some((anchor_y, h, target_scroll_y)) {
             return;
         }
-        self.current_auto_follow_anchor = Some((anchor_y, h));
+        self.current_auto_follow_anchor = Some((anchor_y, h, target_scroll_y));
         // 锚点变化后立刻用新锚点重算 caret viewport 坐标，不等待下一帧。
         self.update_cursor_visual_position();
         self.request_frame_update();
@@ -538,6 +545,20 @@ impl SujianEditorItem {
 
     pub(crate) fn cursor_rect_height(&self) -> f32 {
         self.cursor_ctrl.ime_cursor_rect_h as f32
+    }
+
+    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport y。
+    ///
+    /// QML 侧 auto-follow anchor 应取此值（而非 `cursor_rect_y` = target_y），
+    /// 因为 `cursor_rect_y` 是逻辑目标位置，不是上一帧真正画出来的位置。
+    /// 动画中间态时 visual_y 与 target_y 不同，anchor 必须取视觉实际位置。
+    pub(crate) fn visual_cursor_rect_y(&self) -> f32 {
+        self.cursor_ctrl.visual_y as f32
+    }
+
+    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport h。
+    pub(crate) fn visual_cursor_rect_height(&self) -> f32 {
+        self.cursor_ctrl.visual_h as f32
     }
 
     pub(crate) fn anchor_rect_x(&self) -> f32 {

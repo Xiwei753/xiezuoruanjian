@@ -262,7 +262,8 @@ fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard(
 #[test]
 fn issue705_repro_d_click_at_does_not_release_text_transaction_cursor_ownership() {
     let src = read_src("src/sujian_editor_item/editing.rs");
-    let window = function_window(&src, "fn click_at", 2000);
+    // click_at 函数体约 50 行 × 120 字符 ≈ 6000 字符，取 8000 确保完整覆盖
+    let window = function_window(&src, "fn click_at", 8000);
     // 前提:click_at 确实是鼠标点击命中并更新逻辑 cursor 的路径
     let calls_hit_test = window.contains("self.hit_test(");
     let calls_set_selection = window.contains("set_selection(");

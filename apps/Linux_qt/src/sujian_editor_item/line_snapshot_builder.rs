@@ -65,6 +65,9 @@ impl LineSnapshotBuilder {
                     visual_line_id: line.id,
                     visual_line_top: line.y,
                     visual_line_bottom: line.y + line.height,
+                    // Issue #724 评论 5751573705 问题1: 空行也传 cache_slot + qtextline_idx。
+                    cache_slot: line.cache_slot,
+                    qtextline_idx: line.qtextline_idx,
                 });
 
                 visual_line_ordinal += 1;
@@ -114,6 +117,10 @@ impl LineSnapshotBuilder {
                 visual_line_id: line.id,
                 visual_line_top: line.y,
                 visual_line_bottom: line.y + line.height,
+                // Issue #724 评论 5751573705 问题1: 传递 cache_slot + qtextline_idx，
+                // 供 Partial cluster 从 QTextLayout 取精确 glyph 几何。
+                cache_slot: line.cache_slot,
+                qtextline_idx: line.qtextline_idx,
             });
 
             visual_line_ordinal += 1;
