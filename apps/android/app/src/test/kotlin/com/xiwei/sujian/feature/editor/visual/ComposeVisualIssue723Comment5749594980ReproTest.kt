@@ -1,6 +1,5 @@
 package com.xiwei.sujian.feature.editor.visual
 
-import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -10,9 +9,7 @@ import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
-import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
-import com.xiwei.sujian.feature.editor.layout.cursorRect
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -36,10 +33,10 @@ import org.robolectric.annotation.Config
  * 5. computeCursorParamsForPatch() 取出 cursorMotionPath，applyCursorPatch() 执行 cursorChannel = track；
  * 6. sampleVisualScene() 得到 cursorOwnedByVisual=true，自绘光标又回到旧目标。
  *
- * 修复方向：releaseVisualCursorOwnership 设置 cursorOwnershipSuppressed=true，
- * drainPendingPatchesAtFrame 传 assignCursorChannel=false，
- * applyCursorPatch 只创建 clipTracks（文字 clip 动画继续），不赋 cursorChannel（屏幕 caret 不抢回）。
- * 用户下一次真正产生新的文字输入时解除抑制。
+ * 修复方向：releaseVisualCursorOwnership 记录 suppressCursorThroughPatchId = pendingPatches.maxId，
+ * drainPendingPatchesAtFrame 按 patch.id 边界分两段：
+ * - id <= suppressCursorThroughPatchId 的旧 patch：assignCursorChannel=false，clipTracks 正常创建；
+ * - id > suppressCursorThroughPatchId 的新 patch：assignCursorChannel=true，可正常取得 caret。
  *
  * 本测试覆盖：
  * - 时序1：pending patch 带 cursor motion → 拖成非 collapsed selection → drain → cursorOwnedByVisual 保持 false
@@ -168,10 +165,11 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
             )
 
         // 构造带 wedge 的投影：在 raw offset 3 处插入一个 U+200B
-        val projectionWithWedgeAt3 = EditorSoftBreakProjection(
-            rawLength = TEXT_FABCDE.length,
-            insertPoints = listOf(3),
-        )
+        val projectionWithWedgeAt3 =
+            EditorSoftBreakProjection(
+                rawLength = TEXT_FABCDE.length,
+                insertPoints = listOf(3),
+            )
 
         // 初始 layout："abcde"，caret 在 offset 1，带 wedge 投影
         state.onAuthoritativeLayout(
@@ -324,7 +322,7 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
 
     /**
      * 时序4（评论 5749594980）：release 后用户产生新的文字输入 →
-     * cursorOwnershipSuppressed 解除 → 新 patch 可正常取得 cursor 所有权。
+     * 新 patch id > suppressCursorThroughPatchId → 新 patch 可正常取得 cursor 所有权。
      */
     @Test
     fun pendingPatchWithCursorMotion_thenRelease_thenNewTextInput_cursorOwnershipRestored() {
@@ -381,28 +379,25 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
             state.cursorOwnedByVisual.value,
         )
 
-        // 步骤5（关键）：用户产生新的文字输入 → recordLocalInput 解除抑制
-        // 注意：recordLocalInput 会清除 cursorOwnershipSuppressed
-        // 但这里不实际产生新 patch（需要新 layout 配对），只验证抑制被解除的状态
+        // 步骤5（关键）：用户产生新的文字输入 → recordLocalInput
+        // 注意：recordLocalInput 不会重置 suppressCursorThroughPatchId
+        // 新 patch 的 id 会大于 release 时记录的边界 id，自然绕过抑制。
 
         // 由于没有新的 layout 到达，无法生成新 patch。
-        // 但我们可以通过 onVisualIntent 验证抑制解除 — Core 视觉意图也会解除抑制。
-        // 这里用 recordLocalInput 验证抑制解除：
-        // recordLocalInput 本身不生成 patch，但它清除 cursorOwnershipSuppressed。
-        // 后续如果有新 patch 入队并 drain，assignCursorChannel 应为 true。
+        // 但抑制边界已记录 — 如果有新 patch 到来，其 id > suppressCursorThroughPatchId，
+        // assignCursorChannel 会是 true。
 
-        // 验证 recordLocalInput 解除抑制：用一个简化的方式 —
-        // 直接检查 state 在 recordLocalInput 后不再抑制（通过后续 drain 行为间接验证）
-        // 由于无法直接读取 cursorOwnershipSuppressed（private），用行为验证：
+        // 验证 recordLocalInput 不抛异常且状态正确转换：
 
         // 先让当前动画完成（等待足够长时间）
         val frameTimeFar = 10_000_000L
         state.sampleVisualScene(frameTimeFar)
 
-        // recordLocalInput 解除抑制
+        // recordLocalInput 不重置 suppressCursorThroughPatchId
         state.recordLocalInput(
             oldText = TEXT_FABCDE,
-            newText = TEXT_FABCDE, // 同文本，只模拟 recordLocalInput 调用解除抑制
+            // 同文本，只模拟 recordLocalInput 调用
+            newText = TEXT_FABCDE,
             oldSelection = TextRange(2, 4),
             newSelection = TextRange(2, 2),
             changes = listOf(),

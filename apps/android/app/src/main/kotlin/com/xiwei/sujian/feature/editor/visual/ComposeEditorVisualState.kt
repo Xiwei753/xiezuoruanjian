@@ -137,16 +137,20 @@ class ComposeEditorVisualState(
 
     /**
      * Issue #723 评论 5749594980：系统 caret 已被用户点击/拖选抢回 —
-     * 本批 pending patch 只允许驱动文字 clip、不允许驱动屏幕 cursor。
+     * release 之前已排队的旧 patch 只允许驱动文字 clip、不允许驱动屏幕 cursor。
      *
-     * 时序：用户输入文字 → localPatch 进入 pendingPatches → 用户马上点击 wedge/拖选 →
-     * [releaseVisualCursorOwnership] 设置 suppressed=true → 下一帧 [drainPendingPatchesAtFrame]
-     * 消费旧 patch 时传 assignCursorChannel=false → 文字 clip 动画继续（clipTracks 正常创建），
-     * 但 cursorChannel 不被赋值 → [sampleVisualScene] 的 cursorOwnedByVisual 保持 false。
+     * 时序：用户输入文字 → localPatch A 进入 pendingPatches → 用户马上点击 wedge/拖选 →
+     * [releaseVisualCursorOwnership] 记录 [suppressCursorThroughPatchId] = A.id →
+     * 下一帧 [drainPendingPatchesAtFrame] 消费旧 patch 时按 id 判断：
+     * id <= suppressCursorThroughPatchId 的旧 patch 传 assignCursorChannel=false，
+     * 文字 clip 动画继续（clipTracks 正常创建），但 cursorChannel 不被赋值。
      *
-     * 用户下一次真正产生新的文字输入（[recordLocalInput]）或 Core 视觉意图（[onVisualIntent]）时解除。
+     * 新输入（[recordLocalInput]）或 Core 视觉意图（[onVisualIntent]）产生的新 patch id 更大，
+     * 可以正常取得屏幕 caret 所有权，不改变 release 时已经记下来的旧 patch 身份。
+     *
+     * null 表示没有抑制（未调用过 releaseVisualCursorOwnership 或已无旧 patch 需要抑制）。
      */
-    private var cursorOwnershipSuppressed: Boolean = false
+    private var suppressCursorThroughPatchId: Long? = null
 
     /**
      * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
@@ -315,9 +319,8 @@ class ComposeEditorVisualState(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
     ) {
-        // Issue #723 评论 5749594980：Core 视觉意图到达，解除 caret 抑制 —
-        // 新的视觉意图可以正常取得屏幕 caret 所有权。
-        cursorOwnershipSuppressed = false
+        // Issue #723 评论 5749594980：Core 视觉意图到达，新 patch 可以正常取得屏幕 caret 所有权。
+        // 不重置 suppressCursorThroughPatchId — release 时记下来的旧 patch 身份不变。
         val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective())
         applyFrameUpdate(update)
     }
@@ -341,9 +344,8 @@ class ComposeEditorVisualState(
         newSelection: TextRange,
         changes: List<LocalInputChange>,
     ) {
-        // Issue #723 评论 5749594980：用户产生新的文字输入，解除 caret 抑制 —
-        // 新的文字 patch 可以正常取得屏幕 caret 所有权。
-        cursorOwnershipSuppressed = false
+        // Issue #723 评论 5749594980：用户产生新的文字输入，新 patch 可以正常取得屏幕 caret 所有权。
+        // 不重置 suppressCursorThroughPatchId — release 时记下来的旧 patch 身份不变。
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
@@ -1382,6 +1384,48 @@ class ComposeEditorVisualState(
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
      */
+    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionRedirect != null
+
+    /**
+     * Issue #723 评论 5749321927：交还旧的自绘 caret 所有权 —
+     *
+     * 在 [onInputSnapshotResolved] 的"跳过建新 redirect"分支（hitsWedge=true 点击 wedge，
+     * 或 selection.collapsed=false 拖动选区）中调用，把"跳过"变成"交还"：
+     * - 清 [pendingSelectionRedirect]（防止 [sampleVisualScene] 强制接管 / [drainPendingPatchesAtFrame] 消费旧 redirect）；
+     * - 记录 [suppressCursorThroughPatchId] 为当前已排队 patch 的最大 id，
+     *   标记 release 之前的旧 patch 不得再取得屏幕 caret 所有权；
+     * - 调用 [ComposeVisualTimeline.releaseVisualCursorOwnership] 清 cursorChannel
+     *   （防止下一帧 sample 产出 cursorOwnedByVisual=true；不清 clipTracks/units，文字动画继续）；
+     * - 把 [_visualScene].cursorOwnedByVisual / [_cursorOwnedByVisual] 设回 false
+     *   （交还系统 caret，WritingEditorSurface 不再透明系统 caret）；
+     * - 同步 [drawSnapshotState]（draw 层下一帧直接读到 cursorOwnedByVisual=false）。
+     */
+    private fun releaseVisualCursorOwnership() {
+        pendingSelectionRedirect = null
+        // Issue #723 评论 5749594980：记录 release 之前已排队的旧 patch 身份边界。
+        // 下一帧 drainPendingPatchesAtFrame 按 id 判断：id <= suppressCursorThroughPatchId 的旧 patch
+        // 只建 clipTracks、不赋 cursorChannel；id 更大的新 patch 可以正常取得 caret。
+        suppressCursorThroughPatchId = pendingPatches.maxOfOrNull { it.id }
+        visualTimeline.releaseVisualCursorOwnership()
+        val releasedScene = _visualScene.value.copy(cursorOwnedByVisual = false)
+        _visualScene.update { releasedScene }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
+        _cursorOwnedByVisual.value = false
+        drawSnapshotState = drawSnapshotState.copy(scene = releasedScene)
+    }
+
+    /**
+     * Issue #723 评论 5749594980：按 patch ID 边界分两段 drain pending patches。
+     *
+     * 旧 patch（id <= [suppressCursorThroughPatchId]）：只建 clipTracks，不赋 cursorChannel。
+     * 新 patch（id > [suppressCursorThroughPatchId]）：正常取得屏幕 caret 所有权。
+     *
+     * 这样 release 之前已排队的旧 patch 不会重新取得屏幕 caret，
+     * release 之后新生成的新 patch 可以正常取得新的 cursor ownership。
+     *
+     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
+     * @return 本次帧实际应用的 patch 列表。
+     */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
         if (pendingPatches.isEmpty()) {
             // #713 评论 5739986801：没有文字 patch 但可能有 pending selection redirect —
@@ -1411,40 +1455,62 @@ class ComposeEditorVisualState(
             }
             return emptyList()
         }
-        // #694 评论第 7 步：同一 VSync 不能逐笔重定向几何。
-        // 一次取完这一帧的 patch，先合成一个屏幕 transition（ComposeVisualPatchBatch.compose），
-        // 再只 visualTimeline.applyPatch() 一次。oldLayout=batch.first().oldLayout,
-        // newLayout=batch.last().newLayout, retainedMoves 只按第一份旧 layout 和最后一份新 layout 算一次。
-        val batch = mutableListOf<ComposeVisualPatch>()
-        while (pendingPatches.isNotEmpty()) {
-            val raw = pendingPatches.removeFirst()
-            // #691 评论 5679242735 修改2：用 currentMotionPolicy 替换 patch 的 motionPolicy
-            val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
-            batch.add(patch)
+        // Issue #723 评论 5749594980：按 suppressCursorThroughPatchId 边界分两段 drain。
+        // 旧 patch（id <= boundary）：只驱动文字 clip，不驱动屏幕 cursor。
+        // 新 patch（id > boundary）：正常驱动文字 clip + 屏幕 cursor。
+        val boundary = suppressCursorThroughPatchId
+        val (oldPatches, newPatches) =
+            if (boundary != null) {
+                val (olds, news) = pendingPatches.partition { it.id <= boundary }
+                Pair(olds, news)
+            } else {
+                Pair(emptyList(), pendingPatches.toList())
+            }
+        // 清 pendingPatches，后面按段重新入队
+        pendingPatches.clear()
+        val allAppliedPatches = mutableListOf<ComposeVisualPatch>()
+        // 第一段：旧 patch（release 之前已排队）— 只建 clipTracks，不赋 cursorChannel
+        if (oldPatches.isNotEmpty()) {
+            val oldBatch = mutableListOf<ComposeVisualPatch>()
+            for (raw in oldPatches) {
+                val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
+                oldBatch.add(patch)
+            }
+            val oldFramePatch = ComposeVisualPatchBatch.compose(oldBatch) ?: return emptyList()
+            val cursorParams = computeCursorParamsForPatch(oldFramePatch, fromRectOverride = null)
+            // 旧 patch：assignCursorChannel=false，不驱动屏幕 cursor
+            visualTimeline.applyPatch(
+                patch = oldFramePatch,
+                frameTimeNanos = frameTimeNanos,
+                cursorFromRect = cursorParams?.fromRect,
+                cursorPath = cursorParams?.points,
+                cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
+                assignCursorChannel = false,
+            )
+            allAppliedPatches.add(oldFramePatch)
+            // 旧 patch 消费完后清边界 — 已处理完，不再抑制后续新 patch
+            suppressCursorThroughPatchId = null
         }
-        val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
-        // #708 评论 5723410606 第二节：不再有整屏 barrier redirect —
-        // 旧 timeline 不再按"已经过去了多少真实时间"偷偷向前跑，也不再从 baseScene 重定向。
-        // 首帧 scene 已由 onAuthoritativeLayout 建立，timeline.applyPatch 直接从当前 timeline 状态继续。
-        // 光标起点用 patch.originCursorRect / oldLayout，不从已删除的 baseScene.cursorRect 猜起点。
-        val cursorParams = computeCursorParamsForPatch(framePatch, fromRectOverride = null)
-        // Issue #723 评论 5749594980：caret 已被用户点击/拖选抢回时，旧 pending patch
-        // 只允许驱动文字 clip（clipTracks 正常创建），不允许驱动屏幕 cursor（不赋 cursorChannel）。
-        // 文字吞字/吐字动画继续，但 cursorOwnedByVisual 保持 false，屏幕 caret 留给 BasicTextField。
-        val assignCursorChannel = !cursorOwnershipSuppressed
-        visualTimeline.applyPatch(
-            patch = framePatch,
-            frameTimeNanos = frameTimeNanos,
-            cursorFromRect = cursorParams?.fromRect,
-            cursorPath = cursorParams?.points,
-            cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
-            assignCursorChannel = assignCursorChannel,
-        )
-        // #708 评论 5723410606 第二节：配对完成后清 handoff —
-        // 不再有"matching layout/local patch 到齐、timeline 从 barrier.baseScene redirect"的步骤，
-        // timeline.applyPatch 已直接处理，sample 出同一 frame 的新 scene 后清 handoff。
-        // #708 评论 5724568261 缺口1：pendingLocalEditHandoff 已删除（死状态），
-        // 首帧 scene 由 publishLocalHandoffScene 直接发布，无需在此清理。
+        // 第二段：新 patch（release 之后新生成）— 正常取得屏幕 caret 所有权
+        if (newPatches.isNotEmpty()) {
+            val newBatch = mutableListOf<ComposeVisualPatch>()
+            for (raw in newPatches) {
+                val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
+                newBatch.add(patch)
+            }
+            val newFramePatch = ComposeVisualPatchBatch.compose(newBatch) ?: return emptyList()
+            val cursorParams = computeCursorParamsForPatch(newFramePatch, fromRectOverride = null)
+            // 新 patch：assignCursorChannel=true，正常驱动屏幕 cursor
+            visualTimeline.applyPatch(
+                patch = newFramePatch,
+                frameTimeNanos = frameTimeNanos,
+                cursorFromRect = cursorParams?.fromRect,
+                cursorPath = cursorParams?.points,
+                cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
+                assignCursorChannel = true,
+            )
+            allAppliedPatches.add(newFramePatch)
+        }
         // #713 评论 5739986801：先处理文字 patch；再处理最新 selection cursor redirect；
         // selection redirect 最后应用，保证"用户刚点的新位置"不会又被前一笔迟到的文字 patch 抢回去。
         val redirect = pendingSelectionRedirect
@@ -1470,61 +1536,11 @@ class ComposeEditorVisualState(
                 toY = redirect.targetRect.top,
             )
         }
-        return listOf(framePatch)
+        return allAppliedPatches
     }
 
     /**
-     * 是否还有待处理的 patch — overlay 据此决定是否继续推进帧时钟。
-     *
-     * #713 评论 5740279418：pendingSelectionRedirect 也算 pending —
-     * 否则 redirect 到达帧循环边缘时仍可能提前停。
-     */
-    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionRedirect != null
-
-    /**
-     * Issue #723 评论 5749321927：交还旧的自绘 caret 所有权 —
-     *
-     * 在 [onInputSnapshotResolved] 的"跳过建新 redirect"分支（hitsWedge=true 点击 wedge，
-     * 或 selection.collapsed=false 拖动选区）中调用，把"跳过"变成"交还"：
-     * - 清 [pendingSelectionRedirect]（防止 [sampleVisualScene] 强制接管 / [drainPendingPatchesAtFrame] 消费旧 redirect）；
-     * - 调用 [ComposeVisualTimeline.releaseVisualCursorOwnership] 清 cursorChannel
-     *   （防止下一帧 sample 产出 cursorOwnedByVisual=true；不清 clipTracks/units，文字动画继续）；
-     * - 把 [_visualScene].cursorOwnedByVisual / [_cursorOwnedByVisual] 设回 false
-     *   （交还系统 caret，WritingEditorSurface 不再透明系统 caret）；
-     * - 同步 [drawSnapshotState]（draw 层下一帧直接读到 cursorOwnedByVisual=false）。
-     */
-    private fun releaseVisualCursorOwnership() {
-        pendingSelectionRedirect = null
-        // Issue #723 评论 5749594980：标记当前已排队的 pending patch 不得再取得屏幕 caret 所有权。
-        // 下一帧 drainPendingPatchesAtFrame 消费旧 patch 时传 assignCursorChannel=false，
-        // 文字 clip 动画继续，但 cursorChannel 不被赋值，cursorOwnedByVisual 保持 false。
-        cursorOwnershipSuppressed = true
-        visualTimeline.releaseVisualCursorOwnership()
-        val releasedScene = _visualScene.value.copy(cursorOwnedByVisual = false)
-        _visualScene.update { releasedScene }
-        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
-        _cursorOwnedByVisual.value = false
-        drawSnapshotState = drawSnapshotState.copy(scene = releasedScene)
-    }
-
-    /**
-     * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里应用 patch 到 timeline。
-     *
-     * 已废弃 — 请改用 [drainPendingPatchesAtFrame]。
-     * 保留此方法是为了兼容旧调用路径。
-     *
-     * @param patch 要应用的屏幕 diff。
-     * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
-     */
-    fun applyVisualPatchAtFrame(
-        patch: ComposeVisualPatch,
-        frameTimeNanos: Long,
-    ) {
-        visualTimeline.applyPatch(patch, frameTimeNanos)
-    }
-
-    /**
-     * #689 评论 5674631257 步骤7：采样当前视觉场景 — overlay 在每帧 draw 前调用。
+     * #689 评论 5674631257 步骤7：在 Compose 帧时钟的回调里采样当前视觉场景 — overlay 在每帧 draw 前调用。
      *
      * 每次 sample 后把结果同步给 [_visualScene]。
      * #698 评论 5697612595：不再把 [ComposeVisualScene.hiddenRanges] 同步给对外的 hiddenRanges StateFlow —
@@ -1736,6 +1752,8 @@ class ComposeEditorVisualState(
         pendingSelectionRedirect = null
         // #713 评论 5740279418：重置 cursorAnimating 边沿检测状态
         lastSampledCursorAnimating = false
+        // Issue #723 评论 5749594980：重置旧 patch cursor 抑制边界
+        suppressCursorThroughPatchId = null
     }
 
     /**
