@@ -33,7 +33,9 @@ use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
+use super::layout_snapshot::{
+    ClusterInsertRelation, EditorLayoutSnapshot, LineSnapshotId, SourceRect,
+};
 // Issue #710 评论 5731145076 症状六: 导入 compute_affected_paragraph_ranges
 // 用于计算事务的 visual_affected_byte_range（基于段落边界扩展）。
 pub(crate) use super::render_plan::{
@@ -626,45 +628,61 @@ fn build_insert_reveal_slices(
 
     for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
-            // Issue #724 评论 5750911834 问题 1: cluster 匹配条件改为 overlap 判断，
-            // 允许部分落在 inserted_range 边界的 cluster（ligature 拆分、跨行 cluster）。
-            // 旧逻辑 `byte_start >= range_start && byte_end <= range_end` 会丢弃部分
-            // 落在边界的 cluster，导致 Insert 事务 unit_kinds=""、没有真正 InsertReveal。
-            // overlap 语义：cluster 的 byte range 与 inserted_range 有重叠即纳入。
-            if new_cluster.byte_start < range_end && new_cluster.byte_end > range_start {
-                // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
-                // 这些非可见字符不应创建 InsertReveal 和 static patch，
-                // 避免文字前插空格闪一下/手动换行闪一下。
-                // 已有文字位移交给 ReflowMove，caret 走 canonical track。
-                let cluster_text = new_snapshot
-                    .virtual_text
-                    .get(new_cluster.byte_start..new_cluster.byte_end)
-                    .unwrap_or("");
-                if cluster_text
-                    .chars()
-                    .all(|c| c.is_whitespace() || c.is_control())
-                {
-                    continue;
-                }
-                let new_sr = new_cluster.source_rect.clone();
-                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-                slices.push(AnimatedSlice::insert_reveal(
-                    key,
-                    new_line.id,
-                    new_sr.clone(),
-                    new_doc,
-                    0.0,
-                    0.0,
+            // Issue #724 评论 5751268664 缺口1: 用 Inside/Partial 分类替代 overlap 整块消费。
+            // - Inside：cluster 完全在 inserted 范围内，整个 cluster 进入 InsertReveal + static hide。
+            // - Partial：cluster 部分在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
+            //   只把属于 inserted 的子片段（clipped source rect）交给 InsertReveal + static hide，
+            //   旧邻字部分保持原样不进入 static hide，避免整个 cluster 被当成新插入文字。
+            // - 不相交：跳过，不参与 InsertReveal，不进入 static hide。
+            let relation = match new_cluster.relate_to_inserted_range(range_start, range_end) {
+                Some(r) => r,
+                None => continue,
+            };
+            // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
+            // 这些非可见字符不应创建 InsertReveal 和 static patch，
+            // 避免文字前插空格闪一下/手动换行闪一下。
+            // 已有文字位移交给 ReflowMove，caret 走 canonical track。
+            let cluster_text = new_snapshot
+                .virtual_text
+                .get(new_cluster.byte_start..new_cluster.byte_end)
+                .unwrap_or("");
+            if cluster_text
+                .chars()
+                .all(|c| c.is_whitespace() || c.is_control())
+            {
+                continue;
+            }
+            // Issue #724 评论 5751268664 缺口1: Inside 用整个 source_rect，
+            // Partial 用 clipped_source_rect + clipped_byte_range。
+            let (new_sr, slice_byte_start, slice_byte_end) = match relation {
+                ClusterInsertRelation::Inside => (
+                    new_cluster.source_rect.clone(),
                     new_cluster.byte_start,
                     new_cluster.byte_end,
-                    Some(new_cluster.shaping_identity.clone()),
-                    // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
-                    // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
-                    // managed_new_clusters/patches_by_line 的局部索引。
-                    Some(new_line.visual_line_id),
-                ));
-                managed_new_clusters.push((line_idx, cluster_idx, new_sr));
-            }
+                ),
+                ClusterInsertRelation::Partial {
+                    clipped_source_rect,
+                    clipped_byte_start,
+                    clipped_byte_end,
+                } => (clipped_source_rect, clipped_byte_start, clipped_byte_end),
+            };
+            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+            slices.push(AnimatedSlice::insert_reveal(
+                key,
+                new_line.id,
+                new_sr.clone(),
+                new_doc,
+                0.0,
+                0.0,
+                slice_byte_start,
+                slice_byte_end,
+                Some(new_cluster.shaping_identity.clone()),
+                // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
+                // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
+                // managed_new_clusters/patches_by_line 的局部索引。
+                Some(new_line.visual_line_id),
+            ));
+            managed_new_clusters.push((line_idx, cluster_idx, new_sr));
         }
     }
 

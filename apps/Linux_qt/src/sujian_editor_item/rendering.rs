@@ -102,7 +102,24 @@ impl SujianEditorItem {
     ///   不依赖任何正文事务。
     /// 两条时间线互斥，不为了修可见性再引入第二套光标动画。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
-        let scroll_y = f64::from(self.current_scroll_y);
+        // Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间使用屏幕锚点替代
+        // current_scroll_y 算 caret viewport 坐标。QML 侧 begin_auto_follow_scroll()
+        // 调 set_auto_follow_anchor(y, h) 把滚动前上一帧实际画出的 caret viewport y/h 传进来，
+        // contentY 变化时 caret 仍画在锚点位置，不被滚动拖走。end_auto_follow_scroll()
+        // 调 clear_auto_follow_anchor() 释放锚点，恢复使用 current_scroll_y。
+        let scroll_y = match self.current_auto_follow_anchor {
+            Some((_anchor_y, _anchor_h)) => {
+                // 锚点存在时，editor_layout_cursor_rect 仍用真实 scroll_y 算文档坐标，
+                // 但 build_cursor_plan 收到的 cursor_y 改为锚点 y，让 caret 画在锚点位置。
+                // 这里通过把 scroll_y 替换为"使 caret viewport y 等于 anchor_y"的等效值实现：
+                // caret_doc_y - effective_scroll_y = anchor_y → effective_scroll_y = caret_doc_y - anchor_y
+                // 但 caret_doc_y 依赖 scroll_y，这里先用真实 scroll_y 算一次 caret_doc_y，
+                // 再用 anchor_y 反推 effective_scroll_y。
+                // 简化实现：直接用真实 scroll_y 算文档坐标，build_cursor_plan 收到 anchor_y 作为 cursor_y。
+                f64::from(self.current_scroll_y)
+            }
+            None => f64::from(self.current_scroll_y),
+        };
         let layout_res =
             self.editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y);
 
@@ -110,6 +127,13 @@ impl SujianEditorItem {
         let cursor_y = layout_res.y;
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
+
+        // Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间用锚点 y/h 替代
+        // 当前 scroll_y 算出的 viewport y/h，让 caret 画在锚点位置。
+        let (cursor_y, cursor_h) = match self.current_auto_follow_anchor {
+            Some((anchor_y, anchor_h)) => (anchor_y, anchor_h.max(cursor_h)),
+            None => (cursor_y, cursor_h),
+        };
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;

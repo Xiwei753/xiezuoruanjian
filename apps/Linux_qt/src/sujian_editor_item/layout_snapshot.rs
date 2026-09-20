@@ -98,6 +98,82 @@ pub(crate) struct PreparedLineSnapshot {
     pub visual_line_bottom: f64,
 }
 
+/// Issue #724 评论 5751268664 缺口1: cluster 相对 inserted 子范围的位置分类。
+///
+/// `Inside`：cluster 完全落在 inserted 范围内，整个 cluster 都是新插入文字，
+/// 进入 InsertReveal 动画 + 静态层隐藏。
+///
+/// `Partial`：cluster 部分落在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
+/// 只把属于 inserted 的子片段交给 InsertReveal，旧邻字部分保持原样不进入静态层隐藏。
+/// `clipped_source_rect` 是按字节比例横向裁剪后的 source rect，`clipped_byte_start/end`
+/// 是属于 inserted 的子片段字节范围。
+#[derive(Clone, Debug)]
+pub(crate) enum ClusterInsertRelation {
+    /// cluster 完全在 inserted 范围内。
+    Inside,
+    /// cluster 部分在 inserted 范围内。`clipped_source_rect` 是裁剪后的 source rect，
+    /// `clipped_byte_start/end` 是属于 inserted 的子片段字节范围。
+    Partial {
+        clipped_source_rect: SourceRect,
+        clipped_byte_start: usize,
+        clipped_byte_end: usize,
+    },
+}
+
+impl LineClusterSnapshot {
+    /// Issue #724 评论 5751268664 缺口1: 判断 cluster 相对 inserted 子范围的位置，
+    /// 并对 Partial 情况按字节比例横向裁剪 source_rect。
+    ///
+    /// 裁剪策略：cluster 的字节范围 `[byte_start, byte_end)` 与 inserted 范围
+    /// `[ins_start, ins_end)` 求交集 `[clip_start, clip_end)`。按交集在 cluster
+    /// 字节范围内的比例横向裁剪 source_rect 的 x/w：
+    /// - `left_ratio = (clip_start - byte_start) / cluster_len`
+    /// - `right_ratio = (clip_end - byte_start) / cluster_len`
+    /// - `clipped.x = source_rect.x + source_rect.w * left_ratio`
+    /// - `clipped.w = source_rect.w * (right_ratio - left_ratio)`
+    ///
+    /// y/h 保持不变（cluster 在垂直方向上不可分割，ligature 不会跨行）。
+    /// cluster_len 为 0 时退化为 Inside（保护性 fallback）。
+    pub(crate) fn relate_to_inserted_range(
+        &self,
+        ins_start: usize,
+        ins_end: usize,
+    ) -> Option<ClusterInsertRelation> {
+        // 不相交：完全在 inserted 范围外，不参与 InsertReveal。
+        if self.byte_end <= ins_start || self.byte_start >= ins_end {
+            return None;
+        }
+        let cluster_len = self.byte_end.saturating_sub(self.byte_start);
+        // 完全包含：整个 cluster 都是新插入文字。
+        if self.byte_start >= ins_start && self.byte_end <= ins_end || cluster_len == 0 {
+            return Some(ClusterInsertRelation::Inside);
+        }
+        // 部分重叠：计算交集并按字节比例横向裁剪 source_rect。
+        let clip_start = self.byte_start.max(ins_start);
+        let clip_end = self.byte_end.min(ins_end);
+        if clip_end <= clip_start {
+            return None;
+        }
+        let left_ratio = (clip_start - self.byte_start) as f64 / cluster_len as f64;
+        let right_ratio = (clip_end - self.byte_start) as f64 / cluster_len as f64;
+        let left_ratio = left_ratio.clamp(0.0, 1.0);
+        let right_ratio = right_ratio.clamp(0.0, 1.0);
+        let clipped_x = self.source_rect.x + self.source_rect.w * left_ratio;
+        let clipped_w = self.source_rect.w * (right_ratio - left_ratio);
+        let clipped_source_rect = SourceRect {
+            x: clipped_x,
+            y: self.source_rect.y,
+            w: clipped_w,
+            h: self.source_rect.h,
+        };
+        Some(ClusterInsertRelation::Partial {
+            clipped_source_rect,
+            clipped_byte_start: clip_start,
+            clipped_byte_end: clip_end,
+        })
+    }
+}
+
 impl PreparedLineSnapshot {
     /// 聚合与 `byte_start..byte_end` 相交的所有 cluster 的 `source_rect`。
     /// 相交语义：cluster 的 byte range 与查询 range 有重叠即纳入。
@@ -270,5 +346,98 @@ mod tests {
         let mut b = a.clone();
         b.glyph_indexes_hash = 200;
         assert!(!a.is_same_shaping(&b));
+    }
+
+    /// Issue #724 评论 5751268664 缺口1: cluster 相对 inserted 子范围分类 + clipped source rect。
+    fn make_cluster(byte_start: usize, byte_end: usize, x: f64, w: f64) -> LineClusterSnapshot {
+        LineClusterSnapshot {
+            byte_start,
+            byte_end,
+            source_rect: SourceRect { x, y: 0.0, w, h: 20.0 },
+            shaping_identity: ShapingIdentity {
+                text_content_hash: 0,
+                raw_font_fingerprint: String::new(),
+                glyph_indexes_hash: 0,
+                cluster_glyph_count: 0,
+                direction_rtl: false,
+                format_fingerprint: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn test_relate_to_inserted_range_disjoint() {
+        let c = make_cluster(0, 3, 0.0, 30.0);
+        assert!(c.relate_to_inserted_range(5, 8).is_none());
+    }
+
+    #[test]
+    fn test_relate_to_inserted_range_inside() {
+        let c = make_cluster(5, 8, 50.0, 30.0);
+        match c.relate_to_inserted_range(0, 10) {
+            Some(ClusterInsertRelation::Inside) => {}
+            other => panic!("expected Inside, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_relate_to_inserted_range_partial_left_clip() {
+        // cluster [0, 10), inserted [5, 15) → 交集 [5, 10)，左半被裁掉
+        let c = make_cluster(0, 10, 0.0, 100.0);
+        match c.relate_to_inserted_range(5, 15) {
+            Some(ClusterInsertRelation::Partial {
+                clipped_source_rect,
+                clipped_byte_start,
+                clipped_byte_end,
+            }) => {
+                assert_eq!(clipped_byte_start, 5);
+                assert_eq!(clipped_byte_end, 10);
+                // left_ratio = 0.5, right_ratio = 1.0
+                assert!((clipped_source_rect.x - 50.0).abs() < 0.001);
+                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
+                assert!((clipped_source_rect.h - 20.0).abs() < 0.001);
+            }
+            other => panic!("expected Partial, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_relate_to_inserted_range_partial_right_clip() {
+        // cluster [5, 15), inserted [0, 10) → 交集 [5, 10)，右半被裁掉
+        let c = make_cluster(5, 15, 50.0, 100.0);
+        match c.relate_to_inserted_range(0, 10) {
+            Some(ClusterInsertRelation::Partial {
+                clipped_source_rect,
+                clipped_byte_start,
+                clipped_byte_end,
+            }) => {
+                assert_eq!(clipped_byte_start, 5);
+                assert_eq!(clipped_byte_end, 10);
+                // left_ratio = 0.0, right_ratio = 0.5
+                assert!((clipped_source_rect.x - 50.0).abs() < 0.001);
+                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
+            }
+            other => panic!("expected Partial, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_relate_to_inserted_range_partial_middle_clip() {
+        // cluster [0, 20), inserted [5, 15) → 交集 [5, 15)，左右各裁掉 1/4
+        let c = make_cluster(0, 20, 0.0, 100.0);
+        match c.relate_to_inserted_range(5, 15) {
+            Some(ClusterInsertRelation::Partial {
+                clipped_source_rect,
+                clipped_byte_start,
+                clipped_byte_end,
+            }) => {
+                assert_eq!(clipped_byte_start, 5);
+                assert_eq!(clipped_byte_end, 15);
+                // left_ratio = 0.25, right_ratio = 0.75
+                assert!((clipped_source_rect.x - 25.0).abs() < 0.001);
+                assert!((clipped_source_rect.w - 50.0).abs() < 0.001);
+            }
+            other => panic!("expected Partial, got {:?}", other),
+        }
     }
 }

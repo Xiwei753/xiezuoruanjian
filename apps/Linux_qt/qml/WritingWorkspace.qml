@@ -786,23 +786,35 @@ Rectangle {
                             }
                         }
 
-                        // Issue #693 评论 5689819383: 光标自动跟随滚动。
+                        // Issue #724 评论 5751268664 缺口2: 光标自动跟随滚动。
                         // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
                         // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
                         // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
                         // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
                         // Scene Graph 和 IME 继续使用同一滚动位置。
-                        // Issue #724 评论 5750911834 问题 2: 引入 begin/end_auto_follow_scroll()
-                        // 协调自动跟随滚动。自动跟随滚动期间标记 is_auto_following，
-                        // 不把 scroll_y 直接作用到 caret viewport 坐标，避免光标被滚动拖走。
+                        // Issue #724 评论 5751268664 缺口2: begin/end_auto_follow_scroll()
+                        // 真正把屏幕锚点传进 Rust 渲染链。begin 时把当前 caret viewport y/h
+                        // 作为锚点调 sujianEditor.set_auto_follow_anchor(y, h)，Rust 在
+                        // auto-follow 期间用此锚点算 caret viewport 坐标，不被 contentY 拖走。
+                        // end 时调 sujianEditor.clear_auto_follow_anchor() 释放锚点。
                         property bool is_auto_following: false
 
                         function begin_auto_follow_scroll() {
+                            if (is_auto_following)
+                                return
                             is_auto_following = true
+                            // 把当前 caret viewport y/h 作为锚点传进 Rust。
+                            // cursor_rect_y/height 是 Rust 已算好的 viewport 坐标。
+                            sujianEditor.set_auto_follow_anchor(
+                                sujianEditor.cursor_rect_y,
+                                sujianEditor.cursor_rect_height)
                         }
 
                         function end_auto_follow_scroll() {
+                            if (!is_auto_following)
+                                return
                             is_auto_following = false
+                            sujianEditor.clear_auto_follow_anchor()
                         }
 
                         function ensureCursorVisible() {
@@ -860,8 +872,13 @@ Rectangle {
                             id: scrollAnimationReleaseTimer
                             interval: 80
                             repeat: false
-                            // Issue #724 评论 5750911834 问题 2: 滚动结束后恢复
-                            // is_auto_following 标记，让光标动画恢复正常。
+                            // Issue #724 评论 5751268664 缺口2: 滚动结束后恢复
+                            // is_auto_following 标记并释放 Rust 侧 auto-follow anchor。
+                            // 80ms timer 触发时调 end_auto_follow_scroll()，
+                            // 它会调 sujianEditor.clear_auto_follow_anchor() 释放锚点，
+                            // 下一帧 caret 恢复使用 current_scroll_y 算 viewport 坐标。
+                            // 这保证"到达 target scroll 后保留一帧锚点再释放"——
+                            // timer 80ms 给滚动动画一帧落地时间，释放后 caret 才 snap 到新位置。
                             onTriggered: {
                                 editorScroll.editorAnimationSuppressed = false
                                 editorScroll.end_auto_follow_scroll()

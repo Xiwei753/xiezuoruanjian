@@ -407,6 +407,38 @@ impl SujianEditorItem {
         }
     }
 
+    /// Issue #724 评论 5751268664 缺口2: 设置自动跟随滚动锚点。
+    ///
+    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把当前 caret viewport y/h
+    /// 作为锚点传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
+    /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动
+    /// contentY 变化把 caret 一起拖走。
+    pub(crate) fn set_auto_follow_anchor(&mut self, anchor_y: f64, anchor_h: f64) {
+        let h = anchor_h.max(0.0);
+        if self.current_auto_follow_anchor == Some((anchor_y, h)) {
+            return;
+        }
+        self.current_auto_follow_anchor = Some((anchor_y, h));
+        // 锚点变化后立刻用新锚点重算 caret viewport 坐标，不等待下一帧。
+        self.update_cursor_visual_position();
+        self.request_frame_update();
+    }
+
+    /// Issue #724 评论 5751268664 缺口2: 清除自动跟随滚动锚点。
+    ///
+    /// QML 侧 `end_auto_follow_scroll()` 调此方法释放锚点。之后
+    /// `update_cursor_visual_position` 恢复使用 `current_scroll_y` 算坐标。
+    pub(crate) fn clear_auto_follow_anchor(&mut self) {
+        if self.current_auto_follow_anchor.is_none() {
+            return;
+        }
+        self.current_auto_follow_anchor = None;
+        self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
+    }
+
     pub(crate) fn is_loading(&self) -> bool {
         self.current_is_loading
     }

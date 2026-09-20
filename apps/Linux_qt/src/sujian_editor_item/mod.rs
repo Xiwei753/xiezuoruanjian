@@ -295,6 +295,13 @@ pub struct SujianEditorItem {
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
+    /// Issue #724 评论 5751268664 缺口2: 自动跟随滚动锚点 setter/clearer。
+    /// QML 侧 begin_auto_follow_scroll() 调 set_auto_follow_anchor(y, h)，
+    /// end_auto_follow_scroll() 调 clear_auto_follow_anchor()。
+    #[allow(dead_code)]
+    set_auto_follow_anchor: qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64)),
+    #[allow(dead_code)]
+    clear_auto_follow_anchor: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
     #[allow(dead_code)]
@@ -458,6 +465,14 @@ pub struct SujianEditorItem {
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
+    /// Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间的 caret viewport 锚点。
+    ///
+    /// `Some((anchor_y, anchor_h))` 表示自动跟随滚动期间应使用的 caret viewport y/h，
+    /// `update_cursor_visual_position` 用此值替代 `current_scroll_y` 算 caret viewport 坐标，
+    /// 避免滚动 contentY 变化把 caret 一起拖走。QML 侧 `begin_auto_follow_scroll()` 调
+    /// `set_auto_follow_anchor(y, h)` 设置锚点，`end_auto_follow_scroll()` 调
+    /// `clear_auto_follow_anchor()` 释放锚点。
+    current_auto_follow_anchor: Option<(f64, f64)>,
     current_is_loading: bool,
     current_is_applying_format: bool,
     last_summary: QString,
@@ -575,6 +590,8 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
+            set_auto_follow_anchor: Default::default(),
+            clear_auto_follow_anchor: Default::default(),
             register_text_target_qml: Default::default(),
             register_secret_target_qml: Default::default(),
             register_search_target_qml: Default::default(),
@@ -611,6 +628,7 @@ impl Default for SujianEditorItem {
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,
+            current_auto_follow_anchor: None,
             current_is_loading: false,
             current_is_applying_format: false,
             last_summary: Default::default(),
