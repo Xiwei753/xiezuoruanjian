@@ -3058,10 +3058,26 @@ impl CanonicalDocumentVisualSnapshot {
 
         let cursor_qchar = byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
 
-        let canonical_line = para
-            .lines
-            .iter()
-            .find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end);
+        // Issue #722 评论 5747719529 改法 3: 软换行边界必须使用已经选中的那条
+        // QTextLine，不要用包含区间 find。软换行边界同时等于上一行 end 和下一行
+        // start，包含区间 find 会先命中上一行，再把上一行行尾 X 套到下一行 Y。
+        // 直接使用已选中的 line.qtextline_idx：从对应 paragraph 的
+        // canonical.lines[line.qtextline_idx as usize] 取 cursor_x_map，再按
+        // CaretAffinity::Leading/Trailing 取这一条实际视觉行上的 X。静态布局路径
+        // 本来就是按 qtextline_idx + QTextLine::cursorToX() 算，canonical 动画路径
+        // 必须和它完全一致。
+        let canonical_line: Option<&CanonicalLineSnapshot> =
+            if line.qtextline_idx >= 0 && (line.qtextline_idx as usize) < para.lines.len() {
+                // explicit_line: 直接用已选中的视觉行的 qtextline_idx 索引 canonical lines。
+                let indexed_line = &para.lines[line.qtextline_idx as usize];
+                Some(indexed_line)
+            } else {
+                // qtextline_idx 无效时回退到按 qchar 范围匹配（半开区间，避免软换行
+                // 边界同时命中两行）。只在 qtextline_idx 未被正确设置时才会走到这里。
+                para.lines.iter().find(|cl| {
+                    cl.qchar_start <= cursor_qchar && cursor_qchar < cl.qchar_end
+                })
+            };
 
         match canonical_line {
             Some(cl) => {

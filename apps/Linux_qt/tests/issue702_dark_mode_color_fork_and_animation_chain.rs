@@ -231,13 +231,16 @@ fn issue702_delete_conceal_has_same_frame_progress() {
         "应存在 DeleteConceal"
     );
     assert!(src.contains("InsertReveal"), "应存在 InsertReveal");
+    // Issue #722 评论 5747719529 修正：光标由 caret track 插值决定，不再从文字 glyph
+    // 反推。delete_unit_progress 已删除，改为检查 caret track 插值的存在性。
     assert!(
-        src.contains("delete_unit_progress"),
-        "应有 delete_unit_progress"
+        src.contains("sample_caret_driven_clip") || src.contains("sampled_rect"),
+        "caret track 应使用 sampled_rect 插值（issue722 评论 5747719529）"
     );
+    let tx_src = read_src("src/sujian_editor_item/text_visual_transaction.rs");
     assert!(
-        src.contains("sampled_rect_at_progress"),
-        "caret track 应用 sampled_rect_at_progress"
+        tx_src.contains("sampled_rect_at_progress"),
+        "caret track 应有 sampled_rect_at_progress 方法定义"
     );
 }
 

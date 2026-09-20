@@ -108,6 +108,16 @@ impl TransactionTimeline {
 
 /// Issue #690 评论 5675007226 步骤 3: 单个视觉单元，拥有自己的动画生命期。
 ///
+/// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界。
+/// 文字不能再维护一套会和 caret 分叉的"自己什么时候完全出现/完全消失"的位置/
+/// 可见度进度。真正决定当前 reveal/conceal 截止位置的是这一帧的 caret geometry
+/// （caret_geometry_determines_clip / clip_from_coordinated_caret）。
+/// `PreparedVisualUnit` 的 `started_at` / `duration_ms` 仅用于 reflow/crossfade
+/// 的几何插值时间线；InsertReveal/DeleteConceal 的裁切边界直接消费本帧
+/// coordinated caret 的位置（`compute_frame_caret_driven`），不再由 unit 自己的
+/// `current_visible_fraction` 驱动。caret 与文字使用同一个 frame_now 和同一个
+/// from→to 几何轨迹，快速 rebase 时先采样当前 caret 边界作为下一段动画起点。
+///
 /// 不再让整笔 `PreparedTextVisualTransaction` 单一的 `TransactionTimeline` 同时驱动
 /// 所有 slice 的 0→1。每个 unit 保存自己的 `started_at` / `duration_ms`，从自己的
 /// 时间线计算 progress；`start_fraction` / `target_fraction` 描述这一帧单元在
@@ -302,30 +312,12 @@ impl PreparedCursorVisualTrack {
         }
     }
 
-    /// 与文字帧同一条 easing（`AnimatedSlice::ease_out_quad`）。
-    pub fn eased(&self, now: Instant) -> f64 {
-        AnimatedSlice::ease_out_quad(self.progress(now))
-    }
-
-    /// 在 `now` 时刻按 `from -> to` 插值采样当前屏幕 caret rect。
-    pub fn sampled_rect(&self, now: Instant) -> CursorRect {
-        let eased = self.eased(now);
-        let x = self.from.x + (self.to.x - self.from.x) * eased;
-        let top = self.from.top + (self.to.top - self.from.top) * eased;
-        let h = self.to.bottom - self.to.top;
-        CursorRect {
-            x,
-            top,
-            bottom: top + h,
-            // Issue #712 评论 5739517945 第 2 项: baseline_y 从 from 到 to 插值，
-            // 不再直接取 to.baseline_y，消除垂直动画跳终点。
-            baseline_y: self.from.baseline_y + (self.to.baseline_y - self.from.baseline_y) * eased,
-        }
-    }
-
     /// Issue #702: 用外部传入的 progress（来自文字 unit 的可见进度）采样 caret rect，
     /// 而非 caret track 自己的 timeline。消除删除事务里 caret track 与 DeleteConceal
     /// unit 帧基准分叉导致的"光标先完成、旧字晚消失"错拍。
+    /// Issue #722 评论 5747719529: 此方法是 caret track 的主路径 API，
+    /// `sample_caret_driven_clip` 和 `sample_coordinated_cursor_rect_at` 均通过
+    /// `sampled_rect_at_progress(progress(now))` 调用。
     pub fn sampled_rect_at_progress(&self, progress: f64) -> CursorRect {
         let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
         let x = self.from.x + (self.to.x - self.from.x) * eased;
@@ -388,8 +380,31 @@ impl PreparedCursorVisualTrack {
 /// Issue #701 评论 5699573227: `rebase_to` 仅在测试中直接调用（生产代码走
 /// `build_cursor_visual_track` 的 handoff 分支，逻辑等价）。放在 `#[cfg(test)]`
 /// impl 块里，避免 clippy 误报 dead_code，也不需要 `#[allow(dead_code)]`。
+/// Issue #722 评论 5747719529: `eased` 和 `sampled_rect` 也仅在此 `#[cfg(test)]`
+/// 块中被 `rebase_to` 调用，主路径改用 `sampled_rect_at_progress(progress(now))`。
 #[cfg(test)]
 impl PreparedCursorVisualTrack {
+    /// 与文字帧同一条 easing（`AnimatedSlice::ease_out_quad`）。
+    pub fn eased(&self, now: Instant) -> f64 {
+        AnimatedSlice::ease_out_quad(self.progress(now))
+    }
+
+    /// 在 `now` 时刻按 `from -> to` 插值采样当前屏幕 caret rect。
+    pub fn sampled_rect(&self, now: Instant) -> CursorRect {
+        let eased = self.eased(now);
+        let x = self.from.x + (self.to.x - self.from.x) * eased;
+        let top = self.from.top + (self.to.top - self.from.top) * eased;
+        let h = self.to.bottom - self.to.top;
+        CursorRect {
+            x,
+            top,
+            bottom: top + h,
+            // Issue #712 评论 5739517945 第 2 项: baseline_y 从 from 到 to 插值，
+            // 不再直接取 to.baseline_y，消除垂直动画跳终点。
+            baseline_y: self.from.baseline_y + (self.to.baseline_y - self.from.baseline_y) * eased,
+        }
+    }
+
     /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
     /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
     pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {

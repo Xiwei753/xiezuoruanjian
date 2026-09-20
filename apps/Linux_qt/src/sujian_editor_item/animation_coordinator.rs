@@ -287,13 +287,15 @@ fn build_cursor_visual_track(
 /// coordinated cursor rect。
 ///
 /// 在 `take_rebase_frames` 取消旧事务之前调用，把结果作为新事务纯 reflow 光标动画的
-/// 视觉起点（`cursor_visual_track.from`）。采样逻辑与 `compute_coordinated_cursor_position`
-/// 的边界选择完全一致，按评论四种场景：
-/// - InsertReveal：取这一帧 reveal 边界（frame.x + frame.w）。
-/// - Backspace DeleteConceal（conceal_to_left_edge=true）：取这一帧 conceal 边界（frame.x + frame.w）。
-/// - forward Delete（conceal_to_left_edge=false）：取当前固定 cursor rect（new_rect）。
-/// - 纯 reflow（无上述 glyph）：直接 sample `cursor_visual_track`（自带 started_at/duration_ms），
-///   不再借任何文字 unit 的 progress，也不再回头使用逻辑 `old_cursor_rect`。
+/// 视觉起点（`cursor_visual_track.from`）。
+///
+/// Issue #722 评论 5747719529 改法 4 + 核心语义：光标本身就是吞字/吐字的视觉边界。
+/// 不再从文字 glyph 切片反推光标位置（删除 rightmost_x.max() / conceal_edge.min()）。
+/// 光标位置只由 `PreparedCursorVisualTrack`（canonical old caret → canonical new caret）
+/// 插值决定。有 cursor_visual_track 时直接 sample track；没有 track 时按事务 progress
+/// 插值 old/new cursor rect。文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧
+/// coordinated caret 的位置（caret_driven_clip），caret 与文字使用同一个 frame_now
+/// 和同一个 from→to 几何轨迹。
 ///
 /// 返回的 `CursorRect` 用采样到的 `(x, y)` 和 `new_rect` 的高度/baseline 构造，
 /// 供新事务 `cursor_visual_track.from` 直接消费。
@@ -307,114 +309,38 @@ fn sample_coordinated_cursor_rect_at(
     let h = new_rect.bottom - new_rect.top;
     let op = tx.operation_kind;
 
-    // Issue #690 评论 5681206040: 纯 reflow 光标直接 sample caret track，
-    // 不再借第一个 reflow unit 的 progress。track 自带 started_at/duration_ms。
-    // 没有 caret track 时（首次事务未经过 rebase），回退到 old/new cursor rect
-    // 按事务 progress 插值——与 compute_coordinated_cursor_position 的 fallback 一致。
-    let sample_from_track = |track: &PreparedCursorVisualTrack| -> (f64, f64) {
-        let r = track.sampled_rect(now);
-        (r.x, r.top)
+    // Issue #722 评论 5747719529: 光标是吞字/吐字的视觉边界。
+    // caret 位置只由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
+    // 插值决定，不再从文字 glyph 切片反推。
+    // - 有 cursor_visual_track 时：直接 sample track（caret_driven_clip）。
+    // - 没有 track 时（首次事务未经过 rebase）：按事务 progress 插值 old/new cursor rect。
+    // 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置。
+    let sample_caret_position = || -> (f64, f64) {
+        match tx.cursor_visual_track.as_ref() {
+            Some(track) => {
+                // caret_driven_clip: 光标位置由 caret track 插值决定。
+                // 用 sampled_rect_at_progress(progress(now)) 与 sampled_rect(now) 等价，
+                // 显式表达"caret 与文字使用同一个 frame_now 和 from→to 几何轨迹"。
+                let r = track.sampled_rect_at_progress(track.progress(now));
+                (r.x, r.top)
+            }
+            None => {
+                // 首次事务没有 caret track：用 old/new cursor rect 按事务 progress 插值。
+                let progress = tx.progress(now);
+                let eased = AnimatedSlice::ease_out_quad(progress);
+                let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
+                let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
+                (x, y)
+            }
+        }
     };
 
-    // 首次事务没有 caret track 时的 fallback：按事务 progress 插值 old/new cursor rect。
-    // 与 compute_coordinated_cursor_position 的 sample_reflow fallback 保持一致。
-    let sample_reflow_fallback = || -> (f64, f64) {
-        let progress = tx.progress(now);
-        let eased = AnimatedSlice::ease_out_quad(progress);
-        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-        (x, y)
-    };
-
-    let (cx, cy) = match op {
-        TextVisualOperationKind::Insert => {
-            let mut rightmost_x: Option<f64> = None;
-            // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
-            // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
-            let cursor_y = match tx.cursor_visual_track.as_ref() {
-                Some(track) => track.sampled_rect(now).top,
-                None => {
-                    let progress = tx.progress(now);
-                    let eased = AnimatedSlice::ease_out_quad(progress);
-                    old_rect.top + (new_rect.top - old_rect.top) * eased
-                }
-            };
-            for unit in &tx.units {
-                if unit.slice.kind != AnimatedSliceKind::InsertReveal {
-                    continue;
-                }
-                let visible = unit.current_visible_fraction(now);
-                let frame = unit.slice.compute_frame(visible);
-                let edge_x = frame.x + frame.w;
-                rightmost_x = Some(match rightmost_x {
-                    Some(prev) => prev.max(edge_x),
-                    None => edge_x,
-                });
-                // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                // 不从 glyph frame.y 取。
-            }
-            match rightmost_x {
-                Some(x) => (x, cursor_y),
-                None => {
-                    // 纯 reflow（无 InsertReveal glyph 当边界）：直接 sample caret track。
-                    match tx.cursor_visual_track.as_ref() {
-                        Some(track) => sample_from_track(track),
-                        None => sample_reflow_fallback(),
-                    }
-                }
-            }
-        }
-        TextVisualOperationKind::Delete => {
-            let mut has_conceal_from_right = false;
-            let mut conceal_edge: Option<f64> = None;
-            // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
-            // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
-            let cursor_y = match tx.cursor_visual_track.as_ref() {
-                Some(track) => track.sampled_rect(now).top,
-                None => {
-                    let progress = tx.progress(now);
-                    let eased = AnimatedSlice::ease_out_quad(progress);
-                    old_rect.top + (new_rect.top - old_rect.top) * eased
-                }
-            };
-            for unit in &tx.units {
-                if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
-                    continue;
-                }
-                let visible = unit.current_visible_fraction(now);
-                let frame = unit.slice.compute_frame(visible);
-                if unit.slice.conceal_to_left_edge {
-                    let edge = frame.x + frame.w;
-                    conceal_edge = Some(match conceal_edge {
-                        Some(prev) => prev.min(edge),
-                        None => edge,
-                    });
-                    // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                    // 不从 glyph frame.y 取。
-                } else {
-                    has_conceal_from_right = true;
-                }
-            }
-            if let Some(x) = conceal_edge {
-                (x, cursor_y)
-            } else if has_conceal_from_right {
-                (new_rect.x, new_rect.top)
-            } else {
-                // 跨行 reflow 等没有可直接当边界的 glyph：直接 sample caret track。
-                match tx.cursor_visual_track.as_ref() {
-                    Some(track) => sample_from_track(track),
-                    None => sample_reflow_fallback(),
-                }
-            }
-        }
-        _ => {
-            // CompositionUpdate / Commit / Cursor 纯 reflow：直接 sample caret track。
-            match tx.cursor_visual_track.as_ref() {
-                Some(track) => sample_from_track(track),
-                None => sample_reflow_fallback(),
-            }
-        }
-    };
+    // Issue #722 评论 5747719529: 所有操作类型（Insert/Delete/Reflow/CompositionUpdate/
+    // Commit/Cursor）统一使用 caret track 插值决定光标位置。不再按操作类型分支从文字
+    // glyph 切片反推。光标给吞了就是吞了，光标给吐出来就是吐出来。文字效果跟着光标
+    // 边界，不是光标去追文字动画。
+    let _ = op;
+    let (cx, cy) = sample_caret_position();
 
     Some(CursorRect {
         x: cx,
@@ -2200,7 +2126,6 @@ impl LinuxEditorAnimationCoordinator {
         smooth_cursor_duration_ms: u32,
         coordinated_enabled: bool,
         scroll_y: f64,
-        old_scroll_y: f64,
         old_visible: bool,
         old_blink_visible: bool,
         old_visual_x: f64,
@@ -2229,7 +2154,12 @@ impl LinuxEditorAnimationCoordinator {
         // 实时计算，build_cursor_plan 不再参与 blink 决策。
         // has_active_for_blink 也不再在此计算，避免误导读者以为这里还在做 blink 决策。
 
-        let scroll_changed = (old_scroll_y - scroll_y).abs() > 0.01;
+        // Issue #722 评论 5747719529 改法 1: 把滚动从光标动画判定里彻底拆出去。
+        // 删除 scroll_changed 和 old_scroll_y：真实滚动开始/结束继续由 set_is_scrolling()
+        // 控制暂停和一次 Snap；普通 contentY -> scroll_y 只是 viewport transform，
+        // 不能永久改变光标动画策略。hard_snap 只保留 force_snap_next / is_scrolling /
+        // is_selecting / !old_visible。
+        let _ = scroll_y;
 
         // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
         // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
@@ -2245,10 +2175,11 @@ impl LinuxEditorAnimationCoordinator {
         };
 
         // Issue #679 评论 5658087764 (1): force_snap_next 是一次性强制 Snap 标记，
-        // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见/滚动变化都硬 Snap，
+        // 不再附加"距离够大才算"的条件；点击/滚动/选择/不可见都硬 Snap，
         // 不再被协调动画覆盖为 Tween。
-        let hard_snap =
-            force_snap_next || is_scrolling || is_selecting || !old_visible || scroll_changed;
+        // Issue #722 评论 5747719529: 删除 scroll_changed，hard_snap 只保留
+        // force_snap_next / is_scrolling / is_selecting / !old_visible。
+        let hard_snap = force_snap_next || is_scrolling || is_selecting || !old_visible;
 
         // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
         // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor
@@ -2579,9 +2510,14 @@ impl LinuxEditorAnimationCoordinator {
 
     /// Issue #690 评论 5675007226 步骤 1+3: 从同一 `AnimationFrameSample` 读取文字 progress，
     ///
-    /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`）。每个视觉单元
-    /// 拥有自己的 `started_at` / `duration_ms`，从自己的时间线计算 per-unit progress；
-    /// `start_fraction` 由 rebase 决定（新单元为 0，被连续输入覆盖的单元从已显示比例继续）。
+    /// 替代原来的 `build_text_animation_plan()`（内部各自 `Instant::now()`）。
+    /// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界
+    /// （caret_geometry_determines_clip / clip_from_coordinated_caret）。
+    /// 文字不能再维护一套会和 caret 分叉的独立 timeline 进度。InsertReveal/DeleteConceal
+    /// 的裁切边界直接消费本帧 coordinated caret 的位置（`compute_frame_caret_driven`），
+    /// caret 与文字使用同一个 frame_now 和同一个 from→to 几何轨迹。reflow/crossfade
+    /// 继续用 unit 的时间线做几何插值；`start_fraction` 由 rebase 决定（新单元为 0，
+    /// 被连续输入覆盖的单元从已显示比例继续）。
     fn build_text_animation_plan_with_sample(
         &mut self,
         sample: &AnimationFrameSample,
@@ -2642,9 +2578,40 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // 单元生命期 + 单元视觉窗口，唯一公式（与协同光标完全一致）。
+                // Issue #722 评论 5747719529 核心语义：光标是吞字/吐字的视觉边界。
+                // InsertReveal/DeleteConceal 的裁切边界直接消费本帧 coordinated caret
+                // 的位置（caret_driven_clip），不再由 unit 自己的 visible fraction 驱动。
+                // caret 与文字使用同一个 frame_now 和同一个 from→to 几何轨迹。
                 let visible = unit.current_visible_fraction(sample.frame_now);
-                let frame = unit.slice.compute_frame(visible);
+                let frame = match unit.slice.kind {
+                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                        // 采样本帧 coordinated caret 位置作为裁切边界。
+                        // 有 cursor_visual_track 时用 track 插值；没有时用 old/new rect 插值。
+                        let caret_x = match tx.cursor_visual_track.as_ref() {
+                            Some(track) => {
+                                track.sampled_rect_at_progress(track.progress(sample.frame_now)).x
+                            }
+                            None => {
+                                if let (Some(old_r), Some(new_r)) =
+                                    (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
+                                {
+                                    let progress = tx.progress(sample.frame_now);
+                                    let eased = AnimatedSlice::ease_out_quad(progress);
+                                    old_r.x + (new_r.x - old_r.x) * eased
+                                } else {
+                                    // 没有 caret 信息时回退到 unit visible fraction。
+                                    unit.slice.compute_frame(visible).x
+                                        + unit.slice.compute_frame(visible).w
+                                }
+                            }
+                        };
+                        unit.slice.compute_frame_caret_driven(caret_x, visible)
+                    }
+                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                        // Reflow 不消费 caret 边界，用纯几何插值。
+                        unit.slice.compute_frame(visible)
+                    }
+                };
                 glyphs.push(TextAnimationGlyphInfo {
                     x: frame.x,
                     y: frame.y,
@@ -2662,14 +2629,17 @@ impl LinuxEditorAnimationCoordinator {
 
     /// Issue #690 评论 5675007226 步骤 2 + 5681206040: 协同光标直接计算最终屏幕位置。
     ///
-    /// 光标严格跟随文字吞吐边界，不再在 old/new cursor rect 之间用 progress 插值：
-    /// - InsertReveal：光标 x = 本帧所有 reveal 单元的最右可见边界（frame.x + frame.w）。
-    /// - DeleteConceal (Backspace, conceal_to_left_edge)：光标跟 frame.x + frame.w 往左走，
-    ///   旧字正好被光标"吞掉"。
-    /// - DeleteConceal (forward Delete, !conceal_to_left_edge)：逻辑光标不移动，
-    ///   固定在 new_cursor_rect.x。
-    /// - Reflow / Cursor / Enter：直接 sample `cursor_visual_track`（自带
-    ///   started_at/duration_ms），不再借任何文字 unit 的 progress。
+    /// Issue #722 评论 5747719529 改法 4 + 核心语义：光标本身就是吞字/吐字的视觉边界。
+    /// 不再从文字 glyph 切片反推光标位置（删除 rightmost_x.max() / conceal_edge.min()）。
+    /// 光标位置只由 `PreparedCursorVisualTrack`（canonical old caret → canonical new caret）
+    /// 插值决定，使用同一个 `frame_now` 和同一个 from→to 几何轨迹。
+    /// - 有 cursor_visual_track 时：用 `sampled_rect(frame_now)` 插值（caret_driven_clip）。
+    /// - 没有 track 时（首次事务未经过 rebase）：按事务 progress 插值 old/new cursor rect。
+    /// - 前向 Delete（conceal_to_left_edge=false）：逻辑光标不移动，固定在 new_cursor_rect。
+    ///
+    /// 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置
+    /// （caret_driven_clip），caret 与文字使用同一个 frame_now 和同一个 from→to 几何
+    /// 轨迹。快速 rebase 时先采样当前 caret 边界，再把这个边界作为下一段动画起点。
     ///
     /// 返回 `(x, y, h)` 供 `build_render_plan_full` 直接写入 `CursorRenderState`。
     ///
@@ -2710,14 +2680,19 @@ impl LinuxEditorAnimationCoordinator {
         let op = tx.operation_kind;
         let frame_now = sample.frame_now;
 
-        // Issue #690 评论 5681206040: 纯 reflow 光标直接 sample caret track，
-        // 不再借第一个 reflow unit 的 progress。track 自带 started_at/duration_ms。
-        // 没有 caret track 时（首次事务未经过 rebase，或 CursorOnly），回退到
-        // old/new cursor rect 从事务 progress 插值——保持首次事务原语义。
-        let sample_reflow = || -> Option<(f64, f64)> {
+        // Issue #722 评论 5747719529: 光标是吞字/吐字的视觉边界。
+        // caret 位置只由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
+        // 插值决定，不再从文字 glyph 切片反推（删除 rightmost_x.max() / conceal_edge.min()）。
+        // - 有 cursor_visual_track 时：用 sampled_rect(frame_now) 插值（caret_driven_clip）。
+        // - 没有 track 时：按事务 progress 插值 old/new cursor rect。
+        // 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置。
+        let sample_caret_driven_clip = || -> Option<(f64, f64)> {
             match tx.cursor_visual_track.as_ref() {
                 Some(track) => {
-                    let r = track.sampled_rect(frame_now);
+                    // caret_driven_clip: 光标位置由 caret track 插值决定。
+                    // 用 sampled_rect_at_progress(progress(frame_now)) 与 sampled_rect(frame_now) 等价，
+                    // 显式表达"caret 与文字使用同一个 frame_now 和 from→to 几何轨迹"。
+                    let r = track.sampled_rect_at_progress(track.progress(frame_now));
                     Some((r.x, r.top))
                 }
                 None => {
@@ -2731,125 +2706,24 @@ impl LinuxEditorAnimationCoordinator {
             }
         };
 
-        match op {
-            TextVisualOperationKind::Insert => {
-                let mut rightmost_x: Option<f64> = None;
-                // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
-                // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
-                let cursor_y = match tx.cursor_visual_track.as_ref() {
-                    Some(track) => {
-                        let r = track.sampled_rect(frame_now);
-                        r.top
-                    }
-                    None => {
-                        let progress = tx.progress(frame_now);
-                        let eased = AnimatedSlice::ease_out_quad(progress);
-                        old_rect.top + (new_rect.top - old_rect.top) * eased
-                    }
-                };
-                for unit in &tx.units {
-                    if unit.slice.kind != AnimatedSliceKind::InsertReveal {
-                        continue;
-                    }
-                    // 与文字帧同一个函数、同一个 frame_now：光标边界 == 本帧 reveal 边界。
-                    let visible = unit.current_visible_fraction(frame_now);
-                    let frame = unit.slice.compute_frame(visible);
-                    let edge_x = frame.x + frame.w;
-                    rightmost_x = Some(match rightmost_x {
-                        Some(prev) => prev.max(edge_x),
-                        None => edge_x,
-                    });
-                    // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                    // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
-                }
-                match rightmost_x {
-                    Some(x) => Some((x, cursor_y, h)),
-                    None => {
-                        // 纯 reflow（无 InsertReveal glyph 当边界）：直接 sample caret track。
-                        let (x, y) = sample_reflow()?;
-                        Some((x, y, h))
-                    }
-                }
-            }
-            TextVisualOperationKind::Delete => {
-                let mut has_conceal_from_right = false;
-                let mut conceal_edge: Option<f64> = None;
-                // Issue #712 评论 5739517945 第 2 项: cursor_Y 不再直接取 new_rect.top，
-                // 有 cursor_visual_track 时采样 track 的 top，没有 track 时按事务 progress 插值。
-                let cursor_y = match tx.cursor_visual_track.as_ref() {
-                    Some(track) => {
-                        let r = track.sampled_rect(frame_now);
-                        r.top
-                    }
-                    None => {
-                        let progress = tx.progress(frame_now);
-                        let eased = AnimatedSlice::ease_out_quad(progress);
-                        old_rect.top + (new_rect.top - old_rect.top) * eased
-                    }
-                };
-                // Issue #702: 记录 DeleteConceal unit 的可见进度，供 fallback
-                // 让 caret track 跟随文字 unit 的同一帧基准，而非 caret track
-                // 自己的 timeline，消除"光标先完成、旧字晚消失"的错拍。
-                let mut delete_unit_progress: Option<f64> = None;
+        // Issue #722 评论 5747719529: 所有操作类型统一使用 caret track 插值决定光标位置。
+        // 不再按操作类型分支从文字 glyph 切片反推。光标给吞了就是吞了，光标给吐出来
+        // 就是吐出来。文字效果跟着光标边界，不是光标去追文字动画。
+        //
+        // 唯一例外：前向 Delete（conceal_to_left_edge=false）逻辑光标本来不移动，
+        // 固定在 new_cursor_rect，只让右侧文字向光标方向收掉。
+        let has_forward_delete = op == TextVisualOperationKind::Delete
+            && tx.units.iter().any(|u| {
+                u.slice.kind == AnimatedSliceKind::DeleteConceal && !u.slice.conceal_to_left_edge
+            });
 
-                for unit in &tx.units {
-                    if unit.slice.kind != AnimatedSliceKind::DeleteConceal {
-                        continue;
-                    }
-                    // 与文字帧同一个函数、同一个 frame_now：光标边界 == 本帧 conceal 边界。
-                    let visible = unit.current_visible_fraction(frame_now);
-                    let frame = unit.slice.compute_frame(visible);
-
-                    if unit.slice.conceal_to_left_edge {
-                        let edge = frame.x + frame.w;
-                        conceal_edge = Some(match conceal_edge {
-                            Some(prev) => prev.min(edge),
-                            None => edge,
-                        });
-                        // Issue #712: cursor_Y 永远来自 canonical caret geometry (new_rect.top)，
-                        // 不从 glyph frame.y 取——frame.y 是字形纹理位置，不是 caret top。
-                    } else {
-                        has_conceal_from_right = true;
-                    }
-                    // 记算 unit 的 progress（与 visible 同一帧基准），供 fallback 使用。
-                    let unit_progress = unit.progress(frame_now);
-                    delete_unit_progress = Some(match delete_unit_progress {
-                        Some(prev) => prev.min(unit_progress),
-                        None => unit_progress,
-                    });
-                }
-
-                if let Some(x) = conceal_edge {
-                    // Backspace：光标带着旧字往左吞。
-                    Some((x, cursor_y, h))
-                } else if has_conceal_from_right {
-                    // 前向 Delete：逻辑光标本来不移动，固定在 new_cursor_rect，
-                    // 只让右侧文字向光标方向收掉。
-                    Some((new_rect.x, new_rect.top, h))
-                } else if let Some(unit_progress) = delete_unit_progress {
-                    // Issue #702: 有 DeleteConceal unit 但没有可直接当边界的 glyph
-                    // （跨行 reflow 等）。caret track 跟随文字 unit 的可见进度
-                    // （同一帧基准），而非 caret track 自己的 timeline，消除错拍。
-                    if let Some(track) = tx.cursor_visual_track.as_ref() {
-                        let r = track.sampled_rect_at_progress(unit_progress);
-                        Some((r.x, r.top, h))
-                    } else {
-                        let eased = AnimatedSlice::ease_out_quad(unit_progress);
-                        let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                        let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                        Some((x, y, h))
-                    }
-                } else {
-                    // 没有 DeleteConceal unit：直接 sample caret track。
-                    let (x, y) = sample_reflow()?;
-                    Some((x, y, h))
-                }
-            }
-            _ => {
-                // CompositionUpdate/Commit/Cursor 纯 reflow：直接 sample caret track。
-                let (x, y) = sample_reflow()?;
-                Some((x, y, h))
-            }
+        if has_forward_delete {
+            // 前向 Delete：逻辑光标不移动，固定在 new_cursor_rect。
+            Some((new_rect.x, new_rect.top, h))
+        } else {
+            // caret_driven_clip: 光标位置由 caret track 插值决定。
+            let (x, y) = sample_caret_driven_clip()?;
+            Some((x, y, h))
         }
     }
 

@@ -276,15 +276,24 @@ impl AnimatedSlice {
     /// 纯插值计算：根据"最终可见比例" `visible`（0..1）计算当前帧的 destination rect
     /// 和 source rect。
     ///
-    /// Issue #690 评论 5675007226 步骤 2+3: `visible` 一律由
-    /// `PreparedVisualUnit::current_visible_fraction` 给出（单元自己的时间线 +
-    /// `[start_fraction, target_fraction]` 视觉窗口 + 协同 easing）。这里只做几何与
-    /// 透明度的线性插值，不再重复施加 easing 或 `start_fraction`，避免与协调光标重复缓动。
+    /// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界。
+    /// 真正决定当前 reveal/conceal 截止位置的是这一帧的 caret geometry，不是文字 unit
+    /// 自己的独立 timeline。此函数保留作为 reflow/crossfade 的纯几何插值入口；
+    /// InsertReveal/DeleteConceal 的裁切边界应通过 `compute_frame_caret_driven`
+    /// 直接消费本帧 coordinated caret 的位置（caret_driven_clip），caret 与文字使用
+    /// 同一个 frame_now 和同一个 from→to 几何轨迹。文字不能再维护一套会和 caret
+    /// 分叉的"自己什么时候完全出现/完全消失"的位置/可见度进度。
     pub fn compute_frame(&self, visible: f64) -> AnimatedSliceFrame {
         let visible = visible.clamp(0.0, 1.0);
         match self.kind {
             AnimatedSliceKind::InsertReveal => {
-                let frame_w = self.to_document_rect.w * visible;
+                // Issue #722 评论 5747719529: caret_driven_clip — 吐字时裁切边界
+                // 由本帧 coordinated caret 位置决定。此回退入口用 visible 推导等效
+                // caret 边界（caret_geometry_clip），保持向后兼容；主路径应调用
+                // compute_frame_caret_driven 直接消费 caret geometry。
+                let caret_clip_boundary = self.to_document_rect.x + self.to_document_rect.w * visible;
+                let reveal_from_caret =
+                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w);
                 let frame_h = self.to_document_rect.h;
                 let frame_source_rect = SourceRect {
                     x: self.source_rect.x,
@@ -295,7 +304,7 @@ impl AnimatedSlice {
                 AnimatedSliceFrame {
                     x: self.to_document_rect.x,
                     y: self.to_document_rect.y,
-                    w: frame_w,
+                    w: reveal_from_caret,
                     h: frame_h,
                     opacity: 1.0,
                     source_rect: frame_source_rect,
@@ -303,15 +312,26 @@ impl AnimatedSlice {
                 }
             }
             AnimatedSliceKind::DeleteConceal => {
-                let frame_w = self.from_document_rect.w * visible;
+                // Issue #722 评论 5747719529: caret_driven_clip — 吞字时裁切边界
+                // 由本帧 coordinated caret 位置决定。此回退入口用 visible 推导等效
+                // caret 边界（caret_geometry_clip），保持向后兼容；主路径应调用
+                // compute_frame_caret_driven 直接消费 caret geometry。
                 let frame_h = self.from_document_rect.h;
-                let (frame_x, src_x) = if self.conceal_to_left_edge {
-                    (self.from_document_rect.x, self.source_rect.x)
+                let (caret_clip_boundary, frame_x, src_x) = if self.conceal_to_left_edge {
+                    let caret_b = self.from_document_rect.x + self.from_document_rect.w * visible;
+                    (caret_b, self.from_document_rect.x, self.source_rect.x)
                 } else {
+                    let caret_b = self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible);
                     (
+                        caret_b,
                         self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible),
                         self.source_rect.x + self.source_rect.w * (1.0 - visible),
                     )
+                };
+                let conceal_from_caret = if self.conceal_to_left_edge {
+                    (caret_clip_boundary - self.from_document_rect.x).clamp(0.0, self.from_document_rect.w)
+                } else {
+                    (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary).clamp(0.0, self.from_document_rect.w)
                 };
                 let frame_source_rect = SourceRect {
                     x: src_x,
@@ -322,7 +342,7 @@ impl AnimatedSlice {
                 AnimatedSliceFrame {
                     x: frame_x,
                     y: self.from_document_rect.y,
-                    w: frame_w,
+                    w: conceal_from_caret,
                     h: frame_h,
                     opacity: 1.0,
                     source_rect: frame_source_rect,
@@ -363,6 +383,103 @@ impl AnimatedSlice {
                     source_rect: self.source_rect.clone(),
                     snapshot_id: self.snapshot_id,
                 }
+            }
+        }
+    }
+
+    /// Issue #722 评论 5747719529 核心语义：caret 驱动裁切边界。
+    ///
+    /// 光标本身就是吞字/吐字的视觉边界。InsertReveal/DeleteConceal 的裁切边界直接
+    /// 消费本帧 coordinated caret 的位置（`caret_clip_boundary`），不再由 unit 自己
+    /// 的 visible fraction 驱动。caret 与文字使用同一个 frame_now 和同一个
+    /// from→to 几何轨迹。
+    ///
+    /// - InsertReveal（吐字）：光标往前走到哪里，文字就显示到哪里。
+    ///   `caret_clip_boundary` 是本帧 coordinated caret 的 x 坐标，裁切宽度 =
+    ///   `caret_clip_boundary - to_document_rect.x`（已被光标"带出来"的部分）。
+    /// - DeleteConceal（吞字）：光标往回走到哪里，文字就消失到哪里。
+    ///   `caret_clip_boundary` 是本帧 coordinated caret 的 x 坐标，裁切宽度 =
+    ///   `caret_clip_boundary - from_document_rect.x`（Backspace，conceal_to_left_edge）；
+    ///   前向 Delete 时裁切宽度 = `from_document_rect.right - caret_clip_boundary`。
+    /// - ReflowMove / ReflowCrossFade：不消费 caret 边界，回退到 `compute_frame(visible)`。
+    ///
+    /// 快速连续输入/删除时，新事务必须从当前这条视觉边界继续。上一帧光标已经扫过
+    /// 的部分保持最终状态，尚未扫过的部分继续跟着新的光标边界走。快速 rebase 时
+    /// 先采样当前 caret 边界，再把这个边界作为下一段动画起点。
+    pub fn compute_frame_caret_driven(
+        &self,
+        caret_clip_boundary: f64,
+        visible: f64,
+    ) -> AnimatedSliceFrame {
+        match self.kind {
+            AnimatedSliceKind::InsertReveal => {
+                // caret_driven_clip: 吐字时裁切宽度 = caret 边界 - 文档起点。
+                // 已被光标"带出来"的部分就是已经吐出来，不能后面再自己补一个淡入进度。
+                let reveal_from_caret =
+                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w);
+                let frame_w = reveal_from_caret;
+                let frame_h = self.to_document_rect.h;
+                let frame_source_rect = SourceRect {
+                    x: self.source_rect.x,
+                    y: self.source_rect.y,
+                    w: (self.source_rect.w * (frame_w / self.to_document_rect.w.max(1.0)))
+                        .clamp(0.0, self.source_rect.w),
+                    h: self.source_rect.h,
+                };
+                AnimatedSliceFrame {
+                    x: self.to_document_rect.x,
+                    y: self.to_document_rect.y,
+                    w: frame_w,
+                    h: frame_h,
+                    opacity: 1.0,
+                    source_rect: frame_source_rect,
+                    snapshot_id: self.snapshot_id,
+                }
+            }
+            AnimatedSliceKind::DeleteConceal => {
+                // caret_driven_clip: 吞字时裁切宽度由 caret 边界决定。
+                // 光标往回走到哪里，文字就消失到哪里；已经被光标扫过去的部分就是已经吞掉。
+                let frame_h = self.from_document_rect.h;
+                let (frame_w, frame_x, src_x) = if self.conceal_to_left_edge {
+                    // Backspace：保留左段，裁切宽度 = caret 边界 - 文档起点。
+                    let conceal_from_caret = (caret_clip_boundary - self.from_document_rect.x)
+                        .clamp(0.0, self.from_document_rect.w);
+                    (
+                        conceal_from_caret,
+                        self.from_document_rect.x,
+                        self.source_rect.x,
+                    )
+                } else {
+                    // 前向 Delete：保留右段，裁切宽度 = 文档右端 - caret 边界。
+                    let from_right =
+                        (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary)
+                            .clamp(0.0, self.from_document_rect.w);
+                    (
+                        from_right,
+                        caret_clip_boundary,
+                        self.source_rect.x + (self.source_rect.w * (1.0 - from_right / self.from_document_rect.w.max(1.0))),
+                    )
+                };
+                let frame_source_rect = SourceRect {
+                    x: src_x,
+                    y: self.source_rect.y,
+                    w: (self.source_rect.w * (frame_w / self.from_document_rect.w.max(1.0)))
+                        .clamp(0.0, self.source_rect.w),
+                    h: self.source_rect.h,
+                };
+                AnimatedSliceFrame {
+                    x: frame_x,
+                    y: self.from_document_rect.y,
+                    w: frame_w,
+                    h: frame_h,
+                    opacity: 1.0,
+                    source_rect: frame_source_rect,
+                    snapshot_id: self.snapshot_id,
+                }
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                // Reflow 不消费 caret 边界，回退到纯几何插值。
+                self.compute_frame(visible)
             }
         }
     }
