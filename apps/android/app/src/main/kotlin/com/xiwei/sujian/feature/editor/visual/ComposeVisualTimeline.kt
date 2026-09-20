@@ -504,11 +504,12 @@ class ComposeVisualTimeline {
         val revealChannel =
             if (oldRange != unit.range) {
                 // split：把 parent reveal 进度投影到 child 局部区间
-                val localFraction = computeRevealFractionForChild(
-                    parentRange = unit.range,
-                    parentRevealFraction = parentRevealNow,
-                    childRange = oldRange,
-                )
+                val localFraction =
+                    computeRevealFractionForChild(
+                        parentRange = unit.range,
+                        parentRevealFraction = parentRevealNow,
+                        childRange = oldRange,
+                    )
                 // 从局部 fraction 继续到 1，剩余时长与 parent 一致
                 val remaining = remainingDurationNanos(unit.reveal, frameTimeNanos)
                 TimedFloat(localFraction, 1f, frameTimeNanos, remaining)
@@ -764,6 +765,22 @@ class ComposeVisualTimeline {
                             alpha =
                                 TimedFloat(
                                     from = ghost.alpha.from,
+                                    to = 0f,
+                                    startedAtNanos = ghostStartedAt,
+                                    durationNanos = ghostDuration,
+                                ),
+                            // #725 评论 5752459178：reveal 通道独立后，删除 schedule 必须同时接管 reveal。
+                            // coordinated 模式下 draw 层把 alpha 固定为 1，真正决定吞字可见进度的是 reveal；
+                            // 只重排 alpha 会让多个 delete ghost 的 reveal 全部从 frameTimeNanos 同时开始，
+                            // 导致多字同时吞而非按 orderedDeletedUnits 顺序吞。active unit 转 ghost 的路径
+                            // 也一样：toGhost() 先用旧 reveal 的剩余时长创建通道，随后这里只覆盖 alpha，
+                            // 导致本次删除事件的正式 schedule 根本没有接管 reveal。
+                            // reveal.from 保留 toGhost 时投影好的局部 fraction，split child 从局部进度继续吞，
+                            // 不复活也不退回 parent fraction。toGhost() 负责"当前瞬间"的局部 reveal，
+                            // reconcileDeletedGhosts() 负责把它接到本次删除 patch 的正式分段时间表。
+                            reveal =
+                                TimedFloat(
+                                    from = ghost.reveal.from,
                                     to = 0f,
                                     startedAtNanos = ghostStartedAt,
                                     durationNanos = ghostDuration,
@@ -1068,11 +1085,12 @@ class ComposeVisualTimeline {
         val revealChannel =
             if (ghostRange != unit.range) {
                 // split：把 parent reveal 进度投影到 ghost child 局部区间
-                val localFraction = computeRevealFractionForChild(
-                    parentRange = unit.range,
-                    parentRevealFraction = parentRevealNow,
-                    childRange = ghostRange,
-                )
+                val localFraction =
+                    computeRevealFractionForChild(
+                        parentRange = unit.range,
+                        parentRevealFraction = parentRevealNow,
+                        childRange = ghostRange,
+                    )
                 // 从局部 fraction 继续到 0（ghost 吞字），剩余时长与 parent 一致
                 val remaining = remainingDurationNanos(unit.reveal, now)
                 TimedFloat(localFraction, 0f, now, remaining)

@@ -3,7 +3,6 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
-import com.xiwei.sujian.feature.editor.visual.computeRevealFractionForChild
 
 /**
  * #708 评论 5725706551：本地 handoff scene rebase —
