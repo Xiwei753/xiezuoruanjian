@@ -935,7 +935,12 @@ class ComposeVisualTimeline {
             val fraction =
                 when (unit.role) {
                     VisualUnitRole.Inserted, VisualUnitRole.DeletedGhost ->
-                        currentAlpha(unit.alpha, frameTimeNanos).coerceIn(0f, 1f)
+                        // Issue #725 评论 5750735497：clipFraction 由纯文字时间线
+                        // [ComposeTextRevealTrack] 驱动（从 unit 的 reveal 通道采样），
+                        // 不再由屏幕光标位置算，也不会复制 AndroidX 的 caret 状态机。
+                        ComposeTextRevealTrack(clipFraction = unit.alpha)
+                            .sampleFraction(frameTimeNanos)
+                            .coerceIn(0f, 1f)
                     VisualUnitRole.RetainedMove -> 1f
                 }
             fractions[unit.key] = fraction

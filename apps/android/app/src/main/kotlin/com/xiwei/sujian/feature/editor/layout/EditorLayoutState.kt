@@ -79,8 +79,6 @@ fun ComposeLayoutSnapshot.cursorRect(offset: Int): Rect {
     return result.getCursorRect(displayOffset)
 }
 
-fun ComposeLayoutSnapshot.cursorRect(): Rect = cursorRect(selection.end)
-
 /**
  * #641 评论1 第4节：行信息访问 — 直接转发 [TextLayoutResult]，
  * 不缓存第二份行段。
