@@ -922,6 +922,23 @@ cpp! {{
 
         // 2. 提取 glyphRuns 和 clusters
         const auto glyphRuns = sujianGlyphRuns(line);
+
+        // Issue #724 评论 5750911834 问题 1: 引入全行 logicalStarts。
+        // 收集全行所有 glyph run 的 stringIndexes，用行内真实 cluster 边界
+        // 计算 qcharStart/qcharEnd，不再用相邻 cluster 的 qcharVal 猜。
+        // 这修复了跨 glyph run / ligature 的行边界错误，使 cluster 范围精确。
+        std::vector<int> lineLogicalStarts;
+        for (const auto& run : glyphRuns) {
+            const auto& si = run.stringIndexes();
+            for (int i = 0; i < (int)si.size(); i++) {
+                if (si[i] >= 0) lineLogicalStarts.push_back(si[i]);
+            }
+        }
+        std::sort(lineLogicalStarts.begin(), lineLogicalStarts.end());
+        lineLogicalStarts.erase(
+            std::unique(lineLogicalStarts.begin(), lineLogicalStarts.end()),
+            lineLogicalStarts.end());
+
         for (const auto& run : glyphRuns) {
             const auto& positions = run.positions();
             const auto& glyphIndexes = run.glyphIndexes();
@@ -1012,8 +1029,13 @@ cpp! {{
 
                 int qcharStart = tc.qcharVal;
                 int qcharEnd;
-                if (ci + 1 < (int)tempClusters.size()) {
-                    qcharEnd = tempClusters[ci + 1].qcharVal;
+                // Issue #724 评论 5750911834 问题 1: 用全行 logicalStarts 计算真实
+                // cluster 边界，不再用相邻 cluster 的 qcharVal 猜。这修复了跨
+                // glyph run / ligature 的行边界错误，cluster 范围精确。
+                auto lsIt = std::upper_bound(
+                    lineLogicalStarts.begin(), lineLogicalStarts.end(), tc.qcharVal);
+                if (lsIt != lineLogicalStarts.end()) {
+                    qcharEnd = *lsIt;
                 } else {
                     qcharEnd = entry.qcharEnd;
                 }
@@ -1165,6 +1187,21 @@ cpp! {{
             if (generate_animation_visuals) {
                 const auto glyphRuns = sujianGlyphRuns(line);
 
+            // Issue #724 评论 5750911834 问题 1: 引入全行 logicalStarts。
+            // 收集全行所有 glyph run 的 stringIndexes，用行内真实 cluster 边界
+            // 计算 qcharStart/qcharEnd，不再用相邻 cluster 的 qcharVal 猜。
+            std::vector<int> lineLogicalStarts;
+            for (const auto& run : glyphRuns) {
+                const auto& si = run.stringIndexes();
+                for (int i = 0; i < (int)si.size(); i++) {
+                    if (si[i] >= 0) lineLogicalStarts.push_back(si[i]);
+                }
+            }
+            std::sort(lineLogicalStarts.begin(), lineLogicalStarts.end());
+            lineLogicalStarts.erase(
+                std::unique(lineLogicalStarts.begin(), lineLogicalStarts.end()),
+                lineLogicalStarts.end());
+
             for (const auto& run : glyphRuns) {
                 const auto& positions = run.positions();
                 const auto& glyphIndexes = run.glyphIndexes();
@@ -1254,8 +1291,12 @@ cpp! {{
 
                     int qcharStart = tc.qcharVal;
                     int qcharEnd;
-                    if (ci + 1 < (int)tempClusters.size()) {
-                        qcharEnd = tempClusters[ci + 1].qcharVal;
+                    // Issue #724 评论 5750911834 问题 1: 用全行 logicalStarts 计算真实
+                    // cluster 边界，不再用相邻 cluster 的 qcharVal 猜。
+                    auto lsIt = std::upper_bound(
+                        lineLogicalStarts.begin(), lineLogicalStarts.end(), tc.qcharVal);
+                    if (lsIt != lineLogicalStarts.end()) {
+                        qcharEnd = *lsIt;
                     } else {
                         qcharEnd = entry.qcharEnd;
                     }

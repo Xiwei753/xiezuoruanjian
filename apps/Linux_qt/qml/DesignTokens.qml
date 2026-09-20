@@ -13,6 +13,11 @@ QtObject {
     // 避免 main.qml 里 `DesignTokens { themeController: themeController }` 同名自撞
     // （QML 绑定作用域就是接收对象自身，右侧裸 themeController 会遮蔽 QQmlContext
     // 注入的 themeController，导致自绑定保持 null，颜色链全走 fallback）。
+    // Issue #724 评论 5750911834 问题 3: 所有颜色属性通过同一个 scheme_changed
+    // 信号更新，cached_state 在 scheme_changed 发出前已一次性更新完毕。
+    // QML 引擎在下一帧统一更新所有绑定，不在帧内暴露 light/dark 混合中间状态。
+    // 重复 resolve 已由 reload_from_backend_if_changed() 在 Rust 侧消除，
+    // 不再出现 574 次 theme.resolve 和多次 scheme_changed 导致的中间状态分叉。
     property string themeStateJson: ""
 
     property var themeControllerRef: null

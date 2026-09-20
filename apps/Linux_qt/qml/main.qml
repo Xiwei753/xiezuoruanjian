@@ -294,7 +294,9 @@ ApplicationWindow {
         target: syncBackend
         function onSync_action_completed() {
             if (settingsBackend) settingsBackend.refresh_theme_data()
-            if (themeController) themeController.reload()
+            // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()
+            // 避免重复 resolve。同步完成后主题输入可能未变，跳过 resolve。
+            if (themeController) themeController.reload_from_backend_if_changed()
         }
     }
 
@@ -489,8 +491,11 @@ ApplicationWindow {
             // DesignTokens.isDark / resolvedSchemeJson 等跟随更新。
             // 不再只 refreshState 而漏掉主题重载，导致 light/dark、isDark、
             // editorText 不同步。
+            // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()
+            // 避免重复 resolve。设置变更可能不涉及主题输入（如字体大小），
+            // 此时跳过 resolve，避免 574 次 theme.resolve 和 light/dark 混合状态。
             if (themeController) {
-                themeController.reload();
+                themeController.reload_from_backend_if_changed();
             }
         }
     }
@@ -805,7 +810,9 @@ ApplicationWindow {
             beforeSyncHook: function() { return window.preSyncBarrier() }
             onSettingsChanged: {
                 appController.refreshState(qsTr("刷新设置失败"));
-                if (themeController) themeController.reload();
+                // Issue #724 评论 5750911834 问题 3: 改用 reload_from_backend_if_changed()
+                // 避免与 settingsBackend.onSettings_changed 重复 resolve。
+                if (themeController) themeController.reload_from_backend_if_changed();
             }
         }
     }

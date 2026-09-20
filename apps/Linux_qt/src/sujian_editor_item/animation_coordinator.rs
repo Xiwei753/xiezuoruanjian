@@ -626,8 +626,12 @@ fn build_insert_reveal_slices(
 
     for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
-            // 只处理落在 inserted_range 内的 cluster
-            if new_cluster.byte_start >= range_start && new_cluster.byte_end <= range_end {
+            // Issue #724 评论 5750911834 问题 1: cluster 匹配条件改为 overlap 判断，
+            // 允许部分落在 inserted_range 边界的 cluster（ligature 拆分、跨行 cluster）。
+            // 旧逻辑 `byte_start >= range_start && byte_end <= range_end` 会丢弃部分
+            // 落在边界的 cluster，导致 Insert 事务 unit_kinds=""、没有真正 InsertReveal。
+            // overlap 语义：cluster 的 byte range 与 inserted_range 有重叠即纳入。
+            if new_cluster.byte_start < range_end && new_cluster.byte_end > range_start {
                 // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
                 // 这些非可见字符不应创建 InsertReveal 和 static patch，
                 // 避免文字前插空格闪一下/手动换行闪一下。
@@ -716,8 +720,11 @@ fn build_delete_conceal_slices(
 
     for old_line in &old_snapshot.line_snapshots {
         for old_cluster in &old_line.clusters {
-            // 只处理落在 deleted_range 内的 cluster
-            if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
+            // Issue #724 评论 5750911834 问题 1: cluster 匹配条件改为 overlap 判断，
+            // 允许部分落在 deleted_range 边界的 cluster（ligature 拆分、跨行 cluster）。
+            // 旧逻辑 `byte_start >= range_start && byte_end <= range_end` 会丢弃部分
+            // 落在边界的 cluster。
+            if old_cluster.byte_start < range_end && old_cluster.byte_end > range_start {
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
                 // 按删除前光标位置（old_cursor_rect）决定收缩方向：
@@ -2457,7 +2464,12 @@ impl LinuxEditorAnimationCoordinator {
         cursor_baseline_y: f64,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
-        let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
+        // Issue #724 评论 5750911834 问题 2: should_be_visible 不再用 !is_scrolling
+        // 一刀切隐藏光标。滚动期间光标应保持可见（自动跟随滚动时光标在视口内
+        // 同一相对位置；用户手动滚动时光标位置不变，只要 in_viewport 就应可见）。
+        // 旧逻辑 `editor_enabled && !has_selection && in_viewport && !is_scrolling`
+        // 导致滚动期间光标被隐藏，滚动结束时光标动画偶发消失。
+        let should_be_visible = editor_enabled && !has_selection && in_viewport;
 
         // Issue #705 评论 5717380886: 区分两种"有活动正文事务"的判断：
         // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
@@ -2479,7 +2491,10 @@ impl LinuxEditorAnimationCoordinator {
         // 控制暂停和一次 Snap；普通 contentY -> scroll_y 只是 viewport transform，
         // 不能永久改变光标动画策略。hard_snap 只保留 force_snap_next / is_scrolling /
         // is_selecting / !old_visible。
+        // Issue #724 评论 5750911834 问题 2: is_scrolling 不再驱动 should_be_visible
+        // 和 hard_snap，滚动的暂停和恢复由 set_is_scrolling() 单独控制。
         let _ = scroll_y;
+        let _ = is_scrolling;
 
         // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
         // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
@@ -2499,7 +2514,11 @@ impl LinuxEditorAnimationCoordinator {
         // 不再被协调动画覆盖为 Tween。
         // Issue #722 评论 5747719529: 删除 scroll_changed，hard_snap 只保留
         // force_snap_next / is_scrolling / is_selecting / !old_visible。
-        let hard_snap = force_snap_next || is_scrolling || is_selecting || !old_visible;
+        // Issue #724 评论 5750911834 问题 2: hard_snap 不再因 is_scrolling 强制 snap。
+        // 旧逻辑 `force_snap_next || is_scrolling || is_selecting || !old_visible`
+        // 导致滚动时强制 Snap，滚动结束时光标动画被 snap 到终态。
+        // 滚动的暂停和恢复由 set_is_scrolling() 单独控制，不影响 hard_snap。
+        let hard_snap = force_snap_next || is_selecting || !old_visible;
 
         // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
         // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor

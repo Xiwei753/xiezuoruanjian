@@ -792,6 +792,19 @@ Rectangle {
                         // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
                         // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
                         // Scene Graph 和 IME 继续使用同一滚动位置。
+                        // Issue #724 评论 5750911834 问题 2: 引入 begin/end_auto_follow_scroll()
+                        // 协调自动跟随滚动。自动跟随滚动期间标记 is_auto_following，
+                        // 不把 scroll_y 直接作用到 caret viewport 坐标，避免光标被滚动拖走。
+                        property bool is_auto_following: false
+
+                        function begin_auto_follow_scroll() {
+                            is_auto_following = true
+                        }
+
+                        function end_auto_follow_scroll() {
+                            is_auto_following = false
+                        }
+
                         function ensureCursorVisible() {
                             const flick = contentItem
                             if (!flick)
@@ -812,6 +825,11 @@ Rectangle {
                             }
 
                             const maxY = Math.max(0, contentHeight - height)
+                            // Issue #724 评论 5750911834 问题 2: 自动跟随滚动期间通过
+                            // begin_auto_follow_scroll() 标记，不把 scroll_y 直接作用到
+                            // caret viewport 坐标。end_auto_follow_scroll() 在滚动结束后
+                            // 由 scrollAnimationReleaseTimer 恢复。
+                            begin_auto_follow_scroll()
                             flick.contentY = Math.max(0, Math.min(maxY, nextY))
                         }
 
@@ -842,7 +860,12 @@ Rectangle {
                             id: scrollAnimationReleaseTimer
                             interval: 80
                             repeat: false
-                            onTriggered: editorScroll.editorAnimationSuppressed = false
+                            // Issue #724 评论 5750911834 问题 2: 滚动结束后恢复
+                            // is_auto_following 标记，让光标动画恢复正常。
+                            onTriggered: {
+                                editorScroll.editorAnimationSuppressed = false
+                                editorScroll.end_auto_follow_scroll()
+                            }
                         }
 
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff

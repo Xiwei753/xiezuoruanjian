@@ -133,6 +133,11 @@ pub struct LinuxThemeController {
     scheme_changed: qt_signal!(),
     #[allow(dead_code)]
     reload: qt_method!(fn(&mut self)),
+    /// Issue #724 评论 5750911834 问题 3: 只在主题输入真的变化时才重新 resolve。
+    /// 比较 ThemeInputKey（appearance_mode + system_is_dark + color_source +
+    /// selected_builtin_theme_id + selected_palette_id），避免重复 resolve。
+    #[allow(dead_code)]
+    reload_from_backend_if_changed: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     set_color_source: qt_method!(fn(&mut self, val: QString)),
     #[allow(dead_code)]
@@ -150,6 +155,14 @@ pub struct LinuxThemeController {
     /// getter 只读此缓存，不再每次都 borrow `AppBackend`/`DomainSnapshot`。
     /// 不参与 QML 绑定（QML 只通过 qt_property READ 方法间接读取）。
     cached_state: std::cell::RefCell<Option<ResolvedThemeState>>,
+    /// Issue #724 评论 5750911834 问题 3: 主题输入指纹缓存。
+    ///
+    /// 由 appearance_mode + system_is_dark + color_source +
+    /// selected_builtin_theme_id + selected_palette_id 计算的指纹。
+    /// `reload_from_backend_if_changed()` 比较此指纹，只在输入真的变化时
+    /// 才重新 resolve 并发 scheme_changed，避免重复 resolve（日志 574 次
+    /// theme.resolve 的根因）。
+    last_input_key: std::cell::RefCell<Option<String>>,
 }
 
 impl LinuxThemeController {
@@ -964,10 +977,68 @@ impl LinuxThemeController {
         // 主题解析（应用内部逻辑）→ origin=App。
         let state = self.rebuild_resolved_state();
         *self.cached_state.borrow_mut() = Some(state.clone());
+        // Issue #724 评论 5750911834 问题 3: reload() 同步更新 last_input_key，
+        // 使后续 reload_from_backend_if_changed() 不会因旧 key 不匹配而重复 resolve。
+        *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
         // Issue #710 评论 5731145076: reload() 记录完整 resolved theme，
         // 不只记录 appearanceMode 和 isDark。
         self.log_resolved_theme(
             "theme.resolve",
+            writer_diagnostics::DiagnosticOrigin::App,
+            &state,
+        );
+        self.scheme_changed();
+    }
+
+    /// Issue #724 评论 5750911834 问题 3: 从 ResolvedThemeState 计算主题输入指纹。
+    ///
+    /// 指纹由 appearance_mode + system_is_dark + color_source +
+    /// selected_builtin_theme_id + selected_palette_id 拼接而成。
+    /// 两个 state 产生相同指纹当且仅当它们的主题输入完全相同，
+    /// 此时无需重新 resolve。
+    fn compute_input_key_from_state(&self, state: &ResolvedThemeState) -> String {
+        format!(
+            "{}|{}|{}|{}|{}",
+            state.appearance_mode,
+            state.system_is_dark,
+            state.color_source,
+            state.selected_builtin_theme_id,
+            state.selected_palette_id,
+        )
+    }
+
+    /// Issue #724 评论 5750911834 问题 3: 从当前 DomainSnapshot 计算主题输入指纹。
+    fn compute_input_key_from_snapshot(&self) -> String {
+        let s = self.snap();
+        format!(
+            "{}|{}|{}|{}|{}",
+            s.appearance_mode,
+            s.system_is_dark,
+            s.color_source,
+            s.selected_builtin_theme_id,
+            s.selected_palette_id,
+        )
+    }
+
+    /// Issue #724 评论 5750911834 问题 3: 只在主题输入真的变化时才重新 resolve。
+    ///
+    /// 比较 ThemeInputKey（appearance_mode + system_is_dark + color_source +
+    /// selected_builtin_theme_id + selected_palette_id），只在输入真的变化时
+    /// 才重新 resolve 并发 scheme_changed。避免 main.qml 多处 reload() 调用
+    /// 导致重复 resolve（日志 574 次 theme.resolve 的根因）和中间状态分叉。
+    pub fn reload_from_backend_if_changed(&mut self) {
+        let current_key = self.compute_input_key_from_snapshot();
+        let last_key = self.last_input_key.borrow().clone();
+        if last_key.as_deref() == Some(current_key.as_str()) {
+            // 输入未变化，跳过 resolve，不发 scheme_changed。
+            return;
+        }
+        // 输入真的变化了，重新 resolve。
+        let state = self.rebuild_resolved_state();
+        *self.cached_state.borrow_mut() = Some(state.clone());
+        *self.last_input_key.borrow_mut() = Some(current_key);
+        self.log_resolved_theme(
+            "theme.resolve_if_changed",
             writer_diagnostics::DiagnosticOrigin::App,
             &state,
         );
@@ -989,6 +1060,8 @@ impl LinuxThemeController {
         {
             let state = self.rebuild_resolved_state();
             *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
+            *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
             // Issue #710 评论 5731145076: color source 改变后记录完整 resolved theme。
             self.log_resolved_theme(
                 "theme.color_source_resolved",
@@ -1015,6 +1088,8 @@ impl LinuxThemeController {
         {
             let state = self.rebuild_resolved_state();
             *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
+            *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
             // Issue #710 评论 5731145076: appearance mode 改变后记录完整 resolved theme。
             self.log_resolved_theme(
                 "theme.appearance_resolved",
@@ -1043,6 +1118,8 @@ impl LinuxThemeController {
             }
             let state = self.rebuild_resolved_state();
             *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
+            *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
             // Issue #710 评论 5731145076: builtin theme 改变后记录完整 resolved theme。
             self.log_resolved_theme(
                 "theme.builtin_theme_resolved",
@@ -1080,6 +1157,8 @@ impl LinuxThemeController {
         }
         let state = self.rebuild_resolved_state();
         *self.cached_state.borrow_mut() = Some(state.clone());
+        // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
+        *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
         // Issue #710 评论 5731145076: palette 改变后记录完整 resolved theme。
         self.log_resolved_theme(
             "theme.palette_resolved",
@@ -1115,6 +1194,8 @@ impl LinuxThemeController {
             // getter 读取时缓存需反映最新值，即便 mode != "system" 不发信号）。
             let state = self.rebuild_resolved_state();
             *self.cached_state.borrow_mut() = Some(state.clone());
+            // Issue #724 评论 5750911834 问题 3: 更新 input key 避免后续重复 resolve。
+            *self.last_input_key.borrow_mut() = Some(self.compute_input_key_from_state(&state));
             // Issue #710 评论 5731145076: system_is_dark 改变后记录完整 resolved theme。
             self.log_resolved_theme(
                 "theme.system_is_dark_resolved",
