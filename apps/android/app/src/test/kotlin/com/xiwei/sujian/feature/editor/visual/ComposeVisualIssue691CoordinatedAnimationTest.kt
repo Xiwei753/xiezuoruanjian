@@ -1653,6 +1653,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
 
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -1700,6 +1701,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
 
         // cursor 在 30ms 时的位置（第一笔 cursor 在 30ms 的插值结果）
@@ -1806,6 +1808,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
 
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -1833,6 +1836,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
 
         timeline.applyPatch(
@@ -1992,6 +1996,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
 
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -2019,6 +2024,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
 
         // cursor 在 30ms 时的位置（第一笔 cursor 在 30ms 的插值结果）
@@ -2143,6 +2149,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
 
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -2169,6 +2176,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
 
         timeline.applyPatch(
@@ -2326,6 +2334,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
 
         val fromRect = Rect(0f, 0f, 2f, 14f)
@@ -2353,6 +2362,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 300L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 300L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
 
         val cursorAt30ms = Rect(3f, 0f, 5f, 14f)
@@ -2477,6 +2487,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                             cursorEnabled = true,
                             coordinated = true,
                         ),
+                    intent = nonLocalIntent(1L),
                 )
 
             timeline.applyPatch(
@@ -2511,6 +2522,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                             cursorEnabled = true,
                             coordinated = true,
                         ),
+                    intent = nonLocalIntent(2L),
                 )
 
             timeline.applyPatch(
@@ -2578,6 +2590,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                             cursorEnabled = true,
                             coordinated = true,
                         ),
+                    intent = nonLocalIntent(1L),
                 )
 
             timeline.applyPatch(
@@ -2612,6 +2625,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                             cursorEnabled = true,
                             coordinated = true,
                         ),
+                    intent = nonLocalIntent(2L),
                 )
 
             timeline.applyPatch(
@@ -2875,6 +2889,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath1,
                 durationMs = 100L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -2898,6 +2913,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath2,
                 durationMs = 100L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(2L),
             )
         timeline.applyPatch(
             patch = patch2,
@@ -2921,6 +2937,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = cursorPath3,
                 durationMs = 100L,
                 motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true),
+                intent = nonLocalIntent(3L),
             )
         timeline.applyPatch(
             patch = patch3,
@@ -3003,6 +3020,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(0, 1)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -3030,6 +3048,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(1, 2)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(2L),
             )
         timeline.applyPatch(
             patch = patch2,
@@ -3049,6 +3068,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(2, 3)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(3L),
             )
         timeline.applyPatch(
             patch = patch3,
@@ -3111,6 +3131,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(0, 1)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -3138,6 +3159,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(1, 2)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(2L),
             )
         timeline.applyPatch(
             patch = patch2,
@@ -3157,6 +3179,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(2, 3)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(3L),
             )
         timeline.applyPatch(
             patch = patch3,
@@ -3268,6 +3291,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath1),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -3303,6 +3327,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath2),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(2L),
             )
         // cursor 在 30ms 时的位置（从 patch1 的 cursor 采样）
         val cursorAt30ms = timeline.sampleCursorRect(frameTime30ms) ?: initialCursorRect
@@ -3329,6 +3354,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath3),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(3L),
             )
         // cursor 在 patch2 后的位置（仍在 30ms，同一 VSync）
         val cursorAfterPatch2 = timeline.sampleCursorRect(frameTime30ms) ?: cursorAt30ms
@@ -3486,6 +3512,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 retainedMoves = listOf(RetainedMove(oldRange = TextRange(0, 2), newRange = TextRange(2, 4))),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -3531,6 +3558,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(4, 5)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(2L),
             )
         timeline.applyPatch(
             patch = patch2,
@@ -3550,6 +3578,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 insertedUnits = listOf(TextRange(5, 6)),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(3L),
             )
         timeline.applyPatch(
             patch = patch3,
@@ -3653,6 +3682,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath1),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(1L),
             )
         timeline.applyPatch(
             patch = patch1,
@@ -3696,6 +3726,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath2),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(2L),
             )
         val cursorAt30ms = timeline.sampleCursorRect(frameTime30ms) ?: initialCursorRect
         timeline.applyPatch(
@@ -3720,6 +3751,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                 cursorMotionPath = CursorMotionPath(points = cursorPath3),
                 durationMs = 100L,
                 motionPolicy = textPolicy,
+                intent = nonLocalIntent(3L),
             )
         val cursorAfterPatch2 = timeline.sampleCursorRect(frameTime30ms) ?: cursorAt30ms
         timeline.applyPatch(
@@ -3813,6 +3845,7 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         cursorMotionPath: CursorMotionPath? = null,
         durationMs: Long = 100L,
         motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        intent: EditorVisualIntent? = null,
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -3827,6 +3860,27 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
             motionPolicy = motionPolicy,
+            intent = intent,
+        )
+
+    /**
+     * Issue #720 评论 5747339452：构造非 null intent 绕过本地 reflow 释放门控 —
+     * Robolectric 下 getPathForRange 跨文本 bounds 不稳定（同 range 在不同文本中 left/right 不同），
+     * 导致 naturalGeometryChanged 误判为几何变化、survivor 被误释放。
+     * 本测试验证的是协同动画/光标行为（非 #720 释放），用非本地 intent 绕过释放门控。
+     */
+    private fun nonLocalIntent(id: Long): EditorVisualIntent =
+        EditorVisualIntent(
+            coreTransactionId = id,
+            baseRevision = 0L,
+            newRevision = id,
+            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 100L,
+            offsetMap = null,
+            oldRanges = emptyList(),
+            newRanges = emptyList(),
+            textKind = TextVisualKind.None,
+            cursor = null,
         )
 
     private fun makeInsertIntent(

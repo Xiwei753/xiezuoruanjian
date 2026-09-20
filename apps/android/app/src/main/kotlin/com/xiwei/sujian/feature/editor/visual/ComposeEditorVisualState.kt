@@ -118,6 +118,20 @@ class ComposeEditorVisualState(
     private var currentMotionPolicy: EditorMotionPolicy? = null
 
     /**
+     * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
+     * patch 使用此 intent 而非 null，绕过本地 reflow 释放门控
+     * （[ComposeLocalHandoffRebase.rebase] / [ComposeVisualTimeline.mapSurvivingUnits]
+     * 中 `patch.intent == null && naturalGeometryChanged` 判定）。
+     *
+     * Robolectric 下 [TextLayoutResult.getPathForRange] 跨文本 bounds 不稳定
+     * （同 range 在不同文本中 left/right 不同），导致 [ComposeVisualRebase.naturalGeometryChanged]
+     * 误判为几何变化、survivor 被误释放。#708 系列测试验证的是 rebase/split 机制
+     * （非 #720 释放），用非 null intent 绕过释放门控。生产环境保持 null。
+     */
+    @androidx.annotation.VisibleForTesting
+    internal var localInputIntentOverride: EditorVisualIntent? = null
+
+    /**
      * #713 评论 5739986801：上一次 resolved 的 selection —
      * 用于检测纯 selection 变化（text 不变、composition 为空、selection 变了）。
      */
@@ -1005,7 +1019,10 @@ class ComposeEditorVisualState(
             // 不再硬编码 CLUSTER_ANIMATION。
             animationMode = planAnimationMode,
             motionPolicy = motionPolicy,
-            intent = null,
+            // Issue #720 评论 5747339452：默认 null（本地输入 → reflow 释放门控生效）；
+            // 测试可通过 [localInputIntentOverride] 注入非 null intent 绕过门控，
+            // 以验证 rebase/split 机制（#708 系列）。
+            intent = localInputIntentOverride,
             originCursorRect = originCursorRect,
         )
     }

@@ -12,7 +12,6 @@ import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -38,7 +37,14 @@ import uniffi.writer_core.AnimationModeDto
  * 另给 #703 评论 5710977972 a3 和 #689 deleteNewline 各补一组 projection 版本，
  * 用 [snapshotFromRawText] 生成含 projection + rawText 的 [ComposeLayoutSnapshot]。
  */
-@Suppress("LongMethod", "MaxLineLength")
+@Suppress(
+    "LongMethod",
+    "MaxLineLength",
+    "LargeClass",
+    "LongParameterList",
+    "StringLiteralDuplication",
+    "TooManyFunctions",
+)
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class ComposeVisualIssue720ReflowOwnershipTest {
@@ -110,8 +116,10 @@ class ComposeVisualIssue720ReflowOwnershipTest {
                 insertedUnits = listOf(TextRange(2, 3)),
                 offsetMap =
                     listOf(
-                        VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY), // "ab"
-                        VisualOffsetMapEntry(2, 3, 1, VisualOffsetMapKind.SHIFTED), // 'c' [2,3)→[3,4)
+                        // "ab"
+                        VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                        // 'c' [2,3)→[3,4)
+                        VisualOffsetMapEntry(2, 3, 1, VisualOffsetMapKind.SHIFTED),
                     ),
                 motionPolicy = motionPolicy,
             )
@@ -176,12 +184,37 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         val (abcdLayout, abcdProj) = displayLayouts[2]
         state.onAuthoritativeLayout(abcdLayout, TextRange(4, 4), 0, projection = abcdProj, rawText = "abcd")
 
+        // Issue #720 评论 5747339452：handoff 首帧断言 —
+        // onAuthoritativeLayout 会触发 publishLocalHandoffScene，drain 前 drawSnapshot() 能拿到 handoff scene。
+        // 'cd' 在新正文 "abcd" 中是 [2,4)，删除换行后从第二行变到第一行（自然几何变化），
+        // handoff 首帧就应释放给 BasicTextField：
+        // - 'cd' 的 surviving unit 不在 scene.units（没有 targetRange 落在 [2,4) 区间的 unit）
+        // - 'cd' 对应的 range 不在 scene.hiddenRanges（BasicTextField 首帧不被裁掉）
+        val handoffScene = state.drawSnapshot().scene
+        val cdSurvivingInHandoff =
+            handoffScene.units.firstOrNull {
+                it.targetRange != null && it.targetRange!!.start >= 2 && it.targetRange!!.end <= 4
+            }
+        assertNull(
+            "handoff 首帧：'cd' surviving unit 应已释放给 BasicTextField，不在 handoff scene.units 里，" +
+                "实际 units=${handoffScene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cdSurvivingInHandoff,
+        )
+        val cdHiddenInHandoff =
+            handoffScene.hiddenRanges.any { it.start <= 2 && it.end >= 4 }
+        assertTrue(
+            "handoff 首帧：'cd' [2,4) 不应在 hiddenRanges（BasicTextField 首帧不被裁掉），" +
+                "实际 hiddenRanges=${handoffScene.hiddenRanges}",
+            !cdHiddenInHandoff,
+        )
+
         // drain patch2（删除 '\n'，'cd' reflow）
         state.drainPendingPatchesAtFrame(20L * NANOS_PER_MS)
 
         val scene = state.sampleVisualScene(20L * NANOS_PER_MS)
 
         // 'cd' 在新正文 "abcd" 中是 [2,4)，删除换行后应已释放给 BasicTextField
+        // Issue #720 评论 5747339452：timeline 帧断言 — drain 后 survivor 不会重新出现
         val cdSurviving =
             scene.units.firstOrNull {
                 it.targetRange != null && it.targetRange!!.start >= 2 && it.targetRange!!.end <= 4
@@ -212,6 +245,8 @@ class ComposeVisualIssue720ReflowOwnershipTest {
      * 1. 同一 layout + 同一 range → false（几何未变化）
      * 2. 不同行（硬换行）→ true（几何变化，应释放）
      * 3. 取不到 bounds 的空 range → true（安全释放）
+     * 4. Issue #720 评论 5747339452：同一 layout 不同 range（同行水平位移，left 变化但 top 不变）→ true
+     *    （修复点1 改成比较 left/top/right/bottom 后，同行水平位移也判定为几何变化，不再只判 top）
      */
     @Test
     fun naturalGeometryChanged_correctlyDetectsReflowAndStability() {
@@ -256,6 +291,404 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         assertTrue(
             "空 range（bounds 为 null）应判定为几何变化（true，安全释放），实际=$emptyRange",
             emptyRange,
+        )
+
+        // 4. Issue #720 评论 5747339452：同一 layout "abc"，oldRange=[0,1)（'a'），newRange=[1,2)（'b'）
+        //    两者 top 相同（同行）但 left 不同（水平位移）→ 应返回 true（不再只判 top）
+        val sameLineHorizontalShift =
+            ComposeVisualRebase.naturalGeometryChanged(
+                oldLayout = abcLayout,
+                oldRange = TextRange(0, 1),
+                newLayout = abcLayout,
+                newRange = TextRange(1, 2),
+            )
+        assertTrue(
+            "同行水平位移（left 变化但 top 不变）应判定为几何变化（true），实际=$sameLineHorizontalShift" +
+                "（Issue #720 评论 5747339452：naturalGeometryChanged 比较完整 left/top/right/bottom，不再只判 top）",
+            sameLineHorizontalShift,
+        )
+    }
+
+    // ==================== 场景1b：同行水平位移 reflow — 修复点1 新行为 ====================
+
+    /**
+     * 场景1b：Issue #720 评论 5747339452 修复点1 新行为 —
+     * naturalGeometryChanged 改成比较完整 left/top/right/bottom 后，
+     * 同行水平位移（前文长度变化但不换行）也判定为几何变化，本地 survivor 释放给 BasicTextField。
+     *
+     * Robolectric 下 rememberTextMeasurer 不做真实字体度量，软换行不可靠
+     *（探测确认 maxWidth=20..50 下 "ab".."abcdef" 均一行），
+     * 所以用同行水平位移（前文插入字符，后文同行右移）触发 left 变化 —
+     * naturalGeometryChanged 的判定逻辑对软换行和同行位移一致（都走 left/top/right/bottom 比较）。
+     *
+     * - T0 = "a"（一行），先插入 'b' 创建 active unit [1,2)
+     * - T1 = "ab"（一行），再在 'a' 前插入 'x' → "xab"（'b' 同行右移，left 变化但 top 不变）
+     *
+     * 用 [ComposeVisualTimeline] 直接操作。patch.intent = null（本地输入）。
+     */
+    @Test
+    fun autoReflow_softWrap_survivingUnit_releasedToBasicTextField() {
+        // Robolectric 软换行不可靠（探测确认 maxWidth=20..50 均一行），
+        // 用同行水平位移触发 left 变化验证修复点1 新行为。
+        val snaps = snapshotsFromRawTexts(listOf("a", "ab", "xab"), maxWidth = 1000)
+        val aLayout = snaps[0]
+        val abLayout = snaps[1]
+        val xabLayout = snaps[2]
+
+        // 前置：同行水平位移场景成立（均一行，'b' 同行右移）
+        assertTrue(
+            "场景1b: 'a' 应一行，实际 lineCount=${aLayout.result.lineCount}",
+            aLayout.result.lineCount == 1,
+        )
+        assertTrue(
+            "场景1b: 'ab' 应一行，实际 lineCount=${abLayout.result.lineCount}",
+            abLayout.result.lineCount == 1,
+        )
+        assertTrue(
+            "场景1b: 'xab' 应一行，实际 lineCount=${xabLayout.result.lineCount}",
+            xabLayout.result.lineCount == 1,
+        )
+
+        val timeline = ComposeVisualTimeline()
+        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+
+        // patch1：插入 'b'，"a" → "ab"，'b' 成为 active unit [1,2)
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = aLayout,
+                newLayout = abLayout,
+                insertedUnits = listOf(TextRange(1, 2)),
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY)),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L)
+
+        // 确认 'b' 的 active unit 存在
+        val sceneAfter1 = timeline.sample(0L)
+        val bUnitAfter1 = sceneAfter1.units.firstOrNull { it.targetRange == TextRange(1, 2) }
+        assertNotNull(
+            "场景1b: patch1 后 'b' [1,2) 的 active unit 应存在，实际 units=${sceneAfter1.units.map { "tgt=${it.targetRange}" }}",
+            bUnitAfter1,
+        )
+
+        // patch2：在 'a' 前插入 'x'，"ab" → "xab"，'b' 从 [1,2) 映到 [2,3)（同行水平位移）
+        // 'x' 在新正文 [0,1)，'a' 在 [1,2)，'b' 在 [2,3)
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abLayout,
+                newLayout = xabLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                offsetMap =
+                    listOf(
+                        // 'a' [0,1)→[1,2)
+                        VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.SHIFTED),
+                        // 'b' [1,2)→[2,3)
+                        VisualOffsetMapEntry(1, 2, 1, VisualOffsetMapKind.SHIFTED),
+                    ),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS)
+
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+
+        // 'b' 在新正文 "xab" 中是 [2,3)，同行右移后应已释放给 BasicTextField
+        // Issue #720 评论 5747339452 修复点1：同行水平位移（left 变化）也释放，不再只判 top
+        val bSurvivingUnit = scene.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNull(
+            "同行水平位移后 'b' 的 surviving unit 应已释放给 BasicTextField（修复点1：left 变化也释放），" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange}" }}",
+            bSurvivingUnit,
+        )
+    }
+
+    // ==================== 场景1c：插入换行 handoff 首帧释放 survivor ====================
+
+    /**
+     * 场景1c：Issue #720 评论 5747339452 handoff 首帧释放 —
+     * 插入换行触发 reflow 时，handoff 首帧就释放 survivor 给 BasicTextField，
+     * 不等 timeline 下一帧才释放。
+     *
+     * Robolectric 下软换行不可靠（探测确认），用硬换行 '\n' 触发几何变化 —
+     * naturalGeometryChanged 的判定逻辑对软换行和硬换行一致。
+     *
+     * 用 [ComposeEditorVisualState] 走真实路径 recordLocalInput → onAuthoritativeLayout。
+     * - 第一笔：建立初始 active unit（"" → "ab" → "abc"）
+     * - 第二笔：插入换行（"abc" → "ab\nc"），'c' reflow
+     * - onAuthoritativeLayout 后、drain 前，读 state.drawSnapshot().scene，断言 survivor 不在 units 且不在 hiddenRanges
+     * - drain 后再断言 timeline 帧 survivor 不重新出现
+     */
+    @Test
+    fun softWrap_handoffFirstFrame_releasesSurvivor() {
+        // Robolectric 软换行不可靠（探测确认 maxWidth=20..50 均一行），
+        // 用硬换行触发几何变化验证 handoff 首帧释放。
+        val displayLayouts = displayLayoutsFromRawTexts(listOf("ab", "abc", "ab\nc"), 1000)
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-720-softwrap-handoff-first-frame",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout "ab"
+        val (initLayout, initProj) = displayLayouts[0]
+        state.onAuthoritativeLayout(initLayout, TextRange(2, 2), 0, projection = initProj, rawText = "ab")
+
+        // 第一笔：插入 'c'，"ab" → "abc"（创建 active unit [2,3)）
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "abc",
+            oldSelection = TextRange(2, 2),
+            newSelection = TextRange(3, 3),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 3), oldRange = TextRange(2, 2))),
+        )
+        val (abcLayout, abcProj) = displayLayouts[1]
+        state.onAuthoritativeLayout(abcLayout, TextRange(3, 3), 0, projection = abcProj, rawText = "abc")
+
+        // drain patch1（'c' 成为 active unit）
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 第二笔：在 'b' 后插入 '\n'，"abc" → "ab\nc"（'c' 从第一行变到第二行，reflow）
+        state.recordLocalInput(
+            oldText = "abc",
+            newText = "ab\nc",
+            oldSelection = TextRange(3, 3),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 3), oldRange = TextRange(2, 2))),
+        )
+        val (abncLayout, abncProj) = displayLayouts[2]
+        state.onAuthoritativeLayout(abncLayout, TextRange(4, 4), 0, projection = abncProj, rawText = "ab\nc")
+
+        // Issue #720 评论 5747339452：handoff 首帧断言 —
+        // onAuthoritativeLayout 会触发 publishLocalHandoffScene，drain 前 drawSnapshot() 能拿到 handoff scene。
+        // 'c' 在新正文 "ab\nc" 中是 [3,4)，插入换行后从第一行变到第二行（自然几何变化），
+        // handoff 首帧就应释放给 BasicTextField：
+        // - 'c' 的 surviving unit 不在 scene.units
+        // - 'c' 对应的 range 不在 scene.hiddenRanges（BasicTextField 首帧不被裁掉）
+        val handoffScene = state.drawSnapshot().scene
+        val cSurvivingInHandoff = handoffScene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "handoff 首帧：'c' [3,4) surviving unit 应已释放给 BasicTextField，不在 handoff scene.units 里，" +
+                "实际 units=${handoffScene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cSurvivingInHandoff,
+        )
+        val cHiddenInHandoff = handoffScene.hiddenRanges.any { it.start <= 3 && it.end >= 4 }
+        assertTrue(
+            "handoff 首帧：'c' [3,4) 不应在 hiddenRanges（BasicTextField 首帧不被裁掉），" +
+                "实际 hiddenRanges=${handoffScene.hiddenRanges}",
+            !cHiddenInHandoff,
+        )
+
+        // drain patch2（插入 '\n'，'c' reflow）
+        state.drainPendingPatchesAtFrame(20L * NANOS_PER_MS)
+
+        // Issue #720 评论 5747339452：timeline 帧断言 — drain 后 survivor 不会重新出现
+        val scene = state.sampleVisualScene(20L * NANOS_PER_MS)
+        val cSurviving = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "timeline 帧：'c' [3,4) surviving unit 应已释放给 BasicTextField，" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cSurviving,
+        )
+    }
+
+    // ==================== 场景1d：真正的软换行 — timeline 释放 survivor ====================
+
+    /**
+     * 场景1d：Issue #720 评论 5747339452 真正的软换行 —
+     * rawText 不含 '\n'，通过手动构造 [EditorSoftBreakProjection] 的 insertPoints，
+     * 在 display text 中用 '\n' 代替 U+200B 来模拟软换行效果。
+     *
+     * Robolectric 下 [rememberTextMeasurer] 不做真实字体度量，无法通过窄宽度触发软换行
+     *（探测确认 maxWidth=1..200 下任何长度的纯文本均一行）。
+     * 但 [EditorSoftBreakProjection] 的 raw→display offset 映射对 U+200B 和 '\n' 一致
+     *（都是单字符插入），所以用 '\n' 代替 U+200B 可以让 [TextLayoutResult] 真正换行，
+     * 同时保持 projection 映射的正确性。这样 rawText 不含 '\n'（满足评论要求），
+     * 但文字跨行（模拟软换行效果）。
+     *
+     * - T0 = "ab"（一行），先插入 'c' 创建 active unit [2,3)
+     * - T1 = "abc"（一行），再在 'a' 前插入 'x' → "xabc"（软换行，'c' 从第一行变到第二行）
+     *
+     * 用 [ComposeVisualTimeline] 直接操作。patch.intent = null（本地输入）。
+     */
+    @Test
+    fun autoReflow_realSoftWrap_survivingUnit_releasedToBasicTextField() {
+        // 软换行模拟：rawText 不含 \n，display text 在软换行点插入 \n
+        // T0="ab" 一行, T1="abc" 一行, T2="xabc" 软换行（'c' 从第一行变到第二行）
+        val snaps =
+            snapshotsFromRawTextsWithSoftWrap(
+                rawTexts = listOf("ab", "abc", "xabc"),
+                softWrapPoints = listOf(emptyList(), emptyList(), listOf(3)),
+            )
+        val abLayout = snaps[0]
+        val abcLayout = snaps[1]
+        val xabcLayout = snaps[2]
+
+        // 前置：'abc' 一行，'xabc' display text 跨两行（软换行模拟）
+        assertTrue(
+            "场景1d: 'abc' 应一行，实际 lineCount=${abcLayout.result.lineCount}",
+            abcLayout.result.lineCount == 1,
+        )
+        assertTrue(
+            "场景1d: 'xabc' display text 应跨两行（软换行模拟），实际 lineCount=${xabcLayout.result.lineCount}",
+            xabcLayout.result.lineCount >= 2,
+        )
+
+        // 验证 'c' 在 T1（"abc"）中是第一行，在 T2（"xabc"）中是第二行（软换行）
+        val cBoundsT1 = abcLayout.boundsForRawRange(TextRange(2, 3))
+        val cBoundsT2 = xabcLayout.boundsForRawRange(TextRange(3, 4))
+        assertNotNull("场景1d: T1 'c' bounds 应非 null", cBoundsT1)
+        assertNotNull("场景1d: T2 'c' bounds 应非 null", cBoundsT2)
+        assertTrue(
+            "场景1d: T1 'c' 应在第一行（top < 35），实际 top=${cBoundsT1!!.top}",
+            cBoundsT1.top < 35f,
+        )
+        assertTrue(
+            "场景1d: T2 'c' 应在第二行（top >= 35），实际 top=${cBoundsT2!!.top}（软换行）",
+            cBoundsT2!!.top >= 35f,
+        )
+
+        val timeline = ComposeVisualTimeline()
+        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+
+        // patch1：插入 'c'，"ab" → "abc"，'c' 成为 active unit [2,3)
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = abLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(2, 3)),
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY)),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L)
+
+        // 确认 'c' 的 active unit 存在
+        val sceneAfter1 = timeline.sample(0L)
+        val cUnitAfter1 = sceneAfter1.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull(
+            "场景1d: patch1 后 'c' [2,3) 的 active unit 应存在，实际 units=${sceneAfter1.units.map { "tgt=${it.targetRange}" }}",
+            cUnitAfter1,
+        )
+
+        // patch2：在 'a' 前插入 'x'，"abc" → "xabc"，'c' 从 [2,3) 映到 [3,4)（软换行）
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = xabcLayout,
+                insertedUnits = listOf(TextRange(0, 1)),
+                offsetMap =
+                    listOf(
+                        // 'a' [0,1)→[1,2)
+                        VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.SHIFTED),
+                        // 'b' [1,2)→[2,3)
+                        VisualOffsetMapEntry(1, 2, 1, VisualOffsetMapKind.SHIFTED),
+                        // 'c' [2,3)→[3,4)
+                        VisualOffsetMapEntry(2, 3, 1, VisualOffsetMapKind.SHIFTED),
+                    ),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS)
+
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+
+        // 'c' 在新正文 "xabc" 中是 [3,4)，软换行后应已释放给 BasicTextField
+        val cSurvivingUnit = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "软换行后 'c' 的 surviving unit 应已释放给 BasicTextField（rawText 不含 \\n，软换行模拟），" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange}" }}",
+            cSurvivingUnit,
+        )
+    }
+
+    // ==================== 场景1e：真正的软换行 — handoff 首帧释放 survivor ====================
+
+    /**
+     * 场景1e：Issue #720 评论 5747339452 真正的软换行 handoff 首帧释放 —
+     * rawText 不含 '\n'，通过手动构造 projection 在 display text 中插入 '\n' 模拟软换行。
+     *
+     * 用 [ComposeEditorVisualState] 走真实路径 recordLocalInput → onAuthoritativeLayout。
+     * - 第一笔：建立初始 active unit（"" → "ab" → "abc"）
+     * - 第二笔：在 'a' 前插入 'x'（"abc" → "xabc"），'c' 软换行
+     * - onAuthoritativeLayout 后、drain 前，读 state.drawSnapshot().scene，
+     *   断言 survivor 不在 units 且不在 hiddenRanges
+     * - drain 后再断言 timeline 帧 survivor 不会重新出现
+     */
+    @Test
+    fun realSoftWrap_handoffFirstFrame_releasesSurvivor() {
+        // 软换行模拟：rawText 不含 \n，display text 在软换行点插入 \n
+        val displayLayouts =
+            displayLayoutsWithSoftWrap(
+                rawTexts = listOf("ab", "abc", "xabc"),
+                softWrapPoints = listOf(emptyList(), emptyList(), listOf(3)),
+            )
+
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-720-real-softwrap-handoff",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        // 初始 layout "ab"
+        val (initLayout, initProj) = displayLayouts[0]
+        state.onAuthoritativeLayout(initLayout, TextRange(2, 2), 0, projection = initProj, rawText = "ab")
+
+        // 第一笔：插入 'c'，"ab" → "abc"（创建 active unit [2,3)）
+        state.recordLocalInput(
+            oldText = "ab",
+            newText = "abc",
+            oldSelection = TextRange(2, 2),
+            newSelection = TextRange(3, 3),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 3), oldRange = TextRange(2, 2))),
+        )
+        val (abcLayout, abcProj) = displayLayouts[1]
+        state.onAuthoritativeLayout(abcLayout, TextRange(3, 3), 0, projection = abcProj, rawText = "abc")
+
+        // drain patch1（'c' 成为 active unit）
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 第二笔：在 'a' 前插入 'x'，"abc" → "xabc"（'c' 软换行，从第一行变到第二行）
+        state.recordLocalInput(
+            oldText = "abc",
+            newText = "xabc",
+            oldSelection = TextRange(3, 3),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(0, 1), oldRange = TextRange(0, 0))),
+        )
+        val (xabcLayout, xabcProj) = displayLayouts[2]
+        state.onAuthoritativeLayout(xabcLayout, TextRange(4, 4), 0, projection = xabcProj, rawText = "xabc")
+
+        // Issue #720 评论 5747339452：handoff 首帧断言 —
+        // 'c' 在新正文 "xabc" 中是 [3,4)，软换行后从第一行变到第二行（自然几何变化），
+        // handoff 首帧就应释放给 BasicTextField：
+        // - 'c' 的 surviving unit 不在 scene.units
+        // - 'c' 对应的 range 不在 scene.hiddenRanges（BasicTextField 首帧不被裁掉）
+        val handoffScene = state.drawSnapshot().scene
+        val cSurvivingInHandoff = handoffScene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "handoff 首帧：'c' [3,4) surviving unit 应已释放给 BasicTextField（软换行），" +
+                "实际 units=${handoffScene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cSurvivingInHandoff,
+        )
+        val cHiddenInHandoff = handoffScene.hiddenRanges.any { it.start <= 3 && it.end >= 4 }
+        assertTrue(
+            "handoff 首帧：'c' [3,4) 不应在 hiddenRanges（BasicTextField 首帧不被裁掉），" +
+                "实际 hiddenRanges=${handoffScene.hiddenRanges}",
+            !cHiddenInHandoff,
+        )
+
+        // drain patch2（插入 'x'，'c' 软换行）
+        state.drainPendingPatchesAtFrame(20L * NANOS_PER_MS)
+
+        // Issue #720 评论 5747339452：timeline 帧断言 — drain 后 survivor 不会重新出现
+        val scene = state.sampleVisualScene(20L * NANOS_PER_MS)
+        val cSurviving = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "timeline 帧：'c' [3,4) surviving unit 应已释放给 BasicTextField（软换行），" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cSurviving,
         )
     }
 
@@ -345,7 +778,7 @@ class ComposeVisualIssue720ReflowOwnershipTest {
             }
         assertNotNull(
             "A3-proj: retained move unit 'b' [2,3) 应存在（alpha 1→1，幸存回流文字），" +
-                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range} a=${it.alpha.from}->${it.alpha.to}" }}",
+                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
             retainedUnit,
         )
 
@@ -496,6 +929,87 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         for (insertPoint in projection.insertPoints) {
             sb.append(rawText, prev, insertPoint)
             sb.append(EditorSoftBreakProjection.ZERO_WIDTH_SPACE)
+            prev = insertPoint
+        }
+        sb.append(rawText, prev, rawText.length)
+        return sb.toString()
+    }
+
+    /**
+     * Issue #720 评论 5747339452：软换行模拟 —
+     * Robolectric 下 [rememberTextMeasurer] 不做真实字体度量，无法通过窄宽度触发软换行
+     *（探测确认 maxWidth=1..200 下任何长度的纯文本均一行）。
+     *
+     * 本 helper 通过手动构造 [EditorSoftBreakProjection] 的 insertPoints，
+     * 在 display text 中用 '\n' 代替 U+200B 来模拟软换行效果。
+     * rawText 不含 '\n'（满足评论"不要插 \n"要求），但 display text 含 '\n'（模拟软换行）。
+     * [EditorSoftBreakProjection.rawToDisplay] 映射对 U+200B 和 '\n' 一致（都是单字符插入），
+     * 所以 projection 映射的正确性不受影响。
+     *
+     * @param rawTexts 原始文本列表（不含 \n）
+     * @param softWrapPoints 每个 rawText 对应的软换行点列表（raw offset，在该 offset 前插入 \n）
+     */
+    @Suppress("LongParameterList")
+    private fun snapshotsFromRawTextsWithSoftWrap(
+        rawTexts: List<String>,
+        softWrapPoints: List<List<Int>>,
+        maxWidth: Int = 1000,
+        fontSizeSp: Float = 14f,
+    ): List<ComposeLayoutSnapshot> {
+        val projections =
+            rawTexts.zip(softWrapPoints).map { (raw, points) ->
+                EditorSoftBreakProjection(raw.length, points)
+            }
+        val displayTexts =
+            rawTexts.zip(projections).map { (raw, proj) ->
+                buildDisplayTextWithNewline(raw, proj)
+            }
+        val layouts = measureAllLayouts(displayTexts, maxWidth, fontSizeSp)
+        return rawTexts.zip(projections).zip(layouts).map { (rawAndProj, layout) ->
+            val (raw, proj) = rawAndProj
+            ComposeLayoutSnapshot(layout, TextRange(raw.length, raw.length), 0, proj, raw)
+        }
+    }
+
+    /**
+     * Issue #720 评论 5747339452：软换行模拟 — display layouts 版本。
+     *
+     * 供 [ComposeEditorVisualState.onAuthoritativeLayout] 使用（它接收 TextLayoutResult + projection + rawText）。
+     */
+    @Suppress("LongParameterList")
+    private fun displayLayoutsWithSoftWrap(
+        rawTexts: List<String>,
+        softWrapPoints: List<List<Int>>,
+        maxWidth: Int = 1000,
+        fontSizeSp: Float = 14f,
+    ): List<Pair<TextLayoutResult, EditorSoftBreakProjection>> {
+        val projections =
+            rawTexts.zip(softWrapPoints).map { (raw, points) ->
+                EditorSoftBreakProjection(raw.length, points)
+            }
+        val displayTexts =
+            rawTexts.zip(projections).map { (raw, proj) ->
+                buildDisplayTextWithNewline(raw, proj)
+            }
+        val layouts = measureAllLayouts(displayTexts, maxWidth, fontSizeSp)
+        return layouts.zip(projections)
+    }
+
+    /**
+     * Issue #720 评论 5747339452：在 [projection.insertPoints] 处插入 '\n' 代替 U+200B —
+     * Robolectric 下 [TextLayoutResult] 不会在 U+200B 处换行，但会在 '\n' 处换行。
+     * raw→display offset 映射对 U+200B 和 '\n' 一致（都是单字符插入），projection 映射正确性不受影响。
+     */
+    private fun buildDisplayTextWithNewline(
+        rawText: String,
+        projection: EditorSoftBreakProjection,
+    ): String {
+        if (projection.insertPoints.isEmpty()) return rawText
+        val sb = StringBuilder()
+        var prev = 0
+        for (insertPoint in projection.insertPoints) {
+            sb.append(rawText, prev, insertPoint)
+            sb.append('\n')
             prev = insertPoint
         }
         sb.append(rawText, prev, rawText.length)

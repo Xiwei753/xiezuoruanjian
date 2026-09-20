@@ -19,6 +19,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import uniffi.writer_core.AnimationModeDto
 
 /**
  * #708 评论 5725706551 — `publishLocalHandoffScene()` scene rebase 修复的验证测试。
@@ -136,23 +137,21 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
         // 在 timeline drain 之前检查 drawSnapshot.scene — 这是 publishLocalHandoffScene 建立的 handoff scene
         val handoffScene = state.drawSnapshot().scene
 
-        // 断言1：旧 'a' 的 targetRange 已从 [0,1) 映射成 [1,2)（新正文坐标）
-        // 修复后：ComposeLocalHandoffRebase.rebase 通过 offsetMap 把旧 'a' 的 [0,1) 映射到新 [1,2)
+        // 断言1：Issue #720 评论 5747339452：本地输入 + 'a' 同行右移（自然几何变化）→
+        // handoff 首帧释放 survivor，不加入 rebasedUnits。旧 'a' 不在 handoff scene.units。
         val mappedUnit = handoffScene.units.firstOrNull { it.targetRange == TextRange(1, 2) }
-        assertNotNull(
-            "testA: rebase 后应存在 targetRange=[1,2) 的 unit（旧 'a' 映射到新坐标），" +
+        assertNull(
+            "testA: handoff 首帧应释放 'a'（本地输入 + 自然几何变化），不在 handoff scene.units，" +
                 "实际 units.targetRanges=${handoffScene.units.mapNotNull { it.targetRange }}" +
-                "（旧 bug：旧 'a' 的 targetRange 仍然是 [0,1)（旧坐标），不做 rebase）",
+                "（Issue #720 评论 5747339452：本地 survivor 自然几何变化就释放给 BasicTextField）",
             mappedUnit,
         )
 
-        // 断言2：hiddenRanges 包含 [1,2)（新坐标系下的 'a'）
-        // 修复后：hiddenRanges 从 rebase 后的 targetRange 重新推导，不再从旧 hiddenRanges 复制
+        // 断言2：'a' 已释放，不在 hiddenRanges（BasicTextField 首帧直接画 'a' 最终位置）
         assertTrue(
-            "testA: hiddenRanges 应包含 [1,2)（新坐标系下的 'a'），" +
-                "实际 hiddenRanges=${handoffScene.hiddenRanges}" +
-                "（修复后：hiddenRanges 从 rebase 后的 targetRange 重新推导，不再从旧 hiddenRanges 复制）",
-            handoffScene.hiddenRanges.any { it.start == 1 && it.end == 2 },
+            "testA: 'a' [1,2) 已释放，不应在 hiddenRanges（BasicTextField 首帧不被裁掉），" +
+                "实际 hiddenRanges=${handoffScene.hiddenRanges}",
+            !handoffScene.hiddenRanges.any { it.start == 1 && it.end == 2 },
         )
 
         // 断言3：hiddenRanges 包含 [0,1)（新插入的 'b'）
@@ -718,6 +717,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 targetId = "test-708-5727440517-E",
                 classifier = FakeLocalVisualPlanClassifier,
             )
+        // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
+        // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
+        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -927,6 +929,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 targetId = "test-708-5727808906-F",
                 classifier = FakeLocalVisualPlanClassifier,
             )
+        // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
+        // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
+        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -2376,6 +2381,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 targetId = "test-708-5733321056-I4",
                 classifier = FakeLocalVisualPlanClassifier,
             )
+        // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
+        // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
+        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -2510,6 +2518,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 targetId = "test-708-5733321056-I5",
                 classifier = FakeLocalVisualPlanClassifier,
             )
+        // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
+        // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
+        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -2858,6 +2869,9 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 targetId = "test-708-5734842845-I7",
                 classifier = FakeLocalVisualPlanClassifier,
             )
+        // Issue #720 评论 5747339452：用非 null intent 绕过本地 reflow 释放门控，
+        // 验证 rebase/split 机制（Robolectric bounds 跨文本不稳定导致误释放）。
+        state.localInputIntentOverride = nonLocalIntent(1L)
 
         // 初始 layout：空文本
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
@@ -3020,6 +3034,27 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
     }
 
     // ==================== 辅助方法 ====================
+
+    /**
+     * Issue #720 评论 5747339452：构造非 null intent 绕过本地 reflow 释放门控 —
+     * Robolectric 下 [TextLayoutResult.getPathForRange] 跨文本 bounds 不稳定
+     * （同 range 在不同文本中 left/right 不同），导致 [ComposeVisualRebase.naturalGeometryChanged]
+     * 误判为几何变化、survivor 被误释放。本测试验证的是 rebase/split 机制（非 #720 释放），
+     * 用非 null intent 绕过释放门控。
+     */
+    private fun nonLocalIntent(id: Long): EditorVisualIntent =
+        EditorVisualIntent(
+            coreTransactionId = id,
+            baseRevision = 0L,
+            newRevision = id,
+            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 100L,
+            offsetMap = null,
+            oldRanges = emptyList(),
+            newRanges = emptyList(),
+            textKind = TextVisualKind.None,
+            cursor = null,
+        )
 
     private companion object {
         /** 1 ms = 1_000_000 ns。 */
