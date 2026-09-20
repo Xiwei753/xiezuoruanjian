@@ -62,6 +62,7 @@ impl LineSnapshotBuilder {
                     byte_start: line.byte_start,
                     byte_end: line.byte_end,
                     visual_x: line.x,
+                    visual_line_id: line.id,
                 });
 
                 visual_line_ordinal += 1;
@@ -108,6 +109,7 @@ impl LineSnapshotBuilder {
                 byte_start: line.byte_start,
                 byte_end: line.byte_end,
                 visual_x: line.x,
+                visual_line_id: line.id,
             });
 
             visual_line_ordinal += 1;

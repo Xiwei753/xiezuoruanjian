@@ -85,6 +85,11 @@ pub(crate) struct PreparedLineSnapshot {
     pub byte_start: usize,
     pub byte_end: usize,
     pub visual_x: f64,
+    /// Issue #722 评论 5749572808 问题1: 该行在全文视觉行中的身份，
+    /// 原样从源 `VisualLine.id` 带下来。动画切片的 `visual_line_id`
+    /// 必须用这个全文行号，不能用 `line_snapshots` 的局部数组下标——
+    /// 视口裁剪后局部下标和全文行号不一致，跨行裁切会判断错。
+    pub visual_line_id: usize,
 }
 
 impl PreparedLineSnapshot {

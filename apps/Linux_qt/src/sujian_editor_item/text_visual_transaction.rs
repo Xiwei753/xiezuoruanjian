@@ -322,18 +322,49 @@ impl PreparedCursorVisualTrack {
 
     /// Issue #722 评论 5749164244 问题1: 按 progress 采样当前 caret 所在视觉行 id。
     ///
-    /// caret 从 from 行移到 to 行。progress < 0.5 时 caret 还在 from 行附近，
-    /// >= 0.5 时已到 to 行附近。from/to 行 id 相同时直接返回。
+    /// Issue #722 评论 5749572808 问题2: 不再用 `progress < 0.5` 硬切 from/to 行。
+    /// 改为按采样后的 caret y 与 from/to 行真实 top/bottom 判断：caret y 落在
+    /// from 行 y 范围内 → 还在 from 行；落在 to 行 y 范围内 → 已到 to 行；
+    /// 过渡中间空隙按 y 方向（向下/向上移动）判断。这样跨软换行交棒时
+    /// 不会因 progress 过 0.5 就提前认为 caret 已进入 to 行。
     /// `None` 表示 from/to 行 id 未知（fallback 路径），调用方走 y fallback。
     pub fn sampled_visual_line_id_at_progress(&self, progress: f64) -> Option<usize> {
         match (self.from_visual_line_id, self.to_visual_line_id) {
             (Some(f_id), Some(t_id)) => {
                 if f_id == t_id {
+                    return Some(f_id);
+                }
+                let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
+                let caret_y = self.from.top + (self.to.top - self.from.top) * eased;
+                // from 行 y 范围 [from.top, from.bottom)，to 行 [to.top, to.bottom)。
+                if caret_y >= self.from.top && caret_y < self.from.bottom {
                     Some(f_id)
-                } else if progress < 0.5 {
-                    Some(f_id)
-                } else {
+                } else if caret_y >= self.to.top && caret_y < self.to.bottom {
                     Some(t_id)
+                } else {
+                    // 过渡中间空隙：按 y 方向判断。
+                    if self.to.top > self.from.top {
+                        // 向下移动：caret_y >= from.bottom 说明已离开 from 行，归 to。
+                        if caret_y >= self.from.bottom {
+                            Some(t_id)
+                        } else {
+                            Some(f_id)
+                        }
+                    } else if self.to.top < self.from.top {
+                        // 向上移动：caret_y <= to.bottom 说明已进入 to 行。
+                        if caret_y <= self.to.bottom {
+                            Some(t_id)
+                        } else {
+                            Some(f_id)
+                        }
+                    } else {
+                        // to.top == from.top：fallback 用 progress < 0.5。
+                        if progress < 0.5 {
+                            Some(f_id)
+                        } else {
+                            Some(t_id)
+                        }
+                    }
                 }
             }
             (Some(f_id), None) => Some(f_id),

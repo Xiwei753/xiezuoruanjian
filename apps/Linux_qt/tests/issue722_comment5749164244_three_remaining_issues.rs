@@ -110,11 +110,7 @@ fn issue1_y_fallback_uses_half_open_interval() {
 #[test]
 fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(
-        &src,
-        "fn build_text_animation_plan_with_sample",
-        6000,
-    );
+    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 6000);
     // 修复后：不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 或 `(f.x + f.w, f.y, 0usize)`
     // 注释中可能提到 0usize（说明不再硬编码），只检查代码模式
     let has_hardcoded_zero = window.contains("(r.x, r.top, 0usize)")
@@ -147,20 +143,31 @@ fn issue1_prepared_cursor_visual_track_saves_line_ids() {
 }
 
 /// 问题1 守卫6: build_insert_reveal_slices / build_delete_conceal_slices
-/// 传 Some(line_idx) 而非裸 line_idx。
+/// 传 Some(line.visual_line_id)（全文视觉行 id）而非 Some(line_idx)（局部数组下标）。
+/// Issue #722 评论 5749572808 问题1: line_idx 是 line_snapshots 的局部下标，
+/// 视口裁剪后和全文 VisualLine.id 不一致，跨行裁切会判断错。必须用 line.visual_line_id。
 #[test]
 fn issue1_build_slices_pass_some_line_idx() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
     let insert_window = function_window(&src, "fn build_insert_reveal_slices", 3000);
     let delete_window = function_window(&src, "fn build_delete_conceal_slices", 3000);
-    // 修复后：传 Some(line_idx)
+    // 修复后：传 Some(new_line.visual_line_id) / Some(old_line.visual_line_id)
     assert!(
-        insert_window.contains("Some(line_idx)"),
-        "build_insert_reveal_slices 必须传 Some(line_idx) 而非裸 line_idx"
+        insert_window.contains("Some(new_line.visual_line_id)"),
+        "build_insert_reveal_slices 必须传 Some(new_line.visual_line_id)（全文视觉行 id）而非 Some(line_idx)（局部下标）"
     );
     assert!(
-        delete_window.contains("Some(line_idx)"),
-        "build_delete_conceal_slices 必须传 Some(line_idx) 而非裸 line_idx"
+        delete_window.contains("Some(old_line.visual_line_id)"),
+        "build_delete_conceal_slices 必须传 Some(old_line.visual_line_id)（全文视觉行 id）而非 Some(line_idx)（局部下标）"
+    );
+    // 不应再用 Some(line_idx)（局部下标，视口裁剪后和全文行号不一致）
+    assert!(
+        !insert_window.contains("Some(line_idx)"),
+        "build_insert_reveal_slices 不应再传 Some(line_idx)（局部下标）"
+    );
+    assert!(
+        !delete_window.contains("Some(line_idx)"),
+        "build_delete_conceal_slices 不应再传 Some(line_idx)（局部下标）"
     );
 }
 
@@ -196,7 +203,8 @@ fn issue2_forward_delete_same_line_frame_x_fixed_at_left() {
     let window = function_window(&src, "pub fn compute_frame_caret_driven", 12000);
     // 修复后：不应有 frame_x = from_document_rect.x + (from_document_rect.w - from_right)
     // 即不应从右端往回算 frame_x
-    let has_right_aligned = window.contains("self.from_document_rect.x + (self.from_document_rect.w - from_right)");
+    let has_right_aligned =
+        window.contains("self.from_document_rect.x + (self.from_document_rect.w - from_right)");
     assert!(
         !has_right_aligned,
         "前向 Delete 同一行分支 frame_x 不应从右端往回算，应固定在 from_document_rect.x"

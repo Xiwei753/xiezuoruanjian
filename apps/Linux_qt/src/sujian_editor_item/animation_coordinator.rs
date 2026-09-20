@@ -198,8 +198,38 @@ fn conflicting_units_are_untouched(
     // tx.new_snapshot.virtual_text 是该旧事务应用后的文本（旧事务 new 坐标系），
     // current_old_text 是当前事务应用前的文本（current-old 坐标系）。
     let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
+    // Issue #722 评论 5749572808 问题3: 对 Reveal/Conceal 用真实帧判断存活，
+    // 不用 unit.progress >= 1.0。采样本帧 caret geometry 供 compute_frame_caret_driven。
+    let (caret_x, caret_y, caret_line_id) = sample_caret_geometry_for_caret_driven_clip(tx, now);
     for unit in &tx.units {
-        if unit.progress(now) >= 1.0 {
+        // Issue #722 评论 5749572808 问题3: 按 kind 分支判断是否已到终态。
+        let still_playing = match unit.slice.kind {
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                let visible_fraction = unit.current_visible_fraction(now);
+                let frame = unit.slice.compute_frame_caret_driven(
+                    caret_x,
+                    caret_y,
+                    caret_line_id,
+                    visible_fraction,
+                );
+                match unit.slice.kind {
+                    AnimatedSliceKind::InsertReveal => {
+                        // frame.w < target_w - 0.001 仍活跃。
+                        frame.w < unit.slice.to_document_rect.w - 0.001
+                    }
+                    AnimatedSliceKind::DeleteConceal => {
+                        // frame.w > 0.001 仍活跃。
+                        frame.w > 0.001
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                // Reflow 仍看 unit progress。
+                unit.progress(now) < 1.0
+            }
+        };
+        if !still_playing {
             continue;
         }
         playing_units += 1;
@@ -239,10 +269,17 @@ fn conflicting_units_are_untouched(
 /// `remaining_duration_ms` 是旧 caret track 剩余的播放时长。新事务用 `sampled` 当
 /// `cursor_visual_track.from`，用 `remaining_duration_ms` 当 `cursor_visual_track.duration_ms`，
 /// 不再借任何文字 unit 的 progress。
+///
+/// Issue #722 评论 5749572808 问题2: 增加 `sampled_visual_line_id`，
+/// 采样到的旧事务屏幕 caret 所在视觉行 id。快速连续输入发生 rebase 时，
+/// 新 track 的起点虽然 x/y 用旧事务屏幕真实位置，但"它在哪一行"必须也用
+/// 采样到的行 id，不能强行改成新事务终点所在行——跨软换行交棒时第一帧
+/// 文字可能认为 caret 已进入新行，把下一行提前吐出来。
 #[derive(Clone, Debug)]
 struct RebaseCaretHandoff {
     sampled: CursorRect,
     remaining_duration_ms: u64,
+    sampled_visual_line_id: Option<usize>,
 }
 
 /// Issue #690 评论 5681206040 + 5682867529: 构建新事务的 caret track，四个正文入口共用。
@@ -270,10 +307,11 @@ fn build_cursor_visual_track(
         Some(h) => Some(PreparedCursorVisualTrack {
             from: h.sampled,
             to: to.clone(),
-            // rebase 交棒：from 端是采样到的旧事务屏幕 caret，
-            // 其 visual_line_id 未知（CursorRect 不带），用 to 端行 id 近似。
+            // Issue #722 评论 5749572808 问题2: rebase 交棒时 from 端的 visual_line_id
+            // 用采样到的旧事务屏幕 caret 所在行 id，不能用新事务终点所在行。
+            // 跨软换行交棒时第一帧文字可能认为 caret 已进入新行，把下一行提前吐出来。
             // to 端是新事务的 new_cursor_rect 行 id。
-            from_visual_line_id: new_cursor_visual_line_id,
+            from_visual_line_id: h.sampled_visual_line_id,
             to_visual_line_id: new_cursor_visual_line_id,
             started_at: None,
             duration_ms: h.remaining_duration_ms,
@@ -402,7 +440,12 @@ fn sample_caret_geometry_for_caret_driven_clip(
 /// - Reflow unit：用 `compute_frame(visible_fraction)`（原逻辑），`visible_fraction`
 ///   用 unit 自己的 `current_visible_fraction(now)`。
 ///
-/// 返回 `None` 表示该 unit 已播完（progress >= 1.0），不采集。
+/// Issue #722 评论 5749572808 问题3: 终态判断不再一刀切用 `unit.progress(now) >= 1.0`。
+/// Reveal/Conceal 已由 caret track 决定真实裁切，unit 自己 duration 到 100% 但
+/// caret track 还没走到目标时，正常渲染仍画半截文字，rebase 时不能直接丢掉该 unit。
+/// 改为按真实帧判断：InsertReveal `frame.w >= to_document_rect.w - 0.001` 才算已完全
+/// 吐出（返回 None）；DeleteConceal `frame.w <= 0.001` 才算已完全吞掉（返回 None）。
+/// ReflowMove/ReflowCrossFade 仍看 unit progress。
 fn collect_rebase_frame_for_unit(
     unit: &PreparedVisualUnit,
     caret_x: f64,
@@ -410,19 +453,36 @@ fn collect_rebase_frame_for_unit(
     caret_line_id: Option<usize>,
     now: Instant,
 ) -> Option<RebaseFrame> {
-    if unit.progress(now) >= 1.0 {
-        return None;
-    }
     let visible_fraction = unit.current_visible_fraction(now);
     let frame = match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-            unit.slice
-                .compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible_fraction)
-        }
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => unit
+            .slice
+            .compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible_fraction),
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
             unit.slice.compute_frame(visible_fraction)
         }
     };
+    // Issue #722 评论 5749572808 问题3: 按真实帧判断终态，不用 unit.progress >= 1.0。
+    match unit.slice.kind {
+        AnimatedSliceKind::InsertReveal => {
+            // 已完全吐出 → 不采集。
+            if frame.w >= unit.slice.to_document_rect.w.max(0.0) - 0.001 {
+                return None;
+            }
+        }
+        AnimatedSliceKind::DeleteConceal => {
+            // 已完全吞掉 → 不采集。
+            if frame.w <= 0.001 {
+                return None;
+            }
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            // Reflow 仍看 unit progress。
+            if unit.progress(now) >= 1.0 {
+                return None;
+            }
+        }
+    }
     // 从真实显示帧反算 visible_fraction：
     // Insert = frame.w / to_document_rect.w
     // Delete = frame.w / from_document_rect.w
@@ -525,7 +585,10 @@ fn build_insert_reveal_slices(
                     .virtual_text
                     .get(new_cluster.byte_start..new_cluster.byte_end)
                     .unwrap_or("");
-                if cluster_text.chars().all(|c| c.is_whitespace() || c.is_control()) {
+                if cluster_text
+                    .chars()
+                    .all(|c| c.is_whitespace() || c.is_control())
+                {
                     continue;
                 }
                 let new_sr = new_cluster.source_rect.clone();
@@ -540,7 +603,10 @@ fn build_insert_reveal_slices(
                     new_cluster.byte_start,
                     new_cluster.byte_end,
                     Some(new_cluster.shaping_identity.clone()),
-                    Some(line_idx),
+                    // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
+                    // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
+                    // managed_new_clusters/patches_by_line 的局部索引。
+                    Some(new_line.visual_line_id),
                 ));
                 managed_new_clusters.push((line_idx, cluster_idx, new_sr));
             }
@@ -597,7 +663,7 @@ fn build_delete_conceal_slices(
     let old_cx = old_cursor_rect.as_ref().map(|c| c.x).unwrap_or(0.0);
     let old_cy = old_cursor_rect.as_ref().map(|c| c.top).unwrap_or(0.0);
 
-    for (line_idx, old_line) in old_snapshot.line_snapshots.iter().enumerate() {
+    for old_line in &old_snapshot.line_snapshots {
         for old_cluster in &old_line.clusters {
             // 只处理落在 deleted_range 内的 cluster
             if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
@@ -620,7 +686,9 @@ fn build_delete_conceal_slices(
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
                     conceal_to_left_edge,
-                    Some(line_idx),
+                    // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
+                    // 不是 line_snapshots 的局部数组下标。
+                    Some(old_line.visual_line_id),
                 ));
             }
         }
@@ -1124,13 +1192,7 @@ impl LinuxEditorAnimationCoordinator {
                 .units
                 .iter()
                 .filter_map(|unit| {
-                    collect_rebase_frame_for_unit(
-                        unit,
-                        caret_x,
-                        caret_y,
-                        caret_line_id,
-                        now,
-                    )
+                    collect_rebase_frame_for_unit(unit, caret_x, caret_y, caret_line_id, now)
                 })
                 .collect();
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
@@ -1166,6 +1228,10 @@ impl LinuxEditorAnimationCoordinator {
                 (Some(sampled), Some(track)) => Some(RebaseCaretHandoff {
                     sampled,
                     remaining_duration_ms: track.remaining_duration_ms(now).max(1),
+                    // Issue #722 评论 5749572808 问题2: 复用同一 now 时刻采样的
+                    // caret_line_id（第1121行 sample_caret_geometry_for_caret_driven_clip
+                    // 的返回值），保证 x/y 和行 id 来自同一帧同一 track。
+                    sampled_visual_line_id: caret_line_id,
                 }),
                 (Some(sampled), None) => {
                     // 旧事务没有 caret track（理论上正文事务都应有，防御性 fallback）：
@@ -1181,6 +1247,8 @@ impl LinuxEditorAnimationCoordinator {
                     Some(RebaseCaretHandoff {
                         sampled,
                         remaining_duration_ms: tx_remaining,
+                        // 无 track 时行 id 未知。
+                        sampled_visual_line_id: None,
                     })
                 }
                 (None, _) => None,
@@ -2770,31 +2838,38 @@ impl LinuxEditorAnimationCoordinator {
                         // Issue #722 评论 5749164244 问题1: 三条采样路径都返回真实
                         // visual_line_id（从 PreparedCursorVisualTrack 的 from/to
                         // visual line id 按 progress 采样），不再硬编码 0usize。
-                        let (caret_x, caret_y, caret_line_id) = match tx.cursor_visual_track.as_ref() {
-                            Some(track) => {
-                                let progress = track.progress(sample.frame_now);
-                                let r = track.sampled_rect_at_progress(progress);
-                                let line_id = track.sampled_visual_line_id_at_progress(progress);
-                                (r.x, r.top, line_id)
-                            }
-                            None => {
-                                if let (Some(old_r), Some(new_r)) =
-                                    (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
-                                {
-                                    let progress = tx.progress(sample.frame_now);
-                                    let eased = AnimatedSlice::ease_out_quad(progress);
-                                    let x = old_r.x + (new_r.x - old_r.x) * eased;
-                                    let y = old_r.top + (new_r.top - old_r.top) * eased;
-                                    // 无 caret track 时 visual_line_id 未知，走 y fallback。
-                                    (x, y, None)
-                                } else {
-                                    // 没有 caret 信息时回退到 unit visible fraction。
-                                    let f = unit.slice.compute_frame(visible);
-                                    (f.x + f.w, f.y, None)
+                        let (caret_x, caret_y, caret_line_id) =
+                            match tx.cursor_visual_track.as_ref() {
+                                Some(track) => {
+                                    let progress = track.progress(sample.frame_now);
+                                    let r = track.sampled_rect_at_progress(progress);
+                                    let line_id =
+                                        track.sampled_visual_line_id_at_progress(progress);
+                                    (r.x, r.top, line_id)
                                 }
-                            }
-                        };
-                        unit.slice.compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible)
+                                None => {
+                                    if let (Some(old_r), Some(new_r)) =
+                                        (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
+                                    {
+                                        let progress = tx.progress(sample.frame_now);
+                                        let eased = AnimatedSlice::ease_out_quad(progress);
+                                        let x = old_r.x + (new_r.x - old_r.x) * eased;
+                                        let y = old_r.top + (new_r.top - old_r.top) * eased;
+                                        // 无 caret track 时 visual_line_id 未知，走 y fallback。
+                                        (x, y, None)
+                                    } else {
+                                        // 没有 caret 信息时回退到 unit visible fraction。
+                                        let f = unit.slice.compute_frame(visible);
+                                        (f.x + f.w, f.y, None)
+                                    }
+                                }
+                            };
+                        unit.slice.compute_frame_caret_driven(
+                            caret_x,
+                            caret_y,
+                            caret_line_id,
+                            visible,
+                        )
                     }
                     AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                         // Reflow 不消费 caret 边界，用纯几何插值。
@@ -3347,7 +3422,7 @@ mod tests {
             50,
             60,
             Some(sid_a.clone()),
-                None,
+            None,
         )];
 
         let offset_map = OffsetMap {
@@ -3493,7 +3568,7 @@ mod tests {
             150,
             170,
             Some(sid_a.clone()),
-                None,
+            None,
         )];
 
         let offset_map = OffsetMap {
@@ -3551,7 +3626,7 @@ mod tests {
             50,
             60,
             Some(sid_dup.clone()),
-                None,
+            None,
         )];
 
         let offset_map = OffsetMap {
@@ -3704,6 +3779,7 @@ mod tests {
             byte_start: line_clusters.first().map(|c| c.0).unwrap_or(0),
             byte_end: line_clusters.last().map(|c| c.1).unwrap_or(0),
             visual_x: 0.0,
+            visual_line_id: 0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,
@@ -4393,7 +4469,7 @@ mod tests {
             byte_start,
             byte_end,
             None,
-                None,
+            None,
         )
     }
 
@@ -4425,7 +4501,7 @@ mod tests {
             byte_end,
             None,
             conceal_to_left_edge,
-                None,
+            None,
         )
     }
 
@@ -4833,7 +4909,7 @@ mod tests {
             true,
             None,
             0,
-                0.0,
+            0.0,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -4885,7 +4961,7 @@ mod tests {
             false,
             None,
             0,
-                0.0,
+            0.0,
         );
 
         assert!(
@@ -4963,7 +5039,7 @@ mod tests {
             true,
             None,
             0,
-                0.0,
+            0.0,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -5011,7 +5087,7 @@ mod tests {
             true,
             None,
             0,
-                0.0,
+            0.0,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -5081,7 +5157,7 @@ mod tests {
             true,
             None,
             0,
-                0.0,
+            0.0,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -5225,7 +5301,7 @@ mod tests {
             true,
             None,
             0,
-                0.0,
+            0.0,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）
