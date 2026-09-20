@@ -346,8 +346,14 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 "期望：按 offset-map entry 切成存活 slice",
             survivingAb,
         )
-        assertNotNull(
-            "缺陷5: 跨过删除洞的 active range 应切成存活 slice [2,3)（c），但当前没有",
+        // Issue #720 评论 5746323050：'c' 从 "ab\nc" 第二行变到 "abc" 第一行（top 变化），
+        // 本地输入 + 跨行 reflow → 释放给 BasicTextField，不在 overlay units 里。
+        // defect5 的核心是"切成存活 slice"而非"整块转 ghost" —
+        // "ab" 仍在 overlay 证明 split 逻辑正确，"c" 被释放是 Issue #720 的正确收口。
+        assertNull(
+            "缺陷5+Issue#720: 'c' 跨行 reflow 后应释放给 BasicTextField，不在 overlay units 里\n" +
+                "场景：timeline 有 [0,4)='ab\\nc'，删除中间换行 [2,3)，'c' 从第二行变到第一行\n" +
+                "Issue #720 收口：本地输入只动画真正插入/删除的 glyph，幸存文字由 BasicTextField 直接画最终位置",
             survivingC,
         )
         // 不应整块转 ghost

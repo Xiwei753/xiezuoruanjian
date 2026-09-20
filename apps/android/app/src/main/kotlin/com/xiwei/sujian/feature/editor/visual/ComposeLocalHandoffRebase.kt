@@ -55,6 +55,7 @@ internal object ComposeLocalHandoffRebase {
      * @return rebased handoff — units 已映射到新坐标系，ghostedCoverage 记录已转 ghost 的旧正文范围，
      *   initialClipFractionsByKey 记录每个 child 的真实首帧 fraction。
      */
+    @Suppress("CyclomaticComplexMethod")
     fun rebase(
         scene: ComposeVisualScene,
         patch: ComposeVisualPatch,
@@ -111,7 +112,28 @@ internal object ComposeLocalHandoffRebase {
             // 不要凭空造一个 cursor。
             val parentOldCursorRect = scene.unitClipCursors[unit.key]
             for (slice in slices) {
+                // Issue #720 评论 5747339452：本地 patch + surviving slice 自然几何变化 →
+                // handoff 首帧就释放给 BasicTextField，不加入 rebasedUnits、不写 fraction/cursor map、不进入 mergedHidden。
+                // 这样 BasicTextField 从 handoff 首帧直接画最终位置，不是等 timeline 下一帧才释放。
+                // 真正需要 retained/reflow ownership 的非本地/Core 路径不受 patch.intent == null 这层门控影响。
+                val isLocalSurvivorWithGeometryChange =
+                    patch.intent == null &&
+                        slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING &&
+                        slice.newSubRange != null &&
+                        ComposeVisualRebase.naturalGeometryChanged(
+                            oldLayout = unit.layout,
+                            oldRange = slice.oldSubRange,
+                            newLayout = newLayout,
+                            newRange = slice.newSubRange,
+                        )
+                if (isLocalSurvivorWithGeometryChange) {
+                    continue
+                }
                 val childKey = if (isSplit) nextChildKey() else unit.key
+                // Issue #720 评论 5747339452：handoff 首帧就释放自然几何变化的 survivor，
+                // 不保留瞬态。handoff 和 timeline 两边都释放（timeline 侧由
+                // ComposeVisualTimeline.mapSurvivingUnits() + naturalGeometryChanged 释放），
+                // BasicTextField 从 handoff 首帧直接画最终位置，不再有 oldPosition→newPosition 位移动画。
                 // #708 评论 5731952690 修复3：记录每个 rebase child 的真实首帧 fraction —
                 // 逻辑抽取到 computeSliceInitialFraction helper，降低 rebase() 复杂度。
                 // 返回 null 表示不需要记录（非 split 且 parentOldFraction==null）。
