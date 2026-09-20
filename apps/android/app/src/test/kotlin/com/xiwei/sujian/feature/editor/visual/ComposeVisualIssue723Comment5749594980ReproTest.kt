@@ -33,10 +33,13 @@ import org.robolectric.annotation.Config
  * 5. computeCursorParamsForPatch() 取出 cursorMotionPath，applyCursorPatch() 执行 cursorChannel = track；
  * 6. sampleVisualScene() 得到 cursorOwnedByVisual=true，自绘光标又回到旧目标。
  *
- * 修复方向：releaseVisualCursorOwnership 记录 suppressCursorThroughPatchId = pendingPatches.maxId，
- * drainPendingPatchesAtFrame 按 patch.id 边界分两段：
- * - id <= suppressCursorThroughPatchId 的旧 patch：assignCursorChannel=false，clipTracks 正常创建；
- * - id > suppressCursorThroughPatchId 的新 patch：assignCursorChannel=true，可正常取得 caret。
+ * 修复方向：releaseVisualCursorOwnership 记录 suppressCursorThroughSequence = pendingPatches.lastSequence，
+ * drainPendingPatchesAtFrame 按 pending patch 入队序号边界分两段：
+ * - sequence <= suppressCursorThroughSequence 的旧 patch：assignCursorChannel=false，clipTracks 正常创建；
+ * - sequence > suppressCursorThroughSequence 的新 patch：assignCursorChannel=true，可正常取得 caret。
+ *
+ * Issue #723 评论 5750100004：边界用 PendingPatch.sequence（统一入队序号）而非 ComposeVisualPatch.id
+ * （两套来源、跨来源不单调），避免 release 后新 Core patch（id 小）被误判成旧 patch。
  *
  * 本测试覆盖：
  * - 时序1：pending patch 带 cursor motion → 拖成非 collapsed selection → drain → cursorOwnedByVisual 保持 false
@@ -322,7 +325,7 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
 
     /**
      * 时序4（评论 5749594980）：release 后用户产生新的文字输入 →
-     * 新 patch id > suppressCursorThroughPatchId → 新 patch 可正常取得 cursor 所有权。
+     * 新 patch sequence > suppressCursorThroughSequence → 新 patch 可正常取得 cursor 所有权。
      */
     @Test
     fun pendingPatchWithCursorMotion_thenRelease_thenNewTextInput_cursorOwnershipRestored() {
@@ -380,11 +383,11 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
         )
 
         // 步骤5（关键）：用户产生新的文字输入 → recordLocalInput
-        // 注意：recordLocalInput 不会重置 suppressCursorThroughPatchId
-        // 新 patch 的 id 会大于 release 时记录的边界 id，自然绕过抑制。
+        // 注意：recordLocalInput 不会重置 suppressCursorThroughSequence
+        // 新 patch 的 sequence 会大于 release 时记录的边界 sequence，自然绕过抑制。
 
         // 由于没有新的 layout 到达，无法生成新 patch。
-        // 但抑制边界已记录 — 如果有新 patch 到来，其 id > suppressCursorThroughPatchId，
+        // 但抑制边界已记录 — 如果有新 patch 到来，其 sequence > suppressCursorThroughSequence，
         // assignCursorChannel 会是 true。
 
         // 验证 recordLocalInput 不抛异常且状态正确转换：
@@ -393,7 +396,7 @@ class ComposeVisualIssue723Comment5749594980ReproTest {
         val frameTimeFar = 10_000_000L
         state.sampleVisualScene(frameTimeFar)
 
-        // recordLocalInput 不重置 suppressCursorThroughPatchId
+        // recordLocalInput 不重置 suppressCursorThroughSequence
         state.recordLocalInput(
             oldText = TEXT_FABCDE,
             // 同文本，只模拟 recordLocalInput 调用

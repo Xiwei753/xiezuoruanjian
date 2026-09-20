@@ -108,8 +108,21 @@ class ComposeEditorVisualState(
     /**
      * 待消费的 patch 队列 — 解决快速输入时 LaunchedEffect 取消旧协程导致丢 patch 的问题。
      * 使用队列而非 conflated state，确保每一笔 patch 都能被处理。
+     *
+     * Issue #723 评论 5750100004：队列元素是 [PendingPatch]（携带统一入队序号 [PendingPatch.sequence]），
+     * 不再直接存 [ComposeVisualPatch]。release/drain 按 sequence 判断"release 之前/之后"，
+     * 不受 [ComposeVisualPatch.id] 两套来源（Core 从 0 起、local 从 1_000_000 起）影响。
      */
-    private val pendingPatches = ArrayDeque<ComposeVisualPatch>()
+    private val pendingPatches = ArrayDeque<PendingPatch>()
+
+    /**
+     * Issue #723 评论 5750100004：pending patch 统一入队序号 —
+     * 任何来源（本地输入 / Core / external）的 patch 入 [pendingPatches] 时统一分配，
+     * 从 0 起单调递增。与 [ComposeVisualPatch.id]（两套来源、不连续）解耦，
+     * 只表达"入队先后"。
+     */
+    private var nextPendingSequence: Long = 0L
+
     private val _patchVersion = MutableStateFlow(0L)
     val patchVersion: StateFlow<Long> = _patchVersion.asStateFlow()
 
@@ -136,21 +149,25 @@ class ComposeEditorVisualState(
     private var currentMotionPolicy: EditorMotionPolicy? = null
 
     /**
-     * Issue #723 评论 5749594980：系统 caret 已被用户点击/拖选抢回 —
+     * Issue #723 评论 5749594980 / 评论 5750100004：系统 caret 已被用户点击/拖选抢回 —
      * release 之前已排队的旧 patch 只允许驱动文字 clip、不允许驱动屏幕 cursor。
      *
      * 时序：用户输入文字 → localPatch A 进入 pendingPatches → 用户马上点击 wedge/拖选 →
-     * [releaseVisualCursorOwnership] 记录 [suppressCursorThroughPatchId] = A.id →
-     * 下一帧 [drainPendingPatchesAtFrame] 消费旧 patch 时按 id 判断：
-     * id <= suppressCursorThroughPatchId 的旧 patch 传 assignCursorChannel=false，
+     * [releaseVisualCursorOwnership] 记录 [suppressCursorThroughSequence] = A.sequence →
+     * 下一帧 [drainPendingPatchesAtFrame] 消费旧 patch 时按 sequence 判断：
+     * sequence <= suppressCursorThroughSequence 的旧 patch 传 assignCursorChannel=false，
      * 文字 clip 动画继续（clipTracks 正常创建），但 cursorChannel 不被赋值。
      *
-     * 新输入（[recordLocalInput]）或 Core 视觉意图（[onVisualIntent]）产生的新 patch id 更大，
+     * 新输入（[recordLocalInput]）或 Core 视觉意图（[onVisualIntent]）产生的新 patch sequence 更大，
      * 可以正常取得屏幕 caret 所有权，不改变 release 时已经记下来的旧 patch 身份。
+     *
+     * Issue #723 评论 5750100004：用 [PendingPatch.sequence]（统一入队序号）而非
+     * [ComposeVisualPatch.id]（两套来源、跨来源不单调）做边界，避免"local patch id≈1_000_001
+     * pending → release → 新 Core patch id≈1 pending → drain 时 Core patch 被误判成旧 patch"的反例。
      *
      * null 表示没有抑制（未调用过 releaseVisualCursorOwnership 或已无旧 patch 需要抑制）。
      */
-    private var suppressCursorThroughPatchId: Long? = null
+    private var suppressCursorThroughSequence: Long? = null
 
     /**
      * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
@@ -182,6 +199,20 @@ class ComposeEditorVisualState(
     private data class PendingSelectionRedirect(
         val fromRect: Rect,
         val targetRect: Rect,
+    )
+
+    /**
+     * Issue #723 评论 5750100004：pending patch 队列项 —
+     * 携带只属于本 visual state 的单调入队序号 [sequence]，与 [ComposeVisualPatch.id] 解耦。
+     *
+     * [ComposeVisualPatch.id] 有两套来源（Core/external 从 0 起、local 从 1_000_000 起），
+     * 不能跨来源表达"入队先后"。[sequence] 由 [nextPendingSequence] 统一分配，
+     * 任何来源的 patch 入 pendingPatches 时都拿到一个连续递增的 sequence，
+     * release/drain 按此 sequence 判断"release 之前/之后"，不受两套 patch.id 影响。
+     */
+    private data class PendingPatch(
+        val sequence: Long,
+        val patch: ComposeVisualPatch,
     )
 
     /**
@@ -319,8 +350,8 @@ class ComposeEditorVisualState(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
     ) {
-        // Issue #723 评论 5749594980：Core 视觉意图到达，新 patch 可以正常取得屏幕 caret 所有权。
-        // 不重置 suppressCursorThroughPatchId — release 时记下来的旧 patch 身份不变。
+        // Issue #723 评论 5749594980 / 评论 5750100004：Core 视觉意图到达，新 patch 可以正常取得屏幕 caret 所有权。
+        // 不重置 suppressCursorThroughSequence — release 时记下来的旧 patch 身份不变。
         val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective())
         applyFrameUpdate(update)
     }
@@ -344,8 +375,8 @@ class ComposeEditorVisualState(
         newSelection: TextRange,
         changes: List<LocalInputChange>,
     ) {
-        // Issue #723 评论 5749594980：用户产生新的文字输入，新 patch 可以正常取得屏幕 caret 所有权。
-        // 不重置 suppressCursorThroughPatchId — release 时记下来的旧 patch 身份不变。
+        // Issue #723 评论 5749594980 / 评论 5750100004：用户产生新的文字输入，新 patch 可以正常取得屏幕 caret 所有权。
+        // 不重置 suppressCursorThroughSequence — release 时记下来的旧 patch 身份不变。
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
@@ -873,7 +904,7 @@ class ComposeEditorVisualState(
                         newLayout = finalLayout,
                         restingCursorRect = computeCursorRectFromLayout(finalLayout),
                     )
-                    pendingPatches.addLast(localPatch)
+                    pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                 }
@@ -1216,7 +1247,7 @@ class ComposeEditorVisualState(
                         newLayout = snapshot,
                         restingCursorRect = cursorRect,
                     )
-                    pendingPatches.addLast(localPatch)
+                    pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
                     _patchVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                     Log.d(
@@ -1352,7 +1383,7 @@ class ComposeEditorVisualState(
                 // 无新 patch — 首帧、无 pending、或 pending 与 layout 尚未匹配。
             }
             is FrameUpdate.NewPatch -> {
-                pendingPatches.addLast(update.patch)
+                pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = update.patch))
                 _patchVersion.update { it + 1L }
                 _latestPatch.update { update.patch }
                 Log.d(
@@ -1392,7 +1423,7 @@ class ComposeEditorVisualState(
      * 在 [onInputSnapshotResolved] 的"跳过建新 redirect"分支（hitsWedge=true 点击 wedge，
      * 或 selection.collapsed=false 拖动选区）中调用，把"跳过"变成"交还"：
      * - 清 [pendingSelectionRedirect]（防止 [sampleVisualScene] 强制接管 / [drainPendingPatchesAtFrame] 消费旧 redirect）；
-     * - 记录 [suppressCursorThroughPatchId] 为当前已排队 patch 的最大 id，
+     * - 记录 [suppressCursorThroughSequence] 为当前已排队 patch 的最大入队序号，
      *   标记 release 之前的旧 patch 不得再取得屏幕 caret 所有权；
      * - 调用 [ComposeVisualTimeline.releaseVisualCursorOwnership] 清 cursorChannel
      *   （防止下一帧 sample 产出 cursorOwnedByVisual=true；不清 clipTracks/units，文字动画继续）；
@@ -1402,10 +1433,13 @@ class ComposeEditorVisualState(
      */
     private fun releaseVisualCursorOwnership() {
         pendingSelectionRedirect = null
-        // Issue #723 评论 5749594980：记录 release 之前已排队的旧 patch 身份边界。
-        // 下一帧 drainPendingPatchesAtFrame 按 id 判断：id <= suppressCursorThroughPatchId 的旧 patch
-        // 只建 clipTracks、不赋 cursorChannel；id 更大的新 patch 可以正常取得 caret。
-        suppressCursorThroughPatchId = pendingPatches.maxOfOrNull { it.id }
+        // Issue #723 评论 5749594980 / 评论 5750100004：记录 release 之前已排队的旧 patch 入队序号边界。
+        // 下一帧 drainPendingPatchesAtFrame 按 sequence 判断：sequence <= suppressCursorThroughSequence 的旧 patch
+        // 只建 clipTracks、不赋 cursorChannel；sequence 更大的新 patch 可以正常取得 caret。
+        // 用 lastOrNull()?.sequence：入队顺序即 ArrayDeque 顺序，最后一个就是当前最大 sequence。
+        // 不用 maxOfOrNull { it.patch.id }：ComposeVisualPatch.id 有两套来源（Core 从 0 起、local 从 1_000_000 起），
+        // 跨来源不单调，会导致 release 后新 Core patch（id 小）被误判成旧 patch。
+        suppressCursorThroughSequence = pendingPatches.lastOrNull()?.sequence
         visualTimeline.releaseVisualCursorOwnership()
         val releasedScene = _visualScene.value.copy(cursorOwnedByVisual = false)
         _visualScene.update { releasedScene }
@@ -1415,13 +1449,17 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * Issue #723 评论 5749594980：按 patch ID 边界分两段 drain pending patches。
+     * Issue #723 评论 5749594980 / 评论 5750100004：按 pending patch 入队序号边界分两段 drain pending patches。
      *
-     * 旧 patch（id <= [suppressCursorThroughPatchId]）：只建 clipTracks，不赋 cursorChannel。
-     * 新 patch（id > [suppressCursorThroughPatchId]）：正常取得屏幕 caret 所有权。
+     * 旧 patch（sequence <= [suppressCursorThroughSequence]）：只建 clipTracks，不赋 cursorChannel。
+     * 新 patch（sequence > [suppressCursorThroughSequence]）：正常取得屏幕 caret 所有权。
      *
      * 这样 release 之前已排队的旧 patch 不会重新取得屏幕 caret，
      * release 之后新生成的新 patch 可以正常取得新的 cursor ownership。
+     *
+     * Issue #723 评论 5750100004：用 [PendingPatch.sequence]（统一入队序号）而非
+     * [ComposeVisualPatch.id]（两套来源、跨来源不单调）做边界，避免"local patch id≈1_000_001
+     * pending → release → 新 Core patch id≈1 pending → drain 时 Core patch 被误判成旧 patch"的反例。
      *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
@@ -1455,13 +1493,13 @@ class ComposeEditorVisualState(
             }
             return emptyList()
         }
-        // Issue #723 评论 5749594980：按 suppressCursorThroughPatchId 边界分两段 drain。
-        // 旧 patch（id <= boundary）：只驱动文字 clip，不驱动屏幕 cursor。
-        // 新 patch（id > boundary）：正常驱动文字 clip + 屏幕 cursor。
-        val boundary = suppressCursorThroughPatchId
+        // Issue #723 评论 5749594980 / 评论 5750100004：按 suppressCursorThroughSequence 边界分两段 drain。
+        // 旧 patch（sequence <= boundary）：只驱动文字 clip，不驱动屏幕 cursor。
+        // 新 patch（sequence > boundary）：正常驱动文字 clip + 屏幕 cursor。
+        val boundary = suppressCursorThroughSequence
         val (oldPatches, newPatches) =
             if (boundary != null) {
-                val (olds, news) = pendingPatches.partition { it.id <= boundary }
+                val (olds, news) = pendingPatches.partition { it.sequence <= boundary }
                 Pair(olds, news)
             } else {
                 Pair(emptyList(), pendingPatches.toList())
@@ -1473,7 +1511,7 @@ class ComposeEditorVisualState(
         if (oldPatches.isNotEmpty()) {
             val oldBatch = mutableListOf<ComposeVisualPatch>()
             for (raw in oldPatches) {
-                val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
+                val patch = currentMotionPolicy?.let { raw.patch.copy(motionPolicy = it) } ?: raw.patch
                 oldBatch.add(patch)
             }
             val oldFramePatch = ComposeVisualPatchBatch.compose(oldBatch) ?: return emptyList()
@@ -1489,13 +1527,13 @@ class ComposeEditorVisualState(
             )
             allAppliedPatches.add(oldFramePatch)
             // 旧 patch 消费完后清边界 — 已处理完，不再抑制后续新 patch
-            suppressCursorThroughPatchId = null
+            suppressCursorThroughSequence = null
         }
         // 第二段：新 patch（release 之后新生成）— 正常取得屏幕 caret 所有权
         if (newPatches.isNotEmpty()) {
             val newBatch = mutableListOf<ComposeVisualPatch>()
             for (raw in newPatches) {
-                val patch = currentMotionPolicy?.let { raw.copy(motionPolicy = it) } ?: raw
+                val patch = currentMotionPolicy?.let { raw.patch.copy(motionPolicy = it) } ?: raw.patch
                 newBatch.add(patch)
             }
             val newFramePatch = ComposeVisualPatchBatch.compose(newBatch) ?: return emptyList()
@@ -1752,8 +1790,9 @@ class ComposeEditorVisualState(
         pendingSelectionRedirect = null
         // #713 评论 5740279418：重置 cursorAnimating 边沿检测状态
         lastSampledCursorAnimating = false
-        // Issue #723 评论 5749594980：重置旧 patch cursor 抑制边界
-        suppressCursorThroughPatchId = null
+        // Issue #723 评论 5749594980 / 评论 5750100004：重置旧 patch cursor 抑制边界 + 入队序号计数器
+        suppressCursorThroughSequence = null
+        nextPendingSequence = 0L
     }
 
     /**
@@ -1793,11 +1832,12 @@ class ComposeEditorVisualState(
         // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene
         drawSnapshotState = drawSnapshotState.copy(scene = ComposeVisualScene.Empty)
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
+        // Issue #723 评论 5750100004：p 现在是 PendingPatch，保持 sequence 不变，只替换 patch 的 motionPolicy。
         if (pendingPatches.isNotEmpty()) {
-            val updated = mutableListOf<ComposeVisualPatch>()
+            val updated = mutableListOf<PendingPatch>()
             while (pendingPatches.isNotEmpty()) {
                 val p = pendingPatches.removeFirst()
-                updated.add(p.copy(motionPolicy = effective))
+                updated.add(p.copy(patch = p.patch.copy(motionPolicy = effective)))
             }
             updated.forEach { pendingPatches.addLast(it) }
         }
