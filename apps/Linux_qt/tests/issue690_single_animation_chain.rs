@@ -118,9 +118,13 @@ fn issue690_frame_sample_drives_text_and_cursor() {
 fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
     let cursor = method_body(&src, "fn compute_coordinated_cursor_position(");
+    // Issue #722 评论 5747719529 修正：光标本身就是吞字/吐字的视觉边界。
+    // 不再从文字 glyph 切片反推光标位置（删除 frame.x + frame.w / rightmost_x.max()）。
+    // 光标位置由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
+    // 插值决定（sampled_rect / caret_driven_clip）。
     assert!(
-        cursor.contains("frame.x + frame.w"),
-        "步骤2: InsertReveal / Backspace 光标必须取本帧 reveal-conceal 右边界"
+        cursor.contains("sampled_rect") || cursor.contains("caret_driven_clip"),
+        "步骤2: InsertReveal / Backspace 光标由 caret track 插值决定（issue722 评论 5747719529）"
     );
     assert!(
         cursor.contains("new_rect.x"),

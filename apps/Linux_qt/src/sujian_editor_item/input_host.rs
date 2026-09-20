@@ -1,5 +1,6 @@
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
+use super::animation_coordinator::find_line_geometry_in_snapshot;
 
 // ── IME 输入处理模块 ──
 //
@@ -254,28 +255,10 @@ impl EditorInputHost for SujianEditorItem {
                         (committed_replace_start, committed_replace_end),
                     );
                 let width = self.bounding_width();
-                let old_cursor_rect = self
-                    .pipeline
-                    .composition()
-                    .preedit_cursor_rect
-                    .as_ref()
-                    .map(|c| CursorRect {
-                        x: c.x,
-                        top: c.top,
-                        bottom: c.bottom,
-                        baseline_y: c.baseline_y,
-                    });
-                let new_cursor_rect = self
-                    .pipeline
-                    .current_layout_snapshot()
-                    .as_ref()
-                    .and_then(|s| s.caret_rect.as_ref())
-                    .map(|c| CursorRect {
-                        x: c.x,
-                        top: c.y,
-                        bottom: c.y + c.h,
-                        baseline_y: c.baseline_y,
-                    });
+                // Issue #722 评论 5749791161 问题2+3: IME cancel 路径使用文档坐标的
+                // caret_rect_doc，不再用 viewport 坐标的 caret_rect/preedit_cursor_rect。
+                // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
+                // caret_rect_doc 取，不再统一从 current_layout_snapshot 取。
 
                 let old_snapshot = self
                     .pipeline
@@ -300,6 +283,37 @@ impl EditorInputHost for SujianEditorItem {
                     Some((new_affected_start, new_affected_end)),
                 );
 
+                // Issue #722 评论 5750218208 问题3: old/new caret 都从对应 snapshot 的
+                // caret_rect_doc 取，不再统一从 current_layout_snapshot 取——cancel 恢复
+                // committed 布局后 caret 行/x/y 可能变化，old/new 必须分别反映
+                // preedit 态和 committed 态的 caret 位置。
+                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.baseline_y,
+                });
+                let old_cursor_visual_line_id = old_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.baseline_y,
+                });
+                let new_cursor_visual_line_id = new_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+
+                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
+                let (old_line_top, old_line_bottom) =
+                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
+                let (new_line_top, new_line_bottom) =
+                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
+
                 self.pipeline
                     .animation_coordinator_mut()
                     .cancel_active_composition("clear_preedit");
@@ -318,6 +332,12 @@ impl EditorInputHost for SujianEditorItem {
                         committed_replace_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        old_cursor_visual_line_id,
+                        new_cursor_visual_line_id,
+                        old_line_top,
+                        old_line_bottom,
+                        new_line_top,
+                        new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             }
@@ -400,23 +420,38 @@ impl EditorInputHost for SujianEditorItem {
                     new_composition_range,
                 );
 
-                let old_cursor_rect = self
-                    .pipeline
-                    .current_layout_snapshot()
-                    .as_ref()
-                    .and_then(|s| s.caret_rect.as_ref())
-                    .map(|c| CursorRect {
-                        x: c.x,
-                        top: c.y,
-                        bottom: c.y + c.h,
-                        baseline_y: c.baseline_y,
-                    });
-                let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
+                // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
+                // 同时传递真实 visual_line_id，不再传 None。
+                // Issue #722 评论 5750218208 问题2: old caret 从 old_snapshot 取，
+                // 不再从 current_layout_snapshot 取——old_snapshot 才是 preedit 态
+                // 的布局快照，current_layout_snapshot 可能已是新布局。
+                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
                     x: c.x,
                     top: c.y,
                     bottom: c.y + c.h,
                     baseline_y: c.baseline_y,
                 });
+                let old_cursor_visual_line_id = old_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.baseline_y,
+                });
+                let new_cursor_visual_line_id = new_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+
+                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
+                let (old_line_top, old_line_bottom) =
+                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
+                let (new_line_top, new_line_bottom) =
+                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
                 self.pipeline
                     .animation_coordinator_mut()
@@ -429,6 +464,12 @@ impl EditorInputHost for SujianEditorItem {
                         data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        old_cursor_visual_line_id,
+                        new_cursor_visual_line_id,
+                        old_line_top,
+                        old_line_bottom,
+                        new_line_top,
+                        new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {
@@ -509,23 +550,38 @@ impl EditorInputHost for SujianEditorItem {
                     new_composition_range,
                 );
 
-                let old_cursor_rect = self
-                    .pipeline
-                    .current_layout_snapshot()
-                    .as_ref()
-                    .and_then(|s| s.caret_rect.as_ref())
-                    .map(|c| CursorRect {
-                        x: c.x,
-                        top: c.y,
-                        bottom: c.y + c.h,
-                        baseline_y: c.baseline_y,
-                    });
-                let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+                // Issue #722 评论 5749791161 问题2+3: IME 路径使用文档坐标的 caret_rect_doc，
+                // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
+                // 同时传递真实 visual_line_id，不再传 None。
+                // Issue #722 评论 5750218208 问题2: old caret 从 old_snapshot 取，
+                // 不再从 current_layout_snapshot 取——old_snapshot 才是 preedit 态
+                // 的布局快照，current_layout_snapshot 可能已是新布局。
+                let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
                     x: c.x,
                     top: c.y,
                     bottom: c.y + c.h,
                     baseline_y: c.baseline_y,
                 });
+                let old_cursor_visual_line_id = old_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+                let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
+                    x: c.x,
+                    top: c.y,
+                    bottom: c.y + c.h,
+                    baseline_y: c.baseline_y,
+                });
+                let new_cursor_visual_line_id = new_snapshot
+                    .caret_rect_doc
+                    .as_ref()
+                    .map(|c| c.visual_line_id);
+
+                // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
+                let (old_line_top, old_line_bottom) =
+                    find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
+                let (new_line_top, new_line_bottom) =
+                    find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
                 self.pipeline
                     .animation_coordinator_mut()
@@ -538,6 +594,12 @@ impl EditorInputHost for SujianEditorItem {
                         data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        old_cursor_visual_line_id,
+                        new_cursor_visual_line_id,
+                        old_line_top,
+                        old_line_bottom,
+                        new_line_top,
+                        new_line_bottom,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {

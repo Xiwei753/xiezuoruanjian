@@ -204,9 +204,9 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
         src.contains(coord_call),
         "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position"
     );
-    // 关键：compute_coordinated_cursor_position 成功分支（Some((cx, cy, ch))）内
+    // 关键：compute_coordinated_cursor_position 成功分支（Some((cx, cy_doc, ch))）内
     // 应把 cursor_sample_outcome 设为 Coordinated。
-    let coord_success_window = window_after(&src, "if let Some((cx, cy, ch))", 1200);
+    let coord_success_window = window_after(&src, "if let Some((cx, cy_doc, ch))", 1200);
     assert!(
         coord_success_window.contains("cursor_sample_outcome ="),
         "修复点4: compute_coordinated_cursor_position 成功分支应修改 cursor_sample_outcome"

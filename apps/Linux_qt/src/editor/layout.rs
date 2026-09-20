@@ -1651,6 +1651,22 @@ impl EditorLayout {
         caret_rect(snapshot, cursor_byte, affinity, scroll_y, viewport_h)
     }
 
+    /// Issue #722 评论 5748596920 问题1: canonical caret 文档坐标入口。
+    ///
+    /// 与 `caret_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
+    /// `visible` 始终为 true（文档坐标版本不关心视口可见性）。
+    /// 供正文事务 `record_visual_transaction` 构造 old/new caret track 使用，
+    /// 使 caret track 与 AnimatedSlice/StaticPatch 文档坐标系一致；
+    /// scene graph 在渲染时按当前 scroll_y 做 viewport transform。
+    pub fn caret_rect_doc(
+        &self,
+        snapshot: &LayoutSnapshot,
+        cursor_byte: usize,
+        affinity: CaretAffinity,
+    ) -> CaretRect {
+        caret_rect_doc(snapshot, cursor_byte, affinity)
+    }
+
     pub fn cursor_line_and_x(
         &self,
         snapshot: &LayoutSnapshot,
@@ -2290,6 +2306,74 @@ pub fn caret_rect(
         visual_line_id: line.id,
         visible,
         baseline_y,
+    }
+}
+
+/// Issue #722 评论 5748596920 问题1: canonical caret 文档坐标入口（自由函数版）。
+///
+/// 与 `caret_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
+/// `visible` 始终为 true。供正文事务 caret track 使用，使 caret track 与
+/// AnimatedSlice/StaticPatch 文档坐标系一致。
+pub fn caret_rect_doc(
+    snapshot: &LayoutSnapshot,
+    cursor_byte: usize,
+    affinity: CaretAffinity,
+) -> CaretRect {
+    let line = snapshot
+        .lines
+        .iter()
+        .enumerate()
+        .find(|(idx, _)| {
+            line_contains_cursor_with_affinity(&snapshot.lines, *idx, cursor_byte, affinity)
+        })
+        .map(|(_, line)| line)
+        .or_else(|| snapshot.lines.last());
+
+    let fallback;
+    let line = match line {
+        Some(line) => line,
+        None => {
+            fallback = VisualLine {
+                id: 0,
+                byte_start: 0,
+                byte_end: 0,
+                qchar_start: 0,
+                qchar_end: 0,
+                hard_break: true,
+                x: 0.0,
+                y: 0.0,
+                width: 0.0,
+                height: f64::from(snapshot.font_size) * f64::from(snapshot.line_spacing),
+                para_text: String::new(),
+                para_start: 0,
+                qtextline_idx: 0,
+                para_qchar_start: 0,
+                para_qchar_end: 0,
+                line_wrap_width: 0.0,
+                line_indent_x: 0.0,
+                para_indent: 0.0,
+                x_end_trailing: 0.0,
+                qt_ascent: 0.0,
+                qt_descent: 0.0,
+                cache_slot: 0,
+            };
+            &fallback
+        }
+    };
+
+    let cursor_x = calculate_cursor_x_for_line(line, cursor_byte, affinity, snapshot);
+    let (cursor_y_doc, cursor_h) =
+        cursor_rect_for_line(line, f64::from(snapshot.font_size), &snapshot.font_family);
+    let baseline_y_doc =
+        text_baseline_y(line, f64::from(snapshot.font_size), &snapshot.font_family);
+
+    CaretRect {
+        x: cursor_x,
+        y: cursor_y_doc,
+        h: cursor_h,
+        visual_line_id: line.id,
+        visible: true,
+        baseline_y: baseline_y_doc,
     }
 }
 
@@ -3034,6 +3118,73 @@ impl CanonicalDocumentVisualSnapshot {
         }
     }
 
+    /// Issue #722 评论 5748596920 问题1: canonical caret 文档坐标入口。
+    ///
+    /// 与 `cursor_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
+    /// `visible` 始终为 true。供正文事务 caret track 使用，使 caret track 与
+    /// AnimatedSlice/StaticPatch 文档坐标系一致。
+    pub fn cursor_rect_doc(
+        &self,
+        cursor_byte: usize,
+        affinity: CaretAffinity,
+    ) -> CaretRect {
+        let line = self
+            .visual_lines
+            .iter()
+            .enumerate()
+            .find(|(idx, _)| {
+                line_contains_cursor_with_affinity(&self.visual_lines, *idx, cursor_byte, affinity)
+            })
+            .map(|(_, line)| line)
+            .or_else(|| self.visual_lines.last());
+
+        let fallback;
+        let line = match line {
+            Some(line) => line,
+            None => {
+                fallback = VisualLine {
+                    id: 0,
+                    byte_start: 0,
+                    byte_end: 0,
+                    qchar_start: 0,
+                    qchar_end: 0,
+                    hard_break: true,
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: self.font_size * self.line_spacing,
+                    para_text: String::new(),
+                    para_start: 0,
+                    qtextline_idx: 0,
+                    para_qchar_start: 0,
+                    para_qchar_end: 0,
+                    line_wrap_width: 0.0,
+                    line_indent_x: 0.0,
+                    para_indent: 0.0,
+                    x_end_trailing: 0.0,
+                    qt_ascent: 0.0,
+                    qt_descent: 0.0,
+                    cache_slot: 0,
+                };
+                &fallback
+            }
+        };
+
+        let cursor_x = self.cursor_x_from_canonical(line, cursor_byte, affinity);
+        let (cursor_y_doc, cursor_h) =
+            cursor_rect_for_line(line, self.font_size, &self.font_family);
+        let baseline_y_doc = text_baseline_y(line, self.font_size, &self.font_family);
+
+        CaretRect {
+            x: cursor_x,
+            y: cursor_y_doc,
+            h: cursor_h,
+            visual_line_id: line.id,
+            visible: true,
+            baseline_y: baseline_y_doc,
+        }
+    }
+
     fn cursor_x_from_canonical(
         &self,
         line: &VisualLine,
@@ -3058,10 +3209,26 @@ impl CanonicalDocumentVisualSnapshot {
 
         let cursor_qchar = byte_offset_to_qchar_offset(&para.paragraph_text, cursor_in_para);
 
-        let canonical_line = para
-            .lines
-            .iter()
-            .find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar <= cl.qchar_end);
+        // Issue #722 评论 5747719529 改法 3: 软换行边界必须使用已经选中的那条
+        // QTextLine，不要用包含区间 find。软换行边界同时等于上一行 end 和下一行
+        // start，包含区间 find 会先命中上一行，再把上一行行尾 X 套到下一行 Y。
+        // 直接使用已选中的 line.qtextline_idx：从对应 paragraph 的
+        // canonical.lines[line.qtextline_idx as usize] 取 cursor_x_map，再按
+        // CaretAffinity::Leading/Trailing 取这一条实际视觉行上的 X。静态布局路径
+        // 本来就是按 qtextline_idx + QTextLine::cursorToX() 算，canonical 动画路径
+        // 必须和它完全一致。
+        let canonical_line: Option<&CanonicalLineSnapshot> =
+            if line.qtextline_idx >= 0 && (line.qtextline_idx as usize) < para.lines.len() {
+                // explicit_line: 直接用已选中的视觉行的 qtextline_idx 索引 canonical lines。
+                let indexed_line = &para.lines[line.qtextline_idx as usize];
+                Some(indexed_line)
+            } else {
+                // qtextline_idx 无效时回退到按 qchar 范围匹配（半开区间，避免软换行
+                // 边界同时命中两行）。只在 qtextline_idx 未被正确设置时才会走到这里。
+                para.lines.iter().find(|cl| {
+                    cl.qchar_start <= cursor_qchar && cursor_qchar < cl.qchar_end
+                })
+            };
 
         match canonical_line {
             Some(cl) => {

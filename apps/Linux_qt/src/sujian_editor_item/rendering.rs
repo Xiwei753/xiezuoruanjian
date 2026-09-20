@@ -162,7 +162,6 @@ impl SujianEditorItem {
             self.current_cursor_animation_duration_ms,
             self.current_coordinated_text_cursor_animation_enabled,
             f64::from(self.current_scroll_y),
-            self.cursor_ctrl.last_scroll_y,
             self.cursor_ctrl.visible,
             self.cursor_ctrl.blink_visible,
             self.cursor_ctrl.visual_x,

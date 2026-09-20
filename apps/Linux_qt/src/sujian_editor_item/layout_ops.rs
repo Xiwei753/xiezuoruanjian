@@ -196,6 +196,8 @@ impl SujianEditorItem {
             scroll_y,
             viewport_h,
         );
+        // Issue #722 评论 5749791161: 同时生成文档坐标的 caret，供 VisualTransaction / caret track 使用。
+        let caret_doc = doc_snapshot.cursor_rect_doc(self.buffer.cursor, self.cursor_ctrl.affinity);
 
         let mut snapshot =
             super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
@@ -205,6 +207,7 @@ impl SujianEditorItem {
                 viewport_h,
             );
         snapshot.caret_rect = Some(caret);
+        snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = self.buffer.text.clone();
 
@@ -362,6 +365,11 @@ impl SujianEditorItem {
             scroll_y,
             viewport_h,
         );
+        // Issue #722 评论 5749791161: 同时生成文档坐标的 caret，供 VisualTransaction / caret track 使用。
+        let caret_doc = doc_snapshot.cursor_rect_doc(
+            cursor_byte.min(virtual_text.len()),
+            self.cursor_ctrl.affinity,
+        );
 
         let mut snapshot =
             super::line_snapshot_builder::LineSnapshotBuilder::build_from_canonical_document(
@@ -371,6 +379,7 @@ impl SujianEditorItem {
                 viewport_h,
             );
         snapshot.caret_rect = Some(caret);
+        snapshot.caret_rect_doc = Some(caret_doc);
         snapshot.caret_affinity = self.cursor_ctrl.affinity;
         snapshot.virtual_text = virtual_text.to_string();
 
