@@ -14,57 +14,46 @@ import org.junit.Test
  * profile 只是约束条件：SYSTEM_SUPPRESSED（Search/Token/RepositoryUrl/BranchName/
  * ReplaceQuery）→ forceStatic；INHERIT_GLOBAL / ENABLED → 无约束。
  * effectivePolicy = globalPolicy.apply(profileConstraint).effective() 只在一个计算点合成。
+ *
+ * Issue #725：自绘 caret 已删除，allowCursor 不再生效；光标动画由系统 BasicTextField 处理。
  */
 class TargetMotionConstraintTest {
     @Test
     fun defaultConstraintAllowsAll() {
         val constraint = TargetMotionConstraint()
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
+        val policy = EditorMotionPolicy(textEnabled = true, coordinated = true)
         val result = constraint.apply(policy)
         assertTrue(result.textEnabled)
-        assertTrue(result.cursorEnabled)
         assertTrue(result.coordinated)
     }
 
     @Test
     fun forceStaticDisablesAllAnimation() {
         val constraint = TargetMotionConstraint(forceStatic = true)
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
+        val policy = EditorMotionPolicy(textEnabled = true, coordinated = true)
         val result = constraint.apply(policy)
         assertFalse("forceStatic disables text", result.textEnabled)
-        assertFalse("forceStatic disables cursor", result.cursorEnabled)
         assertFalse("forceStatic disables coordinated", result.coordinated)
     }
 
     @Test
     fun allowTextFalseDisablesTextOnly() {
         val constraint = TargetMotionConstraint(allowText = false)
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
+        val policy = EditorMotionPolicy(textEnabled = true, coordinated = true)
         val result = constraint.apply(policy)
         assertFalse("allowText=false disables text", result.textEnabled)
-        assertTrue("cursor still enabled", result.cursorEnabled)
-        assertFalse("coordinated requires both text and cursor", result.coordinated)
-    }
-
-    @Test
-    fun allowCursorFalseDisablesCursorOnly() {
-        val constraint = TargetMotionConstraint(allowCursor = false)
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
-        val result = constraint.apply(policy)
-        assertTrue("text still enabled", result.textEnabled)
-        assertFalse("allowCursor=false disables cursor", result.cursorEnabled)
-        assertFalse("coordinated requires both text and cursor", result.coordinated)
+        // coordinated requires textEnabled, so it's also disabled
+        assertFalse("coordinated requires text", result.coordinated)
     }
 
     @Test
     fun constraintComposesWithReduceMotion() {
         val constraint = TargetMotionConstraint(allowText = false)
         val policy =
-            EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true, reduceMotion = true)
+            EditorMotionPolicy(textEnabled = true, coordinated = true, reduceMotion = true)
         val effective = policy.effective()
         val result = constraint.apply(effective)
         assertFalse("reduce-motion disables text", result.textEnabled)
-        assertFalse("reduce-motion disables cursor", result.cursorEnabled)
     }
 
     // ── #595 四：profile → 约束的生产映射（EditorWindowHost.constraintFor）──
@@ -75,10 +64,9 @@ class TargetMotionConstraintTest {
         val constraint = EditorWindowHost.constraintFor(TextEditorProfile.SearchQuery)
         assertTrue("SearchQuery must be forceStatic", constraint.forceStatic)
 
-        val policy = EditorMotionPolicy(textEnabled = true, cursorEnabled = true, coordinated = true)
+        val policy = EditorMotionPolicy(textEnabled = true, coordinated = true)
         val effective = constraint.apply(policy).effective()
         assertFalse("SYSTEM_SUPPRESSED profile must suppress text", effective.textEnabled)
-        assertFalse("SYSTEM_SUPPRESSED profile must suppress cursor", effective.cursorEnabled)
     }
 
     @Test

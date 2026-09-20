@@ -67,8 +67,6 @@ data class EditorSettingsState(
     val autoIndentWidth: Float = 2.0f,
     val typingAnimationEnabled: Boolean = true,
     val typingAnimationDurationMs: Long = 100L,
-    val smoothCursorEnabled: Boolean = true,
-    val smoothCursorDurationMs: Long = 80L,
     val coordinatedTextCursorAnimationEnabled: Boolean = true,
     val reduceMotion: Boolean = false,
     val autoSaveEnabled: Boolean = true,

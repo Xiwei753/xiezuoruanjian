@@ -25,10 +25,8 @@
     <string name="pref_auto_indent">自动首行缩进</string>
     <string name="pref_auto_indent_width">首行缩进宽度 (字符)</string>
     <string name="pref_editor_typing_animation">输入动效 (文字从光标浮现)</string>
-    <string name="pref_editor_smooth_cursor">光标平滑移动</string>
 
     <string name="pref_editor_typing_animation_duration">打字动画时长 (毫秒)</string>
-    <string name="pref_editor_smooth_cursor_duration">光标平滑时长 (毫秒)</string>
 
     <!-- Issue #723 评论 5748592923：协同动画（吞字/吐字）统一控制 -->
     <string name="pref_editor_coordinated_animation">协同动画（吞字/吐字）</string>

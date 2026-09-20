@@ -104,7 +104,8 @@ class ComposeVisualTimeline {
 
         // #703 评论 5709208101 问题2：记录 coordinated + spatial clip 模式，
         // sample 时传给 scene，draw 层据此用 clipFraction 覆盖 alpha。
-        coordinatedSpatialClip = policy.textEnabled && policy.cursorEnabled && policy.coordinated
+        // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算。
+        coordinatedSpatialClip = policy.textEnabled && policy.coordinated
 
         // #708 评论 5728951138：当前 patch 已把 active unit 转成 ghost 的范围
         // （旧正文坐标系，与 patch.deletedUnits 同坐标系）。

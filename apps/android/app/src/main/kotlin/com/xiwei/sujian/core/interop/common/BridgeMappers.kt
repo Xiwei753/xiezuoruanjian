@@ -151,8 +151,8 @@ internal fun LocalSettings.toDto() =
         autoIndentWidth = autoIndentWidth,
         editorTypingAnimationEnabled = editorTypingAnimationEnabled,
         editorTypingAnimationDurationMs = editorTypingAnimationDurationMs.toULong(),
-        // Issue #725：自绘 caret 已删除，smooth cursor 设置不再暴露 UI。
-        // Core 端字段保留作为唯一事实来源，Android 端保存时传默认值保持 DTO 完整。
+        // Issue #725：自绘 caret 已删除，smooth cursor 设置不再暴露。
+        // Core 端字段保留作为唯一事实来源，Android 端传默认值保持 DTO 完整。
         editorSmoothCursorEnabled = true,
         editorSmoothCursorDurationMs = 80.toULong(),
         aiEnabled = aiEnabled,

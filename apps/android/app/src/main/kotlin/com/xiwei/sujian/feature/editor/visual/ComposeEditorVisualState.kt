@@ -556,9 +556,9 @@ class ComposeEditorVisualState(
                 hiddenRanges = mergedHidden,
                 units = rebasedUnits,
                 unitClipFractions = rebasedClipFractions,
+                // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算。
                 coordinatedSpatialClip =
                     patch.motionPolicy.effective().textEnabled &&
-                        patch.motionPolicy.effective().cursorEnabled &&
                         patch.motionPolicy.effective().coordinated,
             )
         }

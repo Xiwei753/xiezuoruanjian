@@ -82,7 +82,7 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         )
 
         val timeline = ComposeVisualTimeline()
-        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = true)
 
         // patch1：插入 'c'，"ab" → "abc"，'c' 成为 active unit [2,3)
         val patch1 =
@@ -348,7 +348,7 @@ class ComposeVisualIssue720ReflowOwnershipTest {
         )
 
         val timeline = ComposeVisualTimeline()
-        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = true)
 
         // patch1：插入 'b'，"a" → "ab"，'b' 成为 active unit [1,2)
         val patch1 =

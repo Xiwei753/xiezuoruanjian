@@ -2369,13 +2369,11 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
                 classifier = FakeLocalVisualPlanClassifier,
             )
 
-        // 设置 motionPolicy: textEnabled=true, cursorEnabled=false
-        // 这会让 coordinatedSpatialClip = textEnabled && cursorEnabled && coordinated = false
-        // handoffCursorRect = null（cursorEnabled=false）
+        // 设置 motionPolicy: textEnabled=true, coordinated=true
+        // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算
         state.applyMotionPolicyAtFrame(
             com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy(
                 textEnabled = true,
-                cursorEnabled = false,
                 coordinated = true,
             ),
         )

@@ -18,13 +18,11 @@ class MotionPolicyStateFlowTest {
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
-                cursorEnabled = true,
                 coordinated = true,
                 reduceMotion = true,
             )
         val effective = policy.effective()
         assertFalse(effective.textEnabled)
-        assertFalse(effective.cursorEnabled)
         assertFalse(effective.coordinated)
     }
 
@@ -32,6 +30,5 @@ class MotionPolicyStateFlowTest {
     fun reduceMotionDisablesViaEffective() {
         val policy = EditorMotionPolicy(reduceMotion = true)
         assertTrue("reduceMotion must disable text via effective()", !policy.effective().textEnabled)
-        assertTrue("reduceMotion must disable cursor via effective()", !policy.effective().cursorEnabled)
     }
 }

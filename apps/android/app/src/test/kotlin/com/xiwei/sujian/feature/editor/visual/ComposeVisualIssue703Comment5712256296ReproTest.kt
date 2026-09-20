@@ -206,7 +206,6 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
         val motionPolicy =
             EditorMotionPolicy(
                 textDurationMillis = 1000L,
-                cursorEnabled = true,
                 coordinated = true,
             )
 

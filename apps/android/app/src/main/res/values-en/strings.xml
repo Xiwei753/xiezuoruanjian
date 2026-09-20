@@ -25,10 +25,8 @@
     <string name="pref_auto_indent">Automatic First-Line Indent</string>
     <string name="pref_auto_indent_width">First-Line Indent Width (characters)</string>
     <string name="pref_editor_typing_animation">Typing Animation (text emerges from cursor)</string>
-    <string name="pref_editor_smooth_cursor">Smooth Cursor</string>
 
     <string name="pref_editor_typing_animation_duration">Typing Animation Duration (ms)</string>
-    <string name="pref_editor_smooth_cursor_duration">Smooth Cursor Duration (ms)</string>
 
     <!-- Issue #723 评论 5748592923：协同动画（吞字/吐字）统一控制 -->
     <string name="pref_editor_coordinated_animation">Coordinated Animation (swallow/spit)</string>

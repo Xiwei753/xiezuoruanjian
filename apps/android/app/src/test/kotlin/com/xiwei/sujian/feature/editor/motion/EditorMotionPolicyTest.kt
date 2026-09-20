@@ -14,11 +14,9 @@ class EditorMotionPolicyTest {
     fun defaultPolicyMatchesCoreDefaults() {
         val policy = EditorMotionPolicy()
         assertTrue("Core default: text animation enabled", policy.textEnabled)
-        assertTrue("Core default: cursor animation enabled", policy.cursorEnabled)
         assertTrue("Core default: coordinated enabled", policy.coordinated)
         assertFalse("Core default: reduce motion disabled", policy.reduceMotion)
         assertEquals(100L, policy.textDurationMillis)
-        assertEquals(80L, policy.cursorDurationMillis)
     }
 
     @Test
@@ -26,24 +24,21 @@ class EditorMotionPolicyTest {
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
-                cursorEnabled = true,
                 coordinated = true,
                 reduceMotion = true,
             )
         val effective = policy.effective()
         assertFalse("reduce-motion disables text", effective.textEnabled)
-        assertFalse("reduce-motion disables cursor", effective.cursorEnabled)
         assertFalse("reduce-motion disables coordinated", effective.coordinated)
     }
 
     @Test
     fun effectiveIsIdentityWhenReduceMotionFalse() {
         // Issue #723 评论 5749023316 缺口2：coordinated=false 时 effective() 才是 identity。
-        // coordinated=true 时 effective() 会强制 textEnabled/cursorEnabled=true（归一旧持久化状态）。
+        // coordinated=true 时 effective() 会强制 textEnabled=true（归一旧持久化状态）。
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
-                cursorEnabled = false,
                 coordinated = false,
                 reduceMotion = false,
             )
@@ -52,20 +47,18 @@ class EditorMotionPolicyTest {
     }
 
     @Test
-    fun coordinatedTrueForcesTextAndCursorEnabled() {
+    fun coordinatedTrueForcesTextEnabled() {
         // Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制
-        // textEnabled=true, cursorEnabled=true，收死旧持久化状态
-        // （coordinated=true 但 textEnabled=false / cursorEnabled=false）。
+        // textEnabled=true，收死旧持久化状态
+        // （coordinated=true 但 textEnabled=false）。
         val legacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
-                cursorEnabled = false,
                 coordinated = true,
                 reduceMotion = false,
             )
         val effective = legacyPolicy.effective()
         assertTrue("coordinated=true → effective() 强制 textEnabled=true", effective.textEnabled)
-        assertTrue("coordinated=true → effective() 强制 cursorEnabled=true", effective.cursorEnabled)
         assertTrue("coordinated 标记保持 true", effective.coordinated)
     }
 
@@ -75,20 +68,16 @@ class EditorMotionPolicyTest {
             EditorMotionPolicy(
                 textEnabled = true,
                 textDurationMillis = 150L,
-                cursorEnabled = false,
-                cursorDurationMillis = 60L,
                 coordinated = true,
                 reduceMotion = false,
             )
         assertEquals(true, policy.textEnabled)
         assertEquals(150L, policy.textDurationMillis)
-        assertEquals(false, policy.cursorEnabled)
-        assertEquals(60L, policy.cursorDurationMillis)
         assertEquals(true, policy.coordinated)
         assertEquals(false, policy.reduceMotion)
         // 复制修改不影响原实例 — 不可变性契约
-        val copy = policy.copy(cursorEnabled = true)
-        assertFalse("original must stay unchanged", policy.cursorEnabled)
-        assertTrue("copy must reflect change", copy.cursorEnabled)
+        val copy = policy.copy(textEnabled = false)
+        assertTrue("original must stay unchanged", policy.textEnabled)
+        assertTrue("copy must reflect change", !copy.textEnabled)
     }
 }
