@@ -112,6 +112,12 @@ internal object ComposeLocalHandoffRebase {
             val parentOldCursorRect = scene.unitClipCursors[unit.key]
             for (slice in slices) {
                 val childKey = if (isSplit) nextChildKey() else unit.key
+                // Issue #720 评论 5746323050：本地输入 + surviving slice 自然几何变化时，
+                // handoff rebase 仍保留 slice（rebase 到新坐标 + alpha 动画），
+                // 但 ComposeVisualTimeline.mapSurvivingUnits() 会释放它（不产生 position tween）。
+                // handoff scene 是 patch drain 前的瞬态，survivor 已 rebase 到新位置；
+                // drain 后 timeline 不持有它，BasicTextField 直接画最终位置。
+                // 这样既保留 handoff 阶段的 alpha 过渡，又消除 timeline 的 oldPosition→newPosition 位移动画。
                 // #708 评论 5731952690 修复3：记录每个 rebase child 的真实首帧 fraction —
                 // 逻辑抽取到 computeSliceInitialFraction helper，降低 rebase() 复杂度。
                 // 返回 null 表示不需要记录（非 split 且 parentOldFraction==null）。

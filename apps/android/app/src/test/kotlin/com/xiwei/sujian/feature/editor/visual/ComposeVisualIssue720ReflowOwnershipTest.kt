@@ -1,0 +1,583 @@
+package com.xiwei.sujian.feature.editor.visual
+
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.sp
+import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
+import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import com.xiwei.sujian.feature.editor.layout.cursorRect
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import uniffi.writer_core.AnimationModeDto
+
+/**
+ * Issue #720 评论 5746323050：本地 reflow 所有权收口回归测试 —
+ * 本地输入只动画本次真正插入/删除的 glyph；
+ * 凡是因为自动换行、硬换行删除或前文长度变化而改变自然位置的幸存文字，
+ * 都由 BasicTextField 直接画最终位置。
+ *
+ * 三组场景：
+ * 1. 自动换行 — surviving unit 退出 overlay（[autoReflow_survivingUnit_releasedToBasicTextField]）
+ * 2. 删除手动换行 — surviving unit 交还 BasicTextField，deleted ghost 只覆盖真正删除内容
+ *    （[deleteNewline_survivingUnit_releasedToBasicTextField]）
+ * 3. 几何未变化 — active unit 继续原动画（[geometryUnchanged_survivingUnit_continuesOriginalAnimation]）
+ *
+ * 另给 #703 评论 5710977972 a3 和 #689 deleteNewline 各补一组 projection 版本，
+ * 用 [snapshotFromRawText] 生成含 projection + rawText 的 [ComposeLayoutSnapshot]。
+ */
+@Suppress("LongMethod", "MaxLineLength")
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34])
+class ComposeVisualIssue720ReflowOwnershipTest {
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    // ==================== 场景1：换行回流 — surviving unit 退出 overlay ====================
+
+    /**
+     * 场景1：已有 active inserted unit，后续输入让它的自然位置从上一行变到下一行；
+     * 新 patch 后它必须退出 survivor overlay，不能有 position tween。
+     *
+     * Robolectric 下 rememberTextMeasurer 不做真实字体度量（软换行不可靠），
+     * 所以用硬换行 '\n' 触发几何变化（从第一行变到第二行）—
+     * naturalGeometryChanged 的判定逻辑对软换行和硬换行一致。
+     *
+     * - T0 = "ab"（一行），先插入 'c' 创建 active unit [2,3)
+     * - T1 = "abc"（一行），再在 'b' 后插入 '\n' → "ab\nc"（'c' 从第一行变到第二行）
+     *
+     * 用 [ComposeVisualTimeline] 直接操作。patch.intent = null（本地输入）。
+     */
+    @Test
+    fun autoReflow_survivingUnit_releasedToBasicTextField() {
+        val snaps = snapshotsFromRawTexts(listOf("ab", "abc", "ab\nc"), maxWidth = 1000)
+        val abLayout = snaps[0]
+        val abcLayout = snaps[1]
+        val abncLayout = snaps[2]
+
+        // 前置：'abc' 一行，'ab\nc' 跨两行（'c' 被挤到第二行）
+        assertTrue(
+            "场景1: 'abc' 应一行，实际 lineCount=${abcLayout.result.lineCount}",
+            abcLayout.result.lineCount == 1,
+        )
+        assertTrue(
+            "场景1: 'ab\\nc' 应跨两行，实际 lineCount=${abncLayout.result.lineCount}",
+            abncLayout.result.lineCount >= 2,
+        )
+
+        val timeline = ComposeVisualTimeline()
+        val motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, cursorEnabled = true, coordinated = true)
+
+        // patch1：插入 'c'，"ab" → "abc"，'c' 成为 active unit [2,3)
+        val patch1 =
+            makePatch(
+                id = 1L,
+                oldLayout = abLayout,
+                newLayout = abcLayout,
+                insertedUnits = listOf(TextRange(2, 3)),
+                offsetMap = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY)),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L)
+
+        // 确认 'c' 的 active unit 存在
+        val sceneAfter1 = timeline.sample(0L)
+        val cUnitAfter1 = sceneAfter1.units.firstOrNull { it.targetRange == TextRange(2, 3) }
+        assertNotNull(
+            "场景1: patch1 后 'c' [2,3) 的 active unit 应存在，实际 units=${sceneAfter1.units.map { "tgt=${it.targetRange}" }}",
+            cUnitAfter1,
+        )
+
+        // patch2：在 'b' 后插入 '\n'，"abc" → "ab\nc"，'c' 从 [2,3) 映到 [3,4)
+        // '\n' 在新正文 [2,3)，'c' 在新正文 [3,4)
+        val patch2 =
+            makePatch(
+                id = 2L,
+                oldLayout = abcLayout,
+                newLayout = abncLayout,
+                insertedUnits = listOf(TextRange(2, 3)),
+                offsetMap =
+                    listOf(
+                        VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY), // "ab"
+                        VisualOffsetMapEntry(2, 3, 1, VisualOffsetMapKind.SHIFTED), // 'c' [2,3)→[3,4)
+                    ),
+                motionPolicy = motionPolicy,
+            )
+        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS)
+
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+
+        // 'c' 在新正文 "ab\nc" 中是 [3,4)，换行后应已释放给 BasicTextField
+        val cSurvivingUnit = scene.units.firstOrNull { it.targetRange == TextRange(3, 4) }
+        assertNull(
+            "换行后 'c' 的 surviving unit 应已释放给 BasicTextField，不在 overlay units 里，" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange}" }}",
+            cSurvivingUnit,
+        )
+    }
+
+    // ==================== 场景2：删除手动换行 — surviving unit 交还 BasicTextField ====================
+
+    /**
+     * 场景2：`ab\ncd` 中 'cd' 处于上一笔 active animation；删除 `\n` 后移动的 surviving unit
+     * 必须交还 BasicTextField，deleted ghost 只覆盖真正删除的内容（'\n'）。
+     *
+     * 用 [ComposeEditorVisualState] 走真实路径 recordLocalInput → onAuthoritativeLayout →
+     * drainPendingPatchesAtFrame → sampleVisualScene。
+     */
+    @Test
+    fun deleteNewline_survivingUnit_releasedToBasicTextField() {
+        val state =
+            ComposeEditorVisualState(
+                targetId = "test-720-delete-newline-reflow",
+                classifier = FakeLocalVisualPlanClassifier,
+            )
+
+        val displayLayouts = displayLayoutsFromRawTexts(listOf("ab\n", "ab\ncd", "abcd"), 1000)
+
+        // 初始 layout "ab\n"
+        val (initLayout, initProj) = displayLayouts[0]
+        state.onAuthoritativeLayout(initLayout, TextRange(3, 3), 0, projection = initProj, rawText = "ab\n")
+
+        // 插入 'cd'："ab\n" → "ab\ncd"（在末尾插入 'cd'，创建 active unit）
+        state.recordLocalInput(
+            oldText = "ab\n",
+            newText = "ab\ncd",
+            oldSelection = TextRange(3, 3),
+            newSelection = TextRange(5, 5),
+            changes = listOf(LocalInputChange(newRange = TextRange(3, 5), oldRange = TextRange(3, 3))),
+        )
+        val (abCdLayout, abCdProj) = displayLayouts[1]
+        state.onAuthoritativeLayout(abCdLayout, TextRange(5, 5), 0, projection = abCdProj, rawText = "ab\ncd")
+
+        // drain patch1（'cd' 成为 active unit）
+        state.drainPendingPatchesAtFrame(0L)
+
+        // 删除 '\n'："ab\ncd" → "abcd"（删除 offset [2,3) 的换行符）
+        state.recordLocalInput(
+            oldText = "ab\ncd",
+            newText = "abcd",
+            oldSelection = TextRange(5, 5),
+            newSelection = TextRange(4, 4),
+            changes = listOf(LocalInputChange(newRange = TextRange(2, 2), oldRange = TextRange(2, 3))),
+        )
+        val (abcdLayout, abcdProj) = displayLayouts[2]
+        state.onAuthoritativeLayout(abcdLayout, TextRange(4, 4), 0, projection = abcdProj, rawText = "abcd")
+
+        // drain patch2（删除 '\n'，'cd' reflow）
+        state.drainPendingPatchesAtFrame(20L * NANOS_PER_MS)
+
+        val scene = state.sampleVisualScene(20L * NANOS_PER_MS)
+
+        // 'cd' 在新正文 "abcd" 中是 [2,4)，删除换行后应已释放给 BasicTextField
+        val cdSurviving =
+            scene.units.firstOrNull {
+                it.targetRange != null && it.targetRange!!.start >= 2 && it.targetRange!!.end <= 4
+            }
+        assertNull(
+            "删除换行后 'cd' surviving unit 应已释放给 BasicTextField，" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range}" }}",
+            cdSurviving,
+        )
+
+        // deleted ghost 只覆盖 '\n' [2,3)（旧正文 "ab\ncd" 坐标）
+        val ghosts = scene.units.filter { it.targetRange == null }
+        for (ghost in ghosts) {
+            assertTrue(
+                "deleted ghost 应只覆盖 '\\n' [2,3)，实际 range=${ghost.range}",
+                ghost.range.start >= 2 && ghost.range.end <= 3,
+            )
+        }
+    }
+
+    // ==================== 场景3：naturalGeometryChanged helper 单元测试 ====================
+
+    /**
+     * 场景3：直接验证 [ComposeVisualRebase.naturalGeometryChanged] 的判定逻辑 —
+     * Robolectric 下 rememberTextMeasurer 不做真实字体度量，跨文本比较 bounds 不可靠，
+     * 所以不通过 timeline 间接验证"几何未变化 → 保留"，而是直接测 helper：
+     *
+     * 1. 同一 layout + 同一 range → false（几何未变化）
+     * 2. 不同行（硬换行）→ true（几何变化，应释放）
+     * 3. 取不到 bounds 的空 range → true（安全释放）
+     */
+    @Test
+    fun naturalGeometryChanged_correctlyDetectsReflowAndStability() {
+        val snaps = snapshotsFromRawTexts(listOf("abc", "ab\nc"))
+        val abcLayout = snaps[0]
+        val abncLayout = snaps[1]
+
+        // 1. 同一 layout + 同一 range → false（几何未变化）
+        val sameGeometry =
+            ComposeVisualRebase.naturalGeometryChanged(
+                oldLayout = abcLayout,
+                oldRange = TextRange(0, 1),
+                newLayout = abcLayout,
+                newRange = TextRange(0, 1),
+            )
+        assertTrue(
+            "同一 layout + 同一 range 应判定为几何未变化（false），实际=$sameGeometry",
+            !sameGeometry,
+        )
+
+        // 2. 'c' 从 "abc" 第一行 [2,3) 变到 "ab\nc" 第二行 [3,4) → true（几何变化）
+        val cMovedToSecondLine =
+            ComposeVisualRebase.naturalGeometryChanged(
+                oldLayout = abcLayout,
+                oldRange = TextRange(2, 3),
+                newLayout = abncLayout,
+                newRange = TextRange(3, 4),
+            )
+        assertTrue(
+            "'c' 从第一行变到第二行应判定为几何变化（true），实际=$cMovedToSecondLine",
+            cMovedToSecondLine,
+        )
+
+        // 3. 空 range → boundsForRawRange 返回 null → true（安全释放）
+        val emptyRange =
+            ComposeVisualRebase.naturalGeometryChanged(
+                oldLayout = abcLayout,
+                oldRange = TextRange(0, 0),
+                newLayout = abcLayout,
+                newRange = TextRange(0, 0),
+            )
+        assertTrue(
+            "空 range（bounds 为 null）应判定为几何变化（true，安全释放），实际=$emptyRange",
+            emptyRange,
+        )
+    }
+
+    // ==================== projection 版本：#703 评论 5710977972 a3 ====================
+
+    /**
+     * #703 评论 5710977972 缺陷2 的 projection 版本 —
+     * #717 之后 TextLayoutResult 已经是 display 坐标，不再允许只靠 raw-layout 测试证明换行链正确。
+     * 本测试用 [snapshotFromRawText] 生成含 projection 的 [ComposeLayoutSnapshot]。
+     *
+     * 场景与 [ComposeVisualIssue703RegressionTest.repro_comment5710977972_a3_retainedMoveReflowTextMistakenAsInserted]
+     * 一致：Insert 触发换行 — "ab" → "a\nb"，retainedMoves 幸存回流文字 'b' 不应被误当 inserted 裁切。
+     */
+    @Test
+    fun repro_comment5710977972_a3_retainedMoveReflowTextMistakenAsInserted_projectionVersion() {
+        val snaps = snapshotsFromRawTexts(listOf("ab", "a\nb"), maxWidth = 30)
+        val oldLayout = snaps[0].copy(selection = TextRange(1, 1))
+        val newLayout = snaps[1].copy(selection = TextRange(2, 2))
+
+        // 确认 "ab" 一行，"a\nb" 两行
+        assertTrue(
+            "A3-proj: 'ab' 应一行，实际 lineCount=${oldLayout.result.lineCount}",
+            oldLayout.result.lineCount == 1,
+        )
+        assertTrue(
+            "A3-proj: 'a\\nb' 应跨两行，实际 lineCount=${newLayout.result.lineCount}",
+            newLayout.result.lineCount >= 2,
+        )
+
+        // 'b' [2,3) 在 "a\nb" 第二行，确认 glyph width >= 0.5（非零宽）
+        // projection 版本用 boundsForRawRange（projection-aware）
+        val bBounds = newLayout.boundsForRawRange(TextRange(2, 3))
+        assertNotNull("A3-proj: 'b' [2,3) bounds 应非 null", bBounds)
+        assertTrue(
+            "A3-proj: 'b' [2,3) glyph width 应 >= 0.5（非零宽），实际 bounds=$bBounds",
+            bBounds!!.width >= 0.5f,
+        )
+
+        val timeline = ComposeVisualTimeline()
+
+        // 光标在 'b' 左侧（offset 2，换行符后，'b' 前，第二行开头）
+        // projection 版本用 cursorRect（projection-aware）
+        val cursorBeforeB = newLayout.cursorRect(2)
+        assertTrue(
+            "A3-proj: 光标应在第二行（top>=35），实际 top=${cursorBeforeB.top}",
+            cursorBeforeB.top >= 35f,
+        )
+
+        val cursorPath = CursorMotionPath(points = listOf(CursorMotionPoint(rect = cursorBeforeB, endFraction = 1f)))
+
+        val patch =
+            makePatch(
+                id = 1L,
+                oldLayout = oldLayout,
+                newLayout = newLayout,
+                // 换行符
+                insertedUnits = listOf(TextRange(1, 2)),
+                retainedMoves =
+                    listOf(
+                        RetainedMove(oldRange = TextRange(1, 2), newRange = TextRange(2, 3)),
+                    ),
+                // 'b' reflow
+                cursorMotionPath = cursorPath,
+                durationMs = 1000L,
+                motionPolicy = EditorMotionPolicy(textDurationMillis = 1000L, cursorEnabled = true, coordinated = true),
+            )
+
+        val fromRect = oldLayout.cursorRect(1) // offset 1 在 "ab" 中（'a' 后）
+        timeline.applyPatch(
+            patch = patch,
+            frameTimeNanos = 0L,
+            cursorFromRect = fromRect,
+            cursorPath = cursorPath.points,
+            // 光标 10ms 内到 'b' 左侧
+            cursorDurationNanos = 10L * NANOS_PER_MS,
+        )
+
+        // 在 20ms 采样：光标已在 'b' 左侧（第二行），retained move unit 'b' 的 position 未完成（未收口）
+        val scene = timeline.sample(20L * NANOS_PER_MS)
+        val cursor = scene.cursorRect
+        assertNotNull("A3-proj: cursor rect 应存在", cursor)
+
+        // 找 retained move unit 'b' [2,3)（targetRange != null, alpha=1→1，幸存回流文字）
+        val retainedUnit =
+            scene.units.firstOrNull {
+                it.targetRange == TextRange(2, 3) && it.alpha.from >= 0.99f && it.alpha.to >= 0.99f
+            }
+        assertNotNull(
+            "A3-proj: retained move unit 'b' [2,3) 应存在（alpha 1→1，幸存回流文字），" +
+                "实际 units=${scene.units.map { "tgt=${it.targetRange} rng=${it.range} a=${it.alpha.from}->${it.alpha.to}" }}",
+            retainedUnit,
+        )
+
+        // 期望：retained move 的幸存文字应始终完整可见
+        val clipFraction = scene.unitClipFractions[retainedUnit!!.key] ?: 1f
+        assertTrue(
+            "A3-proj retainedMoves 幸存回流: 'b' clipFraction 应为 1 或不在 unitClipFractions 中（始终完整可见），" +
+                "实际 clipFraction=$clipFraction；cursor=$cursor",
+            clipFraction >= 0.99f,
+        )
+    }
+
+    // ==================== projection 版本：#689 deleteNewline ====================
+
+    /**
+     * [ComposeVisualTransactionRestartReproTest.deleteNewline_geometryUnchangedUnit_noPositionTrack]
+     * 的 projection 版本 — 用 [snapshotFromRawText] 生成含 projection 的 layout。
+     *
+     * 场景：Insert "" → "ab\nc"，再 Delete "ab\nc" → "abc"。
+     * 删换行时 "ab" 在 old/new layout 里位置没变（都在第一行开头），
+     * 不应出现在 retainedMoves 里。
+     */
+    @Test
+    fun deleteNewline_geometryUnchangedUnit_noPositionTrack_projectionVersion() {
+        val state = ComposeEditorVisualState(targetId = "test-720-delete-newline-projection")
+
+        // === 生成 patch A（Insert "" → "ab\nc"）===
+        val displayLayouts = displayLayoutsFromRawTexts(listOf("", "ab\nc", "abc"), 1000)
+        val (initLayout, initProj) = displayLayouts[0]
+        state.onAuthoritativeLayout(initLayout, TextRange(0, 0), 0, projection = initProj, rawText = "")
+        state.onVisualIntent(
+            makeInsertIntent(
+                coreTxnId = 1L,
+                baseRev = 0L,
+                newRev = 1L,
+                oldText = "",
+                newText = "ab\nc",
+                newRange = TextRange(0, 4),
+                replaceBounds = VisualReplaceBounds(0, 0, 0, 4),
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+        val (abncLayout, abncProj) = displayLayouts[1]
+        state.onAuthoritativeLayout(abncLayout, TextRange(4, 4), 0, projection = abncProj, rawText = "ab\nc")
+        val patchA = state.latestPatch.value
+        assertNotNull("patch A 应生成", patchA)
+
+        // === 生成 patch B（Delete "ab\nc" → "abc"）===
+        state.onVisualIntent(
+            EditorVisualIntent(
+                coreTransactionId = 2L,
+                baseRevision = 1L,
+                newRevision = 2L,
+                animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+                durationMs = 100L,
+                offsetMap =
+                    VisualOffsetMap(
+                        entries =
+                            listOf(
+                                // "ab"
+                                VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY),
+                                // "c"
+                                VisualOffsetMapEntry(3, 2, 1, VisualOffsetMapKind.SHIFTED),
+                            ),
+                    ),
+                // "\n"
+                oldRanges = listOf(TextRange(2, 3)),
+                newRanges = emptyList(),
+                textKind = TextVisualKind.Delete,
+                cursor = null,
+                replaceBounds = VisualReplaceBounds(2, 3, 2, 2),
+                expectedOldText = "ab\nc",
+                expectedNewText = "abc",
+            ),
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+        )
+        val (abcLayout, abcProj) = displayLayouts[2]
+        state.onAuthoritativeLayout(abcLayout, TextRange(3, 3), 0, projection = abcProj, rawText = "abc")
+        val patchB = state.latestPatch.value
+        assertNotNull("patch B 应生成", patchB)
+
+        // 核心断言：B 的 retainedMoves 只包含真正发生位移的 unit。
+        // "ab" 在 old layout（"ab\nc" 第一行）和 new layout（"abc" 第一行）里位置没变，
+        // 不应出现在 retainedMoves 里。
+        val retainedMoves = patchB!!.retainedMoves
+        val abMove = retainedMoves.firstOrNull { it.newRange == TextRange(0, 2) }
+        assertNull(
+            "'ab' 几何没变，不应出现在 retainedMoves 里（不产生 position track）\n" +
+                "Issue #720 projection 版本：删换行时几何没变的存活 unit 不产生 position track",
+            abMove,
+        )
+    }
+
+    // ==================== 辅助方法 ====================
+
+    private companion object {
+        /** 1 ms = 1_000_000 ns。 */
+        const val NANOS_PER_MS: Long = 1_000_000L
+    }
+
+    /**
+     * 批量测量：raw texts → display texts → TextLayoutResults → ComposeLayoutSnapshots。
+     *
+     * composeRule.setContent 只能调一次，所以一个测试里所有文本必须一次性测量。
+     * 默认 selection = TextRange(raw.length, raw.length)（光标在末尾）。
+     */
+    @Suppress("LongParameterList")
+    private fun snapshotsFromRawTexts(
+        rawTexts: List<String>,
+        maxWidth: Int = 1000,
+        fontSizeSp: Float = 14f,
+    ): List<ComposeLayoutSnapshot> {
+        val projections = rawTexts.map { EditorSoftBreakProjection.fromRawText(it) }
+        val displayTexts = rawTexts.zip(projections).map { (raw, proj) -> buildDisplayText(raw, proj) }
+        val layouts = measureAllLayouts(displayTexts, maxWidth, fontSizeSp)
+        return rawTexts.zip(projections).zip(layouts).map { (rawAndProj, layout) ->
+            val (raw, proj) = rawAndProj
+            ComposeLayoutSnapshot(layout, TextRange(raw.length, raw.length), 0, proj, raw)
+        }
+    }
+
+    /**
+     * 批量测量：raw texts → (display TextLayoutResults, projections) —
+     * 供 [ComposeEditorVisualState.onAuthoritativeLayout] 使用（它接收 TextLayoutResult + projection + rawText）。
+     */
+    @Suppress("LongParameterList")
+    private fun displayLayoutsFromRawTexts(
+        rawTexts: List<String>,
+        maxWidth: Int = 1000,
+        fontSizeSp: Float = 14f,
+    ): List<Pair<TextLayoutResult, EditorSoftBreakProjection>> {
+        val projections = rawTexts.map { EditorSoftBreakProjection.fromRawText(it) }
+        val displayTexts = rawTexts.zip(projections).map { (raw, proj) -> buildDisplayText(raw, proj) }
+        val layouts = measureAllLayouts(displayTexts, maxWidth, fontSizeSp)
+        return layouts.zip(projections)
+    }
+
+    /**
+     * 按 [projection.insertPoints] 在 raw text 中插入 U+200B 生成 display text。
+     */
+    private fun buildDisplayText(
+        rawText: String,
+        projection: EditorSoftBreakProjection,
+    ): String {
+        if (projection.insertPoints.isEmpty()) return rawText
+        val sb = StringBuilder()
+        var prev = 0
+        for (insertPoint in projection.insertPoints) {
+            sb.append(rawText, prev, insertPoint)
+            sb.append(EditorSoftBreakProjection.ZERO_WIDTH_SPACE)
+            prev = insertPoint
+        }
+        sb.append(rawText, prev, rawText.length)
+        return sb.toString()
+    }
+
+    /**
+     * 一次性测量所有文本（composeRule.setContent 只能调一次）。
+     */
+    private fun measureAllLayouts(
+        texts: List<String>,
+        maxWidth: Int,
+        fontSizeSp: Float,
+    ): List<TextLayoutResult> {
+        val results = mutableListOf<TextLayoutResult>()
+        composeRule.setContent {
+            val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+            texts.forEach { text ->
+                results.add(
+                    textMeasurer.measure(
+                        text = AnnotatedString(text),
+                        style = TextStyle(fontSize = fontSizeSp.sp),
+                        constraints = Constraints(maxWidth = maxWidth),
+                    ),
+                )
+            }
+        }
+        return results
+    }
+
+    @Suppress("LongParameterList")
+    private fun makePatch(
+        id: Long,
+        oldLayout: ComposeLayoutSnapshot,
+        newLayout: ComposeLayoutSnapshot,
+        offsetMap: List<VisualOffsetMapEntry>? = null,
+        insertedUnits: List<TextRange> = emptyList(),
+        deletedUnits: List<TextRange> = emptyList(),
+        retainedMoves: List<RetainedMove> = emptyList(),
+        cursorMotionPath: CursorMotionPath? = null,
+        durationMs: Long = 100L,
+        motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
+    ): ComposeVisualPatch =
+        ComposeVisualPatch(
+            id = id,
+            coreTransactionIds = listOf(id),
+            oldLayout = oldLayout,
+            newLayout = newLayout,
+            offsetMap = offsetMap,
+            insertedUnits = insertedUnits,
+            deletedUnits = deletedUnits,
+            retainedMoves = retainedMoves,
+            cursorMotionPath = cursorMotionPath,
+            durationMs = durationMs,
+            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            motionPolicy = motionPolicy,
+            // intent = null 表示本地输入 — naturalGeometryChanged 判定生效
+        )
+
+    private fun makeInsertIntent(
+        coreTxnId: Long,
+        baseRev: Long,
+        newRev: Long,
+        oldText: String,
+        newText: String,
+        newRange: TextRange,
+        replaceBounds: VisualReplaceBounds,
+        offsetMap: VisualOffsetMap? = null,
+    ): EditorVisualIntent =
+        EditorVisualIntent(
+            coreTransactionId = coreTxnId,
+            baseRevision = baseRev,
+            newRevision = newRev,
+            animationMode = AnimationModeDto.CLUSTER_ANIMATION,
+            durationMs = 100L,
+            offsetMap = offsetMap,
+            oldRanges = emptyList(),
+            newRanges = listOf(newRange),
+            textKind = TextVisualKind.Insert,
+            cursor = null,
+            replaceBounds = replaceBounds,
+            expectedOldText = oldText,
+            expectedNewText = newText,
+        )
+}

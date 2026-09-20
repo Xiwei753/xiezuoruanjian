@@ -564,6 +564,26 @@ class ComposeVisualTimeline {
                 progressByKey.remove(unit.key)
             }
             for (slice in slices) {
+                // Issue #720 评论 5746323050：本地 patch + surviving slice 自然几何变化 →
+                // 不调用 mapSurvivingSlice()、不加入 surviving、清掉 presentedKeys / progressByKey 状态，
+                // 让 BasicTextField 从这一帧开始直接画 newLayout 的最终位置。
+                // mapSurvivingSlice() 的 position tween 保留给真正需要 reflow ownership 的非本地/Core 路径；
+                // 本地编辑不能再从这里偷偷产生 survivor 位移动画。
+                if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
+                    val shouldRelease =
+                        patch.intent == null &&
+                            ComposeVisualRebase.naturalGeometryChanged(
+                                oldLayout = unit.layout,
+                                oldRange = slice.oldSubRange,
+                                newLayout = newLayout,
+                                newRange = slice.newSubRange,
+                            )
+                    if (shouldRelease) {
+                        presentedKeys.remove(unit.key)
+                        progressByKey.remove(unit.key)
+                        continue
+                    }
+                }
                 // 决定本 slice 的 childKey：
                 // - 不 split（单 slice 且代表整个父 unit）→ 保留 parent key
                 // - split（2+ 子 unit）→ 每个子 unit 分配独立新 key

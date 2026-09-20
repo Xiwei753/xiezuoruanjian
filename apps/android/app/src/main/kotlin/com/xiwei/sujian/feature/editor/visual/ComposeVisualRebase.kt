@@ -354,6 +354,46 @@ internal object ComposeVisualRebase {
     ): Rect? = snapshot.boundsForRawRange(range)
 
     /**
+     * Issue #720 评论 5746323050：统一的"自然几何是否变化"判定 —
+     * 输入旧/新 [ComposeLayoutSnapshot] + old/new raw range，
+     * 只通过 snapshot 的 projection-aware 几何入口 [ComposeLayoutSnapshot.boundsForRawRange] 比较，
+     * 不直接碰 TextLayoutResult。
+     *
+     * 只比较垂直位置（top）— Issue #720 的核心症状是跨行变化（自动换行、硬换行删除），
+     * 跨行时 top 会变化。同行水平位移（前文长度变化但不换行）不触发释放，
+     * 保留 position tween 让文字平滑滑动，不产生"先挤到新行再删除"的错位画面。
+     *
+     * - 比较 boundsForRawRange() 的 top；
+     * - top 变化超过 [epsilon]（默认 0.5f px）就视为 reflow（跨行）；
+     * - 旧/新任一侧取不到有效 bounds（null），也按"几何变化"返回 true
+     *   （不能继续由 survivor overlay 持有，交给 BasicTextField）。
+     *
+     * timeline（[ComposeVisualTimeline]）用此 helper 判定是否释放 surviving unit。
+     *
+     * @param oldLayout 旧布局快照。
+     * @param oldRange 旧正文中的 raw range。
+     * @param newLayout 新布局快照。
+     * @param newRange 新正文中的 raw range。
+     * @param epsilon 浮点误差容限（px），默认 0.5f。
+     * @return true 表示自然几何发生变化（跨行 reflow），应释放给 BasicTextField；false 表示几何未变化。
+     */
+    fun naturalGeometryChanged(
+        oldLayout: ComposeLayoutSnapshot,
+        oldRange: TextRange,
+        newLayout: ComposeLayoutSnapshot,
+        newRange: TextRange,
+        epsilon: Float = 0.5f,
+    ): Boolean {
+        val oldBounds = oldLayout.boundsForRawRange(oldRange)
+        val newBounds = newLayout.boundsForRawRange(newRange)
+        // 旧/新任一侧取不到有效 bounds → 不能继续由 survivor overlay 持有
+        if (oldBounds == null || newBounds == null) return true
+        // Issue #720：只比较垂直位置（top）— 跨行变化才释放。
+        // 同行水平位移保留 position tween，不破坏现有动画行为。
+        return kotlin.math.abs(oldBounds.top - newBounds.top) > epsilon
+    }
+
+    /**
      * #708 评论 5726837636：子片段屏幕位置计算 —
      * 当一个 active unit 被切开只删一部分时，ghost 的屏幕位置不能直接用父 unit 左上角，
      * 要用"slice 自然位置 + 父 unit 当前位移"。

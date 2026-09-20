@@ -509,6 +509,13 @@ class ComposeEditorVisualState(
 
             // #708 评论 5725706551 步骤2：hiddenRanges 从 rebase 后所有 targetRange != null 的 unit 重新推导 —
             // 不再从旧 hiddenRanges 复制（旧坐标系），确保 hiddenRanges 和 newLayout 属于同一个坐标系。
+            //
+            // Issue #720 评论 5746323050：不再补第二套 reflow。
+            // handoff rebase 仍保留 surviving slice（rebase 到新坐标 + alpha 动画），
+            // ComposeVisualTimeline.mapSurvivingUnits() 在本地 patch + 跨行 reflow 时释放它（不产生 position tween）。
+            // handoff scene 是 patch drain 前的瞬态，survivor 已 rebase 到新位置；
+            // drain 后 timeline 不持有它，BasicTextField 直接画最终位置。
+            // hiddenRanges 从 rebasedUnits.targetRange 重建，与 handoff 保持一致。
             val mergedHidden = mutableListOf<TextRange>()
             for (unit in rebasedUnits) {
                 val tr = unit.targetRange
