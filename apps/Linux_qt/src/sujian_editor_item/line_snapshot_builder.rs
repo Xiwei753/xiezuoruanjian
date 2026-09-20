@@ -68,6 +68,8 @@ impl LineSnapshotBuilder {
                     // Issue #724 评论 5751573705 问题1: 空行也传 cache_slot + qtextline_idx。
                     cache_slot: line.cache_slot,
                     qtextline_idx: line.qtextline_idx,
+                    // Issue #724 评论 5752140048 问题 4a: 段落文档 byte 起始偏移。
+                    paragraph_document_byte_start: line.para_start,
                 });
 
                 visual_line_ordinal += 1;
@@ -121,6 +123,9 @@ impl LineSnapshotBuilder {
                 // 供 Partial cluster 从 QTextLayout 取精确 glyph 几何。
                 cache_slot: line.cache_slot,
                 qtextline_idx: line.qtextline_idx,
+                // Issue #724 评论 5752140048 问题 4a: 段落文档 byte 起始偏移，
+                // 用于把全文 byte range 转成 paragraph-local offset。
+                paragraph_document_byte_start: line.para_start,
             });
 
             visual_line_ordinal += 1;

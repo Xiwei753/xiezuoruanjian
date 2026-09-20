@@ -795,27 +795,11 @@ Rectangle {
                         // Issue #724 评论 5751573705 问题2: 锚点来源改为上一帧真正画出的
                         // visual caret y/h（而非 target_y），并记录 target_scroll_y 由 Rust
                         // 侧判断到达后清除锚点，不再由 80ms Timer 决定生命周期。
-                        property bool is_auto_following: false
-
-                        function begin_auto_follow_scroll() {
-                            if (is_auto_following)
-                                return
-                            is_auto_following = true
-                            // 把上一帧真正画出的 caret viewport y/h 和当前滚动目标传进 Rust。
-                            // visual_cursor_rect_y/height 是 Rust 已算好的视觉实际位置，
-                            // 不是 target_y——动画中间态时两者不同。
-                            sujianEditor.set_auto_follow_anchor_with_target(
-                                sujianEditor.visual_cursor_rect_y,
-                                sujianEditor.visual_cursor_rect_height,
-                                sujianEditor.scroll_y)
-                        }
-
-                        function end_auto_follow_scroll() {
-                            if (!is_auto_following)
-                                return
-                            is_auto_following = false
-                            sujianEditor.clear_auto_follow_anchor()
-                        }
+                        // Issue #724 评论 5752140048 问题 1+3: 不再维护 QML
+                        // is_auto_following shadow state，也不再在 begin_auto_follow_scroll()
+                        // 内部读取旧 scroll_y 当 target。每次算出完整 targetY 后直接调 Rust 的
+                        // set_auto_follow_anchor_with_target(..., targetY)，Rust 自己持有 anchor
+                        // 是否活跃的唯一状态，避免 QML/Rust 状态分叉和旧 scroll_y 传参。
 
                         function ensureCursorVisible() {
                             const flick = contentItem
@@ -837,12 +821,18 @@ Rectangle {
                             }
 
                             const maxY = Math.max(0, contentHeight - height)
-                            // Issue #724 评论 5750911834 问题 2: 自动跟随滚动期间通过
-                            // begin_auto_follow_scroll() 标记，不把 scroll_y 直接作用到
-                            // caret viewport 坐标。end_auto_follow_scroll() 在滚动结束后
-                            // 由 scrollAnimationReleaseTimer 恢复。
-                            begin_auto_follow_scroll()
-                            flick.contentY = Math.max(0, Math.min(maxY, nextY))
+                            // Issue #724 评论 5752140048 问题 1: 先算出完整目标 targetY，
+                            // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。否则把
+                            // targetY 同时传给 Rust 的 set_auto_follow_anchor_with_target
+                            // 和 flick.contentY，避免传旧 scroll_y 导致 anchor 立刻自清。
+                            const targetY = Math.max(0, Math.min(maxY, nextY))
+                            if (Math.abs(targetY - flick.contentY) < 0.5)
+                                return
+                            sujianEditor.set_auto_follow_anchor_with_target(
+                                sujianEditor.visual_cursor_rect_y,
+                                sujianEditor.visual_cursor_rect_height,
+                                targetY)
+                            flick.contentY = targetY
                         }
 
                         function scheduleEnsureCursorVisible() {
@@ -860,9 +850,11 @@ Rectangle {
                             }
                         }
                         onEditorIsScrollingChanged: {
-                            if (editorIsScrolling) {
-                                editorAnimationSuppressed = true;
-                            }
+                            // Issue #724 评论 5752140048 问题 2: 滚动停止时恢复 false，
+                            // 触发 Rust set_is_scrolling(false) → resume_all()。
+                            // anchor 生命周期和 editorAnimationSuppressed 是两件事，
+                            // 不要为了删 anchor timer 顺手把滚动动画抑制状态恢复也删掉。
+                            editorAnimationSuppressed = editorIsScrolling
                         }
 
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff

@@ -11,13 +11,13 @@ use qmetaobject::QImage;
 
 // Issue #724 评论 5751573705 问题1: C++ 侧头文件 + 外部函数声明。
 // 每个 cpp! 块独立编译，此处必须在本文件内 include 头文件和声明 extern。
-// get_glyph_range_rect 在 qt_text_node.rs 的 cpp! 块中定义，此处 extern 声明。
+// Issue #724 评论 5752140048 问题 4 额外要求: 文件顶部原声明了
+// get_glyph_range_rect(...) 但实际从未调用，qt_text_node.rs 里也没有此函数定义。
+// 删除该 extern 声明，代码和说明保持一致——精确 glyph 几何由本文件内联的
+// cpp! 块直接调用 QTextLine::cursorToX 完成，不经过 get_glyph_range_rect。
 cpp! {{
     #include <QtGui/QTextLayout>
     extern QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
-    bool get_glyph_range_rect(uint64_t generation, int cacheSlot, int qtextlineIdx,
-                              int qcharStart, int qcharEnd,
-                              double* outX, double* outY, double* outW, double* outH);
 }}
 
 /// 一次平台排版后的不可变 glyph cluster 视觉快照。
@@ -114,6 +114,12 @@ pub(crate) struct PreparedLineSnapshot {
     /// Issue #724 评论 5751573705 问题1: 该视觉行在 QTextLayout 中的行索引，
     /// 配合 cache_slot 定位 QTextLine。
     pub qtextline_idx: i32,
+    /// Issue #724 评论 5752140048 问题 4a: 该视觉行所属段落在全文文档中的
+    /// UTF-8 byte 起始偏移（= `VisualLine.para_start`）。`get_precise_glyph_rect_for_byte_range`
+    /// 先把全文 byte range 减去此值转成 paragraph-local byte，再转 paragraph-local
+    /// UTF-16 qchar，配合 per-paragraph QTextLayout 使用（QTextLine::textStart()/
+    /// cursorToX 期望 paragraph-local offset，不是全文 offset）。
+    pub paragraph_document_byte_start: usize,
 }
 
 /// Issue #724 评论 5751268664 缺口1: cluster 相对 inserted 子范围的位置分类。
@@ -237,15 +243,34 @@ impl PreparedLineSnapshot {
         if byte_start < self.byte_start || byte_end > self.byte_end || byte_end <= byte_start {
             return None;
         }
-        let qchar_start = utf8_byte_to_utf16_code_unit(full_text, byte_start);
-        let qchar_end = utf8_byte_to_utf16_code_unit(full_text, byte_end);
+        // Issue #724 评论 5752140048 问题 4a: byte_start/byte_end 是全文文档 byte offset，
+        // 但 get_paragraph_layout 取的是 per-paragraph QTextLayout。QTextLine::textStart()/
+        // textLength()/cursorToX 期望 paragraph-local QChar offset（相对于传给该
+        // QTextLayout 的段落字符串开头）。先把全文 byte offset 转成 paragraph-local
+        // UTF-16 qchar：用全文 UTF-16 计数的可加性，减去段落起点的全文 UTF-16 offset。
+        // paragraph_document_byte_start 是段落 \n 分隔的 char boundary，UTF-16 计数可加性成立。
+        let para_doc_byte_start = self.paragraph_document_byte_start;
+        if byte_start < para_doc_byte_start {
+            return None;
+        }
+        let para_qchar_base =
+            utf8_byte_to_utf16_code_unit(full_text, para_doc_byte_start);
+        let qchar_start =
+            utf8_byte_to_utf16_code_unit(full_text, byte_start).saturating_sub(para_qchar_base);
+        let qchar_end =
+            utf8_byte_to_utf16_code_unit(full_text, byte_end).saturating_sub(para_qchar_base);
         if qchar_end <= qchar_start {
             return None;
         }
         let cache_slot = self.cache_slot;
         let qtextline_idx = self.qtextline_idx;
-        // 调用 C++ 侧：从 g_paragraph_layout_cache 取 QTextLayout，
-        // 用 QTextLine::cursorToX 取精确左/右边缘，写到四个 f64 输出参数。
+        // Issue #724 评论 5752140048 问题 4b: 返回值必须和现有 CanonicalClusterEntry
+        // 的 sourceRect* 契约一致——行图片局部坐标（减去 line.x()/line.y()），已乘 DPR。
+        // cursorToX 返回 QTextLayout 坐标系 x（含 line.x() 偏移），行局部 = cursorToX - line.x()。
+        // y 方向行图片就是这一行，局部 y 从 0 开始。宽高乘 DPR 转物理像素。
+        // 这样 source_rect_to_document_rect 按"行局部物理像素"处理才不会重复加 visual_x
+        // 或在高 DPI 下多除一次 dpr。
+        let dpr = self.dpr;
         let mut rx = 0.0f64;
         let mut ry = 0.0f64;
         let mut rw = 0.0f64;
@@ -256,6 +281,7 @@ impl PreparedLineSnapshot {
             qtextline_idx as "int",
             qchar_start as "int64_t",
             qchar_end as "int64_t",
+            dpr as "double",
             mut rx as "double*",
             mut ry as "double*",
             mut rw as "double*",
@@ -270,10 +296,12 @@ impl PreparedLineSnapshot {
             qreal left = line.cursorToX(qchar_start);
             qreal right = line.cursorToX(qchar_end);
             if (right <= left) return;
-            *rx = line.x() + left;
-            *ry = line.y();
-            *rw = right - left;
-            *rh = line.height();
+            // 行图片局部坐标（减 line.x()/line.y()），乘 DPR 转物理像素，
+            // 与 CanonicalClusterEntry.sourceRect* 契约一致。
+            *rx = (left - line.x()) * dpr;
+            *ry = 0.0;
+            *rw = (right - left) * dpr;
+            *rh = line.height() * dpr;
         });
         if rw <= 0.0 || rh <= 0.0 {
             return None;

@@ -3936,6 +3936,8 @@ mod tests {
             visual_line_bottom: 20.0,
             cache_slot: 0,
             qtextline_idx: 0,
+            // Issue #724 评论 5752140048 问题 4a: 测试用段落起始偏移 0。
+            paragraph_document_byte_start: 0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,
