@@ -88,6 +88,24 @@ class ComposeEditorVisualState(
     val visualScene: StateFlow<ComposeVisualScene> = _visualScene.asStateFlow()
 
     /**
+     * Issue #723 评论 5749023316 缺口1：当前是否真的由 visual timeline 持有 caret —
+     * 从 [_visualScene].cursorOwnedByVisual 派生，但只在 true->false / false->true 边沿更新。
+     *
+     * - [drawsVisualCursor] 是设置级总开关（smooth cursor 是否开启），attach 后不变。
+     * - [cursorOwnedByVisual] 是帧级所有权（这一帧是否由 visual 持有 caret）。
+     *
+     * [WritingEditorSurface] 用 `drawsVisualCursor && cursorOwnedByVisual` 决定系统 caret
+     * 是否透明：smooth cursor 开启但当前 visual 不持有 caret（动画结束/纯点击/拖动）时，
+     * 系统 caret 正常显示，draw 层不自绘，手柄与光标同源。
+     *
+     * StateFlow 自带 distinctUntilChanged 语义：相同值赋值不会触发订阅者重组，
+     * 因此每帧 sample 后无脑 `_cursorOwnedByVisual.value = scene.cursorOwnedByVisual`
+     * 即"只在边沿更新"的语义，不会每帧驱动 Compose 重组。
+     */
+    private val _cursorOwnedByVisual = MutableStateFlow(ComposeVisualScene.Empty.cursorOwnedByVisual)
+    val cursorOwnedByVisual: StateFlow<Boolean> = _cursorOwnedByVisual.asStateFlow()
+
+    /**
      * 待消费的 patch 队列 — 解决快速输入时 LaunchedEffect 取消旧协程导致丢 patch 的问题。
      * 使用队列而非 conflated state，确保每一笔 patch 都能被处理。
      */
@@ -429,8 +447,17 @@ class ComposeEditorVisualState(
                 _latestLayout.value?.effectiveRawText == snapshot.text &&
                 snapshot.selection != lastResolvedSelection
         if (isPureSelectionChange && snapshot.selection.collapsed) {
-            val targetRect = _latestLayout.value?.cursorRect(snapshot.selection.end)
-            if (targetRect != null) {
+            val layout = _latestLayout.value
+            // Issue #723 评论 5749023316 缺口1：纯点击/拖动如果 raw offset 正好命中
+            // projection wedge（wedgeStart != wedgeEnd），不创建自绘 target rect，
+            // 直接交还系统 caret — 不自己猜 AndroidX 私有的 selection affinity。
+            // 此时让 BasicTextField 的系统 caret/handle 持有最终静止位置。
+            val rawEnd = snapshot.selection.end
+            val hitsWedge =
+                layout != null &&
+                    layout.projection.wedgeStart(rawEnd) != layout.projection.wedgeEnd(rawEnd)
+            val targetRect = layout?.cursorRect(rawEnd)
+            if (targetRect != null && !hitsWedge) {
                 // #713 评论 5740578331：计算 fromRect — selection 改变前屏幕真正可见的 cursor
                 val currentScene = _visualScene.value
                 val fromRect =
@@ -452,6 +479,8 @@ class ComposeEditorVisualState(
                         cursorOwnedByVisual = true,
                     )
                 _visualScene.update { ownedScene }
+                // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
+                _cursorOwnedByVisual.value = ownedScene.cursorOwnedByVisual
                 drawSnapshotState = drawSnapshotState.copy(scene = ownedScene)
                 // #713 评论 5740279418：唤醒帧循环 —
                 // 不更新 patchVersion 时 LaunchedEffect(patchVersion) 不会重启，
@@ -752,6 +781,8 @@ class ComposeEditorVisualState(
                 cursorOwnedByVisual = handoffCursorRect != null || scene.cursorOwnedByVisual,
             )
         }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
+        _cursorOwnedByVisual.value = _visualScene.value.cursorOwnedByVisual
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
         drawSnapshotState =
             drawSnapshotState.copy(
@@ -1460,6 +1491,9 @@ class ComposeEditorVisualState(
                 rawScene
             }
         _visualScene.update { scene }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual 给 WritingEditorSurface。
+        // StateFlow 自带 distinctUntilChanged 语义，相同值不触发订阅者重组。
+        _cursorOwnedByVisual.value = scene.cursorOwnedByVisual
         // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene —
         // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
         drawSnapshotState = drawSnapshotState.copy(scene = scene)
@@ -1614,6 +1648,8 @@ class ComposeEditorVisualState(
         _patchVersion.update { 0L }
         _latestLayout.update { null }
         _visualScene.update { ComposeVisualScene.Empty }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual。
+        _cursorOwnedByVisual.value = ComposeVisualScene.Empty.cursorOwnedByVisual
         _latestPatch.update { null }
         _restingCursorRect.update { null }
         // #691 评论 5679242735 修改2：重置运行时 policy 切换状态
@@ -1674,6 +1710,8 @@ class ComposeEditorVisualState(
         // 已发布给 Compose 的旧 visualScene 清空，直到下一次 sampleVisualScene() 重建。
         _drawsVisualCursor.update { effective.cursorEnabled }
         _visualScene.update { ComposeVisualScene.Empty }
+        // Issue #723 评论 5749023316 缺口1：边沿同步 cursorOwnedByVisual。
+        _cursorOwnedByVisual.value = ComposeVisualScene.Empty.cursorOwnedByVisual
         // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene
         drawSnapshotState = drawSnapshotState.copy(scene = ComposeVisualScene.Empty)
         // 把已入队 patch 的 motionPolicy 替换成最新 policy

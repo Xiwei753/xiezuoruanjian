@@ -44,6 +44,7 @@ data class WritingEditorContentParams(
     val inputEnabled: Boolean,
     val onSurfaceReady: () -> Boolean,
     val drawsVisualCursor: Boolean,
+    val cursorOwnedByVisual: Boolean,
     val searchHighlights: List<TextRange>,
     val searchHighlightColor: Color,
     val modifier: Modifier,
@@ -138,6 +139,9 @@ fun WritingEditorSurface(
     modifier: Modifier = Modifier,
 ) {
     val drawsVisualCursor by visualState.drawsVisualCursor.collectAsStateWithLifecycle()
+    // Issue #723 评论 5749023316 缺口1：当前是否真的由 visual timeline 持有 caret。
+    // 只在 ownership 边沿更新（StateFlow distinctUntilChanged），不每帧驱动 Compose 重组。
+    val cursorOwnedByVisual by visualState.cursorOwnedByVisual.collectAsStateWithLifecycle()
 
     WritingEditorContent(
         params =
@@ -151,6 +155,7 @@ fun WritingEditorSurface(
                 inputEnabled = inputEnabled,
                 onSurfaceReady = onSurfaceReady,
                 drawsVisualCursor = drawsVisualCursor,
+                cursorOwnedByVisual = cursorOwnedByVisual,
                 searchHighlights = searchHighlights,
                 searchHighlightColor = searchHighlightColor,
                 modifier = modifier,
@@ -173,6 +178,7 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val inputEnabled = params.inputEnabled
     val onSurfaceReady = params.onSurfaceReady
     val drawsVisualCursor = params.drawsVisualCursor
+    val cursorOwnedByVisual = params.cursorOwnedByVisual
     val searchHighlights = params.searchHighlights
     val searchHighlightColor = params.searchHighlightColor
     val modifier = params.modifier
@@ -280,8 +286,12 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             // smooth cursor 关闭时始终由系统画，draw 层永远不接管。
             // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
             // 不再用 needsIndentedEmptyParagraphCaret 把系统 cursor 设透明。
+            // Issue #723 评论 5749023316 缺口1：只有 smooth cursor 开启（drawsVisualCursor）
+            // 且当前 visual 真正持有 caret（cursorOwnedByVisual）时才透明掉系统 caret；
+            // 动画结束/纯点击/拖动时 cursorOwnedByVisual=false → 系统 caret 正常显示，
+            // draw 层不自绘，手柄与光标同源。
             cursorBrush =
-                if (drawsVisualCursor) {
+                if (drawsVisualCursor && cursorOwnedByVisual) {
                     SolidColor(Color.Transparent)
                 } else {
                     SolidColor(cursorColor)

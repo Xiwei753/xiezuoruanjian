@@ -38,15 +38,35 @@ class EditorMotionPolicyTest {
 
     @Test
     fun effectiveIsIdentityWhenReduceMotionFalse() {
+        // Issue #723 评论 5749023316 缺口2：coordinated=false 时 effective() 才是 identity。
+        // coordinated=true 时 effective() 会强制 textEnabled/cursorEnabled=true（归一旧持久化状态）。
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
                 cursorEnabled = false,
-                coordinated = true,
+                coordinated = false,
                 reduceMotion = false,
             )
         val effective = policy.effective()
         assertEquals(policy, effective)
+    }
+
+    @Test
+    fun coordinatedTrueForcesTextAndCursorEnabled() {
+        // Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制
+        // textEnabled=true, cursorEnabled=true，收死旧持久化状态
+        // （coordinated=true 但 textEnabled=false / cursorEnabled=false）。
+        val legacyPolicy =
+            EditorMotionPolicy(
+                textEnabled = false,
+                cursorEnabled = false,
+                coordinated = true,
+                reduceMotion = false,
+            )
+        val effective = legacyPolicy.effective()
+        assertTrue("coordinated=true → effective() 强制 textEnabled=true", effective.textEnabled)
+        assertTrue("coordinated=true → effective() 强制 cursorEnabled=true", effective.cursorEnabled)
+        assertTrue("coordinated 标记保持 true", effective.coordinated)
     }
 
     @Test

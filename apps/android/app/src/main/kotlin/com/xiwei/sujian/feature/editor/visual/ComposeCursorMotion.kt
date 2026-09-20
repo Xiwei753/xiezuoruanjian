@@ -3,6 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
+import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
@@ -153,13 +154,17 @@ fun buildCursorMotionPath(
 
 /**
  * 安全取 cursor rect — offset 越界或 layout 抛异常时返回 null。
+ *
+ * Issue #723 评论 5749023316 缺口1：本地文字输入产生的 collapsed caret 显式用
+ * [EditorSoftBreakProjection.CaretAffinity.Start]，与 AndroidX 文本编辑后的 wedge affinity 一致。
+ * 不靠 [cursorRect] 的默认参数猜 affinity。
  */
 private fun safeCursorRect(
     layout: ComposeLayoutSnapshot,
     offset: Int,
 ): Rect? =
     try {
-        layout.cursorRect(offset)
+        layout.cursorRect(offset, EditorSoftBreakProjection.CaretAffinity.Start)
     } catch (_: Throwable) {
         null
     }

@@ -773,7 +773,9 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.onVisualIntent(
             makeInsertIntent(1L, 0L, 1L, "", "a", TextRange(0, 1)),
-            EditorMotionPolicy(textEnabled = false, cursorEnabled = false),
+            // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+            // coordinated=true 时 effective() 强制 textEnabled/cursorEnabled=true。
+            EditorMotionPolicy(textEnabled = false, cursorEnabled = false, coordinated = false),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.drainPendingPatchesAtFrame(0L)
@@ -818,7 +820,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[0], TextRange(0, 0), 0)
         state.onVisualIntent(
             makeInsertIntent(1L, 0L, 1L, "", "a", TextRange(0, 1)),
-            EditorMotionPolicy(textEnabled = false, cursorEnabled = true, cursorDurationMillis = 80L),
+            // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+            EditorMotionPolicy(textEnabled = false, cursorEnabled = true, cursorDurationMillis = 80L, coordinated = false),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.drainPendingPatchesAtFrame(0L)
@@ -1019,6 +1022,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
                         textEnabled = false,
                         cursorEnabled = true,
                         cursorDurationMillis = 100L,
+                        // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+                        coordinated = false,
                     ),
             )
 
@@ -1079,7 +1084,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         assertTrue("应有 pending patch", state.hasPendingPatches())
 
         // 4. 切换 policy 到 textEnabled=false
-        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = false, cursorEnabled = true))
+        // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = false, cursorEnabled = true, coordinated = false))
 
         // 5. drain
         state.drainPendingPatchesAtFrame(0L)
@@ -1097,23 +1103,17 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
     }
 
     /**
-     * #691 评论 5686733880：设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=true）
+     * #691 评论 5686733880：设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=false）
      * 从 [ComposeEditorVisualState] 完整生产路径验证 cursor 使用 cursorDurationMillis 而非 textDurationMillis。
+     *
+     * Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制 textEnabled=true，
+     * "coordinated=true 但 textEnabled=false" 的旧组合不再存在。本测试改用 coordinated=false
+     * 验证独立开关下 cursor 使用 cursorDurationMillis。
      *
      * 场景："" → "a" 插入。patch 在 textEnabled=true 时生成（含 insertedUnits，确保不是 CURSOR_ONLY），
      * 然后通过 [applyMotionPolicyAtFrame] 切换到设置矩阵 D（textEnabled=false, cursorEnabled=true,
-     * coordinated=true, textDurationMillis=1000, cursorDurationMillis=80）。
+     * coordinated=false, textDurationMillis=1000, cursorDurationMillis=80）。
      * drain 时 patch 仍含 insertedUnits，但 motionPolicy 已被替换成 textEnabled=false。
-     *
-     * 旧缺陷1：[computeCursorParamsForPatch] 只判断 `coordinated && !isCursorOnly`，
-     * 漏掉 textEnabled，textEnabled=false 时仍用 textDurationMillis=1000ms。
-     * 旧缺陷2：[applyCursorPatch] 又按 `policy.coordinated` 二次覆盖成 textDurationMillis。
-     * 两处叠加导致 cursor 动画拖到 1000ms 才完成。
-     *
-     * 修复后：
-     * - [computeCursorParamsForPatch] 用 `usesCoordinatedTextTimeline =
-     *   textEnabled && cursorEnabled && coordinated && !isCursorOnly`，textEnabled=false → false → cursorDurationMillis=80ms。
-     * - [applyCursorPatch] 不再二次覆盖，直接用传入的 cursorDurationNanos。
      *
      * 断言：
      * - 40ms 时 cursor 在中间（80ms 时长 50% 进度），未到最终位置
@@ -1155,13 +1155,14 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         assertTrue("drain 前应有 pending patch", state.hasPendingPatches())
 
-        // 步骤4：切换 policy 到设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=true）
+        // 步骤4：切换 policy 到设置矩阵 D（textEnabled=false, cursorEnabled=true, coordinated=false）
         // patch 的 motionPolicy 被替换成 textEnabled=false，但 insertedUnits 保留（非空）
+        // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
         state.applyMotionPolicyAtFrame(
             EditorMotionPolicy(
                 textEnabled = false,
                 cursorEnabled = true,
-                coordinated = true,
+                coordinated = false,
                 textDurationMillis = 1000L,
                 cursorDurationMillis = 80L,
             ),
@@ -1919,7 +1920,8 @@ class ComposeVisualIssue691CoordinatedAnimationTest {
         state.sampleVisualScene(0L)
 
         // 切换 policy：cursorEnabled=false
-        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = true, cursorEnabled = false))
+        // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+        state.applyMotionPolicyAtFrame(EditorMotionPolicy(textEnabled = true, cursorEnabled = false, coordinated = false))
 
         // drawsVisualCursor 应跟随 effective.cursorEnabled = false
         assertFalse(

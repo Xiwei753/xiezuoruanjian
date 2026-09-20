@@ -508,6 +508,8 @@ class ComposeVisualIssue703RegressionTest {
                         textEnabled = false,
                         cursorEnabled = true,
                         cursorDurationMillis = 80L,
+                        // Issue #723 评论 5749023316 缺口2：coordinated=false 时独立开关生效。
+                        coordinated = false,
                     ),
             )
         timelineA.applyPatch(patch = patchA, frameTimeNanos = 0L)

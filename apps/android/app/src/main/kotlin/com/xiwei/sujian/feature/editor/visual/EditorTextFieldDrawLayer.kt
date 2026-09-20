@@ -512,25 +512,14 @@ internal fun DrawScope.drawCurrentEditorFrame(
     // 3. 光标
     // Issue #723 评论 5748592923：空段落缩进已进入显示布局本身，
     // 不再有 needsIndentedEmptyParagraphCaret 静态 caret override。
-    // drawsVisualCursor=true：smooth cursor，用 timeline 动画值（scene.cursorRect）优先。
-    // drawsVisualCursor=false：不画（系统 cursor 自己画）。
-    // 自绘 caret 只在动画事务真正持有 cursor 时透明掉系统 caret，动画完成立即交还。
-    if (drawsVisualCursor) {
-        val cursorRectValue =
-            // #713 评论 5740578331：用 cursorOwnedByVisual 决定光标来源 —
-            // cursorOwnedByVisual=true 表示视觉层已接管光标（handoff 首帧 / selection redirect 已排队 / timeline 正在跑），
-            // draw 层画 scene.cursorRect；
-            // cursorOwnedByVisual=false 时动画真正结束且无 pending handoff/redirect，
-            // draw 层回 computeRestingCursorRect(latestLayout, liveSelection)。
-            // cursorAnimating 只表示 track 是否在动，不再决定光标来源 —
-            // 旧 bug：cursorAnimating=false 时 handoff 首帧 T0 / pending redirect 期间 draw 层
-            // 直接忽略 scene.cursorRect 先画新位置，下一帧 timeline 启动又从旧位置动画，
-            // 表现为"新位置先闪一帧 -> 回旧位置 -> 再动画到新位置"。
-            if (scene.cursorOwnedByVisual) {
-                scene.cursorRect
-            } else {
-                computeRestingCursorRect(latestLayout, liveSelection)
-            } ?: restingCursorRect
+    // Issue #723 评论 5749023316 缺口1：自绘 caret 只在 smooth cursor 开启（drawsVisualCursor）
+    // 且当前 visual 真正持有 caret（scene.cursorOwnedByVisual）时才画。
+    // ownership=false 时（动画结束/纯点击/拖动）直接交给 BasicTextField 系统 caret 自己画，
+    // 不再画 computeRestingCursorRect——系统 caret 与选区手柄同源，避免"手柄一处、自绘光标另一处"。
+    // drawsVisualCursor 仍作为"smooth cursor 是否开启"的总开关，
+    // scene.cursorOwnedByVisual 决定"这一帧是否由 visual 持有"。
+    if (drawsVisualCursor && scene.cursorOwnedByVisual) {
+        val cursorRectValue = scene.cursorRect ?: restingCursorRect
         if (cursorRectValue != null) {
             drawVisualCursorRect(
                 rect = cursorRectValue,

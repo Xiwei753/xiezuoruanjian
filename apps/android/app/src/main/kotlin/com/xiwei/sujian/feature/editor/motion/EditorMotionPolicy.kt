@@ -32,12 +32,23 @@ data class EditorMotionPolicy(
     val reduceMotion: Boolean = false,
 ) {
     /**
-     * reduce-motion 优先级最高：直接返回全静态策略。
+     * 策略层归一 — 优先级：reduceMotion > coordinated > 用户独立设置。
+     *
+     * - reduceMotion=true：全静态（textEnabled=false, cursorEnabled=false, coordinated=false），
+     *   编辑器仍正常工作，但所有动画降级为即时更新。优先级最高。
+     * - coordinated=true：文字和光标是一套协同动画，强制 textEnabled=true, cursorEnabled=true，
+     *   防止旧持久化状态（coordinated=true 但 textEnabled=false / cursorEnabled=false）
+     *   升级后把独立开关藏掉却仍暗中关闭一半动画。coordinated 标记保持 true。
+     * - 其余：尊重用户独立设置（textEnabled / cursorEnabled / coordinated 各自生效）。
+     *
+     * Issue #723 评论 5749023316 缺口2：原来只处理 reduceMotion，没处理 coordinated=true
+     * 时的归一。EditorSettings.kt 在 onCheckedChange(false->true) 时会把两个旧字段写 true
+     * （清理持久化值），但运行语义必须由本方法自己保证——旧设置、同步回来的设置也不会重新打架。
      */
     fun effective(): EditorMotionPolicy =
-        if (reduceMotion) {
-            copy(textEnabled = false, cursorEnabled = false, coordinated = false)
-        } else {
-            this
+        when {
+            reduceMotion -> copy(textEnabled = false, cursorEnabled = false, coordinated = false)
+            coordinated -> copy(textEnabled = true, cursorEnabled = true)
+            else -> this
         }
 }
