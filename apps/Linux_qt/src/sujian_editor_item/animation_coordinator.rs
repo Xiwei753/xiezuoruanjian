@@ -2698,6 +2698,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
         current_scroll_y: f64,
+        auto_follow_anchor: Option<(f64, f64)>,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2841,6 +2842,16 @@ impl LinuxEditorAnimationCoordinator {
         // 根据 cursor_sample_outcome 和最终 cursor_render_state 算出。
         // Coordinated → 协同位置;Running/Finished → cursor_render_state 已更新;
         // Idle → 当前 visual 位置。
+        // Issue #724 评论 5752398265: viewport anchor 只在最终绘制时覆盖屏幕 y/h，
+        // 不污染 find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
+        // anchor 来自 QML begin_auto_follow_scroll()，是滚动前上一帧实际画出的 caret
+        // viewport y/h。auto-follow 期间 caret 画在锚点位置，不被滚动拖走。
+        if let Some((anchor_y, anchor_h)) = auto_follow_anchor {
+            cursor_render_state.y = anchor_y;
+            if anchor_h > 0.0 {
+                cursor_render_state.h = anchor_h;
+            }
+        }
         let drawn_caret_rect: Option<(f64, f64, f64)> = Some((
             cursor_render_state.x,
             cursor_render_state.y,
@@ -5092,6 +5103,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -5144,6 +5156,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         assert!(
@@ -5222,6 +5235,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -5270,6 +5284,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -5344,6 +5359,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -5492,6 +5508,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）

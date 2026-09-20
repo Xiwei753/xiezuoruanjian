@@ -17,6 +17,8 @@ use qmetaobject::QImage;
 // cpp! 块直接调用 QTextLine::cursorToX 完成，不经过 get_glyph_range_rect。
 cpp! {{
     #include <QtGui/QTextLayout>
+    #include <QtGui/QGlyphRun>
+    #include <limits>
     extern QTextLayout* get_paragraph_layout(uint64_t gen, int slot);
 }}
 
@@ -231,6 +233,14 @@ impl PreparedLineSnapshot {
     /// 参数 `generation` 来自 `EditorLayoutSnapshot.revision.0`，
     /// `full_text` 用于把 UTF-8 byte 偏移转换为 QChar 偏移。
     /// 返回行视觉资源局部坐标的 source rect（已乘 DPR），失败时返回 `None`。
+    ///
+    /// Issue #724 评论 5752398265: 改用 `QTextLine::glyphRuns(from, length, flags)`
+    /// 取得 glyph runs 并聚合其 `boundingRect()`，不再用 `cursorToX` 猜矩形。
+    /// `cursorToX` 在 ligature/grapheme 内部会把 cursor 调到最近合法位置，得不到
+    /// Qt 为 partial ligature 算出的 clipped bounding rect；RTL 时 `right <= left`
+    /// 还会失败回退到整个 cluster。`glyphRuns` 的 `from`/`length` 相对于所属
+    /// `QTextLayout` 的字符串范围，`boundingRect()` 是 Qt 已算好的 glyph 视觉矩形
+    /// （SplitLigature 的 run 直接用 Qt 已裁好的 boundingRect）。
     pub(crate) fn get_precise_glyph_rect_for_byte_range(
         &self,
         generation: u64,
@@ -293,15 +303,44 @@ impl PreparedLineSnapshot {
             QTextLine line = layout->lineAt(qtextline_idx);
             if (qchar_start < line.textStart() || qchar_end > line.textStart() + line.textLength())
                 return;
-            qreal left = line.cursorToX(qchar_start);
-            qreal right = line.cursorToX(qchar_end);
-            if (right <= left) return;
+            // Issue #724 评论 5752398265: 用 glyphRuns + SplitLigature 取真实视觉子片段，
+            // 不再用 cursorToX 猜矩形。cursorToX 在 ligature 内部会调到最近合法 cursor，
+            // 得不到 Qt 为 partial ligature 算出的 clipped bounding rect；RTL 时
+            // right<=left 还会失败回退到整个 cluster。glyphRuns 的 from/length 相对于
+            // 所属 QTextLayout 的字符串范围，boundingRect() 是 Qt 已算好的 glyph 视觉矩形。
+            int run_from = static_cast<int>(qchar_start);
+            int run_len = static_cast<int>(qchar_end - qchar_start);
+            QList<QGlyphRun> runs = line.glyphRuns(
+                run_from,
+                run_len,
+                QTextLayout::RetrieveGlyphIndexes
+                    | QTextLayout::RetrieveGlyphPositions
+                    | QTextLayout::RetrieveStringIndexes
+            );
+            if (runs.isEmpty())
+                return;
+            // 聚合所有 run 的 boundingRect（行局部坐标，已含 line.x() 偏移）。
+            qreal min_x = std::numeric_limits<qreal>::max();
+            qreal min_y = std::numeric_limits<qreal>::max();
+            qreal max_right = std::numeric_limits<qreal>::lowest();
+            qreal max_bottom = std::numeric_limits<qreal>::lowest();
+            for (const QGlyphRun &gr : runs) {
+                QRectF br = gr.boundingRect();
+                if (!br.isValid() || br.isEmpty())
+                    continue;
+                min_x = std::min(min_x, br.x());
+                min_y = std::min(min_y, br.y());
+                max_right = std::max(max_right, br.x() + br.width());
+                max_bottom = std::max(max_bottom, br.y() + br.height());
+            }
+            if (max_right <= min_x || max_bottom <= min_y)
+                return;
             // 行图片局部坐标（减 line.x()/line.y()），乘 DPR 转物理像素，
             // 与 CanonicalClusterEntry.sourceRect* 契约一致。
-            *rx = (left - line.x()) * dpr;
-            *ry = 0.0;
-            *rw = (right - left) * dpr;
-            *rh = line.height() * dpr;
+            *rx = (min_x - line.x()) * dpr;
+            *ry = (min_y - line.y()) * dpr;
+            *rw = (max_right - min_x) * dpr;
+            *rh = (max_bottom - min_y) * dpr;
         });
         if rw <= 0.0 || rh <= 0.0 {
             return None;

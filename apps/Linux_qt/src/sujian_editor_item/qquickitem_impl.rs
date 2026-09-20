@@ -192,6 +192,7 @@ impl QQuickItem for SujianEditorItem {
                     self.cursor_ctrl.animation.as_ref(),
                     self.cursor_ctrl.cursor_owner_epoch,
                     scroll_y,
+                    self.current_auto_follow_anchor.map(|(y, h, _)| (y, h)),
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。

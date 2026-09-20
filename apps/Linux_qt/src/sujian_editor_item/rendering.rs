@@ -109,14 +109,10 @@ impl SujianEditorItem {
         // 不被滚动拖走。当 current_scroll_y 到达 target_scroll_y 时清除锚点，
         // 不再由 80ms Timer 决定生命周期。end_auto_follow_scroll() 调
         // clear_auto_follow_anchor() 也可释放锚点。
-        let scroll_y = match self.current_auto_follow_anchor {
-            Some((_anchor_y, _anchor_h, _target_scroll_y)) => {
-                // 锚点存在时，editor_layout_cursor_rect 仍用真实 scroll_y 算文档坐标，
-                // 但 build_cursor_plan 收到的 cursor_y 改为锚点 y，让 caret 画在锚点位置。
-                f64::from(self.current_scroll_y)
-            }
-            None => f64::from(self.current_scroll_y),
-        };
+        // Issue #724 评论 5752398265: anchor 只在最终绘制时（build_render_plan_full）
+        // 覆盖屏幕 y/h，不污染 find_cursor_transaction_for_target / build_cursor_plan
+        // 的逻辑 cursor_y。scroll_y 始终用真实 current_scroll_y。
+        let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
             self.editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y);
 
@@ -125,22 +121,16 @@ impl SujianEditorItem {
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
 
-        // Issue #724 评论 5751573705 问题2: 自动跟随滚动期间用锚点 y/h 替代
-        // 当前 scroll_y 算出的 viewport y/h，让 caret 画在锚点位置。
-        // 同时检查 current_scroll_y 是否到达 target_scroll_y，到达后清除锚点。
-        let (cursor_y, cursor_h) = match self.current_auto_follow_anchor {
-            Some((anchor_y, anchor_h, target_scroll_y)) => {
-                // 到达滚动目标：仍用 anchor 画这一帧，之后再清 anchor。
-                // 下一帧 update_cursor_visual_position 时 anchor 已为 None，
-                // caret 自然 snap 到新位置。
-                let current_scroll = f64::from(self.current_scroll_y);
-                if (current_scroll - target_scroll_y).abs() < 1.0 {
-                    self.current_auto_follow_anchor = None;
-                }
-                (anchor_y, anchor_h.max(cursor_h))
+        // Issue #724 评论 5752398265: auto-follow anchor 生命周期管理。
+        // anchor 只在最终绘制时（build_render_plan_full）覆盖屏幕 y/h，不污染
+        // find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
+        // 到达滚动目标时清除 anchor，下一帧 caret 自然 snap 到新位置。
+        if let Some((_anchor_y, _anchor_h, target_scroll_y)) = self.current_auto_follow_anchor {
+            let current_scroll = f64::from(self.current_scroll_y);
+            if (current_scroll - target_scroll_y).abs() < 1.0 {
+                self.current_auto_follow_anchor = None;
             }
-            None => (cursor_y, cursor_h),
-        };
+        }
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;

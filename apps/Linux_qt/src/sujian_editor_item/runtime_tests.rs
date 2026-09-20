@@ -160,6 +160,7 @@ fn build_render_plan_full_produces_drawn_caret_rect() {
                 None,  // cursor_animation
                 0,     // cursor_owner_epoch
                 0.0,
+                None,
             );
 
         assert!(
@@ -205,6 +206,7 @@ fn build_render_plan_full_drawn_caret_reflects_cursor_state() {
                 None,
                 0,
                 0.0,
+                None,
             );
         let (x, _y, _h) = plan.drawn_caret_rect.expect("drawn_caret_rect 已设");
         assert!(
@@ -606,6 +608,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 item.cursor_ctrl.animation.as_ref(),
                 item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
+                None,
             );
 
         // 断言得到 Coordinated（证明正文事务此时确实拥有 caret）
@@ -716,6 +719,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                     item.cursor_ctrl.animation.as_ref(),
                     item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
+                None,
                 );
             match plan_noop.cursor_sample_outcome {
                 super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {
@@ -850,6 +854,7 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 item.cursor_ctrl.animation.as_ref(),
                 item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
+                None,
             );
 
         // 断言这次不能再得到由旧事务产生的 Coordinated

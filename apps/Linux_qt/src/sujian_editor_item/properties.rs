@@ -391,6 +391,9 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
+            // Issue #724 评论 5752398265: 真正用户滚动开始时取消 auto-follow anchor。
+            // 否则用户在 auto-follow 尚未释放时手动滚轮/拖滚动条，anchor 仍可能继续存在。
+            self.current_auto_follow_anchor = None;
             self.pipeline.animation_coordinator_mut().pause_all();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
