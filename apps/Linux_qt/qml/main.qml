@@ -255,9 +255,13 @@ ApplicationWindow {
     // Design tokens
     DesignTokens {
         id: designTokens
-        // Issue #721: 颜色直接读 themeController.*_hex，不再从 themeStateJson 解析。
-        // themeController 由 main.qml 注入；themeStateJson 保留做诊断（onThemeStateJsonChanged 打日志）。
-        themeController: themeController
+        // Issue #721: 颜色直接读 themeControllerRef.*_hex，不再从 themeStateJson 解析。
+        // Issue #721 评论 5747140241: 属性名用 themeControllerRef，右侧 themeController 是
+        // QQmlContext 注入对象。若属性名也叫 themeController，QML 绑定作用域（接收对象自身）
+        // 会让右侧裸 themeController 遮蔽 QQmlContext 注入对象，自绑定保持 null，颜色链全走
+        // fallback。属性名与注入名不同名后右侧明确拿外部注入对象。
+        // themeStateJson 保留做诊断（onThemeStateJsonChanged 打日志），不参与颜色计算。
+        themeControllerRef: themeController
         // Issue #702: 根 DesignTokens 只绑定 themeStateJson 这一份完整主题状态。
         // themeController 把 is_dark 和最终 ThemeColorScheme 打包成
         // {"is_dark": bool, "scheme": <object>} 一次性发布，QML 侧从同一份
