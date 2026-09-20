@@ -786,12 +786,21 @@ Rectangle {
                             }
                         }
 
-                        // Issue #693 评论 5689819383: 光标自动跟随滚动。
+                        // Issue #724 评论 5751268664 缺口2: 光标自动跟随滚动。
                         // 语义同 QPlainTextEdit::ensureCursorVisible()（centerOnScroll=false）：
                         // 只滚刚好够让 caret 回到可视区，不每打一字就强制居中。
                         // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
                         // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
                         // Scene Graph 和 IME 继续使用同一滚动位置。
+                        // Issue #724 评论 5751573705 问题2: 锚点来源改为上一帧真正画出的
+                        // visual caret y/h（而非 target_y），并记录 target_scroll_y 由 Rust
+                        // 侧判断到达后清除锚点，不再由 80ms Timer 决定生命周期。
+                        // Issue #724 评论 5752140048 问题 1+3: 不再维护 QML
+                        // is_auto_following shadow state，也不再在 begin_auto_follow_scroll()
+                        // 内部读取旧 scroll_y 当 target。每次算出完整 targetY 后直接调 Rust 的
+                        // set_auto_follow_anchor_with_target(..., targetY)，Rust 自己持有 anchor
+                        // 是否活跃的唯一状态，避免 QML/Rust 状态分叉和旧 scroll_y 传参。
+
                         function ensureCursorVisible() {
                             const flick = contentItem
                             if (!flick)
@@ -812,7 +821,18 @@ Rectangle {
                             }
 
                             const maxY = Math.max(0, contentHeight - height)
-                            flick.contentY = Math.max(0, Math.min(maxY, nextY))
+                            // Issue #724 评论 5752140048 问题 1: 先算出完整目标 targetY，
+                            // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。否则把
+                            // targetY 同时传给 Rust 的 set_auto_follow_anchor_with_target
+                            // 和 flick.contentY，避免传旧 scroll_y 导致 anchor 立刻自清。
+                            const targetY = Math.max(0, Math.min(maxY, nextY))
+                            if (Math.abs(targetY - flick.contentY) < 0.5)
+                                return
+                            sujianEditor.set_auto_follow_anchor_with_target(
+                                sujianEditor.visual_cursor_rect_y,
+                                sujianEditor.visual_cursor_rect_height,
+                                targetY)
+                            flick.contentY = targetY
                         }
 
                         function scheduleEnsureCursorVisible() {
@@ -830,19 +850,11 @@ Rectangle {
                             }
                         }
                         onEditorIsScrollingChanged: {
-                            if (editorIsScrolling) {
-                                scrollAnimationReleaseTimer.stop();
-                                editorAnimationSuppressed = true;
-                            } else {
-                                scrollAnimationReleaseTimer.restart();
-                            }
-                        }
-
-                        Timer {
-                            id: scrollAnimationReleaseTimer
-                            interval: 80
-                            repeat: false
-                            onTriggered: editorScroll.editorAnimationSuppressed = false
+                            // Issue #724 评论 5752140048 问题 2: 滚动停止时恢复 false，
+                            // 触发 Rust set_is_scrolling(false) → resume_all()。
+                            // anchor 生命周期和 editorAnimationSuppressed 是两件事，
+                            // 不要为了删 anchor timer 顺手把滚动动画抑制状态恢复也删掉。
+                            editorAnimationSuppressed = editorIsScrolling
                         }
 
                         ScrollBar.horizontal.policy: ScrollBar.AlwaysOff

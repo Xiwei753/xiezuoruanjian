@@ -16,6 +16,7 @@ use crate::backend::diagnostics;
 
 cpp! {{
     #include <QCoreApplication>
+    #include <QFile>
     #include <QFileInfo>
     #include <QGuiApplication>
     #include <QIcon>
@@ -46,6 +47,13 @@ pub fn qt_build_version() -> String {
     }
     // SAFETY: version_ptr is QT_VERSION_STR macro which is always a valid C string; null check is above.
     unsafe { CStr::from_ptr(version_ptr).to_string_lossy().into_owned() }
+}
+
+pub fn qrc_resource_exists(path: &str) -> bool {
+    let qpath: QString = path.into();
+    cpp!(unsafe [qpath as "QString"] -> bool as "bool" {
+        return QFile::exists(qpath);
+    })
 }
 
 pub fn set_application_icon() {

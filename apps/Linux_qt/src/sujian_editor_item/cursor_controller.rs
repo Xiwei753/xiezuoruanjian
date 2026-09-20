@@ -121,7 +121,7 @@ impl CursorController {
     /// Issue #705 评论 5717380886: bump 光标所有权版本号。
     ///
     /// 由 `editing.rs::begin_manual_cursor_move()` 统一调用，标记一次"非正文事务
-    /// 导致的逻辑 cursor 移动"（鼠标点击、方向键、Home/End、拖选等）。之后
+    /// 导致的逻辑 cursor 积动"（鼠标点击、方向键、Home/End、拖选等）。之后
     /// `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
     /// 是否仍等于当前 epoch，不一致则不驱动 caret（文字事务继续播自己的
     /// glyph/reflow，但 caret 改由纯光标移动 / 鼠标目标驱动）。
@@ -130,6 +130,18 @@ impl CursorController {
     /// 但遵守 AGENTS.md "不用 unwrap/expect 代替错误处理" 的安全边界）。
     pub fn bump_cursor_owner_epoch(&mut self) {
         self.cursor_owner_epoch = self.cursor_owner_epoch.wrapping_add(1);
+    }
+
+    /// Issue #724 评论 5750911834 问题 2: 取出并立即重置 force_snap_next。
+    ///
+    /// 旧实现在 `apply_plan()` 后段才 `self.force_snap_next = false`，前面的
+    /// `!should_be_visible` 提前返回会留下未消费的 force-snap，下一次正常光标
+    /// 移动仍被直接 Snap。改用 `take_force_snap_next()` 在 `apply_plan()` 前段
+    /// 消费 force_snap_next，确保任何返回路径都不会留下 force-snap。
+    pub fn take_force_snap_next(&mut self) -> bool {
+        let v = self.force_snap_next;
+        self.force_snap_next = false;
+        v
     }
 
     pub fn cursor_should_be_visible(&self) -> bool {
@@ -151,6 +163,13 @@ impl CursorController {
     }
 
     pub fn apply_plan(&mut self, plan: &CursorAnimationPlan) -> CursorUpdateResult {
+        // Issue #724 评论 5750911834 问题 2: 在 apply_plan() 前段消费 force_snap_next，
+        // 避免前面的 !should_be_visible 提前返回留下未消费的 force-snap，
+        // 下一次正常光标移动仍被直接 Snap。
+        // plan 已由 build_cursor_plan() 接收 force_snap_next 参数并做出决策，
+        // apply_plan() 不需要再读 self.force_snap_next，这里只负责消费重置。
+        let _ = self.take_force_snap_next();
+
         let old_x = self.target_x;
         let old_y = self.target_y;
         let old_visible = self.visible;
@@ -293,7 +312,8 @@ impl CursorController {
             }
         }
 
-        self.force_snap_next = false;
+        // Issue #724 评论 5750911834 问题 2: force_snap_next 已在 apply_plan() 前段
+        // 由 take_force_snap_next() 消费重置，不再在此后段重置。
 
         let pos_changed = (self.visual_x - old_x).abs() > 0.01
             || (self.visual_y - old_y).abs() > 0.01

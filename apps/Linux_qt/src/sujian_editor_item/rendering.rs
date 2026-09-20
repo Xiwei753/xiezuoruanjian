@@ -102,6 +102,16 @@ impl SujianEditorItem {
     ///   不依赖任何正文事务。
     /// 两条时间线互斥，不为了修可见性再引入第二套光标动画。
     pub(crate) fn update_cursor_visual_position(&mut self) -> CursorUpdateResult {
+        // Issue #724 评论 5751268664 缺口2: 自动跟随滚动期间使用屏幕锚点替代
+        // current_scroll_y 算 caret viewport 坐标。QML 侧 begin_auto_follow_scroll()
+        // 调 set_auto_follow_anchor_with_target(y, h, target_y) 把滚动前上一帧实际画出的
+        // caret viewport y/h 和滚动目标值传进来。contentY 变化时 caret 仍画在锚点位置，
+        // 不被滚动拖走。当 current_scroll_y 到达 target_scroll_y 时清除锚点，
+        // 不再由 80ms Timer 决定生命周期。end_auto_follow_scroll() 调
+        // clear_auto_follow_anchor() 也可释放锚点。
+        // Issue #724 评论 5752398265: anchor 只在最终绘制时（build_render_plan_full）
+        // 覆盖屏幕 y/h，不污染 find_cursor_transaction_for_target / build_cursor_plan
+        // 的逻辑 cursor_y。scroll_y 始终用真实 current_scroll_y。
         let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
             self.editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y);
@@ -110,6 +120,23 @@ impl SujianEditorItem {
         let cursor_y = layout_res.y;
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
+
+        // Issue #724 评论 5752398265 / 评论 5752572618: auto-follow anchor 生命周期管理。
+        // anchor 只在最终绘制时（build_render_plan_full）覆盖屏幕 y/h，不污染
+        // find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
+        // Issue #724 评论 5752572618: 到达滚动目标时**不清 None**，只置
+        // `release_after_frame = true`。本帧 build_render_plan_full 仍收到 anchor
+        // 的 (y, h) 画锚定帧；画完一帧后由 update_paint_node 检查
+        // release_after_frame，若为 true 则清 current_auto_follow_anchor = None
+        // 并 request_frame_update() 请求下一帧；下一帧 anchor 不存在 → 回到正常
+        // coordinated caret。这样保证用户能看到"正文滚、caret 留原屏幕位置一帧
+        // 再交回"的语义，而不是在绘制锚定帧之前就把 anchor 清掉。
+        if let Some(ref mut anchor) = self.current_auto_follow_anchor {
+            let current_scroll = f64::from(self.current_scroll_y);
+            if (current_scroll - anchor.target_scroll_y).abs() < 1.0 {
+                anchor.release_after_frame = true;
+            }
+        }
 
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;

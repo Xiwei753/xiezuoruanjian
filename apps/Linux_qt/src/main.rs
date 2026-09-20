@@ -297,23 +297,11 @@ fn record_qt_event(level: writer_diagnostics::DiagnosticLevel, event: &str, mess
 }
 
 fn probe_hub_header_resource() {
-    QML_HUB_HEADER_MISSING.store(false, Ordering::SeqCst);
-    let prev_handler = install_message_handler(Some(qml_load_error_handler));
-    let mut probe_engine = QmlEngine::new();
-    probe_engine.load_file("qrc:/HubPageHeader.qml".into());
-    install_message_handler(prev_handler);
-
-    if QML_HUB_HEADER_MISSING.load(Ordering::SeqCst) {
+    if !app_main_cpp::qrc_resource_exists(":/HubPageHeader.qml") {
         debug_error_static(
             "app",
             "qml_resource_probe",
             "qrc:/HubPageHeader.qml missing from embedded qrc",
-        );
-    } else {
-        debug_log_static(
-            "app",
-            "qml_resource_probe",
-            "qrc:/HubPageHeader.qml exists in embedded qrc",
         );
     }
 }

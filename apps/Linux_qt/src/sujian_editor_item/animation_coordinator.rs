@@ -33,7 +33,9 @@ use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 pub(crate) use super::animation_mode::AnimationMode;
 pub(crate) use super::cursor_animation::{CursorAnimationPlan, CursorBlinkMode, CursorTransition};
 use super::layout_revision::LayoutRevision;
-use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, SourceRect};
+use super::layout_snapshot::{
+    ClusterInsertRelation, EditorLayoutSnapshot, LineSnapshotId, SourceRect,
+};
 // Issue #710 评论 5731145076 症状六: 导入 compute_affected_paragraph_ranges
 // 用于计算事务的 visual_affected_byte_range（基于段落边界扩展）。
 pub(crate) use super::render_plan::{
@@ -626,41 +628,79 @@ fn build_insert_reveal_slices(
 
     for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
         for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
-            // 只处理落在 inserted_range 内的 cluster
-            if new_cluster.byte_start >= range_start && new_cluster.byte_end <= range_end {
-                // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
-                // 这些非可见字符不应创建 InsertReveal 和 static patch，
-                // 避免文字前插空格闪一下/手动换行闪一下。
-                // 已有文字位移交给 ReflowMove，caret 走 canonical track。
-                let cluster_text = new_snapshot
-                    .virtual_text
-                    .get(new_cluster.byte_start..new_cluster.byte_end)
-                    .unwrap_or("");
-                if cluster_text
-                    .chars()
-                    .all(|c| c.is_whitespace() || c.is_control())
-                {
-                    continue;
-                }
-                let new_sr = new_cluster.source_rect.clone();
-                let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-                slices.push(AnimatedSlice::insert_reveal(
-                    key,
-                    new_line.id,
-                    new_sr.clone(),
-                    new_doc,
-                    0.0,
-                    0.0,
+            // Issue #724 评论 5751268664 缺口1: 用 Inside/Partial 分类替代 overlap 整块消费。
+            // - Inside：cluster 完全在 inserted 范围内，整个 cluster 进入 InsertReveal + static hide。
+            // - Partial：cluster 部分在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
+            //   只把属于 inserted 的子片段（clipped source rect）交给 InsertReveal + static hide，
+            //   旧邻字部分保持原样不进入 static hide，避免整个 cluster 被当成新插入文字。
+            // - 不相交：跳过，不参与 InsertReveal，不进入 static hide。
+            let relation = match new_cluster.relate_to_inserted_range(range_start, range_end) {
+                Some(r) => r,
+                None => continue,
+            };
+            // Issue #722 评论 5748596920 问题5: 跳过纯空格/tab/换行/控制字符。
+            // 这些非可见字符不应创建 InsertReveal 和 static patch，
+            // 避免文字前插空格闪一下/手动换行闪一下。
+            // 已有文字位移交给 ReflowMove，caret 走 canonical track。
+            let cluster_text = new_snapshot
+                .virtual_text
+                .get(new_cluster.byte_start..new_cluster.byte_end)
+                .unwrap_or("");
+            if cluster_text
+                .chars()
+                .all(|c| c.is_whitespace() || c.is_control())
+            {
+                continue;
+            }
+            // Issue #724 评论 5751268664 缺口1: Inside 用整个 source_rect，
+            // Partial 用精确 glyph 几何 + clipped_byte_range。
+            // 不再用 UTF-8 byte 比例猜视觉宽度——字节长度不是 glyph 宽度，
+            // 中文 UTF-8 3 字节/拉丁 1 字节/ligature/组合字符/fallback font/
+            // 比例字体/RTL 都不能按 byte ratio 对应到 source rect 的 x/w。
+            // Partial 的精确 source rect 从 QTextLayout 侧取（支持 split ligature）。
+            let (new_sr, slice_byte_start, slice_byte_end) = match relation {
+                ClusterInsertRelation::Inside => (
+                    new_cluster.source_rect.clone(),
                     new_cluster.byte_start,
                     new_cluster.byte_end,
-                    Some(new_cluster.shaping_identity.clone()),
-                    // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
-                    // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
-                    // managed_new_clusters/patches_by_line 的局部索引。
-                    Some(new_line.visual_line_id),
-                ));
-                managed_new_clusters.push((line_idx, cluster_idx, new_sr));
-            }
+                ),
+                ClusterInsertRelation::Partial {
+                    clipped_byte_start,
+                    clipped_byte_end,
+                } => {
+                    // Issue #724 评论 5751573705 问题1: 从 QTextLayout 取精确 glyph 几何。
+                    // 失败时（layout 缺失/范围越界）回退到完整 cluster source_rect，
+                    // 至少保证视觉不崩——宁可多画一帧旧邻字，也不猜错位置。
+                    let precise_sr = new_line.get_precise_glyph_rect_for_byte_range(
+                        new_snapshot.revision.0,
+                        &new_snapshot.virtual_text,
+                        clipped_byte_start,
+                        clipped_byte_end,
+                    );
+                    if let Some(sr) = precise_sr {
+                        (sr, clipped_byte_start, clipped_byte_end)
+                    } else {
+                        (new_cluster.source_rect.clone(), clipped_byte_start, clipped_byte_end)
+                    }
+                }
+            };
+            let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+            slices.push(AnimatedSlice::insert_reveal(
+                key,
+                new_line.id,
+                new_sr.clone(),
+                new_doc,
+                0.0,
+                0.0,
+                slice_byte_start,
+                slice_byte_end,
+                Some(new_cluster.shaping_identity.clone()),
+                // Issue #722 评论 5749572808 问题1: 传全文视觉行 id，
+                // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
+                // managed_new_clusters/patches_by_line 的局部索引。
+                Some(new_line.visual_line_id),
+            ));
+            managed_new_clusters.push((line_idx, cluster_idx, new_sr));
         }
     }
 
@@ -716,8 +756,11 @@ fn build_delete_conceal_slices(
 
     for old_line in &old_snapshot.line_snapshots {
         for old_cluster in &old_line.clusters {
-            // 只处理落在 deleted_range 内的 cluster
-            if old_cluster.byte_start >= range_start && old_cluster.byte_end <= range_end {
+            // Issue #724 评论 5750911834 问题 1: cluster 匹配条件改为 overlap 判断，
+            // 允许部分落在 deleted_range 边界的 cluster（ligature 拆分、跨行 cluster）。
+            // 旧逻辑 `byte_start >= range_start && byte_end <= range_end` 会丢弃部分
+            // 落在边界的 cluster。
+            if old_cluster.byte_start < range_end && old_cluster.byte_end > range_start {
                 let old_sr = old_cluster.source_rect.clone();
                 let old_doc = old_line.source_rect_to_document_rect(&old_sr);
                 // 按删除前光标位置（old_cursor_rect）决定收缩方向：
@@ -2457,7 +2500,12 @@ impl LinuxEditorAnimationCoordinator {
         cursor_baseline_y: f64,
     ) -> CursorAnimationPlan {
         let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
-        let should_be_visible = editor_enabled && !has_selection && in_viewport && !is_scrolling;
+        // Issue #724 评论 5750911834 问题 2: should_be_visible 不再用 !is_scrolling
+        // 一刀切隐藏光标。滚动期间光标应保持可见（自动跟随滚动时光标在视口内
+        // 同一相对位置；用户手动滚动时光标位置不变，只要 in_viewport 就应可见）。
+        // 旧逻辑 `editor_enabled && !has_selection && in_viewport && !is_scrolling`
+        // 导致滚动期间光标被隐藏，滚动结束时光标动画偶发消失。
+        let should_be_visible = editor_enabled && !has_selection && in_viewport;
 
         // Issue #705 评论 5717380886: 区分两种"有活动正文事务"的判断：
         // - `has_active_for_blink`：不看 epoch，只要文字动画还在播就 suppress blink。
@@ -2479,7 +2527,10 @@ impl LinuxEditorAnimationCoordinator {
         // 控制暂停和一次 Snap；普通 contentY -> scroll_y 只是 viewport transform，
         // 不能永久改变光标动画策略。hard_snap 只保留 force_snap_next / is_scrolling /
         // is_selecting / !old_visible。
+        // Issue #724 评论 5750911834 问题 2: is_scrolling 不再驱动 should_be_visible
+        // 和 hard_snap，滚动的暂停和恢复由 set_is_scrolling() 单独控制。
         let _ = scroll_y;
+        let _ = is_scrolling;
 
         // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
         // 改为按 CursorMoveSource 决定跨行是否允许 Tween。
@@ -2499,7 +2550,11 @@ impl LinuxEditorAnimationCoordinator {
         // 不再被协调动画覆盖为 Tween。
         // Issue #722 评论 5747719529: 删除 scroll_changed，hard_snap 只保留
         // force_snap_next / is_scrolling / is_selecting / !old_visible。
-        let hard_snap = force_snap_next || is_scrolling || is_selecting || !old_visible;
+        // Issue #724 评论 5750911834 问题 2: hard_snap 不再因 is_scrolling 强制 snap。
+        // 旧逻辑 `force_snap_next || is_scrolling || is_selecting || !old_visible`
+        // 导致滚动时强制 Snap，滚动结束时光标动画被 snap 到终态。
+        // 滚动的暂停和恢复由 set_is_scrolling() 单独控制，不影响 hard_snap。
+        let hard_snap = force_snap_next || is_selecting || !old_visible;
 
         // Issue #702 评论 5707449688 问题 2: 纯光标移动彻底和文字事务 key 解耦，
         // 不再用 driver_key.is_some() 决定 can_tween。纯光标只要满足 smooth cursor
@@ -2643,6 +2698,7 @@ impl LinuxEditorAnimationCoordinator {
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
         current_scroll_y: f64,
+        auto_follow_anchor: Option<(f64, f64)>,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2786,6 +2842,16 @@ impl LinuxEditorAnimationCoordinator {
         // 根据 cursor_sample_outcome 和最终 cursor_render_state 算出。
         // Coordinated → 协同位置;Running/Finished → cursor_render_state 已更新;
         // Idle → 当前 visual 位置。
+        // Issue #724 评论 5752398265: viewport anchor 只在最终绘制时覆盖屏幕 y/h，
+        // 不污染 find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
+        // anchor 来自 QML begin_auto_follow_scroll()，是滚动前上一帧实际画出的 caret
+        // viewport y/h。auto-follow 期间 caret 画在锚点位置，不被滚动拖走。
+        if let Some((anchor_y, anchor_h)) = auto_follow_anchor {
+            cursor_render_state.y = anchor_y;
+            if anchor_h > 0.0 {
+                cursor_render_state.h = anchor_h;
+            }
+        }
         let drawn_caret_rect: Option<(f64, f64, f64)> = Some((
             cursor_render_state.x,
             cursor_render_state.y,
@@ -3879,6 +3945,10 @@ mod tests {
             visual_line_id: 0,
             visual_line_top: 0.0,
             visual_line_bottom: 20.0,
+            cache_slot: 0,
+            qtextline_idx: 0,
+            // Issue #724 评论 5752140048 问题 4a: 测试用段落起始偏移 0。
+            paragraph_document_byte_start: 0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,
@@ -5033,6 +5103,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -5085,6 +5156,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         assert!(
@@ -5163,6 +5235,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -5211,6 +5284,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -5285,6 +5359,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -5433,6 +5508,7 @@ mod tests {
             None,
             0,
             0.0,
+            None,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）

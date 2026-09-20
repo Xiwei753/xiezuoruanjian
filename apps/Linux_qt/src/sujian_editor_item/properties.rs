@@ -391,6 +391,9 @@ impl SujianEditorItem {
         }
         self.current_is_scrolling = value;
         if value {
+            // Issue #724 评论 5752398265: 真正用户滚动开始时取消 auto-follow anchor。
+            // 否则用户在 auto-follow 尚未释放时手动滚轮/拖滚动条，anchor 仍可能继续存在。
+            self.current_auto_follow_anchor = None;
             self.pipeline.animation_coordinator_mut().pause_all();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
@@ -405,6 +408,55 @@ impl SujianEditorItem {
             self.update_cursor_visual_position();
             self.request_static_repaint();
         }
+    }
+
+    /// Issue #724 评论 5751573705 问题2 / 评论 5752572618: 设置自动跟随滚动锚点
+    /// （带 target_scroll_y）。
+    ///
+    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把上一帧真正画出的 caret viewport y/h
+    /// 和当前滚动目标值传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
+    /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标，避免滚动
+    /// contentY 变化把 caret 一起拖走。
+    ///
+    /// Issue #724 评论 5752572618: 到达 target 时**不在此处清除锚点**，只置
+    /// `release_after_frame = true`，本帧 `build_render_plan_full` 仍用 anchor 画
+    /// 锚定帧，画完后由 `update_paint_node` 清除并请求下一帧。
+    /// 不再由 80ms Timer 决定生命周期。
+    pub(crate) fn set_auto_follow_anchor_with_target(
+        &mut self,
+        anchor_y: f64,
+        anchor_h: f64,
+        target_scroll_y: f64,
+    ) {
+        let h = anchor_h.max(0.0);
+        let new_anchor = CaretViewportAnchor {
+            y: anchor_y,
+            h,
+            target_scroll_y,
+            release_after_frame: false,
+        };
+        if self.current_auto_follow_anchor == Some(new_anchor) {
+            return;
+        }
+        self.current_auto_follow_anchor = Some(new_anchor);
+        // 锚点变化后立刻用新锚点重算 caret viewport 坐标，不等待下一帧。
+        self.update_cursor_visual_position();
+        self.request_frame_update();
+    }
+
+    /// Issue #724 评论 5751268664 缺口2: 清除自动跟随滚动锚点。
+    ///
+    /// QML 侧 `end_auto_follow_scroll()` 调此方法释放锚点。之后
+    /// `update_cursor_visual_position` 恢复使用 `current_scroll_y` 算坐标。
+    pub(crate) fn clear_auto_follow_anchor(&mut self) {
+        if self.current_auto_follow_anchor.is_none() {
+            return;
+        }
+        self.current_auto_follow_anchor = None;
+        self.cursor_ctrl.force_snap_next = true;
+        self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
+        self.update_cursor_visual_position();
+        self.request_static_repaint();
     }
 
     pub(crate) fn is_loading(&self) -> bool {
@@ -506,6 +558,20 @@ impl SujianEditorItem {
 
     pub(crate) fn cursor_rect_height(&self) -> f32 {
         self.cursor_ctrl.ime_cursor_rect_h as f32
+    }
+
+    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport y。
+    ///
+    /// QML 侧 auto-follow anchor 应取此值（而非 `cursor_rect_y` = target_y），
+    /// 因为 `cursor_rect_y` 是逻辑目标位置，不是上一帧真正画出来的位置。
+    /// 动画中间态时 visual_y 与 target_y 不同，anchor 必须取视觉实际位置。
+    pub(crate) fn visual_cursor_rect_y(&self) -> f32 {
+        self.cursor_ctrl.visual_y as f32
+    }
+
+    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport h。
+    pub(crate) fn visual_cursor_rect_height(&self) -> f32 {
+        self.cursor_ctrl.visual_h as f32
     }
 
     pub(crate) fn anchor_rect_x(&self) -> f32 {
