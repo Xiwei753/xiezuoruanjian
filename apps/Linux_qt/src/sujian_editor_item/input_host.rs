@@ -318,6 +318,8 @@ impl EditorInputHost for SujianEditorItem {
                         committed_replace_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        None,
+                        None,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             }
@@ -429,6 +431,8 @@ impl EditorInputHost for SujianEditorItem {
                         data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        None,
+                        None,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {
@@ -538,6 +542,8 @@ impl EditorInputHost for SujianEditorItem {
                         data.new_preedit_byte_end,
                         old_cursor_rect,
                         new_cursor_rect,
+                        None,
+                        None,
                         self.cursor_ctrl.cursor_owner_epoch,
                     );
             } else {

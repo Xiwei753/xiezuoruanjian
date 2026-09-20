@@ -66,7 +66,11 @@ pub(crate) struct AnimatedSlice {
     /// 用于跨软换行裁切判断：caret 和 slice 在同一视觉行时才用 caret.x 做横向裁切；
     /// caret 还没进入该行时 InsertReveal 保持 0 / DeleteConceal 保持完整；
     /// caret 已经越过该行时 InsertReveal 保持完整 / DeleteConceal 保持 0。
-    pub visual_line_id: usize,
+    ///
+    /// Issue #722 评论 5749164244 问题1: 改为 `Option<usize>`。
+    /// `None` 表示未知（Reflow 或采样路径无法确定行身份），`Some(id)` 表示已知行。
+    /// 不再用 0 当"未知"哨兵——0 是首行合法索引，不能同时当哨兵值。
+    pub visual_line_id: Option<usize>,
     /// Issue #690 评论 5675007226 步骤 3: 视觉单元的动画起始比例。
     ///
     /// InsertReveal：当前已吐出来的比例（0.0 = 未显示，1.0 = 完全显示）。
@@ -104,7 +108,7 @@ impl AnimatedSlice {
         byte_start: usize,
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
-        visual_line_id: usize,
+        visual_line_id: Option<usize>,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::InsertReveal,
@@ -142,7 +146,7 @@ impl AnimatedSlice {
         byte_end: usize,
         shaping_identity: Option<ShapingIdentity>,
         conceal_to_left_edge: bool,
-        visual_line_id: usize,
+        visual_line_id: Option<usize>,
     ) -> Self {
         Self {
             kind: AnimatedSliceKind::DeleteConceal,
@@ -193,7 +197,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity,
             conceal_to_left_edge: false,
-            visual_line_id: 0,
+            visual_line_id: None,
             start_fraction: 0.0,
         }
     }
@@ -221,7 +225,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_to_left_edge: false,
-            visual_line_id: 0,
+            visual_line_id: None,
             start_fraction: 0.0,
         }
     }
@@ -249,7 +253,7 @@ impl AnimatedSlice {
             byte_end,
             shaping_identity: None,
             conceal_to_left_edge: false,
-            visual_line_id: 0,
+            visual_line_id: None,
             start_fraction: 0.0,
         }
     }
@@ -423,7 +427,7 @@ impl AnimatedSlice {
         &self,
         caret_clip_boundary: f64,
         caret_clip_y: f64,
-        caret_visual_line_id: usize,
+        caret_visual_line_id: Option<usize>,
         visible: f64,
     ) -> AnimatedSliceFrame {
         match self.kind {
@@ -432,16 +436,21 @@ impl AnimatedSlice {
                 // caret 还没进入该 slice 所在视觉行 → InsertReveal 保持 0；
                 // caret 已经越过该视觉行 → 该行已经吐出的部分保持完成；
                 // 只有 caret 和 slice 在同一视觉行时，才用 caret.x 做横向裁切。
-                // 用 visual_line_id 比较（非 0 时）或 y 坐标比较（fallback）判断同行。
-                let same_line = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
-                    caret_visual_line_id == self.visual_line_id
-                } else {
-                    (caret_clip_y - self.to_document_rect.y).abs() < self.to_document_rect.h.max(1.0)
+                // Issue #722 评论 5749164244 问题1: 用 Option<usize> 判断行身份。
+                // None=未知走 y fallback；Some(id) 已知行按 id 比较。
+                // y fallback 用半开区间 line_top <= caret_y < line_bottom，
+                // 不用 abs(y - glyph_y) < glyph_h（相邻行会误判）。
+                let same_line = match (caret_visual_line_id, self.visual_line_id) {
+                    (Some(c_id), Some(s_id)) => c_id == s_id,
+                    _ => {
+                        let line_top = self.to_document_rect.y;
+                        let line_bottom = self.to_document_rect.y + self.to_document_rect.h;
+                        caret_clip_y >= line_top && caret_clip_y < line_bottom
+                    }
                 };
-                let caret_above = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
-                    caret_visual_line_id < self.visual_line_id
-                } else {
-                    caret_clip_y < self.to_document_rect.y
+                let caret_above = match (caret_visual_line_id, self.visual_line_id) {
+                    (Some(c_id), Some(s_id)) => c_id < s_id,
+                    _ => caret_clip_y < self.to_document_rect.y,
                 };
                 let reveal_from_caret = if caret_above {
                     // caret 在该行上方，还没吐到该行
@@ -474,16 +483,20 @@ impl AnimatedSlice {
             }
             AnimatedSliceKind::DeleteConceal => {
                 // Issue #722 评论 5748596920 问题2: 跨软换行裁切按行判断。
+                // Issue #722 评论 5749164244 问题1: 用 Option<usize> 判断行身份，
+                // y fallback 用半开区间 line_top <= caret_y < line_bottom。
                 let frame_h = self.from_document_rect.h;
-                let same_line = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
-                    caret_visual_line_id == self.visual_line_id
-                } else {
-                    (caret_clip_y - self.from_document_rect.y).abs() < self.from_document_rect.h.max(1.0)
+                let same_line = match (caret_visual_line_id, self.visual_line_id) {
+                    (Some(c_id), Some(s_id)) => c_id == s_id,
+                    _ => {
+                        let line_top = self.from_document_rect.y;
+                        let line_bottom = self.from_document_rect.y + self.from_document_rect.h;
+                        caret_clip_y >= line_top && caret_clip_y < line_bottom
+                    }
                 };
-                let caret_above = if caret_visual_line_id != 0 && self.visual_line_id != 0 {
-                    caret_visual_line_id < self.visual_line_id
-                } else {
-                    caret_clip_y < self.from_document_rect.y
+                let caret_above = match (caret_visual_line_id, self.visual_line_id) {
+                    (Some(c_id), Some(s_id)) => c_id < s_id,
+                    _ => caret_clip_y < self.from_document_rect.y,
                 };
                 let (frame_w, frame_x, src_x) = if self.conceal_to_left_edge {
                     // Backspace：保留左段。
@@ -505,26 +518,39 @@ impl AnimatedSlice {
                     )
                 } else {
                     // 前向 Delete：保留右段。
-                    // Issue #722 评论 5748596920 问题3: conceal edge 从远端向 caret.x 运动，
-                    // 裁切宽度随帧变化（由 visible 参数驱动），不再固定。
-                    let from_right = if caret_above {
-                        // caret 在该行上方，还没吞到该行
-                        self.from_document_rect.w
+                    // Issue #722 评论 5749164244 问题2: 修正宽度方向。
+                    // 语义：逻辑 caret 固定在左边，视觉吞字边界从被删内容右端向 caret 移动。
+                    // frame_w = full_w * visible（visible 是当前剩余可见比例），
+                    // frame_x = from_document_rect.x（左端固定），
+                    // source_rect.x 保持原起点（self.source_rect.x）。
+                    // visible: 1→0 是"完整文字 → 右边界往左收到光标 → 完全吞掉"。
+                    // caret_above/!same_line 分支保持原逻辑（caret 在上方=还没吞到该行→满宽；
+                    // caret 在下方=已吞完→0）。
+                    if caret_above {
+                        // caret 在该行上方，还没吞到该行 → 满宽
+                        (
+                            self.from_document_rect.w,
+                            self.from_document_rect.x,
+                            self.source_rect.x,
+                        )
                     } else if !same_line && !caret_above {
-                        // caret 在该行下方，已经吞完该行
-                        0.0
+                        // caret 在该行下方，已经吞完该行 → 0
+                        (
+                            0.0,
+                            self.from_document_rect.x,
+                            self.source_rect.x,
+                        )
                     } else {
-                        // 同一行：裁切宽度随帧变化（conceal_progress），
-                        // 从满宽逐帧收到 0，glyph 逐帧收进光标。
-                        let conceal_progress = visible.clamp(0.0, 1.0);
+                        // 同一行：frame_w = full_w * visible，
+                        // 左端固定，source_rect.x 保持原起点。
                         let full_w = self.from_document_rect.w;
-                        full_w * (1.0 - conceal_progress)
-                    };
-                    (
-                        from_right,
-                        self.from_document_rect.x + (self.from_document_rect.w - from_right),
-                        self.source_rect.x + (self.source_rect.w * (1.0 - from_right / self.from_document_rect.w.max(1.0))),
-                    )
+                        let frame_w = full_w * visible.clamp(0.0, 1.0);
+                        (
+                            frame_w,
+                            self.from_document_rect.x,
+                            self.source_rect.x,
+                        )
+                    }
                 };
                 let frame_source_rect = SourceRect {
                     x: src_x,

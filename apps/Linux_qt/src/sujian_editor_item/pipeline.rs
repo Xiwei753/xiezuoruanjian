@@ -1232,6 +1232,8 @@ impl LinuxEditorPipeline {
                     ctx.is_applying_format,
                     vt.old_cursor_rect.clone(),
                     vt.new_cursor_rect.clone(),
+                    Some(old_caret.visual_line_id),
+                    Some(new_caret.visual_line_id),
                     &old_snap,
                     &new_snap,
                     cursor_owner_epoch,

@@ -217,6 +217,8 @@ impl SujianEditorItem {
                 committed_replace_end,
                 pending_preedit_cursor_rect,
                 new_cursor_rect,
+                None,
+                None,
                 self.cursor_ctrl.cursor_owner_epoch,
             );
 

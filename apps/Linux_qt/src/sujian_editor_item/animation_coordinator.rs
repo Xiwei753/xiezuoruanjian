@@ -260,6 +260,8 @@ struct RebaseCaretHandoff {
 fn build_cursor_visual_track(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
+    old_cursor_visual_line_id: Option<usize>,
+    new_cursor_visual_line_id: Option<usize>,
     handoff: Option<RebaseCaretHandoff>,
     tx_duration_ms: u64,
 ) -> Option<PreparedCursorVisualTrack> {
@@ -268,6 +270,11 @@ fn build_cursor_visual_track(
         Some(h) => Some(PreparedCursorVisualTrack {
             from: h.sampled,
             to: to.clone(),
+            // rebase 交棒：from 端是采样到的旧事务屏幕 caret，
+            // 其 visual_line_id 未知（CursorRect 不带），用 to 端行 id 近似。
+            // to 端是新事务的 new_cursor_rect 行 id。
+            from_visual_line_id: new_cursor_visual_line_id,
+            to_visual_line_id: new_cursor_visual_line_id,
             started_at: None,
             duration_ms: h.remaining_duration_ms,
             pause_start: None,
@@ -277,6 +284,8 @@ fn build_cursor_visual_track(
             Some(PreparedCursorVisualTrack::new_first(
                 from.clone(),
                 to.clone(),
+                old_cursor_visual_line_id,
+                new_cursor_visual_line_id,
                 tx_duration_ms,
             ))
         }
@@ -347,6 +356,103 @@ fn sample_coordinated_cursor_rect_at(
         top: cy,
         bottom: cy + h,
         baseline_y: new_rect.baseline_y,
+    })
+}
+
+/// Issue #722 评论 5749164244 问题3: 采样旧事务在 `now` 时刻的 caret geometry
+/// (x, y, visual_line_id)，供 rebase 帧对 Reveal/Conceal unit 调
+/// `compute_frame_caret_driven` 使用。与 `build_text_animation_plan_with_sample`
+/// 里的采样逻辑完全一致——同一个 now、同一个 caret track sample、同一个跨行判断。
+///
+/// - 有 cursor_visual_track 时：用 `sampled_rect_at_progress(progress(now))` 采样 (x, y)，
+///   用 `sampled_visual_line_id_at_progress(progress(now))` 采样 visual_line_id。
+/// - 无 track 时：按事务 progress 插值 old/new cursor rect，visual_line_id 未知（None）。
+fn sample_caret_geometry_for_caret_driven_clip(
+    tx: &PreparedTextVisualTransaction,
+    now: Instant,
+) -> (f64, f64, Option<usize>) {
+    match tx.cursor_visual_track.as_ref() {
+        Some(track) => {
+            let progress = track.progress(now);
+            let r = track.sampled_rect_at_progress(progress);
+            let line_id = track.sampled_visual_line_id_at_progress(progress);
+            (r.x, r.top, line_id)
+        }
+        None => {
+            if let (Some(old_r), Some(new_r)) =
+                (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
+            {
+                let progress = tx.progress(now);
+                let eased = AnimatedSlice::ease_out_quad(progress);
+                let x = old_r.x + (new_r.x - old_r.x) * eased;
+                let y = old_r.top + (new_r.top - old_r.top) * eased;
+                (x, y, None)
+            } else {
+                (0.0, 0.0, None)
+            }
+        }
+    }
+}
+
+/// Issue #722 评论 5749164244 问题3: 对单个视觉单元采集 rebase 帧。
+///
+/// - Reveal/Conceal unit：用 `compute_frame_caret_driven`（和本帧渲染同一个 now、
+///   同一个 caret track sample、同一个跨行判断），`visible_fraction` 从真实显示帧
+///   反算（Insert = frame.w / to_document_rect.w，Delete = frame.w / from_document_rect.w）。
+/// - Reflow unit：用 `compute_frame(visible_fraction)`（原逻辑），`visible_fraction`
+///   用 unit 自己的 `current_visible_fraction(now)`。
+///
+/// 返回 `None` 表示该 unit 已播完（progress >= 1.0），不采集。
+fn collect_rebase_frame_for_unit(
+    unit: &PreparedVisualUnit,
+    caret_x: f64,
+    caret_y: f64,
+    caret_line_id: Option<usize>,
+    now: Instant,
+) -> Option<RebaseFrame> {
+    if unit.progress(now) >= 1.0 {
+        return None;
+    }
+    let visible_fraction = unit.current_visible_fraction(now);
+    let frame = match unit.slice.kind {
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+            unit.slice
+                .compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible_fraction)
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+            unit.slice.compute_frame(visible_fraction)
+        }
+    };
+    // 从真实显示帧反算 visible_fraction：
+    // Insert = frame.w / to_document_rect.w
+    // Delete = frame.w / from_document_rect.w
+    // Reflow 保留 unit 自己的 visible_fraction（几何插值不由宽度决定）。
+    let effective_fraction = match unit.slice.kind {
+        AnimatedSliceKind::InsertReveal => {
+            let w = unit.slice.to_document_rect.w.max(1.0);
+            (frame.w / w).clamp(0.0, 1.0)
+        }
+        AnimatedSliceKind::DeleteConceal => {
+            let w = unit.slice.from_document_rect.w.max(1.0);
+            (frame.w / w).clamp(0.0, 1.0)
+        }
+        AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => visible_fraction,
+    };
+    let elapsed_ms = match unit.started_at {
+        Some(start) => now.duration_since(start).as_millis() as u64,
+        None => 0,
+    };
+    let remaining_duration_ms = unit.duration_ms.saturating_sub(elapsed_ms);
+    Some(RebaseFrame {
+        byte_start: unit.slice.byte_start,
+        byte_end: unit.slice.byte_end,
+        x: frame.x,
+        y: frame.y,
+        opacity: frame.opacity,
+        shaping_identity: unit.slice.shaping_identity.clone(),
+        visible_fraction: effective_fraction,
+        sampled_at: now,
+        remaining_duration_ms,
     })
 }
 
@@ -434,7 +540,7 @@ fn build_insert_reveal_slices(
                     new_cluster.byte_start,
                     new_cluster.byte_end,
                     Some(new_cluster.shaping_identity.clone()),
-                    line_idx,
+                    Some(line_idx),
                 ));
                 managed_new_clusters.push((line_idx, cluster_idx, new_sr));
             }
@@ -514,7 +620,7 @@ fn build_delete_conceal_slices(
                     old_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
                     conceal_to_left_edge,
-                    line_idx,
+                    Some(line_idx),
                 ));
             }
         }
@@ -1007,7 +1113,26 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             // 受影响：采集 rebase frames（frame.byte_start/end 属于该旧事务 new 坐标系）。
-            let frames = tx.collect_rebase_frames(now);
+            // Issue #722 评论 5749164244 问题3: Reveal/Conceal 的 rebase 采样收回
+            // animation_coordinator，用和本帧渲染同一个 now、同一个 caret track sample、
+            // 同一个跨行判断调 compute_frame_caret_driven。ReflowMove/ReflowCrossFade
+            // 继续用 compute_frame。不再调 tx.collect_rebase_frames（它对所有 unit
+            // 用 compute_frame，与正常渲染路径不一致）。
+            let (caret_x, caret_y, caret_line_id) =
+                sample_caret_geometry_for_caret_driven_clip(tx, now);
+            let frames: Vec<RebaseFrame> = tx
+                .units
+                .iter()
+                .filter_map(|unit| {
+                    collect_rebase_frame_for_unit(
+                        unit,
+                        caret_x,
+                        caret_y,
+                        caret_line_id,
+                        now,
+                    )
+                })
+                .collect();
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
             // 硬约束：进入 match_rebase_frames 的 frame.byte_start/end 必须已经是
             // current-old 坐标。frame 的原值属于旧事务自己的 new_text revision，
@@ -1095,6 +1220,8 @@ impl LinuxEditorAnimationCoordinator {
         is_applying_format: bool,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
@@ -1184,6 +1311,8 @@ impl LinuxEditorAnimationCoordinator {
                     let cursor_visual_track = build_cursor_visual_track(
                         old_cursor_rect.as_ref(),
                         new_cursor_rect.as_ref(),
+                        old_cursor_visual_line_id,
+                        new_cursor_visual_line_id,
                         caret_handoff,
                         vt.duration_ms,
                     );
@@ -1316,6 +1445,8 @@ impl LinuxEditorAnimationCoordinator {
                 let cursor_visual_track = build_cursor_visual_track(
                     old_cursor_rect.as_ref(),
                     new_cursor_rect.as_ref(),
+                    old_cursor_visual_line_id,
+                    new_cursor_visual_line_id,
                     caret_handoff,
                     vt.duration_ms,
                 );
@@ -1380,6 +1511,8 @@ impl LinuxEditorAnimationCoordinator {
         new_preedit_byte_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
@@ -1470,6 +1603,8 @@ impl LinuxEditorAnimationCoordinator {
         let cursor_visual_track = build_cursor_visual_track(
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
+            old_cursor_visual_line_id,
+            new_cursor_visual_line_id,
             caret_handoff,
             unit_duration_ms,
         );
@@ -1532,6 +1667,8 @@ impl LinuxEditorAnimationCoordinator {
         committed_replace_end: usize,
         old_cursor_rect: Option<CursorRect>,
         new_cursor_rect: Option<CursorRect>,
+        old_cursor_visual_line_id: Option<usize>,
+        new_cursor_visual_line_id: Option<usize>,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
@@ -1656,7 +1793,7 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
                                     conceal_to_left_edge,
-                                    0,
+                                    None,
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -1738,7 +1875,7 @@ impl LinuxEditorAnimationCoordinator {
                                     new_cluster.byte_start,
                                     new_cluster.byte_end,
                                     Some(new_cluster.shaping_identity.clone()),
-                                    0,
+                                    None,
                                 ));
                                 static_patches.push(StaticLinePatch::insert_patch(
                                     new_line.id,
@@ -1868,6 +2005,8 @@ impl LinuxEditorAnimationCoordinator {
         let cursor_visual_track = build_cursor_visual_track(
             old_cursor_rect.as_ref(),
             new_cursor_rect.as_ref(),
+            old_cursor_visual_line_id,
+            new_cursor_visual_line_id,
             caret_handoff,
             unit_duration_ms,
         );
@@ -2628,10 +2767,15 @@ impl LinuxEditorAnimationCoordinator {
                         // 采样本帧 coordinated caret 位置作为裁切边界。
                         // Issue #722 评论 5748596920 问题2: 保留完整 caret geometry（x, y, visual_line_id），
                         // 跨软换行时按行判断裁切，不再对所有 unit 用同一个纯 caret_x。
+                        // Issue #722 评论 5749164244 问题1: 三条采样路径都返回真实
+                        // visual_line_id（从 PreparedCursorVisualTrack 的 from/to
+                        // visual line id 按 progress 采样），不再硬编码 0usize。
                         let (caret_x, caret_y, caret_line_id) = match tx.cursor_visual_track.as_ref() {
                             Some(track) => {
-                                let r = track.sampled_rect_at_progress(track.progress(sample.frame_now));
-                                (r.x, r.top, 0usize)
+                                let progress = track.progress(sample.frame_now);
+                                let r = track.sampled_rect_at_progress(progress);
+                                let line_id = track.sampled_visual_line_id_at_progress(progress);
+                                (r.x, r.top, line_id)
                             }
                             None => {
                                 if let (Some(old_r), Some(new_r)) =
@@ -2641,11 +2785,12 @@ impl LinuxEditorAnimationCoordinator {
                                     let eased = AnimatedSlice::ease_out_quad(progress);
                                     let x = old_r.x + (new_r.x - old_r.x) * eased;
                                     let y = old_r.top + (new_r.top - old_r.top) * eased;
-                                    (x, y, 0usize)
+                                    // 无 caret track 时 visual_line_id 未知，走 y fallback。
+                                    (x, y, None)
                                 } else {
                                     // 没有 caret 信息时回退到 unit visible fraction。
                                     let f = unit.slice.compute_frame(visible);
-                                    (f.x + f.w, f.y, 0usize)
+                                    (f.x + f.w, f.y, None)
                                 }
                             }
                         };
@@ -2914,7 +3059,7 @@ mod tests {
                 50,
                 60,
                 Some(sid_a.clone()),
-                0,
+                None,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -2936,7 +3081,7 @@ mod tests {
                 70,
                 80,
                 Some(sid_b.clone()),
-                0,
+                None,
             ),
         ];
 
@@ -2998,7 +3143,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3020,7 +3165,7 @@ mod tests {
                 18,
                 22,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
         ];
 
@@ -3105,7 +3250,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3127,7 +3272,7 @@ mod tests {
                 22,
                 26,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
         ];
 
@@ -3202,7 +3347,7 @@ mod tests {
             50,
             60,
             Some(sid_a.clone()),
-                0,
+                None,
         )];
 
         let offset_map = OffsetMap {
@@ -3256,7 +3401,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3278,7 +3423,7 @@ mod tests {
                 18,
                 22,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
         ];
 
@@ -3348,7 +3493,7 @@ mod tests {
             150,
             170,
             Some(sid_a.clone()),
-                0,
+                None,
         )];
 
         let offset_map = OffsetMap {
@@ -3406,7 +3551,7 @@ mod tests {
             50,
             60,
             Some(sid_dup.clone()),
-                0,
+                None,
         )];
 
         let offset_map = OffsetMap {
@@ -3470,7 +3615,7 @@ mod tests {
                 11,
                 15,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
             AnimatedSlice::insert_reveal(
                 VisualTransactionKey::new(1, 2),
@@ -3492,7 +3637,7 @@ mod tests {
                 25,
                 29,
                 Some(sid_dup.clone()),
-                0,
+                None,
             ),
         ];
 
@@ -3658,6 +3803,8 @@ mod tests {
             12,
             None,
             None,
+            None,
+            None,
             0,
         );
         assert!(key.is_some());
@@ -3747,6 +3894,8 @@ mod tests {
             12,
             None,
             None,
+            None,
+            None,
             0,
         );
         assert!(key.is_some());
@@ -3828,6 +3977,8 @@ mod tests {
             12,
             0,
             12,
+            None,
+            None,
             None,
             None,
             0,
@@ -3916,6 +4067,8 @@ mod tests {
             10,
             None,
             None,
+            None,
+            None,
             0,
         );
         assert!(key.is_some());
@@ -3992,6 +4145,8 @@ mod tests {
             3,
             3,
             3,
+            None,
+            None,
             None,
             None,
             0,
@@ -4072,6 +4227,8 @@ mod tests {
             3,
             0,
             3,
+            None,
+            None,
             None,
             None,
             0,
@@ -4236,7 +4393,7 @@ mod tests {
             byte_start,
             byte_end,
             None,
-                0,
+                None,
         )
     }
 
@@ -4268,7 +4425,7 @@ mod tests {
             byte_end,
             None,
             conceal_to_left_edge,
-                0,
+                None,
         )
     }
 
@@ -4906,6 +5063,8 @@ mod tests {
                 bottom: 60.0,
                 baseline_y: 56.0,
             },
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5047,6 +5206,8 @@ mod tests {
         new_tx.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: sampled_cursor.sampled,
             to: caret(20.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now),
             duration_ms: 100,
             pause_start: None,
@@ -5122,6 +5283,8 @@ mod tests {
         tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(190.0),
             to: caret(20.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5241,6 +5404,8 @@ mod tests {
         tx_a.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(100.0),
             to: caret(220.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5290,6 +5455,8 @@ mod tests {
         tx_b.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: handoff_a.sampled,
             to: caret(20.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now),
             duration_ms: handoff_a.remaining_duration_ms,
             pause_start: None,
@@ -5376,6 +5543,8 @@ mod tests {
         tx_d1.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(0.0),
             to: caret(200.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(40)),
             duration_ms: 200,
             pause_start: None,
@@ -5415,6 +5584,8 @@ mod tests {
         tx_d2.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(0.0),
             to: caret(200.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(40)),
             duration_ms: 200,
             pause_start: None,
@@ -5500,7 +5671,7 @@ mod tests {
         // 事务创建时 started_at = None（尚未开始）。
         let reflow_unit = PreparedVisualUnit::wrap(reflow_slice(0, 3, 0.0, 100.0), 200);
         let cursor_visual_track =
-            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), 200);
+            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), None, None, 200);
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -5700,6 +5871,8 @@ mod tests {
         let old_caret_track = PreparedCursorVisualTrack {
             from: caret(100.0),
             to: caret(160.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -6507,6 +6680,8 @@ mod tests {
         tx1.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(100.0),
             to: caret(160.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -6530,6 +6705,8 @@ mod tests {
         tx2.cursor_visual_track = Some(PreparedCursorVisualTrack {
             from: caret(200.0),
             to: caret(260.0),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,

@@ -287,6 +287,14 @@ pub(crate) struct RebaseFrame {
 pub(crate) struct PreparedCursorVisualTrack {
     pub from: CursorRect,
     pub to: CursorRect,
+    /// Issue #722 评论 5749164244 问题1: from/to 端的视觉行 id。
+    ///
+    /// `CursorRect`（Core 类型）不带 visual_line_id，但 `layout::CaretRect` 有。
+    /// pipeline.rs 构造事务时把 `CaretRect.visual_line_id` 传进来，
+    /// 不在 `make_cursor_rect_from_caret_doc()` 后丢掉。
+    /// `None` 表示未知（fallback 路径或测试构造），采样时走 y fallback。
+    pub from_visual_line_id: Option<usize>,
+    pub to_visual_line_id: Option<usize>,
     /// Issue #690 评论 5682867529: caret track 不再在事务创建时就启动计时，
     /// 而是等到进入 `Rendering` 状态才和文字 unit 共用同一个 `frame_now` 起跑。
     /// `None` 表示尚未开始播放，`progress` 返回 0、`remaining_duration_ms` 返回全长。
@@ -309,6 +317,28 @@ impl PreparedCursorVisualTrack {
                 let elapsed = now.duration_since(start).as_millis() as f64;
                 (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
             }
+        }
+    }
+
+    /// Issue #722 评论 5749164244 问题1: 按 progress 采样当前 caret 所在视觉行 id。
+    ///
+    /// caret 从 from 行移到 to 行。progress < 0.5 时 caret 还在 from 行附近，
+    /// >= 0.5 时已到 to 行附近。from/to 行 id 相同时直接返回。
+    /// `None` 表示 from/to 行 id 未知（fallback 路径），调用方走 y fallback。
+    pub fn sampled_visual_line_id_at_progress(&self, progress: f64) -> Option<usize> {
+        match (self.from_visual_line_id, self.to_visual_line_id) {
+            (Some(f_id), Some(t_id)) => {
+                if f_id == t_id {
+                    Some(f_id)
+                } else if progress < 0.5 {
+                    Some(f_id)
+                } else {
+                    Some(t_id)
+                }
+            }
+            (Some(f_id), None) => Some(f_id),
+            (None, Some(t_id)) => Some(t_id),
+            (None, None) => None,
         }
     }
 
@@ -347,10 +377,18 @@ impl PreparedCursorVisualTrack {
 
     /// 首次事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
     /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 事务时长`。
-    pub fn new_first(from: CursorRect, to: CursorRect, duration_ms: u64) -> Self {
+    pub fn new_first(
+        from: CursorRect,
+        to: CursorRect,
+        from_visual_line_id: Option<usize>,
+        to_visual_line_id: Option<usize>,
+        duration_ms: u64,
+    ) -> Self {
         Self {
             from,
             to,
+            from_visual_line_id,
+            to_visual_line_id,
             started_at: None,
             duration_ms,
             pause_start: None,
@@ -413,6 +451,8 @@ impl PreparedCursorVisualTrack {
         Self {
             from: sampled,
             to: new_to,
+            from_visual_line_id: self.to_visual_line_id,
+            to_visual_line_id: self.to_visual_line_id,
             started_at: None,
             duration_ms: remaining,
             pause_start: None,
@@ -521,6 +561,11 @@ impl PreparedTextVisualTransaction {
     ///
     /// Issue #690 评论 5679744253 问题 1: 采集时计算剩余时长，retarget 时从当前帧
     /// 重新起一段，避免同时继承可见比例和已走过的时间线导致进度被重复应用。
+    ///
+    /// Issue #722 评论 5749164244 问题3: 生产路径（take_rebase_frames）不再调用此方法，
+    /// 改用 `animation_coordinator::collect_rebase_frame_for_unit` 对 Reveal/Conceal
+    /// 用 `compute_frame_caret_driven`。此方法保留供 #690 测试验证 per-unit progress 行为。
+    #[cfg(test)]
     pub fn collect_rebase_frames(&self, now: Instant) -> Vec<RebaseFrame> {
         self.units
             .iter()
@@ -1082,7 +1127,7 @@ mod issue_710_comment_5733109905_repro {
             unit_byte_start,
             unit_byte_end,
             None,
-            0,
+            None,
         );
         let unit = PreparedVisualUnit::wrap(slice, 100);
         PreparedTextVisualTransaction {
