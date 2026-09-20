@@ -295,6 +295,18 @@ pub(crate) struct PreparedCursorVisualTrack {
     /// `None` 表示未知（fallback 路径或测试构造），采样时走 y fallback。
     pub from_visual_line_id: Option<usize>,
     pub to_visual_line_id: Option<usize>,
+    /// Issue #722 评论 5749791161: from/to 端真实视觉行的 top/bottom。
+    ///
+    /// 这些值直接来自对应 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`，
+    /// 不是 caret 自己的 `CursorRect.top/bottom`（caret 矩形只是光标那条细矩形，
+    /// 不等于整条视觉行的边界）。`sampled_visual_line_id_at_progress` 用这些值
+    /// 判断 caret 是否已进入下一条视觉行，避免跨软换行时因 caret top 离开旧
+    /// caret 细矩形就提前切换行 id。
+    /// fallback 路径（行几何未知）传 0.0/0.0，采样时走 y fallback。
+    pub from_line_top: f64,
+    pub from_line_bottom: f64,
+    pub to_line_top: f64,
+    pub to_line_bottom: f64,
     /// Issue #690 评论 5682867529: caret track 不再在事务创建时就启动计时，
     /// 而是等到进入 `Rendering` 状态才和文字 unit 共用同一个 `frame_now` 起跑。
     /// `None` 表示尚未开始播放，`progress` 返回 0、`remaining_duration_ms` 返回全长。
@@ -327,6 +339,12 @@ impl PreparedCursorVisualTrack {
     /// from 行 y 范围内 → 还在 from 行；落在 to 行 y 范围内 → 已到 to 行；
     /// 过渡中间空隙按 y 方向（向下/向上移动）判断。这样跨软换行交棒时
     /// 不会因 progress 过 0.5 就提前认为 caret 已进入 to 行。
+    ///
+    /// Issue #722 评论 5749791161: 行 y 范围用 `from_line_top/bottom` 和
+    /// `to_line_top/bottom`（真实视觉行边界），不用 `self.from.top/bottom` 和
+    /// `self.to.top/bottom`（caret 自己的细矩形边界）。向下跨软换行时，
+    /// caret top 只要离开旧 caret 细矩形就可能直接切成 to 行，但这并不等于
+    /// caret 已进入下一条视觉行。用真实行边界判断才能正确反映 caret 所在行。
     /// `None` 表示 from/to 行 id 未知（fallback 路径），调用方走 y fallback。
     pub fn sampled_visual_line_id_at_progress(&self, progress: f64) -> Option<usize> {
         match (self.from_visual_line_id, self.to_visual_line_id) {
@@ -336,29 +354,30 @@ impl PreparedCursorVisualTrack {
                 }
                 let eased = AnimatedSlice::ease_out_quad(progress.clamp(0.0, 1.0));
                 let caret_y = self.from.top + (self.to.top - self.from.top) * eased;
-                // from 行 y 范围 [from.top, from.bottom)，to 行 [to.top, to.bottom)。
-                if caret_y >= self.from.top && caret_y < self.from.bottom {
+                // from 行 y 范围 [from_line_top, from_line_bottom)，
+                // to 行 [to_line_top, to_line_bottom)。
+                if caret_y >= self.from_line_top && caret_y < self.from_line_bottom {
                     Some(f_id)
-                } else if caret_y >= self.to.top && caret_y < self.to.bottom {
+                } else if caret_y >= self.to_line_top && caret_y < self.to_line_bottom {
                     Some(t_id)
                 } else {
                     // 过渡中间空隙：按 y 方向判断。
-                    if self.to.top > self.from.top {
-                        // 向下移动：caret_y >= from.bottom 说明已离开 from 行，归 to。
-                        if caret_y >= self.from.bottom {
+                    if self.to_line_top > self.from_line_top {
+                        // 向下移动：caret_y >= from_line_bottom 说明已离开 from 行，归 to。
+                        if caret_y >= self.from_line_bottom {
                             Some(t_id)
                         } else {
                             Some(f_id)
                         }
-                    } else if self.to.top < self.from.top {
-                        // 向上移动：caret_y <= to.bottom 说明已进入 to 行。
-                        if caret_y <= self.to.bottom {
+                    } else if self.to_line_top < self.from_line_top {
+                        // 向上移动：caret_y <= to_line_bottom 说明已进入 to 行。
+                        if caret_y <= self.to_line_bottom {
                             Some(t_id)
                         } else {
                             Some(f_id)
                         }
                     } else {
-                        // to.top == from.top：fallback 用 progress < 0.5。
+                        // to_line_top == from_line_top：fallback 用 progress < 0.5。
                         if progress < 0.5 {
                             Some(f_id)
                         } else {
@@ -408,11 +427,19 @@ impl PreparedCursorVisualTrack {
 
     /// 首次事务：`from = old_cursor_rect`，`to = new_cursor_rect`，
     /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 事务时长`。
+    ///
+    /// Issue #722 评论 5749791161: `from_line_top/bottom` 和 `to_line_top/bottom`
+    /// 来自对应 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`，
+    /// 是真实视觉行边界，不是 caret 自己的细矩形边界。
     pub fn new_first(
         from: CursorRect,
         to: CursorRect,
         from_visual_line_id: Option<usize>,
         to_visual_line_id: Option<usize>,
+        from_line_top: f64,
+        from_line_bottom: f64,
+        to_line_top: f64,
+        to_line_bottom: f64,
         duration_ms: u64,
     ) -> Self {
         Self {
@@ -420,6 +447,10 @@ impl PreparedCursorVisualTrack {
             to,
             from_visual_line_id,
             to_visual_line_id,
+            from_line_top,
+            from_line_bottom,
+            to_line_top,
+            to_line_bottom,
             started_at: None,
             duration_ms,
             pause_start: None,
@@ -476,6 +507,9 @@ impl PreparedCursorVisualTrack {
 
     /// 从当前帧重新起一段：`from = sampled caret`，`to = new_to`，
     /// `started_at = None`（等进入 Rendering 再启动），`duration_ms = 旧 track 剩余时长`（至少 1ms 保证非零）。
+    ///
+    /// Issue #722 评论 5749791161: 行几何字段在 rebase 时用 0.0/0.0（测试专用方法，
+    /// 生产代码走 `build_cursor_visual_track` 的 handoff 分支，由 handoff 传递行几何）。
     pub fn rebase_to(&self, new_to: CursorRect, now: Instant) -> Self {
         let sampled = self.sampled_rect(now);
         let remaining = self.remaining_duration_ms(now).max(1);
@@ -484,6 +518,10 @@ impl PreparedCursorVisualTrack {
             to: new_to,
             from_visual_line_id: self.to_visual_line_id,
             to_visual_line_id: self.to_visual_line_id,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: None,
             duration_ms: remaining,
             pause_start: None,
@@ -911,6 +949,7 @@ mod issue_710_comment_5732160521_repro {
             revision: super::super::layout_snapshot::LayoutRevision::next(),
             line_snapshots: Vec::new(),
             caret_rect: None,
+            caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Upstream,
             virtual_text: virtual_text.to_string(),
         }
@@ -1101,6 +1140,7 @@ mod issue_710_comment_5733109905_repro {
             revision: super::super::layout_snapshot::LayoutRevision::next(),
             line_snapshots: Vec::new(),
             caret_rect: None,
+            caret_rect_doc: None,
             caret_affinity: crate::editor::layout::CaretAffinity::Upstream,
             virtual_text: virtual_text.to_string(),
         }

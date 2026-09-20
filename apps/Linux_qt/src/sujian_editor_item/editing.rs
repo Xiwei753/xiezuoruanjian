@@ -1,5 +1,6 @@
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
+use super::animation_coordinator::find_line_geometry_in_snapshot;
 
 /// Issue #701 评论 5699573227 第三阶段: 统一编辑操作描述。
 ///
@@ -127,7 +128,9 @@ impl SujianEditorItem {
         old: &EditorSnapshot,
         new: &EditorSnapshot,
         cause: EditorTransactionCause,
-        pending_preedit_cursor_rect: Option<CursorRect>,
+        // Issue #722 评论 5749791161 问题2: 不再使用 pending_preedit_cursor_rect，
+        // old caret 从 old_snapshot.caret_rect_doc 获取（文档坐标）。
+        _pending_preedit_cursor_rect: Option<CursorRect>,
         preedit_byte_start: usize,
         preedit_byte_end: usize,
         saved_virtual_text: &str,
@@ -191,12 +194,41 @@ impl SujianEditorItem {
         // Issue #658 评论 5623746506 问题 2b: composition commit 的 new text
         // 走 Promote=true，generation 直接成为 current，不再用完即删。
         let new_snapshot = self.build_editor_layout_snapshot(width, true, new_composition_range);
-        let new_cursor_rect = new_snapshot.caret_rect.as_ref().map(|c| CursorRect {
+        // Issue #722 评论 5749791161 问题2+3: IME commit 路径使用文档坐标的 caret_rect_doc，
+        // 不再用 viewport 坐标的 caret_rect（避免重复减 scroll_y）。
+        let new_cursor_rect = new_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
             x: c.x,
             top: c.y,
             bottom: c.y + c.h,
             baseline_y: c.baseline_y,
         });
+        let new_cursor_visual_line_id = new_snapshot
+            .caret_rect_doc
+            .as_ref()
+            .map(|c| c.visual_line_id);
+
+        // Issue #722 评论 5749791161: old_cursor_rect 从 pending_preedit_cursor_rect
+        // 获取（它保存的是 preedit 状态下的 caret 位置）。但 pending_preedit_cursor_rect
+        // 存的是 viewport 坐标，需要改为文档坐标。最简单的方案：从 old_snapshot 的
+        // caret_rect_doc 获取（commit 时 old caret 就是 preedit 状态下的 caret 位置）。
+        // 但 old_snapshot 可能是 active_composition_new_snapshot（也是 viewport 坐标）。
+        // 为了保持一致性，从 old_snapshot.caret_rect_doc 获取文档坐标的 old caret。
+        let old_cursor_rect = old_snapshot.caret_rect_doc.as_ref().map(|c| CursorRect {
+            x: c.x,
+            top: c.y,
+            bottom: c.y + c.h,
+            baseline_y: c.baseline_y,
+        });
+        let old_cursor_visual_line_id = old_snapshot
+            .caret_rect_doc
+            .as_ref()
+            .map(|c| c.visual_line_id);
+
+        // Issue #722 评论 5749791161: 从 snapshot 的 line_snapshots 中查找行几何。
+        let (old_line_top, old_line_bottom) =
+            find_line_geometry_in_snapshot(&old_snapshot, old_cursor_visual_line_id);
+        let (new_line_top, new_line_bottom) =
+            find_line_geometry_in_snapshot(&new_snapshot, new_cursor_visual_line_id);
 
         let visual_text_unchanged =
             !saved_virtual_text.is_empty() && saved_virtual_text == new.text;
@@ -215,10 +247,14 @@ impl SujianEditorItem {
                 candidate_byte_end,
                 committed_replace_start,
                 committed_replace_end,
-                pending_preedit_cursor_rect,
+                old_cursor_rect,
                 new_cursor_rect,
-                None,
-                None,
+                old_cursor_visual_line_id,
+                new_cursor_visual_line_id,
+                old_line_top,
+                old_line_bottom,
+                new_line_top,
+                new_line_bottom,
                 self.cursor_ctrl.cursor_owner_epoch,
             );
 

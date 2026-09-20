@@ -51,6 +51,40 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 
 use crate::sujian_editor_item::editor_animation_debug_log;
 
+/// Issue #722 评论 5749791161: 从 `EditorLayoutSnapshot` 的 `line_snapshots` 中
+/// 按 `visual_line_id` 查找行几何（文档坐标的 top/bottom）。
+///
+/// 行 top 来自 `PreparedLineSnapshot.document_origin_y`（= `VisualLine.y`）。
+/// 行 bottom 通过该行所有 cluster 的最大文档坐标底部近似（cluster bounds 不含
+/// 行间距，但对 caret_driven_clip 的跨行判断足够）。
+/// 找不到对应行时返回 `(0.0, 0.0)`。
+pub(crate) fn find_line_geometry_in_snapshot(
+    snapshot: &EditorLayoutSnapshot,
+    visual_line_id: Option<usize>,
+) -> (f64, f64) {
+    match visual_line_id {
+        Some(id) => {
+            for line in &snapshot.line_snapshots {
+                if line.visual_line_id == id {
+                    let line_top = line.document_origin_y;
+                    let dpr = line.dpr.max(0.001);
+                    let line_bottom = line
+                        .clusters
+                        .iter()
+                        .map(|c| {
+                            line.document_origin_y
+                                + (c.source_rect.y + c.source_rect.h) / dpr
+                        })
+                        .fold(line_top, f64::max);
+                    return (line_top, line_bottom);
+                }
+            }
+            (0.0, 0.0)
+        }
+        None => (0.0, 0.0),
+    }
+}
+
 /// Issue #690 评论 5675007226 步骤 1: 同一帧的统一时间采样。
 ///
 /// `update_paint_node()` 入口处取一次 `Instant::now()` 作为 `frame_now`，
@@ -275,11 +309,18 @@ fn conflicting_units_are_untouched(
 /// 新 track 的起点虽然 x/y 用旧事务屏幕真实位置，但"它在哪一行"必须也用
 /// 采样到的行 id，不能强行改成新事务终点所在行——跨软换行交棒时第一帧
 /// 文字可能认为 caret 已进入新行，把下一行提前吐出来。
+/// Issue #722 评论 5749791161: rebase 交棒时携带采样到的行几何。
+///
+/// `sampled_line_top/bottom` 是旧事务在 `now` 时刻采样到的 caret 所在视觉行的
+/// 真实 top/bottom（来自 `VisualLine.y` 和 `VisualLine.y + VisualLine.height`）。
+/// 新 track 的 from 端行几何用这些值，不用 caret 自己的细矩形边界。
 #[derive(Clone, Debug)]
 struct RebaseCaretHandoff {
     sampled: CursorRect,
     remaining_duration_ms: u64,
     sampled_visual_line_id: Option<usize>,
+    sampled_line_top: f64,
+    sampled_line_bottom: f64,
 }
 
 /// Issue #690 评论 5681206040 + 5682867529: 构建新事务的 caret track，四个正文入口共用。
@@ -294,11 +335,20 @@ struct RebaseCaretHandoff {
 /// Issue #690 评论 5682867529: 不再在事务创建时就用 `now` 启动计时，而是把 `started_at`
 /// 留为 `None`，等 `build_text_animation_plan_with_sample` 在 Prepared→Rendering 分支
 /// 跟文字 unit 共用同一个 `frame_now` 起跑，保证第一帧文字和光标 progress 都 = 0。
+///
+/// Issue #722 评论 5749791161: `old_cursor_line_top/bottom` 和 `new_cursor_line_top/bottom`
+/// 是真实视觉行边界（`VisualLine.y` 和 `VisualLine.y + VisualLine.height`），
+/// 不是 caret 自己的细矩形边界。rebase handoff 分支的 from 端行几何从 handoff
+/// 传递（采样到的旧事务屏幕 caret 所在行），to 端行几何从参数传递。
 fn build_cursor_visual_track(
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
     old_cursor_visual_line_id: Option<usize>,
     new_cursor_visual_line_id: Option<usize>,
+    old_cursor_line_top: f64,
+    old_cursor_line_bottom: f64,
+    new_cursor_line_top: f64,
+    new_cursor_line_bottom: f64,
     handoff: Option<RebaseCaretHandoff>,
     tx_duration_ms: u64,
 ) -> Option<PreparedCursorVisualTrack> {
@@ -313,6 +363,12 @@ fn build_cursor_visual_track(
             // to 端是新事务的 new_cursor_rect 行 id。
             from_visual_line_id: h.sampled_visual_line_id,
             to_visual_line_id: new_cursor_visual_line_id,
+            // Issue #722 评论 5749791161: from 端行几何用 handoff 采样到的行边界，
+            // to 端行几何用参数传入的 new_cursor 行边界。
+            from_line_top: h.sampled_line_top,
+            from_line_bottom: h.sampled_line_bottom,
+            to_line_top: new_cursor_line_top,
+            to_line_bottom: new_cursor_line_bottom,
             started_at: None,
             duration_ms: h.remaining_duration_ms,
             pause_start: None,
@@ -324,6 +380,10 @@ fn build_cursor_visual_track(
                 to.clone(),
                 old_cursor_visual_line_id,
                 new_cursor_visual_line_id,
+                old_cursor_line_top,
+                old_cursor_line_bottom,
+                new_cursor_line_top,
+                new_cursor_line_bottom,
                 tx_duration_ms,
             ))
         }
@@ -1225,14 +1285,28 @@ impl LinuxEditorAnimationCoordinator {
             // 正在屏幕上显示的 coordinated cursor rect，并取旧 caret track 的剩余时长。
             let sampled_cursor = sample_coordinated_cursor_rect_at(tx, now);
             let caret_handoff = match (sampled_cursor, tx.cursor_visual_track.as_ref()) {
-                (Some(sampled), Some(track)) => Some(RebaseCaretHandoff {
-                    sampled,
-                    remaining_duration_ms: track.remaining_duration_ms(now).max(1),
-                    // Issue #722 评论 5749572808 问题2: 复用同一 now 时刻采样的
-                    // caret_line_id（第1121行 sample_caret_geometry_for_caret_driven_clip
-                    // 的返回值），保证 x/y 和行 id 来自同一帧同一 track。
-                    sampled_visual_line_id: caret_line_id,
-                }),
+                (Some(sampled), Some(track)) => {
+                    // Issue #722 评论 5749791161: 采样到的行几何从旧 track 的
+                    // from_line/to_line 字段中选取。caret_line_id 等于 from 行 id
+                    // 时用 from 行几何，等于 to 行 id 时用 to 行几何，否则用 from 行
+                    // 几何作 fallback（caret 通常还在过渡中间，偏向 from 行更安全）。
+                    let (line_top, line_bottom) = match caret_line_id {
+                        Some(id) if Some(id) == track.to_visual_line_id => {
+                            (track.to_line_top, track.to_line_bottom)
+                        }
+                        _ => (track.from_line_top, track.from_line_bottom),
+                    };
+                    Some(RebaseCaretHandoff {
+                        sampled,
+                        remaining_duration_ms: track.remaining_duration_ms(now).max(1),
+                        // Issue #722 评论 5749572808 问题2: 复用同一 now 时刻采样的
+                        // caret_line_id（sample_caret_geometry_for_caret_driven_clip
+                        // 的返回值），保证 x/y 和行 id 来自同一帧同一 track。
+                        sampled_visual_line_id: caret_line_id,
+                        sampled_line_top: line_top,
+                        sampled_line_bottom: line_bottom,
+                    })
+                }
                 (Some(sampled), None) => {
                     // 旧事务没有 caret track（理论上正文事务都应有，防御性 fallback）：
                     // 用事务 timeline 剩余时长估算。
@@ -1247,8 +1321,10 @@ impl LinuxEditorAnimationCoordinator {
                     Some(RebaseCaretHandoff {
                         sampled,
                         remaining_duration_ms: tx_remaining,
-                        // 无 track 时行 id 未知。
+                        // 无 track 时行 id 和行几何未知。
                         sampled_visual_line_id: None,
+                        sampled_line_top: 0.0,
+                        sampled_line_bottom: 0.0,
                     })
                 }
                 (None, _) => None,
@@ -1290,6 +1366,10 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         old_cursor_visual_line_id: Option<usize>,
         new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
         old_snapshot: &EditorLayoutSnapshot,
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
@@ -1381,6 +1461,10 @@ impl LinuxEditorAnimationCoordinator {
                         new_cursor_rect.as_ref(),
                         old_cursor_visual_line_id,
                         new_cursor_visual_line_id,
+                        old_cursor_line_top,
+                        old_cursor_line_bottom,
+                        new_cursor_line_top,
+                        new_cursor_line_bottom,
                         caret_handoff,
                         vt.duration_ms,
                     );
@@ -1515,6 +1599,10 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_rect.as_ref(),
                     old_cursor_visual_line_id,
                     new_cursor_visual_line_id,
+                    old_cursor_line_top,
+                    old_cursor_line_bottom,
+                    new_cursor_line_top,
+                    new_cursor_line_bottom,
                     caret_handoff,
                     vt.duration_ms,
                 );
@@ -1581,6 +1669,10 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         old_cursor_visual_line_id: Option<usize>,
         new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
@@ -1673,6 +1765,10 @@ impl LinuxEditorAnimationCoordinator {
             new_cursor_rect.as_ref(),
             old_cursor_visual_line_id,
             new_cursor_visual_line_id,
+            old_cursor_line_top,
+            old_cursor_line_bottom,
+            new_cursor_line_top,
+            new_cursor_line_bottom,
             caret_handoff,
             unit_duration_ms,
         );
@@ -1737,6 +1833,10 @@ impl LinuxEditorAnimationCoordinator {
         new_cursor_rect: Option<CursorRect>,
         old_cursor_visual_line_id: Option<usize>,
         new_cursor_visual_line_id: Option<usize>,
+        old_cursor_line_top: f64,
+        old_cursor_line_bottom: f64,
+        new_cursor_line_top: f64,
+        new_cursor_line_bottom: f64,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
         let offset_map = OffsetMap::build(&old_snapshot.virtual_text, &new_snapshot.virtual_text);
@@ -1861,7 +1961,8 @@ impl LinuxEditorAnimationCoordinator {
                                     old_cluster.byte_end,
                                     Some(old_cluster.shaping_identity.clone()),
                                     conceal_to_left_edge,
-                                    None,
+                                    // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
+                                    Some(old_line.visual_line_id),
                                 ));
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_new_bs, mapped_new_be) {
@@ -1943,7 +2044,8 @@ impl LinuxEditorAnimationCoordinator {
                                     new_cluster.byte_start,
                                     new_cluster.byte_end,
                                     Some(new_cluster.shaping_identity.clone()),
-                                    None,
+                                    // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
+                                    Some(new_line.visual_line_id),
                                 ));
                                 static_patches.push(StaticLinePatch::insert_patch(
                                     new_line.id,
@@ -2075,6 +2177,10 @@ impl LinuxEditorAnimationCoordinator {
             new_cursor_rect.as_ref(),
             old_cursor_visual_line_id,
             new_cursor_visual_line_id,
+            old_cursor_line_top,
+            old_cursor_line_bottom,
+            new_cursor_line_top,
+            new_cursor_line_bottom,
             caret_handoff,
             unit_duration_ms,
         );
@@ -3817,7 +3923,7 @@ mod tests {
             }],
             layout_generation: 0,
         };
-        EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, CaretAffinity::Downstream)
+        EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, None, CaretAffinity::Downstream)
             .with_virtual_text(virtual_text.to_string())
     }
 
@@ -3881,6 +3987,10 @@ mod tests {
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -3972,6 +4082,10 @@ mod tests {
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -4057,6 +4171,10 @@ mod tests {
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -4133,18 +4251,22 @@ mod tests {
         let key = coord.handle_composition_commit_or_cancel(
             &old_snapshot,
             &new_snapshot,
-            3,
-            10,
+            0,
+            12,
             true,
             false,
-            3,
-            5,
-            3,
-            10,
+            0,
+            12,
+            0,
+            12,
             None,
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -4225,6 +4347,10 @@ mod tests {
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -4307,6 +4433,10 @@ mod tests {
             None,
             None,
             None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
             0,
         );
         assert!(key.is_some());
@@ -5141,6 +5271,10 @@ mod tests {
             },
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5284,6 +5418,10 @@ mod tests {
             to: caret(20.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now),
             duration_ms: 100,
             pause_start: None,
@@ -5361,6 +5499,10 @@ mod tests {
             to: caret(20.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5482,6 +5624,10 @@ mod tests {
             to: caret(220.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -5533,6 +5679,10 @@ mod tests {
             to: caret(20.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now),
             duration_ms: handoff_a.remaining_duration_ms,
             pause_start: None,
@@ -5621,6 +5771,10 @@ mod tests {
             to: caret(200.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(40)),
             duration_ms: 200,
             pause_start: None,
@@ -5662,6 +5816,10 @@ mod tests {
             to: caret(200.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(40)),
             duration_ms: 200,
             pause_start: None,
@@ -5747,7 +5905,7 @@ mod tests {
         // 事务创建时 started_at = None（尚未开始）。
         let reflow_unit = PreparedVisualUnit::wrap(reflow_slice(0, 3, 0.0, 100.0), 200);
         let cursor_visual_track =
-            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), None, None, 200);
+            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), None, None, 0.0, 0.0, 0.0, 0.0, 200);
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -5949,6 +6107,10 @@ mod tests {
             to: caret(160.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -6758,6 +6920,10 @@ mod tests {
             to: caret(160.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,
@@ -6783,6 +6949,10 @@ mod tests {
             to: caret(260.0),
             from_visual_line_id: None,
             to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 0.0,
+            to_line_top: 0.0,
+            to_line_bottom: 0.0,
             started_at: Some(now - Duration::from_millis(50)),
             duration_ms: 100,
             pause_start: None,

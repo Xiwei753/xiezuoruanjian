@@ -164,7 +164,11 @@ impl PreparedLineSnapshot {
 pub(crate) struct EditorLayoutSnapshot {
     pub revision: LayoutRevision,
     pub line_snapshots: Vec<PreparedLineSnapshot>,
+    /// Viewport 坐标的 caret（y/baseline_y 已减 scroll_y），给平台/IME query 使用。
     pub caret_rect: Option<CaretRect>,
+    /// Issue #722 评论 5749791161: 文档坐标的 caret（y/baseline_y 不减 scroll_y，
+    /// visible 始终为 true），给 VisualTransaction / caret track 使用。
+    pub caret_rect_doc: Option<CaretRect>,
     pub caret_affinity: CaretAffinity,
     pub virtual_text: String,
 }
@@ -183,6 +187,7 @@ impl EditorLayoutSnapshot {
         _layout_snapshot: LayoutSnapshot,
         line_snapshots: Vec<PreparedLineSnapshot>,
         caret_rect: Option<CaretRect>,
+        caret_rect_doc: Option<CaretRect>,
         caret_affinity: CaretAffinity,
     ) -> Self {
         let revision = LayoutRevision::next();
@@ -190,6 +195,7 @@ impl EditorLayoutSnapshot {
             revision,
             line_snapshots,
             caret_rect,
+            caret_rect_doc,
             caret_affinity,
             virtual_text: String::new(),
         }

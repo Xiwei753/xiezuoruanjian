@@ -1193,6 +1193,22 @@ impl LinuxEditorPipeline {
                     &ctx.font_family,
                 ));
 
+                // Issue #722 评论 5749791161: 获取 from/to 端真实视觉行的 top/bottom。
+                // 行几何来自 VisualLine.y 和 VisualLine.y + VisualLine.height，
+                // 不是 caret 自己的 CursorRect.top/bottom（光标细矩形边界）。
+                let (old_line_top, old_line_bottom) = old_doc_snapshot
+                    .visual_lines
+                    .iter()
+                    .find(|l| l.id == old_caret.visual_line_id)
+                    .map(|l| (l.y, l.y + l.height))
+                    .unwrap_or((0.0, 0.0));
+                let (new_line_top, new_line_bottom) = new_doc_snapshot
+                    .visual_lines
+                    .iter()
+                    .find(|l| l.id == new_caret.visual_line_id)
+                    .map(|l| (l.y, l.y + l.height))
+                    .unwrap_or((0.0, 0.0));
+
                 // Issue #658 评论 5626002895 问题 3: fallback old snapshot 的图片/cluster/cursor map
                 // 已复制进 Rust snapshot（old_doc_snapshot），fallback_old_generation 的 QTextLayout
                 // 不再需要，立即释放避免生命周期泄漏。old_doc_snapshot 后续 build_old_new_from_canonical
@@ -1234,6 +1250,10 @@ impl LinuxEditorPipeline {
                     vt.new_cursor_rect.clone(),
                     Some(old_caret.visual_line_id),
                     Some(new_caret.visual_line_id),
+                    old_line_top,
+                    old_line_bottom,
+                    new_line_top,
+                    new_line_bottom,
                     &old_snap,
                     &new_snap,
                     cursor_owner_epoch,
@@ -1248,6 +1268,7 @@ impl LinuxEditorPipeline {
                         EditorLayoutSnapshot::new(
                             old_doc_snapshot.to_layout_snapshot(),
                             Vec::new(),
+                            None,
                             None,
                             layout::CaretAffinity::Downstream,
                         )
