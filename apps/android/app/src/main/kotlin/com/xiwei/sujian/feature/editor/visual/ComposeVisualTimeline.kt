@@ -127,6 +127,7 @@ class ComposeVisualTimeline {
         cursorFromRect: Rect? = null,
         cursorPath: List<CursorMotionPoint>? = null,
         cursorDurationNanos: Long = 0L,
+        assignCursorChannel: Boolean = true,
     ) {
         // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
@@ -360,6 +361,7 @@ class ComposeVisualTimeline {
                 surviving = surviving,
                 progressByKey = effectiveProgressByKey,
                 patchClipTrackId = patchClipTrackId,
+                assignCursorChannel = assignCursorChannel,
             )
         }
     }
@@ -431,6 +433,7 @@ class ComposeVisualTimeline {
         surviving: List<VisualTextUnit>,
         progressByKey: Map<Long, Boolean>,
         patchClipTrackId: Long?,
+        assignCursorChannel: Boolean,
     ) {
         val current = cursorChannel
         val startRect =
@@ -489,7 +492,13 @@ class ComposeVisualTimeline {
                 startedAtNanos = frameTimeNanos,
                 durationNanos = cursorDurationNanos,
             )
-        cursorChannel = track
+        // Issue #723 评论 5749594980：assignCursorChannel=false 时只创建 track 放进 clipTracks
+        // （供文字 clip 动画使用），不赋给 cursorChannel（屏幕视觉光标不抢回系统 caret）。
+        // 这覆盖"pending patch 已排队 → 用户点击 wedge/拖选 → release → 下一帧 drain 旧 patch"
+        // 时序：文字吞字/吐字动画继续，但 cursorOwnedByVisual 不重新变 true。
+        if (assignCursorChannel) {
+            cursorChannel = track
+        }
         // #708 评论 5730173947 修复2：把本 patch 的 track 存进 clipTracks，
         // 供绑定了 patchClipTrackId 的 unit 查询自己的 clip 驱动。
         // patchClipTrackId 只在有光标 motion 时分配（与 applyPatch 分配条件一致），

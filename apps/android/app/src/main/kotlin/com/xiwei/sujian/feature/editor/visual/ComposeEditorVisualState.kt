@@ -136,6 +136,19 @@ class ComposeEditorVisualState(
     private var currentMotionPolicy: EditorMotionPolicy? = null
 
     /**
+     * Issue #723 评论 5749594980：系统 caret 已被用户点击/拖选抢回 —
+     * 本批 pending patch 只允许驱动文字 clip、不允许驱动屏幕 cursor。
+     *
+     * 时序：用户输入文字 → localPatch 进入 pendingPatches → 用户马上点击 wedge/拖选 →
+     * [releaseVisualCursorOwnership] 设置 suppressed=true → 下一帧 [drainPendingPatchesAtFrame]
+     * 消费旧 patch 时传 assignCursorChannel=false → 文字 clip 动画继续（clipTracks 正常创建），
+     * 但 cursorChannel 不被赋值 → [sampleVisualScene] 的 cursorOwnedByVisual 保持 false。
+     *
+     * 用户下一次真正产生新的文字输入（[recordLocalInput]）或 Core 视觉意图（[onVisualIntent]）时解除。
+     */
+    private var cursorOwnershipSuppressed: Boolean = false
+
+    /**
      * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
      * patch 使用此 intent 而非 null，绕过本地 reflow 释放门控
      * （[ComposeLocalHandoffRebase.rebase] / [ComposeVisualTimeline.mapSurvivingUnits]
@@ -302,6 +315,9 @@ class ComposeEditorVisualState(
         intent: EditorVisualIntent,
         motionPolicy: EditorMotionPolicy,
     ) {
+        // Issue #723 评论 5749594980：Core 视觉意图到达，解除 caret 抑制 —
+        // 新的视觉意图可以正常取得屏幕 caret 所有权。
+        cursorOwnershipSuppressed = false
         val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective())
         applyFrameUpdate(update)
     }
@@ -325,6 +341,9 @@ class ComposeEditorVisualState(
         newSelection: TextRange,
         changes: List<LocalInputChange>,
     ) {
+        // Issue #723 评论 5749594980：用户产生新的文字输入，解除 caret 抑制 —
+        // 新的文字 patch 可以正常取得屏幕 caret 所有权。
+        cursorOwnershipSuppressed = false
         localInputTracker.record(oldText, newText, oldSelection, newSelection, changes)
     }
 
@@ -1409,12 +1428,17 @@ class ComposeEditorVisualState(
         // 首帧 scene 已由 onAuthoritativeLayout 建立，timeline.applyPatch 直接从当前 timeline 状态继续。
         // 光标起点用 patch.originCursorRect / oldLayout，不从已删除的 baseScene.cursorRect 猜起点。
         val cursorParams = computeCursorParamsForPatch(framePatch, fromRectOverride = null)
+        // Issue #723 评论 5749594980：caret 已被用户点击/拖选抢回时，旧 pending patch
+        // 只允许驱动文字 clip（clipTracks 正常创建），不允许驱动屏幕 cursor（不赋 cursorChannel）。
+        // 文字吞字/吐字动画继续，但 cursorOwnedByVisual 保持 false，屏幕 caret 留给 BasicTextField。
+        val assignCursorChannel = !cursorOwnershipSuppressed
         visualTimeline.applyPatch(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
             cursorFromRect = cursorParams?.fromRect,
             cursorPath = cursorParams?.points,
             cursorDurationNanos = cursorParams?.durationNanos ?: 0L,
+            assignCursorChannel = assignCursorChannel,
         )
         // #708 评论 5723410606 第二节：配对完成后清 handoff —
         // 不再有"matching layout/local patch 到齐、timeline 从 barrier.baseScene redirect"的步骤，
@@ -1471,6 +1495,10 @@ class ComposeEditorVisualState(
      */
     private fun releaseVisualCursorOwnership() {
         pendingSelectionRedirect = null
+        // Issue #723 评论 5749594980：标记当前已排队的 pending patch 不得再取得屏幕 caret 所有权。
+        // 下一帧 drainPendingPatchesAtFrame 消费旧 patch 时传 assignCursorChannel=false，
+        // 文字 clip 动画继续，但 cursorChannel 不被赋值，cursorOwnedByVisual 保持 false。
+        cursorOwnershipSuppressed = true
         visualTimeline.releaseVisualCursorOwnership()
         val releasedScene = _visualScene.value.copy(cursorOwnedByVisual = false)
         _visualScene.update { releasedScene }
