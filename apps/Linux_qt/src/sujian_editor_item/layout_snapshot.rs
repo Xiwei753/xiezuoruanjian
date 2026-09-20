@@ -90,6 +90,12 @@ pub(crate) struct PreparedLineSnapshot {
     /// 必须用这个全文行号，不能用 `line_snapshots` 的局部数组下标——
     /// 视口裁剪后局部下标和全文行号不一致，跨行裁切会判断错。
     pub visual_line_id: usize,
+    /// Issue #722 评论 5750218208: 真实视觉行 top（= `VisualLine.y`，文档坐标）。
+    /// 行几何判断直接用此字段，不再从 cluster ink bounds 猜行高。
+    pub visual_line_top: f64,
+    /// Issue #722 评论 5750218208: 真实视觉行 bottom（= `VisualLine.y + VisualLine.height`，
+    /// 文档坐标）。空行也有正确高度，不依赖 cluster。
+    pub visual_line_bottom: f64,
 }
 
 impl PreparedLineSnapshot {

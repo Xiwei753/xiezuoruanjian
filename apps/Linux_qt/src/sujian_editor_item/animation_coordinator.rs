@@ -51,12 +51,13 @@ use crate::editor::layout::compute_affected_paragraph_ranges;
 
 use crate::sujian_editor_item::editor_animation_debug_log;
 
-/// Issue #722 评论 5749791161: 从 `EditorLayoutSnapshot` 的 `line_snapshots` 中
+/// Issue #722 评论 5750218208: 从 `EditorLayoutSnapshot` 的 `line_snapshots` 中
 /// 按 `visual_line_id` 查找行几何（文档坐标的 top/bottom）。
 ///
-/// 行 top 来自 `PreparedLineSnapshot.document_origin_y`（= `VisualLine.y`）。
-/// 行 bottom 通过该行所有 cluster 的最大文档坐标底部近似（cluster bounds 不含
-/// 行间距，但对 caret_driven_clip 的跨行判断足够）。
+/// 直接返回 `PreparedLineSnapshot.visual_line_top` / `visual_line_bottom`
+/// （= `VisualLine.y` / `VisualLine.y + VisualLine.height`），不再扫描 cluster
+/// ink bounds 猜行高——空行没有 cluster，cluster bounds 也不含行间距，
+/// 用 cluster 会导致空行高度为 0、软换行附近行边界错误。
 /// 找不到对应行时返回 `(0.0, 0.0)`。
 pub(crate) fn find_line_geometry_in_snapshot(
     snapshot: &EditorLayoutSnapshot,
@@ -66,17 +67,7 @@ pub(crate) fn find_line_geometry_in_snapshot(
         Some(id) => {
             for line in &snapshot.line_snapshots {
                 if line.visual_line_id == id {
-                    let line_top = line.document_origin_y;
-                    let dpr = line.dpr.max(0.001);
-                    let line_bottom = line
-                        .clusters
-                        .iter()
-                        .map(|c| {
-                            line.document_origin_y
-                                + (c.source_rect.y + c.source_rect.h) / dpr
-                        })
-                        .fold(line_top, f64::max);
-                    return (line_top, line_bottom);
+                    return (line.visual_line_top, line.visual_line_bottom);
                 }
             }
             (0.0, 0.0)
@@ -3886,6 +3877,8 @@ mod tests {
             byte_end: line_clusters.last().map(|c| c.1).unwrap_or(0),
             visual_x: 0.0,
             visual_line_id: 0,
+            visual_line_top: 0.0,
+            visual_line_bottom: 20.0,
         };
         let layout_snapshot = LayoutSnapshot {
             text_revision: 0,
