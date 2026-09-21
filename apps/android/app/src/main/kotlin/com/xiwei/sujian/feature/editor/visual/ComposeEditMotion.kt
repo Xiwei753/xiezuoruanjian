@@ -247,8 +247,14 @@ class ComposeEditMotion(
      * - 未开始旧 unit（oldGlyphProgress <= startProgress）：从原 from 到原 to。
      * - 新 unit（oldChannel == null）：从 freshFrom 到 freshTo。
      *
-     * 所有未完成 unit 等权分配新 [0, 1] 区间（每个剩余 unit 一段等长），保证重定向后立即继续，
-     * 不会出现"先冻结一段再继续"（Issue #728 评论 5756468643 问题1）。
+     * 分配策略（保证重定向后立即继续，不出现"先冻结再继续" — Issue #728 评论 5756468643 问题1）：
+     * 1. 已完成 unit：直接固定终值（from=to=currentFraction），不占新区间。
+     * 2. 进行中 unit：startProgress=0（立即继续），endProgress=remaining
+     *    （remaining = 1 - oldProgressWithinChannel，即该 unit 还需要走的比例）。
+     *    pending unit 分布在 (remaining, 1] 区间。
+     * 3. 未开始 unit：分布到 (remaining, 1] 区间，等权分配。
+     * 这样进行中 unit 在 master=0 时 localProgress=0 → fraction 从 currentFraction 继续，
+     * 不会冻结；pending unit 在 master 达到其 startProgress 后才开始，各自有独立区间。
      *
      * @param specs 带顺序的 unit 描述（旧 unit 含 oldChannel，新 unit oldChannel=null）。
      * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1，必须用旧 duration 算）。
@@ -261,30 +267,37 @@ class ComposeEditMotion(
         currentSample: Sample,
     ): Map<Long, UnitChannel> {
         val result = mutableMapOf<Long, UnitChannel>()
-        // 未完成 unit 按传入顺序收集，最后等权分配新 [0, 1]
+        // 分三组：已完成（直接固定终值）、进行中（startProgress=0 立即继续）、未开始（pending）
+        // 进行中的 remaining 用于计算其 endProgress 和 pending 区间的起始
+        var inProgressRemaining = 0f
+        val inProgressUnits = mutableListOf<Pair<Long, UnitChannel>>()
         val pending = mutableListOf<Pair<Long, UnitChannel>>()
         for (spec in specs) {
             val ch = spec.oldChannel
             if (ch == null) {
-                // 新 unit：从 freshFrom 到 freshTo，等权一段
                 pending.add(spec.key to UnitChannel(spec.freshFrom, spec.freshTo, 0f, 1f))
                 continue
             }
             val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
-            if (oldGlyphProgress >= ch.endProgress) {
-                // 已完成：固定终值
-                result[spec.key] = UnitChannel(currentFraction, currentFraction, 0f, 0f)
-            } else if (oldGlyphProgress <= ch.startProgress) {
-                // 未开始：从原 from 到原 to，等权一段
-                pending.add(spec.key to UnitChannel(ch.from, ch.to, 0f, 1f))
-            } else {
-                // 进行中：从当前 fraction 继续到原 to，等权一段
-                pending.add(spec.key to UnitChannel(currentFraction, ch.to, 0f, 1f))
+            val classification = classifyRedirectUnit(oldGlyphProgress, ch)
+            when (classification) {
+                is RedirectUnitClass.Completed ->
+                    result[spec.key] = UnitChannel(currentFraction, currentFraction, 0f, 0f)
+                is RedirectUnitClass.NotStarted ->
+                    pending.add(spec.key to UnitChannel(ch.from, ch.to, 0f, 1f))
+                is RedirectUnitClass.InProgress -> {
+                    inProgressRemaining = classification.remaining
+                    inProgressUnits.add(spec.key to UnitChannel(currentFraction, ch.to, 0f, classification.remaining))
+                }
             }
         }
+        for ((key, ch) in inProgressUnits) {
+            result[key] = ch
+        }
         if (pending.isNotEmpty()) {
-            val step = 1f / pending.size
-            var cursor = 0f
+            val available = (1f - inProgressRemaining).coerceAtLeast(0.001f)
+            val step = available / pending.size
+            var cursor = inProgressRemaining
             for ((key, ch) in pending) {
                 result[key] = UnitChannel(ch.from, ch.to, cursor, cursor + step)
                 cursor += step
@@ -292,6 +305,36 @@ class ComposeEditMotion(
         }
         return result
     }
+
+    /**
+     * redirect 时单个旧 unit 的分类 — 已完成 / 未开始 / 进行中。
+     */
+    private sealed class RedirectUnitClass {
+        data object Completed : RedirectUnitClass()
+
+        data object NotStarted : RedirectUnitClass()
+
+        data class InProgress(val remaining: Float) : RedirectUnitClass()
+    }
+
+    private fun classifyRedirectUnit(
+        oldGlyphProgress: Float,
+        ch: UnitChannel,
+    ): RedirectUnitClass =
+        when {
+            oldGlyphProgress >= ch.endProgress -> RedirectUnitClass.Completed
+            oldGlyphProgress <= ch.startProgress -> RedirectUnitClass.NotStarted
+            else -> {
+                val channelSpan = ch.endProgress - ch.startProgress
+                val localProgress =
+                    if (channelSpan > 0f) {
+                        (oldGlyphProgress - ch.startProgress) / channelSpan
+                    } else {
+                        1f
+                    }
+                RedirectUnitClass.InProgress(remaining = (1f - localProgress).coerceIn(0.001f, 1f))
+            }
+        }
 
     /**
      * redirect 时单个 unit 的描述 — 带顺序，区分旧/新。

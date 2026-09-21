@@ -479,6 +479,58 @@ class Issue728Comment5755928697ReproTest {
     }
 
     /**
+     * 问题1 加固：redirect 后进行中 unit 的 fraction 应立即开始增长，
+     * 不应该有"冻结一段再继续"的 gap。
+     *
+     * 场景：2 个 unit {1, 2}，区间 [0, 0.5], [0.5, 1]
+     * 当前正在第二个 unit（key=2），fraction=0.5
+     * redirectCaretTo 到新目标
+     *
+     * 修复前：key=2 的 startProgress=0.5，master=0 时 local=0，fraction 冻结在 0.5
+     * 修复后：key=2 的 startProgress=0，master=0 时 local=0 → fraction=0.5 立即继续
+     *
+     * 验证：redirect 后 1% 进度时 fraction 已经比 redirect 时大（不是冻结）
+     */
+    @Test
+    fun redirect_noFrozenGap_inProgressUnitImmediately() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(1L, 2L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // 2 个 unit：key=1 [0, 0.5], key=2 [0.5, 1]
+        // sample 到 glyphProgress=0.75（第二个 unit 中途，local=0.5，fraction=0.5）
+        val midTime = startTime + (glyphDuration * 0.75f).toLong()
+        val midSample = motion1.sample(midTime)
+        val key2Fraction = midSample.unitClipFractions[2L]!!
+        assertEquals(0.5f, key2Fraction, 0.001f)
+
+        // redirect 到新目标
+        val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
+        val motion2 =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // redirect 后 1% 进度时：fraction 应该已经开始增长（不是冻结在 0.5）
+        val tinyDelay = midTime + glyphDuration / 100 // 1% 的新 duration
+        val afterTiny = motion2.sample(tinyDelay)
+        val newFraction = afterTiny.unitClipFractions[2L]!!
+        assertTrue(
+            "redirect 后 1% 进度时 fraction 应已开始增长（不是冻结）: $newFraction > $key2Fraction",
+            newFraction > key2Fraction,
+        )
+    }
+
+    /**
      * 问题1：redirect 后进行中的 unit 立即继续，不应该冻结。
      *
      * 场景：3 个 unit {1, 2, 3}，区间 [0, 1/3], [1/3, 2/3], [2/3, 1]
@@ -487,6 +539,7 @@ class Issue728Comment5755928697ReproTest {
      *
      * 验证：
      * - key=1（进行中）：从 0.45 继续，不是从 0 开始
+     * - redirect 后 1% 进度时 fraction 已经在增长（不是冻结）
      */
     @Test
     fun redirectTo_activeUnitContinuesFromCurrentFraction() {
@@ -522,11 +575,11 @@ class Issue728Comment5755928697ReproTest {
         val redirectedSample = motion2.sample(midTime)
         assertEquals("key=1 应从 0.45 继续", 0.45f, redirectedSample.unitClipFractions[1L]!!, 0.001f)
 
-        // 关键验证：redirect 后过一小段时间，key=1 的 fraction 应该在增长（不是冻结）
-        val shortDelay = midTime + glyphDuration / 10 // 10% 的新 duration
-        val afterShortDelay = motion2.sample(shortDelay)
-        val newKey1Fraction = afterShortDelay.unitClipFractions[1L]!!
-        assertTrue("key=1 fraction 应继续增长（不是冻结）: $newKey1Fraction > 0.45", newKey1Fraction > 0.45f)
+        // 关键验证：redirect 后 1% 进度时，key=1 的 fraction 应该已经在增长（不是冻结）
+        val tinyDelay = midTime + glyphDuration / 100
+        val afterTiny = motion2.sample(tinyDelay)
+        val newKey1Fraction = afterTiny.unitClipFractions[1L]!!
+        assertTrue("key=1 fraction 应立即增长（不是冻结）: $newKey1Fraction > 0.45", newKey1Fraction > 0.45f)
     }
 
     // ==================== 问题2：unit 顺序来自正文/几何 ====================
@@ -598,7 +651,8 @@ class Issue728Comment5755928697ReproTest {
      *
      * 场景：3 个 unit [0, 1/3], [1/3, 2/3], [2/3, 1]，旧 glyphDuration=100ms，
      * 在 40ms 处（glyphProgress=0.4，key=2 进行中 fraction≈0.2）redirect 到新 duration=200ms。
-     * 修复后 oldGlyphProgress 仍用旧 100ms 算 = 0.4，key=2 从当前 fraction 继续。
+     * 修复后 oldGlyphProgress 仍用旧 100ms 算 = 0.4，key=2 从当前 fraction 继续，
+     * 且 1% 进度时 fraction 已经开始增长（不冻结）。
      */
     @Test
     fun redirect_preservesPhase_whenGlyphDurationChanges() {
@@ -638,10 +692,11 @@ class Issue728Comment5755928697ReproTest {
             0.001f,
         )
 
-        // 继续跑一小段时间：key=2 的 fraction 应该增长（不是冻结）
-        val afterShortDelay = motion2.sample(midTime + 20_000_000L)
-        val newKey2Fraction = afterShortDelay.unitClipFractions[2L]!!
-        assertTrue("key=2 fraction 应继续增长（不是冻结）: $newKey2Fraction > $key2Fraction", newKey2Fraction > key2Fraction)
+        // 继续跑 1%：key=2 的 fraction 应该立即增长（不是冻结）
+        val tinyDelay = midTime + 2_000_000L // 2ms = 1% of 200ms
+        val afterTiny = motion2.sample(tinyDelay)
+        val newKey2Fraction = afterTiny.unitClipFractions[2L]!!
+        assertTrue("key=2 fraction 应立即增长（不是冻结）: $newKey2Fraction > $key2Fraction", newKey2Fraction > key2Fraction)
     }
 
     /**
@@ -656,7 +711,8 @@ class Issue728Comment5755928697ReproTest {
      * 修复后：按传入顺序交错，新 unit（光标处）先吐，旧 unit 从当前 fraction 继续。
      *
      * 验证：redirect 后一小段进度，key=11（光标处新字）在吐（fraction>0），
-     * 而 key=10（右边旧字）还停在当前 fraction（它的区间在后面，还没轮到）。
+     * 而 key=10（右边旧字）的区间在后面（in-progress unit 占据前面 slot），
+     * 但 key=10 的 fraction 应该已经开始增长（in-progress unit 立即继续，不是冻结）。
      */
     @Test
     fun redirectTo_interleavesOldAndNewByTextOrder_notByCreationTime() {
@@ -692,13 +748,19 @@ class Issue728Comment5755928697ReproTest {
         assertEquals("key=10 应从 0.5 继续", 0.5f, redirectedSample.unitClipFractions[10L]!!, 0.001f)
         assertEquals("key=11 应从 0 开始", 0f, redirectedSample.unitClipFractions[11L]!!, 0.001f)
 
-        // 关键验证：redirect 后一小段进度，key=11（光标处新字）先吐，key=10 还停在当前 fraction
+        // 关键验证：redirect 后一小段进度，key=10（in-progress unit）应立即继续（不冻结）
+        // key=11（新 unit）在 key=10 完成前不会开始（in-progress 占据前面 slot）
         val shortDelay = midTime + glyphDuration / 8
         val afterShort = motion2.sample(shortDelay)
         val new11 = afterShort.unitClipFractions[11L]!!
         val new10 = afterShort.unitClipFractions[10L]!!
-        assertTrue("key=11（光标处新字）应先吐：fraction>0", new11 > 0f)
-        // key=10 的区间是 [0.5, 1]，新 motion 进度还小，local 还没到，应仍≈0.5
-        assertEquals("key=10（右边旧字）还应停在当前 fraction，没抢先吐", 0.5f, new10, 0.001f)
+        // key=10 是 in-progress unit，立即继续（不冻结），fraction 应该增长
+        assertTrue("key=10（右边旧字）应立即继续（不冻结）: $new10 > 0.5", new10 > 0.5f)
+        // key=11 是新 unit，排在 key=10 后面，此时 key=10 还没完成，key=11 还没开始
+        assertEquals("key=11（光标处新字）还没开始（key=10 还在吐）", 0f, new11, 0.001f)
+        // 等 key=10 完成后，key=11 应该开始吐
+        val longDelay = midTime + glyphDuration * 3 / 4
+        val afterLong = motion2.sample(longDelay)
+        assertTrue("key=11 在 key=10 完成后应开始吐", afterLong.unitClipFractions[11L]!! > 0f)
     }
 }
