@@ -1,5 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
@@ -277,6 +278,8 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = emptyList(),
+            originCaretRect = Rect.Zero,
+            targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
             motionPolicy = policy,
@@ -303,6 +306,8 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = emptyList(),
+            originCaretRect = Rect.Zero,
+            targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
             motionPolicy = policy,

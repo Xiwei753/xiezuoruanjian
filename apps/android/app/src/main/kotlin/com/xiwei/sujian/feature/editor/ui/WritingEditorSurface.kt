@@ -19,10 +19,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.unit.isSpecified
 import com.xiwei.sujian.feature.editor.input.EditorTextFieldStateBridge
-import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakLayoutBinding
-import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.EditorViewportState
 import com.xiwei.sujian.feature.editor.projection.TextRange
 import com.xiwei.sujian.feature.editor.session.WindowBindingState
@@ -171,39 +168,22 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
     val searchHighlightColor = params.searchHighlightColor
     val modifier = params.modifier
     val scope = rememberCoroutineScope()
-    // Issue #717 评论 5743443030 修复1：OutputTransformation 与 onTextLayout 的同版本绑定 holder。
-    // 普通 holder（非 Compose State），环形缓冲区记录最近若干次 transformation 的绑定。
-    // Issue #717 评论 5743988019：layoutBinding 绑定到 bridge 生命周期 — bridge 随 target 切换而变化
-    // （viewModel.bridgeForTarget 按 targetId 返回不同 bridge），切章节时重建，避免旧 bridge 被闭包保留导致跨 target 污染。
-    val layoutBinding = remember(bridge) { EditorSoftBreakLayoutBinding() }
 
     // #644 评论 #684：OutputTransformation 整个编辑器生命周期只创建一次，
     // 动态值通过 rememberUpdatedState 读取，不再因 ranges 切换而重启输入会话。
-    // #698 评论 5697612595：OutputTransformation 只保留 searchHighlights 部分，
-    // 不再把动画 range 设 Color.Transparent — 动画字的遮罩改由 EditorTextFieldDrawLayer
-    // 在 draw 层用 ClipOp.Difference 裁切完成，断开 hiddenRanges 回流回路。
-    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身 — OutputTransformation
-    // 在启用首行缩进时对空段落插入零宽占位符，让 TextIndent 自己决定行首几何。
+    // Issue #728 评论 5754045689：删除西文软断行 U+200B 插入 —
+    // 不再用 EditorSoftBreakProjection / EditorSoftBreakLayoutBinding 做 raw↔display 映射，
+    // BasicTextField 直接消费 TextLayoutResult，正文始终是纯文本。
+    // OutputTransformation 只保留 searchHighlights 部分。
     val latestSearchHighlights = rememberUpdatedState(searchHighlights)
     val latestSearchHighlightColor = rememberUpdatedState(searchHighlightColor)
-    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身 — OutputTransformation
-    // 在启用首行缩进时对空段落插入零宽占位符，让 TextIndent 自己决定行首几何。
-    val latestAutoIndentEnabled =
-        rememberUpdatedState(
-            textStyle.textIndent?.firstLine?.let { it.isSpecified && it.value != 0f } == true,
-        )
 
-    // Issue #717 评论 5743988019：bridge 随 target 切换而变化（viewModel.bridgeForTarget 按 targetId 返回不同 bridge），
-    // layoutBinding 已绑定到 bridge 生命周期，切章节时重建；OutputTransformation 跟随 layoutBinding 重建即可。
     val outputTransformation =
-        remember(layoutBinding) {
+        remember(bridge) {
             OutputTransformation {
                 applyOutputTransformation(
                     searchHighlights = latestSearchHighlights.value,
                     searchHighlightColor = latestSearchHighlightColor.value,
-                    layoutBinding = layoutBinding,
-                    bridge = bridge,
-                    autoIndentEnabled = latestAutoIndentEnabled.value,
                 )
             }
         }
@@ -227,30 +207,21 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         oldSelection = originalSelection,
                         newSelection = selection,
                         changes = changesSnapshot,
-                        // #706 评论 5718984286 修复：不在 InputTransformation 里读 bridge.state.composition —
-                        // 这里拿到的是本次 InputTransformation 开始前的旧 TextFieldState，
-                        // 判断不了本次新 composition。每次本地文字变更都先武装 barrier，
-                        // 真正 composition 收口由 onAuthoritativeLayout 用本次真实 compositionActive 决定。
                     )
                 }
             }
         }
 
-    // #708 评论 5723410606 第三节：空段落缩进判定不再订阅 latestLayout —
-    // Issue #723 评论 5748592923：空段落缩进进入显示布局本身（OutputTransformation +
-    // projection 零宽占位符），不再需要 caret-only 特判。系统 caret 与自绘 caret
-    // 消费同一份 transformed TextLayoutResult，不再把系统 caret 透明掉。
-
     // #698 评论 5698296237 / 5697612595 / 5699401353：统一 draw 层 —
     // EditorTextFieldDrawLayer 真正包住 BasicTextField（content lambda），
-    // 用 drawWithContent + rememberGraphicsLayer 记录 BasicTextField 的完整绘制，
-    // 再对 hiddenRanges 做 ClipOp.Difference 裁切后重画原正文，然后画动画字和视觉光标。
-    // 不再通过 OutputTransformation 改变 BasicTextField 输出表示，断开 hiddenRanges 回流回路。
-    // 不再用背景色盖正文 — 那会盖掉 selection/search highlight 且背景非纯 surface 时画错底色。
+    // 用 drawWithContent 对 hiddenRanges 做 ClipOp.Difference 裁切后画动画字和 caret。
+    // Issue #728 评论 5754045689：系统 caret 透明（cursorBrush = Color.Transparent），
+    // caret 由 EditorTextFieldDrawLayer 用统一 motion 的 caretRect 画。
     EditorTextFieldDrawLayer(
         visualState = visualState,
         scrollY = viewportState.scrollState.value,
         textColor = textColor,
+        cursorColor = cursorColor,
         modifier = modifier.fillMaxSize(),
     ) {
         BasicTextField(
@@ -265,9 +236,10 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
             textStyle = textStyle.copy(color = textColor),
             outputTransformation = outputTransformation,
             inputTransformation = visualInputTransformation,
-            // Issue #725 评论 5750735497：始终由 BasicTextField 系统绘制 caret，
-            // 不再自绘屏幕光标、不再透明掉系统 caret。
-            cursorBrush = SolidColor(cursorColor),
+            // Issue #728 评论 5754045689：系统 caret 透明 —
+            // caret 由 EditorTextFieldDrawLayer 用统一 motion 的 caretRect 画，
+            // 不再由 BasicTextField 自己画。
+            cursorBrush = SolidColor(Color.Transparent),
             onTextLayout = { getResult ->
                 getResult()?.let { result ->
                     onTextLayoutResult(
@@ -277,8 +249,6 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
                         bridge = bridge,
                         scope = scope,
                         onSurfaceReady = onSurfaceReady,
-                        layoutBinding = layoutBinding,
-                        autoIndentEnabled = latestAutoIndentEnabled.value,
                     )
                 }
             },
@@ -288,6 +258,11 @@ private fun WritingEditorContent(params: WritingEditorContentParams) {
 
 /**
  * 处理 TextLayoutResult — 提取以降低认知复杂度。
+ *
+ * Issue #728 评论 5754045689：删除 display/raw 匹配分支 —
+ * 不再用 EditorSoftBreakLayoutBinding 做 displayText↔rawText 版本匹配，
+ * 直接消费 TextLayoutResult：text 就是 raw 正文（不再插 U+200B），
+ * selection 直接来自 bridge.state.selection。
  */
 @Suppress("LongParameterList")
 private fun onTextLayoutResult(
@@ -297,63 +272,20 @@ private fun onTextLayoutResult(
     bridge: EditorTextFieldStateBridge,
     scope: CoroutineScope,
     onSurfaceReady: () -> Boolean,
-    layoutBinding: EditorSoftBreakLayoutBinding,
-    autoIndentEnabled: Boolean,
 ) {
-    // Issue #717 评论 5743443030 修复1 / 评论 5743745219：按 displayText 内容精确匹配同版本绑定，
-    // 不再靠"长度猜版本"或"把 display 文本反解成 raw"。
-    // 匹配成功时 rawText / projection / rawSelection / compositionActive 整体来自同一次 buffer 变化；
-    // miss 时不把未知版本的 TextLayoutResult 和 live state 强行拼接。
-    val displayText = result.layoutInput.text.text
-    val match = layoutBinding.findForDisplayText(displayText)
-    if (match != null) {
-        // 匹配到同版本 Binding：rawText / projection / rawSelection / compositionActive 整体进入 viewport + visual pipeline。
-        val restoreY = viewportState.onLayout(result, match.projection)
-        if (restoreY != null) {
-            scope.launch { viewportState.scrollState.scrollTo(restoreY) }
-        }
-        visualState.onAuthoritativeLayout(
-            result = result,
-            selection = match.rawSelection,
-            scrollY = viewportState.scrollState.value,
-            compositionActive = match.compositionActive,
-            projection = match.projection,
-            rawText = match.rawText,
-        )
-        onSurfaceReady()
-        return
+    val restoreY = viewportState.onLayout(result)
+    if (restoreY != null) {
+        scope.launch { viewportState.scrollState.scrollTo(restoreY) }
     }
-
-    // Issue #717 评论 5743988019：binding miss（环形缓冲区淘汰或启动时序例外）。
-    // 不把未知版本的 TextLayoutResult 和 live state 强行拼接。
-    // 只有 displayText == liveRawText 且 liveProjection.insertPoints 为空（真正 identity，
-    // 即按当前规则这份 raw 正文不应经过 OutputTransformation）才允许进入 viewport/visual；
-    // insertPoints 非空说明按当前规则这份 raw 正文正常应该经过 OutputTransformation，
-    // 既然 result 里没这些显示断点又没有 Binding 能证明来源，这份 layout 直接丢弃，等下一份匹配的 layout。
-    // BasicTextField 自己仍正常显示。
-    val liveRawText = bridge.state.text.toString()
-    if (displayText == liveRawText) {
-        val liveProjection = EditorSoftBreakProjection.fromRawText(liveRawText, autoIndentEnabled)
-        if (liveProjection.insertPoints.isEmpty()) {
-            val restoreY = viewportState.onLayout(result, liveProjection)
-            if (restoreY != null) {
-                scope.launch { viewportState.scrollState.scrollTo(restoreY) }
-            }
-            visualState.onAuthoritativeLayout(
-                result = result,
-                selection = bridge.state.selection,
-                scrollY = viewportState.scrollState.value,
-                // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
-                // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
-                compositionActive = bridge.state.composition != null,
-                projection = liveProjection,
-                rawText = liveRawText,
-            )
-            onSurfaceReady()
-        }
-    }
-    // displayText != liveRawText 或 liveProjection 非真正 identity：丢弃这份 layout，
-    // 不进入 viewport/visual snapshot，不调用 onSurfaceReady，等下一份匹配的 onTextLayout。
+    visualState.onAuthoritativeLayout(
+        result = result,
+        selection = bridge.state.selection,
+        scrollY = viewportState.scrollState.value,
+        // #694 评论第 2 步：composition 活跃时只推进布局基线，不播放 preedit 的吞吐；
+        // composition 结束后的最终输入再配对 LocalInputVisualEdit 生成视觉 patch。
+        compositionActive = bridge.state.composition != null,
+    )
+    onSurfaceReady()
 }
 
 /**
@@ -375,59 +307,29 @@ fun shouldConfirmEditorAttached(
         bindingState.targetId == targetId
 
 /**
- * Issue #717 评论 5741910919 / 评论 5742273757 修复1+5：OutputTransformation 内容 —
- * 西文软断行显示投影 + 搜索高亮 + 空段落零宽占位符。
+ * Issue #728 评论 5754045689：OutputTransformation 内容 —
+ * 只保留搜索高亮，不再插入 U+200B 西文软断行占位符。
  *
- * 1. 基于原始正文计算软断行投影，从后往前插入 U+200B（修复1：从后往前保证 raw offset 不失效）。
- * 2. 搜索高亮 range 是 raw 坐标，通过 projection.toDisplayRange 转换成 display 坐标后再 addStyle（修复5）。
- * 3. Issue #723 评论 5748592923：启用首行缩进时，对真正的空段落也插入 U+200B 占位符，
- *    让该空段落成为真实可排版的一行，TextIndent 自己决定行首几何。
- *    这个占位也纳入同一份 projection/offset 映射，不在 draw 层额外 +X。
+ * 删除 EditorSoftBreakProjection / EditorSoftBreakLayoutBinding 后，
+ * 正文始终是纯文本，BasicTextField 直接消费 TextLayoutResult，
+ * 搜索高亮 range 直接是正文坐标，不需要 raw→display 映射。
  *
  * 不改变 TextFieldState 存储的正文（纯显示层）。
  */
-@Suppress("CognitiveComplexMethod")
 private fun androidx.compose.foundation.text.input.TextFieldBuffer.applyOutputTransformation(
     searchHighlights: List<TextRange>,
     searchHighlightColor: Color,
-    layoutBinding: EditorSoftBreakLayoutBinding,
-    bridge: EditorTextFieldStateBridge,
-    autoIndentEnabled: Boolean,
 ) {
-    val rawText = originalText.toString()
-    val projection = EditorSoftBreakProjection.fromRawText(rawText, autoIndentEnabled)
-    // 从后往前插入 U+200B，保证前面的 raw offset 不因 buffer 长度变化而失效。
-    // TextFieldBuffer 没有 insert 方法，用 replace(offset, offset, text) 实现插入。
-    for (insertPoint in projection.insertPoints.asReversed()) {
-        if (insertPoint <= length) {
-            replace(insertPoint, insertPoint, EditorSoftBreakProjection.ZERO_WIDTH_SPACE.toString())
-        }
-    }
-    // 搜索高亮 range 是 raw 坐标，通过 projection.toDisplayRange 转换成 display 坐标后再 addStyle。
+    // 搜索高亮 range 直接是正文坐标（不再经过 projection 转换）。
     searchHighlights.forEach { range ->
-        val displayRange =
-            projection.toDisplayRange(
-                androidx.compose.ui.text.TextRange(range.start, range.end),
-            )
-        if (displayRange.start < displayRange.end && displayRange.end <= length) {
+        val start = range.start
+        val end = range.end
+        if (start < end && end <= length) {
             addStyle(
                 SpanStyle(background = searchHighlightColor),
-                displayRange.start,
-                displayRange.end,
+                start,
+                end,
             )
         }
     }
-    // Issue #717 评论 5743443030 修复1 / 评论 5743745219：记录本次 transformation 的完整同版本输入快照。
-    // 此时 buffer 内容（toString()）就是 transform 后的 displayText（含 U+200B）。
-    // addStyle 不改变文本内容，所以 displayText 在 addStyle 前后一致。
-    // originalSelection 是 TextFieldBuffer 公开属性（androidx.compose.ui.text.TextRange），
-    // 即这次 buffer 变化前的原始 selection；bridge.state.composition 是当下 TextFieldState 的 composition。
-    // 二者与 rawText / projection / displayText 严格来自同一次 buffer 变化。
-    layoutBinding.record(
-        rawText = rawText,
-        projection = projection,
-        displayText = toString(),
-        rawSelection = originalSelection,
-        compositionActive = bridge.state.composition != null,
-    )
 }

@@ -4,7 +4,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import kotlin.math.max
 
 /**
@@ -79,6 +78,19 @@ class ComposeVisualTimeline {
     private var presentedKeys: MutableSet<Long> = mutableSetOf()
 
     /**
+     * Issue #728 评论 5761525795：最近一次 [applyPatch] 中 split/rekey 产生的 child key → 继承 fraction。
+     *
+     * split 时 parent 的当前 motion fraction 投影到 child 局部区间，得到 child 首帧应继承的 fraction。
+     * [activeEditUnits] 读取此 map 把继承信息填进 [EditUnitDescriptor.inheritedFraction]，
+     * 让 [ComposeEditorVisualState.drainPendingPatchesAtFrame] 能把继承 fraction 传给
+     * [ComposeEditMotion.redirectTo]，避免 child 被当成全新 unit 从 0/1 重启（闪烁/重影）。
+     *
+     * 生命周期：每次 [applyPatch] 开头清空，split 时填充，[activeEditUnits] 读取。
+     * 只在 applyPatch → activeEditUnits 同一帧调用链内有效，不跨帧保留。
+     */
+    private var lastSplitInheritedFractions: Map<Long, Float> = emptyMap()
+
+    /**
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
      * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
      *
@@ -92,11 +104,18 @@ class ComposeVisualTimeline {
      *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
+     * @param motionSample Issue #728 评论 5761525795：当前 [ComposeEditMotion] 的 sample 结果 —
+     *   split/rekey 时用它拿 parent 的当前 motion fraction，投影到 child 局部区间，
+     *   得到 child 首帧应继承的 fraction（[lastSplitInheritedFractions]）。
+     *   null 表示无 active motion（如首次编辑），split child 无继承信息，按全新 unit 处理。
      */
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample? = null,
     ) {
+        // Issue #728 评论 5761525795：清空上一次 split 继承记录，本次 applyPatch 重新填充。
+        lastSplitInheritedFractions = emptyMap()
         // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
         val policy = patch.motionPolicy.effective()
@@ -229,6 +248,7 @@ class ComposeVisualTimeline {
                 effectiveProgressByKey,
                 currentPatchGhostedCoverage,
                 currentPatchGhostKeys,
+                motionSample,
             )
 
             // 第三步：处理本 patch 新插入的 unit。
@@ -333,11 +353,12 @@ class ComposeVisualTimeline {
         progressByKey: MutableMap<Long, Boolean>,
         currentPatchGhostedCoverage: MutableList<TextRange>,
         currentPatchGhostKeys: MutableSet<Long>,
+        motionSample: ComposeEditMotion.Sample? = null,
     ) {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：target 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         for (unit in sampledUnits) {
             val target = unit.targetRange
             if (target == null) {
@@ -390,6 +411,22 @@ class ComposeVisualTimeline {
                     // #708 评论 5728507555：child 继承父 unit 的 presented 状态，
                     // 让本次 applyPatch 后面的 started/pending 分类读到正确状态。
                     progressByKey[childKey] = parentPresented
+                    // Issue #728 评论 5761525795：split/rekey 时保存 parent → child 的视觉继承关系 —
+                    // 从当前 motion sample 拿 parent 的当前 fraction，投影到 child 局部区间，
+                    // 得到 child 首帧应继承的 fraction。activeEditUnits 读取此值填进 descriptor，
+                    // 让 redirectTo 不把 child 当成全新 unit 从 0/1 重启（避免闪烁/重影）。
+                    // motionSample == null 时 fallback 到 timeline 自己的 reveal 通道（非 coordinated 场景）。
+                    val parentMotionFraction =
+                        motionSample?.unitClipFractions?.get(unit.key)
+                            ?: currentAlpha(unit.reveal, frameTimeNanos)
+                    val childInheritedFraction =
+                        computeRevealFractionForChild(
+                            parentRange = unit.range,
+                            parentRevealFraction = parentMotionFraction,
+                            childRange = slice.oldSubRange,
+                        )
+                    lastSplitInheritedFractions =
+                        lastSplitInheritedFractions + (childKey to childInheritedFraction)
                 }
                 if (slice.kind == ComposeVisualRebase.MappedRangeSliceKind.SURVIVING && slice.newSubRange != null) {
                     val mappedUnit =
@@ -561,7 +598,7 @@ class ComposeVisualTimeline {
     ): RepartitionResult {
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：insertedUnits 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         val validInsertedRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
 
         // 构建待显示序列：pendingSurviving + 新 insertedRanges，按正文顺序（range.start）排序。
@@ -679,7 +716,7 @@ class ComposeVisualTimeline {
         durationNanos: Long,
     ) {
         // Issue #717 评论 5742904417 修复1：deletedUnits 是 raw 坐标，边界检查用 rawText 长度。
-        val oldTextLength = oldLayout.effectiveRawText.length
+        val oldTextLength = oldLayout.result.layoutInput.text.text.length
         val orderedRanges = orderedDeletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
         // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
         // n = orderedRanges.size, unit i: [i/n, (i+1)/n]
@@ -803,7 +840,7 @@ class ComposeVisualTimeline {
     ) {
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：retainedMoves.newRange 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         for (move in patch.retainedMoves) {
             val newRange = move.newRange
             if (newRange.start >= newRange.end) continue
@@ -885,10 +922,22 @@ class ComposeVisualTimeline {
      * 收口要修改 timeline 内部的 units 列表（移除已稳定的 unit），不只是过滤返回值。
      * 否则 units 里残留的 unit 会在下次 applyPatch 时被处理，可能导致问题。
      *
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 unit 生命周期统一到 [ComposeEditMotion] —
+     * 存活/ghost unit 的可见 fraction 和"什么时候释放所有权"以当前 motion sample 为准，
+     * 不再让 alpha/reveal 的旧 duration 提前删除 motion 仍接管的 unit。
+     * rapid redirect 后，旧 unit 的 alpha/reveal 旧时钟可能已结束，但 motion 里这个字还没走到
+     * fraction=1（或 ghost 还没走到 0），此时不能移除 — 由 [motionFractionReachedTarget] 判断。
+     *
      * @param frameTimeNanos 当前帧时间戳。
+     * @param motionSample Issue #728：统一编辑 motion 的 sample 结果 —
+     *   unitClipFractions 直接用 motion sample 给的值，不再独立维护 clip fraction 时间。
+     *   null 表示无 active motion（如 textEnabled=false），clip fraction 用默认值。
      * @return 当前场景（units + hiddenRanges）。
      */
-    fun sample(frameTimeNanos: Long): ComposeVisualScene {
+    fun sample(
+        frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample? = null,
+    ): ComposeVisualScene {
         // 缺陷3：收口 — 移除已稳定的 unit，只保留仍需 overlay 接管的 unit
         val remainingUnits = mutableListOf<VisualTextUnit>()
         val sampledUnits = mutableListOf<VisualTextUnit>()
@@ -899,14 +948,26 @@ class ComposeVisualTimeline {
             val positionFinished = isPositionFinished(sampled.position, frameTimeNanos)
             if (target != null) {
                 // 存活 unit：alpha==1 且 position 已到目标 -> 从 timeline 移除，交还 BasicTextField
-                if (alphaFinished && positionFinished && sampled.alpha.to >= 1f) {
+                // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 1 才允许移除 —
+                // rapid redirect 后旧 unit 的 alpha 旧时钟可能已结束，但 motion 里这个字还没走到 fraction=1，
+                // 此时不能移除，否则旧字提前消失。
+                // 提取 reachedFullAlpha 局部变量降低条件复杂度（detekt ComplexCondition 阈值 4）。
+                val reachedFullAlpha = alphaFinished && positionFinished && sampled.alpha.to >= 1f
+                if (reachedFullAlpha &&
+                    motionFractionReachedTarget(motionSample, unit.key, inserted = true)
+                ) {
                     // #691 评论 5684993243 / 评论 5685940102：收口移除时同步清理 presentedKeys
                     presentedKeys.remove(unit.key)
                     continue
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
-                if (alphaFinished && sampled.alpha.to <= 0f) {
+                // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 0 才允许移除 —
+                // rapid redirect 后旧 ghost 的 alpha 旧时钟可能已淡到 0，但 motion 里这个字还没走到 fraction=0，
+                // 此时不能移除，否则旧 ghost 提前消失（应继续吞字动画）。
+                if (alphaFinished && sampled.alpha.to <= 0f &&
+                    motionFractionReachedTarget(motionSample, unit.key, inserted = false)
+                ) {
                     // #691 评论 5684993243 / 评论 5685940102：ghost 收口移除时同步清理 presentedKeys
                     presentedKeys.remove(unit.key)
                     continue
@@ -936,15 +997,11 @@ class ComposeVisualTimeline {
                 .filter { it.targetRange != null }
                 .mapNotNull { it.targetRange }
                 .filter { it.start < it.end }
-        // #703 评论 B：空间进度驱动吞吐字 — Issue #725 评论 5750735497：
-        // clipFraction 不再由屏幕光标位置算，改由 unit 的 alpha 通道直接驱动。
-        // - Inserted unit（alpha 0→1）：clipFraction = currentAlpha，字从左向右吐出。
-        // - DeletedGhost（alpha 1→0）：clipFraction = currentAlpha，字从右向左被吞掉。
-        // - RetainedMove：clipFraction = 1f（始终完整可见，不参与裁切）。
-        // alpha 通道本身已由 repartitionPendingAndInsertedUnits 按正文顺序均匀分段，
-        // 保留了"沿输入顺序吐字/吞字"的效果，不需要屏幕光标当进度尺。
-        val computedClip = computeUnitClipFractions(sampledUnits, frameTimeNanos)
-        val unitClipFractions = computedClip
+        // Issue #728 评论 5754045689：clip fraction 统一由 ComposeEditMotion 驱动 —
+        // 不再独立维护 clip fraction 时间（删除 ComposeTextRevealTrack）。
+        // motion sample 提供 unitClipFractions（按 unit key），直接使用。
+        // motionSample == null 时用默认值（RetainedMove→1, Inserted→0, DeletedGhost→1）。
+        val unitClipFractions = computeUnitClipFractions(sampledUnits, motionSample)
         return ComposeVisualScene(
             units = sampledUnits,
             hiddenRanges = hiddenRanges,
@@ -955,36 +1012,33 @@ class ComposeVisualTimeline {
 
     /**
      * #703 评论 B / Issue #725 评论 5750735497：空间进度驱动吞吐字 —
-     * clipFraction 直接由 unit 的 reveal 通道驱动，不再由屏幕光标位置算。
+     * Issue #728 评论 5754045689：clip fraction 统一由 [ComposeEditMotion] 驱动 —
+     * 直接读 motionSample.unitClipFractions，不再独立维护 clip fraction 时间
+     * （删除 ComposeTextRevealTrack）。
      *
-     * - Inserted unit（reveal 0→1）：clipFraction = currentReveal，字从左向右吐出。
-     * - DeletedGhost（reveal 1→0）：clipFraction = currentReveal，字从右向左被吞掉。
-     * - RetainedMove：clipFraction = 1f（始终完整可见，不参与裁切）。
+     * - motionSample 非 null 且包含 unit key：用 motion 给的 fraction。
+     * - motionSample == null 或不包含 unit key：用默认值
+     *   （Inserted→0, DeletedGhost→1, RetainedMove→1）。
      *
-     * reveal 通道独立后，split 时每个 child 有自己的 reveal 通道，
-     * 不再共享 parent 的 alpha 通道，避免 parent fraction 和 child 局部 fraction 互相打架。
-     *
-     * @param units 当前帧的 sampled units（alpha/position/reveal 已插值到当前帧）。
-     * @param frameTimeNanos 当前帧时间戳。
+     * @param units 当前帧的 sampled units。
+     * @param motionSample 统一编辑 motion 的 sample 结果。
      * @return unit key → 可见 fraction（0..1）。
      */
     private fun computeUnitClipFractions(
         units: List<VisualTextUnit>,
-        frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample?,
     ): Map<Long, Float> {
         if (units.isEmpty()) return emptyMap()
         val fractions = mutableMapOf<Long, Float>()
         for (unit in units) {
+            val motionFraction = motionSample?.unitClipFractions?.get(unit.key)
             val fraction =
-                when (unit.role) {
-                    VisualUnitRole.Inserted, VisualUnitRole.DeletedGhost ->
-                        // Issue #725 评论 5750735497：clipFraction 由纯文字时间线
-                        // [ComposeTextRevealTrack] 驱动（从 unit 的 reveal 通道采样），
-                        // 不再由屏幕光标位置算，也不会复制 AndroidX 的 caret 状态机。
-                        ComposeTextRevealTrack(clipFraction = unit.reveal)
-                            .sampleFraction(frameTimeNanos)
-                            .coerceIn(0f, 1f)
-                    VisualUnitRole.RetainedMove -> 1f
+                when {
+                    motionFraction != null -> motionFraction.coerceIn(0f, 1f)
+                    unit.role == VisualUnitRole.RetainedMove -> 1f
+                    unit.role == VisualUnitRole.Inserted -> 0f
+                    unit.role == VisualUnitRole.DeletedGhost -> 1f
+                    else -> 1f
                 }
             fractions[unit.key] = fraction
         }
@@ -992,19 +1046,117 @@ class ComposeVisualTimeline {
     }
 
     /**
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 unit 移除门控 —
+     * 从 [motionSample] 的 unitClipFractions 取 [key] 对应 fraction，判断是否到达目标：
+     * - [inserted] == true（存活 unit）：fraction >= 1f 表示吐字完成，允许移除；
+     * - [inserted] == false（ghost unit）：fraction <= 0f 表示吞字完成，允许移除。
+     *
+     * [motionSample] == null 或不包含 [key] 时返回 true —
+     * motion 不接管此 unit（如非 coordinated 模式 / unit 已被 motion 丢弃），
+     * 沿用旧 alpha/reveal 逻辑决定移除。
+     *
+     * 关键：rapid redirect 后，旧 unit 的 alpha/reveal 旧时钟可能已结束，
+     * 但 motion 里这个字还没走到 fraction=1/0，此时返回 false 阻止移除，
+     * 保证旧 unit 一直保留到 motion fraction 到终点。
+     */
+    private fun motionFractionReachedTarget(
+        motionSample: ComposeEditMotion.Sample?,
+        key: Long,
+        inserted: Boolean,
+    ): Boolean {
+        if (motionSample == null) return true
+        val fraction = motionSample.unitClipFractions[key] ?: return true
+        return if (inserted) {
+            fraction >= 1f
+        } else {
+            fraction <= 0f
+        }
+    }
+
+    /**
      * 是否还有活动动画 — overlay 据此决定是否继续推进帧时钟。
      *
      * #691：同时检查文字 units 和光标 cursorChannel 的活动状态。
+     *
+     * Issue #728 评论 5754839786 缺口3：coordinated 模式下 alpha/reveal 通道不再独立决定 timeline active —
+     * coordinated 时 alpha/reveal 由 [ComposeEditMotion] 驱动（motion sample 决定 fraction），
+     * timeline 只看 position 通道（retained/reflow 可独立于 motion）。
+     * [ComposeEditorVisualState.hasActiveVisuals] 已单独检查 [activeEditMotion]，
+     * 所以 coordinated 时 timeline 不重复检查 alpha/reveal 不会漏。
+     * 非 coordinated 时沿用旧逻辑（检查 alpha/position/reveal）。
      *
      * @param frameTimeNanos 当前帧时间戳。
      * @return true 表示还有 unit 的 alpha、position 或 reveal 通道未完成，或光标动画未完成。
      */
     fun hasActiveAnimation(frameTimeNanos: Long): Boolean {
+        if (coordinatedSpatialClip) {
+            // coordinated: alpha/reveal 由 motion 驱动，timeline 只看 position（retained/reflow）
+            return units.any { unit -> !isPositionFinished(unit.position, frameTimeNanos) }
+        }
         return units.any { unit ->
             !isAlphaFinished(unit.alpha, frameTimeNanos) ||
                 !isPositionFinished(unit.position, frameTimeNanos) ||
                 !isAlphaFinished(unit.reveal, frameTimeNanos)
         }
+    }
+
+    /**
+     * Issue #728 评论 5756468643 问题2：暴露带几何事实的 active unit descriptor —
+     * 供 [ComposeEditorVisualState] 按正文 range/实际编辑方向排序，而不是按 unit.key 排序。
+     *
+     * unit.key 只是 timeline 分配的编号，不代表当前正文位置。
+     * 真实连续编辑场景下 key 顺序会失真（左边新字 key 大、右边旧字 key 小），
+     * 按 key sorted() 分配吐字/吞字区间会让 glyph schedule 顺序和光标位置相反。
+     *
+     * 排序规则：
+     * - inserted：按 [targetRange.start] 排序（光标经过顺序，从左到右）。
+     * - deleted：按 [range.start] 排序（光标回退顺序，从右到左时再反向）。
+     *
+     * @return Pair(insertedDescriptors, deletedDescriptors) —
+     *   每个 descriptor 包含 key、role、range、layout 等必要信息，
+     *   调用方按正文 range 排序后再把 keys 传给 [ComposeEditMotion.allocateEditRanges]。
+     */
+    internal fun activeEditUnits(): Pair<List<EditUnitDescriptor>, List<EditUnitDescriptor>> {
+        val inserted = mutableListOf<EditUnitDescriptor>()
+        val deleted = mutableListOf<EditUnitDescriptor>()
+        for (unit in units) {
+            // Issue #728 评论 5761525795：读取 split/rekey 时记录的继承 fraction。
+            val inheritedFraction = lastSplitInheritedFractions[unit.key]
+            when (unit.role) {
+                VisualUnitRole.Inserted -> {
+                    val targetRange = unit.targetRange
+                    if (targetRange != null) {
+                        inserted.add(
+                            EditUnitDescriptor(
+                                key = unit.key,
+                                role = unit.role,
+                                targetRange = targetRange,
+                                sourceRange = null,
+                                layout = unit.layout,
+                                inheritedFraction = inheritedFraction,
+                            ),
+                        )
+                    }
+                }
+                VisualUnitRole.DeletedGhost -> {
+                    deleted.add(
+                        EditUnitDescriptor(
+                            key = unit.key,
+                            role = unit.role,
+                            targetRange = null,
+                            sourceRange = unit.range,
+                            layout = unit.layout,
+                            inheritedFraction = inheritedFraction,
+                        ),
+                    )
+                }
+                VisualUnitRole.RetainedMove -> {}
+            }
+        }
+        // 按正文位置排序：inserted 按 targetRange.start（光标经过顺序），deleted 按 range.start
+        inserted.sortBy { it.targetRange!!.start }
+        deleted.sortBy { it.sourceRange!!.start }
+        return inserted to deleted
     }
 
     /**
@@ -1375,6 +1527,31 @@ class ComposeVisualTimeline {
         private const val NANOS_PER_MS = 1_000_000L
     }
 }
+
+/**
+ * Issue #728 评论 5756468643 问题2：带几何事实的 active unit descriptor。
+ *
+ * 替代原来只暴露 key Set 的 [ComposeVisualTimeline.activeEditUnits]，让调用方能按正文 range /
+ * 实际编辑方向排序，而不是按 unit.key（timeline 分配编号，不代表正文位置）。
+ *
+ * @param key unit 唯一标识。
+ * @param role 视觉角色：Inserted / DeletedGhost / RetainedMove。
+ * @param targetRange 对于 Inserted：该 unit 在新正文中的目标区间（光标经过顺序）。
+ * @param sourceRange 对于 DeletedGhost：该 ghost 在旧正文中的来源区间（光标回退顺序）。
+ * @param layout 该 unit 当前关联的 layout snapshot，可用于取 glyph bounds。
+ * @param inheritedFraction Issue #728 评论 5761525795：split/rekey child 的继承 fraction —
+ *   parent 当前 motion fraction 投影到 child 局部区间后的值。非 null 表示该 unit 是旧 parent
+ *   split/rekey 出来的 child，[ComposeEditMotion.redirectTo] 应从该 fraction 继续而非从 0/1 重启。
+ *   null 表示真正本笔新插入/新建 deleted ghost（无 parent lineage），从 0/1 开始。
+ */
+data class EditUnitDescriptor(
+    val key: Long,
+    val role: VisualUnitRole,
+    val targetRange: TextRange?,
+    val sourceRange: TextRange?,
+    val layout: ComposeLayoutSnapshot,
+    val inheritedFraction: Float? = null,
+)
 
 /**
  * 把 parent reveal 进度投影到 child 局部区间 —

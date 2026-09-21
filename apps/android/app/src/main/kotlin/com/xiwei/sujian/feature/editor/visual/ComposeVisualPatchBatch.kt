@@ -1,7 +1,6 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.text.TextRange
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 
 /**
  * #694 评论第 7 步：同一 VSync 的多笔 patch 合成器 —
@@ -38,9 +37,9 @@ internal object ComposeVisualPatchBatch {
         // 虚构中间 layout 会引入不存在的几何导致 reflow 跳变。
         val oldLayout = first.oldLayout
         val newLayout = last.newLayout
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val oldText = oldLayout.effectiveRawText
-        val newText = newLayout.effectiveRawText
+        // Issue #728 评论 5754045689：result 就是 raw 正文布局，直接读 text。
+        val oldText = oldLayout.result.layoutInput.text.text
+        val newText = newLayout.result.layoutInput.text.text
         val oldLength = oldText.length
         val newLength = newText.length
 
@@ -111,9 +110,9 @@ internal object ComposeVisualPatchBatch {
         // 路径）时按 stage offset map 映射 oldRange→T0 / newRange→Tn 后合成。
         val retainedMoves = composeRetainedMovesAcrossStages(batch)
 
-        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
-        // batch 不再合成 cursorMotionPath / originCursorRect。
-        // 文字吞吐动画由 ComposeTextRevealTrack 纯文字时间线驱动。
+        // Issue #728 评论 5754045689：batch 合成 caret rect —
+        // origin 取第一笔的 origin，target 取最后一笔的 target。
+        // 文字吞吐和 caret 移动统一由 ComposeEditMotion 驱动。
 
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
@@ -142,6 +141,8 @@ internal object ComposeVisualPatchBatch {
             insertedUnits = insertedUnits,
             deletedUnits = deletedUnits,
             retainedMoves = retainedMoves,
+            originCaretRect = first.originCaretRect,
+            targetCaretRect = last.targetCaretRect,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
             motionPolicy = motionPolicy,
@@ -277,8 +278,8 @@ internal object ComposeVisualPatchBatch {
     private fun patchOffsetMapOrFallback(patch: ComposeVisualPatch): List<VisualOffsetMapEntry> {
         patch.offsetMap?.let { if (it.isNotEmpty()) return it }
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val oldText = patch.oldLayout.effectiveRawText
-        val newText = patch.newLayout.effectiveRawText
+        val oldText = patch.oldLayout.result.layoutInput.text.text
+        val newText = patch.newLayout.result.layoutInput.text.text
         return buildFallbackOffsetMap(oldText, newText)
     }
 

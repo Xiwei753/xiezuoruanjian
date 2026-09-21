@@ -3,7 +3,7 @@ package com.xiwei.sujian.feature.editor.visual
 import android.util.Log
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
+import com.xiwei.sujian.feature.editor.layout.cursorRect
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import uniffi.writer_core.AnimationModeDto
 
@@ -108,13 +108,12 @@ class ComposeVisualFrameCoordinator(
      * 真实屏幕布局到达 — 更新最新 layout，然后尝试合流生成 patch。
      */
     fun onLayout(snapshot: ComposeLayoutSnapshot): FrameUpdate {
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B），
-        // 不用 result.layoutInput.text.text（display 文本，含 U+200B）。
-        latest = PresentedLayout(snapshot.effectiveRawText, snapshot)
+        // Issue #728 评论 5754045689：result 就是 raw 正文布局，直接读 text。
+        latest = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
 
         EditorDiagnosticsEvents.editorLayoutPresented(
             targetId = targetId,
-            layoutTextLength = snapshot.effectiveRawText.length,
+            layoutTextLength = snapshot.result.layoutInput.text.text.length,
         )
 
         if (lastConsumed == null) {
@@ -146,13 +145,13 @@ class ComposeVisualFrameCoordinator(
      * 诊断事件与 [onLayout] 一致 — overlay/诊断仍能观察到 layout 已呈现。
      */
     fun observePresentedLayout(snapshot: ComposeLayoutSnapshot) {
-        // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val presented = PresentedLayout(snapshot.effectiveRawText, snapshot)
+        // Issue #728 评论 5754045689：result 就是 raw 正文布局，直接读 text。
+        val presented = PresentedLayout(snapshot.result.layoutInput.text.text, snapshot)
         latest = presented
 
         EditorDiagnosticsEvents.editorLayoutPresented(
             targetId = targetId,
-            layoutTextLength = snapshot.effectiveRawText.length,
+            layoutTextLength = snapshot.result.layoutInput.text.text.length,
         )
 
         // #694 评论 5692161955 问题3：补并发顺序条件。
@@ -196,10 +195,9 @@ class ComposeVisualFrameCoordinator(
         val chain = pendingChain.intents
         val coreTransactionIds = chain.map { it.coreTransactionId }
         val composedOffsetMap = ComposeVisualRebase.composeOffsetMapChain(chain)
-        // Issue #717 评论 5742904417 修复1：oldLength/newLength 用 rawText 长度，
-        // 与 pendingChain.baseText/targetText（raw 正文）长度一致。
-        val oldLength = consumed.layout.effectiveRawText.length
-        val newLength = newest.layout.effectiveRawText.length
+        // Issue #728 评论 5754045689：result 就是 raw 正文布局，长度直接读 text。
+        val oldLength = consumed.layout.result.layoutInput.text.text.length
+        val newLength = newest.layout.result.layoutInput.text.text.length
         val mergedOldRanges: List<androidx.compose.ui.text.TextRange>
         val mergedNewRanges: List<androidx.compose.ui.text.TextRange>
         if (composedOffsetMap != null) {
@@ -278,10 +276,13 @@ class ComposeVisualFrameCoordinator(
                 emptyList()
             }
 
-        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
-        // 不再构建 cursorMotionPath，patch 不携带任何光标运动信息。
-        // 文字吞吐动画由 ComposeTextRevealTrack 纯文字时间线驱动，
-        // 屏幕光标始终由 BasicTextField 自己画。
+        // Issue #728 评论 5754045689：一次性交出 caret rect + 文字 units —
+        // 从 old/new raw layout + old/new selection 直接计算两端 caret rect。
+        // old/new selection 从 intent.cursor 或 snapshot.selection 取。
+        val oldSelectionEnd = chain.first().cursor?.oldEndUtf16 ?: consumed.layout.selection.end
+        val newSelectionEnd = chain.last().cursor?.newEndUtf16 ?: newest.layout.selection.end
+        val originCaretRect = consumed.layout.cursorRect(oldSelectionEnd)
+        val targetCaretRect = newest.layout.cursorRect(newSelectionEnd)
 
         // #684 评论 5666730754：无 overlay 工作的事务不按 durationMs 假装 active。
         val effectiveDurationMs =
@@ -302,6 +303,8 @@ class ComposeVisualFrameCoordinator(
                 insertedUnits = insertedUnits,
                 deletedUnits = deletedUnits,
                 retainedMoves = retainedMoves,
+                originCaretRect = originCaretRect,
+                targetCaretRect = targetCaretRect,
                 durationMs = effectiveDurationMs,
                 animationMode =
                     if (screenSuppressed) {
@@ -324,15 +327,15 @@ class ComposeVisualFrameCoordinator(
             baseRevision = chain.first().baseRevision,
             newRevision = chain.last().newRevision,
             pendingChainSize = chain.size,
-            layoutTextLength = newest.layout.effectiveRawText.length,
+            layoutTextLength = newest.layout.result.layoutInput.text.text.length,
         )
 
         Log.d(
             TAG,
             "patch_built: id=${patch.id} coreTxnIds=$coreTransactionIds " +
                 "retained=${retainedMoves.size} " +
-                "oldTextLen=${consumed.layout.effectiveRawText.length} " +
-                "newTextLen=${newest.layout.effectiveRawText.length}",
+                "oldTextLen=${consumed.layout.result.layoutInput.text.text.length} " +
+                "newTextLen=${newest.layout.result.layoutInput.text.text.length}",
         )
 
         return FrameUpdate.NewPatch(patch)
