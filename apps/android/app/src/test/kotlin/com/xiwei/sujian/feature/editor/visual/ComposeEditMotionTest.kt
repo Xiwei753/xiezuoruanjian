@@ -31,7 +31,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L, 2L),
+                insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -55,7 +55,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forDelete(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                deletedUnitKeys = setOf(1L),
+                deletedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -80,8 +80,8 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forEdit(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
-                deletedUnitKeys = setOf(2L),
+                insertedUnitKeys = listOf(1L),
+                deletedUnitKeys = listOf(2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -115,7 +115,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L, 2L),
+                insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -148,7 +148,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forDelete(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                deletedUnitKeys = setOf(1L, 2L),
+                deletedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -179,7 +179,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -217,7 +217,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = 0L,
                 glyphDurationNanos = 0L,
@@ -238,7 +238,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = 0L,
                 glyphDurationNanos = duration,
@@ -262,7 +262,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = 0L,
@@ -288,7 +288,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = caretDuration,
                 glyphDurationNanos = glyphDuration,
@@ -312,7 +312,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -328,7 +328,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = 0L,
                 glyphDurationNanos = 0L,
@@ -345,7 +345,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = 50_000_000L,
                 glyphDurationNanos = 100_000_000L,
@@ -363,7 +363,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -378,8 +378,8 @@ class ComposeEditMotionTest {
             motion1.redirectTo(
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = Rect(left = 50f, top = 0f, right = 52f, bottom = 20f),
-                newInsertedUnitKeys = setOf(1L, 2L),
-                newDeletedUnitKeys = emptySet(),
+                newInsertedUnitKeys = listOf(1L, 2L),
+                newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -397,7 +397,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -409,8 +409,8 @@ class ComposeEditMotionTest {
             motion1.redirectTo(
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = originRect,
-                newInsertedUnitKeys = setOf(1L),
-                newDeletedUnitKeys = setOf(3L),
+                newInsertedUnitKeys = listOf(1L),
+                newDeletedUnitKeys = listOf(3L),
                 frameTimeNanos = midTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -427,7 +427,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -442,8 +442,8 @@ class ComposeEditMotionTest {
             motion1.redirectTo(
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newTarget,
-                newInsertedUnitKeys = setOf(2L),
-                newDeletedUnitKeys = emptySet(),
+                newInsertedUnitKeys = listOf(2L),
+                newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = finishTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -464,7 +464,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L, 2L),
+                insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -507,7 +507,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -537,7 +537,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,
@@ -585,7 +585,7 @@ class ComposeEditMotionTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = duration,
                 glyphDurationNanos = duration,

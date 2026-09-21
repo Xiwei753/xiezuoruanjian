@@ -52,7 +52,7 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L, 2L),
+                insertedUnitKeys = listOf(1L, 2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -105,7 +105,7 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
+                insertedUnitKeys = listOf(1L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -121,8 +121,8 @@ class Issue728Comment5755928697ReproTest {
             motion1.redirectTo(
                 newOriginCaretRect = targetRect,
                 newTargetCaretRect = newCaretTarget,
-                newInsertedUnitKeys = emptySet(),
-                newDeletedUnitKeys = emptySet(),
+                newInsertedUnitKeys = emptyList(),
+                newDeletedUnitKeys = emptyList(),
                 frameTimeNanos = midTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -179,8 +179,8 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forEdit(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
-                deletedUnitKeys = emptySet(),
+                insertedUnitKeys = listOf(1L),
+                deletedUnitKeys = emptyList(),
                 frameTimeNanos = startTime,
                 caretDurationNanos = caretDurationLong,
                 glyphDurationNanos = glyphDurationShort,
@@ -205,8 +205,8 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forEdit(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
-                deletedUnitKeys = emptySet(),
+                insertedUnitKeys = listOf(1L),
+                deletedUnitKeys = emptyList(),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDurationShort,
                 glyphDurationNanos = caretDurationLong,
@@ -244,8 +244,8 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forEdit(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
-                deletedUnitKeys = emptySet(),
+                insertedUnitKeys = listOf(1L),
+                deletedUnitKeys = emptyList(),
                 frameTimeNanos = startTime,
                 caretDurationNanos = sharedDuration,
                 glyphDurationNanos = sharedDuration,
@@ -294,7 +294,7 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forInsert(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L, 2L, 3L),
+                insertedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -350,7 +350,7 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forDelete(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                deletedUnitKeys = setOf(1L, 2L, 3L),
+                deletedUnitKeys = listOf(1L, 2L, 3L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -403,8 +403,8 @@ class Issue728Comment5755928697ReproTest {
             ComposeEditMotion.forEdit(
                 originCaretRect = originRect,
                 targetCaretRect = targetRect,
-                insertedUnitKeys = setOf(1L),
-                deletedUnitKeys = setOf(2L),
+                insertedUnitKeys = listOf(1L),
+                deletedUnitKeys = listOf(2L),
                 frameTimeNanos = startTime,
                 caretDurationNanos = glyphDuration,
                 glyphDurationNanos = glyphDuration,
@@ -421,5 +421,171 @@ class Issue728Comment5755928697ReproTest {
         val s2 = motion.sample(t2)
         assertEquals("glyphProgress=0.75: inserted 已吐完 fraction=1", 1f, s2.unitClipFractions[1L]!!, 0.001f)
         assertEquals("glyphProgress=0.75: deleted 正在吞 fraction≈0.5", 0.5f, s2.unitClipFractions[2L]!!, 0.001f)
+    }
+
+    // ==================== 问题1：redirect 保留 master progress 相位 ====================
+
+    /**
+     * 问题1：redirect 后正在进行的 unit 应该立即继续，不应该冻结。
+     *
+     * 场景：3 个 unit {1, 2, 3}，区间 [0, 1/3], [1/3, 2/3], [2/3, 1]
+     * 当前正在第二个 unit，fraction=0.5（中途）
+     * 此时 redirectCaretTo 到新目标
+     *
+     * 修复前：新 motion 的 master progress 从 0 开始，第二个 unit 的 startProgress=1/3
+     * 所以前 1/3 的新 duration 里这个 unit 的 localProgress=0，fraction 卡在 0.5 不动
+     *
+     * 修复后：第二个 unit 的 startProgress 归一化到 0，from=0.5，fraction 立即继续
+     */
+    @Test
+    fun redirect_preservesPhase_activeUnitContinuesImmediately() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(1L, 2L, 3L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // 3 个 unit：key=1 [0, 1/3], key=2 [1/3, 2/3], key=3 [2/3, 1]
+        // sample 到 glyphProgress=0.4（第二个 unit 中途）
+        val midTime = startTime + (glyphDuration * 0.4f).toLong()
+        val midSample = motion1.sample(midTime)
+        // key=2 区间 [1/3, 2/3]，localProgress = (0.4 - 1/3) / (1/3) ≈ 0.2，fraction≈0.2
+        val key2Fraction = midSample.unitClipFractions[2L]!!
+        assertTrue("key=2 应在进行中 fraction>0 && <1", key2Fraction > 0f && key2Fraction < 1f)
+
+        // redirect 到新目标
+        val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
+        val motion2 =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // redirect 后立即 sample：key=2 的 fraction 应该从当前值继续
+        val redirectedSample = motion2.sample(midTime)
+        assertEquals("key=2 fraction 应从当前值继续", key2Fraction, redirectedSample.unitClipFractions[2L]!!, 0.001f)
+
+        // 关键验证：redirect 后过一小段时间，key=2 的 fraction 应该在增长（不是冻结）
+        val shortDelay = midTime + glyphDuration / 10 // 10% 的新 duration
+        val afterShortDelay = motion2.sample(shortDelay)
+        val newKey2Fraction = afterShortDelay.unitClipFractions[2L]!!
+        assertTrue("key=2 fraction 应继续增长（不是冻结）: $newKey2Fraction > $key2Fraction", newKey2Fraction > key2Fraction)
+    }
+
+    /**
+     * 问题1：redirect 后进行中的 unit 立即继续，不应该冻结。
+     *
+     * 场景：3 个 unit {1, 2, 3}，区间 [0, 1/3], [1/3, 2/3], [2/3, 1]
+     * 当前正在第一个 unit 中途 fraction=0.45
+     * 此时 redirectTo 到新目标（保留旧 unit 1,2,3）
+     *
+     * 验证：
+     * - key=1（进行中）：从 0.45 继续，不是从 0 开始
+     */
+    @Test
+    fun redirectTo_activeUnitContinuesFromCurrentFraction() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(1L, 2L, 3L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // sample 到 glyphProgress=0.15（第一个 unit 中途）
+        val midTime = startTime + (glyphDuration * 0.15f).toLong()
+        val midSample = motion1.sample(midTime)
+        // key=1 区间 [0, 1/3]，localProgress = 0.15 / (1/3) = 0.45，fraction=0.45
+        assertEquals(0.45f, midSample.unitClipFractions[1L]!!, 0.001f)
+
+        // redirectTo 到新目标，保留旧 unit 1,2,3
+        val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
+        val motion2 =
+            motion1.redirectTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                newInsertedUnitKeys = listOf(1L, 2L, 3L),
+                newDeletedUnitKeys = emptyList(),
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // redirect 后立即 sample：key=1 从 0.45 继续
+        val redirectedSample = motion2.sample(midTime)
+        assertEquals("key=1 应从 0.45 继续", 0.45f, redirectedSample.unitClipFractions[1L]!!, 0.001f)
+
+        // 关键验证：redirect 后过一小段时间，key=1 的 fraction 应该在增长（不是冻结）
+        val shortDelay = midTime + glyphDuration / 10 // 10% 的新 duration
+        val afterShortDelay = motion2.sample(shortDelay)
+        val newKey1Fraction = afterShortDelay.unitClipFractions[1L]!!
+        assertTrue("key=1 fraction 应继续增长（不是冻结）: $newKey1Fraction > 0.45", newKey1Fraction > 0.45f)
+    }
+
+    // ==================== 问题2：unit 顺序来自正文/几何 ====================
+
+    /**
+     * 问题2：unit 顺序应该来自正文位置，不是 key 编号。
+     *
+     * 场景：key=10 和 key=11 两个 unit
+     * 如果按 key sorted()，key=10 会排在 key=11 前面
+     * 但如果我们按正文位置逆序传入，应该得到不同的区间分配
+     *
+     * 修复：allocateEditRanges 接受有序列表，不再内部 sorted()
+     * 调用方（ComposeEditorVisualState）按正文 range 排序后再传入
+     *
+     * 验证：通过 forInsert 创建 motion，观察不同 key 顺序导致的区间分配差异
+     */
+    @Test
+    fun forInsert_respectsKeyOrder_notKeySorted() {
+        // 场景：两个 unit，key 11 和 10（故意逆序）
+        // 如果 allocateEditRanges 内部 sorted()，会按 key 10->11 分配区间
+        // 如果 allocateEditRanges 按传入顺序，会按 11->10 分配区间
+        // 两种顺序下 key=11 的 fraction 增长速度不同（区间位置不同）
+
+        // 顺序 1：key=10 在前，key=11 在后
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(10L, 11L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // 顺序 2：key=11 在前，key=10 在后（逆序）
+        val motion2 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(11L, 10L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // 在 25% 进度时：
+        // motion1: key=10 区间 [0, 0.5]，key=11 区间 [0.5, 1]
+        // motion2: key=11 区间 [0, 0.5]，key=10 区间 [0.5, 1]
+        val t = startTime + glyphDuration / 4
+        val s1 = motion1.sample(t)
+        val s2 = motion2.sample(t)
+
+        // motion1 中 key=10 正在吐（区间 [0, 0.5] 中点 fraction≈0.5）
+        assertTrue("motion1 key=10 应正在吐", s1.unitClipFractions[10L]!! > 0.4f)
+        // motion1 中 key=11 还没开始（区间 [0.5, 1]）
+        assertEquals("motion1 key=11 应还没开始", 0f, s1.unitClipFractions[11L]!!, 0.001f)
+
+        // motion2 中 key=11 正在吐（区间 [0, 0.5] 中点 fraction≈0.5）
+        assertTrue("motion2 key=11 应正在吐", s2.unitClipFractions[11L]!! > 0.4f)
+        // motion2 中 key=10 还没开始（区间 [0.5, 1]）
+        assertEquals("motion2 key=10 应还没开始", 0f, s2.unitClipFractions[10L]!!, 0.001f)
     }
 }

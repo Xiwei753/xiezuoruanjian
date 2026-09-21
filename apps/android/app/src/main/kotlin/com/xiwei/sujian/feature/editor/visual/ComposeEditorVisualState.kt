@@ -1252,8 +1252,14 @@ class ComposeEditorVisualState(
             frameTimeNanos = frameTimeNanos,
         )
         // Issue #728 评论 5754045689：构造/重定向 activeEditMotion —
-        // 从 timeline 拿当前 inserted/deleted unit keys，用 patch 的 caret rect 构造或重定向 motion。
-        val (insertedKeys, deletedKeys) = visualTimeline.activeEditUnitKeys()
+        // 从 timeline 拿当前 inserted/deleted unit descriptors，用 patch 的 caret rect 构造或重定向 motion。
+        // Issue #728 评论 5756468643 问题2：descriptor 已按正文 range 排序（inserted 按 targetRange.start，
+        // deleted 按 range.start），提取 key 时保持这个顺序传给 allocateEditRanges，
+        // 让 glyph schedule 顺序和光标经过顺序一致，而不是按 unit.key 编号排序。
+        val (insertedDescriptors, deletedDescriptors) = visualTimeline.activeEditUnits()
+        // 保持 descriptor 列表的顺序（按正文位置排序），不转 Set 避免丢失顺序
+        val insertedKeys = insertedDescriptors.map { it.key }
+        val deletedKeys = deletedDescriptors.map { it.key }
         val policy = framePatch.motionPolicy.effective()
         val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
         val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS

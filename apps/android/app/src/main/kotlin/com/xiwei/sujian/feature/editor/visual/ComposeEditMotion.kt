@@ -118,9 +118,15 @@ class ComposeEditMotion(
      * - 新 inserted unit：from=0, to=1。
      * - 新 deleted unit：from=1, to=0。
      * - 不在新 keys 里的旧 unit：丢弃（已被 timeline 收口或不再由 motion 接管）。
-     * - 所有 unit 的 startProgress/endProgress 按 newInsertedUnitKeys + newDeletedUnitKeys 重新分配。
      *
      * 不能把已有文字重新从 0 或 1 开始播 — 已有 unit 的 from 用当前 fraction。
+     *
+     * Issue #728 评论 5756468643 问题1：redirect 只保留 fraction 没有保留相位。
+     * 修复：重定向时把剩余 channel 重新归一化到新 [0, 1]：
+     * - 已完成旧 channel：直接固定终值（from=to=currentFraction）。
+     * - 进行中旧 channel：startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
+     * - 未开始旧 channel：接在当前 channel 后面，区间按剩余权重归一化。
+     * - 新 unit（不在旧 channels 里）：按新顺序分配区间，接在所有旧 channel 剩余部分之后。
      *
      * @param newOriginCaretRect 新笔的 old caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新笔的 new caret rect。
@@ -134,59 +140,52 @@ class ComposeEditMotion(
     fun redirectTo(
         newOriginCaretRect: Rect,
         newTargetCaretRect: Rect,
-        newInsertedUnitKeys: Set<Long>,
-        newDeletedUnitKeys: Set<Long>,
+        newInsertedUnitKeys: List<Long>,
+        newDeletedUnitKeys: List<Long>,
         frameTimeNanos: Long,
         caretDurationNanos: Long,
         glyphDurationNanos: Long,
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        val ranges = allocateEditRanges(newInsertedUnitKeys, newDeletedUnitKeys)
-        val newChannels = mutableMapOf<Long, UnitChannel>()
-        for (key in newInsertedUnitKeys) {
-            val currentFraction = currentSample.unitClipFractions[key]
-            val (startProgress, endProgress) = ranges.getValue(key)
-            newChannels[key] =
-                if (currentFraction != null) {
-                    // 已存在：从当前 fraction 继续到 1
-                    UnitChannel(
-                        from = currentFraction,
-                        to = 1f,
-                        startProgress = startProgress,
-                        endProgress = endProgress,
-                    )
-                } else {
-                    // 新 unit：从 0 吐到 1
-                    UnitChannel(
-                        from = 0f,
-                        to = 1f,
-                        startProgress = startProgress,
-                        endProgress = endProgress,
-                    )
-                }
+        val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
+        // 先处理旧 unit 的相位归一化
+        val oldUnitKeys = unitChannels.keys
+        val remainingOldKeys = oldUnitKeys.filter { key ->
+            key in newInsertedUnitKeys || key in newDeletedUnitKeys
         }
-        for (key in newDeletedUnitKeys) {
-            val currentFraction = currentSample.unitClipFractions[key]
+        val oldChannelsRenormalized = renormalizeChannelsForRedirect(
+            currentSample = currentSample,
+            oldGlyphProgress = glyphProgress,
+            newUnitChannels = unitChannels.filterKeys { it in remainingOldKeys },
+        )
+        // 新 unit（不在旧 channels 里的）：按新顺序分配区间，接在旧 channel 剩余部分之后
+        val newInsertedOnly = newInsertedUnitKeys - oldUnitKeys
+        val newDeletedOnly = newDeletedUnitKeys - oldUnitKeys
+        val ranges = allocateEditRanges(newInsertedOnly, newDeletedOnly)
+        // 把新 unit 的区间整体后移，从 oldChannelsRenormalized 的总剩余终点开始
+        val oldTotalEnd = oldChannelsRenormalized.values.maxOfOrNull { it.endProgress } ?: 0f
+        val newChannels = mutableMapOf<Long, UnitChannel>()
+        newChannels.putAll(oldChannelsRenormalized)
+        for (key in newInsertedOnly) {
             val (startProgress, endProgress) = ranges.getValue(key)
             newChannels[key] =
-                if (currentFraction != null) {
-                    // 已存在：从当前 fraction 继续到 0
-                    UnitChannel(
-                        from = currentFraction,
-                        to = 0f,
-                        startProgress = startProgress,
-                        endProgress = endProgress,
-                    )
-                } else {
-                    // 新 unit：从 1 吞到 0
-                    UnitChannel(
-                        from = 1f,
-                        to = 0f,
-                        startProgress = startProgress,
-                        endProgress = endProgress,
-                    )
-                }
+                UnitChannel(
+                    from = 0f,
+                    to = 1f,
+                    startProgress = oldTotalEnd + startProgress,
+                    endProgress = oldTotalEnd + endProgress,
+                )
+        }
+        for (key in newDeletedOnly) {
+            val (startProgress, endProgress) = ranges.getValue(key)
+            newChannels[key] =
+                UnitChannel(
+                    from = 1f,
+                    to = 0f,
+                    startProgress = oldTotalEnd + startProgress,
+                    endProgress = oldTotalEnd + endProgress,
+                )
         }
         return ComposeEditMotion(
             originCaretRect = origin,
@@ -207,8 +206,15 @@ class ComposeEditMotion(
      * 本方法只换 caret 目标，不动文字 unit：
      * - 新 motion 的 origin = 当前 sample 的 caretRect（从屏幕真实位置开始）。
      * - 新 motion 的 target = [newTargetCaretRect]。
-     * - 现有 unit channel 全部保留：from = 当前 sample 的 fraction，to 不变，区间不变。
-     * - 不接收 newInserted/newDeleted keys（纯 caret 移动）。
+     * - 现有 unit channel 全部保留：from = 当前 sample 的 fraction，to 不变。
+     * - **不接收 newInserted/newDeleted keys（纯 caret 移动）。**
+     *
+     * Issue #728 评论 5756468643 问题1：redirect 只保留 fraction 没有保留相位。
+     * 修复：重定向后所有未完成的 channel 从新 motion 的 progress=0 立即继续，
+     * 剩余 channel 按"当前相位之后的剩余部分"重新归一化到新 [0, 1]：
+     * - 已完成 channel：直接固定终值（from=to=currentFraction）。
+     * - 当前进行中 channel：startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
+     * - 后续未开始 channel：接在当前 channel 后面，区间按剩余权重归一化。
      *
      * @param newOriginCaretRect 新 caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新 caret rect。
@@ -226,12 +232,13 @@ class ComposeEditMotion(
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        // 保留现有 unit 的 from = 当前 fraction，to 不变，区间不变（只是 caret 换目标，文字不动）
-        val newChannels =
-            unitChannels.mapValues { (key, ch) ->
-                val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
-                ch.copy(from = currentFraction)
-            }
+        // 当前 master glyph progress（旧 motion 中的相位）
+        val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
+        val newChannels = renormalizeChannelsForRedirect(
+            currentSample = currentSample,
+            oldGlyphProgress = glyphProgress,
+            newUnitChannels = unitChannels,
+        )
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
@@ -240,6 +247,75 @@ class ComposeEditMotion(
             caretDurationNanos = caretDurationNanos,
             glyphDurationNanos = glyphDurationNanos,
         )
+    }
+
+    /**
+     * 重定向时把剩余 channel 重新归一化到新的 [0, 1]。
+     *
+     * 算法：
+     * 1. 按当前 glyphProgress 把每个 unit 分类为：已完成 / 进行中 / 未开始。
+     * 2. 已完成：from=to=currentFraction，固定终值。
+     * 3. 进行中：计算剩余权重 = (1 - localProgress) * (endProgress - startProgress)，
+     *    新 startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
+     * 4. 未开始：权重 = endProgress - startProgress，接在已归一化 channel 后面。
+     *
+     * 所有未完成 channel 按剩余权重分配新 [0, 1] 区间，保证重定向后立即继续，
+     * 不会出现"先冻结一段再继续"的问题。
+     *
+     * @param currentSample 当前 sample（包含每个 unit 的当前 fraction）
+     * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1）
+     * @param newUnitChannels 需要重新归一化的旧 unit channels（key 保留，value 为旧 channel）
+     * @return 归一化后的新 channels，已完成 unit 固定终值，未完成 unit 按相位重新分配区间
+     */
+    private fun renormalizeChannelsForRedirect(
+        currentSample: Sample,
+        oldGlyphProgress: Float,
+        newUnitChannels: Map<Long, UnitChannel>,
+    ): Map<Long, UnitChannel> {
+        val result = mutableMapOf<Long, UnitChannel>()
+        // 收集未完成的 unit，按旧 startProgress 排序（保证顺序）
+        val pendingUnits = mutableListOf<Pair<Long, UnitChannel>>()
+        for ((key, ch) in newUnitChannels) {
+            val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
+            if (oldGlyphProgress >= ch.endProgress) {
+                // 已完成：固定终值
+                result[key] = UnitChannel(
+                    from = currentFraction,
+                    to = currentFraction,
+                    startProgress = 0f,
+                    endProgress = 0f,
+                )
+            } else if (oldGlyphProgress <= ch.startProgress) {
+                // 未开始：收集到 pending，权重 = 原区间长度
+                pendingUnits.add(key to ch)
+            } else {
+                // 进行中：计算剩余权重
+                val localProgress =
+                    mapGlyphProgressToLocal(oldGlyphProgress, ch.startProgress, ch.endProgress)
+                val span = ch.endProgress - ch.startProgress
+                val remainingWeight = (1f - localProgress) * span
+                pendingUnits.add(key to ch.copy(startProgress = 0f, endProgress = remainingWeight))
+            }
+        }
+        // 归一化：把 pending units 按权重分配到新 [0, 1]
+        val totalWeight = pendingUnits.sumOf { (it.second.endProgress - it.second.startProgress).toDouble() }.toFloat()
+        if (totalWeight > 0f && pendingUnits.isNotEmpty()) {
+            var cursor = 0f
+            for ((key, ch) in pendingUnits) {
+                val span = ch.endProgress - ch.startProgress
+                val normalizedSpan = if (totalWeight > 0f) span / totalWeight else 0f
+                val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
+                result[key] =
+                    UnitChannel(
+                        from = currentFraction,
+                        to = ch.to,
+                        startProgress = cursor,
+                        endProgress = cursor + normalizedSpan,
+                    )
+                cursor += normalizedSpan
+            }
+        }
+        return result
     }
 
     /**
@@ -286,12 +362,12 @@ class ComposeEditMotion(
         fun forInsert(
             originCaretRect: Rect,
             targetCaretRect: Rect,
-            insertedUnitKeys: Set<Long>,
+            insertedUnitKeys: List<Long>,
             frameTimeNanos: Long,
             caretDurationNanos: Long,
             glyphDurationNanos: Long,
         ): ComposeEditMotion {
-            val ranges = allocateEditRanges(insertedUnitKeys, emptySet())
+            val ranges = allocateEditRanges(insertedUnitKeys, emptyList())
             val channels =
                 insertedUnitKeys.associateWith { key ->
                     val (startProgress, endProgress) = ranges.getValue(key)
@@ -330,12 +406,12 @@ class ComposeEditMotion(
         fun forDelete(
             originCaretRect: Rect,
             targetCaretRect: Rect,
-            deletedUnitKeys: Set<Long>,
+            deletedUnitKeys: List<Long>,
             frameTimeNanos: Long,
             caretDurationNanos: Long,
             glyphDurationNanos: Long,
         ): ComposeEditMotion {
-            val ranges = allocateEditRanges(emptySet(), deletedUnitKeys)
+            val ranges = allocateEditRanges(emptyList(), deletedUnitKeys)
             val channels =
                 deletedUnitKeys.associateWith { key ->
                     val (startProgress, endProgress) = ranges.getValue(key)
@@ -376,8 +452,8 @@ class ComposeEditMotion(
         fun forEdit(
             originCaretRect: Rect,
             targetCaretRect: Rect,
-            insertedUnitKeys: Set<Long>,
-            deletedUnitKeys: Set<Long>,
+            insertedUnitKeys: List<Long>,
+            deletedUnitKeys: List<Long>,
             frameTimeNanos: Long,
             caretDurationNanos: Long,
             glyphDurationNanos: Long,
@@ -490,17 +566,19 @@ private fun mapGlyphProgressToLocal(
  *   deletedCount 个 deleted，第 i 个 [0.5+0.5*(deletedCount-1-i)/deletedCount, 0.5+0.5*(deletedCount-i)/deletedCount]。
  *   光标先经过插入区吐字，再经过删除区吞字。
  *
- * keys 是 Set 无序，先 sorted 再按索引分配，保证确定性。
+ * Issue #728 评论 5756468643 问题2：keys 必须按正文位置排序后传入 —
+ * inserted 按 targetRange.start（光标经过顺序），deleted 按 range.start（光标回退顺序）。
+ * 不再内部 sorted()，避免按 key 编号排序导致 glyph schedule 顺序和光标位置相反。
  *
  * Issue #728 评论 5755928697 问题3。
  */
 private fun allocateEditRanges(
-    insertedKeys: Set<Long>,
-    deletedKeys: Set<Long>,
+    insertedKeys: List<Long>,
+    deletedKeys: List<Long>,
 ): Map<Long, Pair<Float, Float>> {
     val ranges = mutableMapOf<Long, Pair<Float, Float>>()
-    val sortedInserted = insertedKeys.sorted()
-    val sortedDeleted = deletedKeys.sorted()
+    val sortedInserted = insertedKeys
+    val sortedDeleted = deletedKeys
     val insertedCount = sortedInserted.size
     val deletedCount = sortedDeleted.size
     if (insertedCount > 0 && deletedCount > 0) {
