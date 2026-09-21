@@ -84,6 +84,19 @@ class ComposeEditorVisualState(
      */
     private var restingCaretRect: Rect? = null
 
+    /**
+     * Issue #728 评论 5755336403 缺口2：pending 纯 selection caret 移动 —
+     * onInputSnapshotResolved 没有 frameTimeNanos，不能直接创建 forSelectionMove motion
+     * （用 0L 会让 motion 立即到 target）。先记录 old/new caret target，
+     * 到 drainPendingPatchesAtFrame 的真实 frameTime 再创建/重定向 forSelectionMove。
+     */
+    private data class PendingSelectionCaretMove(
+        val originCaretRect: Rect,
+        val targetCaretRect: Rect,
+    )
+
+    private var pendingSelectionCaretTarget: PendingSelectionCaretMove? = null
+
     /** 最新 layout 快照 — 供 overlay 读取 bounding box。 */
     private val _latestLayout = MutableStateFlow<ComposeLayoutSnapshot?>(null)
     val latestLayout: StateFlow<ComposeLayoutSnapshot?> = _latestLayout.asStateFlow()
@@ -150,6 +163,14 @@ class ComposeEditorVisualState(
      * 用于检测纯 selection 变化（text 不变、composition 为空、selection 变了）。
      */
     private var lastResolvedSelection: TextRange? = null
+
+    /**
+     * Issue #728 评论 5755336403 缺口1：上一次 resolved 的 text —
+     * 用于严格判断纯 selection 移动（text 未变、只有 selection 变了）。
+     * 不能用 _latestLayout.text == snapshot.text 判断，因为 onTextLayout 和 snapshotFlow
+     * 是两条独立流，layout 可能先到，正常打字时也会误判为纯 selection。
+     */
+    private var lastResolvedText: String? = null
 
     /**
      * Issue #723 评论 5750100004：pending patch 队列项 —
@@ -426,23 +447,44 @@ class ComposeEditorVisualState(
                 layoutTextLength = _latestLayout.value?.result?.layoutInput?.text?.text?.length ?: -1,
             )
         }
-        // Issue #728 评论 5754839786 缺口2：纯 selection 移动闭环 —
-        // text 未变、selection 变了（如方向键移动光标、鼠标点击改选区）时没有 patch / motion，
-        // 旧实现只记诊断日志，屏幕 caret 停在旧位置不动。
-        // 这里直接把 restingCaretRect 更新到新 selection.end 对应的 caret rect，并清掉旧 activeEditMotion
-        // （若有未完成 motion 一并被清），让下一帧 sampleVisualScene 用 restingCaretRect 填 drawSnapshot。
-        // 不创建 forSelectionMove motion — onInputSnapshotResolved 没有 frameTimeNanos，
-        // 用 0L 作 startedAt 会让 motion 立即到 target，等效于直接跳，不如直接更新 restingCaretRect。
+        // Issue #728 评论 5755336403 缺口1+缺口2：纯 selection 移动闭环 —
+        // 严格判断：text 与上次 resolved 完全相同（不是与 layout text 比较）、selection 变了、
+        // composition 不活跃。正常 text edit 的 selection 变化不进入此分支，不清 activeEditMotion。
+        // composition 的 selection 变化也不混进来。
         val layoutForSelection = _latestLayout.value
-        if (
-            layoutForSelection != null &&
-            snapshot.selection != lastResolvedSelection &&
-            layoutForSelection.result.layoutInput.text.text == snapshot.text
-        ) {
-            restingCaretRect = layoutForSelection.cursorRect(snapshot.selection.end)
-            activeEditMotion = null
+        val isPureSelectionMove =
+            !compositionActive &&
+                snapshot.text == lastResolvedText &&
+                snapshot.selection != lastResolvedSelection &&
+                layoutForSelection != null &&
+                layoutForSelection.result.layoutInput.text.text == snapshot.text
+        if (isPureSelectionMove) {
+            // 缺口2：记录 pending selection caret target，触发帧循环在真实 frameTime 创建 forSelectionMove。
+            // cursor 动画关闭时直接跳到 target（写 restingCaretRect + drawSnapshotState.caretRect）。
+            // isPureSelectionMove 已保证 layoutForSelection != null，这里断言一次拿到非空引用。
+            val layout = layoutForSelection!!
+            val targetCaret = layout.cursorRect(snapshot.selection.end)
+            val originCaret =
+                restingCaretRect
+                    ?: layout.cursorRect(lastResolvedSelection?.end ?: snapshot.selection.start)
+            val policy = currentMotionPolicy?.effective() ?: EditorMotionPolicy().effective()
+            if (policy.cursorEnabled && policy.cursorDurationMillis > 0L) {
+                // 有平滑光标：记录 pending target，等真实 frameTime 创建 motion
+                pendingSelectionCaretTarget =
+                    PendingSelectionCaretMove(
+                        originCaretRect = originCaret,
+                        targetCaretRect = targetCaret,
+                    )
+                _patchVersion.update { it + 1L }
+            } else {
+                // cursor 动画关闭：直接跳到 target
+                restingCaretRect = targetCaret
+                drawSnapshotState = drawSnapshotState.copy(caretRect = targetCaret)
+                activeEditMotion = null
+            }
         }
         lastResolvedSelection = snapshot.selection
+        lastResolvedText = snapshot.text
         wasCompositionActiveForSnapshot = compositionActive
     }
 
@@ -601,17 +643,18 @@ class ComposeEditorVisualState(
             )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
-        // Issue #728 评论 5754839786 收口：首帧 scene + 首帧 caret 来自同一个当前状态 —
-        // handoff 时把 caretRect 直接设成 patch.targetCaretRect（编辑后位置），
-        // 并同步 restingCaretRect = patch.targetCaretRect（handoff 后 resting caret 就是 target）。
-        // 旧实现只 copy scene + layout，caretRect 沿用旧值（可能是上一笔 motion 的中间 sample 或 null），
-        // 导致 handoff 先换文字、下一 VSync 才开始 caret motion，首帧 caret 错位。
-        restingCaretRect = patch.targetCaretRect
+        // Issue #728 评论 5755336403 缺口3：handoff 不提前把 caret 推到 target —
+        // handoff 只换文字 scene，caret 保持当前屏幕真实位置：
+        // - 无旧 motion 时用 patch.originCaretRect（编辑前位置）
+        // - 有旧 motion 时保持上一帧 draw caret（motion 中间 sample）
+        // 到真实 frameTime 时 drainPendingPatchesAtFrame 创建/重定向 motion，一次把 caret 和文字推进到同一帧。
+        // restingCaretRect 不在 motion 开始前先写 target；只在 motion 完成/瞬时完成后落到 target。
+        val handoffCaretRect = activeEditMotion?.let { drawSnapshotState.caretRect } ?: patch.originCaretRect
         drawSnapshotState =
             drawSnapshotState.copy(
                 scene = _visualScene.value,
                 layout = newLayout,
-                caretRect = patch.targetCaretRect,
+                caretRect = handoffCaretRect,
             )
     }
 
@@ -1146,7 +1189,7 @@ class ComposeEditorVisualState(
      * 把已入队 patch 的 motionPolicy 替换成最新 policy，
      * 防止旧 patch 把文字动画重新启动。
      */
-    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty()
+    fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionCaretTarget != null
 
     /**
      * 在 Compose 帧时钟的回调里消费所有待处理的 patch 并应用到 timeline。
@@ -1161,6 +1204,35 @@ class ComposeEditorVisualState(
      * @return 本次帧实际应用的 patch 列表。
      */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
+        // Issue #728 评论 5755336403 缺口2：先处理 pending 纯 selection caret 移动 —
+        // 在真实 frameTime 创建/重定向 forSelectionMove motion。
+        val pendingSelection = pendingSelectionCaretTarget
+        if (pendingSelection != null) {
+            pendingSelectionCaretTarget = null
+            val policy = currentMotionPolicy?.effective() ?: EditorMotionPolicy().effective()
+            val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            val existing = activeEditMotion
+            activeEditMotion =
+                if (existing != null && !existing.isFinished(frameTimeNanos)) {
+                    existing.redirectTo(
+                        newOriginCaretRect = pendingSelection.originCaretRect,
+                        newTargetCaretRect = pendingSelection.targetCaretRect,
+                        newInsertedUnitKeys = emptySet(),
+                        newDeletedUnitKeys = emptySet(),
+                        frameTimeNanos = frameTimeNanos,
+                        durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                    )
+                } else {
+                    ComposeEditMotion.forSelectionMove(
+                        originCaretRect = pendingSelection.originCaretRect,
+                        targetCaretRect = pendingSelection.targetCaretRect,
+                        frameTimeNanos = frameTimeNanos,
+                        durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                    )
+                }
+            // restingCaretRect 落到 target（motion 完成后无缝接上）
+            restingCaretRect = pendingSelection.targetCaretRect
+        }
         if (pendingPatches.isEmpty()) {
             return emptyList()
         }
@@ -1181,7 +1253,13 @@ class ComposeEditorVisualState(
         val policy = framePatch.motionPolicy.effective()
         val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
         val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
-        if (insertedKeys.isEmpty() && deletedKeys.isEmpty()) {
+        // Issue #728 评论 5755336403 缺口4：selection-only 必须用 oldText == newText 判断 —
+        // Enter / 删除 Enter 是正文编辑，只是换行符没有 glyph，允许没有 inserted/deleted visual unit。
+        // 不能用 "unit key 为空" 推断 "没有文本编辑"。
+        val oldText = framePatch.oldLayout.result.layoutInput.text.text
+        val newText = framePatch.newLayout.result.layoutInput.text.text
+        val isSelectionOnly = oldText == newText && insertedKeys.isEmpty() && deletedKeys.isEmpty()
+        if (isSelectionOnly) {
             // selection-only 移动：caret 单独用 cursorDurationMillis，文字 units 为空
             activeEditMotion =
                 ComposeEditMotion.forSelectionMove(
@@ -1191,6 +1269,9 @@ class ComposeEditorVisualState(
                     durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
                 )
         } else {
+            // text edit（包括 Enter / 删除 Enter 无 glyph unit 的情况）—
+            // caret old→new 按 edit policy 运行，用 textDurationMillis。
+            // insertedKeys/deletedKeys 可能为空（Enter 无 glyph unit），创建无 unit channel 的 edit motion。
             val existing = activeEditMotion
             // 一笔编辑一只钟：text edit 时 caret 和文字共用 textDurationMillis
             val editDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
@@ -1282,6 +1363,8 @@ class ComposeEditorVisualState(
         activeEditMotion = null
         // Issue #728 评论 5754839786 缺口2：清空静止 caret rect
         restingCaretRect = null
+        // Issue #728 评论 5755336403 缺口2：清空 pending 纯 selection caret 移动
+        pendingSelectionCaretTarget = null
         // #694 评论第 3 步：清空本地输入配对状态
         localInputTracker.clear()
         lastPresentedLayout = null
@@ -1299,6 +1382,8 @@ class ComposeEditorVisualState(
         nextHandoffUnitKey = 2_000_000L
         // #713 评论 5739986801：重置 selection 追踪
         lastResolvedSelection = null
+        // Issue #728 评论 5755336403 缺口1：重置 resolved text 追踪
+        lastResolvedText = null
         // Issue #723 评论 5750100004：重置入队序号计数器
         nextPendingSequence = 0L
     }
@@ -1324,14 +1409,14 @@ class ComposeEditorVisualState(
         _visualScene.update { ComposeVisualScene.Empty }
         // Issue #728：清掉旧 activeEditMotion
         activeEditMotion = null
-        // Issue #728 评论 5754839786 缺口2：policy 切换时清掉旧 restingCaretRect —
-        // 旧 motion 的 target caret 不再适用，等下一份 layout / selection 更新。
-        restingCaretRect = null
-        // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene + caretRect
+        // Issue #728 评论 5755336403 缺口5：policy 切换 settle 动画，但保留当前屏幕 caret 位置 —
+        // 不清 restingCaretRect / drawSnapshotState.caretRect，否则系统 caret 已透明时自绘 caret 直接消失。
+        // 只改动画设置不必然产生新 text layout，静止 caret 应保留当前屏幕位置。
+        // #708 评论 5723410606 第一节：清 draw snapshot 的 scene，但保留 caretRect
         drawSnapshotState =
             drawSnapshotState.copy(
                 scene = ComposeVisualScene.Empty,
-                caretRect = null,
+                // caretRect 保持当前值（restingCaretRect），不清空
             )
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
         // Issue #723 评论 5750100004：p 现在是 PendingPatch，保持 sequence 不变，只替换 patch 的 motionPolicy。
