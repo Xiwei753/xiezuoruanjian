@@ -994,6 +994,20 @@ class ComposeVisualTimeline {
                 }
             } else {
                 // ghost unit：alpha==0 -> 删除
+                // Issue #732 评论 5765881243：coordinated 模式下当前 ComposeEditMotion.Sample 没有接管的
+                // deleted ghost（motionSample 存在但 unitClipFractions 不含该 ghost key）也立即释放，
+                // 与存活 unit（target != null）同一条规则。draw 层不画它，Timeline 也不得继续持有，
+                // 不放进 sampledUnits/remainingUnits，不等自己的 alpha/reveal timer 结束。
+                // 否则下一笔 patch 时 activeEditUnits() 会把它作为 DeletedGhost 放进 deletedDescriptors，
+                // ComposeEditMotion.redirectTo()/forEdit() 会再次为它创建 deleted channel，从 1→0 重新进入动画，
+                // 已失去 caret/motion 所有权的旧删除字仍会被重新拉起来吞一次。
+                if (coordinatedSpatialClip &&
+                    motionSample != null &&
+                    !motionSample.unitClipFractions.containsKey(unit.key)
+                ) {
+                    presentedKeys.remove(unit.key)
+                    continue
+                }
                 // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 0 才允许移除 —
                 // rapid redirect 后旧 ghost 的 alpha 旧时钟可能已淡到 0，但 motion 里这个字还没走到 fraction=0，
                 // 此时不能移除，否则旧 ghost 提前消失（应继续吞字动画）。

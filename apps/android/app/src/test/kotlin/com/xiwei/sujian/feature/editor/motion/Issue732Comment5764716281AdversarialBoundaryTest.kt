@@ -56,7 +56,8 @@ class Issue732Comment5764716281AdversarialBoundaryTest {
                 reduceMotion = false,
             )
         assertEquals(
-            "coordinated=true → selectionCursorDurationMillis == textDurationMillis (200L)，不是 cursorDurationMillis (50L)",
+            "coordinated=true → selectionCursorDurationMillis == textDurationMillis (200L)，" +
+                "不是 cursorDurationMillis (50L)",
             200L,
             policy.selectionCursorDurationMillis,
         )
