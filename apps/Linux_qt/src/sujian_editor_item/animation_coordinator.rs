@@ -1497,6 +1497,7 @@ impl LinuxEditorAnimationCoordinator {
                         old_snapshot: Some(old_snapshot.clone()),
                         new_snapshot: Some(new_snapshot.clone()),
                         cursor_owner_epoch,
+                        caret_motion_retired: false,
                         visual_affected_byte_range_old,
                         visual_affected_byte_range_new,
                     };
@@ -1636,6 +1637,7 @@ impl LinuxEditorAnimationCoordinator {
                     old_snapshot: Some(old_snapshot.clone()),
                     new_snapshot: Some(new_snapshot.clone()),
                     cursor_owner_epoch,
+                    caret_motion_retired: false,
                     visual_affected_byte_range_old,
                     visual_affected_byte_range_new,
                 };
@@ -1806,6 +1808,7 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
+            caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
         };
@@ -2192,6 +2195,7 @@ impl LinuxEditorAnimationCoordinator {
             old_snapshot: Some(old_snapshot.clone()),
             new_snapshot: Some(new_snapshot.clone()),
             cursor_owner_epoch,
+            caret_motion_retired: false,
             // Issue #710 评论 5734282079: composition commit/cancel 的 visual affected range。
             // 不再用保守大区间 min/max，而是分别从 old preedit range（old virtualText 坐标）
             // 和 new-side range（commit: candidate_byte_range / cancel: committed_replace_range）
@@ -2322,6 +2326,13 @@ impl LinuxEditorAnimationCoordinator {
             ) {
                 continue;
             }
+            // Issue #727 评论 5760650874 方案 A: 永久退休 caret motion 的事务
+            // 不再被选为 active caret owner。find_cursor_transaction_for_target /
+            // compute_coordinated_cursor_position 都通过本方法取事务后驱动 caret，
+            // retired 事务不应再驱动 caret（已 Snap 回 canonical）。
+            if tx.caret_motion_retired {
+                continue;
+            }
             return Some(tx.key);
         }
         None
@@ -2349,6 +2360,14 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             if tx.cursor_owner_epoch != current_cursor_epoch {
+                continue;
+            }
+            // Issue #727 评论 5760650874 方案 A: 永久退休 caret motion 的事务
+            // 永远跳过——之后本方法不会再返回此事务的 key，
+            // sample_coordinated_motion_frame 不会再给它 owner_key，
+            // 已 Snap 回 canonical 的旧 caret / 吞吐字轨迹不会重新接管。
+            // Timed Reflow 继续播完，事务只等剩余 Timed unit 完成。
+            if tx.caret_motion_retired {
                 continue;
             }
             return Some(tx.key);
@@ -3084,6 +3103,15 @@ impl LinuxEditorAnimationCoordinator {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
                 )
             });
+            // Issue #727 评论 5760650874 方案 A: 发现 has_caret_driven_units && !owns_caret 时，
+            // 永久退休此事务的 caret motion。之后 active_text_transaction_key_with_epoch
+            // 永远跳过此事务，不会再给它 owner_key，已 Snap 回 canonical 的旧 caret / 吞吐字
+            // 轨迹不会重新接管。Timed Reflow 继续播完。
+            // 只在确实有 CaretDriven units 时才置位——纯 Reflow 事务本来就不驱动 caret，
+            // 不需要退休标记。
+            if has_caret_driven_units && !owns_caret {
+                tx.caret_motion_retired = true;
+            }
             let caret_track_done = if has_caret_driven_units {
                 match tx.cursor_visual_track.as_ref() {
                     Some(track) => track.progress(sample.frame_now) >= 1.0,
@@ -3112,7 +3140,11 @@ impl LinuxEditorAnimationCoordinator {
             // Issue #727 评论 5760431554 问题1: 已失去 owner 的 CaretDriven 事务
             // （owns_caret == false）本帧已 Snap 到 canonical，caret 部分立刻视为完成，
             // 不再等自己那条旧 caret track 跑完。仍需等剩余 Timed unit（Reflow）播完。
-            let caret_track_complete = !has_caret_driven_units || !owns_caret || caret_track_done;
+            // Issue #727 评论 5760650874 方案 A: 用 tx.caret_motion_retired 代替 !owns_caret。
+            // 一旦退休，此事务永远视为 caret 部分完成——下一帧即使 new tx 完成移除，
+            // 本事务也不会重新成为 owner（active_text_transaction_key_with_epoch 跳过 retired），
+            // 不会重新接管旧 caret / 吞吐字轨迹造成回跳。
+            let caret_track_complete = !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
 
             if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
@@ -4957,6 +4989,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
         }
@@ -6199,6 +6232,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
         };
@@ -6498,6 +6532,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
         };
@@ -6770,6 +6805,7 @@ mod tests {
             old_snapshot: None,
             new_snapshot: None,
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
         }
@@ -7366,6 +7402,255 @@ mod tests {
         println!(
             "[BUGFIX_VERIFY] Issue #710 评论 5733833897: 多冲突事务 caret handoff \
              选最新拥有 coordinated caret 的一笔 FIXED"
+        );
+    }
+
+    /// Issue #727 评论 5760650874 方案 A 回归测试：旧 CaretDriven 事务失去 owner 后
+    /// **永远**不能再重新获得 owner（即使 new tx 完成移除、即使 old tx 仍在 active queue
+    /// 因 Timed Reflow 未播完）。
+    ///
+    /// 修复前（评论 5760431554 问题1）只在"本帧"把非 owner 的 CaretDriven 事务视为
+    /// caret 部分完成：`caret_track_complete = !has_caret_driven_units || !owns_caret || caret_track_done`。
+    /// 但旧事务若同时还有 ReflowMove/ReflowCrossFade 没播完，`all_units_done == false`，
+    /// 旧事务仍留在 active queue。新事务完成并从队列移除后，下一帧
+    /// `active_text_transaction_key_with_epoch()` 会再次倒序选中这个旧事务，
+    /// `sample_coordinated_motion_frame()` 又会给它 `owner_key = old_tx.key`，
+    /// 已经 Snap 回 canonical 的旧 caret / 吞吐字轨迹会重新接管，造成 caret 回跳。
+    ///
+    /// 方案 A 修复：给 `PreparedTextVisualTransaction` 增加 `caret_motion_retired: bool`，
+    /// 在 `build_text_animation_plan_with_sample` 发现 `has_caret_driven_units && !owns_caret`
+    /// 时置 true，`active_text_transaction_key_with_epoch` / `active_text_transaction_key`
+    /// 永远跳过 retired 事务。
+    ///
+    /// 本测试是跨两帧的完整回归测试：
+    /// - old tx：CaretDriven (InsertReveal) + 仍未完成的 Timed Reflow (ReflowMove duration=1000ms)；
+    /// - new tx：只有 CaretDriven，会成为 owner；
+    /// - 第 1 帧确认 old tx 失去 owner 但因 Reflow 仍留队列，且 caret_motion_retired 被置 true；
+    /// - 移除/完成 new tx；
+    /// - 第 2 帧确认 `active_text_transaction_key_with_epoch()` **不能**重新返回 old tx，
+    ///   `CoordinatedMotionFrame.owner_key` 也不能重新变成 old key。
+    #[test]
+    fn issue727_comment5760650874_old_tx_regains_owner_next_frame() {
+        let create_now = Instant::now();
+        let mut coord = LinuxEditorAnimationCoordinator::new();
+        let old_key = VisualTransactionKey::new(100, 100);
+        let new_key = VisualTransactionKey::new(200, 200);
+        let epoch = 1u64;
+
+        // ── 1. 构造 old tx：含 CaretDriven (InsertReveal) + 未完成的 Timed Reflow ──
+        // caret track: from=caret(0), to=caret(100), duration=100ms
+        // ReflowMove: duration=1000ms（很长，确保在测试时间窗口内未完成）
+        let old_insert_unit = PreparedVisualUnit::wrap(reveal_slice(0, 3, 0.0, 60.0), 100);
+        let old_reflow_unit = PreparedVisualUnit::wrap(reflow_slice(3, 6, 60.0, 120.0), 1000);
+        let old_cursor_track = PreparedCursorVisualTrack::new_first(
+            caret(0.0),
+            caret(100.0),
+            None,
+            None,
+            0.0,
+            20.0,
+            0.0,
+            20.0,
+            100,
+        );
+        let old_tx = PreparedTextVisualTransaction {
+            key: old_key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            timeline: TransactionTimeline::new(100),
+            units: vec![old_insert_unit, old_reflow_unit],
+            old_cursor_rect: Some(caret(0.0)),
+            new_cursor_rect: Some(caret(100.0)),
+            cursor_visual_track: Some(old_cursor_track),
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: None,
+            cursor_owner_epoch: epoch,
+            caret_motion_retired: false,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
+        };
+        coord.prepared_queue.enqueue(old_tx);
+
+        // ── 2. 构造 new tx：只有 CaretDriven (InsertReveal)，会成为 owner ──
+        // active_text_transaction_key_with_epoch 倒序选最后一个 → new tx
+        let new_insert_unit = PreparedVisualUnit::wrap(reveal_slice(0, 3, 100.0, 60.0), 100);
+        let new_cursor_track = PreparedCursorVisualTrack::new_first(
+            caret(100.0),
+            caret(200.0),
+            None,
+            None,
+            0.0,
+            20.0,
+            0.0,
+            20.0,
+            100,
+        );
+        let new_tx = PreparedTextVisualTransaction {
+            key: new_key,
+            state: TextVisualTransactionState::Pending,
+            operation_kind: TextVisualOperationKind::Insert,
+            timeline: TransactionTimeline::new(100),
+            units: vec![new_insert_unit],
+            old_cursor_rect: Some(caret(100.0)),
+            new_cursor_rect: Some(caret(200.0)),
+            cursor_visual_track: Some(new_cursor_track),
+            cancel_reason: None,
+            texture_prepared: false,
+            old_snapshot: None,
+            new_snapshot: None,
+            cursor_owner_epoch: epoch,
+            caret_motion_retired: false,
+            visual_affected_byte_range_old: None,
+            visual_affected_byte_range_new: None,
+        };
+        coord.prepared_queue.enqueue(new_tx);
+
+        // ── 3. mark_prepared 两个事务 ──
+        coord.prepared_queue.mark_prepared(old_key);
+        coord.prepared_queue.mark_prepared(new_key);
+
+        // ── 4. 第 1 帧：begin_rendering_transactions 让两个事务进入 Rendering ──
+        let frame_now_0 = create_now + Duration::from_millis(16);
+        coord.begin_rendering_transactions(frame_now_0);
+
+        // 构造 sample_0
+        let mut sample_0 = AnimationFrameSample::new(frame_now_0);
+        sample_0.set_progress(old_key, 0.0);
+        sample_0.set_progress(new_key, 0.0);
+
+        // 采样 coordinated motion frame → owner_key 应为 new_key（倒序选最后一个）
+        let coordinated_frame_0 = coord.sample_coordinated_motion_frame(&sample_0, epoch);
+        assert_eq!(
+            coordinated_frame_0.owner_key,
+            Some(new_key),
+            "第 1 帧 owner_key 应为 new tx（active_text_transaction_key_with_epoch 倒序选最后一个）"
+        );
+
+        // 调用 build_text_animation_plan_with_sample —— 此处应把 old tx 的 caret_motion_retired 置 true
+        let (_plan_0, keys_to_complete_0) =
+            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
+
+        // 验证 old tx 不在 keys_to_complete（因为 ReflowMove 未完成，all_units_done == false）
+        assert!(
+            !keys_to_complete_0.contains(&old_key),
+            "第 1 帧 old tx 不应完成：ReflowMove 未播完，all_units_done == false"
+        );
+
+        // 验证 old tx 仍在 active queue（因 ReflowMove 未完成）
+        let old_tx_still_active = coord
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .any(|t| t.key == old_key);
+        assert!(
+            old_tx_still_active,
+            "第 1 帧 old tx 应仍在 active queue（ReflowMove 未完成）"
+        );
+
+        // 方案 A 核心断言：old tx 的 caret_motion_retired 应已被置 true
+        {
+            let old_tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == old_key)
+                .expect("old tx 应仍在队列中");
+            assert!(
+                old_tx_ref.caret_motion_retired,
+                "第 1 帧 build_text_animation_plan_with_sample 应把 old tx 的 caret_motion_retired 置 true\
+                 （has_caret_driven_units && !owns_caret）"
+            );
+        }
+
+        // ── 5. 完成 new tx（从队列移除）──
+        let removed = coord.prepared_queue.complete(new_key);
+        assert!(removed.is_some(), "new tx 应能被 complete");
+
+        // ── 6. 第 2 帧：确认修复——old tx 不能重新成为 owner ──
+        // 推进一小段时间（远小于 ReflowMove 的 1000ms，确保 old tx 的 ReflowMove 仍未完成）
+        let frame_now_1 = frame_now_0 + Duration::from_millis(50);
+        // old tx 的 ReflowMove duration=1000ms，elapsed≈66ms，progress≈0.066 < 1.0 → 未完成
+
+        let mut sample_1 = AnimationFrameSample::new(frame_now_1);
+        sample_1.set_progress(old_key, 0.5);
+
+        // 修复后：active_text_transaction_key_with_epoch 跳过 retired 事务，返回 None
+        let active_key_1 = coord.active_text_transaction_key_with_epoch(epoch);
+        assert_eq!(
+            active_key_1,
+            None,
+            "修复后：new tx 完成后，active_text_transaction_key_with_epoch 不应重新返回 old tx\
+             （caret_motion_retired == true，被跳过）"
+        );
+
+        // 修复后：sample_coordinated_motion_frame 的 owner_key 为 None（不重新变成 old_key）
+        let coordinated_frame_1 = coord.sample_coordinated_motion_frame(&sample_1, epoch);
+        assert_eq!(
+            coordinated_frame_1.owner_key,
+            None,
+            "修复后：第 2 帧 owner_key 不应重新变成 old tx\
+             —— 旧 caret/吞吐字轨迹不会重新接管，不会造成 caret 回跳"
+        );
+
+        // 验证 old tx 仍在 active queue（ReflowMove 仍未完成，Timed Reflow 继续播完）
+        {
+            let old_tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == old_key)
+                .expect("old tx 应仍在队列中（ReflowMove 未完成）");
+            assert!(
+                old_tx_ref.caret_motion_retired,
+                "第 2 帧 old tx 的 caret_motion_retired 仍应为 true（永久退休，不会重置）"
+            );
+            // old tx 的 caret track 仍原封不动（from=caret(0), to=caret(100)），
+            // 但因为 retired，不会再被选为 owner，不会重新接管。
+            let track = old_tx_ref
+                .cursor_visual_track
+                .as_ref()
+                .expect("old tx 应有 caret track");
+            assert_eq!(
+                (track.from.x, track.to.x),
+                (0.0, 100.0),
+                "old tx 的 caret track 仍原封不动（from=0, to=100），\
+                 但因 caret_motion_retired == true 不会被重新选为 owner"
+            );
+        }
+
+        // 额外验证：active_text_transaction_key()（无 epoch 版本）也跳过 retired 事务
+        let active_key_no_epoch = coord.active_text_transaction_key();
+        assert_eq!(
+            active_key_no_epoch,
+            None,
+            "修复后：active_text_transaction_key()（无 epoch 版本）也应跳过 retired 事务，\
+             find_cursor_transaction_for_target / compute_coordinated_cursor_position\
+             不会再用 old tx 驱动 caret"
+        );
+
+        // 额外验证：再调一次 build_text_animation_plan_with_sample，
+        // old tx 的 caret_motion_retired 不会被重置（已经是 true 就保持 true）
+        let (_plan_1, _keys_to_complete_1) =
+            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
+        {
+            let old_tx_ref = coord
+                .prepared_queue
+                .active_transactions()
+                .iter()
+                .find(|t| t.key == old_key)
+                .expect("第 2 帧 build 后 old tx 应仍在队列中");
+            assert!(
+                old_tx_ref.caret_motion_retired,
+                "第 2 帧 build_text_animation_plan_with_sample 后 old tx 的 caret_motion_retired\
+                 仍应为 true（永久退休，不会因再次进入循环而重置）"
+            );
+        }
+
+        println!(
+            "[BUGFIX_VERIFY] Issue #727 评论 5760650874 方案 A: \
+             旧 CaretDriven 事务失去 owner 后永远不能再重新获得 owner FIXED"
         );
     }
 }

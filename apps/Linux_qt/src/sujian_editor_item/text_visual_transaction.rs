@@ -706,6 +706,15 @@ pub(crate) struct PreparedTextVisualTransaction {
     /// 前检查到不一致时跳过 caret 驱动（文字事务继续播自己的 glyph/reflow，
     /// 但不再驱动 caret）。
     pub cursor_owner_epoch: u64,
+    /// Issue #727 评论 5760650874: 该事务是否已永久失去 caret motion ownership。
+    ///
+    /// 一旦在 `build_text_animation_plan_with_sample` 中发现 `has_caret_driven_units
+    /// && !owns_caret`（本帧有 CaretDriven units 但不是 owner），此字段置 true，
+    /// 之后 `active_text_transaction_key_with_epoch` 永远跳过此事务，
+    /// `sample_coordinated_motion_frame` 不会再给它 `owner_key`，
+    /// 已 Snap 回 canonical 的旧 caret / 吞吐字轨迹不会重新接管。
+    /// Timed Reflow (ReflowMove/ReflowCrossFade) 继续播完，事务只等剩余 Timed unit 完成。
+    pub caret_motion_retired: bool,
     /// Issue #710 评论 5731145076 症状五/六 / 评论 5732160521 问题 3:
     /// 事务的视觉 affected byte range，分 old/new 两侧保存。
     ///
@@ -1144,6 +1153,7 @@ mod issue_710_comment_5732160521_repro {
             old_snapshot: None,
             new_snapshot: Some(make_test_snapshot(new_virtual_text)),
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
         }
@@ -1333,6 +1343,7 @@ mod issue_710_comment_5733109905_repro {
             old_snapshot: None,
             new_snapshot: Some(make_test_snapshot(new_virtual_text)),
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
         }
@@ -1377,6 +1388,7 @@ mod issue_710_comment_5733109905_repro {
             old_snapshot: None,
             new_snapshot: Some(make_test_snapshot(new_virtual_text)),
             cursor_owner_epoch: 0,
+            caret_motion_retired: false,
             visual_affected_byte_range_old,
             visual_affected_byte_range_new,
         }
