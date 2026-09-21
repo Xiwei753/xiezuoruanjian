@@ -1,6 +1,7 @@
 package com.xiwei.sujian.feature.editor.visual
 
 import androidx.compose.ui.geometry.Rect
+import kotlin.math.abs
 
 /**
  * Issue #728 评论 5754045689：统一编辑 motion —
@@ -114,7 +115,8 @@ class ComposeEditMotion(
      * 先 sample 当前帧，再从当前 caret 位置和当前文字可见比例重定向：
      * - 新 motion 的 origin = 当前 sample 的 caretRect（从屏幕真实位置开始）。
      * - 新 motion 的 target = [newTargetCaretRect]。
-     * - 已有 unit（key 存在于当前 channels 且在新 keys 里）：from = 当前 fraction，to 不变。
+     * - 已有 unit（key 存在于当前 channels 且在新 keys 里）：from = 当前 fraction，
+     *   to = 当前角色目标（inserted: 1, deleted: 0），不再沿用旧 ch.to。
      * - 新 inserted unit：from=0, to=1。
      * - 新 deleted unit：from=1, to=0。
      * - 不在新 keys 里的旧 unit：丢弃（已被 timeline 收口或不再由 motion 接管）。
@@ -123,16 +125,23 @@ class ComposeEditMotion(
      *
      * Issue #728 评论 5756468643 问题1：redirect 只保留 fraction 没有保留相位。
      * 修复：重定向时把剩余 channel 重新归一化到新 [0, 1]：
-     * - 已完成旧 unit：直接固定终值（from=to=currentFraction）。
-     * - 进行中旧 unit：从 startProgress=0 开始，from=currentFraction，to 不变，继续到原 to。
-     * - 未开始旧 unit：接在它后面，从原 from 到原 to。
+     * - 已完成旧 unit 且角色未变（currentFraction == desiredTo）：固定终值。
+     * - 已完成旧 unit 但角色变化（currentFraction != desiredTo）：作为 pending 走新剩余动画。
+     * - 进行中旧 unit：从 startProgress=0 开始，from=currentFraction，to=desiredTo，继续到新目标。
+     * - 未开始旧 unit：接在它后面，from=currentFraction，to=desiredTo。
      * - 新 unit（不在旧 channels 里）：按 caller 传入的正文/几何顺序，和旧 unit 交错排进剩余 schedule，
      *   不按创建时间排（Issue #728 评论 5756468643 问题2）。
      *
+     * Issue #728 评论 5760112985 问题1：oldChannel 只提供 currentFraction 和旧 phase，
+     * 不再决定新目标方向；desiredTo 由当前角色决定（inserted: 1, deleted: 0）。
+     * Issue #728 评论 5760112985 问题2：inserted（正文顺序）+deleted（sourceRange 反序，右往左吞）
+     * 合成一条有序 traversal list，只调用一次剩余 schedule builder，统一归一化到一条 [0,1]，
+     * 不再分别建 inserted/deleted 两条 schedule 导致重叠。
+     *
      * @param newOriginCaretRect 新笔的 old caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新笔的 new caret rect。
-     * @param newInsertedUnitKeys 新笔的 inserted unit keys。
-     * @param newDeletedUnitKeys 新笔的 deleted unit keys。
+     * @param newInsertedUnitKeys 新笔的 inserted unit keys（按 targetRange 正文顺序排好）。
+     * @param newDeletedUnitKeys 新笔的 deleted unit keys（按 sourceRange.start 升序排好，内部会反序成右往左吞）。
      * @param frameTimeNanos 当前帧时间戳。
      * @param caretDurationNanos 新笔 caret 通道时长。<=0 表示瞬时完成。
      * @param glyphDurationNanos 新笔 glyph 通道时长。<=0 表示瞬时完成。
@@ -153,19 +162,25 @@ class ComposeEditMotion(
         // 不能用新 duration，否则相位分类（已完成/进行中/未开始）会失真，
         // 连续编辑时改了 motion 设置就会出现"先冻结再继续"。
         val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
-        // newInsertedUnitKeys / newDeletedUnitKeys 已由调用方按正文/几何顺序排好
-        // （inserted 按 targetRange.start，deleted 按 range.start）。旧未完成 unit 和新 unit
-        // 在这一条顺序里交错重排剩余 schedule，不按创建时间排（Issue #728 评论 5756468643 问题2）。
+        // Issue #728 评论 5760112985 问题2：把 redirect 的剩余 unit 合成一条有序 traversal list，
+        // 只调用一次 buildRedirectChannels 统一归一化到一条 [0,1]，不再分别建 inserted/deleted 两条 schedule。
+        // inserted 按 targetRange 正文顺序，deleted 按 sourceRange 反序（右往左吞，Backspace 语义）。
+        // mixed 沿用 forEdit() 同一规则（inserted 段后接 deleted 反向段）。
+        // oldChannel 只提供 currentFraction 和旧 phase，不再提供新 role/to（Issue #728 评论 5760112985 问题1）。
         val insertedSpecs =
             newInsertedUnitKeys.map { key ->
-                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], freshFrom = 0f, freshTo = 1f)
+                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], desiredTo = 1f)
             }
+        // deleted 按 sourceRange 反序（右往左吞，Backspace 语义）。
+        // newDeletedUnitKeys 已由调用方按 sourceRange.start 升序排好，reversed() 得到降序。
         val deletedSpecs =
-            newDeletedUnitKeys.map { key ->
-                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], freshFrom = 1f, freshTo = 0f)
+            newDeletedUnitKeys.reversed().map { key ->
+                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], desiredTo = 0f)
             }
-        val newChannels = buildRedirectChannels(insertedSpecs, oldGlyphProgress, currentSample).toMutableMap()
-        newChannels.putAll(buildRedirectChannels(deletedSpecs, oldGlyphProgress, currentSample))
+        // 合成一条有序 traversal list：inserted 段（正文顺序）后接 deleted 反向段，
+        // 沿用 forEdit() 的同一规则。只调用一次 buildRedirectChannels 统一归一化到一条 [0,1]。
+        val mergedSpecs = insertedSpecs + deletedSpecs
+        val newChannels = buildRedirectChannels(mergedSpecs, oldGlyphProgress, currentSample)
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
@@ -218,9 +233,10 @@ class ComposeEditMotion(
         // 不重新从整条旧 schedule 的 0 开始（Issue #728 评论 5756468643 问题1）。
         // unitChannels 的迭代顺序即创建时的正文顺序（forInsert/forDelete/forEdit 都按正文位置排序传入），
         // 没有新 unit 加入，无需重排相对顺序。
+        // 纯 caret 移动不改变文字目标，desiredTo = ch.to 保持原行为（Issue #728 评论 5760112985 问题1）。
         val specs =
             unitChannels.map { (key, ch) ->
-                RedirectUnitSpec(key = key, oldChannel = ch, freshFrom = ch.from, freshTo = ch.to)
+                RedirectUnitSpec(key = key, oldChannel = ch, desiredTo = ch.to)
             }
         val newChannels = buildRedirectChannels(specs, oldGlyphProgress, currentSample)
         return ComposeEditMotion(
@@ -236,27 +252,35 @@ class ComposeEditMotion(
     /**
      * redirect 时把旧未完成 unit 和新 unit 合并，按传入 [specs] 顺序重新归一化到新 [0, 1] 剩余 schedule。
      *
-     * 每个 spec 带 [RedirectUnitSpec.oldChannel]（旧 unit 的通道，null 表示新 unit）。
+     * 每个 spec 带 [RedirectUnitSpec.oldChannel]（旧 unit 的通道，null 表示新 unit）和
+     * [RedirectUnitSpec.desiredTo]（当前角色的目标 fraction）。
      * [specs] 已是正文的/几何顺序（调用方按 inserted targetRange.start / deleted range.start 排好），
      * 旧 unit 和新 unit 在这一条顺序里交错排剩余 schedule，不按创建时间排
      * （Issue #728 评论 5756468643 问题2）。
      *
+     * Issue #728 评论 5760112985 问题1：oldChannel 只提供 currentFraction 和旧 phase 分类，
+     * 新目标方向由 [RedirectUnitSpec.desiredTo] 决定，不再沿用旧 ch.to。
+     *
      * 分类（基于旧 motion 的 master glyph progress [oldGlyphProgress]）：
-     * - 已完成旧 unit（oldGlyphProgress >= endProgress）：固定终值 from=to=currentFraction。
-     * - 进行中旧 unit（startProgress < oldGlyphProgress < endProgress）：从 currentFraction 继续到原 to。
-     * - 未开始旧 unit（oldGlyphProgress <= startProgress）：从原 from 到原 to。
-     * - 新 unit（oldChannel == null）：从 freshFrom 到 freshTo。
+     * - 新 unit（oldChannel == null）：from = 1 - desiredTo，to = desiredTo，作为 pending。
+     * - 旧 unit 目标已达成（abs(currentFraction - desiredTo) < 1e-5，包括 Completed 角色未变、
+     *   或刚好走到目标）：固定终值 from=to=currentFraction，不占区间。
+     * - 旧 unit 需要动画（currentFraction != desiredTo）：
+     *   - 进行中（startProgress < oldGlyphProgress < endProgress）：from=currentFraction,
+     *     to=desiredTo，startProgress=0 立即继续，endProgress=remaining。
+     *   - 未开始 / Completed（含角色变化）：from=currentFraction, to=desiredTo，作为 pending。
+     *     **关键：Completed 且角色变化不再固定旧终值，而是作为 pending 走新剩余动画。**
      *
      * 分配策略（保证重定向后立即继续，不出现"先冻结再继续" — Issue #728 评论 5756468643 问题1）：
-     * 1. 已完成 unit：直接固定终值（from=to=currentFraction），不占新区间。
+     * 1. 目标已达成 unit：直接固定终值（from=to=currentFraction），不占新区间。
      * 2. 进行中 unit：startProgress=0（立即继续），endProgress=remaining
      *    （remaining = 1 - oldProgressWithinChannel，即该 unit 还需要走的比例）。
      *    pending unit 分布在 (remaining, 1] 区间。
-     * 3. 未开始 unit：分布到 (remaining, 1] 区间，等权分配。
+     * 3. 未开始 / Completed+角色变化 unit：分布到 (remaining, 1] 区间，等权分配。
      * 这样进行中 unit 在 master=0 时 localProgress=0 → fraction 从 currentFraction 继续，
      * 不会冻结；pending unit 在 master 达到其 startProgress 后才开始，各自有独立区间。
      *
-     * @param specs 带顺序的 unit 描述（旧 unit 含 oldChannel，新 unit oldChannel=null）。
+     * @param specs 带顺序的 unit 描述（旧 unit 含 oldChannel，新 unit oldChannel=null；都带 desiredTo）。
      * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1，必须用旧 duration 算）。
      * @param currentSample 当前 sample（含每个 unit 的当前 fraction）。
      * @return 归一化后的新 channels。
@@ -274,20 +298,33 @@ class ComposeEditMotion(
         val pending = mutableListOf<Pair<Long, UnitChannel>>()
         for (spec in specs) {
             val ch = spec.oldChannel
+            val desiredTo = spec.desiredTo
             if (ch == null) {
-                pending.add(spec.key to UnitChannel(spec.freshFrom, spec.freshTo, 0f, 1f))
+                // 新 unit：from = 1 - desiredTo（inserted: 0, deleted: 1），to = desiredTo，作为 pending。
+                pending.add(spec.key to UnitChannel(1f - desiredTo, desiredTo, 0f, 1f))
                 continue
             }
             val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
+            // 目标已达成（包括 Completed 角色未变、或刚好走到目标）：固定终值，不占区间。
+            if (abs(currentFraction - desiredTo) < 1e-5f) {
+                result[spec.key] = UnitChannel(currentFraction, desiredTo, 0f, 0f)
+                continue
+            }
+            // 需要动画：from = currentFraction, to = desiredTo，按旧 phase 分类决定区间分配。
             val classification = classifyRedirectUnit(oldGlyphProgress, ch)
             when (classification) {
-                is RedirectUnitClass.Completed ->
-                    result[spec.key] = UnitChannel(currentFraction, currentFraction, 0f, 0f)
-                is RedirectUnitClass.NotStarted ->
-                    pending.add(spec.key to UnitChannel(ch.from, ch.to, 0f, 1f))
                 is RedirectUnitClass.InProgress -> {
                     inProgressRemaining = classification.remaining
-                    inProgressUnits.add(spec.key to UnitChannel(currentFraction, ch.to, 0f, classification.remaining))
+                    inProgressUnits.add(
+                        spec.key to UnitChannel(currentFraction, desiredTo, 0f, classification.remaining),
+                    )
+                }
+                is RedirectUnitClass.NotStarted,
+                is RedirectUnitClass.Completed,
+                -> {
+                    // Completed 且角色变化（currentFraction != desiredTo）不再固定旧终值，
+                    // 作为 pending 走新剩余动画（Issue #728 评论 5760112985 问题1）。
+                    pending.add(spec.key to UnitChannel(currentFraction, desiredTo, 0f, 1f))
                 }
             }
         }
@@ -339,16 +376,19 @@ class ComposeEditMotion(
     /**
      * redirect 时单个 unit 的描述 — 带顺序，区分旧/新。
      *
+     * Issue #728 评论 5760112985 问题1：把"旧通道走到哪了"和"这一笔现在要走向哪里"拆开 —
+     * 前者来自 oldChannel/currentSample，后者来自当前 descriptor role（[desiredTo]）。
+     * oldChannel 只用于取当前 fraction 和旧 phase 分类，**不能决定新目标方向**。
+     *
      * @param key unit 唯一标识。
      * @param oldChannel 旧 motion 中该 unit 的通道；null 表示这是本次新出现的 unit。
-     * @param freshFrom 新 unit 的起点 fraction（inserted: 0, deleted: 1）。旧 unit 此值不会被使用。
-     * @param freshTo 新 unit 的终点 fraction（inserted: 1, deleted: 0）。旧 unit 此值不会被使用。
+     * @param desiredTo 当前角色的目标 fraction（inserted: 1, deleted: 0；
+     *   redirectCaretTo 保持 ch.to）。旧 unit 的新目标也由此值决定，不再沿用旧 ch.to。
      */
     private data class RedirectUnitSpec(
         val key: Long,
         val oldChannel: UnitChannel?,
-        val freshFrom: Float,
-        val freshTo: Float,
+        val desiredTo: Float,
     )
 
     /**
