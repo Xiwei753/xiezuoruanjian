@@ -28,6 +28,9 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use writer_core::api::WriterCoreApi;
+// Issue #729：同步取消令牌 + workspace generation 用于切工作区后旧同步回调身份隔离。
+use std::sync::Arc;
+use writer_core::sync::SyncCancellationToken;
 
 use super::json_utils::{
     bridge_error_object, bridge_success_object, qjson_array_data_from_json, qjson_object_from_json,
@@ -378,6 +381,15 @@ pub struct AppBackend {
     /// 都重新 bootstrap（ensure .git + recover_storage_transactions）。
     /// 后台同步线程也 clone 此 layout 快照，避免每次同步都完整 bootstrap。
     current_workspace_git_layout: Option<writer_core::storage::git_repo_layout::GitRepoLayout>,
+    /// Issue #729：workspace 身份 generation。每次成功打开工作区或重置工作区时递增。
+    /// 同步线程启动时捕获此值，回调时校验是否仍等于当前 generation，
+    /// 不相等说明工作区已切换，旧同步结果必须丢弃，避免污染新工作区状态。
+    /// 用 `wrapping_add` 递增，避免溢出 panic。
+    current_workspace_generation: u64,
+    /// Issue #729：当前同步操作的取消令牌。由平台层持有，切工作区时调用 `cancel()`
+    /// 标记旧同步已取消。`Option` + `take()` 在 reset_workspace_state 中消费。
+    /// `Arc<SyncCancellationToken>` 是 `Send + Sync`（由 `Arc` 自动推导），可在线程间共享。
+    current_sync_cancel_token: Option<Arc<SyncCancellationToken>>,
     current_save_status: String,
     current_word_count: i32,
     current_error_message: String,
@@ -926,6 +938,7 @@ mod tests {
             operation_id: "".to_string(),
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
+            workspace_generation: 0,
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -947,6 +960,7 @@ mod tests {
             operation_id: "".to_string(),
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
+            workspace_generation: 0,
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -962,6 +976,7 @@ mod tests {
             operation_id: "".to_string(),
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
+            workspace_generation: 0,
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -1041,6 +1056,170 @@ mod tests {
         let result = backend.save_sync_config();
         // 没有选中作品也应能保存全局配置
         assert!(result);
+    }
+
+    // ── Issue #729：workspace generation 身份隔离测试 ──
+
+    /// 过期 generation 的同步回调必须被丢弃，不更新同步状态。
+    #[test]
+    fn test_handle_sync_outcome_discards_stale_workspace_generation() {
+        let mut backend = AppBackend::default();
+        // 模拟同步进行中：generation=0，operation_id 已设
+        backend.current_sync_operation_id = "op-stale".to_string();
+        backend.current_sync_status = "syncing".to_string();
+        backend.current_sync_in_progress = true;
+        // current_workspace_generation 保持 default 0
+
+        // 旧同步线程捕获的是 generation=0，但工作区已切换使 generation 变为 1。
+        // 此处直接构造一个 generation=0 的 outcome 模拟「回调到达时工作区已前进」。
+        // 为触发丢弃，先把 backend generation 推到 1（模拟切工作区后）。
+        backend.current_workspace_generation = 1;
+
+        let outcome = SyncTaskOutcome {
+            operation_id: "op-stale".to_string(),
+            sync_status: "success".to_string(),
+            action_result: "OK".to_string(),
+            workspace_generation: 0,
+        };
+        backend.handle_sync_outcome(outcome, None);
+
+        // 结果被丢弃：状态未被 "success" 覆盖，in_progress 未被清
+        assert_eq!(
+            backend.current_sync_status, "syncing",
+            "过期 generation 的回调不应更新同步状态"
+        );
+        assert!(
+            backend.current_sync_in_progress,
+            "过期 generation 的回调不应清 in_progress"
+        );
+    }
+
+    /// 匹配 generation 的同步回调正常接受并更新状态。
+    #[test]
+    fn test_handle_sync_outcome_accepts_matching_workspace_generation() {
+        let mut backend = AppBackend::default();
+        backend.current_sync_operation_id = "op-fresh".to_string();
+        backend.current_sync_in_progress = true;
+        // generation 保持 default 0
+
+        let outcome = SyncTaskOutcome {
+            operation_id: "op-fresh".to_string(),
+            sync_status: "error".to_string(),
+            action_result: "Failed".to_string(),
+            workspace_generation: 0,
+        };
+        backend.handle_sync_outcome(outcome, None);
+
+        // 结果被接受：状态更新为 "error"，in_progress 清除
+        assert_eq!(backend.current_sync_status, "error");
+        assert!(!backend.current_sync_in_progress);
+    }
+
+    /// close_workspace（经 reset_workspace_state）必须取消当前同步令牌、
+    /// 递增 workspace generation、清 in_progress。
+    #[test]
+    fn test_close_workspace_cancels_sync_token_and_increments_generation() {
+        let mut backend = AppBackend::default();
+        // 模拟一个正在运行的同步：创建令牌并存入 backend
+        let token = Arc::new(SyncCancellationToken::new());
+        let token_handle = token.clone();
+        backend.current_sync_cancel_token = Some(token);
+        backend.current_sync_in_progress = true;
+        assert!(!token_handle.is_cancelled(), "新令牌初始未取消");
+
+        backend.close_workspace();
+
+        // a. 令牌被取消
+        assert!(
+            token_handle.is_cancelled(),
+            "close_workspace 必须取消当前同步令牌"
+        );
+        // b. generation 递增
+        assert_eq!(
+            backend.current_workspace_generation, 1,
+            "close_workspace 必须递增 workspace generation"
+        );
+        // c. in_progress 清除
+        assert!(
+            !backend.current_sync_in_progress,
+            "close_workspace 必须清 current_sync_in_progress"
+        );
+        // d. 令牌被 take 掉
+        assert!(
+            backend.current_sync_cancel_token.is_none(),
+            "close_workspace 后 current_sync_cancel_token 应为 None"
+        );
+    }
+
+    /// 成功打开工作区必须递增 workspace generation。
+    #[test]
+    fn test_open_data_root_increments_workspace_generation() {
+        let dir = tempdir().expect("tempdir creation failed");
+        let path_str = dir.path().to_string_lossy().to_string();
+
+        let mut backend = AppBackend::default();
+        assert_eq!(backend.current_workspace_generation, 0, "初始 generation=0");
+
+        backend.internal_open_data_root(&path_str);
+        assert_eq!(
+            backend.current_workspace_generation, 1,
+            "打开工作区后 generation 应递增到 1"
+        );
+
+        // 关闭再打开应继续递增
+        backend.close_workspace();
+        assert_eq!(backend.current_workspace_generation, 2);
+
+        backend.internal_open_data_root(&path_str);
+        assert_eq!(backend.current_workspace_generation, 3);
+    }
+
+    /// 切工作区后，旧同步的 outcome（携带旧 generation）必须被丢弃，
+    /// 不污染新工作区的同步状态。
+    #[test]
+    fn test_workspace_switch_discards_old_sync_outcome() {
+        let dir = tempdir().expect("tempdir creation failed");
+        let path_str = dir.path().to_string_lossy().to_string();
+
+        let mut backend = AppBackend::default();
+        backend.internal_open_data_root(&path_str);
+        // 此时 generation=1。模拟启动了一个同步：
+        backend.current_sync_operation_id = "op-old".to_string();
+        backend.current_sync_in_progress = true;
+        backend.current_sync_status = "syncing".to_string();
+        let gen_at_sync_start = backend.current_workspace_generation; // 1
+
+        // 用户切换工作区：close_workspace 取消旧同步并递增 generation
+        backend.close_workspace();
+        // reset 把 current_sync_status 设为 "no_workspace"
+        assert_eq!(backend.current_sync_status, "no_workspace");
+        assert_eq!(backend.current_workspace_generation, 2);
+
+        // 旧同步线程完成，回调到达（携带启动时的旧 generation）
+        let stale_outcome = SyncTaskOutcome {
+            operation_id: "op-old".to_string(),
+            sync_status: "success".to_string(),
+            action_result: "OK".to_string(),
+            workspace_generation: gen_at_sync_start, // 1，已过期
+        };
+        backend.handle_sync_outcome(stale_outcome, None);
+
+        // 旧回调被丢弃：状态不被 "success" 覆盖，仍是 "no_workspace"
+        assert_eq!(
+            backend.current_sync_status, "no_workspace",
+            "切工作区后旧同步回调不应污染新工作区状态"
+        );
+    }
+
+    /// workspace generation 用 wrapping_add 递增，不会溢出 panic。
+    #[test]
+    fn test_workspace_generation_wraps_without_panic() {
+        let mut backend = AppBackend::default();
+        backend.current_workspace_generation = u64::MAX;
+
+        // close_workspace 内部用 wrapping_add，不应 panic
+        backend.close_workspace();
+        assert_eq!(backend.current_workspace_generation, 0);
     }
 }
 

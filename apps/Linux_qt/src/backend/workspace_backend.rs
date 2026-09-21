@@ -381,6 +381,9 @@ impl AppBackend {
         self.current_data_root = path.to_string();
         self.current_projects_root = projects_root_str.clone();
         self.current_has_data_root = true;
+        // Issue #729：递增 workspace generation，使任何正在运行的旧同步回调失效。
+        // 旧同步回调捕获的是旧 generation，回调时校验不匹配会丢弃结果。
+        self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
         // 保存 layout 快照，供普通 core_api() getter 和后台同步线程使用。
         self.current_workspace_git_layout = Some(layout);
         self.current_save_status = "已保存".to_string();
@@ -452,6 +455,18 @@ impl AppBackend {
     // 关闭/切换工作区的共享内部逻辑：清数据根状态、清选区、清树、重置同步状态、清编辑器、发信号。
     // 不清 last_workspace_path，由调用方（close_workspace / switch_workspace）决定是否清。
     fn reset_workspace_state(&mut self) {
+        // Issue #729：切工作区/关闭工作区时，先取消正在运行的同步并使其回调失效。
+        // a. 取消当前同步令牌：标记旧同步已取消（平台层持有，core sync 本轮不检查，
+        //    但 cancel 是同步语义的一部分，未来 core sync 可集成 is_cancelled 提前终止）。
+        if let Some(token) = self.current_sync_cancel_token.take() {
+            token.cancel();
+        }
+        // b. 递增 workspace generation：使旧同步回调的 generation 校验不匹配而被丢弃。
+        //    即使旧同步线程仍在运行，其回调进入 handle_sync_outcome 时会被 generation 拦截。
+        self.current_workspace_generation = self.current_workspace_generation.wrapping_add(1);
+        // c. 清 in_progress：旧同步不再算作进行中，新工作区的 single-flight 不会被旧同步卡住。
+        self.current_sync_in_progress = false;
+
         self.flush_writing_stats();
         self.flush_recent_edits();
         // Clear data root state

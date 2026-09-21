@@ -581,6 +581,12 @@ impl AppBackend {
             }
         };
 
+        // Issue #729：为新同步创建取消令牌并捕获当前 workspace generation。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+
         let app_qptr = QPointer::from(&*self);
         let callback = sync_operations::make_outcome_callback(app_qptr, sync_qptr);
 
@@ -616,6 +622,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         };
                     }
                 };
@@ -646,6 +653,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status.to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                     Err(e) => {
@@ -664,6 +672,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                 }
@@ -695,6 +704,7 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        workspace_generation,
                     });
                 }
             }

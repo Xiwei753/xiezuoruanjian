@@ -1736,8 +1736,7 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         for &(i_start, i_end) in &comp_inserted_ranges {
-            let reveal_slices =
-                build_insert_reveal_slices(key, new_snapshot, (i_start, i_end));
+            let reveal_slices = build_insert_reveal_slices(key, new_snapshot, (i_start, i_end));
             slices.extend(reveal_slices);
         }
         for &(d_start, d_end) in &comp_deleted_ranges {
@@ -3144,7 +3143,8 @@ impl LinuxEditorAnimationCoordinator {
             // 一旦退休，此事务永远视为 caret 部分完成——下一帧即使 new tx 完成移除，
             // 本事务也不会重新成为 owner（active_text_transaction_key_with_epoch 跳过 retired），
             // 不会重新接管旧 caret / 吞吐字轨迹造成回跳。
-            let caret_track_complete = !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
+            let caret_track_complete =
+                !has_caret_driven_units || tx.caret_motion_retired || caret_track_done;
 
             if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
@@ -4244,7 +4244,9 @@ mod tests {
             "commit with same shaping but different geometry should create ReflowMove slice"
         );
         assert!(
-            tx.units.iter().any(|u| !u.slice.static_hidden_document_rects.is_empty()),
+            tx.units
+                .iter()
+                .any(|u| !u.slice.static_hidden_document_rects.is_empty()),
             "Move slices should have static_hidden_document_rects"
         );
     }
@@ -4341,7 +4343,9 @@ mod tests {
             crossfade_count
         );
         assert!(
-            tx.units.iter().any(|u| !u.slice.static_hidden_document_rects.is_empty()),
+            tx.units
+                .iter()
+                .any(|u| !u.slice.static_hidden_document_rects.is_empty()),
             "Crossfade new should have static_hidden_document_rects to prevent double-draw"
         );
     }
@@ -7579,8 +7583,7 @@ mod tests {
         // 修复后：active_text_transaction_key_with_epoch 跳过 retired 事务，返回 None
         let active_key_1 = coord.active_text_transaction_key_with_epoch(epoch);
         assert_eq!(
-            active_key_1,
-            None,
+            active_key_1, None,
             "修复后：new tx 完成后，active_text_transaction_key_with_epoch 不应重新返回 old tx\
              （caret_motion_retired == true，被跳过）"
         );
@@ -7588,8 +7591,7 @@ mod tests {
         // 修复后：sample_coordinated_motion_frame 的 owner_key 为 None（不重新变成 old_key）
         let coordinated_frame_1 = coord.sample_coordinated_motion_frame(&sample_1, epoch);
         assert_eq!(
-            coordinated_frame_1.owner_key,
-            None,
+            coordinated_frame_1.owner_key, None,
             "修复后：第 2 帧 owner_key 不应重新变成 old tx\
              —— 旧 caret/吞吐字轨迹不会重新接管，不会造成 caret 回跳"
         );
@@ -7623,8 +7625,7 @@ mod tests {
         // 额外验证：active_text_transaction_key()（无 epoch 版本）也跳过 retired 事务
         let active_key_no_epoch = coord.active_text_transaction_key();
         assert_eq!(
-            active_key_no_epoch,
-            None,
+            active_key_no_epoch, None,
             "修复后：active_text_transaction_key()（无 epoch 版本）也应跳过 retired 事务，\
              find_cursor_transaction_for_target / compute_coordinated_cursor_position\
              不会再用 old tx 驱动 caret"

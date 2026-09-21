@@ -69,6 +69,23 @@ impl AppBackend {
             return;
         }
 
+        // Issue #729：workspace generation 身份校验。
+        // 同步线程启动时捕获当时的 generation 并填入 outcome。若回调到达时
+        // current_workspace_generation 已变（切工作区/reset_workspace_state 递增），
+        // 说明此结果属于旧工作区，必须丢弃，避免旧同步污染新工作区状态。
+        if outcome.workspace_generation != self.current_workspace_generation {
+            self.debug_log(
+                "sync",
+                "sync_outcome_discarded_workspace_changed",
+                &format!(
+                    "Discarded outcome from stale workspace. expected_gen={}, got_gen={}",
+                    self.current_workspace_generation, outcome.workspace_generation
+                ),
+            );
+            // 旧工作区的回调不应清新工作区的 in_progress（reset_workspace_state 已清）。
+            return;
+        }
+
         let status = outcome.sync_status.clone();
         let result_trunc = if outcome.action_result.chars().count() > 1000 {
             outcome.action_result.chars().take(1000).collect::<String>() + "..."
@@ -294,6 +311,14 @@ impl AppBackend {
             }
         };
 
+        // Issue #729：为新同步创建取消令牌并捕获当前 workspace generation。
+        // 令牌存入 AppBackend，切工作区时由 reset_workspace_state 取消。
+        // generation 副本随线程捕获，回调时与最新 generation 比对丢弃过期结果。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+
         let app_qptr = QPointer::from(&*self);
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 
@@ -329,6 +354,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         };
                     }
                 };
@@ -363,6 +389,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "dry_run_success".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                     Err(e) => {
@@ -384,6 +411,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                 }
@@ -413,6 +441,7 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        workspace_generation,
                     });
                 }
             }
@@ -644,6 +673,12 @@ impl AppBackend {
             }
         };
 
+        // Issue #729：为新同步创建取消令牌并捕获当前 workspace generation。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+
         let app_qptr = QPointer::from(&*self);
         let callback = make_outcome_callback(app_qptr, sync_qptr);
 
@@ -680,6 +715,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         };
                     }
                 };
@@ -785,6 +821,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: status_code,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                     Err(e) => {
@@ -821,6 +858,7 @@ impl AppBackend {
                             operation_id: op_id_capture.clone(),
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
+                            workspace_generation,
                         }
                     }
                 }
@@ -850,6 +888,7 @@ impl AppBackend {
                         operation_id: op_id_capture,
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
+                        workspace_generation,
                     });
                 }
             }

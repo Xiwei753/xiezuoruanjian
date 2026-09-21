@@ -28,6 +28,8 @@
 
 #![allow(clippy::module_inception)]
 
+/// 同步取消令牌 — 平台无关的同步生命周期标记（Issue #729）。
+pub mod cancellation_token;
 pub(crate) mod commit_helpers;
 pub mod config_store;
 pub mod conflict;
@@ -60,6 +62,9 @@ pub use provider::*;
 pub use service::*;
 pub use types::*;
 pub use url::*;
+
+// 同步取消令牌是同步语义的一部分，顶层 re-export 方便平台层使用。
+pub use cancellation_token::SyncCancellationToken;
 
 #[cfg(test)]
 mod api_tests;

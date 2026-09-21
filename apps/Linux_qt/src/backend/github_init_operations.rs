@@ -83,6 +83,12 @@ impl AppBackend {
             });
         });
 
+        // Issue #729：为 github init 同步创建取消令牌并捕获当前 workspace generation。
+        self.current_sync_cancel_token = Some(std::sync::Arc::new(
+            writer_core::sync::SyncCancellationToken::new(),
+        ));
+        let workspace_generation = self.current_workspace_generation;
+
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
             let result = Self::do_github_init(
@@ -91,6 +97,7 @@ impl AppBackend {
                 &remote_url_str,
                 &branch_str,
                 &token_str,
+                workspace_generation,
             );
             callback(result);
         });
@@ -102,6 +109,7 @@ impl AppBackend {
         remote_url: &str,
         branch: &str,
         token: &str,
+        workspace_generation: u64,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
             provider::github::config::{GitHubProviderConfig, GitHubTransport},
@@ -186,6 +194,7 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
                 };
             }
         };
@@ -214,6 +223,7 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
                 };
             }
             Self::run_github_init_sync(
@@ -224,6 +234,7 @@ impl AppBackend {
                 sec_ref,
                 path,
                 "sync.result.clone_init_success",
+                workspace_generation,
             )
         } else if has_directory() {
             Self::run_github_init_sync(
@@ -234,6 +245,7 @@ impl AppBackend {
                 sec_ref,
                 path,
                 "sync.result.remote_configured_sync_success",
+                workspace_generation,
             )
         } else if is_git_repo() {
             SyncTaskOutcome {
@@ -250,6 +262,7 @@ impl AppBackend {
                     raw_error: None,
                 })
                 .unwrap_or_default(),
+                workspace_generation,
             }
         } else {
             SyncTaskOutcome {
@@ -266,6 +279,7 @@ impl AppBackend {
                     raw_error: None,
                 })
                 .unwrap_or_default(),
+                workspace_generation,
             }
         }
     }
@@ -284,6 +298,7 @@ impl AppBackend {
         secrets: &writer_core::sync::SyncSecrets,
         path: &str,
         success_summary_key: &str,
+        workspace_generation: u64,
     ) -> SyncTaskOutcome {
         match api.perform_full_sync(config_dto.clone(), true) {
             Ok(result) => {
@@ -307,6 +322,7 @@ impl AppBackend {
                                 },
                             )
                             .unwrap_or_default(),
+                            workspace_generation,
                         },
                         Err(e) => SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
@@ -324,6 +340,7 @@ impl AppBackend {
                                 },
                             )
                             .unwrap_or_default(),
+                            workspace_generation,
                         },
                     }
                 } else if matches!(status, "conflict" | "partial_conflict") {
@@ -385,6 +402,7 @@ impl AppBackend {
                             },
                         )
                         .unwrap_or_default(),
+                        workspace_generation,
                     }
                 } else {
                     let err = result.error.unwrap_or_default();
@@ -418,6 +436,7 @@ impl AppBackend {
                             },
                         )
                         .unwrap_or_default(),
+                        workspace_generation,
                     }
                 }
             }
@@ -453,6 +472,7 @@ impl AppBackend {
                         },
                     )
                     .unwrap_or_default(),
+                    workspace_generation,
                 }
             }
         }

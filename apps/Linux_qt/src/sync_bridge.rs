@@ -25,6 +25,10 @@ pub struct SyncTaskOutcome {
     pub operation_id: String,
     pub sync_status: String,
     pub action_result: String,
+    /// Issue #729：启动此同步线程时捕获的 workspace generation。
+    /// 回调进入 `handle_sync_outcome` 时与 `AppBackend.current_workspace_generation` 比对，
+    /// 不匹配说明工作区已切换，结果必须丢弃，避免旧同步污染新工作区状态。
+    pub workspace_generation: u64,
 }
 
 /// 对错误消息进行脱敏处理（移除 Token、密钥等敏感信息）。
