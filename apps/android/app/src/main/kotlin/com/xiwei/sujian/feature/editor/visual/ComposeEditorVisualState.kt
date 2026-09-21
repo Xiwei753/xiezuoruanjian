@@ -1302,18 +1302,25 @@ class ComposeEditorVisualState(
                 caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L
                 glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
             }
+            // 快速连续输入：从当前 sample 重定向，不重新起播
+            // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
+            // split/rekey child 从 parent 投影后的 fraction 继续，不从 0/1 重启。
+            val inheritedFractionsByKey =
+                (insertedDescriptors.asSequence() + deletedDescriptors.asSequence())
+                    .mapNotNull { d ->
+                        val f = d.inheritedFraction
+                        if (f != null) d.key to f else null
+                    }
+                    .toMap()
+            // Issue #728 评论 5762435453：motion finished 不等于 timeline 已收口 —
+            // 只要 timeline 本帧从旧 parent split/rekey 出 child（inheritedFractionsByKey 非空），
+            // 就必须继续走 redirectTo 保留 lineage，不能因 motion.finished 走 forEdit 丢弃继承 fraction。
+            // 否则 surviving inserted child 会从 0 重吐、deleted child 会从 1 重吞。
+            val shouldRedirect =
+                existing != null &&
+                    (!existing.isFinished(frameTimeNanos) || inheritedFractionsByKey.isNotEmpty())
             activeEditMotion =
-                if (existing != null && !existing.isFinished(frameTimeNanos)) {
-                    // 快速连续输入：从当前 sample 重定向，不重新起播
-                    // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
-                    // split/rekey child 从 parent 投影后的 fraction 继续，不从 0/1 重启。
-                    val inheritedFractionsByKey =
-                        (insertedDescriptors.asSequence() + deletedDescriptors.asSequence())
-                            .mapNotNull { d ->
-                                val f = d.inheritedFraction
-                                if (f != null) d.key to f else null
-                            }
-                            .toMap()
+                if (shouldRedirect) {
                     existing.redirectTo(
                         newOriginCaretRect = framePatch.originCaretRect,
                         newTargetCaretRect = framePatch.targetCaretRect,
