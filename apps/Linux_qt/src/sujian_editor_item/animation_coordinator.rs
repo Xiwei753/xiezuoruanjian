@@ -2689,7 +2689,9 @@ impl LinuxEditorAnimationCoordinator {
             if tx.state == TextVisualTransactionState::Prepared {
                 tx.state = TextVisualTransactionState::Rendering;
                 if !tx.timeline.is_started() {
-                    tx.timeline.mark_first_frame();
+                    // Issue #727 评论 5760431554 问题2: 传同一个 frame_now，
+                    // transaction timeline 与 unit/cursor track 共用同一帧起点。
+                    tx.timeline.mark_first_frame(frame_now);
                 }
                 // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
                 // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
@@ -3061,6 +3063,17 @@ impl LinuxEditorAnimationCoordinator {
             // 在 `build_render_plan_full` 采样 caret motion 之前完成。到这里时
             // 本帧 Prepared 事务已全部切到 Rendering，不再重复执行。
 
+            // Issue #727 评论 5760431554 问题1: 每笔 tx 开头统一算 owns_caret，
+            // 完成条件与 glyph 收集共用同一处 ownership 判断，避免三处分叉。
+            // 含义：
+            // - 当前 owner 的 CaretDriven：继续等同一条 caret track 到终点；
+            // - 已失去 owner 的 CaretDriven：本帧已 Snap 到 canonical，caret 部分
+            //   立刻视为完成（不再等旧 caret track 跑完），事务只等剩余 Timed unit；
+            // - 这样旧事务被新事务抢走 caret ownership 后不会继续留在 active queue
+            //   等旧 caret track，避免新事务先完成时旧事务重新成为 active caret owner
+            //   造成 caret 回跳/旧吞吐状态重新接管。
+            let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
+
             // Issue #722 评论 5748596920 问题4: InsertReveal/DeleteConceal 的完成条件
             // 必须跟视觉边界一致：caret-driven boundary 到目标后才能释放对应 overlay/static patch。
             // ReflowMove/ReflowCrossFade 才继续按自己的 unit progress 完成。
@@ -3096,7 +3109,10 @@ impl LinuxEditorAnimationCoordinator {
                 })
             };
             // caret-driven 文字事务必须 caret track 也完成才能释放。
-            let caret_track_complete = !has_caret_driven_units || caret_track_done;
+            // Issue #727 评论 5760431554 问题1: 已失去 owner 的 CaretDriven 事务
+            // （owns_caret == false）本帧已 Snap 到 canonical，caret 部分立刻视为完成，
+            // 不再等自己那条旧 caret track 跑完。仍需等剩余 Timed unit（Reflow）播完。
+            let caret_track_complete = !has_caret_driven_units || !owns_caret || caret_track_done;
 
             if all_units_done && caret_track_complete {
                 // Issue #690 评论 5675007226 步骤 5: 完成也进正式诊断包（一条，不逐帧）。
@@ -3131,7 +3147,10 @@ impl LinuxEditorAnimationCoordinator {
                         };
                         // Issue #727 评论 5757225958 问题5: owner_key 不匹配时，
                         // 此 CaretDriven unit 不消费 caret frame，直接回 canonical。
-                        if coordinated_motion_frame.owner_key != Some(tx.key) {
+                        // Issue #727 评论 5760431554 问题1: 复用上方统一算出的 owns_caret，
+                        // 不再单独写 coordinated_motion_frame.owner_key != Some(tx.key)，
+                        // 避免完成条件、clip 收集、glyph 三处 ownership 判断分叉。
+                        if !owns_caret {
                             continue;
                         }
                         // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track

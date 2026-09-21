@@ -89,8 +89,11 @@ impl TransactionTimeline {
         (adjusted / self.duration_ms as f64).clamp(0.0, 1.0)
     }
 
-    pub fn mark_first_frame(&mut self) {
-        let now = Instant::now();
+    /// Issue #727 评论 5760431554 问题2: 接收外部统一 `now`（frame_now），
+    /// 不再内部 `Instant::now()`。transaction timeline / Timed units /
+    /// cursor track 全部消费同一个 frame_now，消除首帧两套起点的采样偏差。
+    /// `first_render_wall_ms` 诊断墙钟时间继续单独取，不影响动画时钟。
+    pub fn mark_first_frame(&mut self, now: Instant) {
         if self.first_render_frame.is_none() {
             self.first_render_frame = Some(now);
             self.first_render_wall_ms = Some(crate::sujian_editor_item::diagnostic_now_ms());
