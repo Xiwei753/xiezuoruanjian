@@ -4,6 +4,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
+import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlin.math.max
 
 /**
@@ -51,11 +52,10 @@ class ComposeVisualTimeline {
 
     /**
      * #703 评论 5709208101 问题2：coordinated + spatial clip 模式标记 —
-     * applyPatch 时从 patch.motionPolicy.effective() 设置，
+     * applyPatch 时从调用方传入的 motionPolicy.effective() 设置（Issue #732 评论 5763493968 第2/4节），
      * sample 时传给 ComposeVisualScene，draw 层据此用 clipFraction 覆盖 alpha（effective alpha=1）。
      *
-     * Issue #725 评论 5750735497：clipFraction 不再由屏幕光标位置算，
-     * 改由 unit 的 alpha 通道直接驱动（insert 0→1 / delete 1→0）。
+     * clipFraction 不再由屏幕光标位置算，改由 unit 的 alpha 通道直接驱动（insert 0→1 / delete 1→0）。
      */
     private var coordinatedSpatialClip: Boolean = false
 
@@ -94,16 +94,21 @@ class ComposeVisualTimeline {
      * 应用一个屏幕 diff — 先 sample(now) 拿到旧动画此刻屏幕真实画到的 alpha 和位置，
      * 再处理新 patch。不能从事务的 progress 反算，也不能先归零。
      *
-     * #691 评论 5679242735 修改2：检查 [patch.motionPolicy.effective] 的 textEnabled —
+     * #691 评论 5679242735 修改2：检查 [policy.effective] 的 textEnabled —
      * 文字动画关闭时不创建任何文字 alpha/position track（units = emptyList()），
      * 不只是把 duration 改成 0。否则仍可能产生一帧 hiddenRanges/ghost 所有权问题。
      *
-     * Issue #725 评论 5750735497：停止自绘屏幕 caret —
+     * Issue #728 评论 5754045689：系统 caret 已透明，可见 caret 由 [EditorTextFieldDrawLayer] 画 —
      * applyPatch 不再接受 cursor 参数（cursorFromRect / cursorPath / cursorDurationNanos / assignCursorChannel），
      * 不再创建 cursorChannel / clipTracks。文字吞吐的 clipFraction 改由 unit 的 alpha 通道直接驱动。
      *
+     * Issue #732 评论 5763493968 第2/4节：policy 不再从 patch.motionPolicy 读 —
+     * 由调用方（[ComposeEditorVisualState.drainPendingPatchesAtFrame]）传入当前 effective policy。
+     * coordinatedSpatialClip 由当前 policy + 当前 motion sample 导出（第4节）。
+     *
      * @param patch 这一帧的屏幕 diff — 包含 [ComposeVisualPatch.intent] 用于 fallback survival map。
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock，不用 System.nanoTime()）。
+     * @param motionPolicy 当前 effective 动画策略 — 由 [ComposeEditorVisualState] 在帧开头应用 pending policy 后传入。
      * @param motionSample Issue #728 评论 5761525795：当前 [ComposeEditMotion] 的 sample 结果 —
      *   split/rekey 时用它拿 parent 的当前 motion fraction，投影到 child 局部区间，
      *   得到 child 首帧应继承的 fraction（[lastSplitInheritedFractions]）。
@@ -112,18 +117,20 @@ class ComposeVisualTimeline {
     fun applyPatch(
         patch: ComposeVisualPatch,
         frameTimeNanos: Long,
+        motionPolicy: EditorMotionPolicy,
         motionSample: ComposeEditMotion.Sample? = null,
     ) {
         // Issue #728 评论 5761525795：清空上一次 split 继承记录，本次 applyPatch 重新填充。
         lastSplitInheritedFractions = emptyMap()
         // #691 评论 5679242735 修改2 / 设置语义 G：文字动画时长以用户设置 textDurationMillis 为唯一事实来源，
         // 不再用 Core intent 的 patch.durationMs（那样用户改时长设置不生效）。
-        val policy = patch.motionPolicy.effective()
+        val policy = motionPolicy.effective()
         val durationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
 
-        // #703 评论 5709208101 问题2：记录 coordinated + spatial clip 模式，
-        // sample 时传给 scene，draw 层据此用 clipFraction 覆盖 alpha。
-        // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算。
+        // #703 评论 5709208101 问题2 / Issue #732 评论 5763493968 第4节：
+        // coordinatedSpatialClip 由当前 effective policy + 当前 motion sample 导出，
+        // 不再从旧 patch policy 保存成 timeline 状态。
+        // Issue #728：系统 caret 已透明，cursorEnabled 不再参与计算。
         coordinatedSpatialClip = policy.textEnabled && policy.coordinated
 
         // #708 评论 5728951138：当前 patch 已把 active unit 转成 ghost 的范围
@@ -313,7 +320,7 @@ class ComposeVisualTimeline {
             units = emptyList()
         }
 
-        // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+        // Issue #728 评论 5754045689：系统 caret 已透明，可见 caret 由 EditorTextFieldDrawLayer 画 —
         // 不再调用 applyCursorPatch，不再创建 cursorChannel / clipTracks。
         // 文字吞吐的 clipFraction 改由 unit 的 alpha 通道直接驱动（见 computeUnitClipFractions）。
     }
@@ -1016,9 +1023,11 @@ class ComposeVisualTimeline {
      * 直接读 motionSample.unitClipFractions，不再独立维护 clip fraction 时间
      * （删除 ComposeTextRevealTrack）。
      *
-     * - motionSample 非 null 且包含 unit key：用 motion 给的 fraction。
-     * - motionSample == null 或不包含 unit key：用默认值
-     *   （Inserted→0, DeletedGhost→1, RetainedMove→1）。
+     * Issue #732 评论 5763493968 第4节：coordinated 模式的 glyph fraction 只能来自当前
+     * ComposeEditMotion.Sample — 删除"找不到 unit fraction 就自己用 0/1 fallback"的后门。
+     * coordinated 模式下 motionSample == null 或不包含 unit key 时不写入 map，
+     * draw 层看到缺失 fraction 会跳过此 unit（直接收口到最终正文）。
+     * 非 coordinated 模式沿用默认值（Inserted→0, DeletedGhost→1, RetainedMove→1）。
      *
      * @param units 当前帧的 sampled units。
      * @param motionSample 统一编辑 motion 的 sample 结果。
@@ -1032,12 +1041,19 @@ class ComposeVisualTimeline {
         val fractions = mutableMapOf<Long, Float>()
         for (unit in units) {
             val motionFraction = motionSample?.unitClipFractions?.get(unit.key)
+            if (motionFraction != null) {
+                fractions[unit.key] = motionFraction.coerceIn(0f, 1f)
+                continue
+            }
+            // Issue #732 评论 5763493968 第4节：coordinated 模式下没有 motion sample fraction —
+            // 不写入 map，draw 层会跳过此 unit（直接收口到最终正文）。
+            if (coordinatedSpatialClip) continue
+            // 非 coordinated 模式沿用默认值
             val fraction =
-                when {
-                    motionFraction != null -> motionFraction.coerceIn(0f, 1f)
-                    unit.role == VisualUnitRole.RetainedMove -> 1f
-                    unit.role == VisualUnitRole.Inserted -> 0f
-                    unit.role == VisualUnitRole.DeletedGhost -> 1f
+                when (unit.role) {
+                    VisualUnitRole.RetainedMove -> 1f
+                    VisualUnitRole.Inserted -> 0f
+                    VisualUnitRole.DeletedGhost -> 1f
                     else -> 1f
                 }
             fractions[unit.key] = fraction
@@ -1174,7 +1190,8 @@ class ComposeVisualTimeline {
     /**
      * #691 评论 5679242735 修改2：运行时 policy 切换时清掉旧 text units。
      *
-     * 由 [ComposeEditorVisualState.applyMotionPolicyAtFrame] 调用 —
+     * Issue #732 评论 5763493968 第3节：由 [ComposeEditorVisualState.drainPendingPatchesAtFrame]
+     * 在帧开头应用 pending policy 时调用 —
      * 用户在动画进行中关闭文字动画或打开 reduce-motion 时，
      * 旧 patch 已带着原来的 insertedUnits/deletedUnits/retainedMoves 入队，
      * drain 时会再把文字动画重新启动。本方法把当前 timeline 里所有活动文字动画清空，
@@ -1656,9 +1673,9 @@ data class VisualTextUnit(
  * - 吞字（deleted ghost）：clipFraction 从 1→0。
  * alpha 最多用于边缘柔化，不负责决定文字整体出现/消失。
  *
- * Issue #725 评论 5750735497：停止自绘屏幕 caret 后，scene 不再携带
- * `cursorRect` / `cursorAnimating` / `cursorOwnedByVisual` / `unitClipCursors` —
- * 屏幕光标始终由 BasicTextField 自己画，timeline 只产出文字绘制状态。
+ * Issue #728 评论 5754045689：系统 caret 已透明（cursorBrush = Color.Transparent），
+ * 可见 caret 由 [EditorTextFieldDrawLayer] 用统一 motion 的 caretRect 画，
+ * timeline 只产出文字绘制状态。
  * 文字吞吐的 clipFraction 改由纯文字时间线（alpha 通道直接驱动）计算，
  * 不再依赖屏幕自绘光标位置当进度尺。
  *

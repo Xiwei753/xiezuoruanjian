@@ -26,7 +26,7 @@ import uniffi.writer_core.AnimationModeDto
  * - 全文件只有 `pendingLocalEditHandoff = handoff.copy(patchId = localPatchId)` 和 `pendingLocalEditHandoff = null`
  * - 没有任何地方真正 `pendingLocalEditHandoff = ComposeLocalEditHandoff(...)`
  * - 所以 `bindLocalPatchHandoff()` 正常输入时实际上只会走 `Log.w(TAG, "local_patch_handoff_missing...")`
- * - `finishCompositionCommit()` 只做 `pendingPatches.addLast(localPatch); _patchVersion.update; bindLocalPatchHandoff(...)`，
+ * - `finishCompositionCommit()` 只做 `pendingPatches.addLast(localPatch); _frameRequestVersion.update; bindLocalPatchHandoff(...)`，
  *   **没有发布局部首帧 scene，也没有同步 drawSnapshot**
  *
  * #711 评论 5738906634：删除 ReflowMove 路线后，原缺口2/缺口3（自动换行必须创建 ReflowMove /
@@ -51,7 +51,7 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
      * - `pendingLocalEditHandoff = null`（在 cancelCompositionLocalVisualState）
      * 没有任何地方真正 `pendingLocalEditHandoff = ComposeLocalEditHandoff(...)`。
      * 所以 bindLocalPatchHandoff() 正常输入时只会走 Log.w("local_patch_handoff_missing")。
-     * `finishCompositionCommit()` 只做 `pendingPatches.addLast(localPatch); _patchVersion.update; bindLocalPatchHandoff(...)`，
+     * `finishCompositionCommit()` 只做 `pendingPatches.addLast(localPatch); _frameRequestVersion.update; bindLocalPatchHandoff(...)`，
      * **没有发布局部首帧 scene，也没有同步 drawSnapshot**。
      *
      * 修复后（#708 评论 5724568261 缺口1）：`pendingLocalEditHandoff` / `ComposeLocalEditHandoff` 已删除，
@@ -118,7 +118,7 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         // 暴露断言：finishCompositionCommit 后首帧 scene 应包含 handoff 条目。
         // 评论描述：finishCompositionCommit 应发布局部首帧 scene 并同步 drawSnapshot，
         // 使 local timeline 立即接管，不出现"最终字先裸画一帧 -> 动画再接手"的窗口。
-        // 旧 bug：finishCompositionCommit 只做 addLast + patchVersion + bindLocalPatchHandoff，
+        // 旧 bug：finishCompositionCommit 只做 addLast + frameRequestVersion + bindLocalPatchHandoff，
         // 不发布首帧 scene，drawSnapshot().scene 保持空（hiddenRanges 空、units 空）。
         // 修复后：finishCompositionCommit 调 publishLocalHandoffScene，scene 包含 handoff 条目。
         val firstFrameScene = state.drawSnapshot().scene
@@ -229,7 +229,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
-        motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -244,7 +243,6 @@ class ComposeVisualIssue708Comment5724568261ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-            motionPolicy = motionPolicy,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

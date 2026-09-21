@@ -101,8 +101,9 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
         val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         val frame0 = 0L
         timeline.applyPatch(
-            patch = insertPatch.copy(motionPolicy = policy),
+            patch = insertPatch,
             frameTimeNanos = frame0,
+            motionPolicy = policy,
         )
 
         // 第二步：sample 到中间帧（150ms），吐字动画进行中但未结束
@@ -126,8 +127,9 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
                 deletedUnits = listOf(TextRange(2, 3), TextRange(1, 2), TextRange(0, 1)),
             )
         timeline.applyPatch(
-            patch = deletePatch.copy(motionPolicy = policy),
+            patch = deletePatch,
             frameTimeNanos = frame1,
+            motionPolicy = policy,
         )
 
         // 第四步：检查 ghost 的 reveal 分段 schedule
@@ -268,7 +270,6 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
         insertedUnits: List<TextRange>,
         deletedUnits: List<TextRange>,
     ): ComposeVisualPatch {
-        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         return ComposeVisualPatch(
             id = 1L,
             coreTransactionIds = emptyList(),
@@ -282,7 +283,6 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            motionPolicy = policy,
             intent = null,
         )
     }
@@ -296,7 +296,6 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
         insertedUnits: List<TextRange>,
         deletedUnits: List<TextRange>,
     ): ComposeVisualPatch {
-        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         return ComposeVisualPatch(
             id = 2L,
             coreTransactionIds = emptyList(),
@@ -310,7 +309,6 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            motionPolicy = policy,
             intent = null,
         )
     }

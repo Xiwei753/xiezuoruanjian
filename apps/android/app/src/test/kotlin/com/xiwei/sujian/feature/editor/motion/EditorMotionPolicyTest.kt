@@ -39,8 +39,9 @@ class EditorMotionPolicyTest {
 
     @Test
     fun effectiveIsIdentityWhenReduceMotionFalse() {
-        // Issue #723 评论 5749023316 缺口2：coordinated=false 时 effective() 才是 identity。
-        // coordinated=true 时 effective() 会强制 textEnabled=true（归一旧持久化状态）。
+        // Issue #732 评论 5763493968 第4节：coordinated=true 时 effective() 也是 identity。
+        // coordinated 本身就是完整模式，不靠改 textEnabled/cursorEnabled 才成立。
+        // effective() 只在 reduceMotion=true 时降级，其余情况直接返回 this。
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
@@ -52,11 +53,12 @@ class EditorMotionPolicyTest {
     }
 
     @Test
-    fun coordinatedTrueForcesTextEnabled() {
-        // Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制
-        // textEnabled=true，收死旧持久化状态
-        // （coordinated=true 但 textEnabled=false）。
-        // Issue #728：coordinated=true 也强制 cursorEnabled=true。
+    fun coordinatedTrueIsIdentity_preservesUserSettings() {
+        // Issue #732 评论 5763493968 第4节：coordinated=true 时 effective() 直接返回 this，
+        // 不再强制 textEnabled=true / cursorEnabled=true。
+        // coordinated 本身就是完整模式，统一用 textDurationMillis 作为这一笔
+        // ComposeEditMotion 的时长；独立的 textEnabled/cursorEnabled/cursorDurationMillis
+        // 只在 coordinated=false 时生效。
         val legacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
@@ -65,8 +67,8 @@ class EditorMotionPolicyTest {
                 reduceMotion = false,
             )
         val effective = legacyPolicy.effective()
-        assertTrue("coordinated=true → effective() 强制 textEnabled=true", effective.textEnabled)
-        assertTrue("coordinated=true → effective() 强制 cursorEnabled=true", effective.cursorEnabled)
+        assertFalse("coordinated=true → effective() 保持 textEnabled=false（不强制归一）", effective.textEnabled)
+        assertFalse("coordinated=true → effective() 保持 cursorEnabled=false（不强制归一）", effective.cursorEnabled)
         assertTrue("coordinated 标记保持 true", effective.coordinated)
     }
 

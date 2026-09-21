@@ -2371,7 +2371,7 @@ class ComposeVisualIssue708Comment5725706551ReproTest {
 
         // 设置 motionPolicy: textEnabled=true, coordinated=true
         // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算
-        state.applyMotionPolicyAtFrame(
+        state.updateMotionPolicy(
             com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy(
                 textEnabled = true,
                 coordinated = true,

@@ -208,7 +208,6 @@ class ComposeVisualIssue694LocalRouteTest {
                 expectedOldText = "a",
                 expectedNewText = "",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0, compositionActive = false)
 

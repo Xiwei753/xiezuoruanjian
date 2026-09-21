@@ -55,7 +55,7 @@ import java.io.File
  *   不跟 typing animation 共用 editorTypingAnimationEnabled / editorTypingAnimationDurationMs。
  *
  * 缺口5b：policy 切换保留 resting caret —
- *   applyMotionPolicyAtFrame settle 动画但不清 restingCaretRect / drawSnapshotState.caretRect，
+ *   updateMotionPolicy settle 动画但不清 restingCaretRect / drawSnapshotState.caretRect，
  *   系统 caret 已透明时自绘 caret 不消失。
  *
  * 测试基础设施：Robolectric + createComposeRule 构造真实 TextLayoutResult（cursorRect 需要）。
@@ -171,7 +171,7 @@ class Issue728Comment5755336403ReproTest {
         val cursorDurationMs = 100L
         val cursorDurationNanos = cursorDurationMs * NANOS_PER_MS
         // 设置 cursor 动画开启的 policy（coordinated=true → effective 后 cursorEnabled=true）
-        state.applyMotionPolicyAtFrame(
+        state.updateMotionPolicy(
             EditorMotionPolicy(
                 textEnabled = true,
                 textDurationMillis = 200L,
@@ -305,7 +305,7 @@ class Issue728Comment5755336403ReproTest {
         val textDurationMs = 200L
         val cursorDurationMs = 50L
         // 设置 textDuration != cursorDuration 以区分 forEdit / forSelectionMove 分支
-        state.applyMotionPolicyAtFrame(
+        state.updateMotionPolicy(
             EditorMotionPolicy(
                 textEnabled = true,
                 textDurationMillis = textDurationMs,
@@ -384,20 +384,20 @@ class Issue728Comment5755336403ReproTest {
     // ==================== 缺口5b：policy 切换保留 resting caret ====================
 
     /**
-     * 缺口5b：applyMotionPolicyAtFrame settle 动画但保留 resting caret。
+     * 缺口5b：updateMotionPolicy settle 动画但保留 resting caret。
      *
      * 场景：
      * 1. onAuthoritativeLayout("ab", selection=(1,1)) 设置 restingCaretRect
      * 2. sampleVisualScene(0L) 把 drawSnapshotState.caretRect 同步为 restingCaretRect
-     * 3. applyMotionPolicyAtFrame(newPolicy) 切换 policy
+     * 3. updateMotionPolicy(newPolicy) 切换 policy
      *
-     * 修复后 applyMotionPolicyAtFrame 不清 restingCaretRect / drawSnapshotState.caretRect，
+     * 修复后 updateMotionPolicy 不清 restingCaretRect / drawSnapshotState.caretRect，
      * 只清 scene 和 activeEditMotion。
      *
      * 验证：drawSnapshot().caretRect 非 null 且等于切换前的值；restingCaretRect 非 null。
      */
     @Test
-    fun gap5b_applyMotionPolicyAtFrame_preservesRestingCaret() {
+    fun gap5b_updateMotionPolicy_preservesRestingCaret() {
         val layouts = captureLayouts("ab")
         val state =
             ComposeEditorVisualState(
@@ -412,7 +412,7 @@ class Issue728Comment5755336403ReproTest {
         assertNotNull("policy 切换前 caretRect 应非 null", caretBefore)
 
         // 切换 policy（reduceMotion=true，settle 所有动画）
-        state.applyMotionPolicyAtFrame(
+        state.updateMotionPolicy(
             EditorMotionPolicy(
                 textEnabled = false,
                 textDurationMillis = 100L,

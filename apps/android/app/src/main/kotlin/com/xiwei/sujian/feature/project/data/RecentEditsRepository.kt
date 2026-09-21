@@ -34,6 +34,14 @@ class RecentEditsRepository(private val context: Context, private val appBridge:
         }
     }
 
+    /**
+     * #732 评论第5节：首页契约 singular — Android 产品层唯一一次"历史列表 → 最近一次"的转换。
+     *
+     * 读取 Core 已排序结果的 [firstOrNull]。Core 的 recent_edits.json 仍保留历史/去重能力，
+     * [getRecentEdits] 通用 API 不删（历史记录查询）；首页自己的契约必须是单值。
+     */
+    fun getLatestRecentEdit(): RecentEdit? = getRecentEdits().firstOrNull()
+
     fun recordRecentEdit(
         projectId: String,
         volumeId: String,

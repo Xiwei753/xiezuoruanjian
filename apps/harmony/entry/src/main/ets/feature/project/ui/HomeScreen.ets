@@ -17,7 +17,7 @@ export struct HomeScreen {
   @Consume("navPathStack") navPathStack: NavPathStack
   @State appDataRoot: string = ''
   @State projects: Project[] = []
-  @State recentEdits: RecentEdit[] = []
+  @State recentEdit: RecentEdit | null = null
   @State writingStats: WritingStats | null = null
   @State isLoading: boolean = true
   @State errorMessage: string = ''
@@ -107,7 +107,7 @@ export struct HomeScreen {
 
       if (appStateResult.success && appStateResult.data) {
         this.projects = appStateResult.data.projects
-        this.recentEdits = appStateResult.data.recentEdits
+        this.recentEdit = appStateResult.data.recentEdit
       } else {
         this.errorMessage = getContext(this).resourceManager.getStringSync($r('app.string.error_load_workspace').id)
       }
@@ -222,7 +222,7 @@ export struct HomeScreen {
             }
 
             // Recent edits section
-            if (this.recentEdits.length > 0) {
+            if (this.recentEdit != null) {
               this.RecentEditsSection()
             }
 
@@ -342,16 +342,17 @@ export struct HomeScreen {
       .width('100%')
       .margin({ bottom: 16 })
 
-      ForEach(this.recentEdits, (edit: RecentEdit) => {
+      // #732 评论第5节：首页契约 singular — 只画一个"最近编辑"卡片。
+      if (this.recentEdit != null) {
         Row() {
           Column() {
-             Text(`Chapter ${edit.chapterId}`)
+             Text(`Chapter ${this.recentEdit!.chapterId}`)
                .fontSize(16)
                .fontColor(this.themeConfig.colors.textPrimary)
                .margin({ bottom: 6 })
 
              Row() {
-               Text(`Project ${edit.projectId}`)
+               Text(`Project ${this.recentEdit!.projectId}`)
                 .fontSize(13)
                 .fontColor(this.themeConfig.colors.textSecondary)
                 .margin({ right: 16 })
@@ -360,7 +361,7 @@ export struct HomeScreen {
           .layoutWeight(1)
           .alignItems(HorizontalAlign.Start)
 
-          Text(this.formatTime(edit.timestamp))
+          Text(this.formatTime(this.recentEdit!.timestamp))
             .fontSize(13)
             .fontColor(this.themeConfig.colors.textHint)
         }
@@ -370,9 +371,9 @@ export struct HomeScreen {
         .borderRadius(DesignTokens.radiusMd)
         .margin({ bottom: 10 })
         .onClick(() => {
-          this.navPathStack.pushPath({ name: Routes.Writing, param: { chapterId: edit.chapterId, chapterTitle: `Chapter ${edit.chapterId}` } })
+          this.navPathStack.pushPath({ name: Routes.Writing, param: { chapterId: this.recentEdit!.chapterId, chapterTitle: `Chapter ${this.recentEdit!.chapterId}` } })
         })
-      }, (edit: RecentEdit) => edit.chapterId)
+      }
     }
     .width('100%')
     .margin({ bottom: 24 })

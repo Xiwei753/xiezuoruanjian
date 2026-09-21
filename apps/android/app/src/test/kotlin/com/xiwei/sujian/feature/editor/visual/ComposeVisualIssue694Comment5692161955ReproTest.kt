@@ -363,7 +363,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
                 expectedOldText = "a",
                 expectedNewText = "",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // 4.5 bridge outcome: AuthoritativeApplied — Undo 在 composition 期间到达，
@@ -437,7 +436,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
                 expectedOldText = "AB",
                 expectedNewText = "ABC",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // 3. 本地 layout 后到: observePresentedLayout("AB")

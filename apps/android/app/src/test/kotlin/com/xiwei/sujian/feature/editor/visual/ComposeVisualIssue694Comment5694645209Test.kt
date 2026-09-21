@@ -433,8 +433,9 @@ class ComposeVisualIssue694Comment5694645209Test {
         val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         val frame0 = 0L
         timeline.applyPatch(
-            patch = insertPatch.copy(motionPolicy = policy),
+            patch = insertPatch,
             frameTimeNanos = frame0,
+            motionPolicy = policy,
         )
 
         // 第二步：sample 到中间帧（150ms），吐字动画进行中但未结束
@@ -459,8 +460,9 @@ class ComposeVisualIssue694Comment5694645209Test {
             )
         val frame1 = midFrame
         timeline.applyPatch(
-            patch = deletePatch.copy(motionPolicy = policy),
+            patch = deletePatch,
             frameTimeNanos = frame1,
+            motionPolicy = policy,
         )
 
         // 第四步：检查 ghost 的分段 schedule
@@ -575,7 +577,6 @@ class ComposeVisualIssue694Comment5694645209Test {
         insertedUnits: List<TextRange>,
         deletedUnits: List<TextRange>,
     ): ComposeVisualPatch {
-        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         return ComposeVisualPatch(
             id = 1L,
             coreTransactionIds = emptyList(),
@@ -589,7 +590,6 @@ class ComposeVisualIssue694Comment5694645209Test {
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            motionPolicy = policy,
             intent = null,
         )
     }
@@ -603,7 +603,6 @@ class ComposeVisualIssue694Comment5694645209Test {
         insertedUnits: List<TextRange>,
         deletedUnits: List<TextRange>,
     ): ComposeVisualPatch {
-        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
         return ComposeVisualPatch(
             id = 2L,
             coreTransactionIds = emptyList(),
@@ -617,7 +616,6 @@ class ComposeVisualIssue694Comment5694645209Test {
             targetCaretRect = Rect.Zero,
             durationMs = 300L,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            motionPolicy = policy,
             intent = null,
         )
     }

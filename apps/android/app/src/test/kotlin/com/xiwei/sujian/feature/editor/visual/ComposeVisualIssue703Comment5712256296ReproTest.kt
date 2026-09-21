@@ -219,9 +219,8 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
                 newLayout = abLayout,
                 insertedUnits = listOf(TextRange(1, 2)),
                 durationMs = 1000L,
-                motionPolicy = motionPolicy,
             )
-        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L)
+        timeline.applyPatch(patch = patch1, frameTimeNanos = 0L, motionPolicy = motionPolicy)
 
         // 确认第一笔创建了 Inserted role 的 unit
         val sceneAfter1 = timeline.sample(0L)
@@ -248,9 +247,8 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
                         RetainedMove(oldRange = TextRange(1, 2), newRange = TextRange(1, 2)),
                     ),
                 durationMs = 1000L,
-                motionPolicy = motionPolicy,
             )
-        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS)
+        timeline.applyPatch(patch = patch2, frameTimeNanos = 20L * NANOS_PER_MS, motionPolicy = motionPolicy)
 
         // 采样检查 surviving unit 的 role
         val scene = timeline.sample(20L * NANOS_PER_MS)
@@ -305,7 +303,6 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
-        motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -320,7 +317,6 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-            motionPolicy = motionPolicy,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

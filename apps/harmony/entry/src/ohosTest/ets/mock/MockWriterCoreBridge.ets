@@ -113,7 +113,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     return this.success([
       {
         projects: this.mockProjects,
-        recentEdits: [] as RecentEdit[]
+        recentEdit: null
       } as AppSummary
     ] as AppSummary[])
   }
@@ -122,7 +122,7 @@ export class MockWriterCoreBridge implements IWriterCoreBridge {
     await this.delay(200)
     const summary: AppSummary = {
       projects: this.mockProjects,
-      recentEdits: [] as RecentEdit[]
+      recentEdit: null
     }
     return this.success(summary)
   }

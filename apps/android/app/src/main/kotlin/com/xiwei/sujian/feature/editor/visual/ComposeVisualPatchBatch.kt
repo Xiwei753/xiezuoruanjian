@@ -58,11 +58,10 @@ internal object ComposeVisualPatchBatch {
                 else -> TextVisualKind.Move
             }
 
-        val motionPolicy = last.motionPolicy
-        val effectivePolicy = motionPolicy.effective()
+        // Issue #732 评论 5763493968 第2节：batch 不再用"最后一个 patch 的 policy"筛掉
+        // inserted/deleted units — batch 只合并事实 diff。是否播放在真正消费这一帧时
+        // （[ComposeEditorVisualState.drainPendingPatchesAtFrame]）由当前 effective policy 决定。
         val screenSuppressed = batch.any { it.animationMode == uniffi.writer_core.AnimationModeDto.SYSTEM_SUPPRESSED }
-        val customTextAnimationEnabled =
-            effectivePolicy.textEnabled && !screenSuppressed && transactionTextKind != TextVisualKind.None
 
         // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
         // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
@@ -75,30 +74,23 @@ internal object ComposeVisualPatchBatch {
         val composedDeleted =
             ComposeVisualRebase.composeOldUnitsToBaseStages(perStageOldUnits, perStageOffsetMaps)
 
+        // batch 只合并事实 diff，不按 policy 筛 units — 是否播放由消费帧的 effective policy 决定。
         val insertedUnits =
-            if (customTextAnimationEnabled) {
-                when (transactionTextKind) {
-                    TextVisualKind.Insert, TextVisualKind.Move -> {
-                        // 优先用合成的 ordered units 保留吐字顺序；
-                        // 若所有 stage 都没 insertedUnits 但净变化有插入，回退到净变化 newRanges。
-                        if (composedInserted.isNotEmpty()) composedInserted else changedRanges.newRanges
-                    }
-                    TextVisualKind.Delete, TextVisualKind.None -> emptyList()
+            when (transactionTextKind) {
+                TextVisualKind.Insert, TextVisualKind.Move -> {
+                    // 优先用合成的 ordered units 保留吐字顺序；
+                    // 若所有 stage 都没 insertedUnits 但净变化有插入，回退到净变化 newRanges。
+                    if (composedInserted.isNotEmpty()) composedInserted else changedRanges.newRanges
                 }
-            } else {
-                emptyList()
+                TextVisualKind.Delete, TextVisualKind.None -> emptyList()
             }
 
         val deletedUnits =
-            if (customTextAnimationEnabled) {
-                when (transactionTextKind) {
-                    TextVisualKind.Delete, TextVisualKind.Move -> {
-                        if (composedDeleted.isNotEmpty()) composedDeleted else changedRanges.oldRanges
-                    }
-                    TextVisualKind.Insert, TextVisualKind.None -> emptyList()
+            when (transactionTextKind) {
+                TextVisualKind.Delete, TextVisualKind.Move -> {
+                    if (composedDeleted.isNotEmpty()) composedDeleted else changedRanges.oldRanges
                 }
-            } else {
-                emptyList()
+                TextVisualKind.Insert, TextVisualKind.None -> emptyList()
             }
 
         // #703 评论 5712256296 缺口1：batch 不再凭几何重算 retainedMoves —
@@ -117,13 +109,9 @@ internal object ComposeVisualPatchBatch {
         // coreTransactionIds 合并所有笔
         val coreTransactionIds = batch.flatMap { it.coreTransactionIds }
 
-        // 无 overlay 工作时不按 durationMs 假装 active
-        val effectiveDurationMs =
-            if (!customTextAnimationEnabled) {
-                0L
-            } else {
-                last.durationMs
-            }
+        // Issue #732 评论 5763493968 第2节：durationMs 不再根据 customTextAnimationEnabled 设 0 —
+        // 是否播放由消费帧决定，batch 只保留 Core 建议时长。
+        val effectiveDurationMs = last.durationMs
 
         val animationMode =
             if (screenSuppressed) {
@@ -145,7 +133,6 @@ internal object ComposeVisualPatchBatch {
             targetCaretRect = last.targetCaretRect,
             durationMs = effectiveDurationMs,
             animationMode = animationMode,
-            motionPolicy = motionPolicy,
             intent = last.intent,
         )
     }

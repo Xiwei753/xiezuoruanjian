@@ -34,7 +34,11 @@ interface WorkspaceAppState {
      */
     val projectSummaries: List<com.xiwei.sujian.feature.project.data.model.ProjectSummary>
 
-    val recentEdits: List<com.xiwei.sujian.feature.project.data.model.RecentEdit>
+    /**
+     * #732 评论第5节：首页契约 singular — 最近一次编辑（nullable）。
+     * Core 的 recent_edits.json 仍保留历史；首页自己的契约必须是单值。
+     */
+    val recentEdit: com.xiwei.sujian.feature.project.data.model.RecentEdit?
     val currentProjectId: String?
     val currentProjectTitle: String
     val currentVolumeId: String?
@@ -92,7 +96,7 @@ class SujianAppViewModel(
     var projectSummaries by androidx.compose.runtime.mutableStateOf<List<ProjectSummary>>(emptyList())
         private set
 
-    var recentEdits by androidx.compose.runtime.mutableStateOf<List<RecentEdit>>(emptyList())
+    var recentEdit by androidx.compose.runtime.mutableStateOf<RecentEdit?>(null)
         private set
 
     var currentProjectId by androidx.compose.runtime.mutableStateOf<String?>(savedStateHandle["currentProjectId"])
@@ -287,9 +291,9 @@ class SujianAppViewModel(
         viewModelScope.launch {
             val result =
                 withContext(Dispatchers.IO) {
-                    runCatching { requireProjectUseCase().getRecentEdits(5) }
+                    runCatching { requireProjectUseCase().getLatestRecentEdit() }
                 }
-            result.onSuccess { list -> recentEdits = list }
+            result.onSuccess { edit -> recentEdit = edit }
                 .onFailure { _uiEvents.tryEmit(WorkspaceUiEvent.Error(errorMessage(it))) }
         }
     }
@@ -356,7 +360,7 @@ class SujianAppState(
     val viewModel: SujianAppViewModel,
 ) : WorkspaceAppState {
     override val projectSummaries: List<ProjectSummary> get() = viewModel.projectSummaries
-    override val recentEdits: List<RecentEdit> get() = viewModel.recentEdits
+    override val recentEdit: RecentEdit? get() = viewModel.recentEdit
     override val currentProjectId: String? get() = viewModel.currentProjectId
     override val currentProjectTitle: String get() = viewModel.currentProjectTitle
     override val currentVolumeId: String? get() = viewModel.currentVolumeId

@@ -89,14 +89,20 @@ fun EditorTextFieldDrawLayer(
 
     // #708 评论 5723410606 第一节：每帧状态不在 Composable 主体读取 —
     // visualScene / latestLayout 改成只在 drawWithContent 内取 drawSnapshot()。
-    // patchVersion 继续作为启动帧循环的低频信号。
-    val patchVersion by visualState.patchVersion.collectAsStateWithLifecycle()
+    // frameRequestVersion 继续作为启动帧循环的低频信号。
+    // Issue #732 评论 5763493968 第3节：policy 改变、selection-only caret target、patch 入队
+    // 都会唤醒同一个帧循环 — 所有引用 frameRequestVersion 的地方同步改名。
+    val frameRequestVersion by visualState.frameRequestVersion.collectAsStateWithLifecycle()
 
     // #689 评论 5674631257 步骤8：只在 timeline 有活动 unit 时用 Compose 的帧时钟推进。
-    // #689 评论 5676120929 问题1：用 patchVersion 唤醒帧循环，真正数据从队列 drain。
+    // #689 评论 5676120929 问题1：用 frameRequestVersion 唤醒帧循环，真正数据从队列 drain。
     // #689 评论 5675270164 缺陷6：全过程只用 withFrameNanos 的 frameTimeNanos。
-    LaunchedEffect(patchVersion) {
-        if (patchVersion <= 0L) return@LaunchedEffect
+    // Issue #732 评论 5763493968 第3节：单一 withFrameNanos 循环 —
+    // 每帧顺序固定为：应用 pending policy → 合并/消费 patch → 创建或 redirect 同一笔
+    // ComposeEditMotion → sample motion → sample timeline → draw。
+    // 不再让设置同步 effect 和 draw loop 分别拿自己的 frame。
+    LaunchedEffect(frameRequestVersion) {
+        if (frameRequestVersion <= 0L) return@LaunchedEffect
         while (true) {
             val active =
                 withFrameNanos { frameTimeNanos ->
@@ -222,13 +228,14 @@ private fun DrawScope.drawVisualScene(
         // position 已由 timeline 算好，直接读 unit.position.from（sample 后 from == 当前值）
         val currentPosition = unit.position.from
         val targetRange = unit.targetRange
-        // #703 评论 5710419102 问题2：coordinated 模式下缺失 clipFraction 不能默认 1，
-        // 否则新插入 unit 首帧会整字出现。insert（targetRange != null）默认 0（不可见），
-        // delete ghost（targetRange == null）默认 1（吞字开始完整可见）。
+        // Issue #732 评论 5763493968 第4节：coordinated 模式的 glyph fraction 只能来自当前
+        // ComposeEditMotion.Sample — 删除"找不到 unit fraction 就自己用 0/1 fallback"的后门。
+        // coordinated 模式下没有 motion sample fraction 时不画此 unit（直接收口到最终正文，
+        // 由 BasicTextField 画），释放对应 hiddenRanges。
         // 非 coordinated 模式沿用 1（alpha 主导显隐）。
         val clipFraction =
             scene.unitClipFractions[unit.key] ?: if (scene.coordinatedSpatialClip) {
-                if (targetRange != null) 0f else 1f
+                continue
             } else {
                 1f
             }

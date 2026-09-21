@@ -21,7 +21,11 @@ interface ProjectUseCasePort {
      */
     suspend fun getProjectSummaries(): List<ProjectSummary>
 
-    suspend fun getRecentEdits(limit: Int): List<RecentEdit>
+    /**
+     * #732 评论第5节：首页契约 singular — 只返回最近一次编辑（nullable）。
+     * Core 的 get_recent_edits() 通用 API 仍返回历史列表，此处是首页产品层的单值收口。
+     */
+    suspend fun getLatestRecentEdit(): RecentEdit?
 
     suspend fun createProject(title: String): Project
 
@@ -53,9 +57,9 @@ class ProjectUseCase(
             repository.getProjectSummaries()
         }
 
-    override suspend fun getRecentEdits(limit: Int): List<RecentEdit> =
+    override suspend fun getLatestRecentEdit(): RecentEdit? =
         withContext(Dispatchers.IO) {
-            recentEditsRepository.getRecentEdits().take(limit)
+            recentEditsRepository.getLatestRecentEdit()
         }
 
     override suspend fun createProject(title: String) =
