@@ -231,13 +231,17 @@ class ComposeEditMotion(
         val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
         // 纯换 caret 目标：现有 unit 按"当前相位之后的剩余部分"重新归一，立即继续，
         // 不重新从整条旧 schedule 的 0 开始（Issue #728 评论 5756468643 问题1）。
-        // unitChannels 的迭代顺序即创建时的正文顺序（forInsert/forDelete/forEdit 都按正文位置排序传入），
-        // 没有新 unit 加入，无需重排相对顺序。
         // 纯 caret 移动不改变文字目标，desiredTo = ch.to 保持原行为（Issue #728 评论 5760112985 问题1）。
+        // Issue #728 评论 5760741452 问题2：不能信 unitChannels 的 map 迭代顺序（插入顺序），
+        // 因为 forDelete/forEdit 的区间是反向分配的，插入顺序 [10,11,12] ≠ 实际 traversal 顺序 12→11→10。
+        // selection-only redirect 必须保留原 motion 的真实 traversal 顺序，按旧 channel 的 startProgress
+        // 升序重建 specs，这样 pending 排序与原 motion 一致，traversal 顺序不会反转。
         val specs =
-            unitChannels.map { (key, ch) ->
-                RedirectUnitSpec(key = key, oldChannel = ch, desiredTo = ch.to)
-            }
+            unitChannels.entries
+                .sortedBy { it.value.startProgress }
+                .map { (key, ch) ->
+                    RedirectUnitSpec(key = key, oldChannel = ch, desiredTo = ch.to)
+                }
         val newChannels = buildRedirectChannels(specs, oldGlyphProgress, currentSample)
         return ComposeEditMotion(
             originCaretRect = origin,
@@ -273,10 +277,17 @@ class ComposeEditMotion(
      *
      * 分配策略（保证重定向后立即继续，不出现"先冻结再继续" — Issue #728 评论 5756468643 问题1）：
      * 1. 目标已达成 unit：直接固定终值（from=to=currentFraction），不占新区间。
-     * 2. 进行中 unit：startProgress=0（立即继续），endProgress=remaining
-     *    （remaining = 1 - oldProgressWithinChannel，即该 unit 还需要走的比例）。
+     * 2. 进行中 unit 且方向未变（desiredTo == oldChannel.to）：startProgress=0（立即继续），
+     *    endProgress=remaining（remaining = 1 - oldProgressWithinChannel，即该 unit 还需要走的比例）。
      *    pending unit 分布在 (remaining, 1] 区间。
      * 3. 未开始 / Completed+角色变化 unit：分布到 (remaining, 1] 区间，等权分配。
+     * 4. 进行中 unit 且角色反转（desiredTo != oldChannel.to，Issue #728 评论 5760741452 问题1）：
+     *    不再用旧方向的 remaining 决定新区间长度（旧 remaining 只对继续沿旧方向走到旧 ch.to 成立，
+     *    角色反转后 glyph 会提前吞完，与 caret 不同步）。把反转的 InProgress unit 当成"重新进入新
+     *    traversal schedule 的第一段"，和 pending 一起等权分配 (remaining, 1] 区间
+     *    （reversedInProgress 排最前）。单 unit 反转时就是 [0, 1] 全区间，
+     *    新 channel startProgress=0, endProgress=1, from=currentFraction, to=desiredTo，
+     *    glyph 与从当前屏幕位置出发的 caret 在整个新 motion 内同步到目标。
      * 这样进行中 unit 在 master=0 时 localProgress=0 → fraction 从 currentFraction 继续，
      * 不会冻结；pending unit 在 master 达到其 startProgress 后才开始，各自有独立区间。
      *
@@ -296,51 +307,111 @@ class ComposeEditMotion(
         var inProgressRemaining = 0f
         val inProgressUnits = mutableListOf<Pair<Long, UnitChannel>>()
         val pending = mutableListOf<Pair<Long, UnitChannel>>()
+        // Issue #728 评论 5760741452 问题1：角色反转的 InProgress unit 不能用旧方向 remaining，
+        // 当成"重新进入新 traversal schedule 的第一段"，和 pending 一起等权分配 (remaining, 1] 区间。
+        // reversedInProgress 排在 pending 之前，保证反转 unit 紧接 in-progress 之后最先开始。
+        val reversedInProgress = mutableListOf<Pair<Long, UnitChannel>>()
         for (spec in specs) {
-            val ch = spec.oldChannel
             val desiredTo = spec.desiredTo
-            if (ch == null) {
-                // 新 unit：from = 1 - desiredTo（inserted: 0, deleted: 1），to = desiredTo，作为 pending。
-                pending.add(spec.key to UnitChannel(1f - desiredTo, desiredTo, 0f, 1f))
-                continue
-            }
-            val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
-            // 目标已达成（包括 Completed 角色未变、或刚好走到目标）：固定终值，不占区间。
-            if (abs(currentFraction - desiredTo) < 1e-5f) {
-                result[spec.key] = UnitChannel(currentFraction, desiredTo, 0f, 0f)
-                continue
-            }
-            // 需要动画：from = currentFraction, to = desiredTo，按旧 phase 分类决定区间分配。
-            val classification = classifyRedirectUnit(oldGlyphProgress, ch)
-            when (classification) {
-                is RedirectUnitClass.InProgress -> {
-                    inProgressRemaining = classification.remaining
+            when (val c = classifyRedirectSpec(spec, oldGlyphProgress, currentSample)) {
+                is SpecClassification.NewUnitPending ->
+                    pending.add(spec.key to UnitChannel(1f - desiredTo, desiredTo, 0f, 1f))
+                is SpecClassification.FixedTerminal ->
+                    result[spec.key] = UnitChannel(c.currentFraction, desiredTo, 0f, 0f)
+                is SpecClassification.InProgressDirectionKept -> {
+                    inProgressRemaining = c.remaining
                     inProgressUnits.add(
-                        spec.key to UnitChannel(currentFraction, desiredTo, 0f, classification.remaining),
+                        spec.key to UnitChannel(c.currentFraction, desiredTo, 0f, c.remaining),
                     )
                 }
-                is RedirectUnitClass.NotStarted,
-                is RedirectUnitClass.Completed,
-                -> {
-                    // Completed 且角色变化（currentFraction != desiredTo）不再固定旧终值，
-                    // 作为 pending 走新剩余动画（Issue #728 评论 5760112985 问题1）。
-                    pending.add(spec.key to UnitChannel(currentFraction, desiredTo, 0f, 1f))
-                }
+                is SpecClassification.InProgressDirectionChanged ->
+                    reversedInProgress.add(spec.key to UnitChannel(c.currentFraction, desiredTo, 0f, 1f))
+                is SpecClassification.Pending ->
+                    pending.add(spec.key to UnitChannel(c.currentFraction, desiredTo, 0f, 1f))
             }
         }
         for ((key, ch) in inProgressUnits) {
             result[key] = ch
         }
-        if (pending.isNotEmpty()) {
+        // 反转的 InProgress unit 排在 pending 之前，紧接方向不变的 in-progress 之后，
+        // 一起等权分配 (inProgressRemaining, 1] 区间（Issue #728 评论 5760741452 问题1）。
+        val schedule = reversedInProgress + pending
+        if (schedule.isNotEmpty()) {
             val available = (1f - inProgressRemaining).coerceAtLeast(0.001f)
-            val step = available / pending.size
+            val step = available / schedule.size
             var cursor = inProgressRemaining
-            for ((key, ch) in pending) {
+            for ((key, ch) in schedule) {
                 result[key] = UnitChannel(ch.from, ch.to, cursor, cursor + step)
                 cursor += step
             }
         }
         return result
+    }
+
+    /**
+     * redirect 时单个 spec 的分类结果 — 决定该 unit 进入哪个收集组。
+     *
+     * 从 [buildRedirectChannels] 的循环体抽出，降低 Cognitive Complexity。
+     */
+    private sealed class SpecClassification {
+        /** 新 unit（oldChannel == null）：from = 1 - desiredTo，作为 pending。 */
+        data object NewUnitPending : SpecClassification()
+
+        /** 目标已达成：固定终值 from=to=currentFraction，不占区间。 */
+        data class FixedTerminal(val currentFraction: Float) : SpecClassification()
+
+        /** 方向不变的 InProgress：startProgress=0 立即继续，endProgress=remaining。 */
+        data class InProgressDirectionKept(val currentFraction: Float, val remaining: Float) : SpecClassification()
+
+        /** 角色反转的 InProgress（Issue #728 评论 5760741452 问题1）：作为新 schedule 第一段。 */
+        data class InProgressDirectionChanged(val currentFraction: Float) : SpecClassification()
+
+        /** NotStarted / Completed+角色变化：作为 pending 走新剩余动画。 */
+        data class Pending(val currentFraction: Float) : SpecClassification()
+    }
+
+    /**
+     * 对单个 [spec] 分类，决定它进入哪个收集组（Issue #728 评论 5760741452 问题1）。
+     */
+    private fun classifyRedirectSpec(
+        spec: RedirectUnitSpec,
+        oldGlyphProgress: Float,
+        currentSample: Sample,
+    ): SpecClassification {
+        val ch = spec.oldChannel
+        val desiredTo = spec.desiredTo
+        if (ch == null) {
+            // 新 unit：作为 pending。
+            return SpecClassification.NewUnitPending
+        }
+        val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
+        // 目标已达成（包括 Completed 角色未变、或刚好走到目标）：固定终值，不占区间。
+        if (abs(currentFraction - desiredTo) < 1e-5f) {
+            return SpecClassification.FixedTerminal(currentFraction)
+        }
+        // 需要动画：按旧 phase 分类决定区间分配。
+        val classification = classifyRedirectUnit(oldGlyphProgress, ch)
+        // Issue #728 评论 5760741452 问题1：检测角色是否反转。
+        // directionChanged=true 时旧方向的 remaining 不再适用，必须重新进入新 traversal schedule。
+        val directionChanged = abs(desiredTo - ch.to) >= 1e-5f
+        return when (classification) {
+            is RedirectUnitClass.InProgress -> {
+                if (directionChanged) {
+                    // 角色反转：不用旧 remaining，作为新 schedule 的第一段和 pending 一起等权分配。
+                    SpecClassification.InProgressDirectionChanged(currentFraction)
+                } else {
+                    // 方向未变：沿用旧 phase 的 remaining，startProgress=0 立即继续。
+                    SpecClassification.InProgressDirectionKept(currentFraction, classification.remaining)
+                }
+            }
+            is RedirectUnitClass.NotStarted,
+            is RedirectUnitClass.Completed,
+            -> {
+                // Completed 且角色变化（currentFraction != desiredTo）不再固定旧终值，
+                // 作为 pending 走新剩余动画（Issue #728 评论 5760112985 问题1）。
+                SpecClassification.Pending(currentFraction)
+            }
+        }
     }
 
     /**

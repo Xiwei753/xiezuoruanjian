@@ -25,6 +25,11 @@ class ComposeEditMotionRedirectRoleTest {
     /**
      * Issue #728 评论 5760112985 问题1：Inserted→DeletedGhost 角色变化时，
      * 目标应从 currentFraction 走向 0（吞字），不再沿用旧 channel 的 to=1（继续吐字）。
+     *
+     * Issue #728 评论 5760741452 问题1 增强：角色反转后 glyph 与 caret 必须**同时**到达终点，
+     * 不能 glyph 提前吞完。单 unit 反转时新 channel 应是 [0, 1] 全区间，
+     * 新 motion 60% 时 fraction ≈ 0.16（0.4+(0-0.4)*0.6），100% 时 fraction=0；
+     * caret 也在 100% 时到目标（left=10），60% 时还在 13.2。
      */
     @Test
     fun redirectTo_insertedBecomesDeletedGhost_targetsZeroNotOldToOne() {
@@ -60,12 +65,51 @@ class ComposeEditMotionRedirectRoleTest {
         assertEquals(0.4f, redirectedStart.unitClipFractions[1L]!!, 0.001f)
 
         // 5. 走一小段后 fraction 下降（往 0 走，不是往 1 走）。
-        // 新 motion 50% 时间：glyphProgress=0.5，key=1 在 [0, 0.6] 区间，
-        // localProgress=0.5/0.6≈0.833，fraction=0.4+(0-0.4)*0.833≈0.067 < 0.4
+        // 新 motion 50% 时间：glyphProgress=0.5，key=1 在 [0, 1] 区间（角色反转后全区间），
+        // localProgress=0.5，fraction=0.4+(0-0.4)*0.5=0.2 < 0.4
         val afterHalf = motion2.sample(midTime + duration / 2)
         val fractionAfter = afterHalf.unitClipFractions[1L]!!
         // 关键断言：desiredTo=0 生效，fraction 在减少（吞字方向），不再用旧 ch.to=1（否则会往 1 增长）
         assertTrue("fraction 应下降（往 0 走），实际=$fractionAfter", fractionAfter < 0.4f)
+
+        // 6. Issue #728 评论 5760741452 问题1 核心断言：glyph 与 caret 同步到达终点。
+        // 新 motion 60% 时间：glyphProgress=0.6，key=1 在 [0, 1] 全区间，
+        // localProgress=0.6，fraction=0.4+(0-0.4)*0.6=0.16（不是 0！）
+        // 旧 bug 用旧方向 remaining=0.6 作 endProgress，60% 时 fraction=0（提前吞完）。
+        val atSixtyPercent = motion2.sample(midTime + duration * 3 / 5)
+        val fractionAtSixty = atSixtyPercent.unitClipFractions[1L]!!
+        assertEquals(
+            "新 motion 60% 时 fraction 应≈0.16（0.4+(0-0.4)*0.6），glyph 不应提前吞完，实际=$fractionAtSixty",
+            0.16f,
+            fractionAtSixty,
+            0.001f,
+        )
+        // 60% 时 caret 还在走：origin=18（40% 时 caret.left），target=10，60% 插值=13.2
+        val caretAtSixty = atSixtyPercent.caretRect
+        assertEquals(
+            "caret 60% 时应在 13.2（还没到目标 10），与 glyph 同步",
+            13.2f,
+            caretAtSixty.left,
+            0.001f,
+        )
+        // glyph 还没到终点（fraction=0.16 > 0），caret 还没到终点（left=13.2 > 10）— 同步
+        assertTrue("glyph 60% 时还没到终点（fraction=$fractionAtSixty > 0）", fractionAtSixty > 0.001f)
+        assertTrue("caret 60% 时还没到终点（left=${caretAtSixty.left} > 10）", caretAtSixty.left > 10.001f)
+
+        // 7. 新 motion 100% 时 glyph 和 caret 同时到达终点
+        val atFull = motion2.sample(midTime + duration)
+        assertEquals(
+            "新 motion 100% 时 glyph fraction 应为 0（终点）",
+            0f,
+            atFull.unitClipFractions[1L]!!,
+            0.001f,
+        )
+        assertEquals(
+            "新 motion 100% 时 caret 应到目标（left=10），与 glyph 同时到达",
+            10f,
+            atFull.caretRect.left,
+            0.001f,
+        )
     }
 
     /**
@@ -224,5 +268,87 @@ class ComposeEditMotionRedirectRoleTest {
         // 25% 时 key=2 还没开始（fraction=1），75% 时 key=1 已完成（fraction=1），
         // 两者在不同区间，不是各自归一化到 [0,1] 同时播放。
         assertTrue("不重叠：key=2 在 key=1 之后才动", fraction2Quarter > fraction2ThreeQuarter)
+    }
+
+    /**
+     * Issue #728 评论 5760741452 问题2：redirectCaretTo 后 traversal 顺序必须保持原 motion 的真实顺序。
+     *
+     * 场景：forDelete([10, 11, 12])，运行到 key=12 中途，redirectCaretTo()（纯 caret 移动），
+     * 后续必须是 key=12 继续 → key11 → key10，不能变成 key12 → key10 → key11。
+     *
+     * forDelete 反向分配区间：key=12 [0, 1/3]（最右先吞），key=11 [1/3, 2/3]，key=10 [2/3, 1]（最左后吞）。
+     * unitChannels 插入顺序是 [10, 11, 12]（正文左→右），但实际 traversal 顺序是 12→11→10。
+     * 旧 bug 用 map 迭代顺序建 specs，pending 按 [10, 11] 排，traversal 变成 12→10→11（错误）。
+     * 修复后按 startProgress 升序建 specs，pending 按 [11, 10] 排，traversal 保持 12→11→10（正确）。
+     */
+    @Test
+    fun redirectCaretTo_preservesOriginalTraversalOrder_rightToLeft() {
+        // 1. forDelete 三个 deleted unit keys=10,11,12（sourceRange.start 升序，正文左→右）
+        val motion1 =
+            ComposeEditMotion.forDelete(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                deletedUnitKeys = listOf(10L, 11L, 12L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = duration,
+                glyphDurationNanos = duration,
+            )
+        // 2. sample 到 duration/6（glyphProgress=1/6，key=12 区间 [0,1/3] 中段）
+        //    key=12 fraction=0.5（in-progress），key=10/11 fraction=1（未开始）
+        val midTime = startTime + duration / 6
+        val midSample = motion1.sample(midTime)
+        assertEquals("key=12 应在 [0,1/3] 中段 fraction=0.5", 0.5f, midSample.unitClipFractions[12L]!!, 0.001f)
+        assertEquals("key=11 还没开始 fraction=1", 1f, midSample.unitClipFractions[11L]!!, 0.001f)
+        assertEquals("key=10 还没开始 fraction=1", 1f, midSample.unitClipFractions[10L]!!, 0.001f)
+
+        // 3. redirectCaretTo（纯 caret 移动，模拟用户按方向键/鼠标移动 selection）
+        val motion2 =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = originRect,
+                frameTimeNanos = midTime,
+                caretDurationNanos = duration,
+                glyphDurationNanos = duration,
+            )
+
+        // 4. sample 到新 motion 60% 时间（glyphProgress=0.6）
+        //    修复后区间：key=12 [0, 0.5]（in-progress 继续），key=11 [0.5, 0.75]，key=10 [0.75, 1.0]
+        //    key=12: 0.6 >= 0.5 → fraction=0（已完成）
+        //    key=11: 0.5 < 0.6 < 0.75 → local=0.4 → fraction=0.6（正在吞）
+        //    key=10: 0.6 <= 0.75 → fraction=1（还没开始）
+        //    key=11 比 key=10 先开始吞 — 右→左顺序保持！
+        val atSixtyPercent = motion2.sample(midTime + duration * 3 / 5)
+        val fraction10 = atSixtyPercent.unitClipFractions[10L]!!
+        val fraction11 = atSixtyPercent.unitClipFractions[11L]!!
+        val fraction12 = atSixtyPercent.unitClipFractions[12L]!!
+
+        // key=12 已完成（最前继续）
+        assertEquals("key=12 应已完成吞（fraction=0），实际=$fraction12", 0f, fraction12, 0.001f)
+        // key=11 先开始吞（fraction<1），key=10 还没开始（fraction==1）— 右→左顺序保持
+        assertTrue("key=11 应已开始吞（fraction<1），实际=$fraction11", fraction11 < 1f)
+        assertEquals("key=10 应还没开始（fraction=1），实际=$fraction10", 1f, fraction10, 0.001f)
+        // 关键断言：key=11 fraction < key=10 fraction — key=11 先于 key=10 开始吞
+        assertTrue(
+            "traversal 顺序应保持 12→11→10：key=11 fraction=$fraction11 < key=10 fraction=$fraction10" +
+                "（key=11 先于 key=10 开始吞）",
+            fraction11 < fraction10,
+        )
+
+        // 5. sample 到新 motion 75% 时间（glyphProgress=0.75）
+        //    key=11: 0.75 >= 0.75 → fraction=0（已完成）
+        //    key=10: 0.75 <= 0.75 → fraction=1（刚好开始）
+        val atSeventyFive = motion2.sample(midTime + duration * 3 / 4)
+        assertEquals(
+            "75% 时 key=11 应已完成 fraction=0（区间 [0.5,0.75]），实际=${atSeventyFive.unitClipFractions[11L]}",
+            0f,
+            atSeventyFive.unitClipFractions[11L]!!,
+            0.001f,
+        )
+        // key=10 在 key=11 之后才开始 — 顺序正确（旧 bug 这里 key=10 已完成、key=11 还没开始）
+        assertTrue(
+            "75% 时 key=10 应还没完成（fraction>0），key=11 已完成 — key=10 在 key=11 之后，" +
+                "实际 key=10=${atSeventyFive.unitClipFractions[10L]}, key=11=${atSeventyFive.unitClipFractions[11L]}",
+            atSeventyFive.unitClipFractions[10L]!! > 0f,
+        )
     }
 }
