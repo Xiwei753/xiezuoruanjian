@@ -547,6 +547,7 @@ pub(super) fn transfer_live_project(
                             &plan.sync_policy,
                             plan.force_sync,
                             Some(outcome),
+                            cancellation_token,
                         ),
                         None => super::generation::publish_generation(
                             provider,
@@ -558,6 +559,7 @@ pub(super) fn transfer_live_project(
                             &plan.sync_policy,
                             plan.force_sync,
                             None,
+                            cancellation_token,
                         ),
                     };
 
@@ -567,6 +569,26 @@ pub(super) fn transfer_live_project(
                     );
                     if !content_ok {
                         return (content_result, None, None);
+                    }
+
+                    // Issue #729：publish_generation 返回后、apply_lifecycle_record 前检查取消令牌。
+                    // 取消则不执行 CAS 写入，返回已收集的 content_result（已上传但未 CAS）。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_live_project: cancellation requested after publish_generation, before apply_lifecycle_record — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            let mut r = content_result;
+                            merge_accumulated_local_effects(
+                                &mut r,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (r, None, None);
+                        }
                     }
 
                     // 4. CAS apply_lifecycle_record。
@@ -834,12 +856,25 @@ pub(super) fn transfer_restore_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
     use crate::sync::SyncStatus;
+
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_restore_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
             use crate::sync::types::TargetOp;
@@ -1007,11 +1042,23 @@ pub(super) fn transfer_delete_local_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_delete_local_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
             use crate::sync::types::TargetOp;
@@ -1115,12 +1162,25 @@ pub(super) fn transfer_delete_remote_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
     use crate::sync::types::TargetLifecycleApplyResult;
+
+    // Issue #729：关键写/delete 操作前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_delete_remote_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     let deleted_at_ms = planned
         .deleted_lww
         .as_ref()

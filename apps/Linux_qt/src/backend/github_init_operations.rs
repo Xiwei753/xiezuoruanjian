@@ -88,6 +88,12 @@ impl AppBackend {
             writer_core::sync::SyncCancellationToken::new(),
         ));
         let workspace_generation = self.current_workspace_generation;
+        // Issue #729：clone token 传入后台线程，再传入 Core API perform_full_sync。
+        // SyncCancellationToken 是 Clone 的（内部 Arc<AtomicBool>），可廉价克隆。
+        let cancel_token = self
+            .current_sync_cancel_token
+            .as_ref()
+            .map(|arc| (**arc).clone());
         // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
         // github_init 的 data_root 就是用户选择的 path。
         let data_root_capture = path_str.clone();
@@ -102,6 +108,7 @@ impl AppBackend {
                 &token_str,
                 workspace_generation,
                 data_root_capture,
+                cancel_token,
             );
             callback(result);
         });
@@ -115,6 +122,7 @@ impl AppBackend {
         token: &str,
         workspace_generation: u64,
         data_root: String,
+        cancel_token: Option<writer_core::sync::SyncCancellationToken>,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
             provider::github::config::{GitHubProviderConfig, GitHubTransport},
@@ -243,6 +251,7 @@ impl AppBackend {
                 "sync.result.clone_init_success",
                 workspace_generation,
                 data_root.clone(),
+                cancel_token.clone(),
             )
         } else if has_directory() {
             Self::run_github_init_sync(
@@ -255,6 +264,7 @@ impl AppBackend {
                 "sync.result.remote_configured_sync_success",
                 workspace_generation,
                 data_root.clone(),
+                cancel_token.clone(),
             )
         } else if is_git_repo() {
             SyncTaskOutcome {
@@ -311,8 +321,9 @@ impl AppBackend {
         success_summary_key: &str,
         workspace_generation: u64,
         data_root: String,
+        cancel_token: Option<writer_core::sync::SyncCancellationToken>,
     ) -> SyncTaskOutcome {
-        match api.perform_full_sync(config_dto.clone(), true, None) {
+        match api.perform_full_sync(config_dto.clone(), true, cancel_token) {
             Ok(result) => {
                 let status = result.overall_status.as_str();
                 if matches!(status, "success" | "latest_wins_applied" | "no_changes") {

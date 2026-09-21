@@ -333,12 +333,15 @@ impl DesktopRuntimeProfile {
     fn collect(qt_version: &str, qml_entry: &str) -> Self {
         let appimage = std::env::var_os("APPIMAGE").is_some();
         let bundled_qt = appimage;
-        // Issue #729 评论 5763441474：区分 linux-rpm 与 linux-debug。
-        // RPM 安装时 build-rpm.sh 设 SUJIAN_PACKAGE_TYPE=rpm；
-        // AppImage 检测 APPIMAGE 环境变量；其余为开发调试运行。
+        // Issue #729 评论 5764768372：区分 linux-rpm 与 linux-debug。
+        // 用 diagnostics::effective_package_type() 判断 rpm（编译期 env!("PACKAGE_TYPE")
+        // 或运行时 AppImage 检测），不读运行时 std::env::var("SUJIAN_PACKAGE_TYPE")
+        // （该变量只在构建阶段导出，运行时没有）。RPM 构建时 build.rs 设
+        // PACKAGE_TYPE=rpm，编译进二进制后常驻。
+        let pkg_type = crate::backend::diagnostics::effective_package_type();
         let runtime_profile = if appimage {
             "linux-appimage"
-        } else if std::env::var("SUJIAN_PACKAGE_TYPE").as_deref() == Ok("rpm") {
+        } else if pkg_type == "rpm" {
             "linux-rpm"
         } else {
             "linux-debug"

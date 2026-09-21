@@ -129,6 +129,14 @@ impl AppBackend {
                 self.current_pending_github_init_path.clear();
                 self.pending_github_init_path_changed();
                 self.internal_open_data_root(&pending_path);
+                // Issue #729 评论 5764768372：internal_open_data_root 不再自己发
+                // workspace_opened/content/state 信号，此处根据 current_has_data_root
+                // 判断真实成功后补发 AppBackend 信号。
+                if self.current_has_data_root {
+                    self.workspace_opened();
+                    self.workspace_content_changed();
+                    self.workspace_state_changed();
+                }
                 self.load_sync_config();
                 return;
             }

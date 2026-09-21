@@ -134,7 +134,9 @@ impl WorkspaceBackend {
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
         let result = self.with_app_mut(|app| app.create_new_workspace());
-        if result.is_ok() {
+        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功，
+        // 不用 result.is_ok()（只代表 with_app_mut 借用成功）。
+        if result.is_ok() && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -142,7 +144,8 @@ impl WorkspaceBackend {
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
         let result = self.with_app_mut(|app| app.open_existing_workspace());
-        if result.is_ok() {
+        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功。
+        if result.is_ok() && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -161,7 +164,10 @@ impl WorkspaceBackend {
             &format!("path={}", path_str),
         );
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        if result.is_ok() {
+        // Issue #729 评论 5764768372：用 snap().has_workspace（current_has_data_root）
+        // 判断真实打开成功，而非 with_app_mut 的 is_ok（只代表借用成功）。
+        // 只有真实成功才发一次 workspace_opened/content/state。
+        if result.is_ok() && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -180,7 +186,8 @@ impl WorkspaceBackend {
             &format!("path={}", path_str),
         );
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        if result.is_ok() {
+        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功。
+        if result.is_ok() && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -347,6 +354,12 @@ impl AppBackend {
             &format!("path={}", path),
         );
 
+        // Issue #729 评论 5764768372：开头先重置 current_has_data_root = false，
+        // 成功路径才设 true。调用后读 current_has_data_root 能准确判断本次是否成功。
+        // 本函数不再自己发 workspace_opened/content/state 信号，由调用方根据
+        // current_has_data_root（即 snap().has_workspace）判断真实成功后发一次。
+        self.current_has_data_root = false;
+
         // 确保 projects 子目录存在
         let projects_root = std::path::Path::new(path).join("projects");
         let projects_root_str = projects_root.to_string_lossy().to_string();
@@ -409,9 +422,9 @@ impl AppBackend {
             self.debug_log("workspace", "ensure_device_info_failed", &format!("{}", e));
         }
 
-        self.workspace_opened();
-        self.workspace_content_changed();
-        self.workspace_state_changed();
+        // Issue #729 评论 5764768372：不再在此发 workspace_opened/content/state 信号。
+        // 由调用方（WorkspaceBackend wrapper 或 sync_operations）根据
+        // current_has_data_root 判断真实成功后发一次，避免重复发射。
 
         self.debug_log(
             "workspace",

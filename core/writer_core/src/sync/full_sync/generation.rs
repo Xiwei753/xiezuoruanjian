@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::types::SyncPolicy;
 use crate::sync::SyncStatus;
 
@@ -55,7 +56,7 @@ pub(super) fn is_generation_path(rel_path: &str) -> bool {
 ///
 /// meta 让 GC 能识别 incomplete generation（上传中，不删）和 complete generation
 /// （可按保留期删）。`uploader_device_id` 用空字符串（诊断字段，不影响 GC 逻辑）。
-#[allow(clippy::too_many_arguments)] // 9 个参数均为独立发布输入，打包会掩盖各自语义
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)] // 10 个参数均为独立发布输入，打包会掩盖各自语义
 pub(super) fn publish_generation(
     provider: &dyn crate::sync::provider::SyncProvider,
     sync_root: &Path,
@@ -66,6 +67,7 @@ pub(super) fn publish_generation(
     sync_policy: &SyncPolicy,
     force_sync: bool,
     merge_outcome: Option<&crate::sync::lww::LwwMergeOutcome>,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::sync::types::SyncResult {
     use crate::sync::generation_gc::{
         GenerationMeta, GENERATION_META_FILENAME, GENERATION_UPLOAD_LEASE_MS,
@@ -91,6 +93,19 @@ pub(super) fn publish_generation(
         return super::transfer_helpers::sync_result_from_provider_error(e);
     }
 
+    // Issue #729：meta(complete=false) 写入后检查取消令牌。
+    // 取消则不继续上传内容，返回 cancelled SyncResult。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] publish_generation: cancellation requested after meta(complete=false) — returning cancelled"
+            );
+            return super::transfer_helpers::sync_result_from_error(crate::Error::Other(
+                "sync cancelled during generation publish".into(),
+            ));
+        }
+    }
+
     // 2. 上传 staging 内容到 generation prefix。
     let content_result = if let Some(outcome) = merge_outcome {
         // 已 merge → 上传完整快照到新
@@ -107,6 +122,7 @@ pub(super) fn publish_generation(
             generation_prefix,
             &outcome.merged_manifest,
             scope,
+            cancellation_token,
         ) {
             Ok(()) => {
                 let mut r = crate::sync::types::SyncResult::success();
@@ -141,15 +157,41 @@ pub(super) fn publish_generation(
             sync_policy,
             &generation_target,
             force_sync,
-            None,
+            cancellation_token,
         )
     };
+
+    // Issue #729：upload_complete_generation_snapshot / run_single_target 返回后检查取消令牌。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] publish_generation: cancellation requested after content upload — returning cancelled"
+            );
+            return super::transfer_helpers::sync_result_from_error(crate::Error::Other(
+                "sync cancelled during generation publish".into(),
+            ));
+        }
+    }
+
     let content_ok = matches!(
         content_result.status,
         SyncStatus::Success | SyncStatus::NoChanges | SyncStatus::LatestWinsApplied
     );
     if !content_ok {
         return content_result;
+    }
+
+    // Issue #729：meta(complete=true) 写入前检查取消令牌。
+    // 取消则不写 complete 标记，返回 cancelled SyncResult。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] publish_generation: cancellation requested before meta(complete=true) — returning cancelled"
+            );
+            return super::transfer_helpers::sync_result_from_error(crate::Error::Other(
+                "sync cancelled during generation publish".into(),
+            ));
+        }
     }
 
     // 3. 写 meta(complete=true)。
@@ -188,6 +230,7 @@ fn upload_complete_generation_snapshot(
     generation_prefix: &str,
     merged_manifest: &crate::sync::types::SyncManifest,
     scope: crate::sync::types::SyncScope,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::error::Result<()> {
     use crate::sync::provider::model::WritePrecondition;
 
@@ -246,6 +289,20 @@ fn upload_complete_generation_snapshot(
             WritePrecondition::Unconditional
         };
         provider.write(&remote_path, &content, precondition)?;
+
+        // Issue #729：每次 provider.write 返回后检查取消令牌。
+        // 取消则立即停止上传，返回 cancelled 错误。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] upload_complete_generation_snapshot: cancellation requested after write {} — returning cancelled",
+                    record.path
+                );
+                return Err(crate::Error::Other(
+                    "sync cancelled during generation upload".into(),
+                ));
+            }
+        }
     }
 
     // 上传 manifest 到 generation prefix。

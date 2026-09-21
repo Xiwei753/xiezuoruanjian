@@ -79,12 +79,17 @@ pub fn run_transfer(
                 cancellation_token,
             ),
             PlannedTargetKind::DeleteLocalProject => {
-                transfer_delete_local_project(provider, planned, plan)
+                transfer_delete_local_project(provider, planned, plan, cancellation_token)
             }
-            PlannedTargetKind::DeleteRemoteProject => {
-                transfer_delete_remote_project(provider, planned, &mut catalog_snapshot)
+            PlannedTargetKind::DeleteRemoteProject => transfer_delete_remote_project(
+                provider,
+                planned,
+                &mut catalog_snapshot,
+                cancellation_token,
+            ),
+            PlannedTargetKind::RestoreProject => {
+                transfer_restore_project(provider, planned, plan, cancellation_token)
             }
-            PlannedTargetKind::RestoreProject => transfer_restore_project(provider, planned, plan),
             PlannedTargetKind::Retry => {
                 let msg = "target lifecycle decision retry".to_string();
                 (
@@ -98,7 +103,7 @@ pub fn run_transfer(
                 )
             }
             PlannedTargetKind::RemoteCleanupProject => {
-                transfer_remote_cleanup_project(provider, planned)
+                transfer_remote_cleanup_project(provider, planned, cancellation_token)
             }
         };
 
@@ -113,9 +118,28 @@ pub fn run_transfer(
     }
 
     // generation GC — 清理未引用 generation。
+    // Issue #729：generation GC 循环前检查取消令牌，取消则跳过整个 GC。
     let now_ms = chrono::Utc::now().timestamp_millis();
     let mut generation_gc_result: Option<Result<(), String>> = None;
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!("[sync] run_transfer: cancellation requested — skipping generation GC");
+            return FullSyncTransferResult {
+                targets,
+                generation_gc_result: None,
+            };
+        }
+    }
     for planned in &plan.targets {
+        // Issue #729：generation GC 循环内每个 target 前检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_transfer: cancellation requested during generation GC — breaking"
+                );
+                break;
+            }
+        }
         if planned.target.remote_prefix.starts_with("projects/") {
             let active_generation = crate::sync::target_lifecycle::find_record(
                 &catalog_snapshot.catalog,

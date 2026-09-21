@@ -1,3 +1,4 @@
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::SyncResult;
 
@@ -14,11 +15,23 @@ use super::PlannedTarget;
 pub(super) fn transfer_remote_cleanup_project(
     provider: &dyn SyncProvider,
     planned: &PlannedTarget,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
     Option<crate::sync::types::LocalLifecycleCommitAction>,
 ) {
+    // Issue #729：远端 delete 前检查取消令牌。取消则跳过整个 helper。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_remote_cleanup_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
+
     log::info!(
         "[sync] run_transfer: RemoteCleanupProject {} — CAS: re-confirming remote lifecycle",
         planned.target.remote_prefix
