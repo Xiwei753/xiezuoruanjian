@@ -106,13 +106,13 @@ fn issue1_y_fallback_uses_half_open_interval() {
     );
 }
 
-/// 问题1 守卫4: build_text_animation_plan_with_sample 的采样路径不再硬编码 0usize。
+/// 问题1 守卫4: build_text_animation_plan_with_sample 的采样路径不再硬编码 0usize，
+/// 且 InsertReveal/DeleteConceal 从统一的 CoordinatedMotionFrame.caret 消费 visual_line_id。
 #[test]
 fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 6000);
-    // 修复后：不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 或 `(f.x + f.w, f.y, 0usize)`
-    // 注释中可能提到 0usize（说明不再硬编码），只检查代码模式
+    let window = function_window(&src, "fn build_text_animation_plan_with_sample", 8000);
+    // Issue #727 约束 3: 不应有 `(r.x, r.top, 0usize)` 或 `(x, y, 0usize)` 等硬编码
     let has_hardcoded_zero = window.contains("(r.x, r.top, 0usize)")
         || window.contains("(x, y, 0usize)")
         || window.contains("(f.x + f.w, f.y, 0usize)");
@@ -120,10 +120,11 @@ fn issue1_build_text_animation_plan_no_longer_hardcodes_zero_line_id() {
         !has_hardcoded_zero,
         "build_text_animation_plan_with_sample 不应硬编码 0usize 作为 caret_line_id"
     );
-    // 应使用 sampled_visual_line_id_at_progress 采样行 id
+    // Issue #727 约束 3+4: InsertReveal/DeleteConceal 从 CoordinatedMotionFrame.caret 消费
+    // visual_line_id，不再由文字层自己采样。应包含 caret_frame.visual_line_id。
     assert!(
-        window.contains("sampled_visual_line_id_at_progress"),
-        "应使用 sampled_visual_line_id_at_progress 采样真实 visual_line_id"
+        window.contains("caret_frame.visual_line_id"),
+        "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费 visual_line_id"
     );
 }
 
@@ -241,43 +242,48 @@ fn issue3_take_rebase_frames_uses_caret_driven_for_reveal_conceal() {
     );
 }
 
-/// 问题3 守卫2: collect_rebase_frame_for_unit 对 Reveal/Conceal 用 compute_frame_caret_driven，
-/// 对 Reflow 用 compute_frame。
+/// 问题3 守卫2: collect_rebase_frame_for_unit_without_caret 对所有类型统一使用
+/// compute_frame(visible_fraction)，visible_fraction 对 Reveal/Conceal 从
+/// caret_track_progress 派生，对 Reflow 从 unit.current_visible_fraction 派生。
 #[test]
 fn issue3_collect_rebase_frame_for_unit_branches_by_kind() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn collect_rebase_frame_for_unit", 2000);
-    // 修复后：Reveal/Conceal 用 compute_frame_caret_driven
-    assert!(
-        window.contains("compute_frame_caret_driven"),
-        "collect_rebase_frame_for_unit 对 Reveal/Conceal 必须用 compute_frame_caret_driven"
-    );
-    // Reflow 用 compute_frame
+    let window = function_window(&src, "fn collect_rebase_frame_for_unit_without_caret", 3000);
+    // Issue #727 约束 4: 统一使用 compute_frame(visible_fraction)
     assert!(
         window.contains("compute_frame(visible_fraction)"),
-        "collect_rebase_frame_for_unit 对 Reflow 必须用 compute_frame(visible_fraction)"
+        "collect_rebase_frame_for_unit_without_caret 必须用 compute_frame(visible_fraction)"
     );
     // visible_fraction 从真实显示帧反算
     assert!(
         window.contains("frame.w / w"),
-        "collect_rebase_frame_for_unit 必须从真实显示帧反算 visible_fraction（frame.w / w）"
+        "collect_rebase_frame_for_unit_without_caret 必须从真实显示帧反算 visible_fraction（frame.w / w）"
     );
 }
 
-/// 问题3 守卫3: sample_caret_geometry_for_caret_driven_clip 与
-/// build_text_animation_plan_with_sample 使用同一套采样逻辑。
+/// 问题3 守卫3: sample_caret_geometry_for_caret_driven_clip 已被删除（Issue #727 约束 4）。
+/// InsertReveal/DeleteConceal 现在统一从 CoordinatedMotionFrame.caret 消费 x/y/visual_line_id。
+/// Reveal/Conceal 使用 compute_frame_caret_driven，Reflow 使用 compute_frame(visible_fraction)。
 #[test]
-fn issue3_sample_caret_geometry_function_exists_and_uses_track() {
+fn issue3_caret_sampling_uses_unified_coordinated_motion_frame() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    let window = function_window(&src, "fn sample_caret_geometry_for_caret_driven_clip", 1500);
-    // 修复后：有 track 时用 sampled_rect_at_progress 和 sampled_visual_line_id_at_progress
+    // Issue #727 约束 4: sample_caret_geometry_for_caret_driven_clip 已删除
+    let has_deleted_fn = src.contains("fn sample_caret_geometry_for_caret_driven_clip");
     assert!(
-        window.contains("sampled_rect_at_progress"),
-        "sample_caret_geometry_for_caret_driven_clip 必须用 sampled_rect_at_progress 采样 caret 位置"
+        !has_deleted_fn,
+        "sample_caret_geometry_for_caret_driven_clip 应已被删除（Issue #727 约束 4）"
     );
+    // Issue #727 约束 3: sample_coordinated_motion_frame 采样统一 caret frame
+    let has_sample_fn = src.contains("fn sample_coordinated_motion_frame");
     assert!(
-        window.contains("sampled_visual_line_id_at_progress"),
-        "sample_caret_geometry_for_caret_driven_clip 必须用 sampled_visual_line_id_at_progress 采样行 id"
+        has_sample_fn,
+        "应有 sample_coordinated_motion_frame 采样统一 CoordinatedMotionFrame"
+    );
+    // build_text_animation_plan_with_sample 从 coordinated_motion_frame.caret 消费
+    let btap_window = function_window(&src, "fn build_text_animation_plan_with_sample", 8000);
+    assert!(
+        btap_window.contains("caret_frame"),
+        "build_text_animation_plan_with_sample 应从 CoordinatedMotionFrame.caret 消费"
     );
 }
 

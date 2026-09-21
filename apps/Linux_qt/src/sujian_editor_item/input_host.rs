@@ -1,6 +1,6 @@
+use super::animation_coordinator::find_line_geometry_in_snapshot;
 use super::*;
 use crate::editor::input::events::ImeReplaceEvent;
-use super::animation_coordinator::find_line_geometry_in_snapshot;
 
 // ── IME 输入处理模块 ──
 //

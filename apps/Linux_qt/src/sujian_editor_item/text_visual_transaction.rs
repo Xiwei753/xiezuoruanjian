@@ -179,8 +179,12 @@ impl VisualUnitTiming {
     /// 获取 `target_fraction`。
     pub fn target_fraction(&self) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven { target_fraction, .. } => *target_fraction,
-            VisualUnitTiming::Timed { target_fraction, .. } => *target_fraction,
+            VisualUnitTiming::CaretDriven {
+                target_fraction, ..
+            } => *target_fraction,
+            VisualUnitTiming::Timed {
+                target_fraction, ..
+            } => *target_fraction,
         }
     }
 
@@ -214,9 +218,7 @@ impl VisualUnitTiming {
     /// 只有 Timed unit（ReflowMove / ReflowCrossFade）才从自己的时间线算可见比例。
     pub fn current_visible_fraction(&self, now: Instant) -> f64 {
         match self {
-            VisualUnitTiming::CaretDriven { start_fraction, .. } => {
-                start_fraction.clamp(0.0, 1.0)
-            }
+            VisualUnitTiming::CaretDriven { start_fraction, .. } => start_fraction.clamp(0.0, 1.0),
             VisualUnitTiming::Timed {
                 start_fraction,
                 target_fraction,

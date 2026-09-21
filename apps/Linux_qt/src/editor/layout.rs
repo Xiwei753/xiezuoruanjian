@@ -3164,11 +3164,7 @@ impl CanonicalDocumentVisualSnapshot {
     /// 与 `cursor_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标（不减 scroll_y），
     /// `visible` 始终为 true。供正文事务 caret track 使用，使 caret track 与
     /// AnimatedSlice/StaticPatch 文档坐标系一致。
-    pub fn cursor_rect_doc(
-        &self,
-        cursor_byte: usize,
-        affinity: CaretAffinity,
-    ) -> CaretRect {
+    pub fn cursor_rect_doc(&self, cursor_byte: usize, affinity: CaretAffinity) -> CaretRect {
         let line = self
             .visual_lines
             .iter()
@@ -3266,9 +3262,9 @@ impl CanonicalDocumentVisualSnapshot {
             } else {
                 // qtextline_idx 无效时回退到按 qchar 范围匹配（半开区间，避免软换行
                 // 边界同时命中两行）。只在 qtextline_idx 未被正确设置时才会走到这里。
-                para.lines.iter().find(|cl| {
-                    cl.qchar_start <= cursor_qchar && cursor_qchar < cl.qchar_end
-                })
+                para.lines
+                    .iter()
+                    .find(|cl| cl.qchar_start <= cursor_qchar && cursor_qchar < cl.qchar_end)
             };
 
         match canonical_line {

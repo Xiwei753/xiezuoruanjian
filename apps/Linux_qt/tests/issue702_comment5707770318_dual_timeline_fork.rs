@@ -5,7 +5,7 @@
 //! 结构已被修复。这些结构的不存在即证实了缺陷已被消除（修复成功）：
 //!
 //! 修复点 1：`build_cursor_plan()` 对 Insert/Delete 在有活跃正文事务且
-//!   coordinated_enabled=true 时不再返回 `CursorTransition::Tween`，而是返回
+//!   has_active_for_coordinated 时不再返回 `CursorTransition::Tween`，而是返回
 //!   `CursorTransition::Snap`（让 apply_plan 清除 animation，不创建独立 timeline）。
 //!
 //! 修复点 2：`CursorSampleOutcome` 枚举增加了 `Coordinated { x, y, h }` 变体
@@ -60,7 +60,7 @@ fn window_after(src: &str, anchor: &str, window_chars: usize) -> String {
 
 // =========================================================================
 // 修复点 1：build_cursor_plan 对 Insert/Delete 在有活跃正文事务且
-// coordinated_enabled=true 时不再返回 CursorTransition::Tween，而是返回 Snap
+// has_active_for_coordinated 时返回 Snap，而不是返回 CursorTransition::Tween
 // =========================================================================
 
 #[test]
@@ -71,28 +71,23 @@ fn fix1_build_cursor_plan_returns_snap_for_insert_delete_with_active_transaction
         src.contains("pub(crate) fn build_cursor_plan"),
         "修复点1: build_cursor_plan 必须存在"
     );
-    // 对 Insert/Delete 在 coordinated_enabled && has_active 时不再返回 Tween。
-    // 验证方法：anim.target_x 偏移分支和 old_visual_x 偏移分支中，
-    // coordinated_enabled && has_active 条件应返回 Snap 而非 Tween。
-    //
-    // 处 2（anim.target_x 偏移分支）：coordinated_enabled && has_active → Snap
-    let ctx2 = window_after(&src, "(anim.target_x - cursor_x).abs() > 0.01", 600);
+    // Issue #727 约束 6: coordinated_enabled 独立开关已删除。
+    // 判断条件改为 has_active_for_coordinated。
+    // 处 2（anim.target_x 偏移分支）：has_active_for_coordinated → Snap
+    // Issue #727: comments between anchor and Snap are ~700 chars, use 1500 to be safe
+    let ctx2 = window_after(&src, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
     assert!(
-        ctx2.contains("coordinated_enabled")
-            && ctx2.contains("has_active")
-            && ctx2.contains("CursorTransition::Snap"),
-        "修复点1 处2: anim.target_x 偏移分支应有 coordinated_enabled && has_active 返回 Snap"
+        ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
+        "修复点1 处2: anim.target_x 偏移分支应有 has_active_for_coordinated 返回 Snap"
     );
     //
-    // 处 3（old_visual_x 偏移分支）：coordinated_enabled && has_active → Snap
-    let ctx3 = window_after(&src, "(old_visual_x - cursor_x).abs() > 0.01", 600);
+    // 处 3（old_visual_x 偏移分支）：has_active_for_coordinated → Snap
+    let ctx3 = window_after(&src, "(old_visual_x - cursor_x).abs() > 0.01", 1500);
     assert!(
-        ctx3.contains("coordinated_enabled")
-            && ctx3.contains("has_active")
-            && ctx3.contains("CursorTransition::Snap"),
-        "修复点1 处3: old_visual_x 偏移分支应有 coordinated_enabled && has_active 返回 Snap"
+        ctx3.contains("has_active_for_coordinated") && ctx3.contains("CursorTransition::Snap"),
+        "修复点1 处3: old_visual_x 偏移分支应有 has_active_for_coordinated 返回 Snap"
     );
-    println!("[BUGFIX_VERIFY] fix1: build_cursor_plan 对 Insert/Delete 在 has_active && coordinated_enabled 时返回 Snap（不再开独立 Tween timeline）");
+    println!("[BUGFIX_VERIFY] fix1: build_cursor_plan 对 Insert/Delete 在 has_active_for_coordinated 时返回 Snap（不再开独立 Tween timeline）");
 }
 
 // =========================================================================
@@ -198,11 +193,11 @@ fn fix4_coordinated_success_sets_cursor_sample_outcome_coordinated() {
         src.contains(init_marker),
         "修复点4: build_render_plan_full 应初始化 cursor_sample_outcome = Idle"
     );
-    // compute_coordinated_cursor_position 调用存在
-    let coord_call = "self.compute_coordinated_cursor_position(&frame_sample)";
+    // Issue #727 约束 6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
+    let coord_call = "self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)";
     assert!(
         src.contains(coord_call),
-        "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position"
+        "修复点4: build_render_plan_full 应调用 compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)"
     );
     // 关键：compute_coordinated_cursor_position 成功分支（Some((cx, cy_doc, ch))）内
     // 应把 cursor_sample_outcome 设为 Coordinated。
@@ -276,14 +271,12 @@ fn dual_timeline_fork_is_eliminated() {
         qquick.contains("CursorSampleOutcome::Coordinated { x, y, h } =>"),
         "分叉消除: qquickitem_impl 有 Coordinated 分支"
     );
-    // 分叉消除条件 3：build_cursor_plan 在正文协同时返回 Snap
+    // 分叉消除条件 3：build_cursor_plan 在 has_active_for_coordinated 时返回 Snap
     // → apply_plan 收到 Snap 执行 self.animation = None，不创建 CursorAnimationState
-    let ctx2 = window_after(&coord, "(anim.target_x - cursor_x).abs() > 0.01", 600);
+    let ctx2 = window_after(&coord, "(anim.target_x - cursor_x).abs() > 0.01", 1500);
     assert!(
-        ctx2.contains("coordinated_enabled")
-            && ctx2.contains("has_active")
-            && ctx2.contains("CursorTransition::Snap"),
-        "分叉消除: build_cursor_plan 在 coordinated_enabled && has_active 时返回 Snap"
+        ctx2.contains("has_active_for_coordinated") && ctx2.contains("CursorTransition::Snap"),
+        "分叉消除: build_cursor_plan 在 has_active_for_coordinated 时返回 Snap"
     );
 
     println!("[BUGFIX_VERIFY] dual_timeline_fork_eliminated: 正文协同光标（Coordinated 变体）与纯光标 Tween（CursorAnimationState）两条路径互斥");

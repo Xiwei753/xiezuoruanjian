@@ -643,7 +643,11 @@ fn build_insert_reveal_slices(
                     if let Some(sr) = precise_sr {
                         (sr, clipped_byte_start, clipped_byte_end)
                     } else {
-                        (new_cluster.source_rect.clone(), clipped_byte_start, clipped_byte_end)
+                        (
+                            new_cluster.source_rect.clone(),
+                            clipped_byte_start,
+                            clipped_byte_end,
+                        )
                     }
                 }
             };
@@ -1408,8 +1412,7 @@ impl LinuxEditorAnimationCoordinator {
 
         // Issue #727 约束 5: valid_caret_motion_track 检查。
         // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
-        let valid_caret_motion_track =
-            old_cursor_rect.is_some() && new_cursor_rect.is_some();
+        let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
         if !valid_caret_motion_track {
             return None;
         }
@@ -2681,7 +2684,7 @@ impl LinuxEditorAnimationCoordinator {
     /// 此方法先完成所有含 CaretDriven unit 的事务，再 pause 剩下的 Timed 事务。
     /// 返回被完成事务的 snapshot IDs，供调用方清理 texture cache。
     pub(crate) fn pause_all(&mut self) -> Vec<super::layout_snapshot::LineSnapshotId> {
-        use super::text_visual_transaction::{VisualUnitTiming, TextVisualTransactionState};
+        use super::text_visual_transaction::{TextVisualTransactionState, VisualUnitTiming};
 
         // 1. 找出所有含 CaretDriven unit 的活跃事务，完成它们到 canonical 状态。
         let caret_driven_keys: Vec<VisualTransactionKey> = self
@@ -2691,7 +2694,9 @@ impl LinuxEditorAnimationCoordinator {
             .filter(|t| {
                 t.state != TextVisualTransactionState::Completed
                     && t.state != TextVisualTransactionState::Cancelled
-                    && t.units.iter().any(|u| matches!(u.timing, VisualUnitTiming::CaretDriven { .. }))
+                    && t.units
+                        .iter()
+                        .any(|u| matches!(u.timing, VisualUnitTiming::CaretDriven { .. }))
             })
             .map(|t| t.key)
             .collect();
@@ -2752,10 +2757,8 @@ impl LinuxEditorAnimationCoordinator {
         //
         // 约束 1: epoch 不一致时事务立刻失去 caret motion ownership，
         // caret 为 None，InsertReveal/DeleteConceal 结束到 canonical 状态。
-        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
-            &frame_sample,
-            cursor_owner_epoch,
-        );
+        let coordinated_motion_frame =
+            self.sample_coordinated_motion_frame(&frame_sample, cursor_owner_epoch);
 
         let (text_animation, keys_to_complete) =
             self.build_text_animation_plan_with_sample(&frame_sample, &coordinated_motion_frame);
@@ -2866,10 +2869,8 @@ impl LinuxEditorAnimationCoordinator {
             match cursor_sample_outcome {
                 super::render_plan::CursorSampleOutcome::Running(p) => {
                     let eased = super::rendering::ease_out_cubic(p);
-                    cursor_render_state.x =
-                        anim.start_x + (anim.target_x - anim.start_x) * eased;
-                    cursor_render_state.y =
-                        anim.start_y + (anim.target_y - anim.start_y) * eased;
+                    cursor_render_state.x = anim.start_x + (anim.target_x - anim.start_x) * eased;
+                    cursor_render_state.y = anim.start_y + (anim.target_y - anim.start_y) * eased;
                 }
                 super::render_plan::CursorSampleOutcome::Finished => {
                     cursor_render_state.x = anim.target_x;
@@ -4075,8 +4076,14 @@ mod tests {
             }],
             layout_generation: 0,
         };
-        EditorLayoutSnapshot::new(layout_snapshot, vec![line], None, None, CaretAffinity::Downstream)
-            .with_virtual_text(virtual_text.to_string())
+        EditorLayoutSnapshot::new(
+            layout_snapshot,
+            vec![line],
+            None,
+            None,
+            CaretAffinity::Downstream,
+        )
+        .with_virtual_text(virtual_text.to_string())
     }
 
     #[test]
@@ -5010,9 +5017,7 @@ mod tests {
         // Issue #727 约束 2: CaretDriven unit 的 start_fraction 是 rebase 交棒时的载体。
         // 交棒后 start_fraction = visible_fraction = 0.75。
         let (start_fraction, started_at_is_none) = match &unit.timing {
-            super::VisualUnitTiming::CaretDriven { start_fraction, .. } => {
-                (*start_fraction, true)
-            }
+            super::VisualUnitTiming::CaretDriven { start_fraction, .. } => (*start_fraction, true),
             super::VisualUnitTiming::Timed {
                 start_fraction,
                 started_at,
@@ -6132,8 +6137,17 @@ mod tests {
         // caret track: from=caret(0), to=caret(200), duration=200ms。
         // 事务创建时 started_at = None（尚未开始）。
         let reflow_unit = PreparedVisualUnit::wrap(reflow_slice(0, 3, 0.0, 100.0), 200);
-        let cursor_visual_track =
-            PreparedCursorVisualTrack::new_first(caret(0.0), caret(200.0), None, None, 0.0, 0.0, 0.0, 0.0, 200);
+        let cursor_visual_track = PreparedCursorVisualTrack::new_first(
+            caret(0.0),
+            caret(200.0),
+            None,
+            None,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            200,
+        );
         let tx = PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Pending,
@@ -6229,7 +6243,8 @@ mod tests {
         let frame_now_0 = prepared_now + Duration::from_millis(16);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(key, 0.0);
-        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0, &CoordinatedMotionFrame::default());
+        let (plan_0, _) = coord
+            .build_text_animation_plan_with_sample(&sample_0, &CoordinatedMotionFrame::default());
 
         // 断言 3: 同一个 frame_now_0 下 progress 都 == 0。
         {
@@ -6276,7 +6291,8 @@ mod tests {
         let frame_now_1 = frame_now_0 + Duration::from_millis(50);
         let mut sample_1 = AnimationFrameSample::new(frame_now_1);
         sample_1.set_progress(key, 0.25);
-        let (plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1, &CoordinatedMotionFrame::default());
+        let (plan_1, _) = coord
+            .build_text_animation_plan_with_sample(&sample_1, &CoordinatedMotionFrame::default());
 
         {
             let tx_ref = coord
@@ -6406,7 +6422,10 @@ mod tests {
         );
         // CaretDriven unit 无独立 duration_ms，剩余时长在 caret track 中断言（见下方）。
         // Timed unit 的 duration_ms 应为剩余时长 50。
-        if !matches!(&new_units[0].timing, super::VisualUnitTiming::CaretDriven { .. }) {
+        if !matches!(
+            &new_units[0].timing,
+            super::VisualUnitTiming::CaretDriven { .. }
+        ) {
             assert_eq!(
                 new_duration_ms, 50,
                 "rebase 后 Timed unit duration_ms 应为剩余时长 50"
@@ -6509,7 +6528,8 @@ mod tests {
                 progress: 0.0,
             }),
         };
-        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
+        let (plan_0, _) =
+            coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
 
         // ── 9. 断言第一帧 Rendering：二者 progress == 0（同帧起跑，没有错拍） ──
         {
@@ -6589,7 +6609,8 @@ mod tests {
                 progress: 0.5,
             }),
         };
-        let (_plan_mid, _) = coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid);
+        let (_plan_mid, _) =
+            coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid);
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6638,7 +6659,8 @@ mod tests {
                 progress: 1.0,
             }),
         };
-        let (_plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
+        let (_plan_1, _) =
+            coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
         {
             let tx_ref = coord
                 .prepared_queue

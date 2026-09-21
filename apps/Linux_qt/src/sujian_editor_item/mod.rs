@@ -323,7 +323,8 @@ pub struct SujianEditorItem {
     /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标。
     /// 当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点。
     #[allow(dead_code)]
-    set_auto_follow_anchor_with_target: qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64, target_scroll_y: f64)),
+    set_auto_follow_anchor_with_target:
+        qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64, target_scroll_y: f64)),
     #[allow(dead_code)]
     clear_auto_follow_anchor: qt_method!(fn(&mut self)),
     #[allow(dead_code)]

@@ -156,8 +156,8 @@ fn build_render_plan_full_produces_drawn_caret_rect() {
                 cursor_style,
                 selection_preedit_style,
                 frame_now,
-                None,  // cursor_animation
-                0,     // cursor_owner_epoch
+                None, // cursor_animation
+                0,    // cursor_owner_epoch
                 0.0,
                 None,
             );
@@ -714,8 +714,8 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                     frame_now_noop,
                     item.cursor_ctrl.animation.as_ref(),
                     item.cursor_ctrl.cursor_owner_epoch,
-                0.0,
-                None,
+                    0.0,
+                    None,
                 );
             match plan_noop.cursor_sample_outcome {
                 super::render_plan::CursorSampleOutcome::Coordinated { x, y, h } => {

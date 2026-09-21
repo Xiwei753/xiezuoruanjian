@@ -148,23 +148,26 @@ fn repro_a_last_scroll_y_field_never_written_back_breaks_scroll_animation() {
     );
     // Issue #722 修复后回归守卫：违规模式已消除（字段已删除）时直接通过。
     // 未修复时前提满足，继续检查关键断言（has_writeback）。
-    if !(field_exists && init_zero && passed_to_plan && plan_has_old_scroll_y && plan_has_scroll_changed) {
+    if !(field_exists
+        && init_zero
+        && passed_to_plan
+        && plan_has_old_scroll_y
+        && plan_has_scroll_changed)
+    {
         return;
     }
 
     // 关键：last_scroll_y 没有任何写回（self.last_scroll_y = ... 赋值）。
     // 搜索整个 cursor_controller.rs 是否存在对 last_scroll_y 的赋值（排除声明和初始化）。
-    let has_writeback = cursor_ctrl
-        .lines()
-        .any(|line| {
-            let trimmed = line.trim();
-            // 排除字段声明 "pub last_scroll_y: f64," 和初始化 "last_scroll_y: 0.0,"
-            (trimmed.contains("last_scroll_y")
-                && trimmed.contains('=')
-                && !trimmed.starts_with("pub last_scroll_y:")
-                && !trimmed.starts_with("last_scroll_y:"))
-                || trimmed.starts_with("self.last_scroll_y =")
-        });
+    let has_writeback = cursor_ctrl.lines().any(|line| {
+        let trimmed = line.trim();
+        // 排除字段声明 "pub last_scroll_y: f64," 和初始化 "last_scroll_y: 0.0,"
+        (trimmed.contains("last_scroll_y")
+            && trimmed.contains('=')
+            && !trimmed.starts_with("pub last_scroll_y:")
+            && !trimmed.starts_with("last_scroll_y:"))
+            || trimmed.starts_with("self.last_scroll_y =")
+    });
     println!(
         "[BUGFIX_REPRO_TRACE] A last_scroll_y has_writeback: {}",
         has_writeback
@@ -491,10 +494,10 @@ fn repro_h_text_unit_maintains_independent_timeline_that_forks_from_caret() {
     // 前提：文字 unit 确实维护独立 timeline
     let unit_has_own_timeline = coord.contains("拥有自己的 `started_at` / `duration_ms`")
         || coord.contains("per-unit progress");
-    let slice_has_own_timeline = slice.contains("单元自己的时间线")
-        || slice.contains("自己的时间线");
-    let has_current_visible_fraction = slice.contains("current_visible_fraction")
-        || coord.contains("current_visible_fraction");
+    let slice_has_own_timeline =
+        slice.contains("单元自己的时间线") || slice.contains("自己的时间线");
+    let has_current_visible_fraction =
+        slice.contains("current_visible_fraction") || coord.contains("current_visible_fraction");
     println!(
         "[BUGFIX_REPRO_TRACE] H independent_timeline: unit_has_own={} slice_has_own={} has_visible_fraction={}",
         unit_has_own_timeline, slice_has_own_timeline, has_current_visible_fraction

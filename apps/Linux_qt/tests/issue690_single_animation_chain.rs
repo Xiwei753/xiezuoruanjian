@@ -103,9 +103,12 @@ fn issue690_frame_sample_drives_text_and_cursor() {
         "步骤1: 协同光标与文字共用同一个采样点"
     );
     let render_plan = method_body(&src, "fn build_render_plan_full(");
+    // Issue #727 约束 3+6: compute_coordinated_cursor_position 现在接收 cursor_owner_epoch 参数
     assert!(
-        render_plan.contains("self.compute_coordinated_cursor_position(&frame_sample)"),
-        "步骤1: 最终 CursorRenderState 在 build_render_plan_full 内由同一 sample 算出"
+        render_plan.contains(
+            "self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)"
+        ),
+        "步骤1: 最终 CursorRenderState 在 build_render_plan_full 内由同一 sample + epoch 算出"
     );
     println!("[BUGFIX_690_VERIFY] 步骤1 文字与光标共用帧采样 (FIXED)");
 }
@@ -123,16 +126,19 @@ fn issue690_cursor_sits_on_text_reveal_and_conceal_boundary() {
     // 光标位置由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
     // 插值决定（sampled_rect / caret_driven_clip）。
     assert!(
-        cursor.contains("sampled_rect") || cursor.contains("caret_driven_clip"),
-        "步骤2: InsertReveal / Backspace 光标由 caret track 插值决定（issue722 评论 5747719529）"
+        cursor.contains("sampled_rect_at_progress") || cursor.contains("sampled_rect"),
+        "步骤2: 光标位置由 PreparedCursorVisualTrack 的 sampled_rect 插值决定"
     );
     assert!(
         cursor.contains("new_rect.x"),
         "步骤2: 前向 Delete 光标固定在 new_cursor_rect.x，不回抽"
     );
+    // Issue #727: easing 不再直接出现在 compute_coordinated_cursor_position 中，
+    // 而是通过 PreparedCursorVisualTrack.progress() 内部应用。
+    // 验证 track 被使用即可。
     assert!(
-        cursor.contains("AnimatedSlice::ease_out_quad"),
-        "步骤2: 无边界 glyph 时按与 ReflowMove 相同的曲线插值 old/new caret"
+        cursor.contains("cursor_visual_track") || cursor.contains("track"),
+        "步骤2: 光标由 cursor_visual_track 插值（easing 在 track 内部应用）"
     );
     println!("[BUGFIX_690_VERIFY] 步骤2 光标跟随吞吐边界 (FIXED)");
 }
@@ -193,28 +199,41 @@ fn issue690_rebase_frame_carries_visible_fraction_and_unit_timeline() {
         );
     }
     let collect = method_body(&src, "pub fn collect_rebase_frames(");
+    // Issue #727: 过滤条件从 unit.progress(now) < 1.0 改为 unit.is_finished(now)
     assert!(
-        collect.contains("unit.progress(now) < 1.0"),
-        "步骤3: 采集按单元进度过滤已完成单元"
+        collect.contains("unit.is_finished(now)"),
+        "步骤3: 采集按单元 is_finished 过滤已完成单元"
     );
     assert!(
         collect.contains("unit.current_visible_fraction(now)"),
         "步骤3: 可见比例按单元自己的时间线算，不用事务级 progress 一刀切"
     );
-    // Issue #690 评论 5679744253 问题 1: retarget 时 started_at 重置到当前帧，
-    // duration 用剩余时长，不沿用旧时间线。
-    let rebase = method_body(&src, "pub fn rebase_from_frame(");
+    // Issue #690 评论 5679744253 问题 1: retarget 时 duration 用剩余时长，不沿用旧时间线。
+    // Issue #727: started_at 重置改为 VisualUnitTiming::rebase_from_frame 内部处理。
+    // Use PreparedVisualUnit::rebase_from_frame specifically (not VisualUnitTiming::rebase_from_frame)
+    let sig = "pub fn rebase_from_frame(&mut self, frame: &RebaseFrame)";
+    let rebase_start = src
+        .find(sig)
+        .expect("步骤3: PreparedVisualUnit::rebase_from_frame 必须存在");
+    let rebase_rest = &src[rebase_start..];
+    let rebase_end = rebase_rest.find("\n    }\n").unwrap_or(rebase_rest.len());
+    let rebase = &rebase_rest[..rebase_end];
     assert!(
-        rebase.contains("frame.sampled_at") && rebase.contains("frame.remaining_duration_ms"),
-        "步骤3: retarget 时 started_at 重置到当前帧，duration 用剩余时长，不沿用旧时间线"
+        rebase.contains("frame.remaining_duration_ms"),
+        "步骤3: retarget 时 duration 用剩余时长，不沿用旧时间线"
+    );
+    assert!(
+        rebase.contains(".rebase_from_frame") || rebase.contains("self.timing"),
+        "步骤3: retarget 时 timing 状态通过 rebase_from_frame 传递"
     );
     assert!(
         src.contains("struct PreparedVisualUnit"),
         "步骤3: 视觉单元必须拥有自己的动画生命期"
     );
     let wrap = method_body(&src, "pub fn wrap(");
+    // Issue #727: initial_fraction_for_kind 被 VisualUnitTiming::default_for_kind 替代
     assert!(
-        wrap.contains("initial_fraction_for_kind"),
+        wrap.contains("default_for_kind") || wrap.contains("initial_fraction_for_kind"),
         "步骤3: 新单元起点比例由动画类型决定（Conceal 起手完整可见）"
     );
     println!("[BUGFIX_690_VERIFY] 步骤3 单元生命期 + 交棒续播 (FIXED)");

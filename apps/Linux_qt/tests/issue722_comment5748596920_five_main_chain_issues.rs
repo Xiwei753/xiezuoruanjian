@@ -125,10 +125,9 @@ fn issue1_record_visual_transaction_caret_still_uses_scroll_y_viewport_coord() {
     }
     let caret_rect_uses_scroll_y = record_window.contains("editor_layout.caret_rect(")
         && record_window.contains("ctx.scroll_y");
-    let cursor_rect_uses_scroll_y = record_window.contains("cursor_rect(")
-        && record_window.contains("ctx.scroll_y");
-    let make_cursor_rect_uses_scroll_y = record_window
-        .contains("make_cursor_rect_from_caret_doc(")
+    let cursor_rect_uses_scroll_y =
+        record_window.contains("cursor_rect(") && record_window.contains("ctx.scroll_y");
+    let make_cursor_rect_uses_scroll_y = record_window.contains("make_cursor_rect_from_caret_doc(")
         && record_window.contains("ctx.scroll_y");
     println!(
         "[BUGFIX_REPRO_TRACE] issue1 uses_scroll_y: caret_rect={} cursor_rect={} make_cursor_rect={}",
@@ -166,7 +165,8 @@ fn issue1_make_cursor_rect_from_caret_doc_baseline_uses_scroll_y() {
     }
 
     let window = function_window(&pipeline, "fn make_cursor_rect_from_caret_doc", 800);
-    let baseline_uses_scroll_y = window.contains("text_baseline_y(") && window.contains("- scroll_y");
+    let baseline_uses_scroll_y =
+        window.contains("text_baseline_y(") && window.contains("- scroll_y");
     println!(
         "[BUGFIX_REPRO_TRACE] issue1 make_cursor_rect baseline_uses_scroll_y: {}",
         baseline_uses_scroll_y
@@ -201,7 +201,10 @@ fn issue2_compute_frame_caret_driven_only_takes_caret_x_not_full_geometry() {
 
     // 前提：compute_frame_caret_driven 确实存在
     let has_fn = slice.contains("pub fn compute_frame_caret_driven(");
-    println!("[BUGFIX_REPRO_TRACE] issue2 compute_frame_caret_driven: has_fn={}", has_fn);
+    println!(
+        "[BUGFIX_REPRO_TRACE] issue2 compute_frame_caret_driven: has_fn={}",
+        has_fn
+    );
     if !has_fn {
         return;
     }
@@ -257,7 +260,8 @@ fn issue2_build_text_animation_plan_uses_single_caret_x_for_all_units() {
     // unit.slice.compute_frame_caret_driven(caret_x, visible)
     let caret_x_outside_loop = window.contains("let caret_x = match tx.cursor_visual_track")
         || window.contains("let caret_x = match tx.cursor_visual_track.as_ref()");
-    let same_caret_x_for_all = window.contains("unit.slice.compute_frame_caret_driven(caret_x, visible)");
+    let same_caret_x_for_all =
+        window.contains("unit.slice.compute_frame_caret_driven(caret_x, visible)");
     // 检查是否有 per-unit caret_x 机制（正确做法）
     let has_per_unit_caret = window.contains("per_unit_caret_x")
         || window.contains("unit_caret_x")
@@ -538,7 +542,9 @@ fn all_five_main_chain_issues_exist() {
     let issue3_violation = coord.contains("has_forward_delete")
         && coord.contains("Some((new_rect.x, new_rect.top, h))")
         && !coord.contains("forward_delete_sampled")
-        && slice.contains("self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary")
+        && slice.contains(
+            "self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary",
+        )
         && !slice.contains("conceal_progress");
 
     // 问题4: 事务完成条件由 unit timeline 决定
@@ -584,10 +590,6 @@ fn all_five_main_chain_issues_exist() {
          接收完整 caret geometry 或 per-unit caret_x；3) 前向 Delete caret_x 随帧移动；\
          4) 事务完成条件由 caret track remaining duration 决定；5) build_insert_reveal_slices \
          过滤空格/换行/控制字符。",
-        issue1_violation,
-        issue2_violation,
-        issue3_violation,
-        issue4_violation,
-        issue5_violation
+        issue1_violation, issue2_violation, issue3_violation, issue4_violation, issue5_violation
     );
 }

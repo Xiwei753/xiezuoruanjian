@@ -10,9 +10,9 @@
 //! 1. `animation_coordinator.rs::find_cursor_transaction_for_target()`(第 1928 行)
 //!    只要 `active_text_transaction_key().is_some()`,就直接返回该事务的
 //!    old/new cursor rect,**完全不管**当前逻辑 cursor 已经被鼠标移动到了别处。
-//! 2. `build_render_plan_full()`(第 2138 行)在 `coordinated_enabled` 时调用
-//!    `compute_coordinated_cursor_position()`(第 2421 行),后者同样只基于
-//!    `active_text_transaction_key()` 取事务并基于其 old/new rect 计算位置。
+//! 2. `build_render_plan_full()`在调用
+//!    `compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)` 时,后者同样只基于
+//!    `active_text_transaction_key_with_epoch(cursor_owner_epoch)` 取事务并基于其 old/new rect 计算位置。
 //! 3. 第 2246-2252 行:`compute_coordinated_cursor_position` 返回 Some 时,
 //!    **无条件覆盖** `cursor_render_state = CursorRenderState { x: cx, y: cy, h: ch, .. }`,
 //!    没有任何"当前帧光标所有权是否仍属于正文事务"的守卫。
@@ -195,39 +195,38 @@ fn issue705_repro_b_compute_coordinated_cursor_ignores_pointer_takeover() {
 // 复现 C:build_render_plan_full 无条件覆盖 cursor_render_state
 // =========================================================================
 
-/// 复现 C:`build_render_plan_full`(animation_coordinator.rs:2138)在
-/// `coordinated_enabled` 且 `compute_coordinated_cursor_position` 返回 Some 时,
-/// **无条件**执行 `cursor_render_state = CursorRenderState { x: cx, y: cy, h: ch, .. }`
-/// (第 2246-2252 行),没有"当前帧光标所有权是否仍属于正文事务"的守卫。
+/// 复现 C:`build_render_plan_full`(animation_coordinator.rs:2723)在
+/// `compute_coordinated_cursor_position` 返回 Some 时,**无条件**执行
+/// `cursor_render_state = CursorRenderState { x: cx, y: cy, h: ch, .. }`,
+/// 没有"当前帧光标所有权是否仍属于正文事务"的守卫。
 ///
-/// 当前代码:窗口内 `if coordinated_enabled { if let Some((cx, cy, ch)) =
-/// self.compute_coordinated_cursor_position(...) { cursor_render_state = \
-/// CursorRenderState { ... x: cx, y: cy, h: ch ... } } }`,且窗口内没有任何
-/// cursor owner epoch / 所有权失效检查。断言"覆盖前应有所有权守卫"在当前
-/// 代码上 FAIL → 复现成功。
+/// 当前代码:窗口内 `if let Some((cx, cy_doc, ch)) =
+/// self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)`
+/// 后直接用返回值覆盖 cursor_render_state。但计算前通过 cursor_owner_epoch 参数
+/// 已有所有权检查（active_text_transaction_key_with_epoch）。
+/// Issue #727 约束 6: coordinated_enabled 独立开关已删除。
 #[test]
 fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    // build_render_plan_full 函数体较大,取从 coordinated_enabled 分支起的窗口,
-    // 覆盖 compute_coordinated_cursor_position 调用与 cursor_render_state 覆盖点。
+    // build_render_plan_full 函数体较大,取覆盖 compute_coordinated_cursor_position
+    // 调用与 cursor_render_state 覆盖点。
     let window = function_window(&src, "fn build_render_plan_full", 10000);
-    // 前提:函数确实有 coordinated_enabled 分支并覆盖 cursor_render_state
-    let has_coordinated_branch = window.contains("if coordinated_enabled");
+    // 前提:函数确实调用 compute_coordinated_cursor_position 并覆盖 cursor_render_state
     let calls_compute = window.contains("self.compute_coordinated_cursor_position");
     let overwrites_cursor = window.contains("cursor_render_state = CursorRenderState");
     let writes_cx_cy_ch =
         window.contains("x: cx") && window.contains("y: cy") && window.contains("h: ch");
     println!(
-        "[BUGFIX_REPRO_TRACE] C build_render_plan: coordinated_branch={} calls_compute={} overwrites_cursor={} writes_cx_cy_ch={}",
-        has_coordinated_branch, calls_compute, overwrites_cursor, writes_cx_cy_ch
+        "[BUGFIX_REPRO_TRACE] C build_render_plan: calls_compute={} overwrites_cursor={} writes_cx_cy_ch={}",
+        calls_compute, overwrites_cursor, writes_cx_cy_ch
     );
     assert!(
-        has_coordinated_branch && calls_compute && overwrites_cursor && writes_cx_cy_ch,
-        "前提:build_render_plan_full 必须有 coordinated_enabled 分支调用 \
-         compute_coordinated_cursor_position 并用其结果覆盖 cursor_render_state"
+        calls_compute && overwrites_cursor && writes_cx_cy_ch,
+        "前提:build_render_plan_full 必须调用 compute_coordinated_cursor_position 并用其结果覆盖 cursor_render_state"
     );
     // 复现断言:覆盖前应有 cursor owner epoch / 所有权失效守卫。
-    // 当前代码没有 → FAIL → 复现。
+    // Issue #727 约束 6: coordinated_enabled 开关已删除,epoch 检查通过
+    // cursor_owner_epoch 参数传入 compute_coordinated_cursor_position 完成。
     let has_guard = has_cursor_owner_epoch_guard(&window);
     println!(
         "[BUGFIX_REPRO_TRACE] C build_render_plan has_owner_epoch_guard: {}",
@@ -235,14 +234,10 @@ fn issue705_repro_c_build_render_plan_overwrites_cursor_without_ownership_guard(
     );
     assert!(
         has_guard,
-        "Issue #705 评论 5717380886 复现 C: build_render_plan_full 在 coordinated_enabled \
-         且 compute_coordinated_cursor_position 返回 Some 时,无条件执行 \
+        "Issue #705 评论 5717380886 复现 C: build_render_plan_full 在 \
+         compute_coordinated_cursor_position 返回 Some 时,无条件执行 \
          cursor_render_state = CursorRenderState {{ x: cx, y: cy, h: ch, .. }}。\
-         没有任何\"当前帧光标所有权是否仍属于正文事务\"的守卫。鼠标 click_at() \
-         之后逻辑 cursor 已跳到点击位置,但本帧 Scene Graph 仍按旧正文事务的 \
-         coordinated caret 覆盖 cursor_render_state,把这一帧 caret 画回旧事务 \
-         位置。修复:覆盖前检查 cursor owner epoch / 所有权是否已被 pointer \
-         动作失效,失效则不覆盖、改走 CursorOnly/点击位置。"
+         修复:通过 cursor_owner_epoch 参数在 compute_coordinated_cursor_position 内部检查所有权。"
     );
 }
 

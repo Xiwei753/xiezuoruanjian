@@ -308,9 +308,10 @@ impl AnimatedSlice {
                 // 由本帧 coordinated caret 位置决定。此回退入口用 visible 推导等效
                 // caret 边界（caret_geometry_clip），保持向后兼容；主路径应调用
                 // compute_frame_caret_driven 直接消费 caret geometry。
-                let caret_clip_boundary = self.to_document_rect.x + self.to_document_rect.w * visible;
-                let reveal_from_caret =
-                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w);
+                let caret_clip_boundary =
+                    self.to_document_rect.x + self.to_document_rect.w * visible;
+                let reveal_from_caret = (caret_clip_boundary - self.to_document_rect.x)
+                    .clamp(0.0, self.to_document_rect.w);
                 let frame_h = self.to_document_rect.h;
                 let frame_source_rect = SourceRect {
                     x: self.source_rect.x,
@@ -338,7 +339,8 @@ impl AnimatedSlice {
                     let caret_b = self.from_document_rect.x + self.from_document_rect.w * visible;
                     (caret_b, self.from_document_rect.x, self.source_rect.x)
                 } else {
-                    let caret_b = self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible);
+                    let caret_b =
+                        self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible);
                     (
                         caret_b,
                         self.from_document_rect.x + self.from_document_rect.w * (1.0 - visible),
@@ -346,9 +348,11 @@ impl AnimatedSlice {
                     )
                 };
                 let conceal_from_caret = if self.conceal_to_left_edge {
-                    (caret_clip_boundary - self.from_document_rect.x).clamp(0.0, self.from_document_rect.w)
+                    (caret_clip_boundary - self.from_document_rect.x)
+                        .clamp(0.0, self.from_document_rect.w)
                 } else {
-                    (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary).clamp(0.0, self.from_document_rect.w)
+                    (self.from_document_rect.x + self.from_document_rect.w - caret_clip_boundary)
+                        .clamp(0.0, self.from_document_rect.w)
                 };
                 let frame_source_rect = SourceRect {
                     x: src_x,
@@ -460,7 +464,8 @@ impl AnimatedSlice {
                     self.to_document_rect.w
                 } else {
                     // 同一行：用 caret.x 做横向裁切
-                    (caret_clip_boundary - self.to_document_rect.x).clamp(0.0, self.to_document_rect.w)
+                    (caret_clip_boundary - self.to_document_rect.x)
+                        .clamp(0.0, self.to_document_rect.w)
                 };
                 let frame_w = reveal_from_caret;
                 let frame_h = self.to_document_rect.h;
@@ -535,21 +540,13 @@ impl AnimatedSlice {
                         )
                     } else if !same_line && !caret_above {
                         // caret 在该行下方，已经吞完该行 → 0
-                        (
-                            0.0,
-                            self.from_document_rect.x,
-                            self.source_rect.x,
-                        )
+                        (0.0, self.from_document_rect.x, self.source_rect.x)
                     } else {
                         // 同一行：frame_w = full_w * visible，
                         // 左端固定，source_rect.x 保持原起点。
                         let full_w = self.from_document_rect.w;
                         let frame_w = full_w * visible.clamp(0.0, 1.0);
-                        (
-                            frame_w,
-                            self.from_document_rect.x,
-                            self.source_rect.x,
-                        )
+                        (frame_w, self.from_document_rect.x, self.source_rect.x)
                     }
                 };
                 let frame_source_rect = SourceRect {

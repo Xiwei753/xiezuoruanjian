@@ -263,8 +263,7 @@ impl PreparedLineSnapshot {
         if byte_start < para_doc_byte_start {
             return None;
         }
-        let para_qchar_base =
-            utf8_byte_to_utf16_code_unit(full_text, para_doc_byte_start);
+        let para_qchar_base = utf8_byte_to_utf16_code_unit(full_text, para_doc_byte_start);
         let qchar_start =
             utf8_byte_to_utf16_code_unit(full_text, byte_start).saturating_sub(para_qchar_base);
         let qchar_end =
@@ -496,7 +495,12 @@ mod tests {
         LineClusterSnapshot {
             byte_start,
             byte_end,
-            source_rect: SourceRect { x, y: 0.0, w, h: 20.0 },
+            source_rect: SourceRect {
+                x,
+                y: 0.0,
+                w,
+                h: 20.0,
+            },
             shaping_identity: ShapingIdentity {
                 text_content_hash: 0,
                 raw_font_fingerprint: String::new(),
