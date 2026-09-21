@@ -56,9 +56,9 @@ class EditorMotionPolicyTest {
     fun coordinatedTrueIsIdentity_preservesUserSettings() {
         // Issue #732 评论 5763493968 第4节：coordinated=true 时 effective() 直接返回 this，
         // 不再强制 textEnabled=true / cursorEnabled=true。
-        // coordinated 本身就是完整模式，统一用 textDurationMillis 作为这一笔
-        // ComposeEditMotion 的时长；独立的 textEnabled/cursorEnabled/cursorDurationMillis
-        // 只在 coordinated=false 时生效。
+        // Issue #732 评论 5764716281 硬问题1：raw 字段可以保留 false，但 coordinated 的运行时
+        // 派生结果仍然启用完整协同 motion — 即 textAnimationEnabledForEdit == true 和
+        // cursorAnimationEnabledForEdit == true。
         val legacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
@@ -67,9 +67,25 @@ class EditorMotionPolicyTest {
                 reduceMotion = false,
             )
         val effective = legacyPolicy.effective()
-        assertFalse("coordinated=true → effective() 保持 textEnabled=false（不强制归一）", effective.textEnabled)
-        assertFalse("coordinated=true → effective() 保持 cursorEnabled=false（不强制归一）", effective.cursorEnabled)
-        assertTrue("coordinated 标记保持 true", effective.coordinated)
+        // raw 字段保留 false（不靠改 raw 字段才成立协同）
+        assertFalse("coordinated=true → effective() 保持 textEnabled=false（raw 不归一）", effective.textEnabled)
+        assertFalse("coordinated=true → effective() 保持 cursorEnabled=false（raw 不归一）", effective.cursorEnabled)
+        assertTrue("协同标记保持 true", effective.coordinated)
+        // 派生值：coordinated=true && !reduceMotion → 一律 true（完整协同 motion 启用）
+        assertTrue(
+            "coordinated=true → textAnimationEnabledForEdit == true（派生值启用完整协同 motion）",
+            effective.textAnimationEnabledForEdit,
+        )
+        assertTrue(
+            "coordinated=true → cursorAnimationEnabledForEdit == true（派生值启用完整协同 motion）",
+            effective.cursorAnimationEnabledForEdit,
+        )
+        // selection-only 光标移动时长：coordinated 模式下用 textDurationMillis
+        assertEquals(
+            "coordinated=true → selectionCursorDurationMillis == textDurationMillis",
+            effective.textDurationMillis,
+            effective.selectionCursorDurationMillis,
+        )
     }
 
     @Test

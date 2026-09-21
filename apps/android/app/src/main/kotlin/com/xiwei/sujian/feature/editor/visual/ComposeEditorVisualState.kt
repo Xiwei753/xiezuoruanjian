@@ -474,7 +474,7 @@ class ComposeEditorVisualState(
                 restingCaretRect
                     ?: layout.cursorRect(lastResolvedSelection?.end ?: snapshot.selection.start)
             val policy = currentMotionPolicy.effective()
-            if (policy.cursorEnabled && policy.cursorDurationMillis > 0L) {
+            if (policy.cursorAnimationEnabledForEdit && policy.selectionCursorDurationMillis > 0L) {
                 // 有平滑光标：记录 pending target，等真实 frameTime 创建 motion
                 pendingSelectionCaretTarget =
                     PendingSelectionCaretMove(
@@ -646,7 +646,7 @@ class ComposeEditorVisualState(
                 // 保存成 timeline 状态，而是由当前 effective policy + 当前 motion sample 导出。
                 // handoff scene 用当前 currentMotionPolicy 导出（drain 时会用最新 policy 覆盖）。
                 coordinatedSpatialClip =
-                    currentMotionPolicy.effective().let { it.textEnabled && it.coordinated },
+                    currentMotionPolicy.effective().let { it.textAnimationEnabledForEdit && it.coordinated },
             )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
@@ -1224,10 +1224,12 @@ class ComposeEditorVisualState(
         if (pendingSelection != null) {
             pendingSelectionCaretTarget = null
             val policy = currentMotionPolicy.effective()
-            val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            val selectionCursorDurationNanos =
+                policy.selectionCursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             val existing = activeEditMotion
-            val caretDuration = if (policy.cursorEnabled) cursorDurationNanos else 0L
+            val caretDuration =
+                if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L
             activeEditMotion =
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
                     // Issue #728 评论 5755928697 问题1：文字动画还没结束时移动光标，
@@ -1238,7 +1240,8 @@ class ComposeEditorVisualState(
                         newTargetCaretRect = pendingSelection.targetCaretRect,
                         frameTimeNanos = frameTimeNanos,
                         caretDurationNanos = caretDuration,
-                        glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L,
+                        glyphDurationNanos =
+                            if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L,
                     )
                 } else {
                     ComposeEditMotion.forSelectionMove(
@@ -1294,13 +1297,18 @@ class ComposeEditorVisualState(
         val newText = framePatch.newLayout.result.layoutInput.text.text
         val isSelectionOnly = oldText == newText && insertedKeys.isEmpty() && deletedKeys.isEmpty()
         if (isSelectionOnly) {
-            // selection-only 移动：caret 单独用 cursorDurationMillis，文字 units 为空
+            // selection-only 移动：caret 单独用 selectionCursorDurationMillis，文字 units 为空
+            // Issue #732 评论 5764716281 硬问题1：用派生值 cursorAnimationEnabledForEdit 和
+            // selectionCursorDurationMillis，coordinated 模式下不被旧 cursorEnabled=false 卡死。
+            val selectionCursorDurationNanos =
+                policy.selectionCursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             activeEditMotion =
                 ComposeEditMotion.forSelectionMove(
                     originCaretRect = framePatch.originCaretRect,
                     targetCaretRect = framePatch.targetCaretRect,
                     frameTimeNanos = frameTimeNanos,
-                    caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                    caretDurationNanos =
+                        if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L,
                 )
         } else {
             // text edit（包括 Enter / 删除 Enter 无 glyph unit 的情况）—
@@ -1310,15 +1318,19 @@ class ComposeEditorVisualState(
             // Issue #728 评论 5755928697 问题2：coordinated=false 时 caret 和 glyph 独立时长。
             // coordinated=true：一只钟，caret 和 glyph 共用 textDurationMillis。
             // coordinated=false：caret 用 cursorDurationMillis，glyph 用 textDurationMillis。
+            // Issue #732 评论 5764716281 硬问题1：用派生值，coordinated 模式下不被隐藏开关关掉。
             val caretDurationNanos: Long
             val glyphDurationNanos: Long
             if (policy.coordinated) {
-                val sharedDuration = if (policy.textEnabled) textDurationNanos else 0L
+                val sharedDuration =
+                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
                 caretDurationNanos = sharedDuration
                 glyphDurationNanos = sharedDuration
             } else {
-                caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L
-                glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
+                caretDurationNanos =
+                    if (policy.cursorAnimationEnabledForEdit) cursorDurationNanos else 0L
+                glyphDurationNanos =
+                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
             }
             // 快速连续输入：从当前 sample 重定向，不重新起播
             // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
@@ -1406,6 +1418,12 @@ class ComposeEditorVisualState(
      * @param frameTimeNanos 当前帧时间戳。
      */
     fun hasActiveVisuals(frameTimeNanos: Long): Boolean {
+        // Issue #732 评论 5764716281 硬问题2：coordinated 模式下 timeline 必须跟 activeEditMotion
+        // 同生共死 — 如果 activeEditMotion==null，timeline 不应继续维持动画（文字应已静态收口）。
+        val policy = currentMotionPolicy.effective()
+        if (policy.coordinated && policy.textAnimationEnabledForEdit && activeEditMotion == null) {
+            return false
+        }
         return visualTimeline.hasActiveAnimation(frameTimeNanos) ||
             (activeEditMotion != null && !activeEditMotion!!.isFinished(frameTimeNanos))
     }

@@ -170,14 +170,17 @@ class Issue728Comment5755336403ReproTest {
             )
         val cursorDurationMs = 100L
         val cursorDurationNanos = cursorDurationMs * NANOS_PER_MS
-        // 设置 cursor 动画开启的 policy（coordinated=true → effective 后 cursorEnabled=true）
+        // 设置 cursor 动画开启的 policy（coordinated=false → cursorAnimationEnabledForEdit=cursorEnabled=true）
+        // Issue #732 评论 5764716281 硬问题1：selectionCursorDurationMillis 在 coordinated=true 时用
+        // textDurationMillis，本测试验证 #728 gap2 闭环（与协同 duration 语义无关），用 coordinated=false
+        // 让 selectionCursorDurationMillis = cursorDurationMillis，保持原断言。
         state.updateMotionPolicy(
             EditorMotionPolicy(
                 textEnabled = true,
                 textDurationMillis = 200L,
                 cursorEnabled = true,
                 cursorDurationMillis = cursorDurationMs,
-                coordinated = true,
+                coordinated = false,
             ),
         )
         // 基线 layout："ab"，selection=(0,0)

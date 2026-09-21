@@ -131,7 +131,7 @@ class ComposeVisualTimeline {
         // coordinatedSpatialClip 由当前 effective policy + 当前 motion sample 导出，
         // 不再从旧 patch policy 保存成 timeline 状态。
         // Issue #728：系统 caret 已透明，cursorEnabled 不再参与计算。
-        coordinatedSpatialClip = policy.textEnabled && policy.coordinated
+        coordinatedSpatialClip = policy.textAnimationEnabledForEdit && policy.coordinated
 
         // #708 评论 5728951138：当前 patch 已把 active unit 转成 ghost 的范围
         // （旧正文坐标系，与 patch.deletedUnits 同坐标系）。
@@ -158,7 +158,7 @@ class ComposeVisualTimeline {
         // （新编辑删除了该位置的旧字，旧 unit 不应继续存活）。
         // 只对"完全包含"转 ghost/移除 — 部分重叠保留原有 rebase/切片逻辑（#689 缺陷5 跨删除洞切存活 slice），
         // 否则会把跨删除洞的部分存活 unit 也整块转 ghost，破坏切片行为。
-        if (policy.textEnabled) {
+        if (policy.textAnimationEnabledForEdit) {
             val newInsertedRanges = patch.insertedUnits
             val newDeletedRanges = patch.deletedUnits
             if (newInsertedRanges.isNotEmpty() || newDeletedRanges.isNotEmpty()) {
@@ -231,13 +231,13 @@ class ComposeVisualTimeline {
         // child key 的即时 presented 状态写入，使本笔 applyPatch 后面的 started/pending
         // 分类能读到 child 的状态，不因 child key 是新分配的就判成 pending 重置 alpha。
         val effectiveProgressByKey =
-            if (policy.textEnabled) {
+            if (policy.textAnimationEnabledForEdit) {
                 units.associate { it.key to hasBeenPresented(it, frameTimeNanos) }.toMutableMap()
             } else {
                 mutableMapOf()
             }
 
-        if (policy.textEnabled) {
+        if (policy.textAnimationEnabledForEdit) {
             // 第一步：先 rebase 当前所有 unit 到此刻的真实 alpha/位置。
             // #691 评论 5680711648 修复1：不能用 sampleUnit() — 它会把尚未开始的通道也 rebase 到 now，
             // 丢失绝对 start time。改用 rebaseUnitForPatch()：尚未开始的通道原样保留未来起点。
@@ -945,6 +945,22 @@ class ComposeVisualTimeline {
         frameTimeNanos: Long,
         motionSample: ComposeEditMotion.Sample? = null,
     ): ComposeVisualScene {
+        // Issue #732 评论 5764716281 硬问题2：coordinated 模式下动画文字所有权必须以有效
+        // ComposeEditMotion.Sample 为前提。如果没有 active motion sample（motionSample == null），
+        // 直接 settle 当前 text units，清掉对应 hiddenRanges，返回最终静态正文。
+        // 约束：coordinated && activeEditMotion == null => timeline 不得拥有任何吞字/吐字 unit。
+        if (coordinatedSpatialClip && motionSample == null) {
+            for (unit in units) {
+                presentedKeys.remove(unit.key)
+            }
+            units = emptyList()
+            return ComposeVisualScene(
+                units = emptyList(),
+                hiddenRanges = emptyList(),
+                unitClipFractions = emptyMap(),
+                coordinatedSpatialClip = coordinatedSpatialClip,
+            )
+        }
         // 缺陷3：收口 — 移除已稳定的 unit，只保留仍需 overlay 接管的 unit
         val remainingUnits = mutableListOf<VisualTextUnit>()
         val sampledUnits = mutableListOf<VisualTextUnit>()
@@ -958,6 +974,15 @@ class ComposeVisualTimeline {
                 // Issue #728 评论 5754839786 缺口3：coordinated 模式下还要 motion fraction 到达 1 才允许移除 —
                 // rapid redirect 后旧 unit 的 alpha 旧时钟可能已结束，但 motion 里这个字还没走到 fraction=1，
                 // 此时不能移除，否则旧字提前消失。
+                // Issue #732 评论 5764716281 硬问题2：coordinated 模式下 motionSample 存在但缺某个 unit key 时，
+                // 该 unit 也不能继续留在 hiddenRanges 等自己的 alpha/reveal timer，直接释放 overlay 所有权。
+                if (coordinatedSpatialClip &&
+                    motionSample != null &&
+                    !motionSample.unitClipFractions.containsKey(unit.key)
+                ) {
+                    presentedKeys.remove(unit.key)
+                    continue
+                }
                 // 提取 reachedFullAlpha 局部变量降低条件复杂度（detekt ComplexCondition 阈值 4）。
                 val reachedFullAlpha = alphaFinished && positionFinished && sampled.alpha.to >= 1f
                 if (reachedFullAlpha &&

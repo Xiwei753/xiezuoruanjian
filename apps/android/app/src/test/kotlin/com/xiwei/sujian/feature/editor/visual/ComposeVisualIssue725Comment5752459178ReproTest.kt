@@ -98,7 +98,7 @@ class ComposeVisualIssue725Comment5752459178ReproTest {
                 deletedUnits = emptyList(),
             )
         val durationNanos = 300_000_000L // 300ms
-        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L)
+        val policy = EditorMotionPolicy(textEnabled = true, textDurationMillis = 300L, coordinated = false)
         val frame0 = 0L
         timeline.applyPatch(
             patch = insertPatch,

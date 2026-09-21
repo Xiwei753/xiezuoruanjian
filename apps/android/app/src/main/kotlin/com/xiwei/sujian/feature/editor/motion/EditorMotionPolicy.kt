@@ -52,4 +52,36 @@ data class EditorMotionPolicy(
             reduceMotion -> copy(textEnabled = false, cursorEnabled = false, coordinated = false)
             else -> this
         }
+
+    /**
+     * Issue #732 评论 5764716281 硬问题1：coordinated 模式下的运行时派生语义 —
+     * coordinated=true 且 reduceMotion=false 时一律启用完整协同 motion，
+     * 不被隐藏的 [textEnabled]/[cursorEnabled] 关掉。
+     * coordinated=false 时才读独立 text/cursor 开关。
+     * Timeline 和 VisualState 只读这些派生语义，不各自重新解释 raw 字段。
+     */
+    val textAnimationEnabledForEdit: Boolean
+        get() = if (coordinated && !reduceMotion) true else textEnabled && !reduceMotion
+
+    /**
+     * coordinated=true 且 reduceMotion=false 时一律 true；coordinated=false 时读 [cursorEnabled]。
+     */
+    val cursorAnimationEnabledForEdit: Boolean
+        get() = if (coordinated && !reduceMotion) true else cursorEnabled && !reduceMotion
+
+    /**
+     * text edit 的动画时长：统一用 [textDurationMillis]
+     * （coordinated 和非 coordinated 模式下 text edit 的文字时长都是 textDurationMillis）。
+     */
+    val editDurationMillis: Long
+        get() = textDurationMillis
+
+    /**
+     * selection-only 光标移动的时长：
+     * - coordinated=true 且 reduceMotion=false 时用 [textDurationMillis]
+     *   （selection-only 也属于协同模式，不能被旧 cursorEnabled=false 卡死）；
+     * - coordinated=false 时用 [cursorDurationMillis]。
+     */
+    val selectionCursorDurationMillis: Long
+        get() = if (coordinated && !reduceMotion) textDurationMillis else cursorDurationMillis
 }

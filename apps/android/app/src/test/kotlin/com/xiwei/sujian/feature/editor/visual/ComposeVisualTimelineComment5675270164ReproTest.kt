@@ -75,7 +75,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 offsetMap = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY)),
                 deletedUnits = listOf(TextRange(2, 3)),
             )
-        timeline.applyPatch(patch, frameTimeNanos = 0L, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            patch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         val scene = timeline.sample(0L)
         val ghosts = scene.units.filter { it.targetRange == null }
@@ -132,7 +136,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 newLayout = aLayout,
                 insertedUnits = listOf(TextRange(0, 1)),
             )
-        timeline.applyPatch(insertPatch, frameTimeNanos = 0L, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            insertPatch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // Step 2: 在 30ms（动画未结束，alpha≈0.3）删除 "a"
         val frameTimeB = 30L * 1_000_000L
@@ -144,7 +152,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 offsetMap = null,
                 deletedUnits = listOf(TextRange(0, 1)),
             )
-        timeline.applyPatch(deletePatch, frameTimeNanos = frameTimeB, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            deletePatch,
+            frameTimeNanos = frameTimeB,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         val scene = timeline.sample(frameTimeB)
         val ghosts = scene.units.filter { it.targetRange == null }
@@ -202,7 +214,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 newLayout = abcLayout,
                 insertedUnits = listOf(TextRange(0, 3)),
             )
-        timeline.applyPatch(patch, frameTimeNanos = 0L, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            patch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // 在 200ms sample（动画时长 100ms，已结束）
         val frameTimeEnd = 200L * 1_000_000L
@@ -263,7 +279,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 deletedUnits = listOf(TextRange(2, 3)),
                 retainedMoves = listOf(RetainedMove(oldRange = TextRange(3, 5), newRange = TextRange(2, 4))),
             )
-        timeline.applyPatch(patch, frameTimeNanos = 0L, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            patch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         val scene = timeline.sample(0L)
         val moveUnit = scene.units.firstOrNull { it.targetRange == TextRange(2, 4) }
@@ -315,7 +335,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 newLayout = oldLayout,
                 insertedUnits = listOf(TextRange(0, 4)),
             )
-        timeline.applyPatch(insertPatch, frameTimeNanos = 0L, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            insertPatch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // Step 2: 删除中间换行 [2,3)，"ab\nc" → "abc"
         val frameTimeB = 30L * 1_000_000L
@@ -334,7 +358,11 @@ class ComposeVisualTimelineComment5675270164ReproTest {
                 // 删除 "\n"
                 deletedUnits = listOf(TextRange(2, 3)),
             )
-        timeline.applyPatch(deletePatch, frameTimeNanos = frameTimeB, motionPolicy = EditorMotionPolicy(textDurationMillis = 100L))
+        timeline.applyPatch(
+            deletePatch,
+            frameTimeNanos = frameTimeB,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         val scene = timeline.sample(frameTimeB)
         // 期望：[0,4) 应切成 [0,2)="ab"（存活，映到 [0,2)）和 [3,4)="c"（存活，映到 [2,3)）

@@ -37,12 +37,12 @@ class Issue723Comment5749023316ReproTest {
     // ==================== 缺口 2：协同动画是完整模式（#732 评论 5763493968 第4节） ====================
 
     /**
-     * 缺口 2-1（#732 重新收口）：`EditorMotionPolicy(coordinated=true, textEnabled=false).effective()`
-     * 现在直接返回 this——coordinated 本身就是完整模式，不靠改 textEnabled 才成立。
+     * 缺口 2-1（#732 评论 5764716281 硬问题1 重新收口）：`EditorMotionPolicy(coordinated=true, textEnabled=false)`
+     * 的 effective() 直接返回 this——raw textEnabled 保持 false，但运行时派生值
+     * textAnimationEnabledForEdit == true，coordinated 模式下完整协同 motion 仍然启用。
      *
      * 旧归一（#723 评论 5749023316）在 effective() 里强制 textEnabled=true，
-     * 但 #732 评论 5763493968 第4节删除了这条归一：协同本身就是完整模式，
-     * 不能靠改另一个隐藏设置才能成立。
+     * #732 评论 5763493968 第4节删除了这条归一，改为派生值（评论 5764716281 硬问题1）。
      */
     @Test
     fun gap2_effective_coordinatedTrue_isIdentity_preservesTextEnabledFalse() {
@@ -55,23 +55,33 @@ class Issue723Comment5749023316ReproTest {
             )
         val effective = legacyPolicy.effective()
 
-        // #732 收口后：coordinated=true → effective() 直接返回 this，不强制 textEnabled=true
+        // #732 收口后：raw textEnabled 保持 false（不归一 raw 字段）
         assertFalse(
-            "#732 收口后：coordinated=true && textEnabled=false 时 effective() 保持 textEnabled=false——" +
-                "coordinated 本身就是完整模式，不靠改 textEnabled 才成立",
+            "#732 收口后：coordinated=true && textEnabled=false 时 effective() 保持 raw textEnabled=false",
             effective.textEnabled,
         )
         assertTrue(
             "协同标记仍为 true（页面认为协同已开启，独立开关已藏）",
             effective.coordinated,
         )
+        // Issue #732 评论 5764716281 硬问题1：派生值启用完整协同 motion
+        assertTrue(
+            "coordinated=true → textAnimationEnabledForEdit == true（派生值不被隐藏 textEnabled 关掉）",
+            effective.textAnimationEnabledForEdit,
+        )
+        assertTrue(
+            "coordinated=true → cursorAnimationEnabledForEdit == true（派生值不被隐藏 cursorEnabled 关掉）",
+            effective.cursorAnimationEnabledForEdit,
+        )
     }
 
     /**
-     * 缺口 2-2（#732 重新收口）：`effective()` 只处理 reduceMotion，不再做 coordinated 归一。
+     * 缺口 2-2（#732 评论 5764716281 硬问题1 重新收口）：`effective()` 只处理 reduceMotion，
+     * 不再做 coordinated 归一。coordinated 模式下通过派生值启用完整协同 motion。
      *
      * reduceMotion=true 仍强制全 false（优先级最高）。
-     * coordinated=true 但 textEnabled=false 时 effective() 直接返回 this（不强制 textEnabled=true）。
+     * coordinated=true 但 textEnabled=false 时 effective() 直接返回 this（不强制 textEnabled=true），
+     * 但派生值 textAnimationEnabledForEdit == true。
      */
     @Test
     fun gap2_effective_onlyHandlesReduceMotion_notCoordinatedNormalization() {
@@ -87,6 +97,10 @@ class Issue723Comment5749023316ReproTest {
             "reduceMotion=true → effective() 强制 textEnabled=false（有策略层保证）",
             reduceMotionEffective.textEnabled,
         )
+        assertFalse(
+            "reduceMotion=true → textAnimationEnabledForEdit == false（reduceMotion 优先级最高）",
+            reduceMotionEffective.textAnimationEnabledForEdit,
+        )
 
         // coordinated=true 但 textEnabled=false → effective() 直接返回 this（#732 收口）
         val coordinatedLegacyPolicy =
@@ -97,9 +111,12 @@ class Issue723Comment5749023316ReproTest {
             )
         val coordinatedEffective = coordinatedLegacyPolicy.effective()
         assertFalse(
-            "#732 收口后：coordinated=true 但 textEnabled=false → effective() 保持 textEnabled=false" +
-                "（coordinated 本身就是完整模式，不靠改 textEnabled 才成立）",
+            "#732 收口后：coordinated=true 但 textEnabled=false → effective() 保持 raw textEnabled=false",
             coordinatedEffective.textEnabled,
+        )
+        assertTrue(
+            "#732 评论 5764716281 硬问题1：coordinated=true → textAnimationEnabledForEdit == true（派生值）",
+            coordinatedEffective.textAnimationEnabledForEdit,
         )
     }
 }

@@ -207,7 +207,7 @@ class ComposeVisualIssue703Comment5712256296ReproTest {
         val motionPolicy =
             EditorMotionPolicy(
                 textDurationMillis = 1000L,
-                coordinated = true,
+                coordinated = false,
             )
 
         // 第一笔：插入 'b'，创建 Inserted role 的 unit，targetRange=[1,2)

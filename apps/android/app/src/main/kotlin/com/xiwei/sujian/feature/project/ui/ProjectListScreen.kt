@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
@@ -112,6 +113,7 @@ internal data class ProjectListLayoutConfig(
     val projectCardMinWidthDp: Float = 0f,
 )
 
+@Suppress("CognitiveComplexMethod")
 @Composable
 internal fun ProjectListContent(
     appState: WorkspaceAppState,
@@ -154,7 +156,8 @@ internal fun ProjectListContent(
             )
         } else if (useWideGrid) {
             // #625 项6 / #628 验收点 4：宽屏 grid — LazyVerticalGrid（多列），数据源 ProjectSummary。
-            // #732 评论第5节：首页契约 singular — recentEdit 单值，宽屏暂不单独画最近编辑卡片（保持 grid 仅展示作品）。
+            // #732 评论 5764716281 硬问题3：首页契约 singular — 宽屏也消费同一个 RecentEdit?，
+            // 有 recentEdit 时只画一张最近编辑卡片（占满第一行），不再写死不画。
             // 卡片最小宽度来自 Rust LayoutMetrics.projectCardMinWidthDp。
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = layoutConfig.projectCardMinWidthDp.dp),
@@ -163,6 +166,19 @@ internal fun ProjectListContent(
                 verticalArrangement = Arrangement.spacedBy(dims.space8),
                 modifier = Modifier.fillMaxSize(),
             ) {
+                if (appState.recentEdit != null) {
+                    // #732 评论 5764716281：宽屏也画一个最近编辑卡片（占满第一行）
+                    item(span = { GridItemSpan(maxLineSpan) }) {
+                        val edit = appState.recentEdit!!
+                        val summary = appState.projectSummaries.find { it.id == edit.projectId }
+                        RecentEditCardContent(
+                            edit = edit,
+                            projectTitle = summary?.title,
+                            onContinueRecentEdit = onContinueRecentEdit,
+                            modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
+                        )
+                    }
+                }
                 gridItems(appState.projectSummaries, key = { it.id }) { summary ->
                     ProjectCard(
                         summary = summary,
@@ -204,21 +220,12 @@ internal fun ProjectListContent(
                         // #625 项6：recentEdit 标题也来自 ProjectSummary 单数据源。
                         val edit = appState.recentEdit!!
                         val summary = appState.projectSummaries.find { it.id == edit.projectId }
-                        SujianCard(
-                            onClick = { onContinueRecentEdit(edit) },
+                        RecentEditCardContent(
+                            edit = edit,
+                            projectTitle = summary?.title,
+                            onContinueRecentEdit = onContinueRecentEdit,
                             modifier = Modifier.fillMaxWidth().padding(bottom = dims.space8),
-                        ) {
-                            Column(modifier = Modifier.padding(dims.space16)) {
-                                Text(
-                                    summary?.title ?: stringResource(id = R.string.unknown_project),
-                                    style = MaterialTheme.typography.titleMedium,
-                                )
-                                Text(
-                                    stringResource(id = R.string.continue_writing_action),
-                                    style = MaterialTheme.typography.bodySmall,
-                                )
-                            }
-                        }
+                        )
                     }
                     item(key = ALL_PROJECTS_HEADER_KEY) {
                         Spacer(modifier = Modifier.height(dims.space16))
@@ -309,6 +316,35 @@ internal fun ProjectListContent(
             },
             onDismiss = { confirmDeleteProject = null },
         )
+    }
+}
+
+/**
+ * #732 评论 5764716281 硬问题3：最近编辑卡片内容 — 宽屏和窄屏共用同一画法。
+ * 提取为独立 Composable 以控制 [ProjectListContent] 的认知复杂度。
+ */
+@Composable
+private fun RecentEditCardContent(
+    edit: RecentEdit,
+    projectTitle: String?,
+    onContinueRecentEdit: (RecentEdit) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val dims = LocalSujianDimensions.current
+    SujianCard(
+        onClick = { onContinueRecentEdit(edit) },
+        modifier = modifier,
+    ) {
+        Column(modifier = Modifier.padding(dims.space16)) {
+            Text(
+                projectTitle ?: stringResource(id = R.string.unknown_project),
+                style = MaterialTheme.typography.titleMedium,
+            )
+            Text(
+                stringResource(id = R.string.continue_writing_action),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
     }
 }
 
