@@ -130,24 +130,22 @@ fn issue2_rust_method_already_deleted() {
 // 问题3: 事务完成帧被 clip 掏空（正文闪一帧）
 // =========================================================================
 
-/// 问题3 守卫1: build_text_animation_plan_with_sample 在 all_units_done && caret_track_complete
-/// 时 keys_to_complete.push(tx.key) + continue，本帧不生成动画 glyph。
-/// 修复后应在 continue 前仍生成完成帧的 glyph，或调整 clip 收集时序。
+/// 问题3 守卫1: 完成帧（keys_to_complete）的事务在 build_text_animation_plan_with_sample
+/// 里 keys_to_complete.push + continue 不生成动画 glyph。为避免"glyph 无、clip 有"的
+/// 一帧文字消失/闪烁，clip_rects 收集必须同帧排除 keys_to_complete。
+/// 上一轮（评论 5757225958）选择"调整 clip 收集时序"方式：clip 收集时用
+/// keys_to_complete_set 排除即将完成的事务。本守卫验证该结构特征存在。
 #[test]
 fn issue3_complete_frame_continue_skips_glyph_generation() {
     let src = read_src("src/sujian_editor_item/animation_coordinator.rs");
-    // 定位 build_text_animation_plan_with_sample
-    let marker = "fn build_text_animation_plan_with_sample";
-    let pos = src.find(marker).expect("build_text_animation_plan_with_sample 必须存在");
-    let window = &src[pos..pos.saturating_add(4000)];
-    // 当前缺陷：完成判断后 continue 跳过 glyph 生成
-    let has_complete_continue = window.contains("keys_to_complete.push(tx.key)")
-        && window.contains("continue;");
+    // clip_rects 收集必须排除 keys_to_complete，否则完成帧"glyph 无、clip 有"→ 文字闪烁。
+    let clip_marker = "let mut clip_rects";
+    let clip_pos = src.find(clip_marker).expect("clip_rects 收集必须存在");
+    let clip_window = &src[clip_pos..clip_pos.saturating_add(1200)];
     assert!(
-        !has_complete_continue,
-        "build_text_animation_plan_with_sample 完成帧 keys_to_complete.push + continue \
-         不生成动画 glyph，但事务状态仍为 Rendering/Prepared，clip_rects 仍收集裁剪 \
-         → 一帧动画 glyph 不画 + canonical 被 clip 隐藏 → 文字闪烁。"
+        clip_window.contains("keys_to_complete_set.contains"),
+        "build_render_plan_full clip_rects 收集必须用 keys_to_complete_set 排除即将完成的事务，\
+         否则完成帧 keys_to_complete.push + continue 不画 glyph 但 clip 仍藏 canonical → 文字闪烁。"
     );
 }
 

@@ -93,49 +93,49 @@ QtObject {
             return
         }
 
-        // Issue #727 评论 5755858583 问题3: 删除 hex() fallback 函数。
+        // Issue #727 评论 5760020833 问题3: 去掉 QML 侧 colors.xxx || prev.xxx 静默 fallback。
         // Rust 侧已保证 colors 包含所有字段的最终值，直接读取即可。
-        // 如果某个字段缺失（防御性），保持 resolvedTheme 中上一次的值。
-        var prev = resolvedTheme
+        // 字段缺失/非法（undefined 或非 string）由 qcolor() 报成洋红，
+        // 不再悄悄继承上一套主题颜色。
         var next = {
             is_dark: dark,
             colors: colors,
-            primary: colors.primary || prev.primary,
-            on_primary: colors.on_primary || prev.on_primary,
-            primary_container: colors.primary_container || prev.primary_container,
-            on_primary_container: colors.on_primary_container || prev.on_primary_container,
-            secondary: colors.secondary || prev.secondary,
-            on_secondary: colors.on_secondary || prev.on_secondary,
-            secondary_container: colors.secondary_container || prev.secondary_container,
-            on_secondary_container: colors.on_secondary_container || prev.on_secondary_container,
-            tertiary: colors.tertiary || prev.tertiary,
-            on_tertiary: colors.on_tertiary || prev.on_tertiary,
-            tertiary_container: colors.tertiary_container || prev.tertiary_container,
-            on_tertiary_container: colors.on_tertiary_container || prev.on_tertiary_container,
-            background: colors.background || prev.background,
-            on_background: colors.on_background || prev.on_background,
-            surface: colors.surface || prev.surface,
-            on_surface: colors.on_surface || prev.on_surface,
-            surface_variant: colors.surface_variant || prev.surface_variant,
-            on_surface_variant: colors.on_surface_variant || prev.on_surface_variant,
-            surface_tint: colors.surface_tint || prev.surface_tint,
-            surface_dim: colors.surface_dim || prev.surface_dim,
-            surface_bright: colors.surface_bright || prev.surface_bright,
-            surface_container_lowest: colors.surface_container_lowest || prev.surface_container_lowest,
-            surface_container_low: colors.surface_container_low || prev.surface_container_low,
-            surface_container: colors.surface_container || prev.surface_container,
-            surface_container_high: colors.surface_container_high || prev.surface_container_high,
-            surface_container_highest: colors.surface_container_highest || prev.surface_container_highest,
-            inverse_surface: colors.inverse_surface || prev.inverse_surface,
-            inverse_on_surface: colors.inverse_on_surface || prev.inverse_on_surface,
-            inverse_primary: colors.inverse_primary || prev.inverse_primary,
-            error: colors.error || prev.error,
-            on_error: colors.on_error || prev.on_error,
-            error_container: colors.error_container || prev.error_container,
-            on_error_container: colors.on_error_container || prev.on_error_container,
-            outline: colors.outline || prev.outline,
-            outline_variant: colors.outline_variant || prev.outline_variant,
-            scrim: colors.scrim || prev.scrim,
+            primary: colors.primary,
+            on_primary: colors.on_primary,
+            primary_container: colors.primary_container,
+            on_primary_container: colors.on_primary_container,
+            secondary: colors.secondary,
+            on_secondary: colors.on_secondary,
+            secondary_container: colors.secondary_container,
+            on_secondary_container: colors.on_secondary_container,
+            tertiary: colors.tertiary,
+            on_tertiary: colors.on_tertiary,
+            tertiary_container: colors.tertiary_container,
+            on_tertiary_container: colors.on_tertiary_container,
+            background: colors.background,
+            on_background: colors.on_background,
+            surface: colors.surface,
+            on_surface: colors.on_surface,
+            surface_variant: colors.surface_variant,
+            on_surface_variant: colors.on_surface_variant,
+            surface_tint: colors.surface_tint,
+            surface_dim: colors.surface_dim,
+            surface_bright: colors.surface_bright,
+            surface_container_lowest: colors.surface_container_lowest,
+            surface_container_low: colors.surface_container_low,
+            surface_container: colors.surface_container,
+            surface_container_high: colors.surface_container_high,
+            surface_container_highest: colors.surface_container_highest,
+            inverse_surface: colors.inverse_surface,
+            inverse_on_surface: colors.inverse_on_surface,
+            inverse_primary: colors.inverse_primary,
+            error: colors.error,
+            on_error: colors.on_error,
+            error_container: colors.error_container,
+            on_error_container: colors.on_error_container,
+            outline: colors.outline,
+            outline_variant: colors.outline_variant,
+            scrim: colors.scrim,
         }
         resolvedTheme = next
     }
@@ -150,11 +150,9 @@ QtObject {
         if (typeof value !== "string" || value.length === 0) {
             return Qt.rgba(1.0, 0.0, 1.0, 1.0) // magenta 表示异常
         }
-        try {
-            return Qt.color(value)
-        } catch (e) {
-            return Qt.rgba(1.0, 0.0, 1.0, 1.0) // magenta 表示异常
-        }
+        // Qt.color 非法颜色返回 null（不抛异常），用 null 检查 fallback 到洋红。
+        const c = Qt.color(value)
+        return c === null ? Qt.rgba(1.0, 0.0, 1.0, 1.0) : c
     }
 
     property bool isDark: resolvedTheme.is_dark

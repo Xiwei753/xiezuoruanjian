@@ -2678,6 +2678,38 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
+    /// Issue #727 评论 5760020833 问题2: 把本帧 Prepared 事务切到 Rendering，
+    /// 并用当前 frame_now 启动 transaction timeline / Timed units / cursor track。
+    /// 必须在 `sample_coordinated_motion_frame` 之前调用，否则刚进入 Prepared 的
+    /// 新事务第一帧采样时状态仍为 Prepared → caret=None → InsertReveal/DeleteConceal
+    /// 不画、clip 也不藏 → 第一帧直接显示最终正文 → 下一帧才从 progress≈0 开始动画，
+    /// 形成固定的一帧"先显示最终文字，再开始动画"的闪烁。
+    fn begin_rendering_transactions(&mut self, frame_now: Instant) {
+        for tx in self.prepared_queue.active_transactions_mut() {
+            if tx.state == TextVisualTransactionState::Prepared {
+                tx.state = TextVisualTransactionState::Rendering;
+                if !tx.timeline.is_started() {
+                    tx.timeline.mark_first_frame();
+                }
+                // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
+                // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
+                // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
+                // CaretDriven unit 无独立时间线，mark_started 是 no-op。
+                for unit in &mut tx.units {
+                    unit.timing.mark_started(frame_now);
+                }
+                // Issue #690 评论 5682867529: caret track 跟文字 unit 同一个 frame_now 启动，
+                // 不再在事务创建时就开始计时。这样第一帧 text unit progress = 0 且
+                // caret track progress = 0，文字和光标从同一屏幕帧起跑。
+                if let Some(track) = tx.cursor_visual_track.as_mut() {
+                    if track.started_at.is_none() {
+                        track.started_at = Some(frame_now);
+                    }
+                }
+            }
+        }
+    }
+
     /// Issue #690 评论 5675007226 步骤 1+2: 接受 `frame_now`，统一采样文字和光标 progress。
     ///
     /// 文字和光标的 progress 全部从同一个 `frame_now` 计算，消除 GUI 线程 tick 和
@@ -2696,6 +2728,11 @@ impl LinuxEditorAnimationCoordinator {
         cursor_owner_epoch: u64,
         _current_scroll_y: f64,
     ) -> RenderPlan {
+        // Issue #727 评论 5760020833 问题2: 先把本帧 Prepared 事务切到 Rendering 并启动
+        // timeline/units/cursor track，再采样 caret motion。否则刚进入 Prepared 的新事务
+        // 第一帧 sample 时状态仍为 Prepared → caret=None → 闪出 canonical 最终正文。
+        self.begin_rendering_transactions(frame_now);
+
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
         let mut frame_sample = AnimationFrameSample::new(frame_now);
@@ -2758,14 +2795,22 @@ impl LinuxEditorAnimationCoordinator {
                 && !keys_to_complete_set.contains(&tx.key)
             {
                 let has_caret_frame = coordinated_motion_frame.caret.is_some();
+                // Issue #727 评论 5760020833 问题1: 还要判断本事务是否是 caret motion 的
+                // owner。当旧 CaretDriven 事务 owner 已丢失（epoch 切换/新事务抢占），
+                // 即使全局有新事务的 caret frame，旧事务的 static_hidden_document_rects
+                // 也不能继续裁 canonical 正文——非 owner 的 CaretDriven 已 Snap 到 canonical，
+                // 再藏 canonical 会挖出文字空洞。
+                let owns_caret = coordinated_motion_frame.owner_key == Some(tx.key);
                 for unit in &tx.units {
                     let is_caret_driven = matches!(
                         unit.slice.kind,
                         AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
                     );
-                    // CaretDriven unit 只在有 caret frame 时才收集；
-                    // Timed unit（Reflow）始终收集。
-                    if is_caret_driven && !has_caret_frame {
+                    // CaretDriven unit 只在本事务拥有 caret frame（has_caret_frame 且
+                    // owns_caret）时才收集；Timed unit（Reflow）始终收集。
+                    // !owns_caret 时也不收集：非 owner 的 CaretDriven 已 Snap 到 canonical，
+                    // 不能再藏 canonical 正文。
+                    if is_caret_driven && (!has_caret_frame || !owns_caret) {
                         continue;
                     }
                     for doc_rect in &unit.slice.static_hidden_document_rects {
@@ -3011,27 +3056,10 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
 
-            if tx.state == TextVisualTransactionState::Prepared {
-                tx.state = TextVisualTransactionState::Rendering;
-                if !tx.timeline.is_started() {
-                    tx.timeline.mark_first_frame();
-                }
-                // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
-                // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
-                // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
-                // CaretDriven unit 无独立时间线，mark_started 是 no-op。
-                for unit in &mut tx.units {
-                    unit.timing.mark_started(sample.frame_now);
-                }
-                // Issue #690 评论 5682867529: caret track 跟文字 unit 同一个 frame_now 启动，
-                // 不再在事务创建时就开始计时。这样第一帧 text unit progress = 0 且
-                // caret track progress = 0，文字和光标从同一屏幕帧起跑。
-                if let Some(track) = tx.cursor_visual_track.as_mut() {
-                    if track.started_at.is_none() {
-                        track.started_at = Some(sample.frame_now);
-                    }
-                }
-            }
+            // Issue #727 评论 5760020833 问题2: Prepared→Rendering 的状态切换及
+            // timeline/units/cursor track 启动已由 `begin_rendering_transactions`
+            // 在 `build_render_plan_full` 采样 caret motion 之前完成。到这里时
+            // 本帧 Prepared 事务已全部切到 Rendering，不再重复执行。
 
             // Issue #722 评论 5748596920 问题4: InsertReveal/DeleteConceal 的完成条件
             // 必须跟视觉边界一致：caret-driven boundary 到目标后才能释放对应 overlay/static patch。
@@ -6230,6 +6258,9 @@ mod tests {
 
         // 第一帧进入 Rendering。
         let frame_now_0 = prepared_now + Duration::from_millis(16);
+        // Issue #727 评论 5760020833 问题2: Prepared→Rendering 现由 begin_rendering_transactions
+        // 在采样前完成，build_text_animation_plan_with_sample 不再做状态切换。
+        coord.begin_rendering_transactions(frame_now_0);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(key, 0.0);
         let (plan_0, _) = coord
@@ -6504,6 +6535,9 @@ mod tests {
 
         // ── 8. 第一帧进入 Rendering ──
         let frame_now_0 = prepared_now + Duration::from_millis(16);
+        // Issue #727 评论 5760020833 问题2: Prepared→Rendering 现由 begin_rendering_transactions
+        // 在采样前完成，build_text_animation_plan_with_sample 不再做状态切换。
+        coord.begin_rendering_transactions(frame_now_0);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(new_key, 0.0);
         // Issue #727 约束 3: InsertReveal/DeleteConceal 需要 CoordinatedMotionFrame.caret
