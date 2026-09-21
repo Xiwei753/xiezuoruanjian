@@ -588,4 +588,117 @@ class Issue728Comment5755928697ReproTest {
         // motion2 中 key=10 还没开始（区间 [0.5, 1]）
         assertEquals("motion2 key=10 应还没开始", 0f, s2.unitClipFractions[10L]!!, 0.001f)
     }
+
+    /**
+     * 问题1 加固：redirect 必须把相位按"旧 motion 的 duration"算，而不是新 duration。
+     *
+     * 连续编辑时如果用户改了 motion 设置（coordinated / duration 变化），redirect 的新 motion
+     * 时长可能不同于旧 motion。如果 oldGlyphProgress 误用新 duration 算，相位分类会失真，
+     * 正在吐的字会被错判成"未开始"而从 0 重新播（或冻结一段）。
+     *
+     * 场景：3 个 unit [0, 1/3], [1/3, 2/3], [2/3, 1]，旧 glyphDuration=100ms，
+     * 在 40ms 处（glyphProgress=0.4，key=2 进行中 fraction≈0.2）redirect 到新 duration=200ms。
+     * 修复后 oldGlyphProgress 仍用旧 100ms 算 = 0.4，key=2 从当前 fraction 继续。
+     */
+    @Test
+    fun redirect_preservesPhase_whenGlyphDurationChanges() {
+        val oldGlyphDuration = 100_000_000L
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(1L, 2L, 3L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = oldGlyphDuration,
+                glyphDurationNanos = oldGlyphDuration,
+            )
+        // glyphProgress=0.4：key=2 区间 [1/3, 2/3]，local=(0.4-1/3)/(1/3)≈0.2，fraction≈0.2
+        val midTime = startTime + 40_000_000L
+        val midSample = motion1.sample(midTime)
+        val key2Fraction = midSample.unitClipFractions[2L]!!
+        assertTrue("key=2 应在进行中", key2Fraction > 0f && key2Fraction < 1f)
+
+        // redirect 到新目标，但用不同的 glyph 时长（200ms）
+        val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
+        val motion2 =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                frameTimeNanos = midTime,
+                caretDurationNanos = 200_000_000L,
+                glyphDurationNanos = 200_000_000L,
+            )
+
+        // redirect 后立即 sample：key=2 的 fraction 应该从当前值继续（不是从 0 重播）
+        val redirectedSample = motion2.sample(midTime)
+        assertEquals(
+            "key=2 fraction 应从当前值继续（相位用旧 duration 算）",
+            key2Fraction,
+            redirectedSample.unitClipFractions[2L]!!,
+            0.001f,
+        )
+
+        // 继续跑一小段时间：key=2 的 fraction 应该增长（不是冻结）
+        val afterShortDelay = motion2.sample(midTime + 20_000_000L)
+        val newKey2Fraction = afterShortDelay.unitClipFractions[2L]!!
+        assertTrue("key=2 fraction 应继续增长（不是冻结）: $newKey2Fraction > $key2Fraction", newKey2Fraction > key2Fraction)
+    }
+
+    /**
+     * 问题2 加固：rapid redirect 时旧未完成 unit 和新 unit 按传入（正文/几何）顺序交错排，
+     * 不按创建时间排。
+     *
+     * 场景（评论里的例子）：右边旧 inserted unit key=10 还在吐（进行中 fraction=0.5），
+     * 用户把光标移到左边再输入新字（key=11，正文里在 key=10 左边）。
+     * 调用方传 newInsertedUnitKeys = [11, 10]（正文顺序：左 11 在前，右 10 在后）。
+     *
+     * 修复前：旧 unit 按创建时间排在前、新 unit 追加在后 → key=10 先吐，key=11 冻结等。
+     * 修复后：按传入顺序交错，新 unit（光标处）先吐，旧 unit 从当前 fraction 继续。
+     *
+     * 验证：redirect 后一小段进度，key=11（光标处新字）在吐（fraction>0），
+     * 而 key=10（右边旧字）还停在当前 fraction（它的区间在后面，还没轮到）。
+     */
+    @Test
+    fun redirectTo_interleavesOldAndNewByTextOrder_notByCreationTime() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = listOf(10L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // 旧 unit key=10 进行中：glyphProgress=0.5，fraction=0.5
+        val midTime = startTime + glyphDuration / 2
+        val midSample = motion1.sample(midTime)
+        assertEquals(0.5f, midSample.unitClipFractions[10L]!!, 0.001f)
+
+        // redirect：按正文顺序传 [11(新,左), 10(旧,右)]
+        val newCaretTarget = Rect(left = 0f, top = 0f, right = 2f, bottom = 20f)
+        val motion2 =
+            motion1.redirectTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                newInsertedUnitKeys = listOf(11L, 10L),
+                newDeletedUnitKeys = emptyList(),
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // 立即 sample：key=10 从当前 0.5 继续，key=11 从 0 开始
+        val redirectedSample = motion2.sample(midTime)
+        assertEquals("key=10 应从 0.5 继续", 0.5f, redirectedSample.unitClipFractions[10L]!!, 0.001f)
+        assertEquals("key=11 应从 0 开始", 0f, redirectedSample.unitClipFractions[11L]!!, 0.001f)
+
+        // 关键验证：redirect 后一小段进度，key=11（光标处新字）先吐，key=10 还停在当前 fraction
+        val shortDelay = midTime + glyphDuration / 8
+        val afterShort = motion2.sample(shortDelay)
+        val new11 = afterShort.unitClipFractions[11L]!!
+        val new10 = afterShort.unitClipFractions[10L]!!
+        assertTrue("key=11（光标处新字）应先吐：fraction>0", new11 > 0f)
+        // key=10 的区间是 [0.5, 1]，新 motion 进度还小，local 还没到，应仍≈0.5
+        assertEquals("key=10（右边旧字）还应停在当前 fraction，没抢先吐", 0.5f, new10, 0.001f)
+    }
 }

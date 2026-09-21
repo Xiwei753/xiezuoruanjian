@@ -456,12 +456,15 @@ class Issue728Comment5755336403ReproTest {
     }
 
     /**
-     * 反射读取 [ComposeEditMotion] 的私有 durationNanos 字段。
+     * 反射读取 [ComposeEditMotion] 的私有 glyphDurationNanos 字段。
      *
-     * 用于区分 forEdit（durationNanos = textDurationNanos）与 forSelectionMove（durationNanos = cursorDurationNanos）。
+     * 用于区分 text edit 分支（glyphDurationNanos = textDurationNanos）与
+     * forSelectionMove 分支（glyphDurationNanos = 0）。
+     * 注释 5754045689 重写后统一 motion 把单 duration 拆成 caretDurationNanos / glyphDurationNanos，
+     * 文字吞吐走 glyphDurationNanos，所以这里读 glyphDurationNanos。
      */
     private fun motionDurationNanos(motion: ComposeEditMotion): Long {
-        val field = ComposeEditMotion::class.java.getDeclaredField("durationNanos")
+        val field = ComposeEditMotion::class.java.getDeclaredField("glyphDurationNanos")
         field.isAccessible = true
         return field.get(motion) as Long
     }

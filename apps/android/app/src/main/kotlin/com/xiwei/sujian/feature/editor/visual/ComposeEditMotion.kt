@@ -123,10 +123,11 @@ class ComposeEditMotion(
      *
      * Issue #728 评论 5756468643 问题1：redirect 只保留 fraction 没有保留相位。
      * 修复：重定向时把剩余 channel 重新归一化到新 [0, 1]：
-     * - 已完成旧 channel：直接固定终值（from=to=currentFraction）。
-     * - 进行中旧 channel：startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
-     * - 未开始旧 channel：接在当前 channel 后面，区间按剩余权重归一化。
-     * - 新 unit（不在旧 channels 里）：按新顺序分配区间，接在所有旧 channel 剩余部分之后。
+     * - 已完成旧 unit：直接固定终值（from=to=currentFraction）。
+     * - 进行中旧 unit：从 startProgress=0 开始，from=currentFraction，to 不变，继续到原 to。
+     * - 未开始旧 unit：接在它后面，从原 from 到原 to。
+     * - 新 unit（不在旧 channels 里）：按 caller 传入的正文/几何顺序，和旧 unit 交错排进剩余 schedule，
+     *   不按创建时间排（Issue #728 评论 5756468643 问题2）。
      *
      * @param newOriginCaretRect 新笔的 old caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新笔的 new caret rect。
@@ -148,47 +149,23 @@ class ComposeEditMotion(
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
-        // 先处理旧 unit 的相位归一化
-        val oldUnitKeys = unitChannels.keys
-        val remainingOldKeys =
-            oldUnitKeys.filter { key ->
-                key in newInsertedUnitKeys || key in newDeletedUnitKeys
+        // 旧 motion 当前的 master glyph progress：必须用旧 motion 的 glyphDurationNanos 算，
+        // 不能用新 duration，否则相位分类（已完成/进行中/未开始）会失真，
+        // 连续编辑时改了 motion 设置就会出现"先冻结再继续"。
+        val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
+        // newInsertedUnitKeys / newDeletedUnitKeys 已由调用方按正文/几何顺序排好
+        // （inserted 按 targetRange.start，deleted 按 range.start）。旧未完成 unit 和新 unit
+        // 在这一条顺序里交错重排剩余 schedule，不按创建时间排（Issue #728 评论 5756468643 问题2）。
+        val insertedSpecs =
+            newInsertedUnitKeys.map { key ->
+                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], freshFrom = 0f, freshTo = 1f)
             }
-        val oldChannelsRenormalized =
-            renormalizeChannelsForRedirect(
-                currentSample = currentSample,
-                oldGlyphProgress = glyphProgress,
-                newUnitChannels = unitChannels.filterKeys { it in remainingOldKeys },
-            )
-        // 新 unit（不在旧 channels 里的）：按新顺序分配区间，接在旧 channel 剩余部分之后
-        val newInsertedOnly = newInsertedUnitKeys - oldUnitKeys
-        val newDeletedOnly = newDeletedUnitKeys - oldUnitKeys
-        val ranges = allocateEditRanges(newInsertedOnly, newDeletedOnly)
-        // 把新 unit 的区间整体后移，从 oldChannelsRenormalized 的总剩余终点开始
-        val oldTotalEnd = oldChannelsRenormalized.values.maxOfOrNull { it.endProgress } ?: 0f
-        val newChannels = mutableMapOf<Long, UnitChannel>()
-        newChannels.putAll(oldChannelsRenormalized)
-        for (key in newInsertedOnly) {
-            val (startProgress, endProgress) = ranges.getValue(key)
-            newChannels[key] =
-                UnitChannel(
-                    from = 0f,
-                    to = 1f,
-                    startProgress = oldTotalEnd + startProgress,
-                    endProgress = oldTotalEnd + endProgress,
-                )
-        }
-        for (key in newDeletedOnly) {
-            val (startProgress, endProgress) = ranges.getValue(key)
-            newChannels[key] =
-                UnitChannel(
-                    from = 1f,
-                    to = 0f,
-                    startProgress = oldTotalEnd + startProgress,
-                    endProgress = oldTotalEnd + endProgress,
-                )
-        }
+        val deletedSpecs =
+            newDeletedUnitKeys.map { key ->
+                RedirectUnitSpec(key = key, oldChannel = unitChannels[key], freshFrom = 1f, freshTo = 0f)
+            }
+        val newChannels = buildRedirectChannels(insertedSpecs, oldGlyphProgress, currentSample).toMutableMap()
+        newChannels.putAll(buildRedirectChannels(deletedSpecs, oldGlyphProgress, currentSample))
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
@@ -214,9 +191,10 @@ class ComposeEditMotion(
      * Issue #728 评论 5756468643 问题1：redirect 只保留 fraction 没有保留相位。
      * 修复：重定向后所有未完成的 channel 从新 motion 的 progress=0 立即继续，
      * 剩余 channel 按"当前相位之后的剩余部分"重新归一化到新 [0, 1]：
-     * - 已完成 channel：直接固定终值（from=to=currentFraction）。
-     * - 当前进行中 channel：startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
-     * - 后续未开始 channel：接在当前 channel 后面，区间按剩余权重归一化。
+     * - 已完成 unit：直接固定终值（from=to=currentFraction）。
+     * - 当前进行中 unit：从 startProgress=0 开始，from=currentFraction，to 不变，继续到原 to。
+     * - 后续未开始 unit：接在它后面，从原 from 到原 to。
+     * 没有新 unit 加入，相对顺序保持 unitChannels 的迭代顺序（即创建时的正文顺序）。
      *
      * @param newOriginCaretRect 新 caret rect（用于 fallback，当前 motion 已 finished 时用）。
      * @param newTargetCaretRect 新 caret rect。
@@ -234,14 +212,17 @@ class ComposeEditMotion(
     ): ComposeEditMotion {
         val currentSample = sample(frameTimeNanos)
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
-        // 当前 master glyph progress（旧 motion 中的相位）
-        val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
-        val newChannels =
-            renormalizeChannelsForRedirect(
-                currentSample = currentSample,
-                oldGlyphProgress = glyphProgress,
-                newUnitChannels = unitChannels,
-            )
+        // 旧 motion 当前的 master glyph progress：用旧 motion 的 glyphDurationNanos 算。
+        val oldGlyphProgress = computeProgress(frameTimeNanos, this.glyphDurationNanos).value
+        // 纯换 caret 目标：现有 unit 按"当前相位之后的剩余部分"重新归一，立即继续，
+        // 不重新从整条旧 schedule 的 0 开始（Issue #728 评论 5756468643 问题1）。
+        // unitChannels 的迭代顺序即创建时的正文顺序（forInsert/forDelete/forEdit 都按正文位置排序传入），
+        // 没有新 unit 加入，无需重排相对顺序。
+        val specs =
+            unitChannels.map { (key, ch) ->
+                RedirectUnitSpec(key = key, oldChannel = ch, freshFrom = ch.from, freshTo = ch.to)
+            }
+        val newChannels = buildRedirectChannels(specs, oldGlyphProgress, currentSample)
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
@@ -253,74 +234,79 @@ class ComposeEditMotion(
     }
 
     /**
-     * 重定向时把剩余 channel 重新归一化到新的 [0, 1]。
+     * redirect 时把旧未完成 unit 和新 unit 合并，按传入 [specs] 顺序重新归一化到新 [0, 1] 剩余 schedule。
      *
-     * 算法：
-     * 1. 按当前 glyphProgress 把每个 unit 分类为：已完成 / 进行中 / 未开始。
-     * 2. 已完成：from=to=currentFraction，固定终值。
-     * 3. 进行中：计算剩余权重 = (1 - localProgress) * (endProgress - startProgress)，
-     *    新 startProgress=0，from=currentFraction，to 不变，endProgress=剩余权重。
-     * 4. 未开始：权重 = endProgress - startProgress，接在已归一化 channel 后面。
+     * 每个 spec 带 [RedirectUnitSpec.oldChannel]（旧 unit 的通道，null 表示新 unit）。
+     * [specs] 已是正文的/几何顺序（调用方按 inserted targetRange.start / deleted range.start 排好），
+     * 旧 unit 和新 unit 在这一条顺序里交错排剩余 schedule，不按创建时间排
+     * （Issue #728 评论 5756468643 问题2）。
      *
-     * 所有未完成 channel 按剩余权重分配新 [0, 1] 区间，保证重定向后立即继续，
-     * 不会出现"先冻结一段再继续"的问题。
+     * 分类（基于旧 motion 的 master glyph progress [oldGlyphProgress]）：
+     * - 已完成旧 unit（oldGlyphProgress >= endProgress）：固定终值 from=to=currentFraction。
+     * - 进行中旧 unit（startProgress < oldGlyphProgress < endProgress）：从 currentFraction 继续到原 to。
+     * - 未开始旧 unit（oldGlyphProgress <= startProgress）：从原 from 到原 to。
+     * - 新 unit（oldChannel == null）：从 freshFrom 到 freshTo。
      *
-     * @param currentSample 当前 sample（包含每个 unit 的当前 fraction）
-     * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1）
-     * @param newUnitChannels 需要重新归一化的旧 unit channels（key 保留，value 为旧 channel）
-     * @return 归一化后的新 channels，已完成 unit 固定终值，未完成 unit 按相位重新分配区间
+     * 所有未完成 unit 等权分配新 [0, 1] 区间（每个剩余 unit 一段等长），保证重定向后立即继续，
+     * 不会出现"先冻结一段再继续"（Issue #728 评论 5756468643 问题1）。
+     *
+     * @param specs 带顺序的 unit 描述（旧 unit 含 oldChannel，新 unit oldChannel=null）。
+     * @param oldGlyphProgress 旧 motion 中的 master glyph progress（0..1，必须用旧 duration 算）。
+     * @param currentSample 当前 sample（含每个 unit 的当前 fraction）。
+     * @return 归一化后的新 channels。
      */
-    private fun renormalizeChannelsForRedirect(
-        currentSample: Sample,
+    private fun buildRedirectChannels(
+        specs: List<RedirectUnitSpec>,
         oldGlyphProgress: Float,
-        newUnitChannels: Map<Long, UnitChannel>,
+        currentSample: Sample,
     ): Map<Long, UnitChannel> {
         val result = mutableMapOf<Long, UnitChannel>()
-        // 收集未完成的 unit，按旧 startProgress 排序（保证顺序）
-        val pendingUnits = mutableListOf<Pair<Long, UnitChannel>>()
-        for ((key, ch) in newUnitChannels) {
-            val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
+        // 未完成 unit 按传入顺序收集，最后等权分配新 [0, 1]
+        val pending = mutableListOf<Pair<Long, UnitChannel>>()
+        for (spec in specs) {
+            val ch = spec.oldChannel
+            if (ch == null) {
+                // 新 unit：从 freshFrom 到 freshTo，等权一段
+                pending.add(spec.key to UnitChannel(spec.freshFrom, spec.freshTo, 0f, 1f))
+                continue
+            }
+            val currentFraction = currentSample.unitClipFractions[spec.key] ?: ch.from
             if (oldGlyphProgress >= ch.endProgress) {
                 // 已完成：固定终值
-                result[key] =
-                    UnitChannel(
-                        from = currentFraction,
-                        to = currentFraction,
-                        startProgress = 0f,
-                        endProgress = 0f,
-                    )
+                result[spec.key] = UnitChannel(currentFraction, currentFraction, 0f, 0f)
             } else if (oldGlyphProgress <= ch.startProgress) {
-                // 未开始：收集到 pending，权重 = 原区间长度
-                pendingUnits.add(key to ch)
+                // 未开始：从原 from 到原 to，等权一段
+                pending.add(spec.key to UnitChannel(ch.from, ch.to, 0f, 1f))
             } else {
-                // 进行中：计算剩余权重
-                val localProgress =
-                    mapGlyphProgressToLocal(oldGlyphProgress, ch.startProgress, ch.endProgress)
-                val span = ch.endProgress - ch.startProgress
-                val remainingWeight = (1f - localProgress) * span
-                pendingUnits.add(key to ch.copy(startProgress = 0f, endProgress = remainingWeight))
+                // 进行中：从当前 fraction 继续到原 to，等权一段
+                pending.add(spec.key to UnitChannel(currentFraction, ch.to, 0f, 1f))
             }
         }
-        // 归一化：把 pending units 按权重分配到新 [0, 1]
-        val totalWeight = pendingUnits.sumOf { (it.second.endProgress - it.second.startProgress).toDouble() }.toFloat()
-        if (totalWeight > 0f && pendingUnits.isNotEmpty()) {
+        if (pending.isNotEmpty()) {
+            val step = 1f / pending.size
             var cursor = 0f
-            for ((key, ch) in pendingUnits) {
-                val span = ch.endProgress - ch.startProgress
-                val normalizedSpan = if (totalWeight > 0f) span / totalWeight else 0f
-                val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
-                result[key] =
-                    UnitChannel(
-                        from = currentFraction,
-                        to = ch.to,
-                        startProgress = cursor,
-                        endProgress = cursor + normalizedSpan,
-                    )
-                cursor += normalizedSpan
+            for ((key, ch) in pending) {
+                result[key] = UnitChannel(ch.from, ch.to, cursor, cursor + step)
+                cursor += step
             }
         }
         return result
     }
+
+    /**
+     * redirect 时单个 unit 的描述 — 带顺序，区分旧/新。
+     *
+     * @param key unit 唯一标识。
+     * @param oldChannel 旧 motion 中该 unit 的通道；null 表示这是本次新出现的 unit。
+     * @param freshFrom 新 unit 的起点 fraction（inserted: 0, deleted: 1）。旧 unit 此值不会被使用。
+     * @param freshTo 新 unit 的终点 fraction（inserted: 1, deleted: 0）。旧 unit 此值不会被使用。
+     */
+    private data class RedirectUnitSpec(
+        val key: Long,
+        val oldChannel: UnitChannel?,
+        val freshFrom: Float,
+        val freshTo: Float,
+    )
 
     /**
      * motion 是否已完成 — caret 和 glyph 都 finished，与 sample().finished 语义一致，但不产生 Sample。
