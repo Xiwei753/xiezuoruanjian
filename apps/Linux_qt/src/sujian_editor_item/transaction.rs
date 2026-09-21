@@ -10,6 +10,7 @@ impl SujianEditorItem {
     ) -> Option<EditorVisualTransaction> {
         let ctx = pipeline::VisualTransactionContext {
             typing_animation_enabled: self.current_typing_animation_enabled,
+            smooth_cursor_enabled: self.current_smooth_cursor_enabled,
             is_scrolling: self.current_is_scrolling,
             is_loading: self.current_is_loading,
             is_applying_format: self.current_is_applying_format,
@@ -47,7 +48,12 @@ impl SujianEditorItem {
         );
         let mut vt = self.pipeline.engine_mut().visual_transaction(&transaction);
 
-        if self.current_typing_animation_enabled && vt.is_some() && !self.current_is_scrolling {
+        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
+        if self.current_typing_animation_enabled
+            && self.current_smooth_cursor_enabled
+            && vt.is_some()
+            && !self.current_is_scrolling
+        {
             vt = self.pipeline.record_visual_transaction(
                 &ctx,
                 &old,

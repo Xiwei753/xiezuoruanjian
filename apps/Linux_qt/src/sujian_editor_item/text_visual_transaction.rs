@@ -106,128 +106,238 @@ impl TransactionTimeline {
     }
 }
 
+/// Issue #727 评论 5754041813 约束 2: 视觉单元的计时语义拆分。
+///
+/// - `CaretDriven`：`InsertReveal` / `DeleteConceal` 永远使用此变体。吞字/吐字不是
+///   独立动画，光标运动才是它的唯一视觉驱动。CaretDriven unit **没有自己的** progress /
+///   duration / started_at；裁切边界直接消费本帧 coordinated caret 的位置
+///   （`compute_frame_caret_driven`）。`start_fraction` / `target_fraction` 仅作为
+///   rebase 交棒时的可见比例载体，不驱动独立时间线。
+/// - `Timed`：`ReflowMove` / `ReflowCrossFade` 允许独立时间线（几何插值需要自己的
+///   started_at / duration_ms / start_fraction / target_fraction）。
+#[derive(Clone, Debug)]
+pub(crate) enum VisualUnitTiming {
+    /// InsertReveal / DeleteConceal：由本帧 caret geometry 驱动，无独立时间线。
+    CaretDriven {
+        /// rebase 交棒时的可见比例载体。不随时间变化，仅由 rebase 更新。
+        start_fraction: f64,
+        /// 目标可见比例（InsertReveal=1.0，DeleteConceal=0.0）。
+        target_fraction: f64,
+    },
+    /// ReflowMove / ReflowCrossFade：独立时间线几何插值。
+    Timed {
+        started_at: Option<Instant>,
+        duration_ms: u64,
+        start_fraction: f64,
+        target_fraction: f64,
+    },
+}
+
+impl VisualUnitTiming {
+    /// 从 `AnimatedSliceKind` 推断默认计时语义。
+    /// InsertReveal / DeleteConceal → CaretDriven；ReflowMove / ReflowCrossFade → Timed。
+    fn default_for_kind(kind: AnimatedSliceKind, duration_ms: u64) -> Self {
+        let target_fraction = match kind {
+            AnimatedSliceKind::DeleteConceal => 0.0,
+            _ => 1.0,
+        };
+        let start_fraction = match kind {
+            AnimatedSliceKind::DeleteConceal => 1.0,
+            _ => 0.0,
+        };
+        match kind {
+            AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                VisualUnitTiming::CaretDriven {
+                    start_fraction,
+                    target_fraction,
+                }
+            }
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                VisualUnitTiming::Timed {
+                    started_at: None,
+                    duration_ms,
+                    start_fraction,
+                    target_fraction,
+                }
+            }
+        }
+    }
+
+    /// 是否为 CaretDriven（InsertReveal / DeleteConceal）。
+    pub fn is_caret_driven(&self) -> bool {
+        matches!(self, VisualUnitTiming::CaretDriven { .. })
+    }
+
+    /// 获取 `start_fraction`（rebase 交棒载体）。
+    pub fn start_fraction(&self) -> f64 {
+        match self {
+            VisualUnitTiming::CaretDriven { start_fraction, .. } => *start_fraction,
+            VisualUnitTiming::Timed { start_fraction, .. } => *start_fraction,
+        }
+    }
+
+    /// 获取 `target_fraction`。
+    pub fn target_fraction(&self) -> f64 {
+        match self {
+            VisualUnitTiming::CaretDriven { target_fraction, .. } => *target_fraction,
+            VisualUnitTiming::Timed { target_fraction, .. } => *target_fraction,
+        }
+    }
+
+    /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
+    /// Issue #727 约束 2: CaretDriven unit 没有自己的时间线，返回 0.0。
+    /// 只有 Timed unit（ReflowMove / ReflowCrossFade）才从自己的时间线算 progress。
+    pub fn progress(&self, now: Instant) -> f64 {
+        match self {
+            VisualUnitTiming::CaretDriven { .. } => 0.0,
+            VisualUnitTiming::Timed {
+                started_at,
+                duration_ms,
+                ..
+            } => match started_at {
+                None => 0.0,
+                Some(start) => {
+                    if *duration_ms == 0 {
+                        return 1.0;
+                    }
+                    let elapsed = now.duration_since(*start).as_millis() as f64;
+                    (elapsed / *duration_ms as f64).clamp(0.0, 1.0)
+                }
+            },
+        }
+    }
+
+    /// 单元在 `now` 时刻的真实可见比例（0..1）。
+    ///
+    /// Issue #727 约束 2: CaretDriven unit（InsertReveal / DeleteConceal）不再从独立
+    /// 时间线驱动可见比例，直接返回 `start_fraction`（由 rebase 交棒设置）。
+    /// 只有 Timed unit（ReflowMove / ReflowCrossFade）才从自己的时间线算可见比例。
+    pub fn current_visible_fraction(&self, now: Instant) -> f64 {
+        match self {
+            VisualUnitTiming::CaretDriven { start_fraction, .. } => {
+                start_fraction.clamp(0.0, 1.0)
+            }
+            VisualUnitTiming::Timed {
+                start_fraction,
+                target_fraction,
+                ..
+            } => {
+                let eased = AnimatedSlice::ease_out_quad(self.progress(now));
+                (start_fraction + (target_fraction - start_fraction) * eased).clamp(0.0, 1.0)
+            }
+        }
+    }
+
+    /// Issue #690 评论 5683759796: 在事务进入 Rendering 时打上统一起始时间。
+    /// 只有 Timed unit 需要 started_at；CaretDriven unit 无独立时间线，no-op。
+    pub fn mark_started(&mut self, frame_now: Instant) {
+        if let VisualUnitTiming::Timed { started_at, .. } = self {
+            if started_at.is_none() {
+                *started_at = Some(frame_now);
+            }
+        }
+    }
+
+    /// Issue #690 评论 5683759796: rebase 交棒时更新可见比例载体。
+    /// CaretDriven: 只更新 start_fraction（无时间线）。
+    /// Timed: 更新 start_fraction + 重置时间线（started_at=None, duration=remaining）。
+    pub fn rebase_from_frame(&mut self, visible_fraction: f64, remaining_duration_ms: u64) {
+        match self {
+            VisualUnitTiming::CaretDriven { start_fraction, .. } => {
+                *start_fraction = visible_fraction.clamp(0.0, 1.0);
+            }
+            VisualUnitTiming::Timed {
+                start_fraction,
+                started_at,
+                duration_ms,
+                ..
+            } => {
+                *start_fraction = visible_fraction.clamp(0.0, 1.0);
+                *started_at = None;
+                *duration_ms = remaining_duration_ms.max(1);
+            }
+        }
+    }
+}
+
 /// Issue #690 评论 5675007226 步骤 3: 单个视觉单元，拥有自己的动画生命期。
 ///
 /// Issue #722 评论 5747719529 核心语义：光标本身就是吞字/吐字的视觉边界。
 /// 文字不能再维护一套会和 caret 分叉的"自己什么时候完全出现/完全消失"的位置/
 /// 可见度进度。真正决定当前 reveal/conceal 截止位置的是这一帧的 caret geometry
 /// （caret_geometry_determines_clip / clip_from_coordinated_caret）。
-/// `PreparedVisualUnit` 的 `started_at` / `duration_ms` 仅用于 reflow/crossfade
-/// 的几何插值时间线；InsertReveal/DeleteConceal 的裁切边界直接消费本帧
-/// coordinated caret 的位置（`compute_frame_caret_driven`），不再由 unit 自己的
-/// `current_visible_fraction` 驱动。caret 与文字使用同一个 frame_now 和同一个
-/// from→to 几何轨迹，快速 rebase 时先采样当前 caret 边界作为下一段动画起点。
 ///
-/// 不再让整笔 `PreparedTextVisualTransaction` 单一的 `TransactionTimeline` 同时驱动
-/// 所有 slice 的 0→1。每个 unit 保存自己的 `started_at` / `duration_ms`，从自己的
-/// 时间线计算 progress；`start_fraction` / `target_fraction` 描述这一帧单元在
-/// 0→1 范围内的可视起点/终点：
-/// - InsertReveal：`start_fraction` = 当前已吐出比例（0→1），`target_fraction` = 1。
-/// - DeleteConceal：`start_fraction` = 当前还剩比例（1→0），`target_fraction` = 0。
-/// - ReflowMove / ReflowCrossFade：`start_fraction` = 0，`target_fraction` = 1。
+/// Issue #727 评论 5754041813 约束 2: 计时语义拆分为 `VisualUnitTiming`。
+/// - `InsertReveal` / `DeleteConceal` → `CaretDriven`：无独立时间线，裁切边界由本帧
+///   coordinated caret 位置决定。
+/// - `ReflowMove` / `ReflowCrossFade` → `Timed`：独立时间线几何插值。
 ///
-/// 快速连续输入时，旧事务被 cancel 并 rebase：匹配的旧 unit 通过 `rebase_from` 把当前
-/// `visible_fraction` 写入 `start_fraction`，文字从"已经吐/吞到一半"的位置继续，
-/// 而不是重新 0→1 / 1→0。新插入的字追加新的 unit，沿用自己独立的 `started_at`。
+/// 快速连续输入时，旧事务被 cancel 并 rebase：匹配的旧 unit 通过 `rebase_from_frame`
+/// 把当前 `visible_fraction` 写入 `start_fraction`，文字从"已经吐/吞到一半"的位置继续。
 /// 只有被新编辑实际覆盖的 unit 才结束/替换。
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedVisualUnit {
     pub slice: AnimatedSlice,
-    pub started_at: Option<Instant>,
-    pub duration_ms: u64,
-    pub start_fraction: f64,
-    pub target_fraction: f64,
+    pub timing: VisualUnitTiming,
 }
 
 impl PreparedVisualUnit {
-    fn target_for_kind(kind: AnimatedSliceKind) -> f64 {
-        match kind {
-            AnimatedSliceKind::DeleteConceal => 0.0,
-            _ => 1.0,
-        }
-    }
-
-    /// 新建单元的起点比例 = 这类动画第一帧的可见状态。
-    ///
-    /// 不能取 `slice.start_fraction`：builder 生成的 slice 该字段恒为 0.0，
-    /// 对 `DeleteConceal` 意味着"已经吞完"，被删的字会一帧都不显示。
-    /// slice 上的 `start_fraction` 只作为 rebase 交棒的载体（见 `rebase_from_frame`）。
-    fn initial_fraction_for_kind(kind: AnimatedSliceKind) -> f64 {
-        match kind {
-            AnimatedSliceKind::DeleteConceal => 1.0,
-            _ => 0.0,
-        }
-    }
-
     /// 把一个 `AnimatedSlice` 包成拥有独立生命期的视觉单元。
     ///
-    /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致）。
-    /// `started_at` 在事务首次进入 Rendering 时由 coordinator 填入。
+    /// `duration_ms` 取自事务（与 `TransactionTimeline::duration_ms` 一致），
+    /// 仅对 Timed unit（ReflowMove / ReflowCrossFade）有效。
     pub fn wrap(slice: AnimatedSlice, duration_ms: u64) -> Self {
-        let target_fraction = Self::target_for_kind(slice.kind);
-        let start_fraction = Self::initial_fraction_for_kind(slice.kind);
-        Self {
-            slice,
-            started_at: None,
-            duration_ms,
-            start_fraction,
-            target_fraction,
-        }
+        let timing = VisualUnitTiming::default_for_kind(slice.kind, duration_ms);
+        Self { slice, timing }
     }
 
-    /// 从自己的 `started_at` / `duration_ms` 计算当前 progress（0..1）。
-    /// `started_at` 为 `None` 表示尚未开始，返回 0。
+    /// 从自己的时间线计算当前 progress（0..1）。
+    /// Issue #727 约束 2: CaretDriven unit 返回 0.0（无独立时间线）。
     pub fn progress(&self, now: Instant) -> f64 {
-        match self.started_at {
-            None => 0.0,
-            Some(start) => {
-                if self.duration_ms == 0 {
-                    return 1.0;
-                }
-                let elapsed = now.duration_since(start).as_millis() as f64;
-                (elapsed / self.duration_ms as f64).clamp(0.0, 1.0)
-            }
+        self.timing.progress(now)
+    }
+
+    /// Issue #727 约束 2: 判断单元是否已到达终态（不应再交棒）。
+    /// CaretDriven unit：`start_fraction == target_fraction` 表示已到终态。
+    /// Timed unit：`progress >= 1.0` 表示已播完。
+    pub fn is_finished(&self, now: Instant) -> bool {
+        match &self.timing {
+            VisualUnitTiming::CaretDriven {
+                start_fraction,
+                target_fraction,
+            } => (start_fraction - target_fraction).abs() < 1e-9,
+            VisualUnitTiming::Timed { .. } => self.timing.progress(now) >= 1.0,
         }
     }
 
     /// 单元在 `now` 时刻的真实可见比例（0..1）。
     ///
-    /// Issue #690 评论 5675007226 步骤 2+3: 文字帧、协同光标、rebase 采集共用这一个公式，
-    /// 全部走 `AnimatedSlice::ease_out_quad`，不再各自施加一遍 easing。
+    /// Issue #727 约束 2: CaretDriven unit（InsertReveal / DeleteConceal）不再从
+    /// 独立时间线驱动，直接返回 `start_fraction`（由 rebase 交棒设置）。
+    /// Timed unit（ReflowMove / ReflowCrossFade）从自己的时间线算可见比例。
     pub fn current_visible_fraction(&self, now: Instant) -> f64 {
-        let eased = AnimatedSlice::ease_out_quad(self.progress(now));
-        (self.start_fraction + (self.target_fraction - self.start_fraction) * eased).clamp(0.0, 1.0)
+        self.timing.current_visible_fraction(now)
     }
 
     /// 按旧单元的当前帧续播本单元。
     ///
-    /// Issue #690 评论 5675007226 步骤 3: 可见比例成为新单元的起点，时间线沿用旧单元的
-    /// `started_at` / `duration_ms`——事务 key 换了也不归零，否则上一笔吐到 60% 的字
-    /// 会被重新从 0 吐一遍。
-    ///
-    /// Issue #690 评论 5679744253 问题 1: 原实现同时继承 `start_fraction`（已走过的可见
-    /// 比例）和 `started_at`/`duration_ms`（已走过的时间线），下一帧 progress 用旧时间线
-    /// 算，再从 `start_fraction` 到 target 做 easing，进度被重复应用。现在改为从当前帧
-    /// 重新起一段：`start_fraction` 已是当前可见比例，`duration_ms` 用剩余时长，
-    /// 不再沿用旧起始时间。
-    ///
-    /// Issue #690 评论 5683759796: `started_at` 留 `None`，不再写成 `Some(frame.sampled_at)`。
-    /// `frame.sampled_at` 是旧事务交棒时刻（t0），新事务此时通常还在 Pending/Prepared，
-    /// 直接用它会让 rebased 文字 unit 从 t0 起跑，而 caret track（`rebase_to` /
-    /// `new_first` / handoff 全部 `started_at = None`）等到进入 Rendering 才用
-    /// `sample.frame_now` 启动，第一帧文字 progress > 0 而 caret track progress = 0，
-    /// 造成"文字已经走了一截，光标才刚起步"的错拍。改成 `None` 后，rebased unit 跟
-    /// fresh unit、caret track 一样，由 `build_text_animation_plan_with_sample` 在
-    /// Prepared→Rendering 时用同一个 `sample.frame_now` 启动，三者同帧起跑。
+    /// Issue #690 评论 5675007226 步骤 3: 可见比例成为新单元的起点。
+    /// Issue #690 评论 5683759796: started_at 留 None，等进入 Rendering 再用
+    /// sample.frame_now 启动，不再用 frame.sampled_at 提前计时。
     pub fn rebase_from_frame(&mut self, frame: &RebaseFrame) {
         self.slice
             .rebase_from(frame.x, frame.y, frame.opacity, frame.visible_fraction);
-        self.start_fraction = self.slice.start_fraction;
-        // Issue #690 评论 5683759796: 从当前帧重新起一段：start_fraction 已是当前可见比例，
-        // duration 用剩余时长；started_at 留 None，等进入 Rendering 再用 sample.frame_now 启动，
-        // 不再用 frame.sampled_at（旧事务交棒时刻）提前计时。
-        self.started_at = None;
-        self.duration_ms = frame.remaining_duration_ms.max(1);
+        // Issue #727: 对 ReflowMove/ReflowCrossFade，slice.rebase_from 已修改 from_document_rect
+        // 为屏幕位置（current_x），timing 的 start_fraction 应重置为 0——from 已被改写为
+        // 屏幕位置，不需要再通过 start_fraction 表达已演进状态，否则进度会被重复应用。
+        // 对 InsertReveal/DeleteConceal（CaretDriven），slice.rebase_from 只修改 start_fraction
+        //（不修改几何），timing 的 start_fraction 需要保留 visible_fraction 作为交棒载体。
+        let timing_start_fraction = match self.slice.kind {
+            AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => 0.0,
+            _ => frame.visible_fraction,
+        };
+        self.timing
+            .rebase_from_frame(timing_start_fraction, frame.remaining_duration_ms);
     }
 }
 
@@ -632,22 +742,72 @@ impl PreparedTextVisualTransaction {
     /// 重新起一段，避免同时继承可见比例和已走过的时间线导致进度被重复应用。
     ///
     /// Issue #722 评论 5749164244 问题3: 生产路径（take_rebase_frames）不再调用此方法，
-    /// 改用 `animation_coordinator::collect_rebase_frame_for_unit` 对 Reveal/Conceal
-    /// 用 `compute_frame_caret_driven`。此方法保留供 #690 测试验证 per-unit progress 行为。
+    /// 改用 `animation_coordinator::collect_rebase_frame_for_unit_without_caret` 对 Reveal/Conceal
+    /// 从 caret track progress 推导 visible_fraction。此方法保留供 #690 测试验证 per-unit progress 行为。
+    ///
+    /// Issue #727 约束 2+3: CaretDriven unit 的 visible_fraction 从 caret track progress 推导，
+    /// remaining_duration_ms 从 caret track 剩余时长计算。
     #[cfg(test)]
     pub fn collect_rebase_frames(&self, now: Instant) -> Vec<RebaseFrame> {
+        let caret_track_progress = self
+            .cursor_visual_track
+            .as_ref()
+            .map(|track| track.progress(now));
+        let caret_remaining_ms = self
+            .cursor_visual_track
+            .as_ref()
+            .map(|track| track.remaining_duration_ms(now))
+            .unwrap_or(0);
         self.units
             .iter()
-            .filter(|unit| unit.progress(now) < 1.0)
+            .filter(|unit| {
+                if unit.is_finished(now) {
+                    return false;
+                }
+                // Issue #727 约束 2: CaretDriven unit 的终态由 caret track progress 决定。
+                // is_finished() 只看 start_fraction == target_fraction，
+                // 但 CaretDriven unit 的可见比例从 caret track progress 推导，
+                // caret track progress >= 1.0 时 unit 已播完，不应再交棒。
+                if unit.timing.is_caret_driven() {
+                    if let Some(progress) = caret_track_progress {
+                        if progress >= 1.0 {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
             .map(|unit| {
-                let visible_fraction = unit.current_visible_fraction(now);
-                let frame = unit.slice.compute_frame(visible_fraction);
-                // 旧单元剩余的播放时长：duration - elapsed，下溢保护为 0。
-                let elapsed_ms = match unit.started_at {
-                    Some(start) => now.duration_since(start).as_millis() as u64,
-                    None => 0,
+                let visible_fraction = match unit.slice.kind {
+                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+                        let progress = caret_track_progress.unwrap_or(0.0);
+                        let eased = AnimatedSlice::ease_out_quad(progress);
+                        let start = unit.timing.start_fraction();
+                        let target = unit.timing.target_fraction();
+                        start + (target - start) * eased
+                    }
+                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                        unit.current_visible_fraction(now)
+                    }
                 };
-                let remaining_duration_ms = unit.duration_ms.saturating_sub(elapsed_ms);
+                let frame = unit.slice.compute_frame(visible_fraction);
+                // Issue #727 约束 2: 通过 VisualUnitTiming 访问 started_at / duration_ms。
+                // CaretDriven unit 无独立时间线，remaining_duration_ms 从 caret track 计算。
+                let (elapsed_ms, duration_ms) = match &unit.timing {
+                    VisualUnitTiming::CaretDriven { .. } => (0u64, caret_remaining_ms),
+                    VisualUnitTiming::Timed {
+                        started_at,
+                        duration_ms,
+                        ..
+                    } => {
+                        let elapsed = match started_at {
+                            Some(start) => now.duration_since(*start).as_millis() as u64,
+                            None => 0,
+                        };
+                        (elapsed, *duration_ms)
+                    }
+                };
+                let remaining_duration_ms = duration_ms.saturating_sub(elapsed_ms);
                 RebaseFrame {
                     byte_start: unit.slice.byte_start,
                     byte_end: unit.slice.byte_end,
@@ -1008,13 +1168,12 @@ mod issue_710_comment_5732160521_repro {
 
         // CursorOnly Tween 已开始（cursor_ctrl.animation.is_some()），不入正文队列
         let has_cursor_only_tween = true;
-        let current_coordinated_text_cursor_animation_enabled = true;
 
+        // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
         // 修复后的统一判断（current_cursor_blink_mode 的逻辑）：
         // tick / render / opacity / 边沿 reset 全部用这一个表达式。
-        let unified_suppressed = (current_coordinated_text_cursor_animation_enabled
-            && has_active_text_transaction)
-            || has_cursor_only_tween;
+        // 是否有吞吐字直接由 has_active_text_transaction 决定，不再受外部开关控制。
+        let unified_suppressed = has_active_text_transaction || has_cursor_only_tween;
 
         // 验证：CursorOnly Tween 期间 blink 应被 Suppressed（常亮），不会因 blink
         // 切到 opacity=0 而消失。

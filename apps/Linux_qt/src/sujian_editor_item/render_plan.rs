@@ -156,6 +156,51 @@ impl Default for CursorSampleOutcome {
     }
 }
 
+/// Issue #727 评论 5754041813 约束 3: 一帧采样的 caret geometry。
+///
+/// 由 `build_render_plan_full` 在入口处统一采样一次，供 cursor layer 和文字
+/// reveal/conceal 共享同一份 caret geometry。文字层不再自己重新采样 caret。
+///
+/// `None` 表示本帧无有效 caret motion track（无活跃正文事务 / epoch 不一致 /
+/// 无 cursor_visual_track），InsertReveal / DeleteConceal 不应生成动画 glyph，
+/// static canonical text 直接完整显示。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct SampledCaretFrame {
+    /// caret 在文档坐标系的 x（横向裁切边界）。
+    pub x: f64,
+    /// caret 在文档坐标系的 y（跨行裁切判断）。
+    pub y: f64,
+    /// caret 所在 visual line id（跨行裁切判断）。
+    pub visual_line_id: Option<usize>,
+    /// Issue #727 约束 3: caret track 的当前 progress（0..1）。
+    /// CaretDriven unit 的可见比例从这里推导，不再由 unit 自己的时间线驱动。
+    pub progress: f64,
+}
+
+impl Default for SampledCaretFrame {
+    fn default() -> Self {
+        Self {
+            x: 0.0,
+            y: 0.0,
+            visual_line_id: None,
+            progress: 0.0,
+        }
+    }
+}
+
+/// Issue #727 评论 5754041813 约束 3: 一帧的统一协同运动结果。
+///
+/// `build_render_plan_full` 入口处先采样 caret motion 得到一份 `SampledCaretFrame`，
+/// 有才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
+/// 没有 caret frame 就不生成 reveal/conceal glyph，static canonical text 直接完整显示。
+/// RenderPlan 里同一份 `SampledCaretFrame` 同时喂 cursor layer 和文字 reveal/conceal，
+/// 不能文字自己再推导一份 caret。
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct CoordinatedMotionFrame {
+    /// 本帧采样的 caret geometry。`None` 表示无有效 caret motion track。
+    pub caret: Option<SampledCaretFrame>,
+}
+
 #[derive(Clone, Debug, Default)]
 /// Issue #707 评论 5723616999: 改 `pub` 让集成测试能访问 `drawn_caret_rect` 字段。
 /// 加 `Default` 让集成测试能构造实例验证字段可读写。
@@ -183,4 +228,10 @@ pub struct RenderPlan {
     /// 输入、删除、鼠标点击创建新事务时,只允许从这个"上一帧真正
     /// 画出来的位置" rebase。
     pub drawn_caret_rect: Option<(f64, f64, f64)>,
+    /// Issue #727 约束 3: 本帧统一采样的协同运动帧。
+    ///
+    /// 由 `build_render_plan_full` 入口处采样一次，供 cursor layer 和文字
+    /// reveal/conceal 共享同一份 caret geometry。`caret` 为 `None` 时
+    /// InsertReveal / DeleteConceal 不生成动画 glyph。
+    pub coordinated_motion_frame: CoordinatedMotionFrame,
 }

@@ -299,6 +299,7 @@ impl CompositionState {
 ///   除以 dpr 转回逻辑坐标。
 pub(crate) struct VisualTransactionContext {
     pub typing_animation_enabled: bool,
+    pub smooth_cursor_enabled: bool,
     pub is_scrolling: bool,
     pub is_loading: bool,
     pub is_applying_format: bool,
@@ -870,7 +871,12 @@ impl LinuxEditorPipeline {
         );
         let mut vt = self.engine.visual_transaction(&transaction);
 
-        if ctx.typing_animation_enabled && vt.is_some() && !ctx.is_scrolling {
+        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
+        if ctx.typing_animation_enabled
+            && ctx.smooth_cursor_enabled
+            && vt.is_some()
+            && !ctx.is_scrolling
+        {
             if let Some(ref mut vt) = vt {
                 let (raw_byte_start, raw_byte_end) = vt
                     .inserted_range
@@ -1243,6 +1249,7 @@ impl LinuxEditorPipeline {
                 let key = self.animation_coordinator.process_transaction(
                     vt,
                     ctx.typing_animation_enabled,
+                    ctx.smooth_cursor_enabled,
                     ctx.is_scrolling,
                     ctx.is_loading,
                     ctx.is_applying_format,

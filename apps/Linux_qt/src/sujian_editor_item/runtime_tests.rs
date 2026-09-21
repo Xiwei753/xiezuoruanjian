@@ -156,7 +156,6 @@ fn build_render_plan_full_produces_drawn_caret_rect() {
                 cursor_style,
                 selection_preedit_style,
                 frame_now,
-                false, // coordinated_enabled
                 None,  // cursor_animation
                 0,     // cursor_owner_epoch
                 0.0,
@@ -202,7 +201,6 @@ fn build_render_plan_full_drawn_caret_reflects_cursor_state() {
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 Instant::now(),
-                false,
                 None,
                 0,
                 0.0,
@@ -604,7 +602,6 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 frame_now,
-                item.current_coordinated_text_cursor_animation_enabled,
                 item.cursor_ctrl.animation.as_ref(),
                 item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
@@ -715,7 +712,6 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                     CursorStyle::default(),
                     SelectionPreeditStyle::default(),
                     frame_now_noop,
-                    item.current_coordinated_text_cursor_animation_enabled,
                     item.cursor_ctrl.animation.as_ref(),
                     item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
@@ -850,7 +846,6 @@ fn full_lifecycle_frame_invalidation_render_plan_epoch_handoff() {
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 frame_now_2,
-                item.current_coordinated_text_cursor_animation_enabled,
                 item.cursor_ctrl.animation.as_ref(),
                 item.cursor_ctrl.cursor_owner_epoch,
                 0.0,
@@ -1041,7 +1036,6 @@ fn build_render_plan_full_uses_anchor_when_release_after_frame_true() {
                 CursorStyle::default(),
                 SelectionPreeditStyle::default(),
                 frame_now,
-                item.current_coordinated_text_cursor_animation_enabled,
                 item.cursor_ctrl.animation.as_ref(),
                 item.cursor_ctrl.cursor_owner_epoch,
                 f64::from(item.current_scroll_y),

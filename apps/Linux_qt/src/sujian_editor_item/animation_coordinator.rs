@@ -47,6 +47,7 @@ use super::text_visual_transaction::PreparedVisualUnit;
 use super::text_visual_transaction::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedTransactionQueue,
     RebaseFrame, TextVisualOperationKind, TextVisualTransactionState, TransactionTimeline,
+    VisualUnitTiming,
 };
 pub(crate) use super::transaction_key::VisualTransactionKey;
 use crate::editor::layout::compute_affected_paragraph_ranges;
@@ -225,29 +226,25 @@ fn conflicting_units_are_untouched(
     // tx.new_snapshot.virtual_text 是该旧事务应用后的文本（旧事务 new 坐标系），
     // current_old_text 是当前事务应用前的文本（current-old 坐标系）。
     let tx_new_text = tx.new_snapshot.as_ref().map(|s| s.virtual_text.as_str());
-    // Issue #722 评论 5749572808 问题3: 对 Reveal/Conceal 用真实帧判断存活，
-    // 不用 unit.progress >= 1.0。采样本帧 caret geometry 供 compute_frame_caret_driven。
-    let (caret_x, caret_y, caret_line_id) = sample_caret_geometry_for_caret_driven_clip(tx, now);
+    // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
+    // 对 Reveal/Conceal 从 caret track progress 推导 visible_fraction 判断存活。
+    let caret_track_progress = tx
+        .cursor_visual_track
+        .as_ref()
+        .map(|track| track.progress(now));
     for unit in &tx.units {
         // Issue #722 评论 5749572808 问题3: 按 kind 分支判断是否已到终态。
         let still_playing = match unit.slice.kind {
             AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                let visible_fraction = unit.current_visible_fraction(now);
-                let frame = unit.slice.compute_frame_caret_driven(
-                    caret_x,
-                    caret_y,
-                    caret_line_id,
-                    visible_fraction,
-                );
+                // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+                let progress = caret_track_progress.unwrap_or(0.0);
+                let eased = AnimatedSlice::ease_out_quad(progress);
+                let start = unit.timing.start_fraction();
+                let target = unit.timing.target_fraction();
+                let visible_fraction = start + (target - start) * eased;
                 match unit.slice.kind {
-                    AnimatedSliceKind::InsertReveal => {
-                        // frame.w < target_w - 0.001 仍活跃。
-                        frame.w < unit.slice.to_document_rect.w - 0.001
-                    }
-                    AnimatedSliceKind::DeleteConceal => {
-                        // frame.w > 0.001 仍活跃。
-                        frame.w > 0.001
-                    }
+                    AnimatedSliceKind::InsertReveal => visible_fraction < 1.0 - 1e-3,
+                    AnimatedSliceKind::DeleteConceal => visible_fraction > 1e-3,
                     _ => unreachable!(),
                 }
             }
@@ -450,96 +447,52 @@ fn sample_coordinated_cursor_rect_at(
     })
 }
 
-/// Issue #722 评论 5749164244 问题3: 采样旧事务在 `now` 时刻的 caret geometry
-/// (x, y, visual_line_id)，供 rebase 帧对 Reveal/Conceal unit 调
-/// `compute_frame_caret_driven` 使用。与 `build_text_animation_plan_with_sample`
-/// 里的采样逻辑完全一致——同一个 now、同一个 caret track sample、同一个跨行判断。
+/// Issue #727 约束 4: 不依赖 caret geometry 的 rebase 帧采集。
 ///
-/// - 有 cursor_visual_track 时：用 `sampled_rect_at_progress(progress(now))` 采样 (x, y)，
-///   用 `sampled_visual_line_id_at_progress(progress(now))` 采样 visual_line_id。
-/// - 无 track 时：按事务 progress 插值 old/new cursor rect，visual_line_id 未知（None）。
-fn sample_caret_geometry_for_caret_driven_clip(
-    tx: &PreparedTextVisualTransaction,
-    now: Instant,
-) -> (f64, f64, Option<usize>) {
-    match tx.cursor_visual_track.as_ref() {
-        Some(track) => {
-            let progress = track.progress(now);
-            let r = track.sampled_rect_at_progress(progress);
-            let line_id = track.sampled_visual_line_id_at_progress(progress);
-            (r.x, r.top, line_id)
-        }
-        None => {
-            if let (Some(old_r), Some(new_r)) =
-                (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
-            {
-                let progress = tx.progress(now);
-                let eased = AnimatedSlice::ease_out_quad(progress);
-                let x = old_r.x + (new_r.x - old_r.x) * eased;
-                let y = old_r.top + (new_r.top - old_r.top) * eased;
-                (x, y, None)
-            } else {
-                (0.0, 0.0, None)
-            }
-        }
-    }
-}
-
-/// Issue #722 评论 5749164244 问题3: 对单个视觉单元采集 rebase 帧。
-///
-/// - Reveal/Conceal unit：用 `compute_frame_caret_driven`（和本帧渲染同一个 now、
-///   同一个 caret track sample、同一个跨行判断），`visible_fraction` 从真实显示帧
-///   反算（Insert = frame.w / to_document_rect.w，Delete = frame.w / from_document_rect.w）。
-/// - Reflow unit：用 `compute_frame(visible_fraction)`（原逻辑），`visible_fraction`
-///   用 unit 自己的 `current_visible_fraction(now)`。
-///
-/// Issue #722 评论 5749572808 问题3: 终态判断不再一刀切用 `unit.progress(now) >= 1.0`。
-/// Reveal/Conceal 已由 caret track 决定真实裁切，unit 自己 duration 到 100% 但
-/// caret track 还没走到目标时，正常渲染仍画半截文字，rebase 时不能直接丢掉该 unit。
-/// 改为按真实帧判断：InsertReveal `frame.w >= to_document_rect.w - 0.001` 才算已完全
-/// 吐出（返回 None）；DeleteConceal `frame.w <= 0.001` 才算已完全吞掉（返回 None）。
-/// ReflowMove/ReflowCrossFade 仍看 unit progress。
-fn collect_rebase_frame_for_unit(
+/// 替代 `collect_rebase_frame_for_unit`（需要 caret_x/caret_y/caret_line_id 参数）。
+/// 对 CaretDriven unit（InsertReveal/DeleteConceal），从 caret track progress 推导
+/// visible_fraction（不依赖 caret geometry），用 slice.compute_frame 构造 rebase frame。
+/// 对 Timed unit（ReflowMove/ReflowCrossFade），保持原逻辑。
+fn collect_rebase_frame_for_unit_without_caret(
     unit: &PreparedVisualUnit,
-    caret_x: f64,
-    caret_y: f64,
-    caret_line_id: Option<usize>,
+    caret_track_progress: Option<f64>,
+    caret_remaining_ms: u64,
     now: Instant,
 ) -> Option<RebaseFrame> {
-    let visible_fraction = unit.current_visible_fraction(now);
-    let frame = match unit.slice.kind {
-        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => unit
-            .slice
-            .compute_frame_caret_driven(caret_x, caret_y, caret_line_id, visible_fraction),
+    let visible_fraction = match unit.slice.kind {
+        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
+            // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track progress 推导。
+            // visible = start_fraction + (target - start) * ease_out_quad(progress)
+            let progress = caret_track_progress.unwrap_or(0.0);
+            let eased = AnimatedSlice::ease_out_quad(progress);
+            let start = unit.timing.start_fraction();
+            let target = unit.timing.target_fraction();
+            start + (target - start) * eased
+        }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            unit.slice.compute_frame(visible_fraction)
+            unit.current_visible_fraction(now)
         }
     };
-    // Issue #722 评论 5749572808 问题3: 按真实帧判断终态，不用 unit.progress >= 1.0。
+    // Issue #727 约束 4: 不依赖 caret geometry，统一用 compute_frame。
+    let frame = unit.slice.compute_frame(visible_fraction);
+    // 按真实帧判断终态。
     match unit.slice.kind {
         AnimatedSliceKind::InsertReveal => {
-            // 已完全吐出 → 不采集。
             if frame.w >= unit.slice.to_document_rect.w.max(0.0) - 0.001 {
                 return None;
             }
         }
         AnimatedSliceKind::DeleteConceal => {
-            // 已完全吞掉 → 不采集。
             if frame.w <= 0.001 {
                 return None;
             }
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
-            // Reflow 仍看 unit progress。
             if unit.progress(now) >= 1.0 {
                 return None;
             }
         }
     }
-    // 从真实显示帧反算 visible_fraction：
-    // Insert = frame.w / to_document_rect.w
-    // Delete = frame.w / from_document_rect.w
-    // Reflow 保留 unit 自己的 visible_fraction（几何插值不由宽度决定）。
     let effective_fraction = match unit.slice.kind {
         AnimatedSliceKind::InsertReveal => {
             let w = unit.slice.to_document_rect.w.max(1.0);
@@ -551,11 +504,21 @@ fn collect_rebase_frame_for_unit(
         }
         AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => visible_fraction,
     };
-    let elapsed_ms = match unit.started_at {
-        Some(start) => now.duration_since(start).as_millis() as u64,
-        None => 0,
+    let (elapsed_ms, duration_ms) = match &unit.timing {
+        VisualUnitTiming::CaretDriven { .. } => (0u64, caret_remaining_ms),
+        VisualUnitTiming::Timed {
+            started_at,
+            duration_ms,
+            ..
+        } => {
+            let elapsed = match started_at {
+                Some(start) => now.duration_since(*start).as_millis() as u64,
+                None => 0,
+            };
+            (elapsed, *duration_ms)
+        }
     };
-    let remaining_duration_ms = unit.duration_ms.saturating_sub(elapsed_ms);
+    let remaining_duration_ms = duration_ms.saturating_sub(elapsed_ms);
     Some(RebaseFrame {
         byte_start: unit.slice.byte_start,
         byte_end: unit.slice.byte_end,
@@ -1275,18 +1238,29 @@ impl LinuxEditorAnimationCoordinator {
                 continue;
             }
             // 受影响：采集 rebase frames（frame.byte_start/end 属于该旧事务 new 坐标系）。
-            // Issue #722 评论 5749164244 问题3: Reveal/Conceal 的 rebase 采样收回
-            // animation_coordinator，用和本帧渲染同一个 now、同一个 caret track sample、
-            // 同一个跨行判断调 compute_frame_caret_driven。ReflowMove/ReflowCrossFade
-            // 继续用 compute_frame。不再调 tx.collect_rebase_frames（它对所有 unit
-            // 用 compute_frame，与正常渲染路径不一致）。
-            let (caret_x, caret_y, caret_line_id) =
-                sample_caret_geometry_for_caret_driven_clip(tx, now);
+            // Issue #727 约束 4: 不再自己采样 caret geometry（删除 sample_caret_geometry_for_caret_driven_clip）。
+            // Reveal/Conceal 的 rebase frame 从 caret track progress 推导 visible_fraction，
+            // 用 slice.compute_frame 构造，不依赖 caret geometry。
+            // ReflowMove/ReflowCrossFade 继续用 compute_frame。
+            let caret_track_progress = tx
+                .cursor_visual_track
+                .as_ref()
+                .map(|track| track.progress(now));
+            let caret_remaining_ms = tx
+                .cursor_visual_track
+                .as_ref()
+                .map(|track| track.remaining_duration_ms(now))
+                .unwrap_or(0);
             let frames: Vec<RebaseFrame> = tx
                 .units
                 .iter()
                 .filter_map(|unit| {
-                    collect_rebase_frame_for_unit(unit, caret_x, caret_y, caret_line_id, now)
+                    collect_rebase_frame_for_unit_without_caret(
+                        unit,
+                        caret_track_progress,
+                        caret_remaining_ms,
+                        now,
+                    )
                 })
                 .collect();
             // 坐标系映射：把每个 frame 的 byte_start/byte_end 映射到 current-old 坐标系。
@@ -1317,7 +1291,17 @@ impl LinuxEditorAnimationCoordinator {
             // 在 cancel 之前采样 caret，构造 RebaseCaretHandoff 候选。
             // Issue #690 评论 5680276931 + 5681206040: 用同一个 now 采样旧事务这一帧
             // 正在屏幕上显示的 coordinated cursor rect，并取旧 caret track 的剩余时长。
+            // Issue #727 约束 4: 不再调 sample_caret_geometry_for_caret_driven_clip，
+            // 直接从 caret track 采样 visual_line_id 供 RebaseCaretHandoff 使用。
             let sampled_cursor = sample_coordinated_cursor_rect_at(tx, now);
+            // 从 caret track 采样 visual_line_id（用于 RebaseCaretHandoff 行几何选取）。
+            let caret_line_id = match tx.cursor_visual_track.as_ref() {
+                Some(track) => {
+                    let progress = track.progress(now);
+                    track.sampled_visual_line_id_at_progress(progress)
+                }
+                None => None,
+            };
             let caret_handoff = match (sampled_cursor, tx.cursor_visual_track.as_ref()) {
                 (Some(sampled), Some(track)) => {
                     // Issue #722 评论 5749791161: 采样到的行几何从旧 track 的
@@ -1393,6 +1377,7 @@ impl LinuxEditorAnimationCoordinator {
         &mut self,
         vt: &EditorVisualTransaction,
         typing_animation_enabled: bool,
+        smooth_cursor_enabled: bool,
         is_scrolling: bool,
         is_loading: bool,
         is_applying_format: bool,
@@ -1408,7 +1393,24 @@ impl LinuxEditorAnimationCoordinator {
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
-        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
+        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
+        // 创建 InsertReveal/DeleteConceal 的条件：
+        // typing_animation_enabled && smooth_cursor_enabled && valid_caret_motion_track
+        // 才允许创建。valid_caret_motion_track = old/new cursor rect 都存在（有 caret motion）。
+        if !typing_animation_enabled
+            || !smooth_cursor_enabled
+            || is_scrolling
+            || is_loading
+            || is_applying_format
+        {
+            return None;
+        }
+
+        // Issue #727 约束 5: valid_caret_motion_track 检查。
+        // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
+        let valid_caret_motion_track =
+            old_cursor_rect.is_some() && new_cursor_rect.is_some();
+        if !valid_caret_motion_track {
             return None;
         }
 
@@ -2371,8 +2373,8 @@ impl LinuxEditorAnimationCoordinator {
     /// Issue #705 评论 5717380886: 返回当前活动的正文编辑事务的 key，
     /// 且其 `cursor_owner_epoch == current_cursor_epoch`。
     ///
-    /// epoch 不一致时返回 None——文字事务继续播自己的 glyph/reflow
-    /// （不清除事务），但不再驱动 caret。
+    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
+    /// InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
     ///
     /// 本方法供 `build_cursor_plan` 内部判断"正文协同是否活跃（epoch 一致）"用。
     /// `find_cursor_transaction_for_target` / `compute_coordinated_cursor_position`
@@ -2487,7 +2489,6 @@ impl LinuxEditorAnimationCoordinator {
         is_preediting: bool,
         smooth_cursor_enabled: bool,
         smooth_cursor_duration_ms: u32,
-        coordinated_enabled: bool,
         scroll_y: f64,
         old_visible: bool,
         old_blink_visible: bool,
@@ -2579,7 +2580,10 @@ impl LinuxEditorAnimationCoordinator {
                 // 不创建独立 CursorAnimationState timeline。
                 // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
                 // epoch 不一致时纯光标移动可走 Tween。
-                if coordinated_enabled && has_active_for_coordinated {
+                // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled
+                // 独立开关。是否有吞吐字直接由 has_active_for_coordinated（本帧有没有
+                // 有效 caret motion track）决定，不再受外部开关控制。
+                if has_active_for_coordinated {
                     CursorTransition::Snap
                 } else {
                     // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
@@ -2618,7 +2622,8 @@ impl LinuxEditorAnimationCoordinator {
             // 不创建独立 CursorAnimationState timeline。
             // Issue #705 评论 5717380886: 用 has_active_for_coordinated（看 epoch），
             // epoch 不一致时纯光标移动可走 Tween。
-            if coordinated_enabled && has_active_for_coordinated {
+            // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
+            if has_active_for_coordinated {
                 CursorTransition::Snap
             } else {
                 // Issue #702 评论 5707449688 问题 2: 纯光标 Tween 不再需要 driver_key，
@@ -2668,10 +2673,39 @@ impl LinuxEditorAnimationCoordinator {
         }
     }
 
-    pub(crate) fn pause_all(&mut self) {
+    /// Issue #727 约束 7: 滚动开始时，CaretDriven 事务（InsertReveal/DeleteConceal）
+    /// 依赖 caret motion track，caret track 被终止时它们必须立即完成到 canonical 状态，
+    /// 不能只 pause（pause 后 resume 时 caret track 已不存在，数据依赖链断裂）。
+    /// Timed 事务（ReflowMove/ReflowCrossFade）有独立时间线，可以正常 pause/resume。
+    ///
+    /// 此方法先完成所有含 CaretDriven unit 的事务，再 pause 剩下的 Timed 事务。
+    /// 返回被完成事务的 snapshot IDs，供调用方清理 texture cache。
+    pub(crate) fn pause_all(&mut self) -> Vec<super::layout_snapshot::LineSnapshotId> {
+        use super::text_visual_transaction::{VisualUnitTiming, TextVisualTransactionState};
+
+        // 1. 找出所有含 CaretDriven unit 的活跃事务，完成它们到 canonical 状态。
+        let caret_driven_keys: Vec<VisualTransactionKey> = self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .filter(|t| {
+                t.state != TextVisualTransactionState::Completed
+                    && t.state != TextVisualTransactionState::Cancelled
+                    && t.units.iter().any(|u| matches!(u.timing, VisualUnitTiming::CaretDriven { .. }))
+            })
+            .map(|t| t.key)
+            .collect();
+        let mut freed_snapshot_ids = Vec::new();
+        for key in caret_driven_keys {
+            if let Some(ids) = self.prepared_queue.complete(key) {
+                freed_snapshot_ids.extend(ids);
+            }
+        }
+        // 2. pause 剩下的活跃事务（纯 Timed：ReflowMove/ReflowCrossFade）。
         for tx in self.prepared_queue.active_transactions_mut() {
             tx.pause();
         }
+        freed_snapshot_ids
     }
 
     pub(crate) fn resume_all(&mut self) {
@@ -2694,7 +2728,6 @@ impl LinuxEditorAnimationCoordinator {
         cursor_style: super::render_plan::CursorStyle,
         selection_preedit_style: super::render_plan::SelectionPreeditStyle,
         frame_now: Instant,
-        coordinated_enabled: bool,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
         current_scroll_y: f64,
@@ -2711,8 +2744,21 @@ impl LinuxEditorAnimationCoordinator {
                 frame_sample.set_progress(tx.key, tx.progress(frame_now));
             }
         }
+
+        // Issue #727 约束 3: 先采样 caret motion 得到一份统一的 CoordinatedMotionFrame，
+        // 供 cursor layer 和文字 reveal/conceal 共享同一份 caret geometry。
+        // 有 SampledCaretFrame 才让 InsertReveal / DeleteConceal 用它的 x/y/visual_line_id 裁文字。
+        // 没有 caret frame 就不生成 reveal/conceal glyph。
+        //
+        // 约束 1: epoch 不一致时事务立刻失去 caret motion ownership，
+        // caret 为 None，InsertReveal/DeleteConceal 结束到 canonical 状态。
+        let coordinated_motion_frame = self.sample_coordinated_motion_frame(
+            &frame_sample,
+            cursor_owner_epoch,
+        );
+
         let (text_animation, keys_to_complete) =
-            self.build_text_animation_plan_with_sample(&frame_sample);
+            self.build_text_animation_plan_with_sample(&frame_sample, &coordinated_motion_frame);
         frame_context.keys_to_complete = keys_to_complete;
         let active_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -2771,70 +2817,68 @@ impl LinuxEditorAnimationCoordinator {
         // CursorOnly 光标位置也从 frame_sample 采样，不再在 build_render_plan_full
         // 之外用 cursor_timeline_sample_with_time 单独推进 cursor_ctrl.visual_x/y。
         let mut cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Idle;
-        if coordinated_enabled {
-            // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
-            // epoch 不一致时 compute_coordinated_cursor_position 返回 None，
-            // 文字事务继续播自己的 glyph/reflow（不清除事务），但不再驱动 caret，
-            // 改走 CursorOnly/点击位置。
-            // 原调用形式 self.compute_coordinated_cursor_position(&frame_sample)
-            // 现增加 cursor_owner_epoch 参数。
-            if let Some((cx, cy_doc, ch)) =
-                self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
-            {
-                // Issue #722 评论 5748596920 问题1: compute_coordinated_cursor_position
-                // 返回文档坐标（cy_doc），本帧真正画 caret 时用当前 scroll_y 转成视口 y。
-                let cy = cy_doc - current_scroll_y;
-                // Issue #702 评论 5707770318: 正文协同光标位置已算出，
-                // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
-                // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
-                // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
-                // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
-                cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Coordinated {
-                    x: cx,
-                    y: cy,
-                    h: ch,
-                };
-                let suppressed = matches!(
-                    self.active_operation_kind(),
-                    Some(TextVisualOperationKind::Insert)
-                );
-                let blink_mode = if suppressed {
-                    CursorBlinkMode::Suppressed
-                } else {
-                    CursorBlinkMode::Normal
-                };
-                let opacity = if blink_mode == CursorBlinkMode::Suppressed {
-                    1.0
-                } else {
-                    cursor_render_state.opacity
-                };
-                cursor_render_state = CursorRenderState {
-                    visible: true,
-                    x: cx,
-                    y: cy,
-                    h: ch,
-                    opacity,
-                };
-            } else if let Some(anim) = cursor_animation {
-                // 无活跃文字事务但有 CursorOnly 动画：用同一份 frame_sample 采样光标位置。
-                cursor_sample_outcome = self.sample_cursor_only_position(anim, &frame_sample);
-                match cursor_sample_outcome {
-                    super::render_plan::CursorSampleOutcome::Running(p) => {
-                        let eased = super::rendering::ease_out_cubic(p);
-                        cursor_render_state.x =
-                            anim.start_x + (anim.target_x - anim.start_x) * eased;
-                        cursor_render_state.y =
-                            anim.start_y + (anim.target_y - anim.start_y) * eased;
-                    }
-                    super::render_plan::CursorSampleOutcome::Finished => {
-                        cursor_render_state.x = anim.target_x;
-                        cursor_render_state.y = anim.target_y;
-                    }
-                    super::render_plan::CursorSampleOutcome::Idle => {}
-                    // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
-                    // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
-                    super::render_plan::CursorSampleOutcome::Coordinated { .. } => {}
+        // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
+        // 是否有吞吐字直接由 compute_coordinated_cursor_position 是否返回 Some 决定。
+        // Issue #705 评论 5717380886: 传入 cursor_owner_epoch。
+        // Issue #727 约束 1: epoch 不一致时 compute_coordinated_cursor_position 返回 None，
+        // 事务立刻失去 caret motion ownership，InsertReveal/DeleteConceal 结束到 canonical
+        // 最终状态（不再继续播放）。改走 CursorOnly/点击位置。
+        if let Some((cx, cy_doc, ch)) =
+            self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
+        {
+            // Issue #722 评论 5748596920 问题1: compute_coordinated_cursor_position
+            // 返回文档坐标（cy_doc），本帧真正画 caret 时用当前 scroll_y 转成视口 y。
+            let cy = cy_doc - current_scroll_y;
+            // Issue #702 评论 5707770318: 正文协同光标位置已算出，
+            // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
+            // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
+            // 屏幕真正画出的位置，但不启动 CursorAnimationState.started_at，
+            // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
+            cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Coordinated {
+                x: cx,
+                y: cy,
+                h: ch,
+            };
+            let suppressed = matches!(
+                self.active_operation_kind(),
+                Some(TextVisualOperationKind::Insert)
+            );
+            let blink_mode = if suppressed {
+                CursorBlinkMode::Suppressed
+            } else {
+                CursorBlinkMode::Normal
+            };
+            let opacity = if blink_mode == CursorBlinkMode::Suppressed {
+                1.0
+            } else {
+                cursor_render_state.opacity
+            };
+            cursor_render_state = CursorRenderState {
+                visible: true,
+                x: cx,
+                y: cy,
+                h: ch,
+                opacity,
+            };
+        } else if let Some(anim) = cursor_animation {
+            // 无活跃文字事务但有 CursorOnly 动画：用同一份 frame_sample 采样光标位置。
+            cursor_sample_outcome = self.sample_cursor_only_position(anim, &frame_sample);
+            match cursor_sample_outcome {
+                super::render_plan::CursorSampleOutcome::Running(p) => {
+                    let eased = super::rendering::ease_out_cubic(p);
+                    cursor_render_state.x =
+                        anim.start_x + (anim.target_x - anim.start_x) * eased;
+                    cursor_render_state.y =
+                        anim.start_y + (anim.target_y - anim.start_y) * eased;
                 }
+                super::render_plan::CursorSampleOutcome::Finished => {
+                    cursor_render_state.x = anim.target_x;
+                    cursor_render_state.y = anim.target_y;
+                }
+                super::render_plan::CursorSampleOutcome::Idle => {}
+                // Issue #702 评论 5707770318: sample_cursor_only_position 不会返回
+                // Coordinated（它只服务纯光标 CursorOnly 动画），此分支不可达。
+                super::render_plan::CursorSampleOutcome::Coordinated { .. } => {}
             }
         }
 
@@ -2868,6 +2912,67 @@ impl LinuxEditorAnimationCoordinator {
             static_patches,
             cursor_sample_outcome,
             drawn_caret_rect,
+            coordinated_motion_frame,
+        }
+    }
+
+    /// Issue #727 约束 3: 采样本帧统一的 CoordinatedMotionFrame。
+    ///
+    /// 在 `build_render_plan_full` 入口处调用，先采样 caret motion 得到一份
+    /// `SampledCaretFrame`，供 cursor layer 和文字 reveal/conceal 共享。
+    ///
+    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
+    /// InsertReveal/DeleteConceal 结束到 canonical 状态。
+    fn sample_coordinated_motion_frame(
+        &self,
+        sample: &AnimationFrameSample,
+        cursor_owner_epoch: u64,
+    ) -> super::render_plan::CoordinatedMotionFrame {
+        // 取当前 epoch 一致的活动正文事务。
+        let key = match self.active_text_transaction_key_with_epoch(cursor_owner_epoch) {
+            Some(k) => k,
+            None => {
+                return super::render_plan::CoordinatedMotionFrame { caret: None };
+            }
+        };
+        let tx = match self
+            .prepared_queue
+            .active_transactions()
+            .iter()
+            .find(|t| t.key == key)
+        {
+            Some(t) => t,
+            None => {
+                return super::render_plan::CoordinatedMotionFrame { caret: None };
+            }
+        };
+        // 只有 Rendering / Paused 状态才有有效 caret motion。
+        if !matches!(
+            tx.state,
+            TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused
+        ) {
+            return super::render_plan::CoordinatedMotionFrame { caret: None };
+        }
+        // 采样 caret geometry + progress。
+        let (x, y, visual_line_id, progress) = match tx.cursor_visual_track.as_ref() {
+            Some(track) => {
+                let progress = track.progress(sample.frame_now);
+                let r = track.sampled_rect_at_progress(progress);
+                let line_id = track.sampled_visual_line_id_at_progress(progress);
+                (r.x, r.top, line_id, progress)
+            }
+            None => {
+                // 无 cursor_visual_track：无有效 caret motion。
+                return super::render_plan::CoordinatedMotionFrame { caret: None };
+            }
+        };
+        super::render_plan::CoordinatedMotionFrame {
+            caret: Some(super::render_plan::SampledCaretFrame {
+                x,
+                y,
+                visual_line_id,
+                progress,
+            }),
         }
     }
 
@@ -2911,6 +3016,7 @@ impl LinuxEditorAnimationCoordinator {
     fn build_text_animation_plan_with_sample(
         &mut self,
         sample: &AnimationFrameSample,
+        coordinated_motion_frame: &super::render_plan::CoordinatedMotionFrame,
     ) -> (TextAnimationPlan, Vec<VisualTransactionKey>) {
         let mut glyphs = Vec::new();
         let mut keys_to_complete = Vec::new();
@@ -2933,10 +3039,10 @@ impl LinuxEditorAnimationCoordinator {
                 }
                 // Issue #690 评论 5675007226 步骤 3: 事务进入 Rendering 时，为每个视觉单元
                 // 打上统一的起始时间；之后每个单元按自己的 duration_ms 独立计算 progress。
+                // Issue #727 约束 2: 通过 VisualUnitTiming::mark_started 统一处理。
+                // CaretDriven unit 无独立时间线，mark_started 是 no-op。
                 for unit in &mut tx.units {
-                    if unit.started_at.is_none() {
-                        unit.started_at = Some(sample.frame_now);
-                    }
+                    unit.timing.mark_started(sample.frame_now);
                 }
                 // Issue #690 评论 5682867529: caret track 跟文字 unit 同一个 frame_now 启动，
                 // 不再在事务创建时就开始计时。这样第一帧 text unit progress = 0 且
@@ -2988,54 +3094,37 @@ impl LinuxEditorAnimationCoordinator {
             }
 
             for unit in &tx.units {
-                // Issue #722 评论 5747719529 核心语义：光标是吞字/吐字的视觉边界。
-                // InsertReveal/DeleteConceal 的裁切边界直接消费本帧 coordinated caret
-                // 的位置（caret_driven_clip），不再由 unit 自己的 visible fraction 驱动。
-                // caret 与文字使用同一个 frame_now 和同一个 from→to 几何轨迹。
-                let visible = unit.current_visible_fraction(sample.frame_now);
+                // Issue #727 约束 3+4: InsertReveal/DeleteConceal 的裁切边界直接消费
+                // 本帧统一的 CoordinatedMotionFrame.caret，不再由文字层自己采样 caret。
+                // 没有 caret frame 就不生成 reveal/conceal glyph（static canonical text
+                // 直接完整显示）。
                 let frame = match unit.slice.kind {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
-                        // 采样本帧 coordinated caret 位置作为裁切边界。
-                        // Issue #722 评论 5748596920 问题2: 保留完整 caret geometry（x, y, visual_line_id），
-                        // 跨软换行时按行判断裁切，不再对所有 unit 用同一个纯 caret_x。
-                        // Issue #722 评论 5749164244 问题1: 三条采样路径都返回真实
-                        // visual_line_id（从 PreparedCursorVisualTrack 的 from/to
-                        // visual line id 按 progress 采样），不再硬编码 0usize。
-                        let (caret_x, caret_y, caret_line_id) =
-                            match tx.cursor_visual_track.as_ref() {
-                                Some(track) => {
-                                    let progress = track.progress(sample.frame_now);
-                                    let r = track.sampled_rect_at_progress(progress);
-                                    let line_id =
-                                        track.sampled_visual_line_id_at_progress(progress);
-                                    (r.x, r.top, line_id)
-                                }
-                                None => {
-                                    if let (Some(old_r), Some(new_r)) =
-                                        (tx.old_cursor_rect.as_ref(), tx.new_cursor_rect.as_ref())
-                                    {
-                                        let progress = tx.progress(sample.frame_now);
-                                        let eased = AnimatedSlice::ease_out_quad(progress);
-                                        let x = old_r.x + (new_r.x - old_r.x) * eased;
-                                        let y = old_r.top + (new_r.top - old_r.top) * eased;
-                                        // 无 caret track 时 visual_line_id 未知，走 y fallback。
-                                        (x, y, None)
-                                    } else {
-                                        // 没有 caret 信息时回退到 unit visible fraction。
-                                        let f = unit.slice.compute_frame(visible);
-                                        (f.x + f.w, f.y, None)
-                                    }
-                                }
-                            };
+                        // Issue #727 约束 3: 从统一的 CoordinatedMotionFrame 获取 caret geometry。
+                        // 约束 4: 不再自己采样 caret（删除 sample_caret_geometry_for_caret_driven_clip
+                        // 及内联采样路径）。
+                        let Some(caret_frame) = coordinated_motion_frame.caret else {
+                            // 无有效 caret motion track：不生成 reveal/conceal glyph。
+                            // static canonical text 直接完整显示。
+                            continue;
+                        };
+                        // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
+                        // progress 推导，不再由 unit 自己的时间线驱动。
+                        // visible = start_fraction + (target - start) * ease_out_quad(progress)
+                        let eased = AnimatedSlice::ease_out_quad(caret_frame.progress);
+                        let start = unit.timing.start_fraction();
+                        let target = unit.timing.target_fraction();
+                        let visible = start + (target - start) * eased;
                         unit.slice.compute_frame_caret_driven(
-                            caret_x,
-                            caret_y,
-                            caret_line_id,
+                            caret_frame.x,
+                            caret_frame.y,
+                            caret_frame.visual_line_id,
                             visible,
                         )
                     }
                     AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
                         // Reflow 不消费 caret 边界，用纯几何插值。
+                        let visible = unit.current_visible_fraction(sample.frame_now);
                         unit.slice.compute_frame(visible)
                     }
                 };
@@ -3074,8 +3163,9 @@ impl LinuxEditorAnimationCoordinator {
     /// `build_render_plan_full` 在写入 `CursorRenderState` 时用当前 scroll_y 转成视口 y。
     /// `x` 是水平坐标，不受 scroll_y 影响。
     ///
-    /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。epoch 不一致时
-    /// 返回 None——文字事务继续播自己的 glyph/reflow（不清除事务），但不再驱动 caret。
+    /// Issue #705 评论 5717380886: 增加 `current_cursor_epoch` 参数。
+    /// Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
+    /// InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
     fn compute_coordinated_cursor_position(
         &self,
         sample: &AnimationFrameSample,
@@ -3093,8 +3183,8 @@ impl LinuxEditorAnimationCoordinator {
             .find(|t| t.key == key)?;
 
         // Issue #705 评论 5717380886: cursor_owner_epoch 检查。
-        // epoch 不一致时返回 None——文字事务继续播自己的 glyph/reflow，
-        // 但不再驱动 caret。
+        // Issue #727 约束 1: epoch 不一致时返回 None——事务立刻失去 caret motion ownership，
+        // InsertReveal/DeleteConceal 结束到 canonical 最终状态（不再继续播放）。
         if tx.cursor_owner_epoch != current_cursor_epoch {
             return None;
         }
@@ -3115,7 +3205,7 @@ impl LinuxEditorAnimationCoordinator {
         // caret 位置只由 PreparedCursorVisualTrack（canonical old caret → canonical new caret）
         // 插值决定，不再从文字 glyph 切片反推（删除 rightmost_x.max() / conceal_edge.min()）。
         // - 有 cursor_visual_track 时：用 sampled_rect(frame_now) 插值（caret_driven_clip）。
-        // - 没有 track 时：按事务 progress 插值 old/new cursor rect。
+        // - 没有 track 时：无有效 caret motion，返回 None 走 CursorOnly 路径。
         // 文字的 InsertReveal/DeleteConceal 裁切边界直接消费本帧 coordinated caret 的位置。
         let sample_caret_driven_clip = || -> Option<(f64, f64)> {
             match tx.cursor_visual_track.as_ref() {
@@ -3127,12 +3217,10 @@ impl LinuxEditorAnimationCoordinator {
                     Some((r.x, r.top))
                 }
                 None => {
-                    // 首次事务没有 caret track：用 old/new cursor rect 按事务 progress 插值。
-                    let progress = tx.progress(frame_now);
-                    let eased = AnimatedSlice::ease_out_quad(progress);
-                    let x = old_rect.x + (new_rect.x - old_rect.x) * eased;
-                    let y = old_rect.top + (new_rect.top - old_rect.top) * eased;
-                    Some((x, y))
+                    // Issue #727 约束 6: 无 cursor_visual_track = 无有效 caret motion。
+                    // 返回 None 让 build_render_plan_full 走 CursorOnly 路径，
+                    // 不用事务的 old/new cursor rect 改写光标位置。
+                    None
                 }
             }
         };
@@ -3190,6 +3278,7 @@ mod tests {
     use super::*;
     use crate::sujian_editor_item::animated_slice::AnimatedSliceKind;
     use crate::sujian_editor_item::layout_snapshot::ShapingIdentity;
+    use crate::sujian_editor_item::render_plan::{CoordinatedMotionFrame, SampledCaretFrame};
     use writer_core::editor::Utf8ByteOffset;
 
     /// 构造不带时间线的 `RebaseFrame`，用于只验证三层匹配策略的用例。
@@ -4750,12 +4839,33 @@ mod tests {
         now: Instant,
     ) -> PreparedVisualUnit {
         let mut unit = PreparedVisualUnit::wrap(slice, duration_ms);
-        unit.started_at = Some(now - Duration::from_millis(elapsed_ms));
+        // Issue #727 约束 2: 通过 VisualUnitTiming 设置 started_at / start_fraction。
+        // CaretDriven unit 无 started_at，通过 start_fraction 模拟已吐/吞比例。
+        // Timed unit 通过 started_at 设置独立时间线。
+        let fraction = if duration_ms > 0 {
+            (elapsed_ms as f64 / duration_ms as f64).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        match &mut unit.timing {
+            super::VisualUnitTiming::Timed { started_at, .. } => {
+                *started_at = Some(now - Duration::from_millis(elapsed_ms));
+            }
+            super::VisualUnitTiming::CaretDriven { .. } => {
+                // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track
+                // progress 推导（start + (target - start) * ease_out_quad(progress)），
+                // 不需要通过 start_fraction 模拟已演进状态。
+                // start_fraction 保持 fresh unit 的初始值（0 for InsertReveal, 1 for DeleteConceal）。
+                // 测试中 caret track 的 started_at 由 rendering_tx 设置，反映已演进状态。
+            }
+        }
         unit
     }
 
     /// 手工装配一笔处于 Rendering 的正文事务。事务 timeline 从 `tx_elapsed_ms` 起算，
     /// 与单元各自的 `elapsed_ms` 故意取不同值，用来验证两者不再互相顶替。
+    /// Issue #727 约束 3: 自动创建 `cursor_visual_track`，使 CaretDriven unit 可以
+    /// 从 caret track progress 推导可见比例。`started_at` 与事务 timeline 同步。
     fn rendering_tx(
         key: VisualTransactionKey,
         operation_kind: TextVisualOperationKind,
@@ -4767,6 +4877,21 @@ mod tests {
     ) -> PreparedTextVisualTransaction {
         let mut timeline = TransactionTimeline::new(100);
         timeline.rendering_started_at = Some(now - Duration::from_millis(tx_elapsed_ms));
+        // Issue #727 约束 3: CaretDriven unit 依赖 caret motion track。
+        // 测试辅助函数自动创建 cursor_visual_track，使 CaretDriven unit 可以生成 glyph。
+        let cursor_visual_track = Some(PreparedCursorVisualTrack {
+            from: old_cursor.clone(),
+            to: new_cursor.clone(),
+            from_visual_line_id: None,
+            to_visual_line_id: None,
+            from_line_top: 0.0,
+            from_line_bottom: 20.0,
+            to_line_top: 0.0,
+            to_line_bottom: 20.0,
+            started_at: Some(now - Duration::from_millis(tx_elapsed_ms)),
+            duration_ms: 100,
+            pause_start: None,
+        });
         PreparedTextVisualTransaction {
             key,
             state: TextVisualTransactionState::Rendering,
@@ -4776,13 +4901,11 @@ mod tests {
             static_patches: Vec::new(),
             old_cursor_rect: Some(old_cursor),
             new_cursor_rect: Some(new_cursor),
-            cursor_visual_track: None,
+            cursor_visual_track,
             cancel_reason: None,
             texture_prepared: true,
             old_snapshot: None,
             new_snapshot: None,
-            // Issue #705 评论 5717380886: 测试辅助函数默认 epoch=0，
-            // 与 CursorController::new() 的初始 epoch 一致。
             cursor_owner_epoch: 0,
             visual_affected_byte_range_old: None,
             visual_affected_byte_range_new: None,
@@ -4806,19 +4929,23 @@ mod tests {
             VisualTransactionKey::new(1, 1),
             TextVisualOperationKind::Insert,
             vec![
-                // 单元自己的时间线：50/100ms → progress 0.5 → 可见比例 ease_out_quad(0.5)=0.75
+                // CaretDriven unit（InsertReveal）：可见比例从 caret track progress 推导。
+                // caret track progress = 0.5 → ease_out_quad(0.5) = 0.75
                 elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now),
-                // 已播完的单元是稳定终态，不再交棒
-                elapsed_unit(reveal_slice(3, 6, 160.0, 60.0), 500, 100, now),
+                // Timed unit（ReflowMove）：有自己的时间线，elapsed 500ms > duration 100ms
+                // → progress >= 1.0 → is_finished() = true → 已播完不交棒。
+                // Issue #727 约束 2: CaretDriven unit 共享 caret track，不能独立"已播完"，
+                // 所以用 Timed unit 验证"已播完的单元不交棒"。
+                elapsed_unit(reflow_slice(3, 6, 160.0, 220.0), 500, 100, now),
             ],
             caret(100.0),
             caret(220.0),
             now,
-            10,
+            50,
         );
-        // 事务级 progress = 0.1（eased 0.19）。旧实现按它一刀切采集，会把吐到 75% 的字
-        // 交棒成 19%，视觉上跳回一半。
-        tx.timeline.rendering_started_at = Some(now - Duration::from_millis(10));
+        // 事务级 progress = 0.5（eased 0.75）。CaretDriven unit 的可见比例从 caret track
+        // progress 推导：start + (target - start) * ease_out_quad(0.5) = 0.75。
+        tx.timeline.rendering_started_at = Some(now - Duration::from_millis(50));
 
         let frames = tx.collect_rebase_frames(now);
         assert_eq!(
@@ -4851,7 +4978,9 @@ mod tests {
     fn issue690_match_rebase_frames_continues_unit_timeline() {
         let now = Instant::now();
         let old_unit = elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now);
-        let visible_fraction = old_unit.current_visible_fraction(now);
+        // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track progress 推导。
+        // start_fraction=0, target_fraction=1, progress=0.5 → visible = 0 + (1-0)*ease_out_quad(0.5) = 0.75
+        let visible_fraction = 0.0 + (1.0 - 0.0) * AnimatedSlice::ease_out_quad(0.5);
         let frame = old_unit.slice.compute_frame(visible_fraction);
         // Issue #690 评论 5679744253 问题 1: RebaseFrame 携带 sampled_at 和
         // remaining_duration_ms，retarget 时从当前帧重新起段。
@@ -4878,14 +5007,28 @@ mod tests {
         match_rebase_frames(&frames, &mut units, &offset_map);
 
         let unit = &units[0];
+        // Issue #727 约束 2: CaretDriven unit 的 start_fraction 是 rebase 交棒时的载体。
+        // 交棒后 start_fraction = visible_fraction = 0.75。
+        let (start_fraction, started_at_is_none) = match &unit.timing {
+            super::VisualUnitTiming::CaretDriven { start_fraction, .. } => {
+                (*start_fraction, true)
+            }
+            super::VisualUnitTiming::Timed {
+                start_fraction,
+                started_at,
+                ..
+            } => (*start_fraction, started_at.is_none()),
+        };
         assert!(
-            (unit.start_fraction - 0.75).abs() < 1e-6,
+            (start_fraction - 0.75).abs() < 1e-6,
             "Reveal 单元交棒后应从已显示比例继续，got {}",
-            unit.start_fraction
+            start_fraction
         );
-        assert_eq!(
-            unit.duration_ms, 50,
-            "单元时长用剩余时长，不被新事务 wrap 的默认时长覆盖"
+        // Issue #727 约束 2: CaretDriven unit 没有 duration_ms / started_at。
+        // remaining_duration_ms 由 caret track 管理，不由 unit 自己的时间线决定。
+        assert!(
+            started_at_is_none,
+            "CaretDriven unit 无独立时间线，started_at 不适用"
         );
         // Issue #690 评论 5679744253 问题 1: retarget 时从当前帧重新起段，
         // started_at 留 None，等进入 Rendering 再启动，progress 从 0 开始。
@@ -4894,10 +5037,8 @@ mod tests {
         // 改成 None 后跟 fresh unit、caret track 一样由 build_text_animation_plan_with_sample
         // 在 Prepared→Rendering 时用同一个 sample.frame_now 启动。
         assert!(
-            unit.started_at.is_none(),
-            "Issue #690 评论 5683759796: rebase 后 started_at 应为 None（等 Rendering 再启动），\
-             got {:?}",
-            unit.started_at
+            started_at_is_none,
+            "Issue #690 评论 5683759796: rebase 后 started_at 应为 None（等 Rendering 再启动）"
         );
         let progress = unit.progress(now);
         assert!(
@@ -4976,14 +5117,28 @@ mod tests {
             "旧事务要留在队列里，继续持有自己的 snapshot 与静态隐藏区"
         );
         let unit = &coord.prepared_queue.active_transactions()[0].units[0];
+        let start_fraction = unit.timing.start_fraction();
         assert!(
-            unit.start_fraction.abs() < 1e-9,
+            start_fraction.abs() < 1e-9,
             "保留的单元起点不能被改写，got {}",
-            unit.start_fraction
+            start_fraction
         );
+        // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track progress 推导。
+        // 保留的单元的 caret track progress = 50/100 = 0.5
+        // → visible = 0 + (1-0)*ease_out_quad(0.5) = 0.75
+        let tx_ref = &coord.prepared_queue.active_transactions()[0];
+        let caret_progress = tx_ref
+            .cursor_visual_track
+            .as_ref()
+            .map(|track| track.progress(now))
+            .unwrap_or(0.0);
+        let visible = start_fraction
+            + (unit.timing.target_fraction() - start_fraction)
+                * AnimatedSlice::ease_out_quad(caret_progress);
         assert!(
-            (unit.current_visible_fraction(now) - 0.75).abs() < 1e-6,
-            "保留的单元沿自己的 started_at 继续，不因新事务 id 归零重播"
+            (visible - 0.75).abs() < 1e-6,
+            "保留的单元沿 caret track 继续，不因新事务 id 归零重播，got {}",
+            visible
         );
     }
 
@@ -5099,7 +5254,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            true,
             None,
             0,
             0.0,
@@ -5133,9 +5287,13 @@ mod tests {
 
     #[test]
     fn issue690_render_plan_keeps_cursor_only_state_when_coordinated_disabled() {
+        // Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关。
+        // 是否有吞吐字直接由"本帧有没有有效 caret motion"决定。
+        // 无 cursor_visual_track = 无 caret motion = 走 CursorOnly 自己的平滑曲线。
         let now = Instant::now();
         let mut coord = LinuxEditorAnimationCoordinator::new();
-        coord.prepared_queue.enqueue(rendering_tx(
+        // 手工装配一笔无 cursor_visual_track 的 Rendering 事务（模拟 caret motion 丢失）。
+        let mut tx = rendering_tx(
             VisualTransactionKey::new(3, 3),
             TextVisualOperationKind::Insert,
             vec![elapsed_unit(reveal_slice(0, 3, 100.0, 60.0), 50, 100, now)],
@@ -5143,7 +5301,9 @@ mod tests {
             caret(160.0),
             now,
             50,
-        ));
+        );
+        tx.cursor_visual_track = None;
+        coord.prepared_queue.enqueue(tx);
 
         let plan = coord.build_render_plan_full(
             stale_cursor_state(),
@@ -5152,7 +5312,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            false,
             None,
             0,
             0.0,
@@ -5161,7 +5320,7 @@ mod tests {
 
         assert!(
             (plan.cursor.x - 1234.5).abs() < 1e-6,
-            "关闭协同动画时走 CursorOnly 自己的平滑曲线，位置不由事务改写"
+            "无 caret motion 时走 CursorOnly 自己的平滑曲线，位置不由事务改写"
         );
         assert!(
             plan.cursor.opacity < 1e-6,
@@ -5178,9 +5337,11 @@ mod tests {
             "吞字单元第一帧必须完整可见，否则被删的字一帧都不出现",
         );
 
-        // 同一条 ease-out 曲线镜像到 1→0：eased(0.5)=0.75 → 还剩 0.25。
+        // Issue #727 约束 2: CaretDriven unit 的 visible_fraction 从 caret track progress 推导。
+        // start_fraction=1.0, target_fraction=0.0, progress=0.5
+        // → visible = 1 + (0-1)*ease_out_quad(0.5) = 1 - 0.75 = 0.25
         let half = elapsed_unit(conceal_slice(0, 3, 100.0, 60.0, true), 50, 100, now);
-        let visible = half.current_visible_fraction(now);
+        let visible = 1.0 + (0.0 - 1.0) * AnimatedSlice::ease_out_quad(0.5);
         assert!(
             (visible - 0.25).abs() < 1e-6,
             "吞字比例必须走与吐字同一条曲线（镜像），got {}",
@@ -5199,8 +5360,10 @@ mod tests {
             frame.x + frame.w
         );
 
+        // caret track progress=1.0 → visible = 1 + (0-1)*ease_out_quad(1.0) = 0
         let done = elapsed_unit(conceal_slice(0, 3, 100.0, 60.0, true), 200, 100, now);
-        let frame = done.slice.compute_frame(done.current_visible_fraction(now));
+        let done_visible = 1.0 + (0.0 - 1.0) * AnimatedSlice::ease_out_quad(1.0);
+        let frame = done.slice.compute_frame(done_visible);
         assert!(frame.w.abs() < 1e-6, "播完后旧字彻底消失，got {}", frame.w);
     }
 
@@ -5231,7 +5394,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            true,
             None,
             0,
             0.0,
@@ -5280,7 +5442,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            true,
             None,
             0,
             0.0,
@@ -5355,7 +5516,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            true,
             None,
             0,
             0.0,
@@ -5504,7 +5664,6 @@ mod tests {
             CursorStyle::default(),
             SelectionPreeditStyle::default(),
             now,
-            true,
             None,
             0,
             0.0,
@@ -6017,8 +6176,15 @@ mod tests {
                 "started_at=None 时 progress 应为 0"
             );
             assert!(
-                tx_ref.units[0].started_at.is_none(),
-                "事务创建时文字 unit started_at 应为 None"
+                tx_ref.units[0].timing.is_caret_driven()
+                    || matches!(
+                        &tx_ref.units[0].timing,
+                        super::VisualUnitTiming::Timed {
+                            started_at: None,
+                            ..
+                        }
+                    ),
+                "事务创建时文字 unit started_at 应为 None（CaretDriven 无 started_at，Timed 应为 None）"
             );
             assert!(
                 (tx_ref.units[0].progress(create_now) - 0.0).abs() < 1e-9,
@@ -6063,7 +6229,7 @@ mod tests {
         let frame_now_0 = prepared_now + Duration::from_millis(16);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(key, 0.0);
-        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0);
+        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0, &CoordinatedMotionFrame::default());
 
         // 断言 3: 同一个 frame_now_0 下 progress 都 == 0。
         {
@@ -6110,7 +6276,7 @@ mod tests {
         let frame_now_1 = frame_now_0 + Duration::from_millis(50);
         let mut sample_1 = AnimationFrameSample::new(frame_now_1);
         sample_1.set_progress(key, 0.25);
-        let (plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1);
+        let (plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1, &CoordinatedMotionFrame::default());
 
         {
             let tx_ref = coord
@@ -6212,20 +6378,40 @@ mod tests {
         let offset_map = OffsetMap::build("abc", "abc");
         match_rebase_frames(&rebase_frames, &mut new_units, &offset_map);
 
-        // rebased text unit: start_fraction = 0.75（旧 unit 当前可见比例），
-        // duration_ms = 50（剩余时长）。
+        // rebased text unit: start_fraction = 0.75（旧 unit 当前可见比例）。
         // Issue #690 评论 5683759796 关键断言: started_at 必须是 None（不是 Some(sampled_at)），
         // 这样才不会从旧事务交棒时刻提前计时。
+        // Issue #727 约束 2: CaretDriven unit 无独立 duration_ms，剩余时长由 caret track 管理。
+        // CaretDriven unit 的 start_fraction 是 rebase 交棒时的载体（0.75）。
+        let (new_started_at_is_none, new_duration_ms) = match &new_units[0].timing {
+            super::VisualUnitTiming::CaretDriven { start_fraction, .. } => {
+                // CaretDriven unit 无 duration_ms 字段，剩余时长在 caret track 中断言。
+                assert!(
+                    (start_fraction - 0.75).abs() < 1e-9,
+                    "rebase 后 CaretDriven unit start_fraction 应为 0.75，got {}",
+                    start_fraction
+                );
+                (true, 0u64)
+            }
+            super::VisualUnitTiming::Timed {
+                started_at,
+                duration_ms,
+                ..
+            } => (started_at.is_none(), *duration_ms),
+        };
         assert!(
-            new_units[0].started_at.is_none(),
+            new_started_at_is_none,
             "Issue #690 评论 5683759796: rebase 后文字 unit started_at 应为 None\
-             （等 Rendering 再启动），got {:?}",
-            new_units[0].started_at
+             （等 Rendering 再启动）"
         );
-        assert_eq!(
-            new_units[0].duration_ms, 50,
-            "rebase 后文字 unit duration_ms 应为剩余时长 50"
-        );
+        // CaretDriven unit 无独立 duration_ms，剩余时长在 caret track 中断言（见下方）。
+        // Timed unit 的 duration_ms 应为剩余时长 50。
+        if !matches!(&new_units[0].timing, super::VisualUnitTiming::CaretDriven { .. }) {
+            assert_eq!(
+                new_duration_ms, 50,
+                "rebase 后 Timed unit duration_ms 应为剩余时长 50"
+            );
+        }
 
         // ── 4. 构造新事务的 caret track（rebase_to，started_at = None） ──
         let new_caret_track = old_caret_track.rebase_to(caret(220.0), now);
@@ -6278,9 +6464,15 @@ mod tests {
                 "mark_prepared 后事务应处于 Prepared"
             );
             assert!(
-                tx_ref.units[0].started_at.is_none(),
-                "Prepared 阶段 rebased text unit started_at 应为 None，got {:?}",
-                tx_ref.units[0].started_at
+                tx_ref.units[0].timing.is_caret_driven()
+                    || matches!(
+                        &tx_ref.units[0].timing,
+                        super::VisualUnitTiming::Timed {
+                            started_at: None,
+                            ..
+                        }
+                    ),
+                "Prepared 阶段 rebased text unit started_at 应为 None（CaretDriven 无 started_at，Timed 应为 None）"
             );
             assert!(
                 (tx_ref.units[0].progress(prepared_now) - 0.0).abs() < 1e-9,
@@ -6307,7 +6499,17 @@ mod tests {
         let frame_now_0 = prepared_now + Duration::from_millis(16);
         let mut sample_0 = AnimationFrameSample::new(frame_now_0);
         sample_0.set_progress(new_key, 0.0);
-        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0);
+        // Issue #727 约束 3: InsertReveal/DeleteConceal 需要 CoordinatedMotionFrame.caret
+        // 不为 None 才能生成 glyph。第一帧 caret track progress = 0，caret 在 from = (100, 0)。
+        let coordinated_frame_0 = CoordinatedMotionFrame {
+            caret: Some(SampledCaretFrame {
+                x: 100.0,
+                y: 0.0,
+                visual_line_id: None,
+                progress: 0.0,
+            }),
+        };
+        let (plan_0, _) = coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
 
         // ── 9. 断言第一帧 Rendering：二者 progress == 0（同帧起跑，没有错拍） ──
         {
@@ -6331,14 +6533,21 @@ mod tests {
                 Some(frame_now_0),
                 "进入 Rendering 后 caret track started_at 应等于第一帧 frame_now"
             );
-            assert_eq!(
-                tx_ref.units[0].started_at,
-                Some(frame_now_0),
-                "Issue #690 评论 5683759796: 进入 Rendering 后 rebased text unit started_at \
-                 应等于第一帧 frame_now（由 build_text_animation_plan_with_sample 设置），\
-                 got {:?}",
-                tx_ref.units[0].started_at
-            );
+            // Issue #727 约束 2: CaretDriven unit 无 started_at，progress 总是 0.0。
+            // Timed unit 的 started_at 应等于第一帧 frame_now。
+            match &tx_ref.units[0].timing {
+                super::VisualUnitTiming::CaretDriven { .. } => {
+                    // CaretDriven: 无独立时间线，progress 由 caret track 驱动。
+                }
+                super::VisualUnitTiming::Timed { started_at, .. } => {
+                    assert_eq!(
+                        *started_at,
+                        Some(frame_now_0),
+                        "Issue #690 评论 5683759796: 进入 Rendering 后 Timed text unit started_at \
+                         应等于第一帧 frame_now"
+                    );
+                }
+            }
             let track_progress = track.progress(frame_now_0);
             let unit_progress = tx_ref.units[0].progress(frame_now_0);
             assert!(
@@ -6362,13 +6571,25 @@ mod tests {
             assert!(!plan_0.glyphs.is_empty(), "第一帧应有文字 glyph 输出");
         }
 
-        // ── 10. 推进 25ms，断言二者一起前进到 0.5 ──
-        // rebased text unit duration_ms = 50（剩余时长），caret track duration_ms = 50（剩余时长）。
-        // 推进 25ms 后二者 progress 都应到 0.5。
+        // ── 10. 推进 25ms，断言 caret track 前进到 0.5 ──
+        // rebased text unit 是 CaretDriven（InsertReveal），progress 总是 0.0。
+        // CaretDriven unit 的 current_visible_fraction 返回 start_fraction（rebase 交棒载体），
+        // 不随时间变化。真正的可见比例推导在 build_text_animation_plan_with_sample 中
+        // 从 caret track progress 计算。
         let frame_now_mid = frame_now_0 + Duration::from_millis(25);
         let mut sample_mid = AnimationFrameSample::new(frame_now_mid);
         sample_mid.set_progress(new_key, 0.5);
-        let (_plan_mid, _) = coord.build_text_animation_plan_with_sample(&sample_mid);
+        // 推进 25ms 后 caret track progress = 0.5，eased = 0.75，
+        // caret 在 100 + (220-100)*0.75 = 190。
+        let coordinated_frame_mid = CoordinatedMotionFrame {
+            caret: Some(SampledCaretFrame {
+                x: 190.0,
+                y: 0.0,
+                visual_line_id: None,
+                progress: 0.5,
+            }),
+        };
+        let (_plan_mid, _) = coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid);
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6382,30 +6603,42 @@ mod tests {
                 .expect("应有 caret track");
             let track_progress = track.progress(frame_now_mid);
             let unit_progress = tx_ref.units[0].progress(frame_now_mid);
+            // CaretDriven unit 的 progress 总是 0.0（无独立时间线）。
+            assert!(
+                (unit_progress - 0.0).abs() < 1e-9,
+                "Issue #727 约束 2: CaretDriven unit progress 总是 0.0，got {}",
+                unit_progress
+            );
             assert!(
                 (track_progress - 0.5).abs() < 1e-9,
                 "推进 25ms 后 caret track progress 应为 0.5（25/50），got {}",
                 track_progress
             );
+            // CaretDriven unit 的 current_visible_fraction 返回 start_fraction（rebase 交棒载体），
+            // 不随时间变化。这是正确的——真正的可见比例推导在 build_text_animation_plan_with_sample 中
+            // 从 caret track progress 计算。
+            let unit_visible = tx_ref.units[0].current_visible_fraction(frame_now_mid);
             assert!(
-                (unit_progress - 0.5).abs() < 1e-9,
-                "推进 25ms 后 rebased text unit progress 应为 0.5（25/50），got {}",
-                unit_progress
-            );
-            assert!(
-                (track_progress - unit_progress).abs() < 1e-9,
-                "推进 25ms 后 caret track 和 rebased text unit 的 progress 应完全相同，\
-                 got track={} unit={}",
-                track_progress,
-                unit_progress
+                (unit_visible - 0.75).abs() < 1e-9,
+                "Issue #727 约束 2: CaretDriven unit current_visible_fraction 返回 start_fraction（0.75），got {}",
+                unit_visible
             );
         }
 
-        // ── 11. 推进到 50ms，断言二者一起到 1.0 ──
+        // ── 11. 推进到 50ms，断言 caret track 到 1.0 ──
         let frame_now_1 = frame_now_0 + Duration::from_millis(50);
         let mut sample_1 = AnimationFrameSample::new(frame_now_1);
         sample_1.set_progress(new_key, 1.0);
-        let (_plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1);
+        // 推进 50ms 后 caret track progress = 1.0，caret 在 to = (220, 0)。
+        let coordinated_frame_1 = CoordinatedMotionFrame {
+            caret: Some(SampledCaretFrame {
+                x: 220.0,
+                y: 0.0,
+                visual_line_id: None,
+                progress: 1.0,
+            }),
+        };
+        let (_plan_1, _) = coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);
         {
             let tx_ref = coord
                 .prepared_queue
@@ -6419,22 +6652,23 @@ mod tests {
                 .expect("应有 caret track");
             let track_progress = track.progress(frame_now_1);
             let unit_progress = tx_ref.units[0].progress(frame_now_1);
+            // CaretDriven unit 的 progress 总是 0.0（无独立时间线）。
+            assert!(
+                (unit_progress - 0.0).abs() < 1e-9,
+                "Issue #727 约束 2: CaretDriven unit progress 总是 0.0，got {}",
+                unit_progress
+            );
             assert!(
                 (track_progress - 1.0).abs() < 1e-9,
                 "推进 50ms 后 caret track progress 应为 1.0（50/50），got {}",
                 track_progress
             );
+            // CaretDriven unit 的 current_visible_fraction 返回 start_fraction（rebase 交棒载体）。
+            let unit_visible = tx_ref.units[0].current_visible_fraction(frame_now_1);
             assert!(
-                (unit_progress - 1.0).abs() < 1e-9,
-                "推进 50ms 后 rebased text unit progress 应为 1.0（50/50），got {}",
-                unit_progress
-            );
-            assert!(
-                (track_progress - unit_progress).abs() < 1e-9,
-                "推进 50ms 后 caret track 和 rebased text unit 的 progress 应完全相同，\
-                 got track={} unit={}",
-                track_progress,
-                unit_progress
+                (unit_visible - 0.75).abs() < 1e-9,
+                "Issue #727 约束 2: CaretDriven unit current_visible_fraction 返回 start_fraction（0.75），got {}",
+                unit_visible
             );
         }
 

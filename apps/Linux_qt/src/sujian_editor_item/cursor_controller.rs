@@ -62,8 +62,11 @@ pub enum CursorMoveSource {
 ///   非正文事务导致的逻辑 cursor 移动（鼠标点击、方向键、Home/End、拖选等）
 ///   会 bump 此 epoch；`PreparedTextVisualTransaction` 创建时记录当时的 epoch，
 ///   `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
-///   是否仍等于当前 epoch。epoch 不一致时，文字事务继续播自己的 glyph/reflow，
-///   但不再驱动 caret（caret 改由纯光标移动 / 鼠标目标驱动）。
+///   是否仍等于当前 epoch。
+///   Issue #727 约束 1: epoch 不一致后，这笔事务立刻失去 caret motion ownership；
+///   InsertReveal / DeleteConceal 同时结束到 canonical 最终状态，不再继续播放。
+///   ReflowMove / ReflowCrossFade 是否继续可以单独决定。
+///   即：caret ownership 丢失 = reveal/conceal ownership 同时丢失。
 pub struct CursorController {
     pub target_x: f64,
     pub target_y: f64,
@@ -121,10 +124,13 @@ impl CursorController {
     /// Issue #705 评论 5717380886: bump 光标所有权版本号。
     ///
     /// 由 `editing.rs::begin_manual_cursor_move()` 统一调用，标记一次"非正文事务
-    /// 导致的逻辑 cursor 积动"（鼠标点击、方向键、Home/End、拖选等）。之后
+    /// 导致的逻辑 cursor 移动"（鼠标点击、方向键、Home/End、拖选等）。之后
     /// `animation_coordinator` 在驱动 coordinated caret 前检查事务记录的 epoch
-    /// 是否仍等于当前 epoch，不一致则不驱动 caret（文字事务继续播自己的
-    /// glyph/reflow，但 caret 改由纯光标移动 / 鼠标目标驱动）。
+    /// 是否仍等于当前 epoch。
+    ///
+    /// Issue #727 约束 1: epoch 不一致后，这笔事务立刻失去 caret motion ownership；
+    /// InsertReveal / DeleteConceal 同时结束到 canonical 最终状态，不再继续播放。
+    /// 即：caret ownership 丢失 = reveal/conceal ownership 同时丢失。
     ///
     /// 使用 `wrapping_add` 避免 overflow panic（u64 在实际使用中不可能溢出，
     /// 但遵守 AGENTS.md "不用 unwrap/expect 代替错误处理" 的安全边界）。

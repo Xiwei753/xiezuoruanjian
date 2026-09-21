@@ -439,7 +439,6 @@ pub struct AppBackend {
     current_setting_smooth_cursor_enabled: bool,
     current_setting_typing_animation_duration_ms: u32,
     current_setting_smooth_cursor_duration_ms: u32,
-    current_setting_coordinated_text_cursor_animation_enabled: bool,
     pub(crate) current_system_is_dark: bool,
     // alpha 阶段 diagnostics 默认 true（与 core settings 和 diagnostics 全局 AtomicBool 对齐）
     pub(crate) current_setting_diagnostics_enabled: bool,
@@ -519,8 +518,6 @@ impl AppBackend {
         s.setting_typing_animation_enabled = self.current_setting_typing_animation_enabled;
         s.setting_smooth_cursor_duration_ms = self.current_setting_smooth_cursor_duration_ms;
         s.setting_typing_animation_duration_ms = self.current_setting_typing_animation_duration_ms;
-        s.setting_coordinated_text_cursor_animation_enabled =
-            self.current_setting_coordinated_text_cursor_animation_enabled;
         s.has_workspace = self.current_has_data_root;
         s.sync_enabled = self.current_sync_enabled;
         s.sync_auto_sync = self.current_sync_auto_sync;

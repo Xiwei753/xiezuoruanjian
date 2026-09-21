@@ -308,8 +308,6 @@ pub struct SujianEditorItem {
     #[allow(dead_code)]
     typing_animation_duration_ms: qt_property!(u32; READ typing_animation_duration_ms WRITE set_typing_animation_duration_ms NOTIFY visual_settings_changed),
     #[allow(dead_code)]
-    coordinated_text_cursor_animation_enabled: qt_property!(bool; READ coordinated_text_cursor_animation_enabled WRITE set_coordinated_text_cursor_animation_enabled NOTIFY visual_settings_changed),
-    #[allow(dead_code)]
     last_transaction_summary: qt_property!(QString; READ last_transaction_summary NOTIFY transaction_created),
     #[allow(dead_code)]
     last_animation_event_count: qt_property!(u32; READ last_animation_event_count NOTIFY transaction_created),
@@ -493,7 +491,6 @@ pub struct SujianEditorItem {
     current_cursor_animation_duration_ms: u32,
     current_typing_animation_enabled: bool,
     current_typing_animation_duration_ms: u32,
-    current_coordinated_text_cursor_animation_enabled: bool,
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
@@ -571,7 +568,6 @@ impl Default for SujianEditorItem {
             cursor_animation_duration_ms: Default::default(),
             typing_animation_enabled: Default::default(),
             typing_animation_duration_ms: Default::default(),
-            coordinated_text_cursor_animation_enabled: Default::default(),
             last_transaction_summary: Default::default(),
             last_animation_event_count: Default::default(),
             scroll_y: Default::default(),
@@ -670,7 +666,6 @@ impl Default for SujianEditorItem {
             current_cursor_animation_duration_ms: 120,
             current_typing_animation_enabled: true,
             current_typing_animation_duration_ms: 160,
-            current_coordinated_text_cursor_animation_enabled: true,
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,

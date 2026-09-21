@@ -188,7 +188,6 @@ impl QQuickItem for SujianEditorItem {
                     cursor_style,
                     selection_preedit_style,
                     frame_now,
-                    self.current_coordinated_text_cursor_animation_enabled,
                     self.cursor_ctrl.animation.as_ref(),
                     self.cursor_ctrl.cursor_owner_epoch,
                     scroll_y,

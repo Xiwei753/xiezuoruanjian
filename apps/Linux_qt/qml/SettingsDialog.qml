@@ -75,21 +75,7 @@ Dialog {
         autoSave.checked = backendRef.setting_auto_save_enabled
         typingAnim.checked = backendRef.setting_typing_animation_enabled
         smoothCursor.checked = backendRef.setting_smooth_cursor_enabled
-        coordinatedCursorAnim.checked = backendRef.setting_coordinated_text_cursor_animation_enabled
-        // 兜底：协同动画开启时，底层 typing/smooth 必须也开（修复旧配置坏状态）
-        var coordinatedFixed = false
-        if (coordinatedCursorAnim.checked) {
-            if (!typingAnim.checked) {
-                backendRef.setting_typing_animation_enabled = true
-                typingAnim.checked = true
-                coordinatedFixed = true
-            }
-            if (!smoothCursor.checked) {
-                backendRef.setting_smooth_cursor_enabled = true
-                smoothCursor.checked = true
-                coordinatedFixed = true
-            }
-        }
+        // 协同光标动画已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动
         aiSwitch.checked = backendRef.ai_enabled
         autoSaveDelay.value = backendRef.setting_auto_save_delay_ms / 1000.0
         fontSizeSlider.value = backendRef.setting_font_size || 16.0
@@ -98,16 +84,6 @@ Dialog {
         autoIndentWidth.value = backendRef.setting_auto_indent_width || 2.0
         typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms || 100
         smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms || 80
-        // 协同开启时，统一使用 typing duration 并同步 smooth duration
-        var coordDur = backendRef.setting_typing_animation_duration_ms || 100
-        coordinatedDuration.value = coordDur
-        if (coordinatedCursorAnim.checked) {
-            // 确保 smooth cursor duration 与 typing duration 一致
-            if (Math.abs((backendRef.setting_smooth_cursor_duration_ms || 80) - coordDur) > 1) {
-                backendRef.setting_smooth_cursor_duration_ms = coordDur
-                smoothCursorDuration.value = coordDur
-            }
-        }
         var mode = themeControllerRef ? themeControllerRef.appearance_mode : "system"
         themeCombo.currentIndex = mode === "light" ? 1 : (mode === "dark" ? 2 : 0)
         // Issue #701 评论 5702675971: colorSourceCombo / builtinThemeCombo /
@@ -156,15 +132,10 @@ Dialog {
             backendRef.setting_font_size = fontSizeSlider.value
             backendRef.setting_line_spacing = lineSpacingSlider.value
             backendRef.setting_auto_indent_width = autoIndentWidth.value
-            backendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
-            if (coordinatedCursorAnim.checked) {
-                backendRef.setting_typing_animation_duration_ms = coordinatedDuration.value
-                backendRef.setting_smooth_cursor_duration_ms = coordinatedDuration.value
-            } else {
-                backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
-                backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
-            }
-            root.settingsDirty = true
+        backendRef.setting_auto_save_delay_ms = autoSaveDelay.value * 1000
+        backendRef.setting_typing_animation_duration_ms = typingAnimDuration.value
+        backendRef.setting_smooth_cursor_duration_ms = smoothCursorDuration.value
+        root.settingsDirty = true
         }
         flushSave()
     }
@@ -362,7 +333,6 @@ Dialog {
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_auto_indent_width = value; root.debouncedSave() }
                 }
                 SettingsRow {
-                    visible: !coordinatedCursorAnim.checked
                     dt: root.dt
                     title: qsTr("打字动画")
                     description: qsTr("输入时字符从光标处吐出")
@@ -372,7 +342,6 @@ Dialog {
                 }
                 AppSlider {
                     id: typingAnimDuration
-                    visible: !coordinatedCursorAnim.checked
                     Layout.fillWidth: true
                     dt: root.dt
                     label: qsTr("打字动画持续时间")
@@ -385,7 +354,6 @@ Dialog {
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_typing_animation_duration_ms = value; root.debouncedSave() }
                 }
                 SettingsRow {
-                    visible: !coordinatedCursorAnim.checked
                     dt: root.dt
                     title: qsTr("平滑光标")
                     description: qsTr("光标移动更顺滑")
@@ -395,7 +363,6 @@ Dialog {
                 }
                 AppSlider {
                     id: smoothCursorDuration
-                    visible: !coordinatedCursorAnim.checked
                     Layout.fillWidth: true
                     dt: root.dt
                     label: qsTr("平滑光标持续时间")
@@ -407,61 +374,7 @@ Dialog {
                     onMoved: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value }
                     onCommitted: function() { if (!backendRef || root.updatingValues) return; backendRef.setting_smooth_cursor_duration_ms = value; root.debouncedSave() }
                 }
-                SettingsRow {
-                    dt: root.dt
-                    title: qsTr("协同光标动画")
-                    description: qsTr("光标与吐字动画协同移动")
-                    clickable: true
-                    onClicked: root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", !coordinatedCursorAnim.checked)
-                    ModernSwitch { id: coordinatedCursorAnim; dt: root.dt; onToggled: function(v) {
-                        root.setSwitchValue(coordinatedCursorAnim, "setting_coordinated_text_cursor_animation_enabled", v)
-                        // 开启协同时强制启用打字动画和平滑光标，并同步时长
-                        if (v && backendRef && !root.updatingValues) {
-                            backendRef.setting_typing_animation_enabled = true
-                            backendRef.setting_smooth_cursor_enabled = true
-                            typingAnim.checked = true
-                            smoothCursor.checked = true
-                            // 同步 smooth duration 为 typing duration，确保一致
-                            var dur = backendRef.setting_typing_animation_duration_ms || 100
-                            backendRef.setting_smooth_cursor_duration_ms = dur
-                            coordinatedDuration.value = dur
-                            smoothCursorDuration.value = dur
-                            root.settingsDirty = true
-                            root.debouncedSave()
-                        } else if (!v && backendRef && !root.updatingValues) {
-                            // 关闭协同时，同步独立滑条的值为后端当前值
-                            typingAnimDuration.value = backendRef.setting_typing_animation_duration_ms
-                            smoothCursorDuration.value = backendRef.setting_smooth_cursor_duration_ms
-                        }
-                    } }
-                }
-                // 协同模式下的整体动画时长滑条
-                AppSlider {
-                    id: coordinatedDuration
-                    visible: coordinatedCursorAnim.checked
-                    Layout.fillWidth: true
-                    dt: root.dt
-                    label: qsTr("整体动画时长")
-                    valueText: Math.round(value) + " ms"
-                    from: 30
-                    to: 1000
-                    stepSize: 10
-                    onMoved: function() {
-                        if (!backendRef || root.updatingValues) return
-                        backendRef.setting_typing_animation_duration_ms = value
-                        backendRef.setting_smooth_cursor_duration_ms = value
-                        typingAnimDuration.value = value
-                        smoothCursorDuration.value = value
-                    }
-                    onCommitted: function() {
-                        if (!backendRef || root.updatingValues) return
-                        backendRef.setting_typing_animation_duration_ms = value
-                        backendRef.setting_smooth_cursor_duration_ms = value
-                        typingAnimDuration.value = value
-                        smoothCursorDuration.value = value
-                        root.debouncedSave()
-                    }
-                }
+                // 协同光标动画开关已删除（Issue #727 约束 6）：吞吐字由 caret motion 唯一驱动，不再有独立开关
             }
 
             // ── 3. 保存和同步 (save + sync) ──

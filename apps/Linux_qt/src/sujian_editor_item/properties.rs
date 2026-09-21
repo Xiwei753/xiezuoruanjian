@@ -274,6 +274,10 @@ impl SujianEditorItem {
         }
         self.current_smooth_cursor_enabled = value;
         if !value {
+            // Issue #727 约束 8: 清 caret animation 时文字也同步 Snap。
+            // smooth cursor 关闭后不再创建新事务（约束 5），现有 CaretDriven 事务
+            // 依赖 caret motion track，必须同步结束到 canonical 状态。
+            self.clear_active_text_animations();
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
@@ -331,18 +335,6 @@ impl SujianEditorItem {
         self.visual_settings_changed();
     }
 
-    pub(crate) fn coordinated_text_cursor_animation_enabled(&self) -> bool {
-        self.current_coordinated_text_cursor_animation_enabled
-    }
-
-    pub(crate) fn set_coordinated_text_cursor_animation_enabled(&mut self, value: bool) {
-        if self.current_coordinated_text_cursor_animation_enabled == value {
-            return;
-        }
-        self.current_coordinated_text_cursor_animation_enabled = value;
-        self.visual_settings_changed();
-    }
-
     pub(crate) fn scroll_y(&self) -> f32 {
         self.current_scroll_y
     }
@@ -374,6 +366,10 @@ impl SujianEditorItem {
             return;
         }
         self.current_viewport_height = value;
+        // Issue #727 约束 8: 清 caret animation 时文字也同步 Snap。
+        // viewport 变化可能改变 caret 位置和 in_viewport 判定，
+        // CaretDriven 事务依赖的 caret geometry 已失效，必须同步结束到 canonical 状态。
+        self.clear_active_text_animations();
         self.cursor_ctrl.animation = None;
         self.cursor_ctrl.force_snap_next = true;
         self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::LayoutChange;
@@ -394,7 +390,19 @@ impl SujianEditorItem {
             // Issue #724 评论 5752398265: 真正用户滚动开始时取消 auto-follow anchor。
             // 否则用户在 auto-follow 尚未释放时手动滚轮/拖滚动条，anchor 仍可能继续存在。
             self.current_auto_follow_anchor = None;
-            self.pipeline.animation_coordinator_mut().pause_all();
+            // Issue #727 约束 7: pause_all 现在先完成 CaretDriven 事务（InsertReveal/
+            // DeleteConceal）到 canonical 状态，再 pause Timed 事务（Reflow）。
+            // 滚动终止 caret motion track 时，CaretDriven 事务不能只 pause——
+            // resume 时 caret track 已不存在，数据依赖链断裂。
+            let freed_snapshot_ids = self.pipeline.animation_coordinator_mut().pause_all();
+            // 完成的事务释放了 texture，需要清理对应的 texture cache。
+            if !freed_snapshot_ids.is_empty() {
+                self.pipeline.texture_cache_mut().clear();
+                self.pipeline.set_current_layout_snapshot(None);
+                self.pipeline.set_previous_layout_snapshot(None);
+                self.pipeline.set_previous_canonical_snapshot(None);
+                self.request_scene_rebuild();
+            }
             self.cursor_ctrl.animation = None;
             self.cursor_ctrl.force_snap_next = true;
             self.cursor_ctrl.last_move_source = cursor_controller::CursorMoveSource::Scroll;
@@ -636,15 +644,16 @@ impl SujianEditorItem {
     /// 之前 `tick_cursor_animation` / `build_cursor_render_state_for_frame` /
     /// `cursor_blink_opacity` / 边沿 reset 各自判断 blink 是否抑制，且判断条件
     /// 不一致：tick 用 `has_active_text_transaction() || has_cursor_only_tween`，
-    /// render/opacity 用 `has_active_insert()`。快速鼠标点击时只有 CursorOnly
+    /// render 用 `has_active_insert()`。快速鼠标点击时只有 CursorOnly
     /// Tween（无 Insert 事务），tick 认为 Suppressed（常亮），render 认为 Normal
     ///（正常 blink），opacity 可能为 0 → 光标消失。
     ///
     /// 现在统一为这一个 `&self` 方法，四处消费同一个结果：
     /// - CursorOnly Tween active（`cursor_ctrl.animation.is_some()`）→ Suppressed
-    /// - 当前 epoch 下正文视觉事务 active（`has_active_text_transaction()`，
-    ///   且 `current_coordinated_text_cursor_animation_enabled`）→ Suppressed
+    /// - 当前 epoch 下正文视觉事务 active（`has_active_text_transaction()`）→ Suppressed
     /// - idle → Normal
+    /// Issue #727 约束 6: 删除 coordinated_text_cursor_animation_enabled 独立开关，
+    /// 是否有吞吐字直接由"本帧有没有有效 caret motion"决定。
     pub(crate) fn current_cursor_blink_mode(&self) -> super::cursor_animation::CursorBlinkMode {
         use super::cursor_animation::CursorBlinkMode;
         let has_active_text = self
@@ -652,9 +661,7 @@ impl SujianEditorItem {
             .animation_coordinator()
             .has_active_text_transaction();
         let has_cursor_only_tween = self.cursor_ctrl.animation.is_some();
-        if (self.current_coordinated_text_cursor_animation_enabled && has_active_text)
-            || has_cursor_only_tween
-        {
+        if has_active_text || has_cursor_only_tween {
             CursorBlinkMode::Suppressed
         } else {
             CursorBlinkMode::Normal
