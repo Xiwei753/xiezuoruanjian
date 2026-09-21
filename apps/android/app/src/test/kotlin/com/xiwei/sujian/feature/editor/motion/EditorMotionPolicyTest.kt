@@ -39,8 +39,9 @@ class EditorMotionPolicyTest {
 
     @Test
     fun effectiveIsIdentityWhenReduceMotionFalse() {
-        // Issue #723 评论 5749023316 缺口2：coordinated=false 时 effective() 才是 identity。
-        // coordinated=true 时 effective() 会强制 textEnabled=true（归一旧持久化状态）。
+        // Issue #732 评论 5763493968 第4节：coordinated=true 时 effective() 也是 identity。
+        // coordinated 本身就是完整模式，不靠改 textEnabled/cursorEnabled 才成立。
+        // effective() 只在 reduceMotion=true 时降级，其余情况直接返回 this。
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
@@ -52,11 +53,12 @@ class EditorMotionPolicyTest {
     }
 
     @Test
-    fun coordinatedTrueForcesTextEnabled() {
-        // Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制
-        // textEnabled=true，收死旧持久化状态
-        // （coordinated=true 但 textEnabled=false）。
-        // Issue #728：coordinated=true 也强制 cursorEnabled=true。
+    fun coordinatedTrueIsIdentity_preservesUserSettings() {
+        // Issue #732 评论 5763493968 第4节：coordinated=true 时 effective() 直接返回 this，
+        // 不再强制 textEnabled=true / cursorEnabled=true。
+        // Issue #732 评论 5764716281 硬问题1：raw 字段可以保留 false，但 coordinated 的运行时
+        // 派生结果仍然启用完整协同 motion — 即 textAnimationEnabledForEdit == true 和
+        // cursorAnimationEnabledForEdit == true。
         val legacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
@@ -65,9 +67,25 @@ class EditorMotionPolicyTest {
                 reduceMotion = false,
             )
         val effective = legacyPolicy.effective()
-        assertTrue("coordinated=true → effective() 强制 textEnabled=true", effective.textEnabled)
-        assertTrue("coordinated=true → effective() 强制 cursorEnabled=true", effective.cursorEnabled)
-        assertTrue("coordinated 标记保持 true", effective.coordinated)
+        // raw 字段保留 false（不靠改 raw 字段才成立协同）
+        assertFalse("coordinated=true → effective() 保持 textEnabled=false（raw 不归一）", effective.textEnabled)
+        assertFalse("coordinated=true → effective() 保持 cursorEnabled=false（raw 不归一）", effective.cursorEnabled)
+        assertTrue("协同标记保持 true", effective.coordinated)
+        // 派生值：coordinated=true && !reduceMotion → 一律 true（完整协同 motion 启用）
+        assertTrue(
+            "coordinated=true → textAnimationEnabledForEdit == true（派生值启用完整协同 motion）",
+            effective.textAnimationEnabledForEdit,
+        )
+        assertTrue(
+            "coordinated=true → cursorAnimationEnabledForEdit == true（派生值启用完整协同 motion）",
+            effective.cursorAnimationEnabledForEdit,
+        )
+        // selection-only 光标移动时长：coordinated 模式下用 textDurationMillis
+        assertEquals(
+            "coordinated=true → selectionCursorDurationMillis == textDurationMillis",
+            effective.textDurationMillis,
+            effective.selectionCursorDurationMillis,
+        )
     }
 
     @Test

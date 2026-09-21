@@ -114,25 +114,13 @@ fun EditorSettingsContent(vm: SettingsViewModel) {
             title = stringResource(id = R.string.pref_editor_coordinated_animation),
             checked = coordinatedAnimationChecked,
             onCheckedChange = { c ->
-                // Issue #723 评论 5748592923：从关闭切到开启时，同时把
-                // editorTypingAnimationEnabled 归一为 true，
-                // 否则把开关藏掉以后，旧的 false 值仍会暗中把协同链拆掉。
-                if (c) {
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal {
-                            it.copy(
-                                editorCoordinatedTextCursorAnimationEnabled = true,
-                                editorTypingAnimationEnabled = true,
-                            )
-                        },
-                    )
-                } else {
-                    vm.handleIntent(
-                        SettingsIntent.UpdateLocal {
-                            it.copy(editorCoordinatedTextCursorAnimationEnabled = false)
-                        },
-                    )
-                }
+                // Issue #732 评论 5763493968 第4节：协同本身就是完整模式，
+                // 不能靠改另一个隐藏设置才能成立 — 只写 editorCoordinatedTextCursorAnimationEnabled。
+                vm.handleIntent(
+                    SettingsIntent.UpdateLocal {
+                        it.copy(editorCoordinatedTextCursorAnimationEnabled = c)
+                    },
+                )
             },
         )
         if (coordinatedAnimationChecked) {

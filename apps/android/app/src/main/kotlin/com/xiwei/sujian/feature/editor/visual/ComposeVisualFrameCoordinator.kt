@@ -4,7 +4,6 @@ import android.util.Log
 import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.cursorRect
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import uniffi.writer_core.AnimationModeDto
 
 /**
@@ -58,12 +57,11 @@ class ComposeVisualFrameCoordinator(
      * Core intent 到达 — 只串进 pending chain（连续才拼接，不连续不开硬拼），
      * 然后尝试合流生成 patch。
      *
-     * @param motionPolicy 本笔 intent 的 effective 动画策略 — 与 pending chain 同源。
+     * Issue #732 评论 5763493968 第2节：删除 motionPolicy 参数 —
+     * 本方法只负责"编辑事实 + old/new layout → patch"，不再决定当前该不该播放动画。
+     * 是否播放由 [ComposeEditorVisualState.drainPendingPatchesAtFrame] 的当前 effective policy 决定。
      */
-    fun onVisualIntent(
-        intent: EditorVisualIntent,
-        motionPolicy: EditorMotionPolicy,
-    ): FrameUpdate {
+    fun onVisualIntent(intent: EditorVisualIntent): FrameUpdate {
         val existing = pending
         if (existing == null) {
             pending =
@@ -71,7 +69,6 @@ class ComposeVisualFrameCoordinator(
                     baseText = intent.expectedOldText,
                     targetText = intent.expectedNewText,
                     intents = listOf(intent),
-                    motionPolicy = motionPolicy,
                 )
         } else {
             val lastExpectedNew = existing.intents.last().expectedNewText
@@ -80,7 +77,6 @@ class ComposeVisualFrameCoordinator(
                     existing.copy(
                         intents = existing.intents + intent,
                         targetText = intent.expectedNewText,
-                        motionPolicy = motionPolicy,
                     )
             } else {
                 pending =
@@ -88,7 +84,6 @@ class ComposeVisualFrameCoordinator(
                         baseText = intent.expectedOldText,
                         targetText = intent.expectedNewText,
                         intents = listOf(intent),
-                        motionPolicy = motionPolicy,
                     )
             }
         }
@@ -236,44 +231,31 @@ class ComposeVisualFrameCoordinator(
                 else -> TextVisualKind.Move
             }
 
-        val chainMotionPolicy = pendingChain.motionPolicy
-        val customAnimationEnabled = chainMotionPolicy.textEnabled && !screenSuppressed
-        val customTextAnimationEnabled =
-            customAnimationEnabled && transactionTextKind != TextVisualKind.None
-
-        val textAnimationActive = customTextAnimationEnabled
-
+        // Issue #732 评论 5763493968 第2节：coordinator 不再用 policy 筛 inserted/deleted units —
+        // 只负责"编辑事实 + old/new layout → patch"，是否播放由消费帧的 effective policy 决定。
         // insertedUnits / deletedUnits — Core 给出的 animation units 在 coordinator 构建 patch 时
         // 直接变成 insertedUnits / deletedUnits；真正运行到哪由 timeline 的每个 unit 自己保存时间。
         val composedOldAnimationUnits = ComposeVisualRebase.composeOldAnimationUnitsToBase(chain)
         val newAnimationUnits = ComposeVisualRebase.composeNewAnimationUnitsToFinal(chain)
 
         val insertedUnits =
-            if (textAnimationActive) {
-                when (transactionTextKind) {
-                    TextVisualKind.Insert,
-                    TextVisualKind.Move,
-                    -> if (newAnimationUnits.isNotEmpty()) newAnimationUnits else mergedNewRanges
-                    TextVisualKind.Delete,
-                    TextVisualKind.None,
-                    -> emptyList()
-                }
-            } else {
-                emptyList()
+            when (transactionTextKind) {
+                TextVisualKind.Insert,
+                TextVisualKind.Move,
+                -> if (newAnimationUnits.isNotEmpty()) newAnimationUnits else mergedNewRanges
+                TextVisualKind.Delete,
+                TextVisualKind.None,
+                -> emptyList()
             }
 
         val deletedUnits =
-            if (textAnimationActive) {
-                when (transactionTextKind) {
-                    TextVisualKind.Delete,
-                    TextVisualKind.Move,
-                    -> if (composedOldAnimationUnits.isNotEmpty()) composedOldAnimationUnits else mergedOldRanges
-                    TextVisualKind.Insert,
-                    TextVisualKind.None,
-                    -> emptyList()
-                }
-            } else {
-                emptyList()
+            when (transactionTextKind) {
+                TextVisualKind.Delete,
+                TextVisualKind.Move,
+                -> if (composedOldAnimationUnits.isNotEmpty()) composedOldAnimationUnits else mergedOldRanges
+                TextVisualKind.Insert,
+                TextVisualKind.None,
+                -> emptyList()
             }
 
         // Issue #728 评论 5754045689：一次性交出 caret rect + 文字 units —
@@ -284,13 +266,9 @@ class ComposeVisualFrameCoordinator(
         val originCaretRect = consumed.layout.cursorRect(oldSelectionEnd)
         val targetCaretRect = newest.layout.cursorRect(newSelectionEnd)
 
-        // #684 评论 5666730754：无 overlay 工作的事务不按 durationMs 假装 active。
-        val effectiveDurationMs =
-            if (!textAnimationActive) {
-                0L
-            } else {
-                lastIntent.durationMs
-            }
+        // Issue #732 评论 5763493968 第2节：durationMs 不再根据 textAnimationActive 设 0 —
+        // 是否播放由消费帧决定，coordinator 只保留 Core 建议时长。
+        val effectiveDurationMs = lastIntent.durationMs
 
         nextPatchId++
         val patch =
@@ -312,7 +290,6 @@ class ComposeVisualFrameCoordinator(
                     } else {
                         lastIntent.animationMode
                     },
-                motionPolicy = chainMotionPolicy,
                 intent = lastIntent,
             )
 
@@ -367,7 +344,6 @@ private data class PendingVisualChain(
     val baseText: String,
     val targetText: String,
     val intents: List<EditorVisualIntent>,
-    val motionPolicy: EditorMotionPolicy,
 )
 
 /**

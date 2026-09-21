@@ -7,7 +7,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -122,7 +121,6 @@ class ComposeVisualTransactionRestartReproTest {
                 newRange = TextRange(0, 4),
                 replaceBounds = VisualReplaceBounds(0, 0, 0, 4),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(4, 4), 0)
         val patchA = state.latestPatch.value
@@ -155,7 +153,6 @@ class ComposeVisualTransactionRestartReproTest {
                 expectedOldText = "ab\nc",
                 expectedNewText = "abc",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(3, 3), 0)
         val patchB = state.latestPatch.value
@@ -200,7 +197,6 @@ class ComposeVisualTransactionRestartReproTest {
                 newRange = TextRange(0, 3),
                 replaceBounds = VisualReplaceBounds(0, 0, 0, 3),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(3, 3), 0)
         val patch = state.latestPatch.value

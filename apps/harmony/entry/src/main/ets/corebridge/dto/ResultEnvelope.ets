@@ -54,5 +54,7 @@ export interface RecentEdit {
 
 export interface AppSummary {
   projects: Project[]
-  recentEdits: RecentEdit[]
+  // #732 评论第5节：首页契约 singular — 最近一次编辑（nullable）。
+  // Core 的 recent_edits.json 仍保留历史；getRecentEdits() 通用 API 不变。
+  recentEdit: RecentEdit | null
 }

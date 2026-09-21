@@ -70,7 +70,7 @@ fun WritingPane(
 
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    WritingPaneMotionPolicySync(coordinator, uiState.settings, chapterId)
+    WritingPaneMotionPolicySync(coordinator, uiState.settings)
     WritingPaneTypographySync(coordinator, uiState.settings)
     WritingPaneSettingsReload(viewModel, targetId)
 
@@ -170,11 +170,12 @@ private fun WritingPaneEditorContent(
                     )
                 }
 
-            // #691 评论 5679815971 问题1：统一设置同步入口 — 监听所有动画相关设置，
-            // 在帧边界组出完整 EditorMotionPolicy，调用 applyMotionPolicyAtFrame 一次性同步
-            // smooth cursor 所有权、timeline 收口、hiddenRanges、visualScene。
-            // 不再让 setSmoothCursorEnabled() 和 motion policy 走两套生命周期。
-            SetupMotionPolicySync(uiState.settings, visualState)
+            // #691 评论 5679815971 问题1 / Issue #732 评论 5763493968 第1节：
+            // 统一设置同步入口 — 设置 → EditorSessionCoordinator.motionPolicyFlow 唯一写入口
+            // 由 WritingPaneMotionPolicySync 完成；这里只把 coordinator 的 policy 流绑定到
+            // visualState（collect 一次 → updateMotionPolicy），不再并行调 applyMotionPolicyAtFrame。
+            // policy 切换、patch 消费、motion 创建全部走 EditorTextFieldDrawLayer 的同一只 frame clock。
+            BindMotionPolicyToVisualState(coordinator, visualState)
 
             SetupViewportSnapshot(targetId, viewportState, coordinator)
 
@@ -225,41 +226,6 @@ private fun WritingPaneEditorContent(
             if (previewState != null && previewState.text.isNotEmpty()) {
                 ReadonlyChapterPreview(previewState = previewState)
             }
-        }
-    }
-}
-
-/**
- * #691 评论 5679815971 问题1：统一设置同步入口 — 提取以降低 [WritingPaneEditorContent] 长度。
- *
- * 监听所有动画相关设置，在帧边界组出完整 EditorMotionPolicy，
- * 调用 applyMotionPolicyAtFrame 一次性同步 smooth cursor 所有权、timeline 收口、hiddenRanges、visualScene。
- * 不再让 setSmoothCursorEnabled() 和 motion policy 走两套生命周期。
- */
-@Composable
-private fun SetupMotionPolicySync(
-    settings: com.xiwei.sujian.feature.editor.presentation.EditorSettingsState,
-    visualState: ComposeEditorVisualState,
-) {
-    androidx.compose.runtime.LaunchedEffect(
-        settings.typingAnimationEnabled,
-        settings.typingAnimationDurationMs,
-        settings.smoothCursorEnabled,
-        settings.smoothCursorDurationMs,
-        settings.coordinatedTextCursorAnimationEnabled,
-        settings.reduceMotion,
-    ) {
-        androidx.compose.runtime.withFrameNanos { frameTimeNanos ->
-            visualState.applyMotionPolicyAtFrame(
-                com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy(
-                    textEnabled = settings.typingAnimationEnabled,
-                    textDurationMillis = settings.typingAnimationDurationMs,
-                    cursorEnabled = settings.smoothCursorEnabled,
-                    cursorDurationMillis = settings.smoothCursorDurationMs,
-                    coordinated = settings.coordinatedTextCursorAnimationEnabled,
-                    reduceMotion = settings.reduceMotion,
-                ),
-            )
         }
     }
 }

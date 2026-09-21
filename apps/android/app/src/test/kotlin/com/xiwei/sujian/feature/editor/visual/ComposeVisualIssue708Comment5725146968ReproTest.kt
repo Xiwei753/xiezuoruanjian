@@ -9,7 +9,6 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -131,7 +130,6 @@ class ComposeVisualIssue708Comment5725146968ReproTest {
         deletedUnits: List<TextRange> = emptyList(),
         retainedMoves: List<RetainedMove> = emptyList(),
         durationMs: Long = 100L,
-        motionPolicy: EditorMotionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
     ): ComposeVisualPatch =
         ComposeVisualPatch(
             id = id,
@@ -146,7 +144,6 @@ class ComposeVisualIssue708Comment5725146968ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-            motionPolicy = motionPolicy,
         )
 
     private fun captureLayouts(vararg texts: String): List<TextLayoutResult> = captureLayoutsWithWidth(texts, 1000)

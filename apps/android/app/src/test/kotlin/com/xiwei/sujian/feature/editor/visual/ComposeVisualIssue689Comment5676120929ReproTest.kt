@@ -62,21 +62,18 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
         visualState.onAuthoritativeLayout(aLayout.result, aLayout.selection, aLayout.scrollY)
         visualState.onVisualIntent(
             intent = makeIntent(1L, "", "a", insertedRanges = listOf(TextRange(0, 1))),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // "a" -> "ab"
         visualState.onAuthoritativeLayout(abLayout.result, abLayout.selection, abLayout.scrollY)
         visualState.onVisualIntent(
             intent = makeIntent(2L, "a", "ab", insertedRanges = listOf(TextRange(1, 2))),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // "ab" -> "abc"
         visualState.onAuthoritativeLayout(abcLayout.result, abcLayout.selection, abcLayout.scrollY)
         visualState.onVisualIntent(
             intent = makeIntent(3L, "ab", "abc", insertedRanges = listOf(TextRange(2, 3))),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // 验证：有三笔 patch 待消费
@@ -128,7 +125,11 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 newLayout = aLayout,
                 insertedUnits = listOf(TextRange(0, 1)),
             )
-        timeline.applyPatch(insertPatch, frameTimeNanos = 0L)
+        timeline.applyPatch(
+            insertPatch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // Step 2: 在 50% 位置（50ms 时）推进一次，获取当前位置
         val halfFrameTime = 50L * 1_000_000L
@@ -149,7 +150,11 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 offsetMap = null,
                 deletedUnits = listOf(TextRange(0, 1)),
             )
-        timeline.applyPatch(deletePatch, frameTimeNanos = halfFrameTime)
+        timeline.applyPatch(
+            deletePatch,
+            frameTimeNanos = halfFrameTime,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // Step 4: 转 ghost 后位置必须等于删除前的当前位置
         val ghostScene = timeline.sample(halfFrameTime)
@@ -194,7 +199,11 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 newLayout = aLayout,
                 insertedUnits = listOf(TextRange(0, 1)),
             )
-        timeline.applyPatch(insertPatch, frameTimeNanos = 0L)
+        timeline.applyPatch(
+            insertPatch,
+            frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // 在动画未完成时验证 unit 存在（50ms）
         val midFrameTime = 50L * 1_000_000L
@@ -250,7 +259,11 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
                 deletedUnits = listOf(TextRange(0, 1)),
                 intent = replaceIntent,
             )
-        timeline.applyPatch(replacePatch, frameTimeNanos = midFrameTime)
+        timeline.applyPatch(
+            replacePatch,
+            frameTimeNanos = midFrameTime,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L, coordinated = false),
+        )
 
         // Step 4: 验证结果 — 旧 "a" 应该转成 ghost，新 "b" 应该 inserted
         val resultScene = timeline.sample(midFrameTime)
@@ -314,7 +327,6 @@ class ComposeVisualIssue689Comment5676120929ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
             animationMode = AnimationModeDto.CLUSTER_ANIMATION,
-            motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs),
             intent = intent,
         )
 

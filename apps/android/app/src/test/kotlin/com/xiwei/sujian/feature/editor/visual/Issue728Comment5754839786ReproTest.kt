@@ -228,6 +228,7 @@ class Issue728Comment5754839786ReproTest {
                 coordinated = true,
             ),
             frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs, coordinated = true),
         )
         val motionSampleFinished =
             ComposeEditMotion.Sample(
@@ -257,6 +258,7 @@ class Issue728Comment5754839786ReproTest {
                 coordinated = true,
             ),
             frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs, coordinated = true),
         )
         val motionSampleMid =
             ComposeEditMotion.Sample(
@@ -308,6 +310,7 @@ class Issue728Comment5754839786ReproTest {
                 coordinated = true,
             ),
             frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs, coordinated = true),
         )
         // sample at midFrame — unit 不被移除（alpha 未到 1）
         timelineCoordinated.sample(frameTimeNanos = midFrame)
@@ -329,6 +332,7 @@ class Issue728Comment5754839786ReproTest {
                 coordinated = false,
             ),
             frameTimeNanos = 0L,
+            motionPolicy = EditorMotionPolicy(textDurationMillis = durationMs, coordinated = false),
         )
         // sample at midFrame — unit 不被移除（alpha 未到 1）
         timelineNonCoordinated.sample(frameTimeNanos = midFrame)
@@ -362,12 +366,6 @@ class Issue728Comment5754839786ReproTest {
         durationMs: Long = 100L,
         coordinated: Boolean = true,
     ): ComposeVisualPatch {
-        val policy =
-            EditorMotionPolicy(
-                textEnabled = true,
-                textDurationMillis = durationMs,
-                coordinated = coordinated,
-            )
         return ComposeVisualPatch(
             id = id,
             coreTransactionIds = listOf(id),
@@ -381,7 +379,6 @@ class Issue728Comment5754839786ReproTest {
             targetCaretRect = Rect.Zero,
             durationMs = durationMs,
             animationMode = AnimationModeDto.GLYPH_ANIMATION,
-            motionPolicy = policy,
         )
     }
 

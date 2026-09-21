@@ -7,7 +7,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -75,7 +74,6 @@ class ComposeVisualIssue694ReproTest {
                 newRange = TextRange(0, 1),
                 replaceBounds = VisualReplaceBounds(0, 0, 0, 1),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         val patchA = state.latestPatch.value
@@ -96,7 +94,6 @@ class ComposeVisualIssue694ReproTest {
                         entries = listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY)),
                     ),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
         val patchB = state.latestPatch.value
@@ -117,7 +114,6 @@ class ComposeVisualIssue694ReproTest {
                         entries = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY)),
                     ),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[3], TextRange(3, 3), 0)
         val patchC = state.latestPatch.value
@@ -180,7 +176,6 @@ class ComposeVisualIssue694ReproTest {
                 newRange = TextRange(0, 1),
                 replaceBounds = VisualReplaceBounds(0, 0, 0, 1),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[1], TextRange(1, 1), 0)
         state.onVisualIntent(
@@ -197,7 +192,6 @@ class ComposeVisualIssue694ReproTest {
                         entries = listOf(VisualOffsetMapEntry(0, 0, 1, VisualOffsetMapKind.IDENTITY)),
                     ),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(2, 2), 0)
         state.onVisualIntent(
@@ -214,7 +208,6 @@ class ComposeVisualIssue694ReproTest {
                         entries = listOf(VisualOffsetMapEntry(0, 0, 2, VisualOffsetMapKind.IDENTITY)),
                     ),
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[3], TextRange(3, 3), 0)
 

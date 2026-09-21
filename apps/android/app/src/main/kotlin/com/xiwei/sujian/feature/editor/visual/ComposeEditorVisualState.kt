@@ -74,7 +74,7 @@ class ComposeEditorVisualState(
      * Issue #728 评论 5754839786 缺口2：静止 caret rect —
      * 无 active motion 时（纯 selection 移动 / 静止 / 动画完成）屏幕 caret 应停留的位置。
      *
-     * 背景：#725 把系统 caret 设成透明后，"静止光标"和"纯 selection 移动"没有闭环 —
+     * 背景：#728 把系统 caret 设成透明后，"静止光标"和"纯 selection 移动"没有闭环 —
      * [sampleVisualScene] 在 motion finished 后把 [activeEditMotion] 置 null，
      * [ComposeEditorDrawSnapshot.caretRect] 随之变 null，draw 层不画 caret，屏幕 caret 消失。
      * 本字段收成单一状态：onAuthoritativeLayout / onInputSnapshotResolved / publishLocalHandoffScene
@@ -126,8 +126,8 @@ class ComposeEditorVisualState(
      */
     private var nextPendingSequence: Long = 0L
 
-    private val _patchVersion = MutableStateFlow(0L)
-    val patchVersion: StateFlow<Long> = _patchVersion.asStateFlow()
+    private val _frameRequestVersion = MutableStateFlow(0L)
+    val frameRequestVersion: StateFlow<Long> = _frameRequestVersion.asStateFlow()
 
     /**
      * 最新生成的 patch — 仅保留给日志/调试使用，timeline 输入不再依赖它。
@@ -136,13 +136,19 @@ class ComposeEditorVisualState(
     val latestPatch: StateFlow<ComposeVisualPatch?> = _latestPatch.asStateFlow()
 
     /**
-     * #691 评论 5679242735 修改2：运行时 policy 切换的最新 effective policy。
+     * Issue #732 评论 5763493968 第3节：当前 effective policy — 非 nullable，初始值 [EditorMotionPolicy]。
      *
-     * 非 null 时，[drainPendingPatchesAtFrame] 会把已入队 patch 的 motionPolicy 替换成它，
-     * 防止旧 patch 带着原来的 insertedUnits/deletedUnits/retainedMoves 再进入 timeline
-     * 把文字动画重新启动（用户已关闭文字动画或打开 reduce-motion）。
+     * [drainPendingPatchesAtFrame] 开头先应用 [pendingMotionPolicy]（如果有），
+     * 然后再 drain patch、更新 timeline、创建/redirect [ComposeEditMotion]。
+     * policy 切换、patch 消费、motion 创建全部进同一只 frame clock。
      */
-    private var currentMotionPolicy: EditorMotionPolicy? = null
+    private var currentMotionPolicy: EditorMotionPolicy = EditorMotionPolicy()
+
+    /**
+     * Issue #732 评论 5763493968 第3节：pending policy — [updateMotionPolicy] 只写此字段，
+     * [drainPendingPatchesAtFrame] 开头应用（currentMotionPolicy = pendingMotionPolicy; pendingMotionPolicy = null）。
+     */
+    private var pendingMotionPolicy: EditorMotionPolicy? = null
 
     /**
      * Issue #720 评论 5747339452：测试用 override — 非 null 时 [buildLocalInputPatch] 生成的
@@ -296,14 +302,14 @@ class ComposeEditorVisualState(
     /**
      * Core 视觉意图到达 — 只把 intent 交给 frameCoordinator，不启动动画、不改 layout。
      *
+     * Issue #732 评论 5763493968 第2节：删除 motionPolicy 参数 —
+     * policy 由 [BindMotionPolicyToVisualState] 统一绑定到 [updateMotionPolicy]，
+     * [drainPendingPatchesAtFrame] 在帧开头应用 pending policy 后才消费 patch。
+     *
      * @param intent Core 视觉意图。
-     * @param motionPolicy 动画策略 — 传入前先 effective() 收口 reduce-motion。
      */
-    fun onVisualIntent(
-        intent: EditorVisualIntent,
-        motionPolicy: EditorMotionPolicy,
-    ) {
-        val update = frameCoordinator.onVisualIntent(intent, motionPolicy.effective())
+    fun onVisualIntent(intent: EditorVisualIntent) {
+        val update = frameCoordinator.onVisualIntent(intent)
         applyFrameUpdate(update)
     }
 
@@ -467,15 +473,15 @@ class ComposeEditorVisualState(
             val originCaret =
                 restingCaretRect
                     ?: layout.cursorRect(lastResolvedSelection?.end ?: snapshot.selection.start)
-            val policy = currentMotionPolicy?.effective() ?: EditorMotionPolicy().effective()
-            if (policy.cursorEnabled && policy.cursorDurationMillis > 0L) {
+            val policy = currentMotionPolicy.effective()
+            if (policy.cursorAnimationEnabledForEdit && policy.selectionCursorDurationMillis > 0L) {
                 // 有平滑光标：记录 pending target，等真实 frameTime 创建 motion
                 pendingSelectionCaretTarget =
                     PendingSelectionCaretMove(
                         originCaretRect = originCaret,
                         targetCaretRect = targetCaret,
                     )
-                _patchVersion.update { it + 1L }
+                _frameRequestVersion.update { it + 1L }
             } else {
                 // cursor 动画关闭：直接跳到 target
                 restingCaretRect = targetCaret
@@ -609,7 +615,7 @@ class ComposeEditorVisualState(
                 remainingGhostKeys.add(ghostKey)
             }
 
-            // Issue #725 评论 5750735497：停止自绘屏幕 caret —
+            // Issue #728 评论 5754045689：系统 caret 已透明，可见 caret 由 EditorTextFieldDrawLayer 画 —
             // 不再计算 handoffCursorRect / handoffCursor，clipFraction 改由 alpha 通道直接驱动。
             // rebasedClipFractions 只继承 rebase 阶段记录的真实首帧 fraction 和 remaining delete ghost 的 fraction=1。
             val rebasedClipFractions =
@@ -636,10 +642,11 @@ class ComposeEditorVisualState(
                 hiddenRanges = mergedHidden,
                 units = rebasedUnits,
                 unitClipFractions = rebasedClipFractions,
-                // Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算。
+                // Issue #732 评论 5763493968 第4节：coordinatedSpatialClip 不再从旧 patch policy
+                // 保存成 timeline 状态，而是由当前 effective policy + 当前 motion sample 导出。
+                // handoff scene 用当前 currentMotionPolicy 导出（drain 时会用最新 policy 覆盖）。
                 coordinatedSpatialClip =
-                    patch.motionPolicy.effective().textEnabled &&
-                        patch.motionPolicy.effective().coordinated,
+                    currentMotionPolicy.effective().let { it.textAnimationEnabledForEdit && it.coordinated },
             )
         }
         // 同步把首帧 scene 写进 draw snapshot — draw 层下一帧 drawWithContent 直接读
@@ -698,7 +705,7 @@ class ComposeEditorVisualState(
                 val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
                 if (localPatch != null) {
                     // #708 评论 5724568261 缺口1：composition 最终提交路径也发布局部首帧 scene —
-                    // 不再只做 addLast + patchVersion + bindLocalPatchHandoff（旧 bindLocalPatchHandoff
+                    // 不再只做 addLast + frameRequestVersion + bindLocalPatchHandoff（旧 bindLocalPatchHandoff
                     // 因 pendingLocalEditHandoff 从未被建立只走 Log.w，首帧 scene 从未发布）。
                     // 现在统一调 publishLocalHandoffScene，让中文 composition commit 后 local timeline
                     // 立即接管，不出现"最终字先裸画一帧 -> 动画再接手"的窗口。
@@ -708,7 +715,7 @@ class ComposeEditorVisualState(
                         newLayout = finalLayout,
                     )
                     pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
-                    _patchVersion.update { it + 1L }
+                    _frameRequestVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                 }
             }
@@ -768,10 +775,9 @@ class ComposeEditorVisualState(
                 else -> TextVisualKind.Move
             }
 
-        val motionPolicy = (currentMotionPolicy ?: EditorMotionPolicy()).effective()
-        val customTextAnimationEnabled =
-            motionPolicy.textEnabled && transactionTextKind != TextVisualKind.None
-
+        // Issue #732 评论 5763493968 第2节：buildLocalInputPatch 不再读 currentMotionPolicy —
+        // 本地输入和 Core/external 输入都生成同一种事实 patch（inserted/deleted units 总是合成），
+        // 是否播放由 [drainPendingPatchesAtFrame] 的当前 effective policy 决定。
         // #694 评论 5691696678 问题3：insertedUnits/deletedUnits 用通用 stage-map 版本合成，
         // 保留多字符吐字顺序（a/b/c 三个 unit 而非单个 [0,3)）。
         // 每笔 edit 的 insertedUnits/deletedUnits 从该笔 stage offset map 补集算，
@@ -784,72 +790,58 @@ class ComposeEditorVisualState(
         // 不再硬编码 CLUSTER_ANIMATION，不再按 UTF-16 +1 硬切。
         // #694 评论 5693864609 问题3：通过注入的 [LocalVisualPlanClassifier] 调用，
         // 生产用 Core，测试用 fake（绕过 Robolectric 原生库加载）。
+        // Issue #732 评论 5763493968 第2节：animationEnabled 传 true —
+        // classifier 总是切分 units，是否播放由消费帧决定。
         val corePlan =
             classifier.classify(
                 oldText = oldText,
                 newText = newText,
                 oldAffectedRanges = changedRanges.oldRanges,
                 newAffectedRanges = changedRanges.newRanges,
-                animationEnabled = customTextAnimationEnabled,
+                animationEnabled = true,
             )
         val planAnimationMode = corePlan.animationMode
         val planInsertedUnits =
-            if (customTextAnimationEnabled) {
-                ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
-            } else {
-                emptyList()
-            }
+            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(newText, corePlan.newAnimationUnits)
         val planDeletedUnits =
-            if (customTextAnimationEnabled) {
-                ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
-            } else {
-                emptyList()
-            }
+            ComposeLocalVisualRebase.utf16AnimationUnitsFromPlan(oldText, corePlan.oldAnimationUnits)
 
         val insertedUnits =
-            if (customTextAnimationEnabled) {
-                when (transactionTextKind) {
-                    TextVisualKind.Insert, TextVisualKind.Move -> {
-                        // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
-                        // orderedStageRanges = composedInserted（local chain 的时间顺序）。
-                        val orderedStageRanges = composedInserted
-                        if (planInsertedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
-                            ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planInsertedUnits, orderedStageRanges)
-                        } else if (planInsertedUnits.isNotEmpty()) {
-                            planInsertedUnits
-                        } else if (orderedStageRanges.isNotEmpty()) {
-                            orderedStageRanges
-                        } else {
-                            changedRanges.newRanges
-                        }
+            when (transactionTextKind) {
+                TextVisualKind.Insert, TextVisualKind.Move -> {
+                    // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
+                    // orderedStageRanges = composedInserted（local chain 的时间顺序）。
+                    val orderedStageRanges = composedInserted
+                    if (planInsertedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
+                        ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planInsertedUnits, orderedStageRanges)
+                    } else if (planInsertedUnits.isNotEmpty()) {
+                        planInsertedUnits
+                    } else if (orderedStageRanges.isNotEmpty()) {
+                        orderedStageRanges
+                    } else {
+                        changedRanges.newRanges
                     }
-                    TextVisualKind.Delete, TextVisualKind.None -> emptyList()
                 }
-            } else {
-                emptyList()
+                TextVisualKind.Delete, TextVisualKind.None -> emptyList()
             }
 
         val deletedUnits =
-            if (customTextAnimationEnabled) {
-                when (transactionTextKind) {
-                    TextVisualKind.Delete, TextVisualKind.Move -> {
-                        // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
-                        // orderedStageRanges = composedDeleted（local chain 的时间顺序）。
-                        val orderedStageRanges = composedDeleted
-                        if (planDeletedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
-                            ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planDeletedUnits, orderedStageRanges)
-                        } else if (planDeletedUnits.isNotEmpty()) {
-                            planDeletedUnits
-                        } else if (orderedStageRanges.isNotEmpty()) {
-                            orderedStageRanges
-                        } else {
-                            changedRanges.oldRanges
-                        }
+            when (transactionTextKind) {
+                TextVisualKind.Delete, TextVisualKind.Move -> {
+                    // #694 评论 5693864609 问题1：Core plan 负责切分 + local stage 负责排序。
+                    // orderedStageRanges = composedDeleted（local chain 的时间顺序）。
+                    val orderedStageRanges = composedDeleted
+                    if (planDeletedUnits.isNotEmpty() && orderedStageRanges.isNotEmpty()) {
+                        ComposeLocalVisualRebase.orderPlanUnitsByStageRanges(planDeletedUnits, orderedStageRanges)
+                    } else if (planDeletedUnits.isNotEmpty()) {
+                        planDeletedUnits
+                    } else if (orderedStageRanges.isNotEmpty()) {
+                        orderedStageRanges
+                    } else {
+                        changedRanges.oldRanges
                     }
-                    TextVisualKind.Insert, TextVisualKind.None -> emptyList()
                 }
-            } else {
-                emptyList()
+                TextVisualKind.Insert, TextVisualKind.None -> emptyList()
             }
 
         // retained reflow 只比较 oldLayout -> newLayout 的真实几何
@@ -893,7 +885,6 @@ class ComposeEditorVisualState(
             // #694 评论 5692161955 问题2：使用 Core plan 返回的 animationMode，
             // 不再硬编码 CLUSTER_ANIMATION。
             animationMode = planAnimationMode,
-            motionPolicy = motionPolicy,
             // Issue #720 评论 5747339452：默认 null（本地输入 → reflow 释放门控生效）；
             // 测试可通过 [localInputIntentOverride] 注入非 null intent 绕过门控，
             // 以验证 rebase/split 机制（#708 系列）。
@@ -1026,7 +1017,7 @@ class ComposeEditorVisualState(
                         newLayout = snapshot,
                     )
                     pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = localPatch))
-                    _patchVersion.update { it + 1L }
+                    _frameRequestVersion.update { it + 1L }
                     _latestPatch.update { localPatch }
                     Log.d(
                         TAG,
@@ -1165,7 +1156,7 @@ class ComposeEditorVisualState(
             }
             is FrameUpdate.NewPatch -> {
                 pendingPatches.addLast(PendingPatch(sequence = nextPendingSequence++, patch = update.patch))
-                _patchVersion.update { it + 1L }
+                _frameRequestVersion.update { it + 1L }
                 _latestPatch.update { update.patch }
                 Log.d(
                     TAG,
@@ -1179,41 +1170,66 @@ class ComposeEditorVisualState(
     /**
      * 在 Compose 帧时钟的回调里消费所有待处理的 patch 并应用到 timeline。
      *
-     * overlay 监听 [patchVersion]，在 `withFrameNanos` 里调用本方法，
+     * overlay 监听 [frameRequestVersion]，在 `withFrameNanos` 里调用本方法，
      * 把队列中所有 pending patch 逐个应用到 timeline。时间戳必须来自 Compose frame clock。
      *
      * #691：同时把光标 motion 并入 timeline — 与文字在同一个 applyPatch 内处理，
      * 保证 cursor 和 text units 使用同一个 frameTimeNanos。
      *
-     * #691 评论 5679242735 修改2：如果 [currentMotionPolicy] 非 null，
-     * 把已入队 patch 的 motionPolicy 替换成最新 policy，
-     * 防止旧 patch 把文字动画重新启动。
+     * Issue #732 评论 5763493968 第3节：开头先应用 [pendingMotionPolicy]（如果有），
+     * 然后再 drain patch、更新 timeline、创建/redirect [ComposeEditMotion]。
+     * policy 切换、patch 消费、motion 创建全部进同一只 frame clock。
      */
     fun hasPendingPatches(): Boolean = pendingPatches.isNotEmpty() || pendingSelectionCaretTarget != null
 
     /**
      * 在 Compose 帧时钟的回调里消费所有待处理的 patch 并应用到 timeline。
      *
-     * overlay 监听 [patchVersion]，在 `withFrameNanos` 里调用本方法，
+     * overlay 监听 [frameRequestVersion]，在 `withFrameNanos` 里调用本方法，
      * 把队列中所有 pending patch 逐个应用到 timeline。时间戳必须来自 Compose frame clock。
      *
-     * Issue #725 评论 5750735497：不再处理 cursor redirect / suppressCursorThroughSequence —
-     * 屏幕 caret 始终由 BasicTextField 自己画，applyPatch 不再接受 cursor 参数。
+     * Issue #728 评论 5754045689：系统 caret 已透明，可见 caret 由 [EditorTextFieldDrawLayer] 画，
+     * applyPatch 不再接受 cursor 参数。
      *
      * @param frameTimeNanos 当前帧时间戳（来自 Compose frame clock）。
      * @return 本次帧实际应用的 patch 列表。
      */
     fun drainPendingPatchesAtFrame(frameTimeNanos: Long): List<ComposeVisualPatch> {
+        // Issue #732 评论 5763493968 第3节：开头先应用 pending policy —
+        // policy 切换、patch 消费、motion 创建全部进同一只 frame clock。
+        val pendingPolicy = pendingMotionPolicy
+        if (pendingPolicy != null) {
+            pendingMotionPolicy = null
+            val previousPolicy = currentMotionPolicy
+            currentMotionPolicy = pendingPolicy.effective()
+            // policy 真正变化时 settle timeline — 清掉旧 text units / ghost / motion，
+            // 让后续 drain 用新 policy 重新决定是否创建 track。
+            if (previousPolicy != currentMotionPolicy) {
+                visualTimeline.settleForPolicyChange()
+                _visualScene.update { ComposeVisualScene.Empty }
+                activeEditMotion = null
+                // 保留 restingCaretRect / drawSnapshotState.caretRect —
+                // policy 切换不必然产生新 text layout，静止 caret 应保留当前屏幕位置。
+                drawSnapshotState =
+                    drawSnapshotState.copy(
+                        scene = ComposeVisualScene.Empty,
+                        // caretRect 保持当前值（restingCaretRect），不清空
+                    )
+            }
+        }
+
         // Issue #728 评论 5755336403 缺口2：先处理 pending 纯 selection caret 移动 —
         // 在真实 frameTime 创建/重定向 forSelectionMove motion。
         val pendingSelection = pendingSelectionCaretTarget
         if (pendingSelection != null) {
             pendingSelectionCaretTarget = null
-            val policy = currentMotionPolicy?.effective() ?: EditorMotionPolicy().effective()
-            val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            val policy = currentMotionPolicy.effective()
+            val selectionCursorDurationNanos =
+                policy.selectionCursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             val existing = activeEditMotion
-            val caretDuration = if (policy.cursorEnabled) cursorDurationNanos else 0L
+            val caretDuration =
+                if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L
             activeEditMotion =
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
                     // Issue #728 评论 5755928697 问题1：文字动画还没结束时移动光标，
@@ -1224,7 +1240,8 @@ class ComposeEditorVisualState(
                         newTargetCaretRect = pendingSelection.targetCaretRect,
                         frameTimeNanos = frameTimeNanos,
                         caretDurationNanos = caretDuration,
-                        glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L,
+                        glyphDurationNanos =
+                            if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L,
                     )
                 } else {
                     ComposeEditMotion.forSelectionMove(
@@ -1242,8 +1259,9 @@ class ComposeEditorVisualState(
         }
         val batch = mutableListOf<ComposeVisualPatch>()
         for (raw in pendingPatches) {
-            val patch = currentMotionPolicy?.let { raw.patch.copy(motionPolicy = it) } ?: raw.patch
-            batch.add(patch)
+            // Issue #732 评论 5763493968 第2节：patch 不再有 motionPolicy 字段 —
+            // 直接用 raw.patch，是否播放由当前 currentMotionPolicy 在 applyPatch/motion 创建时决定。
+            batch.add(raw.patch)
         }
         pendingPatches.clear()
         val framePatch = ComposeVisualPatchBatch.compose(batch) ?: return emptyList()
@@ -1255,6 +1273,7 @@ class ComposeEditorVisualState(
         visualTimeline.applyPatch(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
+            motionPolicy = currentMotionPolicy,
             motionSample = motionSampleForPatch,
         )
         // Issue #728 评论 5754045689：构造/重定向 activeEditMotion —
@@ -1266,7 +1285,9 @@ class ComposeEditorVisualState(
         // 保持 descriptor 列表的顺序（按正文位置排序），不转 Set 避免丢失顺序
         val insertedKeys = insertedDescriptors.map { it.key }
         val deletedKeys = deletedDescriptors.map { it.key }
-        val policy = framePatch.motionPolicy.effective()
+        // Issue #732 评论 5763493968 第2/3节：policy 不再从 patch 读 —
+        // 用当前 currentMotionPolicy（drain 开头已应用 pending policy）。
+        val policy = currentMotionPolicy.effective()
         val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
         val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
         // Issue #728 评论 5755336403 缺口4：selection-only 必须用 oldText == newText 判断 —
@@ -1276,13 +1297,18 @@ class ComposeEditorVisualState(
         val newText = framePatch.newLayout.result.layoutInput.text.text
         val isSelectionOnly = oldText == newText && insertedKeys.isEmpty() && deletedKeys.isEmpty()
         if (isSelectionOnly) {
-            // selection-only 移动：caret 单独用 cursorDurationMillis，文字 units 为空
+            // selection-only 移动：caret 单独用 selectionCursorDurationMillis，文字 units 为空
+            // Issue #732 评论 5764716281 硬问题1：用派生值 cursorAnimationEnabledForEdit 和
+            // selectionCursorDurationMillis，coordinated 模式下不被旧 cursorEnabled=false 卡死。
+            val selectionCursorDurationNanos =
+                policy.selectionCursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             activeEditMotion =
                 ComposeEditMotion.forSelectionMove(
                     originCaretRect = framePatch.originCaretRect,
                     targetCaretRect = framePatch.targetCaretRect,
                     frameTimeNanos = frameTimeNanos,
-                    caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                    caretDurationNanos =
+                        if (policy.cursorAnimationEnabledForEdit) selectionCursorDurationNanos else 0L,
                 )
         } else {
             // text edit（包括 Enter / 删除 Enter 无 glyph unit 的情况）—
@@ -1292,15 +1318,19 @@ class ComposeEditorVisualState(
             // Issue #728 评论 5755928697 问题2：coordinated=false 时 caret 和 glyph 独立时长。
             // coordinated=true：一只钟，caret 和 glyph 共用 textDurationMillis。
             // coordinated=false：caret 用 cursorDurationMillis，glyph 用 textDurationMillis。
+            // Issue #732 评论 5764716281 硬问题1：用派生值，coordinated 模式下不被隐藏开关关掉。
             val caretDurationNanos: Long
             val glyphDurationNanos: Long
             if (policy.coordinated) {
-                val sharedDuration = if (policy.textEnabled) textDurationNanos else 0L
+                val sharedDuration =
+                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
                 caretDurationNanos = sharedDuration
                 glyphDurationNanos = sharedDuration
             } else {
-                caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L
-                glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
+                caretDurationNanos =
+                    if (policy.cursorAnimationEnabledForEdit) cursorDurationNanos else 0L
+                glyphDurationNanos =
+                    if (policy.textAnimationEnabledForEdit) textDurationNanos else 0L
             }
             // 快速连续输入：从当前 sample 重定向，不重新起播
             // Issue #728 评论 5761525795：把 descriptor 的继承 fraction 传给 redirectTo —
@@ -1388,6 +1418,12 @@ class ComposeEditorVisualState(
      * @param frameTimeNanos 当前帧时间戳。
      */
     fun hasActiveVisuals(frameTimeNanos: Long): Boolean {
+        // Issue #732 评论 5764716281 硬问题2：coordinated 模式下 timeline 必须跟 activeEditMotion
+        // 同生共死 — 如果 activeEditMotion==null，timeline 不应继续维持动画（文字应已静态收口）。
+        val policy = currentMotionPolicy.effective()
+        if (policy.coordinated && policy.textAnimationEnabledForEdit && activeEditMotion == null) {
+            return false
+        }
         return visualTimeline.hasActiveAnimation(frameTimeNanos) ||
             (activeEditMotion != null && !activeEditMotion!!.isFinished(frameTimeNanos))
     }
@@ -1399,12 +1435,13 @@ class ComposeEditorVisualState(
         frameCoordinator.clear()
         visualTimeline.clear()
         pendingPatches.clear()
-        _patchVersion.update { 0L }
+        _frameRequestVersion.update { 0L }
         _latestLayout.update { null }
         _visualScene.update { ComposeVisualScene.Empty }
         _latestPatch.update { null }
-        // #691 评论 5679242735 修改2：重置运行时 policy 切换状态
-        currentMotionPolicy = null
+        // Issue #732 评论 5763493968 第3节：重置运行时 policy 切换状态
+        currentMotionPolicy = EditorMotionPolicy()
+        pendingMotionPolicy = null
         // Issue #728：清空统一编辑 motion
         activeEditMotion = null
         // Issue #728 评论 5754839786 缺口2：清空静止 caret rect
@@ -1435,44 +1472,22 @@ class ComposeEditorVisualState(
     }
 
     /**
-     * #691 评论 5679242735 修改2：运行时 policy 切换 — 在帧边界应用新 motion policy。
+     * Issue #732 评论 5763493968 第3节：运行时 policy 切换 — 只写 [pendingMotionPolicy] + [frameRequestVersion]。
      *
      * 场景：patch 已入队但还没 drain，此时用户关闭文字动画或打开 reduce-motion；
      * 旧 patch 会带着原来的 insertedUnits/deletedUnits/retainedMoves 再进入 timeline，
-     * 把文字动画重新启动。本方法：
-     * 1. 记录最新 effective policy 到 [currentMotionPolicy]，
-     *    [drainPendingPatchesAtFrame] 会用它替换已入队 patch 的 motionPolicy。
-     * 2. 调用 [ComposeVisualTimeline.settleForPolicyChange] 清掉旧 text units / ghost / cursorChannel。
-     * 3. 把已入队 patch 的 motionPolicy 替换成最新 policy（防止旧 patch 重新启动文字动画）。
+     * 把文字动画重新启动。本方法只把 effective policy 写进 [pendingMotionPolicy]，
+     * 并增加一次 [frameRequestVersion] 唤醒帧循环；
+     * [drainPendingPatchesAtFrame] 开头会应用 pending policy（settle timeline + 清 motion），
+     * 然后再 drain patch、创建/redirect [ComposeEditMotion]。
      *
-     * @param newPolicy 新的动画策略 — 内部会先 effective() 收口 reduce-motion。
+     * 不在 UI effect 里立刻 settle timeline — policy 切换、patch 消费、motion 创建
+     * 全部进同一只 frame clock（[EditorTextFieldDrawLayer] 的 withFrameNanos）。
+     *
+     * @param policy 新的动画策略 — 内部会先 effective() 收口 reduce-motion。
      */
-    fun applyMotionPolicyAtFrame(newPolicy: EditorMotionPolicy) {
-        val effective = newPolicy.effective()
-        currentMotionPolicy = effective
-        // 清掉旧 text units / ghost
-        visualTimeline.settleForPolicyChange()
-        _visualScene.update { ComposeVisualScene.Empty }
-        // Issue #728：清掉旧 activeEditMotion
-        activeEditMotion = null
-        // Issue #728 评论 5755336403 缺口5：policy 切换 settle 动画，但保留当前屏幕 caret 位置 —
-        // 不清 restingCaretRect / drawSnapshotState.caretRect，否则系统 caret 已透明时自绘 caret 直接消失。
-        // 只改动画设置不必然产生新 text layout，静止 caret 应保留当前屏幕位置。
-        // #708 评论 5723410606 第一节：清 draw snapshot 的 scene，但保留 caretRect
-        drawSnapshotState =
-            drawSnapshotState.copy(
-                scene = ComposeVisualScene.Empty,
-                // caretRect 保持当前值（restingCaretRect），不清空
-            )
-        // 把已入队 patch 的 motionPolicy 替换成最新 policy
-        // Issue #723 评论 5750100004：p 现在是 PendingPatch，保持 sequence 不变，只替换 patch 的 motionPolicy。
-        if (pendingPatches.isNotEmpty()) {
-            val updated = mutableListOf<PendingPatch>()
-            while (pendingPatches.isNotEmpty()) {
-                val p = pendingPatches.removeFirst()
-                updated.add(p.copy(patch = p.patch.copy(motionPolicy = effective)))
-            }
-            updated.forEach { pendingPatches.addLast(it) }
-        }
+    fun updateMotionPolicy(policy: EditorMotionPolicy) {
+        pendingMotionPolicy = policy.effective()
+        _frameRequestVersion.update { it + 1L }
     }
 }

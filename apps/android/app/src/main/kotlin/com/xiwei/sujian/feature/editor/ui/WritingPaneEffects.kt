@@ -274,14 +274,27 @@ internal fun editorTypographyFromSettings(
 
 // ── 动画/排版/设置同步 ────────────────────────────────────────
 
-/** 生产动画链：设置状态 → Editor Host → 输入事务 → 动画协调器 → 真实 VSync 渲染。 */
+/**
+ * 生产动画链：设置状态 → EditorSessionCoordinator.motionPolicyFlow 唯一写入口。
+ *
+ * Issue #732 评论 5763493968 第1节：LaunchedEffect 只 key 动画相关字段，不再 key 整个 settings，
+ * 也不需要 chapterId — policy 是进程级动画事实，不随章节切换重置。
+ * 真正绑定到 visualState 的工作由 [BindMotionPolicyToVisualState] 完成，
+ * 那里只 collect 一次 motionPolicyFlow 并交给 visualState.updateMotionPolicy。
+ */
 @Composable
 internal fun WritingPaneMotionPolicySync(
     coordinator: EditorWindowHost,
     settings: EditorSettingsState,
-    chapterId: String,
 ) {
-    LaunchedEffect(settings, chapterId) {
+    LaunchedEffect(
+        settings.typingAnimationEnabled,
+        settings.typingAnimationDurationMs,
+        settings.smoothCursorEnabled,
+        settings.smoothCursorDurationMs,
+        settings.coordinatedTextCursorAnimationEnabled,
+        settings.reduceMotion,
+    ) {
         coordinator.applyMotionPolicy(
             EditorMotionPolicy(
                 textEnabled = settings.typingAnimationEnabled,
@@ -292,6 +305,26 @@ internal fun WritingPaneMotionPolicySync(
                 reduceMotion = settings.reduceMotion,
             ),
         )
+    }
+}
+
+/**
+ * Issue #732 评论 5763493968 第1节：把 [EditorSessionCoordinator.motionPolicyFlow] 绑定到
+ * [ComposeEditorVisualState] — 只 collect 一次 flow，把新 policy 交给
+ * [ComposeEditorVisualState.updateMotionPolicy]。
+ *
+ * 这里不再自己 `withFrameNanos` — policy 切换、patch 消费、motion 创建全部由
+ * [EditorTextFieldDrawLayer] 的单一帧循环统一处理（第3节）。
+ */
+@Composable
+internal fun BindMotionPolicyToVisualState(
+    coordinator: EditorWindowHost,
+    visualState: ComposeEditorVisualState,
+) {
+    val policy by coordinator.motionPolicyFlow.collectAsStateWithLifecycle()
+    val currentPolicy by rememberUpdatedState(policy)
+    LaunchedEffect(currentPolicy) {
+        visualState.updateMotionPolicy(currentPolicy)
     }
 }
 
@@ -422,8 +455,9 @@ internal fun rememberChapterSwitchSync(
  * #641：收集 Core 视觉意图事件，映射为 [EditorVisualIntent] 喂给 [ComposeEditorVisualState]。
  * 按 target 过滤，避免其他 target 的视觉意图污染当前 overlay。
  *
- * #641 评论 问题3 + 评论 5457777142 问题4：收集 [EditorMotionPolicy] 的 effective 策略
- * 传给 [ComposeEditorVisualState.onVisualIntent]。
+ * Issue #732 评论 5763493968 第1节：不再在这里 collect [EditorMotionPolicy] —
+ * policy 由 [BindMotionPolicyToVisualState] 统一绑定到 visualState，
+ * [ComposeEditorVisualState.onVisualIntent] 不再接受 policy 参数。
  *
  * #694 评论第 5 步：按 Core cause 分流 —
  * - TYPING / TYPING_COMMIT / IME_COMPOSITION / PASTE / DELETE：本地 InputTransformation 已提供
@@ -439,8 +473,6 @@ internal fun CollectVisualIntentEvents(
     visualState: ComposeEditorVisualState,
     coordinator: EditorWindowHost,
 ) {
-    val motionPolicy by coordinator.motionPolicyFlow.collectAsStateWithLifecycle()
-    val currentMotionPolicy by rememberUpdatedState(motionPolicy)
     LaunchedEffect(viewModel, targetId) {
         viewModel.visualIntentEvents
             .collect { event ->
@@ -449,7 +481,7 @@ internal fun CollectVisualIntentEvents(
                 if (event.visualIntent.isLocalInputCause()) return@collect
                 // UNDO/REDO/PROGRAMMATIC/LOAD/FORMAT 仍走 Core visual path
                 val editorVisualIntent = mapCoreVisualIntentToEditorVisualIntent(event)
-                visualState.onVisualIntent(editorVisualIntent, currentMotionPolicy)
+                visualState.onVisualIntent(editorVisualIntent)
             }
     }
 }

@@ -12,28 +12,16 @@ private const val FIXTURE_PROJECT_UUID_9EE6701D = "9ee6701d-24f5-4716-9e9c-55f28
 /**
  * #630 评论5323353678：窄屏 LazyColumn 跨区块 key 唯一性回归测试。
  *
- * 同一作品同时出现在 recentEdits 与 projectSummaries 时，
- * 不同区块的 Lazy item key 必须互不相同，否则 Compose 抛
- * `IllegalArgumentException: Key ... was already used`。
- *
- * 本测试直接调用 production 入口（[recentEditItemKey] / [projectItemKey] /
- * [RECENT_EDITS_HEADER_KEY] / [ALL_PROJECTS_HEADER_KEY]），验证：
- * 1. 同一 UUID 在 recent/all 两区块的 key 唯一；
+ * #732 评论第5节：首页契约 singular — recentEdit 只画一个卡片，key 为 `"recent:$projectId"`。
+ * 本测试验证：
+ * 1. 单个 recentEdit item key 不与同一作品的 project item key 冲突；
  * 2. header 常量不与任何 item key 冲突；
- * 3. 排序/插入后 key 集合仍无重复。
+ * 3. 仅 projects 区块时 key 集合无重复。
  *
- * **不**为测试重复实现 key 逻辑；若生产 key 回退成裸 UUID，本测试会正确失败。
+ * 本测试直接调用 production 入口（[projectItemKey] /
+ * [RECENT_EDITS_HEADER_KEY] / [ALL_PROJECTS_HEADER_KEY]）。
  */
 class ProjectListKeyUniquenessTest {
-    @Test
-    fun recentEditKey_hasRecentPrefix() {
-        val edit = makeRecentEdit(FIXTURE_PROJECT_UUID_9EE6701D)
-        assertEquals(
-            "recent:9ee6701d-24f5-4716-9e9c-55f2802fd12a",
-            recentEditItemKey(edit),
-        )
-    }
-
     @Test
     fun projectItemKey_hasProjectPrefix() {
         val summary = makeProjectSummary(FIXTURE_PROJECT_UUID_9EE6701D)
@@ -49,7 +37,8 @@ class ProjectListKeyUniquenessTest {
         val edit = makeRecentEdit(projectId)
         val summary = makeProjectSummary(projectId)
 
-        val recentKey = recentEditItemKey(edit)
+        // #732 评论第5节：recentEdit 单卡片 key 内联为 "recent:$projectId"。
+        val recentKey = "recent:${edit.projectId}"
         val projectKey = projectItemKey(summary)
 
         assertTrue(
@@ -63,7 +52,7 @@ class ProjectListKeyUniquenessTest {
         val edit = makeRecentEdit(RECENT_EDITS_HEADER_KEY)
         val summary = makeProjectSummary(ALL_PROJECTS_HEADER_KEY)
 
-        val recentItemKey = recentEditItemKey(edit)
+        val recentItemKey = "recent:${edit.projectId}"
         val projectItemK = projectItemKey(summary)
 
         assertTrue(
@@ -83,23 +72,19 @@ class ProjectListKeyUniquenessTest {
     @Test
     fun fullNarrowScreenKeySet_hasNoDuplicates() {
         val sharedProjectId = "aaaa1111-bbbb-cccc-dddd-eeeeeeeeeeee"
-        val otherProjectId = "1111aaaa-2222-bbbb-3333-444444444444"
 
-        val recentEdits =
-            listOf(
-                makeRecentEdit(sharedProjectId),
-                makeRecentEdit(otherProjectId),
-            )
+        // #732 评论第5节：recentEdit 单值 — 只有一个 recent item。
+        val recentEdit = makeRecentEdit(sharedProjectId)
         val projectSummaries =
             listOf(
                 makeProjectSummary(sharedProjectId),
-                makeProjectSummary(otherProjectId),
+                makeProjectSummary("1111aaaa-2222-bbbb-3333-444444444444"),
                 makeProjectSummary("55555555-6666-7777-8888-999999999999"),
             )
 
         val allKeys = mutableListOf<String>()
         allKeys.add(RECENT_EDITS_HEADER_KEY)
-        recentEdits.forEach { allKeys.add(recentEditItemKey(it)) }
+        allKeys.add("recent:${recentEdit.projectId}")
         allKeys.add(ALL_PROJECTS_HEADER_KEY)
         projectSummaries.forEach { allKeys.add(projectItemKey(it)) }
 
@@ -113,7 +98,7 @@ class ProjectListKeyUniquenessTest {
     }
 
     @Test
-    fun allProjectsOnly_noRecentEdits_keySetHasNoDuplicates() {
+    fun allProjectsOnly_noRecentEdit_keySetHasNoDuplicates() {
         val projectSummaries =
             listOf(
                 makeProjectSummary("p1"),
@@ -126,55 +111,6 @@ class ProjectListKeyUniquenessTest {
 
         val distinctKeys = allKeys.toSet()
         assertEquals(allKeys.size, distinctKeys.size)
-    }
-
-    @Test
-    fun manyProjectsInRecentEdits_allAppearInProjectSummaries_noDuplicates() {
-        val ids = (1..10).map { "project-$it-uuid" }
-
-        val recentEdits = ids.map { makeRecentEdit(it) }
-        val projectSummaries = ids.map { makeProjectSummary(it) }
-
-        val allKeys = mutableListOf<String>()
-        allKeys.add(RECENT_EDITS_HEADER_KEY)
-        recentEdits.forEach { allKeys.add(recentEditItemKey(it)) }
-        allKeys.add(ALL_PROJECTS_HEADER_KEY)
-        projectSummaries.forEach { allKeys.add(projectItemKey(it)) }
-
-        val distinctKeys = allKeys.toSet()
-        assertEquals(
-            "All 10 shared projects must have distinct keys across sections",
-            allKeys.size,
-            distinctKeys.size,
-        )
-    }
-
-    @Test
-    fun keyOrderingIsStable_afterSortByTimestamp() {
-        val edits =
-            listOf(
-                makeRecentEdit("c-project", timestamp = "2026-08-18T01:00:00Z"),
-                makeRecentEdit("a-project", timestamp = "2026-08-18T03:00:00Z"),
-                makeRecentEdit("b-project", timestamp = "2026-08-18T02:00:00Z"),
-            )
-
-        val sortedEdits = edits.sortedByDescending { it.timestamp }
-
-        val allKeys = mutableListOf<String>()
-        allKeys.add(RECENT_EDITS_HEADER_KEY)
-        sortedEdits.forEach { allKeys.add(recentEditItemKey(it)) }
-        allKeys.add(ALL_PROJECTS_HEADER_KEY)
-        sortedEdits.forEach {
-            allKeys.add(projectItemKey(makeProjectSummary(it.projectId)))
-        }
-
-        val distinctKeys = allKeys.toSet()
-        assertEquals(allKeys.size, distinctKeys.size)
-
-        val recentKeys = sortedEdits.map { recentEditItemKey(it) }
-        assertEquals("recent:a-project", recentKeys[0])
-        assertEquals("recent:b-project", recentKeys[1])
-        assertEquals("recent:c-project", recentKeys[2])
     }
 
     private fun makeRecentEdit(

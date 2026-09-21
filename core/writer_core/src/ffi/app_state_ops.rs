@@ -26,20 +26,19 @@ pub unsafe extern "C" fn writer_core_list_app_summaries() -> *mut c_char {
                 })
             })
             .collect();
-        let recent_jsons: Vec<serde_json::Value> = recent_edits
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "projectId": e.project_id,
-                    "volumeId": e.volume_id,
-                    "chapterId": e.chapter_id,
-                    "timestamp": e.timestamp
-                })
+        // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
+        // Core 的 recent_edits.json 仍保留历史/去重能力；get_recent_edits() 通用 API 不变。
+        let recent_json: Option<serde_json::Value> = recent_edits.first().map(|e| {
+            serde_json::json!({
+                "projectId": e.project_id,
+                "volumeId": e.volume_id,
+                "chapterId": e.chapter_id,
+                "timestamp": e.timestamp
             })
-            .collect();
+        });
         let summary = serde_json::json!({
             "projects": project_jsons,
-            "recentEdits": recent_jsons
+            "recentEdit": recent_json
         });
         Ok(vec![summary])
     }) {
@@ -79,7 +78,7 @@ pub unsafe extern "C" fn writer_core_open_data_root(path: *const c_char) -> *mut
     let summary = serde_json::json!({
         "path": path_str,
         "projects": [],
-        "recentEdits": []
+        "recentEdit": null
     });
     ok_json(summary)
 }
@@ -108,20 +107,18 @@ pub unsafe extern "C" fn writer_core_get_app_state() -> *mut c_char {
                 })
             })
             .collect();
-        let recent_jsons: Vec<serde_json::Value> = recent_edits
-            .iter()
-            .map(|e| {
-                serde_json::json!({
-                    "projectId": e.project_id,
-                    "volumeId": e.volume_id,
-                    "chapterId": e.chapter_id,
-                    "timestamp": e.timestamp
-                })
+        // #732 评论第5节：首页契约 singular — 只输出最近一次编辑（nullable）。
+        let recent_json: Option<serde_json::Value> = recent_edits.first().map(|e| {
+            serde_json::json!({
+                "projectId": e.project_id,
+                "volumeId": e.volume_id,
+                "chapterId": e.chapter_id,
+                "timestamp": e.timestamp
             })
-            .collect();
+        });
         Ok(serde_json::json!({
             "projects": project_jsons,
-            "recentEdits": recent_jsons
+            "recentEdit": recent_json
         }))
     }) {
         Ok(data) => ok_json(data),

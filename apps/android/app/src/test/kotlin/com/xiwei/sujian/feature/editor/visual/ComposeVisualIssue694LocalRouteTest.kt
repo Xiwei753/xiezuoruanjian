@@ -7,7 +7,6 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.sp
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -208,7 +207,6 @@ class ComposeVisualIssue694LocalRouteTest {
                 expectedOldText = "a",
                 expectedNewText = "",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
         state.onAuthoritativeLayout(layouts[2], TextRange(0, 0), 0, compositionActive = false)
 

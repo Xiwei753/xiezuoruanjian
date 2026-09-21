@@ -267,7 +267,7 @@ class SujianAppViewModelErrorEventTest {
  */
 private class FakeProjectUseCase : ProjectUseCasePort {
     var projectSummariesResult: List<ProjectSummary> = emptyList()
-    var recentEditsResult: List<RecentEdit> = emptyList()
+    var recentEditResult: RecentEdit? = null
     var getProjectSummariesError: Throwable? = null
     var createProjectError: Throwable? = null
     var deleteProjectError: Throwable? = null
@@ -280,7 +280,7 @@ private class FakeProjectUseCase : ProjectUseCasePort {
         return projectSummariesResult
     }
 
-    override suspend fun getRecentEdits(limit: Int): List<RecentEdit> = recentEditsResult.take(limit)
+    override suspend fun getLatestRecentEdit(): RecentEdit? = recentEditResult
 
     override suspend fun createProject(title: String): Project {
         createProjectError?.let { throw it }

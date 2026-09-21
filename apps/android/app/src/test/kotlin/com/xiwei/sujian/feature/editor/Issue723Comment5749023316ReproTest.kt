@@ -19,10 +19,14 @@ import org.robolectric.annotation.Config
  * 缺口1（系统 caret 所有权）在 Issue #725 评论 5750735497 停止自绘屏幕 caret 后不再适用 —
  * drawsVisualCursor/cursorOwnedByVisual/initialDrawsVisualCursor 已删除，相关测试已移除。
  *
- * ## 缺口 2（已修复）：协同动画策略层未收死旧状态
+ * ## 缺口 2（Issue #732 评论 5763493968 第4节重新收口）：协同动画是完整模式
  *
- * 修复方式：EditorMotionPolicy.effective() 在 coordinated=true 时强制
- * textEnabled=true，收死旧持久化状态。
+ * Issue #732 评论 5763493968 第4节：coordinated=true 定义成一种完整模式，
+ * 不再靠 effective() 强制 textEnabled=true 来成立。
+ * effective() 删除 `coordinated -> copy(textEnabled = true, cursorEnabled = true)` 归一，
+ * coordinated=true 时直接返回 this。
+ * 协同模式统一用 textDurationMillis 作为这一笔 ComposeEditMotion 的时长；
+ * 独立的 textEnabled/cursorEnabled/cursorDurationMillis 只在 coordinated=false 时生效。
  *
  * Issue #725：自绘 caret 已删除，cursorEnabled 不再参与计算。
  */
@@ -30,17 +34,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class Issue723Comment5749023316ReproTest {
-    // ==================== 缺口 2：协同动画策略层未收死旧状态 ====================
+    // ==================== 缺口 2：协同动画是完整模式（#732 评论 5763493968 第4节） ====================
 
     /**
-     * 缺口 2-1（已修复）：`EditorMotionPolicy(coordinated=true, textEnabled=false).effective()`
-     * 现在返回 `textEnabled=true`——协同已开启时策略层强制文字动画开启。
+     * 缺口 2-1（#732 评论 5764716281 硬问题1 重新收口）：`EditorMotionPolicy(coordinated=true, textEnabled=false)`
+     * 的 effective() 直接返回 this——raw textEnabled 保持 false，但运行时派生值
+     * textAnimationEnabledForEdit == true，coordinated 模式下完整协同 motion 仍然启用。
      *
-     * Issue #723 评论 5749023316 缺口2修复：effective() 在 coordinated=true 时
-     * 强制 textEnabled=true，收死旧持久化状态。
+     * 旧归一（#723 评论 5749023316）在 effective() 里强制 textEnabled=true，
+     * #732 评论 5763493968 第4节删除了这条归一，改为派生值（评论 5764716281 硬问题1）。
      */
     @Test
-    fun gap2_effective_keepsTextEnabledFalse_whenCoordinatedTrueAndTextDisabled() {
+    fun gap2_effective_coordinatedTrue_isIdentity_preservesTextEnabledFalse() {
         // 旧持久化状态：协同已开启，但文字动画被旧设置关掉
         val legacyPolicy =
             EditorMotionPolicy(
@@ -50,23 +55,33 @@ class Issue723Comment5749023316ReproTest {
             )
         val effective = legacyPolicy.effective()
 
-        // 修复后：coordinated=true → effective() 强制 textEnabled=true
-        assertTrue(
-            "修复后：coordinated=true && textEnabled=false 时 effective() 强制 textEnabled=true——" +
-                "策略层收死旧状态，协同动画文字部分不被暗中关闭",
+        // #732 收口后：raw textEnabled 保持 false（不归一 raw 字段）
+        assertFalse(
+            "#732 收口后：coordinated=true && textEnabled=false 时 effective() 保持 raw textEnabled=false",
             effective.textEnabled,
         )
         assertTrue(
             "协同标记仍为 true（页面认为协同已开启，独立开关已藏）",
             effective.coordinated,
         )
+        // Issue #732 评论 5764716281 硬问题1：派生值启用完整协同 motion
+        assertTrue(
+            "coordinated=true → textAnimationEnabledForEdit == true（派生值不被隐藏 textEnabled 关掉）",
+            effective.textAnimationEnabledForEdit,
+        )
+        assertTrue(
+            "coordinated=true → cursorAnimationEnabledForEdit == true（派生值不被隐藏 cursorEnabled 关掉）",
+            effective.cursorAnimationEnabledForEdit,
+        )
     }
 
     /**
-     * 缺口 2-2（已修复）：`effective()` 现在同时处理 reduceMotion 和 coordinated 归一。
+     * 缺口 2-2（#732 评论 5764716281 硬问题1 重新收口）：`effective()` 只处理 reduceMotion，
+     * 不再做 coordinated 归一。coordinated 模式下通过派生值启用完整协同 motion。
      *
-     * 修复后：reduceMotion=true 强制全 false；coordinated=true 强制 textEnabled=true。
-     * 两个语义对称——都有策略层保证。
+     * reduceMotion=true 仍强制全 false（优先级最高）。
+     * coordinated=true 但 textEnabled=false 时 effective() 直接返回 this（不强制 textEnabled=true），
+     * 但派生值 textAnimationEnabledForEdit == true。
      */
     @Test
     fun gap2_effective_onlyHandlesReduceMotion_notCoordinatedNormalization() {
@@ -82,8 +97,12 @@ class Issue723Comment5749023316ReproTest {
             "reduceMotion=true → effective() 强制 textEnabled=false（有策略层保证）",
             reduceMotionEffective.textEnabled,
         )
+        assertFalse(
+            "reduceMotion=true → textAnimationEnabledForEdit == false（reduceMotion 优先级最高）",
+            reduceMotionEffective.textAnimationEnabledForEdit,
+        )
 
-        // coordinated=true 但 textEnabled=false → effective() 强制 textEnabled=true（收口）
+        // coordinated=true 但 textEnabled=false → effective() 直接返回 this（#732 收口）
         val coordinatedLegacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
@@ -91,10 +110,13 @@ class Issue723Comment5749023316ReproTest {
                 reduceMotion = false,
             )
         val coordinatedEffective = coordinatedLegacyPolicy.effective()
-        assertTrue(
-            "修复后：coordinated=true 但 textEnabled=false → effective() 强制 textEnabled=true" +
-                "（策略层保证协同语义，与 reduceMotion 对称）",
+        assertFalse(
+            "#732 收口后：coordinated=true 但 textEnabled=false → effective() 保持 raw textEnabled=false",
             coordinatedEffective.textEnabled,
+        )
+        assertTrue(
+            "#732 评论 5764716281 硬问题1：coordinated=true → textAnimationEnabledForEdit == true（派生值）",
+            coordinatedEffective.textAnimationEnabledForEdit,
         )
     }
 }

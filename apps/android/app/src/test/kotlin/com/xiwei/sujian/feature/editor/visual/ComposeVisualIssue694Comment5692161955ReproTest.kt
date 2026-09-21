@@ -10,7 +10,6 @@ import androidx.compose.ui.unit.sp
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -363,7 +362,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
                 expectedOldText = "a",
                 expectedNewText = "",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // 4.5 bridge outcome: AuthoritativeApplied — Undo 在 composition 期间到达，
@@ -437,7 +435,6 @@ class ComposeVisualIssue694Comment5692161955ReproTest {
                 expectedOldText = "AB",
                 expectedNewText = "ABC",
             ),
-            motionPolicy = EditorMotionPolicy(textDurationMillis = 100L),
         )
 
         // 3. 本地 layout 后到: observePresentedLayout("AB")
