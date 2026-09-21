@@ -42,7 +42,7 @@ fn run_transfer_catalog_tombstone_before_remote_delete() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         transfer.targets[0].deleted_resolution,
@@ -89,7 +89,7 @@ fn run_transfer_catalog_write_failure_returns_retry() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert_eq!(transfer.targets.len(), 1);
     assert_eq!(
         transfer.targets[0].deleted_resolution,
@@ -156,7 +156,7 @@ fn run_transfer_writes_catalog_upsert_for_live_project() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert_eq!(transfer.targets.len(), 1);
 
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
@@ -201,7 +201,7 @@ fn run_transfer_live_project_lifecycle_failure_returns_error() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert_eq!(transfer.targets.len(), 1);
     assert!(matches!(
         transfer.targets[0].result.status,
@@ -242,7 +242,7 @@ fn run_transfer_delete_local_project_skips_upload() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert_eq!(transfer.targets.len(), 1);
     assert!(matches!(
         transfer.targets[0].result.status,
@@ -363,7 +363,7 @@ fn repro_issue_645_q4_delete_local_project_no_actual_deletion() {
         remote_catalog_snapshot,
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
 
     assert!(
         matches!(
@@ -499,7 +499,7 @@ fn repro_issue_645_q5_live_project_lifecycle_before_content_transfer() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
 
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/P");
@@ -615,7 +615,7 @@ fn q4_run_transfer_uses_plan_catalog_snapshot() {
         remote_catalog_snapshot: plan_snapshot_with_delete,
     };
 
-    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     let remote_catalog_after =
         crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let remote_has_record = !remote_catalog_after.catalog.records.is_empty();
@@ -686,7 +686,7 @@ fn q3_publish_uses_post_transfer_staging_lww() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let _transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
 
     let snapshot = crate::sync::target_lifecycle::load_remote_catalog(&provider).unwrap();
     let rec = crate::sync::target_lifecycle::find_record(&snapshot.catalog, "projects/p1")
@@ -737,7 +737,7 @@ fn q3_post_transfer_manifest_unreadable_returns_error() {
         remote_catalog_snapshot: test_empty_catalog_snapshot(),
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
     assert!(
         matches!(
             transfer.targets[0].result.status,
@@ -816,7 +816,7 @@ fn test_remote_only_delete_cleanup_executes() {
         remote_catalog_snapshot: catalog_snapshot,
     };
 
-    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan);
+    let transfer = crate::sync::full_sync::run_transfer(&provider, &plan, None);
 
     assert!(
         matches!(

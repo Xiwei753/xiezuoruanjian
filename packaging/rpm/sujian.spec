@@ -35,8 +35,10 @@ Requires:       qt6-qtquickcontrols2 >= 6.7
 # Issue #729 评论 5762596831 第 1 部分：收口到原生 Wayland 运行环境
 # qt6-qtwayland 提供 Wayland QPA 插件，避免回退到 xcb/XWayland；
 # fcitx5-qt6 提供 fcitx5 Qt6 输入法插件，供中文输入法在 Wayland 下工作。
+# Issue #729 评论 5763441474：fcitx5-qt6 改为 Recommends（软依赖），
+# 用户未安装 fcitx5 时不强制拉入，Wayland 原生 text-input 协议仍可用。
 Requires:       qt6-qtwayland
-Requires:       fcitx5-qt6
+Recommends:     fcitx5-qt6
 
 %description
 素笺写作是一款跨平台写作软件，Linux 端基于 Qt 6.7+ Quick 和自研文本渲染。

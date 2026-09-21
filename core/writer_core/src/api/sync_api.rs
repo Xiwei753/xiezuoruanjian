@@ -1,5 +1,6 @@
 use super::service::{ApiResult, WriterCoreApi};
 use super::types::*;
+use crate::sync::cancellation_token::SyncCancellationToken;
 
 /// 同步 API — 全量同步统一入口。
 ///
@@ -294,6 +295,7 @@ impl WriterCoreApi {
         &self,
         config: SyncConfigDto,
         force_sync: bool,
+        cancellation_token: Option<SyncCancellationToken>,
     ) -> ApiResult<FullSyncResultDto> {
         let sync_config: crate::sync::SyncConfig = config.into();
 
@@ -318,6 +320,29 @@ impl WriterCoreApi {
                 message_key: None,
             };
             return Ok(noop.into());
+        }
+
+        // Issue #729：取消令牌已标记取消时，直接返回 no-op，与 sync disabled 相同逻辑。
+        // 平台层切工作区时调用 token.cancel()，此处感知后提前终止，不进入网络阶段。
+        if let Some(ref token) = cancellation_token {
+            if token.is_cancelled() {
+                log::debug!("[sync] perform_full_sync: cancellation token already cancelled — returning no-op");
+                let noop = crate::sync::types::FullSyncResult {
+                    overall_status: crate::sync::SyncStatus::Success,
+                    targets: Vec::new(),
+                    total_uploaded: 0,
+                    total_downloaded: 0,
+                    total_local_deletes: 0,
+                    total_remote_deletes: 0,
+                    total_overwritten: 0,
+                    total_ignored: 0,
+                    total_conflicts: 0,
+                    error: None,
+                    error_category: None,
+                    message_key: None,
+                };
+                return Ok(noop.into());
+            }
         }
 
         // Snapshot secrets before acquiring core_write（避免持锁期间回调 override）。
@@ -443,7 +468,11 @@ impl WriterCoreApi {
         };
 
         // Phase 3: Transfer（不持锁）— 网络 + 本地文件读写。
-        let transfer_result = crate::sync::full_sync::run_transfer(provider.as_ref(), &plan);
+        let transfer_result = crate::sync::full_sync::run_transfer(
+            provider.as_ref(),
+            &plan,
+            cancellation_token.as_ref(),
+        );
 
         // Phase 4: Commit（短写锁）— 聚合结果、原子写终态、重建搜索索引、清理 staging。
         let (result, committed_paths, lifecycle_receipts) = {

@@ -141,6 +141,7 @@ pub(super) fn publish_generation(
             sync_policy,
             &generation_target,
             force_sync,
+            None,
         )
     };
     let content_ok = matches!(

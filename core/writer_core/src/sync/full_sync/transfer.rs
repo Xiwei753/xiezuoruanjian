@@ -2,6 +2,7 @@
 //!
 //! Contains `run_transfer`; all helpers live in `transfer_helpers.rs`.
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncResult, TargetSyncResult};
 
@@ -14,12 +15,20 @@ use super::{FullSyncPlan, FullSyncTransferResult};
 ///   CAS — 执行破坏性动作前重新读远端 catalog 确认 winner。
 ///
 /// 本函数是纯函数 — 不接触 `WriterCore`、不持锁、不写 `FullSyncState`。
+///
+/// `cancellation_token`：平台层持有的取消令牌。在每次 target 迭代开头检查
+/// `is_cancelled()`，如果已取消则 break 并返回已收集的结果（已完成的 targets +
+/// 剩余的标记为 cancelled/skipped）。
 #[allow(
     clippy::too_many_lines,
     clippy::cognitive_complexity,
     clippy::excessive_nesting
 )]
-pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyncTransferResult {
+pub fn run_transfer(
+    provider: &dyn SyncProvider,
+    plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
+) -> FullSyncTransferResult {
     use crate::sync::types::PlannedTargetKind;
 
     if !plan.sync_policy.enabled {
@@ -34,6 +43,18 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
 
     let mut targets = Vec::with_capacity(plan.targets.len());
     for planned in &plan.targets {
+        // Issue #729：每次 target 迭代开头检查取消令牌。
+        // 已取消则 break，已完成的 targets 保留，剩余的不执行。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_transfer: cancellation requested — breaking after {} targets",
+                    targets.len()
+                );
+                break;
+            }
+        }
+
         let (result, resolution, action) = match planned.target_kind {
             PlannedTargetKind::App => {
                 let sync_root = planned
@@ -46,12 +67,17 @@ pub fn run_transfer(provider: &dyn SyncProvider, plan: &FullSyncPlan) -> FullSyn
                     &plan.sync_policy,
                     &planned.target,
                     plan.force_sync,
+                    cancellation_token,
                 );
                 (r, None, None)
             }
-            PlannedTargetKind::LiveProject => {
-                transfer_live_project(provider, planned, &mut catalog_snapshot, plan)
-            }
+            PlannedTargetKind::LiveProject => transfer_live_project(
+                provider,
+                planned,
+                &mut catalog_snapshot,
+                plan,
+                cancellation_token,
+            ),
             PlannedTargetKind::DeleteLocalProject => {
                 transfer_delete_local_project(provider, planned, plan)
             }

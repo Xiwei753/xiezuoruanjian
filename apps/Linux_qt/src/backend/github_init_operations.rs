@@ -88,6 +88,9 @@ impl AppBackend {
             writer_core::sync::SyncCancellationToken::new(),
         ));
         let workspace_generation = self.current_workspace_generation;
+        // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
+        // github_init 的 data_root 就是用户选择的 path。
+        let data_root_capture = path_str.clone();
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
@@ -98,6 +101,7 @@ impl AppBackend {
                 &branch_str,
                 &token_str,
                 workspace_generation,
+                data_root_capture,
             );
             callback(result);
         });
@@ -110,6 +114,7 @@ impl AppBackend {
         branch: &str,
         token: &str,
         workspace_generation: u64,
+        data_root: String,
     ) -> SyncTaskOutcome {
         use writer_core::sync::{
             provider::github::config::{GitHubProviderConfig, GitHubTransport},
@@ -195,6 +200,7 @@ impl AppBackend {
                     )
                     .unwrap_or_default(),
                     workspace_generation,
+                    data_root: data_root.clone(),
                 };
             }
         };
@@ -224,6 +230,7 @@ impl AppBackend {
                     )
                     .unwrap_or_default(),
                     workspace_generation,
+                    data_root: data_root.clone(),
                 };
             }
             Self::run_github_init_sync(
@@ -235,6 +242,7 @@ impl AppBackend {
                 path,
                 "sync.result.clone_init_success",
                 workspace_generation,
+                data_root.clone(),
             )
         } else if has_directory() {
             Self::run_github_init_sync(
@@ -246,6 +254,7 @@ impl AppBackend {
                 path,
                 "sync.result.remote_configured_sync_success",
                 workspace_generation,
+                data_root.clone(),
             )
         } else if is_git_repo() {
             SyncTaskOutcome {
@@ -263,6 +272,7 @@ impl AppBackend {
                 })
                 .unwrap_or_default(),
                 workspace_generation,
+                data_root: data_root.clone(),
             }
         } else {
             SyncTaskOutcome {
@@ -280,6 +290,7 @@ impl AppBackend {
                 })
                 .unwrap_or_default(),
                 workspace_generation,
+                data_root: data_root.clone(),
             }
         }
     }
@@ -299,8 +310,9 @@ impl AppBackend {
         path: &str,
         success_summary_key: &str,
         workspace_generation: u64,
+        data_root: String,
     ) -> SyncTaskOutcome {
-        match api.perform_full_sync(config_dto.clone(), true) {
+        match api.perform_full_sync(config_dto.clone(), true, None) {
             Ok(result) => {
                 let status = result.overall_status.as_str();
                 if matches!(status, "success" | "latest_wins_applied" | "no_changes") {
@@ -323,6 +335,7 @@ impl AppBackend {
                             )
                             .unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root.clone(),
                         },
                         Err(e) => SyncTaskOutcome {
                             operation_id: operation_id.to_string(),
@@ -341,6 +354,7 @@ impl AppBackend {
                             )
                             .unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root.clone(),
                         },
                     }
                 } else if matches!(status, "conflict" | "partial_conflict") {
@@ -403,6 +417,7 @@ impl AppBackend {
                         )
                         .unwrap_or_default(),
                         workspace_generation,
+                        data_root: data_root.clone(),
                     }
                 } else {
                     let err = result.error.unwrap_or_default();
@@ -437,6 +452,7 @@ impl AppBackend {
                         )
                         .unwrap_or_default(),
                         workspace_generation,
+                        data_root: data_root.clone(),
                     }
                 }
             }
@@ -473,6 +489,7 @@ impl AppBackend {
                     )
                     .unwrap_or_default(),
                     workspace_generation,
+                    data_root,
                 }
             }
         }

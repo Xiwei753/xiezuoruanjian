@@ -424,8 +424,6 @@ pub struct AppBackend {
     /// 连续点击只保留一次 pending，不堆无限队列。
     manual_sync_pending: bool,
     current_last_sync_time: i64,
-    current_last_auto_sync_reason: String,
-    current_last_auto_sync_started_at: i64,
 
     current_system_color_scheme: String,
     current_pending_github_init_path: String,
@@ -939,6 +937,7 @@ mod tests {
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
             workspace_generation: 0,
+            data_root: "".to_string(),
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -961,6 +960,7 @@ mod tests {
             sync_status: "conflict".to_string(),
             action_result: "Conflict".to_string(),
             workspace_generation: 0,
+            data_root: "".to_string(),
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -977,6 +977,7 @@ mod tests {
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
             workspace_generation: 0,
+            data_root: "".to_string(),
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -1080,6 +1081,7 @@ mod tests {
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
             workspace_generation: 0,
+            data_root: "".to_string(),
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -1107,6 +1109,7 @@ mod tests {
             sync_status: "error".to_string(),
             action_result: "Failed".to_string(),
             workspace_generation: 0,
+            data_root: "".to_string(),
         };
         backend.handle_sync_outcome(outcome, None);
 
@@ -1201,6 +1204,7 @@ mod tests {
             sync_status: "success".to_string(),
             action_result: "OK".to_string(),
             workspace_generation: gen_at_sync_start, // 1，已过期
+            data_root: path_str.clone(),
         };
         backend.handle_sync_outcome(stale_outcome, None);
 

@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncPolicy, SyncResult, SyncTarget};
 
@@ -121,7 +122,16 @@ pub(super) fn run_single_target(
     sync_policy: &SyncPolicy,
     target: &SyncTarget,
     force_sync: bool,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> SyncResult {
+    // Issue #729：关键写入操作前检查取消令牌。
+    // 如果已取消，提前返回，不继续写入远端。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!("[sync] run_single_target: cancellation requested — skipping target");
+            return SyncResult::success();
+        }
+    }
     match crate::sync::SyncService::perform_lww_sync(
         local_root,
         provider,
@@ -190,6 +200,7 @@ pub(super) fn transfer_live_project(
     planned: &PlannedTarget,
     catalog_snapshot: &mut crate::sync::types::RemoteTargetCatalogSnapshot,
     plan: &FullSyncPlan,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> (
     SyncResult,
     Option<crate::sync::types::DeletedTargetResolution>,
@@ -204,6 +215,18 @@ pub(super) fn transfer_live_project(
     /// 超过后返回 `RecoverableError`（错误文字不含 "retrying"，因为已经不重试了，
     /// 是最终失败）。旧未引用 generation 留给现有 generation GC 清理。
     const MAX_CAS_RETRIES: usize = 5;
+
+    // Issue #729：关键写入操作前检查取消令牌。
+    // 如果已取消，提前返回，不继续写入远端。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] transfer_live_project: cancellation requested — skipping target {}",
+                planned.target.remote_prefix
+            );
+            return (SyncResult::success(), None, None);
+        }
+    }
 
     if planned.live_lww.is_some() {
         let sync_root = planned
@@ -438,6 +461,25 @@ pub(super) fn transfer_live_project(
                 remote_record,
             ) {
                 crate::sync::target_lifecycle::LifecycleCandidateComparison::CandidateWins => {
+                    // Issue #729：publish 前检查取消令牌。
+                    // 如果已取消，不执行远端写入，提前返回已收集的 merge 结果。
+                    if let Some(token) = cancellation_token {
+                        if token.is_cancelled() {
+                            log::info!(
+                                "[sync] transfer_live_project: cancellation requested before publish — skipping {}",
+                                planned.target.remote_prefix
+                            );
+                            let mut r = merge_result.unwrap_or_else(SyncResult::success);
+                            merge_accumulated_local_effects(
+                                &mut r,
+                                &accumulated_downloaded_files,
+                                &accumulated_local_trashed_files,
+                                &accumulated_overwritten_files,
+                                &accumulated_ignored_files,
+                            );
+                            return (r, None, None);
+                        }
+                    }
                     // Issue #716 评论 5743264448 问题 1：CandidateWins 分支在 publish 前必须
                     // 检查 pending_take_remote_failed。如果没有 unresolved conflict 但
                     // pending_take_remote_failed 非空，直接返回 RecoverableError，不 publish。

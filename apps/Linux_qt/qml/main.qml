@@ -169,12 +169,6 @@ ApplicationWindow {
     property alias appState: appController.appState
     readonly property bool rootHasWorkspace: workspaceBackend !== null && workspaceBackend.has_workspace === true
 
-    // 是否经历过非 Active 状态（后台/非活动）。
-    // 用于区分"首次打开工作区"与"应用从后台恢复到前台"两个状态：
-    // - 首次打开工作区只走 workspace-open 同步
-    // - 只有真正经历过后台/非活动状态再回到 Active，才调用 maybe_auto_sync_on_foreground()
-    property bool hasBeenInactive: false
-
     property string previousEditorText: ""
 
     // ── 布局契约驱动（#610）：Qt 侧按本平台窗口系统算能力，再套 Core 契约 ──
@@ -370,21 +364,6 @@ ApplicationWindow {
         });
     }
 
-    onActiveChanged: {
-        // 拆分"首次打开工作区"与"应用从后台恢复到前台"两个状态：
-        // - active 变 false：记录已经历过非 Active 状态
-        // - active 变 true：只有 hasBeenInactive 才调用 maybe_auto_sync_on_foreground()，
-        //   首次打开工作区不触发前台自动同步（只走 workspace-open 同步）
-        if (!active) {
-            hasBeenInactive = true
-        } else if (hasBeenInactive && syncBackend) {
-            hasBeenInactive = false
-            if (window.preSyncBarrier()) {
-                syncBackend.maybe_auto_sync_on_foreground()
-            }
-        }
-    }
-
     onClosing: {
         if (appController.inWriting) {
             editorBackend.flush_writing_stats();
@@ -416,18 +395,6 @@ ApplicationWindow {
         }
     }
 
-    Timer {
-        id: workspaceOpenAutoSyncTimer
-        interval: 1500
-        repeat: false
-        onTriggered: {
-            if (syncBackend) {
-                if (!window.preSyncBarrier()) return;
-                syncBackend.request_auto_sync("auto_sync_on_workspace_open");
-            }
-        }
-    }
-
     function applyState(state) {
         appController.applyState(state);
     }
@@ -452,7 +419,6 @@ ApplicationWindow {
             if (themeController) {
                 themeController.reload();
             }
-            workspaceOpenAutoSyncTimer.restart();
         }
         function onWorkspace_content_changed() {
             appController.refreshState(qsTr("刷新工作区内容失败"));

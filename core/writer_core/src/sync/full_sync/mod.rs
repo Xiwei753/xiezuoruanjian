@@ -7,6 +7,7 @@
 //! 2. **Transfer**（不持锁）：用 plan 里的 secrets/config 创建 backend，对每个 target
 //!    调 `backend.sync()`（网络 + 本地文件读写）。本模块的 [`run_transfer`] 是纯函数，
 //!    不接触 [`crate::facade::WriterCore`]，调用方在 API 层释放锁后调用。
+//!    `cancellation_token` 在每次 target 迭代开头检查，已取消则 break。
 //! 3. **Commit**（短写锁）：聚合 [`FullSyncTransferResult`] → [`FullSyncResult`]，
 //!    原子写终态 `FullSyncState`，成功类重建搜索索引。
 //!

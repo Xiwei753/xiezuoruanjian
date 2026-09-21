@@ -99,9 +99,15 @@ impl WorkspaceBackend {
     fn snap(&self) -> std::cell::Ref<'_, DomainSnapshot> {
         self.app.snapshot().borrow()
     }
-    fn emit_workspace_changed(&mut self) {
+    /// 真正打开/恢复工作区时调用：发全部三个信号让 QML 初始化工作区 UI。
+    fn emit_workspace_opened(&mut self) {
         self.workspace_opened();
         self.workspace_content_changed();
+        self.workspace_state_changed();
+    }
+    /// 关闭/切换工作区时调用：只发 workspace_state_changed，不发 workspace_opened，
+    /// 避免 QML 误认为工作区已打开而触发 workspace-open 自动同步等副作用。
+    fn emit_workspace_closed(&mut self) {
         self.workspace_state_changed();
     }
     fn workspace_path(&self) -> QString {
@@ -121,7 +127,7 @@ impl WorkspaceBackend {
             .unwrap_or(false);
         if restored {
             // 真的恢复成功，发 workspace_opened 等信号
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         // 无可恢复工作区时，AppBackend 内部已发 workspace_state_changed 等信号，
         // 此处不再发 workspace_opened，避免 QML 去读未初始化的 workspace。
@@ -129,7 +135,7 @@ impl WorkspaceBackend {
     fn create_new_workspace(&mut self) -> QJsonObject {
         let result = self.with_app_mut(|app| app.create_new_workspace());
         if result.is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
@@ -137,7 +143,7 @@ impl WorkspaceBackend {
     fn open_existing_workspace(&mut self) -> QJsonObject {
         let result = self.with_app_mut(|app| app.open_existing_workspace());
         if result.is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
@@ -156,7 +162,7 @@ impl WorkspaceBackend {
         );
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
         if result.is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
@@ -175,19 +181,19 @@ impl WorkspaceBackend {
         );
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
         if result.is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn close_workspace(&mut self) {
         if self.with_app_mut(|app| app.close_workspace()).is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_closed();
         }
     }
     fn switch_workspace(&mut self) {
         if self.with_app_mut(|app| app.switch_workspace()).is_ok() {
-            self.emit_workspace_changed();
+            self.emit_workspace_closed();
         }
     }
     fn init_workspace_from_github(&mut self) {
@@ -219,7 +225,7 @@ impl WorkspaceBackend {
             .with_app_mut(|app| app.execute_github_init(path, remote_url, branch, token))
             .is_ok()
         {
-            self.emit_workspace_changed();
+            self.emit_workspace_opened();
             self.pending_github_init_path_changed();
         }
     }

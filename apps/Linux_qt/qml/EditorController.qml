@@ -143,9 +143,8 @@ QtObject {
         }
     }
 
-    // NOTE: sync is NOT triggered by save. Auto-sync runs on workspace open
-    // and foreground return only (see main.qml workspaceOpenAutoSyncTimer,
-    // foregroundAutoSyncTimer). This is intentional: save ≠ sync.
+    // NOTE: sync is NOT triggered by save. Auto-sync has been removed
+    // (Issue #729). This is intentional: save ≠ sync.
 
     property var editorItemConnections: Connections {
         target: targetEditorItem ? targetEditorItem : null

@@ -1,5 +1,5 @@
 // =============================================================================
-// sync_operations.rs — 同步执行与自动同步调度逻辑
+// sync_operations.rs — 同步执行逻辑
 // =============================================================================
 //
 // 引用了什么：
@@ -9,7 +9,6 @@
 //
 // 干什么的：
 // - 实现 AppBackend 上的同步执行方法：perform_sync、perform_sync_dry_run、perform_sync_internal。
-// - 实现自动同步调度：request_auto_sync、maybe_auto_sync_on_foreground、trigger_auto_sync、can_start_auto_sync。
 // - 实现同步结果处理：handle_sync_outcome、handle_successful_sync_refresh。
 // - 所有同步操作通过 UUID operation_id 机制保证并发安全，通过 QPointer + queued_callback 实现线程安全回调。
 //
@@ -86,6 +85,22 @@ impl AppBackend {
             return;
         }
 
+        // Issue #729 评论 5763441474：data_root 身份校验。
+        // 同步线程启动时捕获当时的 data_root 并填入 outcome。若回调到达时
+        // current_data_root 已变（切工作区），说明此结果属于旧工作区，必须丢弃。
+        // operation_id + workspace_generation + data_root 三者同时匹配才接受结果。
+        if outcome.data_root != self.current_data_root {
+            self.debug_log(
+                "sync",
+                "sync_outcome_discarded_data_root_changed",
+                &format!(
+                    "Discarded outcome from stale data_root. expected={}, got={}",
+                    self.current_data_root, outcome.data_root
+                ),
+            );
+            return;
+        }
+
         let status = outcome.sync_status.clone();
         let result_trunc = if outcome.action_result.chars().count() > 1000 {
             outcome.action_result.chars().take(1000).collect::<String>() + "..."
@@ -157,27 +172,6 @@ impl AppBackend {
         }
 
         self.debug_log("sync", "sync_refresh_applied", "tree_reloaded=true");
-    }
-
-    pub(crate) fn can_start_auto_sync(&self, reason: &str, min_gap_secs: i64) -> bool {
-        if self.current_sync_in_progress {
-            return false;
-        }
-        if !self.current_has_data_root || !self.current_sync_enabled || !self.current_sync_auto_sync
-        {
-            return false;
-        }
-        if self.current_sync_remote_url.is_empty() || self.current_sync_token.is_empty() {
-            return false;
-        }
-        let now = Self::now_epoch_seconds();
-        if self.current_last_auto_sync_reason == reason {
-            let elapsed = now.saturating_sub(self.current_last_auto_sync_started_at);
-            if elapsed < min_gap_secs {
-                return false;
-            }
-        }
-        true
     }
 
     pub(crate) fn perform_sync_dry_run(
@@ -318,6 +312,8 @@ impl AppBackend {
             writer_core::sync::SyncCancellationToken::new(),
         ));
         let workspace_generation = self.current_workspace_generation;
+        // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
+        let data_root_capture = data_root.clone();
 
         let app_qptr = QPointer::from(&*self);
         let callback = make_outcome_callback(app_qptr, sync_qptr);
@@ -355,6 +351,7 @@ impl AppBackend {
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         };
                     }
                 };
@@ -390,6 +387,7 @@ impl AppBackend {
                             sync_status: "dry_run_success".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                     Err(e) => {
@@ -412,6 +410,7 @@ impl AppBackend {
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                 }
@@ -442,6 +441,7 @@ impl AppBackend {
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
                         workspace_generation,
+                        data_root: data_root_capture,
                     });
                 }
             }
@@ -452,54 +452,6 @@ impl AppBackend {
 
     pub(crate) fn perform_sync(&mut self, sync_qptr: Option<QPointer<SyncBackend>>) -> QString {
         self.perform_sync_internal("manual", false, sync_qptr)
-    }
-
-    pub(crate) fn request_auto_sync(
-        &mut self,
-        reason: QString,
-        sync_qptr: Option<QPointer<SyncBackend>>,
-    ) {
-        let reason_str = reason.to_string();
-        self.trigger_auto_sync(&reason_str, sync_qptr);
-    }
-
-    pub(crate) fn maybe_auto_sync_on_foreground(
-        &mut self,
-        sync_qptr: Option<QPointer<SyncBackend>>,
-    ) {
-        if !self.current_has_data_root
-            || !self.current_sync_auto_sync
-            || self.current_sync_in_progress
-        {
-            return;
-        }
-        let interval_secs = i64::from(self.current_sync_interval.max(60));
-        let now = Self::now_epoch_seconds();
-        let elapsed = now.saturating_sub(self.current_last_sync_time);
-        if self.current_last_sync_time > 0 && elapsed < interval_secs {
-            self.debug_log(
-                "sync",
-                "auto_sync_skipped_foreground",
-                &format!("elapsed={}s, min={}s", elapsed, interval_secs),
-            );
-            return;
-        }
-        self.trigger_auto_sync("auto_sync_on_foreground", sync_qptr);
-    }
-
-    pub(crate) fn trigger_auto_sync(
-        &mut self,
-        reason: &str,
-        sync_qptr: Option<QPointer<SyncBackend>>,
-    ) {
-        if !self.can_start_auto_sync(reason, 60) {
-            self.debug_log("sync", "auto_sync_skipped", &format!("reason={}", reason));
-            return;
-        }
-        self.current_last_auto_sync_reason = reason.to_string();
-        self.current_last_auto_sync_started_at = Self::now_epoch_seconds();
-        self.debug_log("sync", reason, "triggered");
-        self.perform_sync_internal(reason, true, sync_qptr);
     }
 
     pub(crate) fn perform_sync_internal(
@@ -678,6 +630,14 @@ impl AppBackend {
             writer_core::sync::SyncCancellationToken::new(),
         ));
         let workspace_generation = self.current_workspace_generation;
+        // Issue #729：clone token 传入后台线程，再传入 Core API perform_full_sync。
+        // SyncCancellationToken 是 Clone 的（内部 Arc<AtomicBool>），可廉价克隆。
+        let cancel_token = self
+            .current_sync_cancel_token
+            .as_ref()
+            .map(|arc| (**arc).clone());
+        // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
+        let data_root_capture = data_root.clone();
 
         let app_qptr = QPointer::from(&*self);
         let callback = make_outcome_callback(app_qptr, sync_qptr);
@@ -716,6 +676,7 @@ impl AppBackend {
                             sync_status: "error".to_string(),
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         };
                     }
                 };
@@ -730,7 +691,7 @@ impl AppBackend {
                     &format!("backend_type={}, sync_mode=lww_manifest", backend_label),
                 );
 
-                match api.perform_full_sync(config, trigger == "manual") {
+                match api.perform_full_sync(config, trigger == "manual", cancel_token.clone()) {
                     Ok(result) => {
                         let status_code = result.overall_status.clone();
                         let summary_key = match status_code.as_str() {
@@ -822,6 +783,7 @@ impl AppBackend {
                             sync_status: status_code,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                     Err(e) => {
@@ -859,6 +821,7 @@ impl AppBackend {
                             sync_status: cat,
                             action_result: serde_json::to_string(&state).unwrap_or_default(),
                             workspace_generation,
+                            data_root: data_root_capture.clone(),
                         }
                     }
                 }
@@ -889,6 +852,7 @@ impl AppBackend {
                         sync_status: "fatal_error".to_string(),
                         action_result: serde_json::to_string(&state).unwrap_or_default(),
                         workspace_generation,
+                        data_root: data_root_capture,
                     });
                 }
             }
