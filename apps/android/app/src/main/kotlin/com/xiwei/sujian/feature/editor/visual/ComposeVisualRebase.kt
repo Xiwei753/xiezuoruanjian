@@ -6,7 +6,6 @@ import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
 import com.xiwei.sujian.feature.editor.layout.cursorRect
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.layout.rawLineEndForRawOffset
 
 /**
@@ -343,10 +342,8 @@ internal object ComposeVisualRebase {
     /**
      * 安全获取 path bounds — range 无效或越界时返回 null。
      *
-     * Issue #717 评论 5742273757 修复3：改为接收 [ComposeLayoutSnapshot]，
-     * 内部通过 [EditorSoftBreakProjection.toDisplayRange] 把 raw range 映射到 display range
-     * 再调 [TextLayoutResult.getPathForRange]。所有 range 来自正文/visual unit（raw 坐标）
-     * 的调用方都应通过此入口做 raw→display 转换。
+     * Issue #728 评论 5754045689：删除 EditorSoftBreakProjection 后，
+     * range 直接是正文坐标，不再需要 raw→display 映射。
      */
     fun safePathBounds(
         snapshot: ComposeLayoutSnapshot,
@@ -452,8 +449,8 @@ internal object ComposeVisualRebase {
         val oldSelectionEnd = cursor?.oldEndUtf16 ?: prev.selection.end
         val newSelectionEnd = cursor?.newEndUtf16 ?: curr.selection.end
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val oldText = prev.effectiveRawText
-        val newText = curr.effectiveRawText
+        val oldText = prev.result.layoutInput.text.text
+        val newText = curr.result.layoutInput.text.text
         if (oldSelectionEnd < 0 || oldSelectionEnd > oldText.length) return null
         if (newSelectionEnd < 0 || newSelectionEnd > newText.length) return null
         val oldCursorRect = prev.cursorRect(oldSelectionEnd)
@@ -488,8 +485,8 @@ internal object ComposeVisualRebase {
 
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
         // 类型从 AnnotatedString 变 String，String 也是 CharSequence。
-        val oldText = prev.effectiveRawText
-        val newText = curr.effectiveRawText
+        val oldText = prev.result.layoutInput.text.text
+        val newText = curr.result.layoutInput.text.text
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 
@@ -548,8 +545,8 @@ internal object ComposeVisualRebase {
             val length = entry.length
             if (length <= 0) continue
             // Issue #717 评论 5742904417 修复1：边界检查用 rawText 长度。
-            if (oldStart + length > prev.effectiveRawText.length) continue
-            if (newStart + length > curr.effectiveRawText.length) continue
+            if (oldStart + length > prev.result.layoutInput.text.text.length) continue
+            if (newStart + length > curr.result.layoutInput.text.text.length) continue
 
             val chunks = splitEntryByVisualLines(prev, curr, oldStart, newStart, length)
             mergeChunksIntoMoves(chunks, moves)
@@ -572,8 +569,8 @@ internal object ComposeVisualRebase {
     ): List<RetainedMoveChunk> {
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
         // avoidSurrogateCut 接收 CharSequence，String 兼容。
-        val oldText = prevSnapshot.effectiveRawText
-        val newText = currSnapshot.effectiveRawText
+        val oldText = prevSnapshot.result.layoutInput.text.text
+        val newText = currSnapshot.result.layoutInput.text.text
         val cutOffsets = sortedSetOf(0, length)
         var scan = 0
         while (scan < length) {
@@ -711,8 +708,8 @@ internal object ComposeVisualRebase {
                 ?: (effectiveNewRanges.maxOfOrNull { it.end } ?: 0)
 
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val oldText = prev.effectiveRawText
-        val newText = curr.effectiveRawText
+        val oldText = prev.result.layoutInput.text.text
+        val newText = curr.result.layoutInput.text.text
         val oldTextLen = oldText.length
         val newTextLen = newText.length
 

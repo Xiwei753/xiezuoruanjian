@@ -11,9 +11,7 @@ import com.xiwei.sujian.core.interop.diagnostics.EditorDiagnosticsEvents
 import com.xiwei.sujian.feature.editor.input.EditorInputSnapshot
 import com.xiwei.sujian.feature.editor.input.InputSnapshotOutcome
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
-import com.xiwei.sujian.feature.editor.layout.EditorSoftBreakProjection
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -62,6 +60,13 @@ class ComposeEditorVisualState(
 
     /** 持续视觉时间线 — 真正长期存在的屏幕动画状态。 */
     private val visualTimeline = ComposeVisualTimeline()
+
+    /**
+     * Issue #728 评论 5754045689：统一编辑 motion —
+     * 一笔编辑只创建一个 motion，同一只钟驱动 caret 移动和文字吞吐。
+     * null 表示无 active motion（首帧/动画完成/policy 切换后）。
+     */
+    private var activeEditMotion: ComposeEditMotion? = null
 
     /** 最新 layout 快照 — 供 overlay 读取 bounding box。 */
     private val _latestLayout = MutableStateFlow<ComposeLayoutSnapshot?>(null)
@@ -345,7 +350,7 @@ class ComposeEditorVisualState(
                 ) {
                     val latest = _latestLayout.value
                     // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-                    if (latest != null && latest.effectiveRawText == snapshot.text) {
+                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
                         // 同步 coordinator baseline，不生成 local patch
                         frameCoordinator.observePresentedLayout(latest)
                         lastPresentedLayout = latest
@@ -365,7 +370,7 @@ class ComposeEditorVisualState(
                 if (!compositionActive && (wasCompositionActiveForSnapshot || compositionPhaseActive)) {
                     val latest = _latestLayout.value
                     // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-                    if (latest != null && latest.effectiveRawText == snapshot.text) {
+                    if (latest != null && latest.result.layoutInput.text.text == snapshot.text) {
                         finishCompositionCommit(snapshot.text, latest)
                     } else {
                         // final text 对应的新 layout 还没到，记 pending
@@ -402,7 +407,7 @@ class ComposeEditorVisualState(
                 newStart = snapshot.selection.start,
                 newEnd = snapshot.selection.end,
                 // Issue #717 评论 5742904417 修复1：正文长度记 raw 长度。
-                layoutTextLength = _latestLayout.value?.effectiveRawText?.length ?: -1,
+                layoutTextLength = _latestLayout.value?.result?.layoutInput?.text?.text?.length ?: -1,
             )
         }
         lastResolvedSelection = snapshot.selection
@@ -603,9 +608,9 @@ class ComposeEditorVisualState(
     ) {
         val baseLayout = compositionBaseLayout
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        if (baseLayout != null && baseLayout.effectiveRawText != commitText) {
+        if (baseLayout != null && baseLayout.result.layoutInput.text.text != commitText) {
             // 用 compositionBaseLayout -> finalLayout 生成 patch
-            val baseOldText = baseLayout.effectiveRawText
+            val baseOldText = baseLayout.result.layoutInput.text.text
             val localChain = localInputTracker.drainMatchingChain(baseOldText, commitText)
             if (localChain != null) {
                 val localPatch = buildLocalInputPatch(localChain, baseLayout, finalLayout)
@@ -662,8 +667,8 @@ class ComposeEditorVisualState(
         val newText = lastEdit.newText
         // 防御性：配对的 chain 首笔 oldText / 末笔 newText 必须与 layout 一致
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        if (oldText != oldLayout.effectiveRawText) return null
-        if (newText != newLayout.effectiveRawText) return null
+        if (oldText != oldLayout.result.layoutInput.text.text) return null
+        if (newText != newLayout.result.layoutInput.text.text) return null
         val oldLength = oldText.length
         val newLength = newText.length
 
@@ -831,10 +836,8 @@ class ComposeEditorVisualState(
         selection: TextRange,
         scrollY: Int,
         compositionActive: Boolean = false,
-        projection: EditorSoftBreakProjection = EditorSoftBreakProjection.identity(),
-        rawText: String? = null,
     ) {
-        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY, projection, rawText)
+        val snapshot = ComposeLayoutSnapshot(result, selection, scrollY)
 
         // #708 评论 5723410606 第三节：layout 回路真正断开 —
         // onAuthoritativeLayout 最前面先算 fingerprint。
@@ -866,7 +869,7 @@ class ComposeEditorVisualState(
         // 暂存 pendingCompositionCommitText，等下一份 onAuthoritativeLayout 到达时收口。
         val pending = pendingCompositionCommitText
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val newTextForPending = snapshot.effectiveRawText
+        val newTextForPending = snapshot.result.layoutInput.text.text
         if (pending != null && newTextForPending == pending && !compositionActive) {
             pendingCompositionCommitText = null
             finishCompositionCommit(pending, snapshot)
@@ -899,8 +902,8 @@ class ComposeEditorVisualState(
         // 用 drainMatchingChain 按 lastPresentedLayout.text -> newText 找连续 chain，
         // 修复快速输入中间 layout 被跳过时旧 drainMatching 只返回最后一笔导致 patch 被丢的问题。
         // Issue #717 评论 5742904417 修复1：文本身份用 rawText（不含 U+200B）。
-        val newText = snapshot.effectiveRawText
-        val presentedOldText = lastPresentedLayout?.effectiveRawText ?: ""
+        val newText = snapshot.result.layoutInput.text.text
+        val presentedOldText = lastPresentedLayout?.result?.layoutInput?.text?.text ?: ""
         val localChain =
             if (!compositionActive) {
                 localInputTracker.drainMatchingChain(presentedOldText, newText)
@@ -925,7 +928,7 @@ class ComposeEditorVisualState(
                     Log.d(
                         TAG,
                         "local_patch_published: id=${localPatch.id} " +
-                            "oldLen=${oldLayout.effectiveRawText.length} " +
+                            "oldLen=${oldLayout.result.layoutInput.text.text.length} " +
                             "newLen=${newText.length} chainSize=${localChain.size}",
                     )
                 }
@@ -1036,7 +1039,7 @@ class ComposeEditorVisualState(
         return LayoutFingerprint(
             // Issue #717 评论 5742904417 修复1：fingerprint 用 rawText（不含 U+200B），
             // 与 visual pipeline 文本身份判断一致。
-            text = snapshot.effectiveRawText,
+            text = snapshot.result.layoutInput.text.text,
             width = result.size.width,
             height = result.size.height,
             lines = lines,
@@ -1106,6 +1109,47 @@ class ComposeEditorVisualState(
             patch = framePatch,
             frameTimeNanos = frameTimeNanos,
         )
+        // Issue #728 评论 5754045689：构造/重定向 activeEditMotion —
+        // 从 timeline 拿当前 inserted/deleted unit keys，用 patch 的 caret rect 构造或重定向 motion。
+        val (insertedKeys, deletedKeys) = visualTimeline.activeEditUnitKeys()
+        val policy = framePatch.motionPolicy.effective()
+        val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+        val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+        if (insertedKeys.isEmpty() && deletedKeys.isEmpty()) {
+            // selection-only 移动：caret 单独用 cursorDurationMillis，文字 units 为空
+            activeEditMotion =
+                ComposeEditMotion.forSelectionMove(
+                    originCaretRect = framePatch.originCaretRect,
+                    targetCaretRect = framePatch.targetCaretRect,
+                    frameTimeNanos = frameTimeNanos,
+                    durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                )
+        } else {
+            val existing = activeEditMotion
+            // 一笔编辑一只钟：text edit 时 caret 和文字共用 textDurationMillis
+            val editDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
+            activeEditMotion =
+                if (existing != null && !existing.isFinished(frameTimeNanos)) {
+                    // 快速连续输入：从当前 sample 重定向，不重新起播
+                    existing.redirectTo(
+                        newOriginCaretRect = framePatch.originCaretRect,
+                        newTargetCaretRect = framePatch.targetCaretRect,
+                        newInsertedUnitKeys = insertedKeys,
+                        newDeletedUnitKeys = deletedKeys,
+                        frameTimeNanos = frameTimeNanos,
+                        durationNanos = editDurationNanos,
+                    )
+                } else {
+                    ComposeEditMotion.forEdit(
+                        originCaretRect = framePatch.originCaretRect,
+                        targetCaretRect = framePatch.targetCaretRect,
+                        insertedUnitKeys = insertedKeys,
+                        deletedUnitKeys = deletedKeys,
+                        frameTimeNanos = frameTimeNanos,
+                        durationNanos = editDurationNanos,
+                    )
+                }
+        }
         return listOf(framePatch)
     }
 
@@ -1121,11 +1165,22 @@ class ComposeEditorVisualState(
      * @return 当前应绘制的视觉场景。
      */
     fun sampleVisualScene(frameTimeNanos: Long): ComposeVisualScene {
-        val scene = visualTimeline.sample(frameTimeNanos)
+        // Issue #728 评论 5754045689：先 sample activeEditMotion，再把同一份 sample 传给 timeline。
+        val motionSample = activeEditMotion?.sample(frameTimeNanos)
+        val scene = visualTimeline.sample(frameTimeNanos, motionSample)
         _visualScene.update { scene }
-        // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene —
+        // #708 评论 5723410606 第一节：同步 draw snapshot 的 scene + caretRect —
         // draw 层下一帧 drawWithContent 直接读，不在 Composable 主体读 visualScene StateFlow。
-        drawSnapshotState = drawSnapshotState.copy(scene = scene)
+        // Issue #728：caretRect 由 activeEditMotion 统一产生，写进 draw snapshot 供 draw 层画 caret。
+        drawSnapshotState =
+            drawSnapshotState.copy(
+                scene = scene,
+                caretRect = motionSample?.caretRect,
+            )
+        // motion 完成后清掉，避免持续 sample 已结束的 motion
+        if (motionSample != null && motionSample.finished) {
+            activeEditMotion = null
+        }
         return scene
     }
 
@@ -1135,7 +1190,8 @@ class ComposeEditorVisualState(
      * @param frameTimeNanos 当前帧时间戳。
      */
     fun hasActiveVisuals(frameTimeNanos: Long): Boolean {
-        return visualTimeline.hasActiveAnimation(frameTimeNanos)
+        return visualTimeline.hasActiveAnimation(frameTimeNanos) ||
+            (activeEditMotion != null && !activeEditMotion!!.isFinished(frameTimeNanos))
     }
 
     /**
@@ -1151,6 +1207,8 @@ class ComposeEditorVisualState(
         _latestPatch.update { null }
         // #691 评论 5679242735 修改2：重置运行时 policy 切换状态
         currentMotionPolicy = null
+        // Issue #728：清空统一编辑 motion
+        activeEditMotion = null
         // #694 评论第 3 步：清空本地输入配对状态
         localInputTracker.clear()
         lastPresentedLayout = null
@@ -1191,8 +1249,14 @@ class ComposeEditorVisualState(
         // 清掉旧 text units / ghost
         visualTimeline.settleForPolicyChange()
         _visualScene.update { ComposeVisualScene.Empty }
-        // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene
-        drawSnapshotState = drawSnapshotState.copy(scene = ComposeVisualScene.Empty)
+        // Issue #728：清掉旧 activeEditMotion
+        activeEditMotion = null
+        // #708 评论 5723410606 第一节：同步清 draw snapshot 的 scene + caretRect
+        drawSnapshotState =
+            drawSnapshotState.copy(
+                scene = ComposeVisualScene.Empty,
+                caretRect = null,
+            )
         // 把已入队 patch 的 motionPolicy 替换成最新 policy
         // Issue #723 评论 5750100004：p 现在是 PendingPatch，保持 sequence 不变，只替换 patch 的 motionPolicy。
         if (pendingPatches.isNotEmpty()) {

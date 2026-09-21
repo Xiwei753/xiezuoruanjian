@@ -487,6 +487,9 @@ def rule_visual_motion_pure() -> list[Finding]:
             # #708 评论 5727808906：抽取的共享 clip fraction 纯计算 helper，
             # 引用 Rect 做显示数据，与 ComposeVisualRebase 同类，不写正文持久状态。
             "feature/editor/visual/ComposeVisualClip.kt",
+            # Issue #728 评论 5754045689：统一编辑 motion 纯数据类，
+            # 引用 Rect 做 caret 几何数据，与 ComposeVisualPatch 同类，不写正文持久状态。
+            "feature/editor/visual/ComposeEditMotion.kt",
         }
         findings = [f for f in findings if f.path not in _641_visual_exemptions]
         if sub == "/feature/editor/motion/":

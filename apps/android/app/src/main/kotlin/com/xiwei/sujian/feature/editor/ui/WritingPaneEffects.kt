@@ -286,6 +286,8 @@ internal fun WritingPaneMotionPolicySync(
             EditorMotionPolicy(
                 textEnabled = settings.typingAnimationEnabled,
                 textDurationMillis = settings.typingAnimationDurationMs,
+                cursorEnabled = settings.smoothCursorEnabled,
+                cursorDurationMillis = settings.smoothCursorDurationMs,
                 coordinated = settings.coordinatedTextCursorAnimationEnabled,
                 reduceMotion = settings.reduceMotion,
             ),

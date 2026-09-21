@@ -17,6 +17,9 @@ class EditorMotionPolicyTest {
         assertTrue("Core default: coordinated enabled", policy.coordinated)
         assertFalse("Core default: reduce motion disabled", policy.reduceMotion)
         assertEquals(100L, policy.textDurationMillis)
+        // Issue #728：cursor settings defaults
+        assertTrue("Core default: cursor animation enabled", policy.cursorEnabled)
+        assertEquals(100L, policy.cursorDurationMillis)
     }
 
     @Test
@@ -24,11 +27,13 @@ class EditorMotionPolicyTest {
         val policy =
             EditorMotionPolicy(
                 textEnabled = true,
+                cursorEnabled = true,
                 coordinated = true,
                 reduceMotion = true,
             )
         val effective = policy.effective()
         assertFalse("reduce-motion disables text", effective.textEnabled)
+        assertFalse("reduce-motion disables cursor", effective.cursorEnabled)
         assertFalse("reduce-motion disables coordinated", effective.coordinated)
     }
 
@@ -51,14 +56,17 @@ class EditorMotionPolicyTest {
         // Issue #723 评论 5749023316 缺口2：coordinated=true 时 effective() 强制
         // textEnabled=true，收死旧持久化状态
         // （coordinated=true 但 textEnabled=false）。
+        // Issue #728：coordinated=true 也强制 cursorEnabled=true。
         val legacyPolicy =
             EditorMotionPolicy(
                 textEnabled = false,
+                cursorEnabled = false,
                 coordinated = true,
                 reduceMotion = false,
             )
         val effective = legacyPolicy.effective()
         assertTrue("coordinated=true → effective() 强制 textEnabled=true", effective.textEnabled)
+        assertTrue("coordinated=true → effective() 强制 cursorEnabled=true", effective.cursorEnabled)
         assertTrue("coordinated 标记保持 true", effective.coordinated)
     }
 

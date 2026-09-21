@@ -19,10 +19,10 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.drawText
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import com.xiwei.sujian.feature.editor.layout.pathForRawRange
 
 /**
@@ -68,6 +68,9 @@ import com.xiwei.sujian.feature.editor.layout.pathForRawRange
  * @param visualState 编辑器视觉状态。
  * @param scrollY 当前滚动位置（px）— 与 BasicTextField 共享 scrollState.value。
  * @param textColor 文字颜色 — 从主题 role 注入。
+ * @param cursorColor 光标颜色 — 从主题 role 注入。
+ *   Issue #728 评论 5754045689：系统 caret 已透明（cursorBrush = Color.Transparent），
+ *   draw 层用统一 motion 的 caretRect 画 caret。
  * @param modifier Compose modifier。
  * @param content 被包住的正文 composable — 通常是 [BasicTextField]。
  *   本 draw 层用 `drawWithContent` 在绘制阶段裁切 hiddenRanges，使 content 只在非 hidden 区域可见。
@@ -78,6 +81,7 @@ fun EditorTextFieldDrawLayer(
     visualState: ComposeEditorVisualState,
     scrollY: Int,
     textColor: Color,
+    cursorColor: Color,
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
@@ -114,8 +118,10 @@ fun EditorTextFieldDrawLayer(
                     drawCurrentEditorFrame(
                         scene = snapshot.scene,
                         latestLayout = snapshot.layout,
+                        caretRect = snapshot.caretRect,
                         scrollY = scrollY,
                         textColor = textColor,
+                        cursorColor = cursorColor,
                         density = density,
                         drawContent = { this@drawWithContent.drawContent() },
                     )
@@ -155,7 +161,7 @@ private fun DrawScope.buildHiddenPath(
 ): Path? {
     if (hiddenRanges.isEmpty() || layout == null) return null
     // Issue #717 评论 5742904417 修复1：hiddenRanges 是 raw 坐标，textLength 用 rawText 长度。
-    val textLength = layout.effectiveRawText.length
+    val textLength = layout.result.layoutInput.text.text.length
     var combined: Path? = null
     for (range in hiddenRanges) {
         if (range.start >= range.end) continue
@@ -204,7 +210,7 @@ private fun DrawScope.drawVisualScene(
         val snapshot = unit.layout
         val result = snapshot.result
         // Issue #717 评论 5742904417 修复1：unit.range 是 raw 坐标，边界检查用 rawText 长度。
-        if (range.end > snapshot.effectiveRawText.length) continue
+        if (range.end > snapshot.result.layoutInput.text.text.length) continue
         // alpha 已由 timeline 算好，直接读 unit.alpha.from（sample 后 from == 当前值）
         val rawAlpha = unit.alpha.from.coerceIn(0f, 1f)
         // #703 评论 5709208101 问题2：coordinated + spatial clip 模式下 alpha 固定 1 —
@@ -373,11 +379,17 @@ private fun DrawScope.drawTranslatedRangeText(
  *
  * 1. 对 BasicTextField 做 hiddenRanges 裁切并 drawContent()
  * 2. 画 drawVisualScene()
+ * 3. Issue #728 评论 5754045689：画统一 motion caret —
+ *    caretRect 非 null 时画一条竖线（caretRect.width 或默认 2dp），
+ *    系统 caret 已透明，由本层统一画。
  *
  * @param scene 当前视觉场景。
  * @param latestLayout 当前 layout 快照。
+ * @param caretRect 当前帧的 caret rect — 由 [ComposeEditMotion.Sample.caretRect] 产生。
+ *   null 表示无 active motion，不画 caret。
  * @param scrollY 当前滚动位置。
  * @param textColor 文字颜色。
+ * @param cursorColor 光标颜色。
  * @param density 密度信息。
  * @param drawContent 绘制 BasicTextField 内容的回调。
  */
@@ -385,8 +397,10 @@ private fun DrawScope.drawTranslatedRangeText(
 internal fun DrawScope.drawCurrentEditorFrame(
     scene: ComposeVisualScene,
     latestLayout: ComposeLayoutSnapshot?,
+    caretRect: Rect?,
     scrollY: Int,
     textColor: Color,
+    cursorColor: Color,
     density: androidx.compose.ui.unit.Density,
     drawContent: () -> Unit,
 ) {
@@ -417,6 +431,56 @@ internal fun DrawScope.drawCurrentEditorFrame(
         )
     }
 
-    // Issue #725 评论 5750735497：停止自绘屏幕 caret —
-    // 屏幕光标始终由 BasicTextField 自己画，draw 层不再画视觉光标。
+    // 3. Issue #728 评论 5754045689：画统一 motion caret —
+    // caretRect 非 null 时画一条竖线，系统 caret 已透明。
+    if (caretRect != null && cursorColor != Color.Transparent) {
+        drawVisualCaretRect(
+            caretRect = caretRect,
+            scrollY = scrollY,
+            cursorColor = cursorColor,
+            density = density,
+        )
+    }
+}
+
+/**
+ * Issue #728 评论 5754045689：画统一 motion caret —
+ * 用 [ComposeEditMotion.Sample.caretRect] 给的 rect 画一条竖线。
+ *
+ * rect.width > 0 时直接用 rect 的宽度（来自 TextLayoutResult 的 cursor rect）；
+ * rect.width == 0 时用 2dp 默认宽度（系统 cursor 的标准宽度）。
+ * rect 已是正文坐标系，需要减 scrollY 换算到视口坐标。
+ *
+ * @param caretRect caret 的 rect（正文坐标系）。
+ * @param scrollY 当前滚动位置（px）。
+ * @param cursorColor 光标颜色。
+ * @param density 密度信息 — 用于 dp→px 换算。
+ */
+private fun DrawScope.drawVisualCaretRect(
+    caretRect: Rect,
+    scrollY: Int,
+    cursorColor: Color,
+    density: androidx.compose.ui.unit.Density,
+) {
+    val viewportTop = caretRect.top - scrollY.toFloat()
+    val viewportBottom = caretRect.bottom - scrollY.toFloat()
+    val width = caretRect.width
+    val caretWidthPx =
+        if (width > 0f) {
+            width
+        } else {
+            with(density) { 2.dp.toPx() }
+        }
+    val caretLeft =
+        if (width > 0f) {
+            caretRect.left
+        } else {
+            // width == 0：rect 是单条竖线位置，以 left 为中心画 caretWidthPx 宽
+            caretRect.left - caretWidthPx / 2f
+        }
+    drawRect(
+        color = cursorColor,
+        topLeft = Offset(caretLeft, viewportTop),
+        size = androidx.compose.ui.geometry.Size(caretWidthPx, viewportBottom - viewportTop),
+    )
 }

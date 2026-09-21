@@ -20,13 +20,17 @@ import androidx.compose.runtime.Immutable
  * - reduceMotion=true: 所有动画降级为静态更新（等价于 textEnabled=false），
  *   但编辑器仍正常工作。
  *
- * Issue #725：自绘 caret 已删除，cursorEnabled / cursorDurationMillis 不再暴露。
- * 光标动画由系统 BasicTextField 处理，本策略只管文字动画与协同模式。
+ * Issue #728 评论 5754045689：重新由 [ComposeEditMotion] 统一画 caret —
+ * [cursorEnabled] / [cursorDurationMillis] 重新暴露，控制 caret 动画开关和时长。
+ * 一笔编辑一只钟：text edit 时 caret 和文字共用 textDurationMillis；
+ * selection-only 移动（无文字变化）时 caret 单独用 cursorDurationMillis。
  */
 @Immutable
 data class EditorMotionPolicy(
     val textEnabled: Boolean = true,
     val textDurationMillis: Long = 100L,
+    val cursorEnabled: Boolean = true,
+    val cursorDurationMillis: Long = 100L,
     val coordinated: Boolean = true,
     val reduceMotion: Boolean = false,
 ) {
@@ -46,8 +50,8 @@ data class EditorMotionPolicy(
      */
     fun effective(): EditorMotionPolicy =
         when {
-            reduceMotion -> copy(textEnabled = false, coordinated = false)
-            coordinated -> copy(textEnabled = true)
+            reduceMotion -> copy(textEnabled = false, cursorEnabled = false, coordinated = false)
+            coordinated -> copy(textEnabled = true, cursorEnabled = true)
             else -> this
         }
 }

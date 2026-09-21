@@ -4,7 +4,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextRange
 import com.xiwei.sujian.feature.editor.layout.ComposeLayoutSnapshot
 import com.xiwei.sujian.feature.editor.layout.boundsForRawRange
-import com.xiwei.sujian.feature.editor.layout.effectiveRawText
 import kotlin.math.max
 
 /**
@@ -337,7 +336,7 @@ class ComposeVisualTimeline {
         val offsetMap = patch.offsetMap
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：target 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         for (unit in sampledUnits) {
             val target = unit.targetRange
             if (target == null) {
@@ -561,7 +560,7 @@ class ComposeVisualTimeline {
     ): RepartitionResult {
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：insertedUnits 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         val validInsertedRanges = patch.insertedUnits.filter { it.start < it.end && it.end <= newTextLength }
 
         // 构建待显示序列：pendingSurviving + 新 insertedRanges，按正文顺序（range.start）排序。
@@ -679,7 +678,7 @@ class ComposeVisualTimeline {
         durationNanos: Long,
     ) {
         // Issue #717 评论 5742904417 修复1：deletedUnits 是 raw 坐标，边界检查用 rawText 长度。
-        val oldTextLength = oldLayout.effectiveRawText.length
+        val oldTextLength = oldLayout.result.layoutInput.text.text.length
         val orderedRanges = orderedDeletedUnits.filter { it.start < it.end && it.end <= oldTextLength }
         // #694 评论 5693864609 问题1：删除 schedule — 有界窗口分段
         // n = orderedRanges.size, unit i: [i/n, (i+1)/n]
@@ -803,7 +802,7 @@ class ComposeVisualTimeline {
     ) {
         val newLayout = patch.newLayout
         // Issue #717 评论 5742904417 修复1：retainedMoves.newRange 是 raw 坐标，边界检查用 rawText 长度。
-        val newTextLength = newLayout.effectiveRawText.length
+        val newTextLength = newLayout.result.layoutInput.text.text.length
         for (move in patch.retainedMoves) {
             val newRange = move.newRange
             if (newRange.start >= newRange.end) continue
@@ -886,9 +885,15 @@ class ComposeVisualTimeline {
      * 否则 units 里残留的 unit 会在下次 applyPatch 时被处理，可能导致问题。
      *
      * @param frameTimeNanos 当前帧时间戳。
+     * @param motionSample Issue #728：统一编辑 motion 的 sample 结果 —
+     *   unitClipFractions 直接用 motion sample 给的值，不再独立维护 clip fraction 时间。
+     *   null 表示无 active motion（如 textEnabled=false），clip fraction 用默认值。
      * @return 当前场景（units + hiddenRanges）。
      */
-    fun sample(frameTimeNanos: Long): ComposeVisualScene {
+    fun sample(
+        frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample? = null,
+    ): ComposeVisualScene {
         // 缺陷3：收口 — 移除已稳定的 unit，只保留仍需 overlay 接管的 unit
         val remainingUnits = mutableListOf<VisualTextUnit>()
         val sampledUnits = mutableListOf<VisualTextUnit>()
@@ -936,15 +941,11 @@ class ComposeVisualTimeline {
                 .filter { it.targetRange != null }
                 .mapNotNull { it.targetRange }
                 .filter { it.start < it.end }
-        // #703 评论 B：空间进度驱动吞吐字 — Issue #725 评论 5750735497：
-        // clipFraction 不再由屏幕光标位置算，改由 unit 的 alpha 通道直接驱动。
-        // - Inserted unit（alpha 0→1）：clipFraction = currentAlpha，字从左向右吐出。
-        // - DeletedGhost（alpha 1→0）：clipFraction = currentAlpha，字从右向左被吞掉。
-        // - RetainedMove：clipFraction = 1f（始终完整可见，不参与裁切）。
-        // alpha 通道本身已由 repartitionPendingAndInsertedUnits 按正文顺序均匀分段，
-        // 保留了"沿输入顺序吐字/吞字"的效果，不需要屏幕光标当进度尺。
-        val computedClip = computeUnitClipFractions(sampledUnits, frameTimeNanos)
-        val unitClipFractions = computedClip
+        // Issue #728 评论 5754045689：clip fraction 统一由 ComposeEditMotion 驱动 —
+        // 不再独立维护 clip fraction 时间（删除 ComposeTextRevealTrack）。
+        // motion sample 提供 unitClipFractions（按 unit key），直接使用。
+        // motionSample == null 时用默认值（RetainedMove→1, Inserted→0, DeletedGhost→1）。
+        val unitClipFractions = computeUnitClipFractions(sampledUnits, motionSample)
         return ComposeVisualScene(
             units = sampledUnits,
             hiddenRanges = hiddenRanges,
@@ -955,36 +956,33 @@ class ComposeVisualTimeline {
 
     /**
      * #703 评论 B / Issue #725 评论 5750735497：空间进度驱动吞吐字 —
-     * clipFraction 直接由 unit 的 reveal 通道驱动，不再由屏幕光标位置算。
+     * Issue #728 评论 5754045689：clip fraction 统一由 [ComposeEditMotion] 驱动 —
+     * 直接读 motionSample.unitClipFractions，不再独立维护 clip fraction 时间
+     * （删除 ComposeTextRevealTrack）。
      *
-     * - Inserted unit（reveal 0→1）：clipFraction = currentReveal，字从左向右吐出。
-     * - DeletedGhost（reveal 1→0）：clipFraction = currentReveal，字从右向左被吞掉。
-     * - RetainedMove：clipFraction = 1f（始终完整可见，不参与裁切）。
+     * - motionSample 非 null 且包含 unit key：用 motion 给的 fraction。
+     * - motionSample == null 或不包含 unit key：用默认值
+     *   （Inserted→0, DeletedGhost→1, RetainedMove→1）。
      *
-     * reveal 通道独立后，split 时每个 child 有自己的 reveal 通道，
-     * 不再共享 parent 的 alpha 通道，避免 parent fraction 和 child 局部 fraction 互相打架。
-     *
-     * @param units 当前帧的 sampled units（alpha/position/reveal 已插值到当前帧）。
-     * @param frameTimeNanos 当前帧时间戳。
+     * @param units 当前帧的 sampled units。
+     * @param motionSample 统一编辑 motion 的 sample 结果。
      * @return unit key → 可见 fraction（0..1）。
      */
     private fun computeUnitClipFractions(
         units: List<VisualTextUnit>,
-        frameTimeNanos: Long,
+        motionSample: ComposeEditMotion.Sample?,
     ): Map<Long, Float> {
         if (units.isEmpty()) return emptyMap()
         val fractions = mutableMapOf<Long, Float>()
         for (unit in units) {
+            val motionFraction = motionSample?.unitClipFractions?.get(unit.key)
             val fraction =
-                when (unit.role) {
-                    VisualUnitRole.Inserted, VisualUnitRole.DeletedGhost ->
-                        // Issue #725 评论 5750735497：clipFraction 由纯文字时间线
-                        // [ComposeTextRevealTrack] 驱动（从 unit 的 reveal 通道采样），
-                        // 不再由屏幕光标位置算，也不会复制 AndroidX 的 caret 状态机。
-                        ComposeTextRevealTrack(clipFraction = unit.reveal)
-                            .sampleFraction(frameTimeNanos)
-                            .coerceIn(0f, 1f)
-                    VisualUnitRole.RetainedMove -> 1f
+                when {
+                    motionFraction != null -> motionFraction.coerceIn(0f, 1f)
+                    unit.role == VisualUnitRole.RetainedMove -> 1f
+                    unit.role == VisualUnitRole.Inserted -> 0f
+                    unit.role == VisualUnitRole.DeletedGhost -> 1f
+                    else -> 1f
                 }
             fractions[unit.key] = fraction
         }
@@ -1005,6 +1003,27 @@ class ComposeVisualTimeline {
                 !isPositionFinished(unit.position, frameTimeNanos) ||
                 !isAlphaFinished(unit.reveal, frameTimeNanos)
         }
+    }
+
+    /**
+     * Issue #728 评论 5754045689：暴露当前 active unit keys —
+     * 供 [ComposeEditorVisualState] 构造/重定向 [ComposeEditMotion]。
+     *
+     * @return Pair(insertedKeys, deletedKeys) —
+     *   insertedKeys: Inserted role 且 targetRange != null 的 unit keys；
+     *   deletedKeys: DeletedGhost role 的 unit keys。
+     */
+    internal fun activeEditUnitKeys(): Pair<Set<Long>, Set<Long>> {
+        val inserted = mutableSetOf<Long>()
+        val deleted = mutableSetOf<Long>()
+        for (unit in units) {
+            when (unit.role) {
+                VisualUnitRole.Inserted -> if (unit.targetRange != null) inserted.add(unit.key)
+                VisualUnitRole.DeletedGhost -> deleted.add(unit.key)
+                VisualUnitRole.RetainedMove -> {}
+            }
+        }
+        return inserted to deleted
     }
 
     /**

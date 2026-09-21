@@ -244,6 +244,8 @@ private fun SetupMotionPolicySync(
     androidx.compose.runtime.LaunchedEffect(
         settings.typingAnimationEnabled,
         settings.typingAnimationDurationMs,
+        settings.smoothCursorEnabled,
+        settings.smoothCursorDurationMs,
         settings.coordinatedTextCursorAnimationEnabled,
         settings.reduceMotion,
     ) {
@@ -252,6 +254,8 @@ private fun SetupMotionPolicySync(
                 com.xiwei.sujian.feature.editor.motion.EditorMotionPolicy(
                     textEnabled = settings.typingAnimationEnabled,
                     textDurationMillis = settings.typingAnimationDurationMs,
+                    cursorEnabled = settings.smoothCursorEnabled,
+                    cursorDurationMillis = settings.smoothCursorDurationMs,
                     coordinated = settings.coordinatedTextCursorAnimationEnabled,
                     reduceMotion = settings.reduceMotion,
                 ),

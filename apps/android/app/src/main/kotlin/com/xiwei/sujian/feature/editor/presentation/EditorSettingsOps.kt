@@ -45,6 +45,11 @@ suspend fun EditorViewModel.loadEditorSettingsSnapshot(): EditorSettingsState {
         autoIndentWidth = settings.autoIndentWidth,
         typingAnimationEnabled = settings.editorTypingAnimationEnabled,
         typingAnimationDurationMs = settings.editorTypingAnimationDurationMs.toLong(),
+        // Issue #728 评论 5754045689：smooth cursor 设置 —
+        // Core 持久化尚未有独立 cursor 字段，默认跟 typing animation 一致
+        // （#728 设计中 caret 和文字共用同一只钟）。
+        smoothCursorEnabled = settings.editorTypingAnimationEnabled,
+        smoothCursorDurationMs = settings.editorTypingAnimationDurationMs.toLong(),
         coordinatedTextCursorAnimationEnabled = settings.editorCoordinatedTextCursorAnimationEnabled,
         reduceMotion = isSystemReduceMotionEnabled(),
         autoSaveEnabled = settings.autoSaveEnabled,
