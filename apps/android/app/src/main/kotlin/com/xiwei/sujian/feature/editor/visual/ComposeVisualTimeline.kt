@@ -1062,80 +1062,60 @@ class ComposeVisualTimeline {
         }
     }
 
-/**
- * Issue #728 评论 5756468643 问题2：暴露带几何事实的 active unit descriptor —
- * 供 [ComposeEditorVisualState] 按正文 range/实际编辑方向排序，而不是按 unit.key 排序。
- *
- * unit.key 只是 timeline 分配的编号，不代表当前正文位置。
- * 真实连续编辑场景下 key 顺序会失真（左边新字 key 大、右边旧字 key 小），
- * 按 key sorted() 分配吐字/吞字区间会让 glyph schedule 顺序和光标位置相反。
- *
- * 排序规则：
- * - inserted：按 [targetRange.start] 排序（光标经过顺序，从左到右）。
- * - deleted：按 [range.start] 排序（光标回退顺序，从右到左时再反向）。
- *
- * @return Pair(insertedDescriptors, deletedDescriptors) —
- *   每个 descriptor 包含 key、role、range、layout 等必要信息，
- *   调用方按正文 range 排序后再把 keys 传给 [ComposeEditMotion.allocateEditRanges]。
- */
-internal fun activeEditUnits(): Pair<List<EditUnitDescriptor>, List<EditUnitDescriptor>> {
-    val inserted = mutableListOf<EditUnitDescriptor>()
-    val deleted = mutableListOf<EditUnitDescriptor>()
-    for (unit in units) {
-        when (unit.role) {
-            VisualUnitRole.Inserted -> {
-                val targetRange = unit.targetRange
-                if (targetRange != null) {
-                    inserted.add(
+    /**
+     * Issue #728 评论 5756468643 问题2：暴露带几何事实的 active unit descriptor —
+     * 供 [ComposeEditorVisualState] 按正文 range/实际编辑方向排序，而不是按 unit.key 排序。
+     *
+     * unit.key 只是 timeline 分配的编号，不代表当前正文位置。
+     * 真实连续编辑场景下 key 顺序会失真（左边新字 key 大、右边旧字 key 小），
+     * 按 key sorted() 分配吐字/吞字区间会让 glyph schedule 顺序和光标位置相反。
+     *
+     * 排序规则：
+     * - inserted：按 [targetRange.start] 排序（光标经过顺序，从左到右）。
+     * - deleted：按 [range.start] 排序（光标回退顺序，从右到左时再反向）。
+     *
+     * @return Pair(insertedDescriptors, deletedDescriptors) —
+     *   每个 descriptor 包含 key、role、range、layout 等必要信息，
+     *   调用方按正文 range 排序后再把 keys 传给 [ComposeEditMotion.allocateEditRanges]。
+     */
+    internal fun activeEditUnits(): Pair<List<EditUnitDescriptor>, List<EditUnitDescriptor>> {
+        val inserted = mutableListOf<EditUnitDescriptor>()
+        val deleted = mutableListOf<EditUnitDescriptor>()
+        for (unit in units) {
+            when (unit.role) {
+                VisualUnitRole.Inserted -> {
+                    val targetRange = unit.targetRange
+                    if (targetRange != null) {
+                        inserted.add(
+                            EditUnitDescriptor(
+                                key = unit.key,
+                                role = unit.role,
+                                targetRange = targetRange,
+                                sourceRange = null,
+                                layout = unit.layout,
+                            ),
+                        )
+                    }
+                }
+                VisualUnitRole.DeletedGhost -> {
+                    deleted.add(
                         EditUnitDescriptor(
                             key = unit.key,
                             role = unit.role,
-                            targetRange = targetRange,
-                            sourceRange = null,
+                            targetRange = null,
+                            sourceRange = unit.range,
                             layout = unit.layout,
-                        )
+                        ),
                     )
                 }
+                VisualUnitRole.RetainedMove -> {}
             }
-            VisualUnitRole.DeletedGhost -> {
-                deleted.add(
-                    EditUnitDescriptor(
-                        key = unit.key,
-                        role = unit.role,
-                        targetRange = null,
-                        sourceRange = unit.range,
-                        layout = unit.layout,
-                    )
-                )
-            }
-            VisualUnitRole.RetainedMove -> {}
         }
+        // 按正文位置排序：inserted 按 targetRange.start（光标经过顺序），deleted 按 range.start
+        inserted.sortBy { it.targetRange!!.start }
+        deleted.sortBy { it.sourceRange!!.start }
+        return inserted to deleted
     }
-    // 按正文位置排序：inserted 按 targetRange.start（光标经过顺序），deleted 按 range.start
-    inserted.sortBy { it.targetRange!!.start }
-    deleted.sortBy { it.sourceRange!!.start }
-    return inserted to deleted
-}
-
-/**
- * Issue #728 评论 5756468643 问题2：带几何事实的 active unit descriptor。
- *
- * 替代原来只暴露 key Set 的 [activeEditUnitKeys]，让调用方能按正文 range / 实际编辑方向排序，
- * 而不是按 unit.key（timeline 分配编号，不代表正文位置）。
- *
- * @param key unit 唯一标识。
- * @param role 视觉角色：Inserted / DeletedGhost / RetainedMove。
- * @param targetRange 对于 Inserted：该 unit 在新正文中的目标区间（光标经过顺序）。
- * @param sourceRange 对于 DeletedGhost：该 ghost 在旧正文中的来源区间（光标回退顺序）。
- * @param layout 该 unit 当前关联的 layout snapshot，可用于取 glyph bounds。
- */
-data class EditUnitDescriptor(
-    val key: Long,
-    val role: VisualUnitRole,
-    val targetRange: TextRange?,
-    val sourceRange: TextRange?,
-    val layout: ComposeLayoutSnapshot,
-)
 
     /**
      * 清除所有状态 — 章节切换或 detach 时调用。
@@ -1505,6 +1485,26 @@ data class EditUnitDescriptor(
         private const val NANOS_PER_MS = 1_000_000L
     }
 }
+
+/**
+ * Issue #728 评论 5756468643 问题2：带几何事实的 active unit descriptor。
+ *
+ * 替代原来只暴露 key Set 的 [ComposeVisualTimeline.activeEditUnits]，让调用方能按正文 range /
+ * 实际编辑方向排序，而不是按 unit.key（timeline 分配编号，不代表正文位置）。
+ *
+ * @param key unit 唯一标识。
+ * @param role 视觉角色：Inserted / DeletedGhost / RetainedMove。
+ * @param targetRange 对于 Inserted：该 unit 在新正文中的目标区间（光标经过顺序）。
+ * @param sourceRange 对于 DeletedGhost：该 ghost 在旧正文中的来源区间（光标回退顺序）。
+ * @param layout 该 unit 当前关联的 layout snapshot，可用于取 glyph bounds。
+ */
+data class EditUnitDescriptor(
+    val key: Long,
+    val role: VisualUnitRole,
+    val targetRange: TextRange?,
+    val sourceRange: TextRange?,
+    val layout: ComposeLayoutSnapshot,
+)
 
 /**
  * 把 parent reveal 进度投影到 child 局部区间 —

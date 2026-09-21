@@ -151,14 +151,16 @@ class ComposeEditMotion(
         val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
         // 先处理旧 unit 的相位归一化
         val oldUnitKeys = unitChannels.keys
-        val remainingOldKeys = oldUnitKeys.filter { key ->
-            key in newInsertedUnitKeys || key in newDeletedUnitKeys
-        }
-        val oldChannelsRenormalized = renormalizeChannelsForRedirect(
-            currentSample = currentSample,
-            oldGlyphProgress = glyphProgress,
-            newUnitChannels = unitChannels.filterKeys { it in remainingOldKeys },
-        )
+        val remainingOldKeys =
+            oldUnitKeys.filter { key ->
+                key in newInsertedUnitKeys || key in newDeletedUnitKeys
+            }
+        val oldChannelsRenormalized =
+            renormalizeChannelsForRedirect(
+                currentSample = currentSample,
+                oldGlyphProgress = glyphProgress,
+                newUnitChannels = unitChannels.filterKeys { it in remainingOldKeys },
+            )
         // 新 unit（不在旧 channels 里的）：按新顺序分配区间，接在旧 channel 剩余部分之后
         val newInsertedOnly = newInsertedUnitKeys - oldUnitKeys
         val newDeletedOnly = newDeletedUnitKeys - oldUnitKeys
@@ -234,11 +236,12 @@ class ComposeEditMotion(
         val origin = if (currentSample.finished) newOriginCaretRect else currentSample.caretRect
         // 当前 master glyph progress（旧 motion 中的相位）
         val glyphProgress = computeProgress(frameTimeNanos, glyphDurationNanos).value
-        val newChannels = renormalizeChannelsForRedirect(
-            currentSample = currentSample,
-            oldGlyphProgress = glyphProgress,
-            newUnitChannels = unitChannels,
-        )
+        val newChannels =
+            renormalizeChannelsForRedirect(
+                currentSample = currentSample,
+                oldGlyphProgress = glyphProgress,
+                newUnitChannels = unitChannels,
+            )
         return ComposeEditMotion(
             originCaretRect = origin,
             targetCaretRect = newTargetCaretRect,
@@ -279,12 +282,13 @@ class ComposeEditMotion(
             val currentFraction = currentSample.unitClipFractions[key] ?: ch.from
             if (oldGlyphProgress >= ch.endProgress) {
                 // 已完成：固定终值
-                result[key] = UnitChannel(
-                    from = currentFraction,
-                    to = currentFraction,
-                    startProgress = 0f,
-                    endProgress = 0f,
-                )
+                result[key] =
+                    UnitChannel(
+                        from = currentFraction,
+                        to = currentFraction,
+                        startProgress = 0f,
+                        endProgress = 0f,
+                    )
             } else if (oldGlyphProgress <= ch.startProgress) {
                 // 未开始：收集到 pending，权重 = 原区间长度
                 pendingUnits.add(key to ch)
