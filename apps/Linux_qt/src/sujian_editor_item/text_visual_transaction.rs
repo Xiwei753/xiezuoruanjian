@@ -182,6 +182,7 @@ impl VisualUnitTiming {
     }
 
     /// 是否为 CaretDriven（InsertReveal / DeleteConceal）。
+    #[cfg(test)]
     pub fn is_caret_driven(&self) -> bool {
         matches!(self, VisualUnitTiming::CaretDriven { .. })
     }
@@ -320,6 +321,7 @@ impl PreparedVisualUnit {
     /// Issue #727 约束 2: 判断单元是否已到达终态（不应再交棒）。
     /// CaretDriven unit：`start_fraction == target_fraction` 表示已到终态。
     /// Timed unit：`progress >= 1.0` 表示已播完。
+    #[cfg(test)]
     pub fn is_finished(&self, now: Instant) -> bool {
         match &self.timing {
             VisualUnitTiming::CaretDriven {

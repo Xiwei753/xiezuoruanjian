@@ -210,6 +210,7 @@ pub(crate) struct CoordinatedMotionFrame {
 
 impl CoordinatedMotionFrame {
     /// Issue #727 评论 5757225958 问题5: 构造带 owner_key 的 frame。
+    #[cfg(test)]
     pub fn with_owner_key(owner_key: Option<VisualTransactionKey>, caret: Option<SampledCaretFrame>) -> Self {
         Self { owner_key, caret }
     }

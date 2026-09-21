@@ -3187,7 +3187,7 @@ impl LinuxEditorAnimationCoordinator {
             return None;
         }
 
-        let old_rect = tx.old_cursor_rect.as_ref()?;
+        let _old_rect = tx.old_cursor_rect.as_ref()?;
         let new_rect = tx.new_cursor_rect.as_ref()?;
         let h = new_rect.bottom - new_rect.top;
 
