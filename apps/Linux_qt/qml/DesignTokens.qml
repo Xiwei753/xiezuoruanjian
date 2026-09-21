@@ -143,43 +143,57 @@ QtObject {
     // Issue #724 评论 5751573705 问题3: 所有派生 token 只读 resolvedTheme，
     // 不再独立 binding 到 themeControllerRef.*_hex。
     // applyThemeState() 整体替换 resolvedTheme 后 QML 统一更新。
+    // Issue #727 评论 5757225958 问题4: 唯一颜色边界 qcolor(value)。
+    // 所有最终颜色都经此函数转换，异常值用明显错误色（magenta #FF00FF），
+    // 不悄悄回退上一份颜色。Rust 侧 #DFE3E7 到 QML 仍是 #DFE3E7 而非 #000000。
+    function qcolor(value) {
+        if (typeof value !== "string" || value.length === 0) {
+            return Qt.rgba(1.0, 0.0, 1.0, 1.0) // magenta 表示异常
+        }
+        try {
+            return Qt.color(value)
+        } catch (e) {
+            return Qt.rgba(1.0, 0.0, 1.0, 1.0) // magenta 表示异常
+        }
+    }
+
     property bool isDark: resolvedTheme.is_dark
-    property color primary: resolvedTheme.primary
-    property color onPrimary: resolvedTheme.on_primary
-    property color primaryContainer: resolvedTheme.primary_container
-    property color onPrimaryContainer: resolvedTheme.on_primary_container
-    property color secondary: resolvedTheme.secondary
-    property color onSecondary: resolvedTheme.on_secondary
-    property color secondaryContainer: resolvedTheme.secondary_container
-    property color onSecondaryContainer: resolvedTheme.on_secondary_container
-    property color tertiary: resolvedTheme.tertiary
-    property color onTertiary: resolvedTheme.on_tertiary
-    property color tertiaryContainer: resolvedTheme.tertiary_container
-    property color onTertiaryContainer: resolvedTheme.on_tertiary_container
-    property color background: resolvedTheme.background
-    property color onBackground: resolvedTheme.on_background
-    property color surface: resolvedTheme.surface
-    property color onSurface: resolvedTheme.on_surface
-    property color surfaceVariant: resolvedTheme.surface_variant
-    property color onSurfaceVariant: resolvedTheme.on_surface_variant
-    property color surfaceTint: resolvedTheme.surface_tint
-    property color surfaceDim: resolvedTheme.surface_dim
-    property color surfaceBright: resolvedTheme.surface_bright
-    property color surfaceContainerLowest: resolvedTheme.surface_container_lowest
-    property color surfaceContainerLow: resolvedTheme.surface_container_low
-    property color surfaceContainer: resolvedTheme.surface_container
-    property color surfaceContainerHigh: resolvedTheme.surface_container_high
-    property color surfaceContainerHighest: resolvedTheme.surface_container_highest
-    property color inverseSurface: resolvedTheme.inverse_surface
-    property color inverseOnSurface: resolvedTheme.inverse_on_surface
-    property color inversePrimary: resolvedTheme.inverse_primary
-    property color error: resolvedTheme.error
-    property color onError: resolvedTheme.on_error
-    property color errorContainer: resolvedTheme.error_container
-    property color onErrorContainer: resolvedTheme.on_error_container
-    property color outline: resolvedTheme.outline
-    property color outlineVariant: resolvedTheme.outline_variant
-    property color scrim: resolvedTheme.scrim
+    property color primary: qcolor(resolvedTheme.primary)
+    property color onPrimary: qcolor(resolvedTheme.on_primary)
+    property color primaryContainer: qcolor(resolvedTheme.primary_container)
+    property color onPrimaryContainer: qcolor(resolvedTheme.on_primary_container)
+    property color secondary: qcolor(resolvedTheme.secondary)
+    property color onSecondary: qcolor(resolvedTheme.on_secondary)
+    property color secondaryContainer: qcolor(resolvedTheme.secondary_container)
+    property color onSecondaryContainer: qcolor(resolvedTheme.on_secondary_container)
+    property color tertiary: qcolor(resolvedTheme.tertiary)
+    property color onTertiary: qcolor(resolvedTheme.on_tertiary)
+    property color tertiaryContainer: qcolor(resolvedTheme.tertiary_container)
+    property color onTertiaryContainer: qcolor(resolvedTheme.on_tertiary_container)
+    property color background: qcolor(resolvedTheme.background)
+    property color onBackground: qcolor(resolvedTheme.on_background)
+    property color surface: qcolor(resolvedTheme.surface)
+    property color onSurface: qcolor(resolvedTheme.on_surface)
+    property color surfaceVariant: qcolor(resolvedTheme.surface_variant)
+    property color onSurfaceVariant: qcolor(resolvedTheme.on_surface_variant)
+    property color surfaceTint: qcolor(resolvedTheme.surface_tint)
+    property color surfaceDim: qcolor(resolvedTheme.surface_dim)
+    property color surfaceBright: qcolor(resolvedTheme.surface_bright)
+    property color surfaceContainerLowest: qcolor(resolvedTheme.surface_container_lowest)
+    property color surfaceContainerLow: qcolor(resolvedTheme.surface_container_low)
+    property color surfaceContainer: qcolor(resolvedTheme.surface_container)
+    property color surfaceContainerHigh: qcolor(resolvedTheme.surface_container_high)
+    property color surfaceContainerHighest: qcolor(resolvedTheme.surface_container_highest)
+    property color inverseSurface: qcolor(resolvedTheme.inverse_surface)
+    property color inverseOnSurface: qcolor(resolvedTheme.inverse_on_surface)
+    property color inversePrimary: qcolor(resolvedTheme.inverse_primary)
+    property color error: qcolor(resolvedTheme.error)
+    property color onError: qcolor(resolvedTheme.on_error)
+    property color errorContainer: qcolor(resolvedTheme.error_container)
+    property color onErrorContainer: qcolor(resolvedTheme.on_error_container)
+    property color outline: qcolor(resolvedTheme.outline)
+    property color outlineVariant: qcolor(resolvedTheme.outline_variant)
+    property color scrim: qcolor(resolvedTheme.scrim)
 
     // 派生色：没有直接对应的 scheme 字段，继续用 isDark 派生
     property color success: isDark ? Qt.rgba(0.561, 0.839, 0.639, 1) : Qt.rgba(0.122, 0.478, 0.271, 1)

@@ -304,12 +304,8 @@ pub struct SujianEditorItem {
     cursor_rect_width: qt_property!(f32; READ cursor_rect_width NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
     cursor_rect_height: qt_property!(f32; READ cursor_rect_height NOTIFY cursor_rect_changed),
-    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport y/h，
-    /// 供 QML auto-follow anchor 取锚点。
-    #[allow(dead_code)]
-    visual_cursor_rect_y: qt_property!(f32; READ visual_cursor_rect_y NOTIFY cursor_rect_changed),
-    #[allow(dead_code)]
-    visual_cursor_rect_height: qt_property!(f32; READ visual_cursor_rect_height NOTIFY cursor_rect_changed),
+    // Issue #727 评论 5757225958 问题2: 删除 visual_cursor_rect_y / visual_cursor_rect_height
+    // qt_property，这套只为 QML auto-follow anchor 服务的旧接口已无消费者。
     #[allow(dead_code)]
     cursor_visible: qt_property!(bool; READ cursor_visible NOTIFY cursor_rect_changed),
     #[allow(dead_code)]
@@ -525,8 +521,6 @@ impl Default for SujianEditorItem {
             cursor_rect_y: Default::default(),
             cursor_rect_width: Default::default(),
             cursor_rect_height: Default::default(),
-            visual_cursor_rect_y: Default::default(),
-            visual_cursor_rect_height: Default::default(),
             cursor_visible: Default::default(),
             cursor_blink_visible: Default::default(),
             cursor_should_be_visible: Default::default(),

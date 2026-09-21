@@ -499,13 +499,15 @@ impl SujianEditorItem {
     ///
     /// Issue #668: IME 查询永远读目标输入位置 `target_y`，不读动画中间态
     /// `visual_y`。预编辑期间仍优先读 preedit 自己的光标矩形。
+    /// Issue #727 评论 5757225958 问题1: cursor_ctrl.target_y 现在保存文档坐标，
+    /// QML/IME 边界返回前减 current_scroll_y 转视口坐标。
     pub(crate) fn cursor_rect_y(&self) -> f32 {
         if !self.pipeline.composition().preedit_text.is_empty() {
             if let Some(ref r) = self.pipeline.composition().preedit_cursor_rect {
                 return r.top as f32;
             }
         }
-        self.cursor_ctrl.target_y as f32
+        (self.cursor_ctrl.target_y - f64::from(self.current_scroll_y)) as f32
     }
 
     pub(crate) fn cursor_rect_width(&self) -> f32 {
@@ -516,19 +518,9 @@ impl SujianEditorItem {
         self.cursor_ctrl.ime_cursor_rect_h as f32
     }
 
-    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport y。
-    ///
-    /// QML 侧 auto-follow anchor 应取此值（而非 `cursor_rect_y` = target_y），
-    /// 因为 `cursor_rect_y` 是逻辑目标位置，不是上一帧真正画出来的位置。
-    /// 动画中间态时 visual_y 与 target_y 不同，anchor 必须取视觉实际位置。
-    pub(crate) fn visual_cursor_rect_y(&self) -> f32 {
-        self.cursor_ctrl.visual_y as f32
-    }
-
-    /// Issue #724 评论 5751573705 问题2: 上一帧真正画出的 caret viewport h。
-    pub(crate) fn visual_cursor_rect_height(&self) -> f32 {
-        self.cursor_ctrl.visual_h as f32
-    }
+    // Issue #727 评论 5757225958 问题2: 删除 visual_cursor_rect_y / visual_cursor_rect_height。
+    // 这两个方法只为 QML auto-follow anchor 服务，anchor 机制已删除（QML 不再调
+    // set_auto_follow_anchor_with_target），无消费者。
 
     pub(crate) fn anchor_rect_x(&self) -> f32 {
         if !self.buffer.has_selection() {
@@ -543,9 +535,13 @@ impl SujianEditorItem {
         if !self.buffer.has_selection() {
             return self.cursor_rect_y();
         }
-        self.cursor_ctrl
+        // Issue #727 评论 5757225958 问题1: anchor_visual_y 现在保存文档坐标，
+        // QML 边界返回前减 current_scroll_y 转视口坐标。
+        let doc_y = self
+            .cursor_ctrl
             .anchor_visual_y
-            .unwrap_or(self.cursor_ctrl.target_y) as f32
+            .unwrap_or(self.cursor_ctrl.target_y);
+        (doc_y - f64::from(self.current_scroll_y)) as f32
     }
 
     pub(crate) fn anchor_rect_width(&self) -> f32 {

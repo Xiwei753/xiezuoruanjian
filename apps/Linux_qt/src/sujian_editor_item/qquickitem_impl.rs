@@ -374,7 +374,8 @@ impl SujianEditorItem {
         // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
         // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
         // Issue #727 评论 5755858583 问题1: Coordinated/drawn_caret_rect 的 y 是文档坐标，
-        // visual_y 保持视口坐标，回写时减 scroll_y。
+        // visual_y 现在也统一保存文档坐标（与 cursor_ctrl.target_y 一致），
+        // 不再减 scroll_y。QML/IME 边界方法在返回前减 current_scroll_y 转视口坐标。
         match render_plan.cursor_sample_outcome {
             CursorSampleOutcome::Running(p) => {
                 self.cursor_ctrl.update_animation_progress(p);
@@ -386,9 +387,10 @@ impl SujianEditorItem {
             // 把 cursor_ctrl.visual_x/visual_y/visual_h 同步为本帧真正画出的位置，
             // 不启动 CursorAnimationState.started_at（不创建独立 timeline）。
             // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
+            // Issue #727 评论 5757225958 问题1: visual_y 保存文档坐标，不再减 scroll_y。
             CursorSampleOutcome::Coordinated { x, y, h } => {
                 self.cursor_ctrl.visual_x = x;
-                self.cursor_ctrl.visual_y = y - scroll_y;
+                self.cursor_ctrl.visual_y = y;
                 if h > 0.0 {
                     self.cursor_ctrl.visual_h = h;
                 }
@@ -411,11 +413,12 @@ impl SujianEditorItem {
         // 只允许从这个"上一帧真正画出来的位置" rebase。
         // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
         // 当前屏幕位置。
-        // Issue #727 评论 5755858583 问题1: drawn_caret_rect 的 y 是文档坐标，
-        // visual_y 保持视口坐标，回写时减 scroll_y。
+        // Issue #727 评论 5757225958 问题1: drawn_caret_rect 的 y 是文档坐标，
+        // visual_y 现在也统一保存文档坐标，不再减 scroll_y。
+        let _ = scroll_y;
         if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
             self.cursor_ctrl.visual_x = cx;
-            self.cursor_ctrl.visual_y = cy - scroll_y;
+            self.cursor_ctrl.visual_y = cy;
             if ch > 0.0 {
                 self.cursor_ctrl.visual_h = ch;
             }

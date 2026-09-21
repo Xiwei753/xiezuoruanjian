@@ -112,9 +112,13 @@ impl SujianEditorItem {
         // Issue #724 评论 5752398265: anchor 只在最终绘制时（build_render_plan_full）
         // 覆盖屏幕 y/h，不污染 find_cursor_transaction_for_target / build_cursor_plan
         // 的逻辑 cursor_y。scroll_y 始终用真实 current_scroll_y。
+        // Issue #727 评论 5757225958 问题1: cursor_ctrl.target_y/visual_y 统一保存
+        // 文档坐标（不减 scroll_y），和 scene graph cursor layer（QSGTransformNode 做
+        // translate(0, -scroll_y)）的假设一致。改用 editor_layout_cursor_rect_doc()
+        // 获取文档坐标 caret。QML/IME 边界方法在返回前减 current_scroll_y 转视口坐标。
         let scroll_y = f64::from(self.current_scroll_y);
         let layout_res =
-            self.editor_layout_cursor_rect(self.buffer.cursor, self.cursor_ctrl.affinity, scroll_y);
+            self.editor_layout_cursor_rect_doc(self.buffer.cursor, self.cursor_ctrl.affinity);
 
         let cursor_x = layout_res.x;
         let cursor_y = layout_res.y;
@@ -226,7 +230,9 @@ impl SujianEditorItem {
                     };
                     let baseline =
                         crate::editor::layout::text_baseline_y(line, font_size, font_family);
-                    let cursor_top_doc = cursor_y + scroll_y;
+                    // Issue #727 评论 5757225958 问题1: cursor_y 已是文档坐标，
+                    // 不需要再加 scroll_y 还原。
+                    let cursor_top_doc = cursor_y;
                     let cursor_top_to_baseline = baseline - cursor_top_doc;
                     let cursor_bottom_to_baseline = cursor_top_doc + cursor_h - baseline;
                     line_info = format!(
@@ -249,10 +255,11 @@ impl SujianEditorItem {
         }
 
         if self.buffer.has_selection() {
-            let anchor_layout = self.editor_layout_cursor_rect(
+            // Issue #727 评论 5757225958 问题1: anchor_visual_y 统一保存文档坐标，
+            // properties.rs::anchor_rect_y 在边界返回 doc_y - current_scroll_y。
+            let anchor_layout = self.editor_layout_cursor_rect_doc(
                 self.buffer.selection_anchor,
                 CaretAffinity::Downstream,
-                scroll_y,
             );
             self.cursor_ctrl.anchor_visual_x = Some(anchor_layout.x);
             self.cursor_ctrl.anchor_visual_y = Some(anchor_layout.y);

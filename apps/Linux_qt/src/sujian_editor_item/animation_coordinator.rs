@@ -2457,7 +2457,11 @@ impl LinuxEditorAnimationCoordinator {
         cursor_move_source: super::cursor_controller::CursorMoveSource,
         cursor_baseline_y: f64,
     ) -> CursorAnimationPlan {
-        let in_viewport = cursor_y + cursor_h > 0.0 && cursor_y < viewport_height;
+        // Issue #727 评论 5757225958 问题1: cursor_y 现在是文档坐标（caller 改用
+        // editor_layout_cursor_rect_doc），in_viewport 判断需要视口坐标 screen_y =
+        // cursor_y - scroll_y。cursor_ctrl.target_y/visual_y 统一保存文档坐标。
+        let screen_y = cursor_y - scroll_y;
+        let in_viewport = screen_y + cursor_h > 0.0 && screen_y < viewport_height;
         // Issue #724 评论 5750911834 问题 2: should_be_visible 不再用 !is_scrolling
         // 一刀切隐藏光标。滚动期间光标应保持可见（自动跟随滚动时光标在视口内
         // 同一相对位置；用户手动滚动时光标位置不变，只要 in_viewport 就应可见）。
@@ -2487,7 +2491,8 @@ impl LinuxEditorAnimationCoordinator {
         // is_selecting / !old_visible。
         // Issue #724 评论 5750911834 问题 2: is_scrolling 不再驱动 should_be_visible
         // 和 hard_snap，滚动的暂停和恢复由 set_is_scrolling() 单独控制。
-        let _ = scroll_y;
+        // Issue #727 评论 5757225958 问题1: scroll_y 现在用于 in_viewport 判断
+        //（cursor_y 是文档坐标），不再丢弃。
         let _ = is_scrolling;
 
         // Issue #712: 删除 cross_line_snap = dy > cursor_h * 3.0 按距离猜用户意图的规则，
@@ -2715,6 +2720,11 @@ impl LinuxEditorAnimationCoordinator {
 
         let (text_animation, keys_to_complete) =
             self.build_text_animation_plan_with_sample(&frame_sample, &coordinated_motion_frame);
+        // Issue #727 评论 5757225958 问题3: 先构建 keys_to_complete_set，
+        // 供 clip_rects 收集时跳过本帧即将完成的事务，避免"glyph 无、clip 有"
+        // 的一帧文字消失/闪烁。
+        let keys_to_complete_set: std::collections::HashSet<VisualTransactionKey> =
+            keys_to_complete.iter().copied().collect();
         frame_context.keys_to_complete = keys_to_complete;
         let active_keys: Vec<VisualTransactionKey> = self
             .prepared_queue
@@ -2731,18 +2741,21 @@ impl LinuxEditorAnimationCoordinator {
         // Issue #679 评论 5657313927 (3e): 只允许 Prepared / Rendering / Paused
         // 的事务裁剪静态正文；Pending 无论 texture_prepared 是什么都不能隐藏正文，
         // 否则资源还没准备好就会出现空洞。
-        // Issue #727 评论 5755858583 问题2+5: 无 caret frame 时不收集 CaretDriven units
+        // Issue #727 评论 5757225958 问题3: 收集 clip_rects 时跳过本帧 keys_to_complete
+        // 里的事务。既然这一帧已经不画 overlay（build_text_animation_plan_with_sample
+        // 完成帧 continue 跳过 glyph 生成），就必须同帧释放 static ownership，让 canonical
+        // 最终正文立即显示，避免"glyph 无、clip 有"的一帧文字消失/闪烁。
+        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
+        // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
+        // ownership），避免空洞。
+        // Issue #727 评论 5757225958 问题2+5: 无 caret frame 时不收集 CaretDriven units
         // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
         // ownership），避免空洞。
         let mut clip_rects: Vec<super::qt_text_node::AnimationClipRect> = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
             if tx.texture_prepared
-                && matches!(
-                    tx.state,
-                    TextVisualTransactionState::Prepared
-                        | TextVisualTransactionState::Rendering
-                        | TextVisualTransactionState::Paused
-                )
+                && tx.state.is_clip_eligible()
+                && !keys_to_complete_set.contains(&tx.key)
             {
                 let has_caret_frame = coordinated_motion_frame.caret.is_some();
                 for unit in &tx.units {
@@ -2883,7 +2896,10 @@ impl LinuxEditorAnimationCoordinator {
         let key = match self.active_text_transaction_key_with_epoch(cursor_owner_epoch) {
             Some(k) => k,
             None => {
-                return super::render_plan::CoordinatedMotionFrame { caret: None };
+                return super::render_plan::CoordinatedMotionFrame {
+                    caret: None,
+                    owner_key: None,
+                };
             }
         };
         let tx = match self
@@ -2894,7 +2910,10 @@ impl LinuxEditorAnimationCoordinator {
         {
             Some(t) => t,
             None => {
-                return super::render_plan::CoordinatedMotionFrame { caret: None };
+                return super::render_plan::CoordinatedMotionFrame {
+                    caret: None,
+                    owner_key: None,
+                };
             }
         };
         // 只有 Rendering / Paused 状态才有有效 caret motion。
@@ -2902,7 +2921,10 @@ impl LinuxEditorAnimationCoordinator {
             tx.state,
             TextVisualTransactionState::Rendering | TextVisualTransactionState::Paused
         ) {
-            return super::render_plan::CoordinatedMotionFrame { caret: None };
+            return super::render_plan::CoordinatedMotionFrame {
+                caret: None,
+                owner_key: None,
+            };
         }
         // 采样 caret geometry + progress。
         let (x, y, visual_line_id, progress) = match tx.cursor_visual_track.as_ref() {
@@ -2914,7 +2936,10 @@ impl LinuxEditorAnimationCoordinator {
             }
             None => {
                 // 无 cursor_visual_track：无有效 caret motion。
-                return super::render_plan::CoordinatedMotionFrame { caret: None };
+                return super::render_plan::CoordinatedMotionFrame {
+                    caret: None,
+                    owner_key: None,
+                };
             }
         };
         super::render_plan::CoordinatedMotionFrame {
@@ -2924,6 +2949,9 @@ impl LinuxEditorAnimationCoordinator {
                 visual_line_id,
                 progress,
             }),
+            // Issue #727 评论 5757225958 问题5: 记录拥有此 caret frame 的事务 key，
+            // 只有同 key 的 CaretDriven unit 能消费。
+            owner_key: Some(key),
         }
     }
 
@@ -3060,6 +3088,9 @@ impl LinuxEditorAnimationCoordinator {
                 // 本帧统一的 CoordinatedMotionFrame.caret，不再由文字层自己采样 caret。
                 // 没有 caret frame 就不生成 reveal/conceal glyph（static canonical text
                 // 直接完整显示）。
+                // Issue #727 评论 5757225958 问题5: 按 owner_key 过滤——只有同 key 的
+                // CaretDriven unit 能消费此 caret frame。其它事务的 CaretDriven unit
+                // 不消费此 caret（直接回 canonical），只允许 Timed Reflow 继续。
                 let frame = match unit.slice.kind {
                     AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => {
                         // Issue #727 约束 3: 从统一的 CoordinatedMotionFrame 获取 caret geometry。
@@ -3070,6 +3101,11 @@ impl LinuxEditorAnimationCoordinator {
                             // static canonical text 直接完整显示。
                             continue;
                         };
+                        // Issue #727 评论 5757225958 问题5: owner_key 不匹配时，
+                        // 此 CaretDriven unit 不消费 caret frame，直接回 canonical。
+                        if coordinated_motion_frame.owner_key != Some(tx.key) {
+                            continue;
+                        }
                         // Issue #727 约束 2+3: CaretDriven unit 的 visible 从 caret track
                         // progress 推导，不再由 unit 自己的时间线驱动。
                         // visible = start_fraction + (target - start) * ease_out_quad(progress)
@@ -6479,6 +6515,7 @@ mod tests {
                 visual_line_id: None,
                 progress: 0.0,
             }),
+            owner_key: Some(new_key),
         };
         let (plan_0, _) =
             coord.build_text_animation_plan_with_sample(&sample_0, &coordinated_frame_0);
@@ -6560,6 +6597,7 @@ mod tests {
                 visual_line_id: None,
                 progress: 0.5,
             }),
+            owner_key: Some(new_key),
         };
         let (_plan_mid, _) =
             coord.build_text_animation_plan_with_sample(&sample_mid, &coordinated_frame_mid);
@@ -6610,6 +6648,7 @@ mod tests {
                 visual_line_id: None,
                 progress: 1.0,
             }),
+            owner_key: Some(new_key),
         };
         let (_plan_1, _) =
             coord.build_text_animation_plan_with_sample(&sample_1, &coordinated_frame_1);

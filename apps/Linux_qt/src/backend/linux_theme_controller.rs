@@ -1,6 +1,7 @@
 use super::*;
 use crate::backend::AppRef;
 use crate::backend::DomainSnapshot;
+use crate::backend::resolved_theme_snapshot::{ResolvedThemeUiColors, ResolvedThemeUiSnapshot};
 
 /// Issue #701 评论 5699565102: 运行时主题状态的唯一事实来源。
 /// Issue #701 评论 5702214893: resolved scheme 现在缓存在 controller 内。
@@ -54,81 +55,10 @@ pub struct LinuxThemeController {
     appearance_mode: qt_property!(QString; READ appearance_mode NOTIFY scheme_changed),
     #[allow(dead_code)]
     system_is_dark: qt_property!(bool; READ system_is_dark NOTIFY scheme_changed),
-    // Issue #714: 所有颜色属性改为 QString (hex 格式 "#RRGGBB")，
-    // 不再暴露 QColor，消除深色模式颜色桥失真。
-    // QML 侧 `color` 属性可直接接受 "#RRGGBB" 字符串。
-    #[allow(dead_code)]
-    primary_hex: qt_property!(QString; READ primary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_primary_hex: qt_property!(QString; READ on_primary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    primary_container_hex: qt_property!(QString; READ primary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_primary_container_hex: qt_property!(QString; READ on_primary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    secondary_hex: qt_property!(QString; READ secondary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_secondary_hex: qt_property!(QString; READ on_secondary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    secondary_container_hex: qt_property!(QString; READ secondary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_secondary_container_hex: qt_property!(QString; READ on_secondary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    tertiary_hex: qt_property!(QString; READ tertiary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_tertiary_hex: qt_property!(QString; READ on_tertiary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    tertiary_container_hex: qt_property!(QString; READ tertiary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_tertiary_container_hex: qt_property!(QString; READ on_tertiary_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    background_hex: qt_property!(QString; READ background_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_background_hex: qt_property!(QString; READ on_background_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_hex: qt_property!(QString; READ surface_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_surface_hex: qt_property!(QString; READ on_surface_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_variant_hex: qt_property!(QString; READ surface_variant_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_surface_variant_hex: qt_property!(QString; READ on_surface_variant_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_tint_hex: qt_property!(QString; READ surface_tint_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_dim_hex: qt_property!(QString; READ surface_dim_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_bright_hex: qt_property!(QString; READ surface_bright_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_container_lowest_hex: qt_property!(QString; READ surface_container_lowest_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_container_low_hex: qt_property!(QString; READ surface_container_low_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_container_hex: qt_property!(QString; READ surface_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_container_high_hex: qt_property!(QString; READ surface_container_high_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    surface_container_highest_hex: qt_property!(QString; READ surface_container_highest_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    inverse_surface_hex: qt_property!(QString; READ inverse_surface_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    inverse_on_surface_hex: qt_property!(QString; READ inverse_on_surface_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    inverse_primary_hex: qt_property!(QString; READ inverse_primary_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    error_hex: qt_property!(QString; READ error_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_error_hex: qt_property!(QString; READ on_error_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    error_container_hex: qt_property!(QString; READ error_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    on_error_container_hex: qt_property!(QString; READ on_error_container_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    outline_hex: qt_property!(QString; READ outline_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    outline_variant_hex: qt_property!(QString; READ outline_variant_hex NOTIFY scheme_changed),
-    #[allow(dead_code)]
-    scrim_hex: qt_property!(QString; READ scrim_hex NOTIFY scheme_changed),
+    // Issue #727 评论 5757225958 问题4: 删除全套 *_hex qt_property 和 getter。
+    // 主题颜色唯一通道为 theme_state_json -> ResolvedThemeUiSnapshot -> QML Qt.color(value)。
+    // *_hex getter 是第三条颜色通道，已无消费者（QML 侧已改读 resolvedTheme），
+    // 删除以避免主题继续有第三条状态通道。
     #[allow(dead_code)]
     scheme_changed: qt_signal!(),
     #[allow(dead_code)]
@@ -365,70 +295,78 @@ impl LinuxThemeController {
     /// 第二层 JSON` 的低效路径。输出 JSON 结构包含 appearance_mode,
     /// system_is_dark, is_dark, color_source, selected_builtin_theme_id,
     /// selected_palette_id, scheme（ThemeColorSchemeDto 对象或 null）。
+    /// Issue #727 评论 5757225958 问题4: theme_state_json() 只做
+    /// `serde_json::to_string(&snapshot)`，不再手工拼 serde_json::Map。
+    /// 由 `ResolvedThemeState` 一次构造最终 `ResolvedThemeUiSnapshot`，
+    /// fallback 也在这里完成（scheme 为 None 时根据 is_dark 生成 fallback colors）。
     pub fn theme_state_json(&self) -> QString {
         let state = self.state();
-        // Issue #709 评论 issue-body-709: 用 serde_json::Map 直接构造完整状态
-        // JSON，不再走 scheme_json 反序列化再重新打包的低效路径。
-        let mut obj = serde_json::Map::new();
-        obj.insert(
-            "appearance_mode".to_string(),
-            serde_json::Value::String(state.appearance_mode),
-        );
-        obj.insert(
-            "system_is_dark".to_string(),
-            serde_json::Value::Bool(state.system_is_dark),
-        );
-        obj.insert(
-            "is_dark".to_string(),
-            serde_json::Value::Bool(state.is_dark),
-        );
-        obj.insert(
-            "color_source".to_string(),
-            serde_json::Value::String(state.color_source),
-        );
-        obj.insert(
-            "selected_builtin_theme_id".to_string(),
-            serde_json::Value::String(state.selected_builtin_theme_id),
-        );
-        obj.insert(
-            "selected_palette_id".to_string(),
-            serde_json::Value::String(state.selected_palette_id),
-        );
-        // Issue #709 评论 5728916561: 输出诊断字段，追踪 scheme 实际命中的来源和类型。
-        obj.insert(
-            "resolved_source".to_string(),
-            serde_json::Value::String(state.resolved_source),
-        );
-        obj.insert(
-            "resolved_scheme_kind".to_string(),
-            serde_json::Value::String(state.resolved_scheme_kind),
-        );
-        // Issue #727 评论 5755858583 问题3: 统一主题链为 ResolvedThemeUiSnapshot。
-        // 不再序列化 scheme DTO，改为序列化 colors 对象（scheme DTO 的字段值）。
-        // QML 侧 applyThemeState() 只读 parsed.colors，不再自己 fallback。
-        // scheme 为 None 时也生成 fallback colors（根据 is_dark 选择深/浅色固定值），
-        // QML 侧不再需要 hex() fallback 函数。
-        let colors_value = match state.scheme {
-            Some(ref s) => serde_json::to_value(s).unwrap_or_else(|_| {
-                Self::fallback_colors_json(state.is_dark)
-            }),
-            None => Self::fallback_colors_json(state.is_dark),
+        let colors = match state.scheme {
+            Some(ref s) => ResolvedThemeUiColors {
+                primary: s.primary.clone(),
+                on_primary: s.on_primary.clone(),
+                primary_container: s.primary_container.clone(),
+                on_primary_container: s.on_primary_container.clone(),
+                secondary: s.secondary.clone(),
+                on_secondary: s.on_secondary.clone(),
+                secondary_container: s.secondary_container.clone(),
+                on_secondary_container: s.on_secondary_container.clone(),
+                tertiary: s.tertiary.clone(),
+                on_tertiary: s.on_tertiary.clone(),
+                tertiary_container: s.tertiary_container.clone(),
+                on_tertiary_container: s.on_tertiary_container.clone(),
+                background: s.background.clone(),
+                on_background: s.on_background.clone(),
+                surface: s.surface.clone(),
+                on_surface: s.on_surface.clone(),
+                surface_variant: s.surface_variant.clone(),
+                on_surface_variant: s.on_surface_variant.clone(),
+                surface_tint: s.surface_tint.clone(),
+                surface_dim: s.surface_dim.clone(),
+                surface_bright: s.surface_bright.clone(),
+                surface_container_lowest: s.surface_container_lowest.clone(),
+                surface_container_low: s.surface_container_low.clone(),
+                surface_container: s.surface_container.clone(),
+                surface_container_high: s.surface_container_high.clone(),
+                surface_container_highest: s.surface_container_highest.clone(),
+                inverse_surface: s.inverse_surface.clone(),
+                inverse_on_surface: s.inverse_on_surface.clone(),
+                inverse_primary: s.inverse_primary.clone(),
+                error: s.error.clone(),
+                on_error: s.on_error.clone(),
+                error_container: s.error_container.clone(),
+                on_error_container: s.on_error_container.clone(),
+                outline: s.outline.clone(),
+                outline_variant: s.outline_variant.clone(),
+                scrim: s.scrim.clone(),
+            },
+            None => Self::fallback_colors(state.is_dark),
         };
-        obj.insert("colors".to_string(), colors_value);
-        let json = serde_json::to_string(&serde_json::Value::Object(obj))
-            .unwrap_or_else(|_| {
-                "{\"appearance_mode\":\"system\",\"system_is_dark\":false,\"is_dark\":false,\"color_source\":\"built_in\",\"selected_builtin_theme_id\":\"\",\"selected_palette_id\":\"\",\"scheme\":null}"
-                    .to_string()
-            });
+        let snapshot = ResolvedThemeUiSnapshot {
+            appearance_mode: state.appearance_mode,
+            system_is_dark: state.system_is_dark,
+            is_dark: state.is_dark,
+            color_source: state.color_source,
+            selected_builtin_theme_id: state.selected_builtin_theme_id,
+            selected_palette_id: state.selected_palette_id,
+            resolved_source: state.resolved_source,
+            resolved_scheme_kind: state.resolved_scheme_kind,
+            colors,
+        };
+        let json = serde_json::to_string(&snapshot).unwrap_or_else(|_| {
+            "{\"appearance_mode\":\"system\",\"system_is_dark\":false,\"is_dark\":false,\
+             \"color_source\":\"built_in\",\"selected_builtin_theme_id\":\"\",\
+             \"selected_palette_id\":\"\",\"resolved_source\":\"none\",\
+             \"resolved_scheme_kind\":\"none\",\"colors\":{}}"
+                .to_string()
+        });
         QString::from(json)
     }
 
-    /// Issue #727 评论 5755858583 问题3: 当 scheme 为 None 时，根据 is_dark 生成
-    /// fallback colors JSON 对象。这样 QML 侧不再需要 hex() fallback 函数——
-    /// Rust 侧一次生成最终 colors，QML 侧只读不 fallback。
-    ///
-    /// fallback 值与 DesignTokens.qml 中 hex() 函数的 darkVal/lightVal 参数一致。
-    fn fallback_colors_json(is_dark: bool) -> serde_json::Value {
+    /// Issue #727 评论 5757225958 问题4: 当 scheme 为 None 时，根据 is_dark 生成
+    /// fallback `ResolvedThemeUiColors`。Rust 侧一次生成最终 colors，
+    /// QML 侧只读不 fallback。
+    fn fallback_colors(is_dark: bool) -> ResolvedThemeUiColors {
         let (primary, on_primary, primary_container, on_primary_container) = if is_dark {
             ("#92CCFF", "#003351", "#004B73", "#CCE5FF")
         } else {
@@ -484,45 +422,44 @@ impl LinuxThemeController {
         } else {
             ("#72787E", "#C1C6CF", "#000000")
         };
-
-        serde_json::json!({
-            "primary": primary,
-            "on_primary": on_primary,
-            "primary_container": primary_container,
-            "on_primary_container": on_primary_container,
-            "secondary": secondary,
-            "on_secondary": on_secondary,
-            "secondary_container": secondary_container,
-            "on_secondary_container": on_secondary_container,
-            "tertiary": tertiary,
-            "on_tertiary": on_tertiary,
-            "tertiary_container": tertiary_container,
-            "on_tertiary_container": on_tertiary_container,
-            "background": background,
-            "on_background": on_background,
-            "surface": surface,
-            "on_surface": on_surface,
-            "surface_variant": surface_variant,
-            "on_surface_variant": on_surface_variant,
-            "surface_tint": surface_tint,
-            "surface_dim": surface_dim,
-            "surface_bright": surface_bright,
-            "surface_container_lowest": surface_container_lowest,
-            "surface_container_low": surface_container_low,
-            "surface_container": surface_container,
-            "surface_container_high": surface_container_high,
-            "surface_container_highest": surface_container_highest,
-            "inverse_surface": inverse_surface,
-            "inverse_on_surface": inverse_on_surface,
-            "inverse_primary": inverse_primary,
-            "error": error,
-            "on_error": on_error,
-            "error_container": error_container,
-            "on_error_container": on_error_container,
-            "outline": outline,
-            "outline_variant": outline_variant,
-            "scrim": scrim,
-        })
+        ResolvedThemeUiColors {
+            primary: primary.to_string(),
+            on_primary: on_primary.to_string(),
+            primary_container: primary_container.to_string(),
+            on_primary_container: on_primary_container.to_string(),
+            secondary: secondary.to_string(),
+            on_secondary: on_secondary.to_string(),
+            secondary_container: secondary_container.to_string(),
+            on_secondary_container: on_secondary_container.to_string(),
+            tertiary: tertiary.to_string(),
+            on_tertiary: on_tertiary.to_string(),
+            tertiary_container: tertiary_container.to_string(),
+            on_tertiary_container: on_tertiary_container.to_string(),
+            background: background.to_string(),
+            on_background: on_background.to_string(),
+            surface: surface.to_string(),
+            on_surface: on_surface.to_string(),
+            surface_variant: surface_variant.to_string(),
+            on_surface_variant: on_surface_variant.to_string(),
+            surface_tint: surface_tint.to_string(),
+            surface_dim: surface_dim.to_string(),
+            surface_bright: surface_bright.to_string(),
+            surface_container_lowest: surface_container_lowest.to_string(),
+            surface_container_low: surface_container_low.to_string(),
+            surface_container: surface_container.to_string(),
+            surface_container_high: surface_container_high.to_string(),
+            surface_container_highest: surface_container_highest.to_string(),
+            inverse_surface: inverse_surface.to_string(),
+            inverse_on_surface: inverse_on_surface.to_string(),
+            inverse_primary: inverse_primary.to_string(),
+            error: error.to_string(),
+            on_error: on_error.to_string(),
+            error_container: error_container.to_string(),
+            on_error_container: on_error_container.to_string(),
+            outline: outline.to_string(),
+            outline_variant: outline_variant.to_string(),
+            scrim: scrim.to_string(),
+        }
     }
 
     /// Issue #677 评论 5653315696: 输出的主题 JSON 字段名与 Core DTO 一致，统一使用 snake_case。
@@ -587,450 +524,6 @@ impl LinuxThemeController {
         }
     }
 
-    // ── Issue #714: hex getter 方法 ──
-    //
-    // 每个 getter 从 `self.state().scheme` 读取对应字段（String 类型，hex 格式
-    // 如 "#RRGGBB"），如果 scheme 为 None 或字段为空，返回 fallback hex 字符串
-    // （根据 is_dark 选择深色/浅色 fallback）。fallback 值与 DesignTokens.qml
-    // 中当前的 isDark fallback 值一致。
-    //
-    // 所有属性返回 QString (hex 格式 "#RRGGBB")，QML 侧 `color` 属性直接接受
-    // 该字符串，形成 QString → QML color 单一链。
-
-    /// Issue #714: 将 RGB 浮点值转换为 "#RRGGBB" hex 字符串。
-    fn rgb_f_to_hex(r: f64, g: f64, b: f64) -> String {
-        let r = (r * 255.0).round().clamp(0.0, 255.0) as u8;
-        let g = (g * 255.0).round().clamp(0.0, 255.0) as u8;
-        let b = (b * 255.0).round().clamp(0.0, 255.0) as u8;
-        format!("#{:02X}{:02X}{:02X}", r, g, b)
-    }
-
-    /// Issue #714: 从 scheme 读取 hex 颜色字符串或返回 is_dark fallback hex。
-    ///
-    /// scheme 中的颜色字段本身就是 "#RRGGBB" 格式的 String，直接返回即可。
-    /// 只有 scheme 为 None 或字段为空时，才用 `rgb_f_to_hex` 将 fallback
-    /// 浮点值转换为 hex 字符串。
-    fn scheme_hex_or_fallback(
-        &self,
-        scheme_field: &str,
-        is_dark: bool,
-        dark_fallback: (f64, f64, f64),
-        light_fallback: (f64, f64, f64),
-    ) -> String {
-        let state = self.state();
-        if let Some(ref scheme) = state.scheme {
-            let val = match scheme_field {
-                "primary" => &scheme.primary,
-                "on_primary" => &scheme.on_primary,
-                "primary_container" => &scheme.primary_container,
-                "on_primary_container" => &scheme.on_primary_container,
-                "secondary" => &scheme.secondary,
-                "on_secondary" => &scheme.on_secondary,
-                "secondary_container" => &scheme.secondary_container,
-                "on_secondary_container" => &scheme.on_secondary_container,
-                "tertiary" => &scheme.tertiary,
-                "on_tertiary" => &scheme.on_tertiary,
-                "tertiary_container" => &scheme.tertiary_container,
-                "on_tertiary_container" => &scheme.on_tertiary_container,
-                "background" => &scheme.background,
-                "on_background" => &scheme.on_background,
-                "surface" => &scheme.surface,
-                "on_surface" => &scheme.on_surface,
-                "surface_variant" => &scheme.surface_variant,
-                "on_surface_variant" => &scheme.on_surface_variant,
-                "surface_tint" => &scheme.surface_tint,
-                "surface_dim" => &scheme.surface_dim,
-                "surface_bright" => &scheme.surface_bright,
-                "surface_container_lowest" => &scheme.surface_container_lowest,
-                "surface_container_low" => &scheme.surface_container_low,
-                "surface_container" => &scheme.surface_container,
-                "surface_container_high" => &scheme.surface_container_high,
-                "surface_container_highest" => &scheme.surface_container_highest,
-                "inverse_surface" => &scheme.inverse_surface,
-                "inverse_on_surface" => &scheme.inverse_on_surface,
-                "inverse_primary" => &scheme.inverse_primary,
-                "error" => &scheme.error,
-                "on_error" => &scheme.on_error,
-                "error_container" => &scheme.error_container,
-                "on_error_container" => &scheme.on_error_container,
-                "outline" => &scheme.outline,
-                "outline_variant" => &scheme.outline_variant,
-                "scrim" => &scheme.scrim,
-                _ => "",
-            };
-            if !val.is_empty() {
-                return val.to_string();
-            }
-        }
-        let (r, g, b) = if is_dark {
-            dark_fallback
-        } else {
-            light_fallback
-        };
-        Self::rgb_f_to_hex(r, g, b)
-    }
-
-    pub fn primary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "primary",
-            state.is_dark,
-            (0.573, 0.800, 1.000),
-            (0.000, 0.392, 0.592),
-        ))
-    }
-
-    pub fn on_primary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_primary",
-            state.is_dark,
-            (0.000, 0.200, 0.318),
-            (1.000, 1.000, 1.000),
-        ))
-    }
-
-    pub fn primary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "primary_container",
-            state.is_dark,
-            (0.000, 0.294, 0.451),
-            (0.800, 0.898, 1.000),
-        ))
-    }
-
-    pub fn on_primary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_primary_container",
-            state.is_dark,
-            (0.800, 0.898, 1.000),
-            (0.000, 0.118, 0.192),
-        ))
-    }
-
-    pub fn secondary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "secondary",
-            state.is_dark,
-            (0.722, 0.784, 0.855),
-            (0.318, 0.376, 0.435),
-        ))
-    }
-
-    pub fn on_secondary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_secondary",
-            state.is_dark,
-            (0.137, 0.196, 0.251),
-            (1.000, 1.000, 1.000),
-        ))
-    }
-
-    pub fn secondary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "secondary_container",
-            state.is_dark,
-            (0.224, 0.282, 0.341),
-            (0.831, 0.894, 0.965),
-        ))
-    }
-
-    pub fn on_secondary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_secondary_container",
-            state.is_dark,
-            (0.831, 0.894, 0.965),
-            (0.055, 0.114, 0.165),
-        ))
-    }
-
-    pub fn tertiary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "tertiary",
-            state.is_dark,
-            (0.843, 0.749, 1.000),
-            (0.427, 0.341, 0.549),
-        ))
-    }
-
-    pub fn on_tertiary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_tertiary",
-            state.is_dark,
-            (0.243, 0.165, 0.361),
-            (1.000, 1.000, 1.000),
-        ))
-    }
-
-    pub fn tertiary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "tertiary_container",
-            state.is_dark,
-            (0.333, 0.251, 0.455),
-            (0.945, 0.855, 1.000),
-        ))
-    }
-
-    pub fn on_tertiary_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_tertiary_container",
-            state.is_dark,
-            (0.945, 0.855, 1.000),
-            (0.149, 0.078, 0.278),
-        ))
-    }
-
-    pub fn background_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "background",
-            state.is_dark,
-            (0.102, 0.110, 0.118),
-            (0.988, 0.988, 1.000),
-        ))
-    }
-
-    pub fn on_background_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_background",
-            state.is_dark,
-            (0.886, 0.890, 0.906),
-            (0.094, 0.110, 0.125),
-        ))
-    }
-
-    pub fn surface_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface",
-            state.is_dark,
-            (0.102, 0.110, 0.118),
-            (0.988, 0.988, 1.000),
-        ))
-    }
-
-    pub fn on_surface_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_surface",
-            state.is_dark,
-            (0.886, 0.890, 0.906),
-            (0.094, 0.110, 0.125),
-        ))
-    }
-
-    pub fn surface_variant_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_variant",
-            state.is_dark,
-            (0.259, 0.278, 0.306),
-            (0.875, 0.890, 0.922),
-        ))
-    }
-
-    pub fn on_surface_variant_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_surface_variant",
-            state.is_dark,
-            (0.757, 0.776, 0.812),
-            (0.259, 0.278, 0.306),
-        ))
-    }
-
-    pub fn surface_tint_hex(&self) -> QString {
-        let state = self.state();
-        // surface_tint fallback 与 primary 相同（QML 中 `?? primary`）
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_tint",
-            state.is_dark,
-            (0.573, 0.800, 1.000),
-            (0.000, 0.392, 0.592),
-        ))
-    }
-
-    pub fn surface_dim_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_dim",
-            state.is_dark,
-            (0.071, 0.078, 0.094),
-            (0.843, 0.851, 0.875),
-        ))
-    }
-
-    pub fn surface_bright_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_bright",
-            state.is_dark,
-            (0.220, 0.224, 0.247),
-            (0.988, 0.988, 1.000),
-        ))
-    }
-
-    pub fn surface_container_lowest_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_container_lowest",
-            state.is_dark,
-            (0.059, 0.067, 0.075),
-            (1.000, 1.000, 1.000),
-        ))
-    }
-
-    pub fn surface_container_low_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_container_low",
-            state.is_dark,
-            (0.122, 0.133, 0.145),
-            (0.965, 0.973, 0.984),
-        ))
-    }
-
-    pub fn surface_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_container",
-            state.is_dark,
-            (0.137, 0.153, 0.165),
-            (0.941, 0.953, 0.969),
-        ))
-    }
-
-    pub fn surface_container_high_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_container_high",
-            state.is_dark,
-            (0.176, 0.192, 0.208),
-            (0.918, 0.937, 0.961),
-        ))
-    }
-
-    pub fn surface_container_highest_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "surface_container_highest",
-            state.is_dark,
-            (0.220, 0.235, 0.251),
-            (0.894, 0.914, 0.937),
-        ))
-    }
-
-    pub fn inverse_surface_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "inverse_surface",
-            state.is_dark,
-            (0.886, 0.886, 0.898),
-            (0.184, 0.188, 0.200),
-        ))
-    }
-
-    pub fn inverse_on_surface_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "inverse_on_surface",
-            state.is_dark,
-            (0.184, 0.188, 0.200),
-            (0.945, 0.941, 0.957),
-        ))
-    }
-
-    pub fn inverse_primary_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "inverse_primary",
-            state.is_dark,
-            (0.000, 0.392, 0.592),
-            (0.573, 0.800, 1.000),
-        ))
-    }
-
-    pub fn error_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "error",
-            state.is_dark,
-            (1.000, 0.706, 0.671),
-            (0.729, 0.102, 0.102),
-        ))
-    }
-
-    pub fn on_error_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_error",
-            state.is_dark,
-            (0.412, 0.000, 0.020),
-            (1.000, 1.000, 1.000),
-        ))
-    }
-
-    pub fn error_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "error_container",
-            state.is_dark,
-            (0.576, 0.000, 0.039),
-            (1.000, 0.855, 0.839),
-        ))
-    }
-
-    pub fn on_error_container_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "on_error_container",
-            state.is_dark,
-            (1.000, 0.855, 0.839),
-            (0.255, 0.000, 0.008),
-        ))
-    }
-
-    pub fn outline_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "outline",
-            state.is_dark,
-            (0.549, 0.569, 0.596),
-            (0.447, 0.471, 0.494),
-        ))
-    }
-
-    pub fn outline_variant_hex(&self) -> QString {
-        let state = self.state();
-        QString::from(self.scheme_hex_or_fallback(
-            "outline_variant",
-            state.is_dark,
-            (0.259, 0.278, 0.306),
-            (0.757, 0.776, 0.812),
-        ))
-    }
-
-    pub fn scrim_hex(&self) -> QString {
-        let state = self.state();
-        // scrim fallback 深色和浅色都是黑色
-        QString::from(self.scheme_hex_or_fallback(
-            "scrim",
-            state.is_dark,
-            (0.000, 0.000, 0.000),
-            (0.000, 0.000, 0.000),
-        ))
-    }
 
     /// Issue #710 评论 5731145076: 记录完整 resolved theme 诊断事件。
     ///

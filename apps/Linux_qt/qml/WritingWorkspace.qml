@@ -792,14 +792,11 @@ Rectangle {
                         // cursor_rect_y 是目标 caret 的 viewport 坐标（Rust 已减过 scroll_y），
                         // 直接用它做最小滚动量。contentY 改后仍通过 scroll_y 绑定回 Rust，
                         // Scene Graph 和 IME 继续使用同一滚动位置。
-                        // Issue #724 评论 5751573705 问题2: 锚点来源改为上一帧真正画出的
-                        // visual caret y/h（而非 target_y），并记录 target_scroll_y 由 Rust
-                        // 侧判断到达后清除锚点，不再由 80ms Timer 决定生命周期。
-                        // Issue #724 评论 5752140048 问题 1+3: 不再维护 QML
-                        // is_auto_following shadow state，也不再在 begin_auto_follow_scroll()
-                        // 内部读取旧 scroll_y 当 target。每次算出完整 targetY 后直接调 Rust 的
-                        // set_auto_follow_anchor_with_target(..., targetY)，Rust 自己持有 anchor
-                        // 是否活跃的唯一状态，避免 QML/Rust 状态分叉和旧 scroll_y 传参。
+                        // Issue #727 评论 5757225958 问题2: 删除对已删除 Rust 方法
+                        // set_auto_follow_anchor_with_target 的调用，也删除
+                        // visual_cursor_rect_y / visual_cursor_rect_height 这套只为
+                        // anchor 服务的旧接口。ensureCursorVisible() 只根据 viewport
+                        // cursor_rect_y 算 targetY，最后只做 flick.contentY = targetY。
 
                         function ensureCursorVisible() {
                             const flick = contentItem
@@ -821,17 +818,13 @@ Rectangle {
                             }
 
                             const maxY = Math.max(0, contentHeight - height)
-                            // Issue #724 评论 5752140048 问题 1: 先算出完整目标 targetY，
-                            // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。否则把
-                            // targetY 同时传给 Rust 的 set_auto_follow_anchor_with_target
-                            // 和 flick.contentY，避免传旧 scroll_y 导致 anchor 立刻自清。
+                            // Issue #727 评论 5757225958 问题2: 只算出完整目标 targetY，
+                            // 若与当前 contentY 差距 < 0.5 直接返回（无需滚动）。
+                            // 否则直接赋值 flick.contentY，不再调用已删除的
+                            // set_auto_follow_anchor_with_target。
                             const targetY = Math.max(0, Math.min(maxY, nextY))
                             if (Math.abs(targetY - flick.contentY) < 0.5)
                                 return
-                            sujianEditor.set_auto_follow_anchor_with_target(
-                                sujianEditor.visual_cursor_rect_y,
-                                sujianEditor.visual_cursor_rect_height,
-                                targetY)
                             flick.contentY = targetY
                         }
 

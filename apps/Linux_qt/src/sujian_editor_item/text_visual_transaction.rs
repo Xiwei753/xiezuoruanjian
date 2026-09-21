@@ -16,6 +16,25 @@ pub(crate) enum TextVisualTransactionState {
     Cancelled,
 }
 
+impl TextVisualTransactionState {
+    /// Issue #727 评论 5757225958 问题3: 事务是否允许收集 clip_rects。
+    ///
+    /// 只有 Prepared / Rendering / Paused 状态的事务才允许静态层隐藏
+    ///（Pending 无论 texture_prepared 是什么都不能隐藏正文，否则资源还没
+    /// 准备好就会出现空洞；Completed/Cancelled 已移除）。
+    /// 把状态检查集中到这个方法，让 build_render_plan_full 的 clip_rects
+    /// 收集逻辑不再内联 `TextVisualTransactionState::Rendering` 等枚举值，
+    /// 便于结构守卫测试断言"完成帧事务被 keys_to_complete 排除"。
+    pub(crate) fn is_clip_eligible(self) -> bool {
+        matches!(
+            self,
+            TextVisualTransactionState::Prepared
+                | TextVisualTransactionState::Rendering
+                | TextVisualTransactionState::Paused
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TextVisualOperationKind {
     Insert,

@@ -417,22 +417,22 @@ impl SujianEditorItem {
         }
     }
 
-    pub(crate) fn editor_layout_cursor_rect(
+    /// Issue #727 评论 5757225958 问题1: canonical caret 文档坐标入口。
+    ///
+    /// 与原 `editor_layout_cursor_rect` 的区别：返回的 `y` / `baseline_y` 是文档坐标
+    ///（不减 scroll_y），`visible` 始终为 true（文档坐标版本不关心视口可见性）。
+    /// 供 `update_cursor_visual_position` 算 cursor_ctrl.target_y/visual_y 使用，
+    /// 使 cursor_ctrl 内部状态统一保存文档坐标，和 scene graph cursor layer
+    ///（QSGTransformNode 做 translate(0, -scroll_y)）的假设一致。
+    /// QML/IME 边界方法（`cursor_rect_y` / `visual_cursor_rect_y` / `anchor_rect_y`）
+    /// 在返回前减 `current_scroll_y` 转成视口坐标。
+    pub(crate) fn editor_layout_cursor_rect_doc(
         &mut self,
         cursor_byte: usize,
         affinity: CaretAffinity,
-        scroll_y: f64,
     ) -> CursorLayoutRect {
-        // Issue #705 评论 5716410988: 走统一入口,与 hit_test /
-        // index_at_line_x / cursor_line_and_x 同一代 QTextLayout。
         let snapshot = self.current_render_layout_snapshot();
-        self.editor_layout.caret_rect(
-            &snapshot,
-            cursor_byte,
-            affinity,
-            scroll_y,
-            f64::from(self.current_viewport_height.max(1.0)),
-        )
+        self.editor_layout.caret_rect_doc(&snapshot, cursor_byte, affinity)
     }
 
     pub(crate) fn hit_test(&mut self, x: f64, y: f64) -> (usize, CaretAffinity) {

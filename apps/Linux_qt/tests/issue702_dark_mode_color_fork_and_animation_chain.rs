@@ -278,13 +278,17 @@ fn issue709_theme_state_json_includes_resolved_source_and_scheme_kind() {
         src.contains("resolved_scheme_kind"),
         "ResolvedThemeState 应包含 resolved_scheme_kind 字段"
     );
+    // Issue #727 评论 5757225958 问题4: theme_state_json 改为 serde_json::to_string(&snapshot)，
+    // JSON 键由 serde 从 ResolvedThemeUiSnapshot 结构体字段名自动生成。
+    // 检查 resolved_theme_snapshot.rs 中字段定义确保诊断字段存在。
+    let snapshot = read_src("src/backend/resolved_theme_snapshot.rs");
     assert!(
-        src.contains("\"resolved_source\""),
-        "theme_state_json 应输出 resolved_source"
+        snapshot.contains("resolved_source"),
+        "ResolvedThemeUiSnapshot 应包含 resolved_source 字段定义（serde 序列化输出该键）"
     );
     assert!(
-        src.contains("\"resolved_scheme_kind\""),
-        "theme_state_json 应输出 resolved_scheme_kind"
+        snapshot.contains("resolved_scheme_kind"),
+        "ResolvedThemeUiSnapshot 应包含 resolved_scheme_kind 字段定义（serde 序列化输出该键）"
     );
 }
 

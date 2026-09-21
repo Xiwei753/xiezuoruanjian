@@ -195,10 +195,24 @@ impl Default for SampledCaretFrame {
 /// 没有 caret frame 就不生成 reveal/conceal glyph，static canonical text 直接完整显示。
 /// RenderPlan 里同一份 `SampledCaretFrame` 同时喂 cursor layer 和文字 reveal/conceal，
 /// 不能文字自己再推导一份 caret。
+///
+/// Issue #727 评论 5757225958 问题5: 携带 `owner_key` 字段，只有同 key 的
+/// CaretDriven unit 能消费此 caret frame。其它失去 ownership 的 CaretDriven unit
+/// 直接回 canonical，只允许 Timed Reflow 继续。避免 editor.anim.keep 保留旧事务时
+/// 旧 CaretDriven unit 消费新事务的 caret。
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct CoordinatedMotionFrame {
+    /// Issue #727 问题5: owner tx key; only same-key CaretDriven unit consumes.
+    pub owner_key: Option<VisualTransactionKey>,
     /// 本帧采样的 caret geometry。`None` 表示无有效 caret motion track。
     pub caret: Option<SampledCaretFrame>,
+}
+
+impl CoordinatedMotionFrame {
+    /// Issue #727 评论 5757225958 问题5: 构造带 owner_key 的 frame。
+    pub fn with_owner_key(owner_key: Option<VisualTransactionKey>, caret: Option<SampledCaretFrame>) -> Self {
+        Self { owner_key, caret }
+    }
 }
 
 #[derive(Clone, Debug, Default)]
