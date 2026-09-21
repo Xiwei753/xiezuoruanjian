@@ -38,6 +38,16 @@ pub(super) fn transfer_remote_cleanup_project(
     );
     match resolve_current_target_lifecycle(provider, &planned.target.remote_prefix) {
         Ok(Some(current_rec)) => {
+            // Issue #729 评论 5765979275：CAS 返回后、开始下一次 provider 操作前检查取消令牌。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] transfer_remote_cleanup_project: cancellation requested after CAS — skipping {}",
+                        planned.target.remote_prefix
+                    );
+                    return (SyncResult::success(), None, None);
+                }
+            }
             use crate::sync::types::TargetOp;
             match current_rec.op {
                 TargetOp::Upsert => {

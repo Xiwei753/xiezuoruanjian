@@ -62,6 +62,7 @@ pub(crate) fn execute_lww_sync_attempt(
         remote_prefix,
         &outcome.remote_upload_paths,
         &outcome.remote_tree_files,
+        cancellation_token,
     )?;
 
     // Issue #729 评论 5765306162 问题4：upload_local_files 后检查取消令牌。
@@ -81,6 +82,7 @@ pub(crate) fn execute_lww_sync_attempt(
         remote_prefix,
         &outcome.remote_delete_paths,
         &outcome.remote_tree_files,
+        cancellation_token,
     )?;
 
     // Issue #729 评论 5765306162 问题4：delete_remote_files 后检查取消令牌。
@@ -100,6 +102,7 @@ pub(crate) fn execute_lww_sync_attempt(
         &outcome.remote_manifest_path,
         &outcome.manifest_json,
         &outcome.remote_tree_files,
+        cancellation_token,
     )?;
 
     let has_doc_conflicts = !outcome.conflicts.is_empty();
