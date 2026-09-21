@@ -81,35 +81,36 @@ fn qt_theme_dark_mode_is_dark_true_and_real_dark_scheme() {
             Some(true),
             "dark 模式下 is_dark 必须为 true"
         );
-        let scheme = &v["scheme"];
+        // Issue #727: theme_state_json 返回 ResolvedThemeUiSnapshot，颜色在 colors 字段
+        let colors = &v["colors"];
         assert!(
-            scheme.is_object(),
-            "dark 模式下 scheme 必须是合法 JSON 对象"
+            colors.is_object(),
+            "dark 模式下 colors 必须是合法 JSON 对象"
         );
-        let scheme_obj = scheme.as_object().expect("scheme is object");
+        let colors_obj = colors.as_object().expect("colors is object");
         assert!(
-            !scheme_obj.is_empty(),
-            "dark 模式下 scheme 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
+            !colors_obj.is_empty(),
+            "dark 模式下 colors 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
         );
-        let on_surface = scheme["on_surface"]
+        let on_surface = colors["on_surface"]
             .as_str()
-            .expect("dark scheme.on_surface 必须存在且为字符串");
-        assert!(!on_surface.is_empty(), "dark scheme.on_surface 不能为空");
+            .expect("dark colors.on_surface 必须存在且为字符串");
+        assert!(!on_surface.is_empty(), "dark colors.on_surface 不能为空");
         assert!(
             is_light_color(on_surface),
-            "dark scheme.on_surface 必须是浅色文字（深色方案），实际: {}",
+            "dark colors.on_surface 必须是浅色文字（深色方案），实际: {}",
             on_surface
         );
-        let on_surface_variant = scheme["on_surface_variant"]
+        let on_surface_variant = colors["on_surface_variant"]
             .as_str()
-            .expect("dark scheme.on_surface_variant 必须存在且为字符串");
+            .expect("dark colors.on_surface_variant 必须存在且为字符串");
         assert!(
             !on_surface_variant.is_empty(),
-            "dark scheme.on_surface_variant 不能为空"
+            "dark colors.on_surface_variant 不能为空"
         );
         assert!(
             is_light_color(on_surface_variant),
-            "dark scheme.on_surface_variant 必须是浅色文字（深色方案），实际: {}",
+            "dark colors.on_surface_variant 必须是浅色文字（深色方案），实际: {}",
             on_surface_variant
         );
         println!(
@@ -137,35 +138,36 @@ fn qt_theme_light_mode_is_dark_false_and_real_light_scheme() {
             Some(false),
             "light 模式下 is_dark 必须为 false"
         );
-        let scheme = &v["scheme"];
+        // Issue #727: theme_state_json 返回 ResolvedThemeUiSnapshot，颜色在 colors 字段
+        let colors = &v["colors"];
         assert!(
-            scheme.is_object(),
-            "light 模式下 scheme 必须是合法 JSON 对象"
+            colors.is_object(),
+            "light 模式下 colors 必须是合法 JSON 对象"
         );
-        let scheme_obj = scheme.as_object().expect("scheme is object");
+        let colors_obj = colors.as_object().expect("colors is object");
         assert!(
-            !scheme_obj.is_empty(),
-            "light 模式下 scheme 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
+            !colors_obj.is_empty(),
+            "light 模式下 colors 不能是空对象 {{}} — core_api 必须已初始化并加载 builtin theme"
         );
-        let on_surface = scheme["on_surface"]
+        let on_surface = colors["on_surface"]
             .as_str()
-            .expect("light scheme.on_surface 必须存在且为字符串");
-        assert!(!on_surface.is_empty(), "light scheme.on_surface 不能为空");
+            .expect("light colors.on_surface 必须存在且为字符串");
+        assert!(!on_surface.is_empty(), "light colors.on_surface 不能为空");
         assert!(
             is_dark_color(on_surface),
-            "light scheme.on_surface 必须是深色文字（浅色方案），实际: {}",
+            "light colors.on_surface 必须是深色文字（浅色方案），实际: {}",
             on_surface
         );
-        let on_surface_variant = scheme["on_surface_variant"]
+        let on_surface_variant = colors["on_surface_variant"]
             .as_str()
-            .expect("light scheme.on_surface_variant 必须存在且为字符串");
+            .expect("light colors.on_surface_variant 必须存在且为字符串");
         assert!(
             !on_surface_variant.is_empty(),
-            "light scheme.on_surface_variant 不能为空"
+            "light colors.on_surface_variant 不能为空"
         );
         assert!(
             is_dark_color(on_surface_variant),
-            "light scheme.on_surface_variant 必须是深色文字（浅色方案），实际: {}",
+            "light colors.on_surface_variant 必须是深色文字（浅色方案），实际: {}",
             on_surface_variant
         );
         println!(
@@ -196,16 +198,17 @@ fn qt_theme_system_mode_payload_switches_with_system_is_dark() {
             Some(false),
             "system + sys_dark=false → is_dark=false"
         );
-        let scheme1 = &v1["scheme"];
-        assert!(scheme1.is_object(), "system+false scheme 必须是对象");
-        let scheme1_obj = scheme1.as_object().expect("scheme1 is object");
-        assert!(!scheme1_obj.is_empty(), "system+false scheme 不能是空对象");
-        let on_surface1 = scheme1["on_surface"]
+        // Issue #727: theme_state_json 返回 ResolvedThemeUiSnapshot，颜色在 colors 字段
+        let colors1 = &v1["colors"];
+        assert!(colors1.is_object(), "system+false colors 必须是对象");
+        let colors1_obj = colors1.as_object().expect("colors1 is object");
+        assert!(!colors1_obj.is_empty(), "system+false colors 不能是空对象");
+        let on_surface1 = colors1["on_surface"]
             .as_str()
-            .expect("system+false scheme.on_surface 必须存在");
+            .expect("system+false colors.on_surface 必须存在");
         assert!(
             is_dark_color(on_surface1),
-            "system+false (浅色) scheme.on_surface 必须是深色文字，实际: {}",
+            "system+false (浅色) colors.on_surface 必须是深色文字，实际: {}",
             on_surface1
         );
 
@@ -218,23 +221,23 @@ fn qt_theme_system_mode_payload_switches_with_system_is_dark() {
             Some(true),
             "system + sys_dark=true → is_dark=true"
         );
-        let scheme2 = &v2["scheme"];
-        assert!(scheme2.is_object(), "system+true scheme 必须是对象");
-        let scheme2_obj = scheme2.as_object().expect("scheme2 is object");
-        assert!(!scheme2_obj.is_empty(), "system+true scheme 不能是空对象");
-        let on_surface2 = scheme2["on_surface"]
+        let colors2 = &v2["colors"];
+        assert!(colors2.is_object(), "system+true colors 必须是对象");
+        let colors2_obj = colors2.as_object().expect("colors2 is object");
+        assert!(!colors2_obj.is_empty(), "system+true colors 不能是空对象");
+        let on_surface2 = colors2["on_surface"]
             .as_str()
-            .expect("system+true scheme.on_surface 必须存在");
+            .expect("system+true colors.on_surface 必须存在");
         assert!(
             is_light_color(on_surface2),
-            "system+true (深色) scheme.on_surface 必须是浅色文字，实际: {}",
+            "system+true (深色) colors.on_surface 必须是浅色文字，实际: {}",
             on_surface2
         );
 
-        // scheme 内容必须随 is_dark 一起变化（不是同一个 scheme）
+        // colors 内容必须随 is_dark 一起变化（不是同一个 scheme）
         assert_ne!(
-            scheme1, scheme2,
-            "system 模式下 is_dark 切换后 scheme 内容必须变化"
+            colors1, colors2,
+            "system 模式下 is_dark 切换后 colors 内容必须变化"
         );
         assert_ne!(
             on_surface1, on_surface2,
@@ -310,8 +313,8 @@ fn qt_theme_state_json_always_valid_with_is_dark_and_scheme() {
                 mode
             );
             assert!(
-                v.get("scheme").is_some(),
-                "{} 模式下 JSON 必须有 scheme 顶层 key",
+                v.get("colors").is_some(),
+                "{} 模式下 JSON 必须有 colors 顶层 key",
                 mode
             );
             assert!(
@@ -320,18 +323,18 @@ fn qt_theme_state_json_always_valid_with_is_dark_and_scheme() {
                 mode
             );
             assert!(
-                v["scheme"].is_object(),
-                "{} 模式下 scheme 必须是 object",
+                v["colors"].is_object(),
+                "{} 模式下 colors 必须是 object",
                 mode
             );
             assert!(
-                !v["scheme"].as_object().map_or(true, |m| m.is_empty()),
-                "{} 模式下 scheme 不能是空对象 {{}} — core_api 必须已初始化",
+                !v["colors"].as_object().map_or(true, |m| m.is_empty()),
+                "{} 模式下 colors 不能是空对象 {{}} — core_api 必须已初始化",
                 mode
             );
         }
         println!(
-            "[BEHAVIOR_VERIFY] theme_state_json: always valid JSON with is_dark + non-empty scheme"
+            "[BEHAVIOR_VERIFY] theme_state_json: always valid JSON with is_dark + non-empty colors"
         );
     });
 }
@@ -412,13 +415,14 @@ fn qt_theme_dark_light_switch_is_dark_and_scheme_actually_change() {
         assert!(dark_is_dark, "dark → is_dark=true");
         let dark_json: String = ctrl.theme_state_json().into();
         let dark_v: serde_json::Value = serde_json::from_str(&dark_json).expect("valid json");
-        let dark_scheme = &dark_v["scheme"];
-        let dark_on_surface = dark_scheme["on_surface"]
+        // Issue #727: theme_state_json 返回 ResolvedThemeUiSnapshot，颜色在 colors 字段
+        let dark_colors = &dark_v["colors"];
+        let dark_on_surface = dark_colors["on_surface"]
             .as_str()
-            .expect("dark scheme.on_surface 必须存在");
+            .expect("dark colors.on_surface 必须存在");
         assert!(
             is_light_color(dark_on_surface),
-            "dark scheme.on_surface 必须是浅色文字，实际: {}",
+            "dark colors.on_surface 必须是浅色文字，实际: {}",
             dark_on_surface
         );
 
@@ -427,13 +431,13 @@ fn qt_theme_dark_light_switch_is_dark_and_scheme_actually_change() {
         assert!(!light_is_dark, "light → is_dark=false");
         let light_json: String = ctrl.theme_state_json().into();
         let light_v: serde_json::Value = serde_json::from_str(&light_json).expect("valid json");
-        let light_scheme = &light_v["scheme"];
-        let light_on_surface = light_scheme["on_surface"]
+        let light_colors = &light_v["colors"];
+        let light_on_surface = light_colors["on_surface"]
             .as_str()
-            .expect("light scheme.on_surface 必须存在");
+            .expect("light colors.on_surface 必须存在");
         assert!(
             is_dark_color(light_on_surface),
-            "light scheme.on_surface 必须是深色文字，实际: {}",
+            "light colors.on_surface 必须是深色文字，实际: {}",
             light_on_surface
         );
 
@@ -442,15 +446,15 @@ fn qt_theme_dark_light_switch_is_dark_and_scheme_actually_change() {
             "dark/light 切换后 is_dark 必须真实变化"
         );
         assert_ne!(
-            dark_scheme, light_scheme,
-            "dark/light 切换后 scheme 内容必须真实变化"
+            dark_colors, light_colors,
+            "dark/light 切换后 colors 内容必须真实变化"
         );
         assert_ne!(
             dark_on_surface, light_on_surface,
             "dark/light 切换后 on_surface 必须真实变化"
         );
         println!(
-            "[BEHAVIOR_VERIFY] dark/light switch: is_dark + scheme actually change (on_surface: {} -> {})",
+            "[BEHAVIOR_VERIFY] dark/light switch: is_dark + colors actually change (on_surface: {} -> {})",
             dark_on_surface, light_on_surface
         );
     });
