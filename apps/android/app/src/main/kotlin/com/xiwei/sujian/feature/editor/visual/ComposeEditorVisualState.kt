@@ -1211,23 +1211,27 @@ class ComposeEditorVisualState(
             pendingSelectionCaretTarget = null
             val policy = currentMotionPolicy?.effective() ?: EditorMotionPolicy().effective()
             val cursorDurationNanos = policy.cursorDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
+            val textDurationNanos = policy.textDurationMillis.coerceAtLeast(0L) * NANOS_PER_MS
             val existing = activeEditMotion
+            val caretDuration = if (policy.cursorEnabled) cursorDurationNanos else 0L
             activeEditMotion =
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
-                    existing.redirectTo(
+                    // Issue #728 评论 5755928697 问题1：文字动画还没结束时移动光标，
+                    // 用 redirectCaretTo 保留现有 glyph channel，不丢正在吐的字。
+                    // caret 用 cursorDurationNanos；glyph 继续用 textDurationNanos 让文字吐完。
+                    existing.redirectCaretTo(
                         newOriginCaretRect = pendingSelection.originCaretRect,
                         newTargetCaretRect = pendingSelection.targetCaretRect,
-                        newInsertedUnitKeys = emptySet(),
-                        newDeletedUnitKeys = emptySet(),
                         frameTimeNanos = frameTimeNanos,
-                        durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                        caretDurationNanos = caretDuration,
+                        glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L,
                     )
                 } else {
                     ComposeEditMotion.forSelectionMove(
                         originCaretRect = pendingSelection.originCaretRect,
                         targetCaretRect = pendingSelection.targetCaretRect,
                         frameTimeNanos = frameTimeNanos,
-                        durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                        caretDurationNanos = caretDuration,
                     )
                 }
             // restingCaretRect 落到 target（motion 完成后无缝接上）
@@ -1266,15 +1270,26 @@ class ComposeEditorVisualState(
                     originCaretRect = framePatch.originCaretRect,
                     targetCaretRect = framePatch.targetCaretRect,
                     frameTimeNanos = frameTimeNanos,
-                    durationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
+                    caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L,
                 )
         } else {
             // text edit（包括 Enter / 删除 Enter 无 glyph unit 的情况）—
-            // caret old→new 按 edit policy 运行，用 textDurationMillis。
+            // caret old→new 按 edit policy 运行，文字按 glyph policy 运行。
             // insertedKeys/deletedKeys 可能为空（Enter 无 glyph unit），创建无 unit channel 的 edit motion。
             val existing = activeEditMotion
-            // 一笔编辑一只钟：text edit 时 caret 和文字共用 textDurationMillis
-            val editDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
+            // Issue #728 评论 5755928697 问题2：coordinated=false 时 caret 和 glyph 独立时长。
+            // coordinated=true：一只钟，caret 和 glyph 共用 textDurationMillis。
+            // coordinated=false：caret 用 cursorDurationMillis，glyph 用 textDurationMillis。
+            val caretDurationNanos: Long
+            val glyphDurationNanos: Long
+            if (policy.coordinated) {
+                val sharedDuration = if (policy.textEnabled) textDurationNanos else 0L
+                caretDurationNanos = sharedDuration
+                glyphDurationNanos = sharedDuration
+            } else {
+                caretDurationNanos = if (policy.cursorEnabled) cursorDurationNanos else 0L
+                glyphDurationNanos = if (policy.textEnabled) textDurationNanos else 0L
+            }
             activeEditMotion =
                 if (existing != null && !existing.isFinished(frameTimeNanos)) {
                     // 快速连续输入：从当前 sample 重定向，不重新起播
@@ -1284,7 +1299,8 @@ class ComposeEditorVisualState(
                         newInsertedUnitKeys = insertedKeys,
                         newDeletedUnitKeys = deletedKeys,
                         frameTimeNanos = frameTimeNanos,
-                        durationNanos = editDurationNanos,
+                        caretDurationNanos = caretDurationNanos,
+                        glyphDurationNanos = glyphDurationNanos,
                     )
                 } else {
                     ComposeEditMotion.forEdit(
@@ -1293,7 +1309,8 @@ class ComposeEditorVisualState(
                         insertedUnitKeys = insertedKeys,
                         deletedUnitKeys = deletedKeys,
                         frameTimeNanos = frameTimeNanos,
-                        durationNanos = editDurationNanos,
+                        caretDurationNanos = caretDurationNanos,
+                        glyphDurationNanos = glyphDurationNanos,
                     )
                 }
         }

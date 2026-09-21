@@ -1,0 +1,425 @@
+package com.xiwei.sujian.feature.editor.visual
+
+import androidx.compose.ui.geometry.Rect
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * Issue #728 评论 5755928697 三个确定问题的回归测试。
+ *
+ * 三个问题（已由 coder 修复）：
+ * 1. 文字动画还没结束时移动光标，会把正在运行的 glyph channel 全丢掉。
+ *    修复：[ComposeEditMotion.redirectCaretTo] 保留现有 unit channel fraction。
+ * 2. coordinated=false 时独立 smooth cursor 设置对正文编辑不生效。
+ *    修复：双 duration（caretDurationNanos/glyphDurationNanos 独立）。
+ * 3. 一笔里有多个 glyph unit 时所有字同时吐/吞，不是真正跟着光标。
+ *    修复：[ComposeEditMotion.UnitChannel] 增加 startProgress/endProgress 区间，sample 按区间映射。
+ *
+ * 这些测试是 [ComposeEditMotion] 的纯 API 测试，不需要 Robolectric/ComposeRule/反射。
+ * 直接构造 ComposeEditMotion、调用方法、断言。和 [ComposeEditMotionTest] 同级别，
+ * 但聚焦三个问题的修复语义，命名用 Issue728Comment5755928697 前缀。
+ */
+@Suppress("MaxLineLength", "LongMethod")
+class Issue728Comment5755928697ReproTest {
+    private val originRect = Rect(left = 10f, top = 0f, right = 12f, bottom = 20f)
+    private val targetRect = Rect(left = 30f, top = 0f, right = 32f, bottom = 20f)
+    private val startTime = 1_000_000_000L
+
+    /**
+     * 600ms — 能被 6 整除，方便算 1/6、1/2、5/6 区间映射点（问题3 三个 unit 的区间中点）。
+     * 600_000_000 / 6 = 100_000_000（精确），/ 2 = 300_000_000（精确），* 5 / 6 = 500_000_000（精确）。
+     */
+    private val glyphDuration = 600_000_000L
+
+    // ==================== 问题1：redirectCaretTo 保留 glyph channel ====================
+
+    /**
+     * 问题1：文字动画还没结束时移动光标，[ComposeEditMotion.redirectCaretTo] 保留现有 unit channel。
+     *
+     * 场景：forInsert 2 个 unit {1, 2}，sample 到 25%（glyphProgress=0.25），
+     * key=1 区间 [0, 0.5] 正在吐（fraction=0.5），key=2 区间 [0.5, 1] 还没开始（fraction=0）。
+     * 调 redirectCaretTo 换 caret 目标，验证：
+     * - 原有 unit channel 仍然存在（unitClipFractions 包含 key=1 和 key=2）。
+     * - fraction 从当前值继续（key=1=0.5, key=2=0），不是被清空、不是重新从 0/1 开始。
+     * - 继续跑到 glyph 终点，两个 unit 都到 1（文字继续吐完，没被丢弃）。
+     */
+    @Test
+    fun redirectCaretTo_preservesRunningGlyphChannels() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L, 2L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        // 25% 时：glyphProgress=0.25，key=1 区间 [0, 0.5] local=0.5 fraction=0.5，
+        // key=2 区间 [0.5, 1] 还没开始 fraction=0
+        val midTime = startTime + glyphDuration / 4
+        val midSample = motion1.sample(midTime)
+        assertEquals(0.5f, midSample.unitClipFractions[1L]!!, 0.001f)
+        assertEquals(0f, midSample.unitClipFractions[2L]!!, 0.001f)
+
+        // 移动光标（pending selection）— 用 redirectCaretTo，不传 newInserted/newDeleted
+        val newCaretTarget = Rect(left = 5f, top = 0f, right = 7f, bottom = 20f)
+        val motion2 =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // redirect 后立即 sample：unit channel 仍然存在，fraction 保持当前值（不丢字）
+        val redirectedSample = motion2.sample(midTime)
+        assertNotNull("unit 1 channel 应保留（redirectCaretTo 不丢 channel）", redirectedSample.unitClipFractions[1L])
+        assertNotNull("unit 2 channel 应保留（redirectCaretTo 不丢 channel）", redirectedSample.unitClipFractions[2L])
+        assertEquals("unit 1 fraction 应从当前值 0.5 继续", 0.5f, redirectedSample.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("unit 2 fraction 应从当前值 0 继续", 0f, redirectedSample.unitClipFractions[2L]!!, 0.001f)
+
+        // 继续跑到 glyph 终点：两个 unit 都到 1（文字继续吐完，没被丢弃）
+        val endSample = motion2.sample(midTime + glyphDuration)
+        assertEquals("unit 1 应吐完到 1", 1f, endSample.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("unit 2 应吐完到 1", 1f, endSample.unitClipFractions[2L]!!, 0.001f)
+    }
+
+    /**
+     * 问题1 对比测试：redirectTo 用空 keys 会丢 channel（旧 bug 行为），
+     * redirectCaretTo 保留 channel（修复后行为）。验证两者语义不同。
+     *
+     * 场景：forInsert 1 个 unit {1}，sample 到 50%（fraction=0.5）。
+     * - redirectTo(emptySet, emptySet)：新 motion 的 unitChannels 为空（旧 bug 行为，丢 channel）。
+     * - redirectCaretTo：新 motion 的 unitChannels 保留 key=1（修复后行为）。
+     *
+     * 旧实现遇到 pending selection 时调 redirectTo(empty, empty) 把正在吐的字全丢掉；
+     * 修复后改用 redirectCaretTo 保留 channel，文字继续吐完。
+     */
+    @Test
+    fun redirectTo_withEmptyKeys_dropsChannels_contrastWithRedirectCaretTo() {
+        val motion1 =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        val midTime = startTime + glyphDuration / 2
+        val midSample = motion1.sample(midTime)
+        assertEquals(0.5f, midSample.unitClipFractions[1L]!!, 0.001f)
+
+        val newCaretTarget = Rect(left = 5f, top = 0f, right = 7f, bottom = 20f)
+
+        // 旧 bug 行为：redirectTo 用空 keys → 丢 channel
+        val redirectedDropMotion =
+            motion1.redirectTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                newInsertedUnitKeys = emptySet(),
+                newDeletedUnitKeys = emptySet(),
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        val droppedSample = redirectedDropMotion.sample(midTime)
+        assertTrue(
+            "redirectTo 用空 keys 应丢 channel（旧 bug 行为）— unitClipFractions 应不含 key=1",
+            !droppedSample.unitClipFractions.containsKey(1L),
+        )
+
+        // 修复后行为：redirectCaretTo → 保留 channel
+        val preservedMotion =
+            motion1.redirectCaretTo(
+                newOriginCaretRect = targetRect,
+                newTargetCaretRect = newCaretTarget,
+                frameTimeNanos = midTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+        val preservedSample = preservedMotion.sample(midTime)
+        assertNotNull(
+            "redirectCaretTo 应保留 channel（修复后行为）— unitClipFractions 应含 key=1",
+            preservedSample.unitClipFractions[1L],
+        )
+        assertEquals(
+            "redirectCaretTo 保留的 channel fraction 应从当前值 0.5 继续",
+            0.5f,
+            preservedSample.unitClipFractions[1L]!!,
+            0.001f,
+        )
+    }
+
+    // ==================== 问题2：coordinated=false 独立 duration ====================
+
+    /**
+     * 问题2：coordinated=false 时 caret 和 glyph 各自持有 duration，独立计时。
+     *
+     * coordinated=false 在 ComposeEditMotion 层面体现为 caretDurationNanos != glyphDurationNanos。
+     *
+     * 场景1：caretDuration=200ms, glyphDuration=100ms。sample 到 100ms 时
+     * glyph finished（100ms >= 100ms）但 caret 未 finished（100ms < 200ms）。
+     * 验证 caret 不跟 glyphDuration（textDuration）走，caret 用自己的 cursorDuration。
+     *
+     * 场景2：caretDuration=100ms, glyphDuration=200ms。sample 到 100ms 时
+     * caret finished 但 glyph 未 finished。验证 glyph 不跟 caretDuration 走。
+     */
+    @Test
+    fun coordinatedFalse_caretUsesCursorDuration_glyphUsesTextDuration() {
+        val caretDurationLong = 200_000_000L // 200ms
+        val glyphDurationShort = 100_000_000L // 100ms
+
+        // 场景1：caret 200ms, glyph 100ms — glyph 先 finished，caret 还在跑
+        val motionCaretLonger =
+            ComposeEditMotion.forEdit(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L),
+                deletedUnitKeys = emptySet(),
+                frameTimeNanos = startTime,
+                caretDurationNanos = caretDurationLong,
+                glyphDurationNanos = glyphDurationShort,
+            )
+        // sample 到 100ms：glyph finished，caret 未 finished
+        val sampleGlyphDone = motionCaretLonger.sample(startTime + glyphDurationShort)
+        assertEquals(
+            "glyph 应 finished（100ms >= glyphDuration 100ms）— fraction=1",
+            1f,
+            sampleGlyphDone.unitClipFractions[1L]!!,
+            0.001f,
+        )
+        assertFalse(
+            "caret 不应 finished（100ms < caretDuration 200ms）— 整体 finished=false",
+            sampleGlyphDone.finished,
+        )
+        // caret 还在中间（100ms/200ms=0.5），left=10+(30-10)*0.5=20，没到 target
+        assertEquals("caret 在中间（用 caretDuration 200ms 算 progress=0.5）", 20f, sampleGlyphDone.caretRect.left, 0.001f)
+
+        // 场景2：caret 100ms, glyph 200ms — caret 先 finished，glyph 还在跑
+        val motionGlyphLonger =
+            ComposeEditMotion.forEdit(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L),
+                deletedUnitKeys = emptySet(),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDurationShort,
+                glyphDurationNanos = caretDurationLong,
+            )
+        // sample 到 100ms：caret finished，glyph 未 finished
+        val sampleCaretDone = motionGlyphLonger.sample(startTime + glyphDurationShort)
+        assertEquals(
+            "caret 应到 target（100ms >= caretDuration 100ms）",
+            targetRect,
+            sampleCaretDone.caretRect,
+        )
+        assertFalse(
+            "glyph 不应 finished（100ms < glyphDuration 200ms）— 整体 finished=false",
+            sampleCaretDone.finished,
+        )
+        // glyph 还在中间（100ms/200ms=0.5），fraction=0.5
+        assertEquals(
+            "glyph 在中间（用 glyphDuration 200ms 算 progress=0.5）— fraction=0.5",
+            0.5f,
+            sampleCaretDone.unitClipFractions[1L]!!,
+            0.001f,
+        )
+    }
+
+    /**
+     * 问题2 对比：coordinated=true 时 caret 和 glyph 共用同一 duration，sample 到中间时两者都未 finished。
+     *
+     * coordinated=true 在 ComposeEditMotion 层面体现为 caretDurationNanos == glyphDurationNanos。
+     * sample 到中间时 caret 和 glyph 都 progress=0.5，都未 finished；到终点时都 finished。
+     */
+    @Test
+    fun coordinatedTrue_caretAndGlyphShareTextDuration() {
+        val sharedDuration = 200_000_000L // 200ms
+        val motion =
+            ComposeEditMotion.forEdit(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L),
+                deletedUnitKeys = emptySet(),
+                frameTimeNanos = startTime,
+                caretDurationNanos = sharedDuration,
+                glyphDurationNanos = sharedDuration,
+            )
+        // sample 到 100ms（中间）：caret 和 glyph 都 progress=0.5，都未 finished
+        val midSample = motion.sample(startTime + sharedDuration / 2)
+        assertEquals("caret 在中间（progress=0.5）", 20f, midSample.caretRect.left, 0.001f)
+        assertEquals("glyph 在中间（fraction=0.5）", 0.5f, midSample.unitClipFractions[1L]!!, 0.001f)
+        assertFalse("coordinated=true 中间时两者都未 finished", midSample.finished)
+
+        // sample 到 200ms（终点）：两者都 finished
+        val endSample = motion.sample(startTime + sharedDuration)
+        assertEquals(targetRect, endSample.caretRect)
+        assertEquals(1f, endSample.unitClipFractions[1L]!!, 0.001f)
+        assertTrue("coordinated=true 终点时两者都 finished", endSample.finished)
+    }
+
+    // ==================== 问题3：多 unit 区间映射跟着光标 ====================
+
+    /**
+     * 问题3：多个 inserted unit 依次吐字，跟着光标。
+     *
+     * forInsert 3 个 unit {1, 2, 3}，sorted=[1, 2, 3]，区间（纯 inserted 第 i 个 [i/n, (i+1)/n]）：
+     * - key=1: [0, 1/3]
+     * - key=2: [1/3, 2/3]
+     * - key=3: [2/3, 1]
+     *
+     * sample 到 glyphProgress=1/6（第一个区间中点）：
+     * - unit1 fraction≈0.5（正在吐）
+     * - unit2=0（还没开始）
+     * - unit3=0（还没开始）
+     *
+     * sample 到 glyphProgress=1/2（第二个区间中点）：
+     * - unit1=1（已吐完）
+     * - unit2≈0.5（正在吐）
+     * - unit3=0
+     *
+     * sample 到 glyphProgress=5/6（第三个区间中点）：
+     * - unit1=1，unit2=1，unit3≈0.5
+     *
+     * 验证光标从左到右依次吐字，不是所有字同时吐。
+     */
+    @Test
+    fun multipleInsertedUnits_revealSequentially_followingCaret() {
+        val motion =
+            ComposeEditMotion.forInsert(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L, 2L, 3L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // glyphProgress=1/6：unit1 区间 [0, 1/3] 中点 local=0.5 fraction=0.5；
+        // unit2/unit3 还没开始 fraction=0
+        val t1 = startTime + glyphDuration / 6 // 100ms → 100/600=1/6
+        val s1 = motion.sample(t1)
+        assertEquals("glyphProgress=1/6: unit1 正在吐 fraction≈0.5", 0.5f, s1.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=1/6: unit2 还没开始 fraction=0", 0f, s1.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=1/6: unit3 还没开始 fraction=0", 0f, s1.unitClipFractions[3L]!!, 0.001f)
+
+        // glyphProgress=1/2：unit1 已吐完 fraction=1；unit2 区间 [1/3, 2/3] 中点 local=0.5 fraction=0.5；
+        // unit3 还没开始 fraction=0
+        val t2 = startTime + glyphDuration / 2 // 300ms → 300/600=1/2
+        val s2 = motion.sample(t2)
+        assertEquals("glyphProgress=1/2: unit1 已吐完 fraction=1", 1f, s2.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=1/2: unit2 正在吐 fraction≈0.5", 0.5f, s2.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=1/2: unit3 还没开始 fraction=0", 0f, s2.unitClipFractions[3L]!!, 0.001f)
+
+        // glyphProgress=5/6：unit1/unit2 已吐完 fraction=1；unit3 区间 [2/3, 1] 中点 local=0.5 fraction=0.5
+        val t3 = startTime + 5 * glyphDuration / 6 // 500ms → 500/600=5/6
+        val s3 = motion.sample(t3)
+        assertEquals("glyphProgress=5/6: unit1 已吐完 fraction=1", 1f, s3.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=5/6: unit2 已吐完 fraction=1", 1f, s3.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=5/6: unit3 正在吐 fraction≈0.5", 0.5f, s3.unitClipFractions[3L]!!, 0.001f)
+    }
+
+    /**
+     * 问题3：多个 deleted unit 反向吞字，跟着光标从右往左。
+     *
+     * forDelete 3 个 unit {1, 2, 3}，sorted=[1, 2, 3]，反向区间（纯 deleted 第 i 个 [(n-1-i)/n, (n-i)/n]）：
+     * - key=1 (i=0): [2/3, 1]（最后吞）
+     * - key=2 (i=1): [1/3, 2/3]
+     * - key=3 (i=2): [0, 1/3]（最先吞，最右边的 unit）
+     *
+     * sample 到 glyphProgress=1/6：
+     * - unit3（sorted 最后一个，最右边）正在吞 fraction≈0.5
+     * - unit1/unit2 fraction=1（完全可见，还没开始吞）
+     *
+     * sample 到 glyphProgress=1/2：
+     * - unit3 已吞完 fraction=0；unit2 正在吞 fraction≈0.5；unit1 fraction=1
+     *
+     * sample 到 glyphProgress=5/6：
+     * - unit3/unit2 已吞完 fraction=0；unit1 正在吞 fraction≈0.5
+     *
+     * 验证删除按 caret 实际经过顺序反向映射（光标从右往左，先吞最右边）。
+     */
+    @Test
+    fun multipleDeletedUnits_concealReversed_followingCaret() {
+        val motion =
+            ComposeEditMotion.forDelete(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                deletedUnitKeys = setOf(1L, 2L, 3L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // glyphProgress=1/6：unit3 区间 [0, 1/3] 中点 local=0.5 fraction=1+(0-1)*0.5=0.5（正在吞）；
+        // unit1 区间 [2/3, 1] 还没开始 fraction=1；unit2 区间 [1/3, 2/3] 还没开始 fraction=1
+        val t1 = startTime + glyphDuration / 6
+        val s1 = motion.sample(t1)
+        assertEquals("glyphProgress=1/6: unit1 完全可见 fraction=1（还没吞）", 1f, s1.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=1/6: unit2 完全可见 fraction=1（还没吞）", 1f, s1.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=1/6: unit3 正在吞 fraction≈0.5（最右边先吞）", 0.5f, s1.unitClipFractions[3L]!!, 0.001f)
+
+        // glyphProgress=1/2：unit3 已吞完 fraction=0；unit2 区间 [1/3, 2/3] 中点 fraction=0.5；
+        // unit1 还没开始 fraction=1
+        val t2 = startTime + glyphDuration / 2
+        val s2 = motion.sample(t2)
+        assertEquals("glyphProgress=1/2: unit1 完全可见 fraction=1（还没吞）", 1f, s2.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=1/2: unit2 正在吞 fraction≈0.5", 0.5f, s2.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=1/2: unit3 已吞完 fraction=0", 0f, s2.unitClipFractions[3L]!!, 0.001f)
+
+        // glyphProgress=5/6：unit3/unit2 已吞完 fraction=0；unit1 区间 [2/3, 1] 中点 fraction=0.5
+        val t3 = startTime + 5 * glyphDuration / 6
+        val s3 = motion.sample(t3)
+        assertEquals("glyphProgress=5/6: unit1 正在吞 fraction≈0.5", 0.5f, s3.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=5/6: unit2 已吞完 fraction=0", 0f, s3.unitClipFractions[2L]!!, 0.001f)
+        assertEquals("glyphProgress=5/6: unit3 已吞完 fraction=0", 0f, s3.unitClipFractions[3L]!!, 0.001f)
+    }
+
+    /**
+     * 问题3：混合 edit（1 inserted + 1 deleted）— inserted 占前半段，deleted 占后半段。
+     *
+     * forEdit inserted={1}, deleted={2}。区间（混合：inserted 前半段 [0, 0.5]，deleted 后半段 [0.5, 1]）：
+     * - inserted key=1: [0, 0.5]
+     * - deleted key=2: [0.5, 1]
+     *
+     * sample 到 glyphProgress=0.25：
+     * - inserted key=1 区间 [0, 0.5] 中点 local=0.5 fraction=0.5（正在吐）
+     * - deleted key=2 还没开始 fraction=1（还没吞）
+     *
+     * sample 到 glyphProgress=0.75：
+     * - inserted key=1 已吐完 fraction=1
+     * - deleted key=2 区间 [0.5, 1] 中点 local=0.5 fraction=1+(0-1)*0.5=0.5（正在吞）
+     *
+     * 验证光标先经过插入区吐字，再经过删除区吞字。
+     */
+    @Test
+    fun mixedEdit_insertedFirstHalf_deletedSecondHalf() {
+        val motion =
+            ComposeEditMotion.forEdit(
+                originCaretRect = originRect,
+                targetCaretRect = targetRect,
+                insertedUnitKeys = setOf(1L),
+                deletedUnitKeys = setOf(2L),
+                frameTimeNanos = startTime,
+                caretDurationNanos = glyphDuration,
+                glyphDurationNanos = glyphDuration,
+            )
+
+        // glyphProgress=0.25：inserted 正在吐，deleted 还没吞
+        val t1 = startTime + glyphDuration / 4 // 150ms → 150/600=0.25
+        val s1 = motion.sample(t1)
+        assertEquals("glyphProgress=0.25: inserted 正在吐 fraction≈0.5", 0.5f, s1.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=0.25: deleted 还没吞 fraction=1", 1f, s1.unitClipFractions[2L]!!, 0.001f)
+
+        // glyphProgress=0.75：inserted 已吐完，deleted 正在吞
+        val t2 = startTime + 3 * glyphDuration / 4 // 450ms → 450/600=0.75
+        val s2 = motion.sample(t2)
+        assertEquals("glyphProgress=0.75: inserted 已吐完 fraction=1", 1f, s2.unitClipFractions[1L]!!, 0.001f)
+        assertEquals("glyphProgress=0.75: deleted 正在吞 fraction≈0.5", 0.5f, s2.unitClipFractions[2L]!!, 0.001f)
+    }
+}
