@@ -14,7 +14,7 @@ import QtQuick
 Item {
     id: root
     required property var dt
-    property var model: null
+    property var dataModel: null
     property Component delegate: null
     property int minCardWidth: 280
     property int cardHeight: 220
@@ -42,7 +42,7 @@ Item {
         property var gridRoot: root
         anchors.fill: parent
         clip: true
-        model: root.model
+        model: root.dataModel
         delegate: root.delegate
         interactive: true
         cellWidth: root.cellWidth
@@ -56,7 +56,7 @@ Item {
 
     Item {
         anchors.fill: parent
-        visible: !root.model || root.model.count === 0
+        visible: !root.dataModel || root.dataModel.count === 0
 
         Column {
             anchors.centerIn: parent

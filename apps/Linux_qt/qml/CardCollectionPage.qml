@@ -18,7 +18,7 @@ Item {
     property string title: ""
     property string subtitle: ""
     property string actionText: ""
-    property var model: null
+    property var dataModel: null
     property Component delegate: null
     property int cardHeight: 220
     property int minCardWidth: 280
@@ -51,7 +51,7 @@ Item {
             dt: root.dt
             Layout.fillWidth: true
             Layout.fillHeight: true
-            model: root.model
+            dataModel: root.dataModel
             delegate: root.delegate
             cardHeight: root.cardHeight
             minCardWidth: root.minCardWidth

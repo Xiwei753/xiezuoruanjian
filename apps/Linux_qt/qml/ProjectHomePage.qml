@@ -44,13 +44,22 @@ Rectangle {
         try {
             var jsonStr = projectBackendRef.get_project_summaries_json()
             var arr = JSON.parse(jsonStr)
-            if (!arr || !Array.isArray(arr)) return
+            if (!arr || !Array.isArray(arr)) {
+                if (backendRef && backendRef.log_qml) {
+                    backendRef.log_qml("error", "project", "project_summary_parse_failed", "summaries JSON is not an array")
+                }
+                return
+            }
             var map = {}
             for (var i = 0; i < arr.length; i++) {
                 map[arr[i].projectId] = arr[i]
             }
             root._cachedSummaries = map
-        } catch (e) {}
+        } catch (e) {
+            if (backendRef && backendRef.log_qml) {
+                backendRef.log_qml("error", "project", "project_summary_parse_failed", String(e))
+            }
+        }
     }
 
     function getProjectWordCount(projectId) {
@@ -75,7 +84,7 @@ Rectangle {
         title: qsTr("作品")
         subtitle: projectModel.count > 0 ? qsTr("%1 部作品").arg(projectModel.count) : qsTr("开始你的创作之旅")
         actionText: qsTr("+ 新建作品")
-        model: projectModel
+        dataModel: projectModel
         cardHeight: 184
         minCardWidth: 280
         emptyIcon: ""
@@ -83,22 +92,35 @@ Rectangle {
         emptySubtitle: qsTr("点击「新建作品」开始创作")
         onActionClicked: root.createProject()
 
-        delegate: ProjectCard {
-            dt: root.dt
+        delegate: Item {
+            id: cardWrapper
+            required property string projectId
+            required property string projectTitle
+            required property int projectWordCount
+            required property int projectTodayInput
+            required property string projectLastEdited
+            required property string projectSyncStatus
+            required property string projectAccent
+
             width: GridView.view.gridRoot.cardWidth
             height: GridView.view.gridRoot.cardHeight
-            projectId: model.projectId
-            title: model.projectTitle
-            wordCount: model.projectWordCount
-            todayInput: model.projectTodayInput
-            lastEdited: model.projectLastEdited
-            syncStatus: model.projectSyncStatus
-            accentColor: model.projectAccent
-            onClicked: root.openProject(model.projectId)
-            onRightClicked: {
-                projectContextMenu.projectId = model.projectId
-                projectContextMenu.projectTitle = model.projectTitle
-                projectContextMenu.popup()
+
+            ProjectCard {
+                anchors.fill: parent
+                dt: root.dt
+                projectId: cardWrapper.projectId
+                title: cardWrapper.projectTitle
+                wordCount: cardWrapper.projectWordCount
+                todayInput: cardWrapper.projectTodayInput
+                lastEdited: cardWrapper.projectLastEdited
+                syncStatus: cardWrapper.projectSyncStatus
+                accentColor: cardWrapper.projectAccent
+                onClicked: root.openProject(cardWrapper.projectId)
+                onRightClicked: {
+                    projectContextMenu.projectId = cardWrapper.projectId
+                    projectContextMenu.projectTitle = cardWrapper.projectTitle
+                    projectContextMenu.popup()
+                }
             }
         }
     }
