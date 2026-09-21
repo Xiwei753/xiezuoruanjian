@@ -263,6 +263,8 @@ pub fn ensure_four_layer_nodes(root_raw: *mut std::ffi::c_void, item_ptr: *mut s
 
 /// 更新光标节点（child[3] 层内）。
 /// Creates/updates a solid-color rectangle at (x, y) with given width/height and opacity.
+/// Issue #727 评论 5755858583 问题1: cursor_y 是文档坐标，cursor layer 的 QSGTransformNode
+/// 统一做 translate(0, -scroll_y)，和正文/动画层一致，不再在 Rust 侧提前减 scroll_y。
 pub fn update_cursor_node(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
@@ -273,6 +275,7 @@ pub fn update_cursor_node(
     opacity: f64,
     color_str: *const u8,
     color_len: usize,
+    scroll_y: f64,
 ) {
     // SAFETY: pointer from Qt scene graph/QML engine; valid while owning QQuickItem/node alive; called from render thread in updatePaintNode() (threaded render loop) or GUI thread; null-checked or guaranteed non-null by caller.
     cpp!(unsafe [
@@ -284,7 +287,8 @@ pub fn update_cursor_node(
         cursor_h as "double",
         opacity as "double",
         color_str as "const char*",
-        color_len as "size_t"
+        color_len as "size_t",
+        scroll_y as "double"
     ] {
         auto *root = static_cast<QSGTransformNode*>(root_raw);
         if (!root) return;
@@ -295,6 +299,14 @@ pub fn update_cursor_node(
         // Get cursor layer (child[3])
         QSGTransformNode *cursorLayer = dynamic_cast<QSGTransformNode*>(child_at(root, 3));
         if (!cursorLayer) return;
+
+        // Issue #727 评论 5755858583 问题1: cursor layer 和正文/动画层使用相同的
+        // translate(0, -scroll_y) 矩阵，cursor 保持文档坐标，由 QSGTransformNode
+        // 统一做视口变换。
+        QMatrix4x4 cursorMatrix;
+        cursorMatrix.translate(0, -static_cast<qreal>(scroll_y));
+        cursorLayer->setMatrix(cursorMatrix);
+        cursorLayer->markDirty(QSGNode::DirtyMatrix);
 
         // Get or create opacity node
         QSGOpacityNode *opacityNode = nullptr;

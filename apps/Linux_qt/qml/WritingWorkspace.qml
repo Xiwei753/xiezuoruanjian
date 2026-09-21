@@ -899,7 +899,7 @@ Rectangle {
                     //   - updatePaintNode / QSG 渲染完全由 Rust 侧管理
                     // Issue #677 评论 5653315696 约束:
                     //   - 写作区只拿 DesignTokens 已经算好的最终颜色（editorText、
-                    //     textPrimaryHex、primary、selectedText 等），不在写作区里
+                    //     textPrimary、primary、selectedText 等），不在写作区里
                     //     解释主题 JSON。主题 JSON 的 snake_case key 解析只在
                     //     DesignTokens.qml 里完成。
                     //   - text_color 最终来自 dt.editorText → dt.textPrimary →
@@ -932,7 +932,7 @@ Rectangle {
                             : 0
                         padding: dt.sp16
                         // Issue #710 评论 5731145076: text_color 只绑定 dt.editorText，
-                        // 去掉 fallback 到 dt.textPrimaryHex 的第二套逻辑。
+                        // 不再有 fallback 到 dt.textPrimaryHex 的第二套逻辑（已删除）。
                         // editorText = textPrimary = onSurface（DesignTokens 单一事实源），
                         // 主题变化只触发正文节点颜色重建，不重新创建另一份编辑器主题状态。
                         // Issue #714: 颜色绑定改为 dt.xxx.toString()，

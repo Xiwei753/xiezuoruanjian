@@ -1,5 +1,5 @@
 use super::layout_snapshot::{LineSnapshotId, SourceRect};
-use super::static_line_patch::StaticLinePatch;
+use super::qt_text_node::AnimationClipRect;
 use super::transaction_key::VisualTransactionKey;
 use crate::editor::layout::LayoutSnapshot;
 
@@ -214,9 +214,10 @@ pub struct RenderPlan {
     pub cursor_style: CursorStyle,
     /// Issue #677 评论 5654174714: selection/preedit 的本帧轻量颜色状态。
     pub selection_preedit_style: SelectionPreeditStyle,
-    /// 动画期间静态正文层需要隐藏的区域。
-    /// 由 active transaction 的 static_patches 提供，包含精确的行级裁剪信息。
-    pub static_patches: Vec<StaticLinePatch>,
+    /// Issue #727 评论 5755858583 问题2: 动画期间静态正文层需要隐藏的裁剪矩形。
+    /// 直接存储文档坐标 x/y/w/h，由 active units 的 AnimatedSlice.static_hidden_document_rects
+    /// 收集而来。不再通过 StaticLinePatch 中间结构。
+    pub clip_rects: Vec<AnimationClipRect>,
     /// Issue #701 评论 5699573227 第三阶段 (F5): 光标 frame state 采样结果。
     pub cursor_sample_outcome: CursorSampleOutcome,
     /// Issue #705: 本帧真正绘制出去的 caret rect `(x, y, h)`。

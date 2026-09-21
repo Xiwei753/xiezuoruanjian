@@ -191,7 +191,6 @@ impl QQuickItem for SujianEditorItem {
                     self.cursor_ctrl.animation.as_ref(),
                     self.cursor_ctrl.cursor_owner_epoch,
                     scroll_y,
-                    self.current_auto_follow_anchor.map(|a| (a.y, a.h)),
                 );
 
             // Issue #658: 静态正文层参数 — 读取 GUI 线程预计算的快照。
@@ -232,18 +231,7 @@ impl QQuickItem for SujianEditorItem {
             // prepared_frame 不可变借用冲突，故移到 render_frame 借用结束之后。
             // 语义等价：request_frame_update 的 cursor_ctrl.animation 判断在本调用
             // 之后，看到的仍是回写后的状态。
-            self.apply_render_plan_cursor_state(&render_plan, frame_now);
-
-            // Issue #724 评论 5752572618: anchor 到达 target 后本帧仍画锚定帧，
-            // 画完这一帧后才清 anchor 并请求下一帧，下一帧回到正常 coordinated caret。
-            // 放在 apply_render_plan_cursor_state 之后（render_frame 借用已结束），
-            // 确保 release_after_frame=true 的这一帧已经用 anchor 的 (y, h) 画完。
-            if let Some(ref anchor) = self.current_auto_follow_anchor {
-                if anchor.release_after_frame {
-                    self.current_auto_follow_anchor = None;
-                    self.request_frame_update();
-                }
-            }
+            self.apply_render_plan_cursor_state(&render_plan, frame_now, scroll_y);
 
             if !static_rebuild_ok && needs_relayout {
                 self.layout_dirty = true;
@@ -376,6 +364,7 @@ impl SujianEditorItem {
         &mut self,
         render_plan: &super::render_plan::RenderPlan,
         frame_now: std::time::Instant,
+        scroll_y: f64,
     ) {
         use super::render_plan::CursorSampleOutcome;
         // Issue #701 评论 5699573227 第三阶段 (F5): 用 build_render_plan_full 内部
@@ -384,6 +373,8 @@ impl SujianEditorItem {
         // Issue #702: 纯光标移动不再依赖空 Cursor 文字事务。CursorAnimationState
         // 拥有自己的 timeline（started_at + duration_ms），首帧 started_at 为 None
         // 时用 frame_now 启动，之后每帧用 frame_now 推进 from→to 动画。
+        // Issue #727 评论 5755858583 问题1: Coordinated/drawn_caret_rect 的 y 是文档坐标，
+        // visual_y 保持视口坐标，回写时减 scroll_y。
         match render_plan.cursor_sample_outcome {
             CursorSampleOutcome::Running(p) => {
                 self.cursor_ctrl.update_animation_progress(p);
@@ -397,7 +388,7 @@ impl SujianEditorItem {
             // 同时清除残留的纯光标 animation，因为正文协同模式下不应有独立 timeline。
             CursorSampleOutcome::Coordinated { x, y, h } => {
                 self.cursor_ctrl.visual_x = x;
-                self.cursor_ctrl.visual_y = y;
+                self.cursor_ctrl.visual_y = y - scroll_y;
                 if h > 0.0 {
                     self.cursor_ctrl.visual_h = h;
                 }
@@ -420,9 +411,11 @@ impl SujianEditorItem {
         // 只允许从这个"上一帧真正画出来的位置" rebase。
         // cursor_ctrl.target_x/target_y 只表示逻辑目标,不被拿来当
         // 当前屏幕位置。
+        // Issue #727 评论 5755858583 问题1: drawn_caret_rect 的 y 是文档坐标，
+        // visual_y 保持视口坐标，回写时减 scroll_y。
         if let Some((cx, cy, ch)) = render_plan.drawn_caret_rect {
             self.cursor_ctrl.visual_x = cx;
-            self.cursor_ctrl.visual_y = cy;
+            self.cursor_ctrl.visual_y = cy - scroll_y;
             if ch > 0.0 {
                 self.cursor_ctrl.visual_h = ch;
             }

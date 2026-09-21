@@ -121,23 +121,6 @@ impl SujianEditorItem {
         let cursor_h = layout_res.h;
         let visual_line_id = layout_res.visual_line_id;
 
-        // Issue #724 评论 5752398265 / 评论 5752572618: auto-follow anchor 生命周期管理。
-        // anchor 只在最终绘制时（build_render_plan_full）覆盖屏幕 y/h，不污染
-        // find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
-        // Issue #724 评论 5752572618: 到达滚动目标时**不清 None**，只置
-        // `release_after_frame = true`。本帧 build_render_plan_full 仍收到 anchor
-        // 的 (y, h) 画锚定帧；画完一帧后由 update_paint_node 检查
-        // release_after_frame，若为 true 则清 current_auto_follow_anchor = None
-        // 并 request_frame_update() 请求下一帧；下一帧 anchor 不存在 → 回到正常
-        // coordinated caret。这样保证用户能看到"正文滚、caret 留原屏幕位置一帧
-        // 再交回"的语义，而不是在绘制锚定帧之前就把 anchor 清掉。
-        if let Some(ref mut anchor) = self.current_auto_follow_anchor {
-            let current_scroll = f64::from(self.current_scroll_y);
-            if (current_scroll - anchor.target_scroll_y).abs() < 1.0 {
-                anchor.release_after_frame = true;
-            }
-        }
-
         let vp_h = f64::from(self.current_viewport_height.max(1.0));
         let is_selecting = self.buffer.selection_anchor != self.buffer.cursor;
         let is_preediting = !self.pipeline.composition().preedit_text.is_empty();

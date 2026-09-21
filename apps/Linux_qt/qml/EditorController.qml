@@ -111,7 +111,7 @@ QtObject {
         var isDark = dt ? dt.isDark : "<no-dt>";
         var colorSource = tc ? tc.color_source : "<null>";
         var editorText = dt ? String(dt.editorText) : "<no-dt>";
-        var convertedEditorText = dt ? controller.colorToHex(dt.editorText, dt.textPrimaryHex) : "<no-dt>";
+        var convertedEditorText = dt ? controller.colorToHex(dt.editorText, dt.textPrimary) : "<no-dt>";
         var primary = dt ? String(dt.primary) : "<no-dt>";
         var surface = dt ? String(dt.surface) : "<no-dt>";
         var onSurface = dt ? String(dt.onSurface) : "<no-dt>";

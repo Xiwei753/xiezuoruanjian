@@ -83,57 +83,59 @@ QtObject {
             return
         }
         var dark = !!parsed.is_dark
-        var scheme = (parsed.scheme && typeof parsed.scheme === "object") ? parsed.scheme : null
+        // Issue #727 评论 5755858583 问题3: Rust 侧总是生成 colors（即使 scheme
+        // 为 None 也根据 is_dark 生成 fallback colors），QML 侧直接读取不再 fallback。
+        var colors = (parsed.colors && typeof parsed.colors === "object") ? parsed.colors : null
 
-        // 辅助：从 scheme 取 hex 字符串，空则用 isDark fallback
-        function hex(field, darkVal, lightVal) {
-            if (scheme && scheme[field] && typeof scheme[field] === "string" && scheme[field].length > 0) {
-                return scheme[field]
-            }
-            return dark ? darkVal : lightVal
+        // colors 为 null 是防御性情况（不应该发生），保持当前 resolvedTheme 不变
+        if (!colors) {
+            resolvedTheme = Object.assign({}, resolvedTheme, { is_dark: dark })
+            return
         }
 
-        // 一次性构建完整 theme 对象，然后整体替换 resolvedTheme。
-        // QML 引擎在下一帧统一更新所有绑定，不在帧内暴露混合中间态。
+        // Issue #727 评论 5755858583 问题3: 删除 hex() fallback 函数。
+        // Rust 侧已保证 colors 包含所有字段的最终值，直接读取即可。
+        // 如果某个字段缺失（防御性），保持 resolvedTheme 中上一次的值。
+        var prev = resolvedTheme
         var next = {
             is_dark: dark,
-            scheme: scheme,
-            primary: hex("primary", "#92CCFF", "#006497"),
-            on_primary: hex("on_primary", "#003351", "#FFFFFF"),
-            primary_container: hex("primary_container", "#004B73", "#CCE5FF"),
-            on_primary_container: hex("on_primary_container", "#CCE5FF", "#001E31"),
-            secondary: hex("secondary", "#B8C8DA", "#51606F"),
-            on_secondary: hex("on_secondary", "#233240", "#FFFFFF"),
-            secondary_container: hex("secondary_container", "#394857", "#D4E4F6"),
-            on_secondary_container: hex("on_secondary_container", "#D4E4F6", "#0E1D2A"),
-            tertiary: hex("tertiary", "#D7BFFF", "#6D578C"),
-            on_tertiary: hex("on_tertiary", "#3E2A5C", "#FFFFFF"),
-            tertiary_container: hex("tertiary_container", "#554074", "#F1DAFF"),
-            on_tertiary_container: hex("on_tertiary_container", "#F1DAFF", "#261447"),
-            background: hex("background", "#1A1C1E", "#FCFCFF"),
-            on_background: hex("on_background", "#E2E3E7", "#181C20"),
-            surface: hex("surface", "#1A1C1E", "#FCFCFF"),
-            on_surface: hex("on_surface", "#E2E3E7", "#181C20"),
-            surface_variant: hex("surface_variant", "#42474E", "#DFE3EB"),
-            on_surface_variant: hex("on_surface_variant", "#C1C6CF", "#42474E"),
-            surface_tint: hex("surface_tint", "#92CCFF", "#006497"),
-            surface_dim: hex("surface_dim", "#121418", "#D7D9DF"),
-            surface_bright: hex("surface_bright", "#38393F", "#FCFCFF"),
-            surface_container_lowest: hex("surface_container_lowest", "#0F1113", "#FFFFFF"),
-            surface_container_low: hex("surface_container_low", "#1F2225", "#F6F8FB"),
-            surface_container: hex("surface_container", "#23272A", "#F0F3F7"),
-            surface_container_high: hex("surface_container_high", "#2D3135", "#EAEFF5"),
-            surface_container_highest: hex("surface_container_highest", "#383C40", "#E4E9EF"),
-            inverse_surface: hex("inverse_surface", "#E2E2E5", "#2F3033"),
-            inverse_on_surface: hex("inverse_on_surface", "#2F3033", "#F1F0F4"),
-            inverse_primary: hex("inverse_primary", "#006497", "#92CCFF"),
-            error: hex("error", "#FFB4AB", "#BA1A1A"),
-            on_error: hex("on_error", "#690005", "#FFFFFF"),
-            error_container: hex("error_container", "#93000A", "#FFDAD6"),
-            on_error_container: hex("on_error_container", "#FFDAD6", "#410002"),
-            outline: hex("outline", "#8C9198", "#72787E"),
-            outline_variant: hex("outline_variant", "#42474E", "#C1C6CF"),
-            scrim: hex("scrim", "#000000", "#000000"),
+            colors: colors,
+            primary: colors.primary || prev.primary,
+            on_primary: colors.on_primary || prev.on_primary,
+            primary_container: colors.primary_container || prev.primary_container,
+            on_primary_container: colors.on_primary_container || prev.on_primary_container,
+            secondary: colors.secondary || prev.secondary,
+            on_secondary: colors.on_secondary || prev.on_secondary,
+            secondary_container: colors.secondary_container || prev.secondary_container,
+            on_secondary_container: colors.on_secondary_container || prev.on_secondary_container,
+            tertiary: colors.tertiary || prev.tertiary,
+            on_tertiary: colors.on_tertiary || prev.on_tertiary,
+            tertiary_container: colors.tertiary_container || prev.tertiary_container,
+            on_tertiary_container: colors.on_tertiary_container || prev.on_tertiary_container,
+            background: colors.background || prev.background,
+            on_background: colors.on_background || prev.on_background,
+            surface: colors.surface || prev.surface,
+            on_surface: colors.on_surface || prev.on_surface,
+            surface_variant: colors.surface_variant || prev.surface_variant,
+            on_surface_variant: colors.on_surface_variant || prev.on_surface_variant,
+            surface_tint: colors.surface_tint || prev.surface_tint,
+            surface_dim: colors.surface_dim || prev.surface_dim,
+            surface_bright: colors.surface_bright || prev.surface_bright,
+            surface_container_lowest: colors.surface_container_lowest || prev.surface_container_lowest,
+            surface_container_low: colors.surface_container_low || prev.surface_container_low,
+            surface_container: colors.surface_container || prev.surface_container,
+            surface_container_high: colors.surface_container_high || prev.surface_container_high,
+            surface_container_highest: colors.surface_container_highest || prev.surface_container_highest,
+            inverse_surface: colors.inverse_surface || prev.inverse_surface,
+            inverse_on_surface: colors.inverse_on_surface || prev.inverse_on_surface,
+            inverse_primary: colors.inverse_primary || prev.inverse_primary,
+            error: colors.error || prev.error,
+            on_error: colors.on_error || prev.on_error,
+            error_container: colors.error_container || prev.error_container,
+            on_error_container: colors.on_error_container || prev.on_error_container,
+            outline: colors.outline || prev.outline,
+            outline_variant: colors.outline_variant || prev.outline_variant,
+            scrim: colors.scrim || prev.scrim,
         }
         resolvedTheme = next
     }
@@ -240,9 +242,6 @@ QtObject {
     property var projectAccentColors: isDark
         ? ["#7B8CDE", "#DE8C7B", "#7BDE8C", "#DE7BC4", "#7BC4DE", "#C4DE7B"]
         : ["#5B6CAE", "#BE6C5B", "#5BBE6C", "#BE5BA4", "#5BA4BE", "#A4BE5B"]
-
-    property string textPrimaryHex: isDark ? "#E2E2E5" : "#1A1C1E"
-    property string textSecondaryHex: isDark ? "#C3C6CF" : "#42474E"
 
     property int radiusXs: 4
     property int radiusSm: 8

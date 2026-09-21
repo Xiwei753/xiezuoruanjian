@@ -42,7 +42,6 @@ pub(crate) use super::render_plan::{
     CursorRenderState, PreeditRange, RenderPlan, SelectionPreeditPlan, SelectionRange,
     TextAnimationGlyphInfo, TextAnimationPlan,
 };
-use super::static_line_patch::StaticLinePatch;
 use super::text_visual_transaction::PreparedVisualUnit;
 use super::text_visual_transaction::{
     PreparedCursorVisualTrack, PreparedTextVisualTransaction, PreparedTransactionQueue,
@@ -579,18 +578,17 @@ struct ReflowClusterRef {
 /// - `inserted_range`：Core 给出的插入范围 (byte_start, byte_end)。
 ///
 /// # 返回
-/// `(slices, static_patches)`：InsertReveal 动画切片和 insert 级静态行补丁。
+/// `slices`：InsertReveal 动画切片（含 static_hidden_document_rects）。
 fn build_insert_reveal_slices(
     key: VisualTransactionKey,
     new_snapshot: &EditorLayoutSnapshot,
     inserted_range: (usize, usize),
-) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
+) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
-    let mut managed_new_clusters: Vec<(usize, usize, SourceRect)> = Vec::new();
     let (range_start, range_end) = inserted_range;
 
-    for (line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
-        for (cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
+    for (_line_idx, new_line) in new_snapshot.line_snapshots.iter().enumerate() {
+        for (_cluster_idx, new_cluster) in new_line.clusters.iter().enumerate() {
             // Issue #724 评论 5751268664 缺口1: 用 Inside/Partial 分类替代 overlap 整块消费。
             // - Inside：cluster 完全在 inserted 范围内，整个 cluster 进入 InsertReveal + static hide。
             // - Partial：cluster 部分在 inserted 范围内（ligature/cluster 跨越 inserted 边界），
@@ -652,11 +650,11 @@ fn build_insert_reveal_slices(
                 }
             };
             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
-            slices.push(AnimatedSlice::insert_reveal(
+            let mut slice = AnimatedSlice::insert_reveal(
                 key,
                 new_line.id,
                 new_sr.clone(),
-                new_doc,
+                new_doc.clone(),
                 0.0,
                 0.0,
                 slice_byte_start,
@@ -666,34 +664,16 @@ fn build_insert_reveal_slices(
                 // 不是 line_snapshots 的局部数组下标。line_idx 仍用于
                 // managed_new_clusters/patches_by_line 的局部索引。
                 Some(new_line.visual_line_id),
-            ));
-            managed_new_clusters.push((line_idx, cluster_idx, new_sr));
+            );
+            // Issue #727 评论 5755858583 问题2: 直接在 slice 上写 canonical 独占区域，
+            // 不再生成 StaticLinePatch。AnimatedSlice 成为唯一事实源。
+            slice.static_hidden_document_rects = vec![new_doc];
+            slices.push(slice);
         }
     }
 
-    // 生成 StaticLinePatches：Insert 的新字 sourceRect 必须在静态层隐藏到 Reveal 完成。
-    let mut patches_by_line: std::collections::HashMap<usize, Vec<SourceRect>> =
-        std::collections::HashMap::new();
-    for (line_idx, _cluster_idx, sr) in &managed_new_clusters {
-        patches_by_line
-            .entry(*line_idx)
-            .or_default()
-            .push(sr.clone());
-    }
-    let mut static_patches = Vec::new();
-    for (line_idx, hidden_rects) in patches_by_line {
-        let new_line = &new_snapshot.line_snapshots[line_idx];
-        static_patches.push(StaticLinePatch::insert_patch(
-            new_line.id,
-            hidden_rects,
-            Vec::new(),
-            new_line.byte_start,
-            new_line.byte_end,
-        ));
-    }
-
     let slices = merge_adjacent_slices(slices);
-    (slices, static_patches)
+    slices
 }
 
 /// 按 Core 给出的 deleted_range 从 old_snapshot 显式生成 DeleteConceal 切片。
@@ -779,7 +759,7 @@ fn build_delete_conceal_slices(
 /// - `new_cursor_rect`：用于 reflow 中检测到的 delete_conceal 的收缩目标。
 ///
 /// # 返回
-/// `(slices, static_patches)`：动画切片和 cluster 级静态行补丁。
+/// `slices`：动画切片（含 static_hidden_document_rects）。
 fn build_cluster_reflow_slices(
     key: VisualTransactionKey,
     old_snapshot: &EditorLayoutSnapshot,
@@ -789,9 +769,8 @@ fn build_cluster_reflow_slices(
     excluded_new_ranges: &[(usize, usize)],
     old_cursor_rect: Option<&CursorRect>,
     new_cursor_rect: Option<&CursorRect>,
-) -> (Vec<AnimatedSlice>, Vec<StaticLinePatch>) {
+) -> Vec<AnimatedSlice> {
     let mut slices = Vec::new();
-    let mut static_patches = Vec::new();
 
     // Issue #687: old_cx/old_cy/new_cx/new_cy 不再需要——changed range 由
     // build_insert_reveal_slices / build_delete_conceal_slices 显式拥有，
@@ -845,7 +824,6 @@ fn build_cluster_reflow_slices(
     let n_new = new_refs.len();
     let mut old_matched: Vec<bool> = vec![false; n_old];
     let mut new_matched: Vec<bool> = vec![false; n_new];
-    let mut run_managed_new_clusters: Vec<(usize, usize, SourceRect)> = Vec::new();
 
     for (ni, nref) in new_refs.iter().enumerate() {
         // 用 offset_map 将 new cluster 的 byte range 映射回 old 坐标
@@ -895,19 +873,21 @@ fn build_cluster_reflow_slices(
                 && (old_doc.h - new_doc.h).abs() < 0.5;
             if !geometry_same {
                 // 几何变了：只生成 ReflowMove
-                slices.push(AnimatedSlice::reflow_move(
+                // Issue #727 评论 5755858583 问题2: 直接在 slice 上写 canonical 独占区域。
+                let mut slice = AnimatedSlice::reflow_move(
                     key,
                     old_line.id,
                     old_sr,
                     old_doc,
                     new_line.id,
                     new_sr.clone(),
-                    new_doc,
+                    new_doc.clone(),
                     new_cluster.byte_start,
                     new_cluster.byte_end,
                     Some(old_cluster.shaping_identity.clone()),
-                ));
-                run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
+                );
+                slice.static_hidden_document_rects = vec![new_doc];
+                slices.push(slice);
             }
             // 几何没变：不生成任何动画（关键改进——消除普通输入/删除/Enter 的错误 CrossFade）
         } else {
@@ -921,16 +901,18 @@ fn build_cluster_reflow_slices(
                 new_cluster.byte_start,
                 new_cluster.byte_end,
             ));
-            slices.push(AnimatedSlice::reflow_crossfade_new(
+            // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
+            let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
                 new_sr.clone(),
                 old_doc,
-                new_doc,
+                new_doc.clone(),
                 new_cluster.byte_start,
                 new_cluster.byte_end,
-            ));
-            run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
+            );
+            new_slice.static_hidden_document_rects = vec![new_doc];
+            slices.push(new_slice);
         }
 
         // 标记已配对的 old/new cluster，不再参与后续多对多处理
@@ -972,8 +954,10 @@ fn build_cluster_reflow_slices(
             let new_cluster = &new_line.clusters[nref.cluster_idx];
             let new_sr = new_cluster.source_rect.clone();
             let new_doc = new_line.source_rect_to_document_rect(&new_sr);
+            let new_doc_for_hide = new_doc.clone();
 
-            slices.push(AnimatedSlice::reflow_crossfade_new(
+            // Issue #727 评论 5755858583 问题2: ReflowCrossFadeNew 直接写 canonical 独占区域。
+            let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                 key,
                 new_line.id,
                 new_sr.clone(),
@@ -981,34 +965,18 @@ fn build_cluster_reflow_slices(
                 new_doc,
                 new_cluster.byte_start,
                 new_cluster.byte_end,
-            ));
-            run_managed_new_clusters.push((nref.line_idx, nref.cluster_idx, new_sr));
+            );
+            new_slice.static_hidden_document_rects = vec![new_doc_for_hide];
+            slices.push(new_slice);
         }
     }
 
-    // ── 阶段 5：生成 StaticLinePatches ──
-    // 按 line_idx 分组，只为有被接管 cluster 的行生成 patch
-    let mut patches_by_line: std::collections::HashMap<usize, Vec<SourceRect>> =
-        std::collections::HashMap::new();
-    for (line_idx, _cluster_idx, sr) in &run_managed_new_clusters {
-        patches_by_line
-            .entry(*line_idx)
-            .or_default()
-            .push(sr.clone());
-    }
-    for (line_idx, hidden_rects) in patches_by_line {
-        let new_line = &new_snapshot.line_snapshots[line_idx];
-        static_patches.push(StaticLinePatch::reflow_patch(
-            new_line.id,
-            hidden_rects,
-            Vec::new(),
-            new_line.byte_start,
-            new_line.byte_end,
-        ));
-    }
+    // Issue #727 评论 5755858583 问题2: 不再生成 StaticLinePatches。
+    // static_hidden_document_rects 已在创建 slice 时直接写入。
+    // run_managed_new_clusters 不再需要——裁剪信息已在 slice 上。
 
     let slices = merge_adjacent_slices(slices);
-    (slices, static_patches)
+    slices
 }
 
 /// 合并相邻同类型、同方向、同快照的动画切片为 run，避免一个字一个 slice。
@@ -1099,6 +1067,12 @@ fn merge_two(a: &AnimatedSlice, b: &AnimatedSlice) -> AnimatedSlice {
         conceal_to_left_edge: a.conceal_to_left_edge,
         visual_line_id: a.visual_line_id,
         start_fraction: a.start_fraction.min(b.start_fraction),
+        static_hidden_document_rects: a
+            .static_hidden_document_rects
+            .iter()
+            .chain(&b.static_hidden_document_rects)
+            .cloned()
+            .collect(),
     }
 }
 
@@ -1397,23 +1371,20 @@ impl LinuxEditorAnimationCoordinator {
         new_snapshot: &EditorLayoutSnapshot,
         cursor_owner_epoch: u64,
     ) -> Option<VisualTransactionKey> {
-        // Issue #727 约束 5: smooth_cursor_enabled=false 自然意味着没有吞吐字。
-        // 创建 InsertReveal/DeleteConceal 的条件：
-        // typing_animation_enabled && smooth_cursor_enabled && valid_caret_motion_track
-        // 才允许创建。valid_caret_motion_track = old/new cursor rect 都存在（有 caret motion）。
-        if !typing_animation_enabled
-            || !smooth_cursor_enabled
-            || is_scrolling
-            || is_loading
-            || is_applying_format
-        {
+        // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 不再整笔 return None。
+        // 只去掉 CaretDriven units（InsertReveal/DeleteConceal），Reflow 是否保留由
+        // typing_animation_enabled 决定，不要把两类动画重新绑死。
+        if !typing_animation_enabled || is_scrolling || is_loading || is_applying_format {
             return None;
         }
 
         // Issue #727 约束 5: valid_caret_motion_track 检查。
         // 没有 old/new cursor rect 就没有有效 caret motion track，不创建吞吐字事务。
+        // Issue #727 评论 5755858583 问题5: 仅在 smooth_cursor_enabled 时才要求
+        // valid_caret_motion_track——!smooth_cursor_enabled 时不创建 CaretDriven units，
+        // 只创建 Reflow，不需要 caret motion track。
         let valid_caret_motion_track = old_cursor_rect.is_some() && new_cursor_rect.is_some();
-        if !valid_caret_motion_track {
+        if smooth_cursor_enabled && !valid_caret_motion_track {
             return None;
         }
 
@@ -1462,17 +1433,19 @@ impl LinuxEditorAnimationCoordinator {
 
                     let key = self.alloc_key();
                     let mut slices = Vec::new();
-                    let mut static_patches = Vec::new();
 
                     // Issue #687: Insert 事务先生成显式 InsertReveal，再调用 reflow builder；
                     // reflow 必须排除 inserted_range。changed range 由 Core 显式拥有。
+                    // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                    // InsertReveal（CaretDriven unit），只保留 Reflow。
                     let inserted_range_tuple = (range_start, range_end);
-                    let (reveal_slices, reveal_patches) =
-                        build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
-                    slices.extend(reveal_slices);
-                    static_patches.extend(reveal_patches);
+                    if smooth_cursor_enabled {
+                        let reveal_slices =
+                            build_insert_reveal_slices(key, new_snapshot, inserted_range_tuple);
+                        slices.extend(reveal_slices);
+                    }
 
-                    let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                    let reflow_slices = build_cluster_reflow_slices(
                         key,
                         old_snapshot,
                         new_snapshot,
@@ -1483,7 +1456,6 @@ impl LinuxEditorAnimationCoordinator {
                         new_cursor_rect.as_ref(),
                     );
                     slices.extend(reflow_slices);
-                    static_patches.extend(reflow_patches);
 
                     let mut units: Vec<PreparedVisualUnit> = slices
                         .into_iter()
@@ -1517,7 +1489,6 @@ impl LinuxEditorAnimationCoordinator {
                         operation_kind: TextVisualOperationKind::Insert,
                         timeline: TransactionTimeline::new(vt.duration_ms),
                         units,
-                        static_patches,
                         old_cursor_rect,
                         new_cursor_rect,
                         cursor_visual_track,
@@ -1598,22 +1569,25 @@ impl LinuxEditorAnimationCoordinator {
                 let new_revision = LayoutRevision::next();
 
                 let mut slices = Vec::new();
-                let mut static_patches = Vec::new();
 
                 // Issue #687: Delete 事务先生成显式 DeleteConceal，再调用 reflow builder；
                 // reflow 必须排除 deleted_range。changed range 由 Core 显式拥有。
                 // 对每个 deleted range 生成显式 DeleteConceal 切片。
-                for &(d_start, d_end) in &deleted_ranges {
-                    let conceal_slices = build_delete_conceal_slices(
-                        key,
-                        old_snapshot,
-                        (d_start, d_end),
-                        old_cursor_rect.as_ref(),
-                    );
-                    slices.extend(conceal_slices);
+                // Issue #727 评论 5755858583 问题5: !smooth_cursor_enabled 时跳过
+                // DeleteConceal（CaretDriven unit），只保留 Reflow。
+                if smooth_cursor_enabled {
+                    for &(d_start, d_end) in &deleted_ranges {
+                        let conceal_slices = build_delete_conceal_slices(
+                            key,
+                            old_snapshot,
+                            (d_start, d_end),
+                            old_cursor_rect.as_ref(),
+                        );
+                        slices.extend(conceal_slices);
+                    }
                 }
 
-                let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                let reflow_slices = build_cluster_reflow_slices(
                     key,
                     old_snapshot,
                     new_snapshot,
@@ -1624,7 +1598,6 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_rect.as_ref(),
                 );
                 slices.extend(reflow_slices);
-                static_patches.extend(reflow_patches);
 
                 let mut units: Vec<PreparedVisualUnit> = slices
                     .into_iter()
@@ -1655,7 +1628,6 @@ impl LinuxEditorAnimationCoordinator {
                     operation_kind: TextVisualOperationKind::Delete,
                     timeline: TransactionTimeline::new(vt.duration_ms),
                     units,
-                    static_patches,
                     old_cursor_rect,
                     new_cursor_rect,
                     cursor_visual_track,
@@ -1688,7 +1660,7 @@ impl LinuxEditorAnimationCoordinator {
                 // 纯光标移动直接维护 CursorAnimationState（由 rendering.rs
                 // update_cursor_visual_position → build_cursor_plan → apply_plan
                 // 构造），用 Scene Graph 当前帧 frame_now 推进 from→to 动画，
-                // 不再伪装成文字事务（units=空, static_patches=空）。
+                // 不再伪装成文字事务（units=空）。
                 // 此分支不再创建任何事务，返回 None。
                 return None;
             }
@@ -1738,7 +1710,6 @@ impl LinuxEditorAnimationCoordinator {
         let new_revision = LayoutRevision::next();
 
         let mut slices = Vec::new();
-        let mut static_patches = Vec::new();
 
         // Issue #687: IME 组合更新也显式拥有 changed range。
         // 用 diff_plain_text 找到 inserted/deleted range，显式生成 InsertReveal/DeleteConceal，
@@ -1763,10 +1734,9 @@ impl LinuxEditorAnimationCoordinator {
         }
 
         for &(i_start, i_end) in &comp_inserted_ranges {
-            let (reveal_slices, reveal_patches) =
+            let reveal_slices =
                 build_insert_reveal_slices(key, new_snapshot, (i_start, i_end));
             slices.extend(reveal_slices);
-            static_patches.extend(reveal_patches);
         }
         for &(d_start, d_end) in &comp_deleted_ranges {
             let conceal_slices = build_delete_conceal_slices(
@@ -1778,7 +1748,7 @@ impl LinuxEditorAnimationCoordinator {
             slices.extend(conceal_slices);
         }
 
-        let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+        let reflow_slices = build_cluster_reflow_slices(
             key,
             old_snapshot,
             new_snapshot,
@@ -1789,7 +1759,6 @@ impl LinuxEditorAnimationCoordinator {
             new_cursor_rect.as_ref(),
         );
         slices.extend(reflow_slices);
-        static_patches.extend(reflow_patches);
 
         let unit_duration_ms = u64::from(self.typing_animation_duration_ms);
         let mut units: Vec<PreparedVisualUnit> = slices
@@ -1829,7 +1798,6 @@ impl LinuxEditorAnimationCoordinator {
             operation_kind: TextVisualOperationKind::CompositionUpdate,
             timeline: TransactionTimeline::new(unit_duration_ms),
             units,
-            static_patches,
             old_cursor_rect,
             new_cursor_rect,
             cursor_visual_track,
@@ -1922,7 +1890,6 @@ impl LinuxEditorAnimationCoordinator {
         let new_revision = LayoutRevision::next();
 
         let mut slices = Vec::new();
-        let mut static_patches = Vec::new();
 
         if !is_commit {
             // Issue #687: cancel 时显式生成 DeleteConceal for preedit 范围的 old cluster，
@@ -1937,7 +1904,7 @@ impl LinuxEditorAnimationCoordinator {
             slices.extend(conceal_slices);
 
             let cancel_excluded_old: [(usize, usize); 1] = [cancel_deleted_range];
-            let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+            let reflow_slices = build_cluster_reflow_slices(
                 key,
                 old_snapshot,
                 new_snapshot,
@@ -1948,7 +1915,6 @@ impl LinuxEditorAnimationCoordinator {
                 new_cursor_rect.as_ref(),
             );
             slices.extend(reflow_slices);
-            static_patches.extend(reflow_patches);
         } else {
             if visual_text_unchanged {
             } else {
@@ -2073,7 +2039,8 @@ impl LinuxEditorAnimationCoordinator {
                                 new_cluster.byte_end,
                             ) {
                                 let to_doc = new_line.source_rect_to_document_rect(&new_sr);
-                                slices.push(AnimatedSlice::insert_reveal(
+                                let to_doc_for_hide = to_doc.clone();
+                                let mut reveal_slice = AnimatedSlice::insert_reveal(
                                     key,
                                     new_line.id,
                                     new_sr.clone(),
@@ -2085,14 +2052,9 @@ impl LinuxEditorAnimationCoordinator {
                                     Some(new_cluster.shaping_identity.clone()),
                                     // Issue #722 评论 5749791161 问题2: 传真实 visual_line_id
                                     Some(new_line.visual_line_id),
-                                ));
-                                static_patches.push(StaticLinePatch::insert_patch(
-                                    new_line.id,
-                                    vec![new_sr],
-                                    Vec::new(),
-                                    new_cluster.byte_start,
-                                    new_cluster.byte_end,
-                                ));
+                                );
+                                reveal_slice.static_hidden_document_rects = vec![to_doc_for_hide];
+                                slices.push(reveal_slice);
                             }
                         } else if let (Some(mbs), Some(mbe)) = (mapped_old_bs, mapped_old_be) {
                             if let Some((old_line, old_cluster)) = old_snapshot
@@ -2124,7 +2086,8 @@ impl LinuxEditorAnimationCoordinator {
                                         );
                                         let new_doc =
                                             new_line.source_rect_to_document_rect(&new_sr);
-                                        slices.push(AnimatedSlice::reflow_crossfade_new(
+                                        let new_doc_for_hide = new_doc.clone();
+                                        let mut new_slice = AnimatedSlice::reflow_crossfade_new(
                                             key,
                                             new_line.id,
                                             new_sr.clone(),
@@ -2132,14 +2095,10 @@ impl LinuxEditorAnimationCoordinator {
                                             new_doc,
                                             new_cluster.byte_start,
                                             new_cluster.byte_end,
-                                        ));
-                                        static_patches.push(StaticLinePatch::insert_patch(
-                                            new_line.id,
-                                            vec![new_sr],
-                                            Vec::new(),
-                                            new_cluster.byte_start,
-                                            new_cluster.byte_end,
-                                        ));
+                                        );
+                                        new_slice.static_hidden_document_rects =
+                                            vec![new_doc_for_hide];
+                                        slices.push(new_slice);
                                     }
                                 } else {
                                     if let (Some(old_sr), Some(new_sr)) = (
@@ -2161,7 +2120,8 @@ impl LinuxEditorAnimationCoordinator {
                                             && (old_doc.w - new_doc.w).abs() < 0.5
                                             && (old_doc.h - new_doc.h).abs() < 0.5;
                                         if !geometry_same {
-                                            slices.push(AnimatedSlice::reflow_move(
+                                            let new_doc_for_hide = new_doc.clone();
+                                            let mut move_slice = AnimatedSlice::reflow_move(
                                                 key,
                                                 old_line.id,
                                                 old_sr,
@@ -2172,14 +2132,10 @@ impl LinuxEditorAnimationCoordinator {
                                                 new_cluster.byte_start,
                                                 new_cluster.byte_end,
                                                 Some(new_cluster.shaping_identity.clone()),
-                                            ));
-                                            static_patches.push(StaticLinePatch::insert_patch(
-                                                new_line.id,
-                                                vec![new_sr],
-                                                Vec::new(),
-                                                new_cluster.byte_start,
-                                                new_cluster.byte_end,
-                                            ));
+                                            );
+                                            move_slice.static_hidden_document_rects =
+                                                vec![new_doc_for_hide];
+                                            slices.push(move_slice);
                                         }
                                     }
                                 }
@@ -2188,7 +2144,7 @@ impl LinuxEditorAnimationCoordinator {
                     }
                 }
 
-                let (reflow_slices, reflow_patches) = build_cluster_reflow_slices(
+                let reflow_slices = build_cluster_reflow_slices(
                     key,
                     old_snapshot,
                     new_snapshot,
@@ -2199,7 +2155,6 @@ impl LinuxEditorAnimationCoordinator {
                     new_cursor_rect.as_ref(),
                 );
                 slices.extend(reflow_slices);
-                static_patches.extend(reflow_patches);
             }
         }
 
@@ -2229,7 +2184,6 @@ impl LinuxEditorAnimationCoordinator {
             operation_kind: TextVisualOperationKind::CompositionCommitOrCancel,
             timeline: TransactionTimeline::new(unit_duration_ms),
             units,
-            static_patches,
             old_cursor_rect,
             new_cursor_rect,
             cursor_visual_track,
@@ -2735,8 +2689,7 @@ impl LinuxEditorAnimationCoordinator {
         frame_now: Instant,
         cursor_animation: Option<&super::rendering::CursorAnimationState>,
         cursor_owner_epoch: u64,
-        current_scroll_y: f64,
-        auto_follow_anchor: Option<(f64, f64)>,
+        _current_scroll_y: f64,
     ) -> RenderPlan {
         // Issue #690 评论 5675007226 步骤 1: 本帧统一采样一次，后续文字与光标 progress
         // 都从同一个 `AnimationFrameSample` 读取，消除 GUI tick 与 Scene Graph 渲染帧之间的偏差。
@@ -2771,15 +2724,17 @@ impl LinuxEditorAnimationCoordinator {
             .collect();
         frame_context.active_transaction_keys = active_keys;
 
-        // Issue #658: 收集已准备好的 static_patches 供静态正文裁剪。
+        // Issue #727 评论 5755858583 问题2: 只从 AnimatedSlice.static_hidden_document_rects
+        // 收集裁剪区域，不再从 tx.static_patches 收集。AnimatedSlice 成为唯一事实源。
         // 只有 texture_prepared == true 的事务才允许静态层隐藏，
         // 避免纹理准备完成前出现空白帧。
-        // 同时将 hidden_source_rects 通过 source_rect_to_document_rect()
-        // 转换为 doc_hidden_rects，供 QSGClipNode 直接使用文档逻辑坐标。
         // Issue #679 评论 5657313927 (3e): 只允许 Prepared / Rendering / Paused
         // 的事务裁剪静态正文；Pending 无论 texture_prepared 是什么都不能隐藏正文，
         // 否则资源还没准备好就会出现空洞。
-        let mut static_patches = Vec::new();
+        // Issue #727 评论 5755858583 问题2+5: 无 caret frame 时不收集 CaretDriven units
+        // 的 rects——本帧 unit 不画就不能继续隐藏 canonical（同帧释放
+        // ownership），避免空洞。
+        let mut clip_rects: Vec<super::qt_text_node::AnimationClipRect> = Vec::new();
         for tx in self.prepared_queue.active_transactions() {
             if tx.texture_prepared
                 && matches!(
@@ -2789,24 +2744,27 @@ impl LinuxEditorAnimationCoordinator {
                         | TextVisualTransactionState::Paused
                 )
             {
-                for mut patch in tx.static_patches.iter().cloned() {
-                    // 查找对应行快照，将 hidden_source_rects 转换为文档坐标
-                    if !patch.hidden_source_rects.is_empty() && patch.doc_hidden_rects.is_empty() {
-                        if let Some(ref new_snapshot) = tx.new_snapshot {
-                            if let Some(line_snap) = new_snapshot
-                                .line_snapshots
-                                .iter()
-                                .find(|ls| ls.id == patch.snapshot_id)
-                            {
-                                patch.doc_hidden_rects = patch
-                                    .hidden_source_rects
-                                    .iter()
-                                    .map(|sr| line_snap.source_rect_to_document_rect(sr))
-                                    .collect();
-                            }
+                let has_caret_frame = coordinated_motion_frame.caret.is_some();
+                for unit in &tx.units {
+                    let is_caret_driven = matches!(
+                        unit.slice.kind,
+                        AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal
+                    );
+                    // CaretDriven unit 只在有 caret frame 时才收集；
+                    // Timed unit（Reflow）始终收集。
+                    if is_caret_driven && !has_caret_frame {
+                        continue;
+                    }
+                    for doc_rect in &unit.slice.static_hidden_document_rects {
+                        if doc_rect.h > 0.0 && doc_rect.w > 0.0 {
+                            clip_rects.push(super::qt_text_node::AnimationClipRect {
+                                x: doc_rect.x,
+                                y: doc_rect.y,
+                                w: doc_rect.w,
+                                h: doc_rect.h,
+                            });
                         }
                     }
-                    static_patches.push(patch);
                 }
             }
         }
@@ -2829,9 +2787,9 @@ impl LinuxEditorAnimationCoordinator {
         if let Some((cx, cy_doc, ch)) =
             self.compute_coordinated_cursor_position(&frame_sample, cursor_owner_epoch)
         {
-            // Issue #722 评论 5748596920 问题1: compute_coordinated_cursor_position
-            // 返回文档坐标（cy_doc），本帧真正画 caret 时用当前 scroll_y 转成视口 y。
-            let cy = cy_doc - current_scroll_y;
+            // Issue #727 评论 5755858583 问题1: cursor_render_state.y 保存文档坐标（cy_doc），
+            // 不再提前减 scroll_y 转成视口 y。cursor layer 的 QSGTransformNode 统一做
+            // translate(0, -scroll_y)，和正文/动画层一致。
             // Issue #702 评论 5707770318: 正文协同光标位置已算出，
             // 把 cursor_sample_outcome 设为 Coordinated { x, y, h }，
             // 让 qquickitem_impl 同步 visual_x/visual_y/visual_h 到本帧
@@ -2839,7 +2797,7 @@ impl LinuxEditorAnimationCoordinator {
             // 不创建独立 timeline。正文光标只由 compute_coordinated_cursor_position 驱动。
             cursor_sample_outcome = super::render_plan::CursorSampleOutcome::Coordinated {
                 x: cx,
-                y: cy,
+                y: cy_doc,
                 h: ch,
             };
             let suppressed = matches!(
@@ -2859,7 +2817,7 @@ impl LinuxEditorAnimationCoordinator {
             cursor_render_state = CursorRenderState {
                 visible: true,
                 x: cx,
-                y: cy,
+                y: cy_doc,
                 h: ch,
                 opacity,
             };
@@ -2887,16 +2845,8 @@ impl LinuxEditorAnimationCoordinator {
         // 根据 cursor_sample_outcome 和最终 cursor_render_state 算出。
         // Coordinated → 协同位置;Running/Finished → cursor_render_state 已更新;
         // Idle → 当前 visual 位置。
-        // Issue #724 评论 5752398265: viewport anchor 只在最终绘制时覆盖屏幕 y/h，
-        // 不污染 find_cursor_transaction_for_target / build_cursor_plan 的逻辑 cursor_y。
-        // anchor 来自 QML begin_auto_follow_scroll()，是滚动前上一帧实际画出的 caret
-        // viewport y/h。auto-follow 期间 caret 画在锚点位置，不被滚动拖走。
-        if let Some((anchor_y, anchor_h)) = auto_follow_anchor {
-            cursor_render_state.y = anchor_y;
-            if anchor_h > 0.0 {
-                cursor_render_state.h = anchor_h;
-            }
-        }
+        // Issue #727 评论 5755858583 问题1: drawn_caret_rect 保存文档坐标 y，
+        // apply_render_plan_cursor_state 在回写 visual_y 时转成视口 y。
         let drawn_caret_rect: Option<(f64, f64, f64)> = Some((
             cursor_render_state.x,
             cursor_render_state.y,
@@ -2910,7 +2860,7 @@ impl LinuxEditorAnimationCoordinator {
             frame_context,
             cursor_style,
             selection_preedit_style,
-            static_patches,
+            clip_rects,
             cursor_sample_outcome,
             drawn_caret_rect,
             coordinated_motion_frame,
@@ -3073,10 +3023,21 @@ impl LinuxEditorAnimationCoordinator {
             } else {
                 true
             };
+            // Issue #727 评论 5755858583 问题4: 完成判断按 kind 分开。
+            // CaretDriven unit（InsertReveal/DeleteConceal）的 progress() 固定返回 0.0
+            // （无独立时间线），不能用 u.progress() >= 1.0 判断完成——否则含吞吐字的事务
+            // 永远完不了。CaretDriven unit 的完成由 caret_track_done 决定（见下方
+            // caret_track_complete），这里视为 done；只有 Timed unit（ReflowMove/
+            // ReflowCrossFade）才看自己的 progress >= 1.0。
             let all_units_done = if tx.units.is_empty() {
                 sample.progress(tx.key) >= 1.0
             } else {
-                tx.units.iter().all(|u| u.progress(sample.frame_now) >= 1.0)
+                tx.units.iter().all(|u| match u.slice.kind {
+                    AnimatedSliceKind::InsertReveal | AnimatedSliceKind::DeleteConceal => true,
+                    AnimatedSliceKind::ReflowMove | AnimatedSliceKind::ReflowCrossFade => {
+                        u.progress(sample.frame_now) >= 1.0
+                    }
+                })
             };
             // caret-driven 文字事务必须 caret track 也完成才能释放。
             let caret_track_complete = !has_caret_driven_units || caret_track_done;
@@ -4168,8 +4129,8 @@ mod tests {
             "commit with same shaping but different geometry should create ReflowMove slice"
         );
         assert!(
-            !tx.static_patches.is_empty(),
-            "Move slices should have corresponding StaticLinePatch::insert_patch"
+            tx.units.iter().any(|u| !u.slice.static_hidden_document_rects.is_empty()),
+            "Move slices should have static_hidden_document_rects"
         );
     }
 
@@ -4265,8 +4226,8 @@ mod tests {
             crossfade_count
         );
         assert!(
-            !tx.static_patches.is_empty(),
-            "Crossfade new should have StaticLinePatch::insert_patch to prevent double-draw"
+            tx.units.iter().any(|u| !u.slice.static_hidden_document_rects.is_empty()),
+            "Crossfade new should have static_hidden_document_rects to prevent double-draw"
         );
     }
 
@@ -4905,7 +4866,6 @@ mod tests {
             operation_kind,
             timeline,
             units,
-            static_patches: Vec::new(),
             old_cursor_rect: Some(old_cursor),
             new_cursor_rect: Some(new_cursor),
             cursor_visual_track,
@@ -5262,7 +5222,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
 
         assert_eq!(plan.text_animation.glyphs.len(), 1);
@@ -5320,7 +5279,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
 
         assert!(
@@ -5402,7 +5360,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
         assert!(
             (plan.cursor.x - 115.0).abs() < 1e-6,
@@ -5450,7 +5407,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
         assert!(
             (plan.cursor.x - 100.0).abs() < 1e-6,
@@ -5524,7 +5480,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
         // caret track 演了 50/100ms → progress 0.5 → ease_out_quad = 0.75
         // → x = 100 + 100*0.75 = 175
@@ -5672,7 +5627,6 @@ mod tests {
             None,
             0,
             0.0,
-            None,
         );
 
         // 文字 reflow：from=190，progress=0 → frame.x = 190（不跳）
@@ -6154,7 +6108,6 @@ mod tests {
             operation_kind: TextVisualOperationKind::Insert,
             timeline: TransactionTimeline::new(200),
             units: vec![reflow_unit],
-            static_patches: Vec::new(),
             old_cursor_rect: Some(caret(0.0)),
             new_cursor_rect: Some(caret(200.0)),
             cursor_visual_track: Some(cursor_visual_track),
@@ -6451,7 +6404,6 @@ mod tests {
             operation_kind: TextVisualOperationKind::Insert,
             timeline: TransactionTimeline::new(50),
             units: new_units,
-            static_patches: Vec::new(),
             old_cursor_rect: Some(caret(100.0)),
             new_cursor_rect: Some(caret(220.0)),
             cursor_visual_track: Some(new_caret_track),
@@ -6718,7 +6670,6 @@ mod tests {
             operation_kind,
             timeline: TransactionTimeline::new(100),
             units: Vec::new(),
-            static_patches: Vec::new(),
             old_cursor_rect: None,
             new_cursor_rect: None,
             cursor_visual_track: None,

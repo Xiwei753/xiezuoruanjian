@@ -36,7 +36,7 @@ pub(crate) fn render_frame(
     // 消费 EditorLayout 唯一 canonical 排版结果，不再自行创建第二套 QTextLayout。
     //
     // Issue #714 评论 5740007764: 静态层只在 needs_relayout=true 时重建一次，
-    // 不再因 static_patches 非空而在每个动画帧重建。needs_relayout 由
+    // 不再因 clip_rects 非空而在每个动画帧重建。needs_relayout 由
     // layout_dirty || scene_dirty 驱动，覆盖以下需要重建静态层的情形：
     //   - 正文/layout/颜色变化（layout_dirty=true，GUI 线程 request_static_repaint）
     //   - 活动事务集合变化（scene_dirty=true，事务开始/结束/cancel/rebase）
@@ -44,11 +44,11 @@ pub(crate) fn render_frame(
     // animation layer / caret，不重建静态 QSGTextNode，避免 100ms 动画期间
     // 每帧销毁/重建静态节点导致闪烁（吐字刚显出的字闪、Enter 后下面文字闪）。
     //
-    // static_patches 表达的裁剪区域在事务开始的那一帧（scene_dirty=true
+    // clip_rects 表达的裁剪区域在事务开始的那一帧（scene_dirty=true
     // →needs_relayout=true）应用一次，动画期间保持不动；事务结束后
     // （tick 返回 true→scene_dirty=true）再重建一次完整 canonical 正文。
     //
-    // Issue #709 评论 issue-body-709: 主链 static_patches -> doc_hidden_rects -> clip_rects
+    // Issue #709 评论 issue-body-709: 主链 AnimatedSlice.static_hidden_document_rects -> clip_rects
     // 表达的是"静态正文不能画的区域"（被动画层接管的文档区域）。clip_count > 0 时
     // qt_text_node 不再创建完整正文节点，只按 complement 区间生成 clip+text 节点，
     // 静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
@@ -102,9 +102,9 @@ pub(crate) fn render_frame(
                 });
             }
 
-            // Issue #658: 从 static_patches 的 hidden_source_rects 计算精确裁剪区域，
-            // 替代旧的 compute_animation_clip_rects() 整宽 Y 条带方式。
-            let clip_rects = compute_clip_rects_from_patches(plan);
+            // Issue #727 评论 5755858583 问题2: 直接从 plan.clip_rects 读取裁剪区域，
+            // 不再通过 StaticLinePatch 中间结构换算。
+            let clip_rects = &plan.clip_rects;
 
             // Issue #658 评论 5620035970 问题 4: 正文从 padding 开始画，
             // origin_x = snapshot.padding，与 VisualLine.x = padding + x_off 一致。
@@ -118,7 +118,7 @@ pub(crate) fn render_frame(
                 &visual_line_clips,
                 static_text.scroll_y,
                 static_text.color,
-                &clip_rects,
+                clip_rects,
                 f64::from(snapshot.padding),
                 snapshot.layout_generation,
             );
@@ -157,47 +157,11 @@ pub(crate) fn render_frame(
         static_text.viewport_height,
     );
     // Layer 3: 光标
-    render_cursor_layer(root_raw, item_ptr, plan);
+    // Issue #727 评论 5755858583 问题1: scroll_y 传给 render_cursor_layer，
+    // cursor layer 的 QSGTransformNode 统一做 translate(0, -scroll_y)。
+    render_cursor_layer(root_raw, item_ptr, plan, static_text.scroll_y);
 
     static_rebuild_ok
-}
-
-/// Issue #658: 从 static_patches 的 doc_hidden_rects 计算精确裁剪区域。
-///
-/// 主链：`static_patches -> doc_hidden_rects -> clip_rects`。
-///
-/// `doc_hidden_rects` 已通过 `PreparedLineSnapshot::source_rect_to_document_rect()`
-/// 转换为文档逻辑坐标矩形（x/y/w/h），可直接传给 QSGClipNode 使用。
-///
-/// Issue #709 评论 issue-body-709: 这些矩形表达的是"静态正文不能画的区域"，
-/// 即被动画层（InsertReveal / DeleteConceal / ReflowMove）接管的文档区域。
-/// 静态层在 clip_count > 0 时不创建完整正文节点，只按每条 visual line 的
-/// complement 区间（整行可绘制区减去这些 hidden 矩形）生成 QSGClipNode + QSGTextNode。
-/// 动画层单独画 InsertReveal / DeleteConceal / ReflowMove，不把静态正文重新补回去。
-/// 这样静态层与动画层在文档区域上互斥，避免静态正文盖住吐字/吞字动画。
-fn compute_clip_rects_from_patches(plan: &RenderPlan) -> Vec<qt_text_node::AnimationClipRect> {
-    if plan.static_patches.is_empty() {
-        return Vec::new();
-    }
-
-    let mut clip_rects = Vec::new();
-    for patch in &plan.static_patches {
-        // Issue #658: 只使用已转换的 doc_hidden_rects（文档逻辑坐标）。
-        // hidden_source_rects 是行纹理局部物理像素坐标，不能回退使用。
-        // 事务准备阶段应保证 doc_hidden_rects 一定被正确填充。
-        for sr in &patch.doc_hidden_rects {
-            if sr.h > 0.0 && sr.w > 0.0 {
-                clip_rects.push(qt_text_node::AnimationClipRect {
-                    x: sr.x,
-                    y: sr.y,
-                    w: sr.w,
-                    h: sr.h,
-                });
-            }
-        }
-    }
-
-    clip_rects
 }
 
 fn render_text_animation_layer(
@@ -275,9 +239,12 @@ fn render_cursor_layer(
     root_raw: *mut std::ffi::c_void,
     item_ptr: *mut std::ffi::c_void,
     plan: &RenderPlan,
+    scroll_y: f64,
 ) {
     // Issue #679 评论 5657313927: 直接画 CursorRenderState，
     // 不再理解 Snap/Tween/driver/Timestamp。
+    // Issue #727 评论 5755858583 问题1: cursor.y 是文档坐标，scroll_y 传给
+    // update_cursor_node 由 QSGTransformNode 统一做视口变换。
     let cursor = &plan.cursor;
     let cursor_style = &plan.cursor_style;
 
@@ -292,6 +259,7 @@ fn render_cursor_layer(
             0.0,
             cursor_style.color.as_ptr(),
             cursor_style.color.len(),
+            scroll_y,
         );
         return;
     }
@@ -306,6 +274,7 @@ fn render_cursor_layer(
         cursor.opacity,
         cursor_style.color.as_ptr(),
         cursor_style.color.len(),
+        scroll_y,
     );
 }
 

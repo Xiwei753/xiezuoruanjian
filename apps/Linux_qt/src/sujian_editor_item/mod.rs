@@ -49,7 +49,6 @@ pub(crate) mod rendering;
 mod runtime_tests;
 pub(crate) mod scene_graph_renderer;
 pub(crate) mod snapshot_id;
-pub(crate) mod static_line_patch;
 pub(crate) mod text_visual_transaction;
 pub(crate) mod texture_cache;
 pub(crate) mod transaction;
@@ -242,30 +241,6 @@ pub(crate) fn is_complex_grapheme(ch: char) -> bool {
     false
 }
 
-/// Issue #724 评论 5752572618: auto-follow anchor 的 viewport 锚点状态。
-///
-/// 把原来的 tuple `Option<(f64, f64, f64)>` 收成结构体，新增 `release_after_frame`
-/// 标志，拆分"到达目标"和"删除 anchor"两个状态：
-/// - 建立 anchor（`set_auto_follow_anchor_with_target`）：`release_after_frame = false`
-/// - 到达 target（`update_cursor_visual_position` 检测 `|current_scroll - target| < 1.0`）：
-///   只置 `release_after_frame = true`，**不清 None**，本帧 `build_render_plan_full`
-///   仍收到 anchor 的 `(y, h)` 画锚定帧
-/// - 画完一帧后（`update_paint_node` 在 `apply_render_plan_cursor_state` 之后）：
-///   若 `release_after_frame` 为 true，清 `current_auto_follow_anchor = None` 并
-///   `request_frame_update()` 请求下一帧
-/// - 下一帧：anchor 不存在 → 回到正常 coordinated caret
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) struct CaretViewportAnchor {
-    /// 滚动前上一帧真正画出的 caret viewport y。
-    pub y: f64,
-    /// 滚动前上一帧真正画出的 caret viewport h。
-    pub h: f64,
-    /// 滚动目标值（QML 侧 `flick.contentY` 最终要到达的值）。
-    pub target_scroll_y: f64,
-    /// 到达 target 后置 true，本帧仍用 anchor 画锚定帧，画完后清 None 请求下一帧。
-    pub release_after_frame: bool,
-}
-
 #[derive(QObject)]
 pub struct SujianEditorItem {
     #[allow(dead_code)]
@@ -317,16 +292,6 @@ pub struct SujianEditorItem {
     viewport_height: qt_property!(f32; READ viewport_height WRITE set_viewport_height NOTIFY visual_settings_changed),
     #[allow(dead_code)]
     is_scrolling: qt_property!(bool; READ is_scrolling WRITE set_is_scrolling NOTIFY visual_settings_changed),
-    /// Issue #724 评论 5751573705 问题2: 自动跟随滚动锚点 setter（带 target_scroll_y）。
-    /// QML 侧 `begin_auto_follow_scroll()` 调此方法，把当前 caret viewport y/h
-    /// 和滚动目标值传进 Rust。`update_cursor_visual_position` 在 anchor 存在期间
-    /// 使用此锚点替代 `current_scroll_y` 算 caret viewport 坐标。
-    /// 当 `current_scroll_y` 到达 `target_scroll_y` 时清除锚点。
-    #[allow(dead_code)]
-    set_auto_follow_anchor_with_target:
-        qt_method!(fn(&mut self, anchor_y: f64, anchor_h: f64, target_scroll_y: f64)),
-    #[allow(dead_code)]
-    clear_auto_follow_anchor: qt_method!(fn(&mut self)),
     #[allow(dead_code)]
     is_loading: qt_property!(bool; READ is_loading WRITE set_is_loading NOTIFY visual_settings_changed),
     #[allow(dead_code)]
@@ -495,26 +460,6 @@ pub struct SujianEditorItem {
     current_scroll_y: f32,
     current_viewport_height: f32,
     current_is_scrolling: bool,
-    /// Issue #724 评论 5751268664 缺口2 / 评论 5752572618: 自动跟随滚动期间的
-    /// caret viewport 锚点。
-    ///
-    /// `Some(anchor)` 表示自动跟随滚动期间应使用的 caret viewport y/h 和滚动目标值。
-    /// `update_cursor_visual_position` 用 anchor.y/h 替代 `current_scroll_y` 算
-    /// caret viewport 坐标，避免滚动 contentY 变化把 caret 一起拖走。
-    ///
-    /// Issue #724 评论 5752572618: 拆分"到达目标"和"删除 anchor"两个状态：
-    /// - 当 `current_scroll_y` 到达 `target_scroll_y` 时只置
-    ///   `anchor.release_after_frame = true`，**不清 None**，本帧
-    ///   `build_render_plan_full` 仍收到 anchor 的 `(y, h)` 画锚定帧
-    /// - 画完一帧后由 `update_paint_node` 检查 `release_after_frame`，若为 true
-    ///   则清 `current_auto_follow_anchor = None` 并 `request_frame_update()`
-    ///   请求下一帧；下一帧 anchor 不存在 → 回到正常 coordinated caret
-    /// - 不再由 80ms Timer 决定生命周期。
-    ///
-    /// QML 侧 `begin_auto_follow_scroll()` 调
-    /// `set_auto_follow_anchor_with_target(y, h, target_y)`，
-    /// `end_auto_follow_scroll()` 调 `clear_auto_follow_anchor()`。
-    current_auto_follow_anchor: Option<CaretViewportAnchor>,
     current_is_loading: bool,
     current_is_applying_format: bool,
     last_summary: QString,
@@ -633,8 +578,6 @@ impl Default for SujianEditorItem {
             request_text_input_focus: Default::default(),
             snap_next_cursor_update: Default::default(),
             verify_animation_signal_meta_object: Default::default(),
-            set_auto_follow_anchor_with_target: Default::default(),
-            clear_auto_follow_anchor: Default::default(),
             register_text_target_qml: Default::default(),
             register_secret_target_qml: Default::default(),
             register_search_target_qml: Default::default(),
@@ -670,7 +613,6 @@ impl Default for SujianEditorItem {
             current_scroll_y: 0.0,
             current_viewport_height: 0.0,
             current_is_scrolling: false,
-            current_auto_follow_anchor: None,
             current_is_loading: false,
             current_is_applying_format: false,
             last_summary: Default::default(),

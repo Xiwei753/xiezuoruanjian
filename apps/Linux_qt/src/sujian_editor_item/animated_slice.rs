@@ -80,6 +80,12 @@ pub(crate) struct AnimatedSlice {
     /// 快速连续输入时，旧 slice 被 rebase 后从 `start_fraction` 继续播放，
     /// 不再从 0 重新开始（避免文字"吐到一半被重启"）。
     pub start_fraction: f64,
+    /// Issue #727 评论 5755858583 问题2: 该 slice 在静态正文层需要隐藏的文档坐标矩形。
+    ///
+    /// InsertReveal/ReflowMove/ReflowCrossFadeNew 在创建 slice 时直接写自己的
+    /// canonical 独占区域。RenderPlan 从 active units 收集这些 rect 作为裁剪区域，
+    /// 不再从 StaticLinePatch 二次换算。AnimatedSlice 成为唯一事实源。
+    pub static_hidden_document_rects: Vec<SourceRect>,
 }
 
 impl AnimatedSlice {
@@ -126,6 +132,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             visual_line_id,
             start_fraction: 0.0,
+            static_hidden_document_rects: Vec::new(),
         }
     }
 
@@ -164,6 +171,7 @@ impl AnimatedSlice {
             conceal_to_left_edge,
             visual_line_id,
             start_fraction: 0.0,
+            static_hidden_document_rects: Vec::new(),
         }
     }
 
@@ -199,6 +207,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             visual_line_id: None,
             start_fraction: 0.0,
+            static_hidden_document_rects: Vec::new(),
         }
     }
 
@@ -227,6 +236,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             visual_line_id: None,
             start_fraction: 0.0,
+            static_hidden_document_rects: Vec::new(),
         }
     }
 
@@ -255,6 +265,7 @@ impl AnimatedSlice {
             conceal_to_left_edge: false,
             visual_line_id: None,
             start_fraction: 0.0,
+            static_hidden_document_rects: Vec::new(),
         }
     }
 

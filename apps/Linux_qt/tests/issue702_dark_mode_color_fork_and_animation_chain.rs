@@ -179,11 +179,11 @@ fn issue702_cursor_transition_tween_has_duration_ms() {
 // =========================================================================
 
 #[test]
-fn issue702_render_plan_has_static_patches() {
+fn issue702_render_plan_has_clip_rects() {
     let src = read_src("src/sujian_editor_item/render_plan.rs");
     assert!(
-        src.contains("static_patches: Vec<StaticLinePatch>"),
-        "RenderPlan 应携带 static_patches"
+        src.contains("clip_rects: Vec<AnimationClipRect>"),
+        "RenderPlan 应携带 clip_rects"
     );
 }
 
@@ -207,17 +207,8 @@ fn issue702_scene_graph_rebuilds_on_animation_clip() {
         "应只在 needs_relayout 时重建静态节点"
     );
     assert!(
-        src.contains("compute_clip_rects_from_patches"),
-        "应有裁剪计算"
-    );
-}
-
-#[test]
-fn issue702_static_line_patch_has_doc_hidden_rects() {
-    let src = read_src("src/sujian_editor_item/static_line_patch.rs");
-    assert!(
-        src.contains("doc_hidden_rects: Vec<SourceRect>"),
-        "StaticLinePatch 应有 doc_hidden_rects 字段"
+        src.contains("plan.clip_rects"),
+        "应直接从 plan.clip_rects 读取裁剪区域"
     );
 }
 

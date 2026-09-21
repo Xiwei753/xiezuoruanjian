@@ -408,6 +408,7 @@ pub(crate) struct VisualLineClipInfo {
 ///
 /// Issue #658: 改为完整的 x/y/w/h 文档坐标矩形，
 /// 由 build_render_plan_full() 通过 PreparedLineSnapshot::source_rect_to_document_rect() 转换。
+#[derive(Clone, Debug)]
 pub(crate) struct AnimationClipRect {
     /// 文档 x 坐标
     pub x: f64,

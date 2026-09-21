@@ -9,6 +9,8 @@ pub mod json_utils;
 pub mod linux_qt_layout_plan_dto;
 pub mod linux_theme_controller;
 pub(crate) mod message_key_mapper;
+/// Issue #727 评论 5755858583 问题3: 统一深色主题链为 ResolvedThemeUiSnapshot。
+pub mod resolved_theme_snapshot;
 
 use qmetaobject::prelude::*;
 

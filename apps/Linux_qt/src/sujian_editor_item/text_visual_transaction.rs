@@ -4,7 +4,6 @@ use writer_core::editor::CursorRect;
 
 use super::animated_slice::{AnimatedSlice, AnimatedSliceKind};
 use super::layout_snapshot::{EditorLayoutSnapshot, LineSnapshotId, ShapingIdentity};
-use super::static_line_patch::StaticLinePatch;
 use super::transaction_key::VisualTransactionKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -655,7 +654,6 @@ pub(crate) struct PreparedTextVisualTransaction {
     pub operation_kind: TextVisualOperationKind,
     pub timeline: TransactionTimeline,
     pub units: Vec<PreparedVisualUnit>,
-    pub static_patches: Vec<StaticLinePatch>,
     pub old_cursor_rect: Option<CursorRect>,
     pub new_cursor_rect: Option<CursorRect>,
     /// Issue #690 评论 5681206040: coordinated caret 的正式视觉 track。
@@ -851,18 +849,18 @@ impl PreparedTextVisualTransaction {
 
     /// Issue #710 评论 5733109905: 冲突检测改为 **current-old 坐标系逐事务映射**。
     ///
-    /// 本事务的 `visual_affected_byte_range_new` / units / static_patches 的 byte range
+    /// 本事务的 `visual_affected_byte_range_new` / units 的 byte range
     /// 都基于**本事务 new 坐标系**（事务应用后的文本）。查询 range `[byte_start, byte_end)`
-    /// 基于**current-old 坐标系**（当前事务应用前的文本）。
+    /// 基于**current-old 坐标系**（当前事务应用<|target|>前的文本）。
     ///
     /// 要在同一坐标系比较，需要用 `OffsetMap::build(&本事务.new_text, current_old_text)`
-    /// 把本事务 new 坐标系的 range 映射到 current-old 坐标系，再与查询 range 做 overlap。
+    /// 把本事务 new 坐标系的 range �F映射到 current-old 坐标系，再与查询 range 做 overlap。
     /// 本事务的 new_text 取自 `new_snapshot.virtual_text`。
     ///
     /// 如果 `new_snapshot` 为 `None`（无法获取本事务 new_text），退化为保守策略：
     /// 用 `visual_affected_byte_range_old` 直接和查询 range 做 old 坐标系数值比较
     ///（假设 old 坐标系 == current-old，这是无 new_text 时的最佳近似），
-    /// units/static_patches 也退化为裸数值比较。任一侧重叠即判定重叠。
+    /// units 也退化为裸数值比较。任一侧重叠即判定重叠。
     ///
     /// 映射失败（范围跨映射边界）时保守判定为冲突（返回 true），避免漏判。
     pub fn overlaps_byte_range(
@@ -880,18 +878,6 @@ impl PreparedTextVisualTransaction {
             // 映射 units 的 byte range 到 current-old 坐标系再比较
             for u in &self.units {
                 match offset_map.map_old_range_to_new(u.slice.byte_start, u.slice.byte_end) {
-                    Some((ms, me)) => {
-                        if me > byte_start && ms < byte_end {
-                            return true;
-                        }
-                    }
-                    None => return true, // 映射失败，保守判定为冲突
-                }
-            }
-
-            // 映射 static_patches 的 byte range 到 current-old 坐标系再比较
-            for p in &self.static_patches {
-                match offset_map.map_old_range_to_new(p.byte_start, p.byte_end) {
                     Some((ms, me)) => {
                         if me > byte_start && ms < byte_end {
                             return true;
@@ -924,18 +910,11 @@ impl PreparedTextVisualTransaction {
             self.units
                 .iter()
                 .any(|u| u.slice.byte_end > byte_start && u.slice.byte_start < byte_end)
-                || self
-                    .static_patches
-                    .iter()
-                    .any(|p| p.intersects(byte_start, byte_end))
         }
     }
 
     pub fn snapshot_ids(&self) -> Vec<LineSnapshotId> {
         let mut ids: Vec<LineSnapshotId> = self.units.iter().map(|u| u.slice.snapshot_id).collect();
-        for patch in &self.static_patches {
-            ids.push(patch.snapshot_id);
-        }
         ids.sort_by_key(|id| (id.layout_revision, id.paragraph_id, id.visual_line_ordinal));
         ids.dedup();
         ids
@@ -1038,7 +1017,7 @@ impl PreparedTransactionQueue {
     ///
     /// 内部对每个 active tx：取 `tx.new_snapshot.virtual_text`（事务自己的 new_text），
     /// 构造 `OffsetMap::build(&tx.new_text, current_old_text)`（从该旧事务 new 坐标系
-    /// → current-old 坐标系），映射 `visual_affected_byte_range_new` / units / static_patches
+    /// → current-old 坐标系），映射 `visual_affected_byte_range_new` / units
     /// 到 current-old 坐标系再判断 overlap。
     ///
     /// 这样"冲突检测"和"当前编辑的 old→new 动画映射"是两件事，不再共用错的 OffsetMap。
@@ -1133,7 +1112,6 @@ mod issue_710_comment_5732160521_repro {
             operation_kind,
             timeline: TransactionTimeline::new(100),
             units: Vec::new(),
-            static_patches: Vec::new(),
             old_cursor_rect: None,
             new_cursor_rect: None,
             cursor_visual_track: None,
@@ -1323,7 +1301,6 @@ mod issue_710_comment_5733109905_repro {
             operation_kind,
             timeline: TransactionTimeline::new(100),
             units: Vec::new(),
-            static_patches: Vec::new(),
             old_cursor_rect: None,
             new_cursor_rect: None,
             cursor_visual_track: None,
@@ -1368,7 +1345,6 @@ mod issue_710_comment_5733109905_repro {
             operation_kind,
             timeline: TransactionTimeline::new(100),
             units: vec![unit],
-            static_patches: Vec::new(),
             old_cursor_rect: None,
             new_cursor_rect: None,
             cursor_visual_track: None,
@@ -1509,7 +1485,7 @@ mod issue_710_comment_5733109905_repro {
         );
     }
 
-    // ── 问题 3: units/static_patches 明知是旧事务 new 坐标，代码仍先做裸数值 overlap ──
+    // ── 问题 3: units 明知是旧事务 new 坐标，代码仍先做裸数值 overlap ──
     //
     // 场景：
     //   tx1 (Insert): old="abcdef", new="abXYcdef"（位置 2 插 XY）。

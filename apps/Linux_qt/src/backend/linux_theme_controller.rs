@@ -403,18 +403,126 @@ impl LinuxThemeController {
             "resolved_scheme_kind".to_string(),
             serde_json::Value::String(state.resolved_scheme_kind),
         );
-        // scheme 为 None 时序列化为 null，QML 侧 fallback 到 isDark 派生的固定色。
-        let scheme_value = match state.scheme {
-            Some(ref s) => serde_json::to_value(s).unwrap_or(serde_json::Value::Null),
-            None => serde_json::Value::Null,
+        // Issue #727 评论 5755858583 问题3: 统一主题链为 ResolvedThemeUiSnapshot。
+        // 不再序列化 scheme DTO，改为序列化 colors 对象（scheme DTO 的字段值）。
+        // QML 侧 applyThemeState() 只读 parsed.colors，不再自己 fallback。
+        // scheme 为 None 时也生成 fallback colors（根据 is_dark 选择深/浅色固定值），
+        // QML 侧不再需要 hex() fallback 函数。
+        let colors_value = match state.scheme {
+            Some(ref s) => serde_json::to_value(s).unwrap_or_else(|_| {
+                Self::fallback_colors_json(state.is_dark)
+            }),
+            None => Self::fallback_colors_json(state.is_dark),
         };
-        obj.insert("scheme".to_string(), scheme_value);
+        obj.insert("colors".to_string(), colors_value);
         let json = serde_json::to_string(&serde_json::Value::Object(obj))
             .unwrap_or_else(|_| {
                 "{\"appearance_mode\":\"system\",\"system_is_dark\":false,\"is_dark\":false,\"color_source\":\"built_in\",\"selected_builtin_theme_id\":\"\",\"selected_palette_id\":\"\",\"scheme\":null}"
                     .to_string()
             });
         QString::from(json)
+    }
+
+    /// Issue #727 评论 5755858583 问题3: 当 scheme 为 None 时，根据 is_dark 生成
+    /// fallback colors JSON 对象。这样 QML 侧不再需要 hex() fallback 函数——
+    /// Rust 侧一次生成最终 colors，QML 侧只读不 fallback。
+    ///
+    /// fallback 值与 DesignTokens.qml 中 hex() 函数的 darkVal/lightVal 参数一致。
+    fn fallback_colors_json(is_dark: bool) -> serde_json::Value {
+        let (primary, on_primary, primary_container, on_primary_container) = if is_dark {
+            ("#92CCFF", "#003351", "#004B73", "#CCE5FF")
+        } else {
+            ("#006497", "#FFFFFF", "#CCE5FF", "#001E31")
+        };
+        let (secondary, on_secondary, secondary_container, on_secondary_container) = if is_dark {
+            ("#B8C8DA", "#233240", "#394857", "#D4E4F6")
+        } else {
+            ("#51606F", "#FFFFFF", "#D4E4F6", "#0E1D2A")
+        };
+        let (tertiary, on_tertiary, tertiary_container, on_tertiary_container) = if is_dark {
+            ("#D7BFFF", "#3E2A5C", "#554074", "#F1DAFF")
+        } else {
+            ("#6D578C", "#FFFFFF", "#F1DAFF", "#261447")
+        };
+        let (background, on_background, surface, on_surface) = if is_dark {
+            ("#1A1C1E", "#E2E3E7", "#1A1C1E", "#E2E3E7")
+        } else {
+            ("#FCFCFF", "#181C20", "#FCFCFF", "#181C20")
+        };
+        let (surface_variant, on_surface_variant, surface_tint) = if is_dark {
+            ("#42474E", "#C1C6CF", "#92CCFF")
+        } else {
+            ("#DFE3EB", "#42474E", "#006497")
+        };
+        let (surface_dim, surface_bright) = if is_dark {
+            ("#121418", "#38393F")
+        } else {
+            ("#D7D9DF", "#FCFCFF")
+        };
+        let (surface_container_lowest, surface_container_low, surface_container) = if is_dark {
+            ("#0F1113", "#1F2225", "#23272A")
+        } else {
+            ("#FFFFFF", "#F6F8FB", "#F0F3F7")
+        };
+        let (surface_container_high, surface_container_highest) = if is_dark {
+            ("#2D3135", "#383C40")
+        } else {
+            ("#EAEFF5", "#E4E9EF")
+        };
+        let (inverse_surface, inverse_on_surface, inverse_primary) = if is_dark {
+            ("#E2E2E5", "#2F3033", "#006497")
+        } else {
+            ("#2F3033", "#F1F0F4", "#92CCFF")
+        };
+        let (error, on_error, error_container, on_error_container) = if is_dark {
+            ("#FFB4AB", "#690005", "#93000A", "#FFDAD6")
+        } else {
+            ("#BA1A1A", "#FFFFFF", "#FFDAD6", "#410002")
+        };
+        let (outline, outline_variant, scrim) = if is_dark {
+            ("#8C9198", "#42474E", "#000000")
+        } else {
+            ("#72787E", "#C1C6CF", "#000000")
+        };
+
+        serde_json::json!({
+            "primary": primary,
+            "on_primary": on_primary,
+            "primary_container": primary_container,
+            "on_primary_container": on_primary_container,
+            "secondary": secondary,
+            "on_secondary": on_secondary,
+            "secondary_container": secondary_container,
+            "on_secondary_container": on_secondary_container,
+            "tertiary": tertiary,
+            "on_tertiary": on_tertiary,
+            "tertiary_container": tertiary_container,
+            "on_tertiary_container": on_tertiary_container,
+            "background": background,
+            "on_background": on_background,
+            "surface": surface,
+            "on_surface": on_surface,
+            "surface_variant": surface_variant,
+            "on_surface_variant": on_surface_variant,
+            "surface_tint": surface_tint,
+            "surface_dim": surface_dim,
+            "surface_bright": surface_bright,
+            "surface_container_lowest": surface_container_lowest,
+            "surface_container_low": surface_container_low,
+            "surface_container": surface_container,
+            "surface_container_high": surface_container_high,
+            "surface_container_highest": surface_container_highest,
+            "inverse_surface": inverse_surface,
+            "inverse_on_surface": inverse_on_surface,
+            "inverse_primary": inverse_primary,
+            "error": error,
+            "on_error": on_error,
+            "error_container": error_container,
+            "on_error_container": on_error_container,
+            "outline": outline,
+            "outline_variant": outline_variant,
+            "scrim": scrim,
+        })
     }
 
     /// Issue #677 评论 5653315696: 输出的主题 JSON 字段名与 Core DTO 一致，统一使用 snake_case。
