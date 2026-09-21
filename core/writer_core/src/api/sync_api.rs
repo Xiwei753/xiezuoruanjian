@@ -468,6 +468,9 @@ impl WriterCoreApi {
                 log::info!(
                     "[sync] perform_full_sync: cancellation requested after build_full_sync_plan_unlocked — returning no-op"
                 );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态，避免 full_state.local.json 停在 Syncing。
+                self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
             }
         }
@@ -489,6 +492,9 @@ impl WriterCoreApi {
                 log::info!(
                     "[sync] perform_full_sync: cancellation requested before prepare_staging_runs — returning no-op"
                 );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
             }
         }
@@ -515,6 +521,9 @@ impl WriterCoreApi {
                 log::info!(
                     "[sync] perform_full_sync: cancellation requested after prepare_staging_runs — returning no-op"
                 );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
             }
         }
@@ -534,6 +543,9 @@ impl WriterCoreApi {
                 log::info!(
                     "[sync] perform_full_sync: cancellation requested after run_transfer — skipping commit, returning no-op"
                 );
+                // Issue #729 评论 5765306162 问题6：persist_full_sync_started 已写
+                // Syncing，取消前持久化取消终态。
+                self.core_write().persist_full_sync_cancelled();
                 return make_noop_result();
             }
         }

@@ -68,8 +68,16 @@ impl SyncService {
         sync_policy: &crate::sync::types::SyncPolicy,
         target: &crate::sync::types::SyncTarget,
         force_sync: bool,
+        cancellation_token: Option<&crate::sync::cancellation_token::SyncCancellationToken>,
     ) -> crate::Result<SyncResult> {
-        lww::perform_lww_sync(sync_root, provider, sync_policy, target, force_sync)
+        lww::perform_lww_sync(
+            sync_root,
+            provider,
+            sync_policy,
+            target,
+            force_sync,
+            cancellation_token,
+        )
     }
 }
 

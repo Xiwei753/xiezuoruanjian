@@ -81,11 +81,22 @@ pub(super) fn download_remote_to_staging(
 pub(super) fn delete_all_remote_objects(
     provider: &dyn SyncProvider,
     remote_prefix: &str,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> SyncResult {
     let remote_entries = match provider.list(remote_prefix) {
         Ok(entries) => entries,
         Err(err) => return sync_result_from_provider_error(err),
     };
+    // Issue #729 评论 5765306162 问题5：provider.list 返回后检查取消令牌。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] delete_all_remote_objects: cancellation requested after list {} — returning success",
+                remote_prefix
+            );
+            return SyncResult::success();
+        }
+    }
     let mut remote_deletes: Vec<String> = Vec::new();
     for entry in &remote_entries {
         if super::generation::is_generation_path(&entry.path) {
@@ -102,10 +113,24 @@ pub(super) fn delete_all_remote_objects(
             crate::sync::provider::model::DeletePrecondition::Unconditional,
         ) {
             Ok(()) => {
-                remote_deletes.push(full_remote_path);
+                remote_deletes.push(full_remote_path.clone());
             }
             Err(err) => {
                 let mut result = sync_result_from_provider_error(err);
+                result.remote_deletes = remote_deletes;
+                return result;
+            }
+        }
+        // Issue #729 评论 5765306162 问题5：每次 provider.delete 返回后检查取消令牌。
+        // 取消则 break 并返回已完成的结果（已删除的保留，未完成的不继续）。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] delete_all_remote_objects: cancellation requested after delete {} — breaking with {} deletes done",
+                    full_remote_path,
+                    remote_deletes.len()
+                );
+                let mut result = SyncResult::success();
                 result.remote_deletes = remote_deletes;
                 return result;
             }
@@ -132,12 +157,16 @@ pub(super) fn run_single_target(
             return SyncResult::success();
         }
     }
+    // Issue #729 评论 5765306162 问题4：把 cancellation_token 传进 perform_lww_sync，
+    // 不再只在入口检查一次。perform_lww_sync 内部会在 debounce 后、重试循环每次
+    // 迭代前、execute_lww_sync_attempt 内部 merge/upload/delete 后各检查一次。
     match crate::sync::SyncService::perform_lww_sync(
         local_root,
         provider,
         sync_policy,
         target,
         force_sync,
+        cancellation_token,
     ) {
         Ok(result) => result,
         Err(err) => sync_result_from_error(err),
@@ -682,6 +711,7 @@ pub(super) fn transfer_live_project(
                                     let cleanup_result = delete_all_remote_objects(
                                         provider,
                                         &planned.target.remote_prefix,
+                                        cancellation_token,
                                     );
                                     let cleanup_ok = matches!(
                                         cleanup_result.status,
@@ -779,8 +809,11 @@ pub(super) fn transfer_live_project(
                                 planned.target.remote_prefix,
                                 attempt + 1
                             );
-                            let cleanup_result =
-                                delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                            let cleanup_result = delete_all_remote_objects(
+                                provider,
+                                &planned.target.remote_prefix,
+                                cancellation_token,
+                            );
                             let cleanup_ok = matches!(
                                 cleanup_result.status,
                                 SyncStatus::Success | SyncStatus::NoChanges
@@ -887,8 +920,11 @@ pub(super) fn transfer_restore_project(
                     };
                     if !local_project_exists {
                         log::info!("[sync] run_transfer: RestoreProject {} — CAS: remote changed to Delete, local project absent — cleaning remote residue", planned.target.remote_prefix);
-                        let cleanup_result =
-                            delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                        let cleanup_result = delete_all_remote_objects(
+                            provider,
+                            &planned.target.remote_prefix,
+                            cancellation_token,
+                        );
                         let cleanup_ok = matches!(
                             cleanup_result.status,
                             SyncStatus::Success | SyncStatus::NoChanges
@@ -1083,8 +1119,11 @@ pub(super) fn transfer_delete_local_project(
                 }
                 TargetOp::Delete => {
                     log::info!("[sync] run_transfer: DeleteLocalProject {} — CAS confirmed remote Delete, cleaning remote residue", planned.target.remote_prefix);
-                    let cleanup_result =
-                        delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                    let cleanup_result = delete_all_remote_objects(
+                        provider,
+                        &planned.target.remote_prefix,
+                        cancellation_token,
+                    );
                     let cleanup_ok = matches!(
                         cleanup_result.status,
                         crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges
@@ -1204,7 +1243,11 @@ pub(super) fn transfer_delete_remote_project(
     ) {
         TargetLifecycleApplyResult::Applied(persisted) => {
             *catalog_snapshot = persisted;
-            let del_result = delete_all_remote_objects(provider, &planned.target.remote_prefix);
+            let del_result = delete_all_remote_objects(
+                provider,
+                &planned.target.remote_prefix,
+                cancellation_token,
+            );
             (
                 del_result,
                 Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),
@@ -1214,7 +1257,11 @@ pub(super) fn transfer_delete_remote_project(
         TargetLifecycleApplyResult::AlreadyCurrent(persisted) => {
             *catalog_snapshot = persisted;
             log::info!("[sync] run_transfer: DeleteRemoteProject AlreadyCurrent(Delete) {} — continuing cleanup", planned.target.remote_prefix);
-            let del_result = delete_all_remote_objects(provider, &planned.target.remote_prefix);
+            let del_result = delete_all_remote_objects(
+                provider,
+                &planned.target.remote_prefix,
+                cancellation_token,
+            );
             (
                 del_result,
                 Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),
@@ -1229,8 +1276,11 @@ pub(super) fn transfer_delete_remote_project(
             match winner.op {
                 crate::sync::types::TargetOp::Delete => {
                     log::info!("[sync] run_transfer: DeleteRemoteProject RemoteWinner(Delete) {} — continuing cleanup", planned.target.remote_prefix);
-                    let del_result =
-                        delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                    let del_result = delete_all_remote_objects(
+                        provider,
+                        &planned.target.remote_prefix,
+                        cancellation_token,
+                    );
                     (
                         del_result,
                         Some(crate::sync::types::DeletedTargetResolution::LocalDeleteWins),

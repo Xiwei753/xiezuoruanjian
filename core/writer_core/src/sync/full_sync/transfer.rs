@@ -152,6 +152,7 @@ pub fn run_transfer(
                 active_generation,
                 now_ms,
                 crate::sync::generation_gc::GENERATION_RETENTION_MS,
+                cancellation_token,
             ) {
                 Ok(()) => {}
                 Err(e) => {

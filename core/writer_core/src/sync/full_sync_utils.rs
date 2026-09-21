@@ -119,8 +119,14 @@ pub(crate) fn run_full_sync_target(
     target: &crate::sync::types::SyncTarget,
     force_sync: bool,
 ) -> crate::sync::types::SyncResult {
-    match crate::sync::lww::perform_lww_sync(local_root, provider, sync_policy, target, force_sync)
-    {
+    match crate::sync::lww::perform_lww_sync(
+        local_root,
+        provider,
+        sync_policy,
+        target,
+        force_sync,
+        None,
+    ) {
         Ok(result) => result,
         Err(err) => {
             let msg = err.to_string();

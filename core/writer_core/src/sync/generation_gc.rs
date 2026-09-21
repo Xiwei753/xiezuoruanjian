@@ -14,6 +14,7 @@
 //! 每个 generation 有 `generation.meta.json`，记录上传状态（complete）和租约
 //! （upload_lease_until_ms）。GC 用 meta 判断 generation 是否可删。
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::model::DeletePrecondition;
 use crate::sync::provider::SyncProvider;
 
@@ -57,17 +58,37 @@ pub const GENERATION_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 ///
 /// `project_remote_prefix` 如 `"projects/P"`；`active_generation_hint` 为调用方已知的
 /// active generation ID（用作首次确认），但 GC 不依赖它 — 删除前会重新读 catalog。
+//
+// Issue #729 评论 5765306162 问题5：加取消检查后复杂度/nesting/行数超标，
+// 与 transfer_helpers.rs 同类函数一致用 allow 标注。取消检查是必要的健壮性，
+// 非宽范围 allow 掩盖 warning。
+#[allow(
+    clippy::excessive_nesting,
+    clippy::too_many_lines,
+    clippy::cognitive_complexity
+)]
 pub fn run_generation_gc(
     provider: &dyn SyncProvider,
     project_remote_prefix: &str,
     active_generation_hint: Option<&str>,
     now_ms: i64,
     retention_ms: i64,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::error::Result<()> {
     let generations_prefix = format!("{project_remote_prefix}/__generations__");
     let entries = provider
         .list(&generations_prefix)
         .map_err(crate::Error::from)?;
+    // Issue #729 评论 5765306162 问题5：provider.list 返回后检查取消令牌。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] run_generation_gc: cancellation requested after list {} — returning Ok",
+                project_remote_prefix
+            );
+            return Ok(());
+        }
+    }
     // 提取唯一 generation ID segment（__generations__/G/... → G），
     // 并通过 validate_generation_id 校验，防路径穿越。
     let mut generation_ids: Vec<String> = Vec::new();
@@ -86,6 +107,15 @@ pub fn run_generation_gc(
     }
 
     for gen_id in &generation_ids {
+        // Issue #729 评论 5765306162 问题5：每次 generation 迭代前检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_generation_gc: cancellation requested in generation loop — returning Ok"
+                );
+                return Ok(());
+            }
+        }
         // active_generation_hint 永远不删（调用方传入的当前 active）。
         if Some(gen_id.as_str()) == active_generation_hint {
             continue;
@@ -97,6 +127,15 @@ pub fn run_generation_gc(
             generations_prefix, gen_id, GENERATION_META_FILENAME
         );
         let meta_obj = provider.read(&meta_path).map_err(crate::Error::from)?;
+        // Issue #729 评论 5765306162 问题5：provider.read 返回后检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_generation_gc: cancellation requested after read meta — returning Ok"
+                );
+                return Ok(());
+            }
+        }
         let meta = match meta_obj {
             Some(obj) => match serde_json::from_slice::<GenerationMeta>(&obj.content) {
                 Ok(m) => m,
@@ -146,6 +185,15 @@ pub fn run_generation_gc(
         // 确认该 G 仍不是当前 active_generation（Transfer 期间另一台设备可能 CAS
         // 切了 active generation）。catalog 读取失败 → Err（不删，下轮重试）。
         let fresh_catalog = crate::sync::target_lifecycle::load_remote_catalog(provider)?;
+        // Issue #729 评论 5765306162 问题5：load_remote_catalog 返回后检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] run_generation_gc: cancellation requested after load_remote_catalog — returning Ok"
+                );
+                return Ok(());
+            }
+        }
         let fresh_active = crate::sync::target_lifecycle::find_record(
             &fresh_catalog.catalog,
             project_remote_prefix,
@@ -173,6 +221,17 @@ pub fn run_generation_gc(
             provider
                 .delete(&full_path, DeletePrecondition::Unconditional)
                 .map_err(crate::Error::from)?;
+            // Issue #729 评论 5765306162 问题5：每次 provider.delete 返回后检查取消令牌。
+            // 取消则返回 Ok(())（已完成的删除保留，未完成的不继续）。
+            if let Some(token) = cancellation_token {
+                if token.is_cancelled() {
+                    log::info!(
+                        "[sync] run_generation_gc: cancellation requested after delete {} — returning Ok",
+                        full_path
+                    );
+                    return Ok(());
+                }
+            }
         }
     }
 

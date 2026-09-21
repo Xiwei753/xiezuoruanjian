@@ -367,4 +367,24 @@ impl crate::facade::WriterCore {
             log::warn!("Failed to persist full sync early failure state: {e}");
         }
     }
+
+    /// Issue #729 评论 5765306162 问题6：persist_full_sync_started 之后取消时，
+    /// 持久化一个取消终态，避免 full_state.local.json 停在 Syncing 直到下次启动
+    /// 被当成"上次同步中断"。
+    ///
+    /// 用 `SyncStatus::Error("cancelled")` 表示取消（不新增 SyncStatus::Cancelled
+    /// 变体，避免补全 260+ 处 match 分支）。复用 failed_before_targets 模式，
+    /// failed_target 标 "cancelled"。写失败只记录警告。
+    pub(crate) fn persist_full_sync_cancelled(&self) {
+        let previous = self.load_full_sync_state().unwrap_or(None);
+        let state = crate::sync::full_sync_state::FullSyncState::failed_before_targets(
+            previous.as_ref(),
+            crate::sync::SyncStatus::Error("cancelled".to_string()),
+            now_epoch_seconds(),
+            "cancelled",
+        );
+        if let Err(e) = self.save_full_sync_state(&state) {
+            log::warn!("Failed to persist full sync cancelled state: {e}");
+        }
+    }
 }

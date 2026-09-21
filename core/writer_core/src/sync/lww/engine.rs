@@ -9,6 +9,7 @@
 //! Provider 能力（`SyncCapabilities`）影响传输策略：`conditional_write` 决定
 //! 前置条件类型，`max_parallel_downloads` 控制并行下载线程数。
 
+use crate::sync::cancellation_token::SyncCancellationToken;
 use crate::sync::provider::SyncProvider;
 use crate::sync::types::{SyncPolicy, SyncResult, SyncStatus};
 use std::path::Path;
@@ -43,6 +44,7 @@ pub(crate) fn perform_lww_sync(
     sync_policy: &SyncPolicy,
     target: &crate::sync::types::SyncTarget,
     force_sync: bool,
+    cancellation_token: Option<&SyncCancellationToken>,
 ) -> crate::Result<SyncResult> {
     let remote_prefix = &target.remote_prefix;
     log::debug!(
@@ -95,10 +97,40 @@ pub(crate) fn perform_lww_sync(
         }
     }
 
+    // Issue #729 评论 5765306162 问题4：debounce 后、execute_lww_sync_attempt
+    // 调用前检查取消令牌。取消则返回空成功（不写远端），与 run_single_target 入口
+    // 取消的语义一致。
+    if let Some(token) = cancellation_token {
+        if token.is_cancelled() {
+            log::info!(
+                "[sync] perform_lww_sync: cancellation requested after debounce — returning success"
+            );
+            result.status = SyncStatus::Success;
+            return Ok(result);
+        }
+    }
+
     let max_retries = 2;
     let mut attempt = 0;
     loop {
-        match execute_lww_sync_attempt(sync_root, provider, target, &mut state, &mut result) {
+        // Issue #729 评论 5765306162 问题4：重试循环每次迭代前检查取消令牌。
+        if let Some(token) = cancellation_token {
+            if token.is_cancelled() {
+                log::info!(
+                    "[sync] perform_lww_sync: cancellation requested in retry loop — returning success"
+                );
+                result.status = SyncStatus::Success;
+                return Ok(result);
+            }
+        }
+        match execute_lww_sync_attempt(
+            sync_root,
+            provider,
+            target,
+            &mut state,
+            &mut result,
+            cancellation_token,
+        ) {
             Ok(res) => return Ok(res),
             Err(e) => {
                 // 不可恢复错误（认证/权限/precondition conflict/file_not_found 等）

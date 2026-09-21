@@ -133,19 +133,27 @@ impl WorkspaceBackend {
         // 此处不再发 workspace_opened，避免 QML 去读未初始化的 workspace。
     }
     fn create_new_workspace(&mut self) -> QJsonObject {
+        // Issue #729 评论 5765306162 问题3：用 workspace_generation 变化判断本次
+        // 是否真正打开了新工作区，而非 result.is_ok() && snap().has_workspace。
+        // 若原本就有工作区，用户取消选择器时 AppBackend 返回 CANCELLED，
+        // has_workspace 仍 true，会误发 workspace_opened。generation 只有在
+        // internal_open_data_root 成功时才递增，取消时不变。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.create_new_workspace());
-        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功，
-        // 不用 result.is_ok()（只代表 with_app_mut 借用成功）。
-        if result.is_ok() && self.snap().has_workspace {
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
         qjson_object_from_json(&res.to_string())
     }
     fn open_existing_workspace(&mut self) -> QJsonObject {
+        // Issue #729 评论 5765306162 问题3：同 create_new_workspace，用 generation
+        // 变化判断本次是否真正打开了新工作区。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.open_existing_workspace());
-        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功。
-        if result.is_ok() && self.snap().has_workspace {
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -163,11 +171,12 @@ impl WorkspaceBackend {
             "workspace_backend_create_workspace_called",
             &format!("path={}", path_str),
         );
+        // Issue #729 评论 5765306162 问题3：用 generation 变化判断真实打开成功，
+        // 与 create_new_workspace/open_existing_workspace 一致。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        // Issue #729 评论 5764768372：用 snap().has_workspace（current_has_data_root）
-        // 判断真实打开成功，而非 with_app_mut 的 is_ok（只代表借用成功）。
-        // 只有真实成功才发一次 workspace_opened/content/state。
-        if result.is_ok() && self.snap().has_workspace {
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -185,9 +194,11 @@ impl WorkspaceBackend {
             "workspace_backend_open_workspace_called",
             &format!("path={}", path_str),
         );
+        // Issue #729 评论 5765306162 问题3：用 generation 变化判断真实打开成功。
+        let gen_before = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
         let result = self.with_app_mut(|app| app.internal_open_data_root(&path_str));
-        // Issue #729 评论 5764768372：用 snap().has_workspace 判断真实打开成功。
-        if result.is_ok() && self.snap().has_workspace {
+        let gen_after = self.with_app(|app| app.workspace_generation()).unwrap_or(0);
+        if gen_before != gen_after && self.snap().has_workspace {
             self.emit_workspace_opened();
         }
         let res = result.unwrap_or_else(|_| backend_link_broken_json());
@@ -232,7 +243,12 @@ impl WorkspaceBackend {
             .with_app_mut(|app| app.execute_github_init(path, remote_url, branch, token))
             .is_ok()
         {
-            self.emit_workspace_opened();
+            // Issue #729 评论 5765306162 问题2：不在此时发 workspace_opened。
+            // execute_github_init 只是启动后台同步线程，目标目录还没真正打开。
+            // GitHub init 成功后，handle_sync_outcome -> internal_open_data_root
+            // 真正打开目标工作区时才发 opened/content/state（sync_operations.rs
+            // 第 135-139 行已有此逻辑）。此处过早发 opened 会让 QML 误认为工作区
+            // 已打开，触发 workspace-open 自动同步等副作用。
             self.pending_github_init_path_changed();
         }
     }
@@ -289,6 +305,15 @@ impl AppBackend {
     // AppBackend::has_workspace
     pub(crate) fn has_workspace(&self) -> bool {
         self.current_has_data_root
+    }
+
+    // AppBackend::workspace_generation
+    //
+    // Issue #729 评论 5765306162 问题3：暴露 current_workspace_generation 给
+    // WorkspaceBackend wrapper，用 generation 变化判断本次 create/open 是否真正
+    // 打开了新工作区，避免用户取消选择器时误发 workspace_opened。
+    pub(crate) fn workspace_generation(&self) -> u64 {
+        self.current_workspace_generation
     }
 
     // AppBackend::pending_github_init_path

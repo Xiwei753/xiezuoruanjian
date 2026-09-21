@@ -94,9 +94,13 @@ impl AppBackend {
             .current_sync_cancel_token
             .as_ref()
             .map(|arc| (**arc).clone());
-        // Issue #729 评论 5763441474：捕获 data_root 用于回调身份校验。
-        // github_init 的 data_root 就是用户选择的 path。
-        let data_root_capture = path_str.clone();
+        // Issue #729 评论 5765306162 问题1：捕获 data_root 用于回调身份校验。
+        // data_root 语义是"启动同步时的工作区身份"（origin_data_root），即
+        // self.current_data_root（启动 github init 时当前工作区路径）。
+        // 不是用户选择的目标导入目录 path_str —— 目标目录此时还没成为当前工作区，
+        // 用 path_str 会导致 sync_operations.rs 的 data_root 校验误杀成功结果。
+        // 真正要打开的目标目录继续只走 current_pending_github_init_path（不变）。
+        let data_root_capture = self.current_data_root.clone();
 
         let op_id_capture = op_id.clone();
         thread::spawn(move || {
@@ -121,6 +125,10 @@ impl AppBackend {
         branch: &str,
         token: &str,
         workspace_generation: u64,
+        // Issue #729 评论 5765306162 问题1：启动 github init 时的工作区身份
+        // （origin_data_root = 启动时 self.current_data_root），不是目标导入目录。
+        // 用于回调身份校验：sync_operations.rs 比较 outcome.data_root ==
+        // self.current_data_root，启动时目标目录还没成为当前工作区，故必须传 origin。
         data_root: String,
         cancel_token: Option<writer_core::sync::SyncCancellationToken>,
     ) -> SyncTaskOutcome {

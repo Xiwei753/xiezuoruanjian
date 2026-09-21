@@ -69,8 +69,11 @@ pub(super) fn transfer_remote_cleanup_project(
                             None,
                         )
                     } else {
-                        let cleanup_result =
-                            delete_all_remote_objects(provider, &planned.target.remote_prefix);
+                        let cleanup_result = delete_all_remote_objects(
+                            provider,
+                            &planned.target.remote_prefix,
+                            cancellation_token,
+                        );
                         let cleanup_ok = matches!(
                             cleanup_result.status,
                             crate::sync::SyncStatus::Success | crate::sync::SyncStatus::NoChanges
